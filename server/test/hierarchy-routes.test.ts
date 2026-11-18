@@ -65,7 +65,7 @@ describe('hierarchy routes', () => {
     const body = (await get()).json();
     expect(body.projects).toEqual([{
       project: 'project-a', teamKey: null, initiatives: 'on', linearOwner: null, ownsTeam: false,
-      ownerNow: { id: 'sess-2', source: 'default', live: true, project: 'project-a' }, state: 'not-migrated', stateAt: null, itemId: null, inboundWaiting: 0,
+      ownerNow: { id: 'sess-2', source: 'default', live: true, project: 'project-a', ifUnnamed: { id: 'sess-2', live: true } }, state: 'not-migrated', stateAt: null, itemId: null, inboundWaiting: 0,
     }]);
     expect(body.coordinators).toEqual([{ id: 'sess-1', live: false }, { id: 'sess-2', live: true }]);
   });
@@ -92,11 +92,28 @@ describe('hierarchy routes', () => {
     expect(rows.map((r) => (r as unknown as { ownerNow: { project: string } }).ownerNow.project)).toEqual(['project-b', 'project-b']);
   });
 
+  it('ifUnnamed is the coordinator the default rule gives with no named owner: for a named row not the named one, for none null, for a shared-key sibling its own default', async () => {
+    claim('prog-a', 'project-a', 'sess-1', 1);
+    claim('prog-b', 'project-b', 'sess-2', 2);
+    db.prepare("INSERT INTO project_linking (project, teamKey) VALUES ('project-a', 'AAA'), ('project-b', 'AAA'), ('project-c', NULL)").run();
+    presence['sess-1'] = 'alive';
+    presence['sess-2'] = 'dead';
+    await setProject('project-a', { initiatives: 'on', linearOwner: 'sess-2', ownsTeam: true });
+    const rows = (await get()).json().projects as { project: string; ownerNow: { id: string | null; source: string; live: boolean; ifUnnamed: { id: string | null; live: boolean } } }[];
+    const by = (p: string) => rows.find((r) => r.project === p)!.ownerNow;
+    // named: the owner now is the named sess-2 (not live), but clearing it gives project-a's latest programme's coordinator, sess-1 (live).
+    expect([by('project-a').id, by('project-a').source, by('project-a').ifUnnamed]).toEqual(['sess-2', 'named', { id: 'sess-1', live: true }]);
+    // shared-key sibling: its owner now is project-a's named sess-2, its own default is project-b's coordinator, sess-2 (not live).
+    expect([by('project-b').id, by('project-b').ifUnnamed]).toEqual(['sess-2', { id: 'sess-2', live: false }]);
+    // none: no programme home, no named owner.
+    expect([by('project-c').source, by('project-c').ifUnnamed]).toEqual(['none', { id: null, live: false }]);
+  });
+
   it('a hibernated owner reads live', async () => {
     // `coordinatorPresenceIn` answers `alive` for an asleep session, so the route's `live` follows it.
     claim('prog-a', 'project-a', 'sess-1', 1);
     presence['sess-1'] = 'alive';
-    expect((await get()).json().projects[0].ownerNow).toEqual({ id: 'sess-1', source: 'default', live: true, project: 'project-a' });
+    expect((await get()).json().projects[0].ownerNow).toEqual({ id: 'sess-1', source: 'default', live: true, project: 'project-a', ifUnnamed: { id: 'sess-1', live: true } });
   });
 
   it('an unmeasured owner is neither live nor gone: it reads not live', async () => {

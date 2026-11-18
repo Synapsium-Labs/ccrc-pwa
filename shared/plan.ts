@@ -159,7 +159,7 @@ export interface PlanView {
 }
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
-  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string };
+  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
   ownsTeam: boolean; state: HierarchyState; stateAt: number | null; itemId: number | null; inboundWaiting: number;
 }
 export interface HierarchyAnswer {

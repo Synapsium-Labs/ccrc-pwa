@@ -727,6 +727,33 @@ describe('the hierarchy settings', () => {
     expect(within(rowOf('project-a')).getByText('Default: none live')).toBeInTheDocument();
   });
 
+  it('F2: the empty option names who choosing it gives (ifUnnamed), not the named owner; absent ifUnnamed reads as today', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA', linearOwner: 'coord-z' })), row('project-b', wire({ teamKey: 'BBB' })),
+      row('project-c', wire({ teamKey: 'CCC' })), row('project-d', wire({ teamKey: 'DDD', linearOwner: 'coord-z' }))], hier([
+      hrow('project-a', { linearOwner: 'coord-z', ownerNow: { id: 'coord-z', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-a', live: true } } }),
+      hrow('project-b', { teamKey: 'BBB', ownerNow: { id: 'coord-b', source: 'named', live: true, project: 'project-b', ifUnnamed: { id: null, live: false } } }),
+      hrow('project-c', { teamKey: 'CCC', ownerNow: { id: 'coord-a', source: 'default', live: true, project: 'project-c' } }),
+      hrow('project-d', { teamKey: 'DDD', linearOwner: 'coord-z', ownerNow: { id: 'coord-z', source: 'named', live: false, project: 'project-d' } }),
+    ]));
+    // The named row: the empty option names the default rule's coordinator, coord-a, never the named coord-z.
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-a')).queryByText('Default: coord-z (not live)')).toBeNull();
+    expect(within(rowOf('project-a')).getByText('coord-z (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-b')).getByText('Default: none live')).toBeInTheDocument();
+    expect(within(rowOf('project-c')).getByText('Default: coord-a (live)')).toBeInTheDocument();
+    // Absent ifUnnamed (an older server): today's words from ownerNow.
+    expect(within(rowOf('project-d')).getByText('Default: coord-z (not live)')).toBeInTheDocument();
+  });
+
+  it('F2: a shared-key sibling\'s empty option names its own default and the note says its own setting is not used', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))], hier([
+      hrow('project-a', { ownsTeam: true, linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-b', live: false } } }),
+      hrow('project-b', { ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-a', live: true } } }),
+    ]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText(/own owner setting is not used meanwhile/)).toBeInTheDocument();
+  });
+
   it('a missing project field reads as the project own owner', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { ownerNow: { id: 'coord-a', source: 'default', live: true } })]));
     await within(rowOf('project-a')).findByText('Default: coord-a (live)');
