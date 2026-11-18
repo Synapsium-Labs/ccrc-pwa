@@ -8,8 +8,12 @@ One part of the wave lifecycle. `wave-lifecycle.md` lists every part.
    `docs/superpowers/programs/<slug>.md` in the project's own repo, fill the
    header and the wave-1 row, and **commit it**. The commit is the artefact; an
    uncommitted ledger is not a handoff.
+   A new programme then declares its plan with `ccrc-api plan put` (with
+   `home`) before this open, and each open names its wave's ticket, or none for
+   a new one: `references/plan.md` has the verbs and the plan's refusals
+   (`plan-missing`, `wave-epic-mismatch`, `ticket-unavailable`, `plan-closed`).
 2. `POST /api/runs`
-   `{"program":"<slug>","title":"<title>","programmeTitle":"<the programme's name, used only when this opens a new programme>","project":"<project>","homeProject":"<the project this programme lives in>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>"}`
+   `{"program":"<slug>","title":"<title>","programmeTitle":"<the programme's name, used only when this opens a new programme>","project":"<project>","homeProject":"<the project this programme lives in>","wave":1,"waveOf":<M or null>,"claimedBy":"<your session id>","ticket":"<optional ticket key>"}`
    → `{"ok":true,"id":<run id>,"ledgerPath":…,"ledgerRepo":…,"ledgerAbsPath":…}`, or one of the refusals below.
 
 | refused | what it means | what you do |
