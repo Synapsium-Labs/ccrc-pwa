@@ -69,6 +69,10 @@ const OVERLORD_SRC = read('server/src/coord/overlordRoutes.ts');
  *  the upload `PUT` and the status read `GET /api/overlord/private-names`, are the operator's and session-gated:
  *  `NAME_LIST_DOORS`. */
 const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
+/** The Models sheet's write door (programme model-class-advance, wave R4): `POST /api/models/:lane`, a routes file of its own with NO
+ *  box-token lane. The operator's door, session-gated: `MODELS_DOORS`. (The read beside it, `GET /api/models/:lane`, is in `server.ts`.) */
+const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
+
 /** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
  *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
  *  `DECISION_MODEL_DOORS`. */
@@ -178,6 +182,12 @@ const OVERLORD_OPERATOR_DOORS = ['/api/overlord/designation', '/api/overlord/des
  *  EXEMPT. */
 const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-names'];
 
+/** The Models sheet's write door (programme model-class-advance, wave R4), registered from `server/src/laneModelsRoutes.ts`, which no
+ *  harvest above can see: `POST /api/models/:lane`, hold, release and revert of one class. Hand-kept for the NAME only, like
+ *  `NAME_LIST_DOORS`: the describe below derives the file's registrations and compares in both directions. The operator's, behind the
+ *  session gate, no box token, in no EXEMPT table. */
+const MODELS_DOORS = ['/api/models/:lane'];
+
 /** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
  *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
 const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
@@ -185,7 +195,7 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
 
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...DECISION_MODEL_DOORS];
+  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...DECISION_MODEL_DOORS, ...MODELS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -438,6 +448,27 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'nameListRoutes.ts and NAME_LIST_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...NAME_LIST_DOORS].sort());
     expect(lanesIn(NAME_LIST_SRC), 'a name list door consults the box token — both are the operator\'s').toEqual([]);
     for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+  });
+
+  it('MODELS_DOORS is exactly what the models routes file registers, in both directions; none is a lane or EXEMPT (model-class-advance R4)', () => {
+    const keys = registrationsIn(MODELS_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'laneModelsRoutes.ts and MODELS_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...MODELS_DOORS].sort());
+    expect(keys, 'the Models sheet\'s write door is a POST, and only that').toEqual(['POST /api/models/:lane']);
+    expect(lanesIn(MODELS_SRC), 'the models door consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of MODELS_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
+    }
+  });
+
+  it('a box-token call planted in the models routes file is SEEN — the lane source is live (the control)', () => {
+    const LINE = "app.post('/api/models/:lane', async (req, reply) => {";
+    expect(MODELS_SRC, 'the registration line moved — re-point this control at it').toContain(LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = MODELS_SRC.replace(LINE, `${LINE}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['POST /api/models/:lane']);
+    }
   });
 
   it('DECISION_MODEL_DOORS is exactly what the decision-model file registers, in both directions; none is a lane or EXEMPT (decision model B)', () => {
