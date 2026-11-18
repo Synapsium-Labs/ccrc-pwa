@@ -22,7 +22,7 @@ numbers.
 - **The server.** `denyStandingOf` (L1) answers `current`, `history` or `none` from the child's spawn digest, the
   managed file's digest and the history. The raise refuses `deny-not-engaged` only for `none`, and mints a `history`
   child's row held, its class left as the classifier gave it, with `approvals.denyCurrent = 0` (ruling F5; migration
-  101 by position, after the quiz record's 100 (#2991); forecasts B takes 101 too, so whichever lands second
+  102 by position, after the quiz record's 100 (#2991) and forecasts B's 101 (#3003); whichever lands second
   renumbers). The rule door asks `approvalAllowRefusal` (L1), which refuses an allow on a row
   whose deny rules are not current with a new word, `deny-not-current` (`APPROVAL_REFUSALS`, `REFUSAL_STATUS`, a
   `409`). It answers after `guard-forbidden` and before `guard-escalate`, whatever the row's class: the fact is the
