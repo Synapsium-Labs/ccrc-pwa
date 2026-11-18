@@ -60,10 +60,11 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   `CLAUDECODE` refusal reds `ccrc-quiz-record.test.ts` (2 cases), and without its `TMUX_PANE` refusal (1 case).
 - **Red first**: Task 7's store tests ran red against `main`'s sources (14 cases) and green on the branch; the doors' and the
   card's route tests were written before their code and ran red first.
-- **Migration slot**: 95. Done tests A (#2964) landed 92, the programme's phases (#2974) 93 and forecasts A (#2987) 94, so
-  this PR moved under the standing renumber license each time; the shared `decision-model-records` case is untouched. The
-  coordinator named 98 (95 to 97 queued for gates A, handoffs and decision model B), but `MIGRATIONS` is positional and
-  cannot skip a slot, so the entry takes 95 by position and whoever lands second renumbers.
+- **Migration slot**: 96. Done tests A (#2964) landed 92, the programme's phases (#2974) 93, forecasts A (#2987) 94 and the
+  Linear hierarchy's wave 4 (#2982) 95, so this PR moved under the standing renumber license each time; the shared
+  `decision-model-records` case is untouched. The coordinator named 98 (95 to 97 queued for gates A, handoffs and decision
+  model B), but `MIGRATIONS` is positional and cannot skip a slot, so the entry takes 96 by position and whoever lands second
+  renumbers.
 - **Fix round 1** (first CI on 39b5420c0 red, all three my own): the pwa test stubbed `baseline: null` where the answer is
   typed boolean; the record-door test's header cases needed a `Record<string, string>` type for the tests-inclusive
   typecheck; and `mail-routes.test.ts`'s kebab-token scan refused the card's `'not-yet'`, now declared once in L0 as
