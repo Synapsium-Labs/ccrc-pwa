@@ -110,15 +110,19 @@ export function shapeMatchers(masks: readonly CredentialMask[] = CREDENTIAL_MASK
 }
 export const SHAPES = shapeMatchers();
 
+/** What follows the LF of a LF, blanks, CR break: blanks (NULs, in the escape view), then a CR that no LF follows. Its
+ *  one other reader is `accounts/mask.ts`'s `BREAK_REST`, so the two never drift apart (review 2514 F5). */
+export const LF_BREAK_REST = String.raw`[ \t\0]*\r(?!\n)`;
 /** A row break (D-5995, D-8710): CR LF, LF, CR, or a LF then blanks then a CR that no LF follows. The last is ONE row
  *  down to the first column, as CR LF is: a move down (CUD, IND) reads as a LF and one NUL of unknown indent, and the
  *  CR after it returns to the first column, so a key a program wraps with CUD+CR or IND+CR is joined like one wrapped
  *  with CR LF (review 2326 O2). A CR CR LF (a CR LF that a second output translation doubled) is one row down too, as a
  *  terminal draws it: read as a CR, then a CR LF, it was an empty row that ended a key's rows, and the whole key showed
- *  (C45, review 2445 F4); at most one CR more, so a run of CRs is never read back more than once. A CR that a CR LF
- *  follows ends no LF, blanks, CR break, as one that a LF follows. The one definition every row reader in this module
- *  and `accounts/mask.ts` builds on. */
-export const ROW_BREAK = String.raw`\r\r?\n|\n[ \t\0]*\r(?!\r?\n)|\r|\n`;
+ *  (C45, review 2445 F4); at most one CR more, so a run of CRs is never read back more than once. A LF, blanks, CR then
+ *  a CR LF stays two breaks with no row between (a blank row on screen), as at `main`: the chain walk steps through
+ *  both, and reading the LF alone as the break left a blank row that ended a key's rows (C45 fix round, review 2514 F1).
+ *  The one definition every row reader in this module and `accounts/mask.ts` builds on. */
+export const ROW_BREAK = String.raw`\r\r?\n|\n${LF_BREAK_REST}|\r|\n`;
 /** The next row's leading token run after a span that ends at its row's end: [start, end) in `t`, or null. A TUI
  *  wrap is INDENTED (Claude Code indents the rows a long line wraps into; tmux may draw that indent as a cursor move,
  *  which both views read as a NUL), so a next row with no indent is a new line, never a wrap. Sticky expressions:

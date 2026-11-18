@@ -1496,8 +1496,8 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
       // Review 2445 F1 (`pane-cut-long-break`): a slice cut after the LF of such a break (past `BREAK_CUT_MAX`, or an
       // escape the cut read as text) began the next slice's lookahead with the blanks and the CR, read as an empty row that
       // ended the key's rows, and the key went out raw: at `main`, the whole 2,000 bytes at 3 of 4 placements and 360 at
-      // the other for 64 and 65 blanks, 64 NULs, LF SGR CR and LF CUF CR, and at 4 of 4 for 200 blanks (482,448 to 516,810
-      // bytes a form). 62 and 63 blanks stay masked, as at `main`.
+      // the other for 64 and 65 blanks, 64 NULs, LF SGR CR and LF CUF CR, and at 4 of 4 for 200 blanks (rows of 468,006 to
+      // 516,810 bytes a form, 469,323 to 560,139 bytes masked). 62 and 63 blanks stay masked, as at `main`.
       const key = keyOf(2_000, 2461);
       const m = fingerprinted(key);
       try {
@@ -1573,6 +1573,88 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
         expect(shownPhases(m2, key2, rowsOf(key2, 64, 600, '\r\r\n').text), '8,192 bytes, 600 bytes of escapes a row').toEqual([]);
       } finally {
         m2.close();
+      }
+    }, 300_000);
+
+    /** A LF or a move down, then a blank, a tab or an SGR, then a CR CR LF: two row breaks with no row between them. */
+    const BREAK_THEN_CRCRLF: readonly (readonly [string, string])[] = [
+      ['LF, blank', '\n \r\r\n'], ['LF, tab', '\n\t\r\r\n'], ['LF, SGR', '\n\x1b[0m\r\r\n'], ['CUD', '\x1b[B\r\r\n'], ['IND', '\x1bD\r\r\n'],
+    ];
+    it('past the hold, one break of a LF or a move down, a blank or an SGR, then CR CR LF does not end the chain (review 2514 F1)', () => {
+      // Review 2514 F1, on this task's first fix (20775879e): `ROW_BREAK`'s LF, blanks, CR arm refused a CR that a CR LF
+      // followed, so this break read as a LF, a blank row, then a CR CR LF; the chain walk ended at the blank row and the
+      // 18 rows after the break (1,152 bytes) went out raw at each run below, where `main` shows 0. `main`, and this fix,
+      // read the LF, blank, CR and the CR LF after it as two breaks with no row between, which the walk steps through. In
+      // one push, and in 16 KiB chunks at phases 0 and 12,288, the whole key shows at `main` and here alike: on screen the
+      // break is a blank row, which ends the matcher's row join (`drawer-consecutive-breaks`, `c45.md` §13).
+      const key = keyOf(8_192, 2471);
+      const m = fingerprinted(key);
+      try {
+        const shown = shownOf(key);
+        const { text: t0, breaks } = rowsOf(key, 64, 600, '\r\n');
+        const b = breaks[109]!;
+        for (const [name, sep] of BREAK_THEN_CRCRLF) {
+          const text = t0.slice(0, b) + sep + t0.slice(b + 2);
+          expect(text.length, name).toBeGreaterThan(64 * 1_024);
+          for (const [size, phases] of [[4_096, [0, 1_024, 2_048, 3_072]], [16_384, [4_096, 8_192]]] as const) {
+            for (const p of phases) {
+              const sent = throughDrawer(m, chunked(text, size, p, 0));
+              expect(shown(sent), `${name}, ${size} B chunks, phase ${p}`).toBe(0);
+              expect(count(sent, DRAWER_SECRET_MASK), `${name}, ${size} B chunks, phase ${p}: marks`).toBeGreaterThan(0);
+            }
+          }
+        }
+      } finally {
+        m.close();
+      }
+    }, 300_000);
+
+    it('pane history: one break of a LF or a move down, a blank or an SGR, then CR CR LF is masked where main masks it (review 2514 F1)', async () => {
+      // The same break in pane history, a 2,000-byte key at 40 columns, 1,800 bytes of escapes a row, after 200 rows, the
+      // break before the key's 40th row: at 20775879e 400 key bytes at this placement for each form, where `main` shows 0.
+      // At other placements `main` shows up to the whole key for these forms, and so does this fix, cell for cell
+      // (`drawer-consecutive-breaks`, `c45.md` §13).
+      const key = keyOf(2_000, 2472);
+      const m = fingerprinted(key);
+      try {
+        const shown = shownOf(key);
+        const { text: t0, breaks } = rowsOf(key, 40, 1_800, '\r\n', 200);
+        const b = breaks[239]!;
+        for (const [name, sep] of BREAK_THEN_CRCRLF) {
+          const text = t0.slice(0, b) + sep + t0.slice(b + 2);
+          const out = await m.maskTextSliced(`${ordinary(15_000)}${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
+          expect(shown(out), name).toBe(0);
+          expect(count(out, SECRET_MASK), `${name}: marks`).toBeGreaterThan(0);
+        }
+      } finally {
+        m.close();
+      }
+    }, 300_000);
+
+    it('two pushes cut inside a CR CR LF, after its first CR or after both, draw nothing, plain rows or past the hold (review 2514 F2)', () => {
+      // Review 2514 F2: a push that ended in both CRs read them as two breaks with an empty row between, so the drawer held
+      // nothing and the key's rows before the cut went out alone: the whole key at every such cut, at `main` and at this
+      // task's first fix alike. Two CRs at a text's end are now one break the next byte may complete. A cut after the first
+      // CR was masked before and is pinned beside it.
+      for (const [n, pre] of [[2_000, 0], [8_192, 600]] as const) {
+        const key = keyOf(n, 2473);
+        const m = fingerprinted(key);
+        try {
+          const shown = shownOf(key);
+          const { text, breaks } = rowsOf(key, 64, pre, '\r\r\n');
+          const bad: string[] = [];
+          for (const b of breaks) {
+            if (pre > 0 && b < 60_000) continue;
+            for (const c of [b + 1, b + 2]) {
+              const sent = throughDrawer(m, [{ text: text.slice(0, c), quietMs: 0 }, { text: text.slice(c), quietMs: 40 }]);
+              const k = shown(sent);
+              if ((k > 0 || !sent.includes(DRAWER_SECRET_MASK)) && bad.length < 5) bad.push(`cut at ${c}: ${k} key bytes, ${count(sent, DRAWER_SECRET_MASK)} marks`);
+            }
+          }
+          expect(bad, `${n} bytes, ${pre} bytes of escapes a row`).toEqual([]);
+        } finally {
+          m.close();
+        }
       }
     }, 300_000);
   });

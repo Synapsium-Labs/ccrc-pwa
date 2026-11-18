@@ -51,7 +51,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import { isOperatorSecretLane, type SecretUnmasked } from '../../../shared/ledgers.js';
 import {
-  ROW_BREAK, RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
+  LF_BREAK_REST, ROW_BREAK, RUN_MAX_BYTES, RUN_MIN_BYTES, ROW_END, ROW_INDENT, SHAPE_STARTED, SHAPES, TOKEN_RUN, leadingRun, matchesShape, origin,
   Rows, rowTextEnd, runOnRows, shapeSpans, spanIn, spliceMasked, viewOf, walkStrings, type View,
 } from './shapes.js';
 
@@ -231,8 +231,9 @@ function sliceCutAt(text: string, nl: number): number {
   return br !== null && br[0].length + 1 < v.t.length ? Math.max(nl + 1, b0 + origin(v, br[0].length)) : nl + 1;
 }
 /** The rest of a row break that a slice cut after its LF (C45): blanks and escapes (NULs in the view), then the CR that
- *  ends the break, with no LF or CR LF after it (that makes a CR LF or CR CR LF, and the blanks a row of their own). */
-const BREAK_REST = /^[ \t\0]*\r(?!\r?\n)/;
+ *  ends the break, with no LF after it (that makes a CR LF, and the blanks a row of their own). Built from the grammar's
+ *  own piece (`LF_BREAK_REST`), never a copy of it (review 2514 F5). */
+const BREAK_REST = new RegExp(`^(?:${LF_BREAK_REST})`);
 /** The first index of view `v` whose original index is `i` or later. */
 function viewIndexOf(v: View, i: number): number {
   if (v.map === null) return i;
@@ -519,10 +520,12 @@ function chainRowsOn(text: string, from: number, left: ChainLeft, spans: [number
 }
 /** `i`, or where the escape that `i` falls inside begins, never before `min` (review 2411 F3): an escape begun before `i`
  *  and not ended by it. A cut there leaves its head as text at the end of what is read before it and its tail as text at
- *  the start of what is read after. Read back over `ESC_CUT_BACK` units: an escape longer than that is cut where it is. */
+ *  the start of what is read after. Read back over `ESC_CUT_BACK` units, and no further (review 2514 F12: an unbounded
+ *  search for the last ESC read to the text's start): an escape longer than that is cut where it is. */
 function outsideEscape(text: string, i: number, min: number): number {
   const from = Math.max(min, i - ESC_CUT_BACK);
-  const e = text.lastIndexOf('\x1b', i - 1);
+  let e = i - 1;
+  while (e >= from && text.charCodeAt(e) !== 0x1b) e--;
   if (e < from) return i;
   const u = UNFINISHED_ESC.exec(text.slice(from, i));
   return u === null ? i : Math.max(min, from + u.index);
@@ -1317,10 +1320,20 @@ const ROW_TAIL_MIN_BYTES = 8;
  *  LF, blanks, CR, one break that starts at the CR LF's LF. Kept, as it fails closed: a reader that steps back over
  *  breaks (the cap's step back) reaches the row before the blank row and reads its run, a chain that can only mask
  *  more; a reader that stops at the start (`chainBack`, `rowTailAt`) finds the CR LF's CR before it, text that is no
- *  run, and ends there as it does forward. */
+ *  run, and ends there as it does forward. A CR CR LF reads back from its LF to its first CR, unless that CR ends a LF,
+ *  blanks, CR break (a LF that no CR comes before: a CR right before a LF is always in the break that LF ends): then
+ *  the break is the CR LF after it, as forward (C45 fix round, review 2514 F1). An index where no forward break ends
+ *  (a LF a CR may follow) answers the start of the break it would be in: every caller passes a break's end or a text's
+ *  end, where the next byte may complete it (review 2514 F7). */
 export function breakStartAt(t: string, j: number): number | null {
   const c = t[j - 1];
-  if (c === '\n') return j >= 2 && t[j - 2] === '\r' ? (j >= 3 && t[j - 3] === '\r' ? j - 3 : j - 2) : j - 1;
+  if (c === '\n') {
+    if (j < 2 || t[j - 2] !== '\r') return j - 1;
+    if (j < 3 || t[j - 3] !== '\r') return j - 2;
+    let k = j - 3;
+    while (k > 0 && (t[k - 1] === ' ' || t[k - 1] === '\t' || t[k - 1] === '\0')) k--;
+    return k > 0 && t[k - 1] === '\n' && t[k - 2] !== '\r' ? j - 2 : j - 3;
+  }
   if (c !== '\r') return null;
   let k = j - 1;
   while (k > 0 && (t[k - 1] === ' ' || t[k - 1] === '\t' || t[k - 1] === '\0')) k--;
@@ -1345,7 +1358,10 @@ function rowTailAt(
   let j = t.length;
   while (j > 0 && ROW_LEAD.includes(t[j - 1]!)) j--;
   if (j === 0) return null;
-  const br = breakStartAt(t, j);
+  let br = breakStartAt(t, j);
+  // Two CRs at the text's end: the next byte may make them a CR CR LF, one row down, so the row before them ends here.
+  // Read as two breaks, an empty row between, nothing was held and a key's rows went out alone (review 2514 F2).
+  if (br === j - 1 && j === t.length && t[j - 2] === '\r') br = breakStartAt(t, j - 1);
   if (br === null) {
     // No row break yet, but the run ends in blanks (an erase, padding) at the text's end: its row end may be the next
     // chunk's first bytes, and its key's next row after it (D-8710). Held while fingerprints are; a shape that reaches
