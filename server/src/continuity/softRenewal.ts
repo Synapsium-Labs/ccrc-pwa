@@ -9,7 +9,7 @@
 import type { FleetRole } from '../../../shared/fleetRoles.js';
 import {
   BREAK_NO_MESSAGE_MS, BREAK_PLACE_HIDDEN_MS, EARLY_WHILE_AWAY_FRACTION, LEAST_AGE_MS, ON_SCHEDULE_WAIT_MS, SOFT_BUDGET,
-  SOFT_CEILING_FRACTION, TURNS_SOFT,
+  SOFT_CEILING_FRACTION, TURNS_SOFT, type RenewalMode,
 } from '../../../shared/continuity.js';
 import { RENEWAL_ROWS, measuredCount, type Reading, type RenewalInputs } from './renewalDue.js';
 
@@ -30,7 +30,7 @@ export interface SoftInputs {
   /** Overlord: observed time with no Overlord place visible (W1's console report). Not applicable to other roles. */
   readonly placeHiddenObservedMs: SoftReading<number>;
   /** The Setting (R19): renew when I'm away (the default), or on schedule. */
-  readonly mode: 'when-away' | 'on-schedule';
+  readonly mode: RenewalMode;
   /** How long the soft trigger has waited, observed. */
   readonly dueSinceObservedMs: number;
   /** The generation's age, observed: the least age. */

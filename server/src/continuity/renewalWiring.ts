@@ -4,8 +4,8 @@
 // (`ccdSessionHost`) with its send, usage and receipt reads, so `watch.ts` hands the pass three values and the runner its
 // plan. It decides nothing: every decision is in `renewalFeed.ts`, `renewalDrain.ts` and the machine.
 import type { SessionRecord } from '../registry.js';
-import type { FleetSession } from '../../../shared/api.js';
-import { HIBERNATE_FRESH_CAP, capSupported } from '../ccdargv.js';
+import { isRegistryId, type FleetSession } from '../../../shared/api.js';
+import { CCD_ARGV, HIBERNATE_FRESH_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { WatcherDeps } from '../deps.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import { queueSystemMail } from '../coord/rundefsTx.js';
@@ -16,9 +16,11 @@ import { readUsageMeasured } from '../usage.js';
 import { ccdSessionHost } from './ccdSessionHost.js';
 import type { SessionHost } from './sessionHost.js';
 import type { PlannedAct } from './generationsLane.js';
-import { runRenewalActs, type ActsResult } from './renewalActs.js';
+import { runRenewalActs, type ActsResult, type PrecompactWrite } from './renewalActs.js';
 import { drainVerdict, type DrainRead } from './renewalDrain.js';
 
+/** The actor the precompact route writes are journalled under on the box. */
+const PRECOMPACT_ACTOR = 'generations lane';
 // `onDraft: 'stash'` is written at each call: `lane-draft-never-blocks.test.ts` reads the policy off the call itself.
 const SEND_OPTS = { holdIfAutoContinueArmed: true, refuseIfTurnRunning: true } as const;
 
@@ -26,6 +28,8 @@ export interface RenewalWiring {
   readonly canRenew: boolean;
   readonly drainOf: (id: string) => Promise<DrainRead>;
   readonly run: (planned: readonly PlannedAct[]) => Promise<ActsResult>;
+  /** Write `precompact=allow` for each session the pass retracts (`GenerationsResult.retract`), live or shadow. */
+  readonly retract: (sessionIds: readonly string[]) => Promise<void>;
 }
 
 /** The `SessionHost` over ccd, one construction for the renewal acts and for the designation door's first prompt (Overlord W1
@@ -61,6 +65,14 @@ export function renewalActsOf(
   const now = (): number => deps.time.clock.wall();
   const unmeasured: DrainRead = { held: true, reason: 'unmeasured' };
   const host = renewalHostOf(deps, coord, serial);
+  // The PreCompact arm's field (the renewal hand-offs, Task 6): one `route --set precompact=` behind the `route` verb's cap.
+  const routePrecompact = async (id: string, value: 'refuse' | 'allow'): Promise<PrecompactWrite> => {
+    if (!isRegistryId(id)) return { kind: 'refused', reason: 'not a registry id' };
+    if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
+    const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
+    if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };
+    return res.ok ? { kind: 'written' } : { kind: 'refused', reason: res.stderr.split('\n')[0]?.trim() || 'no stderr' };
+  };
   return {
     canRenew: capSupported(deps.fleetState, HIBERNATE_FRESH_CAP),
     drainOf: async (id) => {
@@ -74,7 +86,16 @@ export function renewalActsOf(
     },
     run: (planned) => runRenewalActs({
       coord, host, now, log: (line) => console.warn(line), memo,
+      routePrecompact,
       mail: (toId, subject, body) => queueSystemMail(coord, null, { fromId: 'operator', toId, runId: null, kind: 'status', subject, body }).queued,
     }, planned),
+    retract: async (ids) => {
+      for (const id of ids) {
+        const w = await routePrecompact(id, 'allow');
+        if (w.kind !== 'written') {
+          console.warn(`ccrc-server: renewal: ${id}: precompact=allow (retraction) was not written (${w.kind}${'reason' in w ? `: ${w.reason}` : 'detail' in w ? `: ${w.detail}` : ''})`);
+        }
+      }
+    },
   };
 }

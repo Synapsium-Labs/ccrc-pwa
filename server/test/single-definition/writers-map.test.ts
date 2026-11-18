@@ -315,7 +315,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
-  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts'] as const;
+  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts',
+  'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -415,6 +416,10 @@ describe(TABLES_PIN, () => {
       // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
       claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
       programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
+      // The renewal hand-offs (Overlord W1a): the Renew now door's request, the prompt route's mark and the lane's quiet of it.
+      continuity_renew_requests: ['server/src/continuity/continuityStore.ts#insertRenewRequest'],
+      operator_marks: ['server/src/continuity/continuityStore.ts#putOperatorMark'],
+      operator_mark_quiet: ['server/src/continuity/continuityStore.ts#advanceMarkQuiet'],
       // The decision-model records (Overlord W2, plan w2-decision-model.md Task 4): one answer per key, one writer; the day counts'
       // reservation and its settle, the boot release settling through the same writer. PR B adds `recordAnchorRun`.
       decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
