@@ -563,6 +563,35 @@ describe('the hierarchy settings', () => {
     expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: null, ownsTeam: false });
   });
 
+  it('a hierarchy write in flight locks every other row from the moment it starts', async () => {
+    const save = await sharedKey();
+    const inFlight = held<{ ok: true; settings: { initiatives: 'on'; linearOwner: null; ownsTeam: true } }>();
+    save.mockImplementationOnce(() => inFlight.promise);
+    fireEvent.click(owning('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(ownerSelect('project-b')).toBeDisabled();
+    expect(initiativesBox('project-b')).toBeDisabled();
+    expect(owning('project-b')).toBeDisabled();
+    await act(async () => { inFlight.resolve({ ok: true, settings: { initiatives: 'on', linearOwner: null, ownsTeam: true } }); });
+    vi.mocked(api.hierarchy).mockImplementation(async () => aOwns());
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+  });
+
+  it('an owner-for-all save in flight locks every row from the moment it starts', async () => {
+    await twoRows();
+    const inFlight = held<{ ok: true; projects: number }>();
+    vi.spyOn(api, 'ownerForAll').mockImplementation(() => inFlight.promise);
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(1));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    await act(async () => { inFlight.resolve({ ok: true, projects: 2 }); });
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+  });
+
   it('the stale note stays while a row is locked behind a failed read, even when an older read lands after it', async () => {
     await twoRows();
     const r2 = held<HierarchyAnswer>();

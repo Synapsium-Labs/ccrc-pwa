@@ -80,15 +80,16 @@ export const templateOffered = (l: ProjectLinkingWire): boolean =>
  *  key is shared, and the state. Every value shown, and every body written, is the hierarchy answer's row, the one source the
  *  server re-measures after each write (it clears `ownsTeam` on a sibling in the same transaction). Each control writes the
  *  moment it changes, the whole settings body at once. */
-function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, result }: {
+function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, track, result }: {
   name: string; answer: HierarchyAnswer; reread: () => number; busy: boolean; locked: boolean; setBusy: (b: boolean) => void;
-  raise: (seq: number) => void; result: ReturnType<typeof useResultLine>;
+  raise: (seq: number) => void; track: (d: 1 | -1) => void; result: ReturnType<typeof useResultLine>;
 }): ReactNode {
   const ownerId = useId();
   const h = answer.projects.find((p) => p.project === name);
   if (h === undefined) return null;
   const write = (patch: Partial<Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>>): void => {
     setBusy(true);
+    track(1);
     result.clear();
     void api.saveHierarchy(name, { initiatives: h.initiatives, linearOwner: h.linearOwner, ownsTeam: h.ownsTeam, ...patch })
       .then(
@@ -102,7 +103,7 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, res
           result.say(linkingErrorText(err), 'refusal');
         },
       )
-      .finally(() => setBusy(false));
+      .finally(() => { track(-1); setBusy(false); });
   };
   const inbound = inboundWords(h.inboundWaiting);
   const named = h.linearOwner;
@@ -137,9 +138,9 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, res
   );
 }
 
-function LinkingRow({ name, linking, now, onStored, answer, landed, floor, raise, reread }: {
+function LinkingRow({ name, linking, now, onStored, answer, landed, floor, inflight, raise, track, reread }: {
   name: string; linking: ProjectLinkingWire; now: number; onStored: (project: string, linking: ProjectLinkingWire) => void;
-  answer: HierarchyAnswer | null; landed: number; floor: number; raise: (seq: number) => void; reread: () => number;
+  answer: HierarchyAnswer | null; landed: number; floor: number; inflight: number; raise: (seq: number) => void; track: (d: 1 | -1) => void; reread: () => number;
 }): ReactNode {
   const keyId = useId();
   const overrideId = useId();
@@ -243,7 +244,7 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, raise
         )}
         {pr !== null && <TextLink href={pr}>{LINKING_TEXT.templatePr}</TextLink>}
       </div>
-      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={landed < Math.max(need, floor)} setBusy={setBusy} raise={raise} result={result} />}
+      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={inflight > 0 || landed < Math.max(need, floor)} setBusy={setBusy} raise={raise} track={track} result={result} />}
       <div className="linking-result"><ResultLine line={result.line} /></div>
       <QuickConfirm
         open={asking}
@@ -263,7 +264,7 @@ function withTemplatePresent(l: ProjectLinkingWire): ProjectLinkingWire {
 }
 
 /** The card's one act on every project (D-8184): pick a coordinator, then confirm. The answer is read back, not assumed. */
-function OwnerForAll({ answer, reread, setFloor }: { answer: HierarchyAnswer; reread: () => number; setFloor: (seq: number) => void }): ReactNode {
+function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAnswer; reread: () => number; setFloor: (seq: number) => void; track: (d: 1 | -1) => void }): ReactNode {
   const pickId = useId();
   const [pick, setPick] = useState('');
   const [asking, setAsking] = useState(false);
@@ -271,6 +272,7 @@ function OwnerForAll({ answer, reread, setFloor }: { answer: HierarchyAnswer; re
   const result = useResultLine();
   const apply = (): void => {
     setBusy(true);
+    track(1);
     result.clear();
     void api.ownerForAll(pick)
       // It wrote every row: every row stays locked until a read at least as new as this write has landed (the card's floor).
@@ -278,7 +280,7 @@ function OwnerForAll({ answer, reread, setFloor }: { answer: HierarchyAnswer; re
         if (!(err instanceof ApiError)) setFloor(reread());
         result.say(linkingErrorText(err), 'refusal');
       })
-      .finally(() => setBusy(false));
+      .finally(() => { track(-1); setBusy(false); });
   };
   return (
     <div className="linking-all" data-linking-all="">
@@ -332,6 +334,9 @@ export function ProjectLinkingCard(): ReactNode {
   }, []);
   // The seq of the read the last owner-for-all save needs: a floor every row's lock also checks.
   const [floor, setFloorState] = useState(0);
+  // Hierarchy writes (and owner-for-all) in flight: every row is locked from the moment one starts, since it may change other rows.
+  const [inflight, setInflight] = useState(0);
+  const track = useCallback((d: 1 | -1): void => setInflight((n) => n + d), []);
   const raise = useCallback((seq: number): void => setFloorState((f) => Math.max(f, seq)), []);
 
   useEffect(() => {
@@ -357,7 +362,7 @@ export function ProjectLinkingCard(): ReactNode {
       : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
           <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} raise={raise} reread={reread} />)}
+            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />)}
           </ul>
         );
   }
@@ -368,7 +373,7 @@ export function ProjectLinkingCard(): ReactNode {
           <p className="settings-note">{HIERARCHY_TEXT.rereadFailed}</p>
           <Button variant="ghost" onClick={() => reread()}>{HIERARCHY_TEXT.readAgain}</Button>
         </div>}{body}
-        {answer !== null && read.kind === 'read' && read.rows.length > 0 && <OwnerForAll answer={answer} reread={reread} setFloor={raise} />}</div>
+        {answer !== null && read.kind === 'read' && read.rows.length > 0 && <OwnerForAll answer={answer} reread={reread} setFloor={raise} track={track} />}</div>
     </Section>
   );
 }
