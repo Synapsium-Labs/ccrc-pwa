@@ -83,6 +83,7 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
+import { registerApprovalCensusRoutes } from './coord/approvalCensusRoutes.js';
 import { overridesViewNow } from './overridesRead.js';
 import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
@@ -2156,6 +2157,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
     actorOf: (req) => deviceActor(sessionAuth(req).device),
   });
+  // The approval census's read (approvals plan 2026-11-18, Task 1.4): session-gated, no box token, registered from its own
+  // file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`APPROVAL_CENSUS_DOORS`) read by name.
+  registerApprovalCensusRoutes(app, { coord: () => deps.coord, wall: () => deps.time.clock.wall() });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
   const accountGate = createAccountGate({

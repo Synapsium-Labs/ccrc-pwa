@@ -101,8 +101,9 @@ export interface ApprovalCensusRowWire {
   readonly day: string;
   readonly sessionId: string;
   readonly programme: string | null;
-  readonly thread: 'main' | 'subagent';
-  readonly tool: string;
+  /** `null` for a menu seen with no envelope: whose thread painted it cannot be read. */
+  readonly thread: 'main' | 'subagent' | null;
+  readonly tool: string | null;
   readonly summary: string | null;
   readonly path: ApprovalCensusPath;
   readonly route: string | null;

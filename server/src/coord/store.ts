@@ -45,6 +45,7 @@ import * as probes from '../continuity/continuityStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
+import * as census from './approvalCensusStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
@@ -5529,7 +5530,7 @@ export class CoordStore {
   setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
-  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
+  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number; pushSource?: string }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
   claimOutboxRow(id: number, at: number, response?: responses.PushResponseOf): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at, response); }
   silenceOutboxRow(id: number, why: PushSilentWhy, at: number): ReturnType<typeof outbox.silenceOutboxRow> { return outbox.silenceOutboxRow(this.db, id, why, at); }
   supersededUnbound(id: number): boolean { return outbox.supersededUnbound(this.db, id); }
@@ -9805,6 +9806,14 @@ export class CoordStore {
     return h.ok ? { ok: true, row: h.row } : { ok: false, detail: h.detail };
   }
 
+  // The approval census (approvals plan 2026-11-18, §3.1; `approvalCensusStore.ts`): its one writer, reached only through
+  // the questions owner, its retention, and the census read's three reads.
+  insertCensusRow(r: census.CensusRowInsert): ReturnType<typeof census.insertCensusRow> { return census.insertCensusRow(this.db, r); }
+  pruneCensusSummaries(before: number): number { return census.pruneCensusSummaries(this.db, before); }
+  censusRowsIn(fromMs: number, toMs: number): census.CensusRowsResult { return census.censusRowsIn(this.db, fromMs, toMs); }
+  approvalRowsForCensus(fromMs: number, toMs: number): census.ApprovalCensusSourceResult { return census.approvalRowsForCensus(this.db, fromMs, toMs); }
+  approvalPushSources(fromMs: number, toMs: number): Readonly<Record<string, number>> { return census.approvalPushSources(this.db, fromMs, toMs); }
+
   /** A child's rows in the given states, oldest first. */
   approvalsForChild(childId: string, states: readonly ApprovalState[]): ApprovalsReadResult {
     if (states.length === 0) return { ok: true, rows: [] };
@@ -9836,13 +9845,16 @@ export class CoordStore {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
     releaseReason?: ApprovalMintReleaseReason;
+    /** The census's two facts from mint (approvals plan 2026-11-18, Task 1.4): the statements' command words (null when
+     *  the grammar cannot list them) and `literalInRoot`. Absent: stored NULL, as on a row minted before them. */
+    commandWords?: readonly string[] | null; literalInRoot?: boolean;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, commandWords, literalInRoot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
@@ -9850,6 +9862,8 @@ export class CoordStore {
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
         a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt,
+        a.commandWords === undefined || a.commandWords === null ? null : JSON.stringify(a.commandWords),
+        a.literalInRoot === undefined ? null : (a.literalInRoot ? 1 : 0),
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');

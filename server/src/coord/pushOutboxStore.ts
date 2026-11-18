@@ -282,16 +282,21 @@ export function armBoundRowInTx(db: DatabaseSync, source: OutboxSource, sourceId
  *  still send (C67). It always commits in its own transaction and never joins a caller's open one: a row a caller's
  *  rollback took back would hand its id, and its attempt's late verdict, to the next insert (review 2150 F7, slug
  *  unbound-insert-commits-alone), so inside a transaction it writes nothing and the push is sent with no row. */
-export function insertUnboundRow(db: DatabaseSync, row: { readonly pushId: string; readonly payload: OutboxPayload; readonly at: number },
+export function insertUnboundRow(db: DatabaseSync, row: {
+  readonly pushId: string; readonly payload: OutboxPayload; readonly at: number;
+  /** An approval push's source, `approval:<n>` or `census:<n>` (approvals plan 2026-11-18, Task 1.4): the census read
+   *  counts the pushes by it. Written here, by this one insert, and nowhere else. */
+  readonly pushSource?: string;
+},
   response?: PushResponseOf): ({ readonly ok: true; readonly id: number; readonly claimSeq: number } & ResponseSide) | { readonly ok: false; readonly detail: string } {
   if (db.isTransaction) return { ok: false, detail: 'push_outbox insert refused inside an open transaction' };
   try {
     mustMove(null, 'sending', 'sender', 'insertUnboundRow');
-    const insert = stmt(db, 'INSERT INTO push_outbox (pushId, payload, tag, state, createdAt, armedAt, claimSeq, attempts, claimedAt) '
-      + "VALUES (?, ?, ?, 'sending', ?, ?, 1, 1, ?)");
+    const insert = stmt(db, 'INSERT INTO push_outbox (pushId, payload, tag, state, createdAt, armedAt, claimSeq, attempts, claimedAt, pushSource) '
+      + "VALUES (?, ?, ?, 'sending', ?, ?, 1, 1, ?, ?)");
     // The push's response row commits with the insert, before anything is sent (C67; plan w1-responses Task 3).
     const write = (): { id: number; side: ResponseSide } => {
-      const id = Number(insert.run(row.pushId, JSON.stringify(row.payload), row.payload.tag, row.at, row.at, row.at).lastInsertRowid);
+      const id = Number(insert.run(row.pushId, JSON.stringify(row.payload), row.payload.tag, row.at, row.at, row.at, row.pushSource ?? null).lastInsertRowid);
       return { id, side: response === undefined ? { responseWritten: false } : pushResponseSide(db, row.pushId, row.payload, response, row.at) };
     };
     const { id, side } = tx(db, write);

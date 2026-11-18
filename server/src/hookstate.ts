@@ -80,6 +80,9 @@ export interface HookState {
    *  file whose `updatedAt` is good (`aliveAt`'s rule). `fleet.ts` is the one
    *  reader that turns it into `FleetSession.background`. */
   background?: { count: number; kinds: string[] };
+  /** The hook's `waitBy` (D-5232): `subagent` when a subagent's own prompt raised this wait. Absent otherwise, and on any
+   *  other value. Read by the approval census (approvals plan 2026-11-18, Task 1.3) for a prompt's thread. */
+  waitBy?: 'subagent';
 }
 
 /** D-5231: the kinds string the hook writes — unique cleaned kinds, comma-joined, or empty. */
@@ -366,6 +369,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
         graphGateDenials: reviveGraphCount(raw, 'graphGateDenials'),
         interrupted: interruptedRaw === true,
         ...(background === undefined ? {} : { background }),
+        ...(raw['waitBy'] === 'subagent' ? { waitBy: 'subagent' as const } : {}),
       },
       sessionId,
       identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',

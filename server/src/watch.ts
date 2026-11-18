@@ -3654,6 +3654,8 @@ export class FleetWatcher {
     dedupeKey?: string;
     /** The push outbox (Overlord W1): an ask's bound row, written by its move; the funnel sends that row. */
     bound?: NoticeOpts['bound'];
+    /** An approval push's source (approvals plan 2026-11-18, Task 1.4), kept on its outbox row. */
+    source?: string;
   } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
@@ -3672,6 +3674,7 @@ export class FleetWatcher {
         ...(e.url !== undefined ? { url: e.url } : {}),
         ...(e.dedupeKey !== undefined ? { dedupeKey: e.dedupeKey } : {}),
         ...(e.bound !== undefined ? { bound: e.bound } : {}),
+        ...(e.source !== undefined ? { source: e.source } : {}),
       });
   }
 
@@ -9670,6 +9673,10 @@ export class FleetWatcher {
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);
+        // The approval census (approvals plan 2026-11-18, Task 1.3): every tick a dialog is painted, before anything raises,
+        // the questions owner decides whether this prompt leaves no approvals row and writes its one census row if so. The
+        // push below carries the source it found (`pushSourceOf`, Task 1.4).
+        this.questions.observeCensus(r, dialog, this.hookStates.get(r.id) ?? null, Date.now());
         // The pane is what raises this push (`kind: 'ask'` has exactly one
         // producer, and it is this scrape), but the ANSWERABLE part comes from
         // the hook envelope: only it carries the option labels and the content
@@ -9683,10 +9690,12 @@ export class FleetWatcher {
           // `assembleFleet` (see `tick()`), so the current fleet's project
           // set isn't computed yet; it reads last tick's, same reasoning as
           // `sweepMerged` above.
+          const source = this.questions.pushSourceOf(r.id);
           this.pushOne({
             kind: 'ask', sessionId: r.id, project: r.project,
             title: '❓ Question', body: askPushBody(this.hookStates.get(r.id) ?? null, dialog),
             ...(actions ? { actions } : {}),
+            ...(source !== undefined ? { source } : {}),
           }, this.activeProjects);
           // Latched whenever this raise had no actions, cleared the moment one
           // has them — so the amendment below fires at most once per question.
