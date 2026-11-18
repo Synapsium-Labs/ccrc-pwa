@@ -4220,13 +4220,14 @@ screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
 - **Fix round 1 (review 2430).** The 64 KiB hold moved texts of 64 to 256 KiB, which `main` read whole, onto the
   carried-chain arms, which read a move down then a CR (CUD+CR, IND+CR) as two breaks with an empty row between and a
   text ending inside a break as an empty row: up to 3,840 bytes of a key in the drawer and the whole key in pane history
-  where `main` showed none (F1, measured by the review and again here). `chainRowSpans`, the cap's step back, a grown
+  where `main` showed none (F1, review 2430's measurement; this task's own script measured up to 2,736 bytes in the
+  drawer and up to 8,064 of 8,128 in pane history, `c44.md` §12.2, figures C45 labelled after review 2445 F7). `chainRowSpans`, the cap's step back, a grown
   read's end and pane history's slice cut now read row breaks as `ROW_BREAK` does, and `endsInRow` (so `cont`) answers
   true for a text that ends inside a break or after one the next text may complete. That also closed the same reader's
   form past `main`'s 256 KiB hold, and two pane-history forms that leaked on `main` too: CR LF at a grown read (review
-  2430 F3) and LF then CR at a slice cut. Seven more cases (fourteen in the describe), eight more mutants (twenty),
-  each red; the minors F4 to F10 are corrected in the records (`c44.md` §12). A 200-form fuzz shows this branch worse
-  than `main` in none; four forms coloured character by character leak on both alike, carried
+  2430 F3) and LF then CR at a slice cut. Seven more cases (fourteen in the describe; six red before the fix, the
+  seventh on its mutant `n2c`), eight more mutants (twenty), each red; the minors F4 to F10 are corrected in the records
+  (`c44.md` §12). A 200-form fuzz shows this branch worse than `main` in none; four forms coloured character by character leak on both alike, carried
   (`mask-perchar-fuzz-shared`).
 
 - **D-8728** — `mask-fail-open-forms`: Task C44, issued on 2026-11-17. The masker's stops that cannot prove a key's
@@ -4235,12 +4236,48 @@ screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
   the floor rather than an empty lead (`drawer-lead-floor-not-empty`), five holes found in the task and closed
   (`drawer-lead-bel-hyperlink`, `pane-cap-blank-read`, `chain-row-tail-cont`, `drawer-taint-through-escapes`,
   `r19-row-tail-arm`), the F11 comment in a file another run claims (`secret-mask-comment-consent`), and, from review
-  2430 F1, the carried-chain arms and pane history's slice cut reading row breaks as `ROW_BREAK` does, with `cont` true
-  for a text that ends inside a break (`chain-row-break-grammar`).
+  2430 F1, the carried-chain arms, the cap's step back, a grown read's end and pane history's slice cut reading row
+  breaks as `ROW_BREAK` does, with `cont` true for a text that ends inside a break (`chain-row-break-grammar`).
 
 **Acceptance.** Every server test of the masker passes at the PR's tip, but for load timeouts that `main`'s masker
-shows too (`c44.md` §11); the D-8728 rows are red at `main` as `c44.md` §4 says; each mutant in `c44.md` §5 reds;
-the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+shows too (`c44.md` §11 and §12.9); the D-8728 rows are red at `main` as `c44.md` §4 and §12.3 say (of the fix round's
+seven, six were red before it and the seventh reds its mutant `n2c`); each mutant in `c44.md` §5 and §12.4 reds; the
+server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+
+**Rollback.** A plain revert.
+
+### Task C45: the masker follow-up to C44 (D-8749) — now
+
+**Why.** Review 2445 read C44 (#2998) and found nothing that blocked its landing, but nine findings to carry: a slice
+cut that still ends a key's rows when a LF and its CR are far apart or have an escape between them (F1), the cut's bound
+and the back reader's grammar unpinned (F3, F2), consecutive row breaks that end a key's rows (F4), a slow case that may
+have slowed (F5), rows that a drawer sending nothing passes (F6), and record figures (F7 to F9). This is secret masking,
+so fail-closed comes before a tidy screen. The task note is `docs/superpowers/programs/desktop-polish/c45.md`.
+
+**What was done.**
+- **F5 first.** `secret-mask.test.ts`'s "typed slowly" case is not slower at `main` than before C44: ratio 0.93 over six
+  alternating pairs, and 468 against 475 ms of CPU over eight in one process; its wall clock is opening five `coord.db`
+  files under load (26 to 32 s of 26 to 32 s), not the masker (`c45.md` §1). No masker change for it.
+- **F1** (`pane-cut-long-break`): the slice cut reads its break through the escape view, and a slice's lookahead reads
+  the rest of a break the cut fell inside as part of it (`lookaheadEnd`'s `lead`), not as an empty row. A LF, 64 blanks or
+  more (or NULs, or an escape), then a CR showed up to the whole key in pane history at `main`; 0 here. Cutting at the
+  break's start, the review's first proposal, leaked every form, short breaks included (measured), so it was not used.
+- **F3**: a row pins where a slice ends at 63 and 64 blanks and for an escape, so `BREAK_CUT_MAX` at 63 or 65 reds it.
+- **F2**: `breakStartAt` keeps the one family it reads back differently from `ROW_BREAK` (a CR LF, blanks or none, then
+  a CR), because the difference fails closed; its docstring says where, and a brute force over 488,280 strings pins the
+  agreement and the difference (`mask-break-grammar.test.ts`).
+- **F4** (`drawer-consecutive-breaks`): the cause is the forward grammar, not `chainBack`. `ROW_BREAK` reads CR CR LF (a
+  CR LF doubled) as one break, closing it in the drawer and pane history (the whole key at `main`); CR LF CR, CR SGR LF,
+  CR LF SGR CR, LF LF and CR LF then CUD+CR stay as at `main`, named with their sizes.
+- **F6**: C44's seven fix-round rows assert the mark too; a drawer that drops every emit reds each drawer row.
+- **Records** (F7 to F9): the row comments, `c44.md` and this plan's C44 figures corrected or labelled as review 2430's
+  or the C44 script's; D-5995 (16) names `mask-perchar-fuzz-shared`; #2998's stale lines listed in `c45.md` §10.
+- **Tests.** Three rows in `drawer-mask-rows.test.ts` (describe "D-8749"), each red at `main`, and the new
+  `mask-break-grammar.test.ts`. Twelve mutants, each red (`c45.md` §6).
+
+**Acceptance.** Every server test of the masker and the row grammar passes at the PR's tip, but for load timeouts that
+`main` shows too (`c45.md` §12); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say; each mutant in
+`c45.md` §6 reds; the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
 
 **Rollback.** A plain revert.
 
@@ -4619,6 +4656,13 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   guard's layout arm refuses a new file under `docs/superpowers/specs/` or `docs/superpowers/plans/` outside the review
   judge's layout (format F1), on every branch and with no trailer escape (the operator's ruling of 2026-11-17: follow the
   judge's standard). Notes already on `main` stay where they are. Further departures, by slug, in `c43.md`.
+- **D-8749** — `mask-c44-follow-up`: Task C45, issued on 2026-11-18. The masker closes the slice-cut and doubled-CR forms
+  review 2445 carried from C44 and pins its break grammar: a slice's lookahead reads the rest of a LF ... CR break its cut
+  fell inside as part of that break, and the cut reads its break through the escape view (`pane-cut-long-break`, review
+  2445 F1, not by cutting at the break's start, which leaked every form); `ROW_BREAK` reads CR CR LF as one break, and the
+  other consecutive-break forms stay as at `main`, carried (`drawer-consecutive-breaks`, F4); `breakStartAt`'s one
+  difference from `ROW_BREAK` is kept and pinned (F2); the slow case's setup is carried as a test change
+  (`secret-mask-slow-case-db`, F5). Sizes and runs in `c45.md`.
 
 ## Out of scope
 
