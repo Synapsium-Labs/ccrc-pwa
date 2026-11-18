@@ -83,4 +83,19 @@ describe('useLaneModels (D-8406)', () => {
     const fourth = renderHook(() => useLaneModels('lane-a', never));
     expect(fourth.result.current).toEqual(readOf('Kept'));
   });
+
+  it('a caller asking again (refreshKey changing) reads the lane again, and a first render asks nothing extra', async () => {
+    let opus = 'Opus before';
+    const load = vi.fn(async (lane: string) => answer(lane, readOf(opus)));
+    const { result, rerender } = renderHook(({ key }: { key: number }) => useLaneModels('lane-a', load, false, key),
+      { initialProps: { key: 0 } });
+    await waitFor(() => expect(result.current).toEqual(readOf('Opus before')));
+    expect(load).toHaveBeenCalledTimes(1);
+    opus = 'Opus after';
+    rerender({ key: 1 });
+    await waitFor(() => expect(result.current).toEqual(readOf('Opus after')));
+    expect(load).toHaveBeenCalledTimes(2);
+    rerender({ key: 1 }); // the same key asks nothing
+    expect(load).toHaveBeenCalledTimes(2);
+  });
 });

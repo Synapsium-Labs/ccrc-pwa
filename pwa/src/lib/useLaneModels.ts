@@ -20,11 +20,13 @@ const cached = (lane: string | null): LaneModelsRead | null =>
 /** `lane` is the session's wrapper, or `null` while there is none to ask about (the hook then asks nothing). `load` is
  *  injectable for tests; it defaults to the app's one API client. `refreshOn` is a surface's own "shown again" signal
  *  (the model picker opening): each time it turns true the lane is asked again, so a class the registry moved while the
- *  screen stayed open is named the moment the models are looked at. */
+ *  screen stayed open is named the moment the models are looked at. `refreshKey` is a caller's own "ask again": each time
+ *  it changes the lane is read once more (the Models sheet, after an act whose outcome is unknown). */
 export function useLaneModels(
   lane: string | null,
   load: (lane: string, signal: AbortSignal) => Promise<unknown> = (l, signal) => api.laneModels(l, { signal }),
   refreshOn = false,
+  refreshKey = 0,
 ): LaneModelsRead | null {
   const [state, setState] = useState<{ lane: string | null; read: LaneModelsRead | null }>(
     () => ({ lane, read: cached(lane) }));
@@ -63,5 +65,13 @@ export function useLaneModels(
     wasShown.current = refreshOn;
     if (refreshOn && !before && lane !== null) reload();
   }, [refreshOn, lane, reload]);
+  // A caller's own "ask again" (the Models sheet, after an act whose outcome is unknown): each change of the key reads the
+  // lane once more. The first render's key is the baseline, so mounting asks nothing extra.
+  const lastKey = useRef(refreshKey);
+  useEffect(() => {
+    if (lastKey.current === refreshKey) return;
+    lastKey.current = refreshKey;
+    if (lane !== null) reload();
+  }, [refreshKey, lane, reload]);
   return state.lane === lane ? state.read : cached(lane);
 }

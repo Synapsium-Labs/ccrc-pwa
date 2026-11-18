@@ -24,7 +24,11 @@
 // The alias is set in ONE place, the lane's `settings.json` `env` block
 // (`deploy/models-op.mjs`'s materialiser writes it from the registry, `shared/modelenv.mjs` names its keys).
 import type { RosterWire, RouteField } from '../../../shared/api';
-import { CLASSES, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../../shared/models';
+import {
+  CLASSES, type LaneAdvanceRead, type LaneAdvanceState, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead,
+  type ModelClass,
+} from '../../../shared/models';
+import type { HistoryEntry, Hold, Pending, Previous } from '../../../shared/model-advance.mjs';
 import type { ProviderId } from '../../../shared/providers';
 import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 import { managedCodex } from '../accounts/connectFlow';
@@ -235,11 +239,75 @@ export function modelReadbackFor(
   return key === undefined || key === '' ? null : key;
 }
 
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
+const ADVANCE_STATES: readonly LaneAdvanceState[] = ['ok', 'absent', 'unreadable', 'invalid', 'unreported'];
+const HOLD_BYS: readonly string[] = ['hand', 'revert'];
+const HOWS: readonly string[] = ['advance', 'revert', 'hand'];
+const CANARIES: readonly string[] = ['passed', 'failed', 'not-run'];
+
+const asHold = (v: unknown): Hold | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || typeof v.at !== 'string' || typeof v.by !== 'string' || !HOLD_BYS.includes(v.by)) return undefined;
+  return { at: v.at, by: v.by as Hold['by'] };
+};
+const asPrevious = (v: unknown): Previous | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || !strOrNull(v.model) || !strOrNull(v.effort)) return undefined;
+  return { model: v.model, effort: v.effort };
+};
+/** One history entry: the fields the sheet reads are held to their grammar, and the entry's other keys ride along. */
+const asMove = (v: unknown): HistoryEntry | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || typeof v.at !== 'string' || typeof v.how !== 'string' || !HOWS.includes(v.how)) return undefined;
+  if (!strOrNull(v.from) || !strOrNull(v.to) || typeof v.ok !== 'boolean') return undefined;
+  if (typeof v.canary !== 'string' || !CANARIES.includes(v.canary)) return undefined;
+  return { ...v } as HistoryEntry;
+};
+const asPending = (v: unknown): Pending | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || typeof v.at !== 'string' || typeof v.class !== 'string' || !(CLASSES as readonly string[]).includes(v.class)) return undefined;
+  if (!strOrNull(v.to)) return undefined;
+  return { ...v } as unknown as Pending;
+};
+const asClassAdvance = (v: unknown): LaneClassAdvance | undefined => {
+  if (!isObj(v) || !strOrNull(v.family) || typeof v.revertable !== 'boolean') return undefined;
+  const hold = asHold(v.hold);
+  const previous = asPrevious(v.previous);
+  const lastMove = asMove(v.lastMove);
+  if (hold === undefined || previous === undefined || lastMove === undefined) return undefined;
+  return { family: v.family, hold, previous, revertable: v.revertable, lastMove };
+};
+
+/** The lane's advance state as `show` reported it (`LaneAdvanceRead`): five states never folded, and `undefined` for
+ *  an answer off the grammar. A state with no `detail` or `pending` key reads them as null (absence permits); the
+ *  classes are read only for `ok`, where every class must read. */
+function asLaneAdvance(raw: unknown): LaneAdvanceRead | undefined {
+  if (!isObj(raw) || typeof raw.state !== 'string' || !(ADVANCE_STATES as readonly string[]).includes(raw.state)) return undefined;
+  const state = raw.state as LaneAdvanceState;
+  const detail = raw.detail === undefined ? null : raw.detail;
+  if (!strOrNull(detail)) return undefined;
+  const pending = raw.pending === undefined ? null : asPending(raw.pending);
+  if (pending === undefined) return undefined;
+  if (state !== 'ok') return { state, detail, pending, classes: null };
+  if (!isObj(raw.classes)) return undefined;
+  const classes = {} as Record<ModelClass, LaneClassAdvance>;
+  for (const cls of CLASSES) {
+    const c = asClassAdvance(raw.classes[cls]);
+    if (c === undefined) return undefined;
+    classes[cls] = c;
+  }
+  return { state, detail, pending, classes };
+}
+
 /** D-8406: `GET /api/models/:lane`'s answer, held to its shape: the lane's `LaneModelsRead`, or `null` for anything
  *  else (an older server's 404 body, a malformed answer). A `read` must carry every class with a model and a label that
  *  are each a string or null, and (D-8686) an `efforts` that is an array of strings, or null; one that does not is not
  *  trusted for any class. An `efforts` that is absent (an older server) or null reads as `null`, "not known": absence
- *  permits. The ONE reader of that wire. Pure. */
+ *  permits. An `advance` key (model-class-advance R4) is read through `asLaneAdvance`: ABSENT stays absent (an agent
+ *  without the op: the advance file was not read, which is not `unreported`), and one off its grammar is not trusted
+ *  at all, so the whole answer reads `null`. The POST's 200 carries `models` too, and reads through here. The ONE
+ *  reader of that wire. Pure. */
 export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const models = (raw as { models?: unknown }).models;
@@ -249,7 +317,6 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   if (kind !== 'read') return null;
   const classes = (models as { classes?: unknown }).classes;
   if (typeof classes !== 'object' || classes === null) return null;
-  const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
   const out = {} as Record<ModelClass, LaneClassModel>;
   for (const cls of CLASSES) {
     const c = (classes as Record<string, unknown>)[cls];
@@ -261,7 +328,10 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
     }
     out[cls] = { model, label, efforts: efforts === undefined || efforts === null ? null : [...(efforts as string[])] };
   }
-  return { kind: 'read', classes: out };
+  const rawAdvance = (models as { advance?: unknown }).advance;
+  if (rawAdvance === undefined) return { kind: 'read', classes: out };
+  const advance = asLaneAdvance(rawAdvance);
+  return advance === undefined ? null : { kind: 'read', classes: out, advance };
 }
 
 /** Whether a class's readback can be measured on this lane (D-6334): the lane's provider is known and the list

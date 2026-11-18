@@ -16,6 +16,8 @@ import { navigate } from '../src/lib/router';
 import { useFleetStore } from '../src/stores/fleet';
 import { atBlock, declValue, ruleIn } from './cssRule';
 import { TEST_ROSTER } from './rosterFixture';
+import { ACCOUNT_CAPS, type AccountsConnect } from '../../shared/api';
+import type { RosterWire } from '../../shared/api';
 
 const fleetCss = readFileSync(path.join(import.meta.dirname, '..', 'src', 'fleet', 'fleet.css'), 'utf8');
 
@@ -622,5 +624,60 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
     expect(scroll.calls).toHaveLength(0);
     expect(document.activeElement).toBe(document.body);
     expect(rowOf('claude')).toHaveAttribute('tabindex', '-1');
+  });
+});
+
+// The Models act (model-class-advance wave R4, Task 20 as re-planned): the fold's one way into the Models sheet, on a Codex
+// lane only, stood down under the same rule as its neighbours, and the sheet it opens reads the lane through the one hook.
+describe('AccountsScreen: the fold\'s Models act', () => {
+  const connectOf = (over: Partial<AccountsConnect> = {}): AccountsConnect =>
+    ({ accountOps: 'available', gate: 'armed', origin: 'https', caps: [...ACCOUNT_CAPS], stepUpFreshUntil: Date.now() + 3_600_000, ...over });
+  const MIXED: RosterWire[] = TEST_ROSTER.map((r) =>
+    r.id === 'gpt' ? { ...r, provider: 'openai', kind: 'codex', managed: true }
+      : r.id === 'claude' ? { ...r, provider: 'anthropic', kind: 'sign-in' } : r);
+  const withLanes = (connect: AccountsConnect | null): void => {
+    act(() => useFleetStore.setState({
+      conn: 'open', usage: [acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', five: null, seven: 12 })], roster: MIXED, accountsConnect: connect,
+      lanes: {}, sessions: [],
+    }));
+  };
+  const card = (id: string): HTMLElement => document.querySelector(`.accounts-row[data-lane="${id}"]`) as HTMLElement;
+
+  it('is drawn in a Codex lane\'s fold and in no other lane\'s', async () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    withLanes(connectOf());
+    render(<AccountsScreen />);
+    expect(within(card('gpt')).getByRole('button', { name: 'Models' })).toBeInTheDocument();
+    expect(within(card('claude')).queryByRole('button', { name: 'Models' })).toBeNull();
+    expect(screen.getAllByRole('button', { name: 'Models' })).toHaveLength(1);
+  });
+
+  it('is stood down where its neighbours are (a fleet that cannot run account ops), and absent before the gate answers', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    withLanes(connectOf({ accountOps: 'unsupported' }));
+    render(<AccountsScreen />);
+    expect(within(card('gpt')).getByRole('button', { name: 'Models' })).toBeDisabled();
+    cleanup();
+    withLanes(null);
+    render(<AccountsScreen />);
+    expect(screen.queryByRole('button', { name: 'Models' })).toBeNull();
+  });
+
+  it('opens the sheet for that lane, which reads it once and acts through the api method', async () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    const classes = { haiku: 'm-h', sonnet: 'm-s', opus: 'm-o', fable: null };
+    const read = vi.spyOn(api, 'laneModels').mockResolvedValue({
+      ok: true, lane: 'gpt', models: { kind: 'read', classes: Object.fromEntries(Object.entries(classes).map(([c, m]) => [c, { model: m, label: m, efforts: null }])),
+        advance: { state: 'absent', detail: null, pending: null, classes: null } },
+    });
+    const post = vi.spyOn(api, 'laneModelsAct').mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
+    withLanes(connectOf());
+    render(<AccountsScreen />);
+    fireEvent.click(within(card('gpt')).getByRole('button', { name: 'Models' }));
+    const dialog = await screen.findByRole('dialog');
+    expect(dialog.querySelector('[data-frame="models"]')).not.toBeNull();
+    fireEvent.click(await within(dialog).findByRole('button', { name: 'Hold the opus class' }));
+    expect(post).toHaveBeenCalledWith('gpt', { action: 'hold', class: 'opus' });
+    expect(read.mock.calls.map((c) => c[0])).toEqual(['gpt']);
   });
 });

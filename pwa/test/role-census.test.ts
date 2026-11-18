@@ -272,6 +272,11 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     // Mint and Sign in (accounts plan Task A22, D-7849): the server's host beside Open, and the countdown.
     '.acct-url-host': META,
     '.acct-countdown': META,
+    // The Models sheet (model-class-advance R4): the advance note, a class's name, the facts under its model and a refusal.
+    '.acct-models-note': META,
+    '.acct-models-class .acct-models-name': META,
+    '.acct-models-facts p': META,
+    '.acct-models-class .acct-models-refusal': META,
   },
   'shell.css': {
     '.shell-accounts .account-gauge-label': META,
