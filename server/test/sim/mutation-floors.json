@@ -157,6 +157,7 @@
   "server/src/coord/decisionModel.ts#isLiteralHost": 1,
   "server/src/coord/programmeRemaining.ts#remainingBodyOf": 1,
   "server/src/coord/programmeRemaining.ts#edgeTargetVerdict": 1,
+  "server/src/coord/edgeVerdict.ts#edgeVerdict": 1,
   "server/src/coord/overlaps.ts#overlapSightings": 1,
   "server/src/coord/overlaps.ts#goalConflictSightings": 1,
   "server/src/coord/overlaps.ts#pairMoves": 1,
@@ -171,7 +172,15 @@
   "server/src/continuity/renewalReadings.ts#fittedCeilingOf": 1,
   "server/src/continuity/renewalReadings.ts#backstopInstantBefore": 1,
   "server/src/continuity/renewalReadings.ts#backstopDueOf": 1,
+  "shared/overlord-identity.ts#readActorColumns": 1,
+  "server/src/coord/otherLanes.ts#otherLaneVerdict": 1,
   "server/src/coord/planPolicy.ts#phaseNumbers": 1,
   "server/src/coord/planPolicy.ts#diffPhases": 1,
-  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1
+  "server/src/coord/planPolicy.ts#phaseRefVerdict": 1,
+  "server/src/time/seeded.ts#seededDraws": 1,
+  "server/src/coord/forecast.ts#forecastProgramme": 1,
+  "server/src/coord/forecast.ts#forecastOutcome": 1,
+  "server/src/coord/forecast.ts#forecastCalibration": 1,
+  "server/src/coord/forecast.ts#sealBoundary": 1,
+  "server/src/coord/forecast.ts#leadHistoryFrom": 1
 }

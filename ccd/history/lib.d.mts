@@ -600,6 +600,8 @@ export interface HealthInputs {
   readonly heldPassMs?: number | null;
   /** D-5633 (W5h-1 Task 2): the check after a bind's stop record (meta HEALTH_META.exportMarksCheck, read by parseMarkCheckState); null or absent when no check stands unfinished. A value the parser refuses rides extrasUnmeasured. */
   readonly exportMarksCheck?: ReturnType<typeof parseMarkCheckState> | null;
+  /** D-8726 (history-fts-fold-once): each FTS5 index's segment count from its structure record (store.mjs ftsSegmentsOn); null or absent where it is not measured. */
+  readonly ftsSegments?: { readonly blobs: number | null; readonly nodes: number | null } | null;
   readonly bytesBehindLast3: readonly number[];
   readonly fts: string | null;
   readonly modesWrong: readonly ModeWrong[];
@@ -647,6 +649,10 @@ export interface HealthInputs {
   /** What status could not read (Task 28F): each name is an input that kept its default and was NOT measured. */
   readonly extrasUnmeasured: readonly string[];
 }
+/** D-8726 (history-fts-fold-once): FTS5's segment limit and the two thresholds below it. */
+export const FTS5_MAX_SEGMENT: 2000;
+export const FTS_SEGMENTS_WARN: 500;
+export const FTS_SEGMENTS_DRAIN: 1500;
 export const HEALTH_META: Readonly<{
   recoverUnmovedTicks: 'recover_unmoved_ticks';
   exportSegmentNewer: 'export_segment_newer';

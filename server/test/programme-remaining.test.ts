@@ -4,8 +4,8 @@
 import { describe, it, expect } from 'vitest';
 import { edgeTargetVerdict, remainingBodyOf } from '../src/coord/programmeRemaining.js';
 import {
-  EDGE_KIND_OF_PREDICATE, EDGE_KINDS, EDGE_PREDICATES, EDGE_STATES, EDGE_WHY_MAX, EDGES_PER_STATEMENT_MAX, REMAINING_REASON_MAX,
-  REMAINING_WAVES_MAX, edgeTargetKey, parseEdgeTarget, type EdgeKind, type EdgePredicate,
+  EDGE_CLEARING_SHIPPED, EDGE_KIND_OF_PREDICATE, EDGE_KINDS, EDGE_PREDICATES, EDGE_STATES, EDGE_WHY_MAX, EDGES_PER_STATEMENT_MAX, REMAINING_REASON_MAX,
+  REMAINING_WAVES_MAX, edgeTargetKey, isEdgePredicate, parseEdgeTarget, type EdgeKind, type EdgePredicate,
 } from '../../shared/programmeFacts.js';
 import {
   DECIDE, EDGES_MAX, GOOD, LANDED, MERGED, NOW, REASON_MAX, WAVES_MAX, WHY_MAX, edgeTargetCases, remainingBodyCases,
@@ -22,6 +22,17 @@ describe('the remaining-work vocabulary', () => {
     expect(Object.keys(cover).sort()).toEqual([...EDGE_PREDICATES].sort());
     for (const k of Object.values(cover)) expect(EDGE_KINDS).toContain(k);
     expect(EDGE_STATES).toEqual(['open', 'met', 'target-ended', 'target-unmeasurable']);
+  });
+
+  it('the edge arm has shipped, so EDGE_CLEARING_SHIPPED is true (review 2265 F1; remaining work B)', () => {
+    expect(EDGE_CLEARING_SHIPPED).toBe(true);
+  });
+
+  it('CHARACTERIZATION (remaining work B\'s move): the edge predicates, their order, their kinds and their guard', () => {
+    expect(EDGE_PREDICATES).toEqual(['run-closed', 'pr-merged', 'operator-confirms']);
+    expect({ ...EDGE_KIND_OF_PREDICATE }).toEqual({ 'run-closed': 'needs-landed', 'pr-merged': 'needs-landed', 'operator-confirms': 'needs-decision' });
+    for (const w of EDGE_PREDICATES) expect(isEdgePredicate(w)).toBe(true);
+    for (const w of ['review-passed', 'goals-modified', 'run-merged', '']) expect(isEdgePredicate(w)).toBe(false);
   });
 
   it('edgeTargetKey is one canonical form, and parseEdgeTarget reads it back and nothing else', () => {

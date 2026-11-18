@@ -1,6 +1,8 @@
 // Programme facts (Overlord W2, spec §5.6 H38): the L0 vocabulary and wire of what the server keeps about a programme as a
-// whole. Ring L0, context Coordination (C5): it imports nothing, and each literal union carries its `Record<X, true>` map
+// whole. Ring L0, context Coordination (C5): it imports only a `shared/` sibling's vocabulary (the edge predicates are
+// done tests', `./doneTests.js`), never `node:*`, and each literal union carries its `Record<X, true>` map
 // (`rings/wire-totality.test.ts`). Each W2 piece keeps its own headed block below; one piece never edits another's.
+import { DONE_PREDICATES, type DonePredicate, type DoneTarget } from './doneTests.js';
 
 // Overlord W2, overlaps (spec 2026-11-09 §5.5-5.6; plan docs/superpowers/plans/2026-11-16-overlord-w2/w2-overlaps.md, Task 1):
 // the pair vocabulary, the goal-conflict choice table and the wire a standing pair travels on. Ring: L0, context
@@ -117,28 +119,31 @@ export const EDGE_EVIDENCE_MAX = 300;
  *  that a target nothing can read stops holding the forecast within a week. Its own fact, not any other week: it only
  *  shares the number (`token-shared.test.ts` names it in a row of its own). This block's one millisecond count. */
 export const EDGE_UNMEASURABLE_AFTER_MS = 7 * 86_400_000;
-/** Whether the edge arm that clears edges has shipped. Remaining work B sets it true; until then the forecast counts no
- *  edge in `blocking` or health, and lists edges as "clearing not shipped" (review 2265, F1). */
-export const EDGE_CLEARING_SHIPPED = false as boolean;
+/** Whether the edge arm that clears edges has shipped. Remaining work B shipped it (the forecast lane's edge arm,
+ *  `forecastLane.ts`). No forecast code reads it yet: forecasts B is the reader to come, which counts edges in
+ *  `blocking` and health only while it is true, and lists them as "clearing not shipped" while it is false (review
+ *  2265, F1). Typed `boolean` so that reader's other branch still compiles. */
+export const EDGE_CLEARING_SHIPPED = true as boolean;
 
 export type EdgeKind = 'needs-landed' | 'needs-decision';
 const EDGE_KIND_MAP: Record<EdgeKind, true> = { 'needs-landed': true, 'needs-decision': true };
 export const EDGE_KINDS = Object.keys(EDGE_KIND_MAP) as readonly EdgeKind[];
 
-/** Table 5.5a's words an edge can name (question 2). Done tests' vocabulary owns them; remaining work B derives this
- *  list from it, in a move commit. */
-export type EdgePredicate = 'run-closed' | 'pr-merged' | 'operator-confirms';
-const EDGE_PREDICATE_MAP: Record<EdgePredicate, true> = { 'run-closed': true, 'pr-merged': true, 'operator-confirms': true };
-export const EDGE_PREDICATES = Object.keys(EDGE_PREDICATE_MAP) as readonly EdgePredicate[];
+/** Table 5.5a's words an edge can name (question 2): a pick from done tests' vocabulary (`doneTests.ts`, its one owner),
+ *  so a word that is not a `DonePredicate` does not compile, and the list keeps that vocabulary's order. `review-passed`
+ *  and `goals-modified` name what a request asks for, not what a programme waits on, so no edge takes them. */
+const EDGE_PREDICATE_MAP = {
+  'run-closed': true, 'pr-merged': true, 'operator-confirms': true,
+} as const satisfies Partial<Record<DonePredicate, true>>;
+export type EdgePredicate = keyof typeof EDGE_PREDICATE_MAP;
+export const EDGE_PREDICATES: readonly EdgePredicate[] =
+  DONE_PREDICATES.filter((p): p is EdgePredicate => Object.prototype.hasOwnProperty.call(EDGE_PREDICATE_MAP, p));
 export const isEdgePredicate = (w: string): w is EdgePredicate => (EDGE_PREDICATES as readonly string[]).includes(w);
 
-/** What an edge waits on, each shape tied to a row of this tree: a run of another programme; a pull request that run's
- *  recorded lineage lists (the lineage records no repository, so the run's project names it); an item of this
- *  programme that still waits. */
-export type EdgeTarget =
-  | { readonly predicate: 'run-closed'; readonly runId: number }
-  | { readonly predicate: 'pr-merged'; readonly runId: number; readonly pr: number }
-  | { readonly predicate: 'operator-confirms'; readonly itemId: number };
+/** What an edge waits on: done tests' bare target for one of the edge's predicates, each shape tied to a row of this
+ *  tree: a run of another programme; a run's own pull request (the run names the repository); an item of this programme
+ *  that still waits. */
+export type EdgeTarget = Extract<DoneTarget, { readonly predicate: EdgePredicate }>;
 
 /** The kind of edge each target takes. */
 export const EDGE_KIND_OF_PREDICATE: Readonly<Record<EdgePredicate, EdgeKind>> = {
@@ -148,6 +153,7 @@ export const EDGE_KIND_OF_PREDICATE: Readonly<Record<EdgePredicate, EdgeKind>> =
 export type EdgeState = 'open' | 'met' | 'target-ended' | 'target-unmeasurable';
 const EDGE_STATE_MAP: Record<EdgeState, true> = { open: true, met: true, 'target-ended': true, 'target-unmeasurable': true };
 export const EDGE_STATES = Object.keys(EDGE_STATE_MAP) as readonly EdgeState[];
+export const isEdgeState = (w: string): w is EdgeState => Object.prototype.hasOwnProperty.call(EDGE_STATE_MAP, w);
 
 /** Why the store refused a statement whose body was good: it would take the programme past `OPEN_EDGES_PER_PROGRAMME_MAX`
  *  open edges. It rides the door's 400 `detail`, never a `refused` or `reject.code`. */
@@ -203,3 +209,96 @@ export interface ProgrammeEdge {
 
 /** The door's answer: the statement's id, and the edges it opened (`added`) or found already open (`kept`). */
 export interface RemainingAnswer { ok: true; id: number; added: number[]; kept: number[] }
+
+// ── Forecasts (plan `docs/superpowers/plans/2026-11-16-overlord-w2/w2-forecasts-health.md`, PR A) ─────────────────────
+// The server forecasts when a programme will land: a seeded Monte Carlo over its past wave lead times
+// (`server/src/coord/forecast.ts#forecastProgramme`), sealed at each wave boundary by the forecast lane into
+// `programme_forecasts`, and scored at its 85% date against measured closes alone (`forecastOutcome`). No model and no
+// session ever produces a date.
+
+/** Trials per forecast. */
+export const FORECAST_TRIALS = 10_000;
+/** A programme forecasts from its own history once it has this many done leads, else from the fleet's. */
+export const FORECAST_OWN_MIN = 20;
+/** The fleet's history serves once it has this many done leads, else the programme is `unforecastable`. */
+export const FORECAST_FLEET_MIN = 20;
+/** The most abandoned leads one wave of a trial can lose before its done lead (question 3). */
+export const ABANDON_REDRAWS_MAX = 3;
+/** Question 4: a close no statement names waits this long for its boundary's statement, then seals with the newest
+ *  statement standing at that time. */
+export const SEAL_WAIT_MINUTES = 30;
+/** The seal arm looks back this far for a close with no seal; one closed during a longer gap is never sealed. */
+export const SEAL_LOOKBACK_DAYS = 7;
+
+/** One source's samples (question 3): `done`, `abandoned` and `rework` lead times in ms, each finite and above zero;
+ *  `waves`, `abandons` and `reworks` the counts the two shares are taken from. `leadsUnmeasured` counts the waves the
+ *  store could not measure (a rebuilt run, a lead that is not a finite number above zero): never a sample. */
+export interface LeadHistory {
+  readonly done: readonly number[]; readonly abandoned: readonly number[]; readonly rework: readonly number[];
+  readonly waves: number; readonly abandons: number; readonly reworks: number; readonly leadsUnmeasured: number;
+}
+
+export const FORECAST_SOURCE_MAP = { own: true, fleet: true } as const satisfies Record<string, true>;
+export type ForecastSource = keyof typeof FORECAST_SOURCE_MAP;
+export const FORECAST_SOURCES = Object.keys(FORECAST_SOURCE_MAP) as readonly ForecastSource[];
+export const isForecastSource = (v: unknown): v is ForecastSource =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(FORECAST_SOURCE_MAP, v);
+
+/** Why a programme has no forecast: no statement stood, the statement says nothing is left, or neither its own history
+ *  nor the fleet's has enough done leads. */
+export const UNFORECASTABLE_REASON_MAP = { 'no-remaining': true, 'nothing-left': true, 'too-little-history': true } as const satisfies Record<string, true>;
+export type UnforecastableReason = keyof typeof UNFORECASTABLE_REASON_MAP;
+export const UNFORECASTABLE_REASONS = Object.keys(UNFORECASTABLE_REASON_MAP) as readonly UnforecastableReason[];
+export const isUnforecastableReason = (v: unknown): v is UnforecastableReason =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(UNFORECASTABLE_REASON_MAP, v);
+
+export const FORECAST_KIND_MAP = { forecast: true, unforecastable: true } as const satisfies Record<string, true>;
+export type ForecastKind = keyof typeof FORECAST_KIND_MAP;
+export const FORECAST_KINDS = Object.keys(FORECAST_KIND_MAP) as readonly ForecastKind[];
+export const isForecastKind = (v: unknown): v is ForecastKind =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(FORECAST_KIND_MAP, v);
+
+/** A forecast: the median and 85% dates (epoch ms), the source's done leads `n`, and the seed that replays it. */
+export type Forecast =
+  | { readonly kind: 'forecast'; readonly medianAt: number; readonly p85At: number; readonly n: number;
+      readonly source: ForecastSource; readonly seed: number }
+  | { readonly kind: 'unforecastable'; readonly reason: UnforecastableReason };
+
+/** A seal's stored outcome: `open` until the score arm reads it at its 85% date. */
+export const SEAL_OUTCOME_MAP = { open: true, met: true, missed: true } as const satisfies Record<string, true>;
+export type SealOutcome = keyof typeof SEAL_OUTCOME_MAP;
+export const SEAL_OUTCOMES = Object.keys(SEAL_OUTCOME_MAP) as readonly SealOutcome[];
+export const isSealOutcome = (v: unknown): v is SealOutcome =>
+  typeof v === 'string' && Object.prototype.hasOwnProperty.call(SEAL_OUTCOME_MAP, v);
+
+/** `forecastOutcome`'s answer: `none` writes nothing (not yet due, nothing to score, or already scored). */
+export const FORECAST_VERDICT_MAP = { none: true, met: true, missed: true } as const satisfies Record<string, true>;
+export type ForecastVerdict = keyof typeof FORECAST_VERDICT_MAP;
+export const FORECAST_VERDICTS = Object.keys(FORECAST_VERDICT_MAP) as readonly ForecastVerdict[];
+
+/** One sealed forecast, as read. `closingRunId` is the work run whose close is its boundary; `asOf` the boundary it is
+ *  computed as of; `statementId`, `lo` and `hi` the statement it used, null when none stood. A stored word this build
+ *  cannot read makes the row `unreadable`, carried, never dropped and never scored. */
+export interface SealedForecast {
+  readonly id: number; readonly program: string; readonly closingRunId: number; readonly sealedAt: number; readonly asOf: number;
+  readonly statementId: number | null; readonly lo: number | null; readonly hi: number | null;
+  readonly forecast: Forecast | 'unreadable'; readonly outcome: SealOutcome | 'unreadable'; readonly scoredAt: number | null;
+}
+
+/** Calibration (question 6, M30): the share of scored seals met must stay inside this band, edges included. */
+export const CALIBRATION_BAND: readonly [number, number] = [0.75, 0.9];
+/** A cut with fewer scored seals than this is unmeasured. */
+export const CALIBRATION_MIN_N = 8;
+/** Four cuts, now and 7, 14 and 21 days before; each reads the seals scored in the 28 days before it. */
+export const CALIBRATION_CUTS = 4;
+export const CALIBRATION_CUT_STEP_DAYS = 7;
+export const CALIBRATION_WINDOW_DAYS = 28;
+
+export const CALIBRATION_STATE_MAP = { calibrated: true, uncalibrated: true, unmeasured: true } as const satisfies Record<string, true>;
+export type CalibrationState = keyof typeof CALIBRATION_STATE_MAP;
+export const CALIBRATION_STATES = Object.keys(CALIBRATION_STATE_MAP) as readonly CalibrationState[];
+
+/** One cut: its time, the seals scored in the window before it, how many were met, and the share met (null under
+ *  `CALIBRATION_MIN_N`, never 0). */
+export interface CalibrationCut { readonly at: number; readonly n: number; readonly met: number; readonly share: number | null }
+export interface Calibration { readonly state: CalibrationState; readonly cuts: readonly CalibrationCut[] }

@@ -18,6 +18,12 @@ import { openCoordDb } from '../../src/coord/db.js';
 import { insertStart, mintGeneration } from '../../src/continuity/continuityStore.js';
 import type { AuthorityAppend } from '../../src/coord/overlordAuthorityJournal.js';
 import { mkTmp } from '../tmpHelpers.js';
+import { actorOf } from '../../src/accounts/audit.js';
+import { attributionIdentity } from '../../src/auth/attributionIdentity.js';
+
+/** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
+const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+  .operator(actorOf('operator-a', '0123456789abcdef'));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
@@ -610,25 +616,26 @@ export function retireEndsGenerationCases(m: DesignationStoreModule): Record<str
           startReportedAt: now, resumed: false, model: 'claude-opus-5-5', lane: null, host: null, outcome: 'crashed', mono: 1, proc: 'p',
           now }, null, true).ok).toBe(true);
         expect(m.designatePending(db, j, { sessionId: id, deadlineAt: now + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
-          actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
+          actor: OPERATOR, at: now, opKey: 'op-designate-1' }).ok).toBe(true);
         expect(m.goLive(db, j, id, '11111111-2222-3333-4444-555555555555', now + 1)).toMatchObject({ ok: true, changed: true });
-        expect(m.retire(db, j, { actor: 'operator-a', at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+        expect(m.retire(db, j, { actor: OPERATOR, at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
         expect(liveOverlordGenerations(db)).toBe(0);
       } finally { db.close(); }
     },
     'a pending-only retire ends the cancelled body\'s generation (review 2366 N3)': () => pendingCase((db, id, now) => {
-      expect(m.retire(db, PENDING_J, { actor: 'operator-a', at: now + 1, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true, owed: [id] });
+      expect(m.retire(db, PENDING_J, { actor: OPERATOR, at: now + 1, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true, owed: [id] });
     }, m),
     'a live retire with a pending attempt ends the pending body\'s generation (review 2366 N3)': () => {
       const db = openCoordDb(path.join(mkTmp('ccrc-designation-sim-'), 'coord.db'));
       try {
         const bound = 'overlord-brisk-heron'; const id = 'overlord-quiet-otter'; const now = 1_800_000_000_000;
         expect(m.designatePending(db, PENDING_J, { sessionId: bound, deadlineAt: now + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
-          actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
+          actor: OPERATOR, at: now, opKey: 'op-designate-1' }).ok).toBe(true);
         expect(m.goLive(db, PENDING_J, bound, '66666666-7777-8888-9999-000000000000', now + 1)).toMatchObject({ ok: true, changed: true });
         mintOverlord(db, id, now);
-        db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = 1, pendingDeadlineAt = 2, pendingActor = 'o'").run(id);
-        expect(m.retire(db, PENDING_J, { actor: 'operator-a', at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
+        db.prepare("UPDATE overlord_designation SET pendingId = ?, pendingKind = 'rebind', pendingSince = 1, pendingDeadlineAt = 2, pendingActor = 'o', "
+          + "pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'").run(id);
+        expect(m.retire(db, PENDING_J, { actor: OPERATOR, at: now + 2, opKey: 'op-retire-1' })).toMatchObject({ ok: true, changed: true });
         expect(liveOverlordGenerations(db)).toBe(0);
       } finally { db.close(); }
     },
@@ -653,7 +660,7 @@ function pendingCase(act: (db: DatabaseSync, id: string, now: number) => void, m
     const id = 'overlord-quiet-otter'; const now = 1_800_000_000_000;
     mintOverlord(db, id, now);
     expect(m.designatePending(db, PENDING_J, { sessionId: id, deadlineAt: now + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
-      actor: 'operator-a', at: now, opKey: 'op-designate-1' }).ok).toBe(true);
+      actor: OPERATOR, at: now, opKey: 'op-designate-1' }).ok).toBe(true);
     act(db, id, now);
     expect(liveOverlordGenerations(db)).toBe(0);
   } finally { db.close(); }

@@ -2,9 +2,10 @@
 import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
-  adoptionVerdict, deferralOf, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
-  requeueVerdict, requestIdOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type SyncSnapshot, type SyncStep,
+  adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
+  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
+import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld, keyWaitMail } from '../src/linear/inboundPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
 
 const U = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
@@ -38,8 +39,8 @@ const directory = {
 };
 
 function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: TicketRow[]; bindings?: BindingRow[]; mode?: 'public' | 'private' | 'unknown';
-  initiatives?: 'on' | 'off'; wsInitiatives?: 'on' | 'off' | 'unknown'; dir?: typeof directory | null; teamKey?: string | null; end?: SyncSnapshot['program']['end'];
-  extraProjects?: SyncSnapshot['projects'] } = {}): SyncSnapshot {
+  initiatives?: 'on' | 'off'; wsInitiatives?: 'on' | 'off' | 'unknown'; dir?: typeof directory | null; teamKey?: string | null; end?: ProgrammeSnapshot['program']['end'];
+  extraProjects?: SyncSnapshot['projects'] } = {}): ProgrammeSnapshot {
   const plan: StoredPlan = {
     program: 'prog', planBy: null, required: true,
     epics: [{ ...epic(o.epic), checkpoints: o.cps ?? [], tickets: o.tickets ?? [] }],
@@ -57,7 +58,7 @@ const ops = (steps: SyncStep[]): string[] => steps.map((s) => (s.kind === 'skip'
 const boundEpic = (fp = 'stale'): BindingRow => bind({ localKind: 'epic', localId: 1, fingerprint: fp });
 type SnapOpts = Parameters<typeof snap>[0];
 /** `snap(o)` with the epic's project bound at the fingerprint a first create would have written, so no project step follows. */
-function snapBound(o: SnapOpts = {}, extra: BindingRow[] = []): SyncSnapshot {
+function snapBound(o: SnapOpts = {}, extra: BindingRow[] = []): ProgrammeSnapshot {
   const first = planSyncSteps(snap({ ...o, bindings: [] })).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
   if (first?.kind !== 'create') throw new Error('no project create');
   return snap({ ...o, bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint }), ...extra, ...(o?.bindings ?? [])] });
@@ -220,31 +221,33 @@ describe('final-review rulings: the pure verdicts (D-8182)', () => {
   const RID = requestIdOf('epic', 1, WS);
   const VIEWER = U(9);
   const NONE = new Set<string>();
-  const ask = (o: { viewer?: string | null; teamKey?: string | null; held?: ReadonlySet<string> } = {}) => ({
-    requestId: RID, viewer: o.viewer === undefined ? VIEWER : o.viewer, teamKey: o.teamKey === undefined ? 'AAA' : o.teamKey, held: o.held ?? NONE,
+  const ask = (o: { viewer?: string | null; held?: ReadonlySet<string> } = {}) => ({
+    requestId: RID, viewer: o.viewer === undefined ? VIEWER : o.viewer, held: o.held ?? NONE,
   });
-  const ROWS: { name: string; kind: AdoptionKind; nodes: AdoptionNode[]; a?: Parameters<typeof ask>[0]; adopt: boolean }[] = [
+  // D-8183 (round 1 A11): a project (made by this key) and an issue are ours by their id alone, whatever team they sit in now (the
+  // team key may have changed between a lost create reply and the recovery); the verdict answers the issue's actual team, so the
+  // binding records it and the next pass's update moves the issue.
+  const ROWS: { name: string; kind: AdoptionKind; nodes: AdoptionNode[]; a?: Parameters<typeof ask>[0]; adopt: boolean; team?: string }[] = [
     { name: "C2': an initiative at the requestId made by this key", kind: 'initiative', nodes: [{ id: RID, creatorId: VIEWER }], adopt: true },
     { name: 'I-1: an initiative at the requestId made by another creator', kind: 'initiative', nodes: [{ id: RID, creatorId: U(901) }], adopt: false },
     { name: "C-2: a same-named initiative of this key at another id (another programme's)", kind: 'initiative', nodes: [{ id: U(77), creatorId: VIEWER }], adopt: false },
     { name: 'an initiative with no creator answered', kind: 'initiative', nodes: [{ id: RID, creatorId: null }], adopt: false },
     { name: 'no viewer known: nothing is provably ours', kind: 'initiative', nodes: [{ id: RID, creatorId: VIEWER }], a: { viewer: null }, adopt: false },
     { name: 'an object another binding holds', kind: 'initiative', nodes: [{ id: RID, creatorId: VIEWER }], a: { held: new Set([RID]) }, adopt: false },
-    { name: 'a project at the requestId, this key, in the team', kind: 'project', nodes: [{ id: RID, creatorId: VIEWER, teamKeys: ['AAA'] }], a: { teamKey: 'aaa' }, adopt: true },
-    { name: 'a project at the requestId outside the team', kind: 'project', nodes: [{ id: RID, creatorId: VIEWER, teamKeys: ['BBB'] }], adopt: false },
+    { name: 'a project at the requestId, this key, in the team', kind: 'project', nodes: [{ id: RID, creatorId: VIEWER, teamKeys: ['AAA'] }], adopt: true },
+    { name: 'A11: a project at the requestId made by this key, in another team now', kind: 'project', nodes: [{ id: RID, creatorId: VIEWER, teamKeys: ['BBB'] }], adopt: true },
     { name: "C-2: another programme's same-named project in the team", kind: 'project', nodes: [{ id: U(78), creatorId: VIEWER, teamKeys: ['AAA'] }], adopt: false },
     { name: 'I-1: a project at the requestId made by another creator', kind: 'project', nodes: [{ id: RID, creatorId: U(901), teamKeys: ['AAA'] }], adopt: false },
     { name: "C2': a milestone at the requestId", kind: 'milestone', nodes: [{ id: U(5) }, { id: RID }], a: { viewer: null }, adopt: true },
     { name: "C2': a milestone of the same name at another id", kind: 'milestone', nodes: [{ id: U(5) }], adopt: false },
     { name: 'a milestone another binding holds', kind: 'milestone', nodes: [{ id: RID }], a: { held: new Set([RID]) }, adopt: false },
-    { name: 'C11: an issue at the requestId in the planned team', kind: 'issue', nodes: [{ id: RID, teamKey: 'aaa' }], adopt: true },
-    { name: 'C11: an issue at the requestId in another team', kind: 'issue', nodes: [{ id: RID, teamKey: 'BBB' }], adopt: false },
-    { name: 'C11: an issue that answers no team', kind: 'issue', nodes: [{ id: RID }], adopt: false },
-    { name: 'C11: an issue with no planned team', kind: 'issue', nodes: [{ id: RID, teamKey: 'AAA' }], a: { teamKey: null }, adopt: false },
+    { name: 'C11: an issue at the requestId, held by no other binding: its team is answered', kind: 'issue', nodes: [{ id: RID, teamKey: 'aaa' }], adopt: true, team: 'aaa' },
+    { name: 'A11: an issue at the requestId in another team than planned', kind: 'issue', nodes: [{ id: RID, teamKey: 'BBB' }], adopt: true, team: 'BBB' },
+    { name: 'A11: an issue that answers no team is adopted with no team', kind: 'issue', nodes: [{ id: RID }], adopt: true },
     { name: 'C11: an issue another binding holds', kind: 'issue', nodes: [{ id: RID, teamKey: 'AAA' }], a: { held: new Set([RID]) }, adopt: false },
   ];
   it.each(ROWS)('adoptionVerdict: $name', (row) => {
-    expect(adoptionVerdict(row.kind, row.nodes, ask(row.a))).toEqual(row.adopt ? { verdict: 'adopt', id: RID } : { verdict: 'none' });
+    expect(adoptionVerdict(row.kind, row.nodes, ask(row.a))).toEqual(row.adopt ? { verdict: 'adopt', id: RID, ...(row.team === undefined ? {} : { teamKey: row.team }) } : { verdict: 'none' });
   });
 
   const step = { stateType: 'started', teamKey: 'AAA', input: { title: 'T', description: 'D', projectId: U(501), projectMilestoneId: null } };
@@ -335,6 +338,134 @@ describe('fix round 1 (D-8182): the initiatives probe and the directory', () => 
     if (proj?.kind !== 'create') throw new Error('no create');
     expect(planSyncSteps(snap({ bindings: [boundEpic(proj.fingerprint), failed] })).steps).toEqual([]);
   });
+
+  // ── D-8183 carried items 8 and 9: the link mark rides the stored fingerprint (still no link row, D-8677) ──
+  /** The bindings after a step's ok: its fingerprint stored on its binding. */
+  const after = (bindings: BindingRow[], st: SyncStep): BindingRow[] =>
+    bindings.map((b) => (st.kind === 'update' || st.kind === 'link') && b.id === st.bindingId ? { ...b, fingerprint: st.fingerprint } : b);
+
+  it('withLinkMark and linkMarkOf: a fingerprint is <base> or <base>+<mark>', () => {
+    expect(withLinkMark('abc', null)).toBe('abc');
+    expect(withLinkMark('abc', 'def')).toBe('abc+def');
+    expect(linkMarkOf('abc+def')).toEqual({ base: 'abc', mark: 'def' });
+    expect(linkMarkOf('abc')).toEqual({ base: 'abc', mark: null });
+    expect(linkMarkOf('adopted')).toEqual({ base: 'adopted', mark: null });
+    expect(linkMarkOf(null)).toEqual({ base: null, mark: null });
+  });
+
+  it('an update of a linked project sends no second link', () => {
+    const [eb, ib] = linked();
+    const upd = planSyncSteps(snap({ epic: { title: 'A new name' }, bindings: [eb!, ib!] })).steps;
+    expect(ops(upd)).toEqual(['update:projectUpdate']);                           // one update, and the link stands: no second link
+    const settled = after([eb!, ib!], upd[0]!);
+    expect(planSyncSteps(snap({ epic: { title: 'A new name' }, bindings: settled })).steps).toEqual([]);
+  });
+
+  it('a failed initiative sends its linked projects no update, and a project updated meanwhile sends no link when it binds again', () => {
+    const [eb, ib] = linked();
+    const failed = { ...ib!, state: 'failed' as const, failedAt: 1, failedWord: 'linear-forbidden', failedInputs: 'x' };
+    expect(planSyncSteps(snap({ bindings: [eb!, failed] })).steps).toEqual([]);   // the failure itself changes nothing of the project
+    const upd = planSyncSteps(snap({ epic: { title: 'A new name' }, bindings: [eb!, failed] })).steps;
+    expect(ops(upd)).toEqual(['update:projectUpdate']);                           // the plan changed: one update, keeping the link mark
+    const settled = after([eb!, failed], upd[0]!);
+    expect(planSyncSteps(snap({ epic: { title: 'A new name' }, bindings: settled })).steps).toEqual([]);
+    expect(planSyncSteps(snap({ epic: { title: 'A new name' }, bindings: [settled[0]!, ib!] })).steps).toEqual([]);   // bound again: still linked
+  });
+
+  it('a project created while the initiative is live is linked once, however often it is updated after', () => {
+    const created = planSyncSteps(snap()).steps;
+    const init = created.find((x) => x.kind === 'create' && x.op === 'initiativeCreate');
+    if (init?.kind !== 'create') throw new Error('no initiative create');
+    const ib = bind({ localKind: 'programme', localId: 7, linearId: U(700), fingerprint: init.fingerprint });
+    const make = planSyncSteps(snap({ bindings: [ib] })).steps;
+    expect(ops(make)).toEqual(['create:projectCreate']);
+    const proj = make[0]!;
+    if (proj.kind !== 'create') throw new Error('no project create');
+    let bindings = [boundEpic(proj.fingerprint), ib];
+    const link = planSyncSteps(snap({ bindings })).steps;
+    expect(ops(link)).toEqual(['link:initiativeToProjectCreate']);
+    bindings = after(bindings, link[0]!);
+    expect(planSyncSteps(snap({ bindings })).steps).toEqual([]);
+    for (const title of ['Renamed once', 'Renamed twice']) {
+      const next = planSyncSteps(snap({ epic: { title }, bindings })).steps;
+      expect(ops(next)).toEqual(['update:projectUpdate']);
+      bindings = after(bindings, next[0]!);
+      expect(planSyncSteps(snap({ epic: { title }, bindings })).steps).toEqual([]);
+    }
+  });
+
+  it('a project whose stored fingerprint is wave 3\'s (no mark) reads not current once: one update, then one link (answered conflict in Linear)', () => {
+    const [eb, ib] = linked();
+    const old = { ...eb!, fingerprint: 'wave3-encoding' };
+    const upd = planSyncSteps(snap({ bindings: [old, ib!] })).steps;
+    expect(ops(upd)).toEqual(['update:projectUpdate']);
+    const afterUpdate = [...after([old], upd[0]!), ib!];
+    const link = planSyncSteps(snap({ bindings: afterUpdate })).steps;
+    expect(ops(link)).toEqual(['link:initiativeToProjectCreate']);
+    expect(planSyncSteps(snap({ bindings: [...after([afterUpdate[0]!], link[0]!), ib!] })).steps).toEqual([]);
+  });
+
+  it('a project linked to another initiative than the live one is linked to the live one, once', () => {
+    const [eb, ib] = linked();
+    const other = { ...ib!, linearId: U(799) };
+    const link = planSyncSteps(snap({ bindings: [eb!, other] })).steps;
+    expect(ops(link)).toEqual(['link:initiativeToProjectCreate']);
+    expect(planSyncSteps(snap({ bindings: [...after([eb!], link[0]!), other] })).steps).toEqual([]);
+  });
+
+  it('the drift pass reads the same rule: a project is current when its base matches and (the initiative is not live, or its mark is the live one\'s)', () => {
+    const currentOf = (bindings: BindingRow[]): boolean | undefined => planSyncSteps(snap({ bindings })).owned.find((o) => o.kind === 'project')?.current;
+    const [eb, ib] = linked();
+    expect(currentOf([eb!, ib!])).toBe(true);
+    expect(currentOf([eb!, { ...ib!, linearId: U(799) }])).toBe(false);                    // linked to another initiative than the live one
+    expect(currentOf([{ ...eb!, fingerprint: 'wave3-encoding' }, ib!])).toBe(false);       // the base differs
+    const base = linkMarkOf(eb!.fingerprint).base!;
+    expect(currentOf([{ ...eb!, fingerprint: base }, ib!])).toBe(false);                   // no mark yet while the initiative is live: the link waits
+    expect(currentOf([{ ...eb!, fingerprint: base }, { ...ib!, state: 'failed' as const, failedAt: 1, failedWord: 'x', failedInputs: 'x' }])).toBe(true);   // not live: the base is enough
+  });
+
+  // ── item 9: the issue's PR link, by the same mark ──
+  function boundTicket(): { bound: BindingRow; withPr: (b: BindingRow, url: string | null, title?: string) => SyncSnapshot } {
+    const base = snapBound({ tickets: [tk()] });
+    const create = planSyncSteps(base).steps.find((x) => x.kind === 'create' && x.op === 'issueCreate');
+    if (create?.kind !== 'create') throw new Error('no issue create');
+    const bound = bind({ localKind: 'ticket', localId: 1, identifier: 'AAA-1', fingerprint: create.fingerprint });
+    return {
+      bound,
+      withPr: (b, url, title) => ({
+        ...snapBound({ tickets: [tk(title === undefined ? {} : { title })] }, [b]),
+        ...(url === null ? {} : { ticketPrs: { 1: { url, number: Number(url.split('/').pop()), branch: null } } }),
+      }),
+    };
+  }
+  const PR7 = 'https://github.com/owner/repo/pull/7';
+  const PR8 = 'https://github.com/owner/repo/pull/8';
+
+  it('a pass with no PR known sends no update and no second link', () => {
+    const { bound, withPr } = boundTicket();
+    const link = planSyncSteps(withPr(bound, PR7)).steps.find((x) => x.kind === 'link' && x.op === 'issueLink');
+    if (link?.kind !== 'link') throw new Error('no link');
+    const linked7 = after([bound], link)[0]!;
+    expect(planSyncSteps(withPr(linked7, PR7)).steps.filter((x) => x.kind !== 'create')).toEqual([]);           // linked: settled
+    expect(planSyncSteps(withPr(linked7, null)).steps.filter((x) => x.kind !== 'create')).toEqual([]);          // no PR known this pass: nothing
+    expect(planSyncSteps(withPr(linked7, PR7)).steps.filter((x) => x.kind !== 'create')).toEqual([]);           // known again: no second link
+  });
+
+  it('a new PR URL is linked once; an update keeps the mark', () => {
+    const { bound, withPr } = boundTicket();
+    const l7 = planSyncSteps(withPr(bound, PR7)).steps.find((x) => x.kind === 'link');
+    if (l7?.kind !== 'link') throw new Error('no link');
+    let b = after([bound], l7)[0]!;
+    const l8 = planSyncSteps(withPr(b, PR8)).steps.filter((x) => x.kind !== 'create');
+    expect(ops(l8)).toEqual(['link:issueLink']);
+    expect(l8[0]).toMatchObject({ input: { url: PR8 } });
+    b = after([b], l8[0]!)[0]!;
+    expect(planSyncSteps(withPr(b, PR8)).steps.filter((x) => x.kind !== 'create')).toEqual([]);
+    const upd = planSyncSteps(withPr(b, PR8, 'A new title')).steps.filter((x) => x.kind !== 'create');
+    expect(ops(upd)).toEqual(['update:issueUpdate']);                                                            // the plan changed: one update, no second link
+    b = after([b], upd[0]!)[0]!;
+    expect(planSyncSteps(withPr(b, PR8, 'A new title')).steps.filter((x) => x.kind !== 'create')).toEqual([]);
+  });
 });
 
 describe('fix round 1 (D-8182): put back', () => {
@@ -373,6 +504,62 @@ describe('M5: what a deferral is (L1, D-8182)', () => {
   it.each(ROWS)('deferralOf(%s)', (cause, d) => { expect(deferralOf(cause)).toEqual(d); });
 });
 
+describe('D-8183 carried item 7: three decisions that were in the executor, now pure', () => {
+  const dstreak = { keyDigest: 'digest-a', since: 1, lastFilledAt: 500, refills: 3 };
+  it('probeRecheckDue: a settled probe is looked at again once its workspace was refilled since, or the episode ended', () => {
+    expect(probeRecheckDue(undefined, 500)).toBe(true);                    // the episode ended
+    expect(probeRecheckDue(undefined, null)).toBe(true);
+    expect(probeRecheckDue(dstreak, 500)).toBe(false);                     // the same fill: nothing new
+    expect(probeRecheckDue(dstreak, null)).toBe(false);                    // no fill held
+    expect(probeRecheckDue(dstreak, 501)).toBe(true);                      // refilled since
+  });
+
+  it('dispatchWaitVerdict: bound goes first; a held programme or workspace goes without; else wait', () => {
+    const base = { identifier: null, programmeHeldUntil: null, workspaceHeld: false, now: 1000 };
+    expect(dispatchWaitVerdict({ ...base, identifier: 'AAA-1' })).toBe('bound');
+    expect(dispatchWaitVerdict({ ...base, identifier: 'AAA-1', programmeHeldUntil: 2000, workspaceHeld: true })).toBe('bound');
+    expect(dispatchWaitVerdict({ ...base, programmeHeldUntil: 1001 })).toBe('go-without');
+    expect(dispatchWaitVerdict({ ...base, programmeHeldUntil: 1000 })).toBe('wait');   // the hold has passed
+    expect(dispatchWaitVerdict({ ...base, workspaceHeld: true })).toBe('go-without');
+    expect(dispatchWaitVerdict(base)).toBe('wait');
+  });
+
+  it('deferralUntil: the backoff step (at least the floor), the short directory wait, or the time the cause carries', () => {
+    const o = { now: 1000, backoffMs: 30_000, directoryWaitMs: 10_000 };
+    expect(deferralUntil({ why: 'failure', wait: 'backoff' }, o)).toBe(31_000);
+    expect(deferralUntil({ why: 'failure', wait: 'backoff' }, { ...o, floorMs: 300_000 })).toBe(301_000);
+    expect(deferralUntil({ why: 'failure', wait: 'backoff' }, { ...o, floorMs: 5 })).toBe(31_000);
+    expect(deferralUntil({ why: 'wait', wait: 'directory' }, o)).toBe(11_000);
+    expect(deferralUntil({ why: 'failure', wait: 'until' }, { ...o, until: 9000 })).toBe(9000);
+    expect(deferralUntil({ why: 'failure', wait: 'until' }, o)).toBe(31_000);
+    expect(deferralUsesBackoff({ why: 'failure', wait: 'backoff' })).toBe(true);
+    expect(deferralUsesBackoff({ why: 'wait', wait: 'directory' })).toBe(false);
+    expect(deferralUsesBackoff({ why: 'failure', wait: 'until' })).toBe(false);
+  });
+});
+
+describe('D-8183 carried item 10: the probe mail says what waits', () => {
+  const base = { slug: 'prog-a', workspaceId: 'ws-a', initiativeBound: false, endWaiting: false };
+  it('an unbound initiative: today\'s sentence', () => {
+    expect(probeEpisodeText(base)).toBe('ccrc cannot tell whether initiatives are on in the Linear workspace ws-a, so the initiative of prog-a there is waiting. '
+      + 'Its projects, milestones and issues still sync, not linked to an initiative; ccrc looks again at the next directory refill or plan change.');
+  });
+  it('a bound initiative: its update waits and its projects stay linked as they are', () => {
+    const t = probeEpisodeText({ ...base, initiativeBound: true });
+    expect(t).toContain("the initiative's update waits; its projects stay linked as they are");
+    expect(t).not.toContain('not linked to an initiative');
+    expect(t).not.toContain('closed once ccrc can tell');
+  });
+  it('a bound initiative of an ended programme: it stays unclosed until ccrc can tell', () => {
+    const t = probeEpisodeText({ ...base, initiativeBound: true, endWaiting: true });
+    expect(t).toContain("the initiative's update waits; its projects stay linked as they are");
+    expect(t).toContain('closed once ccrc can tell');
+  });
+  it('an end waiting on an unbound initiative adds nothing (there is no initiative to close)', () => {
+    expect(probeEpisodeText({ ...base, endWaiting: true })).toBe(probeEpisodeText(base));
+  });
+});
+
 describe('D-8701 episodes: bounded waits (coordinator ruling, mail 22220; I1)', () => {
   const DIG = 'digest-a';
   it('a streak counts each new fill that reads unsettled, from the first; a settled fill ends it; no fill changes nothing', () => {
@@ -400,5 +587,113 @@ describe('D-8701 episodes: bounded waits (coordinator ruling, mail 22220; I1)', 
       .toEqual({ cause: 'statuses-unread', tell: ['ws-1'] });
     expect(directoryWaitVerdict([{ workspaceId: 'ws-1', missing: 'statuses', streak: streak(3) }, { workspaceId: 'ws-2', missing: 'directory', streak: undefined }]))
       .toEqual({ cause: 'directory-missing', tell: ['ws-1'] });
+  });
+});
+
+describe('an Upkeep epic: a snapshot with no programme (D-8183)', () => {
+  const upkeep = (o: SnapOpts = {}): SyncSnapshot => ({ ...snap({ ...o, epic: { program: null, key: 'upkeep', waves: [], ...(o.epic ?? {}) } }), program: null });
+  it('creates the project in the team: no initiative step, no skip for initiatives, no link, no milestones, no notice', () => {
+    for (const initiatives of ['on', 'off'] as const) {
+      const d = planSyncSteps(upkeep({ initiatives }));
+      expect(ops(d.steps)).toEqual(['create:projectCreate']);
+      expect(d.notices).toEqual([]);
+      expect(d.waits).toEqual([]);
+      expect(JSON.stringify(d.steps[0])).not.toContain('Part of');
+      expect(d.steps[0]).toMatchObject({ input: { name: 'Epic one', teamIds: [TEAM] } });
+    }
+    // a workspace whose initiatives read `unknown` has nothing to wait for either: there is no initiative step to defer
+    expect(planSyncSteps(upkeep({ wsInitiatives: 'unknown' })).waits).toEqual([]);
+  });
+  it('the bound project is never linked, and its owned fields name no initiative and no milestone', () => {
+    const first = planSyncSteps(upkeep()).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (first?.kind !== 'create') throw new Error('no project create');
+    const bound = upkeep({ bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint })] });
+    const d = planSyncSteps(bound);
+    expect(d.steps).toEqual([]);
+    expect(d.owned).toEqual([expect.objectContaining({ kind: 'project', owned: expect.objectContaining({ initiativeIds: [], milestoneIds: [] }) })]);
+  });
+  it('an inbound ticket bound with the adopted fingerprint gets one absolute update into the project, never a create', () => {
+    const first = planSyncSteps(upkeep({ tickets: [tk({ program: null, source: 'inbound', kind: 'task' })] })).steps.find((x) => x.kind === 'create' && x.op === 'projectCreate');
+    if (first?.kind !== 'create') throw new Error('no project create');
+    const s = upkeep({
+      tickets: [tk({ program: null, source: 'inbound', kind: 'task' })],
+      bindings: [bind({ localKind: 'epic', localId: 1, fingerprint: first.fingerprint }), bind({ localKind: 'ticket', localId: 1, fingerprint: 'adopted', identifier: 'AAA-12' })],
+    });
+    expect(ops(planSyncSteps(s).steps)).toEqual(['update:issueUpdate']);
+    expect(planSyncSteps(s).steps[0]).toMatchObject({ input: { projectId: U(501), title: 'Ticket one' }, bindingId: expect.any(Number) });
+  });
+  it('a programme snapshot still reads its initiative step first (the null is only the Upkeep key)', () => {
+    expect(ops(planSyncSteps(snap()).steps)).toEqual(['create:initiativeCreate', 'create:projectCreate']);
+  });
+});
+
+describe('uuidOf (D-8183)', () => {
+  it('is the v4-shaped hash requestIdOf builds from, so one function names every request id', () => {
+    expect(uuidOf('ticket:1:ws-a:cancel')).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    expect(requestIdOf('ticket', 1, 'ws-a', 'cancel')).toBe(uuidOf('ticket:1:ws-a:cancel'));
+    expect(requestIdOf('epic', 2, 'ws-a')).toBe(uuidOf('epic:2:ws-a'));
+    expect(uuidOf('inbound:L1')).not.toBe(uuidOf('inbound:L2'));
+    expect(uuidOf('inbound:L1')).toBe(uuidOf('inbound:L1'));
+  });
+});
+
+describe('the inbound close\'s refusals (F8, A7/A8; L1)', () => {
+  const steps = [30_000, 120_000, 600_000, 1_800_000];
+  it('a key word holds the workspace on the failure-hold steps, the last repeating, and mails the owner', () => {
+    const a = inboundActVerdict('linear-unauthorised', undefined, { now: 1000, backoffSteps: steps });
+    expect(a).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: true, hold: { until: 31_000, step: 1 } });
+    const b = inboundActVerdict('linear-unauthorised', a.kind === 'retry' ? a.hold ?? undefined : undefined, { now: 40_000, backoffSteps: steps });
+    expect(b).toEqual({ kind: 'retry', mailsOwner: true, keyRefused: true, hold: { until: 160_000, step: 2 } });
+    const z = inboundActVerdict('linear-unauthorised', { until: 0, step: 9 }, { now: 0, backoffSteps: steps });
+    expect(z).toMatchObject({ hold: { until: 1_800_000 } });
+  });
+  // A-2, the coordinator's ruling (b): not-configured is answered locally, so both lanes retry it at the next beat, with no hold.
+  it('not-configured is retried at the next beat with no hold, and mails the owner', () => {
+    expect(inboundActVerdict('not-configured', { until: 0, step: 3 }, { now: 0, backoffSteps: steps })).toEqual({ kind: 'retry', hold: null, mailsOwner: true, keyRefused: false });
+    // @ts-expect-error not-configured is no DeferCause: the DEFERRALS row came out (A-2)
+    expect(deferralOf('not-configured')).toBeUndefined();
+  });
+  it('another retry word holds without mailing; any other word gives up', () => {
+    expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry', mailsOwner: false });
+    for (const w of ['linear-forbidden', 'not-found', 'linear-invalid', 'workspace-blocked']) expect(inboundActVerdict(w, undefined, { now: 0, backoffSteps: steps })).toEqual({ kind: 'give-up' });
+  });
+  it('only the key\'s refusal (a 401) is recorded for both lanes (review 2394 A-3)', () => {
+    expect(inboundActVerdict('rate-limited', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ keyRefused: false });
+    expect(inboundActVerdict('linear-unauthorised', undefined, { now: 0, backoffSteps: steps })).toMatchObject({ keyRefused: true });
+  });
+  // Review 2408 F2: the give-up counts the close's own malformed answers, as the plan sync counts a binding's, never the
+  // workspace's hold step, which every retry word of every close in the workspace moves. The step is the wait only.
+  it('malformed is given up on the close\'s own count past the last step, whatever the workspace\'s step (review 2394 N1, 2408 F2)', () => {
+    expect(inboundActVerdict('malformed', { until: 0, step: 4 }, { now: 0, backoffSteps: steps, malformedSeen: 1 })).toMatchObject({ kind: 'retry', hold: { step: 5 } });
+    expect(inboundActVerdict('malformed', { until: 0, step: 0 }, { now: 0, backoffSteps: steps, malformedSeen: 4 })).toMatchObject({ kind: 'retry', hold: { step: 1 } });
+    expect(inboundActVerdict('malformed', { until: 0, step: 0 }, { now: 0, backoffSteps: steps, malformedSeen: 5 })).toEqual({ kind: 'give-up' });
+    expect(inboundActVerdict('rate-limited', { until: 0, step: 9 }, { now: 0, backoffSteps: steps })).toMatchObject({ kind: 'retry' });
+  });
+  // Review 2408 A-3: a rate limit's Retry-After floors the wait, as the plan sync floors the same deferral.
+  it('a rate limit waits at least the answer\'s Retry-After (review 2408 A-3)', () => {
+    expect(inboundActVerdict('rate-limited', undefined, { now: 1000, backoffSteps: steps, floorMs: 300_000 })).toMatchObject({ hold: { until: 301_000 } });
+    expect(inboundActVerdict('rate-limited', undefined, { now: 1000, backoffSteps: steps, floorMs: 0 })).toMatchObject({ hold: { until: 31_000 } });
+  });
+  // Review 2408 A-2: each key word has its own mail, which says what ccrc does for that word.
+  it('the two key words mail apart, and the not-configured mail says ccrc tries at every beat (review 2408 A-2)', () => {
+    const row = { identifier: 'AAA-1', teamKey: 'AAA', title: 't', body: null };
+    const none = keyWaitMail(row, 'not-configured');
+    const refused = keyWaitMail(row, 'linear-unauthorised');
+    expect(none.subject).not.toBe(refused.subject);
+    expect(none.body).toContain('ccrc tries again at every beat and closes the issue once a key is set');
+    expect(none.body).not.toContain('growing interval');
+    expect(refused.body).toContain('on a growing interval');
+  });
+  it('inboundHeld is true strictly before until', () => {
+    expect(inboundHeld(undefined, 5)).toBe(false);
+    expect(inboundHeld({ until: 10, step: 1 }, 9)).toBe(true);
+    expect(inboundHeld({ until: 10, step: 1 }, 10)).toBe(false);
+  });
+  it('givenUpReason marks the reason and givenUpWord reads it back', () => {
+    expect(givenUpReason('noise', 'linear-forbidden')).toBe('noise [not closed in Linear: linear-forbidden]');
+    expect(givenUpReason(null, 'not-found')).toBe('[not closed in Linear: not-found]');
+    expect(givenUpWord('noise [not closed in Linear: linear-forbidden]')).toBe('linear-forbidden');
+    expect(givenUpWord('noise')).toBeNull();
+    expect(givenUpWord(null)).toBeNull();
   });
 });

@@ -191,7 +191,9 @@ number from `POST /api/ledger/deviations`.
 - **D-8680 (2026-11-16)** — requeue-keeps-bound: a requeued binding with a Linear id returns to `bound`, so a retry
   updates and never creates. Record: the wave 3 note.
 - **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
-  (wave 4's open point). Record: the wave 3 note.
+  (wave 4's open point). Wave 4 (the coordinator's ruling): links are compared one way, so a planned link missing in Linear
+  is drift and an extra link is not (`driftPolicy.ts`'s `ONE_WAY_LINKS`); a project's milestones compare the same way,
+  since nothing deletes one. Record: the wave 3 and wave 4 notes.
 - **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
   by-name listing of 10, so with ten or more same-named objects ownership can fail. The binding is retried at every
   requeue, directory refill and plan change, and only its mail is once. Carried to the next capture (`creator { id }` on
@@ -208,6 +210,23 @@ number from `POST /api/ledger/deviations`.
   and keep a held `dueAt` even when it is later; and a held programme's dispatch (`ensureTicketBound`, read through `heldSyncUntil`) starts no pass.
   The plan's outcome table already said "deferred by the backoff", so this changes the interface text, not the intent.
   Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
+- **D-8703 (2026-11-17)** — drift-actor-unread: the changed* documents select no actor and `ops.ts` is frozen, so a drift
+  event's actor and the persistent-drift item read "not read"; the item still shows the object, the field, both values
+  and the time. The actor joins D-8699's next-capture list. Clause (review 2408 A-6, the coordinator's ruling, the same
+  cause): §7.3 exempts an issue moved to completed by Linear's GitHub integration once the merge is recorded, and with the
+  actor unread the grace exempts ANY completion after a recorded merge, whoever made it. Record: the wave 4 note.
+- **D-8704 (2026-11-17)** — catch-up-by-fingerprint: a binding stores F(the planned inputs), not F(Linear's owned
+  fields), so a difference is a catch-up when the binding's fingerprint is not the plan's current one; the programme is
+  marked due through `markSyncDue` alone (a held programme stays held, D-8702). Gap: a person's edit made while the sync
+  is behind, or while a programme is held, is overwritten with no drift event and no comment. Record: the wave 4 note.
+- **D-8705 (2026-11-17)** — inbound-open-and-kept-text: `changedIssues` selects no `createdAt` and no creator, so an
+  inbound issue is an open one in a managed team that no binding holds and the journal's `viaFleet` does not name; the
+  inbound row keeps the reporter's title and body, cut visibly to the plan's ticket bounds and read only under `untrusted`
+  and through the secret mask, so `plan triage` and `plan take` call no Linear. Record: the wave 4 note.
+- **D-8706 (2026-11-17)** — triage-own-programme-epic: `plan triage` `hand` to the caller's own programme takes the issue
+  at once, so the body's optional `epic` is then required (`plan-bad-body`). Record: the wave 4 note.
+- **D-8707 (2026-11-17)** — write-ask-project-teams: `LinearWriteAsk.resource` gains `teamKeys`, every team a project
+  write puts the project in, so the policy is asked about each. Record: the wave 4 note.
 - **D-8708 (2026-11-17)** — description-fit-255: an initiative's or project's description is fitted to Linear's
   255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`, counted in UTF-16 units), keeping the
   provenance line whole and cutting the body at its end with `…`. A description that fits is sent unchanged, except that trailing whitespace
@@ -221,6 +240,42 @@ number from `POST /api/ledger/deviations`.
   as insurance. Carried to the next capture, on the operator's go: the cap's INVALID_INPUT answer, with a non-ASCII
   body, to tell characters from bytes. The same change journals the cancel comment's body; that is a defect fixed,
   not a departure. Record: the ledger, review runs 2364 and 2368.
+- **D-8720 (2026-11-17)** — kept-plan-quiet: after *Keep the plan*, the same binding's persistent drift is not raised again
+  for seven days; a restore Linear refuses still raises the item at once (§7.4). Record: the wave 4 note (review run 2386
+  F3, the coordinator's ruling).
+- **D-8721 (2026-11-17)** — restore-comment-daily: a restore comments at most once a day on an object, whether or not its
+  item is open; §7.4 bounds only the open case. Record: the wave 4 note (review run 2386 F6, the coordinator's ruling).
+- **D-8722 (2026-11-17)** — issue-adopt-by-id: a ticket's issue is adopted by its idempotent id on any team, so a key
+  change between a lost create reply and recovery is not stranded. The id hashes kind, local id and workspace, so this is
+  safe only while one coord.db has ever filed tickets into that workspace. A second install, or a rebuilt database that
+  numbers tickets again, can adopt and rewrite another install's issue. The issue creator on the next capture (D-8699's
+  list) closes it. Record: the wave 4 note (review run 2386 F5, the coordinator's ruling).
+- **D-8723 (2026-11-17)** — w4-schema-additions: the wave's one migration departs from Task 4.1's SQL in four places.
+  `linear_inbound` gains `reason` (a close's reason, and a given-up close's refusal), `actedAt` (when the close's Linear
+  writes landed or were given up) and `itemId` (the operator item a `raise` made), beyond D-8705's `title` and `body`;
+  two tables the plan never names persist wave 3's carried findings, `linear_sync_streaks` (item 6, the D-8701 episode
+  streaks) and `linear_probe_settled` (item 1, the settled-probe marks); and `linear_drift_marks` keeps one watermark per
+  changed* kind (`initiatives`, `projects`, `milestones`, `issues`) in place of one `watermark`, so a change made between
+  two kinds' reads is never skipped (review run 2386 A3). A restore deferred on a target keeps the watermark of every kind
+  whose event rides on that target, so an initiative's link carried on a project's restore is read again (review run 2394
+  N2). Record: the wave 4 note (review run 2386 A6).
+- **D-8724 (2026-11-18)** — w4-names-and-pass-word: wave 4 names two of Task 4.1's deciders differently and adds a
+  fifth pass word. `notDrift` is built as `graceVerdict` and `graceRereads`, and `restoredLines` as
+  `restoredDescription` over `composeRestored`; the interface lines above are amended to the built names, and the rules
+  they decide are unchanged. `LINEAR_CCRC_PASSES` (`policy.ts`) gains `inbound`, the drift lane's close of an inbound
+  issue (its comment and its cancel), beyond the four of §8.3 and Task 1.2, so that close is attributed as ccrc's own
+  like every other ccrc write. Record: review run 2427 A3 and A4, the wave 4 note's rulings table.
+- **D-8725 (2026-11-18)** — w4-carried-gaps: wave 4 (#2982) landed with gaps that its reviews carried to a follow-up run
+  of the same epic, ruled to land before wave 7 touches any team beyond the programme's own. A restore does not yet
+  wait on a held programme or workspace, and the drift pass's reads do not yet honour a refused key's block (review run
+  2443 P3). A bound issue moved out of a managed team, or a milestone moved into a project ccrc does not bind, is not
+  read again (2443 P2). A page-capped changed* read keeps its old watermark (review run 2408 F3). A stored inbound row
+  whose issue later completes or is canceled is not retired (review run 2427 F1). A create whose reply was lost can
+  read as inbound, and a take or triage can then bind a second ticket to that issue (review run 2435 F2). The drift
+  pass reads Linear before ccrc's own record, so a sync write landing between the two reads is restored (2435 F1). None
+  of them deletes or adopts anything in Linear. Separately, the linear skill's refusal table lists no
+  `linear-text-public` row for the `linear` verbs, because the proxy never answers that word there (fix round 3 A-8,
+  departing from Task 4.4's skill row). Record: the wave 4 note's Follow-ups and the ledger.
 
 ## Global Constraints
 
@@ -1446,25 +1501,28 @@ whose `before` would be the post-move state (Task 7.3).
     an issue's state is its **type**, never its name; labels only those ccrc set).
   - `driftVerdict(owned: OwnedFields, planned: OwnedFields, lastWritten: string | null): 'match' | 'catch-up' | 'drift'`
     — `catch-up` when `fingerprintOf(owned) === lastWritten` (ccrc wrote the current value; the plan moved on).
-  - `notDrift(field: string, before: unknown, after: unknown, ctx: { prMerged: boolean; gracePasses: number }): boolean`
-    — same state category; an issue `completed` by an integration with the merge recorded, or within one pass of
-    grace; any field ccrc does not own (§6.2).
+  - `graceVerdict(o: { drifted: readonly string[]; linearState: unknown; prMerged: boolean; driftSince: number | null }): GraceVerdict`
+    and `graceRereads(graced: readonly string[], read: ReadonlySet<string>): string[]` (built in place of the plan's
+    `notDrift(field, before, after, { prMerged, gracePasses })`; D-8724) — same state category; an issue `completed`
+    after its run's PR merged (D-8703: any actor), or within one pass of grace; any field ccrc does not own (§6.2).
   - `isPersistent(restores: readonly number[], now: number): boolean` — three within seven days
     (`DRIFT_PERSIST = { restores: 3, windowMs: 7 * 86_400_000 }`).
   - `restoreComment(kind, field, planned: string, was: string, at: number): string` — §7.2's sentence;
-    `restoredLines(description: string, line: string): string` — keeps the last three "Restored" lines.
+    `restoredDescription(planned: string, linearDescription: string | null, line: string): string`, over the private
+    `composeRestored` (built in place of the plan's `restoredLines(description, line)`; D-8724) — keeps the last three
+    "Restored" lines.
   - `isInbound(issue: { linearId: string; teamKey: string }, bound: ReadonlySet<string>, viaFleet: ReadonlySet<string>, managed: ReadonlySet<string>): boolean`
   - planStore: `managedTeams(db): { workspaceId: string; teamKey: string }[]` (`state = 'applied'`), `recordDrift`,
     `driftRestoresOf(db, bindingId, since)`, `upsertInbound`, `inboundWaiting(db, project)`.
 
-- [ ] **Step 1: Write the failing tests** — one per rule: `In Progress → In Review is not drift`, `completed by the integration with the merge recorded is not drift`,
+- [x] **Step 1: Write the failing tests** — one per rule: `In Progress → In Review is not drift`, `completed by the integration with the merge recorded is not drift`,
   `completed with no merge recorded waits one pass`, `a moved project is drift`, `a value ccrc wrote is catch-up`,
   `three restores in seven days is persistent, three in eight is not`, `restoredLines keeps three`,
   `an issue created through the journal is not inbound`; migration 58 applies after 57.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-policy.test.ts test/plan-store.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-policy.test.ts test/plan-store.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
 
 ### Task 4.2: The drift pass and persistent drift
 
@@ -1493,15 +1551,15 @@ Test `server/test/drift-pass.test.ts`.
   - Acts: `hand` mails the programme's coordinator (`planOwnerOf`) with the drift record and closes the item; `keep`
     closes it and restoring goes on.
 
-- [ ] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
+- [x] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
   `the third restore in a week raises the item`; `with the item open, two edits in one pass restore once and comment once a day`;
   `a restore refused linear-forbidden raises the item at once` (Review Focus 5); `an unmanaged team is never read`;
   `hand mails the coordinator`; `a restore waits for the sync pass in flight and, when that pass wrote the newer
   planned value, writes nothing and raises no drift`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
-- [ ] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
-- [ ] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
+- [x] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
+- [x] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
 
 ### Task 4.3: The inbound path, the Upkeep epic and the Linear owner item
 
@@ -1526,17 +1584,17 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   - `GET /api/projects/:project/upkeep` → the Upkeep epic's `EpicView` (session-gated, in `MASKED_GET_ROUTES`), for the
     console's Upkeep page (Task 5.3).
 
-- [ ] **Step 1: Write the failing tests** — `an unbound issue in a managed team is mailed to the owner once`;
+- [x] **Step 1: Write the failing tests** — `an unbound issue in a managed team is mailed to the owner once`;
   `triage by another coordinator is not-linear-owner`; `hand to the owner's own programme takes it at once`;
   `upkeep creates the Upkeep epic once and places the ticket`; `take moves an Upkeep ticket into the programme's epic`;
   `raise makes a decide item for the operator`; `no live owner raises one item per project and it settles when an owner is named and live`;
   `a hibernated owner is mailed, and no item is raised`; `an unmeasured owner raises no item`;
   `the Upkeep project is created once, outside any initiative, and never closed`; `GET upkeep answers its tickets, masked`;
   the client rows' identity and count pins.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
+- [x] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
 
 ### Task 4.4: Session writes in managed teams
 
@@ -1550,12 +1608,12 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   through `ccrc-api plan ticket-add`", after routing and before the policy point, journaled `refused`. In an unmanaged
   team, unchanged; `comment`, `link` and reads unchanged.
 
-- [ ] **Step 1: Write the failing tests** — `create in a managed team is plan-owned and sends nothing`; `update of an unbound issue in a managed team passes`;
+- [x] **Step 1: Write the failing tests** — `create in a managed team is plan-owned and sends nothing`; `update of an unbound issue in a managed team passes`;
   `create in an unmanaged team passes`; `comment on a bound issue passes`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-proxy-routes.test.ts`.
-- [ ] **Step 3: Implement** (`LinearProxyDeps` gains `managed(workspaceId: string, teamKey: string): boolean`).
-- [ ] **Step 4: Run to pass** — plus `test/skill-size-ratchet.test.ts test/refusal-status.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): plan-owned in managed teams (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-proxy-routes.test.ts`.
+- [x] **Step 3: Implement** (`LinearProxyDeps` gains `managed(workspaceId: string, teamKey: string): boolean`).
+- [x] **Step 4: Run to pass** — plus `test/skill-size-ratchet.test.ts test/refusal-status.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): plan-owned in managed teams (D-8183)`.
 
 ---
 

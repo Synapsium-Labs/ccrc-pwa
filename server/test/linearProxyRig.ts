@@ -29,6 +29,8 @@ import { linearServicesFake, type LinearServicesFake } from './linearServicesFak
 import { seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import type { OtherLaneReads } from '../src/coord/otherLanes.js';
+import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 
 export const PROXY_TOKEN = 'e'.repeat(64);
 
@@ -197,6 +199,8 @@ export interface ProxyRigOpts {
   absent?: readonly ('rate' | 'refresher' | 'journal' | 'policy')[];
   /** `direct` only: attribution in place of the registry's (every `u-<id>` pair is vouched for by default). */
   attribute?: (id: string, uuid: string) => Promise<AttributionRead>;
+  /** `direct` only: the other lanes' reads (Overlord W1); not designated by default. */
+  otherLaneReads?: OtherLaneReads;
   /** The coord.db the journal writes (a fresh in-memory one by default). */
   db?: DatabaseSync;
   timeoutMs?: number;
@@ -275,6 +279,7 @@ export async function proxyRig(o: ProxyRigOpts = {}): Promise<ProxyRig> {
       ccrcDir, mailToken: () => PROXY_TOKEN,
       attribute: o.attribute ?? (async (id, uuid) => (uuid === `u-${id}` ? { ok: true }
         : { ok: false, error: 'stale-uuid', detail: 'byUuid does not match the registry — stale sender; re-read your own .uuid' })),
+      otherLaneReads: o.otherLaneReads ?? NOT_DESIGNATED_READS,
       rate: absent.has('rate') ? null : fx.rate,
       refresher: absent.has('refresher') ? null : fx.refresher,
       journal: absent.has('journal') ? null : fx.journal,

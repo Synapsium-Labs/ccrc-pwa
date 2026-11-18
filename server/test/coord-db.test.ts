@@ -748,10 +748,13 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[90] (overlord_designation, the Overlord's designation row, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, a run's own bound PR as its close measured it, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0),
-    // and MIGRATIONS[93] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
+    // and MIGRATIONS[93] (programme_forecasts, the sealed forecasts, Overlord W2 forecasts A),
+    // and MIGRATIONS[94] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183),
+    // and MIGRATIONS[95] (the designation actor columns, Overlord W1 gates A),
+    // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a).
-    expect(COORD_SCHEMA_VERSION).toBe(94);
-    expect(MIGRATIONS.length).toBe(94);
+    expect(COORD_SCHEMA_VERSION).toBe(97);
+    expect(MIGRATIONS.length).toBe(97);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -870,8 +873,11 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[90] (overlord_designation, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, programme work map WM0),
-    // and MIGRATIONS[93] (the renewal hand-offs' four tables, Overlord W1a); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(94);
+    // and MIGRATIONS[93] (programme_forecasts, Overlord W2 forecasts A),
+    // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4),
+    // and MIGRATIONS[95] (the designation actor columns, gates A),
+    // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(97);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

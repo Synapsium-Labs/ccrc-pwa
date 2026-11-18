@@ -22,6 +22,7 @@ import { OverlordAuthorityGuard } from '../src/coord/overlordAuthorityGuard.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
 import { actorOf } from '../src/accounts/audit.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { refuseRoute } from '../src/refuse.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import type { PoolSet } from '../../shared/poolset.js';
@@ -60,6 +61,8 @@ const GEN = '11111111-2222-3333-4444-555555555555';
 const FABLE_ROSTER = { ...ROSTER, accounts: ROSTER.accounts.map((a) => ({ ...a, fableBilling: 'included' as const })) };
 const BOUND = 'overlord-aaaaaaaa';
 const PENDING = 'overlord-bbbbbbbb';
+const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
+const OPERATOR = identity.operator(actorOf('device-a', 'abcdef0123456789'));
 
 // ── the fakes ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -138,7 +141,7 @@ async function rig(opts: { journal?: 'fake' | 'real'; fable?: boolean } = {}): P
   const serial: OverlordRouteDeps['serial'] = (fn) => { serialRuns.n += 1; const run = tail.then(fn, fn); tail = run.catch(() => undefined); return run; };
   const app = Fastify({ logger: false });
   registerOverlordRoutes(app, {
-    gate, serial, coord, journal, body, host: { deliver: async () => { throw new Error('no prompt from a Settings door'); } },
+    gate, identity, serial, coord, journal, body, host: { deliver: async () => { throw new Error('no prompt from a Settings door'); } },
     clock: time.ports.clock, entropy: time.ports.entropy, dec: () => null,
     facts: {
       ccdWords: () => [], serverWords: [], builds: () => 'agreed', roster: () => (opts.fable === false ? ROSTER : FABLE_ROSTER),
@@ -155,7 +158,7 @@ async function rig(opts: { journal?: 'fake' | 'real'; fable?: boolean } = {}): P
 /** The row as a Start leaves it: pending, then bound when `live`, through the store's own writers and this rig's journal. */
 function seed(r: Rig, over: { model?: 'opus' | 'fable'; accountPools?: PoolSet; state: 'live' | 'pending' | 'unbound' }): void {
   const p = r.coord.designatePending(r.journal, { sessionId: over.state === 'pending' ? PENDING : BOUND, deadlineAt: 10_000, model: over.model ?? 'opus',
-    accountPools: over.accountPools ?? SET_BA, actor: 'op', at: 1, opKey: 'designate-seed' });
+    accountPools: over.accountPools ?? SET_BA, actor: OPERATOR, at: 1, opKey: 'designate-seed' });
   expect(p.ok).toBe(true);
   if (over.state === 'pending') return;
   expect(r.coord.bindPendingGeneration(BOUND, GEN, 2).ok).toBe(true);
@@ -332,8 +335,8 @@ describe('POST /api/overlord/model (C45)', () => {
     const r = await rig();
     seed(r, { state: 'live' }); quiet(r);
     const before = rowOf(r);
-    expect(r.coord.setModelClass(r.journal, { model: 'opus', actor: 'someone', at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
-    expect(r.coord.setAccountSet(r.journal, { accountPools: SET_BA, actor: 'someone', at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
+    expect(r.coord.setModelClass(r.journal, { model: 'opus', actor: identity.operator(actorOf('device-b', '0123456789abcdef')), at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
+    expect(r.coord.setAccountSet(r.journal, { accountPools: SET_BA, actor: identity.operator(actorOf('device-b', '0123456789abcdef')), at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
     expect(r.fake.seen).toEqual([]);
     expect(rowOf(r)).toEqual(before);
   });
@@ -366,7 +369,7 @@ describe('POST /api/overlord/account-set (C46, C56)', () => {
     seed(r, { state: 'live', accountPools: { pools: ['pool-a', 'pool-b', 'pool-c'], untagged: false } }); quiet(r);
     // The door reads the row and asks no step-up for a narrowing to {pool-a, pool-b}; before it reaches the serialiser, the set
     // is narrowed to {pool-a} by another act, so {pool-a, pool-b} now widens.
-    r.gate.onAsk = () => { r.gate.onAsk = null; expect(r.coord.setAccountSet(r.journal, { accountPools: SET_A, actor: 'op', at: 5, opKey: 'other' }).ok).toBe(true); };
+    r.gate.onAsk = () => { r.gate.onAsk = null; expect(r.coord.setAccountSet(r.journal, { accountPools: SET_A, actor: OPERATOR, at: 5, opKey: 'other' }).ok).toBe(true); };
     const res = await postSet(r, { accountPools: SET_AB });
     expect(r.gate.asks.map((a) => a.stepUp)).toEqual([false]);
     expect(res.statusCode).toBe(REFUSAL_STATUS['step-up-required']);
