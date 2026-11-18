@@ -34,7 +34,7 @@ import type { CoordStore } from '../coord/store.js';
 import { operatorWasShown, type ItemRow } from '../coord/ledgersStore.js';
 import { designationFactFrom, identityOf, roleFactsOf, type DesignationFact } from '../roleOf.js';
 import { CARD_REGISTRY_UNREAD, cardRoleOf, type CardRole } from './card.js';
-import { noteKeyReader } from './noteKeys.js';
+import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { noteKeyFact } from './notes.js';
 import { timerPreview } from './timers.js';
 
@@ -53,6 +53,9 @@ export interface CardFactsDeps {
   /** Declared coordinator intent on one incarnation, from the delegation checkpoint (`intentOfCheckpoint`, the one reader,
    *  `declaredIntent.ts`), or `not-ready` while the delegation lane has no ready checkpoint. */
   declaredIntent(id: string, incarnation: string): boolean | 'not-ready';
+  /** The private store's text-free message read (a `miss` note's key), resolved when the card is gathered; absent or null on a
+   *  server without the store, where a `message` key reads `unmeasured`. */
+  readonly messages?: () => NoteKeysMessages | null | undefined;
 }
 
 /** The history line's verb (C52). No read names a session's newest node yet (slug history-line-without-a-node). */
@@ -207,7 +210,7 @@ export async function gatherCardFacts(deps: CardFactsDeps, id: string, now: numb
   const mailMore = mailRead.kind === 'read' && mailRead.value.length > CARD_MAIL_MAX;
 
   // The notes: the identity's live ones (the identity is the session id: notes stay keyed by it, slug notes-keyed-by-session-id), each with what its key's row is now.
-  const keyOf = noteKeyReader(coord, id);
+  const keyOf = noteKeyReader(coord, id, deps.messages?.() ?? undefined);
   const notes = attempt<readonly CardNote[]>('the notes', () => {
     const r = coord.liveNotes(id);
     return !r.ok ? null : r.notes.map((n) => ({
