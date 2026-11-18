@@ -8648,8 +8648,7 @@ export class FleetWatcher {
         const prior = d.attempts > 0 || d.deliveredAt !== null;
         // An operator message's nudge types its own fixed line and resumes only that line (`mailNudgeOf`, the private store's
         // mail branch); every other mail is the id-agnostic line above, as before.
-        const origin = store.mailOrigin(d.mailId);
-        const nudge = mailNudgeOf(d.toId, origin);
+        const origin = store.mailOrigin(d.mailId), nudge = mailNudgeOf(d.toId, origin);
         const ownBox = nudge.operatorMessageId === null ? null : await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId).catch(() => null);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.

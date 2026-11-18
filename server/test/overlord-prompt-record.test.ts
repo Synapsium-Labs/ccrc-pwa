@@ -29,6 +29,7 @@ import { settlementMarkCases, promptTargetCases } from './sim/operatorModelSets.
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { quietAtTestEnd } from './laneQuiet.js';
 
 // ── the deciders' cases, against the real module ───────────────────────────────────────────────────────────────────────
 
@@ -431,7 +432,7 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     const h = lane({ panes, emptyAfterEnter });
     const coord = new CoordStore(openCoordDb(path.join(h.home, '.ccrc', 'coord.db')));
     const deps = { ...testDeps(h.home, h.run), coord, ...(operatorModel === undefined ? {} : { operatorModel: operatorModel as OperatorModelStore }), ...over } as Deps;
-    const w = new FleetWatcher(withFakeClock(deps), new Bus(), 2000);
+    const w = quietAtTestEnd(new FleetWatcher(withFakeClock(deps), new Bus(), 2000));
     await w.tick();
     seedRegistry(h.home);
     return { h, coord, w };
