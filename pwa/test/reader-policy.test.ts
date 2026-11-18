@@ -1,6 +1,9 @@
 // Docs W8a Task 5: the reader's L1 decisions (`docs/reader/policy.ts`, `readerText.ts`), the enumerable storage port
 // in `lib/storage.ts` and `replaceFragment` in `lib/router.ts`. Every page is a placeholder (`demo`, `a/b.md`,
 // `example-org/example-repo`); control characters are built with `String.fromCharCode`, never written raw.
+import { existsSync, readFileSync } from 'node:fs';
+import path from 'node:path';
+import ts from 'typescript';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { BRIDGE_LIMITS } from '@synapsium-labs/docserver/frame';
 import { DOC_SECTION_SLUGS } from '../../shared/docs';
@@ -411,5 +414,178 @@ describe('the library 1.1 take-up: the reader\'s decisions (the take-up plan, Ta
     expect(readerBarTitle('Path identity design', 'a.md')).toBe('Path identity design');
     expect(readerBarTitle(null, 'a.md')).toBe('a.md');
     expect(readerBarTitle('  ', 'a.md')).toBe('a.md');
+  });
+});
+
+// The policy ring (the architecture spec's L1, completion plan Task 13): `policy.ts` is pure deciders, so nothing it reaches
+// at run time may be a `.tsx`, a module that imports `react` or `react-dom` (a hook module), a store or `lib/api.ts`. The
+// walk follows every runtime import and re-export through relative specifiers, reading the declarations with the TypeScript
+// compiler API; `import type` / `export type` and declarations whose named specifiers are all `type` are erased and skipped,
+// bare package specifiers are leaves. `docLinkTarget` once lived in `docsLinks.ts`, which imports `pinFor` from the
+// `useDocsVisit.ts` hook module: that chain is what this walk turns red on.
+const PWA_ROOT = path.join(import.meta.dirname, '..');
+const POLICY_FILE = path.join(PWA_ROOT, 'src', 'docs', 'reader', 'policy.ts');
+
+/** The runtime module specifiers one source file names: import and export declarations that are not type-only, `import x =
+ *  require()` and literal dynamic `import()`. */
+function runtimeSpecifiers(file: string, text: string): string[] {
+  const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, file.endsWith('x') ? ts.ScriptKind.TSX : ts.ScriptKind.TS);
+  const out: string[] = [];
+  const visit = (n: ts.Node): void => {
+    if (ts.isImportDeclaration(n) && ts.isStringLiteral(n.moduleSpecifier)) {
+      const c = n.importClause;
+      const bindings = c?.namedBindings;
+      const allNamedType = c !== undefined && c.name === undefined && bindings !== undefined && ts.isNamedImports(bindings)
+        && bindings.elements.length > 0 && bindings.elements.every((e) => e.isTypeOnly);
+      if (!(c?.isTypeOnly === true || allNamedType)) out.push(n.moduleSpecifier.text);
+    } else if (ts.isExportDeclaration(n) && n.moduleSpecifier !== undefined && ts.isStringLiteral(n.moduleSpecifier)) {
+      const allNamedType = n.exportClause !== undefined && ts.isNamedExports(n.exportClause)
+        && n.exportClause.elements.length > 0 && n.exportClause.elements.every((e) => e.isTypeOnly);
+      if (!(n.isTypeOnly || allNamedType)) out.push(n.moduleSpecifier.text);
+    } else if (ts.isImportEqualsDeclaration(n) && ts.isExternalModuleReference(n.moduleReference)
+      && ts.isStringLiteral(n.moduleReference.expression) && !n.isTypeOnly) {
+      out.push(n.moduleReference.expression.text);
+    } else if (ts.isCallExpression(n) && n.expression.kind === ts.SyntaxKind.ImportKeyword
+      && n.arguments.length > 0 && ts.isStringLiteral(n.arguments[0]!)) {
+      out.push((n.arguments[0] as ts.StringLiteral).text);
+    }
+    ts.forEachChild(n, visit);
+  };
+  visit(sf);
+  return out;
+}
+
+/** The file a relative specifier names, from `from`'s directory: the path itself when it is a file, else with `.ts`, `.tsx`,
+ *  `/index.ts` or `/index.tsx`; a `.js` spelling (the shared files' own) also tries its `.ts` and `.tsx` source; `null` when
+ *  none exists. `exists` is the walk's file system. */
+function resolveRelative(from: string, spec: string, exists: (p: string) => boolean): string | null {
+  const base = path.resolve(path.dirname(from), spec);
+  const stem = base.endsWith('.js') ? base.slice(0, -3) : null;
+  const sources = stem === null ? [] : [`${stem}.ts`, `${stem}.tsx`];
+  for (const c of [base, ...sources, `${base}.ts`, `${base}.tsx`, path.join(base, 'index.ts'), path.join(base, 'index.tsx')]) {
+    if (exists(c)) return c;
+  }
+  return null;
+}
+
+/** What breaks the ring, found by walking from `entry`. Each line names the offending path and the chain that reached it. */
+function ringBreaks(entry: string, root: string, fs: { read(p: string): string | null }): string[] {
+  const rel = (p: string): string => path.relative(root, p).split(path.sep).join('/');
+  const parsed = (p: string): boolean => /\.(?:ts|tsx|mts|js|mjs)$/.test(p);
+  const exists = (p: string): boolean => fs.read(p) !== null && /\.[a-z]+$/.test(p);
+  const breaks: string[] = [];
+  const seen = new Set<string>([entry]);
+  const queue: string[][] = [[entry]];
+  while (queue.length > 0) {
+    const chain = queue.shift()!;
+    const file = chain[chain.length - 1]!;
+    const via = chain.map(rel).join(' -> ');
+    const r = rel(file);
+    if (file.endsWith('.tsx')) breaks.push(`${r} is a .tsx (${via})`);
+    if (r.startsWith('src/stores/')) breaks.push(`${r} is a store (${via})`);
+    if (r === 'src/lib/api.ts') breaks.push(`${r} is lib/api.ts (${via})`);
+    const text = fs.read(file);
+    if (text === null || !parsed(file)) continue;
+    for (const spec of runtimeSpecifiers(file, text)) {
+      if (!spec.startsWith('.')) {
+        if (spec === 'react' || spec === 'react-dom' || spec.startsWith('react/') || spec.startsWith('react-dom/')) {
+          breaks.push(`${r} imports ${spec}, so it is a hook module (${via})`);
+        }
+        continue;
+      }
+      const next = resolveRelative(file, spec, exists);
+      if (next === null) {
+        breaks.push(`${r} imports ${spec}, which resolves to no file (${via})`);
+        continue;
+      }
+      if (seen.has(next)) continue;
+      seen.add(next);
+      queue.push([...chain, next]);
+    }
+  }
+  return breaks;
+}
+
+const diskFs = { read: (p: string): string | null => (existsSync(p) && !p.endsWith('/') ? safeRead(p) : null) };
+function safeRead(p: string): string | null {
+  try {
+    return readFileSync(p, 'utf8');
+  } catch {
+    return null;
+  }
+}
+
+describe('policy.ts stays ring L1: nothing it reaches at run time is a .tsx, a hook module, a store or lib/api.ts', () => {
+  it('the real walk finds nothing', () => {
+    expect(ringBreaks(POLICY_FILE, PWA_ROOT, diskFs)).toEqual([]);
+  });
+
+  it('the walk reaches the shared kernel and the limits files it is meant to cover', () => {
+    // A walk that stops at the first hop would pass the test above for the wrong reason.
+    const reached: string[] = [];
+    const spy = { read: (p: string): string | null => { const t = diskFs.read(p); if (t !== null) reached.push(path.relative(PWA_ROOT, p).split(path.sep).join('/')); return t; } };
+    ringBreaks(POLICY_FILE, PWA_ROOT, spy);
+    expect(reached).toEqual(expect.arrayContaining([
+      'src/docs/reader/policy.ts', 'src/lib/markdownLimits.ts', 'src/lib/readerLimits.ts', '../shared/docs.ts',
+    ]));
+  });
+
+  // A planted control on a virtual tree (no disk): each shape the walk must find or must skip.
+  const root = '/v';
+  const at = (p: string): string => `${root}/${p}`;
+  const treeOf = (files: Record<string, string>) => ({ read: (p: string): string | null => files[path.relative(root, p)] ?? null });
+  const entry = at('src/docs/reader/policy.ts');
+
+  it('a runtime import of a hook module two hops down is found, with the chain', () => {
+    const fs = treeOf({
+      'src/docs/reader/policy.ts': "import { a } from '../links';\nexport const x = a;",
+      'src/docs/links.ts': "import { pin } from './useVisit';\nexport const a = pin;",
+      'src/docs/useVisit.ts': "import { useState } from 'react';\nexport const pin = useState;",
+    });
+    expect(ringBreaks(entry, root, fs)).toEqual([
+      'src/docs/useVisit.ts imports react, so it is a hook module (src/docs/reader/policy.ts -> src/docs/links.ts -> src/docs/useVisit.ts)',
+    ]);
+  });
+
+  it('a re-export, an export star, a dynamic import and an import-equals each count', () => {
+    for (const line of [
+      "export { b } from '../comp';", "export * from '../comp';", "export const lazy = () => import('../comp');",
+      "import comp = require('../comp');",
+    ]) {
+      const fs = treeOf({ 'src/docs/reader/policy.ts': line, 'src/docs/comp.tsx': 'export const b = 1;' });
+      expect(ringBreaks(entry, root, fs), line).toEqual([
+        'src/docs/comp.tsx is a .tsx (src/docs/reader/policy.ts -> src/docs/comp.tsx)',
+      ]);
+    }
+  });
+
+  it('a store and lib/api.ts are found; a directory index resolves', () => {
+    const fs = treeOf({
+      'src/docs/reader/policy.ts': "import { s } from '../../stores';\nimport { f } from '../../lib/api';\nexport const x = [s, f];",
+      'src/stores/index.ts': 'export const s = 1;',
+      'src/lib/api.ts': 'export const f = 1;',
+    });
+    expect(ringBreaks(entry, root, fs)).toEqual([
+      'src/stores/index.ts is a store (src/docs/reader/policy.ts -> src/stores/index.ts)',
+      'src/lib/api.ts is lib/api.ts (src/docs/reader/policy.ts -> src/lib/api.ts)',
+    ]);
+  });
+
+  it('import type, export type and an import whose named specifiers are all type are erased and skipped', () => {
+    const fs = treeOf({
+      'src/docs/reader/policy.ts': [
+        "import type { A } from '../comp';", "export type { B } from '../comp';", "import { type C, type D } from '../comp';",
+        "export { type E } from '../comp';", "import type React from 'react';", "export type { A, B };",
+      ].join('\n'),
+      'src/docs/comp.tsx': "import { useState } from 'react';\nexport const z = useState;",
+    });
+    expect(ringBreaks(entry, root, fs)).toEqual([]);
+  });
+
+  it('a relative specifier that resolves to no file is reported, so the walk cannot go quiet on a typo', () => {
+    const fs = treeOf({ 'src/docs/reader/policy.ts': "import { q } from './missing';\nexport const x = q;" });
+    expect(ringBreaks(entry, root, fs)).toEqual([
+      'src/docs/reader/policy.ts imports ./missing, which resolves to no file (src/docs/reader/policy.ts)',
+    ]);
   });
 });

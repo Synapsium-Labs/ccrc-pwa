@@ -12,7 +12,7 @@
 import { DOCS_PARSE_BUDGET_MS } from '../../lib/markdownLimits';
 import { utf8ByteLength } from '../../lib/markdownGuard';
 import { READER_COPY_WRITE_MAX_BYTES, READER_DOC_KEY_MAX_UNITS, READER_LAB_DRAW_WATCHDOG_MS } from '../../lib/readerLimits';
-import { docLinkTarget } from '../docsLinks';
+import { docLinkTarget } from '../docLinkTarget';
 import type { DocLinkContextValue } from '../DocLink';
 import type { DocSectionSlug } from '../../../../shared/docs';
 import type { ReaderHiddenChar } from './readerText';
