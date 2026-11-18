@@ -24,7 +24,7 @@
 - Fixture HOMEs only for ccd; poisoned `gh` where a fixture spawns tools; `ccrc test -- <command>` for every test and typecheck, foreground, timeout at least 600000 ms; mutation runs through the coordinator's mutation runner, scratch outside the worktree.
 - Public repository: neutral names (`project-a`, `lane-a`, `the fleet box`); no host, path, label or tracker host in code, tests, docs or commit text. The no-tracker scan of M11.23 enforces the last.
 - Each wave opens with its own run and issued deviation block; a departure found mid-wave is `D-TBD-<slug>` and reported.
-- Ownership against the sibling waves: X1 (appearance) owns the reader host's prefs and the Aa ownership; X3 (draft review) owns Share and the draft store. P1 to P4 touch no reader host file (`ReaderFrame.tsx`, `reader/bridge.ts`, `reader/policy.ts`, `DocsHead.tsx`, `docs.css`); P6 and P5 do, and are dispatched only after X1's host wave has merged. ccd and `server/src/docs/**` edits serialise with X3's by claim, one wave at a time.
+- Ownership against the sibling waves: X1 (appearance) owns the reader host's prefs and the Aa ownership; X3 (draft review) owns Share and the draft store. P1 to P4 touch no reader host file (`ReaderFrame.tsx`, `reader/bridge.ts`, `reader/policy.ts`, `DocsHead.tsx`, `docs.css`), with one exception: P2.4 edits `DocsHead.tsx`'s truth line and the five actions' off reasons only, serialised with X1 by claim (P2.4 claims the file only while no X1 wave holds it, and otherwise waits for the holder to release it). P6 and P5 edit the host files freely, and are dispatched only after X1's host wave has merged. ccd and `server/src/docs/**` edits serialise with X3's by claim, one wave at a time.
 
 ## Review Focus
 
@@ -41,9 +41,9 @@
 | Wave | Tasks | Depends on | Owns (create or modify) |
 |---|---|---|---|
 | P1 range reads and large files | P1.1 to P1.5 | `main` | `shared/docs.ts` (range block and ceilings), `ccd/ccd` (`_docs_py` range verb, snapshot cache), `agent/src/whitelist.ts`, `server/src/ccdargv.ts`, `server/src/docs/{policy,ports,ccdsource,routes}.ts`, `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts`, `pwa/src/docs/range/**` (new), `pwa/src/docs/objectUrls.ts`, `pwa/src/docs/DocsLeaf.tsx` (above-cap branches), `pwa/src/docs/DocImage.tsx`, `pwa/src/docs/docsText.ts` |
-| P2 outside folders | P2.1 to P2.4 | P1 | `ccd/ccd` (`docs-folder`, `docs-folder-read`, walker, registry), `shared/docs.ts` (folder block), `agent/src/whitelist.ts`, `server/src/ccdargv.ts`, `server/src/docs/folderRoutes.ts` (new, handlers only), `server/src/docs/{routes,policy,ports,ccdsource}.ts`, `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts`, `pwa/src/screens/settings/DocsFoldersSection.tsx` (new), `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks,DocsBanners}.tsx/ts`, `CLAUDE.md` (the SAFETY sentence only), the classifier's forbidden row and the child deny rules (`server/src/coord/approvalguard.ts`, `shared/api.ts#childDenyRules`) |
+| P2 outside folders | P2.1 to P2.4 | P1 | `ccd/ccd` (`docs-folder`, `docs-folder-read`, walker, registry), `shared/docs.ts` (folder block), `agent/src/whitelist.ts`, `server/src/ccdargv.ts`, `server/src/docs/folderRoutes.ts` (new, handlers only), `server/src/docs/{routes,policy,ports,ccdsource}.ts`, `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts`, `pwa/src/screens/settings/DocsFoldersSection.tsx` (new), `pwa/src/screens/settings/SettingsIndex.tsx`, `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks,DocsBanners}.tsx/ts`, `pwa/src/docs/DocsHead.tsx` (truth line and off reasons only, serialised with X1 by claim), `CLAUDE.md` (the SAFETY sentence only), the classifier's forbidden row and the child deny rules (`server/src/coord/approvalguard.ts`, `shared/api.ts#childDenyRules`) |
 | P3 PDF frame | P3.1 to P3.3 | P1, P2 | `shared/docs.ts` (`pdf` class, magic), `pwa/src/docs/pdf/**` (new: `PdfFrame.tsx`, `pdfPolicy.ts`, `pdfSrcdoc.ts`), `pwa/package.json` and lock (`pdfjs-dist`), `pwa/src/docs/DocsLeaf.tsx` (pdf branch), third-party notices |
-| P4 listings, refs, settings store | P4.1 to P4.4 | P2 | `ccd/ccd` (index newest, ref resolution), `shared/docs.ts` (index field, ref grammar, `ico`), `shared/docsTracker.ts` (new, L0 checker), `server/src/coord/{schema,store}.ts` (`docs_settings`), `server/src/docs/settingsRoutes.ts` (new, handlers only), `server/src/docs/routes.ts`, `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts`, `pwa/src/screens/settings/DocsSettingsSection.tsx` (new), `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks}.tsx/ts` |
+| P4 listings, refs, settings store | P4.1 to P4.4 | P2 | `ccd/ccd` (index newest, ref resolution), `shared/docs.ts` (index field, ref grammar, `ico`), `shared/docsTracker.ts` (new, L0 checker), `server/src/coord/{schema,store}.ts` (`docs_settings`), `server/src/docs/settingsRoutes.ts` (new, handlers only), `server/src/docs/routes.ts`, `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts`, `pwa/src/screens/settings/DocsSettingsSection.tsx` (new), `pwa/src/screens/settings/SettingsIndex.tsx`, `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks}.tsx/ts`, `server/test/single-definition/docs-l0.test.ts` |
 | P6 print stage 1 and the page loader | P6.1 to P6.2 | X1's host wave, P4 | `pwa/src/docs/print/**` (new), `pwa/src/lib/printTreeJob.ts` (new), `pwa/src/lib/markdownWorker.ts` (the `print-tree` job's dispatch), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row), `pwa/src/docs/docs.css` (print rules), `pwa/src/docs/mockup/{load,plan,policy}.ts`, `pwa/src/docs/mockup/shim.ts` (new) |
 | P5 reading layer | P5.1 to P5.5 | the library release, P6 | `pwa/package.json` and lock (library pin), `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/reader/{bridge,policy,places}.ts` (`places.ts` new), `pwa/src/docs/readerHistory.ts`, `pwa/src/docs/DocsHead.tsx` (Layout row), `pwa/src/docs/print/**` (stage 2), `pwa/src/lib/trackerLinkJob.ts` (new), `pwa/src/lib/{markdownWorker,markdownRunner,readerLimits}.ts` (the `tracker-links` job, `docsRunner`, its budget), `server/test/single-definition/docs-ring.test.ts`, rich-docs spec §3.3 and §4.4 |
 
@@ -151,7 +151,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P2.4: Settings and folder pages
 
-**Files:** Create `pwa/src/screens/settings/DocsFoldersSection.tsx`; Modify `pwa/src/screens/settings/SettingsIndex.tsx`, `pwa/src/docs/{DocsIndexView.tsx,DocsTreeView.tsx,docsTree.ts,docsLinks.ts,DocsBanners.tsx,DocsHead.tsx}` (truth line and the five actions' off reasons only; DocsHead's other areas stay X1's), `shared/docs.ts#parseDocsPage` (`~<label>`); Test `pwa/test/docs-folders.test.tsx` (new).
+**Files:** Create `pwa/src/screens/settings/DocsFoldersSection.tsx`; Modify `pwa/src/screens/settings/SettingsIndex.tsx`, `pwa/src/docs/{DocsIndexView.tsx,DocsTreeView.tsx,docsTree.ts,docsLinks.ts,DocsBanners.tsx,DocsHead.tsx}` (in `DocsHead.tsx`, the truth line and the five actions' off reasons only, claimed only while no X1 wave holds it; its other areas stay X1's), `shared/docs.ts#parseDocsPage` (`~<label>`); Test `pwa/test/docs-folders.test.tsx` (new).
 
 - [ ] **Step 1: Failing tests:** `parseDocsPage: ~label is a folder, never a project`; `folder page: truth line says Not in a repository with the file's modified time`; `folder page: history, changes, versions, GitHub and Share are off with their reasons`; `index: folders listed after projects`; `settings: add and remove round trip, refusal reason shown`.
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(docs): outside folders in Settings and Docs (X2 P2)`.
@@ -168,7 +168,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P3.2: `PdfFrame`
 
-**Files:** Create `pwa/src/docs/pdf/{PdfFrame.tsx,pdfPolicy.ts,pdfSrcdoc.ts}`; Modify `pwa/src/docs/DocsLeaf.tsx`; Test `pwa/test/pdf-frame.test.tsx` (new), browser `pwa/test/browser/pdf-frame.browser.test.ts` (new).
+**Files:** Create `pwa/src/docs/pdf/{PdfFrame.tsx,pdfPolicy.ts,pdfSrcdoc.ts}`; Modify `pwa/src/docs/DocsLeaf.tsx`; Test `pwa/test/pdf-frame.test.tsx` (new), browser `pwa/browser/pdf-frame.browser.test.ts` (new).
 
 **Interfaces:** Produces `PDF_SANDBOX = 'allow-scripts'`; `pdfCsp(hashes: string[]): string` (spec §4.4 tokens, no `'unsafe-eval'`, no `'wasm-unsafe-eval'`); `buildPdfSrcdoc({ pdfB64, viewer, worker, fonts, cmaps }): string` with the CSP meta first and the click guard second; `<PdfFrame bytes>` mounts once, tears down on a second `load`.
 
@@ -193,7 +193,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P4.2: Old ref spellings and `.ico`
 
-**Files:** Modify `ccd/ccd` (resolver: `refs/tags/<t>`, a bare tag name after the branches, 7 to 64 hex commits), `shared/docs.ts` (`parseDocsPage`, `DOCS_RASTER_TYPES` `ico` with count and offset checks); Test `server/test/ccd-docs-ref.test.ts`, `server/test/docs-shared.test.ts`, `pwa/test/docs-url.test.ts`.
+**Files:** Modify `ccd/ccd` (resolver: `refs/tags/<t>`, a bare tag name after the branches, 7 to 64 hex commits), `shared/docs.ts` (`parseDocsPage`, `DOCS_RASTER_TYPES` `ico` with count and offset checks); Test `server/test/ccd-docs-ref.test.ts` (new, `makeCcdHarness`, three poisons), `server/test/docs-shared.test.ts`, `server/test/docs-url.test.ts`.
 
 - [ ] **Step 1: Failing tests:** `ref: origin/b reads refs/remotes/origin/b unless a local origin/b exists`; `ref: refs/tags/t opens at its commit`; `ref: a bare tag name with no branch of that name opens at the tag's commit` (an annotated tag peeled); `ref: a name that is both a branch and a tag opens the branch`; `ref: a unique short commit opens at= the full commit`; `ref: an ambiguous short commit refuses`; `ico: magic with a bad count or offset is a mismatch`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): old ref spellings and ico (X2 P4)`.
@@ -209,7 +209,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P4.4: Settings UI, default branch and the no-tracker scan
 
-**Files:** Create `pwa/src/screens/settings/DocsSettingsSection.tsx`; Modify `pwa/src/docs/docsLinks.ts`; Test `pwa/test/docs-settings.test.tsx` (new), `server/test/single-definition/docs-no-tracker.test.ts` (new).
+**Files:** Create `pwa/src/screens/settings/DocsSettingsSection.tsx`; Modify `pwa/src/screens/settings/SettingsIndex.tsx`, `pwa/src/docs/docsLinks.ts`, `server/test/single-definition/docs-l0.test.ts` (the no-tracker scan, in the docs area file); Test `pwa/test/docs-settings.test.tsx` (new).
 
 - [ ] **Step 1: Failing tests:** `settings: rules round trip with refusal reasons`; `default branch: listing links carry ?ref when set, a gone branch falls back with a note`; `no tracker host in pwa/src, server/src, shared or the pinned library's defaults`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): docs settings in Settings (X2 P4)`.
@@ -218,7 +218,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P6.1: Print stage 1
 
-**Files:** Create `pwa/src/docs/print/{PrintView.tsx,printTree.ts}`, `pwa/src/lib/printTreeJob.ts` (the worker's lazy `print-tree` job, as `readerRenderJob.ts` is for `render`); Modify `pwa/src/lib/markdownWorker.ts` (dispatch `kind: 'print-tree'`), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row in Page details), `pwa/src/docs/docs.css` (`@media print`); Test `pwa/test/docs-print.test.tsx` (new), `pwa/test/print-tree.test.ts` (new), browser `pwa/test/browser/docs-print.browser.test.ts` (new).
+**Files:** Create `pwa/src/docs/print/{PrintView.tsx,printTree.ts}`, `pwa/src/lib/printTreeJob.ts` (the worker's lazy `print-tree` job, as `readerRenderJob.ts` is for `render`); Modify `pwa/src/lib/markdownWorker.ts` (dispatch `kind: 'print-tree'`), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row in Page details), `pwa/src/docs/docs.css` (`@media print`); Test `pwa/test/docs-print.test.tsx` (new), `pwa/test/print-tree.test.ts` (new), browser `pwa/browser/docs-print.browser.test.ts` (new).
 
 **Interfaces:** Produces `answerPrintTreeJob(job: { id: number; kind: 'print-tree'; src: string }): PrintTreeReply` in the worker: the library's `render` (as the reader's job, same gate and limits), then the HTML parser, then `printAllow(tree): PrintTree` (L1, pure: the spec §4.6 allow-list, elements and attributes by name); `preparePrintTree(doc, runner): Promise<PrintTree | null>` (started after the reader's `ready`, parse budgets apply); `<PrintView tree figures?>` (React only, never `dangerouslySetInnerHTML`); `PRINT_WAIT_MS = 10000`.
 
@@ -229,7 +229,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P6.2: Sibling modules, import maps and fetch within the walls
 
-**Files:** Create `pwa/src/docs/mockup/shim.ts`; Modify `pwa/src/docs/mockup/{load,plan}.ts`; Test `pwa/test/mockup-loader.test.ts` (new), browser `pwa/test/browser/mockup-loader.browser.test.ts` (new).
+**Files:** Create `pwa/src/docs/mockup/shim.ts`; Modify `pwa/src/docs/mockup/{load,plan}.ts`; Test `pwa/test/mockup-loader.test.ts` (new), browser `pwa/browser/mockup-loader.browser.test.ts` (new).
 
 - [ ] **Step 1: Failing tests:** `loader: a two-module graph renders`; `loader: an import map naming siblings renders`; `loader: an import map naming https asks Load external`; `loader: an import map naming data: is refused`; `loader: a sibling fetch answers from the set, others fail`; `loader: a page over 5 MiB shows Download and Source with the reason`; `loader: MOCKUP_SANDBOX_SCRIPTED, MOCKUP_CSP and the click guard unchanged` (pins).
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): in-walls page loader (X2 P6)`.
@@ -238,7 +238,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P5.1: Adopt the release; layouts
 
-**Files:** Modify `pwa/package.json` and lock, `pwa/src/docs/reader/{bridge,policy}.ts`, `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/DocsHead.tsx` (Layout row), `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` §3.3; Test `pwa/test/reader-layouts.test.ts` (new), browser `pwa/test/browser/reader-layouts.browser.test.ts` (new).
+**Files:** Modify `pwa/package.json` and lock, `pwa/src/docs/reader/{bridge,policy}.ts`, `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/DocsHead.tsx` (Layout row), `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` §3.3; Test `pwa/test/reader-layouts.test.ts` (new), browser `pwa/browser/reader-layouts.browser.test.ts` (new).
 
 **Interfaces:** Produces `type ReaderLayout = 'default' | 'classic' | 'editorial' | 'review' | 'guided'`; `layoutFromVariant(v: string | null): ReaderLayout` (`AB`→default, `A`→editorial, `B`→review, `C`→guided, `classic`→classic, else default); pref key `ccrc:reader:v1:pref:prefs` gains `layout`.
 
@@ -259,7 +259,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P5.3: Back places
 
-**Files:** Create `pwa/src/docs/reader/places.ts` (L1 decider); Modify `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/readerHistory.ts`, rich-docs spec §4.4; Test `pwa/test/reader-places.test.ts` (new), browser `pwa/test/browser/reader-places.browser.test.ts` (new).
+**Files:** Create `pwa/src/docs/reader/places.ts` (L1 decider); Modify `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/readerHistory.ts`, rich-docs spec §4.4; Test `pwa/test/reader-places.test.ts` (new), browser `pwa/browser/reader-places.browser.test.ts` (new).
 
 **Interfaces:** Produces `decideBack(popped: unknown, visit: { id: string; places: Place[]; pendingSeq: number | null }): { kind: 'close-overlay' } | { kind: 'goto'; id: string } | { kind: 'consume' } | { kind: 'skip' } | { kind: 'router' }`, consulted before the router on every `popstate`; `skip` calls `history.back()` again, at most `PLACES_MAX` times in a row; `PLACES_MAX = 50` per doc visit; a pushed entry's URL is `location.href` unchanged.
 

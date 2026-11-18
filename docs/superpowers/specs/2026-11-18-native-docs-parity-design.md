@@ -50,7 +50,7 @@ This section is the side-by-side table. Each row gives the action, what the stan
 
 | # | Action | Standalone result | Native at `main` (proof) | Disposition |
 |---|---|---|---|---|
-| I1 | Open the docs index | One card per root, each section with its newest five docs and "N more" | Partial: a project chooser with per-section counts (`DocsIndexView.tsx#IndexRow`, `shared/docs.ts#DocsIndexOk`); no doc names | Gap, §5.1 |
+| I1 | Open the docs index | One card per root, each section with its newest five docs and "N more" | Partial: a project chooser with per-section counts (`DocsIndexView.tsx`, `shared/docs.ts#DocsIndexRow`); no doc names | Gap, §5.1 |
 | I2 | Open a project | Every section with all its docs (readable titles, date labels, draft badges), served-ref note | Partial: one row per section with its count and draft totals, no doc names (`DocsTreeView.tsx`, the project page) | Gap, §5.1 |
 | I3 | Open a section | All file types, humanized titles, date label, draft badge, newest first | Partial: folders-first tree, all types, sizes, class glyphs, filter (`DocsTreeView.tsx#ListingPage`); raw file names, no date label | Gap, §5.2 |
 | I4 | Deep paths | Any depth | Native, bounded at 16 levels and 5000 entries, unlisted counted by reason (`DocsTreeOk.unlisted`) | Native |
@@ -558,7 +558,7 @@ flowchart LR
   L["Library 1.2.0<br/>its own programme"] --> P5["P5 reading layer:<br/>layouts, tracker links,<br/>Back, flags, print stage 2"]
   P6 --> P5
 ```
-*Figure 7. Wave order. P1 to P4 touch no reader host file and need nothing from the library. P6 waits for X1's host wave, because both edit the reader host files. P5 waits for library 1.2.0 and comes last.*
+*Figure 7. Wave order. P1 to P4 touch no reader host file, except P2.4's truth line in `DocsHead.tsx`, serialised with X1 by claim, and need nothing from the library. P6 waits for X1's host wave, because both edit the reader host files. P5 waits for library 1.2.0 and comes last.*
 
 ## 10. Testing and proof
 
