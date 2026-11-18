@@ -6453,10 +6453,8 @@ _apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
 # THE ROUTE AFTER THE REQUEST (approvals plan Task 1.2). The gate wrote `sent` before the request was made; a request that
 # got no answer is patched to `request-failed`, and one answered with anything but a `201` to `request-refused:<word>`
 # (the refusal's own `error` word when it is a kebab word, else `http-<code>`). Patched ONLY over this run's own bytes:
-# the file must still hold exactly what the write above stored (`$out`), so an event that wrote BEFORE the compare keeps
-# its state and the word is lost. An event that writes inside the window between the compare and the `mv` (one jq fork
-# wide) is overwritten, as any two hook writes race: the hookstate write takes no lock. One jq fork, on these two failure
-# arms only.
+# the file must still hold what the write above stored (`$out`): a write before the compare wins and the word is lost; one
+# inside the compare-to-`mv` window (one jq fork) is overwritten, as hook writes race (no lock). On the failure arms only.
 _hook_approval_route_patch() {   # <word> -> rc 0 always
   local cur="" new="" tmp
   [[ -z "$hs_skip" && -n "${out:-}" && -f "$f" && ! -L "$f" ]] || return 0
