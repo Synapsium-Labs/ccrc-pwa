@@ -3692,6 +3692,35 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 97: user_version 96 -> 97 ─────────────────────────────────────────────
+  // The renewal hand-offs (Overlord spec §3.3.9 C50, §3.3.11, Tables 11.1d and 11.1e; W1a, plan `w1a-renewal-handoffs.md`
+  // Tasks 1, 3 and 4). `continuity_renew_requests`: the operator's Renew now, written only by `POST /api/sessions/:id/renew`
+  // and read by the generations lane after its `renew-requests` cursor (`continuity_cursor`); `live` is whether the
+  // `continuity` row was live at the press, and the lane never turns a shadow press into a due (ruling F1 on review 2312). `operator_marks`: the
+  // `operator-at-programme` mark, its `at` written only by the console's prompt route; `operator_mark_quiet`: the mark's
+  // observed quiet, written only by the generations lane, keyed on the `at` it was kept for (the coordinator's ruling F5 on
+  // review 1902: a row of the lane's own, so the route and the lane never write one row, and a `quiet` kept for an older `at`
+  // reads as none). `renewal_mode_settings`: the Setting "when soft renewals happen", ONE ROW, the `plain_memory_settings`
+  // idiom, its `mode` read back through `isRenewalMode`, never cast, so NO CHECK; NO SEED ROW: no row reads as the spec's
+  // default (`renewalModeOf`), and the door's write inserts it. NEW TABLES, nothing on an existing table: an older build
+  // opening a file at `user_version 97` takes rule 3, never names them, and boots. Overlaps (#2949) landed 85, decision model A
+  // (#2948) 86, row revisions (#2965) 87, renewal readings A (#2962) 88, remaining work A (#2951) 89, org D (#2958) 90, designation A (#2950) 91, done tests A (#2964) 92, the programme work map WM0 (#2974) 93, forecasts A (#2987) 94, Linear hierarchy W4 (#2982) 95 and gates A (#2993) 96, so this is 97 (the coordinator's word, 2026-11-18, mail 24004); others may hold 97 too, and the second to land renumbers on the coordinator's word.
+  // RE-MEASURE the slot before merge (it must print 96 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_renew_requests (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, actor TEXT NOT NULL, at INTEGER NOT NULL,
+    live INTEGER NOT NULL CHECK (live IN (0, 1)));
+  CREATE INDEX continuity_renew_requests_by_session ON continuity_renew_requests(sessionId, id);
+  CREATE TABLE operator_marks (programme TEXT PRIMARY KEY, at INTEGER NOT NULL);
+  CREATE TABLE operator_mark_quiet (programme TEXT PRIMARY KEY, at INTEGER NOT NULL, quiet TEXT NOT NULL);
+  CREATE TABLE renewal_mode_settings (
+    id        INTEGER PRIMARY KEY CHECK (id = 1),
+    mode      TEXT    NOT NULL,
+    updatedAt INTEGER NOT NULL
+  );
+  `,
+
+  // ── 98: user_version 97 -> 98 ─────────────────────────────────────────────
   // Health changes and what each run cost (Overlord W2 forecasts B, plan `w2-forecasts-health.md` Task 7; spec §5.6 H38).
   // `programme_health`: append-only, one row per change of a programme's health word, with its evidence (JSON); `noticed`
   // is 1 on a row whose worse word recorded a record-only notice, so the lane records at most one per programme and word
@@ -3702,8 +3731,9 @@ export const MIGRATIONS: readonly string[] = [
   // dispatched into, after its `/clear`; NULL when the dispatch could not measure it (a spend reading then counts
   // `outside`). Its one writer is the dispatch write, `CoordStore#dispatchRun`. NEW TABLES and one nullable column: an
   // older build at this `user_version` takes rule 3 and never names them.
-  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95 and gates A (#2993) 96, so this is 97 by
-  // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 96 before this entry is counted):
+  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96 and the renewal hand-offs
+  // (#2934) 97, so this is 98 by position; whoever lands second renumbers. RE-MEASURE the slot (it must print 97 before
+  // this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

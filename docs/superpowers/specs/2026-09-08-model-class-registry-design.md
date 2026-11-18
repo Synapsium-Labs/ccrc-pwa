@@ -256,7 +256,7 @@ One probe per lane, selected by the registry file's `probe`:
 
 | provider | probe | credential | notes |
 |---|---|---|---|
-| `codex` (ChatGPT/Codex) | `GET https://chatgpt.com/backend-api/codex/models?client_version=0.160.0` | the lane's OAuth (`$CHATGPT_TOKEN_DIR/auth.json`, refreshed by LiteLLM's `Authenticator`) + `ChatGPT-Account-Id` | the same call `ccgpt` documents; `client_version` is a constant in the probe, bumped deliberately |
+| `codex` (ChatGPT/Codex) | `GET https://chatgpt.com/backend-api/codex/models?client_version=0.170.0` | the lane's OAuth (`$CHATGPT_TOKEN_DIR/auth.json`, refreshed by LiteLLM's `Authenticator`) + `ChatGPT-Account-Id` | the same call `ccgpt` documents; `client_version` is a constant in the probe, bumped deliberately |
 | `openrouter` | `GET https://openrouter.ai/api/v1/models` | none for the list; the lane's key for `/models/{author}/{slug}/endpoints` | catalogue is NOT filtered by the ownership whitelist (that needs one endpoints call per model); the check happens at **discovery-add** (§8): the endpoints call runs once and the UI shows which whitelisted providers serve the model, refusing the add if none do |
 | `compatible` | `GET <baseUrl>/v1/models` | the lane's token | best effort; a 404 leaves "never probed" and the discovery list must be explicit |
 | (Anthropic lanes) | none | — | no registry file; classes are client defaults |

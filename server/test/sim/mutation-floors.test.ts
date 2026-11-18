@@ -35,6 +35,7 @@ import { OPERATOR_MODEL_MUTANT_SETS } from './operatorModelSets.js';
 import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
+import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
 import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
@@ -201,6 +202,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...ANSWER_MARK_MUTANT_SETS,
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
+  ...HANDOFF_MUTANT_SETS,
   ...DESIGNATION_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,
   ...PROGRAMME_FACTS_MUTANT_SETS,
