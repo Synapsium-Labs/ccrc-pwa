@@ -3845,6 +3845,24 @@ export const MIGRATIONS: readonly string[] = [
   );
   ALTER TABLE runs ADD COLUMN dispatchConversation TEXT;
   `,
+
+  // ── 102: user_version 101 -> 102 ──────────────────────────────────────────
+  // The stale deny digest (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's
+  // plan-review ruling F5, 2026-11-18). `approvals.denyCurrent`: 1 when the child's deny digest was the managed deny
+  // file's current one at mint, 0 when the installer's digest history named it instead (a child spawned under an older
+  // deny file, which a running Claude Code never re-reads). The row's `class` stays the classifier's; the rule door
+  // refuses an allow on a 0 row (`approvalAllowRefusal`), while a deny or a hand-over stays open. ONE writer, the store's
+  // `insertApproval`, called by the raise.
+  // ONE ADDITIVE COLUMN with a constant default and a CHECK, and nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its inserts
+  // store 1. Its rule door does not read the column, but a rollback is a restart, which empties the held inputs, so it
+  // refuses a 0 row's allow `guard-escalate` (the PR's note says so). The slot is the next free one by position: the quiz record (#2991) took
+  // 100 and forecasts B (#3003) 101, so this is 102, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN denyCurrent INTEGER NOT NULL DEFAULT 1 CHECK (denyCurrent IN (0, 1));
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

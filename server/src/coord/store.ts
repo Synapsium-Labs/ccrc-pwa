@@ -1027,6 +1027,10 @@ export interface ApprovalRow {
   state: ApprovalState; releaseReason: ApprovalReleaseReason | null; askAt: number; notifyAt: number;
   ruledAt: number | null; verdict: 'allow' | 'deny' | null; reason: string | null; ruling: string | null;
   answeredBy: string | null; toolUseId: string | null; corrected: boolean;
+  /** Approvals PR 0: the child's deny digest was the managed file's current one when the row was minted. A row minted
+   *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
+   *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
+  denyCurrent: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -9770,13 +9774,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected';
+    'answeredBy, toolUseId, corrected, denyCurrent';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
+    denyCurrent: number;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9800,6 +9805,7 @@ export class CoordStore {
         verdict: r.verdict === 'allow' || r.verdict === 'deny' ? r.verdict : null,
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
+        denyCurrent: r.denyCurrent === 1,
       },
     };
   }
@@ -9851,25 +9857,28 @@ export class CoordStore {
   }
 
   /** Minted by `POST /api/approvals`, `held` — or, with a `releaseReason`, `released` at once (forbidden, truncated,
-   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. */
+   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. `denyCurrent`
+   *  (approvals PR 0) is optional only so the test callers that predate it, the pin files among them, run unedited: absent
+   *  stores 1, current, which is open for a caller that forgets it. The raise, the one production caller, always passes
+   *  it, and the approvals routes suite reds if it stops (review 2648 F3, the report's leave option). */
   insertApproval(a: {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
-    releaseReason?: ApprovalMintReleaseReason;
+    releaseReason?: ApprovalMintReleaseReason; denyCurrent?: boolean;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
-        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt,
+        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');

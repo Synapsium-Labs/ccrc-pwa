@@ -4,7 +4,7 @@
 // claimant rules (`POST /api/approvals/:id/rule`) and the server signs; the hook fetches the ruling with its nonce.
 // Every ruling here is verified with the shipped verifier's own function (`ccd/approval-verify.mjs`).
 import { describe, it, expect, afterEach, vi } from 'vitest';
-import { appendFileSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { verdictFor } from '../../ccd/approval-verify.mjs';
 import { APPROVAL_REFUSALS_LOG, APPROVAL_SIGNING_KEY_FILE, SECRET_MASK } from '../../shared/api.js';
@@ -125,12 +125,120 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
     }
   });
 
+  // Approvals PR 0: this is also the absent-history case, which fails closed (no history file is planted here).
   it('the managed deny file changed since the spawn: deny-not-engaged', async () => {
     f = await standardFixture();
     appendFileSync(path.join(f.home, '.cc-sessions', 'child-deny.settings.json'), ' ');
     const { res } = await ask(f);
     expect(res.json()).toMatchObject({ error: 'deny-not-engaged' });
     expect(DENY_DIGEST).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  // Approvals PR 0 (plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's plan-review rulings F5 and F6): a
+  // child spawned under an older deny file is held when the installer's digest history names its digest, its class left
+  // as the classifier gave it and its row recording that its deny rules are not current; the rule door refuses its
+  // allow, and a deny or a hand-over works. The server measures the standing itself: the hook's `denyDigest` decides
+  // nothing.
+  describe('a deny digest the installer\'s history names (approvals PR 0)', () => {
+    const DENY_PATH = (fx: Approvals): string => path.join(fx.home, '.cc-sessions', 'child-deny.settings.json');
+    const HISTORY = (fx: Approvals): string => path.join(fx.home, '.cc-sessions', 'child-deny.digests');
+    /** The deny list changes after the child's spawn; the history names the digest it was spawned with, then the new one. */
+    const changeDenyFile = (fx: Approvals, named = true): void => {
+      appendFileSync(DENY_PATH(fx), ' ');
+      const now = sha256(readFileSync(DENY_PATH(fx), 'utf8'));
+      writeFileSync(HISTORY(fx), `${named ? DENY_DIGEST : 'c'.repeat(64)} 1700000000000\n${now} 1700000000001\n`);
+    };
+    it('is minted held for the claimant, its class ordinary, denyCurrent false, and mailed', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const { res, id } = await ask(f);
+      expect(res.statusCode).toBe(201);
+      const row = rowOf(f, id);
+      expect({ state: row.state, class: row.class, denyCurrent: row.denyCurrent, parentId: row.parentId })
+        .toEqual({ state: 'held', class: 'ordinary', denyCurrent: false, parentId: PARENT });
+      expect(mailsTo(f, PARENT)).toHaveLength(1);
+      expect(mailsTo(f, PARENT)[0]!.body).toContain('not run under the box\'s current deny rules');
+    });
+    // MUTATION (Task 0.4): drop the rule door's refusal, and this reds.
+    it('its allow is refused deny-not-current (409), nothing signed; its deny is signed and verifies', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const { id, body } = await ask(f);
+      const allow = await f.rule(id, PARENT, 'allow');
+      expect({ status: allow.statusCode, body: allow.json() }).toMatchObject({ status: 409, body: { error: 'deny-not-current' } });
+      expect(allow.body, 'the refusal\'s exact bytes (review F5)').toBe('{"ok":false,"error":"deny-not-current"}');
+      expect(rowOf(f, id).state).toBe('held');
+      expect((await f.rule(id, PARENT, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
+      const got = (await f.ruling(id, body['nonce'] as string)).json() as { ruling: { record: Record<string, unknown>; sig: string } };
+      const expected = { sessionId: CHILD, agentId: '', digest: body['digest'], nonce: body['nonce'], rowId: id, now: Date.now() };
+      expect(verdictFor(got.ruling, expected, await keyOf(f))).toBe('deny deny by the fixture');
+    });
+    it('its hand-over works as for any held row', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const { id } = await ask(f);
+      expect((await f.release(id, PARENT)).statusCode).toBe(200);
+      expect(rowOf(f, id).state).toBe('declined');
+    });
+    it('a digest in neither the managed file nor the history is deny-not-engaged, nothing minted', async () => {
+      f = await standardFixture();
+      changeDenyFile(f, false);
+      expect((await ask(f)).res.json()).toMatchObject({ error: 'deny-not-engaged' });
+      expect(approvalCount(f.coord)).toBe(0);
+    });
+    // MUTATION (Task 0.4): read an unreadable history as empty-but-trusted, or as naming every digest, and this reds.
+    it('an unreadable history reads as neither: a non-current digest is deny-not-engaged, nothing minted', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      rmSync(HISTORY(f));
+      mkdirSync(HISTORY(f));
+      expect((await ask(f)).res.json()).toMatchObject({ error: 'deny-not-engaged' });
+      expect(approvalCount(f.coord)).toBe(0);
+    });
+    it('a history digest without the bash pin is deny-not-engaged, nothing minted', async () => {
+      for (const shell of [null, '/bin/zsh']) {
+        const fx = await standardFixture();
+        try {
+          changeDenyFile(fx);
+          fx.child(CHILD, fx.runId, { shell });
+          expect((await ask(fx)).res.json(), String(shell)).toMatchObject({ error: 'deny-not-engaged' });
+          expect(approvalCount(fx.coord)).toBe(0);
+        } finally { await fx.close(); }
+      }
+    });
+    // MUTATION (Task 0.4): read the hook's denyDigest in place of the registry stamp, and this reds.
+    it('a lying hook: a denyDigest naming the current file while the stamp is stale still mints denyCurrent false', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const now = sha256(readFileSync(DENY_PATH(f), 'utf8'));
+      const res = await f.request({ ...requestBody(ORDINARY), denyDigest: now });
+      expect(res.statusCode).toBe(201);
+      const id = (res.json() as { id: number }).id;
+      expect(rowOf(f, id).denyCurrent).toBe(false);
+      expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'deny-not-current' });
+    });
+    it('a current child stays current whatever the history says, and its allow is signed', async () => {
+      f = await standardFixture();
+      writeFileSync(HISTORY(f), `${'c'.repeat(64)} 1700000000000\n${DENY_DIGEST} 1700000000001\n`);
+      const { id } = await ask(f);
+      expect(rowOf(f, id).denyCurrent).toBe(true);
+      expect((await f.rule(id, PARENT, 'allow')).json()).toEqual({ ok: true, state: 'allowed' });
+    });
+    it('the hook\'s denyDigest decides nothing: absent (an older hook) still routes a history child; a wrong one changes nothing', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const plain = await ask(f);
+      expect(rowOf(f, plain.id).denyCurrent).toBe(false);
+      const wrong = await f.request({ ...requestBody(ORDINARY), denyDigest: 'f'.repeat(64) });
+      expect(wrong.statusCode).toBe(201);
+      expect(rowOf(f, (wrong.json() as { id: number }).id).denyCurrent).toBe(false);
+      const g = await standardFixture();
+      try {
+        const current = await g.request({ ...requestBody(ORDINARY), denyDigest: 'f'.repeat(64) });
+        expect(current.statusCode).toBe(201);
+        expect(rowOf(g, (current.json() as { id: number }).id).denyCurrent).toBe(true);
+      } finally { await g.close(); }
+    });
   });
 
   it('role both without the opt-in is single-box, nothing minted; with it, minted', async () => {
