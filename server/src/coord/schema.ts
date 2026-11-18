@@ -3661,6 +3661,37 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
+  // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
+  // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
+  // and written by `overlordDesignationStore.ts`'s writers from one `RecordedActor`. The CHECK lists are the L0 maps' keys
+  // (`designation-actor.test.ts` holds them). The defaults are MEASURED, not guessed: only the account gate's doors wrote
+  // the row before this, so every row reads operator, account-gate, operator, and a pending actor standing is filled the same.
+  // SIX COLUMNS on an existing table: an older build opening a file at `user_version 96` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names them, and its writers leave the pending three as they were. A standing attempt with
+  // a half actor reads `unmeasured` (fail closed); an old-build clear of pendingId and pendingActor reads cleared even when
+  // metadata remains. WM0 (#2974) took 93, forecasts A (#2987) took 94 and Linear hierarchy (#2982) took 95, so this takes 96. Sibling pieces add migrations too, so this
+  // number is renumbered at landing. RE-MEASURE the slot before the PR and before merge (it must print 95 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE overlord_designation ADD COLUMN actorKind TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorIssuer TEXT NOT NULL DEFAULT 'account-gate'
+    CHECK (actorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorStrength TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorStrength IN ('attributed','workload','operator'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorKind TEXT
+    CHECK (pendingActorKind IS NULL OR pendingActorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorIssuer TEXT
+    CHECK (pendingActorIssuer IS NULL OR pendingActorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorStrength TEXT
+    CHECK (pendingActorStrength IS NULL OR pendingActorStrength IN ('attributed','workload','operator'));
+  UPDATE overlord_designation SET pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'
+    WHERE pendingActor IS NOT NULL;
+  `,
+
+  // ── 97: user_version 96 -> 97 ─────────────────────────────────────────────
   // Health changes and what each run cost (Overlord W2 forecasts B, plan `w2-forecasts-health.md` Task 7; spec §5.6 H38).
   // `programme_health`: append-only, one row per change of a programme's health word, with its evidence (JSON); `noticed`
   // is 1 on a row whose worse word recorded a record-only notice, so the lane records at most one per programme and word
@@ -3668,8 +3699,8 @@ export const MIGRATIONS: readonly string[] = [
   // `outside`; `startCost` stays NULL (cost restarts at the wave's /clear, the coordinator's ruling on Step 1). Writers:
   // `programmeFactsStore.ts#appendHealth` and `#recordRunSpend` (`ON CONFLICT DO NOTHING`), each called only by its arm
   // of the forecast lane. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names them.
-  // Forecasts A (#2987) landed 94 and the Linear hierarchy's wave 4 (#2982) 95, so this is 96 by position; whoever lands
-  // second renumbers. RE-MEASURE the slot (it must print 95 before this entry is counted):
+  // Forecasts A (#2987) landed 94, the Linear hierarchy's wave 4 (#2982) 95 and gates A (#2993) 96, so this is 97 by
+  // position; whoever lands second renumbers. RE-MEASURE the slot (it must print 96 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

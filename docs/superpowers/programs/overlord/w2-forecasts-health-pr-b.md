@@ -17,7 +17,8 @@ numbers. No D-number is defined here.
   first pass on; the portfolio read gains optional fields. Nothing pushes.
 - **Migration slot:** 96. Built at 95, the next free on `main` at `5d8d3d0d3` (forecasts A took 94); the Linear
   hierarchy's wave 4 (#2982) landed 95 first, so the one absorption of `main` (the coordinator's ruling) renumbered this
-  to 96. Gates A also aims at 96; whoever lands second renumbers at its landing merge.
+  to 96, and gates A (#2993) landed 96 before the push, so a second absorption (also ruled) made it 97. Other PRs land
+  ahead of this one, so it renumbers again at its landing merge.
 
 ## 1. Departures from the plan, by slug
 

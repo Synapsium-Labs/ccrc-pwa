@@ -48,6 +48,8 @@ import { NotifyLog } from '../src/notifylog.js';
 import {
   bindPendingGeneration, designatePending, failPending, goLive, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
+import { actorOf } from '../src/accounts/audit.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { ID_GATE_TOKEN } from './idGateFixture.js';
@@ -74,13 +76,15 @@ const GEN = '11111111-2222-3333-4444-555555555555';
 const STATES = ['no-row', 'live-with-owed-stop', 'pending-only'] as const;
 type State = typeof STATES[number];
 const fakeJournal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
+const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+  .operator(actorOf('operator-a', '0123456789abcdef'));
 
 function seedDesignation(db: DatabaseSync, st: State): void {
   const row = (): unknown => db.prepare('SELECT sessionId, pendingId, stopsOwed FROM overlord_designation').get();
   if (st === 'no-row') { expect(row()).toBeUndefined(); return; }
   const des = (id: string, opKey: string): void => {
     expect(designatePending(db, fakeJournal, { sessionId: id, deadlineAt: NOW + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
-      actor: 'operator-a', at: NOW, opKey }).ok).toBe(true);
+      actor: OPERATOR, at: NOW, opKey }).ok).toBe(true);
   };
   if (st === 'pending-only') {
     des(OAK, 'op-pending');

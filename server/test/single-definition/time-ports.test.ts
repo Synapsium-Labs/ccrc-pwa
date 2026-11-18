@@ -58,6 +58,9 @@ const TIME_PORT_FILES: readonly string[] = [
   // Overlord W2, remaining work: the vocabulary, the body's rules and the store take `now` as an argument.
   'server/src/coord/programmeRemaining.ts',
   'server/src/coord/programmeFactsStore.ts',
+  // Overlord W1, gates A: the caller identity port and its attribution adapter read no clock; the entries make a later read red.
+  'server/src/auth/callerIdentity.ts',
+  'server/src/auth/attributionIdentity.ts',
   // Overlord W2, done tests A: the vocabulary, the pure deciders and the one reader read no clock.
   'shared/doneTests.ts',
   'server/src/coord/doneTests.ts',
