@@ -3,16 +3,20 @@
 // MEASURED (review 2445 F2; `docs/superpowers/programs/desktop-polish/c45.md`): `breakStartAt` reads a row break back
 // from its last byte, and its docstring said it reads every break as `ROW_BREAK` reads it forward; nothing pinned that.
 // A brute force over every string of 1 to 8 bytes over x, LF, CR, space, NUL and tab (2,015,538 strings, 4,333,419
-// forward breaks; the tab since review 2514 F6) agreed on every forward break but one family (76,511 of them): a CR
-// LF (or CR CR LF), blanks (or none), then a CR. Forward, the CR LF is one break, the blanks a blank row, the CR another
-// break; back from that CR, `breakStartAt` reads LF, blanks, CR as one break starting at the LF. Kept:
+// forward breaks; the tab since review 2514 F6) agreed on every forward break but one family: a CR LF (or CR CR LF),
+// blanks (or none), then a CR (76,511). Forward, the CR LF is one break, the blanks a blank row, the CR another break;
+// back from that CR, `breakStartAt` reads LF, blanks, CR as one break starting at the LF. Its second member (507, since
+// review 2585 F1): a CR LF, blanks, then a CR CR LF, which back from its LF reads from its second CR, as `main` read every
+// CR CR LF, so the cap's step back reads the first CR through the first member and crosses the blank row. Kept:
 // a reader that walks back over breaks steps further back, onto the row before, which can only join more rows to a
 // key's chain (fail closed), and the readers that stop there read the LF's CR as text before the run, as forward. This
 // row pins the agreement everywhere else and the one difference exactly, so a change to either side is a red suite.
-// One direction only (review 2514 F7): at 906,983 indexes where no forward break ends (a LF that a CR may follow, say),
-// `breakStartAt` still answers a start, the start of the break that byte would be in. Harmless: every caller passes the
-// end of a break or of a text, where the next byte may complete it, and reads forward from the start it is given.
+// One direction only (review 2514 F7): at indexes where no forward break ends (a LF that a CR may follow, say; 906,983
+// of them), `breakStartAt` still answers a start, the start of the break that byte would be in. Harmless:
+// each caller passes an index just after a LF or a CR and reads forward from the start it is given, or steps further
+// back (review 2585 F8).
 import { describe, it, expect } from 'vitest';
+import { readFileSync } from 'node:fs';
 import { ROW_BREAK } from '../src/accounts/shapes.js';
 import { breakStartAt } from '../src/accounts/mask.js';
 
@@ -28,19 +32,23 @@ function* stringsOf(n: number): Generator<string> {
     idx[k]!++;
   }
 }
-/** The one family where the readings differ: a forward CR alone at `s` that a CR LF and blanks come before. */
-const crAfterCrLfBlanks = (t: string, s: number, e: number): number | null => {
-  if (e !== s + 1 || t[s] !== '\r') return null;
+/** The one family where the readings differ, after a CR LF and blanks: a forward CR alone at `s` (blanks or none), which
+ *  `breakStartAt` reads back to the CR LF's LF; or a forward CR CR LF at `s` (one blank or more), which it reads back to
+ *  its second CR, as `main` read every CR CR LF (review 2585 F1). The member's name and the start read back, or null. */
+const keptFamily = (t: string, s: number, e: number): { member: 'cr' | 'crcrlf'; back: number } | null => {
   let k = s;
   while (k > 0 && (t[k - 1] === ' ' || t[k - 1] === '\t' || t[k - 1] === '\0')) k--;
-  return k >= 2 && t[k - 1] === '\n' && t[k - 2] === '\r' ? k - 1 : null;
+  if (k < 2 || t[k - 1] !== '\n' || t[k - 2] !== '\r') return null;
+  if (e === s + 1 && t[s] === '\r') return { member: 'cr', back: k - 1 };
+  if (e === s + 3 && t.startsWith('\r\r\n', s) && k < s) return { member: 'crcrlf', back: s + 1 };
+  return null;
 };
 
 describe('D-8749 — breakStartAt reads each row break back to where ROW_BREAK reads it from (review 2445 F2)', () => {
-  it('every string of 1 to 8 bytes over x, LF, CR, space, NUL and tab: one start, but for the CR LF, blanks, CR family', () => {
+  it('every string of 1 to 8 bytes over x, LF, CR, space, NUL and tab: one start, but for the CR LF, blanks, CR or CR CR LF family', () => {
     const forward = new RegExp(ROW_BREAK, 'g');
     let breaks = 0;
-    const family: string[] = [];
+    const family = { cr: 0, crcrlf: 0 };
     const other: string[] = [];
     for (let n = 1; n <= 8; n++) {
       for (const t of stringsOf(n)) {
@@ -51,16 +59,17 @@ describe('D-8749 — breakStartAt reads each row break back to where ROW_BREAK r
           breaks++;
           const back = breakStartAt(t, e);
           if (back === s) continue;
-          const f = crAfterCrLfBlanks(t, s, e);
-          if (f !== null && back === f) { if (family.length < 3) family.push(JSON.stringify(t)); continue; }
+          const f = keptFamily(t, s, e);
+          if (f !== null && back === f.back) { family[f.member]++; continue; }
           if (other.length < 5) other.push(`${JSON.stringify(t)}: forward [${s}, ${e}), back ${back}`);
         }
       }
     }
     expect(breaks).toBeGreaterThan(4_000_000);
     expect(other).toEqual([]);
-    // The difference is real and exactly this family: forward reads CR LF then CR, back reads LF CR as one break.
-    expect(family.length).toBeGreaterThan(0);
+    // The difference is real and exactly this family: forward reads CR LF then CR, back reads LF CR as one break; forward
+    // reads CR LF, blanks, CR CR LF, back reads the CR CR LF from its second CR.
+    expect(family).toEqual({ cr: 76_511, crcrlf: 507 });
     expect(breakStartAt('\r\n\r', 3)).toBe(1);
     expect(breakStartAt('\r\n \r', 4)).toBe(1);
     expect(breakStartAt('\r\n\0\r', 4)).toBe(1);
@@ -76,10 +85,20 @@ describe('D-8749 — breakStartAt reads each row break back to where ROW_BREAK r
     expect(breakStartAt('x\r\r\nx', 4)).toBe(1);
     expect(breakStartAt('\n \r\r\nx', 5)).toBe(3);
     expect(breakStartAt('x\n\t\r\r\nx', 6)).toBe(4);
-    expect(breakStartAt('\r\n \r\r\nx', 6)).toBe(3);   // the LF is the CR LF's: no LF, blanks, CR break before
+    // The LF is the CR LF's, so forward is CR LF, a blank, CR CR LF; back from it, the second CR: the family's second member.
+    expect(breakStartAt('\r\n \r\r\nx', 6)).toBe(4);
+    expect(breakStartAt('\r\n\r\r\nx', 5)).toBe(2);   // no blank between: one CR CR LF, as forward
     expect(breakStartAt('x\r\r\r\nx', 5)).toBe(2);
     // A tab is a blank to both readers (review 2514 F6: the alphabet had none, so dropping it from the CR arm stayed green).
     expect(breakStartAt('x\n\t\rx', 4)).toBe(1);
+  });
+
+  it('the slice lookahead\'s BREAK_REST is built from the grammar\'s LF_BREAK_REST, never a copy of it (review 2585 F3)', () => {
+    // A hand-written copy (the 20775879e lookahead, or one without the tab) leaves every row green: this source pin is what
+    // reds it. `mask.ts` holds no other expression for the rest of a LF, blanks, CR break.
+    const src = readFileSync(new URL('../src/accounts/mask.ts', import.meta.url), 'utf8');
+    expect(src).toContain('const BREAK_REST = new RegExp(`^(?:${LF_BREAK_REST})`);');
+    expect(src.match(/\[ \\t\\0\]\*\\r/g) ?? []).toEqual([]);
   });
 
   it('no row break ends at a byte that is not a LF or a CR', () => {

@@ -1631,10 +1631,38 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
       }
     }, 300_000);
 
+    it('pane history past the cap: a CR LF, 64 blanks or an SGR, then CR CR LF breaks the key no worse than main (review 2585 F1)', async () => {
+      // Review 2585 F1: a 2,000-byte key at 40 columns, 1,800 bytes of escapes a row, CR LF rows, the break before the key's
+      // row 41 (counting from 0) written CR LF, 64 blanks (or an SGR), then CR CR LF, past the 64 KiB cap with the cap in
+      // the indent of the row after it. At da2c4569d `breakStartAt` read that CR CR LF back to its first CR, the cap's step back stopped at
+      // the blank row before it, and the whole key showed; `main` reads the CR CR LF back from its second CR, through the
+      // kept CR LF, blanks, CR family, crosses the blank row and masks the rows before the cut: 360 key bytes show, at
+      // every placement from 54,000 to 54,600 bytes of other lines before (**measured**, `c45.md` §14). Pinned at `main`'s
+      // figure, not at 0: the bytes that show at `main` are the carried `drawer-consecutive-breaks`.
+      const key = keyOf(2_000, 2585);
+      const m = fingerprinted(key);
+      try {
+        const shown = shownOf(key);
+        const { text: t0, breaks } = rowsOf(key, 40, 1_800, '\r\n');
+        const b = breaks[40]!;
+        for (const [name, sep] of [['64 blanks', `\r\n${' '.repeat(64)}\r\r\n`], ['an SGR', '\r\n\x1b[0m\r\r\n']] as const) {
+          const text = t0.slice(0, b) + sep + t0.slice(b + 2);
+          for (const n0 of [54_000, 54_296]) {
+            const out = await m.maskTextSliced(`${ordinary(n0).slice(0, n0)}\n${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
+            expect(shown(out), `${name}, ${n0} bytes before`).toBeLessThanOrEqual(360);
+            expect(count(out, SECRET_MASK), `${name}, ${n0} bytes before: marks`).toBeGreaterThan(0);
+          }
+        }
+      } finally {
+        m.close();
+      }
+    }, 300_000);
+
     it('two pushes cut inside a CR CR LF, after its first CR or after both, draw nothing, plain rows or past the hold (review 2514 F2)', () => {
       // Review 2514 F2: a push that ended in both CRs read them as two breaks with an empty row between, so the drawer held
-      // nothing and the key's rows before the cut went out alone: the whole key at every such cut, at `main` and at this
-      // task's first fix alike. Two CRs at a text's end are now one break the next byte may complete. A cut after the first
+      // nothing and the key's rows before the cut went out alone: at this task's first fix, the whole key at 23 of the 31
+      // cuts after both CRs of the 2,000-byte form and the rows before the cut at the rest, the whole key at all 41 of the
+      // 8,192-byte form's (review 2585 F5); at `main`, the whole key at every cut. Two CRs at a text's end are now one break the next byte may complete. A cut after the first
       // CR was masked before and is pinned beside it.
       for (const [n, pre] of [[2_000, 0], [8_192, 600]] as const) {
         const key = keyOf(n, 2473);
