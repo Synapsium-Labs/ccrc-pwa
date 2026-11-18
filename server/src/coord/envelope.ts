@@ -2,6 +2,7 @@ import { MAIL_ENVELOPE_FENCE, type MailKind } from '../../../shared/api.js';
 import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js';
 import { isOperatorMessageMail, operatorMessageIdOf, operatorMessageNudgeBody } from '../../../shared/operatorMessages.js';
+import { squash } from '../../../shared/whitespace.js';
 
 export interface EnvelopeInput {
   /** The DELIVERY id (`mail_deliveries.id`), not the mail id (`mail.id`) —
@@ -246,9 +247,11 @@ export function mailNudgeOf(toId: string, origin: { readonly fromId: string; rea
  *  leftover nudge may be resumed (`true`, the prefix mode). An operator message's line names its id, so only THIS delivery's own
  *  line may be: `'whole'` presses Enter on a box that renders exactly the line and NEVER types (an empty box is
  *  `nothing-to-submit`), so it is passed only when the box already holds the line, and otherwise no resume is asked: the line
- *  is typed into an empty box, and any other text, another message's line included, is a draft (slug `whole-mode-never-types`). */
+ *  is typed into an empty box, and any other text, another message's line included, is a draft (slug `whole-mode-never-types`).
+ *  The box is compared up to whitespace (`squash`, as `sendPrompt`'s own wrap-tolerant comparison does), so a pane narrower than the
+ *  line, which wraps it, still reads as the line (review 2550 F4). */
 export function resumeRuleOf(nudge: { readonly line: string; readonly operatorMessageId: number | null }, box: string | null):
   { readonly resumeIfOwn: true } | { readonly resumeIfOwn: 'whole' } | Record<string, never> {
   if (nudge.operatorMessageId === null) return { resumeIfOwn: true };
-  return box === nudge.line ? { resumeIfOwn: 'whole' } : {};
+  return box !== null && squash(box) === squash(nudge.line) ? { resumeIfOwn: 'whole' } : {};
 }

@@ -2,7 +2,7 @@
 // `absent`, or `unmeasured` for a read that failed or threw. It decides nothing: `noteKeyFact` (L1, `notes.ts`) does. The
 // note door and the card's gatherer both read through it, so a key is measured one way wherever it is shown.
 import type { CoordStore } from '../coord/store.js';
-import { designationFactFrom } from '../roleOf.js';
+import { designationFactFrom, designationFactOf, type RoleFacts } from '../roleOf.js';
 import type { OperatorModelStore } from '../operatorModel/store.js';
 import type { NoteKey } from '../../../shared/continuity.js';
 import type { KeyReading } from './notes.js';
@@ -37,15 +37,15 @@ export function noteKeyReader(coord: NoteKeysCoord, caller: string, messages?: N
     }
     return claimed;
   };
-  let designated: boolean | 'unmeasured' | undefined;
-  const callerDesignated = (): boolean | 'unmeasured' => {
-    if (designated === undefined) {
+  let designation: RoleFacts['designation'] | 'unmeasured' | undefined;
+  const callerDesignation = (): RoleFacts['designation'] | 'unmeasured' => {
+    if (designation === undefined) {
       try {
         const d = designationFactFrom(coord.designationRead());
-        designated = d === 'unmeasured' ? 'unmeasured' : d.kind === 'row' && d.live === caller;
-      } catch { designated = 'unmeasured'; }
+        designation = d === 'unmeasured' ? 'unmeasured' : designationFactOf(caller, d);
+      } catch { designation = 'unmeasured'; }
     }
-    return designated;
+    return designation;
   };
   const messageRow = (id: number): { readonly sessionId: string } | 'absent' | 'unmeasured' => {
     if (messages === undefined) return 'unmeasured';
@@ -74,7 +74,7 @@ export function noteKeyReader(coord: NoteKeysCoord, caller: string, messages?: N
         return { kind: 'run', run: { state: r.run.state, claimedByCaller: mine === 'unmeasured' ? 'unmeasured' : mine.has(key.id) } };
       }
       case 'message':
-        return { kind: 'message', message: messageRow(key.id), callerDesignated: callerDesignated() };
+        return { kind: 'message', message: messageRow(key.id), callerDesignation: callerDesignation() };
     }
   };
 }

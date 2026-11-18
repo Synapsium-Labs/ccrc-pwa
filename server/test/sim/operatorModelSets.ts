@@ -10,6 +10,7 @@ import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 const MESSAGES_TS = path.join(ROOT, 'server/src/operatorModel/messages.ts');
+const PROMPT_BODY_TS = path.join(ROOT, 'server/src/operatorModel/promptBody.ts');
 
 export type OperatorModelDeciders = typeof import('../../src/operatorModel/messages.js');
 export type PrivacyJournalModule = typeof import('../../src/operatorModel/privacyJournal.js');
@@ -25,6 +26,8 @@ export const BOOT_SETTLEMENT_KEY = 'server/src/operatorModel/messages.ts#bootSet
 export const NUDGE_RECOVERY_KEY = 'server/src/operatorModel/messages.ts#nudgeRecovery';
 export const SETTLEMENT_MARK_KEY = 'server/src/operatorModel/messages.ts#settlementMarkOf';
 export const PROMPT_TARGET_KEY = 'server/src/operatorModel/messages.ts#promptTargetVerdict';
+export const PROMPT_BODY_KEY = 'server/src/operatorModel/promptBody.ts#promptBodyVerdict';
+export type PromptBodyModule = typeof import('../../src/operatorModel/promptBody.js');
 
 type State = 'recorded' | 'queued' | 'delivered' | 'picked-up' | 'settled' | 'spent';
 type Event = 'queue' | 'deliver' | 'pick-up' | 'settle' | 'spend' | 'unsettle';
@@ -44,7 +47,7 @@ export const TABLE_1: Record<State, Partial<Record<Event, State | 'stage'>>> = {
 };
 /** Who may send each event, written out. */
 export const EVENT_ACTORS: Record<Event, Actor[]> = {
-  queue: ['route', 'boot-pass'], deliver: ['mail-lane'], 'pick-up': ['hook'], settle: ['route', 'acknowledge', 'citing-door'],
+  queue: ['route', 'boot-pass'], deliver: ['mail-lane', 'boot-pass'], 'pick-up': ['hook'], settle: ['route', 'acknowledge', 'citing-door'],
   spend: ['citing-door', 'boot-pass'], unsettle: ['boot-pass'],
 };
 const STAMP: Record<Event, string | null> = {
@@ -346,6 +349,17 @@ export function promptTargetCases(m: Pick<OperatorModelDeciders, 'promptTargetVe
       expect(word(m.promptTargetVerdict(designated(OTHER, 2), S, { overlordTerm: 1 }))).toBe('refuse stale-designation');
       expect(word(m.promptTargetVerdict(designated(OTHER, 1), S, { overlordTerm: 1 }))).toBe('refuse stale-designation');
     },
+    'the pending body of a designate, or of a rebind, is renewing with or without a term; the bound session and any other are not': () => {
+      const pending = (sessionId: string, kind: 'designate' | 'rebind') => ({ sessionId, kind, deadlineAt: 9, since: 1, actor: 'x', generation: null });
+      const pendingOnly = { kind: 'not-designated', row: { bound: null, pending: pending(S, 'designate'), term: 1 } } as never;
+      const rebind = { kind: 'designated', sessionId: OTHER, term: 2, row: { bound: { sessionId: OTHER, generation: 'g' }, pending: pending(S, 'rebind'), term: 2 } } as never;
+      for (const body of [{}, { overlordTerm: 1 }]) {
+        expect(word(m.promptTargetVerdict(pendingOnly, S, body)), `designate ${JSON.stringify(body)}`).toBe('refuse renewing');
+        expect(word(m.promptTargetVerdict(rebind, S, body)), `rebind ${JSON.stringify(body)}`).toBe('refuse renewing');
+      }
+      expect(m.promptTargetVerdict(pendingOnly, OTHER, {})).toEqual({ kind: 'type' });
+      expect(m.promptTargetVerdict(rebind, OTHER, {})).toEqual({ kind: 'record', term: 2 });
+    },
     'any other session with no term is typed to, as today; so is every session when nobody is designated': () => {
       expect(m.promptTargetVerdict(designated(OTHER, 2), S, {})).toEqual({ kind: 'type' });
       expect(m.promptTargetVerdict(NOT_DESIGNATED, S, {})).toEqual({ kind: 'type' });
@@ -354,6 +368,39 @@ export function promptTargetCases(m: Pick<OperatorModelDeciders, 'promptTargetVe
       for (const t of [-1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 2, {}, true]) {
         expect(word(m.promptTargetVerdict(designated(S, 1), S, { overlordTerm: t })), String(t)).toBe('refuse bad-request');
       }
+    },
+  };
+}
+
+// ---------- promptBodyVerdict (Task 5, review 2550 F6) ----------
+
+export function promptBodyCases(m: Pick<PromptBodyModule, 'promptBodyVerdict'>): Record<string, SuiteCase> {
+  const KEY = 'send-key-0123456789abcdef';
+  const word = (v: ReturnType<PromptBodyModule['promptBodyVerdict']>) => (v.kind === 'refuse' ? `refuse ${v.word}` : v.kind);
+  return {
+    'a good body is ok, with its text and its key, or no key': () => {
+      expect(m.promptBodyVerdict({ text: 'hello' }, undefined)).toEqual({ kind: 'ok', text: 'hello', key: null });
+      expect(m.promptBodyVerdict({ text: 'hello', attachments: [] }, KEY)).toEqual({ kind: 'ok', text: 'hello', key: KEY });
+    },
+    'any attachment but an empty list is bad-attachment': () => {
+      for (const attachments of [['/x/y.png'], [''], 'x', 7, null, {}]) {
+        expect(word(m.promptBodyVerdict({ text: 'hello', attachments }, KEY)), JSON.stringify(attachments)).toBe('refuse bad-attachment');
+      }
+    },
+    'text that is not a non-empty string is bad-request': () => {
+      for (const text of [undefined, '', 7, null, ['a']]) expect(word(m.promptBodyVerdict({ text }, undefined)), String(text)).toBe('refuse bad-request');
+    },
+    'a sendKey that is present and malformed is bad-request, with its detail': () => {
+      for (const key of ['short', 'a'.repeat(65), 'has space 0123456789abcdef', 12345678901234567, null, '']) {
+        const v = m.promptBodyVerdict({ text: 'hello' }, key);
+        expect(word(v), String(key)).toBe('refuse bad-request');
+        expect(v.kind === 'refuse' ? v.detail : '', String(key)).toContain('sendKey');
+      }
+    },
+    'the order is attachments, then text, then the key': () => {
+      expect(word(m.promptBodyVerdict({ text: '', attachments: ['x'] }, 'bad'))).toBe('refuse bad-attachment');
+      expect(m.promptBodyVerdict({ text: '', attachments: [] }, 'bad')).toEqual({ kind: 'refuse', word: 'bad-request' });
+      expect(m.promptBodyVerdict({ text: 'hello' }, 'bad')).toMatchObject({ kind: 'refuse', word: 'bad-request', detail: expect.stringContaining('sendKey') });
     },
   };
 }
@@ -444,6 +491,22 @@ export const NUDGE_RECOVERY_SET: MutantSet<OperatorModelDeciders> = {
   ],
 };
 
+export const PROMPT_BODY_SET: MutantSet<PromptBodyModule> = {
+  modulePath: PROMPT_BODY_TS,
+  suite: promptBodyCases,
+  mutants: [
+    { id: 'PB1 attachments allowed', old: "if (body.attachments !== undefined && !(Array.isArray(body.attachments) && body.attachments.length === 0)) {", new: 'if (false) {' },
+    { id: 'PB2 any array allowed', old: 'Array.isArray(body.attachments) && body.attachments.length === 0', new: 'Array.isArray(body.attachments)' },
+    { id: 'PB3 attachment word is bad-request', old: "return { kind: 'refuse', word: 'bad-attachment' };", new: "return { kind: 'refuse', word: 'bad-request' };" },
+    { id: 'PB4 empty text allowed', old: "typeof body.text !== 'string' || body.text.length === 0", new: "typeof body.text !== 'string'" },
+    { id: 'PB5 non-string text allowed', old: "typeof body.text !== 'string' || body.text.length === 0", new: 'body.text === undefined || body.text.length === 0' },
+    { id: 'PB6 malformed key allowed', old: 'if (key !== undefined && !isSendKey(key)) {', new: 'if (false) {' },
+    { id: 'PB7 null key allowed', old: 'if (key !== undefined && !isSendKey(key)) {', new: 'if (key !== undefined && key !== null && !isSendKey(key)) {' },
+    { id: 'PB8 key without its detail', old: "detail: 'sendKey: 16 to 64 characters of A-Z a-z 0-9 _ -'", new: "detail: 'bad'" },
+    { id: 'PB9 text before attachments', old: "if (body.attachments !== undefined && !(Array.isArray(body.attachments) && body.attachments.length === 0)) {", new: "if (typeof body.text !== 'string' || body.text.length === 0) return { kind: 'refuse', word: 'bad-request' };\n  if (body.attachments !== undefined && !(Array.isArray(body.attachments) && body.attachments.length === 0)) {" },
+    { id: 'PB10 key before text', old: "if (typeof body.text !== 'string' || body.text.length === 0) return { kind: 'refuse', word: 'bad-request' };", new: "if (key !== undefined && !isSendKey(key)) return { kind: 'refuse', word: 'bad-request', detail: 'sendKey' };\n  if (typeof body.text !== 'string' || body.text.length === 0) return { kind: 'refuse', word: 'bad-request' };" },
+  ],
+};
 export const SETTLEMENT_MARK_SET: MutantSet<OperatorModelDeciders> = {
   modulePath: MESSAGES_TS,
   suite: settlementMarkCases,
@@ -468,6 +531,9 @@ export const PROMPT_TARGET_SET: MutantSet<OperatorModelDeciders> = {
     { id: 'PT7 negative term allowed', old: 'Number.isSafeInteger(term) && term >= 0', new: 'Number.isSafeInteger(term)' },
     { id: 'PT8 designated session typed', old: "return bound ? { kind: 'record', term: designation.term } : { kind: 'type' };", new: "return { kind: 'type' };" },
     { id: 'PT9 other session recorded', old: "return bound ? { kind: 'record', term: designation.term } : { kind: 'type' };", new: "return designation.kind === 'designated' ? { kind: 'record', term: designation.term } : { kind: 'type' };" },
+    { id: 'PT10 pending body typed', old: "if (fact !== 'unmeasured' && designationFactOf(sessionId, fact) === 'pending') {", new: 'if (false) {' },
+    { id: 'PT11 pending word is unmeasured', old: "return { kind: 'refuse', word: 'renewing',", new: "return { kind: 'refuse', word: 'unmeasured'," },
+    { id: 'PT12 pending read for any session', old: "designationFactOf(sessionId, fact) === 'pending'", new: "designationFactOf(sessionId, fact) !== 'none'" },
   ],
 };
 
@@ -480,6 +546,7 @@ export const OPERATOR_MODEL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [NUDGE_RECOVERY_KEY]: NUDGE_RECOVERY_SET as MutantSet<never>,
   [SETTLEMENT_MARK_KEY]: SETTLEMENT_MARK_SET as MutantSet<never>,
   [PROMPT_TARGET_KEY]: PROMPT_TARGET_SET as MutantSet<never>,
+  [PROMPT_BODY_KEY]: PROMPT_BODY_SET as MutantSet<never>,
   [COHERENCE_KEY]: COHERENCE_SET as MutantSet<never>,
   [PRIVACY_ENTRY_KEY]: PRIVACY_ENTRY_SET as MutantSet<never>,
 };

@@ -210,7 +210,8 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { mailNudgeOf, resumeRuleOf } from './coord/envelope.js';
+import { mailNudgeOf } from './coord/envelope.js';
+import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
 import { settleOperatorNudge } from './operatorModel/nudgeLane.js';
 import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
@@ -8648,8 +8649,8 @@ export class FleetWatcher {
         const prior = d.attempts > 0 || d.deliveredAt !== null;
         // An operator message's nudge types its own fixed line and resumes only that line (`mailNudgeOf`, the private store's
         // mail branch); every other mail is the id-agnostic line above, as before.
-        const origin = store.mailOrigin(d.mailId), nudge = mailNudgeOf(d.toId, origin);
-        const ownBox = nudge.operatorMessageId === null ? null : await readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId).catch(() => null);
+        const origin = store.mailOrigin(d.mailId);
+        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
@@ -8697,7 +8698,7 @@ export class FleetWatcher {
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
         const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin).line,
-          { onDraft: 'stash', ...resumeRuleOf(nudge, ownBox), clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);

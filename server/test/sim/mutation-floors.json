@@ -118,6 +118,7 @@
   "server/src/operatorModel/messages.ts#nudgeRecovery": 1,
   "server/src/operatorModel/messages.ts#settlementMarkOf": 1,
   "server/src/operatorModel/messages.ts#promptTargetVerdict": 1,
+  "server/src/operatorModel/promptBody.ts#promptBodyVerdict": 1,
   "server/src/operatorModel/privacyJournal.ts#privacyCoherence": 1,
   "server/src/operatorModel/privacyJournal.ts#privacyJournalEntry": 1,
   "server/src/responses.ts#receiptVerdict": 1,

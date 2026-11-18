@@ -270,5 +270,5 @@ export interface Deps {
 export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
   coord?: WatcherCoordPort;
   /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store. */
-  operatorModel?: Pick<OperatorModelStore, 'moveMessage'>;
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage' | 'messageStateOf'>;
 };

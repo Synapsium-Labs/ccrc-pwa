@@ -1,6 +1,6 @@
 // Overlord W1, the private store B (plan w1-private-store.md, Task 6): the boot pass (I8). The deciders are pure cases; the pass
 // runs on fixture files only (a migrated coord.db copy, a temp operator-model.db, a privacy-issuer double), neutral names.
-import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
@@ -13,8 +13,9 @@ import type { CitationRead } from '../src/operatorModel/messages.js';
 import { bootSettlementCases, nudgeRecoveryCases } from './sim/operatorModelSets.js';
 import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
 import { OperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
+import { settleOperatorNudge } from '../src/operatorModel/nudgeLane.js';
 import { bootPassSummary, runOperatorModelBootPass, w1Citations } from '../src/operatorModel/bootPass.js';
-import { operatorMessageSubject } from '../../shared/operatorMessages.js';
+import { OVERLORD_OPERATOR_MARK, operatorMessageSubject } from '../../shared/operatorMessages.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -183,12 +184,94 @@ describe('runOperatorModelBootPass', () => {
     ins('operator', 'operator-message:3'); ins('operator', 'operator-message:12'); ins('operator', 'operator-message:07'); ins('lane-b-project-a', 'operator-message:99');
     expect(w.coord.highestOperatorMessageMail()).toBe(12);
   });
+  // ---- review 2550, fix round 1 ----
+  /** A nudge mail with one delivery in `state`, as the mail lane leaves it; returns the delivery id. */
+  const delivery = (w: World, id: number, state: string): number => {
+    nudgeMail(w, id, state);
+    const mailId = (w.coord.db.prepare('SELECT id FROM mail WHERE subject = ?').get(operatorMessageSubject(id)) as { id: number }).id;
+    return Number(w.coord.db.prepare('INSERT INTO mail_deliveries (mailId, toId, state, envelope) VALUES (?, ?, ?, ?)').run(mailId, S, state, 'e').lastInsertRowid);
+  };
+  const queueMove = (w: World, id: number): void => { expect(w.store.moveMessage(id, 'queue', 'route', 2_000).ok).toBe(true); };
+  const ackStub = (w: World) => ({ markAcked: (deliveryId: number) => { w.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked' WHERE id = ?").run(deliveryId); return { ok: true as const, state: 'acked' as const }; } });
+
+  it('F3: a queued row whose nudge delivery is ACKED is moved to delivered; an unacked one stays queued', () => {
+    const w = world();
+    const acked = rec(w); const waiting = rec(w);
+    queueMove(w, acked); queueMove(w, waiting);
+    delivery(w, acked, 'acked'); delivery(w, waiting, 'delivered');
+    const r = pass(w);
+    expect(r.counts).toMatchObject({ delivered: 1, errors: 0 });
+    expect([stateOf(w, acked), stateOf(w, waiting)]).toEqual(['delivered', 'queued']);
+    expect(rowOf(w, acked).deliveredAt).toBe(NOW);
+    expect(pass(w).counts).toMatchObject({ delivered: 0 });
+  });
+  it('F3: a recorded row linked to an acked nudge is queued and delivered in the same pass', () => {
+    const w = world();
+    const id = rec(w);
+    delivery(w, id, 'acked');
+    expect(pass(w).counts).toMatchObject({ linked: 1, delivered: 1 });
+    expect(stateOf(w, id)).toBe('delivered');
+  });
+  it('F3: the ack at the mail lane moves a refused deliver nowhere, and the next boot delivers it', () => {
+    const w = world();
+    const id = rec(w);
+    queueMove(w, id);
+    const d = delivery(w, id, 'delivered');
+    const warn: string[] = [];
+    const refuse = { moveMessage: () => ({ ok: false as const, error: 'write-failed' as const, detail: 'fixture' }), messageStateOf: w.store.messageStateOf.bind(w.store) };
+    settleOperatorNudge({ coord: ackStub(w), operatorModel: refuse, now: 3_000, warn: (l) => warn.push(l) }, { id: d, deliveredAt: null }, id);
+    expect(warn.join('\n')).toContain('deliver refused');
+    expect(stateOf(w, id)).toBe('queued');
+    expect((w.coord.db.prepare('SELECT state FROM mail_deliveries WHERE id = ?').get(d) as { state: string }).state).toBe('acked');
+    expect(pass(w).counts).toMatchObject({ delivered: 1 });
+    expect(stateOf(w, id)).toBe('delivered');
+  });
+  it('F3: a replayed delivery (deliveredAt set, the process died before the settle) moves a still-queued row; a delivered one is left alone', () => {
+    const w = world();
+    const id = rec(w);
+    queueMove(w, id);
+    const d = delivery(w, id, 'delivered');
+    const spy = vi.spyOn(w.store, 'moveMessage');
+    settleOperatorNudge({ coord: ackStub(w), operatorModel: w.store, now: 3_000, warn: () => {} }, { id: d, deliveredAt: 2_500 }, id);
+    expect(stateOf(w, id)).toBe('delivered');
+    expect(spy).toHaveBeenCalledWith(id, 'deliver', 'mail-lane', 3_000);
+    spy.mockClear();
+    settleOperatorNudge({ coord: ackStub(w), operatorModel: w.store, now: 4_000, warn: () => {} }, { id: d, deliveredAt: 2_500 }, id);
+    expect(spy).not.toHaveBeenCalled();
+  });
+  it('N3: a nudge the boot pass queues writes the @overlord mark in the same transaction as the mail', () => {
+    const w = world();
+    rec(w);
+    expect(w.coord.operatorMarks()).toEqual({ ok: true, rows: [] });
+    expect(pass(w).counts).toMatchObject({ queued: 1 });
+    expect(w.coord.operatorMarks()).toEqual({ ok: true, rows: [{ programme: OVERLORD_OPERATOR_MARK, at: NOW, quiet: null }] });
+    // The mark and the mail commit together: a mark that throws rolls the mail back.
+    const x = world();
+    rec(x);
+    x.coord.putOperatorMark = () => { throw new Error('mark boom'); };
+    const r = pass(x);
+    expect(r.counts).toMatchObject({ queued: 0, errors: 1 });
+    expect(mails(x)).toHaveLength(0);
+  });
+  it('F8: a coordination call that throws is logged and counted, and the other rows are still handled', () => {
+    const w = world();
+    const bad = rec(w); const good = rec(w);
+    const real = w.coord.hasMailWithSubject.bind(w.coord);
+    w.coord.hasMailWithSubject = (from, run, to, subject) => { if (subject === operatorMessageSubject(bad)) throw new Error('db busy'); return real(from, run, to, subject); };
+    w.coord.highestOperatorMessageMail = () => { throw new Error('mail read boom'); };
+    const r = pass(w);
+    expect(r.counts).toMatchObject({ queued: 1, errors: 2 });
+    expect(stateOf(w, bad)).toBe('recorded');
+    expect(stateOf(w, good)).toBe('queued');
+    expect(r.lines.join('\n')).toContain(`message ${bad} not re-nudged (db busy)`);
+    expect(r.lines.join('\n')).toContain('mail read boom');
+  });
   it('the summary line carries counts and never a text', () => {
     const w = world();
     rec(w, { text: 'a secret sentence' });
     const r = pass(w);
     const line = bootPassSummary(r.counts);
-    expect(line).toBe('operator model boot pass: kept 0, unsettled 0, unjudged 0, linked 0, queued 1, waiting 0');
+    expect(line).toBe('operator model boot pass: kept 0, unsettled 0, unjudged 0, linked 0, queued 1, waiting 0, delivered 0, errors 0');
     expect(line + r.lines.join('\n')).not.toContain('secret');
   });
 });

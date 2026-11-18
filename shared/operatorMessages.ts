@@ -35,7 +35,7 @@ const MESSAGE_ACTOR_MAP = {
   hook: "the hook's pick-up report door (pick-up)",
   acknowledge: 'the acknowledge door (settle)',
   'citing-door': 'a door that cites the message, after its own commit (settle, spend)',
-  'boot-pass': 'the boot pass (unsettle; queue, for a nudge never queued; spend, W2)',
+  'boot-pass': 'the boot pass (unsettle; queue, for a nudge never queued; deliver, for a queued row whose nudge is acked (F3); spend, W2)',
 } as const;
 export type MessageActor = keyof typeof MESSAGE_ACTOR_MAP;
 export const MESSAGE_ACTORS = Object.keys(MESSAGE_ACTOR_MAP) as MessageActor[];
@@ -45,7 +45,7 @@ export const isMessageActor = (v: unknown): v is MessageActor =>
 /** Who may send each event. */
 export const MESSAGE_EVENT_ACTORS: Readonly<Record<MessageEvent, readonly MessageActor[]>> = {
   queue: ['route', 'boot-pass'],
-  deliver: ['mail-lane'],
+  deliver: ['mail-lane', 'boot-pass'],
   'pick-up': ['hook'],
   settle: ['route', 'acknowledge', 'citing-door'],
   spend: ['citing-door', 'boot-pass'],
@@ -106,9 +106,15 @@ export function operatorMessageIdOf(subject: string): number | null {
 }
 export const isOperatorMessageMail = (m: { readonly fromId: string; readonly subject: string }): boolean =>
   m.fromId === OPERATOR_MESSAGE_SENDER && operatorMessageIdOf(m.subject) !== null;
+const NUDGE_MARKER_HEAD = 'Operator message ';
+const NUDGE_MARKER = new RegExp(`${NUDGE_MARKER_HEAD.trim().replace(' ', '\\s+')}\\s+[1-9][0-9]*\\s*:`);
 /** The nudge mail's body: the id and the `messages` door, never the text (the private store plan, Task 6; the route's
  *  nudge and the boot pass's re-nudge say the same words). */
-export const operatorMessageNudgeBody = (id: number): string => `Operator message ${id}: read it with your messages door.`;
+export const operatorMessageNudgeBody = (id: number): string => `${NUDGE_MARKER_HEAD}${id}: read it with your messages door.`;
+/** Whether a box's text carries an operator message's nudge marker (`Operator message <id>:`), wherever a narrow pane wrapped it. The
+ *  generic mail nudge's resume asks it so it never presses Enter on that line: the line names one message, and the generic head it
+ *  opens with is shared (review 2550 F2). */
+export const carriesOperatorMessageMarker = (boxText: string): boolean => NUDGE_MARKER.test(boxText);
 /** The key under which the prompt route marks the operator's newest message to the designated session in W1a's
  *  `operator_marks` (slug `overlord-mark-key`): `@` can begin no programme slug, so it names no programme. */
 export const OVERLORD_OPERATOR_MARK = '@overlord';

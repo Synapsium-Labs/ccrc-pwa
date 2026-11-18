@@ -57,6 +57,17 @@ describe('a message as a note key', () => {
     expect(noteKeyFact(mine({ kind: 'message', id: id + 9 }), OVERLORD)).toBe('gone');
     expect(noteKeyFact(noteKeyReader(coordWith(() => none), OVERLORD, s)({ kind: 'message', id }), OVERLORD)).toBe('not-yours');
   });
+  it('a pending body is not the designated session: it reads as roleOf reads it (pending first), never live', () => {
+    const { store: s } = store();
+    const id = record(s);
+    const view = (live: string | null, pending: string | null) => ({ pending: pending === null ? null : { sessionId: pending, kind: 'rebind' as const }, term: 2 }) as never;
+    const pendingOnly: DesignationRead = { kind: 'not-designated', row: view(null, OTHER) };
+    const bothSame: DesignationRead = { kind: 'designated', sessionId: OTHER, term: 2, row: view(OTHER, OTHER) };
+    const fact = (read: DesignationRead): string => noteKeyFact(noteKeyReader(coordWith(() => read), OTHER, s)({ kind: 'message', id }), OTHER);
+    expect(fact(pendingOnly)).toBe('not-yours');
+    expect(fact(bothSame)).toBe('not-yours');
+    expect(fact(designated(OTHER))).toBe('live');
+  });
   it('reads unmeasured when either read failed or is absent', () => {
     const { store: s, db } = store();
     const id = record(s);

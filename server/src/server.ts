@@ -70,8 +70,8 @@ import { registerCoordRoutes, sendCloseOutcome, type OperatorDoorWiring } from '
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
 import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
-import { promptTargetVerdict } from './operatorModel/messages.js';
-import { NO_DESIGNATION, recordOperatorPrompt } from './operatorModel/promptRecord.js';
+import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
+import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -2592,12 +2592,15 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
     const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown; overlordTerm?: unknown };
     // The designated session's prompt is recorded, then nudged through the mail lane; nothing is typed (Overlord W1 private store, Task 5).
-    const verdict = promptTargetVerdict(deps.coord?.designationRead() ?? NO_DESIGNATION, id, body);
-    if (verdict.kind === 'refuse') return refuseRoute(reply, verdict.word, { detail: verdict.detail });
-    if (verdict.kind === 'record') {
+    const designation = () => deps.coord?.designationRead() ?? NO_DESIGNATION;
+    const aimed = async (verdict: PromptTargetVerdict) => {
+      if (verdict.kind === 'refuse') return refuseRoute(reply, verdict.word, { detail: verdict.detail });
+      if (verdict.kind === 'type') return null;
       const out = await recordOperatorPrompt({ gate: (ask) => accountGate(req, reply, ask), identity, store: deps.operatorModel, coord: deps.coord, masker: deps.masker, wall: () => deps.time.clock.wall(), warn: (l) => console.warn(l) }, id, verdict.term, body);
       return out.kind === 'replied' ? reply : reply.code(out.status).send(out.body);
-    }
+    };
+    const first = await aimed(promptTargetVerdict(designation(), id, body));
+    if (first !== null) return first;
     const raw = Array.isArray(body.attachments) ? body.attachments : [];
     if (raw.length > MAX_ATTACHMENTS) {
       return reply.code(400).send({ ok: false, error: 'bad-attachment' });
@@ -2629,7 +2632,10 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     const res = await sendPrompt(sendDeps, id, body.text, {
       onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
       ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
+      recheck: promptRecheck(designation, id, body),
     });
+    // The designation moved while the send waited its turn: nothing was typed, so the words are recorded or refused as a new prompt.
+    if (!res.ok && res.error === 'target-moved') return (await aimed(promptTargetVerdict(designation(), id, body))) ?? refuseRoute(reply, 'stale-designation');
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
     else if (deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
     return res.ok ? res : reply.code(409).send(res);

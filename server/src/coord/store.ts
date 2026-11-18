@@ -7188,6 +7188,13 @@ export class CoordStore {
     return row !== undefined;
   }
 
+  /** Whether a mail with this (fromId, toId, subject) has a delivery ACKED, over every delivery state of the others (the boot
+   *  pass's check that a queued operator message's nudge was typed and acked; F3). */
+  hasAckedMailWithSubject(fromId: string, toId: string, subject: string): boolean {
+    return this.db.prepare("SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = ? AND m.toId = ? AND m.subject = ? AND d.state = 'acked' LIMIT 1")
+      .get(fromId, toId, subject) !== undefined;
+  }
+
   /** The largest `n` of any `operator-message:<n>` mail from `operator`, over every delivery state, or `none` (the boot
    *  pass's check against the private store's highest id, Overlord W1 private store B). */
   highestOperatorMessageMail(): number | 'none' {

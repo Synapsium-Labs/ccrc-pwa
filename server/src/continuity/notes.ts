@@ -19,6 +19,7 @@ import {
 import { OPEN_ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { NOTE_REFUSALS, type NoteRefusal } from '../../../shared/refusal.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
+import type { RoleFacts } from '../roleOf.js';
 
 /** What a session asks to write. `revises` names the note it supersedes; `closes` ends that note with no successor. */
 export interface NoteInput {
@@ -219,9 +220,10 @@ export type KeyReading =
   | {
     readonly kind: 'message';
     /** The message's row, as its session only (never its text), or `absent`, or `unmeasured`; and whether the caller is the
-     *  designated session (`unmeasured` when the designation could not be read). */
+     *  designation fact of the caller as `roleOf.ts#designationFactOf` reads it (`unmeasured` when the designation could not
+     *  be read); only `live` is the designated session, a `pending` body is not yet. */
     readonly message: { readonly sessionId: string } | 'absent' | 'unmeasured';
-    readonly callerDesignated: boolean | 'unmeasured';
+    readonly callerDesignation: RoleFacts['designation'] | 'unmeasured';
   };
 
 const OPEN_ITEMS: ReadonlySet<ItemState> = new Set(OPEN_ITEM_STATES);
@@ -244,9 +246,9 @@ export function noteKeyFact(r: KeyReading, caller: string): KeyFact {
       if (r.run === 'absent' || TERMINAL_RUNS.has(r.run.state)) return 'gone';
       return r.run.claimedByCaller === 'unmeasured' ? 'unmeasured' : r.run.claimedByCaller ? 'live' : 'not-yours';
     case 'message':
-      if (r.message === 'unmeasured' || r.callerDesignated === 'unmeasured') return 'unmeasured';
+      if (r.message === 'unmeasured' || r.callerDesignation === 'unmeasured') return 'unmeasured';
       if (r.message === 'absent') return 'gone';
-      return r.callerDesignated ? 'live' : 'not-yours';
+      return r.callerDesignation === 'live' ? 'live' : 'not-yours';
   }
 }
 

@@ -7,6 +7,7 @@ import {
 } from '../../../shared/operatorMessages.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
+import { designationFactFrom, designationFactOf } from '../roleOf.js';
 
 /** The four delivery stamps a row carries, the furthest of which `deliveryStageOf` reads. */
 export interface DeliveryStamps {
@@ -64,16 +65,22 @@ export function settlementMarkOf(text: string): 'mark' | 'none' {
 export type PromptTargetVerdict =
   | { readonly kind: 'record'; readonly term: number }
   | { readonly kind: 'type' }
-  | { readonly kind: 'refuse'; readonly word: 'unmeasured' | 'stale-designation' | 'bad-request'; readonly detail: string };
+  | { readonly kind: 'refuse'; readonly word: 'unmeasured' | 'renewing' | 'stale-designation' | 'bad-request'; readonly detail: string };
 
 /** Total over the designation's three arms and the body's `overlordTerm`. An unmeasured designation refuses every prompt,
- *  before any typing (X7). An `overlordTerm` that is present but not a non-negative safe integer is `bad-request`; one that
+ *  before any typing (X7). A session that is the PENDING body of a designate or a rebind is `renewing`: its words would be
+ *  typed unrecorded into what is about to be the Overlord (the fact is `roleOf.ts#designationFactOf`'s, as `identityOf` reads
+ *  it, review 2550 F1). An `overlordTerm` that is present but not a non-negative safe integer is `bad-request`; one that
  *  does not name THIS session at THIS term is `stale-designation`. Without one, the designated session records and any other
  *  session is typed to. */
 export function promptTargetVerdict(
   designation: DesignationRead, sessionId: string, body: { readonly overlordTerm?: unknown },
 ): PromptTargetVerdict {
   if (designation.kind === 'unmeasured') return { kind: 'refuse', word: 'unmeasured', detail: designation.why };
+  const fact = designationFactFrom(designation);
+  if (fact !== 'unmeasured' && designationFactOf(sessionId, fact) === 'pending') {
+    return { kind: 'refuse', word: 'renewing', detail: 'this session is being designated; its prompt waits for the binding' };
+  }
   const term = body.overlordTerm;
   if (term !== undefined && !(typeof term === 'number' && Number.isSafeInteger(term) && term >= 0)) {
     return { kind: 'refuse', word: 'bad-request', detail: 'overlordTerm: not a non-negative safe integer' };

@@ -1,7 +1,8 @@
 // The console's prompt to the designated session: recorded, then nudged through the mail lane (Overlord W1 private store,
 // Task 5; spec §3.8 H7, §3.3.11; open questions 3, 5, 6, 7, 8, 13, 17). Ring L4, context C11: it decides nothing. The route in
-// `server.ts` asks `promptTargetVerdict` (L1) and calls this only for `record`; this asks the account gate, the text's
-// deciders (`settlementMarkOf`, the store's `capMessageText`) and the store, and acts on what they answer.
+// `server.ts` asks `promptTargetVerdict` (L1) and calls this only for `record`; this asks the account gate, the deciders
+// (`promptBodyVerdict` for the body's shape and the order of its refusals, `settlementMarkOf`, the store's `capMessageText`) and
+// the store, and acts on what they answer. Its one check of its own is that the two stores it was handed are present (`unavailable`).
 //
 // RECORDED BEFORE DELIVERED. The row and its privacy-journal record commit in `operator-model.db` first. Only then, in ONE
 // `coord.db` transaction, the nudge mail is queued and W1a's mark `@overlord` is written; and with no `await` after the
@@ -15,16 +16,12 @@
 import type { AccountGateAnswer, AccountGateAsk } from '../accounts/gate.js';
 import { SHAPE_ONLY_MASKER, type SecretMasker } from '../accounts/mask.js';
 import type { CallerIdentity } from '../auth/callerIdentity.js';
-import type { WatcherCoordPort } from '../coord/ports.js';
-import { insertSystemMailTx } from '../coord/rundefsTx.js';
-import type { CoordStore } from '../coord/store.js';
-import { tx } from '../coord/tx.js';
 import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal.js';
-import {
-  OVERLORD_OPERATOR_MARK, isSendKey, operatorMessageNudgeBody, operatorMessageSubject, type MessageState,
-} from '../../../shared/operatorMessages.js';
+import type { MessageState } from '../../../shared/operatorMessages.js';
 import type { DesignationRead } from '../../../shared/overlord-designation.js';
-import { settlementMarkOf } from './messages.js';
+import { promptTargetVerdict, settlementMarkOf } from './messages.js';
+import { promptBodyVerdict } from './promptBody.js';
+import { queueOperatorNudge, type NudgeQueueCoord } from './nudgeQueue.js';
 import type { OperatorModelStore, StoreWriteError } from './store.js';
 
 /** The route's reading of "no coordination store": nobody is designated, so every prompt takes today's typing path. */
@@ -38,7 +35,7 @@ export interface PromptRecordDeps {
   readonly gate: (ask: AccountGateAsk) => AccountGateAnswer;
   readonly identity: Pick<CallerIdentity, 'operator'>;
   readonly store: Pick<OperatorModelStore, 'recordMessage' | 'moveMessage'> | undefined;
-  readonly coord: (WatcherCoordPort & Pick<CoordStore, 'putOperatorMark'>) | undefined;
+  readonly coord: NudgeQueueCoord | undefined;
   readonly masker?: Pick<SecretMasker, 'maskText'>;
   readonly wall: () => number;
   readonly warn: (line: string) => void;
@@ -55,6 +52,12 @@ const STORE_REFUSAL: Readonly<Record<Exclude<StoreWriteError, 'refused'>, 'journ
   'journal-unreadable': 'journal-unreadable', 'journal-unwritable': 'journal-unwritable', 'write-failed': 'write-failed', 'not-open': 'unavailable',
 };
 
+/** The re-ask the typed path makes INSIDE `sendPrompt`'s queue slot, right before its first key (review 2550 F1): `go` while the
+ *  verdict is still `type`, `stop` when the designation moved while the call waited its turn (a `goLive` in that wait), so the words
+ *  are recorded or refused by the route and never typed unrecorded into a now-live Overlord. */
+export const promptRecheck = (read: () => DesignationRead, sessionId: string, body: { readonly overlordTerm?: unknown }): (() => 'go' | 'stop') =>
+  () => (promptTargetVerdict(read(), sessionId, body).kind === 'type' ? 'go' : 'stop');
+
 /** The body's fields this act reads. The key is read by a field constant, not as a property or a literal element: `sendKey` is one of the pane typers'
  *  names, which `single-definition/injected-prompts.test.ts` reserves in `server/src` (slug `send-key-field-is-composed-key`). */
 type PromptBody = { readonly text?: unknown; readonly attachments?: unknown };
@@ -67,22 +70,17 @@ export async function recordOperatorPrompt(
 ): Promise<PromptRecordAnswer> {
   const pass = deps.gate({ cap: null });
   if (!pass.pass) return { kind: 'replied' };
-  // Attachments are content, never words (§3.8): no door serves a file to the Overlord in W1 (slug
-  // `overlord-prompt-takes-no-attachment`).
-  if (body.attachments !== undefined && !(Array.isArray(body.attachments) && body.attachments.length === 0)) {
-    return refuse('bad-attachment');
-  }
-  if (typeof body.text !== 'string' || body.text.length === 0) return refuse('bad-request');
-  const key = sendKeyOf(body);
-  if (key !== undefined && !isSendKey(key)) return refuse('bad-request', { detail: 'sendKey: 16 to 64 characters of A-Z a-z 0-9 _ -' });
+  const bodyVerdict = promptBodyVerdict(body, sendKeyOf(body));
+  if (bodyVerdict.kind === 'refuse') return refuse(bodyVerdict.word, bodyVerdict.detail === undefined ? {} : { detail: bodyVerdict.detail });
+  const key = bodyVerdict.key;
   const { store, coord } = deps;
   if (store === undefined || coord === undefined) return refuse('unavailable');
 
-  const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(body.text);
+  const text = (deps.masker ?? SHAPE_ONLY_MASKER).maskText(bodyVerdict.text);
   const at = deps.wall();
   const recorded = store.recordMessage({
     at, sessionId, term, actor: deps.identity.operator(pass.actor), text, mark: settlementMarkOf(text) === 'mark',
-    composedKey: key === undefined ? null : key,
+    composedKey: key,
   });
   if (!recorded.ok) {
     return recorded.error === 'refused'
@@ -94,15 +92,7 @@ export async function recordOperatorPrompt(
   if (!replay) {
     // From here the words are recorded: nothing below changes the answer's `ok`.
     try {
-      const subject = operatorMessageSubject(id);
-      const queued = tx(coord.db, () => {
-        const fresh = !coord.hasOutstandingMail('operator', null, sessionId, subject);
-        if (fresh) {
-          insertSystemMailTx(coord, null, { fromId: 'operator', toId: sessionId, runId: null, kind: 'status', subject, body: operatorMessageNudgeBody(id) });
-        }
-        if (!coord.putOperatorMark(OVERLORD_OPERATOR_MARK, at).ok) deps.warn(`ccrc-server: prompt: the operator mark could not be written (message ${id})`);
-        return fresh;
-      });
+      const queued = queueOperatorNudge(coord, sessionId, id, at, deps.warn);
       // No `await` between the committed queue and its move.
       if (queued) {
         const moved = store.moveMessage(id, 'queue', 'route', at);

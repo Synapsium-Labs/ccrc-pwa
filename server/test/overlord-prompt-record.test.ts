@@ -25,7 +25,8 @@ import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operator
 import { settleOperatorNudge } from '../src/operatorModel/nudgeLane.js';
 import { isOperatorMessageMail, isSendKey, operatorMessageSubject } from '../../shared/operatorMessages.js';
 import type { DesignationRead } from '../../shared/overlord-designation.js';
-import { settlementMarkCases, promptTargetCases } from './sim/operatorModelSets.js';
+import * as bodyDeciders from '../src/operatorModel/promptBody.js';
+import { settlementMarkCases, promptTargetCases, promptBodyCases } from './sim/operatorModelSets.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { fakeTime, FAKE_T0, type FakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -40,6 +41,9 @@ describe('settlementMarkOf (open question 8)', () => {
 });
 describe('promptTargetVerdict (open questions 16 and 18)', () => {
   for (const [name, fn] of Object.entries(promptTargetCases(deciders))) it(name, fn);
+});
+describe('promptBodyVerdict (review 2550 F6)', () => {
+  for (const [name, fn] of Object.entries(promptBodyCases(bodyDeciders))) it(name, fn);
 });
 describe('isSendKey (open question 17)', () => {
   it('16 to 64 characters of A-Z a-z 0-9 _ -, nothing else', () => {
@@ -374,6 +378,50 @@ describe('the prompt route, to any other session or on another arm of the design
   });
 });
 
+describe('the prompt route, while the designation is pending or moves under a waiting send (review 2550 F1)', () => {
+  const pending = (sessionId: string, kind: 'designate' | 'rebind') => ({ sessionId, kind, deadlineAt: 9, since: 1, actor: 'x', generation: null });
+  const pendingOnly = (sessionId: string): DesignationRead => ({ kind: 'not-designated', row: { bound: null, pending: pending(sessionId, 'designate'), term: 1 } as never });
+  const reads = (r: Rig) => r.coord.designationRead as unknown as { mockReturnValueOnce(v: DesignationRead): { mockReturnValue(v: DesignationRead): void } };
+
+  it('a prompt with no term to a PENDING designate body, or a rebind\'s new body, answers 409 renewing and types and records nothing', async () => {
+    const rebind: DesignationRead = { kind: 'designated', sessionId: OTHER, term: 2, row: { bound: { sessionId: OTHER, generation: 'g' }, pending: pending(OVERLORD, 'rebind'), term: 2 } as never };
+    for (const [label, designation] of [['designate', pendingOnly(OVERLORD)], ['rebind', rebind]] as const) {
+      const r = await rig({ designation });
+      const res = await post(r, OVERLORD, { text: 'hello' });
+      expect([res.statusCode, res.json().error], label).toEqual([409, 'renewing']);
+      expect(typed(r), label).toEqual([]);
+      expect(r.order, label).toEqual([]);
+      expect(mails(r), label).toEqual([]);
+    }
+  });
+
+  it('a goLive while the send waits for its queue slot records the prompt and types nothing', async () => {
+    const r = await rig({ designation: NOT_DESIGNATED });
+    reads(r).mockReturnValueOnce(NOT_DESIGNATED).mockReturnValue(designated(OVERLORD, 1));   // the verdict, then the slot's re-ask, then the route's
+    const res = await post(r, OVERLORD, { text: 'hello' });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, messageId: 1, replay: false });
+    expect(typed(r)).toEqual([]);
+    expect(r.order).toEqual(['record', 'mail', 'move:queue']);
+    expect(mails(r)).toHaveLength(1);
+  });
+
+  it('a designation that turns unmeasured while the send waits refuses unmeasured and types nothing', async () => {
+    const r = await rig({ designation: NOT_DESIGNATED });
+    reads(r).mockReturnValueOnce(NOT_DESIGNATED).mockReturnValue({ kind: 'unmeasured', why: 'fixture' });
+    const res = await post(r, OTHER, { text: 'hello' });
+    expect([res.statusCode, res.json().error]).toEqual([502, 'unmeasured']);
+    expect(typed(r)).toEqual([]);
+  });
+
+  it('a designation that stays put while the send waits is typed to as before', async () => {
+    const r = await rig({ designation: NOT_DESIGNATED });
+    expect((await post(r, OTHER, { text: 'hello' })).statusCode).toBe(200);
+    expect(typed(r).length).toBeGreaterThan(0);
+    expect(r.order).toEqual([]);
+  });
+});
+
 // ── the mail lane's operator-message branch ───────────────────────────────────────────────────────────────────────────
 
 const ID = 'lane-a-project-a';
@@ -437,7 +485,10 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     seedRegistry(h.home);
     return { h, coord, w };
   };
-  const store = () => ({ moveMessage: vi.fn(() => ({ ok: true as const, value: { changed: true, state: 'delivered' as const } })) });
+  const store = (state: 'recorded' | 'queued' | 'delivered' | 'picked-up' = 'delivered') => ({
+    moveMessage: vi.fn(() => ({ ok: true as const, value: { changed: true, state: 'delivered' as const } })),
+    messageStateOf: vi.fn(() => ({ kind: 'measured' as const, value: state })),
+  });
 
   it('the first delivery types the fixed line (the id, the door, no ccrc-api), moves the row to delivered, acks the delivery, and never replays it', async () => {
     const om = store();
@@ -479,6 +530,37 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     expect(other.moveMessage).not.toHaveBeenCalled();
   });
 
+  it('a GENERIC nudge never presses Enter on an operator message\'s line left in the box: it holds the line as a draft (review 2550 F2)', async () => {
+    const om = store();
+    const a = await primed([framedBox(LINE)], om);
+    const generic = queue(a.coord, 'lane-b-project-a', 'hi');
+    await a.w.sweepMail();
+    expect(keyPresses(a.h.calls)).toEqual(['C-s']);          // the stash of a draft, never an Enter on message 7's line
+    expect(literalSends(a.h.calls)).toEqual([]);              // and message 7's line is not typed a second time
+    expect(stateOf(a.coord, generic.id)).toBe('queued');
+    expect(om.moveMessage).not.toHaveBeenCalled();
+    // the same box under a generic nudge that left its OWN line is still resumed (the generic resume is unchanged)
+    const own = await primed([framedBox(renderMailNudge(ID))], undefined, {}, true);
+    const second = queue(own.coord, 'lane-b-project-a', 'hi');
+    await own.w.sweepMail();
+    expect(keyPresses(own.h.calls)).toEqual(['Enter']);
+    expect(stateOf(own.coord, second.id)).toBe('delivered');
+  });
+
+  it('a box that wrapped THIS delivery\'s own line over two rows is still resumed with one Enter and nothing typed (review 2550 F4)', async () => {
+    const own = store();
+    const wrapped = `❯ ${LINE.slice(0, 40)}\n  ${LINE.slice(40)}\n${'─'.repeat(40)}\n`;
+    const a = await primed([wrapped], own, {}, true);
+    const { id } = queue(a.coord, 'operator', operatorMessageSubject(7));
+    await a.w.sweepMail();
+    expect(keyPresses(a.h.calls)).toEqual(['Enter']);
+    expect(literalSends(a.h.calls)).toEqual([]);
+    expect(stateOf(a.coord, id)).toBe('acked');
+    const op = mailNudgeOf(ID, { fromId: 'operator', subject: 'operator-message:7' });
+    expect(resumeRuleOf(op, `${LINE.slice(0, 40)}\n${LINE.slice(40)}`)).toEqual({ resumeIfOwn: 'whole' });
+    expect(resumeRuleOf(op, `${LINE.slice(0, 40)}\n${renderOperatorMessageNudge(8).slice(40)}`)).toEqual({});
+  });
+
   it('a delivery of any other mail types renderMailNudge and calls nothing on the store', async () => {
     const om = store();
     const nudge = renderMailNudge(ID);
@@ -512,7 +594,7 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
   });
 
   it('a refused move is logged and does not stop the ack (each answer is read, nothing after it assumes it)', async () => {
-    const om = { moveMessage: vi.fn(() => ({ ok: false as const, error: 'refused' as const, detail: 'fixture' })) };
+    const om = { moveMessage: vi.fn(() => ({ ok: false as const, error: 'refused' as const, detail: 'fixture' })), messageStateOf: vi.fn(() => ({ kind: 'measured' as const, value: 'queued' as const })) };
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
     const { coord, w } = await primed([emptyBox, emptyBox, echoedBox(LINE), emptyBox], om);
     const { id } = queue(coord, 'operator', operatorMessageSubject(7));
@@ -529,6 +611,20 @@ describe('sweepMail: the operator-message branch (open question 3)', () => {
     expect(ack).toHaveBeenCalledWith(3, 5);
     settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: om, now: 5, warn: () => {} }, { id: 3, deliveredAt: null }, 7);
     expect(om.moveMessage).toHaveBeenCalledTimes(1);
+  });
+
+  it('settleOperatorNudge: a replay over a row still queued (the earlier move was refused) moves it to delivered; an unreadable state moves nothing and warns', () => {
+    const ack = vi.fn(() => ({ ok: true as const, state: 'acked' as const }));
+    const queued = store('queued');
+    settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: queued, now: 5, warn: () => {} }, { id: 3, deliveredAt: 4 }, 7);
+    expect(queued.moveMessage).toHaveBeenCalledWith(7, 'deliver', 'mail-lane', 5);
+    expect(ack).toHaveBeenCalledWith(3, 5);
+    const lines: string[] = [];
+    const unread = { ...store(), messageStateOf: vi.fn(() => ({ kind: 'unmeasured' as const, why: 'fixture' })) };
+    settleOperatorNudge({ coord: { markAcked: ack }, operatorModel: unread, now: 6, warn: (l) => lines.push(l) }, { id: 4, deliveredAt: 4 }, 8);
+    expect(unread.moveMessage).not.toHaveBeenCalled();
+    expect(lines.some((l) => l.includes('message 8') && l.includes('unmeasured'))).toBe(true);
+    expect(ack).toHaveBeenCalledWith(4, 6);
   });
 
   it('pushNewMail records the nudge and pushes nothing, where an ordinary mail pushes', async () => {

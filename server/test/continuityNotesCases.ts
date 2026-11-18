@@ -244,12 +244,15 @@ export function notesCases(m: Notes): Record<string, Case> {
     },
     'noteKeyFact: a message, for the designated caller or not': () => {
       const f = m.noteKeyFact;
-      const msg = (message: 'absent' | 'unmeasured' | { sessionId: string }, callerDesignated: boolean | 'unmeasured') =>
-        f({ kind: 'message', message, callerDesignated }, CALLER);
+      type D = 'live' | 'pending' | 'none' | 'unmeasured';
+      const msg = (message: 'absent' | 'unmeasured' | { sessionId: string }, callerDesignation: D) =>
+        f({ kind: 'message', message, callerDesignation }, CALLER);
       const row = { sessionId: 'lane-b-project-a' };
-      expect([true, false, 'unmeasured'].map((d) => msg(row, d as boolean | 'unmeasured'))).toEqual(['live', 'not-yours', 'unmeasured']);
-      expect([true, false, 'unmeasured'].map((d) => msg('absent', d as boolean | 'unmeasured'))).toEqual(['gone', 'gone', 'unmeasured']);
-      expect([true, false, 'unmeasured'].map((d) => msg('unmeasured', d as boolean | 'unmeasured'))).toEqual(['unmeasured', 'unmeasured', 'unmeasured']);
+      const ds: D[] = ['live', 'pending', 'none', 'unmeasured'];
+      // A pending body is not the designated session yet: it reads as `designationFactOf` does (N2).
+      expect(ds.map((d) => msg(row, d))).toEqual(['live', 'not-yours', 'not-yours', 'unmeasured']);
+      expect(ds.map((d) => msg('absent', d))).toEqual(['gone', 'gone', 'gone', 'unmeasured']);
+      expect(ds.map((d) => msg('unmeasured', d))).toEqual(['unmeasured', 'unmeasured', 'unmeasured', 'unmeasured']);
     },
     'handoverVerdict: a thread naming a message is reference-unknown': () => {
       const t = handover().threads[0]!;

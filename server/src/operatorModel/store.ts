@@ -275,6 +275,19 @@ export class OperatorModelStore {
     });
   }
 
+  /** The row's state, never its text: the mail lane's ack reads it to move `deliver` while the row is still before `delivered`. */
+  messageStateOf(id: number): StoreRead<MessageState | 'absent'> {
+    return this.read(() => {
+      const r = this.db.prepare('SELECT state FROM operator_messages WHERE id = ?').get(id) as { state: MessageState } | undefined;
+      return r === undefined ? 'absent' : r.state;
+    });
+  }
+
+  /** The ids of the rows still `queued`, in id order, no text: the boot pass checks each against an acked nudge (F3). */
+  queuedIds(): StoreRead<readonly number[]> {
+    return this.read(() => (this.db.prepare("SELECT id FROM operator_messages WHERE state = 'queued' ORDER BY id").all() as { id: number }[]).map((r) => r.id));
+  }
+
   /** Every row before `settled`, in id order, never trimmed: the card's and the inbox's unsettled list (I8). */
   unsettledMessages(): StoreRead<readonly OperatorMessageRow[]> {
     return this.read(() => (this.db.prepare(`SELECT ${ROW_COLUMNS} FROM operator_messages WHERE state IN (${UNSETTLED_SQL}) ORDER BY id`)
