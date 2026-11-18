@@ -52,6 +52,9 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 // D-5292, the measured shape itself, escaped below), and a curly apostrophe pasted into
 // SKILL.md reds this pin without looking like a change. SKILL.md's contract
 // section states the same rule where an editor of the prose will see it.
+// Approvals PR P: the literal-path rule, word for word, as reviewer clause 9 and the coordinator skill's
+// approval-prompts reference carry it.
+const RULE = 'Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full.';
 const CONTRACT = [
   "Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
@@ -59,7 +62,7 @@ const CONTRACT = [
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
   "Ack before you act: `mail inbox`, run bare (no pipe, no redirect, no `head` or `tail`), acks what it printed; by hand, key the ack on the DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.",
-  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. " + RULE + " You never delete through a variable (`rm -rf \"$X\"`), and a delete of any other shape stops your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
@@ -217,12 +220,13 @@ describe('the worker skill: its contract', () => {
   // SKILL.md's clause 5 line itself, so dropping it reds by name rather than
   // only as a whole-clause mismatch above.
   it('clause 5 carries the no-variable-rm rule into every subagent brief (D-5292)', () => {
-    const SUBAGENT_BRIEF = 'every subagent brief you write carries this rule';
+    const SUBAGENT_BRIEF = 'every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word';
     const line = skill.split('\n').find((l) => l.startsWith('5. '));
     expect(line, 'SKILL.md has no clause 5').toBeTruthy();
     expect(CONTRACT[4]).toContain(SUBAGENT_BRIEF);
     expect(line, 'clause 5 no longer carries the rule into subagent briefs').toContain(SUBAGENT_BRIEF);
     expect(line, 'clause 5 no longer forbids deletes through a variable').toContain('never delete through a variable (`rm -rf "$X"`)');
+    expect(line, 'clause 5 no longer carries the literal-path rule word for word (approvals PR P)').toContain(RULE);
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────

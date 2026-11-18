@@ -9,7 +9,7 @@ One part of the wave lifecycle. `wave-lifecycle.md` lists every part.
 refuters per critical or important finding (one per minor, returned as advisory), at most 8 findings per lens,
 majority deciding, model and effort literal in the script. The REVIEWER
 runs it — this session dispatches the review run and rules on the report it returns (step 1
-below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
+below, clause 12); a lens that returned nothing is a review not yet done, never an approval. Every brief for an Agent-tool subagent, a workflow `agent()` call or an implementer carries both sentences of `references/approval-prompts.md`, word for word.
 
 **Order is load-bearing here, and it is the opposite of what you might guess.**
 A program is `active` only while it has at least one open (non-`done`,

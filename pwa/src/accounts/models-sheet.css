@@ -1,0 +1,74 @@
+/* The Models sheet (model-class-advance wave R4; Task 20 as re-planned), a stylesheet of its own so fleet.css stays
+   within its growth cap.
+   A stack of class cards inside the account sheet's body. Every block wraps rather than scrolls, so nothing is wider than
+   the panel at 360; the acts are Buttons (44px tall by their own variant). At 900 and up the cards sit two to a row.
+   GROUNDS: the body repeats the sheet's own ground and the card paints --bg-raised, each beside the ink it carries, so the
+   contrast audit measures both pairs from this file (as `.caps-control` is self-grounded). */
+.acct-models {
+  gap: var(--sp-3);
+  background: var(--bg-sheet);
+  color: var(--ink-secondary);
+}
+.acct-models-note,
+.acct-models-facts p,
+.acct-models-model,
+.acct-models-refusal {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.acct-models-note {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+}
+.acct-models-list { display: grid; gap: var(--sp-2); min-width: 0; }
+.acct-models-class {
+  display: grid;
+  /* A card beside a taller one in its row keeps its rows at their own height: never spread, never a stretched button. */
+  align-content: start;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-secondary);
+}
+.acct-models-class .acct-models-name {
+  margin: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+}
+.acct-models-class .acct-models-model {
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.acct-models-facts { display: grid; gap: 2px; min-width: 0; }
+.acct-models-facts p {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+}
+.acct-models-acts { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin-top: var(--sp-1); }
+.acct-models-act { flex: none; min-height: var(--tap-min); }
+.acct-models-class .acct-models-refusal {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+}
+/* TWO KINDS OF NOTE, two inks (F11): a definite refusal reads as the failure it is (the error ink), and a note that the act MAY
+   have run reads as a caution (the attention ink), never as the failure colour: nothing is known to have failed. Each ink
+   is measured on --bg-raised by the contrast audit (`contrast.test.ts`, the Models sheet's notes). */
+.acct-models-class .acct-models-refusal--refused { color: var(--status-dead-text); }
+.acct-models-class .acct-models-refusal--unknown { color: var(--status-attention-text); }
+/* A failed read of the lane: its words, and the Try again beside them. */
+.acct-models .acct-models-failed { display: flex; flex-wrap: wrap; align-items: center; gap: var(--sp-1) var(--sp-2); color: var(--status-dead-text); }
+.acct-models-failed p { margin: 0; min-width: 0; overflow-wrap: anywhere; }
+/* The four class names the unreadable-files read draws (names only, no model, no act). */
+.acct-models-names { margin: 0; padding: 0; list-style: none; display: grid; gap: var(--sp-1); }
+.acct-models .acct-models-names li { font-family: var(--family-mono); font-size: var(--fs-meta); color: var(--ink-primary); }
+@media (min-width: 900px) {
+  .acct-models-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
