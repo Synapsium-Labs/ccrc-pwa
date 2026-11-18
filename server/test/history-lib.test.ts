@@ -97,6 +97,9 @@ const RINGS: Record<string, { ring: 'L1' | 'L3' | 'L4'; forbids: (s: string) => 
   // so neither reaches loadSecrets (ruled F4); only the worker entry imports node:worker_threads.
   'overlord-read.mjs': { ring: 'L4', forbids: (s) => s === 'node:sqlite' || s === './sweep.mjs' || s === './cli.mjs' || s.startsWith('../') || s === 'node:child_process' },
   'overlord-worker.mjs': { ring: 'L4', forbids: (s) => s !== 'node:worker_threads' && s !== './overlord-read.mjs' },
+  // D-8726 (history-fts-fold-once): the FTS5 structure record's reader and the merge step's decision, L1 like lib.mjs: pure,
+  // importing only lib.mjs's thresholds. store.mjs reads the bytes, sweep.mjs runs the merge.
+  'fts-structure.mjs': { ring: 'L1', forbids: (s) => s !== './lib.mjs' },
 };
 
 describe('lib.mjs is L1: its import block is node:crypto, the shared run-id grammar and the shared redactor, nothing else (spec §6.4, §13; W4 addendum P10; D-5867)', () => {
@@ -4590,7 +4593,34 @@ describe('deriveHealth: every §9.6 rule as a word with its class, detail and re
     // W5h-1 Task 2 (D-5633): a check after a bind that has not finished; stopped on an escalating word past EXPORT_MARKS_STALL_MS, it FAILs.
     ['export-marks-unchecked', 'warn', { exportMarksCheck: { word: 'budget', sinceMs: NOW - MIN, cleared: 4 } }],
     ['export-marks-stalled', 'fail', { exportMarksCheck: { word: 'failed', sinceMs: NOW - 25 * 60 * MIN, cleared: 0 } }],
+    // D-8726 (history-fts-fold-once): an FTS5 index's segments against FTS5's 2000.
+    ['fts-segments-high', 'warn', { ftsSegments: { blobs: 500, nodes: 0 } }],
+    ['fts-segments-near-limit', 'fail', { ftsSegments: { blobs: 3, nodes: 1500 } }],
   ];
+
+  it('fts-segments-high WARNs from FTS_SEGMENTS_WARN and fts-segments-near-limit FAILs from FTS_SEGMENTS_DRAIN, per index, naming each (D-8726)', () => {
+    const at = (blobs: number | null, nodes: number | null): healthLib.HealthResult => healthLib.deriveHealth(base({ ftsSegments: { blobs, nodes } }));
+    expect([healthLib.FTS_SEGMENTS_WARN, healthLib.FTS_SEGMENTS_DRAIN, healthLib.FTS5_MAX_SEGMENT]).toEqual([500, 1500, 2000]);
+    expect(at(499, 499), 'below the WARN').toEqual({ pass: 'ok', warn: [], fail: [] });
+    expect(at(null, null), 'an index not measured judges nothing').toEqual({ pass: 'ok', warn: [], fail: [] });
+    expect(healthLib.deriveHealth(base()), 'CONTROL: absent judges nothing').toEqual({ pass: 'ok', warn: [], fail: [] });
+    expect(words(at(500, 0), 'warn')).toEqual(['fts-segments-high']);
+    expect(words(at(1499, 0), 'warn')).toEqual(['fts-segments-high']);
+    expect(words(at(1499, 0), 'fail')).toEqual([]);
+    const near = at(1500, 0);
+    expect(words(near, 'fail')).toEqual(['fts-segments-near-limit']);
+    expect(words(near, 'warn'), 'the FAIL stands alone for that index').toEqual([]);
+    expect(near.fail[0]!.detail).toBe(`store ${STORE}: blobs_fts holds 1500 segments; FTS5 allows 2000, and a write that needs another then fails`);
+    expect(near.fail[0]!.remedy).toContain('ccrc history doctor --repair, which rebuilds both indexes whole, from a terminal outside any session');
+    const both = at(1999, 600);
+    expect(words(both, 'fail')).toEqual(['fts-segments-near-limit']);
+    expect(both.fail[0]!.detail).toContain('blobs_fts holds 1999 segments');
+    expect(words(both, 'warn')).toEqual(['fts-segments-high']);
+    expect(both.warn[0]!.detail).toContain('nodes_fts holds 600 segments');
+    expect(both.warn[0]!.remedy).toContain('the merge steps start a merge only when none is in progress');
+    expect(at(700, 800).warn[0]!.detail, 'two indexes in one line').toBe(
+      `store ${STORE}: blobs_fts holds 700 segments; FTS5 allows 2000, and a write that needs another then fails; nodes_fts holds 800 segments; FTS5 allows 2000, and a write that needs another then fails`);
+  });
 
   it('export-segment-damaged: the remedy puts a whole copy back and keeps another outside export/<store_id>/ for good, but not while a recovery is open (wave 5h-1 FR2, F3)', () => {
     const r = healthLib.deriveHealth(base({ exportSegmentDamaged: ['2.0a1b2c3d.db'] })).warn.find((i) => i.word === 'export-segment-damaged')!;

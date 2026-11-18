@@ -190,7 +190,7 @@ and no route was added. #2996's census was widened on the coordinator's ruling (
 shapes with the same meaning. A plan-door row goes through `door('<lane>', …)` or `teamDoor('<lane>', …)` exactly once,
 the `door` slice ends at `teamDoor`, `callerOf` is held to `opts.attribute`, and a twin order check holds `teamDoor`.
 Its routes suite refuses the two doors with the other seven and admits a plain session past the lane. The pin suite
-is unedited. The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 163 gated, 98 exempt, 86
+is unedited. The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 164 gated (262 less 98; review run 2427 A5), 98 exempt, 86
 box-token machine lanes (89 with notify, pools/epoch and updates/intent), and 88 `ccrc-api` rows. Every fix has a test seen red before it: against the previous
 code for F2, A-2, A-3 and A-8, and, for the test-only F1, F4 and A-5, by mutating the line each guards.
 

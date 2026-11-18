@@ -13,9 +13,9 @@ trailer.
   guard proved by mutating its line and running the test (restored from a saved copy each time).
 - **Departures:** D-8733 drift-reads-every-team, D-8734 drift-cursor-and-return-tables, D-8735 inbound-retired, D-8736
   w4fu-words. Defined in the plan; summarised below.
-- **One migration**, entry 96 (main ended at 95 at build time, D-8673): `linear_drift_cursors` and `linear_inbound_notes`,
-  new tables only. Overlord gates A (#2993) also takes 96 on its own branch; whichever lands second renumbers (gates A's
-  worker and I agreed the order: after gates A, this entry is 97 and the run-close replay covers forty-four).
+- **One migration**, entry 97: `linear_drift_cursors` and `linear_inbound_notes`, new tables only. Main ended at 95 at
+  build time (D-8673), and Overlord gates A (#2993) landed first and took 96, so this entry moved to 97 in the one merge of
+  main, and the run-close replay covers forty-four.
 - **Growth:** `watch.ts`, `server.ts`, `coord/store.ts`, `coord/routes.ts` and `coord/delegation-checkpoint.ts` are
   untouched; `shared/api.ts` is line-neutral (one cap word on the two existing `plan-phases-v1` lines).
 - **No live Linear call, capture or probe**, and no Linear key read: every test runs on the recorded and constructed
@@ -50,7 +50,7 @@ Tests for a pure function written after its pass-level test (`restoreHoldVerdict
   teams since the watermark, read and dropped, in the same pages of 100 (one rate-service call per page, on lane `sync`,
   like every other read). For a workspace whose unmanaged teams are busy this can reach the page cap, which D-8734's cursor
   now spreads across passes without skipping a change.
-- **D-8734, drift-cursor-and-return-tables.** Migration 96: `linear_drift_cursors` and `linear_inbound_notes`. The margin
+- **D-8734, drift-cursor-and-return-tables.** Migration 97: `linear_drift_cursors` and `linear_inbound_notes`. The margin
   `DRIFT_SWEEP_MARGIN_MS` is ccrc's clock against Linear's `updatedAt`; a skew larger than five minutes with ccrc ahead would
   narrow it, and nothing measures Linear's clock (Linear's `updatedAt` order is unmeasured too, so nothing relies on it).
 - **D-8735, inbound-retired.** As in the table. A retired row keeps its `reason` (a close's reason stays a close's reason);

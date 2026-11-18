@@ -3659,8 +3659,38 @@ export const MIGRATIONS: readonly string[] = [
     lastFilledAt INTEGER NOT NULL, refills INTEGER NOT NULL);
   CREATE TABLE linear_probe_settled (workspaceId TEXT NOT NULL, program TEXT NOT NULL, PRIMARY KEY (workspaceId, program));
   `,
-
   // ── 96: user_version 95 -> 96 ─────────────────────────────────────────────
+  // The designation row's actor (Overlord spec §3.6 H3, §7.4 C27; W1, plan `w1-gates.md` Task 3): its kind, issuer and
+  // strength beside the subject `actor` and `pendingActor` already hold, read through `shared/overlord-identity.ts#readActorColumns`
+  // and written by `overlordDesignationStore.ts`'s writers from one `RecordedActor`. The CHECK lists are the L0 maps' keys
+  // (`designation-actor.test.ts` holds them). The defaults are MEASURED, not guessed: only the account gate's doors wrote
+  // the row before this, so every row reads operator, account-gate, operator, and a pending actor standing is filled the same.
+  // SIX COLUMNS on an existing table: an older build opening a file at `user_version 96` takes rule 3 (it warns, reads as-is
+  // and migrates nothing), never names them, and its writers leave the pending three as they were. A standing attempt with
+  // a half actor reads `unmeasured` (fail closed); an old-build clear of pendingId and pendingActor reads cleared even when
+  // metadata remains. WM0 (#2974) took 93, forecasts A (#2987) took 94 and Linear hierarchy (#2982) took 95, so this takes 96. Sibling pieces add migrations too, so this
+  // number is renumbered at landing. RE-MEASURE the slot before the PR and before merge (it must print 95 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE overlord_designation ADD COLUMN actorKind TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorIssuer TEXT NOT NULL DEFAULT 'account-gate'
+    CHECK (actorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN actorStrength TEXT NOT NULL DEFAULT 'operator'
+    CHECK (actorStrength IN ('attributed','workload','operator'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorKind TEXT
+    CHECK (pendingActorKind IS NULL OR pendingActorKind IN ('operator','session','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorIssuer TEXT
+    CHECK (pendingActorIssuer IS NULL OR pendingActorIssuer IN ('account-gate','session-cookie','attribution','server'));
+  ALTER TABLE overlord_designation ADD COLUMN pendingActorStrength TEXT
+    CHECK (pendingActorStrength IS NULL OR pendingActorStrength IN ('attributed','workload','operator'));
+  UPDATE overlord_designation SET pendingActorKind = 'operator', pendingActorIssuer = 'account-gate', pendingActorStrength = 'operator'
+    WHERE pendingActor IS NOT NULL;
+  `,
+
+  // ── 97: user_version 96 -> 97 ─────────────────────────────────────────────
   // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
   // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
   // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
@@ -3675,9 +3705,9 @@ export const MIGRATIONS: readonly string[] = [
   // build, D-8735: a word in a TEXT column, no schema change, and an older build reads such a row as a state none of its sweeps
   // select.)
   //
-  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 96` warns, reads as-is, names neither and boots.
-  // Measured on main at build time (D-8673): main ended at 95. Overlord gates A also takes 96 on its own branch; whichever lands
-  // second renumbers. RE-MEASURE the slot before the PR and before merge (it must print 95 before this entry is counted):
+  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 97` warns, reads as-is, names neither and boots.
+  // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, so this,
+  // the second lander, takes 97. RE-MEASURE the slot before the PR and before merge (it must print 96 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
