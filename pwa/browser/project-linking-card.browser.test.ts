@@ -4,7 +4,10 @@
 //   * nothing in the card or on the page scrolls sideways, and no text is cut short or clipped (no ellipsis, no element
 //     scrolling inside itself), with a long project name that has to wrap;
 //   * the layout follows the card's own width, not the window's (a container query): under 480 a row stacks, from 480 its
-//     name, key and visibility share a line with the template cell under them, from 760 a row is ONE grid line;
+//     name, key and visibility share a line with the template cell under them, from 760 name, key, visibility and the
+//     template cell share ONE grid line. The hierarchy cell sits under that: its owner select takes a line of its own, and
+//     the toggles and the state line share the one under it. So a row is four lines from 480 to under 760 of card width
+//     (cells, template, owner, toggles and state) and three from 760 up (D-8184; the assertions in `describe` below);
 //   * on a phone the key field and Save share a line, and the select and the template button are as wide as the card;
 //   * D-8405: a project the route answers once per checkout directory is ONE row, and the automatic link's line and the
 //     candidates' one-tap buttons (long team names and evidence) wrap inside the key cell, at every width and skin.
@@ -67,10 +70,12 @@ const HIER = {
   coordinators: [{ id: 'cc-coord-a', live: true }, { id: LONG_COORD, live: false }],
   projects: [...new Set(PROJECTS.map((p) => p.name))].map((project, i) => ({
     project, teamKey: PROJECTS.find((p) => p.name === project)!.linking.teamKey, initiatives: 'on',
-    // A7: project-a names the long coordinator (its select SHOWS that long value); project-c, which shares the key, shows the
-    // longest default option, the inherited one ("Default: …, from project-a, which owns team key KEY").
+    // A7: project-a names the long coordinator (its select SHOWS that long value, "<id> (not live)"); project-c, which shares the
+    // key and names no owner, SHOWS the longest empty option the select can now say: "Default: <id> (not live)", the default
+    // rule's long coordinator from `ifUnnamed` (D-8738). Where the inherited owner comes from is a separate note under the
+    // select, no longer part of the option.
     linearOwner: i === 0 ? LONG_COORD : null,
-    ownerNow: project === 'project-c' ? { id: 'cc-coord-a', source: 'default', live: true, project: 'project-a' }
+    ownerNow: project === 'project-c' ? { id: LONG_COORD, source: 'named', live: false, project: 'project-a', ifUnnamed: { id: LONG_COORD, live: false } }
       : i === 0 ? { id: LONG_COORD, source: 'named', live: false } : { id: 'cc-coord-a', source: 'default', live: true },
     ownsTeam: false,
     state: i === 0 ? 'map-waiting' : i === 1 ? 'migrated' : 'not-migrated', stateAt: NOW - 86_400_000, itemId: i === 0 ? 7 : null,
