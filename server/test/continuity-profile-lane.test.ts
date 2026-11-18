@@ -94,7 +94,7 @@ function harness(w: World = {}) {
         usageAsked.push(id);
         const win = w.windows?.[id];
         return win === undefined ? { kind: 'absent' }
-          : { kind: 'reading', usage: { stale: w.stale?.has(id) === true, ctxWindow: win } as unknown as Extract<UsageRead, { kind: 'reading' }>['usage'] };
+          : { kind: 'reading', uuid: null, usage: { stale: w.stale?.has(id) === true, ctxWindow: win } as unknown as Extract<UsageRead, { kind: 'reading' }>['usage'] };
       },
       steerMarker: async (id) => (w.steer?.[id] ?? 'absent') as 'present' | 'absent' | 'unreadable',
       declaredIntent: async (id) => { intentAsked.push(id); return w.intent?.[id] ?? false; },

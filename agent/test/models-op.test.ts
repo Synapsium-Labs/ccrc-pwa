@@ -233,14 +233,16 @@ describe('the models op over a real agent, with a recording port', () => {
     expect(ops.filter((w) => !CAP_WORD.test(w))).toEqual([]);
   });
 
-  it('the D-8406 grant stays (D-8688): an older server still reads the lane\'s two files', async () => {
+  // R3b retires the D-8406 grant D-8688 kept: an older server's files fallback is refused, over the real `read` op, and
+  // the op is the one way to a lane's models. Reds the day the grant comes back.
+  it('the D-8406 grant is retired (R3b): an older server\'s read of the lane\'s two files is refused', async () => {
     const c = await up(recorder());
     const dir = path.join(fixture!.home, '.ccrc', 'models');
     mkdirSync(dir, { recursive: true });
     writeFileSync(path.join(dir, 'lane-a.classes.json'), '{"registry":1}\n');
     writeFileSync(path.join(dir, 'lane-a.json'), '{"catalogue":1}\n');
-    expect(await c.req<Res>(1, { op: 'read', path: path.join(dir, 'lane-a.classes.json') })).toMatchObject({ ok: true, data: '{"registry":1}\n' });
-    expect(await c.req<Res>(2, { op: 'read', path: path.join(dir, 'lane-a.json') })).toMatchObject({ ok: true, data: '{"catalogue":1}\n' });
+    expect(await c.req<Res>(1, { op: 'read', path: path.join(dir, 'lane-a.classes.json') })).toMatchObject({ ok: false, err: 'forbidden' });
+    expect(await c.req<Res>(2, { op: 'read', path: path.join(dir, 'lane-a.json') })).toMatchObject({ ok: false, err: 'forbidden' });
   });
 });
 

@@ -4,6 +4,8 @@
 // replacement) or an SVG's `data:image/svg+xml;base64,` URL (never a `blob:`), loaded through the page's queue
 // (concurrency 2) from an image the pin rule admits. Everything else is a refused span with its reason. Every page is
 // a placeholder (`demo`, `main`, `example-org/example-repo`, `https://evil.example`, `https://a.example`).
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -16,7 +18,7 @@ import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
-import { DocImage, DocsAssetContext, planImageRef, type DocsAssetContextValue } from '../src/docs/DocImage';
+import { DocImage, DocsAssetContext, planImageRef, rasterDataUrl, svgDataUrl, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { planMockupAssets } from '../src/docs/mockup/plan';
 import type { MockupContext } from '../src/docs/mockup/ports';
 import { pinFor } from '../src/docs/useDocsVisit';
@@ -1057,5 +1059,31 @@ describe('the plain view, the reader and the mockup planner share one pin rule a
     const row = planMockupAssets([ONE], mockupCtx('/docs/demo/specs/a.md', tree)).rows[0]!;
     expect(row.verdict.v).toBe('inline');
     expect(plain.kind === 'pinned' && row.verdict.v === 'inline' ? plain.pin : null).toEqual(row.verdict.v === 'inline' ? row.verdict.pin : undefined);
+  });
+});
+
+// C2's known duplicate, closed at D2's first item: the base64 of an image's bytes has one owner, `mockup/load.ts`'s
+// `base64Of` (C2's ruling that load.ts exports it rather than a caller copying it), and DocImage's two data: URL
+// builders take it from there. Characterised against the old copy first: each builder's output is exactly the bytes'
+// base64, at and around the 32 768-byte chunk the encoder spreads into `String.fromCharCode`.
+describe('the data: URL builders take their base64 from its one owner (D2 first item)', () => {
+  const bytesOf = (n: number): Uint8Array => Uint8Array.from({ length: n }, (_, i) => (i * 131 + 7) & 0xff);
+
+  it.each([0, 1, 2, 3, 0x7fff, 0x8000, 0x8001, 0x10003])('%i bytes: svgDataUrl and rasterDataUrl hold exactly their base64', (n) => {
+    const bytes = bytesOf(n);
+    const want = Buffer.from(bytes).toString('base64');
+    expect(svgDataUrl(bytes)).toBe(`data:image/svg+xml;base64,${want}`);
+    expect(rasterDataUrl(bytes, 'image/png')).toBe(`data:image/png;base64,${want}`);
+  });
+
+  it('under src/docs only mockup/load.ts encodes base64, and DocImage imports base64Of from it', () => {
+    const root = path.join(import.meta.dirname, '..', 'src', 'docs');
+    const files = (readdirSync(root, { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f)).map((f) => f.split(path.sep).join('/')).sort();
+    expect(files.length).toBeGreaterThan(40);
+    const encoders = files.filter((f) => /\bbtoa\(/.test(readFileSync(path.join(root, f), 'utf8')));
+    expect(encoders).toEqual(['mockup/load.ts']);
+    expect(readFileSync(path.join(root, 'DocImage.tsx'), 'utf8'))
+      .toMatch(/^import \{[^}]*\bbase64Of\b[^}]*\} from '\.\/mockup\/load';$/m);
   });
 });

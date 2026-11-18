@@ -50,6 +50,7 @@ import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
+import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { simulate } from './run.js';
 import {
   CARD_BLOCK_KEY, CARD_BLOCK_SET, CARD_NEVER_EMPTY_KEY, CARD_NEVER_EMPTY_SET, CARD_ONE_LINE_KEY, CARD_ONE_LINE_SET, CARD_TRIM_KEY,
@@ -219,6 +220,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
+  ...PROGRAMME_HEALTH_MUTANT_SETS,
 };
 
 it('rewriteRelativeImports makes ./ and ../ absolute and leaves bare specifiers', () => {

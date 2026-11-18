@@ -293,7 +293,10 @@ describe('the reader lab run (reader lab plan, Task 9)', () => {
   it('every mount host is scrolled into view before its reader mounts (a frame off screen draws nothing, so ready never comes)', async () => {
     const calls: string[] = [];
     const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(function scrolled(this: HTMLElement): void {
-      if (this.className === 'reader-lab-mount') calls.push(`scroll:${this.className}`);
+      if (this.className !== 'reader-lab-mount') return;
+      // A host scrolled before it is attached scrolls nothing (review 1531: the order of `hostIn`'s append and scroll).
+      expect(this.isConnected, 'the mount host is attached when it is scrolled').toBe(true);
+      calls.push(`scroll:${this.className}`);
     });
     try {
       const r = rig();

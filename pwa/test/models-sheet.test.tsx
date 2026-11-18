@@ -7,6 +7,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import type { LaneAdvanceRead, LaneClassAdvance, LaneModelsRead, ModelClass } from '../../shared/models';
 import { ModelsSheet } from '../src/accounts/ModelsSheet';
+import { PickSheet } from '../src/session/PickSheet';
+import { laneReadWords } from '../src/lib/models';
 import { VERB_CODE_WORDS } from '../src/accounts/modelsSheetWords';
 import { ApiError } from '../src/lib/apiError';
 import { clearScreenCache, laneModelsKey, peek, put } from '../src/lib/screenCache';
@@ -110,11 +112,53 @@ describe('ModelsSheet: what it shows', () => {
   it('an absent or unreadable read says so in words and offers no act', async () => {
     mount({ kind: 'absent' });
     expect(await screen.findByTestId('models-read-state')).toBeTruthy();
-    expect(screen.getByTestId('models-read-state').textContent).toMatch(/no class registry/i);
+    expect(screen.getByTestId('models-read-state').textContent).toMatch(/did not find this lane's models/i);
     expect(screen.queryAllByRole('button', { name: /hold|release|revert/i })).toHaveLength(0);
     cleanup(); clearScreenCache();
     mount({ kind: 'unreadable' });
     expect((await screen.findByTestId('models-read-state')).textContent).toMatch(/could not be read/i);
+  });
+
+  // R3b: each arm the read can answer instead of the classes reaches the sheet in its own words, with the class names
+  // listed and no act offered.
+  it.each([
+    [{ kind: 'unsupported' }, /does not offer/i],
+    [{ kind: 'not-started' }, /did not reach the fleet box/i],
+    [{ kind: 'refused', why: 'bad-lane' }, /would not ask/i],
+    [{ kind: 'busy' }, /busy.*reads the lane again/i],
+    [{ kind: 'unreadable' }, /could not be read just now/i],
+    [{ kind: 'unreadable', code: 'catalogue-invalid' }, /catalogue is not one the fleet box accepts/i],
+    [{ kind: 'unreadable', code: 'roster-absent' }, /no account roster/i],
+    [{ kind: 'unreadable', code: 'no-output' }, /printed nothing/i],
+  ] as const)('%o says so in words, lists the class names and offers no act', async (models, words) => {
+    mount(models as LaneModelsRead);
+    const said = await screen.findByTestId('models-read-state');
+    expect(said.textContent).toMatch(words);
+    expect(said.getAttribute('data-kind')).toBe(models.kind);
+    expect(screen.getByTestId('models-name-opus')).toBeTruthy();
+    expect(screen.queryAllByRole('button', { name: /hold|release|revert/i })).toHaveLength(0);
+  });
+
+  // R3b fix round 1, F2: a transient newest answer keeps the lane's last good read on the sheet, its word beside it.
+  it.each(['busy', 'not-started'] as const)('a %s answer over a good read keeps the classes and says the word beside them', async (kind) => {
+    put(laneModelsKey('lane-a'), wire(read(okAdvance())), Date.now());
+    mount({ kind });
+    await ready();
+    const said = await screen.findByTestId('models-read-transient');
+    expect(said.getAttribute('data-kind')).toBe(kind);
+    expect(said.textContent).toMatch(kind === 'busy' ? /busy.*reads the lane again/i : /did not reach the fleet box.*reads the lane again/i);
+    expect(rowOf('opus').textContent).toContain('Gamma 6.1');
+    expect(screen.queryByTestId('models-read-state')).toBeNull();
+  });
+
+  it('the model picker says why it names no model, and says nothing over a read', () => {
+    const opts = [{ label: 'Opus class', route: { field: 'class' as const, value: 'opus' }, readback: '', active: false }];
+    render(<PickSheet open onClose={() => {}} eyebrow="model" title="Choose a model" options={opts} onPick={() => {}}
+      note={laneReadWords({ kind: 'busy' })} />);
+    expect(screen.getByTestId('pick-note').textContent).toMatch(/busy.*reads the lane again/i);
+    cleanup();
+    render(<PickSheet open onClose={() => {}} eyebrow="model" title="Choose a model" options={opts} onPick={() => {}} note={null} />);
+    expect(screen.queryByTestId('pick-note')).toBeNull();
   });
 
   it('offline: the sentence shows and every act is stood down', async () => {
@@ -270,6 +314,19 @@ describe('ModelsSheet: Hold and Release settle only on the server\'s answer', ()
     mount('pending');
     await ready();
     expect(rowOf('opus').textContent).toContain('Held by hand since 2026-11-18 10:30Z');
+  });
+
+  // fix round 2, N4 and N5: a 200 whose read is transient says nothing ran after the act, so the lane's cache entry, which
+  // predates the act, goes: another surface then reads the lane fresh rather than seed from it.
+  it.each(['busy', 'not-started'] as const)('a 200 whose read is %s drops the lane\'s cache entry, and writes no transient one', async (kind) => {
+    let reads = 0;
+    const load = vi.fn(() => { reads += 1; return reads === 1 ? Promise.resolve(wire(read(okAdvance()))) : new Promise<unknown>(() => {}); });
+    mount(read(okAdvance()), { load, act: async () => actAnswer('hold', 'opus', { kind }) });
+    await ready();
+    expect(peek(laneModelsKey('lane-a'))?.raw, 'the pre-act read is cached').toBeTruthy();
+    fireEvent.click(within(rowOf('opus')).getByRole('button', { name: 'Hold the opus class' }));
+    await waitFor(() => expect(load).toHaveBeenCalledTimes(2));
+    expect(peek(laneModelsKey('lane-a'))).toBeUndefined();
   });
 
   it('a 200 whose read carries NO advance key (the fleet box fell back to its files) schedules another read, never leaving the acts hidden (F7)', async () => {
