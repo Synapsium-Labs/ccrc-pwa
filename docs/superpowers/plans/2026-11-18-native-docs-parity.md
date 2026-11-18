@@ -45,7 +45,7 @@
 | P3 PDF frame | P3.1 to P3.3 | P1, P2 | `shared/docs.ts` (`pdf` class, magic), `pwa/src/docs/pdf/**` (new: `PdfFrame.tsx`, `pdfPolicy.ts`, `pdfSrcdoc.ts`), `pwa/package.json` and lock (`pdfjs-dist`), `pwa/src/docs/DocsLeaf.tsx` (pdf branch), third-party notices |
 | P4 listings, refs, settings store | P4.1 to P4.4 | P2 | `ccd/ccd` (index newest, ref resolution), `shared/docs.ts` (index field, ref grammar, `ico`), `shared/docsTracker.ts` (new, L0 checker), `server/src/coord/{schema,store}.ts` (`docs_settings`), `server/src/docs/settingsRoutes.ts` (new, handlers only), `server/src/docs/routes.ts`, `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts`, `pwa/src/screens/settings/DocsSettingsSection.tsx` (new), `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks}.tsx/ts` |
 | P6 print stage 1 and the page loader | P6.1 to P6.2 | X1's host wave, P4 | `pwa/src/docs/print/**` (new), `pwa/src/lib/printTreeJob.ts` (new), `pwa/src/lib/markdownWorker.ts` (the `print-tree` job's dispatch), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row), `pwa/src/docs/docs.css` (print rules), `pwa/src/docs/mockup/{load,plan,policy}.ts`, `pwa/src/docs/mockup/shim.ts` (new) |
-| P5 reading layer | P5.1 to P5.5 | the library release, P6 | `pwa/package.json` and lock (library pin), `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/reader/{bridge,policy,places}.ts` (`places.ts` new), `pwa/src/docs/readerHistory.ts`, `pwa/src/docs/DocsHead.tsx` (Layout row), `pwa/src/docs/print/**` (stage 2), the docs worker job (`pwa/src/lib/docsRunner*`), rich-docs spec §3.3 and §4.4 |
+| P5 reading layer | P5.1 to P5.5 | the library release, P6 | `pwa/package.json` and lock (library pin), `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/reader/{bridge,policy,places}.ts` (`places.ts` new), `pwa/src/docs/readerHistory.ts`, `pwa/src/docs/DocsHead.tsx` (Layout row), `pwa/src/docs/print/**` (stage 2), `pwa/src/lib/trackerLinkJob.ts` (new), `pwa/src/lib/{markdownWorker,markdownRunner,readerLimits}.ts` (the `tracker-links` job, `docsRunner`, its budget), `server/test/single-definition/docs-ring.test.ts`, rich-docs spec §3.3 and §4.4 |
 
 Every wave ends with the common acceptance cycle of the completion plan (exact-tip CI and CodeQL, privacy scan, review run).
 
@@ -202,7 +202,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Files:** Create `shared/docsTracker.ts` (L0), `server/src/docs/settingsRoutes.ts` (handlers only, no fastify import); Modify `server/src/docs/routes.ts` (the two registrations), `server/src/server.ts` (only if the registration call changes), `server/src/coord/{schema,store}.ts` (one migration, `CoordStore#readDocsSettings` and `#writeDocsSettings`), `server/test/box-token-census.test.ts` (`DOCS_DOORS` gains the two settings doors), `server/test/auth-gate.test.ts` (the docs count and running total), `server/test/rings/fastify-l4.data.ts` (only for a new fastify-importing file); Test `server/test/docs-tracker.test.ts` (new), `server/test/docs-settings-routes.test.ts` (new).
 
-**Interfaces:** Produces `interface TrackerRule { name: string; pattern: string; template: string; projects?: string[] }`; `checkTrackerRule(r): { ok: true } | { ok: false; why: 'pattern-long' | 'pattern-empty-match' | 'pattern-invalid' | 'template-scheme' | 'template-host' | 'too-many' }`; `resolveItemLink(rules, project, value): string | null`; `settingsWidening(before, after): boolean`; `GET /api/docs/settings`, `PUT /api/docs/settings`.
+**Interfaces:** Produces `interface TrackerRule { name: string; pattern: string; template: string; projects?: string[] }`; `checkTrackerRule(r): { ok: true } | { ok: false; why: 'pattern-long' | 'pattern-empty-match' | 'pattern-invalid' | 'template-scheme' | 'template-host' | 'too-many' }`; `resolveItemLink(rules, project, value): string | null` (imported only by P5.2's tracker job; `checkTrackerRule` tests a pattern against the empty string only); `settingsWidening(before, after): boolean`; `GET /api/docs/settings`, `PUT /api/docs/settings`.
 
 - [ ] **Step 1: Failing tests:** `tracker: placeholder beside the host refused`; `tracker: http template refused`; `tracker: pattern matching empty refused`; `tracker: 201-character pattern refused`; `tracker: 21 rules refused`; `tracker: capture with / and ? is percent-encoded`; `settings: a widening PUT needs the step-up and refuses dark`; `settings: a removing PUT works dark`; `box-token-census: DOCS_DOORS is exactly what docs/routes.ts registers` (the settings doors added); `auth-gate: docs/routes.ts route count` (moved by two); the migration's hidden pins (run the `coord.db` migration census suites; see the census note in Results).
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): docs settings store and tracker rules (X2 P4)`.
@@ -249,9 +249,11 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P5.2: Tracker links through the worker
 
-**Files:** Modify the docs worker job (`pwa/src/lib/docsRunner*`), `pwa/src/docs/reader/bridge.ts`; Test `pwa/test/reader-tracker.test.ts` (new).
+**Files:** Create `pwa/src/lib/trackerLinkJob.ts` (the worker's lazy `tracker-links` job, as `readerRenderJob.ts` is for `render`); Modify `pwa/src/lib/markdownWorker.ts` (dispatch `kind: 'tracker-links'`), `pwa/src/lib/markdownRunner.ts` (`docsRunner` posts it after the render answers), `pwa/src/lib/readerLimits.ts` (`TRACKER_MATCH_BUDGET_MS = 250`), `pwa/src/docs/reader/bridge.ts` (links into the seed), `server/test/single-definition/docs-ring.test.ts`; Test `pwa/test/reader-tracker.test.ts` (new).
 
-- [ ] **Step 1: Failing tests:** `tracker: matching item links in the seed`; `tracker: non-match stays text`; `tracker: (a+)+ against 100 a and a b ends in the worker budget, items as text`; `tracker: at most 50 values of 100 characters`.
+**Interfaces:** Produces `answerTrackerJob(job: { id: number; kind: 'tracker-links'; project: string; values: string[]; rules: TrackerRule[] }): { id: number; links: { value: string; href: string }[] }`; the runner answers `timeout` past `TRACKER_MATCH_BUDGET_MS`, and the console then seeds no links and mounts the rendered doc.
+
+- [ ] **Step 1: Failing tests:** `tracker: matching item links in the seed`; `tracker: non-match stays text`; `tracker: (a+)+ against 100 a and a b ends in the 250 ms job budget, the doc rendered, items as text`; `tracker: a matching timeout keeps the rendered doc, never the plain view`; `docs-ring: resolveItemLink is imported only by trackerLinkJob.ts`; `tracker: at most 50 values of 100 characters`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): tracker links (X2 P5)`.
 
 ### Task P5.3: Back places
@@ -309,7 +311,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.18 | P3.2 | Drop the click guard | pdf frame: link annotation does not navigate |
 | M11.19 | P3.2 | Reload on a second load | pdf frame: forced navigation tears down once |
 | M11.20 | P4.3 | Allow `http:` templates | tracker: http template refused |
-| M11.21 | P5.2 | Match in the frame instead of the worker | tracker: (a+)+ ends in the worker budget |
+| M11.21 | P5.2 | Run matching inside the render job | tracker: a matching timeout keeps the rendered doc, never the plain view |
 | M11.22 | P4.3 | Skip the sentinel host check | tracker: placeholder beside the host refused |
 | M11.23 | P4.4 | Add a tracker host to a default | no tracker host in the shipped code |
 | M11.24 | P6.1 | Parse the print tree in `beforeprint` | print: tree parsed only after ready |
@@ -338,6 +340,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.47 | P4.1 | Draw the project page's section rows without their docs | project page: each section lists its docs |
 | M11.48 | P4.2 | Resolve a bare name to the tag before the branches | ref: a name that is both a branch and a tag opens the branch |
 | M11.49 | P5.3 | Hand a stale place of another visit to the router instead of skipping it | places: stale places after navigating away cost no extra Back |
+| M11.50 | P5.2 | Import `resolveItemLink` from the render job | docs-ring: resolveItemLink is imported only by trackerLinkJob.ts |
 | M11.56 | P2.3 | Drop `docs-folder --add` from the hook's jq verb lists | session hook: docs-folder --add is denied in a child |
 
 ## Deviations found
