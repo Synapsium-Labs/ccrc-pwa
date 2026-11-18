@@ -48,14 +48,16 @@ changes no other line and no checkbox.
 |---|---|---|
 | 5.3 | `api.ts` gains `upkeep(project)`; `plan(slug)` was Task 5.2's | `plan(slug)` is added here too, since Task 5.2 is not built and the epic page reads `GET /api/programmes/:slug/plan` |
 | 5.3 | route rows with two captures | `RouteMatch` carries one `param`; it gains `rest`, the later decoded captures (empty for a one-capture row). The epic row's `accepts` keeps the slug owner's grammar, and an unknown key answers "No such epic in this programme" (the coordinator accepted this design) |
-| 5.3 | at 1920 "each ticket's run state inline" | `TicketView` carries no run state; the ticket's own state word and its run link share the title line. No new read |
+| 5.3 | at 1920 "each ticket's run state inline" | `TicketView` carries only the run's id, so the run's state word (`runStateWord`) comes from the fleet store's live runs and shows from 1920px up beside the run link; a run not among the live runs (closed, or not heard yet) shows no state. No new read |
 | 5.3 | evidence `{path}` opens in the Docs reader | `PlanView` carries no home project, so the Docs link uses the epic's `project` |
 | 5.3 | evidence `{pr}` links the pull request | `pullUrl` with the project's measured repository slug from the project list; with no slug known, "PR #n" as plain text |
 | 5.3 | the Upkeep page lists its tickets | it also lists `notClosed` (the inbound closes Linear refused), each word with a fixed sentence: `not-found`, `linear-forbidden`, `linear-invalid`, `malformed`, `policy-denied`, the words the server records when it gives a close up; any other word is framed |
 | 5.1 | the Upkeep link on the row when inbound issues wait | the link shows whenever the project has a team key |
+| 5.1 | the owner select's empty option names the default owner and whether it is live | the hierarchy read's `ownerNow` gains `project`, the project the owner was decided for (`linearOwnerOfProject` already decided it; the route dropped it), optional on the wire so an older server's answer reads as the project's own owner (the coordinator's ruling in fix round 1). The option says `Default: <id> (live)`, `(not live)` or `Default: none live` for every source; for a project whose shared team key another project owns, it names that project's owner and its liveness, and a note under the select (which wraps, so a phone shows it whole) says which project the owner comes from and that the project's own owner setting is not used meanwhile |
 | 5.1 | `hierarchyWords.ts` under `screens/settings/` | it lives in `pwa/src/fleet/`, beside `linkingWords.ts`, because the add-project sheet in `fleet/` reads it and `fleet/` never imports `screens/` |
-| 5.1 | at 1920 "one grid line per row" | two lines per row from 480px of card width up: the card is capped at 960px and its layout follows the card's width (a container query), so 1920 is the same container as 1280, and the hierarchy cell takes its own line |
+| 5.1 | at 1920 "one grid line per row" | from 480px to under 760px of card width a row is four lines, and three lines from 760px up: the card is capped at 960px and its layout follows the card's width (a container query), so 1920 is the same container as 1280. The hierarchy cell takes its own line, and inside it the Linear owner select takes a full line of its own, with the toggles and the state on the line under it, so the select shows its whole value with a long coordinator id (review round 1); the browser file measures a select's shown value against its box |
 | 5.4 | every act's control on the item | on a Waiting list row, only the light acts draw (drift: Hand and Keep; initiatives: Check again); map, report and owner draw their controls on the item page only, because Approve and Put back need the body on screen and Name needs the coordinator list |
+| 5.4 | initiatives *Check again* sends `{act:'check-again'}` | an answer of `{ok:true, queued:false}` (no Linear key serves the workspace, or the server has no plan sync) is a plain status line saying no check was queued and the item stays open; it is neither "Sent." nor a refusal, and the item is not treated as acted on (review round 1) |
 | 5.4 | the act bar sticky at the item's foot | `bottom: var(--phone-bar-h)`, so it clears the phone bar |
 
 ## Test and build changes beyond the plan's files
@@ -91,9 +93,7 @@ fixture names only. To make them again:
 - **The Upkeep answer's shape is typed on the PWA side only.** `GET /api/projects/:project/upkeep` is not typed against
   a shared shape; a later wave can move it into `shared/plan.ts`, where the server types its reply against it. The same
   goes for the refused-close words, which the PWA lists from the server's give-up words by hand.
-- **Two minor points from the last re-review, left as they are.** On the project linking card, when two rows save at
-  once and the first row's re-read settles before the second's newer one, the first row unlocks and shows its old value
-  until the newer re-read lands; acting on it in that gap sends the old value again (narrower than the race this wave
-  fixed: one row at a time is safe). The fix is to land any re-read newer than the last one that landed. And the Upkeep
-  page's test of a refused close with no time counts the rows but does not assert that row draws no date (the typecheck
-  catches the null case).
+- **One minor point from the last re-review, left as it is.** The Upkeep page's test of a refused close with no time
+  counts the rows but does not assert that row draws no date (the typecheck catches the null case). (The other point,
+  two rows saving at once on the linking card, was fixed in review round 1: a row stays locked until a read at least as
+  new as its own write, or the owner-for-all write, has landed; a failed re-read keeps it locked and offers Read again.)
