@@ -139,13 +139,30 @@ describe('POST /api/sessions/:id/act-key: the key, once', () => {
     expect(warns.some((w) => w.includes('act-key') && w.includes(ID))).toBe(true);
   });
 
-  it('a superseded start: stale-generation (superseded); a start with no hash never matches', async () => {
+  it('a superseded start: stale-generation (superseded) once a newer start has minted; a start with no hash never matches', async () => {
     app = await open();
     mint(await reportStart(app, NONCE, 'startup', FAKE_T0));
-    await reportStart(app, NONCE2, 'clear', FAKE_T0 + 10);
+    mint(await reportStart(app, NONCE2, 'clear', FAKE_T0 + 10));
     expect(why(await claim(app))).toBe('superseded');
-    await reportStart(app, null, 'clear', FAKE_T0 + 20);
+    mint(await reportStart(app, null, 'clear', FAKE_T0 + 20));
     expect(why(await claim(app, { nonce: NONCE2 }))).toBe('superseded');
+  });
+
+  it('a nested process\'s start carries the spawn\'s hash and is declined: it supersedes nothing, the key issues (review 2636 F1)', async () => {
+    app = await open();
+    const n = mint(await reportStart(app, NONCE, 'startup', FAKE_T0));
+    // A nested Claude Code process in the pane inherits the spawn's environment, so the hook's report of its start carries
+    // the same hash; the generations lane declines it (not the row's own conversation) and mints nothing from it.
+    await reportStart(app, NONCE, 'resume', FAKE_T0 + 30);
+    const res = await claim(app);
+    expect([res.statusCode, (res.json() as { generation: number }).generation]).toEqual([200, n]);
+  });
+
+  it('a start the lane declined, with a newer start minted, answers superseded, never renewing for ever (review 2636 F1)', async () => {
+    app = await open();
+    await reportStart(app, NONCE, 'startup', FAKE_T0);
+    mint(await reportStart(app, NONCE2, 'clear', FAKE_T0 + 10));
+    expect(why(await claim(app))).toBe('superseded');
   });
 
   it('a compaction repeats the hash and supersedes nothing', async () => {

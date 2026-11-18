@@ -30,7 +30,7 @@ import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type A
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
 import {
-  RENEW_REQUESTS_CURSOR, effectiveGeneration, newestStartOf, sessionLiveGeneration, startByNonce, type TimerRow,
+  RENEW_REQUESTS_CURSOR, effectiveGeneration, newestMintedStartOf, sessionLiveGeneration, startByNonce, type TimerRow,
 } from './continuityStore.js';
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
@@ -302,10 +302,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
    * one claim. A box-token machine lane, an `auth/gate.ts` EXEMPT entry, as the start report is: the token first, then the
    * path's session is the sender (`not-owner`), then the body's shape (`fromUuid`, and `nonce`, 64 lowercase hex: 400
    * `bad-request` with no echo of the value), then the registry's attribution of `fromUuid`, then the facts, each read once in
-   * one synchronous stretch (`actKeyByNonce`, `newestStartOf`, `startByNonce`), then `actKeyClaimVerdict`. On `issue` it mints
+   * one synchronous stretch (`actKeyByNonce`, `newestMintedStartOf`, `startByNonce`), then `actKeyClaimVerdict`. On `issue` it mints
    * the key (`entropy.hex(32)`), stores only its sha256 through `issueActKey`, and answers `200 { ok, generation, key }` only on
    * `{ ok: true }`: a refused insert (two claims racing) answers `stale-generation` (`nonce-spent`), never a key. A refusal is
-   * 409 `stale-generation` or `renewing`, or 502 `unmeasured`, its why in `detail`; a spent nonce raises `claimsRefused`. THE
+   * 409 `stale-generation` or `renewing`, or 502 `unmeasured`, its why in `detail`; a spent nonce raises `claimsRefused` on the row only when its generation is this session's. THE
    * NONCE AND THE KEY ARE SECRETS: no line this door logs names either, only the session, the start and the why.
    */
   app.post('/api/sessions/:id/act-key', {
@@ -331,10 +331,10 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (coord === undefined || entropy === undefined) return refuseRoute(reply, 'unavailable');
     const presented = sha256(nonce);
     const v = actKeyClaimVerdict({
-      presented, spent: actKeyByNonce(coord.db, presented), newest: newestStartOf(coord.db, id), matching: startByNonce(coord.db, id, presented),
+      presented, spent: actKeyByNonce(coord.db, presented), newest: newestMintedStartOf(coord.db, id), matching: startByNonce(coord.db, id, presented),
     });
     const refused = (error: 'renewing' | 'stale-generation' | 'unmeasured', why: Parameters<typeof claimWhyText>[0]): FastifyReply => {
-      if (why === 'nonce-spent') noteRefusedClaim(coord.db, presented, deps.wall());
+      if (why === 'nonce-spent') noteRefusedClaim(coord.db, presented, id, deps.wall());
       console.warn(`ccrc-server: act-key: the claim of ${id} refused ${error} (${why})`);
       return refuseRoute(reply, error, { detail: `${why}: ${claimWhyText(why)}` });
     };

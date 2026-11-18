@@ -1,6 +1,6 @@
 // Overlord W1 door process A1 (plan `w1-door-process.md` Task 1): `continuity_act_keys` on a fixture coord.db. Its three
 // writers (`issueActKey` once, `noteRefusedClaim`, `advanceActCounter` only upward), its two reads, which tell a failed read
-// from `'none'`, and the claim's two start reads (`newestStartOf`, `startByNonce`) beside the start's nonce hash.
+// from `'none'`, and the claim's two start reads (`newestMintedStartOf`, `startByNonce`) beside the start's nonce hash.
 import { describe, it, expect, afterEach } from 'vitest';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
@@ -8,7 +8,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { actKeyByNonce, actKeyOf, advanceActCounter, issueActKey, noteRefusedClaim } from '../src/continuity/actKeyStore.js';
-import { newestStartOf, startByNonce, type MintInput } from '../src/continuity/continuityStore.js';
+import { genExpectOf, newestMintedStartOf, startByNonce, type MintInput } from '../src/continuity/continuityStore.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 afterEach(removeTmpFixtures);
@@ -32,8 +32,12 @@ const mintIn = (startId: number, over: Partial<MintInput> = {}): MintInput => ({
   identity: ID, sessionId: ID, role: 'coordinator', term: 1, rowIncarnation: null, startId, startReportedAt: NOW,
   resumed: false, model: 'claude-opus-5-5', lane: 'lane-a', host: null, outcome: 'crashed', mono: 1_000, proc: 'p1', now: NOW, ...over,
 });
+/** Mint the identity's next generation from `startId`, ending the live one as the generations lane does. */
 const mint = (s: CoordStore, startId: number): number => {
-  const r = s.mintGeneration(mintIn(startId), null, true);
+  const live = s.liveGenerations();
+  if (!live.ok) throw new Error(live.detail);
+  const old = live.rows.find((g) => g.identity === ID);
+  const r = s.mintGeneration(mintIn(startId), old === undefined ? null : genExpectOf(old), true);
   if (!r.ok) throw new Error('not minted');
   return r.id;
 };
@@ -82,11 +86,21 @@ describe('advanceActCounter and noteRefusedClaim', () => {
   });
   it('a refused claim raises claimsRefused and stamps lastRefusedAt on the row holding the hash', () => {
     const s = store();
-    issueActKey(s.db, { generationId: 1, nonceSha256: N1, keySha256: KEY_SHA, issuedAt: NOW });
-    expect(noteRefusedClaim(s.db, N1, NOW + 5)).toEqual({ changed: true });
-    expect(noteRefusedClaim(s.db, N1, NOW + 9)).toEqual({ changed: true });
-    expect(noteRefusedClaim(s.db, N2, NOW + 9)).toEqual({ changed: false });
-    expect(actKeyOf(s.db, 1)).toMatchObject({ ok: true, value: { claimsRefused: 2, lastRefusedAt: NOW + 9 } });
+    const g = mint(s, startOf(s, 'startup', NOW, N1));
+    issueActKey(s.db, { generationId: g, nonceSha256: N1, keySha256: KEY_SHA, issuedAt: NOW });
+    expect(noteRefusedClaim(s.db, N1, ID, NOW + 5)).toEqual({ changed: true });
+    expect(noteRefusedClaim(s.db, N1, ID, NOW + 9)).toEqual({ changed: true });
+    expect(noteRefusedClaim(s.db, N2, ID, NOW + 9)).toEqual({ changed: false });
+    expect(actKeyOf(s.db, g)).toMatchObject({ ok: true, value: { claimsRefused: 2, lastRefusedAt: NOW + 9 } });
+  });
+  it('only the generation\'s own session raises its count: another session presenting the spent nonce changes nothing (review 2636 F2)', () => {
+    const s = store();
+    const g = mint(s, startOf(s, 'startup', NOW, N1));
+    issueActKey(s.db, { generationId: g, nonceSha256: N1, keySha256: KEY_SHA, issuedAt: NOW });
+    expect(noteRefusedClaim(s.db, N1, 'lane-b-project-a', NOW + 5)).toEqual({ changed: false });
+    expect(actKeyOf(s.db, g)).toMatchObject({ ok: true, value: { claimsRefused: 0, lastRefusedAt: null } });
+    expect(noteRefusedClaim(s.db, N1, ID, NOW + 7)).toEqual({ changed: true });
+    expect(actKeyOf(s.db, g)).toMatchObject({ ok: true, value: { claimsRefused: 1, lastRefusedAt: NOW + 7 } });
   });
 });
 
@@ -116,41 +130,60 @@ describe('the claim\'s start reads', () => {
     startOf(s, 'clear', NOW + 1);
     expect(s.db.prepare('SELECT doorNonceSha256 FROM continuity_starts ORDER BY id').all()).toEqual([{ doorNonceSha256: N1 }, { doorNonceSha256: null }]);
   });
-  it('newestStartOf reads the newest start that can mint, with its generation once minted', () => {
+  it('newestMintedStartOf reads the newest start the lane minted from, never one it declined or has not judged', () => {
     const s = store();
-    expect(newestStartOf(s.db, ID)).toEqual({ ok: true, value: 'none' });
+    expect(newestMintedStartOf(s.db, ID)).toEqual({ ok: true, value: 'none' });
     const a = startOf(s, 'startup', NOW, N1);
-    expect(newestStartOf(s.db, ID)).toEqual({ ok: true, value: { startId: a, nonceSha256: N1, generation: 'not-minted' } });
+    expect(newestMintedStartOf(s.db, ID)).toEqual({ ok: true, value: 'none' });
     const g = mint(s, a);
-    expect(newestStartOf(s.db, ID)).toEqual({ ok: true, value: { startId: a, nonceSha256: N1, generation: { id: g, n: 1, state: 'carded' } } });
-    // A compaction repeats its process's hash and mints nothing; a fork is never this identity's: neither supersedes.
+    expect(newestMintedStartOf(s.db, ID)).toEqual({ ok: true,
+      value: { startId: a, reportedAt: NOW, nonceSha256: N1, generation: { id: g, n: 1, state: 'carded' } } });
+    // A compaction repeats its process's hash, a fork and a nested process's start are not this identity's next life, and a
+    // newer spawn's start is not minted yet: none of them is a start the lane minted from.
     startOf(s, 'compact', NOW + 10, N1);
     startOf(s, 'fork', NOW + 20, N2);
-    expect(newestStartOf(s.db, ID)).toMatchObject({ ok: true, value: { startId: a } });
+    startOf(s, 'resume', NOW + 25, N1);
     const b = startOf(s, 'resume', NOW + 30, N2);
-    expect(newestStartOf(s.db, ID)).toEqual({ ok: true, value: { startId: b, nonceSha256: N2, generation: 'not-minted' } });
+    expect(newestMintedStartOf(s.db, ID)).toMatchObject({ ok: true, value: { startId: a } });
+    const h = mint(s, b);
+    expect(newestMintedStartOf(s.db, ID)).toEqual({ ok: true,
+      value: { startId: b, reportedAt: NOW + 30, nonceSha256: N2, generation: { id: h, n: 2, state: 'carded' } } });
   });
   it('the session\'s start order is reportedAt, so a resend received late is not the newest', () => {
     const s = store();
     const late = startOf(s, 'clear', NOW + 100, N2);
-    startOf(s, 'startup', NOW, N1);
-    expect(newestStartOf(s.db, ID)).toMatchObject({ ok: true, value: { startId: late } });
+    const early = startOf(s, 'startup', NOW, N1);
+    mint(s, late);
+    mint(s, early);
+    expect(newestMintedStartOf(s.db, ID)).toMatchObject({ ok: true, value: { startId: late, reportedAt: NOW + 100 } });
   });
   it('startByNonce reads the newest start carrying the hash, with and without a minted generation', () => {
     const s = store();
     const a = startOf(s, 'startup', NOW, N1);
-    expect(startByNonce(s.db, ID, N1)).toEqual({ ok: true, value: { startId: a, nonceSha256: N1, generation: 'not-minted' } });
+    expect(startByNonce(s.db, ID, N1)).toEqual({ ok: true, value: { startId: a, reportedAt: NOW, nonceSha256: N1, generation: 'not-minted' } });
     expect(startByNonce(s.db, ID, N2)).toEqual({ ok: true, value: 'none' });
     expect(startByNonce(s.db, 'lane-b-project-a', N1)).toEqual({ ok: true, value: 'none' });
     const g = mint(s, a);
     startOf(s, 'compact', NOW + 5, N1);
-    expect(startByNonce(s.db, ID, N1)).toEqual({ ok: true, value: { startId: a, nonceSha256: N1, generation: { id: g, n: 1, state: 'carded' } } });
+    expect(startByNonce(s.db, ID, N1)).toEqual({ ok: true,
+      value: { startId: a, reportedAt: NOW, nonceSha256: N1, generation: { id: g, n: 1, state: 'carded' } } });
+  });
+  it('a nested process\'s start carries the spawn\'s hash and the lane declines it: the claim still reads the minted start (review 2636 F1)', () => {
+    const s = store();
+    const a = startOf(s, 'startup', NOW, N1);
+    const g = mint(s, a);
+    // A nested Claude Code process in the pane inherits the spawn's environment, so its start report carries the same hash;
+    // the lane declines it (`foreign-uuid`) and mints nothing from it.
+    const nested = startOf(s, 'resume', NOW + 50, N1);
+    expect(nested).toBeGreaterThan(a);
+    expect(startByNonce(s.db, ID, N1)).toMatchObject({ ok: true, value: { startId: a, generation: { id: g } } });
+    expect(newestMintedStartOf(s.db, ID)).toMatchObject({ ok: true, value: { startId: a } });
   });
   it('a missing table answers unmeasured, never none', () => {
     const s = store();
     s.db.exec('DROP TABLE continuity_act_keys');
     s.db.exec('ALTER TABLE continuity_starts DROP COLUMN doorNonceSha256');
-    expect(newestStartOf(s.db, ID).ok).toBe(false);
+    expect(newestMintedStartOf(s.db, ID).ok).toBe(false);
     expect(startByNonce(s.db, ID, N1).ok).toBe(false);
   });
 });

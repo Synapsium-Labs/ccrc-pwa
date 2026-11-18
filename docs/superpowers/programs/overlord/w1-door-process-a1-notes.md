@@ -6,14 +6,25 @@ is taken here.
 
 ## Departures
 
-- **`claim-reads-starts-that-can-mint`**: the plan's "the session's newest recorded start" and "the start carrying the hash"
-  read only starts whose source can mint a generation, never a `compact` or a `fork`. A compaction keeps the conversation
-  and runs in the same process, so its start report repeats the spawn's hash and mints nothing. Read as a start, it would
-  supersede the start whose generation the key belongs to, and a door process that first claims after a compaction would
-  answer `renewing` for ever. A `fork` sends no start report today; it is excluded for the same reason.
+- **`claim-reads-the-minted-start`** (review 2636 F1, the coordinator's ruling; it replaces the first round's
+  `claim-reads-starts-that-can-mint`, which chose starts by source): the plan's "the session's newest recorded start" and
+  "the start carrying the hash" follow the start the generations lane minted from, which the generation row names
+  (`continuity_generations.startId`). The claim binds, of the session's starts carrying the hash, the newest the lane
+  minted from (else the newest, not minted yet), and it is superseded only by a start the lane minted from that was recorded
+  after it (`reportedAt`, then id). So a start the lane declines never stands in for the start whose generation the key
+  belongs to, and never supersedes it: a compaction or a fork, a nested Claude Code process in the pane (it inherits the
+  spawn's environment, so its start report carries the same hash, and the lane declines it as not the row's own
+  conversation), a start older than the live generation's, and a start of a role or row the lane does not mint. A door
+  whose own start was declined answers `superseded` once a newer start has minted, never `renewing` for ever. The one case
+  left `renewing` is a session none of whose starts the lane ever mints (a role that is not long-lived, a row the registry
+  no longer lists): it fails closed, no key, and the door process's bounded back-off only retries; no door process is
+  spawned for such a session. The lane does not record a declined start, and its cursor is no substitute, since a
+  coordinator's first generation may still mint from a start the cursor has passed. A newer spawn's start that the lane
+  has not judged yet supersedes nothing: until it mints, the old generation is live and its key may still issue once; the
+  mint ends that generation, and the fence's calls refuse its key from then on.
 - **`arms-5-and-6-are-exclusive`**: the plan's mutant "arms 5 and 6 swapped" is an equivalent mutant: a start whose
   generation is not minted has no state, so the two arms never both hold and no input tells their order apart. It is not
-  in `ACT_KEY_MUTANT_SETS`, so the set's nine mutants are all killed and the floor is 1.
+  in `ACT_KEY_MUTANT_SETS`, so the set's mutants (eleven since review 2636 F1) are all killed and the floor is 1.
 - **`entropy-dep-optional`**: `ContinuityRouteDeps.entropy` is optional. The composition root always passes
   `deps.time.entropy`; a server built without it (the four other suites that build the continuity routes by hand) answers
   `unavailable` at the claim door, as it does for an absent store. Required, it would have changed four test files other
@@ -65,6 +76,22 @@ is taken here.
   entry installer does not render it in A1: the program and its pin are installed together in A2. Until then an
   installed body's `_door_prog_ok` refuses (a placeholder pin), and nothing in A1 calls it outside the tests.
 
+- **`refusal-count-is-the-sessions-own`** (review 2636 F2): `noteRefusedClaim` raises `claimsRefused` only on a row whose
+  generation is the claiming session's own, so a session presenting a nonce another session spent changes no count of
+  that session's.
+
+## Review 2636's notes (no change)
+
+- **F3**: the claim's two start reads order by the hook-supplied `reportedAt`, then id, as `StartRow` and the generations
+  lane's `startBefore` do. A box clock stepped backwards between a start and its successor could make the older sort
+  newest. The exposure is the lane's own, so the claim adds no new fact; the decider's order (`recordedAfter`) is that one
+  rule.
+- **F4**: the hook's non-child prefilter matches `*.door*`, wider than the plan's `.cc-sessions/.door`. It only runs the
+  account arm more often, the safe direction, and is kept; removing it reds the four top-level deny cases.
+- **F5**: `CLAUDE.md`'s SAFETY section names `~/.cc-sessions/.door/` in a sentence of its own beside the account write
+  directories' sentence. The three lists (`ACCOUNT_SECRET_PATHS`, `ACCOUNT_WRITE_DIRS`, the installer's bash copy) agree;
+  only the prose is in two sentences.
+
 ## The hook refusal
 
 A Bash call that edited the deny lists (a heredoc whose text names the guarded paths) was refused by the session hook's
@@ -89,7 +116,7 @@ edits through the Edit tool, one file at a time; they were made that way.
 - Growth (`growthCheck`'s own measure, armed, against the merge base): `ccd/ccd` +3, `ccd/lib/door.sh` +26 (new),
   `ccd (program)` +29, `ccd/session-hook.sh` +2, `ccd/ccrc` +1, `server/src/coord/schema.ts` +5, `server/src/server.ts` 0,
   `shared/api.ts` 0 (edited in place).
-- Mutation: `actKeyClaimVerdict`, nine mutants, all killed (floor 1). By hand, each restored from a saved copy: the body back
+- Mutation: `actKeyClaimVerdict`, eleven mutants (review 2636 F1 added the start order's two), all killed (floor 1). By hand, each restored from a saved copy: the body back
   on curl's argv reds the four command-line cases; the key answered on a refused insert reds the race case; the nonce in the
   refusal's log line reds the good-claim case; the non-child prefilter's `.door` fragment removed reds the four top-level
   cases of the door directory (the child cases stay green).

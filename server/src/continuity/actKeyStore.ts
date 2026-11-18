@@ -47,11 +47,12 @@ export function issueActKey(db: DatabaseSync, row: ActKeyIssue): ActKeyIssueResu
   }
 }
 
-/** `claimsRefused`'s ONE WRITER (the claim door): a spent nonce presented again. Changes the row holding the hash, if any. */
-export function noteRefusedClaim(db: DatabaseSync, nonceSha256: string, at: number): { changed: boolean } {
+/** `claimsRefused`'s ONE WRITER (the claim door): a spent nonce presented again. Changes the row holding the hash only when
+ *  its generation is the claiming session's own (review 2636 F2), so no session raises another's count. */
+export function noteRefusedClaim(db: DatabaseSync, nonceSha256: string, sessionId: string, at: number): { changed: boolean } {
   try {
-    const res = db.prepare('UPDATE continuity_act_keys SET claimsRefused = claimsRefused + 1, lastRefusedAt = ? WHERE nonceSha256 = ?')
-      .run(at, nonceSha256);
+    const res = db.prepare('UPDATE continuity_act_keys SET claimsRefused = claimsRefused + 1, lastRefusedAt = ? WHERE nonceSha256 = ? '
+      + 'AND generationId IN (SELECT id FROM continuity_generations WHERE sessionId = ?)').run(at, nonceSha256, sessionId);
     return { changed: Number(res.changes) === 1 };
   } catch {
     return { changed: false };

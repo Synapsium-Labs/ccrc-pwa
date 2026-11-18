@@ -4,6 +4,8 @@
 // The plan's mutants: each arm deleted; arms 3 and 4 swapped; the hash compare negated; a `null` hash read as a match. The
 // plan's "arms 5 and 6 swapped" is an EQUIVALENT mutant, so it is not in the set (slug arms-5-and-6-are-exclusive): a start
 // whose generation is not minted has no state, so the two arms can never both hold, and no input tells their order apart.
+// Review 2636 F1 (slug claim-reads-the-minted-start) adds the start order's two: the order read by id alone, and a start
+// read as recorded after itself.
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
@@ -18,8 +20,9 @@ const H = 'a'.repeat(64);
 const OTHER = 'b'.repeat(64);
 const ok = <T>(value: T): ClaimRead<T> => ({ ok: true, value });
 const lost: ClaimRead<never> = { ok: false, detail: 'continuity_act_keys read failed: no such table' };
-const startOf = (startId: number, nonceSha256: string | null, generation: StartFact['generation']): StartFact =>
-  ({ startId, nonceSha256, generation });
+/** A start; its `reportedAt` follows its id unless a case gives one (a session's order is `reportedAt`, then id). */
+const startOf = (startId: number, nonceSha256: string | null, generation: StartFact['generation'], reportedAt = startId * 1_000): StartFact =>
+  ({ startId, reportedAt, nonceSha256, generation });
 const minted = (id: number, n: number, state: 'active' | 'carded' | 'ended' = 'carded'): StartFact['generation'] => ({ id, n, state });
 const both = (s: StartFact): Pick<ClaimFacts, 'newest' | 'matching'> => ({ newest: ok(s), matching: ok(s) });
 const facts = (over: Partial<ClaimFacts> = {}): ClaimFacts => ({ presented: H, spent: ok('none'), ...both(startOf(7, H, minted(3, 2))), ...over });
@@ -40,9 +43,21 @@ export function actKeyCases(m: ActKeyModule): Record<string, SuiteCase> {
       expect(v(facts(both(startOf(7, null, minted(3, 2)))))).toEqual(refused('renewing', 'start-unreported'));
       expect(v(facts(both(startOf(7, OTHER, minted(3, 2)))))).toEqual(refused('renewing', 'start-unreported'));
     },
-    '4. the matching start is not the newest: stale-generation (superseded)': () => {
-      expect(v(facts({ newest: ok(startOf(9, OTHER, 'not-minted')) }))).toEqual(refused('stale-generation', 'superseded'));
+    '4. a start the lane minted from was recorded after the matching start: stale-generation (superseded)': () => {
       expect(v(facts({ newest: ok(startOf(9, OTHER, minted(5, 3))) }))).toEqual(refused('stale-generation', 'superseded'));
+      // The same reportedAt: the later id is the later start.
+      expect(v(facts({ newest: ok(startOf(9, OTHER, minted(5, 3), 7_000)) }))).toEqual(refused('stale-generation', 'superseded'));
+    },
+    '4. the order is reportedAt first: a minted start with a lower id but a later reportedAt supersedes': () => {
+      expect(v(facts({ matching: ok(startOf(9, H, minted(3, 2), 1_000)), newest: ok(startOf(7, OTHER, minted(5, 3), 2_000)) })))
+        .toEqual(refused('stale-generation', 'superseded'));
+    },
+    '4. a minted start recorded BEFORE the matching one does not supersede it (the previous generation stays the newest minted)': () => {
+      expect(v(facts({ matching: ok(startOf(8, H, 'not-minted')), newest: ok(startOf(7, OTHER, minted(3, 2))) })))
+        .toEqual(refused('renewing', 'not-minted'));
+    },
+    '4. no start minted yet does not supersede: none is newest': () => {
+      expect(v(facts({ matching: ok(startOf(7, H, 'not-minted')), newest: ok('none') }))).toEqual(refused('renewing', 'not-minted'));
     },
     '5. the matching start\'s generation is not minted yet: renewing (not-minted)': () => {
       expect(v(facts(both(startOf(7, H, 'not-minted'))))).toEqual(refused('renewing', 'not-minted'));
@@ -55,21 +70,25 @@ export function actKeyCases(m: ActKeyModule): Record<string, SuiteCase> {
       expect(v(facts(both(startOf(7, H, minted(3, 2, 'active')))))).toEqual({ kind: 'issue', generationId: 3, n: 2 });
     },
     'ORDER: a spent nonce whose start is superseded answers nonce-spent': () => {
-      expect(v(facts({ spent: ok({ generationId: 3 }), newest: ok(startOf(9, OTHER, 'not-minted')) }))).toEqual(refused('stale-generation', 'nonce-spent'));
+      expect(v(facts({ spent: ok({ generationId: 3 }), newest: ok(startOf(9, OTHER, minted(5, 3))) }))).toEqual(refused('stale-generation', 'nonce-spent'));
     },
     'ORDER: an unmeasured matching beside a spent nonce answers unmeasured': () => {
       expect(v(facts({ spent: ok({ generationId: 3 }), matching: lost }))).toEqual(refused('unmeasured', 'store-unreadable'));
     },
-    'ORDER: a start nobody reported answers start-unreported even when a newer start exists (arm 3 before arm 4)': () => {
-      expect(v(facts({ newest: ok(startOf(9, OTHER, 'not-minted')), matching: ok('none') }))).toEqual(refused('renewing', 'start-unreported'));
+    'ORDER: a start nobody reported answers start-unreported even when a newer start minted (arm 3 before arm 4)': () => {
+      expect(v(facts({ newest: ok(startOf(9, OTHER, minted(5, 3))), matching: ok('none') }))).toEqual(refused('renewing', 'start-unreported'));
+      expect(v(facts({ newest: ok(startOf(9, OTHER, minted(5, 3))), matching: ok(startOf(7, OTHER, minted(3, 2))) })))
+        .toEqual(refused('renewing', 'start-unreported'));
     },
-    'ORDER: a superseded start that is not minted answers superseded, not renewing (arm 4 before arm 5)': () => {
-      expect(v(facts({ newest: ok(startOf(9, OTHER, 'not-minted')), matching: ok(startOf(7, H, 'not-minted')) })))
+    'ORDER: a start the lane declined, with a newer start minted, answers superseded, never renewing for ever (arm 4 before arm 5)': () => {
+      expect(v(facts({ newest: ok(startOf(9, OTHER, minted(5, 3))), matching: ok(startOf(7, H, 'not-minted')) })))
         .toEqual(refused('stale-generation', 'superseded'));
     },
     'the four restarts (a crash respawn, a Restart, a swap landing, a wake): renewing (not-minted), then issue, never stale-generation': () => {
-      // The old generation (id 3, n 2) stays live; its start (7) bound an older nonce. The restart's spawn bound H to start 8.
-      expect(v(facts(both(startOf(8, H, 'not-minted'))))).toEqual(refused('renewing', 'not-minted'));
+      // The old generation (id 3, n 2) stays live, minted from start 7, which bound an older nonce, and it is the newest start
+      // the lane minted from until the restart's start (8, bound to H) mints.
+      expect(v(facts({ newest: ok(startOf(7, OTHER, minted(3, 2))), matching: ok(startOf(8, H, 'not-minted')) })))
+        .toEqual(refused('renewing', 'not-minted'));
       expect(v(facts(both(startOf(8, H, minted(4, 3)))))).toEqual({ kind: 'issue', generationId: 4, n: 3 });
     },
     'a spooled start (none carries the hash yet) answers renewing (start-unreported)': () => {
@@ -82,7 +101,7 @@ const ARM = {
   a1: "  if (!f.spent.ok || !f.newest.ok || !f.matching.ok) return refuse('unmeasured', 'store-unreadable');\n",
   a2: "  if (f.spent.value !== 'none') return refuse('stale-generation', 'nonce-spent');\n",
   a3: "  if (matching === 'none' || matching.nonceSha256 === null || matching.nonceSha256 !== f.presented) {\n    return refuse('renewing', 'start-unreported');\n  }\n",
-  a4: "  if (newest === 'none' || newest.startId !== matching.startId) return refuse('stale-generation', 'superseded');\n",
+  a4: "  if (newest !== 'none' && recordedAfter(newest, matching)) return refuse('stale-generation', 'superseded');\n",
   a5: "  if (matching.generation === 'not-minted') return refuse('renewing', 'not-minted');\n",
   a6: "  if (matching.generation.state === 'ended') return refuse('stale-generation', 'generation-ended');\n",
 } as const;
@@ -98,11 +117,15 @@ const ACT_KEY_SET: MutantSet<ActKeyModule> = {
     { id: 'K5 the not-minted arm deleted', old: ARM.a5, new: "  if (matching.generation === 'not-minted') return { kind: 'issue', generationId: 0, n: 0 };\n" },
     { id: 'K6 the ended arm deleted', old: ARM.a6, new: '' },
     { id: 'K7 arms 3 and 4 swapped', old: ARM.a3 + NEWEST + ARM.a4,
-      new: NEWEST + "  if (newest === 'none' || matching === 'none' || newest.startId !== matching.startId) return refuse('stale-generation', 'superseded');\n"
+      new: NEWEST + "  if (newest !== 'none' && matching !== 'none' && recordedAfter(newest, matching)) return refuse('stale-generation', 'superseded');\n"
         + ARM.a3 },
     { id: 'K8 the hash compare negated', old: 'matching.nonceSha256 !== f.presented', new: 'matching.nonceSha256 === f.presented' },
     { id: 'K9 a null hash read as a match', old: 'matching.nonceSha256 === null || matching.nonceSha256 !== f.presented',
       new: '(matching.nonceSha256 !== null && matching.nonceSha256 !== f.presented)' },
+    { id: 'K10 the start order read by id alone', old: 'a.reportedAt > b.reportedAt || (a.reportedAt === b.reportedAt && a.startId > b.startId)',
+      new: 'a.startId > b.startId' },
+    { id: 'K11 a start read as recorded after itself', old: 'a.reportedAt === b.reportedAt && a.startId > b.startId',
+      new: 'a.reportedAt === b.reportedAt && a.startId >= b.startId' },
   ],
   suite: actKeyCases,
 };

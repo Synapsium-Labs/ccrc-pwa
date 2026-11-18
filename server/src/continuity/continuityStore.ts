@@ -1,6 +1,6 @@
 // L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a), the card's and the notes'
 // (§3.3.3, §3.3.2; each its own section below), and the probes' (§3.3.5, the last section). `continuity_starts` has one writer, `insertStart`, and its reads:
-// `startsSince` (the generations lane's), `startsOf`, and the act-key claim's `newestStartOf` and `startByNonce`; `continuity_generations` and `continuity_cursor` are written only through the
+// `startsSince` (the generations lane's), `startsOf`, and the act-key claim's `newestMintedStartOf` and `startByNonce`; `continuity_generations` and `continuity_cursor` are written only through the
 // generation functions below, by the generations lane. `CoordStore` keeps one-line delegates of the same names. Nothing
 // here decides: the door (`routes.ts`) validates, the lane's deciders decide, and this file records and measures.
 // The renewal readings' section (W1, PR A) reads the closed-book spot probes by class and keeps the daily backstop's row,
@@ -149,35 +149,40 @@ export function startsOf(db: DatabaseSync, sessionId: string, limit: number): St
   }
 }
 
-// The act-key claim's two start reads (Overlord W1 door process, plan `w1-door-process.md` Task 1). Each reads only starts that
-// can mint (slug claim-reads-starts-that-can-mint, `actKey.ts`): a compaction or a fork mints nothing, and a compaction repeats
-// its process's hash. One session's start order is `reportedAt`, then id (`StartRow`'s ORDER note). Each start carries the
-// generation minted from it, if any. A failed read answers `ok: false` with its detail, never `'none'`.
-const CLAIM_START_SQL = 'SELECT s.id AS startId, s.doorNonceSha256 AS nonceSha256, g.id AS genId, g.n AS n, g.state AS state '
-  + "FROM continuity_starts s LEFT JOIN continuity_generations g ON g.startId = s.id WHERE s.sessionId = ? AND s.source NOT IN ('compact', 'fork')";
-type ClaimStartRaw = { startId: number; nonceSha256: string | null; genId: number | null; n: number | null; state: string | null };
+// The act-key claim's two start reads (Overlord W1 door process, plan `w1-door-process.md` Task 1). Each follows the start the
+// generations lane minted from, which the generation row names (`continuity_generations.startId`; review 2636 F1, slug
+// claim-reads-the-minted-start, `actKey.ts`), so a start the lane declined (a compaction or a fork, a nested process in the
+// pane carrying the spawn's hash, a late start, a role or row it does not mint) neither supersedes nor stands in. One
+// session's start order is `reportedAt`, then id (`StartRow`'s ORDER note). Each start carries its place in that order and
+// the generation minted from it, if any. A failed read answers `ok: false` with its detail, never `'none'`.
+const CLAIM_START_SQL = 'SELECT s.id AS startId, s.reportedAt AS reportedAt, s.doorNonceSha256 AS nonceSha256, g.id AS genId, g.n AS n, '
+  + 'g.state AS state FROM continuity_starts s LEFT JOIN continuity_generations g ON g.startId = s.id WHERE s.sessionId = ?';
+type ClaimStartRaw = { startId: number; reportedAt: number; nonceSha256: string | null; genId: number | null; n: number | null; state: string | null };
 function claimStartOf(r: ClaimStartRaw | undefined): ClaimRead<StartFact | 'none'> {
   if (r === undefined) return { ok: true, value: 'none' };
-  if (r.genId === null) return { ok: true, value: { startId: r.startId, nonceSha256: r.nonceSha256, generation: 'not-minted' } };
+  const at = { startId: r.startId, reportedAt: Number(r.reportedAt), nonceSha256: r.nonceSha256 };
+  if (r.genId === null) return { ok: true, value: { ...at, generation: 'not-minted' } };
   if (!isGenerationState(r.state)) return { ok: false, detail: `continuity_generations row ${r.genId}: state ${String(r.state)}` };
-  return { ok: true, value: { startId: r.startId, nonceSha256: r.nonceSha256, generation: { id: r.genId, n: Number(r.n), state: r.state } } };
+  return { ok: true, value: { ...at, generation: { id: r.genId, n: Number(r.n), state: r.state } } };
 }
 const claimReadFailed = (e: unknown): { ok: false; detail: string } =>
   ({ ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` });
 
-/** The session's newest recorded start that can mint, with its generation, `'none'`, or the read's failure. */
-export function newestStartOf(db: DatabaseSync, sessionId: string): ClaimRead<StartFact | 'none'> {
+/** The session's newest start the generations lane minted from, with its generation, `'none'`, or the read's failure. */
+export function newestMintedStartOf(db: DatabaseSync, sessionId: string): ClaimRead<StartFact | 'none'> {
   try {
-    return claimStartOf(stmt(db, `${CLAIM_START_SQL} ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1`).get(sessionId) as ClaimStartRaw | undefined);
+    return claimStartOf(stmt(db, `${CLAIM_START_SQL} AND g.id IS NOT NULL ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1`)
+      .get(sessionId) as ClaimStartRaw | undefined);
   } catch (e) {
     return claimReadFailed(e);
   }
 }
 
-/** The session's newest start that can mint and carries this nonce hash, with its generation, `'none'`, or the read's failure. */
+/** Of the session's starts carrying this nonce hash, the newest the lane minted from, else the newest (not minted yet, or
+ *  declined), with its generation, `'none'`, or the read's failure. */
 export function startByNonce(db: DatabaseSync, sessionId: string, nonceSha256: string): ClaimRead<StartFact | 'none'> {
   try {
-    return claimStartOf(stmt(db, `${CLAIM_START_SQL} AND s.doorNonceSha256 = ? ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1`)
+    return claimStartOf(stmt(db, `${CLAIM_START_SQL} AND s.doorNonceSha256 = ? ORDER BY g.id IS NULL, s.reportedAt DESC, s.id DESC LIMIT 1`)
       .get(sessionId, nonceSha256) as ClaimStartRaw | undefined);
   } catch (e) {
     return claimReadFailed(e);
