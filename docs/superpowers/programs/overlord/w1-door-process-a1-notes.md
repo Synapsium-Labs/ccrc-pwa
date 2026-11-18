@@ -62,3 +62,12 @@ edits through the Edit tool, one file at a time; they were made that way.
 
 - Local runs: `ccrc-containment.test.ts`'s row "`--url=` is not a curl option" fails on this box only: its curl (8.18)
   accepts `--url=` and answers 7, where the row expects curl's own 2. It is not this change's; CI is the arbiter.
+- Local runs: `secret-mask.test.ts`'s "typed slowly" case fails here on a clean export of `origin/main` too (a timing case
+  under load); and the shellcheck ratchet's program lint is killed by the test slice's memory cap. CI is the arbiter of both.
+- Growth (`growthCheck`'s own measure, armed, against the merge base): `ccd/ccd` +3, `ccd/lib/door.sh` +26 (new),
+  `ccd (program)` +29, `ccd/session-hook.sh` +2, `ccd/ccrc` +1, `server/src/coord/schema.ts` +5, `server/src/server.ts` 0,
+  `shared/api.ts` 0 (edited in place).
+- Mutation: `actKeyClaimVerdict`, nine mutants, all killed (floor 1). By hand, each restored from a saved copy: the body back
+  on curl's argv reds the four command-line cases; the key answered on a refused insert reds the race case; the nonce in the
+  refusal's log line reds the good-claim case; the non-child prefilter's `.door` fragment removed reds the four top-level
+  cases of the door directory (the child cases stay green).
