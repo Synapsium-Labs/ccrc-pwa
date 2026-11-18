@@ -4264,7 +4264,7 @@ so fail-closed comes before a tidy screen. The task note is `docs/superpowers/pr
   break's start, the review's first proposal, leaked every form, short breaks included (measured), so it was not used.
 - **F3**: a row pins where a slice ends at 63 and 64 blanks and for an escape, so `BREAK_CUT_MAX` at 63 or 65 reds it.
 - **F2**: `breakStartAt` keeps the one family it reads back differently from `ROW_BREAK` (a CR LF, blanks or none, then
-  a CR), because the difference fails closed; its docstring says where, and a brute force over 488,280 strings pins the
+  a CR), because the difference fails closed; its docstring says where, and a brute force over 2,015,538 strings (488,280 before fix round 1's tab) pins the
   agreement and the difference (`mask-break-grammar.test.ts`).
 - **F4** (`drawer-consecutive-breaks`): the cause is the forward grammar, not `chainBack`. `ROW_BREAK` reads CR CR LF (a
   CR LF doubled) as one break, closing it in the drawer and pane history (the whole key at `main`); CR LF CR, CR SGR LF,
@@ -4277,14 +4277,19 @@ so fail-closed comes before a tidy screen. The task note is `docs/superpowers/pr
 
 - **Fix round 1 (review 2514).** The first `ROW_BREAK` change also refused a LF, blanks, CR break that a CR LF followed,
   so a LF or a move down, a blank or an SGR, then a CR CR LF ended a key's chain at a blank row: 1,152 key bytes in the
-  drawer and up to 1,600 in pane history where `main` showed 0 (review 2514 F1, blocking). The lookahead is `main`'s
+  drawer and up to 1,160 in pane history where `main` showed 0 (review 2514 F1, blocking). The lookahead is `main`'s
   again and `breakStartAt`'s CR CR LF arm reads back as the grammar reads forward (`row-break-lookahead-restored`), so
   those forms measure as at `main`; a push that ends in both CRs of a CR CR LF is held (`crcr-push-end-held`, review 2514
   F2: the whole key at `main`, 0 here). Three more rows and four mutants; the minors F3 to F14 in `c45.md` §13.
+- **Fix round 2 (review 2585).** This task's first CR CR LF arm read a CR LF, blanks (or an SGR), then a CR CR LF back to
+  its first CR, so pane history's step back at the 64 KiB cap stopped at the blank row: the whole 2,000-byte key where
+  `main` showed 360 bytes (review 2585 F1, blocking). The arm now reads that break back from its second CR, as `main` did,
+  the kept family's second member (`crcrlf-arm-after-crlf-blanks`); the brute force pins it with its count. One more row,
+  two mutants, a sweep of every earlier form against `main`, and the minors F2 to F14 in `c45.md` §14.
 
 **Acceptance.** Every server test of the masker and the row grammar passes at the PR's tip, but for load timeouts that
-`main` shows too (`c45.md` §12 and §13.6); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
-round's at 20775879e as §13.5 says; each mutant in
+`main` shows too (`c45.md` §12, §13.6 and §14.6); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
+round's at 20775879e as §13.5 says, and fix round 2's at da2c4569d as §14 says; each mutant in
 `c45.md` §6 reds; the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
 
 **Rollback.** A plain revert.
@@ -4673,7 +4678,10 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   (`secret-mask-slow-case-db`, F5). Fix round 1 (review 2514): `ROW_BREAK`'s LF, blanks, CR lookahead is `main`'s again
   and `breakStartAt`'s CR CR LF arm agrees with it (`row-break-lookahead-restored`, review 2514 F1: the first change ended
   a key's chain at a LF, blank, CR CR LF, a new leak), and a push that ends in both CRs of a CR CR LF is held
-  (`crcr-push-end-held`, review 2514 F2, closed). Sizes and runs in `c45.md`.
+  (`crcr-push-end-held`, review 2514 F2, closed). Fix round 2 (review 2585): `breakStartAt` reads a CR LF, blanks, CR CR
+  LF back from its second CR, as `main` did, so the cap's step back crosses the blank row before it
+  (`crcrlf-arm-after-crlf-blanks`, review 2585 F1: the whole key in pane history past the cap where `main` showed 360
+  bytes, a leak since this task's first commit). Sizes and runs in `c45.md`.
 
 ## Out of scope
 
