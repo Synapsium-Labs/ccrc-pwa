@@ -1,0 +1,64 @@
+/* The Models sheet (model-class-advance wave R4; Task 20 as re-planned), a stylesheet of its own so fleet.css stays
+   within its growth cap.
+   A stack of class cards inside the account sheet's body. Every block wraps rather than scrolls, so nothing is wider than
+   the panel at 360; the acts are Buttons (44px tall by their own variant). At 900 and up the cards sit two to a row.
+   GROUNDS: the body repeats the sheet's own ground and the card paints --bg-raised, each beside the ink it carries, so the
+   contrast audit measures both pairs from this file (as `.caps-control` is self-grounded). */
+.acct-models {
+  gap: var(--sp-3);
+  background: var(--bg-sheet);
+  color: var(--ink-secondary);
+}
+.acct-models-note,
+.acct-models-facts p,
+.acct-models-model,
+.acct-models-refusal {
+  margin: 0;
+  min-width: 0;
+  overflow-wrap: anywhere;
+}
+.acct-models-note {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+}
+.acct-models-list { display: grid; gap: var(--sp-2); min-width: 0; }
+.acct-models-class {
+  display: grid;
+  /* A card beside a taller one in its row keeps its rows at their own height: never spread, never a stretched button. */
+  align-content: start;
+  gap: var(--sp-1);
+  min-width: 0;
+  padding: var(--sp-3);
+  border: 1px solid var(--edge-subtle);
+  border-radius: var(--r-md);
+  background: var(--bg-raised);
+  color: var(--ink-secondary);
+}
+.acct-models-class .acct-models-name {
+  margin: 0;
+  font-family: var(--family-mono);
+  font-size: var(--fs-meta);
+  font-weight: var(--weight-medium);
+  color: var(--ink-primary);
+}
+.acct-models-class .acct-models-model {
+  font-family: var(--family-mono);
+  font-size: var(--fs-sm);
+  color: var(--ink-primary);
+}
+.acct-models-facts { display: grid; gap: 2px; min-width: 0; }
+.acct-models-facts p {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+}
+.acct-models-acts { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-2); margin-top: var(--sp-1); }
+.acct-models-act { flex: none; min-height: var(--tap-min); }
+.acct-models-class .acct-models-refusal {
+  font-family: var(--family-ui);
+  font-size: var(--fs-meta);
+  color: var(--ink-primary);
+}
+.acct-models-class .acct-models-refusal[data-kind='unknown'] { color: var(--status-dead-text); }
+@media (min-width: 900px) {
+  .acct-models-list { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}

@@ -28,6 +28,7 @@ import {
   modelsActFailure, pendingWords, previousWords, revertAriaLabel, revertConsequence, revertTitle, type ModelsAction,
 } from './modelsSheetWords';
 import '../fleet/fleet.css';
+import './models-sheet.css';
 
 /** The act the sheet calls: rejects with the app's `ApiError` on a non-2xx, as every `api.*` write does. */
 export type ModelsActFn = (lane: string, body: { action: ModelsAction; class: ModelClass }) => Promise<unknown>;

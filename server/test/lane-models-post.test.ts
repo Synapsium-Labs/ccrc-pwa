@@ -27,12 +27,12 @@ const CAT = {
     { id: 'model-6.1-delta', label: 'Model 6.1 Delta' },
   ],
 };
-const LABELS = laneClassModels(parseRegistry(REG), parseCatalogue(CAT));
+const CLASS_LABELS = laneClassModels(parseRegistry(REG), parseCatalogue(CAT));
 
 /** A real SENTENCE of the kind the verb prints: a path and a command. It must never reach the HTTP answer. */
 const DETAIL = "account \"lane-a\" has a problem at /home/someone/.ccrc/models/lane-a.advance.json; run 'ccrc models lane-a show'.";
 const SHOW = `${JSON.stringify({
-  ok: true, op: 'show', id: 'lane-a', anthropic: false, registry: REG, labels: LABELS, windowNotices: [],
+  ok: true, op: 'show', id: 'lane-a', anthropic: false, registry: REG, labels: CLASS_LABELS, windowNotices: [],
 })}\n`;
 const exited = (stdout: string, code = 0): ModelsAsked => ({ kind: 'exited', code, stdout });
 const holdDone = (changed: boolean, cls: ModelClass = C1): ModelsAsked =>
@@ -86,7 +86,7 @@ describe('POST /api/models/:lane', () => {
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.json()).toEqual({
       ok: true, lane: 'lane-a', action: 'hold', class: C1, changed: true, partial: false,
-      models: { kind: 'read', classes: LABELS, advance: { state: 'unreported', detail: null, pending: null, classes: null } },
+      models: { kind: 'read', classes: CLASS_LABELS, advance: { state: 'unreported', detail: null, pending: null, classes: null } },
     });
     expect(r.events, 'the act first, then the fresh read').toEqual(['hold', 'show']);
     expect(r.calls[0]).toEqual(['lane-a', 'hold', C1]);
