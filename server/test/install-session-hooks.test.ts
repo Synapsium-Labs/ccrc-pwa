@@ -504,6 +504,34 @@ describe('the children\'s deny digest history (approvals PR 0)', () => {
     run();
     expect(lines()).toHaveLength(1);
   });
+  // The coordinator's plan-review ruling F1 (2026-11-18): a rewrite records the OUTGOING file's digest before the incoming
+  // one, so the children spawned under the outgoing file are named even on a box whose history never held it.
+  it('a rewrite records the outgoing digest, then the incoming one', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    fs.writeFileSync(denyFile(), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n');
+    const outgoing = digestOf(denyFile());
+    run();
+    const incoming = digestOf(denyFile());
+    expect(incoming).not.toBe(outgoing);
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([outgoing, incoming]);
+  });
+  it('the outgoing digest already last is not written twice', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    fs.writeFileSync(denyFile(), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n');
+    const outgoing = digestOf(denyFile());
+    fs.writeFileSync(histFile(), `${outgoing} 1700000000000\n`);
+    run();
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([outgoing, digestOf(denyFile())]);
+    expect(lines()[0]).toBe(`${outgoing} 1700000000000`);
+  });
+  it('a symlink at the deny file\'s name is not ours: its target\'s digest is never recorded', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    const target = path.join(home, 'foreign.json');
+    fs.writeFileSync(target, '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n');
+    fs.symlinkSync(target, denyFile());
+    run();
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([digestOf(denyFile())]);
+  });
   it('keeps the newest 32 lines, the new digest last', () => {
     fs.mkdirSync(reg(), { recursive: true });
     const old = Array.from({ length: 40 }, (_, i) => `${i.toString(16).padStart(64, '0')} ${1700000000000 + i}`);
