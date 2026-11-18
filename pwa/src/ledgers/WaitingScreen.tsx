@@ -119,7 +119,7 @@ function ItemRow({ item, now, onOpen, current, rowActs, itemHref }: {
         </RowMain>
         <RowMeta pills={itemPills(item)} when={meta} />
       </BareRow>
-      {rowActs !== null && <ItemControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} />}
+      {rowActs !== null && <ItemControls item={item} runs={rowActs.runs} acts={rowActs.acts} enabled={rowActs.enabled} place="row" />}
       {/* The operator's two answer marks (Overlord W1), beside the row's button, never inside it; off on a saved copy. */}
       {/* Fail closed: a row drawn with no acts says nothing about the page being current, so its boxes are off. */}
       <AnswerMarkBoxes item={item} current={rowActs !== null && rowActs.enabled} />

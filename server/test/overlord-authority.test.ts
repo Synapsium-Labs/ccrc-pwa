@@ -4,6 +4,7 @@ import { describe, expect, it } from 'vitest';
 import { buildChainedRecord, chainNext, decodeChainedLine, encodeChainedRecord, type ChainedJournalRecord } from '../src/chainedJournal.js';
 import { isOverlordAuthorityKebab } from '../src/coord/overlordAuthorityJournal.js';
 import { DELEGATION_JOURNAL_FORMAT, DelegationJournalError } from '../src/coord/delegation-journal.js';
+import type { DecisionRowSide } from '../../shared/decisionModel.js';
 import {
   OVERLORD_AUTHORITY_FORMAT, OVERLORD_AUTHORITY_KINDS, OverlordAuthorityError, authorityAgainstFold, authorityDirection, authorityEntry,
   authorityFold, canonicalAuthorityMove,
@@ -27,6 +28,11 @@ const SAMPLES: { readonly [K in OverlordAuthorityKind]: Extract<OverlordAuthorit
   'authority-latch-clear': { kind: 'authority-latch-clear', opKey: 'op-6', cause: 'restore-detected' },
   'authority-account-set': { kind: 'authority-account-set', opKey: 'op-7', from: { pools: ['pool-a', 'pool-b'], untagged: true }, to: { pools: ['pool-a'], untagged: false } },
   'authority-model-class': { kind: 'authority-model-class', opKey: 'op-8', from: 'fable', to: 'opus' },
+  'authority-decision-row': {
+    kind: 'authority-decision-row', opKey: 'op-10', row: 'scope.widens', gate: true,
+    from: { mode: 'shadow', ceiling: 600, armedLine: null, held: false },
+    to: { mode: 'armed', ceiling: 600, armedLine: { id: 3, line: 0.9 }, held: false },
+  },
   'authority-restore-confirmed': CONFIRM,
 };
 const KINDS = Object.keys(OVERLORD_AUTHORITY_KINDS) as OverlordAuthorityKind[];
@@ -100,6 +106,81 @@ describe('the Overlord authority grammar (Task 3)', () => {
     expect(authorityEntry({ ...SAMPLES['authority-latch-raise'], cause: 'a-cause-from-a-newer-build' })).toMatchObject({ cause: 'a-cause-from-a-newer-build' });
   });
 
+  describe('authority-decision-row (Overlord W2, decision model B)', () => {
+    const S = SAMPLES['authority-decision-row'];
+    const side = (o: Partial<DecisionRowSide> = {}): DecisionRowSide => ({ mode: 'shadow', ceiling: 600, armedLine: null, held: false, ...o });
+
+    it('takes its sample and returns it whole', () => {
+      expect(authorityEntry({ ...S })).toEqual(S);
+    });
+    it('refuses a missing key and an extra key at the top, in a side and in an armed line', () => {
+      for (const key of ['row', 'gate', 'from', 'to', 'opKey']) {
+        const o = { ...S } as Record<string, unknown>;
+        delete o[key];
+        expect(refusal(o).code, `missing ${key}`).toBe('bad-field');
+      }
+      expect(refusal({ ...S, extra: 1 }).code).toBe('unknown-key');
+      for (const key of ['mode', 'ceiling', 'armedLine', 'held']) {
+        const f = { ...S.to } as unknown as Record<string, unknown>;
+        delete f[key];
+        expect(refusal({ ...S, to: f }).code, `side missing ${key}`).toBe('bad-field');
+      }
+      expect(refusal({ ...S, from: { ...S.from, extra: 1 } }).code).toBe('unknown-key');
+      expect(refusal({ ...S, to: { ...S.to, armedLine: { id: 3, line: 0.9, extra: 1 } } }).code).toBe('unknown-key');
+      expect(refusal({ ...S, to: { ...S.to, armedLine: { id: 3 } } }).code).toBe('bad-field');
+      expect(refusal({ ...S, to: { ...S.to, armedLine: { line: 0.9 } } }).code).toBe('bad-field');
+    });
+    it('refuses a row the catalogue does not hold', () => {
+      expect(refusal({ ...S, row: 'scope.narrows' }).message).toMatch(/not a decision-model row/);
+      expect(refusal({ ...S, row: '__proto__' }).code).toBe('bad-field');
+      expect(refusal({ ...S, row: 'toString' }).code).toBe('bad-field');
+    });
+    it('checks gate against the catalogue: scope.widens is the one gate, every other row is advice', () => {
+      expect(refusal({ ...S, gate: false }).message).toMatch(/gate is not scope\.widens's direction/);
+      for (const row of ['programme.pick', 'programme.any', 'relay.method', 'readback.omits', 'readback.adds', 'goals.conflict']) {
+        expect(authorityEntry({ ...S, row, gate: false }), row).toMatchObject({ row, gate: false });
+        expect(refusal({ ...S, row, gate: true }).message, row).toMatch(/gate is not/);
+      }
+    });
+    it('takes a ceiling of 50 and of 5000 and refuses 49, 5001, a fraction, a string and NaN', () => {
+      for (const ceiling of [50, 5000, 600]) {
+        expect(authorityEntry({ ...S, from: side({ ceiling }), to: side({ ceiling }) })).toMatchObject({ from: { ceiling }, to: { ceiling } });
+      }
+      for (const ceiling of [49, 5001, 0, -50, 60.5, '600', Number.NaN, Infinity, null]) {
+        expect(refusal({ ...S, to: side({ ceiling: ceiling as number }) }).code, `to ${String(ceiling)}`).toBe('bad-field');
+        expect(refusal({ ...S, from: side({ ceiling: ceiling as number }) }).code, `from ${String(ceiling)}`).toBe('bad-field');
+      }
+    });
+    it('refuses a mode outside the three, and takes each of the three', () => {
+      for (const mode of ['off', 'shadow', 'armed']) expect(authorityEntry({ ...S, to: side({ mode: mode as never }) })).toMatchObject({ to: { mode } });
+      for (const mode of ['on', 'ARMED', '', 7, null, 'toString']) {
+        expect(refusal({ ...S, to: side({ mode: mode as never }) }).message, String(mode)).toMatch(/mode is not off, shadow or armed/);
+      }
+    });
+    it('refuses an armedLine without a line, or with a line outside 0 to 1 or not a number; takes the ends', () => {
+      expect(refusal({ ...S, to: side({ armedLine: { id: 3 } as never }) }).code).toBe('bad-field');
+      expect(refusal({ ...S, to: side({ armedLine: { id: 3, line: undefined } as never }) }).code).toBe('bad-field');
+      for (const line of [1.5, -0.1, Number.NaN, Infinity, '0.9', null]) {
+        expect(refusal({ ...S, to: side({ armedLine: { id: 3, line: line as number } }) }).message, String(line)).toMatch(/line is not from 0 to 1/);
+      }
+      for (const line of [0, 1, 0.5]) expect(authorityEntry({ ...S, to: side({ armedLine: { id: 3, line } }) })).toMatchObject({ to: { armedLine: { line } } });
+      expect(authorityEntry({ ...S, to: side({ armedLine: null }) })).toMatchObject({ to: { armedLine: null } });
+    });
+    it('refuses an armedLine id that is not a positive safe integer, and an armedLine that is not null or an object', () => {
+      for (const id of [0, -1, 1.5, '3', null, Number.MAX_SAFE_INTEGER + 2]) {
+        expect(refusal({ ...S, to: side({ armedLine: { id: id as number, line: 0.9 } }) }).code, String(id)).toBe('bad-field');
+      }
+      for (const l of [undefined, 0.9, 'x', [1]]) expect(refusal({ ...S, to: side({ armedLine: l as never }) }).code, String(l)).toBe('bad-field');
+    });
+    it('refuses held that is not a boolean', () => {
+      for (const held of [0, 'false', null, undefined]) expect(refusal({ ...S, to: side({ held: held as never }) }).code, String(held)).toBe('bad-field');
+    });
+    it('the kind is in the format\'s table, and no other journal\'s grammar takes it', () => {
+      expect(OVERLORD_AUTHORITY_FORMAT.kinds).toContain('authority-decision-row');
+      expect(() => DELEGATION_JOURNAL_FORMAT.entry({ ...S })).toThrow(DelegationJournalError);
+    });
+  });
+
   it('the census row: this grammar refuses the delegation journal\'s kinds, and the delegation grammar refuses these', () => {
     for (const k of DELEGATION_JOURNAL_FORMAT.kinds) {
       const e = refusal({ ...SAMPLES['authority-rung'], kind: k });
@@ -142,6 +223,23 @@ describe('authorityDirection: every row of the grammar table, both ways where it
     expect(d({ ...s, from: { pools: ['pool-a'], untagged: false }, to: { pools: ['pool-a'], untagged: true } })).toBe('widens');
     expect(d({ ...s, from: { pools: [], untagged: true }, to: { pools: [], untagged: false } })).toBe('narrows');
   });
+  it('a decision-model row reads its direction by decisionRowDirection from the entry alone (the full table is decision-model-lines)', () => {
+    const S = SAMPLES['authority-decision-row'];
+    const side = (o: Partial<DecisionRowSide> = {}): DecisionRowSide => ({ mode: 'shadow', ceiling: 600, armedLine: null, held: false, ...o });
+    // spend: off to shadow, or a higher ceiling, widens, gate or advice
+    expect(d({ ...S, row: 'relay.method', gate: false, from: side({ mode: 'off' }), to: side({ mode: 'shadow' }) })).toBe('widens');
+    expect(d({ ...S, row: 'relay.method', gate: false, from: side(), to: side({ ceiling: 601 }) })).toBe('widens');
+    expect(d({ ...S, row: 'relay.method', gate: false, from: side(), to: side({ ceiling: 599 }) })).toBe('narrows');
+    expect(d({ ...S, row: 'relay.method', gate: false, from: side({ mode: 'shadow' }), to: side({ mode: 'off' }) })).toBe('narrows');
+    // a gate that stops shutting widens; an advice row going the same way narrows
+    const armed = side({ mode: 'armed', armedLine: { id: 1, line: 0.9 } });
+    expect(d({ ...S, from: armed, to: side({ mode: 'shadow' }) })).toBe('widens');
+    expect(d({ ...S, gate: false, row: 'relay.method', from: armed, to: side({ mode: 'shadow' }) })).toBe('narrows');
+    // a stricter line narrows, an equal id and value is no move, a looser or unrelated one widens
+    expect(d({ ...S, from: armed, to: side({ mode: 'armed', armedLine: { id: 2, line: 0.95 } }) })).toBe('narrows');
+    expect(d({ ...S, from: armed, to: side({ mode: 'armed', armedLine: { id: 2, line: 0.8 } }) })).toBe('widens');
+    expect(d({ ...S, from: armed, to: armed })).toBe('narrows');
+  });
   it('a model class narrows to opus and widens to fable', () => {
     expect(d({ ...SAMPLES['authority-model-class'], from: 'fable', to: 'opus' })).toBe('narrows');
     expect(d({ ...SAMPLES['authority-model-class'], from: 'opus', to: 'fable' })).toBe('widens');
@@ -171,6 +269,25 @@ describe('authorityFold', () => {
   it('the rung, the account set and the model class take each record\'s to', () => {
     const v = authorityFold(chain([SAMPLES['authority-rung'], SAMPLES['authority-account-set'], SAMPLES['authority-model-class']]));
     expect(v).toMatchObject({ operatorRung: 'advise', accountSet: { pools: ['pool-a'], untagged: false }, modelClass: 'opus' });
+  });
+  it('decision rows: none before a record; two moves on one row keep the last to; two rows are kept apart', () => {
+    const S = SAMPLES['authority-decision-row'];
+    expect([...authorityFold([]).decisionRows]).toEqual([]);
+    const second = { ...S, opKey: 'op-10b', from: S.to, to: { ...S.to, ceiling: 300 } };
+    const other = { ...S, opKey: 'op-10c', row: 'relay.method' as const, gate: false, from: S.from, to: { ...S.from, mode: 'off' as const } };
+    const one = authorityFold(chain([S, second])).decisionRows;
+    expect([...one.keys()]).toEqual(['scope.widens']);
+    expect(one.get('scope.widens')).toEqual(second.to);
+    const two = authorityFold(chain([S, other, second])).decisionRows;
+    expect([...two.keys()].sort()).toEqual(['relay.method', 'scope.widens']);
+    expect(two.get('scope.widens')).toEqual(second.to);
+    expect(two.get('relay.method')).toEqual(other.to);
+  });
+  it('a Confirm record leaves decisionRows as it stood (the stricter of a restored row is restoreStricter\'s, question 12)', () => {
+    const S = SAMPLES['authority-decision-row'];
+    const v = authorityFold(chain([S, CONFIRM]));
+    expect(v.decisionRows.get('scope.widens')).toEqual(S.to);
+    expect(v.lastConfirm).not.toBeNull();
   });
   it('a Confirm sets lastConfirm and every field to what it carries, so a widening before it is gone', () => {
     const recs = chain([
@@ -221,6 +338,40 @@ describe('authorityAgainstFold (F2, stated-from-against-the-fold)', () => {
       .toEqual({ matches: false, direction: 'widens' });
     expect(authorityAgainstFold({ ...SAMPLES['authority-rung'], from: 'advise', to: 'chat' }, view({ operatorRung: 'full' })))
       .toEqual({ matches: false, direction: 'narrows' });
+  });
+  it('a decision-model row: null with no fold value; matches on every field of from; else the direction read from the fold\'s side', () => {
+    const S = SAMPLES['authority-decision-row'];
+    const rows = (side: DecisionRowSide | null) => view({ decisionRows: new Map(side === null ? [] : [['scope.widens' as const, side]]) });
+    expect(authorityAgainstFold(S, rows(null))).toBeNull();
+    // the fold holds another row only
+    expect(authorityAgainstFold(S, view({ decisionRows: new Map([['relay.method' as const, S.from]]) }))).toBeNull();
+    expect(authorityAgainstFold(S, rows(S.from))).toEqual({ matches: true, direction: 'narrows' });
+    // each field of from is compared
+    expect(authorityAgainstFold(S, rows({ ...S.from, mode: 'off' }))).toMatchObject({ matches: false });
+    expect(authorityAgainstFold(S, rows({ ...S.from, ceiling: 601 }))).toMatchObject({ matches: false });
+    expect(authorityAgainstFold(S, rows({ ...S.from, held: true }))).toMatchObject({ matches: false });
+    expect(authorityAgainstFold(S, rows({ ...S.from, armedLine: { id: 1, line: 0.9 } }))).toMatchObject({ matches: false });
+    // armedLine: both null match; an id or a value that differs does not; equal ones match
+    const armed = { ...S.from, mode: 'armed' as const, armedLine: { id: 3, line: 0.9 } };
+    expect(authorityAgainstFold({ ...S, from: armed, to: { ...armed, mode: 'shadow' } }, rows(armed))).toEqual({ matches: true, direction: 'widens' });
+    expect(authorityAgainstFold({ ...S, from: armed, to: { ...armed, mode: 'shadow' } }, rows({ ...armed, armedLine: { id: 4, line: 0.9 } })))
+      .toMatchObject({ matches: false });
+    expect(authorityAgainstFold({ ...S, from: armed, to: { ...armed, mode: 'shadow' } }, rows({ ...armed, armedLine: { id: 3, line: 0.8 } })))
+      .toMatchObject({ matches: false });
+    expect(authorityAgainstFold({ ...S, from: armed, to: { ...armed, mode: 'shadow' } }, rows({ ...armed, armedLine: null })))
+      .toMatchObject({ matches: false });
+  });
+  it('a decision-model row that differs reads its direction from the fold\'s side, not from the stated from', () => {
+    const S = SAMPLES['authority-decision-row'];
+    const off: DecisionRowSide = { mode: 'off', ceiling: 600, armedLine: null, held: false };
+    // stated from shadow to shadow narrows on its own; the fold holds off, so shadow is new spend: widens
+    const stated = { ...S, from: S.from, to: S.from };
+    expect(authorityDirection(stated)).toBe('narrows');
+    expect(authorityAgainstFold(stated, view({ decisionRows: new Map([['scope.widens' as const, off]]) }))).toEqual({ matches: false, direction: 'widens' });
+    // the other way: stated off to shadow widens on its own; the fold holds shadow, so the same move is no new spend
+    const statedWide = { ...S, from: off, to: S.from };
+    expect(authorityDirection(statedWide)).toBe('widens');
+    expect(authorityAgainstFold(statedWide, view({ decisionRows: new Map([['scope.widens' as const, S.from]]) }))).toEqual({ matches: false, direction: 'narrows' });
   });
   it('an account set compares pools and untagged; a model class its word', () => {
     const set = SAMPLES['authority-account-set'];

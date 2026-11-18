@@ -753,10 +753,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[95] (the designation actor columns, Overlord W1 gates A),
     // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a),
-    // and MIGRATIONS[97] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2),
+    // and MIGRATIONS[98] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups, D-8734, D-8735).
-    expect(COORD_SCHEMA_VERSION).toBe(98);
-    expect(MIGRATIONS.length).toBe(98);
+    expect(COORD_SCHEMA_VERSION).toBe(99);
+    expect(MIGRATIONS.length).toBe(99);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -879,9 +880,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4),
     // and MIGRATIONS[95] (the designation actor columns, gates A),
     // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
-    // and MIGRATIONS[97] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2),
+    // and MIGRATIONS[98] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(98);
+    expect(COORD_SCHEMA_VERSION).toBe(99);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

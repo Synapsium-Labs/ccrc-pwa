@@ -3719,7 +3719,35 @@ export const MIGRATIONS: readonly string[] = [
   );
   `,
 
-  // ── 98: user_version 97 -> 98 ─────────────────────────────────────────────
+  // ── 98: user_version 97 -> 98 ────────────────────────────────────────────
+  // The decision model's arming, host and lines (Overlord spec §3.7 H6, Table 11.1a and 11.1d; W2, plan `w2-decision-model.md`
+  // Task 6). `decision_rows`, each row's switch (`off`, `shadow`, `armed`), its daily ceiling, an armed gate's line and the
+  // server's hold: in `OVERLORD_AUTHORITY_TABLES`, so it is NEVER SEEDED (a row with no journal head reads `missing` at boot
+  // and rolls authority back); an absent row reads `DECISION_ROW_DEFAULT`, and the first move inserts it, journal record
+  // first. `decision_host`, the one host (kind, endpoint, origin, model id; the key itself is in the `.server` slot, never
+  // here). `decision_lines`, every admitted line, newest per row and key current, with its canary and its anchors' baseline.
+  // ONE writer each, in `decisionModelStore.ts`: `moveDecisionRowInTx`, `setDecisionHostInTx`, and `admitDecisionLine` with
+  // `recordCanary` for the canary columns. NEW TABLES only: an older build at this `user_version` takes rule 3 and never names
+  // them (Table 11.1a, "Ignores them"). Account organization D (#2958) landed 90, designation A (#2950) 91, done tests A (#2964) 92, the
+  // programme work map WM0 (#2974) 93, forecasts A (#2987) 94, Linear hierarchy W4 (#2982) 95, gates A (#2993) 96 and
+  // handoffs (#2934) 97, so this is 98 by position (the coordinator's standing license, 2026-11-17; renumbered at the landing
+  // merge). RE-MEASURE the slot before the PR and before merge (it must print 97 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE decision_rows (row TEXT PRIMARY KEY, mode TEXT NOT NULL CHECK (mode IN ('off', 'shadow', 'armed')),
+    ceiling INTEGER NOT NULL, armedLineId INTEGER, armedLineValue REAL, heldCause TEXT, heldAt INTEGER,
+    updatedAt INTEGER NOT NULL, actor TEXT NOT NULL);
+  CREATE TABLE decision_host (id INTEGER PRIMARY KEY CHECK (id = 1), kind TEXT NOT NULL, endpoint TEXT NOT NULL,
+    origin TEXT NOT NULL, modelId TEXT NOT NULL, keySetAt INTEGER, updatedAt INTEGER NOT NULL, actor TEXT NOT NULL);
+  CREATE TABLE decision_lines (id INTEGER PRIMARY KEY, row TEXT NOT NULL, revision TEXT NOT NULL, hostKind TEXT NOT NULL,
+    origin TEXT NOT NULL, modelId TEXT NOT NULL, line REAL NOT NULL, labelled INTEGER NOT NULL, errors INTEGER NOT NULL,
+    bound REAL NOT NULL, canaryExpected INTEGER NOT NULL, canaryAsked INTEGER NOT NULL DEFAULT 0,
+    canaryCrossed INTEGER NOT NULL DEFAULT 0, baseline TEXT NOT NULL, admittedAt INTEGER NOT NULL);
+  CREATE INDEX decision_lines_by_key ON decision_lines (row, hostKind, origin, modelId, revision, id);
+  `,
+
+  // ── 99: user_version 98 -> 99 ─────────────────────────────────────────────
   // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
   // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
   // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
@@ -3735,11 +3763,11 @@ export const MIGRATIONS: readonly string[] = [
   // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
   // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
   //
-  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 98` warns, reads as-is, names none of these and boots
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 99` warns, reads as-is, names none of these and boots
   // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
   // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
-  // renewal hand-offs (#2934) took 97, so this, the third lander, takes 98. RE-MEASURE the slot before the PR and before merge
-  // (it must print 97 before this entry is counted):
+  // renewal hand-offs (#2934) took 97 and the decision model B (#2990) took 98, so this, the fourth lander, takes 99. RE-MEASURE
+  // the slot before the PR and before merge (it must print 98 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

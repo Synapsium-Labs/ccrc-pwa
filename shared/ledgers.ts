@@ -539,7 +539,10 @@ export function isOneLine(v: string): boolean {
  *  `SECRET_TAIL_MIN` bytes, its trailing `=` set aside as the masker sets it aside; `''` for a shorter one, whose tail is
  *  never shown. */
 export function secretTailOf(value: string): string {
-  if (utf8Bytes(value.replace(/=+$/, '')) < SECRET_TAIL_MIN) return '';
+  // A loop, not `/=+$/`: that pattern backtracks quadratically over a long run of `=` (CodeQL js/polynomial-redos).
+  let end = value.length;
+  while (end > 0 && value.charCodeAt(end - 1) === 0x3d) end--;
+  if (utf8Bytes(value.slice(0, end)) < SECRET_TAIL_MIN) return '';
   return Array.from(value).slice(-SECRET_TAIL_CHARS).join('');
 }
 

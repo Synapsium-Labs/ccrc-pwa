@@ -50,13 +50,14 @@ const setup = (o: {
   const ft = fakeTime();
   const d: Double = { calls: [], built: [] };
   const store = decisionAskStore(db);
+  const seen: { lines: { row: DecisionRowId; host: { kind: DecisionHostKind; origin: string; modelId: string } }[]; keys: string[] } = { lines: [], keys: [] };
   const deps: DecisionAskDeps = {
     store: o.settleFails ? { ...store, settle: () => false } : store,
     time: ft.ports,
     arming: (row) => o.arming?.[row] ?? DECISION_ROW_DEFAULT,
-    currentLine: () => o.currentLine ?? null,
+    currentLine: (row, host) => { seen.lines.push({ row, host }); return o.currentLine ?? null; },
     host: () => (o.host === undefined ? LOCAL_HOST : o.host),
-    keySet: () => true,
+    keySet: (origin) => { seen.keys.push(origin); return true; },
     modelFor: (h): DecisionModel => {
       d.built.push(h);
       if (o.model !== undefined) return o.model(h, ft.ports);
@@ -71,7 +72,7 @@ const setup = (o: {
     egress: (texts) => o.screen?.(texts) ?? o.egress ?? 'clear',
     stateHash: (state) => createHash('sha256').update(JSON.stringify(state)).digest('hex'),
   };
-  return { deps, d, ft };
+  return { deps, d, ft, seen };
 };
 afterEach(() => { vi.restoreAllMocks(); });
 const one = (row: DecisionRowId, extra: object = {}) => ({ rows: [row], fields: new Map([[row, FIELDS[row]]]), refs: new Map(), ...extra });
@@ -157,6 +158,23 @@ describe('gatherDecisions: the one caller (Task 5)', () => {
     expect(await gatherDecisions(deps, one('scope.widens'))).toEqual([{ row: 'scope.widens', outcome: 'not-asked', why: 'held', ms: 0, attempts: 0 }]);
     expect(d.calls).toHaveLength(0);
     expect(counts('scope.widens')).toBeUndefined();
+  });
+
+  it('the line and the key are looked up under the host snapshot the call planned with, never a host read again (review 2418 F9)', async () => {
+    const { deps, seen } = setup({ arming: { 'relay.method': SHADOW, 'scope.widens': SHADOW }, host: HOSTED_HOST });
+    await gatherDecisions(deps, { rows: ['relay.method', 'scope.widens'],
+      fields: new Map([['relay.method', FIELDS['relay.method']], ['scope.widens', FIELDS['scope.widens']]]), refs: new Map() });
+    // One host snapshot, so the key is asked for once, under its origin, and the line once a row under its kind, origin and model.
+    expect(seen.keys).toEqual([HOSTED_HOST.origin]);
+    expect(seen.lines.map((l) => l.row).sort()).toEqual(['relay.method', 'scope.widens']);
+    for (const l of seen.lines) expect(l.host).toMatchObject({ kind: 'hosted', origin: HOSTED_HOST.origin, modelId: 'model-a' });
+  });
+
+  it('with no host there is no line to look up and no key to ask about', async () => {
+    const { deps, seen } = setup({ arming: { 'relay.method': SHADOW }, host: null });
+    await gatherDecisions(deps, one('relay.method'));
+    expect(seen.lines).toEqual([]);
+    expect(seen.keys).toEqual([]);
   });
 
   it('an armed gate is gathered under its armedLine while a newer current line exists (review 2262 F3)', async () => {

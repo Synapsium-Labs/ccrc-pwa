@@ -159,9 +159,20 @@ export interface PlanView {
 }
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
-  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean };
+  ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
   ownsTeam: boolean; state: HierarchyState; stateAt: number | null; itemId: number | null; inboundWaiting: number;
 }
 export interface HierarchyAnswer {
   ok: true; projects: HierarchyProjectRow[]; coordinators: { id: string; live: boolean }[];
 }
+// D-8737: the map's shapes, early from the plan's Task 7.1 text, so the console's body types over them; wave 7 imports them.
+export const MAP_CLASSES = ['programme', 'epic', 'checkpoint', 'leaf', 'upkeep', 'finished', 'superseded', 'stale', 'unclear'] as const;
+export type MapClass = (typeof MAP_CLASSES)[number];
+export interface MapEntry {
+  /** A Linear UUID. */
+  issue: string;
+  identifier: string;
+  class: MapClass;
+  target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind };
+}
+export interface MapCounts { created: number; moved: number; closed: number; left: number; skipped: number }
