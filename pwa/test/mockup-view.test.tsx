@@ -36,6 +36,26 @@ vi.mock('../src/docs/mockup/load', async (importOriginal) => {
   const real = await importOriginal<typeof import('../src/docs/mockup/load')>();
   return { ...real, startMockupLoad: vi.fn(real.startMockupLoad), buildMockupSrcdoc: vi.fn(real.buildMockupSrcdoc) };
 });
+/** How many `onAuthRegained` listeners are subscribed now: the real announcer, wrapped only to count (review 2378 F1). */
+const authListeners = vi.hoisted(() => ({ live: 0 }));
+vi.mock('../src/lib/auth', async (importOriginal) => {
+  const real = await importOriginal<typeof import('../src/lib/auth')>();
+  return {
+    ...real,
+    onAuthRegained: (fn: () => void): (() => void) => {
+      const off = real.onAuthRegained(fn);
+      authListeners.live += 1;
+      let on = true;
+      return () => {
+        if (on) {
+          on = false;
+          authListeners.live -= 1;
+        }
+        off();
+      };
+    },
+  };
+});
 
 const RealDOMParser = DOMParser;
 let constructed = 0;
@@ -1241,6 +1261,94 @@ describe('re-list, retry and sign-in (D-8660: the view owns them, the loader nev
     await flush();
     expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(before);
     expect(authReads.paths()).toEqual(['a.png']);
+  });
+
+  // Review 2378 F1: `clearAuthLost` announces once, to the listeners already subscribed, so an attempt listens from its start.
+  const isAuthRow = (r: { readonly verdict: { readonly v: string; readonly failure?: unknown } }): boolean =>
+    r.verdict.v === 'failed' && r.verdict.failure === 'auth';
+
+  it('a sign-in that completes while the load is still pending, after a read answered auth, reads again in ONE new attempt once the load ends (review 2378 F1)', async () => {
+    const before = authListeners.live;
+    const held = deferred();
+    const reads = scripted((pin, nth) => {
+      if (pin.path === 'a.png') return nth === 1 ? { kind: 'failed', failure: 'auth' } : OK();
+      return nth === 1 ? held : OK();
+    });
+    const m = mount({ html: '<img src="a.png"><img src="b.png">', context: ctxOf([entry('specs', 'a.png'), entry('specs', 'b.png')]), reader: reads.reader });
+    await waitFor(() => expect(reads.paths()).toEqual(['a.png', 'b.png']));
+    await flush();
+    // a.png answered auth (the login screen is up), and sign-in completes while b.png is still loading.
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await act(async () => {
+      held.resolve(OK());
+      await flush();
+    });
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reads.paths()).toEqual(['a.png', 'b.png', 'a.png', 'b.png']));
+    await waitFor(() => expect(m.container.querySelector('details.docs-mockup-census > summary')?.textContent).toBe('Assets and references · 2 loaded · 0 not loaded'));
+    // The first attempt's result, which held the auth row, built nothing: the view went straight to the new attempt.
+    for (const [, result] of vi.mocked(buildMockupSrcdoc).mock.calls) expect(result.plan.rows.some(isAuthRow)).toBe(false);
+    // The new attempt's result has no auth row: no listener is left behind, the first attempt's included.
+    await flush();
+    expect(authListeners.live).toBe(before);
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2);
+  });
+
+  it('a sign-in during a load whose result has no auth row starts nothing, and the attempt then holds no listener (review 2378 F1)', async () => {
+    const before = authListeners.live;
+    const held = deferred();
+    const reads = scripted((_pin, nth) => (nth === 1 ? held : OK()));
+    const m = mount({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
+    await waitFor(() => expect(reads.paths()).toEqual(['a.png']));
+    expect(authListeners.live, 'the pending attempt listens').toBe(before + 1);
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await act(async () => {
+      held.resolve(OK());
+      await flush();
+    });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    await flush();
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
+    expect(authListeners.live, 'a result with no auth row drops the listener').toBe(before);
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await flush();
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
+    expect(reads.paths()).toEqual(['a.png']);
+  });
+
+  it('a result with an auth row keeps one listener until sign-in, and unmount drops it (review 2378 F1)', async () => {
+    const before = authListeners.live;
+    const reads = scripted(() => ({ kind: 'failed', failure: 'auth' }));
+    const m = mount({ html: '<img src="a.png">', context: ctxOf([entry('specs', 'a.png')]), reader: reads.reader });
+    await waitFor(() => expect(m.frame()).not.toBeNull());
+    await flush();
+    expect(authListeners.live).toBe(before + 1);
+    // Sign-in: the new attempt's start drops this attempt's listener and subscribes its own, so one listener stands.
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await waitFor(() => expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reads.paths()).toEqual(['a.png', 'a.png']));
+    await flush();
+    expect(authListeners.live).toBe(before + 1);
+    m.unmount();
+    expect(authListeners.live).toBe(before);
+  });
+
+  it('the first movement drops the aborted attempt\'s listener: a sign-in before the next context starts nothing (review 2378 F1)', async () => {
+    const before = authListeners.live;
+    const heldCss = deferred();
+    const reads = scripted(heldPScript(heldCss));
+    const relist = vi.fn<() => void>();
+    mount({ html: HTML, context: ctxP(), reader: reads.reader, relist });
+    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
+    expect(authListeners.live).toBe(before);
+    act(() => raiseAuthLost('expired'));
+    act(() => clearAuthLost());
+    await flush();
+    expect(vi.mocked(startMockupLoad)).toHaveBeenCalledTimes(1);
   });
 
   it('the observing reader passes every answer through unchanged (the port stays read-only, the rows keep the words)', async () => {

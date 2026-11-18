@@ -1508,7 +1508,7 @@ the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
 the programme doors (`POST /api/coord/programmes/:slug/calls`, the coordinator's call record, and
 `POST /api/coord/programmes/:slug/remaining`, what a programme says is left),
-the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
+the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,phases/refs,epics/drop,close}`),
 the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
 (`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
@@ -5748,13 +5748,17 @@ test jobs; tested in
 `server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
 file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
 ledger-branch name existed). A pull request ADDS a per-task note instead,
-`docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
+`docs/superpowers/programs/<programme>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
 ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
 escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
 trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
-commit does not), which passes and is written to the step summary. The
-guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
-(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
+commit does not), which passes and is written to the step summary. Its layout arm (D-8719) holds every branch,
+ledger branches included, with no trailer escape, to the repo's review judge's layout: a file added, copied or
+renamed in under `docs/superpowers/specs/` or `docs/superpowers/plans/` is a dated spec
+(`YYYY-MM-DD-<slug>-design.md`, or its `-design.promise-ids.json`) or a dated plan (`YYYY-MM-DD-<slug>.md`),
+directly in that directory. The
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs in enforce mode
+(`LEDGER_GUARD_MODE: enforce` in `ci.yml`), so a violation of either arm fails the check.
 
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
@@ -8973,7 +8977,7 @@ These conventions carry more weight here than style:
   `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-update-sync`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
-  add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
+  add a new `docs/superpowers/programs/<programme>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
   trailer on the head commit. `.github/ci/ledger-guard.mjs` checks it (D-6926).
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to

@@ -33,11 +33,12 @@ const ROWS = PINNED_WINDOW_ROWS + TMUX_STATUS_ROWS;
 const TOKEN = 'c3'.repeat(32);
 const SECRET = 'cmp-7c19e0b4d2a65f38c1e9-b0d74a2e96f1c3587a2d';   // no repeated slice, so a later slice never matches the shown prefix
 
-/** A masker holding one fingerprint row, as a box with a compatible lane has: the drawer then holds every open run. */
-const fingerprinted = (): SecretMasker => {
+/** A masker holding one fingerprint row, as a box with a compatible lane has: the drawer then holds every open run.
+ *  `more`: further keys, one lane each (D-8710's longer keys). */
+const fingerprinted = (...more: string[]): SecretMasker => {
   const db = openCoordDb(path.join(mkTmp('ccrc-drawer-screen-'), 'coord.db'));
   const m = new SecretMasker({ db, token: () => TOKEN });
-  m.ingest({ gen: fingerprintGeneration(TOKEN), rows: [fingerprintRow(TOKEN, 'lane-a', SECRET)] });
+  m.ingest({ gen: fingerprintGeneration(TOKEN), rows: [SECRET, ...more].map((k, i) => fingerprintRow(TOKEN, `lane-${i}`, k)) });
   return m;
 };
 
@@ -336,10 +337,13 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
 
   it('a masked key is one mark per row it touches whatever its length, and no SGR sits around a mark', () => {
     // The ruled property (option C): the mark reveals nothing about a key's length, so the number of marks follows the
-    // rows a key touches and nothing else. Shape keys (any length the shape takes), on one row from 11 characters to
-    // 200, and hard-wrapped by a program at 120 columns (every row as full as the first, the last shorter) from 116
-    // characters to the run ceiling, `RUN_MAX_BYTES`. Mutant o1c of review 2307 (a second mark for a segment of 110 or
-    // more characters) reds at the whole key of 110 characters.
+    // rows a key touches and nothing else. Shape keys (any length the shape takes), swept, not sampled (review 2326 F1,
+    // desktop polish Task C41): every whole key from 11 characters to 215 on one row; hard-wrapped by a program at 60,
+    // 100, 120 and 200 columns onto two and three rows (every row as full as the first) with every length of the last
+    // row, and at 120 columns on to the run ceiling, `RUN_MAX_BYTES`; and every key of 15 to 40 characters starting at
+    // each column from 150 to 220 (past 220 the terminal wraps it, and it is still one run, one mark). Review 2307's o1c
+    // (a second mark for a segment of 110 or more) and review 2326's m1 (over 200), m2 (a wrapped segment over 118), m4
+    // (exactly 17) and m6c (15 or more from column 207) each red here.
     const alnum = 'Q7m2Xv9LpT4cR8nW1zK6bY3hJ5dF0gA2sE7uN4oPqZ8iVt';
     const keyOf = (n: number): string => {
       let k = 'sk-';
@@ -348,24 +352,37 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
     };
     const park = `\x1b[?25h${at(PINNED_WINDOW_ROWS, 3)}`;
     const cases: { name: string; key: string; frame: string; rows: number }[] = [];
-    for (const n of [11, 12, 14, 15, 16, 20, 44, 50, 100, 108, 109, 110, 111, 150, 200]) {
+    for (let n = 11; n <= 215; n++) {
       const key = keyOf(n);
       cases.push({ name: `a whole key of ${n} characters on one row`, key, rows: 1,
         frame: `${at(10, 1)}\x1b[m\x1b[2Kkey: ${key} done.\x1b[K${park}` });
     }
-    const W = 120;
-    for (const n of [116, 200, 233, 234, 300, 500, 1_000, 2_000, 8_192]) {
+    const wrapped = (n: number, W: number): void => {
       const key = keyOf(n);
       const lines = [`key: ${key.slice(0, W - 5)}`];
       for (let at0 = W - 5; at0 < n; at0 += W - 2) lines.push(`  ${key.slice(at0, at0 + W - 2)}`);
       cases.push({ name: `a key of ${n} characters wrapped at ${W} columns onto ${lines.length} rows`, key, rows: lines.length,
         frame: `${at(2, 1)}\x1b[m\x1b[2K${lines.join('\x1b[K\r\n')} done.\x1b[K${park}` });
+    };
+    for (const W of [60, 100, 120, 200]) {
+      for (let last = 1; last <= W - 2; last++) for (const rows of [2, 3]) wrapped(W - 5 + (rows - 2) * (W - 2) + last, W);
     }
+    for (const n of [500, 1_000, 2_000, 8_192]) wrapped(n, 120);
+    for (let col = 150; col <= COLS; col++) {
+      for (let n = 15; n <= 40; n++) {
+        const key = keyOf(n);
+        cases.push({ name: `a key of ${n} characters from column ${col}`, key, rows: 1,
+          frame: `${at(10, 1)}\x1b[m\x1b[2K${at(10, col)}${key}${park}` });
+      }
+    }
+    const sgrBeside = new RegExp(`\x1b\\[[0-9;]*m${DRAWER_SECRET_MASK}|${DRAWER_SECRET_MASK}\x1b\\[[0-9;]*m`);
     for (const c of cases) {
       const drawn = throughDrawer(SHAPE_ONLY_MASKER, [{ text: c.frame, quietMs: 40 }]);
       expect(drawn.split(DRAWER_SECRET_MASK).length - 1, `${c.name}: marks`).toBe(c.rows);
-      expect(drawn, `${c.name}: SGR beside a mark`).not.toMatch(new RegExp(`\x1b\\[[0-9;]*m${DRAWER_SECRET_MASK}|${DRAWER_SECRET_MASK}\x1b\\[[0-9;]*m`));
-      for (let i = 0; i + 8 <= c.key.length; i += 4) expect(drawn, `${c.name}: a slice of the key`).not.toContain(c.key.slice(i, i + 8));
+      expect(sgrBeside.test(drawn), `${c.name}: SGR beside a mark`).toBe(false);
+      const shown: string[] = [];
+      for (let i = 0; i + 8 <= c.key.length; i += 4) if (drawn.includes(c.key.slice(i, i + 8))) shown.push(c.key.slice(i, i + 8));
+      expect(shown, `${c.name}: a slice of the key`).toEqual([]);
     }
   });
 
@@ -412,6 +429,114 @@ describe('D-8694 — a masked key is one column per row it touches, so no other 
       const drawn = throughDrawer(m, [{ text: input, quietMs: 40 }]);
       expect(drawn).not.toContain(SECRET_MASK);
       expect(drawn.split(DRAWER_SECRET_MASK)).toHaveLength(9);
+    } finally {
+      m.close();
+    }
+  });
+});
+
+// D-8710 — A KEY A PROGRAM DRAWS ACROSS THREE OR MORE ROWS IS MASKED ON EVERY ROW (desktop polish Task C41).
+//
+// MEASURED (review 2326 F3; `docs/superpowers/programs/desktop-polish/c41.md`): the exact-bytes row join read a
+// run that ends its row with the next row's leading run only, so a fingerprinted key a program drew on three or more
+// rows reached the screen with every byte and no mark, under every row separator: the review's 45 characters at
+// 17/20/8 and 12/15/15/3, and a 500-character key at 220 columns, which a real tmux 3.6 forwards with a cursor position
+// and the indent before each row. The join now walks every row the key fills, and each row it touches shows one mark.
+describe('D-8710 — a key drawn across three or more rows shows no byte and one mark per row', () => {
+  afterEach(() => { vi.useRealTimers(); });
+
+  /** The separators between a line's rows, each after the row's `ESC[K`: what a program writes (CR LF and an indent),
+   *  what tmux forwards (a cursor position and the indent, or to the third column), a cursor move forward after CR LF,
+   *  NEL, and a move down then CR (CUD or IND, review 2326 O2). */
+  const SEPS: { name: string; sep: (row: number) => string }[] = [
+    { name: 'CR LF and an indent', sep: () => '\r\n  ' },
+    { name: 'a cursor position and the indent', sep: (r) => `${at(r, 1)}  ` },
+    { name: 'a cursor position at the third column', sep: (r) => at(r, 3) },
+    { name: 'CR LF and CUF 2', sep: () => '\r\n\x1b[2C' },
+    { name: 'NEL', sep: () => '\x1bE' },
+    { name: 'CUD, CR and CUF 2', sep: () => '\x1b[B\r\x1b[2C' },
+    { name: 'IND, CR and an indent', sep: () => '\x1bD\r  ' },
+  ];
+  const ROW = 20;
+  /** `key` drawn from row `ROW` after `key: `, in rows of `parts` characters joined by `sep`, then ` done.`, on the
+   *  first paint with the key's rows erased first; the cursor parked last, so no run is left open. */
+  const frameOf = (key: string, parts: readonly number[], sep: (row: number) => string): string => {
+    let s = firstPaint();
+    for (let r = ROW; r < ROW + parts.length; r++) s += `${at(r, 1)}\x1b[2K`;
+    s += `${at(ROW, 1)}\x1b[mkey: `;
+    let i = 0;
+    parts.forEach((p, k) => { if (k > 0) s += `\x1b[K${sep(ROW + k)}`; s += key.slice(i, i + p); i += p; });
+    return `${s} done.\x1b[K\x1b[?25h${at(PINNED_WINDOW_ROWS, 3)}`;
+  };
+  /** The drawer's screen for `chunks` against the raw stream's: every row the key does not touch is the raw row; each
+   *  row it touches is the raw row with the key's segment drawn as one `DRAWER_SECRET_MASK`; no slice of 6 of the key
+   *  is anywhere on the screen. */
+  const expectMasked = async (m: SecretMasker, key: string, parts: readonly number[], frame: string, where: string,
+    chunks: readonly Chunk[] = [{ text: frame, quietMs: 40 }]): Promise<void> => {
+    const truth = await screenOf(frame);
+    const shown = await screenOf(throughDrawer(m, chunks));
+    let i = 0;
+    const segs = parts.map((p) => { const s = key.slice(i, i + p); i += p; return s; });
+    for (let y = 0; y < ROWS; y++) {
+      const k = y - (ROW - 1);
+      if (k < 0 || k >= parts.length) { expect(shown[y], `${where}: row ${y + 1}`).toBe(truth[y]); continue; }
+      expect(truth[y], `${where}: the raw row ${y + 1} holds its segment`).toContain(segs[k]);
+      expect(shown[y], `${where}: row ${y + 1}, the key's row ${k + 1}`).toBe(truth[y]!.replace(segs[k]!, DRAWER_SECRET_MASK));
+    }
+    const text = shown.join('\n');
+    const leaked: string[] = [];
+    for (let j = 0; j + 6 <= key.length; j++) if (text.includes(key.slice(j, j + 6))) leaked.push(key.slice(j, j + 6));
+    expect(leaked, `${where}: a slice of the key on the screen`).toEqual([]);
+  };
+
+  it('a fingerprinted key on three and on four rows is one mark per row under every separator', async () => {
+    // The review's splits of a 45-character key, and the same key with the rows in other lengths: a short head, and
+    // middle rows of 12 characters, the fewest a key's row join runs through (`WRAP_ROW_MIN`).
+    const m = fingerprinted();
+    try {
+      for (const s of SEPS) {
+        for (const parts of [[17, 20, 8], [12, 15, 15, 3], [5, 20, 20], [20, 12, 12, 1]]) {
+          await expectMasked(m, SECRET, parts, frameOf(SECRET, parts, s.sep), `${parts.join('/')}, ${s.name}`);
+        }
+      }
+    } finally {
+      m.close();
+    }
+  });
+
+  it('a shapeless key of 500 characters at 220 columns, as tmux forwards it, is masked on its three rows, whole or cut', async () => {
+    // 215, 218 and 67 characters, each row after the first reached by a cursor position and drawn after its indent:
+    // the frame a real tmux 3.6 sent when a program drew the key with CR LF and an indent (measured, c41.md). Then the
+    // same frame cut into two chunks at every 41st byte, with no gap and with a hold that expires in the gap.
+    let x = 0x5eed;
+    const KEY = Array.from({ length: 500 }, (_, i) => {
+      x = (x * 1103515245 + 12345) >>> 0;
+      return i % 9 === 8 ? '-' : 'abcdefghijklmnopqrstuvwxyz0123456789'[(x >>> 16) % 36]!;
+    }).join('');
+    for (let i = 0; i + 8 <= KEY.length; i++) expect(KEY.indexOf(KEY.slice(i, i + 8)), 'every slice of 8 is its own').toBe(i);
+    const parts = [215, 218, 67];
+    const m = fingerprinted(KEY);
+    try {
+      const frame = frameOf(KEY, parts, SEPS[1]!.sep);
+      await expectMasked(m, KEY, parts, frame, 'whole');
+      const keyAt = frame.indexOf(KEY.slice(0, 8));
+      // Each row end: from the row's `ESC[K` to the next row's first key byte.
+      const rowEnds: [number, number][] = [];
+      let done = 0;
+      for (const p of parts.slice(0, -1)) {
+        const end = frame.indexOf(KEY.slice(done + p - 8, done + p)) + 8;
+        done += p;
+        rowEnds.push([end, frame.indexOf(KEY.slice(done, done + 8))]);
+      }
+      for (let cut = keyAt - 3; cut < frame.length; cut += 41) {
+        for (const quietMs of [0, 40]) {
+          // A quiet gap between a row's end and the next row's first byte is D-5995's accepted gap (a quiet row end is
+          // the line's end): that cut is measured with no gap only.
+          if (quietMs > 0 && rowEnds.some(([a, b]) => cut >= a && cut <= b)) continue;
+          await expectMasked(m, KEY, parts, frame, `cut at ${cut}, ${quietMs} ms quiet`,
+            [{ text: frame.slice(0, cut), quietMs }, { text: frame.slice(cut), quietMs: 40 }]);
+        }
+      }
     } finally {
       m.close();
     }

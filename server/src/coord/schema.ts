@@ -3573,19 +3573,62 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE runs ADD COLUMN closePr TEXT;                          -- ClosePrFacts JSON; NULL is no record
   `,
-
   // ── 93: user_version 92 -> 93 ─────────────────────────────────────────────
+  // The programme's phases (programme work map WM0, D-8715; spec 2026-11-16 §7 D14): `plan_phases`, a programme's ordered
+  // phases (a phase is dropped when `droppedWhy` is set, and keeps its references), and `plan_phase_refs`, each phase's
+  // references to a whole epic or one ticket (`refId` is that epic's or ticket's id by `kind`), a ticket reference carrying
+  // the phase a recorded carry took it to (`carriedTo`, with `carriedAt`). Written by `planStore.ts` alone. NEW TABLES,
+  // nothing on an existing table: an older build opening a file at `user_version 93` takes rule 3, never names them. This
+  // branch started at 88; renewal readings A (#2962) landed 88, remaining work A (#2951) 89, account organization D
+  // (#2958) 90, designation A (#2950) 91 and done tests A (#2964) 92 first, so WM0 took the next slot each time (the
+  // coordinator's terms: the second to land takes it). RE-MEASURE the slot before merge (it must print 92 before this
+  // entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE plan_phases (id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL, key TEXT NOT NULL,
+    ordinal INTEGER NOT NULL, title TEXT NOT NULL, summary TEXT NOT NULL, droppedWhy TEXT, UNIQUE (program, key));
+  CREATE TABLE plan_phase_refs (id INTEGER PRIMARY KEY AUTOINCREMENT, phaseId INTEGER NOT NULL REFERENCES plan_phases(id),
+    kind TEXT NOT NULL CHECK (kind IN ('epic', 'ticket')), refId INTEGER NOT NULL, carriedTo INTEGER REFERENCES plan_phases(id),
+    carriedAt INTEGER, UNIQUE (phaseId, kind, refId), CHECK ((carriedTo IS NULL) = (carriedAt IS NULL)),
+    CHECK (carriedTo IS NULL OR kind = 'ticket'));
+  `,
+
+  // ── 94: user_version 93 -> 94 ─────────────────────────────────────────────
+  // Sealed forecasts (Overlord W2 forecasts A, plan `w2-forecasts-health.md` Task 3; spec §5.6 H38, Table 11.1a row "Sealed
+  // forecasts (85% dates)"): `programme_forecasts`, one row per closed work run (its wave boundary, `closingRunId` UNIQUE),
+  // computed as of `asOf` from the statement it names (`statementId`, NULL when none stood) and replayable from `seed`;
+  // `outcome` is `open` until the forecast lane scores it at `p85At`. Writers: `programmeFactsStore.ts#sealForecast` (the
+  // INSERT, `ON CONFLICT DO NOTHING`) and `#scoreForecast` (`outcome` and `scoredAt` only, on an `open` row), each called
+  // only by its arm of the forecast lane. NEW TABLE only: an older build at this `user_version` takes rule 3 and never
+  // names it. Account organization D (#2958) landed 90, the Overlord's designation (#2950) 91, done tests A (#2964) 92 and the
+  // programme's phases (#2974) 93, so this is 94 by position (the coordinator's standing renumber license, 2026-11-17);
+  // whoever lands second renumbers. RE-MEASURE the slot (it must print 93 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE programme_forecasts (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, program TEXT NOT NULL REFERENCES programs(slug),
+    closingRunId INTEGER NOT NULL UNIQUE REFERENCES runs(id), sealedAt INTEGER NOT NULL, asOf INTEGER NOT NULL,
+    statementId INTEGER REFERENCES programme_remaining(id), lo INTEGER, hi INTEGER, kind TEXT NOT NULL, reason TEXT,
+    source TEXT, n INTEGER, seed INTEGER, medianAt INTEGER, p85At INTEGER, outcome TEXT NOT NULL DEFAULT 'open', scoredAt INTEGER
+  );
+  CREATE INDEX programme_forecasts_by_program ON programme_forecasts (program, id);
+  `,
+
+  // ── 95: user_version 94 -> 95 ─────────────────────────────────────────────
   // The replay quiz's record path (Overlord W1a, plan `2026-11-17-overlord-quiz-record.md` Task 7, §5; slug
   // quiz-run-pending-until-confirmed): `continuity_quiz_runs` gains the run's state, the single-arm report's counts, its mode
   // and the interval's method, and the operator's ruling. `continuity/quizStore.ts#insertQuizRun` (the one inserter, from the
   // record door) writes `pending` with no baseline; `continuity/quizStore.ts#ruleQuizRun` is the ONE writer of `state`,
   // `ruledAt`, `ruledBy` and `baseline`. An existing row reads `confirmed` (none exist live: the record door never shipped
   // before this entry), and the new count columns are NULL on it.
-  // COLUMNS ON AN EXISTING TABLE, nullable or defaulted: an older build opening a file at `user_version 93` takes rule 3 (it
+  // COLUMNS ON AN EXISTING TABLE, nullable or defaulted: an older build opening a file at `user_version 95` takes rule 3 (it
   // warns, reads as-is and migrates nothing), never names them, and boots. Its `quizBaselineRead` reads `baseline = 1` alone,
-  // and a pending row carries 0 there, so it still never counts an unconfirmed run. The designation (#2950) landed 91 and done
-  // tests A (#2964) 92, so this is 93 (the coordinator's standing renumber license); whoever lands second renumbers.
-  // RE-MEASURE the slot before the PR and before merge (it must print 92 before this entry is counted):
+  // and a pending row carries 0 there, so it still never counts an unconfirmed run. Done tests A (#2964) landed 92, the
+  // programme's phases (#2974) 93 and forecasts A (#2987) 94, so this is 95 by position (the coordinator's standing renumber
+  // license); whoever lands second renumbers.
+  // RE-MEASURE the slot before the PR and before merge (it must print 94 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

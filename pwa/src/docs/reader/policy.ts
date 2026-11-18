@@ -178,18 +178,21 @@ export interface ReaderMountPlan {
   /** Whether the mount is handed the reader's storage port. */
   readonly store: boolean;
   readonly chrome: ReaderChrome;
+  /** Whether the mount carries the doc's history: the version seed's commits and day filter, and the `changes` and
+   *  `openVersion` adapters (completion plan Task 12). The reader lab's mounts never do. */
+  readonly history: boolean;
 }
 
 /** The one decision: the Docs reader draws as the E17 reading says (`docsDrawFor`), waits `readerWatchdogMs(bytes)`, keeps
- *  reader state and has the bar it asked for; the reader lab's `lab-draw` draws on open in the library's `auto` mode
+ *  reader state, carries the doc's history and has the bar it asked for; the reader lab's `lab-draw` draws on open in the library's `auto` mode
  *  (where `ready` waits for the figures, so the lab's gap window still times the draw: refinement (d)), waits
- *  READER_LAB_DRAW_WATCHDOG_MS, keeps nothing and has the frame's own bar, whatever the reading and the bar asked for. */
+ *  READER_LAB_DRAW_WATCHDOG_MS, keeps nothing, carries no history and has the frame's own bar, whatever the reading and the bar asked for. */
 export function readerMountPlan(
   profile: ReaderMountProfile | undefined, bytes: number, chrome: ReaderChrome, e17: ReaderE17Reading,
 ): ReaderMountPlan {
   return profile === 'lab-draw'
-    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar' }
-    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome };
+    ? { draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false }
+    : { draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(bytes), store: true, chrome, history: true };
 }
 
 /** The reader's tools a host may run without the frame's bar: the library's `DocFrame.command` names, held equal by
