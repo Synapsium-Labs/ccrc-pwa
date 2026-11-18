@@ -113,6 +113,80 @@ describe('insertRemaining, the one writer', () => {
   });
 });
 
+describe('an unknown stored edge state counts as open in the writer (review 2347 F2)', () => {
+  const plantUnknown = (r: Rig, id: number) => r.coord.db.prepare("UPDATE programme_edges SET state = 'paused' WHERE id = ?").run(id);
+
+  it('a statement naming an edge equal to an unknown-state row keeps that row, and inserts no second edge', () => {
+    const r = rig();
+    const first = okOf(insert(r, [landed(r.runB)]));
+    plantUnknown(r, first.added[0]!);
+    const again = okOf(insert(r, [landed(r.runB, 'still waiting')]));
+    expect(again).toMatchObject({ added: [], kept: first.added });
+    expect(count(r, 'programme_edges')).toBe(1);
+  });
+
+  it('an unknown-state row counts toward the open-edge cap', () => {
+    const r = rig();
+    const many = (from: number, n: number): NewEdge[] => Array.from({ length: n }, (_, i) => merged(r.runB, from + i));
+    const a = okOf(insert(r, many(1, 10)));
+    okOf(insert(r, many(11, 10)));
+    plantUnknown(r, a.added[0]!);
+    expect(insert(r, many(21, 1))).toMatchObject({ ok: false, why: 'too-many-open-edges' });
+    expect(count(r, 'programme_edges')).toBe(20);
+  });
+
+  it('CONTROL: an edge this build ended is not counted open, and an equal edge is opened anew', () => {
+    const r = rig();
+    const first = okOf(insert(r, [landed(r.runB)]));
+    r.coord.db.prepare("UPDATE programme_edges SET state = 'target-ended' WHERE id = ?").run(first.added[0]);
+    const again = okOf(insert(r, [landed(r.runB)]));
+    expect([again.added.length, again.kept]).toEqual([1, []]);
+  });
+});
+
+describe('settleEdge, the one writer of an edge\'s state, and the edge arm\'s read', () => {
+  const row = (r: Rig, id: number) => r.coord.db.prepare('SELECT state, endedAt, evidence, unmeasuredSince FROM programme_edges WHERE id = ?').get(id);
+
+  it('an end sets the state, endedAt and evidence of an open row, once', () => {
+    const r = rig();
+    const id = okOf(insert(r, [landed(r.runB)])).added[0]!;
+    expect(r.coord.settleEdge(id, { kind: 'end', state: 'met', evidence: 'pr-7' }, NOW + 1)).toEqual({ written: true });
+    expect(row(r, id)).toEqual({ state: 'met', endedAt: NOW + 1, evidence: 'pr-7', unmeasuredSince: null });
+    expect(r.coord.settleEdge(id, { kind: 'end', state: 'target-ended', evidence: 'x' }, NOW + 2)).toEqual({ written: false });
+    expect(row(r, id)).toEqual({ state: 'met', endedAt: NOW + 1, evidence: 'pr-7', unmeasuredSince: null });
+  });
+
+  it('a clock sets unmeasuredSince alone, and answers written only when it changes', () => {
+    const r = rig();
+    const id = okOf(insert(r, [landed(r.runB)])).added[0]!;
+    expect(r.coord.settleEdge(id, { kind: 'clock', unmeasuredSince: NOW }, NOW)).toEqual({ written: true });
+    expect(r.coord.settleEdge(id, { kind: 'clock', unmeasuredSince: NOW }, NOW + 5)).toEqual({ written: false });
+    expect(row(r, id)).toEqual({ state: 'open', endedAt: null, evidence: null, unmeasuredSince: NOW });
+    expect(r.coord.settleEdge(id, { kind: 'clock', unmeasuredSince: null }, NOW + 6)).toEqual({ written: true });
+    expect(row(r, id)).toMatchObject({ state: 'open', unmeasuredSince: null });
+  });
+
+  it('a row whose state this build does not know is never written', () => {
+    const r = rig();
+    const id = okOf(insert(r, [landed(r.runB)])).added[0]!;
+    r.coord.db.prepare("UPDATE programme_edges SET state = 'paused' WHERE id = ?").run(id);
+    expect(r.coord.settleEdge(id, { kind: 'end', state: 'met', evidence: 'pr-7' }, NOW)).toEqual({ written: false });
+    expect(r.coord.settleEdge(id, { kind: 'clock', unmeasuredSince: NOW }, NOW)).toEqual({ written: false });
+    expect(row(r, id)).toEqual({ state: 'paused', endedAt: null, evidence: null, unmeasuredSince: null });
+  });
+
+  it('openEdgesToMeasure reads every programme\'s open edges, an unknown state flagged, and no ended one', () => {
+    const r = rig();
+    const [a, b, c] = okOf(insert(r, [landed(r.runB), merged(r.runB, 7), merged(r.runB, 8)])).added;
+    const d = okOf(insert(r, [landed(r.runA)], {}, 'prog-b')).added[0]!;
+    r.coord.db.prepare("UPDATE programme_edges SET state = 'paused' WHERE id = ?").run(b);
+    r.coord.db.prepare("UPDATE programme_edges SET state = 'target-ended' WHERE id = ?").run(c);
+    const got = r.coord.openEdgesToMeasure();
+    expect(got.map((e) => e.id)).toEqual([a, b, d]);
+    expect(got.find((e) => e.id === b)).toMatchObject({ state: 'open', stateUnreadable: true });
+  });
+});
+
 describe('the reads', () => {
   it('remainingOf answers newest first, at most limit, one programme', () => {
     const r = rig();
@@ -172,20 +246,20 @@ describe('edgeTargetCheck', () => {
     expect(r.coord.edgeTargetCheck('prog-a', { predicate: 'run-closed', runId: 99999 })).toMatchObject({ ok: false });
   });
 
-  it('a pr-merged target must be a pull request the run\'s lineage lists; a run with no lineage lists none', () => {
+  it('a pr-merged target must name a run that exists, of any programme, whatever its lineage lists (review 2381 N1)', () => {
     const r = rig();
     const t = { predicate: 'pr-merged', runId: r.runB, pr: 7 } as const;
-    expect(r.coord.edgeTargetCheck('prog-a', t)).toMatchObject({ ok: false, detail: expect.stringMatching(/does not list pull request 7/) });
-    r.coord.foldPrLineage(r.runB, [{ pr: 6, branch: 'ws/a', phase: 'merged', recordedAt: NOW }]);
-    expect(r.coord.edgeTargetCheck('prog-a', t)).toMatchObject({ ok: false });
-    r.coord.foldPrLineage(r.runB, [{ pr: 6, branch: 'ws/a', phase: 'merged', recordedAt: NOW }, { pr: 7, branch: 'ws/a', phase: 'open', recordedAt: NOW }]);
     expect(r.coord.edgeTargetCheck('prog-a', t)).toEqual({ ok: true });
+    r.coord.foldPrLineage(r.runB, [{ pr: 6, branch: 'ws/a', phase: 'merged', recordedAt: NOW }]);
+    expect(r.coord.edgeTargetCheck('prog-a', t)).toEqual({ ok: true });
+    expect(r.coord.edgeTargetCheck('prog-a', { ...t, runId: r.runA })).toEqual({ ok: true });
+    expect(r.coord.edgeTargetCheck('prog-a', { ...t, runId: 99_999 })).toMatchObject({ ok: false, detail: expect.stringMatching(/run 99999 does not exist/) });
   });
 
-  it('an unreadable lineage throws, naming the run, rather than reading as none', () => {
+  it('a lineage that does not parse is never read: the target check answers from the run row alone (review 2377 F3)', () => {
     const r = rig();
     r.coord.db.prepare('UPDATE runs SET prLineage = ? WHERE id = ?').run('{"not":"a list"}', r.runB);
-    expect(() => r.coord.edgeTargetCheck('prog-a', { predicate: 'pr-merged', runId: r.runB, pr: 7 })).toThrow(new RegExp(`run ${r.runB}`));
+    expect(r.coord.edgeTargetCheck('prog-a', { predicate: 'pr-merged', runId: r.runB, pr: 7 })).toEqual({ ok: true });
   });
 
   it('an operator-confirms target must be a waiting item of this programme (F6)', () => {

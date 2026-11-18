@@ -13,6 +13,7 @@ import type { LiveAskAnswer } from '../src/coord/ports.js';
 import type { WaitingView } from '../../shared/ledgers.js';
 import type { AnswerMarkView } from '../../shared/answerMarks.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 
 const NOW = 1_790_000_000_000;
 const HOUR = 3_600_000;
@@ -34,6 +35,7 @@ function rig(): Rig {
   app = Fastify({ logger: false });
   registerLedgerOperatorRoutes(app, {
     coord, bus, now: () => NOW, presenceOf: () => 'alive', gate: () => ({ pass: true }) as never, ccrcDir,
+    identity: attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }),
     registerSecret: () => 'unregistered', retireSecret: () => {},
     withAbandon: (async () => { throw new Error('no abandon hold in this rig'); }) as never, sendClose: ((reply: unknown) => reply) as never,
     authEnabled: false, sessionAuth: () => ({ pass: true }) as never, mailToken: () => null,

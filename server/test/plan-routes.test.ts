@@ -13,6 +13,7 @@ import type { GateDecision } from '../src/auth/gate.js';
 import type { PlanView } from '../../shared/plan.js';
 import { setLinking } from '../src/coord/linkingStore.js';
 import { mkTmp } from './tmpHelpers.js';
+import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 
 const TOKEN = 'k'.repeat(64);
 let dir: string;
@@ -31,7 +32,7 @@ const serial: PlanRouteOpts['serial'] = (fn) => { const next = lock.then(fn, fn)
 const build = async (): Promise<FastifyInstance> => {
   const a = Fastify();
   registerPlanRoutes(a, {
-    coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }),
+    coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS,
     sessionAuth: () => session, authEnabled, readLinearStore: async () => ({ kind: 'unreadable', code: 'ENOENT' }),
     runOfSession: (id) => runs[id] ?? null, now: () => 1_000,
   });

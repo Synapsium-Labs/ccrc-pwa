@@ -103,15 +103,17 @@ export function remainingBodyOf(raw: unknown, now: number): RemainingBody {
   return { ok: true, statement: { lo, hi, reason, runId }, edges };
 }
 
-/** What the store read of one target (`programmeFactsStore.ts#edgeTargetFacts`): the run it names, with the pull requests
- *  its recorded lineage lists, or the item it names; null when there is no such row. */
+/** What the store read of one target (`programmeFactsStore.ts#edgeTargetFacts`): the run it names, or the item it names;
+ *  null when there is no such row. No run's lineage or close record: whether a pull request is the run's own, and merged,
+ *  is the done-test reader's to answer when the edge arm asks it (review 2377 F3). */
 export type EdgeTargetFacts =
-  | { predicate: 'run-closed' | 'pr-merged'; run: { program: string; prs: readonly number[] } | null }
+  | { predicate: 'run-closed' | 'pr-merged'; run: { program: string } | null }
   | { predicate: 'operator-confirms'; item: { program: string; state: string } | null };
 
 /** Every edge target is tied to a row of this tree (the door's step 9; plan question 2, review 2265 F5 and F6): a
- *  `run-closed` target is a run of ANOTHER programme; a `pr-merged` target names a run whose recorded lineage lists the
- *  pull request; an `operator-confirms` target is an item of THIS programme that still waits. First match. */
+ *  `run-closed` target is a run of ANOTHER programme; a `pr-merged` target names a run that exists, of any programme (the
+ *  edge clears only through that run's own close record naming the pull request, merged: review 2381 N1); an
+ *  `operator-confirms` target is an item of THIS programme that still waits. First match. */
 export function edgeTargetVerdict(slug: string, target: EdgeTarget, facts: EdgeTargetFacts): { ok: true } | { ok: false; detail: string } {
   if (target.predicate === 'operator-confirms') {
     const item = facts.predicate === 'operator-confirms' ? facts.item : null;
@@ -125,5 +127,5 @@ export function edgeTargetVerdict(slug: string, target: EdgeTarget, facts: EdgeT
   if (target.predicate === 'run-closed') {
     return run.program === slug ? refuse(`run ${target.runId} is a run of programme ${slug}; a run-closed edge names another programme's run`) : { ok: true };
   }
-  return run.prs.includes(target.pr) ? { ok: true } : refuse(`run ${target.runId}'s recorded lineage does not list pull request ${target.pr}`);
+  return { ok: true };
 }

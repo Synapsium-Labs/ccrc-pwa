@@ -25,6 +25,7 @@ import {
 import type { Roster } from '../../../shared/roster.js';
 import { workspaceId } from '../../../shared/slug.js';
 import type { AccountGate } from '../accounts/gate.js';
+import type { CallerIdentity, RecordedActor } from '../auth/callerIdentity.js';
 import type { ActorFlags } from '../ccdargv.js';
 import { launchDigestOf } from '../continuity/launchProfile.js';
 import type { SessionHost } from '../continuity/sessionHost.js';
@@ -42,7 +43,7 @@ import {
   accountSetStepUp, accountSetVerdict, designateVerdict, modelClassVerdict, modelStepUp, overlordAccounts, retireVerdict, routeOf,
   type AccountFacts,
 } from './overlordDesignation.js';
-import type { AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
+import type { ActorRefused, AuthorityAppender, AuthorityRefused, RowUnreadable } from './overlordDesignationStore.js';
 import { ladderRead, ladderWire, NO_WITNESS_YET, type LadderConditionInputs, type NarrowingWitness } from './overlordLadderRead.js';
 import { isRung, isLadderCauseKey, type Rung } from '../../../shared/overlord-ladder.js';
 import { rungMoveVerdict, narrowingState, type LadderWriterRefusal } from './overlordLadder.js';
@@ -93,8 +94,10 @@ export type OverlordCoord = Pick<CoordStore,
   | 'setModelClass' | 'setAccountSet'>;
 
 export interface OverlordRouteDeps {
-  /** The account gate (D-5511): its `actor` is the row's. */
+  /** The account gate (D-5511): its `actor` is the row's, recorded through `identity` (gates A). */
   readonly gate: AccountGate;
+  /** The caller identity port (gates A, Q17): the gate's actor minted at `operator` strength, the one actor a writer takes. */
+  readonly identity: Pick<CallerIdentity, 'operator'>;
   /** The coordination serialiser: every write door's body runs inside it, so a designate and a retire never interleave. */
   readonly serial: CoordRoutesHandle['serial'];
   readonly coord: OverlordCoord;
@@ -168,7 +171,7 @@ const RUNG_REFUSAL_DETAIL = {
 const UNREADABLE = 'the designation row could not be read';
 
 /** What a row writer refuses with: the journal's refusal, a row it cannot narrow, or a row that already holds an attempt. */
-type Failure = AuthorityRefused | RowUnreadable | { readonly ok: false; readonly reason: 'exists' | 'not-found' };
+type Failure = AuthorityRefused | RowUnreadable | ActorRefused | { readonly ok: false; readonly reason: 'exists' | 'not-found' };
 
 // ── the drain ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -232,6 +235,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   const writerRefusal = (reply: FastifyReply, r: Failure): FastifyReply => {
     if ('authority' in r) return authorityRefusal(reply, r);
     if (r.reason === 'exists') return refuseRoute(reply, 'overlord-exists', { detail: 'an Overlord is already designated or being started' });
+    if (r.reason === 'actor') return refuseRoute(reply, 'internal', { detail: 'the door handed the writer an actor the identity port did not mint' });
     if (r.reason === 'not-found') return refuseRoute(reply, 'not-found', { detail: 'no Overlord designation row' });
     return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
   };
@@ -262,12 +266,12 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     if (!g.pass) return reply;
     const parsed = parseDesignateBody(req.body);
     if (parsed === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     const dec = deps.dec(req);
     return deps.serial(() => designate(reply, parsed, actor, dec));
   });
 
-  async function designate(reply: FastifyReply, parsed: DesignateBody, actor: string, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
+  async function designate(reply: FastifyReply, parsed: DesignateBody, actor: RecordedActor, dec: ActorFlags | null): Promise<FastifyReply | Record<string, unknown>> {
     // A re-designate over a retired row journals both records as narrowings while the journal is not coherent, and builds a body
     // that cannot go live: refuse before any row write or ccd call (review 2349 F9).
     const auth = facts.authority?.() ?? { kind: 'coherent' };
@@ -374,7 +378,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
   app.delete('/api/overlord/designate', async (req, reply) => {
     const g = deps.gate(req, reply, { cap: null, stepUp: true });
     if (!g.pass) return reply;
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       const verdict = retireVerdict(coord.designationRead());
       if (verdict.act === 'unmeasured') return refuseRoute(reply, 'unavailable', { detail: UNREADABLE });
@@ -483,7 +487,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const g = deps.gate(req, reply, { cap: null, stepUp: model === null || modelStepUp(model) });
     if (!g.pass) return reply;
     if (model === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       let f: AccountFacts;
       try { f = await accountFactsOf(); } catch (err) {
@@ -511,7 +515,7 @@ export function registerOverlordRoutes(app: FastifyInstance, deps: OverlordRoute
     const g = deps.gate(req, reply, { cap: null, stepUp: stepped });
     if (!g.pass) return reply;
     if (next === null) return refuseRoute(reply, 'bad-request', { detail: 'body' });
-    const actor = g.actor.toString();
+    const actor = deps.identity.operator(g.actor);
     return deps.serial(async () => {
       let f: AccountFacts;
       try { f = await accountFactsOf(); } catch (err) {

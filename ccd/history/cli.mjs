@@ -38,7 +38,7 @@ import {
   historyPaths, decideCliStore, CONTROL_FILE_MAX, decideStatusRead, capOf, floorThreshold, exportHorizonDays, parseOpMarker,
   decideStatusReadFailure, RETENTION_STATE_META, SIDECAR_WALK_META, decideGrepIndex, parsePassMarker, decidePassLive, parsePassDied, decideOpLive,
 } from './lib.mjs';
-import { StoreError, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn } from './store.mjs';
+import { StoreError, openReader, userVersion, measuredSize, readBounded, FTS_GATE_SQL, ftsGateFactsOn, FTS_STRUCTURE_SQL } from './store.mjs';
 // The health block's own imports (task 28). Namespace imports, so this block
 // binds no name the status code above already imported.
 import * as healthLib from './lib.mjs';
@@ -86,6 +86,10 @@ export const STATUS_SQL = Object.freeze({
   ftsTable: FTS_GATE_SQL.table,
   ftsBackfill: FTS_GATE_SQL.backfill,
   ftsRebuild: FTS_GATE_SQL.rebuild,
+  // D-8726 (history-fts-fold-once): each FTS5 index's structure record, read by store.mjs's ftsSegmentsOn (row id 10).
+  ftsStructureTable: FTS_STRUCTURE_SQL.table,
+  ftsStructureBlobs: FTS_STRUCTURE_SQL.blobs,
+  ftsStructureNodes: FTS_STRUCTURE_SQL.nodes,
   breaker: 'SELECT count(*) AS n FROM breaker WHERE open_until_ms > ?',
   metaKey: 'SELECT v FROM meta WHERE k = ?',
 });
@@ -1188,7 +1192,7 @@ const listOf = (v) => {
  *  status never reads one fact twice or spells it two ways. A reading that
  *  throws is named in `unmeasured` (Task 28F: absent is not unreadable). */
 function readStoreExtras(p, nowMs) {
-  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
+  const x = { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], copyBps: null, heldPassMs: null, exportMarksCheck: null, ftsSegments: null, unmeasured: [] };
   let db;
   try { db = healthStore.openReader(p.dbFile); } catch { x.unmeasured.push('store'); return x; }
   // Each reading is its own try: one that fails is named in `unmeasured` and keeps its default, which
@@ -1221,6 +1225,8 @@ function readStoreExtras(p, nowMs) {
       const v = meta(healthLib.HEALTH_META.exportMarksCheck);
       x.exportMarksCheck = v === null ? null : healthLib.parseMarkCheckState(v);
     });
+    // D-8726 (history-fts-fold-once): each FTS5 index's segment count; an absent index is null, a record that does not read is unmeasured.
+    read('fts-structure', () => { x.ftsSegments = healthStore.ftsSegmentsOn(db); });
     read('copy_bps', () => {                                            // task 13's executor
       const bps = intOf(meta('copy_bps'));
       x.copyBps = bps > 0 ? bps : null;
@@ -1243,7 +1249,7 @@ export async function readHealthExtras(home, env, nowMs) {
   } catch { dbPath = p.dbDir; }
   const store = env.exit === healthLib.EXIT.OK
     ? readStoreExtras(p, nowMs)
-    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], copyBps: null, heldPassMs: null, exportMarksCheck: null, unmeasured: [] };
+    : { breakerOpen: false, recoverUnmovedTicks: 0, exportSegmentNewer: [], exportSegmentMissing: 0, exportSegmentDamaged: [], copyBps: null, heldPassMs: null, exportMarksCheck: null, ftsSegments: null, unmeasured: [] };
   // FU8 (FP3): a link or a file at spool/ is measured by lstat, never followed, and no spool/.draining is read through it.
   let spoolNotDirectory = false;
   try { spoolNotDirectory = !healthFs.lstatSync(p.spool).isDirectory(); } catch { spoolNotDirectory = false; }
@@ -1306,6 +1312,7 @@ export function healthInputsOf(env, x, nowMs) {
       : null,
     heldPassMs: x.heldPassMs ?? null,
     exportMarksCheck: x.exportMarksCheck ?? null,   // D-5633: the check after a bind's stop record, or null when none stands
+    ftsSegments: x.ftsSegments ?? null,   // D-8726: each FTS5 index's segment count, or null when unmeasured
     // The envelope lists the newest tick first; deriveHealth's catching-up rule reads oldest first.
     bytesBehindLast3: [...(env.bytes_behind_last3 ?? [])].map(Number).reverse(),
     fts: env.fts ?? null,
