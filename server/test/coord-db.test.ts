@@ -755,8 +755,9 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // hand-offs, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder).
-    expect(COORD_SCHEMA_VERSION).toBe(99);
-    expect(MIGRATIONS.length).toBe(99);
+    // and MIGRATIONS[99] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0).
+    expect(COORD_SCHEMA_VERSION).toBe(100);
+    expect(MIGRATIONS.length).toBe(100);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -881,7 +882,8 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2); the migration above is still entry 11.
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder).
-    expect(COORD_SCHEMA_VERSION).toBe(99);
+    // and MIGRATIONS[99] (approvals.denyCurrent, Overlord approvals PR 0).
+    expect(COORD_SCHEMA_VERSION).toBe(100);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1832,7 +1834,7 @@ describe('coord.db: migration 12 — runs.coordProject', () => {
   it('a database from a NEWER build still READS — rollback is real', () => {
     const dir = mkTmp('ccrc-mig12-fwd-');
     const p = path.join(dir, '.ccrc', 'coord.db');
-    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    const db = openCoordDb(p); db.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 1}`); db.close();
     expect(() => openCoordDb(p).close()).not.toThrow();
   });
 });
@@ -2415,7 +2417,7 @@ describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-fi
     const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
     expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
       'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
-      'answeredBy', 'toolUseId', 'corrected']);
+      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent']);
     db.close();
   });
 });
