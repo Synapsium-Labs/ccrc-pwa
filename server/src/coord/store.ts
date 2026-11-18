@@ -9843,8 +9843,9 @@ export class CoordStore {
 
   /** Minted by `POST /api/approvals`, `held` — or, with a `releaseReason`, `released` at once (forbidden, truncated,
    *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. `denyCurrent`
-   *  (approvals PR 0) absent stores 1, the column's own default and what an older build's insert stores; the raise, the
-   *  one production caller, always passes it. */
+   *  (approvals PR 0) is optional only so the test callers that predate it, the pin files among them, run unedited: absent
+   *  stores 1, current, which is open for a caller that forgets it. The raise, the one production caller, always passes
+   *  it, and the approvals routes suite reds if it stops (review 2648 F3, the report's leave option). */
   insertApproval(a: {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;

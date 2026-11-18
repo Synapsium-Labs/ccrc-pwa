@@ -14,7 +14,9 @@ numbers.
   file is written to a temporary file and renamed, so a symlink at the name is replaced, never followed. `--remove`
   leaves it; `ccrc uninstall` removes it with the deny file.
 - **The hook** (`_hook_approval_wait`). A digest equal to the managed file's is sent as before. A digest the history
-  names is sent with `denyDigest`, which is advisory: the server decides nothing from it (ruling F6). A digest in
+  names is sent with `denyDigest`, which is advisory: the server decides nothing from it (ruling F6). For such a
+  child the wait never prints an allow, whatever the verified record says, so the server's rule door is not the only
+  gate (review 2648 F1, fix round 1); a deny prints. A digest in
   neither returns silently, as before. The history is read only when the digest is not current, with builtins only,
   so the current-digest path gains no fork and no read.
 - **The trusted-file write deny.** The history joins the hook's `TNS` list, so a child may not write it by the
@@ -27,7 +29,7 @@ numbers.
   whose deny rules are not current with a new word, `deny-not-current` (`APPROVAL_REFUSALS`, `REFUSAL_STATUS`, a
   `409`). It answers after `guard-forbidden` and before `guard-escalate`, whatever the row's class: the fact is the
   child's, so it answers the same before and after a server restart. A deny is signed and a hand-over works as
-  before. The brief tells the claimant the child runs under older deny rules and offers no allow.
+  before. The brief tells the claimant the child does not run under the box's current deny rules, and offers no allow.
 
 ## The held route file (the operator's ruling on item 436)
 
@@ -77,7 +79,10 @@ touch credentials. The finding above rests on reading the build's code.
   instead records the digest of the file the failed write left in place, when that digest is not already last. That
   file is the installed one, so the history still never names a file that was not installed, which is the reason the
   plan gives. A guard to skip the history on a failed write was not added: no fixture can fail the deny file's write
-  while leaving the history writable, so no test could turn it red.
+  while leaving the history writable, so no test could turn it red. Accepted in fix round 1. How it differs from the
+  plan's words: the plan appends nothing on a failed write; the spine may append one line, the digest of the file the
+  failed write left, which is a file that was installed. A history entry grants a hold, a deny and a hand-over, never an
+  allow, so the difference matters only if a later PR lets history membership grant something.
 
 - `path-guard-w3-releases-hook` (PR 1's slug, #3043, the coordinator's ruling): the consolidation path guard's W3
   arm refused this diff, which edits the session hook beside the questions owner. The release is taken from #3043
@@ -92,9 +97,16 @@ touch credentials. The finding above rests on reading the build's code.
   for, so they are not rescued by it.
 - **A stale child's prompt is now held like a current child's `escalate` prompt** (ruling F7). It costs its claimant
   a brief and up to the window before the prompt reaches the operator, where before it reached the operator at once.
-- **A rollback inside a row's window.** An older server's rule door does not read `denyCurrent`. If the server is
-  rolled back while a stale `ordinary` row is still inside its window, that row can be allowed. The window is 60 s
-  on the main thread and 180 s for a subagent.
+- **A rollback inside a row's window** (corrected in fix round 1, review 2648 F7). An older server's rule door does
+  not read `denyCurrent`, but a rollback is a restart, and the held inputs live only in memory: the older door finds
+  none for the row and refuses its allow `guard-escalate`. The claimant is refused either way; only the word differs.
+  The hook's own gate (below) refuses it too.
+- **"Deny current" is decided at mint** (review 2648 F2, the coordinator's ruling: a residual, no fourth route hunk).
+  The raise reads the child's standing once; the rule door reads the row's `denyCurrent`, not the files again. A deny
+  file installed while a row is held leaves a `current` row allowable until its window ends: at most 60 s on the main
+  thread and 180 s for a subagent. The child enforces the rules it pinned at spawn either way (Task 0.1), and the class
+  guard still runs at the door. **Carry to PR 3:** re-check the child's standing at signing, PR 3's one signing site,
+  so the fact is read again where the allow is signed. The coordinator folds this carry into the plan.
 - **The history file is trusted as written.** It sits in the registry beside the deny file. The hook's write deny
   now covers it, but a top-level session runs with the same reach the guard section of `CLAUDE.md` describes for
   the other trusted files.
@@ -108,7 +120,7 @@ first mutant, and the restore was checked byte for byte.
   symlink, a write on `--remove`, seconds for milliseconds, the old history dropped, the outgoing digest never
   recorded, recorded after the incoming one, read through a symlink, the current digest never recorded). Uninstall:
   1 killed.
-- Hook: 8 mutants, all killed (a digest in neither sent, `denyDigest` dropped, any line naming any digest, the line
+- Hook: 9 mutants, all killed (the allow arm's second gate dropped, fix round 1; a digest in neither sent, `denyDigest` dropped, any line naming any digest, the line
   not anchored, a symlinked history read, the history read on the current path, the truncated body without
   `denyDigest`, `denyDigest` sent for a current digest). Write deny: the new alternative removed reds 6 cases.
 - L1 deciders: in `server/test/sim/mutation-floors.json`, `denyStandingOf` (17 mutants) and `approvalAllowRefusal`

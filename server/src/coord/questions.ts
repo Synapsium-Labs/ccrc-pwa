@@ -570,7 +570,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   /** The unredacted input a held row was classified from, kept ONLY in memory and only for the row's window (spec
    *  §6.7: the server holds the unredacted input only for the request), so the rule route can run the guard again
    *  (spec §6.3 server step 5). A server restarted mid-window has none, and then an allow is refused `guard-escalate`
-   *  (the guard cannot be re-run, and unknown means escalate); a deny still lands (D-5491). */
+   *  (the guard cannot be re-run, and unknown means escalate), unless the row's deny rules are not current, which is
+   *  refused `deny-not-current` first (approvals PR 0, `approvalAllowRefusal`); a deny still lands (D-5491). */
   const approvalInputs = new Map<number, HeldApprovalInput>();
   const forgetExpiredInputs = (now: number): void => {
     for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
@@ -1612,7 +1613,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    *  (`403 not-parent`, wherever the caller sits); a row minted released (`approval-released`); the row's state
    *  (`declined`, `already-ruled`, `hook-gone`) and window (`hook-gone` at or after `notifyAt`); the child's mark and the
    *  claimant rule (`not-a-child`, `run-unreadable`, `parent-changed`); the guard again for an allow
-   *  (`guard-forbidden`, `guard-escalate`); then the signer, the signature and the CAS that stores it. */
+   *  (`guard-forbidden`, then `deny-not-current` for a row whose child does not run under the box's current deny rules,
+   *  then `guard-escalate`); then the signer, the signature and the CAS that stores it. */
   const ruleApproval = async (q: Extract<ClaimantRule, { kind: 'approval' }>, d: ClaimantDoorDeps): Promise<QuestionDoorAnswer> => {
     const { coord, cfg } = d;
     const { id, fromId, verdict, reason } = q;
@@ -1654,7 +1656,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const again = held === undefined ? 'escalate'
         : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: cfg.home }), cwd: held.cwd });
       // The allow check is L1's (`approvalAllowRefusal`): either class short of `ordinary` is refused, and a row whose
-      // child runs under older deny rules than the box's (approvals PR 0, the row's own `denyCurrent`) is refused
+      // child does not run under the box's current deny rules (approvals PR 0, the row's own `denyCurrent`) is refused
       // `deny-not-current`.
       const refusal = approvalAllowRefusal(row.class, again, row.denyCurrent);
       if (refusal !== null) return refused(refusal);

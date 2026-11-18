@@ -1,5 +1,5 @@
 // The stale deny digest's mutant sets (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md Tasks 0.2 to 0.4;
-// the floors rule is D-8217): `denyStandingOf` and `approvalClassFloor`, each run against every case of
+// the floors rule is D-8217): `denyStandingOf` and `approvalAllowRefusal`, each run against every case of
 // `../approvalDenyFloorCases.ts` loaded over the mutated copy of server/src/coord/approvalDenyFloor.ts. Registered in
 // mutation-floors.test.ts's MUTANT_SETS, with a floor in mutation-floors.json.
 import path from 'node:path';
@@ -15,23 +15,23 @@ const suite = (mod: ApprovalDenyFloorModule): Record<string, SuiteCase> =>
 export const DENY_STANDING_SET: MutantSet<ApprovalDenyFloorModule> = {
   modulePath: MODULE_TS,
   mutants: [
-    { id: 'DS-2 no shape check on the managed digest', old: 'if (managed === null || !DIGEST.test(managed)) return', new: 'if (managed === null) return' },
-    { id: 'DS-3 an unreadable managed file reads the history', old: 'if (managed === null || !DIGEST.test(managed)) return \'none\';', new: 'if (managed !== null && !DIGEST.test(managed)) return \'none\';' },
-    { id: 'DS-4 current is never current', old: 'if (child === managed) return \'current\';', new: '' },
-    { id: 'DS-5 a history digest is current', old: 'm[1] === child) return \'history\';', new: 'm[1] === child) return \'current\';' },
-    { id: 'DS-6 any digest is in the history', old: 'if (m !== null && m[1] === child) return \'history\';', new: 'if (m !== null) return \'history\';' },
-    { id: 'DS-7 the bound is never applied', old: '.filter((l) => l !== \'\').slice(-CHILD_DENY_DIGESTS_MAX)', new: '.filter((l) => l !== \'\')' },
-    { id: 'DS-8 blank lines count against the bound', old: '.filter((l) => l !== \'\').slice(-CHILD_DENY_DIGESTS_MAX)', new: '.slice(-CHILD_DENY_DIGESTS_MAX)' },
-    { id: 'DS-9 the bound is one short', old: '.slice(-CHILD_DENY_DIGESTS_MAX)', new: '.slice(-(CHILD_DENY_DIGESTS_MAX - 1))' },
-    { id: 'DS-10 the bound is 33', old: 'export const CHILD_DENY_DIGESTS_MAX = 32;', new: 'export const CHILD_DENY_DIGESTS_MAX = 33;' },
-    { id: 'DS-11 the line is not anchored at its start', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /([0-9a-f]{64}) [0-9]{1,16}$/;' },
-    { id: 'DS-12 the line is not anchored at its end', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}/;' },
-    { id: 'DS-13 the time is optional', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64})( [0-9]{1,16})?$/;' },
-    { id: 'DS-14 any whitespace separates', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64})\\s+[0-9]{1,16}$/;' },
-    { id: 'DS-15 the time takes any token', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64}) \\S{1,16}$/;' },
-    { id: 'DS-16 a digest takes upper case', old: 'const DIGEST = /^[0-9a-f]{64}$/;', new: 'const DIGEST = /^[0-9a-fA-F]{64}$/;' },
-    { id: 'DS-17 no history is history', old: 'if (history === null) return \'none\';', new: 'if (history === null) return \'history\';' },
-    { id: 'DS-18 the history file name', old: 'export const CHILD_DENY_DIGESTS_FILE = \'child-deny.digests\';', new: 'export const CHILD_DENY_DIGESTS_FILE = \'child-deny.digest\';' },
+    { id: 'DS-1 no shape check on the managed digest', old: 'if (managed === null || !DIGEST.test(managed)) return', new: 'if (managed === null) return' },
+    { id: 'DS-2 an unreadable managed file reads the history', old: 'if (managed === null || !DIGEST.test(managed)) return \'none\';', new: 'if (managed !== null && !DIGEST.test(managed)) return \'none\';' },
+    { id: 'DS-3 current is never current', old: 'if (child === managed) return \'current\';', new: '' },
+    { id: 'DS-4 a history digest is current', old: 'm[1] === child) return \'history\';', new: 'm[1] === child) return \'current\';' },
+    { id: 'DS-5 any digest is in the history', old: 'if (m !== null && m[1] === child) return \'history\';', new: 'if (m !== null) return \'history\';' },
+    { id: 'DS-6 the bound is never applied', old: '.filter((l) => l !== \'\').slice(-CHILD_DENY_DIGESTS_MAX)', new: '.filter((l) => l !== \'\')' },
+    { id: 'DS-7 blank lines count against the bound', old: '.filter((l) => l !== \'\').slice(-CHILD_DENY_DIGESTS_MAX)', new: '.slice(-CHILD_DENY_DIGESTS_MAX)' },
+    { id: 'DS-8 the bound is one short', old: '.slice(-CHILD_DENY_DIGESTS_MAX)', new: '.slice(-(CHILD_DENY_DIGESTS_MAX - 1))' },
+    { id: 'DS-9 the bound is 33', old: 'export const CHILD_DENY_DIGESTS_MAX = 32;', new: 'export const CHILD_DENY_DIGESTS_MAX = 33;' },
+    { id: 'DS-10 the line is not anchored at its start', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /([0-9a-f]{64}) [0-9]{1,16}$/;' },
+    { id: 'DS-11 the line is not anchored at its end', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}/;' },
+    { id: 'DS-12 the time is optional', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64})( [0-9]{1,16})?$/;' },
+    { id: 'DS-13 any whitespace separates', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64})\\s+[0-9]{1,16}$/;' },
+    { id: 'DS-14 the time takes any token', old: 'const HISTORY_LINE = /^([0-9a-f]{64}) [0-9]{1,16}$/;', new: 'const HISTORY_LINE = /^([0-9a-f]{64}) \\S{1,16}$/;' },
+    { id: 'DS-15 a digest takes upper case', old: 'const DIGEST = /^[0-9a-f]{64}$/;', new: 'const DIGEST = /^[0-9a-fA-F]{64}$/;' },
+    { id: 'DS-16 no history is history', old: 'if (history === null) return \'none\';', new: 'if (history === null) return \'history\';' },
+    { id: 'DS-17 the history file name', old: 'export const CHILD_DENY_DIGESTS_FILE = \'child-deny.digests\';', new: 'export const CHILD_DENY_DIGESTS_FILE = \'child-deny.digest\';' },
   ],
   suite,
 };

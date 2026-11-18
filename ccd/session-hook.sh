@@ -6292,10 +6292,11 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # (the header's "no network, and on the hot path no waiting" contract is the hot path's; a PermissionRequest is not
 # on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
 #   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
-#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
-#      deny rules never gets rulings) or named by the installer's digest history `$REG/child-deny.digests` (approvals
-#      PR 0: a child spawned under an older deny file, which a running Claude Code never re-reads; the request then
-#      carries `denyDigest`, and the server holds it with its allow capped at `escalate`), and only when it can VERIFY a
+#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned with no
+#      deny rules the box ever installed never gets rulings) or named by the installer's digest history
+#      `$REG/child-deny.digests` (approvals PR 0: a child spawned under an older deny file, which a running Claude Code
+#      never re-reads; the request then carries `denyDigest`, and the server holds it, its row `denyCurrent: false`, its
+#      allow refused `deny-not-current` at the rule door; this wait never prints an allow for it, a deny it prints), and only when it can VERIFY a
 #      ruling: `node` on PATH, the verifier beside this
 #      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
 #      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
@@ -6479,6 +6480,9 @@ _hook_approval_wait() {
               reason="${verdict#* }"
               case "$verdict" in
                 'allow '*)
+                  # Approvals PR 0, the second gate: a child whose digest only the history names never prints an allow,
+                  # whatever the record says; the server's rule door refuses it `deny-not-current` too. A deny prints.
+                  [[ -z "$dd" ]] || return 0
                   t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
                   return 0 ;;
                 'deny '*)

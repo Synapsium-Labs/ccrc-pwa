@@ -13485,7 +13485,8 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
  *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
  *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
- *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, nor one the installer's
+ *                        digest history names (approvals PR 0), or its `.childshell`
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.

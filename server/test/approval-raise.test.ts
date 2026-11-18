@@ -92,7 +92,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     expect(r.ok && r.row !== null && { state: r.row.state, cls: r.row.class, denyCurrent: r.row.denyCurrent })
       .toEqual({ state: 'held', cls: 'ordinary', denyCurrent: false });
     const body = (f.coord.db.prepare("SELECT body FROM mail WHERE subject LIKE 'approval:%'").get() as { body: string }).body;
-    expect(body).toContain('older deny rules');
+    expect(body).toContain('not run under the box\'s current deny rules');
     expect(body).not.toContain('Allow it once');
   });
   it('step 9: a denyStanding of current mints denyCurrent true, and the brief offers the allow', async () => {

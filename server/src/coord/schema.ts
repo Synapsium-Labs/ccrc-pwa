@@ -3855,8 +3855,8 @@ export const MIGRATIONS: readonly string[] = [
   // `insertApproval`, called by the raise.
   // ONE ADDITIVE COLUMN with a constant default and a CHECK, and nothing else: an older build opening a file at this
   // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its inserts
-  // store 1. Its rule door does not read the column, so a 0 row it meets in a rollback inside a row's window reads as
-  // current (the PR's note names that residual). The slot is the next free one by position: the quiz record (#2991) took
+  // store 1. Its rule door does not read the column, but a rollback is a restart, which empties the held inputs, so it
+  // refuses a 0 row's allow `guard-escalate` (the PR's note says so). The slot is the next free one by position: the quiz record (#2991) took
   // 100 and forecasts B (#3003) 101, so this is 102, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

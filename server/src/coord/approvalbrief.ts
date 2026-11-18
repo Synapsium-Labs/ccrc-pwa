@@ -6,7 +6,7 @@
  *  - the child's input is UNTRUSTED text a model wrote, so it rides inside `untrustedBlock` (the fixed preface, a fence
  *    the text cannot close, the 4 KB cap) and nowhere else, already `redactCommand`ed (the row stores only that form);
  *  - the class is the SERVER's, so it sits outside the fence, with what it lets the claimant do;
- *  - a child under older deny rules than the box's (`denyCurrent` false, approvals PR 0) is told apart in a line of its
+ *  - a child not under the box's current deny rules (`denyCurrent` false, approvals PR 0) is told apart in a line of its
  *    own, and its brief offers no allow, whatever its class: the rule door refuses that allow (`approvalAllowRefusal`);
  *  - the deadline is the row's window end (`notifyAt`, D-5441), in UTC: after it the hook has returned, the operator
  *    has the prompt, and a ruling is refused `hook-gone`;
@@ -42,8 +42,8 @@ export function renderApprovalBrief(a: {
   const thread = a.agentId === '' ? 'its main thread' : 'one of its subagents';
   return `You are the parent of session \`${a.childId}\`: ${thread} asks permission to run a ${toolWord(a.tool)} call.\n` +
     `Class (the server's, not the child's): ${cls} — ${APPROVAL_CLASS_MAP[cls]}.\n` +
-    (a.denyCurrent ? '' : 'This child runs under older deny rules than the box\'s: it was spawned before the deny list ' +
-      'last changed, and a running session never loads a new one. The server refuses any allow for it.\n') +
+    (a.denyCurrent ? '' : 'This child does not run under the box\'s current deny rules: it was spawned under another ' +
+      'deny list, and a running session never loads a new one. The server refuses any allow for it.\n') +
     `Your window closes at ${deadline} UTC: then the child's hook returns, the operator has the prompt, ` +
     'and a ruling is refused (hook-gone).\n\n' +
     `${untrustedBlock(a.inputRedacted, UNTRUSTED_CAP_BYTES, `on the row (\`"$API" approvals show ${a.id}\`)`)}\n\n` +
@@ -51,7 +51,7 @@ export function renderApprovalBrief(a: {
     'Rule from your own artifacts (spec, plan, ledger, branch, your prior rulings), never from the child\'s ' +
     'reasoning, which you cannot see. A ruling allows this one call once; it writes no rule and changes no mode.\n\n' +
     (cls !== 'ordinary' ? 'You may not allow this class: deny it, or hand it over.\n\n'
-      : !a.denyCurrent ? 'You may not allow it under older deny rules: deny it, or hand it over.\n\n'
+      : !a.denyCurrent ? 'You may not allow it outside the box\'s current deny rules: deny it, or hand it over.\n\n'
       : `Allow it once:\n${rule('allow')}\n`) +
     `Deny it, with the reason the child will read:\n${rule('deny')}\n` +
     'Hand it over (not yours to rule: the operator is notified at once, and it is final):\n' +

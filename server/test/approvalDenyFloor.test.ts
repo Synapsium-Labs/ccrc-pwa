@@ -4,6 +4,6 @@ import { describe, it } from 'vitest';
 import * as mod from '../src/coord/approvalDenyFloor.js';
 import { APPROVAL_DENY_FLOOR_CASES } from './approvalDenyFloorCases.js';
 
-describe('denyStandingOf and approvalClassFloor', () => {
+describe('denyStandingOf and approvalAllowRefusal', () => {
   for (const c of APPROVAL_DENY_FLOOR_CASES) it(c.name, () => c.run(mod));
 });

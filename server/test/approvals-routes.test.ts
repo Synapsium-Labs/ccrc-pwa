@@ -157,7 +157,7 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
       expect({ state: row.state, class: row.class, denyCurrent: row.denyCurrent, parentId: row.parentId })
         .toEqual({ state: 'held', class: 'ordinary', denyCurrent: false, parentId: PARENT });
       expect(mailsTo(f, PARENT)).toHaveLength(1);
-      expect(mailsTo(f, PARENT)[0]!.body).toContain('older deny rules');
+      expect(mailsTo(f, PARENT)[0]!.body).toContain('not run under the box\'s current deny rules');
     });
     // MUTATION (Task 0.4): drop the rule door's refusal, and this reds.
     it('its allow is refused deny-not-current (409), nothing signed; its deny is signed and verifies', async () => {
@@ -166,6 +166,7 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
       const { id, body } = await ask(f);
       const allow = await f.rule(id, PARENT, 'allow');
       expect({ status: allow.statusCode, body: allow.json() }).toMatchObject({ status: 409, body: { error: 'deny-not-current' } });
+      expect(allow.body, 'the refusal\'s exact bytes (review F5)').toBe('{"ok":false,"error":"deny-not-current"}');
       expect(rowOf(f, id).state).toBe('held');
       expect((await f.rule(id, PARENT, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
       const got = (await f.ruling(id, body['nonce'] as string)).json() as { ruling: { record: Record<string, unknown>; sig: string } };

@@ -76,23 +76,23 @@ describe('the claimant\'s rule commands keep the reason out of the shell (D-5489
     expect(body).toContain('verdict:"deny"');
   });
 
-  // Approvals PR 0: a child under older deny rules than the box's is held, but its allow is refused at the rule door, so
+  // Approvals PR 0: a child not under the box's current deny rules is held, but its allow is refused at the rule door, so
   // its brief says why and offers no allow, even for an ordinary class; deny and hand-over stay.
-  it('a row under older deny rules says so and offers no allow, though its class is ordinary', () => {
+  it('a row not under the current deny rules says so and offers no allow, though its class is ordinary', () => {
     const body = brief('ordinary', false);
-    expect(body).toContain('This child runs under older deny rules than the box\'s');
-    expect(body).toContain('You may not allow it under older deny rules: deny it, or hand it over.');
+    expect(body).toContain('This child does not run under the box\'s current deny rules');
+    expect(body).toContain('You may not allow it outside the box\'s current deny rules: deny it, or hand it over.');
     expect(body).not.toContain('Allow it once');
     expect(body).not.toContain('verdict:"allow"');
     expect(body).toContain('verdict:"deny"');
     expect(body).toContain('Hand it over');
     const current = brief('ordinary', true);
-    expect(current).not.toContain('older deny rules');
+    expect(current).not.toContain('current deny rules');
     expect(current).toContain('Allow it once');
   });
-  it('an escalate row under older deny rules keeps the class line, and says the older rules too', () => {
+  it('an escalate row not under the current deny rules keeps the class line, and says so too', () => {
     const body = brief('escalate', false);
     expect(body).toContain('You may not allow this class: deny it, or hand it over.');
-    expect(body).toContain('This child runs under older deny rules than the box\'s');
+    expect(body).toContain('This child does not run under the box\'s current deny rules');
   });
 });

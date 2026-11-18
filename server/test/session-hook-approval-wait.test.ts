@@ -516,7 +516,8 @@ describe('it engages only where it can act, and asks for nothing otherwise', () 
 
 // Overlord approvals PR 0 (plan 2026-11-18-overlord-approvals.md §3.2.1, Task 0.3): a child spawned under an older deny
 // file is routed, not skipped, when the installer's digest history (`child-deny.digests`, its one writer the install
-// spine) names its digest. The request then carries `denyDigest`, and the server holds it with its allow capped.
+// spine) names its digest. The request then carries `denyDigest`, and the server holds it, its row `denyCurrent: false`,
+// its allow refused `deny-not-current` at the rule door; this wait never prints an allow for it (the second gate).
 describe('a stale deny digest the history names is routed with denyDigest (approvals PR 0)', () => {
   const OLD = 'c'.repeat(64);
   const history = (...ds: string[]): void => put('.cc-sessions/child-deny.digests', ds.map((d, i) => `${d} ${1700000000000 + i}\n`).join(''));
@@ -550,6 +551,15 @@ describe('a stale deny digest the history names is routed with denyDigest (appro
     put('stub/sign.json', '{"state":"denied"}');
     const d = decision(fire(payloadFor(MAIN)));
     expect(d?.hookSpecificOutput.decision).toEqual({ behavior: 'deny', message: 'denied by your coordinator: not under older rules' });
+  });
+  // MUTATION (fix round 1, F1): drop the allow arm's `[[ -z "$dd" ]] || return 0`, and this reds.
+  it('a history child\'s verified allow is never printed: the wait ends with nothing, the second gate beside the rule door', () => {
+    stale();
+    history(OLD);
+    const r = fire(payloadFor(MAIN));
+    expect(r.body?.['denyDigest']).toBe(OLD);
+    expect(r.rulings, 'the ruling was read and verified').toBeGreaterThan(0);
+    expect(r.stdout).toBe('');
   });
   // MUTATION (Task 0.3): send a digest in neither, and this reds.
   it('a digest in neither the managed file nor the history: no request, as today', () => {
