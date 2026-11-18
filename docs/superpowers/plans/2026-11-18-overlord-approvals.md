@@ -40,9 +40,13 @@ this pull request)
 - **Wave AP2 follows W3's second step.**
   - PR 5 holds for the Overlord, under `mayHold`, only the rows the coordinator held and then declined, let lapse or
     could not allow. Rows released at mint go to the operator as today.
-  - PR 6 lets the Overlord allow two families confined to the child's own workspace, under a second key the fleet pins
-    apart. `read-only` is a closed allowlist of commands and options. `scratch-write` is literal-path `rm` and `mkdir`
-    under the child's temp root. `forbidden` stays the operator's, always.
+  - PR 6 lets the Overlord allow one family, `read-only`, confined to the child's own workspace, under a second key
+    the fleet pins apart. It is a closed allowlist of commands and options. The Overlord allows no write and no delete
+    in v1. `forbidden` stays the operator's, always.
+- **The trigger shape stays `escalate` in v1.** No tier of this plan may allow a delete through a variable: not the
+  coordinator, not a grant, not the Overlord. Prevention (PR P) and the park (PR 3) are what cover it. PR P keeps
+  children from writing the shape, and the park turns the one that slips through into a row on Waiting on you, not a
+  menu nobody sees.
 - **The operator's three answers** are recorded as yes, the coordinator's provisional ruling (§5).
 - **Check on review:** F1, F3, F4, F8 and F12 of review 2536, as this revision answers them (§10).
 
@@ -521,8 +525,8 @@ revoke on its own.
 
 **This re-rules a standing call, and says so (F4).** The classifier's header records the coordinator's ruling after
 review round 5: every read or inspection command escalates, because rounds 3 to 5 each found a read that printed a file
-it should not have. This plan re-rules that call for two narrow families only, on the operator's direction of
-2026-11-18. Both families are closed allowlists, and they inherit every rule `ordinary` already has:
+it should not have. This plan re-rules that call for one narrow family only, `read-only`, on the operator's direction
+of 2026-11-18. It is a closed allowlist, and it inherits every rule `ordinary` already has:
 
 - every target strictly inside a root;
 - no `..` component;
@@ -535,9 +539,8 @@ it should not have. This plan re-rules that call for two narrow families only, o
 | Family | What it admits in v1 | What it refuses |
 |---|---|---|
 | `read-only` | One command per request from a fixed list, each with an allowlist of its options:<br/>`cat` (none);<br/>`head` and `tail` (`-n <int>`, `-c <int>`);<br/>`wc` (`-l`, `-c`, `-w`);<br/>`ls` (`-l`, `-a`, `-1`, `-d`, `-h`);<br/>`stat` (none);<br/>`cmp` (`-s`);<br/>`diff` (`-u`, `-q`), between two files;<br/>`grep` (`-n`, `-i`, `-c`, `-l`, `-w`, `-v`, `-F`, `-E`, `-H`, `-h`, and one `-e <pattern>`);<br/>`find` (`-name`, `-type`, `-path`, `-maxdepth`, `-mindepth`, `-newer`, `-size`, `-mtime`).<br/>Every operand is a literal path inside a root and outside `.git`. The only redirects are `>/dev/null`, `2>/dev/null` and `2>&1` | `sed`, `jq`, `git` (its configured programs run from a `.git/config` a child can write), `tar`, `du` and every other command. `grep -r`, `-R`, `-f`, `--include`. `find -L` and every `find` action. Any other redirect. Pipelines, loops, substitutions, subshells, variables in an operand. A credential path mention |
-| `scratch-write` | `rm` and `mkdir` of literal paths strictly under the child's own temp root, with the options `ordinary` allows | Every target in the worktree or the scratch leaf. Globs. Variables. Every command that moves or copies |
 
-*Table 3e. The v1 families. An `escalate` request either matches one row wholly or has family `none`.*
+*Table 3e. The v1 family. An `escalate` request either matches the row wholly or has family `none`.*
 
 - **The source rule.** A write that moves or copies (`mv`, `cp`, `tar -x`, `git archive`) is outside v1. Any later
   family that admits one must also require every source inside the roots, since `mv` of an outside file into the temp
@@ -546,18 +549,20 @@ it should not have. This plan re-rules that call for two narrow families only, o
   is outside the guard's reach, and `read-only` can print what such a link points at. v1 therefore refuses every
   link-making command in any request (`ln`, `cp -s`, `cp -l`), so a child cannot plant a link and read through it in
   one request. A link planted earlier stays the accepted limit, as it is for `ordinary`.
-- **What `scratch-write` adds.** Literal in-root `rm` and `mkdir` are already `ordinary`, which a coordinator may
-  allow. `scratch-write` adds no new shape. It bounds which `ordinary` rows the Overlord may allow: only those under the
-  temp root, never the worktree.
-  - The trigger shape (a `for` loop, unquoted and mid-word variables) stays `escalate`, family `none`, in v1.
-  - Loops and pipelines stay `escalate`.
-- **Reversibility (F16).**
-  - A `read-only` allow changes nothing, so it is reversible.
-  - A `scratch-write` allow is irreversible: a deleted temp file is not in git. It is confined to the child's own temp
-    root, which the reaper removes anyway.
-  - The operator's answer to open question 2 ("the Overlord may approve reads and scratch cleanups inside a child's own
-    workspace") is recorded as the bounded exception to the version-1 ban on irreversible effects, for that root only.
-- **The family decider,** `approvalFamily(request, row)` (L1), answers `read-only`, `scratch-write` or `none`.
+- **No write family in v1 (the coordinator's ruling of 2026-11-18, after the fix-round-1 wave-done).** The first
+  revision also had `scratch-write`: literal `rm` and `mkdir` under the temp root. That family was a subset of
+  `ordinary`, so it added no shape anyone could allow, only a key use and a table. It is dropped.
+  - The Overlord allows no `ordinary` row either. An `ordinary` allow can delete, which is irreversible, and the
+    coordinator already allows those. A held `ordinary` row the coordinator let lapse reaches the Overlord, which may
+    deny it or send it to the operator.
+- **The trigger shape stays `escalate`, family `none`, in v1.** A delete through a variable (a `for` loop, unquoted
+  and mid-word variables) is allowed by no tier of this plan. Loops and pipelines stay `escalate` too.
+  - What covers it is prevention (PR P, §3.8), which keeps children from writing the shape, and the park (PR 3,
+    §3.3), which turns the one that slips through into a row on Waiting on you with its context.
+  - PR 6 alone would not have settled the trigger prompt.
+- **Reversibility (F16).** A deny and a `read-only` allow change nothing, so they are reversible. No Overlord approval
+  is irreversible, so the version-1 ban on irreversible effects holds with no exception.
+- **The family decider,** `approvalFamily(request, row)` (L1), answers `read-only` or `none`.
   - It answers `none` for a row whose deny is not current (F5).
   - A property test pins that `forbidden` never has a family.
   - Every case review 2536 named (F4) is a red test in Task 6.1.
@@ -594,7 +599,8 @@ it should not have. This plan re-rules that call for two narrow families only, o
 | v1 | any | (none) | verifies only under the wide key | refused: a v1 record is checked against the main key only, so it is unsigned here |
 | v2 | `ordinary`, deny current | `coordinator` | main | allow |
 | v2 | `ordinary` or `escalate`, any deny currency | `operator` | main | allow (PR 3): the operator's own ruling, through the step-up door |
-| v2 | `ordinary` under the temp root (`scratch-write`) or `escalate` family `read-only`, deny current | `overlord` | wide | allow (PR 6) |
+| v2 | `escalate` family `read-only`, deny current | `overlord` | wide | allow (PR 6) |
+| v2 | `ordinary` | `overlord` | any | no allow: the Overlord allows no write |
 | v2 | deny not current | `coordinator` or `overlord` | any | no allow (F5) |
 | v2 | family `none`, or a family the authority may not use, or a key that is not the authority's | any | any | no allow |
 | any | `forbidden` | any | any | no allow, ever |
@@ -688,7 +694,7 @@ This plan records its calls by slug. The coordinator mints D-numbers for any dev
 | `grants-are-scoped-and-expire` | Standing grants | none; per run; per programme | Per run, child or agent, at most 8 h, `ordinary` only, the claimant re-checked at use, signed only through the one signing site | Proposed |
 | `overlord-holds-only-held-rows` | Which rows the Overlord's tier takes | every released reason; rows the coordinator held | Rows the coordinator held, then declined, let lapse or could not allow. Mint-time reasons are Later | Ruled (fix round 1) |
 | `overlord-approval-is-a-mayhold-case` | The Overlord's hold | a new predicate; a case of `mayHold` | A case of `mayHold` (C31, H18). No parallel mechanism | Proposed |
-| `families-on-an-allowlist` | What the Overlord may allow beyond `ordinary` | any `escalate`; listed commands; an allowlist of commands and options | Two closed allowlists inside the child's workspace (Table 3e); a re-ruling of round 5 for these two only | Ruled (fix round 1) |
+| `families-on-an-allowlist` | What the Overlord may allow | any `escalate`; listed commands; an allowlist of commands and options; a write family | One closed allowlist, `read-only`, inside the child's workspace (Table 3e), a re-ruling of round 5 for it only. No write family and no `ordinary` allow: `scratch-write` was a subset of `ordinary` and is dropped | Ruled (fix round 1; write family dropped 2026-11-18) |
 | `wide-key-is-separately-pinned` | The signer for the Overlord's allows | the same key with a flag; a second key | A second key, pinned apart, named by the record's authority | Proposed |
 
 *Table 4. The calls this plan makes.*
@@ -698,7 +704,7 @@ This plan records its calls by slug. The coordinator mints D-numbers for any dev
 | # | Question | Answer, or recommendation | Whose |
 |---|---|---|---|
 | 1 | Parking changes where approvals appear. A parked prompt reaches the operator as a row on Waiting on you from park time, and no longer as a menu in a pane. The first sight is delayed by at most the tier windows: the same as today on the main thread, and up to five minutes later on a subagent | Yes (the coordinator's provisional ruling, 2026-11-18) | The operator |
-| 2 | May the Overlord approve reads and scratch cleanups inside a child's own workspace? | Yes (provisional), as Table 3e bounds them. This is also the bounded exception to the version-1 ban for the temp root | The operator |
+| 2 | May the Overlord approve reads inside a child's own workspace? | Yes (provisional), as Table 3e bounds them. A read is reversible, so the version-1 ban needs no exception | The operator |
 | 3 | May coordinators' own permission prompts be held for the Overlord? | Yes (provisional), in AP2, under the same `mayHold`. Plain top-level sessions stay the operator's | The operator |
 | 4 | Does a running Claude Code re-read a changed `--settings` file? | Measure it in Task 0.1. The chosen arm ships either way | Author |
 | 5 | The park horizon | 2 h | Author |
@@ -714,7 +720,7 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
   Overlord under `mayHold` for held rows, then the operator. The two old reasons are answered by the park, grants and
   the wide key.
 - **Table 6.7b** gains an approvals row for held rows only (F12). A released row stays unheld.
-- **Table 7.1a** gains `answer-approval`, with `read-only` reversible and `scratch-write` irreversible but confined
+- **Table 7.1a** gains `answer-approval`. A deny and a `read-only` allow are reversible, and it allows no write
   (F16).
 - **New calls C71 to C76 in Table 13a:**
   - C71: the stale digest (`stale-deny-routes-capped`);
@@ -788,7 +794,7 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
 | 3 | AP1 | The park: `approval_parks`, the parked-aware rule door, the lapse and stale carve-outs, the operator's signed ruling, record v2 and the verifier's v2 rule for `operator`, the child's nudge, the Shadow lanes row, the subagent window | PR 2 | +450 server, +100 hook, +60 verifier, +40 shared, +100 pwa; +1,000 tests |
 | 4 | AP1 | Standing grants: the table, the door, `shapeKey`, `grantCovers`, the claimant re-check, the one signing site | PR 3 | +400 server, +80 classifier; +600 tests; +60 skill reference |
 | 5 | AP2 | The Overlord's tier for held rows: the `approval` kind in `mayHold`, its door, `answer-approval` | PR 4, W3 step two | +400 server, +100 pwa; +700 tests |
-| 6 | AP2 | The two families on their allowlists, the wide key, the `overlord` authority, the install pin, doctor's check | PR 5 | +600 classifier, +200 server, +40 verifier, +40 install; +1,500 tests |
+| 6 | AP2 | The `read-only` family on its allowlist, the wide key, the `overlord` authority, the install pin, doctor's check | PR 5 | +600 classifier, +200 server, +40 verifier, +40 install; +1,500 tests |
 
 *Table 8. The eight pull requests. Growth is the author's estimate. growth-check runs armed on any listed file a PR
 grows.*
@@ -992,7 +998,7 @@ grows.*
 - [ ] Mutations: drop the arming check, and the disarmed case reds. Admit a mint-released row, and the released case
   reds.
 
-### Task 6.1: The families, on their allowlists (PR 6)
+### Task 6.1: The `read-only` family, on its allowlist (PR 6)
 
 - [ ] Red, `approval-family.test.ts`, over the guard corpus plus a family corpus. Every case below answers `none`:
   - **Moves, copies and links:** `mv` of an outside file into the temp root; `cp -r ~ <temp root>`; `ln -s` and
@@ -1005,8 +1011,9 @@ grows.*
   - **Paths:** a `..` component; a path under `.git`; a credential path.
   - **Shape:** a pipeline; a loop; a variable in an operand; the trigger prompt's shape.
   - **Deny:** a row whose deny is not current.
-- [ ] Red, the admitted cases: each `read-only` command with each allowed option on an in-root literal path;
-  `rm -rf <temp root>/x` as `scratch-write`; `rm -rf <worktree>/x` as `none` for the Overlord.
+  - **Writes:** `rm -rf <temp root>/x`, `mkdir <temp root>/x` and `rm -rf <worktree>/x`, each `ordinary` and each
+    family `none`; the verifier refuses an `overlord` record for any of them.
+- [ ] Red, the admitted cases: each `read-only` command with each allowed option on an in-root literal path.
 - [ ] Red, the property: `forbidden` never has a family.
 - [ ] Green: `approvalFamily` in `approvalguard.ts` (L1), as closed option tables.
 - [ ] Mutations: admit `-r` for `grep`, admit `>` to an in-root path, and admit `ln`. Each case reds.
@@ -1033,7 +1040,7 @@ The second review checks F1, F3, F4, F8 and F12. This table says where each now 
 | F1: already-stale children unrouted, and the history missing the first digest | §3.2.1 (both sides of a rewrite, every install, not recovered), Task 0.2 flipped, Table 2a row 1, In short |
 | F2: reviewer clause 9 already carries the rule | §3.8, Task P.1 (widen in place, the count stays ten) |
 | F3: the unsigned pane press | §3.3.2 (a signed operator ruling, no press), Table 3a, Task 3.3's two-identical-menus case |
-| F4: the families as worded | §3.6, Table 3e (allowlists, no `sed`, `jq` or `git`, the source rule, the symlink limit, the size), Task 6.1 |
+| F4: the families as worded | §3.6, Table 3e (one allowlist, the write family dropped, no `sed`, `jq` or `git`, the source rule, the symlink limit, the size), Task 6.1 |
 | F5: the cap folded into the class | `denyCurrent` as its own fact (§3.2.1), Table 3b's deny row, `grantCovers` and `approvalFamily` |
 | F6: the "current" read misplaced, the history writable | §3.2.1 (the route closure, the advisory field, the trusted-file deny), §7, Task 0.4's lying-hook case |
 | F7: the held-row cost | §3.2.1, "The accepted cost" |
@@ -1061,7 +1068,8 @@ coordinator mints its number.
   and a change to the pinned door tests. Trigger: M38 shows those reasons as a large remaining path.
 - **An instant decision-model ruling inside the main-thread window.** Trigger: the decision model's approval rows
   leave shadow with M19's bounds met.
-- **Wider families** (loops over literal lists, pipelines of `read-only` commands, writes with the source rule).
+- **Wider families** (loops over literal lists, pipelines of `read-only` commands, writes with the source rule, a
+  write family that adds a shape `ordinary` does not have).
   Trigger: M38 shows family `none` as the largest remaining path.
 
 ## Where things stand
