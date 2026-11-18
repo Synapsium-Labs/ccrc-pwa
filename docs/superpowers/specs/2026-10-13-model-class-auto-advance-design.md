@@ -207,7 +207,8 @@ picks the new one up by itself or is relaunched. The typed-`/model` measurement 
 ### 2.5 Anthropic lanes
 
 > [!NOTE]
-> **Amended 2026-11-18 (D18 resolved; D-8683 confirmed for `opus`, `sonnet` and `haiku`; D-8744 to D-8748).** A0
+> **Amended 2026-11-18 (D18 resolved; D-8683 confirmed for `opus`, `sonnet` and `haiku`; D-8744 to D-8748, D-8750 and
+> D-8751).** A0
 > measured the premise read-only on 2026-11-16 (§2.5.1), and it holds for those three classes; Fable is unmeasured
 > (§2.5.8). Claude Code's own alias resolution, with its catalogue cache, is the source of truth, and **ccrc never
 > re-pins an Anthropic class**. The arm stays as D-8683 narrowed it. §2.5.2 resolves D18 (D-8744), replacing the
@@ -254,19 +255,26 @@ For each class on an Anthropic lane, ccrc answers two questions: which id the al
 what the catalogue says about that id.
 
 1. **The alias's id** comes from the newest of two kinds of evidence:
-   - **the lane's own cache:** its newest file in the current format, fetched within the last seven days (D25,
-     D-8745), whose alias target's row does not need a newer Claude Code than the lane runs (§2.5.8). When the lane's
-     build cannot be read, a target whose row names a minimum build is not taken;
+   - **the lane's own cache:** its newest file in the current format, whose alias target's row does not need a newer
+     Claude Code than the lane runs (§2.5.8). When the lane's build cannot be read, a target whose row names a
+     minimum build is not taken. A cache fetched more than seven days ago is stale (D25, D-8745): doctor names it,
+     and it stays evidence until newer evidence comes;
    - **a fresh alias launch:** a session ccd spawned new on that lane that launched the class by its alias, with no
-     explicit model, no hold and no resume. ccd marks such a launch at spawn with its process start and its lane, and
-     fills the mark once with the id the session first reported (the status line's usage sidecar). That is Claude
-     Code's own resolution, measured, and the same observation as the canary by real use (§2.5.6). A resume, a
-     respawn, a held launch and a typed older id are never marked.
+     explicit model, no hold on that class and no resume. ccd marks such a launch at spawn with its process start and
+     its lane, and fills the mark once with the id the session first reported (the status line's usage sidecar),
+     from a step of the supervise tick of its own. That is Claude Code's own resolution, measured, and the same
+     observation as the canary by real use (§2.5.6). A resume, a respawn, a held launch and a typed older id are
+     never marked, and a `/model` typed after the launch but before its first reading drops the mark. The aliases
+     file keeps the newest filled reading of each class, so a mark that goes with a swap or a wake never lowers it.
 
-   A marked launch whose process started after the cache's fetch outranks the cache's target: newest evidence wins.
-   `show` and `lanes` carry both ids when they disagree. With neither, the class has no current id on that lane and
-   shows its class word. A lane on which every launch is held shows its held id, and says in words that the alias's
-   resolution there is not observed while the hold stands.
+   A marked launch whose process started after the cache's fetch outranks the cache's target, and a cache fetched
+   after the newest kept launch outranks that launch: newest evidence wins. **An id only ever moves to newer
+   evidence:** a lost mark, a stale cache or a target the build cannot launch never hands a class back to older
+   evidence. `show` and `lanes` carry both ids when they disagree. With neither, the class has no current id on that
+   lane and shows its class word. A held class whose id rests on evidence older than its hold reads as **unobserved**,
+   a field on the aliases file and the wire, and shows its held id; a hold stops marks for its own class only. Claude
+   Code reports a 1M-context session's id with a `[1m]` suffix; one reader on each side strips it, and every
+   comparison of ids goes through it.
 2. **The id's row** (its label, its effort levels and its default effort) comes from the lane's own cache when it lists
    that id, else from the newest current-format cache on the box that lists it. No alias target is ever taken from
    another home. That a row says the same in every organisation's catalogue is unmeasured: A0 compared id lists and
@@ -278,19 +286,19 @@ what the catalogue says about that id.
 
 ```mermaid
 flowchart TD
-  A["Hourly refresh, one Anthropic lane"] --> B{"Own cache in the current format,<br/>fetched within 7 days?"}
-  B -- "yes" --> C{"Its target needs a newer<br/>Claude Code than the lane runs?"}
-  C -- "no" --> L{"A marked alias launch on this lane<br/>started after the cache's fetch?"}
-  L -- "no" --> T["Class id: the cache's alias target"]
+  A["Hourly refresh, one Anthropic lane"] --> B{"Own cache in the current format,<br/>its target launchable by the lane's build?"}
+  B -- "yes" --> L{"The newest kept or marked launch of this class<br/>started after the cache's fetch?"}
+  L -- "no" --> T["Candidate: the cache's alias target<br/>(stale after 7 days: doctor names it)"]
   L -- "yes" --> U
-  C -- "yes" --> O
-  B -- "no" --> O{"A marked alias launch<br/>on this class, this lane?"}
-  O -- "yes" --> U["Class id: what the newest marked launch first reported"]
-  O -- "no" --> N["No id: the class word"]
-  T --> R["Row: from the lane's own cache, else the newest<br/>cache on the box that lists that id"]
-  U --> R
+  B -- "no" --> O{"A kept or marked alias launch<br/>of this class, on this lane?"}
+  O -- "yes" --> U["Candidate: what the newest launch first reported"]
+  O -- "no" --> P
+  T --> K{"Candidate newer than the evidence<br/>of the class's current id?"}
+  U --> K
+  K -- "yes" --> R["Class id: the candidate. Row: from the lane's own cache,<br/>else the newest cache on the box that lists that id"]
+  K -- "no" --> P["Class id unchanged, or the class word if it never had one"]
   R --> W["Write the lane's aliases file, under the lane lock"]
-  N --> W
+  P --> W
 ```
 *Figure 2. Where an Anthropic lane's class id and its row come from, each hour.*
 
@@ -308,15 +316,17 @@ The rejected options:
 
 `~/.ccrc/models/<id>.aliases.json`, one per Anthropic lane, is written by D21's one writer, under the lane lock, by
 the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
-- **Per class:** the current id and where it came from (`cache` or `use`), the cache's target and the id a marked
-  launch reported when they disagree, the row (label, effort levels or "takes none", default effort, the minimum
-  Claude Code build) and where the row came from, and any orphaned saved effort (§2.5.5). A Fable row appears only when the
+- **Per class:** the current id, where it came from (`cache` or `use`), when that evidence dates from and when the id
+  was first written; the cache's target and the newest filled launch reading, kept when its mark goes; whether the
+  class is unobserved (§2.5.2); the row (label, effort levels or "takes none", default effort, the minimum Claude Code
+  build) and where the row came from; and any orphaned saved effort (§2.5.5). A Fable row appears only when the
   source names a Fable id.
 - **Per lane:** the cache it read (when it was fetched, and its format), or why it read none.
 - **A class whose id changed** from one id to another gets a `history` entry and a `previous` in the lane's advance
-  file (§2.1), written by the same refresh under the same lock, so Revert has something to put back. A change of
-  source alone, or an id that appears or disappears, is not a move. An Anthropic lane's advance file is created
-  without a registry: each class's `family` is its own class word (D-8747).
+  file (§2.1), written by the same refresh under the same lock, so Revert has something to put back, and one push. A
+  change of source alone is not a move. A class's first id is not a move either: a release that lands while the class
+  has no id becomes its first id, with no history and no push, and sessions are compared against it from then. An
+  Anthropic lane's advance file is created without a registry: each class's `family` is its own class word (D-8747).
 - **The hourly refresh reaches Anthropic lanes** through the `lanes` op and the push the Codex step already uses, both
   widened to the Anthropic lane kind (D-8751).
 - **Reaped** with the advance file when the lane's model files are removed.
@@ -355,21 +365,25 @@ the hourly refresh. Its name keeps it apart from a Codex lane's class registry.
   (§2.5.2).
 - **ccd's routing record gains the model id beside the class,** on every lane, and its readback compares the id when
   the pending change is an id change (`_route_readback` confirms by family today, through `_model_family_class`, so an
-  id change alone has nothing to confirm it). The id is recorded from the session's own reading, never typed; a
-  session with no recorded id is never pending. A changed id counts as pending on an Anthropic lane when the class
+  id change alone has nothing to confirm it). The id is recorded from the session's own reading, never typed, by a
+  step of the supervise tick of its own, beside the applier and outside its pending check: in the steady state
+  nothing is pending, and the applier returns before it reads anything. The same step fills a launch's mark. Every
+  spawn rewrites the routing record, so the id is recorded again after each spawn. A session with no recorded id is
+  never pending. A changed id counts as pending on an Anthropic lane when the class
   is not held, and on a Codex lane only under D11's fallback.
 - **The move is a re-pick of the alias row** in the `/model` picker, session-only, as ccd applies a class today
   (`_route_type_model`). Whether a re-pick re-resolves the alias in a running session is unmeasured, so the
   Anthropic plan's ccd wave measures it first, on a throwaway session (D-8748). If it does not, a running session moves at
   its next relaunch, and `model-sessions-behind` names it with that remedy. Either way this closes a known leak: a
   session resumed without `--model` came back on its old model.
-- **One push** per family per lane.
+- **One push** per class move, in the Codex step's own line shape, through the same push (D-8751).
 
 #### 2.5.7 Holds at launch (D19, D24)
 
 - **A hold records the held id.** On an Anthropic lane the advance file's `hold` gains `model`: the class's current id
-  when held, or `previous` on Revert. An older reader keeps an unknown key, so the file stays readable after a
-  rollback. An Anthropic lane has its own path to the writer's `hold`, `release` and `revert`, past the gates that
+  when held, or `previous` on Revert. A release clears the hold and is kept as the class's `releasedAt`, never as a
+  history entry, so it spends none of the history's ten slots and never reads as a move (D-8747). An older reader
+  keeps both unknown keys, so the file stays readable after a rollback. An Anthropic lane has its own path to the writer's `hold`, `release` and `revert`, past the gates that
   refuse a lane with no registry (D-8747).
 - **ccd launches the lane's sessions with `ANTHROPIC_DEFAULT_<CLASS>_MODEL=<held id>`** in the launch environment, so
   `--model <class>`, the `/model` picker's alias row and a subagent naming the alias all resolve to the held id. It
@@ -485,8 +499,10 @@ hears about it. Failures fail shut: a pin never moves on data that cannot be rea
 
 On an Anthropic lane the four read the aliases file beside the advance file. `model-held-behind` fires when a held
 class's alias now resolves to a newer id than the one held. `model-sessions-behind` fires for a running session
-on an id other than the one it should run: the held id while the class is held, else the class's current id. The
-day counts from the move, or from the release of a hold, whichever is later. `model-advance-held-back` has no Anthropic
+on an id other than the one it should run: the held id while the class is held, else the class's current id. A
+session's class is its routing record's served class; a session with no class, or `default`, is never named. A class
+with no id, or one that is unobserved (§2.5.2), raises neither WARN. The day counts from the hold while held, else
+from the later of the move (or the class's first id) and the release of a hold. `model-advance-held-back` has no Anthropic
 cause, because there is no canary to fail. The Anthropic causes of `model-advance-blocked` are `alias-source-absent`,
 `alias-cache-stale`, `aliases-file-unreadable` and `aliases-file-invalid`; `alias-source-absent` WARNs only once the
 box's ccd marks alias launches, and before that it is a note.
@@ -521,11 +537,11 @@ review the same day.
 | D18 | The Anthropic source | A roster grouping; Claude Code's account state; the newest of the lane's own cache and a marked alias launch | The newest of the lane's own cache and a fresh alias launch ccd marked; each id's row from the lane's own cache, else any cache on the box that lists it (§2.5.2, D-8744). Replaces D-8684's roster grouping, which A0 found nothing to check against | Agreed 2026-11-18 |
 | D19 | Revert on a running Anthropic session | Next idle point; next relaunch | Next relaunch: the idle point needs a settings write | Agreed |
 | D20 | Delivery order | Both arms in one plan; Codex first, Anthropic second | Codex first, since that is where classes are stale today | Agreed |
-| D21 | One writer for the advance state | Each path writes its own; one writer with a lock | One writer, a lock, commit after materialise. Its Anthropic scope narrowed (D-8683, confirmed by A0) to holds, revert and history, plus the aliases file | Amended |
+| D21 | One writer for the advance state | Each path writes its own; one writer with a lock | One writer, a lock, commit after materialise. Its Anthropic scope narrowed (D-8683, confirmed by A0 for `opus`, `sonnet` and `haiku`; Fable unmeasured, §2.5.8) to holds, revert and history, plus the aliases file | Amended |
 | D22 | When a canary counts | Any failure fails; not-ready waits silently | Not-ready waits; only a real refusal fails | Agreed |
 | D23 | Effort across an Anthropic id change | Rewrite the home's saved level; keep ccrc's level by class and carry an orphaned saved level at launch | By class, plus a session-only carry of an orphaned saved level when the record says `auto`. ccrc never writes a model or effort choice into `settings.json` (§2.5.5, D-8746) | Agreed 2026-11-18 |
 | D24 | How a hold reaches an Anthropic launch | `--model <held id>`; the alias's environment key | `ANTHROPIC_DEFAULT_<CLASS>_MODEL`, so subagents are held too, measured first; `--model <held id>` if Claude Code ignores the key (§2.5.7, D-8748) | Agreed 2026-11-18 |
-| D25 | When an Anthropic cache is stale | Its own `staleAt`; seven days | Seven days, the window of the seed each build bundles. Its own `staleAt` lapses within the hour, and Claude Code keeps launching over it (D-8745) | Agreed 2026-11-18 |
+| D25 | When an Anthropic cache is stale | Its own `staleAt`; seven days | Seven days, the window of the seed each build bundles. Its own `staleAt` lapses within the hour, and Claude Code keeps launching over it. A stale cache is named by doctor and stays evidence until newer evidence comes (D-8745) | Agreed 2026-11-18 |
 
 > [!NOTE]
 > **Amended 2026-11-16, by the programme's operator.**
@@ -588,7 +604,11 @@ Each part ships with tests that go red when its guard is removed, measured, per 
     files in one home, none; a target that needs a newer build, or a build that cannot be read; a marked launch newer
     than the cache; a row borrowed by id and never a target borrowed by home.
   - The launch marker: a fresh alias launch is marked, and a resume, a swap, a held launch, an explicit model and a
-    typed older id never are.
+    typed older id never are; a `/model` typed before the first reading drops the mark; the mark is filled with
+    nothing pending.
+  - The kept reading: a swap and a wake that remove the newest mark record no backward move, and neither does a
+    stale cache; a class's first id is not a move; a release is kept as `releasedAt`, never as history.
+  - Unobserved: a held class with only older evidence, and a class with no id, raise neither behind WARN.
   - The canary by real use: no move before a marked launch reports the new id, and a move after one.
   - ccd's routing record with the model id: a newer id counts as pending on an Anthropic lane, and the readback
     compares the id.
