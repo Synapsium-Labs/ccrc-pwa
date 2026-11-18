@@ -946,7 +946,7 @@ function censusCommand(tool: string, input: Record<string, unknown>): string | n
 
 /** A request's statements' command words, in order, from the classifier's own statement list (`parse(lex(…))`): the
  *  plain command name of each simple command, and `=` for a standalone assignment. `null` when the command is not one
- *  the statement grammar can list (a pipeline, a substitution, a quoted or path-qualified name, any other tool): the
+ *  the statement grammar can list (a pipeline, a substitution, a quoted command name, any other tool): the
  *  census keeps the words, never an operand. */
 export function approvalCommandWords(tool: string, input: Record<string, unknown>): readonly string[] | null {
   const command = censusCommand(tool, input);
