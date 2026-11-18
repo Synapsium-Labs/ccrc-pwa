@@ -95,7 +95,7 @@ The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spell
 
 - **At mount**, a new adapter key `appearance` carries the contract. The library writes each slot onto the frame root with the CSSOM (`style.setProperty` on a library-owned property name) before first paint. So the first painted frame is already in ccrc's colours.
 - **While open**, `DocFrame.setAppearance(a)` posts one new parent op, `appearance`, on the existing port: `{t: 'appearance', v: 1, appearance: a}`, where `a` has exactly the contract's shape, `{mode, colour?: {<slot>: '#…'}, skin?: {<slot>: …}, label?}`. One spelling serves the adapter key, the op and the validator. An op whose value has no `colour` group drops host colours (§7).
-- **Nothing flows back.** There is no new frame-to-parent op and no new `store.set` key. The frame never tells ccrc what it applied.
+- **Nothing flows back.** This contract adds no frame-to-parent op and no `store.set` key. The frame never tells ccrc what it applied.
 - **Hosted means an appearance was seeded.** A mount whose adapters carried `appearance` is hosted for its whole life. While hosted, ccrc never calls `setPrefs` with a `theme`, and the frame never writes `theme` to `pref:prefs`. Its `prefs` path writes the whole prefs object, so the library leaves `theme` out of what it stores while hosted.
 
 ### 2.2 Fonts
@@ -296,7 +296,7 @@ This section lists what does not change and what the new data could do. The stan
 - **The label.** It is the one free text that crosses. It is at most 64 characters, refused if it holds a control character, and set with `textContent`, so markup in it shows as its own characters and never renders.
 - **How values are written.** Through the CSSOM, onto library-owned custom property names. No stylesheet text is built from host input. Fonts load through the `FontFace` API from decoded bytes, under fixed family names.
 - **Fonts.** These are ccrc's own bundled bytes. They are the first binary bytes in the srcdoc that the library does not pin by hash: its own faces sit in a stylesheet that `frameDocument` checks against its manifest. So the library checks ccrc's faces by alphabet, signature and size, and ccrc pins them with a row: the bytes it passes are exactly the design system's font files. A malformed font would reach the browser's font parser inside an opaque-origin, script-pinned frame, and a face that fails to load is dropped (§2.2).
-- **Exfiltration.** The frame learns ccrc's current colours. It has no way to send them anywhere: `default-src 'none'`, no network, and no new frame-to-parent op.
+- **Exfiltration.** The frame learns ccrc's current colours. This contract gives it no way to send them anywhere: `default-src 'none'`, no network, and no frame-to-parent op of its own. Another design may add a frame-to-parent op additively, such as X2's figure images. That design argues its own threat model, and nothing here rules it out.
 - **Rate.** A parent op costs the frame a repaint, plus a redraw of any drawn figure. Coalescing to one per animation frame bounds the ops. Cancelling queued redraws on a newer appearance bounds the figure work. The bridge's refusal count applies to frame-to-parent ops only, so a burst of host ops can never close the port.
 
 ## 9. Budgets
@@ -396,7 +396,13 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - a font that fails its checks or `FontFace` load is dropped, and the mount reaches `ready`;
    - a document at the old srcdoc cap still mounts with both faces.
 8. Size: the frame assets (guard, bootstrap, enhance, stylesheet) grow by at most 32 768 characters over 1.1.0's 781 099.
-9. Boundaries: `frameCsp()` is byte-identical to 1.1.0, and so is the frame-to-parent op set.
+9. Boundaries, written so that they pin this contract's own additions and nothing else:
+   - `frameCsp()` answers the same with and without an appearance, and this contract adds no CSP source;
+   - this contract adds exactly one parent-to-frame op, `appearance`, and no frame-to-parent op.
+
+   Neither row compares the whole op set or the whole CSP with 1.1.0's, so another design's additive op can ship in the same library wave and release, on its own interface and with its own tests.
+
+**One release for more than one design.** The library wave that carries this contract may also carry X2's figure-image op, a frame-to-parent op designed separately. The two have independent interfaces and tests. This section designs only its own.
 
 **Compatibility.** A 1.1.0 host keeps working unchanged against the new version. The new version's frame ignores nothing a 1.1.0 host sends. A host built for the new version that is pinned back to 1.1.0 fails to build, and does not fail at run time.
 
