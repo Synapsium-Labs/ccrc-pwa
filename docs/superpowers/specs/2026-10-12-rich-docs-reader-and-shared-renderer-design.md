@@ -495,7 +495,7 @@ These close the gaps found against the standalone docs server (research B). Each
 
 | Capability of the standalone docs server | Verdict | Where |
 |---|---|---|
-| Index, project and directory pages | Yes, base §4.4 | The index's "newest five" cards, and readable titles with a date label in listings, are Kept: no longer Later (G10); the X2 parity design §5.1 and §5.2 adds them (amended 2026-11-18; X2 parity design) |
+| Index, project and directory pages | Yes, base §4.4 | The index's "newest five" cards, the project page's list of each section's docs, and readable titles with a date label in listings, are Kept: no longer Later (G10); the X2 parity design §5.1 and §5.2 adds them (amended 2026-11-18; X2 parity design) |
 | Recursive listings | Yes, base §2 (a) | Listings already recurse (`ccd/ccd:35878`); the path grammar allows 16 components (G2) |
 | Draft badges and banner | Yes, base §4.5 | More precise than today |
 | `?ref=<branch>` | Yes, base §3.1 | Stricter. `?ref=origin/<b>` reads as a local branch named `origin/<b>`; rewrite old links to the bare `?ref=<b>` (§9 Step 4). The old spellings `?ref=origin/<b>`, a tag and a short commit are Kept and resolve natively (X2 parity design §5.3) (amended 2026-11-18; X2 parity design). |

@@ -43,7 +43,7 @@
 | P1 range reads and large files | P1.1 to P1.5 | `main` | `shared/docs.ts` (range block and ceilings), `ccd/ccd` (`_docs_py` range verb, snapshot cache), `agent/src/whitelist.ts`, `server/src/ccdargv.ts`, `server/src/docs/{policy,ports,ccdsource,routes}.ts`, `pwa/src/docs/range/**` (new), `pwa/src/docs/objectUrls.ts`, `pwa/src/docs/DocsLeaf.tsx` (above-cap branches), `pwa/src/docs/DocImage.tsx`, `pwa/src/docs/docsText.ts` |
 | P2 outside folders | P2.1 to P2.4 | P1 | `ccd/ccd` (`docs-folder`, `docs-folder-read`, walker, registry), `shared/docs.ts` (folder block), `agent/src/whitelist.ts`, `server/src/ccdargv.ts`, `server/src/docs/folderRoutes.ts` (new), `server/src/docs/{policy,ports,ccdsource}.ts`, `server/test/box-token-census.test.ts`, `pwa/src/screens/settings/DocsFoldersSection.tsx` (new), `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks,DocsBanners}.tsx/ts`, `CLAUDE.md` (census and SAFETY sentences), the classifier's forbidden row and the child deny rules (`server/src/coord/approvalguard.ts`, `shared/api.ts#childDenyRules`) |
 | P3 PDF frame | P3.1 to P3.3 | P1, P2 | `shared/docs.ts` (`pdf` class, magic), `pwa/src/docs/pdf/**` (new: `PdfFrame.tsx`, `pdfPolicy.ts`, `pdfSrcdoc.ts`), `pwa/package.json` and lock (`pdfjs-dist`), `pwa/src/docs/DocsLeaf.tsx` (pdf branch), third-party notices |
-| P4 listings, refs, settings store | P4.1 to P4.4 | P2 | `ccd/ccd` (index newest, ref resolution), `shared/docs.ts` (index field, ref grammar, `ico`), `shared/docsTracker.ts` (new, L0 checker), `server/src/coord/{schema,store}.ts` (`docs_settings`), `server/src/docs/settingsRoutes.ts` (new), `server/test/box-token-census.test.ts`, `pwa/src/screens/settings/DocsSettingsSection.tsx` (new), `pwa/src/docs/{DocsIndexView,docsTree,docsLinks}.tsx/ts`, `CLAUDE.md` (census sentence) |
+| P4 listings, refs, settings store | P4.1 to P4.4 | P2 | `ccd/ccd` (index newest, ref resolution), `shared/docs.ts` (index field, ref grammar, `ico`), `shared/docsTracker.ts` (new, L0 checker), `server/src/coord/{schema,store}.ts` (`docs_settings`), `server/src/docs/settingsRoutes.ts` (new), `server/test/box-token-census.test.ts`, `pwa/src/screens/settings/DocsSettingsSection.tsx` (new), `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks}.tsx/ts`, `CLAUDE.md` (census sentence) |
 | P6 print stage 1 and the page loader | P6.1 to P6.2 | X1's host wave, P4 | `pwa/src/docs/print/**` (new), `pwa/src/lib/printTreeJob.ts` (new), `pwa/src/lib/markdownWorker.ts` (the `print-tree` job's dispatch), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row), `pwa/src/docs/docs.css` (print rules), `pwa/src/docs/mockup/{load,plan,policy}.ts`, `pwa/src/docs/mockup/shim.ts` (new) |
 | P5 reading layer | P5.1 to P5.5 | the library release, P6 | `pwa/package.json` and lock (library pin), `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/reader/{bridge,policy,places}.ts` (`places.ts` new), `pwa/src/docs/readerHistory.ts`, `pwa/src/docs/DocsHead.tsx` (Layout row), `pwa/src/docs/print/**` (stage 2), the docs worker job (`pwa/src/lib/docsRunner*`), rich-docs spec §3.3 and §4.4 |
 
@@ -182,13 +182,13 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ## Wave P4: listings, refs and the docs settings store
 
-### Task P4.1: Index newest five and readable titles
+### Task P4.1: Index newest five, the project page's docs and readable titles
 
-**Files:** Modify `ccd/ccd` (`docs-index --all`), `shared/docs.ts` (`DocsIndexOk.projects[].newest?`, `newestTruncated?`), `pwa/src/docs/{DocsIndexView.tsx,docsTree.ts}`; Test `server/test/ccd-docs-index.test.ts`, `pwa/test/docs-titles.test.ts` (new).
+**Files:** Modify `ccd/ccd` (`docs-index --all`), `shared/docs.ts` (`DocsIndexOk.projects[].newest?`, `newestTruncated?`), `pwa/src/docs/{DocsIndexView.tsx,DocsTreeView.tsx,docsTree.ts}`; Test `server/test/ccd-docs-index.test.ts`, `pwa/test/docs-titles.test.ts` (new).
 
 **Interfaces:** Produces `docTitle(name: string): { title: string; date: string | null }` (L1, `docsTree.ts`).
 
-- [ ] **Step 1: Failing tests:** `index: at most five newest per section`; `index: at the wire cap names drop from the last project, counts kept, newestTruncated set`; `index: an answer without newest renders`; `docTitle: table of names` (date prefix, extension, `-` and `_`).
+- [ ] **Step 1: Failing tests:** `project page: each section lists its docs with title, date label and draft badge, newest first` (from the tree answer, no extra request); `index: at most five newest per section`; `index: at the wire cap names drop from the last project, counts kept, newestTruncated set`; `index: an answer without newest renders`; `docTitle: table of names` (date prefix, extension, `-` and `_`).
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): newest docs and readable titles (X2 P4)`.
 
 ### Task P4.2: Old ref spellings and `.ico`
@@ -335,6 +335,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.44 | P5.5 | Use the frame's bytes without re-encoding | print figures: images are re-encoded |
 | M11.45 | P5.5 | Wait without a deadline | print figures: missing after 10 s prints source |
 | M11.46 | P6.1 | Let `style` through `printAllow` | print tree: the allow-list drops style, handlers and foreign URLs |
+| M11.47 | P4.1 | Draw the project page's section rows without their docs | project page: each section lists its docs |
 
 ## Deviations found
 
