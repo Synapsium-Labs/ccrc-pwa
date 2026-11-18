@@ -259,6 +259,13 @@ number from `POST /api/ledger/deviations`.
   two kinds' reads is never skipped (review run 2386 A3). A restore deferred on a target keeps the watermark of every kind
   whose event rides on that target, so an initiative's link carried on a project's restore is read again (review run 2394
   N2). Record: the wave 4 note (review run 2386 A6).
+- **D-8737 (2026-11-18)** — map-shapes-early: no read on the wire carries a migration map's or report's contents before
+  wave 7, so wave 5 adds Task 7.1's `MAP_CLASSES`, `MapEntry` and `MapCounts` to `shared/plan.ts`, verbatim from Task
+  7.1's text, and builds the map and report bodies as one component over them. `ItemView` renders the body when it is
+  handed one; until wave 7 adds the read that hands it (and the map and report arms of the item act route), a map or
+  report item shows its why and how text with its controls, and those controls answer the refusal's fixed sentence.
+  Wave 7 imports these shapes and defines them nowhere else; if its capture or build finds a shape must change, it
+  changes it in `shared/plan.ts` and amends this entry. Record: the wave 5 note (the coordinator's ruling, run 2447).
 
 ## Global Constraints
 
