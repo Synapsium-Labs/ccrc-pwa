@@ -85,7 +85,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 - Produces: `ccd docs-show-range --project P --commit C --section S --path X --pin <blob:sha|fp:sha|stat:size:mtimeNs> --prepare` answering `DocsRangePrepared`; `… --snapshot ID --offset O --length L` answering `DocsRangeFrame`.
 - Cache: ccd-owned directory under ccd's own state (never inside `$REG`), mode 0700, one `flock`; reserve-then-copy against 536870912 bytes, or a lower bound read from the cache directory's bound file (only ever lower); at most 2 prepares at once, 6 a minute; entries one hour, least recently used first; snapshot id bound to (project or label, section, path, pin).
 
-- [ ] **Step 1: Failing tests** (each one `it`): `range: frames reassemble to the blob`; `range: a file changed since the listing refuses` (stat pin, then `touch`; expect `draft-changed`); `range: fp pin of a changed draft refuses`; `range: a frame naming another path's snapshot refuses`; `range: a frame of 524289 bytes refuses`; `range: a 64 MiB plus one byte file refuses range-too-large`; `range: a third concurrent prepare answers prepare-busy`; `range: a seventh prepare in a minute answers prepare-busy`; `range: an evicted snapshot answers snapshot-gone`; `range: cache never exceeds its bound` (the fixture HOME lowers the bound to 8 MiB with the bound file; two concurrent 5 MiB prepares; a hook pauses the first between reserve and copy; the second refuses `prepare-busy` and the directory never holds more than 8 MiB); `range: a bound file above the constant changes nothing`.
+- [ ] **Step 1: Failing tests** (each one `it`): `range: frames reassemble to the blob`; `range: a file changed since the listing refuses` (stat pin, then `touch`; expect `draft-changed`); `range: fp pin of a changed draft refuses`; `range: a frame naming another path's snapshot refuses`; `range: a frame of 524289 bytes refuses`; `range: files of 67108863 and 67108864 bytes prepare, 67108865 refuses range-too-large` (sparse fixtures, so the HOME holds no 64 MiB of written data); `range: a third concurrent prepare answers prepare-busy`; `range: a seventh prepare in a minute answers prepare-busy`; `range: an evicted snapshot answers snapshot-gone`; `range: cache never exceeds its bound` (the fixture HOME lowers the bound to 8 MiB with the bound file; two concurrent 5 MiB prepares; a hook pauses the first between reserve and copy; the second refuses `prepare-busy` and the directory never holds more than 8 MiB); `range: a bound file above the constant changes nothing`.
 - [ ] **Step 2: Run** from `server/`; expect FAIL (`unknown verb`).
 - [ ] **Step 3: Implement** the verb in `_docs_py`; the prepare reads a committed blob through the existing blob path, a draft through the existing fingerprinted read, and checks a `stat` pin against `os.fstat` of the opened descriptor.
 - [ ] **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(ccd): docs-show-range with a bounded snapshot cache (X2 P1, D-8764)`.
@@ -107,7 +107,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 **Interfaces:**
 - Produces: `readRange(loader, target, opts: { signal: AbortSignal; onProgress(done: number, total: number): void }): Promise<{ ok: true; blob: Blob } | { ok: false; why: DocsRangeFailure }>`; L1 `rangeVerdict(size: number, cls: DocContentClass): 'show' | 'range' | 'over-ceiling'`; `imageHeaderDims(bytes: Uint8Array): { w: number; h: number } | null` (PNG IHDR, JPEG SOF, GIF, WebP).
 
-- [ ] **Step 1: Failing tests:** `range reassembly: frames in order make the blob`; `range reassembly: a frame with a bad digest fails the read`; `range reassembly: cancel drops every frame` (signal aborted mid-read, nothing saved, no further request); `range reassembly: snapshot-gone restarts from prepare once, then fails`; `rangeVerdict: below, at and above 2 MiB and 64 MiB`; `image view: 16385 px wide refuses before decode`; `over ceiling: the sentence names the size and the ceiling, no Download offered`.
+- [ ] **Step 1: Failing tests:** `range reassembly: frames in order make the blob`; `range reassembly: a frame with a bad digest fails the read`; `range reassembly: cancel drops every frame` (signal aborted mid-read, nothing saved, no further request); `range reassembly: snapshot-gone restarts from prepare once, then fails`; `rangeVerdict: below, at and above 2 MiB and 64 MiB`; `image view: 8192 by 8192 shows, 8192 by 8193 refuses before decode` (pixels below, at and above `DOCS_IMAGE_VIEW_MAX_PIXELS`, from headers only); `image view: 16384 by 4096 shows, 16385 by 1 refuses before decode` (the side limit); `over ceiling: the sentence names the size and the ceiling, no Download offered`.
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(docs): range reassembly, Download and image view above 2 MiB (X2 P1)`.
 
 ### Task P1.5: Markdown in parts, and the overlay cap
@@ -160,10 +160,12 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P3.1: The `pdf` class and the dependency decision
 
-**Files:** Modify `shared/docs.ts` (`DOC_CONTENT_CLASS_MAP`, `DOC_CONTENT_CLASS_BY_EXT`, `DOCS_CLASS_CAP`, `sniffPdf`), `pwa/package.json` and lock, the shipped third-party notices; Test `server/test/docs-shared.test.ts`, `pwa/test/pdf-dependency.test.ts` (new).
+**Files:** Modify `shared/docs.ts` (`DOC_CONTENT_CLASS_MAP`, `DOC_CONTENT_CLASS_BY_EXT`, `DOCS_CLASS_CAP`, `sniffPdf`, `pdfVerdict`), `pwa/package.json` and lock, the shipped third-party notices; Test `server/test/docs-shared.test.ts`, `pwa/test/pdf-dependency.test.ts` (new).
 
 - [ ] **Step 0:** Choose the newest `pdfjs-dist` release; record version, integrity, provenance and `npm audit signatures` output in Results.
-- [ ] **Step 1: Failing tests:** `contentClass: .pdf is pdf`; `sniffPdf: %PDF- at 0 matches, else mismatch`; `pdf dependency: exact pin, no caret`; `pdf dependency: notice present`.
+**Interfaces:** Produces `pdfVerdict(size: number): 'inline' | 'download'` (L1, pure, against `DOCS_PDF_INLINE_MAX_BYTES`), which `DocsLeaf.tsx`'s pdf branch (P3.2) consults.
+
+- [ ] **Step 1: Failing tests:** `pdfVerdict: 4194303 and 4194304 bytes inline, 4194305 download only`; `contentClass: .pdf is pdf`; `sniffPdf: %PDF- at 0 matches, else mismatch`; `pdf dependency: exact pin, no caret`; `pdf dependency: notice present`.
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(docs): pdf class and pdfjs-dist pin (X2 P3)`.
 
 ### Task P3.2: `PdfFrame`
@@ -178,7 +180,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 ### Task P3.3: Labs PDF-L1 to PDF-L3 and the ceiling
 
 - [ ] **Step 1:** Run PDF-L1 (blob worker in an opaque origin, inherited policy), PDF-L2 (srcdoc at 4 MiB with viewer, worker, fonts and CMaps) and PDF-L3 (a JPEG 2000 image) on desktop Chromium and Firefox in the browser harness; record each in Results; phone engines go to F's device item.
-- [ ] **Step 2:** If PDF-L2 fails at 4 MiB, lower `DOCS_PDF_INLINE_MAX_BYTES` to the largest size it passes, with a test at, below and above, and report it. **Step 3: Commit** `test(docs): PDF labs (X2 P3)`.
+- [ ] **Step 2:** If PDF-L2 fails at 4 MiB, lower `DOCS_PDF_INLINE_MAX_BYTES` to the largest size it passes, move P3.1's three sizes with it (one byte below, at, one byte above), and report it. **Step 3: Commit** `test(docs): PDF labs (X2 P3)`.
 
 ## Wave P4: listings, refs and the docs settings store
 
@@ -344,6 +346,9 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.50 | P5.2 | Import `resolveItemLink` from the render job | docs-ring: resolveItemLink is imported only by trackerLinkJob.ts |
 | M11.51 | P1.5 | Default a missing `mtimeNs` to `"0"` in `statPinOf` | entryView: a draft without mtimeNs stays withheld |
 | M11.52 | P5.5 | Check the dimensions only after decode | print figures: a PNG declaring 4096 px is refused before createImageBitmap |
+| M11.53 | P1.2 | Move ccd's parity copy of `DOCS_RANGE_MAX_BYTES` down by one | range: files of 67108863 and 67108864 bytes prepare |
+| M11.54 | P3.1 | Move `DOCS_PDF_INLINE_MAX_BYTES` down by one | pdfVerdict: 4194304 bytes inline |
+| M11.55 | P1.4 | Move `DOCS_IMAGE_VIEW_MAX_PIXELS` down by one | image view: 8192 by 8192 shows |
 | M11.56 | P2.3 | Drop `docs-folder --add` from the hook's jq verb lists | session hook: docs-folder --add is denied in a child |
 
 ## Deviations found
