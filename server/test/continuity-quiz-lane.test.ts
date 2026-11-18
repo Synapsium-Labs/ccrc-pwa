@@ -33,8 +33,8 @@ const MON = Date.UTC(2026, 10, 16, 0, 0, 0);       // Monday 2026-11-16, ISO wee
 const DAY = 86_400_000;
 
 const facts = (over: Partial<QuizLaneFacts> = {}): QuizLaneFacts => ({
-  recordReady: true, week: quizWeek(MON + DAY), recordedAts: { ok: true, value: [] }, baseline: { ok: true, exists: false },
-  itemRaised: { ok: true, value: false }, ...over,
+  recordReady: true, week: quizWeek(MON + DAY), recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
+  baseline: { ok: true, exists: false }, itemRaised: { ok: true, value: false }, ...over,
 });
 
 describe('quizWeek: the ISO week, in UTC (slug quiz-week-is-utc)', () => {
@@ -101,7 +101,7 @@ describe('the item says what, how and why, and names every condition', () => {
       expect(all).toContain('quiz-record-runbook.md, in the Overlord programme\'s docs');
       expect(all).toContain('node --no-warnings ~/ccrc/deploy/history-quiz-single.mjs');
       expect(all).toMatch(/arms \(it runs step 0b's probes first/);
-      expect(all).toMatch(/press Confirm on the pending run/);
+      expect(all).toMatch(/find the pending run whose report sha starts as report and ccrc quiz-record printed, and press Confirm/);
       expect(all).toMatch(/never while a W2 window is open/);
       expect(all).toMatch(/within 8 days of the arms run/);
     });
@@ -158,12 +158,16 @@ describe('the lane over the store', () => {
     expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W48', true).title]);
   });
 
-  it('a pending run holds its week but is no baseline; a discarded run holds nothing (quiz-run-pending-until-confirmed)', () => {
+  // Review 2442 F2 replaced review 2121 F2's pin ("a pending run holds its week"): a session holding the box token could post
+  // one pending run a week and keep the reminder silent, so only a confirmed run closes the week now.
+  it('a pending run never silences its week: the item is raised and says a run waits; a discarded run counts for nothing', () => {
     const { coord, port } = setup();
     recordRun(coord, MON + 3_600_000, 'a', null);
-    expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
-    expect(runQuizLane(port, MON + 8 * DAY, () => {})).toMatchObject({ kind: 'raised' });
-    expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W48', false).title]);
+    expect(runQuizLane(port, MON + DAY, () => {})).toMatchObject({ kind: 'raised' });
+    const [item] = quizItems(coord);
+    expect(item).toMatchObject({ title: quizItemText('2026-W47', false).title, how: quizItemText('2026-W47', false, true).how });
+    expect(item!.how[0]).toMatch(/^A recorded run is waiting for your Confirm or Discard on the Shadow lanes card/);
+    expect(port.recordedAts()).toEqual({ ok: true, value: [] });
     const fresh = setup();
     recordRun(fresh.coord, MON + 3_600_000, 'a', 'discard');
     expect(runQuizLane(fresh.port, MON + DAY, () => {})).toMatchObject({ kind: 'raised' });

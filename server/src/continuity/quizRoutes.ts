@@ -21,10 +21,11 @@ import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
 import { isQuizRuleAction, quizRecordVerdict } from './quiz.js';
-import { insertQuizRun, ruleQuizRun } from './quizStore.js';
+import { insertQuizRun, quizPendingCount, ruleQuizRun } from './quizStore.js';
 
-/** The record door's body cap: the verb refuses a report over 64 KiB, and the JSON around it is small. */
-export const QUIZ_RECORD_BODY_LIMIT = 80 * 1024;
+/** The record door's body cap (review 2442 F7): the verb refuses a report over 64 KiB, and `jq` writes each byte of it as at
+ *  most six characters (`\u00XX`), so six times that plus room for the sha, the trace and the keys always fits. */
+export const QUIZ_RECORD_BODY_LIMIT = 6 * 64 * 1024 + 4096;
 /** The verb's trace (`quiz-record <user> <role> <ISO time>`): one line of at most this many characters. */
 const RECORDED_BY_MAX = 200;
 const RUN_ID_RE = /^[1-9][0-9]{0,15}$/;
@@ -68,11 +69,16 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     if (typeof recordedBy !== 'string' || recordedBy.length === 0 || recordedBy.length > RECORDED_BY_MAX || /[\r\n]/.test(recordedBy)) {
       return refuseRoute(reply, 'bad-request', { field: 'recordedBy', detail: `recordedBy is one line of at most ${RECORDED_BY_MAX} characters` });
     }
+    if (deps.coord === undefined) return notConfigured(reply);
     const now = deps.wall();
     const measuredSha = createHash('sha256').update(report, 'utf8').digest('hex');
-    const v = quizRecordVerdict({ text: report, claimedSha: sha256, measuredSha, now });
-    if (!v.ok) return refuseRoute(reply, 'bad-request', { field: v.field, detail: v.detail });
-    if (deps.coord === undefined) return notConfigured(reply);
+    // The count, the verdict and the insert run with no await between them, so no other record lands in between.
+    let pending: number;
+    try { pending = quizPendingCount(deps.coord.db, measuredSha); } catch {
+      return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be read' });
+    }
+    const v = quizRecordVerdict({ text: report, claimedSha: sha256, measuredSha, now, pending });
+    if (!v.ok) return refuseRoute(reply, v.word ?? 'bad-request', { field: v.field, detail: v.detail });
     const r = insertQuizRun(deps.coord.db, { report: v.report, extra: v.extra, recordedBy, recordedAt: now });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be written' });
     return reply.code(200).send({ ok: true, id: r.id, fresh: r.fresh, state: r.state });

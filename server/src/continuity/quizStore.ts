@@ -4,15 +4,16 @@
 // no baseline (slug quiz-run-pending-until-confirmed); ONE ruler, `ruleQuizRun`, the one writer of `state`, `ruledAt`,
 // `ruledBy` and `baseline`, which asks `quiz.ts#quizRuleVerdict` inside its own transaction over the rows already recorded and
 // the W1a lane-arm rows read through the reader its caller hands it (`CoordStore.laneArmSetting`, the one reader of
-// `lane_arm_settings`). Reads: `quizRuns`, `quizRecordedAts` (the lane's, discarded rows left out), `quizBaselineRead` (the
-// lane-arm door's fact, confirmed rows only, with the baseline's date) and `quizPendingRead` (the card's). Nothing here decides
+// `lane_arm_settings`). Reads: `quizRuns`, `quizRecordedAts` and `quizPendingWaits` (the lane's: confirmed rows, and whether
+// any run is pending), `quizBaselineRead` (the lane-arm door's fact, confirmed rows only, with the baseline's date),
+// `quizPendingRead` (the card's) and `quizPendingCount` (the record door's). Nothing here decides
 // beyond asking those rules, and no read folds a failure into an answer: each tells a failed read apart.
 import type { DatabaseSync } from 'node:sqlite';
 import type { LaneArmQuizReads, LaneArmRead } from '../coord/laneArm.js';
 import { tx } from '../coord/tx.js';
 import type { CoordStore } from '../coord/store.js';
 import { itemRaisedWithTitle } from '../coord/ledgersStore.js';
-import type { LaneArmQuizPending } from '../../../shared/lane-arm.js';
+import { QUIZ_SHA_PREFIX, type LaneArmQuizPending } from '../../../shared/lane-arm.js';
 import {
   QUIZ_ITEM_PROGRAMME, QUIZ_RUN_STATES, W1A_ARM_ROWS, quizRuleVerdict, type QuizArmed, type QuizReport, type QuizRuleAction, type QuizRunExtra,
   type QuizRunState, type W1aArmRow,
@@ -147,16 +148,31 @@ export function quizRuns(db: DatabaseSync): QuizRunsRead {
   }
 }
 
-/** When each recorded run that was not discarded was recorded, oldest first: the quiz lane's read (review 2121 F2), so a
- *  pending or confirmed run holds this week's item and a discarded one does not. It selects that column alone, so a corrupt
- *  value in another column never makes the lane's read fail. */
+/** When each CONFIRMED run was recorded, oldest first: the quiz lane's read. Review 2442 F2 replaced review 2121 F2's rule
+ *  (a pending run held the week): a pending run never silences the week's item, and a discarded one counts for nothing. It
+ *  selects that column alone, so a corrupt value in another column never makes the lane's read fail. */
 export function quizRecordedAts(db: DatabaseSync): { ok: true; value: number[] } | { ok: false; detail: string } {
   try {
-    const rows = db.prepare("SELECT recordedAt FROM continuity_quiz_runs WHERE state != 'discarded' ORDER BY id").all() as { recordedAt: number }[];
+    const rows = db.prepare("SELECT recordedAt FROM continuity_quiz_runs WHERE state = 'confirmed' ORDER BY id").all() as { recordedAt: number }[];
     return { ok: true, value: rows.map((r) => r.recordedAt) };
   } catch (e) {
     return { ok: false, detail: e instanceof Error ? e.message : String(e) };
   }
+}
+
+/** Whether any recorded run waits for the operator's ruling: the quiz lane's read, so the week's item says so. */
+export function quizPendingWaits(db: DatabaseSync): { ok: true; value: boolean } | { ok: false; detail: string } {
+  try {
+    return { ok: true, value: db.prepare("SELECT 1 FROM continuity_quiz_runs WHERE state = 'pending' LIMIT 1").get() !== undefined };
+  } catch (e) {
+    return { ok: false, detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** How many runs are pending, leaving out a row with `exceptSha` (a resend of that report): the record door's count for the
+ *  pending cap. It throws on a failed read, and the door answers `write-failed`. */
+export function quizPendingCount(db: DatabaseSync, exceptSha: string): number {
+  return (db.prepare("SELECT count(*) AS n FROM continuity_quiz_runs WHERE state = 'pending' AND reportSha != ?").get(exceptSha) as { n: number }).n;
 }
 
 /** Whether a confirmed baseline row exists, and when it was recorded: the lane-arm door's fact (`decideLaneArmPost`), the quiz
@@ -171,13 +187,16 @@ export function quizBaselineRead(db: DatabaseSync): QuizBaselineRead {
   }
 }
 
-/** The runs waiting for the operator's ruling, oldest first: the card's read. */
+/** The runs waiting for the operator's ruling, in id order (the order they were recorded, never a field inside a report):
+ *  the card's read, with what the operator matches before a Confirm (review 2442 F1). */
 export function quizPendingRead(db: DatabaseSync): QuizPendingRead {
   try {
-    const rows = db.prepare('SELECT id, measuredAt, score, lo, hi, questions, families, answered, runFailed, absent '
-      + "FROM continuity_quiz_runs WHERE state = 'pending' ORDER BY id").all() as unknown as (LaneArmQuizPending & Record<string, number | null>)[];
+    const rows = db.prepare('SELECT id, recordedAt, reportSha, recordedBy, measuredAt, score, lo, hi, questions, families, answered, '
+      + "runFailed, absent FROM continuity_quiz_runs WHERE state = 'pending' ORDER BY id").all() as unknown as
+      (Omit<LaneArmQuizPending, 'reportShaPrefix'> & { reportSha: string } & Record<string, number | null>)[];
     return { ok: true, runs: rows.map((r) => ({
-      id: r.id, measuredAt: r.measuredAt, score: r.score, lo: r.lo, hi: r.hi, questions: r.questions, families: r.families,
+      id: r.id, recordedAt: r.recordedAt, reportShaPrefix: r.reportSha.slice(0, QUIZ_SHA_PREFIX), recordedBy: r.recordedBy,
+      measuredAt: r.measuredAt, score: r.score, lo: r.lo, hi: r.hi, questions: r.questions, families: r.families,
       answered: r.answered ?? 0, runFailed: r.runFailed ?? 0, absent: r.absent ?? 0,
     })) };
   } catch (e) {
@@ -195,6 +214,7 @@ export function quizLanePortOf(coord: Pick<CoordStore, 'db' | 'raiseItem'>, reco
   return {
     recordReady,
     recordedAts: () => quizRecordedAts(coord.db),
+    pendingWaits: () => quizPendingWaits(coord.db),
     baseline: () => quizBaselineRead(coord.db),
     itemRaised: (titles) => {
       try {

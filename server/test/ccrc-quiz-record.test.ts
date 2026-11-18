@@ -86,6 +86,12 @@ describe('ccrc quiz-record: refusals before any read', () => {
     expect(r.stderr).toMatch(/in-session/);
     expect(clientCalls()).toEqual([]);
   });
+  it('refuses in-session when CLAUDECODE is set but empty, as history\'s single-arm module reads it (review 2442 F9)', async () => {
+    const r = await run(['--report', report(), '--sha', SHA], { CLAUDECODE: '' });
+    expect(r.code).toBe(2);
+    expect(r.stderr).toMatch(/in-session/);
+    expect(clientCalls()).toEqual([]);
+  });
   it('refuses in-pane when TMUX_PANE is set: exit 2, the client never called', async () => {
     const r = await run(['--report', report(), '--sha', SHA], { TMUX_PANE: '%3' });
     expect(r.code).toBe(2);
@@ -150,7 +156,7 @@ describe('ccrc quiz-record: the post and the answers', () => {
     fs.writeFileSync(path.join(home, '.ccrc', 'ccrc.env'), 'CCRC_ROLE=fleet\n');
     const r = await run(['--report', report(), '--sha', SHA]);
     expect(r.code, r.stderr).toBe(0);
-    expect(r.stdout).toBe('recorded run 7, pending: confirm it on the Shadow lanes card\n');
+    expect(r.stdout).toBe(`recorded run 7, report sha ${SHA.slice(0, 12)}, pending: confirm it on the Shadow lanes card\n`);
     expect(clientCalls()).toEqual(['quiz record --json -']);
     const body = JSON.parse(clientStdin()) as { report: string; sha256: string; recordedBy: string };
     expect(body.report).toBe(REPORT);
@@ -168,7 +174,7 @@ describe('ccrc quiz-record: the post and the answers', () => {
     plantClient('{"ok":true,"id":4,"fresh":false,"state":"confirmed"}');
     const r = await run(['--report', report(), '--sha', SHA]);
     expect(r.code).toBe(0);
-    expect(r.stdout).toBe('already recorded as run 4 (confirmed)\n');
+    expect(r.stdout).toBe(`already recorded as run 4, report sha ${SHA.slice(0, 12)} (confirmed)\n`);
   });
   it('prints a refusal as <word>: <detail> on stderr and exits 1', async () => {
     plantClient('{"ok":false,"error":"bad-request","detail":"sha256 does not match the report"}');

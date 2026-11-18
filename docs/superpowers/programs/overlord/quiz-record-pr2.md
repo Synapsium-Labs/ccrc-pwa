@@ -26,8 +26,10 @@ programme ledger.
 - **quiz-bootstrap-copy-in-lane-arm**: the frozen L0 copy of the bootstrap's `ci`, `method` and `B` lives in
   `shared/lane-arm.ts` (`QUIZ_BOOTSTRAP`), beside the card's quiz wire, rather than in a new `shared/` file;
   `continuity-quiz-route.test.ts` compares it with `deploy/history-gate.mjs#BOOTSTRAP`.
-- **quiz-record-door-refuses-unknown-keys**: rule 3 also refuses any top-level key outside §4's field list, naming it, so a
-  comparison figure (a lift, a delta, a verdict, a PASS) can never ride in. §5's rule 3 named `kind` and `v` only.
+- **quiz-record-door-refuses-unknown-keys**: rule 3 also refuses any TOP-LEVEL key outside §4's field list, naming it, so a
+  comparison figure (a lift, a delta, a verdict, a PASS) can never ride in at the top level. §5's rule 3 named `kind` and `v`
+  only. The nested objects (`counts`, `share`, `interval`) still take extra keys; nothing from them is stored but the mapped
+  columns, so no figure rides in that way either (review 2442 F8).
 - **quiz-rule-verdict-is-l1**: the ruling's decision (only a pending run, a confirm asks the baseline rule, a discard is never
   a baseline) is its own L1 decider, `quizRuleVerdict`, with a mutant set and a floor; `ruleQuizRun` asks it in its
   transaction, as `insertQuizRun` used to ask `quizBaseline`.
@@ -35,6 +37,15 @@ programme ledger.
   a failed baseline read is `unreadable`, never "not yet", and a failed pending read stays a failure.
 - **verb-sha-is-lower-case**: the verb refuses a `--sha` that is not 64 lower-case hex, as the door does, rather than posting
   one the door would refuse.
+- **quiz-card-dates-are-utc** (coordinator ruling on review 2442 F10): the plan says the PWA renders the card's dates "in the
+  console's time zone", but Settings stores no console zone (the only zone a Settings row stores is the renewal backstop's).
+  The card renders them in UTC, labelled (`2026-11-24 UTC`), the zone the quiz week is keyed in (quiz-week-is-utc), so a
+  run's date and the weekly item's week always agree and nobody reads it as local time.
+- **quiz-pending-never-holds-the-week** (coordinator ruling on review 2442 F2, replacing review 2121 F2's pin): a pending run
+  no longer holds the week's reminder. Only a confirmed run closes the week; while the week has only pending rows the item is
+  raised and says a recorded run waits for a Confirm or Discard on the Shadow lanes card; a discarded run counts for nothing.
+  Why: a session holding the box token could post one well-formed pending run a week and keep the reminder silent until the
+  operator happened to open Settings.
 
 Carried from the plan's §12 and kept: the-door-checks-the-sha, quiz-run-pending-until-confirmed, quiz-record-refuses-any-pane,
 recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-over-answered.
@@ -63,6 +74,17 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   a ten-question fixture, writes it as PR 1's `report` subcommand does (`canonicalJson` and a newline), posts it through the
   record door and reads the row back field for field; it also pins the kind and the field list equal. Dropping `inputs` from
   the door's field list reds both cases.
+- **Fix round 1 after review 2442** (rulings 23897, F10 ruled 23899): F1 each pending run on the card names its run id, when
+  it was recorded, the first 12 hex of its report sha and the verb's trace, and the verb prints the same id and prefix; the
+  runbook and the weekly item say to match the prefix before Confirm and discard a run you did not record. F2 as the departure
+  above. F3 the card sorts pending runs by id, and the record door refuses a sixth pending run with its own word,
+  `quiz-pending-full` (409, `shared/refusal.ts#QUIZ_RECORD_REFUSALS`), counting the pending rows other than one with the
+  report's sha so a resend still answers its row. F4 `inputs.frozen_sha256` must equal the top level's. F5 a case and a
+  mutant each for the interval's `ci`, the `kind`, the share's numerator alone and an extra key in `inputs` (D19 to D25 with
+  F3's cap and its bound; L8 to L10 for F2). F6 the arm and pilot words are named constants, compared with history's own
+  beside the settings modes, and the contract runs in both modes. F7 the body limit is six times the verb's 64 KiB plus 4 KiB,
+  which `jq`'s worst escaping always fits. F8 as the departure above. F9 the verb treats a set-but-empty `CLAUDECODE` as a
+  session. F10 as the departure above. Each new case was measured red against its guard and green with it.
 - **A second absorption** (the coordinator's word, after the first CI on 761f1ff5e): other lanes A (#2996) landed a census
   that places every write door in one class, and the record door had none. Main was merged once more and the door took a
   `launch-profile` row in `overlord-other-lanes-census.test.ts`'s `NOT_REFUSED` (box token only; a session holding the token

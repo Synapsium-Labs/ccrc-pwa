@@ -148,7 +148,7 @@ function LaneRow({ row, poll }: { row: LaneArmRowView; poll: LaneArmPoll }): Rea
   );
 }
 
-/** The replay quiz's block (Overlord W1a, plan 2026-11-17 §6): each pending run, oldest first, with Confirm and Discard
+/** The replay quiz's block (Overlord W1a, plan 2026-11-17 §6): each pending run, in the order recorded, with Confirm and Discard
  *  through the step-up (`useStepUp`'s `runAct`, the secret door's flow), then the baseline line. A ruling that lands re-reads
  *  the card; a refusal is said as the rows say theirs and re-reads too (the run may already be ruled). */
 function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload: () => void; stepUpDeps: StepUpDeps }): ReactNode {
@@ -179,12 +179,13 @@ function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload
   const b = quiz.baseline;
   const baselineLine = b.state === 'recorded' ? T.quizBaseline.recorded(laneArmQuizDate(b.at))
     : b.state === 'not-yet' ? T.quizBaseline.notYet : T.quizBaseline.unreadable;
-  const runs = quiz.pending.ok ? [...quiz.pending.runs].sort((x, y) => x.measuredAt - y.measuredAt) : [];
+  // In the order they were recorded (review 2442 F3): never by a field inside a report, which its poster chose.
+  const runs = quiz.pending.ok ? [...quiz.pending.runs].sort((x, y) => x.id - y.id) : [];
   return (
     <div data-quiz-baseline={b.state}>
       {quiz.pending.ok ? runs.map((r) => (
         <div key={r.id} data-quiz-run={r.id}>
-          <p className={SETTINGS_NOW_CLASS.note}>{T.quizPending(laneArmQuizDate(r.measuredAt), r)}</p>
+          <p className={SETTINGS_NOW_CLASS.note}>{T.quizPending(laneArmQuizDate(r.measuredAt), laneArmQuizDate(r.recordedAt), r)}</p>
           <Button variant="primary" size="fit" disabled={busy} onClick={() => { void rule(r.id, 'confirm'); }}>{T.quizConfirm}</Button>
           <Button variant="ghost" size="fit" disabled={busy} onClick={() => { void rule(r.id, 'discard'); }}>{T.quizDiscard}</Button>
         </div>

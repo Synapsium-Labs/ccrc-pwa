@@ -10,7 +10,9 @@ import {
   QUIZ_ARMED_WORDS, QUIZ_REPORT_FIELDS, QUIZ_RUN_STATES, W1A_ARM_ROWS, isW1aArmRow, quizBaseline, quizRuleVerdict, validQuizReport,
   type QuizReport, type QuizRunExtra, type W1aArmRow,
 } from '../src/continuity/quiz.js';
-import { insertQuizRun, quizBaselineRead, quizPendingRead, quizRecordedAts, quizRuns, ruleQuizRun } from '../src/continuity/quizStore.js';
+import {
+  insertQuizRun, quizBaselineRead, quizPendingCount, quizPendingRead, quizPendingWaits, quizRecordedAts, quizRuns, ruleQuizRun,
+} from '../src/continuity/quizStore.js';
 import { LANE_ARM_LANES } from '../../shared/lane-arm.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -225,16 +227,28 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     expect(runs.ok && runs.rows[0]).toMatchObject({ score: 0.71, recordedAt: 1000 });
   });
 
-  it('the lane\'s recorded weeks skip discarded rows; the card\'s pending read lists pending runs oldest first', () => {
+  // Review 2442 F2: the lane's recorded weeks are confirmed rows only (a pending run never silences the week; review 2121 F2
+  // read pending rows too), and its pending read says whether any run waits. F1: the card's read names each run.
+  it('the lane\'s recorded weeks are confirmed rows only; the card\'s pending read lists pending runs in id order, each named', () => {
     const { coord, read } = setup();
     const a = idOf(ins(coord, {}, 1000));
     const b = idOf(ins(coord, { reportSha: SHA('c') }, 2000));
     const c = idOf(ins(coord, { reportSha: SHA('d') }, 3000));
+    const d = idOf(ins(coord, { reportSha: SHA('e') }, 4000));
     rule(coord, b, 'discard', read);
-    expect(quizRecordedAts(coord.db)).toEqual({ ok: true, value: [1000, 3000] });
-    expect(quizPendingRead(coord.db)).toEqual({ ok: true, runs: [a, c].map((id) => ({
-      id, measuredAt: Date.UTC(2026, 10, 16, 9), score: 0.71, lo: 0.62, hi: 0.79, questions: 40, families: 6, answered: 38, runFailed: 1, absent: 1,
+    expect(quizRecordedAts(coord.db)).toEqual({ ok: true, value: [] });
+    expect(quizPendingWaits(coord.db)).toEqual({ ok: true, value: true });
+    rule(coord, d, 'confirm', read);
+    expect(quizRecordedAts(coord.db)).toEqual({ ok: true, value: [4000] });
+    expect(quizPendingCount(coord.db, SHA('f'))).toBe(2);
+    expect(quizPendingCount(coord.db, SHA('d'))).toBe(1);
+    expect(quizPendingRead(coord.db)).toEqual({ ok: true, runs: [[a, 1000, SHA('a')], [c, 3000, SHA('d')]].map(([id, recordedAt, sha]) => ({
+      id, recordedAt, reportShaPrefix: String(sha).slice(0, 12), recordedBy: 'quiz-record op both 2026-11-17T00:00:00Z',
+      measuredAt: Date.UTC(2026, 10, 16, 9), score: 0.71, lo: 0.62, hi: 0.79, questions: 40, families: 6, answered: 38, runFailed: 1, absent: 1,
     })) });
+    rule(coord, a, 'discard', read);
+    rule(coord, c, 'discard', read);
+    expect(quizPendingWaits(coord.db)).toEqual({ ok: true, value: false });
   });
 
   it('every read tells a failed read apart, and both writers answer write-failed', () => {
@@ -244,6 +258,8 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     expect(quizRuns(coord.db)).toMatchObject({ ok: false });
     expect(quizRecordedAts(coord.db)).toMatchObject({ ok: false });
     expect(quizPendingRead(coord.db)).toMatchObject({ ok: false });
+    expect(quizPendingWaits(coord.db)).toMatchObject({ ok: false });
+    expect(() => quizPendingCount(coord.db, SHA('a'))).toThrow();
     expect(ins(coord)).toEqual({ ok: false, kind: 'write-failed' });
     expect(rule(coord, 1, 'confirm', read)).toEqual({ ok: false, kind: 'write-failed' });
   });

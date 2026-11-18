@@ -14,9 +14,14 @@ import { CoordStore } from '../src/coord/store.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import { quizBaselineRead, quizPendingRead, quizRuns } from '../src/continuity/quizStore.js';
 import { BOOTSTRAP } from '../../deploy/history-gate.mjs';
-import { REPORT_FIELDS, REPORT_KIND, singleReportOf } from '../../deploy/history-quiz-single.mjs';
+import { PILOT_SKIPPED, REPORT_FIELDS, REPORT_KIND, singleReportOf } from '../../deploy/history-quiz-single.mjs';
+import { SETTINGS_MODES, TREATMENT_ARM } from '../../deploy/history-replay.mjs';
 import { canonicalJson } from '../../ccd/history/lib.mjs';
-import { QUIZ_SINGLE_REPORT_KEYS, QUIZ_SINGLE_REPORT_KIND } from '../src/continuity/quiz.js';
+import {
+  QUIZ_PENDING_CAP, QUIZ_PILOT_SKIPPED, QUIZ_SETTINGS_MODES, QUIZ_SINGLE_REPORT_KEYS, QUIZ_SINGLE_REPORT_KIND, QUIZ_TREATMENT_ARM,
+} from '../src/continuity/quiz.js';
+import { QUIZ_RECORD_BODY_LIMIT } from '../src/continuity/quizRoutes.js';
+import { ruleQuizRun } from '../src/continuity/quizStore.js';
 import { QUIZ_BOOTSTRAP } from '../../shared/lane-arm.js';
 import { ID_GATE_TOKEN, recorder, seedRow } from './idGateFixture.js';
 import { testDeps } from './helpers.js';
@@ -153,6 +158,40 @@ describe('POST /api/continuity/quiz-runs (the record door, box token)', () => {
     expect(json(res)).toMatchObject({ ok: false, error: 'not-configured' });
   });
 
+  it('five pending runs refuse a sixth with quiz-pending-full; a resend still answers its row, and a ruling frees a place (review 2442 F3)', async () => {
+    const r = await rig();
+    const ids: number[] = [];
+    for (let k = 0; k < QUIZ_PENDING_CAP; k += 1) ids.push(json(await record(r, bodyOf(r, { n_families: 34 - k })))['id'] as number);
+    const sixth = await record(r, bodyOf(r, { n_families: 20 }));
+    expect(sixth.statusCode, sixth.body).toBe(409);
+    expect(json(sixth)).toMatchObject({ ok: false, error: 'quiz-pending-full', field: 'pending' });
+    expect(json(await record(r, bodyOf(r, { n_families: 34 })))).toEqual({ ok: true, id: ids[0], fresh: false, state: 'pending' });
+    ruleQuizRun(r.coord.db, { id: ids[0]!, action: 'discard', at: r.now, by: 'device-a' }, (lane) => r.coord.laneArmSetting(lane));
+    expect(json(await record(r, bodyOf(r, { n_families: 20 })))).toMatchObject({ ok: true, fresh: true, state: 'pending' });
+    const runs = quizRuns(r.coord.db);
+    expect(runs.ok && runs.rows.filter((x) => x.state === 'pending')).toHaveLength(QUIZ_PENDING_CAP);
+  });
+
+  it('the body limit takes the verb\'s largest report after JSON escaping, so the door reads it, never a 413 (review 2442 F7)', async () => {
+    const r = await rig();
+    const text = '\u0001'.repeat(64 * 1024);
+    const payload = { report: text, sha256: sha(text), recordedBy: TRACE };
+    expect(JSON.stringify(payload).length).toBeGreaterThan(6 * 64 * 1024);
+    expect(JSON.stringify(payload).length).toBeLessThanOrEqual(QUIZ_RECORD_BODY_LIMIT);
+    const res = await record(r, payload);
+    expect(res.statusCode, res.body).toBe(400);
+    expect(json(res)).toMatchObject({ ok: false, error: 'bad-request', field: 'report' });
+  });
+
+  it('the pending read carries the run id, when it was recorded, its report sha prefix and the trace (review 2442 F1)', async () => {
+    const r = await rig();
+    const body = bodyOf(r);
+    const id = json(await record(r, body))['id'];
+    expect(quizPendingRead(r.coord.db)).toMatchObject({ ok: true, runs: [{
+      id, recordedAt: r.now, reportShaPrefix: body.sha256.slice(0, 12), recordedBy: TRACE,
+    }] });
+  });
+
   it('armed, the record door still takes the box token alone (an EXEMPT lane), and a cookie without the token is refused', async () => {
     const r = await rig({ armed: true });
     expect(json(await record(r, bodyOf(r)))).toMatchObject({ ok: true, state: 'pending' });
@@ -224,19 +263,22 @@ describe('POST /api/continuity/quiz-runs/:id/rule (the rule door, session and st
 // The contract with PR 1 (#2988): the report `deploy/history-quiz-single.mjs#singleReportOf` builds, written as its `report`
 // subcommand writes it, is the report the record door takes, field for field (plan §4 and §5).
 describe('the contract: history\'s single-arm report is the record door\'s', () => {
-  it('the kind and the field list are the same', () => {
+  it('the kind, the field list, the settings modes, the arm and the pilot word are the same (review 2442 F6)', () => {
     expect(QUIZ_SINGLE_REPORT_KIND).toBe(REPORT_KIND);
     expect([...QUIZ_SINGLE_REPORT_KEYS]).toEqual([...REPORT_FIELDS]);
+    expect([...QUIZ_SETTINGS_MODES]).toEqual([...SETTINGS_MODES]);
+    expect(QUIZ_TREATMENT_ARM).toBe(TREATMENT_ARM);
+    expect(QUIZ_PILOT_SKIPPED).toBe(PILOT_SKIPPED);
   });
 
-  it('singleReportOf over a fixture run records pending, and the row carries its counts, share, interval and inputs', async () => {
+  it.each(['restricted', 'fallback'])('singleReportOf over a fixture run in %s mode records pending, and the row carries its counts, share, interval and inputs', async (mode) => {
     const r = await rig();
     const fam = (n: number) => ({ store_id: '00000000-0000-4000-8000-0000000005a1', ccrc_id: `quiz-${n % 3}`, generation: `g-${n % 3}` });
     const entries = Array.from({ length: 10 }, (_, n) => ({ ...fam(n), qid: `q${n}` }));
     const answers = new Map<string, unknown>(entries.map((e, n) => [e.qid, n === 9 ? { question_state: 'run-failed' }
       : { question_state: 'answered', answer_field: { state: 'value' }, correct: n % 4 !== 0 }]));
     const report = singleReportOf({
-      setup: { seed: sha('contract seed'), settings_mode: 'restricted', judge_model: 'claude-opus-9-1' }, setupSha256: sha('setup'),
+      setup: { seed: sha('contract seed'), settings_mode: mode, judge_model: 'claude-opus-9-1' }, setupSha256: sha('setup'),
       frozen: { entries }, frozenSha256: sha('frozen'), summarySha256: sha('summary'), judgedSha256: sha('judged'),
       summary: { finished_ms: r.now - HOUR, ccrc_release: 'v9.9.8', claude_code_versions: ['2.9.1'], steer_armed: 'yes', agents_on_armed: 'no' },
       judged: { claude_code_version: '2.9.2' }, answers,
@@ -254,7 +296,7 @@ describe('the contract: history\'s single-arm report is the record door\'s', () 
     })]);
     const row = r.coord.db.prepare('SELECT correct, arm, settingsMode, pilot, ci, method, bootstrapB, inputs FROM continuity_quiz_runs').get();
     expect({ ...(row as Record<string, unknown>), inputs: JSON.parse(String((row as { inputs: string }).inputs)) }).toEqual({
-      correct: 6, arm: 'treatment', settingsMode: 'restricted', pilot: 'skipped-by-ruling', ci: BOOTSTRAP.ci, method: BOOTSTRAP.method,
+      correct: 6, arm: 'treatment', settingsMode: mode, pilot: 'skipped-by-ruling', ci: BOOTSTRAP.ci, method: BOOTSTRAP.method,
       bootstrapB: BOOTSTRAP.B, inputs: report.inputs,
     });
   });

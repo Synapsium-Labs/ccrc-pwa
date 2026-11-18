@@ -34,8 +34,9 @@ const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number
 /** One pending quiz run, whole, or null. */
 function asQuizPending(raw: unknown): LaneArmQuizPending | null {
   if (!isRecord(raw)) return null;
-  const { id, measuredAt, score, lo, hi } = raw;
-  if (!isFiniteNum(id) || !isFiniteNum(measuredAt) || !isFiniteNum(score) || !isFiniteNum(lo) || !isFiniteNum(hi)) return null;
+  const { id, recordedAt, reportShaPrefix, recordedBy, measuredAt, score, lo, hi } = raw;
+  if (!isFiniteNum(id) || !isFiniteNum(recordedAt) || !isFiniteNum(measuredAt) || !isFiniteNum(score) || !isFiniteNum(lo) || !isFiniteNum(hi)) return null;
+  if (typeof reportShaPrefix !== 'string' || typeof recordedBy !== 'string') return null;
   const counts: number[] = [];
   for (const k of QUIZ_COUNTS) {
     const v = raw[k];
@@ -43,7 +44,7 @@ function asQuizPending(raw: unknown): LaneArmQuizPending | null {
     counts.push(v);
   }
   const [questions, families, answered, runFailed, absent] = counts as [number, number, number, number, number];
-  return { id, measuredAt, score, lo, hi, questions, families, answered, runFailed, absent };
+  return { id, recordedAt, reportShaPrefix, recordedBy, measuredAt, score, lo, hi, questions, families, answered, runFailed, absent };
 }
 
 /** The quiz block, whole, or null (a malformed one is dropped: the card then shows no block, never a throw). */
@@ -69,10 +70,11 @@ function asQuizView(raw: unknown): LaneArmQuizView | null {
   return null;
 }
 
-/** A quiz date as the card says it, in the console's own time zone: "24 Nov 2026". */
+/** A quiz date as the card says it, in UTC and labelled so: "2026-11-24 UTC" (slug quiz-card-dates-are-utc, review 2442
+ *  F10): the quiz week is UTC (slug quiz-week-is-utc), so a run's date and the weekly item's week always agree, and the label
+ *  keeps anyone from reading it as local time. */
 export function laneArmQuizDate(ms: number): string {
-  const d = new Date(ms);
-  return `${d.getDate()} ${d.toLocaleString('en', { month: 'short' })} ${d.getFullYear()}`;
+  return `${new Date(ms).toISOString().slice(0, 10)} UTC`;
 }
 
 /** The view, whole, or null. A row this build does not know (a newer server's lane) is left out, not a failure. */

@@ -160,8 +160,8 @@ const QUIZ_RECORD_SET: MutantSet<Quiz> = {
     { id: 'D4', old: 'if (!isNat(at) || at > i.now + QUIZ_RECORD_FUTURE_SLACK_MS ||', new: 'if (!isNat(at) ||' },
     { id: 'D5', old: "|| b['v'] !== QUIZ_SINGLE_REPORT_V)", new: ')' },
     { id: 'D6', old: 'if (stray !== undefined) return', new: 'if (false) return' },
-    { id: 'D7', old: "if (b['arm'] !== 'treatment') return", new: 'if (false) return' },
-    { id: 'D8', old: "if (b['pilot'] !== 'skipped-by-ruling') return", new: 'if (false) return' },
+    { id: 'D7', old: "if (b['arm'] !== QUIZ_TREATMENT_ARM) return", new: 'if (false) return' },
+    { id: 'D8', old: "if (b['pilot'] !== QUIZ_PILOT_SKIPPED) return", new: 'if (false) return' },
     { id: 'D9', old: "if (typeof mode !== 'string' || !(QUIZ_SETTINGS_MODES as readonly string[]).includes(mode)) return", new: 'if (false) return' },
     { id: 'D10', old: "|| iv['method'] !== QUIZ_BOOTSTRAP.method", new: '' },
     { id: 'D11', old: 'if (n.questions !== n.answered + n.runFailed + n.absent || ', new: 'if (' },
@@ -172,12 +172,24 @@ const QUIZ_RECORD_SET: MutantSet<Quiz> = {
     { id: 'D16', old: '!QUIZ_INPUT_KEYS.every((k) => isSha(inputs[k]))', new: 'false' },
     { id: 'D17', old: "|| n.correct > n.answered", new: '' },
     { id: 'D18', old: "|| iv['B'] !== QUIZ_BOOTSTRAP.B", new: '' },
+    // Review 2442 F4: the inputs' frozen sha is the top level's.
+    { id: 'D19', old: "|| inputs['frozen_sha256'] !== b['frozen_sha256']", new: '' },
+    // Review 2442 F5: the four sub-conditions that had no case: the interval's ci, the kind, the share's numerator alone, and
+    // an extra key in the inputs.
+    { id: 'D20', old: "|| iv['ci'] !== QUIZ_BOOTSTRAP.ci", new: '' },
+    { id: 'D21', old: "if (b['kind'] !== QUIZ_SINGLE_REPORT_KIND || b['v']", new: "if (b['v']" },
+    { id: 'D22', old: "|| share['num'] !== n.correct", new: '' },
+    { id: 'D23', old: 'Object.keys(inputs).length !== QUIZ_INPUT_KEYS.length || ', new: '' },
+    // Review 2442 F3: the pending cap, and its bound.
+    { id: 'D24', old: 'if (i.pending >= QUIZ_PENDING_CAP) {', new: 'if (false) {' },
+    { id: 'D25', old: 'if (i.pending >= QUIZ_PENDING_CAP) {', new: 'if (i.pending > QUIZ_PENDING_CAP) {' },
   ],
   suite(m): Record<string, SuiteCase> {
-    const verdict = (r: Record<string, unknown>, claimed?: string) => {
+    const verdict = (r: Record<string, unknown>, claimed?: string, pending = 0) => {
       const text = JSON.stringify(r);
-      return m.quizRecordVerdict({ text, claimedSha: claimed ?? sha256(text), measuredSha: sha256(text), now: NOW });
+      return m.quizRecordVerdict({ text, claimedSha: claimed ?? sha256(text), measuredSha: sha256(text), now: NOW, pending });
     };
+    const inputs = (over: Record<string, unknown>) => singleReport({ inputs: { ...(singleReport()['inputs'] as object), ...over } });
     const refuses = (r: Record<string, unknown>, field: string): void => { expect(verdict(r)).toMatchObject({ ok: false, field }); };
     const counts = (c: Record<string, number>, share = { num: c['correct']!, den: c['answered']! }) => singleReport({ counts: c, share, n_questions: c['questions'] });
     return {
@@ -210,6 +222,17 @@ const QUIZ_RECORD_SET: MutantSet<Quiz> = {
         refuses(singleReport({ interval: { ...(singleReport()['interval'] as object), lower: { num: 80, den: 96 } } }), 'lo');
       },
       'malformed inputs refuse': () => { refuses(singleReport({ inputs: { setup_sha256: 'x', frozen_sha256: SHA('b'), arms_summary_sha256: SHA('3'), judged_sha256: SHA('4') } }), 'inputs'); },
+      'inputs whose frozen sha is not the report\'s refuse': () => { refuses(inputs({ frozen_sha256: SHA('c') }), 'inputs'); },
+      'an extra key in the inputs refuses': () => { refuses(inputs({ extra_sha256: SHA('5') }), 'inputs'); },
+      'a foreign ci refuses': () => { refuses(singleReport({ interval: { ...(singleReport()['interval'] as object), ci: 90 } }), 'interval'); },
+      'a foreign kind refuses': () => { refuses(singleReport({ kind: 'ccrc-history-quiz-report' }), 'kind'); },
+      'a share whose numerator alone is not the correct count refuses': () => {
+        refuses(counts({ questions: 100, answered: 96, correct: 79, run_failed: 3, absent: 1 }, { num: 78, den: 96 }), 'counts');
+      },
+      'five pending runs refuse a sixth with its own word, and four leave room': () => {
+        expect(verdict(singleReport(), undefined, 5)).toMatchObject({ ok: false, field: 'pending', word: 'quiz-pending-full' });
+        expect(verdict(singleReport(), undefined, 4)).toMatchObject({ ok: true });
+      },
     };
   },
 };
@@ -261,16 +284,21 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
   mutants: [
     // L1, the ruling's (ask 434): the record path's gate dropped.
     { id: 'L1', old: "if (!f.recordReady) return { kind: 'hold', why: 'record-path-absent' };", new: '' },
-    { id: 'L2', old: "if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok) return", new: "if (!f.recordedAts.ok || !f.baseline.ok) return" },
-    { id: 'L3', old: "if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok) return", new: "if (!f.recordedAts.ok || !f.itemRaised.ok) return" },
+    { id: 'L2', old: '!f.baseline.ok || !f.itemRaised.ok ||', new: '!f.baseline.ok ||' },
+    { id: 'L3', old: '|| !f.baseline.ok || !f.itemRaised.ok', new: '|| !f.itemRaised.ok' },
     { id: 'L4', old: 'f.recordedAts.value.some((at) => at >= f.week.start)', new: 'f.recordedAts.value.some((at) => at > f.week.start)' },
     { id: 'L5', old: "if (f.itemRaised.value) return { kind: 'hold', why: 'raised' };", new: '' },
-    { id: 'L6', old: "return { kind: 'raise', item: quizItemText(f.week.key, f.baseline.exists) };", new: "return { kind: 'raise', item: quizItemText(f.week.key, true) };" },
+    { id: 'L6', old: 'quizItemText(f.week.key, f.baseline.exists, f.pendingWaits.value)', new: 'quizItemText(f.week.key, true, f.pendingWaits.value)' },
     { id: 'L7', old: 'f.recordedAts.value.some((at) => at >= f.week.start)', new: 'f.recordedAts.value.length > 0' },
+    // Review 2442 F2: the pending read's failure holds, and a waiting run is said in the item.
+    { id: 'L8', old: '|| !f.pendingWaits.ok)', new: ')' },
+    { id: 'L9', old: 'quizItemText(f.week.key, f.baseline.exists, f.pendingWaits.value)', new: 'quizItemText(f.week.key, f.baseline.exists)' },
+    { id: 'L10', old: 'const waiting = pendingWaits', new: 'const waiting = false' },
   ],
   suite(m): Record<string, SuiteCase> {
     const facts = (over: Partial<Facts> = {}): Facts => ({
-      recordReady: true, week: { key: '2026-W47', start: MON }, recordedAts: { ok: true, value: [] }, baseline: { ok: true, exists: false },
+      recordReady: true, week: { key: '2026-W47', start: MON }, recordedAts: { ok: true, value: [] }, pendingWaits: { ok: true, value: false },
+      baseline: { ok: true, exists: false },
       itemRaised: { ok: true, value: false }, ...over,
     });
     return {
@@ -279,6 +307,13 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
         expect(m.quizLaneVerdict(facts({ itemRaised: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
         expect(m.quizLaneVerdict(facts({ baseline: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
         expect(m.quizLaneVerdict(facts({ recordedAts: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
+        expect(m.quizLaneVerdict(facts({ pendingWaits: { ok: false, detail: 'x' } }))).toEqual({ kind: 'hold', why: 'unmeasured' });
+      },
+      'a run waiting for a ruling is said in the item': () => {
+        const v = m.quizLaneVerdict(facts({ pendingWaits: { ok: true, value: true } }));
+        expect(v).toEqual({ kind: 'raise', item: m.quizItemText('2026-W47', false, true) });
+        expect(v.kind === 'raise' && v.item.how[0]).toMatch(/^A recorded run is waiting for your Confirm or Discard on the Shadow lanes card/);
+        expect(m.quizItemText('2026-W47', false, false).how[0]).not.toMatch(/waiting/);
       },
       'a run recorded at the week\'s first ms counts': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON] } }))).toEqual({ kind: 'hold', why: 'recorded' }); },
       'a run of last week does not': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON - 1] } })).kind).toBe('raise'); },

@@ -14,6 +14,7 @@
 // "has never been live" and "is shadow now" agree. A read that is not an exact `shadow` (live, a token this build does not
 // know, a lost row, a read that failed) makes no baseline: doubt never makes one.
 import { ANCHOR_SLOT_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, QUIZ_BOOTSTRAP, type LaneArmLane } from '../../../shared/lane-arm.js';
+import { QUIZ_RECORD_REFUSALS, type QuizRecordRefusal } from '../../../shared/refusal.js';
 import type { LaneArmBaseline, LaneArmRead } from '../coord/laneArm.js';
 
 /** The W1a lane-arm rows the baseline guards, in the card's order: an arm of any of them changes what a session recalls,
@@ -155,6 +156,10 @@ export const QUIZ_SINGLE_REPORT_KEYS = [
 /** The settings modes the single-arm setup takes, explicitly (OQ1 as restated). */
 export const QUIZ_SETTINGS_MODES = ['restricted', 'fallback'] as const;
 export type QuizSettingsMode = (typeof QUIZ_SETTINGS_MODES)[number];
+/** The one arm a single-arm run runs (recall on), and its pilot word: copies of history's own (the driver's `TREATMENT_ARM`
+ *  and the single-arm module's `PILOT_SKIPPED`), which the contract test compares (review 2442 F6). */
+export const QUIZ_TREATMENT_ARM = 'treatment';
+export const QUIZ_PILOT_SKIPPED = 'skipped-by-ruling';
 const QUIZ_INPUT_KEYS = ['setup_sha256', 'frozen_sha256', 'arms_summary_sha256', 'judged_sha256'] as const;
 
 /** THE ANSWERED FLOOR: a run where more than one question in ten failed to run or came back absent measures the instrument
@@ -165,6 +170,9 @@ export const QUIZ_ANSWERED_FLOOR = { num: 9, den: 10 } as const;
 export const QUIZ_RECORD_MAX_AGE_DAYS = 8;
 const QUIZ_DAY_MS = 24 * 60 * 60 * 1000;
 export const QUIZ_RECORD_FUTURE_SLACK_MS = 5 * 60 * 1000;
+/** THE PENDING CAP (review 2442 F3): the record door refuses a new pending run while this many wait for the operator's
+ *  ruling, so the card can never fill with lookalikes. */
+export const QUIZ_PENDING_CAP = 5;
 
 /** What a single-arm report carries beside the thirteen record fields: the counts, the run's mode and the interval's method,
  *  kept as new columns (the migration that adds them) and never folded into `QuizReport`. */
@@ -173,9 +181,9 @@ export interface QuizRunExtra {
   correct: number;
   runFailed: number;
   absent: number;
-  arm: 'treatment';
+  arm: typeof QUIZ_TREATMENT_ARM;
   settingsMode: QuizSettingsMode;
-  pilot: 'skipped-by-ruling';
+  pilot: typeof QUIZ_PILOT_SKIPPED;
   ci: number;
   method: string;
   bootstrapB: number;
@@ -184,7 +192,7 @@ export interface QuizRunExtra {
 
 export type QuizRecordVerdict =
   | { readonly ok: true; readonly report: QuizReport; readonly extra: QuizRunExtra }
-  | { readonly ok: false; readonly field: string; readonly detail: string };
+  | { readonly ok: false; readonly field: string; readonly detail: string; readonly word?: QuizRecordRefusal };
 
 const isNat = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
 const asObject = (v: unknown): Record<string, unknown> | null =>
@@ -210,10 +218,13 @@ function fracOf(v: unknown): Frac | null {
  *   8. the share and both interval ends are fractions in [0, 1] with a denominator above zero (`share`, `interval`);
  *   9. the answered floor (`counts`);
  *  10. freshness: `measured_ms` neither in the future nor older than the bound (`measured_ms`);
- *  11. the mapped record goes to `validQuizReport`, whose refusal passes on unchanged (its `lo <= score <= hi` is OQ4's
- *      refusal: an interval that misses its score is refused, never clamped), and the inputs are four hex64 values (`inputs`). */
+ *  11. the inputs are the four hex64 values and nothing else, and `inputs.frozen_sha256` is the top level's (`inputs`); the
+ *      mapped record goes to `validQuizReport`, whose refusal passes on unchanged (its `lo <= score <= hi` is OQ4's refusal:
+ *      an interval that misses its score is refused, never clamped);
+ *  12. fewer than `QUIZ_PENDING_CAP` other runs are pending (`pending`, the word `quiz-pending-full`). `pending` is what the
+ *      door counted, leaving out a row with this report's sha, so a resend still answers its first row. */
 export function quizRecordVerdict(i: {
-  readonly text: string; readonly claimedSha: unknown; readonly measuredSha: string; readonly now: number;
+  readonly text: string; readonly claimedSha: unknown; readonly measuredSha: string; readonly now: number; readonly pending: number;
 }): QuizRecordVerdict {
   const no = (field: string, detail: string): QuizRecordVerdict => ({ ok: false, field, detail });
   if (!isSha(i.claimedSha) || i.claimedSha !== i.measuredSha) return no('sha256', 'the sha256 is not the sha of the report\'s bytes');
@@ -226,8 +237,8 @@ export function quizRecordVerdict(i: {
   }
   const stray = Object.keys(b).find((k) => !(QUIZ_SINGLE_REPORT_KEYS as readonly string[]).includes(k));
   if (stray !== undefined) return no(stray, `${stray} is not a field of the single-arm report`);
-  if (b['arm'] !== 'treatment') return no('arm', 'the single-arm run is the treatment arm, recall on');
-  if (b['pilot'] !== 'skipped-by-ruling') return no('pilot', 'pilot is skipped-by-ruling');
+  if (b['arm'] !== QUIZ_TREATMENT_ARM) return no('arm', 'the single-arm run is the treatment arm, recall on');
+  if (b['pilot'] !== QUIZ_PILOT_SKIPPED) return no('pilot', 'pilot is skipped-by-ruling');
   const mode = b['settings_mode'];
   if (typeof mode !== 'string' || !(QUIZ_SETTINGS_MODES as readonly string[]).includes(mode)) return no('settings_mode', 'settings_mode is restricted or fallback');
   const iv = asObject(b['interval']);
@@ -259,8 +270,9 @@ export function quizRecordVerdict(i: {
     return no('measured_ms', `measured_ms is when the arms ran: not in the future and not more than ${QUIZ_RECORD_MAX_AGE_DAYS} days ago`);
   }
   const inputs = asObject(b['inputs']);
-  if (inputs === null || Object.keys(inputs).length !== QUIZ_INPUT_KEYS.length || !QUIZ_INPUT_KEYS.every((k) => isSha(inputs[k]))) {
-    return no('inputs', `inputs are ${QUIZ_INPUT_KEYS.join(', ')}, each a sha256`);
+  if (inputs === null || Object.keys(inputs).length !== QUIZ_INPUT_KEYS.length || !QUIZ_INPUT_KEYS.every((k) => isSha(inputs[k]))
+    || inputs['frozen_sha256'] !== b['frozen_sha256']) {
+    return no('inputs', `inputs are ${QUIZ_INPUT_KEYS.join(', ')}, each a sha256, and frozen_sha256 is the report's own`);
   }
   const mapped = validQuizReport({
     measuredAt: at, reportSha: i.measuredSha, questionsSha: b['frozen_sha256'], questions: b['n_questions'], families: b['n_families'],
@@ -268,9 +280,13 @@ export function quizRecordVerdict(i: {
     ccrcRelease: b['ccrc_release'], claudeBuilds: b['claude_code_versions'], steerArmed: b['steer_armed'], agentsOnArmed: b['agents_on_armed'],
   });
   if (!mapped.ok) return mapped;
+  if (i.pending >= QUIZ_PENDING_CAP) {
+    return { ok: false, field: 'pending', word: QUIZ_RECORD_REFUSALS.pendingFull,
+      detail: `${i.pending} recorded runs already wait for your Confirm or Discard on the Shadow lanes card` };
+  }
   return { ok: true, report: mapped.report, extra: {
-    answered: n.answered, correct: n.correct, runFailed: n.runFailed, absent: n.absent, arm: 'treatment', settingsMode: mode as QuizSettingsMode,
-    pilot: 'skipped-by-ruling', ci: QUIZ_BOOTSTRAP.ci, method: QUIZ_BOOTSTRAP.method, bootstrapB: QUIZ_BOOTSTRAP.B,
+    answered: n.answered, correct: n.correct, runFailed: n.runFailed, absent: n.absent, arm: QUIZ_TREATMENT_ARM, settingsMode: mode as QuizSettingsMode,
+    pilot: QUIZ_PILOT_SKIPPED, ci: QUIZ_BOOTSTRAP.ci, method: QUIZ_BOOTSTRAP.method, bootstrapB: QUIZ_BOOTSTRAP.B,
     inputs: { setup_sha256: inputs['setup_sha256'] as string, frozen_sha256: inputs['frozen_sha256'] as string,
       arms_summary_sha256: inputs['arms_summary_sha256'] as string, judged_sha256: inputs['judged_sha256'] as string },
   } };
@@ -303,7 +319,7 @@ export function quizWeek(now: number): { readonly key: string; readonly start: n
 
 /** The item's words: what, how and why, the four conditions of the W0-28 ruling among them. Before a baseline exists the
  *  title says this run is the baseline. */
-export function quizItemText(weekKey: string, baselineExists: boolean): { readonly title: string; readonly why: string; readonly how: readonly string[] } {
+export function quizItemText(weekKey: string, baselineExists: boolean, pendingWaits = false): { readonly title: string; readonly why: string; readonly how: readonly string[] } {
   // The lane keys "once a week" on this exact title (`ledgersStore.ts#itemRaisedWithTitle`; `operator_items` has no other key
   // for a plain item), so rewording it mid-week raises that week's item a second time (review 2121 F6).
   const title = baselineExists
@@ -317,7 +333,12 @@ export function quizItemText(weekKey: string, baselineExists: boolean): { readon
       : 'No baseline is recorded yet: this run becomes it if every W1a shadow lane is still in shadow when you record it, and '
         + 'no W1a lane can go live until it exists.')
     + ' Nothing waits on this week\'s run but the record itself.';
+  const waiting = pendingWaits
+    ? ['A recorded run is waiting for your Confirm or Discard on the Shadow lanes card (Settings, Automation, Shadow lanes): '
+      + 'a pending run does not count, so this week stays open until you rule on it or record another.']
+    : [];
   const how = [
+    ...waiting,
     'On the fleet box, in your own shell, never in a session\'s pane and never while a W2 window is open, run history\'s '
       + 'single-arm quiz by hand as its runbook says (quiz-record-runbook.md, in the Overlord programme\'s docs): once, its '
       + 'setup, source, freeze and marker steps; each week, arms (it runs step 0b\'s probes first and stops if one fails), judge '
@@ -325,7 +346,8 @@ export function quizItemText(weekKey: string, baselineExists: boolean): { readon
     `Record the run from the same shell, within ${QUIZ_RECORD_MAX_AGE_DAYS} days of the arms run: ccrc quiz-record --report <file> --sha <hex>, with `
       + 'the week\'s single-report.json and the sha report printed. It refuses inside a session and a pane, and records the run '
       + 'as pending.',
-    'Then open Settings, Automation, Shadow lanes and press Confirm on the pending run, or Discard if it should not count. Only '
+    'Then open Settings, Automation, Shadow lanes, find the pending run whose report sha starts as report and ccrc quiz-record '
+      + 'printed, and press Confirm, or Discard if it should not count; discard any run you did not record. Only '
       + 'a confirmed run counts: the first one confirmed while every W1a lane is in shadow becomes the baseline.',
     'The conditions this record keeps (the W0-28 ruling): the history store is opened read-only, and no session runs a writing '
       + 'form of `ccrc history`; no history marker is written (steer, agents-on and the rest stay yours); the driver runs by '
@@ -338,12 +360,14 @@ export function quizItemText(weekKey: string, baselineExists: boolean): { readon
 /** A read the lane made: its value, or why it failed (never folded into a value). */
 export type QuizRead<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly detail: string };
 
-/** What the lane read before it decides: whether the record path ships, this week, when each recorded run was recorded,
- *  whether a baseline exists, and whether this week's item was ever raised (in any state). */
+/** What the lane read before it decides: whether the record path ships, this week, when each CONFIRMED run was recorded
+ *  (review 2442 F2: a pending run never silences the week, a discarded one counts for nothing), whether any run waits for the
+ *  operator's ruling, whether a baseline exists, and whether this week's item was ever raised (in any state). */
 export interface QuizLaneFacts {
   readonly recordReady: boolean;
   readonly week: { readonly key: string; readonly start: number };
   readonly recordedAts: QuizRead<readonly number[]>;
+  readonly pendingWaits: QuizRead<boolean>;
   readonly baseline: LaneArmBaseline;
   readonly itemRaised: QuizRead<boolean>;
 }
@@ -355,12 +379,13 @@ export type QuizLaneVerdict =
   | { readonly kind: 'hold'; readonly why: QuizLaneHold }
   | { readonly kind: 'raise'; readonly item: ReturnType<typeof quizItemText> };
 
-/** THE LANE'S RULE: one item a week, only while the record path ships, only when no run was recorded this week and no item
- *  for this week was ever raised; any failed read raises nothing. */
+/** THE LANE'S RULE: one item a week, only while the record path ships, only when no run recorded this week was confirmed and
+ *  no item for this week was ever raised; the item says so when a recorded run waits for a ruling; any failed read raises
+ *  nothing. */
 export function quizLaneVerdict(f: QuizLaneFacts): QuizLaneVerdict {
   if (!f.recordReady) return { kind: 'hold', why: 'record-path-absent' };
-  if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok) return { kind: 'hold', why: 'unmeasured' };
+  if (!f.recordedAts.ok || !f.baseline.ok || !f.itemRaised.ok || !f.pendingWaits.ok) return { kind: 'hold', why: 'unmeasured' };
   if (f.recordedAts.value.some((at) => at >= f.week.start)) return { kind: 'hold', why: 'recorded' };
   if (f.itemRaised.value) return { kind: 'hold', why: 'raised' };
-  return { kind: 'raise', item: quizItemText(f.week.key, f.baseline.exists) };
+  return { kind: 'raise', item: quizItemText(f.week.key, f.baseline.exists, f.pendingWaits.value) };
 }

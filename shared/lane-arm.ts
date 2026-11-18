@@ -90,10 +90,16 @@ export interface LaneArmRowView {
  *  which `continuity-quiz-route.test.ts` compares with the driver's own. L0 because the server may not import the driver. */
 export const QUIZ_BOOTSTRAP = Object.freeze({ ci: 95, method: 'percentile', B: 10000 } as const);
 
-/** One pending replay quiz run, as the card shows it (plan §6): when the arms ran, the score and its interval, the questions,
- *  families and counts. The operator confirms or discards it there. */
+/** How many hex characters of a pending run's report sha the card shows, and `ccrc quiz-record` prints (review 2442 F1). */
+export const QUIZ_SHA_PREFIX = 12;
+/** One pending replay quiz run, as the card shows it (plan §6): which run (its id, when it was recorded, the start of its
+ *  report's sha and the verb's trace), when the arms ran, the score and its interval, the questions, families and counts. The
+ *  operator matches the sha prefix with what `report` and `ccrc quiz-record` printed, then confirms or discards it there. */
 export interface LaneArmQuizPending {
   id: number;
+  recordedAt: number;
+  reportShaPrefix: string;
+  recordedBy: string;
   measuredAt: number;
   score: number;
   lo: number;
@@ -234,12 +240,14 @@ export const LANE_ARM_TEXT = {
     notYet: 'Replay quiz baseline: not yet',
     unreadable: 'Replay quiz baseline: could not be read',
   },
-  quizPending: (date: string, r: LaneArmQuizPending): string => `Replay quiz run, ${date}: score ${r.score.toFixed(2)} `
+  quizPending: (measured: string, recorded: string, r: LaneArmQuizPending): string => `Replay quiz run ${r.id}, report sha `
+    + `${r.reportShaPrefix}, recorded ${recorded} by ${r.recordedBy}; the arms ran ${measured}: score ${r.score.toFixed(2)} `
     + `(${r.lo.toFixed(2)} to ${r.hi.toFixed(2)}), ${r.questions} questions over ${r.families} families, ${r.answered} answered, `
     + `${r.runFailed} failed to run, ${r.absent} absent`,
   quizPendingUnreadable: 'The server could not read the replay quiz runs waiting for you',
   quizConfirm: 'Confirm',
   quizDiscard: 'Discard',
-  quizRuleNote: 'Confirm counts the run; the first one confirmed while every W1a lane is in shadow becomes the baseline. '
-    + 'Discard keeps the row and never counts it.',
+  quizRuleNote: 'Before you confirm, match the run\'s report sha with the one report and ccrc quiz-record printed, and '
+    + 'discard any run you did not record. Confirm counts the run; the first one confirmed while every W1a lane is in shadow '
+    + 'becomes the baseline. Discard keeps the row and never counts it.',
 } as const;
