@@ -234,9 +234,10 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
   - **after the mount resolves:** when the current stamp differs from the mount's `seededStamp`, `setAppearance` is called exactly once, with a fresh read. When they are equal, it is never called, even if the stamp moved during the hold before the bridge's read;
   - **while open:** each stamp change calls `setAppearance` with a fresh read; the reader keeps the same mount (no `destroy`, no second `mount`);
   - **coalesces to the latest per frame:** three stamp changes, each in its own task (separate `await`s), inside one faked animation frame send one call, carrying the last read. Without the coalescing they would send three. Changes made in one task arrive as one observer callback, so they cannot show the difference;
-  - **the mode-only fallback:** `readerPrefsOf(useThemeChoice(), THEMES)` still feeds `setAppearance`'s `theme` argument, which a mode-only mount sends as `prefs.theme`.
+  - **the mode-only fallback:** `readerPrefsOf(useThemeChoice(), THEMES)` still feeds `setAppearance`'s `theme` argument, which a mode-only mount sends as `prefs.theme`;
+  - **the mode-only trigger:** on a mode-only mount on a dark device, Follow the system → Phosphor leaves the stamp unchanged but moves the derived mode from `'auto'` to `'dark'`. It sends `setPrefs({theme: 'dark'})` exactly once, through the kept `[prefs]` effect. On a hosted mount the same change sends nothing.
 - [ ] **Step 2: Run to red** (`test/reader-frame.test.tsx`). Expected: FAIL on the new rows only.
-- [ ] **Step 3: Implement.** Replace `seededPrefs` with the mount's `seededStamp`. Keep `live.current` for the latest stamp. Coalesce with one `requestAnimationFrame` handle that is local to the effect and cancelled on cleanup.
+- [ ] **Step 3: Implement.** On a hosted mount, compare against the mount's `seededStamp`. On a mode-only mount, keep today's `[prefs]` effect and `seededPrefs` unchanged. Keep `live.current` for the latest stamp and mode. Coalesce with one `requestAnimationFrame` handle that is local to the effect and cancelled on cleanup.
 - [ ] **Step 4: Run to green**, plus `test/reader-bridge.test.ts`. Expected: PASS.
 - [ ] **Step 5: Commit**: `feat(docs): the reader follows ccrc's appearance while open`.
 
@@ -331,6 +332,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M17 | `sectionFamily` answers `sans` where `--family-section` equals `--family-mono` | Task 2 section-family row; AP-1 heading family under Instrument |
 | AP-M18 | Map `radiusLarge ← --r-md` | AP-1 popover radius under both skins (Refined 14 against 10 px) |
 | AP-M19 | `readerAppearanceOf` leaves `label` out | Task 2 "every mapped token" row; AP-6 shows the library's neutral default instead of ccrc's line |
+| AP-M20 | Drop the `[prefs]` effect, so stamp changes are the only trigger | Task 5 "the mode-only trigger" |
 
 ## Deviations found
 

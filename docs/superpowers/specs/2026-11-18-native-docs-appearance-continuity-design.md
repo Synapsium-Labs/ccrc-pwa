@@ -201,6 +201,8 @@ This section covers an ordinary open, a lazy open (the reader chunk still loadin
 
 **While open.** On a stamp change, `ReaderFrame` reads the values again and calls `setAppearance`. Calls coalesce to one per animation frame, and the latest wins. The frame applies the values in place: no remount, the same iframe and nonce, and the reading position kept.
 
+**A mode-only mount keeps today's trigger.** On a mode-only mount (§7), `ReaderFrame` keeps its existing effect on the derived mode (`readerPrefsOf`). The stamp alone would miss a change: on a dark device, Follow the system and Phosphor both leave `data-theme` unset, so the stamp does not move while the mode goes from `auto` to `dark`. A hosted mount needs no such trigger, because both choices then apply the same values.
+
 ```mermaid
 sequenceDiagram
   participant U as Person
