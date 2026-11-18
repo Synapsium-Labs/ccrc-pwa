@@ -390,7 +390,7 @@ export const W2_CASES: PortfolioCase[] = [
     const e = entry(m, { ...f, w2: w2() });
     expect(e).toStrictEqual({
       ...w1,
-      edges: { list: [], clearingShipped: false },
+      edges: { list: [], clearingShipped: true },
       // The closed run has no row: unmeasured, never 0. The open run was dispatched and has no session, so no reading
       // speaks for it: unmeasured too.
       spend: { ...SPEND_ZERO, wavesUnmeasured: 1, runsUnmeasured: 2 },
@@ -470,19 +470,25 @@ export const W2_CASES: PortfolioCase[] = [
     const without = w2entry(m, {}, {});
     const edges = [edge(1, { state: 'target-ended', endedAt: NOW - HOUR }), edge(2, { state: 'target-unmeasurable', unmeasuredSince: NOW - HOUR })];
     const e = w2entry(m, {}, { edges, edgeRuns: [{ runId: 900, program: 'prog-b' }], newestDated: [{ program: 'prog-b', p85At: NOW + DAY }] });
-    expect(e.edges).toEqual({ list: edges, clearingShipped: false });
+    expect(e.edges).toEqual({ list: edges, clearingShipped: true });
     expect(e.blocking).toEqual(without.blocking);
     expect(e.criticalPath).toEqual(without.criticalPath);
     expect(e.criticalPath!.chain).toEqual(['prog-a']);
   } },
-  { name: 'with clearing not shipped, every edge is listed as such and none enters the critical path (F1)', run: (m) => {
+  // Remaining work B shipped clearing (#3002), so an edge counts (F1's other side): an open needs-landed edge on another
+  // programme's run enters the critical path. A needs-decision edge is listed and walks nowhere; it blocks in the health
+  // facts (`healthFactsOf`'s edges arm), not in the entry's W1 `blocking`, which stays items and asks.
+  { name: 'with clearing shipped, an open needs-landed edge enters the critical path and a needs-decision edge does not', run: (m) => {
     const open = edge(1);
     const decision = edge(2, { kind: 'needs-decision', target: { predicate: 'operator-confirms', itemId: 7 } });
     const other = edge(3, { program: 'prog-b' });
+    const without = w2entry(m, {}, {});
     const e = w2entry(m, {}, { edges: [open, decision, other], edgeRuns: [{ runId: 900, program: 'prog-b' }], newestDated: [{ program: 'prog-b', p85At: NOW + 5 * DAY }] });
-    expect(e.edges).toEqual({ list: [open, decision], clearingShipped: false });
-    expect(e.criticalPath).toEqual({ chain: ['prog-a'], latestP85At: null, unmeasured: ['prog-a'], cut: false });
-    expect(e.blocking).toEqual({ items: [], asks: 0 });
+    expect(e.edges).toEqual({ list: [open, decision], clearingShipped: true });
+    expect(e.criticalPath).toEqual({ chain: ['prog-a', 'prog-b'], latestP85At: NOW + 5 * DAY, unmeasured: ['prog-a'], cut: false });
+    expect(e.blocking).toEqual(without.blocking);
+    // The decision edge alone walks nowhere.
+    expect(w2entry(m, {}, { edges: [decision], edgeRuns: [{ runId: 900, program: 'prog-b' }] }).criticalPath!.chain).toEqual(['prog-a']);
   } },
   { name: 'the critical path carries the programme\'s own newest 85% date, and names a programme with none unmeasured', run: (m) => {
     const e = w2entry(m, {}, { newestDated: [{ program: 'prog-a', p85At: NOW + 4 * DAY }] });

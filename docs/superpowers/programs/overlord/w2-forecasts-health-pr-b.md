@@ -15,8 +15,9 @@ numbers. No D-number is defined here.
 - **Live at merge** (the index's question 20): the health arm records rows and record-only notices (none on a
   programme's first row, at most one per programme and word a day); the spend arm records rows for runs closed from its
   first pass on; the portfolio read gains optional fields. Nothing pushes.
-- **Migration slot:** 95, the next free on `main` at `5d8d3d0d3` (forecasts A took 94). Other open PRs also aim at 95;
-  whoever lands second renumbers under the coordinator's standing license.
+- **Migration slot:** 96. Built at 95, the next free on `main` at `5d8d3d0d3` (forecasts A took 94); the Linear
+  hierarchy's wave 4 (#2982) landed 95 first, so the one absorption of `main` (the coordinator's ruling) renumbered this
+  to 96. Gates A also aims at 96; whoever lands second renumbers at its landing merge.
 
 ## 1. Departures from the plan, by slug
 
@@ -36,6 +37,7 @@ numbers. No D-number is defined here.
 | `spend-read-counts-work-and-review-runs` | "A closed run with an `absent` or `outside` row, or with no row … count in `runsUnmeasured`." | Only work and review runs count (the kinds the spend arm records). Every closed one with no `measured` row counts in `runsUnmeasured`, including runs closed before the arm's first pass: they were never measured, and they are never read as 0. |
 | `spend-open-run-without-a-session` | "an open run with no fresh reading" counts in `runsUnmeasured`. | A dispatched open work or review run with no session counts in `runsUnmeasured` (no reading can speak for it); an open run never dispatched has run no session and spent nothing, so it is not counted. A live reading of a run of another kind is not the programme's spend. Mutants P-FOR-W7 to P-FOR-W9 and P-FOR-W12. |
 | `tasks-7-and-8-one-commit` | One commit per task. | Task 7's health arm reads the portfolio's facts (`portfolioFacts`, `portfolioFor`) that Task 8 widens, so the two land as one commit that typechecks, with both subjects in its message. |
+| `edge-cases-rewritten-for-clearing-shipped` | The F1 cases: with `EDGE_CLEARING_SHIPPED` false, every edge is listed as "clearing not shipped" and none blocks or enters the critical path. | Remaining work B (#3002) shipped clearing while this was built, and the one absorption of `main` brought the flag in as true (the coordinator's ruling: the rewrites in a commit of their own after the merge). Rewritten: the W2 characterization case and the target-ended and target-unmeasurable case now read `clearingShipped: true`, and the second still shows those edges never block or walk. The F1 case became "with clearing shipped, an open needs-landed edge enters the critical path and a needs-decision edge does not"; the entry's W1 `blocking` stays items and asks. Added: a health-arm case where an open needs-decision edge on a shown, non-blocking item makes the word `blocked-on-you` through its edges arm. The deciders take the flag as an argument and were already tested both ways, so their cases are unchanged. Red checks: P-FOR-W13 (the entry's flag) and P-FOR-W14 (the critical path's flag) join `portfolioFor`'s set, both killed, and the lane's flag forced false fails the new health-arm case. No production code changed. |
 | `portfolio-w2-facts-optional` | `PortfolioEntry` and `PortfolioView` gain optional fields. | `PortfolioFacts` gains an optional `w2`, which the facts read always sets; a caller that builds W1's facts alone (the existing portfolio cases) gets W1's entry unchanged. |
 | `unforecastable-seal-has-its-own-reading` | Carried from forecasts A (review 2414 F9): an unforecastable seal stays `outcome = 'open'` for ever. | The entry's `forecast` is `unforecastable` with its reason and no date, never "pending"; `healthFactsOf`'s newest scored seal skips every `open` seal, so an unforecastable one is never read as a seal waiting for its date. Both tested. |
 

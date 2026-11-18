@@ -83,6 +83,9 @@ export const PORTFOLIO_FOR_SET = set([
   { id: 'P-FOR-W10', old: '...(health === undefined ? {} : { health: { word: health.word, evidence: health.evidence, at: health.at } }),', new: '' },
   { id: 'P-FOR-W11', old: 'const forecast = forecastEntry(seals[seals.length - 1]);', new: 'const forecast = forecastEntry(seals[0]);' },
   { id: 'P-FOR-W12', old: "if (!SPEND_KINDS.includes(r.kind) || isOpenRun(r)) continue;", new: 'if (isOpenRun(r)) continue;' },
+  // Clearing shipped (#3002): the entry's flag and the critical path's walk read it.
+  { id: 'P-FOR-W13', old: 'clearingShipped: EDGE_CLEARING_SHIPPED },', new: 'clearingShipped: false },' },
+  { id: 'P-FOR-W14', old: '      EDGE_CLEARING_SHIPPED),', new: '      false),' },
 ]);
 
 export const PORTFOLIO_MUTANT_SETS: Record<string, MutantSet<never>> = {

@@ -9,7 +9,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { forecastProgramme } from '../src/coord/forecast.js';
 import { runForecastLane, type ForecastLanePort, type ForecastLive, type UsageRead } from '../src/coord/forecastLane.js';
 import type { SpendReading } from '../src/coord/programmeMeasures.js';
-import type { HealthVerdict } from '../../shared/programmeFacts.js';
+import { EDGE_CLEARING_SHIPPED, type HealthVerdict } from '../../shared/programmeFacts.js';
 import { fakeTime } from './fakeTime.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -314,6 +314,25 @@ describe('the health arm', () => {
   const open = (c: CoordStore): void => {
     spendRun(c, { openedAt: T0 - 2 * HOUR, dispatchedAt: T0 - 2 * HOUR, closedAt: null, sessionId: null });
   };
+
+  it('with clearing shipped, an open needs-decision edge on a shown item makes the word blocked-on-you through its edges arm', () => {
+    expect(EDGE_CLEARING_SHIPPED).toBe(true);
+    const h = harness();
+    open(coord);
+    // A `soon` item is shown to the operator but is not a blocking item, so only the edge can block.
+    const item = coord.raiseItem({ program: 'prog-a', runId: null, raisedBy: 'lane-a-project-a', kind: 'do', title: 't', why: 'w',
+      how: [], options: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, T0 - DAY);
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(healthRows(coord).map((r) => r.word)).not.toContain('blocked-on-you');
+    const r = coord.insertRemaining('prog-a', 'lane-a-project-a', { lo: 1, hi: 2, reason: 'left', runId: null },
+      [{ kind: 'needs-decision', target: { predicate: 'operator-confirms', itemId: item }, why: 'waits on it' }], null, T0);
+    if (!r.ok) throw new Error(r.detail);
+    expect(runForecastLane(coord, T0 + MIN, entropy(), h.live)).toMatchObject({ healthChanged: 1, failed: [] });
+    const last = coord.db.prepare('SELECT word, evidence FROM programme_health WHERE program = ? ORDER BY id DESC LIMIT 1').get('prog-a') as
+      { word: string; evidence: string };
+    expect(last.word).toBe('blocked-on-you');
+    expect(JSON.parse(last.evidence)).toMatchObject({ matched: 'blocked-on-you:edges', values: { blockingEdges: 1 } });
+  });
 
   it('a programme\'s first row is recorded with no notice, and a repeat of the same word appends none', () => {
     const h = harness();
