@@ -32,6 +32,7 @@ import { fileBothRoleWriter, fileTokenStore, tokenPaths } from './token/files.js
 import { gateRowsOver, generationReaderOver, tokenSyncLinkOver } from './token/link.js';
 import { coordinationRestoreRefusal, openCoordDb } from './coord/db.js';
 import { openOperatorModelStore, operatorModelBootLines } from './operatorModel/store.js';
+import { readPrivateNameList } from './operatorModel/nameListRead.js';
 import { COORDINATION_RESTORE_MARKER_FILE } from './coord/delegation-checkpoint.js';
 import { CoordStore } from './coord/store.js';
 import { createLandingJournal } from './coord/landingJournal.js';
@@ -49,6 +50,12 @@ import { LinearJournal } from './linear/journal.js';
 import { planStorePort } from './coord/planStore.js';
 import { quizLanePortOf } from './continuity/quizStore.js';
 import { QUIZ_RECORD_READY } from './continuity/quiz.js';
+import { canonicalJson } from '../../shared/api.js';
+import { DECISION_QUESTIONS, type DecisionHostKind } from '../../shared/decisionModel.js';
+import { decisionEgressOf, isPrivateAddress } from './coord/decisionModel.js';
+import { createHttpDecisionModel, readDecisionModelKey } from './coord/decisionModelHttp.js';
+import { decisionArmingStore, decisionAskStore, releaseDecisionReservations } from './coord/decisionModelStore.js';
+import type { DecisionEgress, DecisionFetch, DecisionStateReads, LabelledCases } from './coord/decisionModelPort.js';
 import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
@@ -61,7 +68,8 @@ import { testboxCaptureTransport } from './buildCaptureLane.js';
 import { testboxAdminOpsFor } from './testboxAdmin.js';
 import { SecretMasker, SHAPE_ONLY_MASKER, fingerprintAnswerOf, fingerprintGeneration, fingerprintRow } from './accounts/mask.js';
 import { mkdirSync } from 'node:fs';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
+import { lookup } from 'node:dns/promises';
 import path from 'node:path';
 
 const cfg = loadConfig();
@@ -374,6 +382,54 @@ deps.plan = planStorePort(coord.db);
 deps.quiz = quizLanePortOf(coord, QUIZ_RECORD_READY);
 // The forecast lane's port (Overlord W2 forecasts A): the store's own delegates, over the same coord.db.
 deps.forecasts = coord;
+// The decision model's anchor-set lane and its ports (Overlord W2, plan `w2-decision-model.md` Task 9), over the same coord.db and
+// authority journal. Every row ships `off`, so the lane asks nothing until the operator switches one on.
+/** The hosted egress screen (question 9; review 2418 F2): the private-name list through its one reader. */
+const egressScreen: DecisionEgress['screen'] = (texts) => decisionEgressOf(texts, readPrivateNameList(operatorModel.store, cfg.ccrcDir));
+/** Every address a host name resolves to, built once (review 2418 F9): the key door and the adapter use it. */
+const decisionResolve = async (name: string): Promise<readonly string[]> => (await lookup(name, { all: true })).map((a) => a.address);
+/** The labelled cases (question 8): none, until the label queue fills the port, so no line is admitted and every row stays in shadow. */
+const noLabelsYet: LabelledCases = { casesFor: () => [] };
+/** State reads over inline fields and `programme` refs (a slug is its own text) only: a `message`, `goals-version` or `mail` ref
+ *  would need a reader that arrives with the label queue, the first producer of labelled cases, so it reads `unresolvable`. */
+const inlineStateReads: DecisionStateReads = {
+  fieldsOf: (row, refs, inline) => {
+    const kindOf = (name: string): string | undefined => DECISION_QUESTIONS[row].fields.find((f) => f.name === name)?.refKind;
+    if (Object.keys(refs).some((name) => kindOf(name) !== 'programme')) return 'unresolvable';
+    return { ...refs, ...inline };
+  },
+};
+const decisionFetch: DecisionFetch = async (url, init) => { const r = await fetch(url, init); return { status: r.status, body: r.body as AsyncIterable<Uint8Array> | null }; };
+const decisionArming = decisionArmingStore(coordDb, overlordAuthority);
+const decisionHostNow = (): { kind: DecisionHostKind; endpoint: string; origin: string; modelId: string } | null => {
+  const h = decisionArming.hostRead();
+  return h.kind === 'host' ? { kind: h.host.kind, endpoint: h.host.endpoint, origin: h.host.origin, modelId: h.host.modelId } : null;
+};
+deps.decisions = {
+  store: decisionArming, labels: noLabelsYet, states: inlineStateReads, resolve: decisionResolve,
+  ask: {
+    store: decisionAskStore(coordDb), time,
+    arming: (row) => decisionArming.rowSide(row),
+    currentLine: (row, h) => {
+      const l = decisionArming.currentLine(row, { hostKind: h.kind, origin: h.origin, modelId: h.modelId, revision: DECISION_QUESTIONS[row].revision });
+      return l === null ? null : { id: l.id, line: l.line };
+    },
+    host: decisionHostNow,
+    keySet: (origin) => readDecisionModelKey(cfg.ccrcDir, origin).kind === 'value',
+    modelFor: (h) => createHttpDecisionModel(h, (origin) => readDecisionModelKey(cfg.ccrcDir, origin), {
+      fetch: decisionFetch, resolve: decisionResolve, time, isPrivateAddress,
+    }),
+    egress: egressScreen,
+    stateHash: (state) => createHash('sha256').update(canonicalJson(state) ?? JSON.stringify(state)).digest('hex'),
+  },
+};
+// A crash's unsettled reservations are released at boot, counted as maintenance (spend is over-counted, never under-counted).
+try {
+  const released = releaseDecisionReservations(coordDb);
+  if (released > 0) console.warn(`ccrc-server: decision model: released ${released} reserved call(s) a crash left unsettled`);
+} catch (err) {
+  console.warn(`ccrc-server: decision model: the boot release of stale reservations failed: ${err instanceof Error ? err.message : String(err)}`);
+}
 deps.linearPolicy = allowAll;
 // The Linear plan sync (D-8182): the one writer of ccrc's own Linear objects, ticked by the watcher's `linearPlanSync` lane.
 deps.planSync = planSyncFor({

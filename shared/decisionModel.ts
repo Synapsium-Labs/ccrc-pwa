@@ -232,7 +232,8 @@ export type DecisionVerdict = 'yes' | 'no' | 'unsure' | { readonly option: strin
  *  to a session (project it through `decisionMarkOf`). */
 export type DecisionCheck =
   | { row: DecisionRowId; outcome: 'answered'; revision: string; modelId: string; hostKind: DecisionHostKind;
-      lineGen: number; recordId: number | null; verdict: DecisionVerdict; p: number; band: DecisionBand;
+      /** The endpoint's origin it was gathered under (PR B: `applyDecision` row 5 holds it against today's host). */
+      origin: string; lineGen: number; recordId: number | null; verdict: DecisionVerdict; p: number; band: DecisionBand;
       ms: number; attempts: number; reused: boolean; egress: 'clear' | 'skipped-no-list' | 'not-hosted' }
   | { row: DecisionRowId; outcome: Exclude<DecisionOutcome, 'answered'>; why: string | null; ms: number;
       attempts: number };
@@ -247,4 +248,122 @@ export interface DecisionMark {
 export function decisionMarkOf(check: DecisionCheck): DecisionMark {
   if (check.outcome === 'answered') return { row: check.row, band: check.band, verdict: check.verdict, outcome: check.outcome };
   return { row: check.row, band: null, verdict: null, outcome: check.outcome };
+}
+
+// ── PR B: arming, the host, the lines and the read (plan Tasks 6 to 9) ─────────────────────────────────────────────────
+
+/** The `.server` slot of the operator-secrets store that holds the decision model's key (question 6): read by the adapter at
+ *  each call, written and removed only by the key doors. */
+export const DECISION_MODEL_KEY_SLOT = 'decision-model-key';
+
+/** Why the server held a row (question 4): drift, a changed line key, the canary, a failed bound at the armed line, a removed
+ *  key, or an off move the journal refused (ruling F1). Only the operator clears a hold. */
+export const DECISION_HELD_CAUSES = ['drift', 'line-key', 'canary', 'bound', 'no-key', 'off-refused'] as const;
+export type DecisionHeldCause = (typeof DECISION_HELD_CAUSES)[number];
+export const isDecisionHeldCause = (v: unknown): v is DecisionHeldCause =>
+  typeof v === 'string' && (DECISION_HELD_CAUSES as readonly string[]).includes(v);
+
+/** A row as its store keeps it: its side, and why it is held (null when it is not). */
+export interface DecisionRowState extends DecisionRowSide {
+  readonly heldCause: DecisionHeldCause | null;
+}
+
+/** The anchor set: each row's 20 fixed public states, re-asked daily (question 10's drift rule reads 4 of them). */
+export const DECISION_ANCHOR_COUNT = 20;
+
+/** One row of the operator's read (`GET /api/decision-model`; the W2 Settings plan's SQ2). Never a model's answer, a price or
+ *  any part of the key. */
+export interface DecisionRowView {
+  readonly id: DecisionRowId;
+  readonly side: DecisionRowSide;
+  readonly heldWhy: DecisionHeldCause | null;
+  readonly direction: 'advice' | 'gate';
+  readonly privateState: boolean;
+  /** Today's HTTP attempts (UTC day): serving, the anchor-set lane, reserved in flight, and their sum. */
+  readonly today: { readonly serve: number; readonly maintenance: number; readonly reserved: number; readonly total: number };
+  /** The current line (the newest admitted under today's host, model and revision), or null before any. */
+  readonly line: {
+    readonly id: number; readonly line: number; readonly admitted: boolean; readonly labelled: number; readonly errors: number;
+    readonly bound: number | null; readonly canaryAsked: number; readonly canaryExpected: number; readonly canaryCrossed: number;
+  } | null;
+  /** A newer admitted line offered to an armed gate (question 4): the operator's Approve arms with `line: offered.id`. */
+  readonly offered: { readonly id: number; readonly line: number } | null;
+}
+export interface DecisionModelView {
+  readonly rows: readonly DecisionRowView[];
+  readonly fleetToday: number;
+  readonly fleetCap: number;
+  /** The host, `endpoint` beside `origin` (ruled, the W2 index fold): the endpoint is not secret. */
+  readonly host: { readonly kind: DecisionHostKind; readonly endpoint: string; readonly origin: string; readonly modelId: string } | null;
+  /** The key's record, never any part of the key. `masked`: the egress masker catches it (a key under its 20-byte floor is
+   *  stored and shown not masked). */
+  readonly key: { readonly setAt: number; readonly masked: boolean } | null;
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0;
+const isFrac = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v) && v >= 0 && v <= 1;
+const isHostKind = (v: unknown): v is DecisionHostKind => typeof v === 'string' && (DECISION_HOST_KINDS as readonly string[]).includes(v);
+
+/** A `DecisionRowSide` read from the wire (a door's `expected`, the read's `side`), or null when it is not one: exact keys, a
+ *  ceiling in the door's bounds, an `armedLine` with a positive id and a value from 0 to 1. */
+export function readDecisionRowSide(x: unknown): DecisionRowSide | null {
+  if (!isObj(x)) return null;
+  const keys = Object.keys(x).sort().join(',');
+  if (keys !== 'armedLine,ceiling,held,mode') return null;
+  const { mode, ceiling, armedLine, held } = x;
+  if (!isDecisionRowMode(mode) || typeof held !== 'boolean') return null;
+  if (typeof ceiling !== 'number' || !Number.isSafeInteger(ceiling) || ceiling < DECISION_CEILING_MIN || ceiling > DECISION_CEILING_MAX) return null;
+  if (armedLine === null) return { mode, ceiling, armedLine: null, held };
+  if (!isObj(armedLine) || Object.keys(armedLine).sort().join(',') !== 'id,line') return null;
+  const { id, line } = armedLine;
+  if (!isCount(id) || id < 1 || !isFrac(line)) return null;
+  return { mode, ceiling, armedLine: { id, line }, held };
+}
+
+/** The one reader of the operator's read (the W2 Settings plan's SQ2): the whole view, or why not. Never a partial view. */
+export function readDecisionModelView(x: unknown): { ok: true; view: DecisionModelView } | { ok: false; detail: string } {
+  const no = (detail: string): { ok: false; detail: string } => ({ ok: false, detail });
+  if (!isObj(x)) return no('not an object');
+  const { rows, fleetToday, fleetCap, host, key } = x;
+  if (!Array.isArray(rows)) return no('rows');
+  if (!isCount(fleetToday) || !isCount(fleetCap)) return no('fleet counts');
+  const out: DecisionRowView[] = [];
+  for (const [i, r] of rows.entries()) {
+    if (!isObj(r)) return no(`rows[${i}]`);
+    const side = readDecisionRowSide(r['side']);
+    if (!isDecisionRowId(r['id']) || side === null) return no(`rows[${i}].id or side`);
+    const heldWhy = r['heldWhy'];
+    if (heldWhy !== null && !isDecisionHeldCause(heldWhy)) return no(`rows[${i}].heldWhy`);
+    const direction = r['direction'];
+    if ((direction !== 'advice' && direction !== 'gate') || typeof r['privateState'] !== 'boolean') return no(`rows[${i}].direction`);
+    const t = r['today'];
+    if (!isObj(t) || !isCount(t['serve']) || !isCount(t['maintenance']) || !isCount(t['reserved']) || !isCount(t['total'])) return no(`rows[${i}].today`);
+    const l = r['line'];
+    let line: DecisionRowView['line'] = null;
+    if (l !== null) {
+      if (!isObj(l) || !isCount(l['id']) || !isFrac(l['line']) || typeof l['admitted'] !== 'boolean' || !isCount(l['labelled'])
+        || !isCount(l['errors']) || (l['bound'] !== null && !isFrac(l['bound'])) || !isCount(l['canaryAsked'])
+        || !isCount(l['canaryExpected']) || !isCount(l['canaryCrossed'])) return no(`rows[${i}].line`);
+      line = { id: l['id'], line: l['line'], admitted: l['admitted'], labelled: l['labelled'], errors: l['errors'],
+        bound: l['bound'] as number | null, canaryAsked: l['canaryAsked'], canaryExpected: l['canaryExpected'], canaryCrossed: l['canaryCrossed'] };
+    }
+    const o = r['offered'];
+    if (o !== null && (!isObj(o) || !isCount(o['id']) || !isFrac(o['line']))) return no(`rows[${i}].offered`);
+    out.push({ id: r['id'], side, heldWhy, direction, privateState: r['privateState'],
+      today: { serve: t['serve'], maintenance: t['maintenance'], reserved: t['reserved'], total: t['total'] }, line,
+      offered: o === null ? null : { id: (o as { id: number }).id, line: (o as { line: number }).line } });
+  }
+  let h: DecisionModelView['host'] = null;
+  if (host !== null) {
+    if (!isObj(host) || !isHostKind(host['kind']) || typeof host['endpoint'] !== 'string' || typeof host['origin'] !== 'string'
+      || typeof host['modelId'] !== 'string') return no('host');
+    h = { kind: host['kind'], endpoint: host['endpoint'], origin: host['origin'], modelId: host['modelId'] };
+  }
+  let k: DecisionModelView['key'] = null;
+  if (key !== null) {
+    if (!isObj(key) || !isCount(key['setAt']) || typeof key['masked'] !== 'boolean') return no('key');
+    k = { setAt: key['setAt'], masked: key['masked'] };
+  }
+  return { ok: true, view: { rows: out, fleetToday, fleetCap, host: h, key: k } };
 }

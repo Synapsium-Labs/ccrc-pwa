@@ -17,6 +17,10 @@
 import { POOL_NAME_RE } from '../../../shared/roster.js';
 import type { ModelClass } from '../../../shared/models.js';
 import {
+  DECISION_CEILING_MAX, DECISION_CEILING_MIN, isDecisionRowId, isDecisionRowMode, type DecisionRowId, type DecisionRowSide,
+} from '../../../shared/decisionModel.js';
+import { decisionRowDirection, isDecisionGate } from './decisionLines.js';
+import {
   chainedExactKeys, isRecord,
   type ChainedJournalErrorCode, type ChainedJournalFormat, type ChainedJournalRecord, type JournalWhere,
 } from '../chainedJournal.js';
@@ -55,6 +59,9 @@ export type OverlordAuthorityEntry =
   | { kind: 'authority-latch-clear'; opKey: string; cause: string }
   | { kind: 'authority-account-set'; opKey: string; from: OverlordAccountSet; to: OverlordAccountSet }
   | { kind: 'authority-model-class'; opKey: string; from: OverlordAuthorityModelClass; to: OverlordAuthorityModelClass }
+  // A decision-model row's arming, ceiling or hold (Overlord W2, decision model B; plan question 5): one kind, spend counted as
+  // widening, which way read by `decisionLines.ts#decisionRowDirection` from the entry alone.
+  | { kind: 'authority-decision-row'; opKey: string; row: DecisionRowId; gate: boolean; from: DecisionRowSide; to: DecisionRowSide }
   | {
     kind: 'authority-restore-confirmed'; opKey: string; term: number; epochAtConfirm: number;
     privacySequenceAtConfirm: number | null; restoreGeneration: number; newChain: boolean;
@@ -80,6 +87,7 @@ const KEYS: { readonly [K in OverlordAuthorityKind]: readonly string[] } = {
   'authority-latch-clear': keysOf<EntryOf<'authority-latch-clear'>>({ kind: true, opKey: true, cause: true }),
   'authority-account-set': keysOf<EntryOf<'authority-account-set'>>({ kind: true, opKey: true, from: true, to: true }),
   'authority-model-class': keysOf<EntryOf<'authority-model-class'>>({ kind: true, opKey: true, from: true, to: true }),
+  'authority-decision-row': keysOf<EntryOf<'authority-decision-row'>>({ kind: true, opKey: true, row: true, gate: true, from: true, to: true }),
   'authority-restore-confirmed': keysOf<EntryOf<'authority-restore-confirmed'>>({
     kind: true, opKey: true, term: true, epochAtConfirm: true, privacySequenceAtConfirm: true, restoreGeneration: true,
     newChain: true, binding: true, operatorRung: true, latches: true, accountSet: true, modelClass: true,
@@ -90,13 +98,15 @@ const KEYS: { readonly [K in OverlordAuthorityKind]: readonly string[] } = {
 export const OVERLORD_AUTHORITY_KINDS: Readonly<Record<OverlordAuthorityKind, true>> = {
   'authority-designate': true, 'authority-rebind': true, 'authority-retire': true, 'authority-rung': true,
   'authority-latch-raise': true, 'authority-latch-clear': true, 'authority-account-set': true, 'authority-model-class': true,
-  'authority-restore-confirmed': true,
+  'authority-decision-row': true, 'authority-restore-confirmed': true,
 };
 
 const ACCOUNT_SET_KEYS = keysOf<OverlordAccountSet>({ pools: true, untagged: true });
 const LATCH_KEYS = keysOf<OverlordLatchPair>({ cause: true, cap: true });
 const KEPT_KEYS = keysOf<Extract<OverlordConfirmBinding, { kind: 'kept' }>>({ kind: true, sessionId: true, generation: true });
 const CLEARED_KEYS = keysOf<Extract<OverlordConfirmBinding, { kind: 'cleared' }>>({ kind: true });
+const SIDE_KEYS = keysOf<DecisionRowSide>({ mode: true, ceiling: true, armedLine: true, held: true });
+const LINE_KEYS = keysOf<NonNullable<DecisionRowSide['armedLine']>>({ id: true, line: true });
 
 // ── The refusal classes and the format ───────────────────────────────────────────────────────────────────────────────
 
@@ -175,6 +185,29 @@ function latches(v: unknown): OverlordLatchPair[] {
   return out;
 }
 
+/** A decision-model row's side: a mode of the three, a ceiling inside the ceiling door's bounds, an `armedLine` that is null or
+ *  carries both its id and its value (review 2262 F2: the line's value travels in the record), and `held`. */
+function decisionSide(v: unknown, what: string): DecisionRowSide {
+  if (!isRecord(v)) return refuse('bad-field', `${what} is not an object`);
+  exactKeys(v, SIDE_KEYS, what);
+  const mode = v['mode'];
+  if (!isDecisionRowMode(mode)) return refuse('bad-field', `${what}.mode is not off, shadow or armed`);
+  const c = v['ceiling'];
+  if (typeof c !== 'number' || !Number.isSafeInteger(c) || c < DECISION_CEILING_MIN || c > DECISION_CEILING_MAX) {
+    return refuse('bad-field', `${what}.ceiling is not an integer from ${DECISION_CEILING_MIN} to ${DECISION_CEILING_MAX}`);
+  }
+  const l = v['armedLine'];
+  let armedLine: DecisionRowSide['armedLine'] = null;
+  if (l !== null) {
+    if (!isRecord(l)) return refuse('bad-field', `${what}.armedLine is neither null nor {id, line}`);
+    exactKeys(l, LINE_KEYS, `${what}.armedLine`);
+    const line = l['line'];
+    if (typeof line !== 'number' || !Number.isFinite(line) || line < 0 || line > 1) return refuse('bad-field', `${what}.armedLine.line is not from 0 to 1`);
+    armedLine = { id: positiveInt(l['id'], `${what}.armedLine.id`), line };
+  }
+  return { mode, ceiling: c, armedLine, held: bool(v['held'], `${what}.held`) };
+}
+
 function binding(v: unknown): OverlordConfirmBinding {
   if (!isRecord(v)) return refuse('bad-field', 'binding is not an object');
   if (v['kind'] === 'cleared') { exactKeys(v, CLEARED_KEYS, 'a cleared binding'); return { kind: 'cleared' }; }
@@ -213,6 +246,15 @@ export function authorityEntry(raw: unknown): OverlordAuthorityEntry {
       return { kind, opKey, from: accountSet(raw['from'], 'from'), to: accountSet(raw['to'], 'to') };
     case 'authority-model-class':
       return { kind, opKey, from: modelClass(raw['from'], 'from'), to: modelClass(raw['to'], 'to') };
+    case 'authority-decision-row': {
+      const row = raw['row'];
+      if (!isDecisionRowId(row)) return refuse('bad-field', 'row is not a decision-model row');
+      // `gate` is stated so a reader needs no catalogue, and checked against it, so a record can never read a gate's move as
+      // advice's (which would turn a widening into a narrowing).
+      const gate = bool(raw['gate'], 'gate');
+      if (gate !== isDecisionGate(row)) return refuse('bad-field', `gate is not ${row}'s direction in the catalogue`);
+      return { kind, opKey, row, gate, from: decisionSide(raw['from'], 'from'), to: decisionSide(raw['to'], 'to') };
+    }
     case 'authority-restore-confirmed': {
       const p = raw['privacySequenceAtConfirm'];
       return {
@@ -244,6 +286,7 @@ export function authorityDirection(entry: OverlordAuthorityMove): 'narrows' | 'w
     case 'authority-rung': return rank(entry.to) > rank(entry.from) ? 'widens' : 'narrows';
     case 'authority-account-set': return within(entry.to, entry.from) ? 'narrows' : 'widens';
     case 'authority-model-class': return entry.to === 'fable' ? 'widens' : 'narrows';
+    case 'authority-decision-row': return decisionRowDirection(entry.gate, entry.from, entry.to);
   }
 }
 
@@ -280,6 +323,15 @@ export function authorityAgainstFold(
         && f.pools.every((p, i) => p === move.from.pools[i]);
       return { matches: same, direction: authorityDirection({ ...move, from: f }) };
     }
+    case 'authority-decision-row': {
+      const f = view.decisionRows.get(move.row);
+      if (f === undefined) return null;
+      const a = f.armedLine;
+      const b = move.from.armedLine;
+      const sameLine = a === null ? b === null : b !== null && a.id === b.id && a.line === b.line;
+      const same = f.mode === move.from.mode && f.ceiling === move.from.ceiling && f.held === move.from.held && sameLine;
+      return { matches: same, direction: authorityDirection({ ...move, from: f }) };
+    }
     default: return null;
   }
 }
@@ -294,15 +346,23 @@ export interface AuthorityView {
   latches: ReadonlyMap<string, OverlordRungWord>;
   accountSet: OverlordAccountSet | null;
   modelClass: OverlordAuthorityModelClass | null;
+  /** Each decision-model row's side, as its last record left it (Overlord W2, decision model B): the fold `restoreStricter`
+   *  will read (plan question 12). A row no record named is absent. */
+  decisionRows: ReadonlyMap<DecisionRowId, DecisionRowSide>;
   lastConfirm: { sequence: number; epochAtConfirm: number; privacySequenceAtConfirm: number | null; restoreGeneration: number } | null;
 }
 
 /** The records folded in order. A designate or rebind binds its session; a retire leaves no binding and its term. A latch raised
  *  twice keeps the lower cap (a new latch never raises the cap, §7.5). A Confirm sets every field to the stricter value it
- *  carries, so a widening before it is gone. */
+ *  carries, so a widening before it is gone. A Confirm carries no decision-model row, so it leaves `decisionRows` as it stood:
+ *  the stricter of a restored row and this fold is `restoreStricter`'s, a follow-up after authority journal C (plan question 12,
+ *  `decision-rows-restore-after-c`). */
 export function authorityFold(records: readonly ChainedJournalRecord<OverlordAuthorityEntry>[]): AuthorityView {
-  const v: AuthorityView = { designation: null, operatorRung: null, latches: new Map(), accountSet: null, modelClass: null, lastConfirm: null };
+  const v: AuthorityView = {
+    designation: null, operatorRung: null, latches: new Map(), accountSet: null, modelClass: null, decisionRows: new Map(), lastConfirm: null,
+  };
   const latchMap = new Map<string, OverlordRungWord>();
+  const rowMap = new Map<DecisionRowId, DecisionRowSide>();
   for (const r of records) {
     const e = r.entry;
     switch (e.kind) {
@@ -317,6 +377,7 @@ export function authorityFold(records: readonly ChainedJournalRecord<OverlordAut
       case 'authority-latch-clear': latchMap.delete(e.cause); break;
       case 'authority-account-set': v.accountSet = e.to; break;
       case 'authority-model-class': v.modelClass = e.to; break;
+      case 'authority-decision-row': rowMap.set(e.row, e.to); break;
       case 'authority-restore-confirmed':
         v.designation = e.binding.kind === 'kept'
           ? { term: e.term, sessionId: e.binding.sessionId, generation: e.binding.generation }
@@ -333,5 +394,5 @@ export function authorityFold(records: readonly ChainedJournalRecord<OverlordAut
         break;
     }
   }
-  return { ...v, latches: latchMap };
+  return { ...v, latches: latchMap, decisionRows: rowMap };
 }
