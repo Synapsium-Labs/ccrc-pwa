@@ -395,4 +395,30 @@ A new `coord.db` migration and a new docs constant can red tests outside the obv
 At `bde0449dc`, every required check and CodeQL passed. The repo's review judge, which is not a required check, was red on two blocking reasons:
 
 - `promise-delta-missing`: the new spec had no `promise-delta` fence. Fixed by spec §11, in the template's "none - <reason>" form.
-- `pr1-files-invalid`: a first PR may hold one spec and at most one plan. This PR also amends the rich-docs spec's §6 parity table, which the wave's brief requires in the same PR, so it stays and is reported to the coordinator.
+- `pr1-files-invalid`: a first PR may hold one spec and at most one plan. This PR also amends the rich-docs spec's §6 parity table. The coordinator ruled in fix round 1 (wave question 4) that the amendment stays in this PR and accepted this reason as its price: completion plan Task 16 step 1 asks for the amendment through this reviewed follow-on task, and moving it would leave the older Dropped labels standing beside an approved spec.
+
+### Fix round 1 (review run 2647, at `6d4e1ac86`)
+
+The held-out review confirmed 14 important findings and four advisories; none was critical, and none contradicted a coordinator ruling. Each was fixed in its own commit:
+
+| Finding | Fix |
+|---|---|
+| F1 print fidelity | Print draws the library's render output under a print allow-list through React, as Export does; each block of the standalone print is a row, PR1 to PR11; the blocks the library builds in the frame come with its print mode (library 1.2, P5); §8's footing corrected |
+| F2 project page | I2 is a Gap; the project page lists each section's docs; 27 native, 23 gaps |
+| F3 bare tag | A bare tag name opens at its commit, branches first, recorded as a difference |
+| F4, F9 census | One model: every new door registers in `docs/routes.ts`, joins `DOCS_DOORS` and the auth gate's docs count; no box-token lane and no CLAUDE.md sentence; the index reads labels only |
+| F5 forbidden verb | Every layer named, with the flag-qualified forms and why the verb is not in `REQUIRED_VERB_FLAG` |
+| F6 Back places | The entry's URL, a budget per doc visit, and stale places that cost no extra Back |
+| F7 tracker matching | Its own worker job after the render, 250 ms, a timeout keeps the rendered doc; one importer of `resolveItemLink` |
+| F8 layouts and appearance | Every layout uses the appearance slots and passes the contrast pairs gate as X1's merged contract defines them; one library wave, X1's contract first |
+| F10 stat pin | An additive `mtimeNs` string, one reader, the pin in `entryView`'s answer |
+| F11 mutation rows | M11.2, M11.14, M11.25 and M11.28 now red their tests |
+| F12 PNG order | Dimensions from IHDR before `createImageBitmap`, re-checked after |
+| F13 ownership and paths | P2.4's `DocsHead.tsx` edit serialised with X1 by claim; `SettingsIndex.tsx` in P2 and P4; paths and symbols corrected |
+| F14 ceilings | Below, at and above for each ceiling, and a mutation row moving each constant |
+| A1 | Rich-docs Waiting on you and Later, one line each, and the `?ref` row, as ruled |
+| A2 | A testable second-spelling proof, the cache's home and cleanup, the memory peak, the clone cost |
+| A3 | I10's default view, the comparison kept for the tab, AR-1's redaction check, a citation path |
+| A4 | A jump rides the `hash` op's `push` and `from`; the print pace; D-8764's second quote; C1 and C3 gate E and F |
+
+**The adversarial pass, again.** One Opus · high pass over the changed sections found 9 important and 13 minor problems, none critical, and confirmed every hard wall unchanged. All 22 were fixed in this round: a jump's `from` is the library's anchor token, not a fragment id; stale places are unwound before an in-app navigation, and skipped by the direction of travel after a reload, in the router's one `popstate` path, so Forward keeps working; the print and tracker jobs reuse the render job's chunk, so there is one render path, and the worker's pin tests are in the Files; the docs handlers stay in `routes.ts` for the docs ring's role table; the direct-entry layer takes `docs-folder` whole; folder labels have a grammar checked twice; print ids are prefixed and classes come from the library's vocabulary; the verb-gate and call-site tests are in the Files; and the minors (the cache bound's safe read, `statPin`, stat-pinned files through range, the size check before allocating, IHDR first, the tag hint, two rich-docs rows, mutation-row references and red-test names, the home-directory rule, the paths scan through the one HTTP adapter, and a formatting slip). The mutation table now runs M11.1 to M11.59, each row naming a test its task defines.
