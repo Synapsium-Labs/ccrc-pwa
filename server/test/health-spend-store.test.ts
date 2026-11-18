@@ -126,7 +126,14 @@ describe('unspentClosesOf, the spend arm\'s read', () => {
     run({ wave: 5, state: 'working', closedAt: null });
     const got = coord.unspentClosesOf(FIRST);
     expect(got.map((c) => c.runId)).toEqual([early, review, late]);
-    expect(got[0]).toEqual({ runId: early, sessionId: 'sess-a', dispatchedAt: NOW - 10 * DAY + MIN, closedAt: FIRST, redispatched: false });
+    expect(got[0]).toEqual({ runId: early, sessionId: 'sess-a', dispatchedAt: NOW - 10 * DAY + MIN, closedAt: FIRST, redispatched: false,
+      resumed: false, clearedAt: null, conversation: null });
+  });
+
+  it('carries what the dispatch recorded: resumed, its /clear and the conversation (fix round 1, F3 and F10\')', () => {
+    const r = run({ wave: 1, closedAt: NOW - HOUR, sessionId: 'sess-a' });
+    coord.db.prepare("UPDATE runs SET resumed = 1, clearedAt = ?, dispatchConversation = 'conv-a' WHERE id = ?").run(NOW - 2 * HOUR, r);
+    expect(coord.unspentClosesOf(FIRST)[0]).toMatchObject({ runId: r, resumed: true, clearedAt: NOW - 2 * HOUR, conversation: 'conv-a' });
   });
 
   it('leaves out a run closed before the cutoff (no backfill), and one that has a row', () => {
