@@ -170,6 +170,14 @@ describe('reloadStep: when a pending reload runs (Task C3)', () => {
   });
 });
 
+describe('screenOf: two epics of one programme (D-8184)', () => {
+  it('are two screens, and an epic is not its programme', () => {
+    expect(screenOf('/programmes/prog-a/epics/e-1')).not.toBe(screenOf('/programmes/prog-a/epics/e-2'));
+    expect(screenOf('/programmes/prog-a/epics/e-1')).toBe(screenOf('/programmes/prog-a/epics/e-1/'));
+    expect(screenOf('/programmes/prog-a/epics/e-1')).not.toBe(screenOf('/programmes/prog-a'));
+  });
+});
+
 describe('screenOf: the screen a path is on (Task C3)', () => {
   it('names the route and its parameter', () => {
     expect(screenOf('/')).toBe('fleet ');

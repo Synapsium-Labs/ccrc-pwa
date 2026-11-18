@@ -72,6 +72,11 @@ const NAME_LIST_SRC = read('server/src/operatorModel/nameListRoutes.ts');
 /** The Models sheet's write door (programme model-class-advance, wave R4): `POST /api/models/:lane`, a routes file of its own with NO
  *  box-token lane. The operator's door, session-gated: `MODELS_DOORS`. (The read beside it, `GET /api/models/:lane`, is in `server.ts`.) */
 const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
+
+/** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
+ *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
+ *  `DECISION_MODEL_DOORS`. */
+const DECISION_MODEL_SRC = read('server/src/coord/decisionModelRoutes.ts');
 const GATE_SRC = read('server/src/auth/gate.ts');
 const README = read('README.md');
 const CLAUDE_MD = read('CLAUDE.md');
@@ -182,9 +187,14 @@ const NAME_LIST_DOORS = ['/api/overlord/private-names', '/api/overlord/private-n
  *  session gate, no box token, in no EXEMPT table. */
 const MODELS_DOORS = ['/api/models/:lane'];
 
+/** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
+ *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
+const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
+  '/api/decision-model/rows/:id/ceiling', '/api/decision-model/key', '/api/decision-model/key'];
+
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
-  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...MODELS_DOORS];
+  ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...DECISION_MODEL_DOORS, ...MODELS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -458,6 +468,15 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       const planted = MODELS_SRC.replace(LINE, `${LINE}\n    ${call}`);
       expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['POST /api/models/:lane']);
     }
+  });
+
+  it('DECISION_MODEL_DOORS is exactly what the decision-model file registers, in both directions; none is a lane or EXEMPT (decision model B)', () => {
+    const keys = registrationsIn(DECISION_MODEL_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'decisionModelRoutes.ts and DECISION_MODEL_DOORS disagree — a door was registered, or a name listed, on one side only')
+      .toEqual([...DECISION_MODEL_DOORS].sort());
+    expect(lanesIn(DECISION_MODEL_SRC), 'a decision-model door consults the box token — all are the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
   });
 
   it('a route with NO box-token check is not counted as a lane', () => {

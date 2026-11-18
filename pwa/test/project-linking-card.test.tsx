@@ -5,7 +5,11 @@ import { act, cleanup, fireEvent, render, screen, waitFor, within } from '@testi
 import { ToastHost } from '@ccrc/ui';
 import { LINKING_REFUSALS, type ProjectLinkingWire } from '../../shared/linking';
 import type { ProjectRow } from '../../shared/api';
+import type { HierarchyAnswer, HierarchyProjectRow } from '../../shared/plan';
+import { HIERARCHY_TEXT, ownerForAllConsequence, defaultOwnerWords, namedOwnerWords, ownerInheritedNote } from '../src/fleet/hierarchyWords';
+import { itemPath } from '../src/ledgers/ledgerWords';
 import { api } from '../src/lib/api';
+import { upkeepPath } from '../src/lib/routes';
 import { ApiError } from '../src/lib/apiError';
 import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
@@ -22,8 +26,15 @@ const wire = (over: Partial<ProjectLinkingWire> = {}): ProjectLinkingWire =>
 const row = (name: string, linking?: ProjectLinkingWire): ProjectRow =>
   ({ name, workdir: `/w/${name}`, ...(linking === undefined ? {} : { linking }) });
 const serve = (projects: ProjectRow[]) => vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
-const mount = async (projects: ProjectRow[]): Promise<HTMLElement> => {
+let answer: HierarchyAnswer | null = null;
+// `null`: an older server (the route is absent, 404); an Error: a read that failed; an answer: the route's answer.
+const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | null = null): Promise<HTMLElement> => {
   serve(projects);
+  answer = hier instanceof Error ? null : hier;
+  const read = vi.spyOn(api, 'hierarchy');
+  if (hier === null) read.mockRejectedValue(new ApiError(404, { ok: false }));
+  else if (hier instanceof Error) read.mockRejectedValue(hier);
+  else read.mockImplementation(async () => answer!);
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
   await act(async () => { render(<><ToastHost /><ProjectLinkingCard /></>); });
   return screen.findByRole('region', { name: SETTINGS_CARDS.security.linking.title });
@@ -133,7 +144,7 @@ describe('the card', () => {
     for (const word of ['write-failed', 'bad-request']) {
       cleanup();
       await mount([row('project-a', wire({ teamKey: 'KEY' }))]);
-      vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(503, { ok: false, error: word, detail: 'box text that must not show' }));
+      vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: word, detail: 'box text that must not show' }));
       fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
       const sentence = await within(rowOf('project-a')).findByRole('status');
       expect(sentence.textContent, word).toBe(LINKING_ROUTE_TEXT[word as 'write-failed' | 'bad-request']);
@@ -203,5 +214,612 @@ describe('D-8405: one row per project, and the automatic team link', () => {
     expect(within(rowOf('project-a')).getByText('The key was cleared here, so it is not linked automatically.')).toBeInTheDocument();
     expect(rowOf('project-b').querySelector('[data-linking-auto]')).toBeNull();
     expect(within(rowOf('project-b')).queryByRole('group', { name: LINKING_TEXT.candidates })).toBeNull();
+  });
+});
+
+// The hierarchy settings (Linear hierarchy design §11.1, D-8184, plan Task 5.1). Neutral fixtures: `AAA`, `BBB`, `coord-a`.
+const hrow = (project: string, over: Partial<HierarchyProjectRow> = {}): HierarchyProjectRow => ({
+  project, teamKey: 'AAA', initiatives: 'on', linearOwner: null, ownerNow: { id: 'coord-a', source: 'default', live: true },
+  ownsTeam: false, state: 'not-migrated', stateAt: null, itemId: null, inboundWaiting: 0, ...over,
+});
+const hier = (projects: HierarchyProjectRow[]): HierarchyAnswer =>
+  ({ ok: true, projects, coordinators: [{ id: 'coord-a', live: true }, { id: 'coord-b', live: false }] });
+const ownerSelect = (n: string): HTMLSelectElement => within(rowOf(n)).getByLabelText(HIERARCHY_TEXT.owner) as HTMLSelectElement;
+
+describe('the hierarchy settings', () => {
+  it('the empty owner option names the default and whether it is live', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))], hier([
+      hrow('project-a'),
+      hrow('project-b', { teamKey: 'BBB', ownerNow: { id: null, source: 'none', live: false } }),
+    ]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText('Default: none live')).toBeInTheDocument();
+  });
+
+  it('saving the owner renders the stored row', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const save = vi.spyOn(api, 'saveHierarchy').mockImplementation(async () => {
+      answer = hier([hrow('project-a', { linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false } })]);
+      return { ok: true, settings: { initiatives: 'on', linearOwner: 'coord-b', ownsTeam: false } };
+    });
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { initiatives: 'on', linearOwner: 'coord-b', ownsTeam: false }));
+    await waitFor(() => expect(ownerSelect('project-a').value).toBe('coord-b'));
+    expect(within(rowOf('project-a')).getByText(LINKING_TEXT.saved)).toBeInTheDocument();
+  });
+
+  it('the initiatives toggle saves the other way round', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: null, ownsTeam: false } });
+    fireEvent.click(await within(rowOf('project-a')).findByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { initiatives: 'off', linearOwner: null, ownsTeam: false }));
+  });
+
+  it('the owning-project control shows only for a shared key', async () => {
+    await mount([
+      row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'aaa' })), row('project-c', wire({ teamKey: 'BBB' })),
+    ], hier([hrow('project-a'), hrow('project-b'), hrow('project-c', { teamKey: 'BBB' })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const own = (n: string) => within(rowOf(n)).queryByRole('checkbox', { name: HIERARCHY_TEXT.owning });
+    expect(own('project-a')).not.toBeNull();
+    expect(own('project-b')).not.toBeNull();
+    expect(own('project-c')).toBeNull();
+  });
+
+  it('the state line links the map item and counts inbound issues', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))], hier([
+      hrow('project-a', { state: 'map-waiting', itemId: 42, inboundWaiting: 3 }),
+      hrow('project-b', { teamKey: 'BBB', state: 'migrated', stateAt: Date.UTC(2026, 10, 12, 8) }),
+    ]));
+    const link = await within(rowOf('project-a')).findByRole('link', { name: HIERARCHY_TEXT.mapWaiting });
+    expect(link.getAttribute('href')).toBe(itemPath(42));
+    expect(within(rowOf('project-a')).getByText('3 inbound issues wait for an owner')).toBeInTheDocument();
+    expect(await within(rowOf('project-b')).findByText('Migrated on 2026-11-12')).toBeInTheDocument();
+  });
+
+  it('a project with a team key links its Upkeep page, with no inbound issues waiting; one with no key shows none', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: null }))], hier([
+      hrow('project-a'), hrow('project-b', { teamKey: null }),
+    ]));
+    const link = await within(rowOf('project-a')).findByRole('link', { name: HIERARCHY_TEXT.upkeep });
+    expect(link.getAttribute('href')).toBe(upkeepPath('project-a'));
+    expect(within(rowOf('project-b')).queryByRole('link', { name: HIERARCHY_TEXT.upkeep })).toBeNull();
+  });
+
+  it('a refusal shows its fixed sentence', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(400, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    expect(await within(rowOf('project-a')).findByText(LINKING_ROUTE_TEXT['write-failed'])).toBeInTheDocument();
+    expect(document.body.textContent).not.toContain('disk path');
+  });
+
+  it('M1: a hierarchy write, a team-key write and owner-for-all whose outcome is unknown never say nothing was changed', async () => {
+    const region = await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    fireEvent.change(keyField('project-a'), { target: { value: 'BBB' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(api.saveLinking).toHaveBeenCalledTimes(1));
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
+    vi.spyOn(api, 'ownerForAll').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(region.querySelector('[data-linking-all]')!.textContent).toContain(HIERARCHY_TEXT.unconfirmed));
+    expect(region.querySelector('[data-linking-all]')!.textContent).not.toContain(LINKING_ROUTE_TEXT['write-failed']);
+  });
+
+  it('I2: a 502 answer to owner-for-all locks every row behind a read newer than the write; a 409 unlocks at once', async () => {
+    await twoRows();
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    const apply = async (n: number): Promise<void> => {
+      fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+      fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+      fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+      await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(n));
+    };
+    const all = vi.spyOn(api, 'ownerForAll').mockRejectedValue(new ApiError(409, { ok: false, error: LINKING_REFUSALS[0] }));
+    await apply(1);
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(ownerSelect('project-b')).not.toBeDisabled();
+    expect(api.hierarchy).toHaveBeenCalledTimes(1);
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    all.mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    await apply(2);
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    await act(async () => { held1.resolve(answer!); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(ownerSelect('project-b')).not.toBeDisabled();
+  });
+
+  it('making one coordinator the owner of every project asks first', async () => {
+    const region = await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    const all = vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 1 });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    expect(all).not.toHaveBeenCalled();
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(all).toHaveBeenCalledWith('coord-b'));
+  });
+
+  it('a sibling that lost the team loses its checked box and its next write sends ownsTeam false (one source)', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA', ownsTeam: true }))],
+      hier([hrow('project-a'), hrow('project-b', { ownsTeam: true })]));
+    const own = (n: string) => within(rowOf(n)).findByRole('checkbox', { name: HIERARCHY_TEXT.owning });
+    expect((await own('project-b')).getAttribute('aria-checked')).toBe('true');
+    const save = vi.spyOn(api, 'saveHierarchy').mockImplementation(async (project) => {
+      if (project === 'project-a') answer = hier([hrow('project-a', { ownsTeam: true }), hrow('project-b', { ownsTeam: false })]);
+      return { ok: true, settings: { initiatives: 'on', linearOwner: null, ownsTeam: project === 'project-a' } };
+    });
+    fireEvent.click(await own('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { initiatives: 'on', linearOwner: null, ownsTeam: true }));
+    await waitFor(async () => expect((await own('project-b')).getAttribute('aria-checked')).toBe('false'));
+    fireEvent.click(within(rowOf('project-b')).getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: null, ownsTeam: false }));
+  });
+
+  it('a team key Save re-reads the hierarchy, so the owning-project control follows the key', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a'), hrow('project-b', { teamKey: 'BBB' })]));
+    const own = () => within(rowOf('project-b')).queryByRole('checkbox', { name: HIERARCHY_TEXT.owning });
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    expect(own()).toBeNull();
+    vi.spyOn(api, 'saveLinking').mockImplementation(async () => {
+      answer = hier([hrow('project-a'), hrow('project-b', { teamKey: 'AAA' })]);
+      return { ok: true, linking: wire({ teamKey: 'AAA' }) };
+    });
+    fireEvent.change(keyField('project-b'), { target: { value: 'AAA' } });
+    fireEvent.click(within(rowOf('project-b')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(own()).not.toBeNull());
+  });
+
+  it('a failed hierarchy read says so; an older server (404) draws no hierarchy controls and no note', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], new Error('offline'));
+    expect(await screen.findByText(HIERARCHY_TEXT.unreadable)).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByLabelText(HIERARCHY_TEXT.owner)).toBeNull();
+    cleanup();
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], null);
+    expect(screen.queryByText(HIERARCHY_TEXT.unreadable)).toBeNull();
+    expect(screen.queryByText(HIERARCHY_TEXT.allAct)).toBeNull();
+  });
+
+  // I2 (final review): a write's re-read is held pending, so the answer shown is the old one for a while.
+  const held = <T,>(): { promise: Promise<T>; resolve: (v: T) => void; reject: (e: unknown) => void } => {
+    let resolve!: (v: T) => void; let reject!: (e: unknown) => void;
+    const promise = new Promise<T>((res, rej) => { resolve = res; reject = rej; });
+    return { promise, resolve, reject };
+  };
+  // A hierarchy write raises the card's floor, so a second hierarchy write cannot start while the first's read is pending. The
+  // concurrent second write of these tests is therefore a team-key save on the other row (it locks that row behind its own read).
+  const saveKeyOfB = async (): Promise<void> => {
+    vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'BBB' }) });
+    fireEvent.change(keyField('project-b'), { target: { value: 'BBB2' } });
+    fireEvent.click(within(rowOf('project-b')).getByRole('button', { name: LINKING_TEXT.save }));
+  };
+  const initiativesBox = (n: string) => within(rowOf(n)).getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives });
+
+  it('the controls stay locked until the write\'s re-read settles, so back-to-back writes do not undo each other', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const reread = held<HierarchyAnswer>();
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: null, ownsTeam: false } });
+    vi.mocked(api.hierarchy).mockImplementation(() => reread.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    // The POST has landed and the GET is in flight: the select and the checkbox are locked, so no stale body can go out.
+    await waitFor(() => expect(within(rowOf('project-a')).getByText(LINKING_TEXT.saved)).toBeInTheDocument());
+    expect(ownerSelect('project-a')).toBeDisabled();
+    fireEvent.click(initiativesBox('project-a'));
+    expect(save).toHaveBeenCalledTimes(1);
+    await act(async () => { reread.resolve(hier([hrow('project-a', { initiatives: 'off' })])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false }));
+  });
+
+  it('a re-read that was started earlier and settles later is ignored (only the newest lands)', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a'), hrow('project-b', { teamKey: 'BBB' })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const first = held<HierarchyAnswer>();
+    const second = held<HierarchyAnswer>();
+    vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: null, ownsTeam: false } });
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    await saveKeyOfB();
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(3));
+    // The third read (the second write's) lands with both off; then the first read lands late with the old, both-on answer.
+    const newest = hier([hrow('project-a', { initiatives: 'off' }), hrow('project-b', { teamKey: 'BBB', initiatives: 'off' })]);
+    const old = hier([hrow('project-a'), hrow('project-b', { teamKey: 'BBB' })]);
+    vi.mocked(api.hierarchy).mockImplementation(async () => newest);
+    await act(async () => { second.resolve(newest); });
+    await act(async () => { first.resolve(old); });
+    await waitFor(() => expect(initiativesBox('project-a').getAttribute('aria-checked')).toBe('false'));
+    expect(initiativesBox('project-b').getAttribute('aria-checked')).toBe('false');
+  });
+
+  const OFF = { initiatives: 'off', linearOwner: null, ownsTeam: false } as const;
+  const bothOff = (): HierarchyAnswer => hier([hrow('project-a', { initiatives: 'off' }), hrow('project-b', { teamKey: 'BBB', initiatives: 'off' })]);
+  const aOffBOn = (): HierarchyAnswer => hier([hrow('project-a', { initiatives: 'off' }), hrow('project-b', { teamKey: 'BBB' })]);
+  const twoRows = async (): Promise<ReturnType<typeof vi.spyOn>> => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a'), hrow('project-b', { teamKey: 'BBB' })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    return vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: OFF });
+  };
+
+  it('a failed re-read after a write keeps the row locked, says so, and a read again unlocks it on the server\'s answer', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: OFF });
+    vi.mocked(api.hierarchy).mockRejectedValue(new TypeError('offline'));
+    fireEvent.click(initiativesBox('project-a'));
+    expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
+    expect(screen.queryByText(HIERARCHY_TEXT.unreadable)).toBeNull();
+    expect(ownerSelect('project-a')).toBeInTheDocument();
+    // Still locked: no change can be made, so no body carries the old answer.
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(initiativesBox('project-a')).toBeDisabled();
+    expect(save).toHaveBeenCalledTimes(1);
+    // Read again: the server's stored answer lands, the row unlocks, and the next body carries it.
+    vi.mocked(api.hierarchy).mockImplementation(async () => hier([hrow('project-a', { initiatives: 'off' })]));
+    fireEvent.click(screen.getByRole('button', { name: HIERARCHY_TEXT.readAgain }));
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(screen.queryByText(HIERARCHY_TEXT.rereadFailed)).toBeNull();
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('two rows write at once and the first re-read lands first: each row unlocks on a read newer than its own write', async () => {
+    const save = await twoRows();
+    const first = held<HierarchyAnswer>();
+    const second = held<HierarchyAnswer>();
+    // Later reads (a control change's) answer with what the server now stores.
+    vi.mocked(api.hierarchy).mockImplementation(async () => bothOff());
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    await saveKeyOfB();
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(3));
+    await act(async () => { first.resolve(aOffBOn()); });
+    // A's own read landed: A unlocks on an answer newer than its write. B's has not: B stays locked.
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(ownerSelect('project-b')).toBeDisabled();
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+    await act(async () => { second.resolve(bothOff()); });
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+    fireEvent.change(ownerSelect('project-b'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+    expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('two rows write at once and the newer re-read lands first: the older one is dropped and both rows end on the stored values', async () => {
+    const save = await twoRows();
+    const first = held<HierarchyAnswer>();
+    const second = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementation(async () => bothOff());
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    await saveKeyOfB();
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(3));
+    await act(async () => { second.resolve(bothOff()); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    await act(async () => { first.resolve(aOffBOn()); });
+    // The older answer was dropped: B still reads off, and nothing relocked.
+    expect(initiativesBox('project-b').getAttribute('aria-checked')).toBe('false');
+    expect(ownerSelect('project-a')).not.toBeDisabled();
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+    fireEvent.change(ownerSelect('project-b'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+    expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('after an owner-for-all save every row stays locked until a read as new as it has landed, then writes the stored owner', async () => {
+    const save = await twoRows();
+    vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 2 });
+    const held1 = held<HierarchyAnswer>();
+    const stored = hier([hrow('project-a', { linearOwner: 'coord-b' }), hrow('project-b', { teamKey: 'BBB', linearOwner: 'coord-b' })]);
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    expect(initiativesBox('project-a')).toBeDisabled();
+    expect(save).not.toHaveBeenCalled();
+    await act(async () => { held1.resolve(stored); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('a failed re-read after an owner-for-all save keeps every row locked until Read again lands', async () => {
+    await twoRows();
+    vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 2 });
+    vi.mocked(api.hierarchy).mockRejectedValue(new TypeError('offline'));
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    vi.mocked(api.hierarchy).mockImplementation(async () => hier([hrow('project-a', { linearOwner: 'coord-b' }), hrow('project-b', { teamKey: 'BBB', linearOwner: 'coord-b' })]));
+    fireEvent.click(screen.getByRole('button', { name: HIERARCHY_TEXT.readAgain }));
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+    expect(ownerSelect('project-a')).not.toBeDisabled();
+  });
+
+  const sharedKey = async (): Promise<ReturnType<typeof vi.spyOn>> => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))],
+      hier([hrow('project-a'), hrow('project-b', { ownsTeam: true })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    return vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'on', linearOwner: null, ownsTeam: true } });
+  };
+  const owning = (n: string) => within(rowOf(n)).getByRole('checkbox', { name: HIERARCHY_TEXT.owning });
+  const aOwns = (): HierarchyAnswer => hier([hrow('project-a', { ownsTeam: true }), hrow('project-b', { ownsTeam: false })]);
+
+  it('an owning-project write locks the sibling row too: its body never carries the old ownsTeam, and carries the stored one after the read', async () => {
+    const save = await sharedKey();
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.click(owning('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-b')).toBeDisabled();
+    expect(initiativesBox('project-b')).toBeDisabled();
+    vi.mocked(api.hierarchy).mockImplementation(async () => aOwns());
+    await act(async () => { held1.resolve(aOwns()); });
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+    fireEvent.click(initiativesBox('project-b'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: null, ownsTeam: false });
+  });
+
+  it('a failed re-read after an owning-project write keeps the sibling locked until Read again lands', async () => {
+    const save = await sharedKey();
+    vi.mocked(api.hierarchy).mockRejectedValue(new TypeError('offline'));
+    fireEvent.click(owning('project-a'));
+    expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    vi.mocked(api.hierarchy).mockImplementation(async () => aOwns());
+    fireEvent.click(screen.getByRole('button', { name: HIERARCHY_TEXT.readAgain }));
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+    fireEvent.click(initiativesBox('project-b'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: null, ownsTeam: false });
+  });
+
+  it('a hierarchy write in flight locks every other row from the moment it starts', async () => {
+    const save = await sharedKey();
+    const inFlight = held<{ ok: true; settings: { initiatives: 'on'; linearOwner: null; ownsTeam: true } }>();
+    save.mockImplementationOnce(() => inFlight.promise);
+    fireEvent.click(owning('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(ownerSelect('project-b')).toBeDisabled();
+    expect(initiativesBox('project-b')).toBeDisabled();
+    expect(owning('project-b')).toBeDisabled();
+    await act(async () => { inFlight.resolve({ ok: true, settings: { initiatives: 'on', linearOwner: null, ownsTeam: true } }); });
+    vi.mocked(api.hierarchy).mockImplementation(async () => aOwns());
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+  });
+
+  it('an owner-for-all save in flight locks every row from the moment it starts', async () => {
+    await twoRows();
+    const inFlight = held<{ ok: true; projects: number }>();
+    vi.spyOn(api, 'ownerForAll').mockImplementation(() => inFlight.promise);
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(api.ownerForAll).toHaveBeenCalledTimes(1));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    await act(async () => { inFlight.resolve({ ok: true, projects: 2 }); });
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+  });
+
+  it('the stale note stays while a row is locked behind a failed read, even when an older read lands after it', async () => {
+    await twoRows();
+    const r2 = held<HierarchyAnswer>();
+    const r3 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => r2.promise).mockImplementationOnce(() => r3.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    await saveKeyOfB();
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(3));
+    await act(async () => { r3.reject(new TypeError('offline')); });
+    expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
+    await act(async () => { r2.resolve(aOffBOn()); });
+    // Read 2 covers A's write, so A unlocks; B's write needs read 3, which failed: B stays locked, so the note and the retry stay.
+    expect(ownerSelect('project-a')).not.toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    expect(screen.getByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: HIERARCHY_TEXT.readAgain })).toBeInTheDocument();
+  });
+
+  it('a write whose result is unknown locks behind a re-read; a definite refusal unlocks at once', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const save = vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(409, { ok: false, error: LINKING_REFUSALS[0] }));
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(api.hierarchy).toHaveBeenCalledTimes(1);
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    save.mockRejectedValue(new TypeError('timeout'));
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a', { initiatives: 'off' })])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+  });
+
+  it.each([502, 503])('a %i answer to a hierarchy write may follow a commit: the row stays locked until a read newer than the write lands', async (status) => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const save = vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(status, { ok: false, error: 'write-failed' }));
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a', { initiatives: 'off' })])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+  });
+
+  it('a 502 answer to a team-key write locks the row behind a re-read too', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.change(keyField('project-a'), { target: { value: 'BBB' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a')])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+  });
+
+  it('a project missing from the hierarchy answer is drawn at the server defaults, and a write sends them with the change', async () => {
+    await mount([row('project-a', wire())], hier([]));
+    expect(await within(rowOf('project-a')).findByText('Default: none live')).toBeInTheDocument();
+    expect(ownerSelect('project-a').value).toBe('');
+    expect(initiativesBox('project-a')).toBeChecked();
+    expect(within(rowOf('project-a')).getByText('Not migrated')).toBeInTheDocument();
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: null, ownsTeam: false } });
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { initiatives: 'off', linearOwner: null, ownsTeam: false }));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a', { initiatives: 'off', teamKey: null })])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(initiativesBox('project-a')).not.toBeChecked();
+  });
+
+  it('a stamp the clock cannot place says no date rather than throwing', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state: 'migrated', stateAt: 1e20 })]));
+    expect(await within(rowOf('project-a')).findByText('Migrated')).toBeInTheDocument();
+  });
+
+  it('the all-projects act is not drawn while the project list is empty', async () => {
+    await mount([], hier([]));
+    expect(screen.queryByText(HIERARCHY_TEXT.allAct)).toBeNull();
+  });
+
+  it('a default owner that is not live says so, and so does a named one', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA', linearOwner: 'coord-z' })), row('project-b', wire({ teamKey: 'BBB' }))], hier([
+      hrow('project-a', { linearOwner: 'coord-z', ownerNow: { id: 'coord-z', source: 'named', live: false } }),
+      hrow('project-b', { teamKey: 'BBB', ownerNow: { id: 'coord-b', source: 'default', live: false } }),
+    ]));
+    expect(await within(rowOf('project-b')).findByText('Default: coord-b (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-a')).getByText('coord-z (not live)')).toBeInTheDocument();
+  });
+
+  it('the empty option names the default owner and its liveness for a named, a default and a none source alike', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' })), row('project-c', wire({ teamKey: 'CCC' }))], hier([
+      hrow('project-a', { ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
+      hrow('project-b', { teamKey: 'BBB', ownerNow: { id: 'coord-b', source: 'default', live: false, project: 'project-b' } }),
+      hrow('project-c', { teamKey: 'CCC', ownerNow: { id: null, source: 'none', live: false, project: 'project-c' } }),
+    ]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText('Default: coord-b (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-c')).getByText('Default: none live')).toBeInTheDocument();
+    expect(screen.queryByText(/latest programme/)).toBeNull();
+    expect(screen.queryByText(/own owner setting is not used/)).toBeNull();
+  });
+
+  it('a project whose owner comes from the project owning its key says so, with that coordinator liveness', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))], hier([
+      hrow('project-a', { ownsTeam: true, linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a' } }),
+      hrow('project-b', { ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-a', live: true } } }),
+    ]));
+    // I1: the option names the sibling's own default (ifUnnamed); the note names who owns it now, and whether that one is live.
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText('The owner now is coord-b (not live), from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.')).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(/own owner setting is not used/)).toBeNull();
+  });
+
+  it('an inherited owner with none live says so, and an own named owner outside the list is not labelled with another coordinator liveness', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA', linearOwner: 'coord-z' }))], hier([
+      hrow('project-a', { ownsTeam: true, ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } }),
+      hrow('project-b', { linearOwner: 'coord-z', ownerNow: { id: 'coord-a', source: 'named', live: true, project: 'project-a' } }),
+    ]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText('coord-z (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-a')).getByText('Default: none live')).toBeInTheDocument();
+  });
+
+  it('F2: the empty option names who choosing it gives (ifUnnamed), not the named owner; absent ifUnnamed reads as today', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA', linearOwner: 'coord-z' })), row('project-b', wire({ teamKey: 'BBB' })),
+      row('project-c', wire({ teamKey: 'CCC' })), row('project-d', wire({ teamKey: 'DDD', linearOwner: 'coord-z' }))], hier([
+      hrow('project-a', { linearOwner: 'coord-z', ownerNow: { id: 'coord-z', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-a', live: true } } }),
+      hrow('project-b', { teamKey: 'BBB', ownerNow: { id: 'coord-b', source: 'named', live: true, project: 'project-b', ifUnnamed: { id: null, live: false } } }),
+      hrow('project-c', { teamKey: 'CCC', ownerNow: { id: 'coord-a', source: 'default', live: true, project: 'project-c' } }),
+      hrow('project-d', { teamKey: 'DDD', linearOwner: 'coord-z', ownerNow: { id: 'coord-z', source: 'named', live: false, project: 'project-d' } }),
+    ]));
+    // The named row: the empty option names the default rule's coordinator, coord-a, never the named coord-z.
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-a')).queryByText('Default: coord-z (not live)')).toBeNull();
+    expect(within(rowOf('project-a')).getByText('coord-z (not live)')).toBeInTheDocument();
+    expect(within(rowOf('project-b')).getByText('Default: none live')).toBeInTheDocument();
+    expect(within(rowOf('project-c')).getByText('Default: coord-a (live)')).toBeInTheDocument();
+    // Absent ifUnnamed (an older server): today's words from ownerNow.
+    expect(within(rowOf('project-d')).getByText('Default: coord-z (not live)')).toBeInTheDocument();
+  });
+
+  it('F2: a shared-key sibling\'s empty option names its own default and the note says its own setting is not used', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'AAA' }))], hier([
+      hrow('project-a', { ownsTeam: true, linearOwner: 'coord-b', ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-b', live: false } } }),
+      hrow('project-b', { ownerNow: { id: 'coord-b', source: 'named', live: false, project: 'project-a', ifUnnamed: { id: 'coord-a', live: true } } }),
+    ]));
+    await within(rowOf('project-b')).findByText('Default: coord-a (live)');
+    expect(within(rowOf('project-b')).getByText(/own owner setting is not used meanwhile/)).toBeInTheDocument();
+  });
+
+  it('a missing project field reads as the project own owner', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { ownerNow: { id: 'coord-a', source: 'default', live: true } })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(screen.queryByText(/own owner setting is not used/)).toBeNull();
+  });
+
+  it('the none-live words for an inherited owner', () => {
+    const r = hrow('project-b', { ownerNow: { id: null, source: 'none', live: false, project: 'project-a' } });
+    expect(defaultOwnerWords(r)).toBe('Default: none live');
+    expect(ownerInheritedNote(r)).toBe('No owner is live now. That comes from project-a, which owns team key AAA. This project\'s own owner setting is not used meanwhile.');
+    expect(namedOwnerWords(r, 'coord-z')).toBe('coord-z (not live)');
+    expect(namedOwnerWords(hrow('project-a', { ownerNow: { id: 'coord-z', source: 'named', live: true } }), 'coord-z')).toBe('coord-z');
+  });
+
+  it('M3: the all-projects words claim only the projects with Linear settings', () => {
+    expect(ownerForAllConsequence('coord-b')).toBe('Every project with Linear settings gets coord-b as its Linear owner. Each project\'s other settings stay as they are.');
+    expect(HIERARCHY_TEXT.allDone).toBe('Saved. Every project with Linear settings now names that coordinator.');
   });
 });

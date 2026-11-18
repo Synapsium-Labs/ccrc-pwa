@@ -14,12 +14,14 @@
 // orders, the lower of the two for `yes` and `unsure`, the higher for `no`; for a choice, the lower of the two orders'
 // probabilities for the option named.
 import {
-  DECISION_BAND_CUTS, DECISION_BANDS, DECISION_FACT_MAX_CHARS, DECISION_FIELD_MAX_CHARS, DECISION_FLEET_DAILY_TOTAL, DECISION_HOST_KINDS,
-  DECISION_MALFORMED_WHY, DECISION_NOT_ASKED_WHY, DECISION_OUTCOMES, DECISION_QUESTION_TYPES, DECISION_QUESTIONS,
+  DECISION_BAND_CUTS, DECISION_BANDS, DECISION_FACT_MAX_CHARS, DECISION_FIELD_MAX_CHARS, DECISION_FLEET_DAILY_TOTAL, DECISION_HELD_CAUSES,
+  DECISION_HOST_KINDS, DECISION_MALFORMED_WHY, DECISION_NOT_ASKED_WHY, DECISION_OUTCOMES, DECISION_QUESTION_TYPES, DECISION_QUESTIONS,
   DECISION_REQUEST_MAX_BYTES, DECISION_RESERVE_PER_REQUEST, DECISION_SHORTLIST_MAX, DECISION_UNAVAILABLE_WHY,
-  type DecisionBand, type DecisionCheck, type DecisionHostKind, type DecisionMalformedWhy, type DecisionRowId, type DecisionRowSide,
-  type DecisionVerdict,
+  type DecisionBand, type DecisionCheck, type DecisionHostKind, type DecisionMalformedWhy, type DecisionQuestionRow, type DecisionRowId,
+  type DecisionRowSide, type DecisionVerdict,
 } from '../../../shared/decisionModel.js';
+import { DECISION_MODEL_REFUSALS } from '../../../shared/refusal.js';
+import { privateNameHits, type NameList } from '../../../shared/private-names.mjs';
 
 /** A row's state, after the caller built it: each field's text, or a list of texts. */
 export type DecisionFields = Readonly<Record<string, string | readonly string[]>>;
@@ -59,11 +61,22 @@ export function decisionRequestGroups(rows: readonly DecisionRowId[], stateOf: (
 /** The egress word an answered check records (`egressWordOf`). */
 export const DECISION_RECORDED_EGRESS = ['clear', 'skipped-no-list', 'not-hosted'] as const;
 
+/** The words `applyDecision` and `gateOutcome` spell: an effect on a row, and the gate's one other answer. */
+export const DECISION_EFFECT_WORDS = ['clear-yes', 'clear-no', 'none-picked', 'to-operator'] as const;
+/** The words `decisionLines.ts`'s deciders spell beyond the refusals of `shared/refusal.ts#DECISION_MODEL_REFUSALS`: the canary's
+ *  `not-run`, the off door's `already-held`, a door's name for the step-up and a catalogue row's `attackerWants`. */
+export const DECISION_LINES_WORDS = ['not-run', 'already-held', 'key-put', 'key-delete', 'an-option'] as const;
+
 /** Every word the decision-model files spell as a literal, from the lists that declare them. `mail-routes.test.ts`'s code
  *  scan admits a word of these files through this guard: none is a mail or run refusal. */
+/** What the bound key reader answers beside a value and the read-failure words (`decisionModelHttp.ts#readDecisionModelKey`,
+ *  review 2418 F1): a key stored for another origin, or with no record naming one. */
+export const DECISION_KEY_READ_WORDS = ['not-bound'] as const;
+
 const DECISION_MODEL_WORDS: ReadonlySet<string> = new Set<string>([...DECISION_HOST_KINDS, ...DECISION_OUTCOMES,
   ...DECISION_UNAVAILABLE_WHY, ...DECISION_NOT_ASKED_WHY, ...DECISION_MALFORMED_WHY, ...DECISION_BANDS,
-  ...DECISION_QUESTION_TYPES, ...DECISION_EGRESS_WORDS, ...DECISION_RECORDED_EGRESS]);
+  ...DECISION_QUESTION_TYPES, ...DECISION_EGRESS_WORDS, ...DECISION_RECORDED_EGRESS, ...DECISION_HELD_CAUSES,
+  ...DECISION_EFFECT_WORDS, ...DECISION_LINES_WORDS, ...DECISION_KEY_READ_WORDS, ...Object.keys(DECISION_MODEL_REFUSALS)]);
 export const isDecisionModelWord = (w: string): boolean => DECISION_MODEL_WORDS.has(w);
 
 export interface PlanInput {
@@ -164,6 +177,24 @@ export function decisionDayOf(wallMs: number): string {
 export function decisionLineGen(row: DecisionRowId, side: DecisionRowSide, current: { id: number } | null): number {
   if (DECISION_QUESTIONS[row].direction === 'gate' && side.mode === 'armed' && side.armedLine !== null) return side.armedLine.id;
   return current?.id ?? 0;
+}
+
+/**
+ * The hosted egress screen (question 9; review 2418 F2, the coordinator's ruling), over the private-name list as its one reader
+ * (`nameListRead.ts#readPrivateNameList`) answers it: `no-list` only when no list was ever uploaded, `unreadable` when the list
+ * cannot be read or the matcher cannot trust it (which refuses the hosted call, plan row 9), and otherwise `hit` when any text
+ * hits an entry (`privateNameHits`), else `clear`. The record's egress word tells the three answered cases apart.
+ */
+export function decisionEgressOf(texts: readonly string[],
+  list: { readonly state: 'none' } | { readonly state: 'unreadable' } | { readonly state: 'list'; readonly list: NameList }):
+  'clear' | 'hit' | 'no-list' | 'unreadable' {
+  if (list.state === 'none') return 'no-list';
+  if (list.state !== 'list') return 'unreadable';
+  try {
+    return texts.some((t) => privateNameHits(t, list.list).length > 0) ? 'hit' : 'clear';
+  } catch {
+    return 'unreadable';
+  }
 }
 
 /** The egress word an answered check records: `not-hosted` when no screen ran, `skipped-no-list` when no list was ever
@@ -455,4 +486,86 @@ export function decisionCallMiss(row: DecisionRowId, call:
   | { outcome: 'auth-failed' | 'refused' | 'over-size'; ms: number; attempts: number }
   | { outcome: 'malformed'; why: string; ms: number; attempts: number }): DecisionCheck {
   return decisionMissCheck(row, call.outcome, 'why' in call ? call.why : null, call.ms, call.attempts);
+}
+
+// ── applying an answer (PR B, Task 8) ──────────────────────────────────────────────────────────────────────────────────
+
+/** What a check comes to for its row, now: `clear-yes` and `clear-no` for a yes-or-no row, a pick (an option, or `none-picked`)
+ *  for a choice, `unsure`, and the four ways a row can be out of the way: `shadow` (a record only, index Q11), `skipped` (the
+ *  row is off, or an advice row had no usable answer) and `shut` (a gate with no clear yes). */
+export type DecisionEffect = 'clear-yes' | 'clear-no' | 'unsure' | { pick: string } | 'none-picked' | 'shadow' | 'skipped' | 'shut';
+
+/**
+ * Apply a check to its row (the plan's Task 8 table, first match). Called inside the act's transaction; it decides nothing but
+ * the effect.
+ *
+ * | # | When | Effect |
+ * |---|---|---|
+ * | 1 | the row is `off` | `skipped` |
+ * | 2 | a gate, armed, held | `shut` |
+ * | 3 | `shadow`, or an advice row armed and held | `shadow` |
+ * | 4 | the check is not `answered` | a gate `shut`; advice `skipped` |
+ * | 5 | its host kind, origin or model is not today's | as row 4 |
+ * | 6 | the line used is none, or its id is not the check's `lineGen`; for a gate, also when its armed line's key (`armedLineKey`) is none, is another line's (its `id` is not the armed line's), or names another revision, host kind, origin or model than the check | as row 4 |
+ * | 7 | the verdict is `unsure` | a gate `shut`; advice `unsure` |
+ * | 8 | a yes-or-no row, a `yes` at or over the line | `clear-yes` |
+ * | 9 | a yes-or-no row, otherwise | a gate `shut`; advice `clear-no` |
+ * | 10 | a choice row, an option or `none` at or over the line | `{ pick }` or `none-picked` |
+ * | 11 | a choice row, otherwise | `unsure` (a gate `shut`) |
+ *
+ * The line a gate uses is its `armedLine`, never a newer one (review 2262 F3), read against the key it was admitted under (review
+ * 2418 F3), so a gate armed for one question text is never served on an answer to another; an advice row uses the current
+ * line, which is looked up under today's key. Rows 8 and
+ * 10 also read the verdict, so a `no` that carries a high `p` reads as a no (and a `yes` or `no` on a choice row as no pick):
+ * nothing but a clear yes or a named option, at the line, under the line and host it was gathered under, clears or picks.
+ */
+export function applyDecision(check: DecisionCheck, now: { row: DecisionQuestionRow; side: DecisionRowSide;
+  currentLine: { id: number; line: number } | null; host: { kind: DecisionHostKind; origin: string; modelId: string } | null;
+  /** The key the gate's armed line was admitted under (its `decision_lines` row: id, revision, host kind, origin, model), or
+   *  null. The id ties it to `side.armedLine`, so the current line's key is never read as the armed one's (review 2431 L4). */
+  armedLineKey: { id: number; revision: string; hostKind: DecisionHostKind; origin: string; modelId: string } | null }): DecisionEffect {
+  if (check.row !== now.row.id) throw new Error(`applyDecision: a check of ${check.row} applied to ${now.row.id}`);
+  const gate = now.row.direction === 'gate';
+  const { side } = now;
+  // 1.
+  if (side.mode === 'off') return 'skipped';
+  // 2.
+  if (gate && side.mode === 'armed' && side.held) return 'shut';
+  // 3.
+  if (side.mode === 'shadow' || (!gate && side.held)) return 'shadow';
+  const out = gate ? 'shut' : 'skipped';
+  // 4.
+  if (check.outcome !== 'answered') return out;
+  // 5. An answer gathered under another host is not today's.
+  const h = now.host;
+  if (h === null || h.kind !== check.hostKind || h.origin !== check.origin || h.modelId !== check.modelId) return out;
+  // 6. A gate is gathered under, and read against, its own armed line.
+  const used = gate ? side.armedLine : now.currentLine;
+  if (used === null || used.id !== check.lineGen) return out;
+  if (gate) {
+    const k = now.armedLineKey;
+    if (k === null || k.id !== used.id || k.revision !== check.revision || k.hostKind !== check.hostKind || k.origin !== check.origin
+      || k.modelId !== check.modelId) return out;
+  }
+  // 7.
+  if (check.verdict === 'unsure') return gate ? 'shut' : 'unsure';
+  const atLine = check.p >= used.line;
+  if (now.row.type === 'yes-no') {
+    // 8, 9.
+    if (check.verdict === 'yes' && atLine) return 'clear-yes';
+    return gate ? 'shut' : 'clear-no';
+  }
+  // 10, 11.
+  if (atLine && check.verdict === 'none') return 'none-picked';
+  if (atLine && typeof check.verdict === 'object') return { pick: check.verdict.option };
+  return gate ? 'shut' : 'unsure';
+}
+
+/**
+ * What every caller of a gate does with an effect (ruling F16: never wider than the row disarmed). A `clear-yes` returns the
+ * code rule's own verdict unchanged, exactly what `skipped` (the row off) returns, and so does `shadow` (a shadow gate was never
+ * armed: the coordinator's ruling RL11). Every other effect goes to the operator.
+ */
+export function gateOutcome<V>(codeVerdict: V, effect: DecisionEffect): V | 'to-operator' {
+  return effect === 'clear-yes' || effect === 'skipped' || effect === 'shadow' ? codeVerdict : 'to-operator';
 }

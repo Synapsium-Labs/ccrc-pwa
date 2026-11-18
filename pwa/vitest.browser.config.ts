@@ -8,6 +8,7 @@
 // is a run of its own, so each builds once. Pinned by test/browser-leg.test.ts and test/browser-dist.test.ts.
 import { defineConfig } from 'vitest/config';
 import { SlowFirstSequencer } from './browser/slowFirst.js';
+import { REACT_SINGLETON } from './vite.react-singleton.js';
 
 export default defineConfig({
   // This config is a standalone defineConfig: it does not inherit vite.config.ts, so the allow list is stated again here.
@@ -16,7 +17,11 @@ export default defineConfig({
   // the allow list. Setting `allow` replaces the default, so '.' keeps pwa's own root. The production build is not
   // affected.
   server: { fs: { allow: ['.', '../ui'] } },
+  // One React for a file that renders @ccrc/ui components to static markup on the node side (browser/linear-items.browser.test.ts):
+  // the lists are vite.config.ts's own, one module (vite.react-singleton.ts), pinned by test/react-singleton-pin.test.ts.
+  resolve: { dedupe: [...REACT_SINGLETON.dedupe], alias: { ...REACT_SINGLETON.alias } },
   test: {
+    server: { deps: { inline: [...REACT_SINGLETON.inline] } },
     include: ['browser/**/*.browser.test.{ts,tsx}'],
     environment: 'jsdom',
     // As in vite.config.ts: vitest otherwise turns a `.css?raw` import into an empty string, so Export's stylesheet

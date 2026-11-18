@@ -29,6 +29,7 @@ import type { PlanSync } from './linear/planSync.js';
 import type { DriftPass } from './linear/driftPass.js';
 import type { QuizLanePort } from './continuity/quizLane.js';
 import type { ForecastLanePort } from './coord/forecastLane.js';
+import type { DecisionDeps } from './coord/decisionModelLane.js';
 import type { OverlordAuthorityJournal } from './coord/overlordAuthorityJournal.js';
 import type { OverlordAuthorityGuard } from './coord/overlordAuthorityGuard.js';
 import type { WatcherCoordPort } from './coord/ports.js';
@@ -215,6 +216,9 @@ export interface Deps {
   /** The forecast lane's port (Overlord W2 forecasts A, `coord/forecastLane.ts`): the coordination store itself, set in
    *  `index.ts`. Absent: the lane does not run. */
   forecasts?: ForecastLanePort;
+  /** The decision model's anchor-set lane and its ports (Overlord W2, `coord/decisionModelLane.ts`), built once in `index.ts` over
+   *  coord.db and the authority journal. Absent (a test, a script): the lane does not run. */
+  decisions?: DecisionDeps;
   /** D-8182: the Linear plan sync, built once in `index.ts` beside the journal; the watcher's `linearPlanSync` lane ticks it. Absent (a test, a script): the lane does nothing. */
   planSync?: PlanSync | null;
   /** D-8183: the Linear drift pass, built once in `index.ts` after `planSync`; the watcher's `linearDrift` lane ticks it and the item route's `hand`/`keep` reach `act`. Absent (a test, a script): the lane does nothing and the acts are `unavailable`. */

@@ -12,7 +12,7 @@ import { LANE_SCHEDULE, OUTBOX_LANE_PERIOD_MS, RESPONSES_LANE_PERIOD_MS, laneRow
 import { LaneRunner } from '../src/laneRunner.js';
 import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
-import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS } from '../src/laneSchedule.js';
+import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS, DECISION_ANCHOR_PERIOD_MS, QUIZ_LANE_PERIOD_MS } from '../src/laneSchedule.js';
 import { LAUNCH_PROFILE_LANE_ROW } from '../src/continuity/profileLane.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
@@ -521,9 +521,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 51 of 51 are monotonic (the Linear plan sync, D-8182; the Linear drift pass, D-8183; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 52 of 52 are monotonic (the Linear plan sync, D-8182; the Linear drift pass, D-8183; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(51);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(52);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -649,5 +649,21 @@ describe('the case lane row (Overlord spec §10.5, Table 11.1c)', () => {
       cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip',
       warnKey: 'ccrc-server: the case lane failed', derivedFrom: { name: 'DRIFT_SWEEP_MS' },
     });
+  });
+});
+
+describe('the decision anchors lane row (Overlord W2, plan w2-decision-model.md Task 9, Table 11.1c)', () => {
+  it('looks once a day on the quiz lane\'s period by reference, skips an overlap and names its warning', () => {
+    expect(laneRow('decisionAnchors')).toEqual({
+      name: 'decisionAnchors', cadenceMs: DECISION_ANCHOR_PERIOD_MS, clock: 'mono', flight: 'skip',
+      warnKey: 'ccrc-server: the decision anchors lane failed',
+      derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: expect.any(String) },
+    });
+    // The day as a literal, the quiz row's reason above: a test reading the constant would move with a mutation of it.
+    expect(DECISION_ANCHOR_PERIOD_MS).toBe(86_400_000);
+    expect(DECISION_ANCHOR_PERIOD_MS).toBe(QUIZ_LANE_PERIOD_MS);
+  });
+  it('is the last row of the table', () => {
+    expect(LANE_SCHEDULE[LANE_SCHEDULE.length - 1]!.name).toBe('decisionAnchors');
   });
 });
