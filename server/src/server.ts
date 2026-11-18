@@ -264,6 +264,8 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/plan',
   // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
   '/api/hierarchy',
+  // A project's Upkeep epic (D-8183): its tickets' titles are what a person typed in Linear.
+  '/api/projects/:project/upkeep',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
@@ -2119,13 +2121,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
       const run = open?.ok === true ? open.siblings[0] : undefined;
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
-    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys,
+    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys, presenceOf,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
+    driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
@@ -2174,6 +2177,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    // D-8183: the plan owns the tickets of a managed team (`plan-owned`).
+    managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
+    boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
   // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
   registerLinkingRoutes(app, {

@@ -199,20 +199,37 @@ describe('5. the Linear and plan lanes', () => {
   it('the plan-door rows are exactly the write doors planRoutes.ts registers, each its own key through door', () => {
     const writes = keysOf(PLAN_SRC).filter((k) => !/^(GET|HEAD) /.test(k)).sort();
     expect(writes).toEqual(rowsVia('plan-door').map((k) => OTHER_LANES[k].route).sort());
+    // A programme door goes through `door`; the Linear hierarchy's team-keyed triage door (wave 4, #2982) through `teamDoor`,
+    // which asks the same check (below). Either way: one door, with its own lane key.
     for (const lane of rowsVia('plan-door')) {
       const body = handlerBody(PLAN_SRC, OTHER_LANES[lane].route);
-      expect(count(body, 'door('), lane).toBe(1);
-      expect(count(body, `door('${lane}', `), lane).toBe(1);
+      expect(count(body, 'door(') + count(body, 'teamDoor('), lane).toBe(1);
+      expect(count(body, `door('${lane}', `) + count(body, `teamDoor('${lane}', `), lane).toBe(1);
     }
   });
 
   it('door asks refuseOtherLane once, after attribution, before the reserved programme, the store read and serial', () => {
-    const door = between(PLAN_SRC, 'const door = (lane: OtherLane, work: Work)', 'const ownerVerdict');
+    const door = between(PLAN_SRC, 'const door = (lane: OtherLane, work: Work)', 'const teamDoor');
     expect(count(door, 'refuseOtherLane(reply, lane, id, opts.otherLaneReads)')).toBe(1);
-    expect(before(door, 'opts.attribute(', 'refuseOtherLane(')).toBe(true);
+    expect(before(door, 'callerOf(req, reply)', 'refuseOtherLane(')).toBe(true);
     expect(before(door, 'refuseOtherLane(', 'LINEAR_SYNC_PROGRAMME')).toBe(true);
     expect(before(door, 'refuseOtherLane(', 'await workspaces(')).toBe(true);
     expect(before(door, 'refuseOtherLane(', 'opts.serial(')).toBe(true);
+  });
+
+  it('callerOf, which door and teamDoor attribute through, asks opts.attribute once', () => {
+    const callerOf = between(PLAN_SRC, 'const callerOf = async (', 'const door = (lane: OtherLane, work: Work)');
+    expect(count(callerOf, 'await opts.attribute(')).toBe(1);
+  });
+
+  it('teamDoor asks refuseOtherLane once, after attribution, before the store reads and serial', () => {
+    const teamDoor = between(PLAN_SRC, 'const teamDoor = (lane: OtherLane, work: TeamWork)', 'const ownerVerdict');
+    expect(count(teamDoor, 'refuseOtherLane(reply, lane, id, opts.otherLaneReads)')).toBe(1);
+    expect(before(teamDoor, 'callerOf(req, reply)', 'refuseOtherLane(')).toBe(true);
+    expect(before(teamDoor, 'refuseOtherLane(', 'plan.planOf(')).toBe(true);
+    expect(before(teamDoor, 'refuseOtherLane(', 'plan.hierarchyProjectsOf(')).toBe(true);
+    expect(before(teamDoor, 'refuseOtherLane(', 'await workspaces(')).toBe(true);
+    expect(before(teamDoor, 'refuseOtherLane(', 'opts.serial(')).toBe(true);
   });
 });
 

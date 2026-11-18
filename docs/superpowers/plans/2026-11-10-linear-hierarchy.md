@@ -191,7 +191,9 @@ number from `POST /api/ledger/deviations`.
 - **D-8680 (2026-11-16)** — requeue-keeps-bound: a requeued binding with a Linear id returns to `bound`, so a retry
   updates and never creates. Record: the wave 3 note.
 - **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
-  (wave 4's open point). Record: the wave 3 note.
+  (wave 4's open point). Wave 4 (the coordinator's ruling): links are compared one way, so a planned link missing in Linear
+  is drift and an extra link is not (`driftPolicy.ts`'s `ONE_WAY_LINKS`); a project's milestones compare the same way,
+  since nothing deletes one. Record: the wave 3 and wave 4 notes.
 - **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
   by-name listing of 10, so with ten or more same-named objects ownership can fail. The binding is retried at every
   requeue, directory refill and plan change, and only its mail is once. Carried to the next capture (`creator { id }` on
@@ -208,6 +210,23 @@ number from `POST /api/ledger/deviations`.
   and keep a held `dueAt` even when it is later; and a held programme's dispatch (`ensureTicketBound`, read through `heldSyncUntil`) starts no pass.
   The plan's outcome table already said "deferred by the backoff", so this changes the interface text, not the intent.
   Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
+- **D-8703 (2026-11-17)** — drift-actor-unread: the changed* documents select no actor and `ops.ts` is frozen, so a drift
+  event's actor and the persistent-drift item read "not read"; the item still shows the object, the field, both values
+  and the time. The actor joins D-8699's next-capture list. Clause (review 2408 A-6, the coordinator's ruling, the same
+  cause): §7.3 exempts an issue moved to completed by Linear's GitHub integration once the merge is recorded, and with the
+  actor unread the grace exempts ANY completion after a recorded merge, whoever made it. Record: the wave 4 note.
+- **D-8704 (2026-11-17)** — catch-up-by-fingerprint: a binding stores F(the planned inputs), not F(Linear's owned
+  fields), so a difference is a catch-up when the binding's fingerprint is not the plan's current one; the programme is
+  marked due through `markSyncDue` alone (a held programme stays held, D-8702). Gap: a person's edit made while the sync
+  is behind, or while a programme is held, is overwritten with no drift event and no comment. Record: the wave 4 note.
+- **D-8705 (2026-11-17)** — inbound-open-and-kept-text: `changedIssues` selects no `createdAt` and no creator, so an
+  inbound issue is an open one in a managed team that no binding holds and the journal's `viaFleet` does not name; the
+  inbound row keeps the reporter's title and body, cut visibly to the plan's ticket bounds and read only under `untrusted`
+  and through the secret mask, so `plan triage` and `plan take` call no Linear. Record: the wave 4 note.
+- **D-8706 (2026-11-17)** — triage-own-programme-epic: `plan triage` `hand` to the caller's own programme takes the issue
+  at once, so the body's optional `epic` is then required (`plan-bad-body`). Record: the wave 4 note.
+- **D-8707 (2026-11-17)** — write-ask-project-teams: `LinearWriteAsk.resource` gains `teamKeys`, every team a project
+  write puts the project in, so the policy is asked about each. Record: the wave 4 note.
 - **D-8708 (2026-11-17)** — description-fit-255: an initiative's or project's description is fitted to Linear's
   255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`, counted in UTF-16 units), keeping the
   provenance line whole and cutting the body at its end with `…`. A description that fits is sent unchanged, except that trailing whitespace
@@ -221,6 +240,25 @@ number from `POST /api/ledger/deviations`.
   as insurance. Carried to the next capture, on the operator's go: the cap's INVALID_INPUT answer, with a non-ASCII
   body, to tell characters from bytes. The same change journals the cancel comment's body; that is a defect fixed,
   not a departure. Record: the ledger, review runs 2364 and 2368.
+- **D-8720 (2026-11-17)** — kept-plan-quiet: after *Keep the plan*, the same binding's persistent drift is not raised again
+  for seven days; a restore Linear refuses still raises the item at once (§7.4). Record: the wave 4 note (review run 2386
+  F3, the coordinator's ruling).
+- **D-8721 (2026-11-17)** — restore-comment-daily: a restore comments at most once a day on an object, whether or not its
+  item is open; §7.4 bounds only the open case. Record: the wave 4 note (review run 2386 F6, the coordinator's ruling).
+- **D-8722 (2026-11-17)** — issue-adopt-by-id: a ticket's issue is adopted by its idempotent id on any team, so a key
+  change between a lost create reply and recovery is not stranded. The id hashes kind, local id and workspace, so this is
+  safe only while one coord.db has ever filed tickets into that workspace. A second install, or a rebuilt database that
+  numbers tickets again, can adopt and rewrite another install's issue. The issue creator on the next capture (D-8699's
+  list) closes it. Record: the wave 4 note (review run 2386 F5, the coordinator's ruling).
+- **D-8723 (2026-11-17)** — w4-schema-additions: the wave's one migration departs from Task 4.1's SQL in four places.
+  `linear_inbound` gains `reason` (a close's reason, and a given-up close's refusal), `actedAt` (when the close's Linear
+  writes landed or were given up) and `itemId` (the operator item a `raise` made), beyond D-8705's `title` and `body`;
+  two tables the plan never names persist wave 3's carried findings, `linear_sync_streaks` (item 6, the D-8701 episode
+  streaks) and `linear_probe_settled` (item 1, the settled-probe marks); and `linear_drift_marks` keeps one watermark per
+  changed* kind (`initiatives`, `projects`, `milestones`, `issues`) in place of one `watermark`, so a change made between
+  two kinds' reads is never skipped (review run 2386 A3). A restore deferred on a target keeps the watermark of every kind
+  whose event rides on that target, so an initiative's link carried on a project's restore is read again (review run 2394
+  N2). Record: the wave 4 note (review run 2386 A6).
 
 ## Global Constraints
 

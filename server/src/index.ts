@@ -42,6 +42,7 @@ import { operatorSecretRows, withOperatorSecretRows } from './coord/ledgersSecre
 import { readLocalCcdCaps } from './localcaps.js';
 import { localUpdateSpawnFor } from './update/converge.js';
 import { UPDATE_OP_TIMEOUT_MS } from '../../shared/agent-protocol.js';
+import { coordinatorPresenceIn } from '../../shared/ledgers.js';
 import { apiBaseProblem, createCataloguePoller } from './update/catalogue.js';
 import { AccountAudit, actorOf, knownFleetIdentity } from './accounts/audit.js';
 import { LinearJournal } from './linear/journal.js';
@@ -52,6 +53,7 @@ import { allowAll } from './linear/policyPoint.js';
 import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { planSyncFor } from './linear/planSync.js';
+import { driftPassFor } from './linear/driftPass.js';
 import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
@@ -377,7 +379,13 @@ deps.linearPolicy = allowAll;
 deps.planSync = planSyncFor({
   coord, plan: deps.plan, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll, refresher: linearRefresher,
   privateTrackerKeys: cfg.privateTrackerKeys, readLinearStore: () => readLinearStore(cfg.ccrcDir),
-  currentFleet: () => watcher.currentFleet(),
+  currentFleet: () => watcher.currentFleet(), presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id),
+});
+// The Linear drift pass (D-8183): reads a managed team's changes and has the sync put the plan's values back; ticked by the watcher's `linearDrift` lane.
+deps.driftPass = driftPassFor({
+  coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
+  readLinearStore: () => readLinearStore(cfg.ccrcDir), currentFleet: () => watcher.currentFleet(), viaFleet: (ids) => linearJournal.viaFleet(ids),
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), directory: linearRefresher.directory,
 });
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

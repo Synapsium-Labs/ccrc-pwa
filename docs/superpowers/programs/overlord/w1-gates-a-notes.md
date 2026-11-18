@@ -59,9 +59,9 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
   - (d) Convert designation C's string-actor fixtures for `designatePending`, `retire` and the setters in
     `overlord-settings-doors`, `overlord-designation-store` and `sim/designationSets` to minted actors.
   - (e) Designation B's forthcoming `rebindPending` writes all four pending actor columns and clears through `CLEAR_PENDING`.
-- **Migration slot**: main's #2974 took 93 after #2964 took 92, then forecasts A (#2987) took 94. The authorized
-  landing-order absorption preserves all three and takes measured slot 95; a later landing collision must re-measure
-  the next free slot under the coordinator's license.
+- **Migration slot**: main's #2974 took 93 after #2964 took 92, forecasts A (#2987) took 94 and Linear hierarchy
+  (#2982) took 95. The authorized landing-order absorption preserves those entries and takes measured slot 96;
+  a later landing collision must re-measure the next free slot under the coordinator's license.
 
 - **Additive absorption**: kept both migration and census additions under the standing license; the shared decision-model record case was kept verbatim.
 
@@ -288,3 +288,30 @@ Neither resource-affected final attempt is claimed green; no TypeScript diagnost
 CI must measure the final head. No complete local suite is claimed, and the original signal remains red/shallow.
 Documentation checks passed: deviation references 34/34, anchors 9/9 and citations 4/4. The round's three-file diff
 passes whitespace checking; privacy scanning gates the commit, description and outgoing status before publication.
+
+### Landing-order absorption after remaining work B and Linear hierarchy
+
+The fixture-repair head `37849c7e1` passed all twelve server shards, required test summaries, node floor and actual
+CodeQL. The full CI run stayed red because Storybook browser-dependency setup failed before its builds, including
+one explicitly authorized failed-job retry. The coordinator ruled that this non-required job does not hold landing
+and owns its infrastructure diagnosis; it is not reclassified green. Landing instead waited for remaining work B
+(#3002) and Linear hierarchy (#2982). Both merged before the coordinator's named go for one further main absorption,
+migration/census/floor resolutions only, one push, and an exact-tip required-check/CodeQL handoff without more review.
+
+The single fetched main is `e88fe39ed9156d2fb4216d4e7dae563b5eca40bc`, with #2982 at `98d3b29d4`. Preview and actual
+merge conflicted only in schema, database census, mail census and rollback replay. The claim census found no other
+holder on those four files; all were claimed before resolution. Main's entire 95-entry migration prefix remains
+verbatim; actor metadata is appended at position 96. Both database version pins and the migration-length pin become
+96. Rollback retains the incoming Linear table drops and now replays all 43 entries from 54 through 96. The mail
+census keeps both edge-state admission and the scoped identity vocabulary; no assertion is removed or floor lowered.
+The remaining files merged automatically, including both mutation families and the incoming inbound-plan door
+coverage alongside the minted designation helpers and complete rebind actor metadata. No production behavior was
+hand-edited beyond the actor migration's position, and the shared decision-model records test is unchanged.
+
+Serial foreground wrapper measurements, one whole file per invocation: database 149/149, rollback replay 21/21,
+mail routes/census 61/61, actor metadata 33/33, other-lanes census 53/53, box-token census 60/60, writers map 45/45,
+caller characterization 13/13, other-lanes routes 35/35, combined mutation floors 189/189 and the complete tests-inclusive
+file 12/12 all passed. No resource kill was reported in these runs. No full local suite is claimed; the original
+full-run signal remains red/shallow. The new-head required checks and actual CodeQL are still the post-push gate.
+Documentation guards passed 34/34, 9/9 and 4/4, and the full staged merge diff passed whitespace checking. The
+complete branch-delta scan against the pinned base found zero private hits before committing the merge.
