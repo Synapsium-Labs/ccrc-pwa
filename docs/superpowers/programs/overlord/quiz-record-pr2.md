@@ -60,11 +60,10 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   `CLAUDECODE` refusal reds `ccrc-quiz-record.test.ts` (2 cases), and without its `TMUX_PANE` refusal (1 case).
 - **Red first**: Task 7's store tests ran red against `main`'s sources (14 cases) and green on the branch; the doors' and the
   card's route tests were written before their code and ran red first.
-- **Migration slot**: 96. Done tests A (#2964) landed 92, the programme's phases (#2974) 93, forecasts A (#2987) 94 and the
-  Linear hierarchy's wave 4 (#2982) 95, so this PR moved under the standing renumber license each time; the shared
-  `decision-model-records` case is untouched. The coordinator named 98 (95 to 97 queued for gates A, handoffs and decision
-  model B), but `MIGRATIONS` is positional and cannot skip a slot, so the entry takes 96 by position and whoever lands second
-  renumbers.
+- **Migration slot**: 100, taken at the landing merge. Done tests A (#2964) landed 92, the programme's phases (#2974) 93,
+  forecasts A (#2987) 94, the Linear hierarchy's wave 4 (#2982) 95, gates A (#2993) 96, the renewal hand-offs (#2934) 97,
+  decision model B (#2990) 98 and the ladder (#2994) 99, so this PR moved under the standing renumber license each time; the
+  shared `decision-model-records` case is untouched.
 - **Fix round 1** (first CI on 39b5420c0 red, all three my own): the pwa test stubbed `baseline: null` where the answer is
   typed boolean; the record-door test's header cases needed a `Record<string, string>` type for the tests-inclusive
   typecheck; and `mail-routes.test.ts`'s kebab-token scan refused the card's `'not-yet'`, now declared once in L0 as
@@ -97,6 +96,15 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   that places every write door in one class, and the record door had none. Main was merged once more and the door took a
   `launch-profile` row in `overlord-other-lanes-census.test.ts`'s `NOT_REFUSED` (box token only; a session holding the token
   could post a pending run, but only the operator's session-gated Confirm makes it count). The census reds without it.
+
+- **The landing merge** (the coordinator's landing turn): main merged once at slot 100. The census rows keep both sides
+  (HTTP 277, `ROUTES` 280, `FLAG_AWARE` thirty-two, the quiz and decision-model doors in the box-token census, the quiz
+  sentence in CLAUDE.md after the decision-model one, with the holders' consent), and the server's and the mail-routes
+  test's import lines keep both sides (ruled; no function body changed).
+- **coord-db-newer-build-version-is-derived** (coordinator's ruling at the landing merge): `coord-db.test.ts`'s "a database
+  from a NEWER build still READS" case set `user_version = 99`, which stopped being newer when the schema reached 100 entries:
+  the reopen ran migration 100 again and failed (`duplicate column name`). It now sets `COORD_SCHEMA_VERSION + 1`, so the
+  version it calls newer is always newer.
 
 ## For PR 1's runbook
 
