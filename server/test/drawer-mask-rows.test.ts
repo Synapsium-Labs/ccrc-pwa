@@ -1289,8 +1289,9 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
   };
 
   it('a key whose rows a move down then a CR breaks, past the drawer\'s hold, is never drawn (review 2430 F1)', () => {
-    // Main masks every form; before the fix: 2,672 bytes at 29 of 32 phases (8,192 bytes at 64 columns, 600 bytes of escapes
-    // a row, 88,840 and 88,713 bytes), and 350 and 600 bytes at 31 and 32 of 32 (2,000 and 4,000 bytes coloured per character).
+    // Main masks every form; before the fix (77afd3c59, measured by C45 with this row's phases): up to 1,984 bytes at 31 of
+    // its 32 runs, CUD+CR and IND+CR (8,192 bytes at 64 columns, 600 bytes of escapes a row, 88,840 and 88,713 bytes), and
+    // 350 and 600 bytes at 30 and 32 of 32 (2,000 and 4,000 bytes coloured per character).
     for (const [name, sep] of MOVE_DOWN) {
       const key = keyOf(8_192, 2441);
       const m = fingerprinted(key);
@@ -1314,8 +1315,9 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
   }, 300_000);
 
   it('pane history: a key whose rows a move down then a CR breaks is masked past the lookahead (review 2430 F1)', async () => {
-    // Main masks every form; before the fix: 400 of 2,000 bytes at 8 of 8 placements (1,800 bytes of escapes a row after 200
-    // rows of other text) and 8,064 or 2,816 of 8,128 at 6 of 6 (700 or 1,500 bytes a row).
+    // Main masks every form; before the fix (77afd3c59, measured by C45): 400 of 2,000 bytes at 8 of 8 placements (1,800
+    // bytes of escapes a row after 200 rows of other text), 8,064 of 8,128 at 6 of 6 with CUD+CR (700 and 1,500 bytes a
+    // row) and 5,632 at 6 of 6 with IND+CR at 1,500 (0 at 700).
     for (const [name, sep] of MOVE_DOWN) {
       const key = keyOf(2_000, 2443);
       const m = fingerprinted(key);
@@ -1349,8 +1351,8 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
   }, 300_000);
 
   it('two pushes cut inside a row break past the drawer\'s hold, between CR and LF or a move down and its CR, draw nothing (review 2430 F1)', () => {
-    // At every row break past 60,000 bytes. Main masks every cut; before the fix: 33 of 41 CR LF cuts and 66 of 82 move-down
-    // cuts drew up to 2,736 bytes.
+    // At every row break past 60,000 bytes. Main masks every cut; before the fix (77afd3c59, measured by C45): 33 of 41 cuts
+    // a form drew up to 2,112 bytes, CR LF, CUD+CR and IND+CR alike.
     const key = keyOf(8_192, 2445);
     const m = fingerprinted(key);
     try {
@@ -1375,7 +1377,7 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
 
   it('a key whose rows a move down then a CR breaks, past 256 KiB, is never drawn (review 2430 F1; red at main too)', () => {
     // 4,600 bytes of escapes a row (295,698 bytes): past main's 256 KiB hold too, where main's carried rows read the break
-    // the same way (main: 352 bytes at 32 of 32 phases; before the fix: 800 bytes at 31 of 32).
+    // the same way (measured by C45 with this row's 16 phases: main 352 bytes at 16 of 16; before the fix 736 at 15 of 16).
     const key = keyOf(4_000, 2446);
     const m = fingerprinted(key);
     try {
@@ -1389,10 +1391,10 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
 
   it('pane history: a key whose rows end in CR LF, or LF then CR, is masked across a slice or a grown read (review 2430 F3)', async () => {
     // A grown read ended at the LF of a CR LF, read the CR as an empty last row and answered "no cut", so the key's rows went
-    // out raw on both sides (main and before the fix alike: 2,000 bytes at 7 of 8 placements, 4,000 and 8,192 bytes coloured
-    // per character at 8 of 8). And a slice ended after the LF of a LF then CR (or a LF, blanks, then CR), one row down, and
-    // began the next with the CR, an empty row (main and before the fix alike: the whole 2,000 bytes at 8 of 8). Both read
-    // the row break as `ROW_BREAK` does.
+    // out raw on both sides (main and before the fix alike, measured by C45: 80 to 2,000 bytes at 7 of 8 placements, the
+    // whole key at 4; 4,000 and 8,192 bytes coloured per character, the whole key at 8 of 8). And a slice ended after the LF
+    // of a LF then CR (or a LF, blanks, then CR), one row down, and began the next with the CR, an empty row (main and before
+    // the fix alike: the whole 2,000 bytes at 7 of 8, 360 at the other). Both read the row break as `ROW_BREAK` does.
     const key = keyOf(2_000, 2447);
     const m = fingerprinted(key);
     try {
@@ -1461,8 +1463,9 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
     // Three pushes: the first passes the hold, the second ends between CR and LF, LF and CR, or a move down and its CR,
     // the third brings the rest at once or after a pause past the hold, when the held tail goes out unheld, ending in the
     // break. The chain the first push carries is read on by each later push, which hands on a break it ends inside as the
-    // first push's text does (C44). Before the fix: up to 5 cuts each; main draws the key's later rows at every cut with
-    // the pause (it holds a key's rows no longer than a pause), so this row reds at main too.
+    // first push's text does (C44). Before the fix (77afd3c59, measured by C45): 26, 26, 54 and 52 cuts drew up to 1,664 to
+    // 2,048 bytes; main draws the key's later rows, up to the whole key, at 26 or 27 cuts a form, those with the pause (it
+    // holds a key's rows no longer than a pause), so this row reds at main too.
     const key = keyOf(8_192, 2450);
     const m = fingerprinted(key);
     try {
