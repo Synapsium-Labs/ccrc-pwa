@@ -71,7 +71,7 @@ flowchart LR
 - `skin.<slot>` holds the skin's character, in ten slots, each falling back by itself (§2.3 says which ccrc token feeds each, and why the others are not carried):
   - `radius`, `radiusSmall` and `radiusLarge`: whole pixels from 0 to 24;
   - `controlRow`: whole pixels from 28 to 56, the height of rows in the frame's popovers, applied only under `(pointer: fine)`;
-  - `popShadow`: the popovers' elevation, one to three shadows, each two to four lengths in px and one colour;
+  - `popShadow`: the popovers' elevation. It holds one to three comma-separated shadows. Each shadow has two to four lengths, then one colour, with no `inset`, no other function and no keyword. A length is `0` or whole px: the x and y offsets from -64 to 64, the blur from 0 to 64, the spread from -8 to 8. The colour is `#rrggbb`, `#rrggbbaa` or `rgba(r, g, b, a)`, with r, g and b whole numbers from 0 to 255 and a from 0 to 1. Both forms ccrc uses fit, measured in every palette: Refined's `0 12px 40px rgba(0, 0, 0, 0.55)` (and `rgba(26, 32, 27, 0.22)` in light palettes), and Instrument's hairline `0 0 0 1px #5F697C` (one `--edge-strong` per palette);
   - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
 
   "The popovers" are Aa, the changes menu, the cross-reference card, quick jump, the keys sheet and the contents drawer. Their headings are the frame's own chrome, never document headings.
@@ -292,7 +292,7 @@ This section lists what does not change and what the new data could do. The stan
 
 **What the new data is.**
 - **Origin.** Colour, length and font values computed from ccrc's own stylesheets. A document cannot influence them: documents render inside the frame, never on ccrc's root.
-- **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again: closed keys; `#rrggbb` or `#rrggbbaa` only; lengths as whole pixels in range; no `;`, braces, `url(` or `var(`.
+- **Validation.** Both sides validate. The adapter validates with the library's own pure `parseAppearance` before sending. The frame validates again: closed keys; colour slots `#rrggbb` or `#rrggbbaa` only (`popShadow`'s colour may also be a bounded `rgba()`, §2); lengths as whole pixels in range; no `;`, braces, `url(` or `var(`. A `popShadow` within its bounds paints at most a 64 px blur and an 8 px spread around a popover, and it reaches no URL.
 - **The label.** It is the one free text that crosses. It is at most 64 characters, refused if it holds a control character, and set with `textContent`, so markup in it shows as its own characters and never renders.
 - **How values are written.** Through the CSSOM, onto library-owned custom property names. No stylesheet text is built from host input. Fonts load through the `FontFace` API from decoded bytes, under fixed family names.
 - **Fonts.** These are ccrc's own bundled bytes. They are the first binary bytes in the srcdoc that the library does not pin by hash: its own faces sit in a stylesheet that `frameDocument` checks against its manifest. So the library checks ccrc's faces by alphabet, signature and size, and ccrc pins them with a row: the bytes it passes are exactly the design system's font files. A malformed font would reach the browser's font parser inside an opaque-origin, script-pinned frame, and a face that fails to load is dropped (§2.2).
@@ -363,7 +363,8 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 
 **Tests the library ships.**
 1. `parseAppearance`:
-   - accepts every slot at the edges of its grammar;
+   - accepts every slot at the edges of its grammar, `popShadow` at three shadows, offsets of ±64, blur 64 and spread ±8 included;
+   - leaves out a `popShadow` with `inset`, four shadows, a blur of 65, a spread of 9, `rgba(256, 0, 0, 1)`, `rgba(0, 0, 0, 1.5)` or `rgb(0, 0, 0)`;
    - leaves out, without throwing, an unknown key, a 3-digit hex, `rgb()`, `var(`, `url(`, a `;`, an out-of-range length and an oversize payload, and names each in `refused`;
    - one refused colour leaves out the whole colour group; one refused skin slot leaves out only itself;
    - a bad `mode` reads as `auto`.
