@@ -382,6 +382,7 @@ No test, build or install ran: nothing in this wave changes code.
   - a Settings shortcut is not added in this wave.
 
   All three are folded into spec §6, §10 and Where things stand.
+- **Ask 600, the brief's first item.** The coordinator answered option 1 (mail 25257): the item is deferred and `main` is not merged. The item was the completion plan's D2 Results correction: row `W4-T10-M10`'s count, and D-8730's two clauses missing from fix round 2's F4 lists. Its section reached `main` with #3026 at 21:24Z, after this workspace was cut from `6f5421139`, and no clause-16 trigger licensed absorbing `main`. The coordinator carries both items to the first wave cut from a base that has #3026. This wave did not edit the completion plan. Its claim attempt was refused whole (409, held by D2's claim), so nothing was acquired.
 
 ### The adversarial pass (Opus · high, one pass over the spec and this plan)
 
