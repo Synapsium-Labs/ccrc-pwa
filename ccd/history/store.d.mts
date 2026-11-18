@@ -71,7 +71,7 @@ export function parentOf(db: DatabaseSync, nodeId: string): string | null;
 export function recoverOpenOn(db: DatabaseSync): boolean;
 export const FTS_GATE_SQL: Readonly<{ table: string; backfill: string; rebuild: string }>;
 // ── D-8726 (history-fts-fold-once): each FTS5 index's structure record ──
-export const FTS_STRUCTURE_SQL: Readonly<{ table: string; blobs_fts: string; nodes_fts: string }>;
+export const FTS_STRUCTURE_SQL: Readonly<{ table: string; blobs: string; nodes: string }>;
 export function ftsStructureOn(db: DatabaseSync, table: 'blobs_fts' | 'nodes_fts'): import('./fts-structure.mjs').FtsStructure;
 export function ftsSegmentsOn(db: DatabaseSync): { blobs: number | null; nodes: number | null };
 export function ftsGateFactsOn(db: DatabaseSync): { probe: 'present' | 'absent' | 'threw'; table: boolean; rebuilding: boolean; completed: boolean };

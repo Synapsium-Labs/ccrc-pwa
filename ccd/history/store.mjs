@@ -328,8 +328,8 @@ export const FTS_GATE_SQL = Object.freeze({
  *  STATUS_SQL carries them by reference, so the EXPLAIN cost pin sees each one. Row id 10 is a primary-key read. */
 export const FTS_STRUCTURE_SQL = Object.freeze({
   table: "SELECT 1 AS x FROM sqlite_master WHERE type = 'table' AND name = ?",
-  blobs_fts: `SELECT block FROM blobs_fts_data WHERE id = ${FTS_STRUCTURE_ROWID}`,
-  nodes_fts: `SELECT block FROM nodes_fts_data WHERE id = ${FTS_STRUCTURE_ROWID}`,
+  blobs: `SELECT block FROM blobs_fts_data WHERE id = ${FTS_STRUCTURE_ROWID}`,
+  nodes: `SELECT block FROM nodes_fts_data WHERE id = ${FTS_STRUCTURE_ROWID}`,
 });
 
 /** One FTS5 index's structure (fts-structure.mjs's parseFtsStructure), `blobs_fts` or `nodes_fts`: `missing` when the
@@ -337,7 +337,7 @@ export const FTS_STRUCTURE_SQL = Object.freeze({
 export function ftsStructureOn(db, table) {
   try {
     if (db.prepare(FTS_STRUCTURE_SQL.table).get(`${table}_data`) === undefined) return { state: 'missing' };
-    const r = db.prepare(FTS_STRUCTURE_SQL[table]).get();
+    const r = db.prepare(FTS_STRUCTURE_SQL[table === 'blobs_fts' ? 'blobs' : 'nodes']).get();
     return parseFtsStructure(r === undefined ? null : r.block);
   } catch {
     return { state: 'unreadable' };

@@ -88,8 +88,8 @@ export const STATUS_SQL = Object.freeze({
   ftsRebuild: FTS_GATE_SQL.rebuild,
   // D-8726 (history-fts-fold-once): each FTS5 index's structure record, read by store.mjs's ftsSegmentsOn (row id 10).
   ftsStructureTable: FTS_STRUCTURE_SQL.table,
-  ftsStructureBlobs: FTS_STRUCTURE_SQL.blobs_fts,
-  ftsStructureNodes: FTS_STRUCTURE_SQL.nodes_fts,
+  ftsStructureBlobs: FTS_STRUCTURE_SQL.blobs,
+  ftsStructureNodes: FTS_STRUCTURE_SQL.nodes,
   breaker: 'SELECT count(*) AS n FROM breaker WHERE open_until_ms > ?',
   metaKey: 'SELECT v FROM meta WHERE k = ?',
 });
