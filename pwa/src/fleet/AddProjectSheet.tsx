@@ -23,12 +23,16 @@ export interface AddProjectSheetProps {
   onStartSession?: (project: string) => void;
 }
 
+/** The owner select's coordinators (D-8184); one function for the sheet's life, so the form's effect reads it once per opening. */
+const loadCoordinators = (): Promise<readonly { id: string; live: boolean }[]> => api.hierarchy().then((a) => a.coordinators);
+
 export function AddProjectSheet({ open, onClose, add, adding, onStartSession }: AddProjectSheetProps): ReactNode {
   const form = useProjectAddForm({
     active: open,
     add,
     adding,
     linking: true,
+    loadCoordinators,
     onAdded: (added, dismissed) => {
       // True with or without the sheet, so a success that lands after a dismissal is said too, with its action.
       const text = projectAddedText(added.name, added.source);
@@ -39,7 +43,7 @@ export function AddProjectSheet({ open, onClose, add, adding, onStartSession }: 
       // The linking follow-ups (D-8147) run after the add and each outcome is a line of the one toast. With neither field
       // set the toast is said at once, as before.
       if (hasLinkingChoice(added.linking)) {
-        void linkingFollowUps(added.name, added.linking, { save: api.saveLinking, open: api.openTemplatePr })
+        void linkingFollowUps(added.name, added.linking, { save: api.saveLinking, open: api.openTemplatePr, saveHierarchy: api.saveHierarchy })
           .then((lines) => say([text, ...lines].join(' ')));
       } else say(text);
       if (!dismissed) onClose();

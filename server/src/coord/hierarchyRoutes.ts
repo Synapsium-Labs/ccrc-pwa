@@ -10,7 +10,7 @@ import { UPKEEP_DUE_PREFIX, type HierarchyAnswer, type HierarchyProjectRow } fro
 import { refuseRoute } from '../refuse.js';
 import type { CoordRoutesHandle } from './routes.js';
 import type { HierarchyProjectFacts, HierarchySettingsBody, PlanStorePort } from './planStore.js';
-import { linearOwnerOfProject } from './planPolicy.js';
+import { linearOwnerOf, linearOwnerOfProject } from './planPolicy.js';
 import { planViewOf } from './planRoutes.js';
 import { givenUpWord } from '../linear/inboundPolicy.js';
 
@@ -52,10 +52,14 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
   const now = opts.now ?? Date.now;
 
   /** The owner now of a project, by the rule `linearOwnerOf` holds (design §7.5): a shared team key answers one project's owner
-   *  (`teamOwnerProject`, the one rule the triage route and the drift pass ask too). */
+   *  (`teamOwnerProject`, the one rule the triage route and the drift pass ask too). `ifUnnamed` is what choosing the empty owner
+   *  option gives: the same policy function with no named owner, for the project's own latest programme (D-8738). */
   const ownerNow = (plan: PlanStorePort, rows: readonly HierarchyProjectFacts[], row: HierarchyProjectFacts): HierarchyProjectRow['ownerNow'] => {
     const o = linearOwnerOfProject(row.project, rows, { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf });
-    return { id: o.id, source: o.source, live: o.live };
+    const u = linearOwnerOf(row.project, {
+      named: null, ownsTeamProject: null, latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: opts.presenceOf,
+    });
+    return { id: o.id, source: o.source, live: o.live, project: o.project, ifUnnamed: { id: u.id, live: u.live } };
   };
 
   /**
