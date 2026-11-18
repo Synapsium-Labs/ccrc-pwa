@@ -164,7 +164,7 @@ describe('no pwa/ file before W7 (D-5855; spec §5.1 rule 8)', () => {
 // W1 answer marks B): it stood because W3 was the server halves only and the PWA halves were W7's, and consolidation W7
 // has landed (C7a to C7p, the last of them #1948 and #1952), so a later stream may edit a W3 file beside the PWA.
 // The session hook left the signing arm the same way (slug path-guard-w3-releases-hook, approvals plan 2026-11-18 PR 1):
-// W3 has landed (Q3a to Q3g), and the approvals plan edits the hook's approval wait beside the questions owner by design
+// W3 has landed (Q3a to Q3g, the last of them Q3f, #1745), and the approvals plan edits the hook's approval wait beside the questions owner by design
 // (Task 1.2 the envelope's route word, Task 1.3 the census the owner writes). The verifier and the signer stay on it.
 
 /** The files W3 creates (Q3b, Q3c, Q3g). */

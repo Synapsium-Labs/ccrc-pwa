@@ -260,6 +260,9 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/find', '/api/programmes', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
+  // The approval census's read (approvals PR 1): each row's summary is a prompt's command text, masked and redacted at
+  // write; the hook masks the answer again with the masker's current fingerprints.
+  '/api/approvals/census',
   // The programme ledgers (plan PL3): an item's title, reason and steps are written by sessions.
   '/api/programmes/:slug/items',
   // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).

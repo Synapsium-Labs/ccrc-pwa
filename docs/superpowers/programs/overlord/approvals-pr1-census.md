@@ -74,8 +74,15 @@ Departures are listed by slug. The coordinator mints the numbers.
   counts as inside it (a read of the worktree itself).
 - `path-guard-w3-releases-hook`: consolidation W3's path guard reds a diff that touches a W3-owned file beside the
   approval signing path. This plan edits the session hook (Task 1.2) beside the questions owner (Task 1.3) by design,
-  and W3 has landed, so the guard's signing arm drops the session hook as its `pwa/` arm was dropped once W7 landed.
-  The verifier and the signer stay on it.
+  and W3 has landed (Q3a to Q3g, the last of them Q3f, #1745), so the guard's signing arm drops the session hook as
+  its `pwa/` arm was dropped once W7 landed. The verifier and the signer stay on it, and the guard's CONTROL case
+  still reds a W3-owned file beside each of them.
+- `census-read-masked-by-hook`: the census read is on the answer hook's masked list (`MASKED_GET_ROUTES`), not
+  exempt. Its rows carry each prompt's summary, the command text a session wrote, so the secret-masking suite's rule
+  puts it on the masked side, though every summary was already masked and redacted at write.
+- `run-close-drops-census`: the run-close switch suite's migration case drops every table and column added after
+  version 53 by hand before it reopens; it now drops the census table and the two approvals columns too. The
+  neighbouring migrations are not idempotent either: this suite's hand drops are their pattern.
 - `census-read-through-questions`: the census read reaches the store through the questions owner
   (`questions.ts#censusSources`), not directly, because that owner holds the approvals and census rows (C31) and W3's
   question census keeps every question-table read in that file. `approvalRowsForCensus` joins W3's closed method list
