@@ -216,10 +216,11 @@ _child_deny_json() {
 # children are refused as before, the safe direction. `--remove` leaves it, as it leaves the deny file (D-5392).
 CHILD_DENY_DIGESTS="$HOME/.cc-sessions/child-deny.digests"
 CHILD_DENY_DIGESTS_MAX=32
+# The tools are the hook's own `_apr_sha256`'s, in its order: `shasum -a 256` ships on macOS and with perl on Linux,
+# and node is the fallback. This file cannot source ccd's platform block, so it spells no GNU-only tool.
 _child_deny_sha256() {   # <file> -> 64 lowercase hex on stdout; rc 1 with no tool or an unreadable file
   local s=""
-  if command -v sha256sum >/dev/null 2>&1; then s=$(sha256sum < "$1" 2>/dev/null) || return 1
-  elif command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 < "$1" 2>/dev/null) || return 1
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 < "$1" 2>/dev/null) || return 1
   elif command -v node >/dev/null 2>&1; then
     s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' < "$1" 2>/dev/null) || return 1
   else return 1; fi
