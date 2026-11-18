@@ -718,6 +718,7 @@ export function AccountsScreen(): ReactNode {
                     <Button
                       variant="ghost" size="fit" disabled={!canAct}
                       aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      aria-label={`${MODELS_ACT} for ${wrapper}`}
                       onClick={() => openModels(wrapper)}
                     >
                       {MODELS_ACT}

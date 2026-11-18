@@ -317,6 +317,8 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.acct-models-class .acct-models-name': META,
     '.acct-models-facts p': META,
     '.acct-models-class .acct-models-refusal': META,
+    // The four class names the unreadable-files read draws.
+    '.acct-models .acct-models-names li': META,
   },
   'tool-card.css': {
     // The word `failed` on an errored call's row (T4a, D-6387): a status word beside the dot, the same role as the

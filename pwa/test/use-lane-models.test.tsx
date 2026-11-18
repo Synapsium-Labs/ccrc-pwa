@@ -6,6 +6,8 @@ import { act, renderHook, waitFor } from '@testing-library/react';
 import type { LaneModelsRead } from '../../shared/models';
 import { useLaneModels } from '../src/lib/useLaneModels';
 import { clearScreenCache } from '../src/lib/screenCache';
+import { ApiError } from '../src/lib/apiError';
+import type { LaneModelsReadOutcome } from '../src/lib/useLaneModels';
 
 afterEach(() => { clearScreenCache(); vi.restoreAllMocks(); });
 
@@ -97,5 +99,50 @@ describe('useLaneModels (D-8406)', () => {
     expect(load).toHaveBeenCalledTimes(2);
     rerender({ key: 1 }); // the same key asks nothing
     expect(load).toHaveBeenCalledTimes(2);
+  });
+
+  it('a read begun BEFORE the caller asked again lands stale and replaces nothing, so an act\'s answer is never put back (F6)', async () => {
+    let first!: (v: unknown) => void;
+    const calls: number[] = [];
+    const load = vi.fn((lane: string) => {
+      calls.push(calls.length);
+      return calls.length === 1 ? new Promise<unknown>((r) => { first = r; }) : Promise.resolve(answer(lane, readOf('Opus after the act')));
+    });
+    const { result, rerender } = renderHook(({ key }: { key: number }) => useLaneModels('lane-a', load, false, key), { initialProps: { key: 0 } });
+    expect(result.current).toBeNull(); // the opening read is still in flight
+    rerender({ key: 1 }); // the sheet\'s act answered: it asks again
+    await waitFor(() => expect(result.current).toEqual(readOf('Opus after the act')));
+    await act(async () => { first(answer('lane-a', readOf('Opus before the act'))); await Promise.resolve(); });
+    expect(result.current).toEqual(readOf('Opus after the act')); // the late, older read changed nothing
+  });
+
+  it('reports each landed read to an optional observer: ok, or the class of failure; a stale or aborted read reports nothing (F12)', async () => {
+    const seen: LaneModelsReadOutcome[] = [];
+    const modes: (() => Promise<unknown>)[] = [
+      async () => { throw new ApiError(401, { error: 'unauthenticated' }); },
+      async () => { throw new TypeError('Failed to fetch'); },
+      async () => ({ ok: true, lane: 'lane-a', models: { kind: 'read', classes: {} } }),
+      async () => { throw new ApiError(404, { error: 'not-found' }); },
+      async () => answer('lane-a', readOf('Fine')),
+    ];
+    let i = 0;
+    const load = vi.fn(() => modes[i++]!());
+    const { rerender } = renderHook(({ key }: { key: number }) => useLaneModels('lane-a', load, false, key, (o) => seen.push(o)), { initialProps: { key: 0 } });
+    for (let k = 1; k <= 4; k += 1) {
+      await waitFor(() => expect(seen).toHaveLength(k));
+      rerender({ key: k });
+    }
+    await waitFor(() => expect(seen).toHaveLength(5));
+    expect(seen).toEqual([
+      { ok: false, failure: 'signed-out' }, { ok: false, failure: 'no-answer' }, { ok: false, failure: 'unreadable' },
+      { ok: false, failure: 'unreadable' }, { ok: true },
+    ]);
+  });
+
+  it('an existing caller that passes no observer is unchanged: a failed read is still nothing', async () => {
+    const failing = vi.fn(async () => { throw new TypeError('Failed to fetch'); });
+    const { result } = renderHook(() => useLaneModels('lane-a', failing));
+    await waitFor(() => expect(failing).toHaveBeenCalled());
+    expect(result.current).toBeNull();
   });
 });

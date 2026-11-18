@@ -2367,6 +2367,32 @@ describe('the programme box\'s hues (Task G2)', () => {
 // beside its ink, so the audit measures every pair in every palette through the stylesheet and none falls into the
 // uncovered census. The programme's name sits on its hue's own tint (the pair `.pg-kicker` is gated on) through
 // `--pg-ink`, which is ink on the surface when the programme has no hue.
+// The Models sheet's two kinds of note (model-class-advance R4, F11): a definite refusal in the error ink and a note that the
+// act MAY have run in the attention ink, each on its card's own ground (--bg-raised), in every palette.
+describe('the Models sheet\'s notes are measured in every palette', () => {
+  it.each([
+    ['.acct-models-class .acct-models-refusal--refused', 'var(--status-dead-text)', 'var(--bg-raised)'],
+    ['.acct-models-class .acct-models-refusal--unknown', 'var(--status-attention-text)', 'var(--bg-raised)'],
+    ['.acct-models .acct-models-failed', 'var(--status-dead-text)', 'var(--bg-sheet)'],
+    ['.acct-models .acct-models-names li', 'var(--ink-primary)', 'var(--bg-sheet)'],
+  ])('%s reads %s on %s at 4.5:1 or better', (key, ink, ground) => {
+    const rows = rowsFor(key + ' [in ' + (ground === 'var(--bg-raised)' ? '.acct-models-class' : '.acct-models') + ']');
+    expect(rows, key).toHaveLength(THEME_COUNT);
+    for (const row of rows) {
+      expect(row.detail, row.label).toContain(ink);
+      expect(row.detail, row.label).toContain(ground);
+      expect(row.ratio, row.label).toBeGreaterThanOrEqual(4.5);
+    }
+  });
+  it('the two kinds are not painted the same ink', () => {
+    const css = readFileSync(path.join(ROOT, 'src/accounts/models-sheet.css'), 'utf8');
+    const inkOf = (kind: string): string => new RegExp(`--${kind}\\s*\\{\\s*color:\\s*([^;]+);`).exec(css)?.[1] ?? '';
+    expect(inkOf('refused')).not.toBe('');
+    expect(inkOf('unknown')).not.toBe('');
+    expect(inkOf('refused')).not.toBe(inkOf('unknown'));
+  });
+});
+
 describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () => {
   const HUES = ['cyan', 'violet', 'magenta', 'blue'] as const;
   const SHEET = 'src/ledgers/ledgers.css';

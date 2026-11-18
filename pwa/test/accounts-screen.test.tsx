@@ -628,56 +628,71 @@ describe('AccountsScreen — opens at a lane (?lane=<id>)', () => {
 });
 
 // The Models act (model-class-advance wave R4, Task 20 as re-planned): the fold's one way into the Models sheet, on a Codex
-// lane only, stood down under the same rule as its neighbours, and the sheet it opens reads the lane through the one hook.
+// lane only (the roster's lane kind, managed or not: F10, the operator's ruling), stood down under the same rule as its
+// neighbours, and the sheet it opens reads the lane through the one hook. Neutral lane ids with rows of their own (F19).
 describe('AccountsScreen: the fold\'s Models act', () => {
   const connectOf = (over: Partial<AccountsConnect> = {}): AccountsConnect =>
     ({ accountOps: 'available', gate: 'armed', origin: 'https', caps: [...ACCOUNT_CAPS], stepUpFreshUntil: Date.now() + 3_600_000, ...over });
-  const MIXED: RosterWire[] = TEST_ROSTER.map((r) =>
-    r.id === 'gpt' ? { ...r, provider: 'openai', kind: 'codex', managed: true }
-      : r.id === 'claude' ? { ...r, provider: 'anthropic', kind: 'sign-in' } : r);
+  const LANES: RosterWire[] = [
+    { id: 'lane-a', label: 'lane-a', hue: 'magenta', homeAble: false, hidden: false, pool: null, provider: 'openai', kind: 'codex', managed: true },
+    { id: 'lane-b', label: 'lane-b', hue: 'cyan', homeAble: true, hidden: false, pool: null, provider: 'anthropic', kind: 'sign-in' },
+    // A Codex lane ccrc only records (an external launcher): its kind is still codex, so its Models act is offered.
+    { id: 'lane-c', label: 'lane-c', hue: 'blue', homeAble: false, hidden: false, pool: null, provider: 'openai', kind: 'codex', managed: false },
+  ];
   const withLanes = (connect: AccountsConnect | null): void => {
     act(() => useFleetStore.setState({
-      conn: 'open', usage: [acct({ wrapper: 'claude' }), acct({ wrapper: 'gpt', five: null, seven: 12 })], roster: MIXED, accountsConnect: connect,
-      lanes: {}, sessions: [],
+      conn: 'open', usage: [acct({ wrapper: 'lane-b' }), acct({ wrapper: 'lane-a', five: null, seven: 12 }), acct({ wrapper: 'lane-c', five: null, seven: 3 })],
+      roster: LANES, accountsConnect: connect, lanes: {}, sessions: [],
     }));
   };
   const card = (id: string): HTMLElement => document.querySelector(`.accounts-row[data-lane="${id}"]`) as HTMLElement;
+  const modelsOf = (id: string): HTMLElement => within(card(id)).getByRole('button', { name: `Models for ${id}` });
 
-  it('is drawn in a Codex lane\'s fold and in no other lane\'s', async () => {
+  it('is drawn in a Codex lane\'s fold, named for its lane, and in no other lane\'s', async () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     withLanes(connectOf());
     render(<AccountsScreen />);
-    expect(within(card('gpt')).getByRole('button', { name: 'Models' })).toBeInTheDocument();
-    expect(within(card('claude')).queryByRole('button', { name: 'Models' })).toBeNull();
-    expect(screen.getAllByRole('button', { name: 'Models' })).toHaveLength(1);
+    expect(modelsOf('lane-a')).toHaveTextContent(/^Models$/);
+    expect(within(card('lane-b')).queryByRole('button', { name: /^Models/ })).toBeNull();
+    expect(screen.getAllByRole('button', { name: /^Models for / }).map((b) => b.getAttribute('aria-label')).sort())
+      .toEqual(['Models for lane-a', 'Models for lane-c']);
+  });
+
+  it('is offered on a Codex lane that is NOT managed too (the roster\'s kind gates it, F10)', () => {
+    vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
+    withLanes(connectOf());
+    render(<AccountsScreen />);
+    expect(card('lane-c')).not.toBeNull();
+    expect(modelsOf('lane-c')).toBeEnabled();
   });
 
   it('is stood down where its neighbours are (a fleet that cannot run account ops), and absent before the gate answers', () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     withLanes(connectOf({ accountOps: 'unsupported' }));
     render(<AccountsScreen />);
-    expect(within(card('gpt')).getByRole('button', { name: 'Models' })).toBeDisabled();
+    expect(modelsOf('lane-a')).toBeDisabled();
     cleanup();
     withLanes(null);
     render(<AccountsScreen />);
-    expect(screen.queryByRole('button', { name: 'Models' })).toBeNull();
+    expect(screen.queryByRole('button', { name: /^Models/ })).toBeNull();
   });
 
   it('opens the sheet for that lane, which reads it once and acts through the api method', async () => {
     vi.spyOn(api, 'accounts').mockReturnValue(new Promise(() => {}));
     const classes = { haiku: 'm-h', sonnet: 'm-s', opus: 'm-o', fable: null };
     const read = vi.spyOn(api, 'laneModels').mockResolvedValue({
-      ok: true, lane: 'gpt', models: { kind: 'read', classes: Object.fromEntries(Object.entries(classes).map(([c, m]) => [c, { model: m, label: m, efforts: null }])),
+      ok: true, lane: 'lane-a', models: { kind: 'read', classes: Object.fromEntries(Object.entries(classes).map(([c, m]) => [c, { model: m, label: m, efforts: null }])),
         advance: { state: 'absent', detail: null, pending: null, classes: null } },
     });
     const post = vi.spyOn(api, 'laneModelsAct').mockRejectedValue(new ApiError(501, { ok: false, error: 'unsupported' }));
     withLanes(connectOf());
     render(<AccountsScreen />);
-    fireEvent.click(within(card('gpt')).getByRole('button', { name: 'Models' }));
+    fireEvent.click(modelsOf('lane-a'));
     const dialog = await screen.findByRole('dialog');
     expect(dialog.querySelector('[data-frame="models"]')).not.toBeNull();
     fireEvent.click(await within(dialog).findByRole('button', { name: 'Hold the opus class' }));
-    expect(post).toHaveBeenCalledWith('gpt', { action: 'hold', class: 'opus' });
-    expect(read.mock.calls.map((c) => c[0])).toEqual(['gpt']);
+    expect(post).toHaveBeenCalledWith('lane-a', { action: 'hold', class: 'opus' });
+    // the act settles by reading the lane again (F1 a), so the GET is asked once at open and once after the act
+    await vi.waitFor(() => expect(read.mock.calls.map((c) => c[0])).toEqual(['lane-a', 'lane-a']));
   });
 });

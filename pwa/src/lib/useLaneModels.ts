@@ -10,9 +10,12 @@
 import { useEffect, useRef, useState } from 'react';
 import type { LaneModelsRead } from '../../../shared/models';
 import { api } from './api';
-import { asLaneModelsRead } from './models';
+import { asLaneModelsRead, laneReadFailureOf, type LaneReadFailure } from './models';
 import { laneModelsKey, peek, put } from './screenCache';
 import { usePoll } from './usePoll';
+
+/** What a landed read came to, for a caller that says it (the Models sheet): `ok`, or the class of failure (F12). */
+export type LaneModelsReadOutcome = { readonly ok: true } | { readonly ok: false; readonly failure: LaneReadFailure };
 
 const cached = (lane: string | null): LaneModelsRead | null =>
   lane === null ? null : asLaneModelsRead(peek(laneModelsKey(lane))?.raw);
@@ -27,11 +30,14 @@ export function useLaneModels(
   load: (lane: string, signal: AbortSignal) => Promise<unknown> = (l, signal) => api.laneModels(l, { signal }),
   refreshOn = false,
   refreshKey = 0,
+  onRead?: (outcome: LaneModelsReadOutcome) => void,
 ): LaneModelsRead | null {
   const [state, setState] = useState<{ lane: string | null; read: LaneModelsRead | null }>(
     () => ({ lane, read: cached(lane) }));
   const current = useRef(lane);
   current.current = lane;
+  const onReadNow = useRef(onRead);
+  onReadNow.current = onRead;
   const { reload } = usePoll({
     // `null` asks once on mount and on every return to the page; `0` is the injected mode, which asks nothing.
     pollMs: lane === null ? 0 : null,
@@ -41,12 +47,14 @@ export function useLaneModels(
       return load(asked, signal).then((raw) => ({ asked, raw }));
     },
     onOutcome: (outcome) => {
-      if (!outcome.ok) return;
+      if (!outcome.ok) { onReadNow.current?.({ ok: false, failure: laneReadFailureOf(outcome.err) }); return; }
       const { asked, raw } = outcome.raw as { asked: string; raw: unknown };
+      if (asked !== current.current) return;
       const read = asLaneModelsRead(raw);
-      if (read === null || asked !== current.current) return;
+      if (read === null) { onReadNow.current?.({ ok: false, failure: 'unreadable' }); return; }
       put(laneModelsKey(asked), raw, Date.now());
       setState({ lane: asked, read });
+      onReadNow.current?.({ ok: true });
     },
   });
   // A new lane on a mounted hook (the session moved accounts): show its cached answer, if any, and ask about it now.
