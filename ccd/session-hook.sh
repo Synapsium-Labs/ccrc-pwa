@@ -5327,7 +5327,8 @@ fi
 # tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
-# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# deny file `$REG/child-deny.settings.json`, which the arm below reads, and its digest history `$REG/child-deny.digests`,
+# which the approval wait reads (approvals PR 0, the coordinator's ruling F6)) is denied by the same writers, after a `cd` into
 # `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
 # edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
 # relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
@@ -5579,7 +5580,7 @@ def BW: "build\ta write to a Claude Code build or its launcher";
 def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
 def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
 def TNC: "claude-" + TCH + "{1,64}";
-def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json)" + BT;
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json|child-deny\\.digests)" + BT;
 def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
 def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
 def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";

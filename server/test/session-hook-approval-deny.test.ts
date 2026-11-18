@@ -550,6 +550,10 @@ describe('build guard D-6065: a write to a file the launcher, the roll or the gu
     'echo pass > ~/.cc-sessions/lane-a-project-a.claude-canary', 'echo 2.1.302 > ~/.cc-sessions/lane-a-project-a.claude-build',
     'touch ~/.cc-sessions/.claude-roll.lock', 'cp /tmp/x ~/.cc-sessions/child-deny.settings.json',
     'echo 0 > ~/.cc-sessions/lane-a-project-a.deny-settings', 'cd ~/.cc-sessions && cp /tmp/x child-deny.settings.json',
+    // Approvals PR 0 (the coordinator's ruling F6): the deny file's digest history, which the approval wait trusts.
+    'echo "$(printf c%.0s {1..64}) 1700000000000" >> ~/.cc-sessions/child-deny.digests',
+    'cp /tmp/x ~/.cc-sessions/child-deny.digests', 'cd ~/.cc-sessions && cp /tmp/x child-deny.digests',
+    'mv /tmp/child-deny.digests ~/.cc-sessions', 'rm ~/.cc-sessions/child-deny.digests',
   ];
   it.each(denied)('denied: %s', (c) => {
     expect(bash(c), c).toContain(TRUST_WHY);
@@ -558,6 +562,7 @@ describe('build guard D-6065: a write to a file the launcher, the roll or the gu
     ['Write', { file_path: '/home/u/.ccrc/claude-target', content: 'x' }],
     ['Edit', { file_path: '/home/u/.cc-sessions/child-deny.settings.json', old_string: 'a', new_string: 'b' }],
     ['Write', { file_path: '/home/u/.cc-sessions//x/../claude-roll-live', content: 'x' }],
+    ['Write', { file_path: '/home/u/.cc-sessions/child-deny.digests', content: 'x' }],
   ];
   it.each(editDenied)('denied: %s %j', (tool, input) => {
     expect(fire(tool, input), `${tool} ${JSON.stringify(input)}`).toContain(TRUST_WHY);
@@ -565,6 +570,7 @@ describe('build guard D-6065: a write to a file the launcher, the roll or the gu
   it.each([
     'cat ~/.ccrc/claude-target', 'ls ~/.cc-sessions/', 'sha256sum ~/.ccrc/claude-smoked',
     'cat ~/.cc-sessions/child-deny.settings.json', 'cp /tmp/x ~/.ccrc/other-file', 'cd ~/.ccrc && cat claude-target',
+    'cat ~/.cc-sessions/child-deny.digests', 'cp /tmp/x ~/.cc-sessions/child-deny.digestsX',
   ])('allowed: %s', (c) => {
     expect(bash(c), c).toBeNull();
   });
