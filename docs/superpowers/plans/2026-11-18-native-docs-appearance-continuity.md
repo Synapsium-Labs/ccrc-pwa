@@ -130,6 +130,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
     - contract `undefined` and contract `2` each give `{kind:'mode-only', why:'contract-unsupported'}`;
     - a `colourScheme` of `'normal'` or `''` gives `mode: 'auto'`, no colour group, and `dropped.why: 'scheme-unreadable'`;
     - `controlRow` `'52px'` is kept and `'60px'` is left out; `sectionCase` `'uppercase'` is kept and `'small-caps'` is left out;
+    - **section family:** with `--family-section` answering the same text as `--family-mono`, `sectionFamily` is `'mono'`; with it equal to `--family-ui`, `'sans'`; with any other text, the slot is left out;
     - its serialised value is at most 4096 bytes.
   - `resolvePaletteTokens`:
     - `('phosphor', 'refined', 'coarse')` answers `--r-md` as `'10px'` (the second default block) and `colourScheme` `'dark'`;
@@ -247,11 +248,21 @@ Each row reads the frame's computed values through the existing harness's frame 
 
 - [ ] **Step 1: Take BASE.** Before any edit, take the per-skin `PHH-FIGURE` and `T10-FIGURES worst` lines, and `frame-cost`'s open-to-`ready` median at the Task 1 pin, with no appearance. Record them in Results.
 - [ ] **Step 2: Write the rows**, each named by its acceptance id:
-  - **AP-1 and AP-2:** iterate `SKINS` x (`THEMES` plus Follow the system under emulated light and dark), and print the count.
+  - **AP-1 and AP-2:** iterate `SKINS` x (`THEMES` plus Follow the system under emulated light and dark), and print the count. In every open, assert:
+    - each colour slot's computed value on the frame root equals the host's computed value for its mapped token (both lower-cased), and the frame's `color-scheme` equals the host's;
+    - the frame's sans and mono roles resolve to the loaded ccrc faces (`document.fonts` in the frame holds both with status `loaded`, and a chrome label's computed `font-family` starts with the library's fixed family name for the host face).
+
+    Once per skin, with Aa open and under a fine pointer, assert:
+    - a popover row's height equals `--row-h`;
+    - the popover's `box-shadow` equals `--elev-pop`;
+    - the radii of a control, a pill and a popover equal `--r-md`, `--r-sm` and `--r-lg`;
+    - the Aa group heading's `font-family` role, `font-size`, `font-weight`, `letter-spacing` and `text-transform` equal the host's section-label tokens.
+
+    And per skin, the frame bar's height, the measure, the prose size, the gutters and the title block's sizes equal BASE.
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** cycle every palette, flip the system mode and switch skin while open; same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn.
-  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab, and Aa showing the line "Appearance follows ccrc Settings" and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row.
+  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings" and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
   - Extend `frame-cost` with the srcdoc-growth and open-to-`ready` budgets.
@@ -312,6 +323,10 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M12 | The lab profile passes `appearance` | Task 4 "the lab" |
 | AP-M13 | A hosted mount sends neither `appearance` nor `prefs.theme`, so the stored theme rules | Task 6 AP-3 (stale stored theme) |
 | AP-M14 | A dropped colour group sends `setPrefs({theme})` instead of an appearance with no colours | Task 4 "while open, hosted" |
+| AP-M15 | `readerAppearanceOf` leaves the skin group out | Task 2 "every mapped token" row; AP-1 skin assertions |
+| AP-M16 | `bridge.ts` never passes `fonts` | Task 4 "an outcome of kind `appearance`"; AP-1 face assertion |
+| AP-M17 | `sectionFamily` answers `sans` where `--family-section` equals `--family-mono` | Task 2 section-family row; AP-1 heading family under Instrument |
+| AP-M18 | Map `radiusLarge ← --r-md` | AP-1 popover radius under both skins (Refined 14 against 10 px) |
 
 ## Deviations found
 
