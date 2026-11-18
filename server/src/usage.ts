@@ -3,7 +3,7 @@ import type { FleetIO } from './io.js';
 import { tokenCountOf, type SessionUsage } from '../../shared/api.js';
 import { familyClassOf } from '../../shared/models.js';
 import type { SpendTurnRead } from '../../shared/programmeFacts.js';
-import { readTurnMarkMeasured } from './turnmark.js';
+import type { TurnMarkRead } from './coord/stall.js';
 
 /** A sidecar older than this is STALE: carried, but flagged. Thirty minutes,
  *  the bound `HOOKSTATE_FRESH_MS` gives the hook state, in the sidecar's own
@@ -76,14 +76,13 @@ export async function readUsage(io: FleetIO, registryDir: string, id: string, no
 
 /** The turn marker of each session with a usage reading (Overlord W2 forecasts B, fix round 1, F2), judged against the
  *  registry's conversation the reading was taken beside (`conversations`, the usage sweep's own map): `read` with its
- *  newest turn's start, or `unread` for any answer that cannot vouch (absent, unmeasured, malformed, foreign). Staleness
- *  against the live process is not asked: the question is only whether a turn started after the render. */
-export async function readSpendTurns(io: FleetIO, registryDir: string,
+ *  newest turn's start, or `unread` for any answer that cannot vouch (absent, unmeasured, malformed, foreign, a throw).
+ *  `readMark` is the marker's one reader (`turnmark.ts#readTurnMarkMeasured`), handed in by the watcher. */
+export async function readSpendTurns(readMark: (id: string, registryUuid: string) => Promise<TurnMarkRead>,
   conversations: ReadonlyMap<string, { readonly registry: string }>): Promise<Map<string, SpendTurnRead>> {
   const out = new Map<string, SpendTurnRead>();
   await Promise.all([...conversations].map(async ([id, c]) => {
-    const mark = await readTurnMarkMeasured(io, registryDir, id, c.registry, null)
-      .catch(() => ({ ok: false as const }));
+    const mark = await readMark(id, c.registry).catch((): TurnMarkRead => ({ ok: false, reason: 'unmeasured' }));
     out.set(id, mark.ok ? { kind: 'read', turnAt: mark.turnAt } : { kind: 'unread' });
   }));
   return out;

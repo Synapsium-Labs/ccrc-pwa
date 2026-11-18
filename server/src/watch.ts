@@ -6277,7 +6277,8 @@ export class FleetWatcher {
     const port = this.deps.forecasts;
     if (!port) return;
     await this.runLane('forecasts', async () => {
-      if (this.usageSwept) this.spendTurns = await readSpendTurns(this.deps.io, this.deps.cfg.registryDir, this.usageConversation);
+      if (this.usageSwept) this.spendTurns = await readSpendTurns((id, reg) =>
+        readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, reg, null), this.usageConversation);
       const now = this.deps.time.clock.wall();
       if (this.usageSwept) this.forecastSpendSince ??= now;
       const usage = { ready: () => this.usageSwept, reading: (id: string) => {
