@@ -18,7 +18,7 @@
 - No second copy of the palette or skin catalogue anywhere under `pwa/src/docs/` or `pwa/src/readerLab/`; the only reader-side artefact is `READER_APPEARANCE_MAP`, a slot-to-token mapping.
 - One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
 - Contrast floors: 4.5:1 for body text, links, semantic text, code tokens, table text and figure labels, on every ground and derived tint they are drawn on; 3:1 for the focus ring and figure lines; no floor for decorative edges. A derived tint holds at most 6% of its colour.
-- Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters, the library's frame-asset growth at most 32 768 over 1.1.0's 781 099, the appearance seed at most 4 096, so at most 224 504 in all; hosted open-to-`ready` median at most 1.10 x BASE median; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
+- Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters, the library's frame-asset growth at most 32 768 over 1.1.0's 781 099, the appearance seed at most 4 096, so at most 224 504 in all; hosted open-to-`ready` median of 9 opens at most 1.10 x the BASE median of 9; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
 - The reader lab mounts with no appearance (spec X1-10).
 - Heavy tests, typecheck and browser runs go through `ccrc test`, in the foreground, with a timeout of at least 600000 ms. Mutations run in sequence from saved copies, and each is restored and hash-checked, never with `git checkout`.
 - Commit on the workspace branch only. Private-name scan every changed file before each commit and before the push.
@@ -41,7 +41,7 @@
 |---|---|---|---|
 | L | The library programme, in the library's repository | Spec §10: the contract, validator, frame application, font assets, `appearance` op, CSS on slots, Mermaid from slots, Aa hosted line, the library's own tests | This plan merged |
 | R | The operator | The library's minor release and signed tag | L reviewed |
-| C | One ccrc run (this plan's Tasks 1 to 7) | Exact re-pin, the appearance source, mapping, adapter, frame wiring, browser matrix, rich-docs amendments | R released, and #3026 (D2) merged: Task 4 reads beside D-8729's focus sample, which is on #3026's branch and not yet on `main` (2026-11-18) |
+| C | One ccrc run (this plan's Tasks 1 to 7) | Exact re-pin, the appearance source, mapping, adapter, frame wiring, browser matrix, rich-docs amendments | R released. #3026 (D2) is merged (`839c05e46`, 2026-11-18), so D-8729's focus sample, beside which Task 4 reads, is on `main` |
 | F | The coordinator, at completion Task 17 | AP-1 to AP-8 on the final installed release set | C merged, E reviewed |
 
 No ccrc wave edits the library's repository. C does not start before R: its types and tests read the library's `APPEARANCE_SLOTS`, `APPEARANCE_PAIRS`, `APPEARANCE_CONTRACT` and `parseAppearance`, and it spells none of them itself. These pure exports come from the library's `./frame` entry. `docs-scans.test.ts#LIBRARY_HOMES` lets any file under `pwa/src/docs/reader/` import `./frame`, but only `bridge.ts` may import `./host`.
@@ -250,7 +250,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
 
 Each row reads the frame's computed values through the existing harness's frame inspection, the way `reader-frame.browser.test.ts` reads the frame today. No new parent listener is added.
 
-- [ ] **Step 1: Take BASE.** Before any edit, take the per-skin `PHH-FIGURE` and `T10-FIGURES worst` lines, and `frame-cost`'s open-to-`ready` median at the Task 1 pin, with no appearance. Record them in Results.
+- [ ] **Step 1: Take BASE.** Before any edit, take the per-skin `PHH-FIGURE` and `T10-FIGURES worst` lines, and `frame-cost`'s open-to-`ready` median of 9 opens at the Task 1 pin, with no appearance. Record them in Results.
 - [ ] **Step 2: Write the rows**, each named by its acceptance id:
   - **AP-1 and AP-2:** iterate `SKINS` x (`THEMES` plus Follow the system under emulated light and dark), and print the count. In every open, assert:
     - each colour slot's computed value on the frame root equals the host's computed value for its mapped token (both lower-cased), and the frame's `color-scheme` equals the host's;
@@ -301,7 +301,7 @@ Task 17's row: "Exercise both canonical skins, all twelve canonical palettes and
 |---|---|---|---|
 | AP-1 | both canonical skins | Task 6 AP-1 | Open a doc under Refined and Instrument; frame values and faces are ccrc's |
 | AP-2 | all twelve palettes and Follow the system | Task 6 AP-2; Task 2 parts 2 and 3 | 14 appearances x 2 skins, the count read from the discovered catalogue |
-| AP-3 | ordinary open | Task 6 AP-3 | First paint in host colours, no flash |
+| AP-3 | ordinary open | Task 6 AP-3 | With a stale reader theme stored, values at first `ready` are the host's. On a device, no light-then-dark flash is seen. Paint before first paint is the library's own test (spec §10) |
 | AP-4 | lazy open | Task 4 "reads after the last await"; Task 6 AP-4 | Change during the chunk hold; the seed is the latest |
 | AP-5 | changes while open under the reviewed contract | Task 5; Task 6 AP-5 | Cycle, flip, switch; in place, within 100 ms, figures redrawn |
 | AP-6 | native chrome, typography, surfaces, focus, accessibility | Task 2 part 3; Task 6 AP-6 | Pairs meet floors on the installed frame; focus visible; Aa line |
@@ -454,7 +454,7 @@ It returned 1 critical, 8 important and 10 minor findings. Each was fixed, or re
 | I7: density and controls were dropped without an ask | Fixed in the design. The skin's radius, popover row height and section-label case are carried. The bar and reading layout stay, as the operator's own reading-layout and budget constraints require (X1-7). Reported to the coordinator in the wave-done mail |
 | I8: no red-capable row for "a stale reader preference never overrides" | Fixed. AP-3 seeds a stale stored theme, and new mutation row AP-M13 |
 | Minor: palette counts | Fixed: 8 dark, 4 light |
-| Minor: D-8729 is not on `main` | Fixed: wave C waits for #3026 |
+| Minor: D-8729 is not on `main` | Fixed at the time: wave C waited for #3026, which has since merged (`839c05e46`) |
 | Minor: AP-3 cannot see a pre-`ready` flash | Recorded. The library's own test owns paint before first paint (spec §10). AP-3 checks the seed and the first-`ready` values, and F's device check looks for a flash |
 | Minor: a stamp read at the call made a needless follow-up op | Fixed. The bridge's read returns the stamp, and the mount carries `seededStamp` |
 | Minor: the scan was narrow | Fixed. It covers object keys and hex literals, and includes `pwa/src/lib/appearance.ts` |
@@ -471,4 +471,4 @@ At `41d3ade8d`, every required check and CodeQL passed. The repo's review judge,
 ### Carried
 
 - The library programme plans wave L from spec §10. Its release and ccrc's re-pin are the operator's.
-- Wave C waits for wave R and for #3026.
+- Wave C waits for wave R. #3026 has merged.
