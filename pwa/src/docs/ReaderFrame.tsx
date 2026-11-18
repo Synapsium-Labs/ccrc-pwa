@@ -104,7 +104,10 @@ export interface ReaderFrameProps {
   readonly opened?: { readonly pin: DocPin; readonly page: DocsPageLocation & { kind: 'path' }; readonly only: string | null };
   /** The visit's pending fragment: handed to the frame as its `initialHash` when it mounts. */
   readonly pendingFragment: string | null;
-  /** Called once, when this body's frame reports `ready` with the fragment handed to it. */
+  /** Called when this body's frame reports `ready` with an anchor to spend: at the first `ready` when the mount was handed
+   *  the fragment, and at the `ready` of each frame a same-page link reopened at its anchor (`openAt`), whether or not the
+   *  mount was handed one. So it can run more than once for one body, and the handler must bear a repeat (the leaf's,
+   *  `DocsLeaf`'s `setFragment(null)`, does). */
   onFragmentConsumed(): void;
 }
 
