@@ -232,6 +232,16 @@ unmeasured, so the pass stopped before its second release read and the flip neve
 `designationRead` to the real store, as `roll-lane.test.ts`'s fake does. No source change; the coordinator's word, mail
 23481.
 
+### doors-census-entries
+
+Gates A (#2993) brought `overlord-doors-census.test.ts`, which requires every registration in `continuity/routes.ts` to
+have a door row or a `NOT_OVERLORD_DOORS` entry in `coord/overlordDoors.ts`. The merge onto migration 97 was clean, but
+CI on its tip found three of this PR's doors unnamed: `POST /api/sessions/:id/renew` and `GET`/`POST
+/api/coord/renewal-mode`. Each now has a `NOT_OVERLORD_DOORS` entry, worded like the two renewal-backstop entries
+already there: an operator door, session-gated, no box token. There is no row, so the rows-on-landing list is
+unchanged. Converting these doors to the identity port, with operator rows, belongs to gates PR B's census, which
+carries it. The coordinator's word, mail 24044; the file is the ladder's claim 4931, edited on its leave (mail 24046).
+
 ## Stable exports for W1's consumers
 
 Designation B (Restart) and private store B read these:
