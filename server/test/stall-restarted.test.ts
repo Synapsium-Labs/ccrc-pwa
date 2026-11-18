@@ -9,6 +9,8 @@ import {
   stallArmHasRung, stallDetail, parseStallDetail, stallRestartedSubject,
   RESTARTED_HEADS_UP_MS, STALL_RESTARTED_PREFIX, ORPHAN_D_IDLE_MS, BACKLOG_HORIZON_MS,
 } from '../src/coord/stall.js';
+import * as stallModule from '../src/coord/stall.js';
+import { restartedHandoffCases } from './sim/handoffSets.js';
 import type {
   StallArm, StallArming, StallMode, StallNotice, StallRunRow, StallSessionInput, StallSessionRole, StallVerdict,
   StallWorker, TurnMark, TurnMarkRead,
@@ -50,7 +52,8 @@ function notice(mode: StallMode, arm: StallArm, rung: 1 | 2 | 3, key: number, at
 }
 interface Over {
   role?: StallSessionRole; run?: StallRunRow | null; worker?: StallWorker; mark?: TurnMarkRead; liveStartedAt?: number | null;
-  notices?: readonly StallNotice[]; arming?: StallArming; coordinationPaused?: boolean;
+  notices?: readonly StallNotice[]; arming?: StallArming; coordinationPaused?: boolean; longLived?: boolean;
+  mail?: StallSessionInput['mail'];
 }
 /** A run worker resumed at `restartAt`, idle since a minute after it; the live process started 5 s before. */
 function input(restartAt = R, over: Over = {}): StallSessionInput {
@@ -59,8 +62,9 @@ function input(restartAt = R, over: Over = {}): StallSessionInput {
     sessionId: WORKER, role, run: over.run !== undefined ? over.run : role === 'worker' ? runRow() : null,
     worker: over.worker ?? workerAt('idle', restartAt + MIN), mark: over.mark ?? mark(restartAt),
     liveStartedAt: over.liveStartedAt !== undefined ? over.liveStartedAt : restartAt - 5_000, markUnreadableSince: null,
-    mail: [], deliveries: [], notices: over.notices ?? [], arming: over.arming ?? W2,
+    mail: over.mail ?? [], deliveries: [], notices: over.notices ?? [], arming: over.arming ?? W2,
     coordinationPaused: over.coordinationPaused ?? false,
+    ...(over.longLived === undefined ? {} : { longLived: over.longLived }),
   };
 }
 const r1 = (key = R): StallVerdict => ({ act: 'notify', arm: 'restarted', rung: 1, key, to: 'worker' });
@@ -212,5 +216,30 @@ describe('restarted: the mails', () => {
     const a = stallSessionMail(sess(), r1() as Extract<StallVerdict, { act: 'notify' }>, NOW).subject;
     const b = stallSessionMail(sess(), r2() as Extract<StallVerdict, { act: 'notify' }>, NOW).subject;
     expect(a).not.toBe(b);
+  });
+});
+
+describe('restarted, widened to long-lived sessions (Overlord W1a, the renewal hand-offs, Task 7; W0-21, Proposal 12)', () => {
+  const coord = (over: Over = {}): StallSessionInput => ({ ...input(R, { role: 'coordinator', run: null, longLived: true, ...over }), sessionId: COORD });
+
+  // The arm's cases live once in `sim/handoffSets.ts` (its mutation floor runs them against each mutant).
+  for (const [name, run] of Object.entries(restartedHandoffCases(stallModule))) it(name, run);
+
+  it('its mail is the self-notice a run worker reads, addressed to the coordinator; the delivery is the arm\'s, unchanged', () => {
+    const one = coord({ mark: mark(R, { lostBg: 1, lostKinds: ['shell'], lostIds: ['b1'] }) });
+    expect(stallSessionMail(one, r1() as Extract<StallVerdict, { act: 'notify' }>, NOW).subject).toBe(stallRestartedSubject(R));
+    expect(stallRestartedVerdicts(coord({ arming: DARK }), NOW)).toEqual([r1()]);
+    expect(stallNotifyDelivery('restarted', 'worker', DARK)).toBe('shadow');
+    expect(stallNotifyDelivery('restarted', 'worker', W2)).toBe('send');
+  });
+
+  it('a run worker keeps its two rungs whatever longLived says, so a child is never mailed twice', () => {
+    expect(stallRestartedVerdicts(input(R), NOW)).toEqual([r1(), r2()]);
+    expect(stallRestartedVerdicts(input(R, { longLived: true }), NOW)).toEqual([r1(), r2()]);
+    expect(stallRestartedVerdicts(input(R, { run: null, longLived: true }), NOW)).toEqual([NONE]);
+  });
+
+  it('a coordinator with no restart after its stop gets none', () => {
+    expect(stallRestartedVerdicts(coord({ mark: mark(R, { stopAt: R + MIN }) }), NOW)).toEqual([NONE]);
   });
 });

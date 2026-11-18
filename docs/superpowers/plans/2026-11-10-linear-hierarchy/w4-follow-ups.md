@@ -13,9 +13,10 @@ trailer.
   guard proved by mutating its line and running the test (restored from a saved copy each time).
 - **Departures:** D-8733 drift-reads-every-team, D-8734 drift-cursor-and-return-tables, D-8735 inbound-retired, D-8736
   w4fu-words. Defined in the plan; summarised below.
-- **One migration**, entry 97: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
-  `linear_inbound.retiredWhy`; additive only. Main ended at 95 at build time (D-8673), and Overlord gates A (#2993) landed
-  first and took 96, so this entry moved to 97 in the one merge of main, and the run-close replay covers forty-four.
+- **One migration**, entry 98: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
+  `linear_inbound.retiredWhy`; additive only. Main ended at 95 at build time (D-8673). Overlord gates A (#2993) landed
+  first and took 96, so this entry moved to 97 in the first merge of main; the renewal hand-offs (#2934) then took 97, so
+  fix round 1's one merge of main (the branch read conflicting) moved it to 98, and the run-close replay covers forty-five.
 - **Growth:** `watch.ts`, `coord/store.ts`, `coord/routes.ts` and `coord/delegation-checkpoint.ts` are untouched;
   `server.ts` gains one line (fix round 1: the plan routes' `inboundRecheck` option, by the ladder's consent, mail 24088);
   `shared/api.ts` is line-neutral (one cap word on the two existing `plan-phases-v1` lines).
@@ -53,7 +54,7 @@ Tests for a pure function written after its pass-level test (`restoreHoldVerdict
   teams since the watermark, read and dropped, in the same pages of 100 (one rate-service call per page, on lane `sync`,
   like every other read). For a workspace whose unmanaged teams are busy this can reach the page cap, which D-8734's cursor
   now spreads across passes without skipping a change.
-- **D-8734, drift-cursor-and-return-tables.** Migration 97: `linear_drift_cursors` and `linear_inbound_notes`. The margin
+- **D-8734, drift-cursor-and-return-tables.** Migration 98: `linear_drift_cursors`, `linear_inbound_notes` and `linear_inbound.retiredWhy`. The margin
   `DRIFT_SWEEP_MARGIN_MS` is ccrc's clock against Linear's `updatedAt`; a skew larger than five minutes with ccrc ahead would
   narrow it, and nothing measures Linear's clock (Linear's `updatedAt` order is unmeasured too, so nothing relies on it).
 - **D-8735, inbound-retired.** As in the table, amended by fix round 1 (F4). A retired row keeps its `reason` (a close's

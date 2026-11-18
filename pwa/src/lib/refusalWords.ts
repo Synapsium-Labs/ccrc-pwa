@@ -8,7 +8,7 @@ import { ARCHIVE_REFUSALS, type ArchiveRefusal } from '../../../shared/api';
 import { SWAP_REFUSALS, TESTBOX_ADMIN_ROUTE_REFUSALS, TESTBOX_PARITY_REQUIRED_SENTENCE, type SwapRefusal, type TestboxAdminRouteRefusal } from '../../../shared/api';
 import { TESTBOX_ADMIN_CODE_SENTENCE } from '../../../shared/testbox-admin';
 import type { LinkingRefusal } from '../../../shared/linking';
-import type { RouteRefusal } from '../../../shared/refusal';
+import type { HandoffRefusal, RouteRefusal } from '../../../shared/refusal';
 import { ANSWER_MAX } from '../../../shared/ledgers';
 import { ApiError } from './apiError';
 
@@ -59,6 +59,10 @@ const SEND_ERROR_TEXT: Record<string, string> = {
   // this code (dialog.ts's `turnRunning`, send.ts's own doc); it holds the nudge
   // for a minute and counts no attempt.
   'turn-running': 'Claude is in the middle of a turn — the message waits until it finishes.',
+  // Overlord W1a hand-offs: the console's prompt route refuses, before anything is typed, while the session is between
+  // conversations: a renewal, or a long-lived session's start or wake before its card is read (review 2312 F7). The failed
+  // bubble keeps the text and Retry resends it.
+  renewing: 'Between conversations (starting or renewing) — your message is kept; send it again in a moment.',
 };
 
 /**
@@ -80,6 +84,17 @@ export const sendErrorText = (code: string, submittable?: boolean): string =>
   (code === 'verify-failed' && submittable === true)
     ? VERIFY_FAILED_COLLAPSED
     : (SEND_ERROR_TEXT[code] ?? code);
+
+/** The Renew now door's two words of its own (Overlord W1a hand-offs), keyed by the L0 words. */
+export const RENEW_NOW_REFUSAL_TEXT: Readonly<Record<Exclude<HandoffRefusal, 'renewing'>, string>> = {
+  'renew-not-long-lived': 'This session has no long-lived conversation to renew.',
+  'renew-pending': 'A Renew now for this session is already waiting.',
+};
+export const RENEW_NOW_RECORDED_TEXT = 'Renew now recorded: the session renews once its turn ends.';
+/** The door's answer for a press while the `continuity` row is shadow (review 2312 F1, F5): recorded, and nothing renews. */
+export const RENEW_NOW_SHADOW_TEXT = 'Renew now recorded in shadow: no renewal happens while continuity is in shadow.';
+/** A failed Renew now in words: the door's own sentence, else the PWA's generic failure text. */
+export const renewNowText = (err: unknown): string => refusalText(err, RENEW_NOW_REFUSAL_TEXT) ?? failedTo('renew', err);
 
 /** `POST /submit`'s own refusals. Separate from SEND_ERROR_TEXT because they
  *  answer a different question — not "why didn't my message send" but "why
