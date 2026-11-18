@@ -3746,6 +3746,24 @@ export const MIGRATIONS: readonly string[] = [
     canaryCrossed INTEGER NOT NULL DEFAULT 0, baseline TEXT NOT NULL, admittedAt INTEGER NOT NULL);
   CREATE INDEX decision_lines_by_key ON decision_lines (row, hostKind, origin, modelId, revision, id);
   `,
+
+  // ── 99: user_version 98 -> 99 ────────────────────────────────────────────
+  // The door process's act key (Overlord spec §3.3.11 H12 "The fence", Table 11.1a's row `continuity_generations`; W1, plan
+  // `w1-door-process.md` Task 1). `continuity_act_keys`, one row per generation, ever: the launch nonce's sha256 (UNIQUE, so a
+  // nonce binds at most one generation) and the key's sha256, never the key. THREE WRITERS, ONE ROW, in
+  // `server/src/continuity/actKeyStore.ts`: `issueActKey` (the row), `noteRefusedClaim` (`claimsRefused`, `lastRefusedAt`) and
+  // `advanceActCounter` (`counter`, only upward). `continuity_starts.doorNonceSha256`: the hash the spawn bound to a start,
+  // written by `insertStart` alone; null for an older hook's start, which binds no nonce. A NEW TABLE and a NULLABLE COLUMN: an
+  // older build at this `user_version` takes rule 3, never names the table, and its `insertStart` names its columns, so the
+  // column reads null. The second of the PRs holding 99 to land renumbers (positional; the coordinator's brief, 2026-11-18).
+  // RE-MEASURE the slot before the PR and before merge (it must print 98 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_act_keys (generationId INTEGER PRIMARY KEY, nonceSha256 TEXT NOT NULL UNIQUE, keySha256 TEXT NOT NULL,
+    issuedAt INTEGER NOT NULL, counter INTEGER NOT NULL DEFAULT 0, claimsRefused INTEGER NOT NULL DEFAULT 0, lastRefusedAt INTEGER);
+  ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

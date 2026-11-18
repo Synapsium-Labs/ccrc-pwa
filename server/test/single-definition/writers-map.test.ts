@@ -317,7 +317,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
   'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts',
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
-  'decision_rows', 'decision_host', 'decision_lines'] as const;
+  'decision_rows', 'decision_host', 'decision_lines',
+  'continuity_act_keys'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -439,6 +440,9 @@ describe(TABLES_PIN, () => {
       // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): the seal arm's INSERT and the
       // score arm's outcome write, each reached only from its arm of the forecast lane.
       programme_forecasts: ['scoreForecast', 'sealForecast'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
+      // The door process's act key (Overlord W1 door process A1, plan w1-door-process.md Task 1): three facts, three writers,
+      // one row: the claim door's issue and refused-claim count, and the counter, reached only through gates B's guarded adapter.
+      continuity_act_keys: ['advanceActCounter', 'issueActKey', 'noteRefusedClaim'].map((f) => `server/src/continuity/actKeyStore.ts#${f}`),
     });
   });
 

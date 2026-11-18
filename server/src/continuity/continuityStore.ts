@@ -1,6 +1,6 @@
 // L3 adapter: the start report's table and the generations' (Overlord spec §3.3.11, H12, W1a), the card's and the notes'
-// (§3.3.3, §3.3.2; each its own section below), and the probes' (§3.3.5, the last section). `continuity_starts` has one writer, `insertStart`, and one read,
-// `startsSince` (the generations lane's); `continuity_generations` and `continuity_cursor` are written only through the
+// (§3.3.3, §3.3.2; each its own section below), and the probes' (§3.3.5, the last section). `continuity_starts` has one writer, `insertStart`, and its reads:
+// `startsSince` (the generations lane's), `startsOf`, and the act-key claim's `newestStartOf` and `startByNonce`; `continuity_generations` and `continuity_cursor` are written only through the
 // generation functions below, by the generations lane. `CoordStore` keeps one-line delegates of the same names. Nothing
 // here decides: the door (`routes.ts`) validates, the lane's deciders decide, and this file records and measures.
 // The renewal readings' section (W1, PR A) reads the closed-book spot probes by class and keeps the daily backstop's row,
@@ -24,6 +24,7 @@ import type { GenView } from './generationMachine.js';
 import { tx } from '../coord/tx.js';
 import type { SpotProbe } from './probes.js';
 import { isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
+import type { ClaimRead, StartFact } from './actKey.js';
 import { startLoadsRowOf, type StartLoadsRaw, type StartLoadsReport, type StartLoadsRow } from './startLoads.js';
 export type { StartLoadsReport } from './startLoads.js';
 
@@ -38,6 +39,9 @@ export interface StartInsert {
   rowIncarnation: string | null;
   reportedAt: number;
   receivedAt: number;
+  /** The launch nonce's sha256 the spawn bound to this start (the door process, Overlord W1), or null: an older hook's start,
+   *  or a start no spawn bound, binds no nonce. Optional, so a caller that predates it writes null. */
+  doorNonceSha256?: string | null;
 }
 
 /** `fresh: false` is a resend that met the unique key: the first report's row stands and its id is answered. */
@@ -49,9 +53,10 @@ export type StartsRead = { ok: true; rows: StartRow[] } | { ok: false; detail: s
 export function insertStart(db: DatabaseSync, row: StartInsert): StartInsertResult {
   try {
     const res = db.prepare(
-      'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt) '
-      + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, reportId) DO NOTHING',
-    ).run(row.sessionId, row.reportId, row.uuid, startSourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt);
+      'INSERT INTO continuity_starts (sessionId, reportId, uuid, source, model, rowIncarnation, reportedAt, receivedAt, doorNonceSha256) '
+      + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, reportId) DO NOTHING',
+    ).run(row.sessionId, row.reportId, row.uuid, startSourceOf(row.source), row.model, row.rowIncarnation, row.reportedAt, row.receivedAt,
+      row.doorNonceSha256 ?? null);
     if (Number(res.changes) === 1) return { ok: true, id: Number(res.lastInsertRowid), fresh: true };
     const held = db.prepare('SELECT id FROM continuity_starts WHERE sessionId = ? AND reportId = ?')
       .get(row.sessionId, row.reportId) as { id: number } | undefined;
@@ -141,6 +146,41 @@ export function startsOf(db: DatabaseSync, sessionId: string, limit: number): St
     return { ok: true, rows: rows.map((r) => ({ ...r, source: startSourceOf(r.source) })) };
   } catch (e) {
     return { ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+// The act-key claim's two start reads (Overlord W1 door process, plan `w1-door-process.md` Task 1). Each reads only starts that
+// can mint (slug claim-reads-starts-that-can-mint, `actKey.ts`): a compaction or a fork mints nothing, and a compaction repeats
+// its process's hash. One session's start order is `reportedAt`, then id (`StartRow`'s ORDER note). Each start carries the
+// generation minted from it, if any. A failed read answers `ok: false` with its detail, never `'none'`.
+const CLAIM_START_SQL = 'SELECT s.id AS startId, s.doorNonceSha256 AS nonceSha256, g.id AS genId, g.n AS n, g.state AS state '
+  + "FROM continuity_starts s LEFT JOIN continuity_generations g ON g.startId = s.id WHERE s.sessionId = ? AND s.source NOT IN ('compact', 'fork')";
+type ClaimStartRaw = { startId: number; nonceSha256: string | null; genId: number | null; n: number | null; state: string | null };
+function claimStartOf(r: ClaimStartRaw | undefined): ClaimRead<StartFact | 'none'> {
+  if (r === undefined) return { ok: true, value: 'none' };
+  if (r.genId === null) return { ok: true, value: { startId: r.startId, nonceSha256: r.nonceSha256, generation: 'not-minted' } };
+  if (!isGenerationState(r.state)) return { ok: false, detail: `continuity_generations row ${r.genId}: state ${String(r.state)}` };
+  return { ok: true, value: { startId: r.startId, nonceSha256: r.nonceSha256, generation: { id: r.genId, n: Number(r.n), state: r.state } } };
+}
+const claimReadFailed = (e: unknown): { ok: false; detail: string } =>
+  ({ ok: false, detail: `continuity_starts read failed: ${e instanceof Error ? e.message : String(e)}` });
+
+/** The session's newest recorded start that can mint, with its generation, `'none'`, or the read's failure. */
+export function newestStartOf(db: DatabaseSync, sessionId: string): ClaimRead<StartFact | 'none'> {
+  try {
+    return claimStartOf(stmt(db, `${CLAIM_START_SQL} ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1`).get(sessionId) as ClaimStartRaw | undefined);
+  } catch (e) {
+    return claimReadFailed(e);
+  }
+}
+
+/** The session's newest start that can mint and carries this nonce hash, with its generation, `'none'`, or the read's failure. */
+export function startByNonce(db: DatabaseSync, sessionId: string, nonceSha256: string): ClaimRead<StartFact | 'none'> {
+  try {
+    return claimStartOf(stmt(db, `${CLAIM_START_SQL} AND s.doorNonceSha256 = ? ORDER BY s.reportedAt DESC, s.id DESC LIMIT 1`)
+      .get(sessionId, nonceSha256) as ClaimStartRaw | undefined);
+  } catch (e) {
+    return claimReadFailed(e);
   }
 }
 
