@@ -68,10 +68,9 @@ get wrong when editing `src/whitelist.ts`.
   steered session on a remote fleet. The name must pass `isRegistryId`; `~/.ccrc` may be a link, but `history` and
   `steer-on` must each be a real directory or absent (`lstat`), and a live link at the marker is refused. A hard link at a
   marker's name cannot be detected (same user). `read`, `readdir` and `lstat` admit none of it.
-  And one more READ grant (D-8406): a lane's class registry and catalogue, `~/.ccrc/models/<lane>.classes.json` and
-  `<lane>.json`, by exact name (`isLaneModelsReadName`, `shared/models.mjs`) and canonical-path equality
-  (`isLaneModelsFile`), for the session's model picker. `~/.ccrc/models` stays unlistable, and its other files unread.
-  It stays as the server's fallback until both boxes run the `models` op (D-8688), and R3b retires it.
+  No file under `~/.ccrc/models` is readable: the lane-models read grant (D-8406) is retired (model-class-advance R3b),
+  and the server reads a lane's models only through the `models` op's `show`. `test/whitelist.test.ts` reds if a lane's
+  registry or catalogue becomes readable again.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
 - The **`update` op** (design 2026-09-20 §10) is one of the SIX wire-triggered spawn classes outside the exec whitelist

@@ -361,11 +361,15 @@ export function createIo(client: FleetClient): FleetIO {
     /** The agent's `models` op (auto-advance W4, D-8687, D-8693), `testboxAdmin`'s shape: the builder runs here first (so
      *  a refusal never reaches the wire), and the frame is sent only to an agent whose ready frame names the op. An older
      *  agent that answers `bad-request` is `unsupported` too; a frame that never left is `not-started`; anything after
-     *  the send, or an answer off `readModelsOpAnswer`'s grammar, is `lost`. */
+     *  the send, or an answer off `readModelsOpAnswer`'s grammar, is `lost`. Before the link's first ready frame
+     *  (`agentOps` unset) nothing is sent and the answer is `not-started`, never `unsupported`: no agent has said what it
+     *  answers yet, so "this agent predates the op" would be a guess with the wrong remedy (R3b fix round 1, F5). */
     async models(lane, action, cls) {
       const built = buildModelsArgv(lane, action, cls);
       if (!built.ok) return { kind: 'refused', why: built.why };
-      if (!(client.state.agentOps ?? []).includes(MODELS_OP)) return { kind: 'unsupported' };
+      const ops = client.state.agentOps;
+      if (ops === undefined) return { kind: 'not-started' };
+      if (!ops.includes(MODELS_OP)) return { kind: 'unsupported' };
       type Frame = ModelsReq extends infer R ? (R extends ModelsReq ? Omit<R, 'id'> : never) : never;
       const frame: Frame = action === 'show'
         ? { t: 'req', op: MODELS_OP, lane, action }

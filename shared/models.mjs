@@ -105,39 +105,27 @@ export const MODEL_ID_RE = /^[A-Za-z0-9][A-Za-z0-9._:\/-]{0,127}$/;
  *  only, a letter first, 32 characters at most. Its readers today:
  *  `deploy/models-op.mjs`, which re-exports it as ACCOUNT_ID_RE, and
  *  `deploy/models-canary.mjs` check an `--id` against it before any path is
- *  built, and PUSH_HEAD below reads a push line's lane with it. The agent's
- *  `models` op (plan §3.10, W4) will validate against it too; no agent code
- *  reads it yet. `server/test/models-lane-id-parity.test.ts` holds the four
- *  spellings equal. */
+ *  built, PUSH_HEAD below reads a push line's lane with it, and the `models`
+ *  op's one lane guard (`isModelsLaneId`, `shared/agent-protocol.ts`) checks a
+ *  lane against it on the agent and on both server arms before anything runs.
+ *  `server/test/models-lane-id-parity.test.ts` holds the four spellings equal. */
 export const MODELS_LANE_ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
 /** The two words `ccrc models <here> …` reads as box-wide subcommands, never as
  *  a lane id (deviation B-4): `ccd/ccrc`'s MODELS_RESERVED in bash, here for
- *  node and TypeScript. No runtime code reads it yet: the agent's `models` op
- *  (plan §3.10, W4) will refuse them as a lane. Its one reader today is the
- *  same test, which pins it equal to the bash list. */
+ *  node and TypeScript. The `models` op's lane guard (`isModelsLaneId`,
+ *  `shared/agent-protocol.ts`) refuses them as a lane, and the same test pins
+ *  it equal to the bash list. */
 export const MODELS_RESERVED_IDS = Object.freeze(['refresh', 'litellm']);
 
-/** D-8406: the directory under `~/.ccrc` that holds every lane's model files, and the names of the two a reader
- *  outside the models verbs needs — the class registry and the catalogue — each spelled ONCE, here.
- *  `deploy/models-op.mjs` builds its paths from them, the fleet's read grant admits exactly them
- *  (`isLaneModelsReadName`, `agent/src/whitelist.ts`), and the server reads them by them
- *  (`server/src/laneModels.ts`), so the three cannot come to name different files. */
+/** D-8406: the directory under `~/.ccrc` that holds every lane's model files, and the names of two of them, the class
+ *  registry and the catalogue, each spelled ONCE, here. `deploy/models-op.mjs` builds its paths from them. Since R3b nothing outside the models verbs reads these files:
+ *  the server asks the fleet's `models` op (`show`), and the agent's file read admits no file under `~/.ccrc/models`. */
 export const MODELS_DIR_NAME = 'models';
 /** `<id>.classes.json`: the lane's class registry (§4.1). */
 export const registryFileName = (id) => `${id}.classes.json`;
 /** `<id>.json`: the lane's catalogue (§4.2). */
 export const catalogueFileName = (id) => `${id}.json`;
-
-/** D-8406: whether `name` is one of the two lane files the console may read — `registryFileName` or
- *  `catalogueFileName` of a lane id `MODELS_LANE_ID_RE` accepts and `MODELS_RESERVED_IDS` does not hold. A lane id
- *  has no dot, so `<id>.effort.json`, `<id>.windows.json` and every other sibling are refused by shape. Pure. */
-export function isLaneModelsReadName(name) {
-  if (typeof name !== 'string') return false;
-  const id = [registryFileName(''), catalogueFileName('')]
-    .filter((suffix) => name.endsWith(suffix)).map((suffix) => name.slice(0, -suffix.length))[0];
-  return id !== undefined && MODELS_LANE_ID_RE.test(id) && !MODELS_RESERVED_IDS.includes(id);
-}
 
 /** The longest models notice `/api/notify` sends to the phone (auto-advance
  *  plan W2 Task 12). A CEILING, not a promise that every well-formed line
