@@ -7453,6 +7453,7 @@ The egress refusal is the one exception, because a detailed answer there is an o
 | `bad-endpoint` | The decision-model key door | The endpoint does not parse, carries userinfo, a query or a fragment, is not `https:` for a hosted host, or a local host's address is not loopback or private (a key leaves over `http:` only to loopback). Answered 400 | H6 |
 | `row-changed` | The decision-model arm, off and ceiling doors | The row is not what the operator last read (`expected`), so the move would act on a stale view. Answered 409 | H6 |
 | `stored-not-applied` | The decision-model key door | The host record and the holds were written, but the key could not be stored (or removed); send it again. A key that was not stored is bound to no origin, so it is never sent. Answered 503 | H6 |
+| `removed-not-held` | The decision-model key door's `DELETE` | The key was removed, but the holds of the armed gates were not written (Remove key always removes the key); remove it again. Answered 503 | H6 |
 | `egress-refused` | Relay, answer, kickoff, brief | The body quotes an `overlord-only` entry or hits the private-name list. One word, no detail, counted and throttled | H9, H31 |
 | `request-not-yours` | `POST /api/runs` | The request's owner is not the run's programme | H22 |
 | `dependency-cycle` | The `blocked` request door | The named dependency makes a cycle | H22 |
