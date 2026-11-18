@@ -204,7 +204,8 @@ interface HookConfig {
   /** Frame realm: messages posted on the port once it is captured (a navigated child's, which has no scripts of the
    *  library's to be ahead of); with `holdLoadForChild`, once the parent has recorded and answered the child's word. */
   readonly onHello?: readonly unknown[];
-  /** Frame realm: the srcdoc document navigates here at once. */
+  /** Frame realm: the srcdoc document navigates here, at once, or with `navigateAfterLoad` only when the parent hook
+   *  posts it `ccrcHookGo`, which it does once it has taken the srcdoc's own load listener call. */
   readonly navigateTo?: string;
   /** With `holdLoadForChild`: the load-first ordering, forced at its worst. The srcdoc navigates only when the parent
    *  hook has taken the srcdoc's own load listener call (the parent tells it to), and the parent answers the child's
