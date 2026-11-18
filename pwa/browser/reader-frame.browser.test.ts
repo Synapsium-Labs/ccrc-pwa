@@ -9,7 +9,8 @@
 // What the rows share:
 //   - Two hooks, both Playwright init scripts. The PARENT hook (the page's realm) records every iframe the reader
 //     mounts (attributes, srcdoc, whether it held focus when it was inserted), wraps `HTMLIFrameElement.prototype
-//     .contentWindow` so every `postMessage` to the frame is counted (target, payload, port), notes when `ready`
+//     .contentWindow` so every `postMessage` to the frame is counted (target, payload, port; not for a row that asks
+//     for the frame's window bare, `bareContentWindow`, since the wrapper is never a message's source), notes when `ready`
 //     arrived, and can put ops on the frame's end of the port before the frame is handed it. The FRAME hook (each
 //     frame's realm) captures the `MessagePort` the frame is handed, so a row can speak on the frame's own port once
 //     it is up. Measured (12 loads): the init script reaches a srcdoc frame BEFORE its scripts in some loads and
@@ -255,6 +256,12 @@ interface HookConfig {
   /** Parent realm: every window `message` the parent receives is recorded (`__msgIn`: the payload's `t`, the origin, the port
    *  count), so a row can wait on the parent's own receipt of a stray message and then assert it had no effect. */
   readonly countMessages?: boolean;
+  /** Parent realm: `HTMLIFrameElement.prototype.contentWindow` is left unwrapped, so `iframe.contentWindow` is the
+   *  frame's own window and nothing posted to the frame is counted (`__posts`, `earlyOps` and the load-first hold need the
+   *  wrapper). The wrapper is a Proxy, and a Proxy is never the `source` of a message the frame posts, so under it a
+   *  listener that checks `event.source === iframe.contentWindow` never matches, which production's would: a row about
+   *  window messages from the frame runs bare (measured: the stray case missed such a listener with the wrapper on). */
+  readonly bareContentWindow?: boolean;
   /** Parent realm: `Clipboard.prototype.writeText` records its text (`__clipWrites`) and resolves, so a row counts what the
    *  console writes and when (headless Chrome grants no clipboard permission). */
   readonly recordClipboard?: boolean;
@@ -286,7 +293,9 @@ function hookScript(cfg: HookConfig): string {
       window.__msgIn = [];
       window.addEventListener('message', (e) => {
         const d = e.data;
-        window.__msgIn.push({ t: d !== null && typeof d === 'object' ? String(d.t) : typeof d, origin: e.origin, ports: e.ports.length });
+        const f = document.querySelector('.docs-reader iframe');
+        window.__msgIn.push({ t: d !== null && typeof d === 'object' ? String(d.t) : typeof d, origin: e.origin, ports: e.ports.length,
+          fromReader: f !== null && e.source === f.contentWindow });
       }, true);
     }
     if (CFG.recordClipboard && typeof Clipboard !== 'undefined') {
@@ -362,7 +371,7 @@ function hookScript(cfg: HookConfig): string {
       };
     }
     const desc = Object.getOwnPropertyDescriptor(HTMLIFrameElement.prototype, 'contentWindow');
-    Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
+    if (!CFG.bareContentWindow) Object.defineProperty(HTMLIFrameElement.prototype, 'contentWindow', {
       configurable: true, enumerable: desc.enumerable,
       get() {
         const w = desc.get.call(this);
@@ -876,8 +885,10 @@ const topIn = (frame: Frame, id: string): Promise<{ readonly top: number; readon
 }, id);
 const inView = (at: { readonly top: number; readonly viewport: number } | null): boolean => at !== null && at.top >= 0 && at.top < at.viewport;
 
-/** What the parent window has received, by the payload's `t` (the hook's `countMessages`), with each message's origin and port count. */
-const messagesIn = (page: Page): Promise<{ t: string; origin: string; ports: number }[]> => page.evaluate(() => (window as unknown as { __msgIn: { t: string; origin: string; ports: number }[] }).__msgIn);
+/** What the parent window has received, by the payload's `t` (the hook's `countMessages`), with each message's origin and port
+ *  count, and whether its source is the reader's iframe's `contentWindow` (true only for a row whose hook runs it bare). */
+type MessageIn = { t: string; origin: string; ports: number; fromReader: boolean };
+const messagesIn = (page: Page): Promise<MessageIn[]> => page.evaluate(() => (window as unknown as { __msgIn: MessageIn[] }).__msgIn);
 /** Every text the console wrote to the clipboard (the hook's `recordClipboard`). */
 const clipboardWrites = (page: Page): Promise<string[]> => page.evaluate(() => (window as unknown as { __clipWrites: string[] }).__clipWrites);
 
@@ -1150,7 +1161,10 @@ describe('W8a reader frame in Chrome', () => {
   // posts a well-formed navigate, store.set and hash to `parent` (a window message, no port): the parent's own window must
   // receive all three (counted in the parent hook, a bounded wait), and then none has an effect. Each sink has a control of
   // its own, the same message on the frame's own port. `STRAY_ID` is a heading of long.md far below the first screen, so a
-  // scroll of the frame would show.
+  // scroll of the frame would show. The hook runs bare (`bareContentWindow`), and each stray message's source is asserted to
+  // be the iframe's own `contentWindow`: so a library that acted on window messages from its frame behind the usual source
+  // check would act here as in production (row NDR-D2-T13-B-STRAYWIN, which survived the wrapped hook, where no source
+  // check can match).
   const STRAY_ID = 'part-100';
   const STRAY = [
     { t: 'navigate', href: './other.md' },
@@ -1159,7 +1173,7 @@ describe('W8a reader frame in Chrome', () => {
   ] as const;
 
   it('M8.B5: a parent.postMessage of a well-formed navigate has no effect (store.set and hash too: the parent received all three)', async () => {
-    const { s, outcome } = await open('long.md', { hook: { countMessages: true } });
+    const { s, outcome } = await open('long.md', { hook: { countMessages: true, bareContentWindow: true } });
     expect(outcome).toBe('ready');
     const frame = await readerFrame(s.page);
     const before = await readerKeys(s.page);
@@ -1173,7 +1187,8 @@ describe('W8a reader frame in Chrome', () => {
     await expect.poll(async () => (await messagesIn(s.page)).filter((m) => STRAY.some((x) => x.t === m.t)).map((m) => m.t).sort(), {
       timeout: 10_000, message: 'the parent window did not receive the frame\'s three stray messages (navigate, store.set, hash)',
     }).toEqual(['hash', 'navigate', 'store.set']);
-    expect((await messagesIn(s.page)).filter((m) => STRAY.some((x) => x.t === m.t)).every((m) => m.origin === 'null' && m.ports === 0), 'each came from the sandboxed frame with no port').toBe(true);
+    expect((await messagesIn(s.page)).filter((m) => STRAY.some((x) => x.t === m.t)).every((m) => m.origin === 'null' && m.ports === 0 && m.fromReader),
+      'each came from the sandboxed frame, its source the iframe\'s own window (a source check would match it), with no port').toBe(true);
     await rendered(s.page);
     expect(pathOf(s.page), 'no route').toBe(leafUrl('long.md'));
     expect(await readerKeys(s.page), 'no store write').toEqual(before);
