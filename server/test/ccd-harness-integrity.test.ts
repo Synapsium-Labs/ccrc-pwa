@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { stringPieces } from './scan/parse.js';
 import { STUB_SEAM_GONE, stubFn } from './ccdStub.js';
-import { makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { CONTAINED_CCRC_SEAMS, makeCcdHarness, stripCcrcKnobs, type CcdHarness } from './ccdWsHelpers.js';
 import { pythonHeredocs } from './docsHelperPy.js';
 import { REAL_PYTHON3 } from './ccdDocsHelpers.js';
 
@@ -232,7 +232,7 @@ describe('every `_x() {` a test writes names a shipped function or a listed test
 describe('every python heredoc a shipped shell script holds parses and compiles (D-6051)', () => {
   /** The count `pythonHeredocs` finds over the shipped shell scripts, measured on this tree: eight in ccd/ccd, one in
    *  ccd/lib/train-proof.sh (`_pr_train_py`, the train record's python, moved out of `_pr_py`'s, D-7463), two in
-   *  ccd-graph-sweep, one in ccgpt-runtime, four in ccrc-models-probe (the fourth its release lookup, D-8743), one in
+   *  ccd-graph-sweep, one in ccgpt-runtime, four in ccrc-models-probe (the fourth its release lookup's program, staged by `cat`, D-8743), one in
    *  ccd-land-probe. */
   const PINNED_COUNT = 17;
 
@@ -276,5 +276,33 @@ describe('every python heredoc a shipped shell script holds parses and compiles 
     expect(() => pythonHeredocs("x() {\n  python3 - <<'PY'\nprint(1)\n}\n")).toThrow(/never closes/);
     expect(pythonHeredocs("# python3 - <<'PY' in a comment\necho\n")).toEqual([]);
     expect(pythonHeredocs("python3 - <<'PY'\nprint(1)\nPY\n")).toEqual([{ line: 1, tag: 'PY', body: 'print(1)\n' }]);
+  });
+});
+
+// D-8743, fix round 1 of model-class-advance wave 2 (review A9): a test that strips the ccrc knobs from a contained env
+// keeps the containment seams, so the strip has one owner, `stripCcrcKnobs` (ccdWsHelpers.ts). Each hand-written
+// `CCRC_` delete loop under server/test dropped the probe's release seam with the knobs, and the account suite met the
+// poisoned curl on CI.
+describe('one strip of the CCRC_ knobs, which keeps the containment seams (D-8743)', () => {
+  const STRIP = /startsWith\(\s*['"]CCRC_['"]\s*\)[^;\n]*\bdelete\b/;
+  const OWNER = 'ccdWsHelpers.ts';
+
+  it('no file under server/test deletes CCRC_ names by hand: each strip calls stripCcrcKnobs', () => {
+    const files = (fs.readdirSync(TEST_DIR, { recursive: true }) as string[]).filter((f) => /\.tsx?$/.test(f) && f !== OWNER);
+    expect(files.length, 'non-vacuity: the scan reads the test tree').toBeGreaterThan(100);
+    const hits = files.flatMap((f) => fs.readFileSync(path.join(TEST_DIR, f), 'utf8').split('\n')
+      .flatMap((l, i) => (STRIP.test(l) ? [`${f}:${i + 1}`] : [])));
+    expect(hits).toEqual([]);
+  });
+
+  it('the helper drops the knobs and keeps the seams and the names it is told to (CONTROL: the scan sees a loop)', () => {
+    expect(CONTAINED_CCRC_SEAMS).toContain('CCRC_MODELS_PROBE_RELEASE_FIXTURE');
+    const env = { CCRC_KNOB: '1', CCRC_HERE: 'here', CCRC_MODELS_PROBE_RELEASE_FIXTURE: 'seam', PATH: 'p' };
+    expect(stripCcrcKnobs({ ...env }, ['CCRC_HERE'])).toEqual({ CCRC_HERE: 'here', CCRC_MODELS_PROBE_RELEASE_FIXTURE: 'seam', PATH: 'p' });
+    expect(stripCcrcKnobs({ ...env })).toEqual({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: 'seam', PATH: 'p' });
+    // Split, so this line is not itself a hit of the scan above.
+    expect(STRIP.test("for (const k of Object.keys(env)) if (k.startsWith('CCRC" + "_')) delete env[k];")).toBe(true);
+    expect(STRIP.test("for (const [k, v] of Object.entries(process.env)) if (!k.startsWith('CCRC_')) env[k] = v;")).toBe(false);
+    expect(STRIP.test(fs.readFileSync(path.join(TEST_DIR, OWNER), 'utf8')), 'the owner holds the one loop').toBe(true);
   });
 });

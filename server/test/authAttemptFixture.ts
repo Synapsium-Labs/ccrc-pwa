@@ -17,7 +17,7 @@
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import { existsSync, mkdirSync, readFileSync, readdirSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, stripCcrcKnobs } from './ccdWsHelpers.js';
 import { BASH, REPO, ccrcIn, laneBox } from './laneStateFixture.js';
 import { assertManagerStandIns, MANAGER_STANDIN_MARK } from './codexLaneFixture.js';
 
@@ -221,11 +221,9 @@ export function authEnv(home: string, extra: NodeJS.ProcessEnv = {}): NodeJS.Pro
   const e = ghContainedEnv(home, { ...process.env, HOME: home }, { systemd: true, tmux: true });
   // The probe's release-lookup seam (D-8743) survives the strip: it is containment, not a knob. `ghContainedEnv` set it to
   // a missing file, which the probe reads as a failed lookup, so the Codex check never asks npm.
-  const release = e['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
-  for (const k of Object.keys(e)) if (k.startsWith('CCRC_')) delete e[k];
+  stripCcrcKnobs(e);
   Object.assign(e, {
     OSTYPE: 'linux-gnu', CCRC_AUTH_SCRIPT: join(home, 'fake-script'), CCRC_AUTH_TICK: '0.2', CCRC_AUTH_TIMEOUT: '30',
-    CCRC_MODELS_PROBE_RELEASE_FIXTURE: release,
   }, extra);
   assertManagerStandIns(e, home);
   return e;

@@ -532,6 +532,21 @@ function containedReleaseAnswer(env: NodeJS.ProcessEnv, home: string): { CCRC_MO
   return { CCRC_MODELS_PROBE_RELEASE_FIXTURE: typeof named === 'string' && named !== '' ? named : path.join(home, 'no-codex-release-answer') };
 }
 
+/** The CCRC_ names a contained env sets as CONTAINMENT rather than as a knob (D-8743): a test that strips the ccrc knobs
+ *  from a contained env keeps these, or the containment they carry is gone with the knobs. */
+export const CONTAINED_CCRC_SEAMS: readonly string[] = ['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
+
+/** Deletes every CCRC_ name from `env`, in place, except the containment seams (`CONTAINED_CCRC_SEAMS`) and the names in
+ *  `keep`, and returns it. THE ONE STRIP: `ccd-harness-integrity.test.ts` refuses a hand-written `CCRC_` delete loop
+ *  anywhere else under server/test, because each such loop dropped the probe's release seam until fix round 1 of
+ *  model-class-advance wave 2 (review A9). */
+export function stripCcrcKnobs(env: NodeJS.ProcessEnv, keep: readonly string[] = []): NodeJS.ProcessEnv {
+  for (const k of Object.keys(env)) {
+    if (k.startsWith('CCRC_') && !CONTAINED_CCRC_SEAMS.includes(k) && !keep.includes(k)) delete env[k];
+  }
+  return env;
+}
+
 export function ghContainedEnv(
   home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
 ): NodeJS.ProcessEnv {

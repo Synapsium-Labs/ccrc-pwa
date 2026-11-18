@@ -10,12 +10,17 @@
 //     `$HOME/.ccrc/models/<id>.json` and nothing else; the live `~/.ccrc` on
 //     the box this suite runs on holds the operator's real catalogues.
 //  2. `ghContainedEnv` plants the poisoned `gh`, and this file plants a
-//     poisoned `curl` beside it. Every case asserts the curl log is EMPTY:
-//     the probe must reach the network through NOTHING in these tests.
-//  3. `CCRC_MODELS_PROBE_FIXTURE` is the one seam that makes (2) possible —
-//     it replaces the FETCH with a `cat` of the named file and touches no
-//     other line of the probe. A missing file through that seam is exactly a
-//     failed fetch, which is how the stale path below is driven.
+//     poisoned `curl` beside it. The probe must reach the network through
+//     NOTHING in these tests, and the cases that could reach it assert the curl
+//     log is EMPTY. The D-8743 describe at the end replaces that curl with a
+//     recording stand-in in the cases that drive the release lookup's own curl.
+//  3. Two seams make (2) possible. `CCRC_MODELS_PROBE_FIXTURE` replaces the
+//     FETCH with a `cat` of the named file and touches no other line of the
+//     probe; a missing file through it is exactly a failed fetch, which is how
+//     the stale path below is driven. `CCRC_MODELS_PROBE_RELEASE_FIXTURE`
+//     (D-8743) replaces npm's answer to the Codex arm's release lookup alone;
+//     `ghContainedEnv` sets it to a missing file for every case that names
+//     none.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn, spawnSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -1318,7 +1323,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     const raw = catalogueAt('codex-a') as Record<string, unknown>;
     expect(raw['clientVersion']).toBe(NEWER);
     expect(parseCatalogue(raw).clientVersion).toBe(NEWER);
-    // At the floor too: every Codex catalogue the arm writes says what it asked as.
+    // From the cache too: this run is inside the hour, so it asks npm nothing and records the cached release it asked
+    // as. The older-release case below records the floor.
     expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
     expect((catalogueAt('codex-a') as Record<string, unknown>)['clientVersion']).toBe(NEWER);
   });
@@ -1381,6 +1387,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
   it('a failed lookup with no cache asks as the floor; so does an unreadable cache', () => {
     expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
     expect(askedAs()).toBe(FLOOR);
+    expect(cache()['lastError']).toMatch(/^no answer \(/);
+    expect(curlCalls(), 'a missing answer file is a failed lookup, never a fall-through to curl').toEqual([]);
     fs.writeFileSync(cachePath(), '{"version":');
     expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
     expect(askedAs()).toBe(FLOOR);
@@ -1409,12 +1417,24 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     expect(cache()['version']).toBe(NEWER2);
   });
 
+  it('a try stamped up to a minute ahead is clock skew and trusted; one further ahead is not (the boundary)', () => {
+    plantCache({ version: NEWER, readAt: now(), triedAt: now() + 30 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
+    expect(askedAs(), 'a stamp 30 s ahead was not trusted').toBe(NEWER);
+    plantCache({ version: NEWER, readAt: now(), triedAt: now() + 120 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
+    expect(askedAs(), 'a stamp 120 s ahead was trusted').toBe(NEWER2);
+  });
+
   it('a try stamped in the future is not trusted: the lookup runs', () => {
     plantCache({ version: NEWER, readAt: now() + 7200, triedAt: now() + 7200 });
     expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
     expect(askedAs()).toBe(NEWER2);
   });
 
+  // TIMING-DEPENDENT (review A4): it tells a probe that waits from one that does not only while the probe reaches the
+  // lock inside the holder's hold, 3 s here. A box loaded enough to delay the probe's start past that reads green
+  // against a probe that does not wait.
   it('a probe that meets another holding the lookup waits for its answer and does not ask again', () => {
     const held = path.join(home, 'lock-held');
     const holder = spawn('python3', ['-I', '-c', [
@@ -1424,7 +1444,7 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       'fd = os.open(cache + ".lock", os.O_RDWR | os.O_CREAT, 0o600)',
       'fcntl.flock(fd, fcntl.LOCK_EX)',
       'open(held, "w").close()',
-      'time.sleep(1.5)',
+      'time.sleep(3)',
       't = int(time.time())',
       'json.dump({"version": version, "readAt": t, "triedAt": t}, open(cache, "w"))',
       'fcntl.flock(fd, fcntl.LOCK_UN)',
@@ -1455,7 +1475,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       'cat > "$HOME/curl-stdin"',
       `cat ${JSON.stringify(body)}`,
     ].join('\n') + '\n', { mode: 0o755 });
-    const r = spawnSync(BASH, [PROBE, 'codex-a', 'codex'], { env: e, encoding: 'utf8' });
+    // A non-empty stdin (review A1): the probe's own stdin carries bytes, and curl must still read none.
+    const r = spawnSync(BASH, [PROBE, 'codex-a', 'codex'], { env: e, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n' });
     expect(r.status, r.stderr).toBe(0);
     expect(askedAs()).toBe(NEWER);
     const argv = fs.readFileSync(path.join(home, 'curl-argv'), 'utf8').split('\n').filter(Boolean);
@@ -1463,7 +1484,9 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     const after = (flag: string): string | undefined => argv[argv.indexOf(flag) + 1];
     expect(after('--proto')).toBe('=https');
     expect(after('--max-redirs')).toBe('0');
-    expect(Number(after('--max-time'))).toBeLessThanOrEqual(10);
+    expect(after('--max-time'), 'curl bounds the lookup at 10 s').toBe('10');
+    expect(after('--max-filesize'), 'curl refuses an answer over the cap').toBe('262144');
+    expect(argv.includes('--fail'), 'an HTTP error is a nonzero exit, not a body').toBe(true);
     expect(argv[argv.length - 1]).toBe(NPM_URL);
     for (const flag of ['-K', '--config', '-u', '--user', '-n', '--netrc', '--netrc-optional', '--netrc-file', '-b', '--cookie', '-E', '--cert', '--oauth2-bearer'])
       expect(argv.includes(flag), `curl was handed ${flag}`).toBe(false);
@@ -1478,6 +1501,114 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       expect(parseCatalogue({ probe: 'codex', ...base, clientVersion: bad }), String(bad)).not.toHaveProperty('clientVersion');
     expect(parseCatalogue({ probe: 'codex', ...base })).not.toHaveProperty('clientVersion');
     expect(parseCatalogue({ probe: 'openrouter', ...base, clientVersion: '0.171.2' })).not.toHaveProperty('clientVersion');
+  });
+
+  // F1 (review): a deeply nested answer or cache file is refused or read as absent, never a crash that would drop the
+  // cached release, skip recording the try and leave every lane asking again on the floor.
+  const nested = (depth: number): string => '['.repeat(depth) + ']'.repeat(depth);
+
+  it('a deeply nested answer is a failed lookup: the cached release is kept and asked as, and the try is recorded', () => {
+    const readAt = now() - 7200;
+    plantCache({ version: NEWER, readAt, triedAt: readAt });
+    const r = codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('nested', nested(100_000)) });
+    expect(r.code, r.stderr).toBe(0);
+    expect(askedAs()).toBe(NEWER);
+    const c = cache();
+    expect(c['version']).toBe(NEWER);
+    expect(c['readAt']).toBe(readAt);
+    expect(c['triedAt']).toBeGreaterThan(readAt);
+    expect(c['lastError']).toBe('the answer is not JSON');
+  });
+
+  it('a deeply nested cache file is absent: a good lookup rewrites it, a failed one records the try over it', () => {
+    fs.mkdirSync(path.dirname(cachePath()), { recursive: true });
+    fs.writeFileSync(cachePath(), `{"version": ${nested(100_000)}}`);
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
+    expect(askedAs()).toBe(NEWER2);
+    expect(cache()['version']).toBe(NEWER2);
+    fs.writeFileSync(cachePath(), nested(100_000));
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
+    expect(askedAs()).toBe(FLOOR);
+    const c = cache();
+    expect(c).not.toHaveProperty('version');
+    expect(c['triedAt']).toBeGreaterThanOrEqual(now() - 60);
+    expect(c['lastError']).toMatch(/^no answer \(/);
+  });
+
+  // A8 (review): the lookup runs past the credential gate, so a run that sent nothing asked npm for nothing.
+  it('a credential refused before any request asks npm nothing: no lookup, no cache, no curl', () => {
+    fs.writeFileSync(path.join(authDir(), 'auth.json'), '{}');
+    const bin = path.join(home, '.local', 'bin');
+    const e = env({ CHATGPT_TOKEN_DIR: authDir(), CCRC_CODEX_PYTHON: py, CCRC_MODELS_AUTH_LIB: lib });
+    delete e['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
+    fs.writeFileSync(path.join(bin, 'curl'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/curl-asked"\nexit 7\n', { mode: 0o755 });
+    const r = spawnSync(BASH, [PROBE, 'codex-a', 'codex', '--check'], { env: e, encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(3);
+    expect(fs.existsSync(path.join(home, 'curl-asked')), 'npm was asked before the credential gate').toBe(false);
+    expect(fs.existsSync(cachePath()), 'a lookup ran before the credential gate').toBe(false);
+  });
+
+  // F2 (review): the lookup's real curl arm, driven directly. The program is the probe's own text, cut out of its
+  // heredoc, run as the request program runs it, with a planted `curl` in each shape the bounds exist for.
+  describe('the lookup program\'s curl arm, run directly', () => {
+    const lookupProgram = (): string => {
+      const src = fs.readFileSync(PROBE, 'utf8').split('\n');
+      const open = src.findIndex((l) => l.includes("<<'RELEASE_PY'"));
+      const close = src.findIndex((l, i) => i > open && l === 'RELEASE_PY');
+      expect(open, 'the probe stages its release lookup as a RELEASE_PY heredoc').toBeGreaterThan(0);
+      expect(close).toBeGreaterThan(open);
+      const file = path.join(home, 'release-lookup.py');
+      fs.writeFileSync(file, src.slice(open + 1, close).join('\n') + '\n');
+      return file;
+    };
+    /** Runs the lookup with `curl` as the given script (or absent), and answers what it printed, how long it took and
+     *  the cache it left. */
+    const lookup = (curl: string | null): { out: string; ms: number; cache: Record<string, unknown> } => {
+      const bin = path.join(home, 'lookup-bin');
+      fs.mkdirSync(bin, { recursive: true });
+      if (curl !== null) fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n${curl}\n`, { mode: 0o755 });
+      const PATH = curl === null ? bin : `${bin}:${process.env['PATH'] ?? ''}`;
+      const t0 = Date.now();
+      const r = spawnSync(pythonOrSkip()!, ['-I', lookupProgram(), FLOOR, cachePath(), ''], {
+        env: { HOME: home, PATH }, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n', timeout: 45_000,
+      });
+      const ms = Date.now() - t0;
+      expect(r.status, `${r.stderr} (signal ${r.signal})`).toBe(0);
+      return { out: r.stdout.trim(), ms, cache: cache() };
+    };
+
+    it('a curl that answers well: the release, and curl read nothing of the program\'s stdin', () => {
+      const r = lookup(`cat > "$HOME/curl-stdin"\nprintf '%s' '${npm(NEWER)}'`);
+      expect(r.out).toBe(NEWER);
+      expect(fs.readFileSync(path.join(home, 'curl-stdin'), 'utf8'), 'curl read the lookup\'s stdin').toBe('');
+    });
+
+    it('a curl that hangs past its own bound is killed by the alarm: the floor, within the bound, the reason kept', () => {
+      const r = lookup('exec sleep 30');
+      expect(r.out).toBe(FLOOR);
+      expect(r.ms, 'the lookup outlived its alarm').toBeLessThan(25_000);
+      expect(r.cache['lastError']).toBe('no answer within 10s');
+    }, 60_000);
+
+    it('a curl whose output passes the cap is killed at once: the floor, the size named', () => {
+      const r = lookup(`printf '%s' '${npm(NEWER)}'\nexec yes ' '`);
+      expect(r.out).toBe(FLOOR);
+      expect(r.ms, 'the over-cap answer waited on the alarm').toBeLessThan(8_000);
+      expect(r.cache['lastError']).toMatch(/^the answer is over \d+ bytes$/);
+    }, 60_000);
+
+    it('a curl that exits nonzero is a failed lookup whatever it printed', () => {
+      const r = lookup(`printf '%s' '${npm(NEWER)}'\necho 'curl: (22) The requested URL returned error: 503' >&2\nexit 22`);
+      expect(r.out).toBe(FLOOR);
+      expect(r.cache['lastError']).toBe('curl exit 22: curl: (22) The requested URL returned error: 503');
+      expect(r.cache).not.toHaveProperty('version');
+    });
+
+    it('no curl on PATH is a failed lookup, not a crash', () => {
+      const r = lookup(null);
+      expect(r.out).toBe(FLOOR);
+      expect(r.cache['lastError']).toMatch(/^curl could not run \(/);
+    });
   });
 
   it('the release seam is read in exactly one place', () => {

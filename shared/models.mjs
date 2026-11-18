@@ -314,8 +314,8 @@ function requestShapeOf(raw) {
 }
 
 /** D-8743: a plain `X.Y.Z` of decimal numbers, no leading zero, each at most six digits: the one shape a catalogue's
- *  `clientVersion` takes. The probe's Codex arm applies the same bound in its own language (`_codex_client_version`
- *  and the normaliser, ccd/ccrc-models-probe). */
+ *  `clientVersion` takes. The probe's Codex arm applies the same bound in its own language (`_codex_release_lookup_program`,
+ *  the request program and the normaliser, ccd/ccrc-models-probe). */
 const PLAIN_VERSION_RE = /^(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})$/;
 const isPlainVersion = (v) => typeof v === 'string' && PLAIN_VERSION_RE.test(v);
 

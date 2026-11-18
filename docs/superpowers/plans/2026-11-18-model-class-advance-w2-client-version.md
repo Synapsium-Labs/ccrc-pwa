@@ -18,11 +18,11 @@ was fetched as.
 
 ```mermaid
 flowchart TD
-  A["Codex arm: the three bash refusals pass"] --> B{"Cache tried within the hour?"}
+  A["Codex arm: the credential gate passes"] --> B{"Cache tried within the hour?"}
   B -- yes --> D["Use the cached release"]
   B -- no --> L{"Lock taken within its bound?"}
   L -- no --> D
-  L -- yes --> C["Ask npm: @openai/codex latest, 10 s bound, no credential"]
+  L -- yes --> C["Ask npm: @openai/codex latest, curl bounded at 10 s, no credential"]
   C -- "plain X.Y.Z" --> W["Cache it: version, readAt, triedAt"]
   C -- "failed, prerelease, malformed, oversized" --> F["Cache keeps the last good release; triedAt and lastError updated"]
   W --> D
@@ -36,7 +36,8 @@ flowchart TD
 
 ## 1. What changes
 
-The Codex arm's fetch gains one step before the catalogue request. Everything else the probe does is unchanged.
+The Codex arm's fetch gains one step before the catalogue request, taken past the credential gate (fix round 1, A8),
+so a run that sent nothing asked npm for nothing. Everything else the probe does is unchanged.
 
 | Piece | Today | After this wave |
 |---|---|---|
@@ -53,15 +54,23 @@ The Codex arm's fetch gains one step before the catalogue request. Everything el
   header: no credential, no `.netrc`, no npm config.
 - **What is read.** The answer's `version`, and nothing else. Only a plain `X.Y.Z` of decimal numbers is accepted: a
   prerelease or build suffix, a leading zero, an oversized number, an answer over the size cap, or an answer that is
-  not a JSON object is refused as a failed lookup.
+  not a JSON object or does not parse (a deeply nested one included) is refused as a failed lookup.
 - **The cache.** One file, `~/.ccrc/codex-client-release.json`, written atomically (temp file and rename in the same
   directory), mode 0600. It holds `version` and `readAt` (the last good release and when it was read), `triedAt` (the
-  last attempt, good or not) and `lastError` (the last failure's reason, bounded, absent after a success).
-- **Cadence.** A lookup runs only when `triedAt` is more than an hour old, absent, unreadable or in the future. A lock
-  file beside the cache serialises lanes refreshing at the same moment: a probe that cannot take it within its bound
-  uses the cache as it stands, so two lanes never both ask in one hour.
-- **Failure.** A failed, slow or refused lookup uses the cached release, else the floor. It never fails the probe,
-  never changes `--check`'s exit status and never blocks the catalogue request beyond its bound.
+  last attempt, good or not) and `lastError` (the last failure's reason, bounded, absent after a success). A cache
+  file that cannot be read or parsed (a deeply nested one included) is absent, so the next lookup rewrites it.
+- **Cadence.** A lookup runs only when `triedAt` is more than an hour old, absent or unreadable, or stamped more than
+  60 s ahead of the box's clock; a stamp up to 60 s ahead is trusted as clock skew between writers (fix round 1, A6).
+  A lock file beside the cache serialises lanes refreshing at the same moment: a probe waits up to 15 s for the holder
+  and re-reads what it wrote, and one that cannot take or open the lock uses the cache as it stands, so two lanes
+  never both ask in one hour.
+- **Bounds (fix round 1, A5).** The lookup itself is bounded at 10 s by curl (`--max-time 10`), with an alarm at
+  13 s as the backstop and a curl whose output passes the cap killed at once. Its whole worst case, the 15 s lock wait
+  included, is about 30 s, and the request program stops waiting for it at 40 s. The refresh is hourly, so the latency
+  costs nothing; it is stated so that nothing claims less.
+- **Failure.** A failed, slow or refused lookup uses the cached release, else the floor. Every failure, an exception
+  nothing foresaw included (fix round 1, F1), is recorded as `triedAt` and `lastError` when the file can be written.
+  It never fails the probe and never changes `--check`'s exit status.
 - **The floor.** The version asked as is never below `CODEX_CLIENT_VERSION`. An older published release (npm's
   `latest` moved back) is cached as what npm said and is not used.
 
@@ -71,6 +80,11 @@ The Codex arm's fetch gains one step before the catalogue request. Everything el
 named file. A missing file through it is a failed lookup. It is read in one place, as the catalogue seam is, and it is
 a `fixture-path` row of the settings census. The catalogue seam (`CCRC_MODELS_PROBE_FIXTURE`) still replaces the whole
 fetch, so a run through it makes no lookup and writes no `clientVersion`.
+
+`ghContainedEnv` sets it to a missing file for every contained env. A test that strips the ccrc knobs from a contained
+env does it through `stripCcrcKnobs` (`server/test/ccdWsHelpers.ts`), which keeps the containment seams;
+`ccd-harness-integrity.test.ts` refuses a hand-written `CCRC_` delete loop anywhere else under `server/test` (fix round
+1, A9).
 
 ## 2. Tasks
 
@@ -99,8 +113,10 @@ Each must be red against today's probe before Task 3.
 
 ### Task 3: the lookup in the probe
 
-`_codex_client_version` in `ccd/ccrc-models-probe`: one python program (lock, cache, lookup by `curl`, validation,
-atomic write) that prints the version to ask as. `_fetch_codex_lane` calls it after its three refusals, exports the
+`_codex_release_lookup_program` in `ccd/ccrc-models-probe` stages one python program (lock, cache, lookup by `curl`,
+validation, atomic write) that prints the version to ask as. Since fix round 1 (A8) the Codex request program runs it
+as a child past its credential gate, re-checks what it prints against the floor, and uses the result for the URL and
+the user-agent. `_fetch_codex_lane` calls it after its three refusals, exports the
 result as `CODEX_CLIENT_VERSION` and writes it to `$TMPD/client-version`; the python request reads it for both the URL
 and the user-agent. The normaliser adds `clientVersion` to a Codex catalogue when that file holds a plain `X.Y.Z`.
 
@@ -155,6 +171,38 @@ driven by vitest, so the rows ran through a small script that does the same save
 | M13 | `server/test/ccdWsHelpers.ts` | contained envs leave the release seam empty | killed (1) |
 | M14 | probe | a failed try is not recorded | killed (12) |
 
+### Task 6: fix round 1 (review run 2482, the coordinator's rulings)
+
+- F1: every exception at the two parse sites and around the program's top-level flow is a failed try, recorded with
+  `triedAt`; a cache that cannot be parsed is absent. Tests: a deeply nested answer, a deeply nested cache file.
+- F2: the curl arm's bounds get tests, the lookup program run directly with a planted `curl` that hangs, passes the
+  cap, exits nonzero or is absent; and mutation rows for the alarm, `--max-time`, `--max-filesize`, the over-cap kill
+  and the exit-status check.
+- A1: the probe and the direct runs get a non-empty stdin, and curl must read none of it.
+- A2, A3, A11, A12: comments, counts, the missing-answer case's assertions, the two-seam headers.
+- A4: M9 holds the lock 3 s and is marked timing-dependent below.
+- A5: the bounds are stated as they are (§1.1, D-8743, the spec's amendment).
+- A6: a stamp up to 60 s ahead is trusted as clock skew; further ahead triggers a lookup. The boundary is tested.
+- A8: the lookup runs past the credential gate. Test: a refused credential asks npm nothing.
+- A9: `stripCcrcKnobs` and its guard, above.
+
+## Known limits
+
+- **An unwritable `~/.ccrc` (A7).** If the lock cannot be created, the lookup never runs and the probe asks as the
+  cache it can read, else the floor, with nothing recorded. If the lock exists but the cache cannot be written,
+  `triedAt` is never recorded, so every probe asks npm again (each bounded as above). A box whose `~/.ccrc` is
+  unwritable has larger problems; the doctor follow-up below reads the cache's age.
+- **Thin detection in two hand-written curl poisons (A10).** `ccrc-models.test.ts` and `models-probe.test.ts` plant
+  their own `curl` poison with no ledger-hit line, and their `afterEach` removes HOME, so a missing release seam there
+  is not caught by the poison scan. It would still be stopped: the poison exits 97, which is a failed lookup.
+- **The seam is honoured outside tests (A13).** As the catalogue seam is: a caller that sets
+  `CCRC_MODELS_PROBE_RELEASE_FIXTURE` decides npm's answer and caches it box-wide for an hour, within the same
+  plain `X.Y.Z` and floor rules.
+- **M9 is timing-dependent (A4).** It tells a probe that waits from one that does not only while the probe reaches the
+  lock inside the holder's 3 s hold.
+- **The top-level catch-all has no test trigger.** With both parse sites catching everything, no answer or cache file
+  reaches it; it is the backstop for an exception nothing above foresaw, and it has no mutation row.
+
 ## Deviations found
 
 - **D-8743 — the Codex client version follows the published release (the coordinator's ruling, 2026-11-18).** The
@@ -162,8 +210,9 @@ driven by vitest, so the rows ran through a small script that does the same save
   `@openai/codex`'s `latest` dist-tag (`version`). It accepts only a plain `X.Y.Z` and refuses a prerelease, a
   malformed or an oversized answer. It asks as the greater of that release and the shipped constant, which stays as a
   floor and is never undercut. One cache file holds the last good release and when it was read, and the lookup runs at
-  most once an hour for the whole box. A failed or slow lookup (bounded at 10 s) uses the cached value, else the
-  floor, and never blocks or fails the catalogue fetch. The user-agent carries the same version. The catalogue records
+  most once an hour for the whole box. The lookup itself is bounded at 10 s by curl, and its whole worst case, the lock
+  wait included, is about 30 s; a failed or slow lookup uses the cached value, else the floor, and never fails the
+  catalogue fetch. It runs past the credential gate, so a run that sent nothing asked npm for nothing. The user-agent carries the same version. The catalogue records
   the client version it was fetched as, in an additive field older readers ignore. No credential goes to npm, and
   nothing but the version string is read from the answer. This reverses the registry spec's "bumped deliberately"
   rule (§5) under the owner's rule of 2026-10-07. Its cost if wrong: a newer client version can list a model the

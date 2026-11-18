@@ -11,7 +11,7 @@ import {
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, stripCcrcKnobs } from './ccdWsHelpers.js';
 import { assertManagerStandIns, MANAGER_STANDIN_MARK } from './codexLaneFixture.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
@@ -75,7 +75,7 @@ export function boxEnv(home: string): NodeJS.ProcessEnv {
   };
   for (const n of ['curl', 'systemctl', 'systemd-run', 'launchctl']) poison(n);
   poison('tmux', true);
-  for (const k of Object.keys(e)) if (k.startsWith('CCRC_')) delete e[k];
+  stripCcrcKnobs(e);
   assertManagerStandIns(e, home);
   return e;
 }

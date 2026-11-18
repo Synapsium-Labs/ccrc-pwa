@@ -270,8 +270,11 @@ the published Codex CLI release (npm's `@openai/codex` at its `latest`
 dist-tag, a plain `X.Y.Z` only) and its shipped constant `CODEX_CLIENT_VERSION`,
 which stays as a floor and is never undercut. The release is looked up at most
 once an hour for the whole box and cached in
-`~/.ccrc/codex-client-release.json`; a failed or slow lookup (bounded at 10 s)
-uses the cached release, else the floor, and never fails the catalogue fetch.
+`~/.ccrc/codex-client-release.json`. The lookup itself is bounded at 10 s by
+curl, and its whole worst case, the lock wait included, is about 30 s; a
+failed or slow lookup uses the cached release, else the floor, and never fails
+the catalogue fetch. It runs only once the lane's credential has passed its
+gate, so a run that sent nothing asked npm for nothing.
 No credential goes to npm. The request's user-agent carries the same version,
 and the catalogue records it as `clientVersion` (§4.2). This reverses the
 original "bumped deliberately" rule under the owner's rule of 2026-10-07 that
