@@ -82,8 +82,10 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     expect(text).toContain('Never file or edit a hierarchy object');
   });
 
-  it('every run opens with its ticket, named by its key in the runs open body', () => {
-    expect(flat(plan())).toContain('Every run opens with its ticket: send `"ticket":"<ticket key>"` in the `runs open` body');
+  it('every work run of a planned programme opens with its ticket, named by its key in the runs open body (review 2590 A1)', () => {
+    // A review run gets no ticket, and an older programme with no plan opens with none (`openRun.ts`).
+    expect(flat(plan())).toContain('Every work run of a planned programme opens with its ticket: send `"ticket":"<ticket key>"` in '
+      + 'the `runs open` body');
   });
 
   it('gives the Linear owner its duty here, plan triage of its team\'s issues, never another programme\'s plan', () => {

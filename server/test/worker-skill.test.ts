@@ -1071,12 +1071,15 @@ describe('the worker skill: follow-ups go into the plan (D-8185)', () => {
 
   it('the worker files follow-ups with plan ticket-add into its own epic', () => {
     const flat = linear.replace(/\s+/g, ' ');
-    expect(flat).toContain('**In a managed team, a follow-up goes into the plan, never straight into Linear.**');
+    // Review 2590 F1: the rule holds in any team (design §12, ruling 29; a planned programme is born in the new shape before
+    // its team is migrated); only the `plan-owned` refusal is a managed team's.
+    expect(flat).toContain('**A follow-up goes into the plan, never straight into Linear.**');
+    expect(flat).toContain('(`plan show <slug>` names it), in any team;');
+    expect(flat).toContain('in a managed team `linear create` answers `plan-owned`.');
     // Review 2580 F2: a run with no ticket (a review run, or an older programme with no plan) has no epic to file into.
     expect(flat).toContain('With no ticket on your run (a review run, or an older programme with no plan), ask your coordinator.');
     expect(flat).toContain('a `follow-up` ticket in your run\'s epic');
     expect(flat).toContain('`plan show <slug>`');
-    expect(flat).toContain('`plan-owned`');
     expect(clientRoutes().map((r) => r.key)).toEqual(expect.arrayContaining(['plan.ticket-add', 'plan.show']));
     expect(TICKET_KINDS as readonly string[]).toContain('follow-up');
   });

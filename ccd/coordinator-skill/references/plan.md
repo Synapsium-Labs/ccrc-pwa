@@ -11,8 +11,8 @@ team whose migration is applied) with `linear create` (it answers `plan-owned`):
 inbound, initiatives, owner, map, report) in the console, and a coordinator never answers one for them, nor asks for
 those approvals in its turn text.
 
-Every run opens with its ticket: send `"ticket":"<ticket key>"` in the `runs open` body to attach a ticket of the epic
-that lists the wave, or send none and ccrc makes one, keyed `run-<run id>`.
+Every work run of a planned programme opens with its ticket: send `"ticket":"<ticket key>"` in the `runs open` body to
+attach a ticket of the epic that lists the wave, or send none and ccrc makes one, keyed `run-<run id>`.
 
 A run is refused at `runs open` when the plan does not allow it:
 

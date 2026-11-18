@@ -35,8 +35,8 @@ commit. No checkbox is ticked.
   a person's edit with a comment of its own; never file or edit a hierarchy object; `linear create` in a managed team, a
   team whose migration is applied, answers `plan-owned`; the operator acts on the hierarchy items (drift, inbound,
   initiatives, owner, map, report) in the console, and a coordinator never answers one for them, nor asks for those
-  approvals in its turn text); every run opens with its ticket (`"ticket"` in the `runs open` body, or ccrc makes
-  `run-<run id>`); a ticket names its `project` when its work lands outside the home project; `plan put`'s refusals
+  approvals in its turn text); every work run of a planned programme opens with its ticket (`"ticket"` in the
+  `runs open` body, or ccrc makes `run-<run id>`); a ticket names its `project` when its work lands outside the home project; `plan put`'s refusals
   include the work map's `unknown-ref` and `bad-carry` for a `phases` body; **The Linear owner: plan triage** (a project's
   owner is a coordinator the operator sets in the console, or ccrc's default when none is set; its duty here is to triage
   its team's inbound issues; it never touches another programme's plan; the four decisions and their refusals); **plan
@@ -50,12 +50,12 @@ commit. No checkbox is ticked.
 
 ### The worker and Linear skills (Task 6.2)
 
-- **The worker's §Linear** (`ccd/worker-skill/SKILL.md`): in a managed team, a follow-up goes into the plan, never
-  straight into Linear, as a `follow-up` ticket in the worker's run's epic (`plan show` names it), with an executable
+- **The worker's §Linear** (`ccd/worker-skill/SKILL.md`): a follow-up goes into the plan, never straight into
+  Linear, in any team, as a `follow-up` ticket in the worker's run's epic (`plan show` names it), with an executable
   `plan ticket-add` block; with no ticket on its run (a review run, or an older programme with no plan) the worker asks
-  its coordinator; never edit a hierarchy object; `linear create` there answers `plan-owned`. To stay inside the cap,
-  the verb hints the Linear skill already carries were cut and the untrusted-text paragraph was shortened. The file is
-  exactly `main`'s size.
+  its coordinator; never edit a hierarchy object; in a managed team `linear create` answers `plan-owned`. To stay inside
+  the cap, the verb hints the Linear skill already carries were cut and the untrusted-text paragraph was shortened. The
+  file ends one byte smaller than on `main`.
 - **The Linear skill** (`ccd/linear-skill/SKILL.md`): **The hierarchy is ccrc's** (in a managed team, a team whose
   migration is applied, ccrc creates, moves and closes the hierarchy and puts back edits; a restore comment is ccrc's
   own; never edit one by hand; never `linear create` a hierarchy object or ticket there; change the plan instead). The
@@ -71,7 +71,7 @@ commit. No checkbox is ticked.
 | Item | Ruling | Done |
 |---|---|---|
 | F1 | the console-only rule where a coordinator reads it | One sentence in the coordinator SKILL.md's Linear pointer, pinned in the new file; D-8739 and this note now say the rule lives there and in `plan.md`. |
-| F2 | the worker's follow-up rule, conditioned | "In a managed team"; a run with no ticket (a review run, or an older programme with no plan) asks its coordinator. Paid for inside the section; the pin moved with the text, seen red on the old wording. |
+| F2 | the worker's follow-up rule, conditioned (superseded by round 2's F1) | "In a managed team"; a run with no ticket (a review run, or an older programme with no plan) asks its coordinator. Paid for inside the section; the pin moved with the text, seen red on the old wording. |
 | F3 | a managed team is a team whose migration is applied | The Linear skill and `plan.md` define it so (design §7.1, `managedTeams`), pinned in both test files. |
 | F4 | the follow-up package carries the caps hunk and is measured | Added (coordinator cap 23580 to 23872, the measured size); the pin file's last hunk keeps only its clause case; measured green below. |
 | A1 | `unknown-ref` and `bad-carry` | Named in `plan put`'s refusal list (a `phases` body), and dropped from `NOT_MET`. |
@@ -79,6 +79,17 @@ commit. No checkbox is ticked.
 | A3 | the owner's duty sentence | "Its duty here is to triage its team's inbound issues", pinned. |
 | A4 | a ticket names its `project` | One sentence in `plan.md`'s `plan put` section, pinned. |
 | A5 | the triage and take example bodies | Parsed by `parsePlanTriage` and `parsePlanTake` in the new file (seen red on a mutated `decision` and a mutated `why`); `ticket-done` stays in `WORK_MAP_VERBS`, with the reason in its comment: WM1's row (#2997), not on `main` yet, listed so its landing does not red this file before WM5 documents it. |
+
+## Review round 2 (run 2590)
+
+| Item | Ruling | Done |
+|---|---|---|
+| F1 | the worker's follow-up rule holds in any team (design §12, ruling 29; plan Task 6.2), correcting round 1's F2 | "A follow-up goes into the plan, never straight into Linear", "in any team"; the no-ticket case (ask your coordinator) stays; "managed team" now conditions only the `plan-owned` refusal. Paid for inside the section (one byte smaller than before); three pins moved, each seen red on the round 1 wording. No departure: this is the plan's text. |
+| A1 | only a work run of a planned programme opens with a ticket | `plan.md`: "Every work run of a planned programme opens with its ticket" (`openRun.ts` gives a review run none, and an older programme opens with none); the pin moved, seen red on the old wording. |
+| A2 | the follow-up's caps hunk, said as measured | D-8739 and this note: the hunk sets the coordinator cap to the file's measured size with clause 21 (23872); this PR shrinks the file below `main`'s cap first, so the cap moves by 292 bytes, less than the clause's 639. |
+
+Not taken: naming `plan met` and `plan close` in the final-merge and boundary steps (a split vote); clause 21's follow-up
+carries them.
 
 ## Differences from the plan's text
 
@@ -106,8 +117,9 @@ commit. No checkbox is ticked.
 
 ## The follow-up (D-8739)
 
-One commit, all five patches together: the SKILL.md clause line and count word, the size-caps hunk that raises the
-coordinator cap by clause 21's bytes only (to the file's measured size with the clause, 23872), the pin file's hunks,
+One commit, all five patches together: the SKILL.md clause line and count word, the size-caps hunk that sets the
+coordinator cap to the file's measured size with the clause (23872; this pull request shrank the file below `main`'s cap
+first, so the cap moves by less than the clause's bytes), the pin file's hunks,
 and README's and CLAUDE.md's one word each. The SKILL.md and caps patches are against this pull request's files; the
 pin-file, README and CLAUDE.md patches against `main` commit 21d136c9c23af977aa19570bba6d9e245b2a8cb6, where those three
 files are as on this pull request. The pin-file patch differs from the package run 1850 recorded in one place only: its
