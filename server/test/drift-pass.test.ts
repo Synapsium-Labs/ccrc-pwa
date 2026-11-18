@@ -1255,7 +1255,7 @@ describe('the skip of a node a sync write moved has a test that goes red without
   it('a sync write after the read leaves no grace stamp on an issue Linear reads completed', async () => {
     const r = await synced(await rig());
     r.lin.over.issue = { stateType: 'completed' };
-    r.drift = withWriteAfter(r, 'changedIssues', { tickets: { insert: [], update: [{ id: ticketId(r), title: 'The newer planned title' }], drop: [] } }, undefined, { issue: { title: 'Ticket t1' } });
+    r.drift = withWriteAfter(r, 'changedIssues', changes({ tickets: { insert: [], update: [{ id: ticketId(r), title: 'The newer planned title' }], drop: [] } }), undefined, { issue: { title: 'Ticket t1' } });
     await passAt(r, r.t.now + 1);
     expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'issueUpdate')).toHaveLength(1);       // the sync did write
     expect(bindingOf(r, 'ticket').driftSince).toBeNull();                                                   // compare's grace stamp, never reached
@@ -1266,7 +1266,7 @@ describe('the skip of a node a sync write moved has a test that goes red without
     const r = await synced(await rig());
     r.lin.over.project = { milestones: [] };
     const epic = r.plan.planOf(SLUG).epics[0]!;
-    r.drift = withWriteAfter(r, 'changedProjects', { epics: { insert: [], update: [{ id: epic.id, title: 'A newer epic title' }], drop: [] } });
+    r.drift = withWriteAfter(r, 'changedProjects', changes({ epics: { insert: [], update: [{ id: epic.id, title: 'A newer epic title' }], drop: [] } }));
     await passAt(r, r.t.now + 1);
     expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'projectUpdate')).toHaveLength(1);
     expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0)).toEqual([]);
@@ -1279,7 +1279,7 @@ describe('the skip of a node a sync write moved has a test that goes red without
     const mark = vi.spyOn(r.plan, 'markSyncDue');
     let watching = false;
     r.drift = withWriteAfter(r, 'changedIssues',
-      { tickets: { insert: [], update: [{ id: ticketId(r), title: 'The newer planned title' }], drop: [] } },
+      changes({ tickets: { insert: [], update: [{ id: ticketId(r), title: 'The newer planned title' }], drop: [] } }),
       () => {
         // a second edit after the sync's write: the binding is no longer current, so a compare of this node would read a catch-up
         applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticketId(r), title: 'A third planned title' }], drop: [] } }), OWNER, r.t.now, null);
