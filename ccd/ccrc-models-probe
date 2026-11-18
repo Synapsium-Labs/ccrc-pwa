@@ -203,14 +203,21 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # refreshed one after another share one lookup an hour, and a failing npm is
 # asked once an hour, not once a lane. The lock beside it (`.lock`, flock)
 # serialises lanes refreshed at the same moment: a probe waits up to LOCK_S for
-# the holder, re-reads what it wrote, and never asks again inside the hour; one
-# that cannot take the lock, or cannot open it, uses the file as it stands.
+# the holder and re-reads what it wrote, so it asks again inside the hour only
+# when the holder could not record its try (each waiter then asks in turn). One
+# that cannot open the lock, or whose flock fails other than by would-block,
+# makes no lookup and records a failed try that names the lock when the file can
+# be written (review N5); one that waits past LOCK_S uses the file as it stands.
 #
 # ITS BOUNDS (review A5): the lookup itself is bounded at LOOKUP_S (10 s) by
 # curl, with the alarm at 13 s as the backstop; its whole worst case, the lock
 # wait included, is about 30 s, and the request program stops waiting for it at
-# 40 s. The refresh is hourly, so that latency costs nothing; it is said here so
-# that nothing claims less.
+# 40 s. The refresh is hourly, so a lane refresh pays it at most once an hour.
+# One caller is interactive (review N6): the Codex sign-in install check
+# (`_acct_install_codex` in ccd/ccrc) runs this probe, so a sign-in can wait
+# about 28 s (40 s at most) on the lookup before its 30 s catalogue request,
+# inside that check's own 120 s bound. It is said here so that nothing claims
+# less.
 #
 # IT NEVER FAILS THE PROBE. Every failure, an exception nothing foresaw
 # included, is a failed try: it is recorded as `triedAt` and `lastError` when
@@ -366,8 +373,9 @@ def refresh(c):
     try:
         os.makedirs(os.path.dirname(CACHE), exist_ok=True)
         lock = os.open(CACHE + ".lock", os.O_RDWR | os.O_CREAT, 0o600)
-    except OSError:
-        return c
+    except OSError as e:
+        # No lookup without the lock; the try is recorded, so a broken lock is seen rather than silent (review N5).
+        return failed(c, f"the lock could not be opened ({e.strerror or type(e).__name__})")
     try:
         until = time.monotonic() + LOCK_S
         while True:
@@ -378,8 +386,8 @@ def refresh(c):
                 if time.monotonic() >= until:
                     return read_cache()
                 time.sleep(0.1)
-            except OSError:
-                return read_cache()
+            except OSError as e:
+                return failed(read_cache(), f"the lock could not be taken ({e.strerror or type(e).__name__})")
         c = read_cache()
         now = int(time.time())
         if not due(c, now):

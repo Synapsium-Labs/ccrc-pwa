@@ -62,12 +62,16 @@ so a run that sent nothing asked npm for nothing. Everything else the probe does
 - **Cadence.** A lookup runs only when `triedAt` is more than an hour old, absent or unreadable, or stamped more than
   60 s ahead of the box's clock; a stamp up to 60 s ahead is trusted as clock skew between writers (fix round 1, A6).
   A lock file beside the cache serialises lanes refreshing at the same moment: a probe waits up to 15 s for the holder
-  and re-reads what it wrote, and one that cannot take or open the lock uses the cache as it stands, so two lanes
-  never both ask in one hour.
+  and re-reads what it wrote, so it asks again inside the hour only when the holder could not record its try (each
+  waiter then asks in turn). One that cannot open the lock, or whose `flock` fails other than by would-block, makes no
+  lookup and records a failed try that names the lock when the file can be written (fix round 2, N5); one that waits
+  past 15 s uses the cache as it stands.
 - **Bounds (fix round 1, A5).** The lookup itself is bounded at 10 s by curl (`--max-time 10`), with an alarm at
   13 s as the backstop and a curl whose output passes the cap killed at once. Its whole worst case, the 15 s lock wait
-  included, is about 30 s, and the request program stops waiting for it at 40 s. The refresh is hourly, so the latency
-  costs nothing; it is stated so that nothing claims less.
+  included, is about 30 s, and the request program stops waiting for it at 40 s. The refresh is hourly, so a lane
+  refresh pays it at most once an hour. One caller is interactive (fix round 2, N6): the Codex sign-in install check
+  runs this probe, so a sign-in can wait about 28 s (40 s at most) on the lookup before its 30 s catalogue request,
+  inside that check's own 120 s bound. It is stated so that nothing claims less.
 - **Failure.** A failed, slow or refused lookup uses the cached release, else the floor. Every failure, an exception
   nothing foresaw included (fix round 1, F1), is recorded as `triedAt` and `lastError` when the file can be written.
   It never fails the probe and never changes `--check`'s exit status.
@@ -82,9 +86,11 @@ a `fixture-path` row of the settings census. The catalogue seam (`CCRC_MODELS_PR
 fetch, so a run through it makes no lookup and writes no `clientVersion`.
 
 `ghContainedEnv` sets it to a missing file for every contained env. A test that strips the ccrc knobs from a contained
-env does it through `stripCcrcKnobs` (`server/test/ccdWsHelpers.ts`), which keeps the containment seams;
-`ccd-harness-integrity.test.ts` refuses a hand-written `CCRC_` delete loop anywhere else under `server/test` (fix round
-1, A9).
+env does it through `stripCcrcKnobs` (`server/test/ccdWsHelpers.ts`), which keeps the containment seams, both values
+`ghContainedEnv` sets: this seam and the codex auth library's closed endpoint, `CCRC_CODEX_AUTH_BASE` (fix round 2).
+`ccd-harness-integrity.test.ts` refuses a hand-written one-line `CCRC_` delete loop anywhere else under `server/test`
+(fix round 1, A9). It is a one-line-shape guard, and its comment names the shapes it misses (fix round 2, N1; see Known
+limits).
 
 ## 2. Tasks
 
@@ -113,12 +119,13 @@ Each must be red against today's probe before Task 3.
 
 ### Task 3: the lookup in the probe
 
-`_codex_release_lookup_program` in `ccd/ccrc-models-probe` stages one python program (lock, cache, lookup by `curl`,
-validation, atomic write) that prints the version to ask as. Since fix round 1 (A8) the Codex request program runs it
-as a child past its credential gate, re-checks what it prints against the floor, and uses the result for the URL and
-the user-agent. `_fetch_codex_lane` calls it after its three refusals, exports the
-result as `CODEX_CLIENT_VERSION` and writes it to `$TMPD/client-version`; the python request reads it for both the URL
-and the user-agent. The normaliser adds `clientVersion` to a Codex catalogue when that file holds a plain `X.Y.Z`.
+`_codex_release_lookup_program` in `ccd/ccrc-models-probe` holds one python program (lock, cache, lookup by `curl`,
+validation, atomic write) that prints the last good release, or nothing. `_fetch_codex_lane` only stages it, after its
+three refusals, as `$TMPD/release-lookup.py`, and hands the request program its path, the cache path, the release
+seam and the version file's path; `CODEX_CLIENT_VERSION` stays the floor. The Codex request program runs it as a child
+past its credential gate (fix round 1, A8), asks as the greater of what it printed and the floor (the one owner of that
+rule), uses that version for both the URL and the user-agent, and writes it to `$TMPD/client-version`. The normaliser
+adds `clientVersion` to a Codex catalogue when that file holds a plain `X.Y.Z`.
 
 ### Task 4: the catalogue field
 
@@ -139,15 +146,35 @@ drops unknown fields.
 - F2: the curl arm's bounds get tests, the lookup program run directly with a planted `curl` that hangs, passes the
   cap, exits nonzero or is absent; and mutation rows for the alarm, `--max-time`, `--max-filesize`, the over-cap kill
   and the exit-status check.
-- A1: the probe and the direct runs get a non-empty stdin, and curl must read none of it.
+- A1: the direct run gets a non-empty stdin, and curl must read none of it; it is the one case that can red M23. The
+  case through the probe keeps a non-empty stdin as a smoke check and says so in its title (fix round 2, N2): the
+  request program's own stdin is its heredoc and it starts the lookup on `/dev/null`, so either keeps it green.
 - A2, A3, A11, A12: comments, counts, the missing-answer case's assertions, the two-seam headers.
 - A4: M9 holds the lock 3 s and is marked timing-dependent below.
 - A5: the bounds are stated as they are (§1.1, D-8743, the spec's amendment).
-- A6: a stamp up to 60 s ahead is trusted as clock skew; further ahead triggers a lookup. The boundary is tested.
+- A6: a stamp up to 60 s ahead is trusted as clock skew; further ahead triggers a lookup. The code's own boundary is
+  tested at a fixed clock, +60 s trusted and +61 s looked up (fix round 2, N3); the case through the probe brackets it
+  at +30 s and +120 s.
 - A8: the lookup runs past the credential gate. Test: a refused credential asks npm nothing.
 - A9: `stripCcrcKnobs` and its guard, above.
 - Found by the round's mutation run: the floor had two owners. The lookup now prints the last good release or
   nothing, and the request program alone applies the floor.
+
+### Task 7: fix round 2 (review run 2503, the coordinator's rulings)
+
+- N1: the strip guard stays a one-line-shape guard; its comment names what it catches and what it misses.
+- N2, N3: A1's and A6's text above. The direct run fixes the lookup program's clock (`time.time`) for the boundary
+  case, so +60 s and +61 s are measured exactly. M24 and the new M28 name that case.
+- N4, N9, N10: recorded under Known limits, no code.
+- N5: a lock that cannot be opened, or a `flock` that fails other than by would-block, records a failed try that
+  names the lock (`the lock could not be opened (…)`, `the lock could not be taken (…)`) when the cache can be
+  written. Red first: a directory where the lock file goes, beside a writable cache. Row M27.
+- N6: the header's two comments, the lock wait and the interactive caller (§1.1).
+- N7, N8: the stale flow (Task 3), the test header, the two "floor" titles, the settings-census comment, and the
+  counts (below, and the PR body).
+- The advisory, folded in: `CONTAINED_CCRC_SEAMS` carries both containment values `ghContainedEnv` sets, the release
+  seam and `CCRC_CODEX_AUTH_BASE`; a case checks the list against what `ghContainedEnv` sets and that a stripped
+  contained env keeps both. Row M29. The nine converted call sites, in eight files, pass with it.
 
 ## 3. Mutation rows
 
@@ -166,30 +193,30 @@ Measured results are below.
 
 ## Mutation results
 
-Measured 2026-11-18 at fix round 1's tip, every row run again after the round's last code change (review A3: the counts
+Measured 2026-11-18 at fix round 2's tip, every row run again after the round's last code change (review A3: the counts
 are the file's as it now reads). Each row applied one exact replacement to the named file, ran
-`server/test/models-probe.test.ts` (M26: `ccd-harness-integrity.test.ts`) through `ccrc test`, and restored the file
+`server/test/models-probe.test.ts` (M26, M29: `ccd-harness-integrity.test.ts`) through `ccrc test`, and restored the file
 from its saved bytes. The coordinator's `mutation-run.py` mutates a Python module in memory, and these guards live in
 a bash script (with embedded Python) driven by vitest, so the rows ran through a small script that does the same save,
 mutate, run and restore by hand. Each row was checked to fail on the case written for it, not on a crash: the slice's
-memory cap killed processes twice during the run.
+memory cap killed processes during round 1's run. There is no M25: the number was never used.
 
 | Row | File | Mutation | Result (failing cases) |
 |---|---|---|---|
 | M1 | probe | the request asks as the release even below the floor | killed (2) |
 | M2 | probe | any version string is accepted | killed (5) |
 | M3 | probe | the size check is removed | killed (3) |
-| M4 | probe | a lookup on every run | killed (4) |
-| M5 | probe | a failed lookup drops the cached release | killed (2) |
+| M4 | probe | a lookup on every run | killed (5) |
+| M5 | probe | a failed lookup drops the cached release | killed (3) |
 | M6 | probe | the user-agent back to `0.0.0` | killed (24) |
 | M7 | probe | the catalogue does not record the version | killed (2) |
 | M8 | probe | `curl` without `-q` (reads `.curlrc`) | killed (1) |
 | M9 | probe | no lock wait (timing-dependent, see Known limits) | killed (1) |
-| M10 | probe | a try stamped any distance ahead is trusted | killed (2) |
+| M10 | probe | a try stamped any distance ahead is trusted | killed (3) |
 | M11 | `shared/models.mjs` | `parseCatalogue` keeps any `clientVersion` | killed (1) |
 | M12 | probe | the request asks as the floor | killed (9) |
 | M13 | `server/test/ccdWsHelpers.ts` | contained envs leave the release seam empty | killed (1) |
-| M14 | probe | a failed try is not recorded | killed (15) |
+| M14 | probe | a failed try is not recorded | killed (16) |
 | M15 | probe | no alarm | killed (1) |
 | M16 | probe | no `--max-time` | killed (1) |
 | M17 | probe | no `--max-filesize` | killed (1) |
@@ -198,9 +225,12 @@ memory cap killed processes twice during the run.
 | M20 | probe | the answer's parse catches `ValueError` only | killed (1) |
 | M21 | probe | the cache's parse catches `OSError` and `ValueError` only | killed (1) |
 | M22 | probe | the lookup runs before the credential gate | killed (1) |
-| M23 | probe | curl inherits the lookup's stdin | killed (1) |
-| M24 | probe | no stamp ahead of the clock is trusted | killed (1) |
-| M26 | `server/test/ccdWsHelpers.ts` | `stripCcrcKnobs` drops the containment seams | killed (1) |
+| M23 | probe | curl inherits the lookup's stdin | killed (1: the direct run only) |
+| M24 | probe | no stamp ahead of the clock is trusted | killed (2: the skew boundary at a fixed clock, and the bracket) |
+| M26 | `server/test/ccdWsHelpers.ts` | `stripCcrcKnobs` drops the containment seams | killed (2) |
+| M27 | probe | a lock that cannot be opened returns the cache with nothing recorded | killed (1: the unopenable lock) |
+| M28 | probe | the skew bound is exclusive (`<` for `<=`) | killed (1: the skew boundary at a fixed clock) |
+| M29 | `server/test/ccdWsHelpers.ts` | the kept list loses `CCRC_CODEX_AUTH_BASE` | killed (1: the stripped contained env) |
 
 The first run of the round left M1 alive: the floor was applied twice, in the lookup's output and in the request
 program's re-check. The lookup now prints the last good release or nothing, and the request program alone applies the
@@ -208,7 +238,8 @@ floor. In the wave's first round, M3 survived until a good answer padded past th
 ## Known limits
 
 - **An unwritable `~/.ccrc` (A7).** If the lock cannot be created, the lookup never runs and the probe asks as the
-  cache it can read, else the floor, with nothing recorded. If the lock exists but the cache cannot be written,
+  cache it can read, else the floor; the failed try is recorded only when the cache itself can still be written (fix
+  round 2, N5). If the lock exists but the cache cannot be written,
   `triedAt` is never recorded, so every probe asks npm again (each bounded as above). A box whose `~/.ccrc` is
   unwritable has larger problems; the doctor follow-up below reads the cache's age.
 - **Thin detection in two hand-written curl poisons (A10).** `ccrc-models.test.ts` and `models-probe.test.ts` plant
@@ -221,6 +252,20 @@ floor. In the wave's first round, M3 survived until a good answer padded past th
   lock inside the holder's 3 s hold.
 - **The top-level catch-all has no test trigger.** With both parse sites catching everything, no answer or cache file
   reaches it; it is the backstop for an exception nothing above foresaw, and it has no mutation row.
+- **The request program's own backstops are untested (N4).** Its 40 s wait on the child (`LOOKUP_WAIT_S`) and its catch
+  around the child stand behind the child's own bounds (curl's 10 s, the 13 s alarm, the 15 s lock wait), so no case
+  reaches them and a mutant that drops either survives. They are kept as backstops; there is no 40 s test.
+- **A `flock` failure other than would-block has no test trigger (N5).** Its record is the same call as the unopenable
+  lock's, which M27 covers.
+- **A curl that floods stderr (N9).** The lookup reads curl's stdout to its end before its stderr, so a curl writing
+  more than a pipe's buffer (about 64 KiB) to stderr stalls until the 13 s alarm, and a good answer is recorded as
+  `no answer within 10s`. `curl -sS --fail` writes one error line; the case is theoretical.
+- **The catch-all writes without the lock (N10).** An exception in the short stretch outside `fetch()`'s own `try`
+  records its failed try unlocked, so it could overwrite a concurrent holder's fresh good record with the older
+  version; the next hour's lookup corrects it. Reasoned, not measured.
+- **The strip guard reads one line (N1).** It catches a `startsWith` test of the `CCRC_` prefix with a `delete` after it
+  on the same line. It misses a multi-line braced delete, a regex-form delete and the allow-list copy, and the owner
+  file is exempt by name. Not widened in this wave, by ruling.
 
 ## Deviations found
 

@@ -1247,8 +1247,9 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
 // shipped constant, which is the floor. One box-wide cache file is looked up at most once an hour; a failed lookup
 // uses the cache, else the floor. The user-agent carries the same version, and the catalogue records it.
 // The release seam (`CCRC_MODELS_PROBE_RELEASE_FIXTURE`) replaces the npm request alone; every contained env defaults
-// it to a missing file (`ghContainedEnv`), so no case here reaches npm. The real request is driven in one case, through
-// a recording `curl` planted for that case.
+// it to a missing file (`ghContainedEnv`), so no case here reaches npm. The real npm request is driven through the probe
+// in one case, with a recording `curl` planted for it; the lookup program's curl arm, its lock and its skew boundary are
+// run directly, in their own describe below (fix rounds 1 and 2).
 describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the published release (D-8743)', () => {
   const FLOOR = /^CODEX_CLIENT_VERSION="(\d+\.\d+\.\d+)"$/m.exec(fs.readFileSync(PROBE, 'utf8'))?.[1] ?? '';
   const parts = (v: string): number[] => v.split('.').map(Number);
@@ -1417,7 +1418,9 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     expect(cache()['version']).toBe(NEWER2);
   });
 
-  it('a try stamped up to a minute ahead is clock skew and trusted; one further ahead is not (the boundary)', () => {
+  // A bracket around the skew bound through the probe; the code's own boundary, +60 s and +61 s at a fixed clock, is
+  // pinned by the direct run below (review N3).
+  it('a try stamped up to a minute ahead is clock skew and trusted; one further ahead is not (a bracket)', () => {
     plantCache({ version: NEWER, readAt: now(), triedAt: now() + 30 });
     expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer2', npm(NEWER2)) }).code).toBe(0);
     expect(askedAs(), 'a stamp 30 s ahead was not trusted').toBe(NEWER);
@@ -1462,7 +1465,7 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     }
   });
 
-  it('the network lookup sends no credential: curl -q, https only, no redirect, bounded, the one URL, nothing on stdin', () => {
+  it('the network lookup sends no credential: curl -q, https only, no redirect, bounded, the one URL (stdin: a smoke check)', () => {
     const bin = path.join(home, '.local', 'bin');
     fs.mkdirSync(bin, { recursive: true });
     const body = answer('net', npm(NEWER));
@@ -1475,7 +1478,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       'cat > "$HOME/curl-stdin"',
       `cat ${JSON.stringify(body)}`,
     ].join('\n') + '\n', { mode: 0o755 });
-    // A non-empty stdin (review A1): the probe's own stdin carries bytes, and curl must still read none.
+    // A non-empty stdin (review A1), as a SMOKE CHECK only (review N2): the request program's own stdin is its heredoc
+    // and it starts the lookup on /dev/null, so either keeps this green. The direct run below is the case that reds.
     const r = spawnSync(BASH, [PROBE, 'codex-a', 'codex'], { env: e, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n' });
     expect(r.status, r.stderr).toBe(0);
     expect(askedAs()).toBe(NEWER);
@@ -1563,13 +1567,18 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     };
     /** Runs the lookup with `curl` as the given script (or absent), and answers what it printed (the last good release,
      *  or nothing: the floor is the request program's to apply), how long it took and the cache it left. */
-    const lookup = (curl: string | null): { out: string; ms: number; cache: Record<string, unknown> } => {
+    // `at` fixes the program's clock (`time.time`) at that second, so a boundary is measured exactly (review N3);
+    // `seam` is its second argument, npm's answer as a file.
+    const FIXED_CLOCK = 'import runpy, sys, time\nT = float(sys.argv[1])\ntime.time = lambda: T\nsys.argv = sys.argv[2:]\n'
+      + 'runpy.run_path(sys.argv[0], run_name="__main__")\n';
+    const lookup = (curl: string | null, o: { at?: number; seam?: string } = {}): { out: string; ms: number; cache: Record<string, unknown> } => {
       const bin = path.join(home, 'lookup-bin');
       fs.mkdirSync(bin, { recursive: true });
       if (curl !== null) fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n${curl}\n`, { mode: 0o755 });
       const PATH = curl === null ? bin : `${bin}:${process.env['PATH'] ?? ''}`;
+      const args = [lookupProgram(), cachePath(), o.seam ?? ''];
       const t0 = Date.now();
-      const r = spawnSync(pythonOrSkip()!, ['-I', lookupProgram(), cachePath(), ''], {
+      const r = spawnSync(pythonOrSkip()!, o.at === undefined ? ['-I', ...args] : ['-I', '-c', FIXED_CLOCK, String(o.at), ...args], {
         env: { HOME: home, PATH }, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n', timeout: 45_000,
       });
       const ms = Date.now() - t0;
@@ -1583,14 +1592,14 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       expect(fs.readFileSync(path.join(home, 'curl-stdin'), 'utf8'), 'curl read the lookup\'s stdin').toBe('');
     });
 
-    it('a curl that hangs past its own bound is killed by the alarm: the floor, within the bound, the reason kept', () => {
+    it('a curl that hangs past its own bound is killed by the alarm: nothing printed, within the bound, the reason kept', () => {
       const r = lookup('exec sleep 30');
       expect(r.out).toBe('');
       expect(r.ms, 'the lookup outlived its alarm').toBeLessThan(25_000);
       expect(r.cache['lastError']).toBe('no answer within 10s');
     }, 60_000);
 
-    it('a curl whose output passes the cap is killed at once: the floor, the size named', () => {
+    it('a curl whose output passes the cap is killed at once: nothing printed, the size named', () => {
       const r = lookup(`printf '%s' '${npm(NEWER)}'\nexec yes ' '`);
       expect(r.out).toBe('');
       expect(r.ms, 'the over-cap answer waited on the alarm').toBeLessThan(8_000);
@@ -1608,6 +1617,33 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       const r = lookup(null);
       expect(r.out).toBe('');
       expect(r.cache['lastError']).toMatch(/^curl could not run \(/);
+    });
+
+    it('the skew boundary at a fixed clock: a try stamped 60 s ahead is trusted, one 61 s ahead is looked up (review N3)', () => {
+      const at = now();
+      const seam = answer('newer2', npm(NEWER2));
+      plantCache({ version: NEWER, readAt: at, triedAt: at + 60 });
+      let r = lookup(null, { at, seam });
+      expect(r.out, 'a stamp 60 s ahead was not trusted').toBe(NEWER);
+      expect(r.cache, 'a trusted stamp was rewritten').toEqual({ version: NEWER, readAt: at, triedAt: at + 60 });
+      plantCache({ version: NEWER, readAt: at, triedAt: at + 61 });
+      r = lookup(null, { at, seam });
+      expect(r.out, 'a stamp 61 s ahead was trusted').toBe(NEWER2);
+      expect(r.cache).toEqual({ version: NEWER2, readAt: at, triedAt: at });
+    });
+
+    it('a lock that cannot be opened beside a writable cache: no lookup, and a failed try that names the lock (review N5)', () => {
+      const old = now() - 7200;
+      plantCache({ version: NEWER, readAt: old, triedAt: old });
+      // A directory where the lock file goes: no process opens it for writing, root included.
+      fs.mkdirSync(`${cachePath()}.lock`);
+      const r = lookup(`echo asked >> "$HOME/curl-calls"\nprintf '%s' '${npm(NEWER2)}'`);
+      expect(r.out, 'the cached release').toBe(NEWER);
+      expect(fs.existsSync(path.join(home, 'curl-calls')), 'npm was asked without the lock').toBe(false);
+      expect(r.cache['lastError']).toMatch(/^the lock could not be opened \(/);
+      expect(r.cache['version']).toBe(NEWER);
+      expect(r.cache['readAt']).toBe(old);
+      expect(r.cache['triedAt'] as number, 'the try was not recorded').toBeGreaterThanOrEqual(now() - 60);
     });
   });
 

@@ -533,12 +533,14 @@ function containedReleaseAnswer(env: NodeJS.ProcessEnv, home: string): { CCRC_MO
 }
 
 /** The CCRC_ names a contained env sets as CONTAINMENT rather than as a knob (D-8743): a test that strips the ccrc knobs
- *  from a contained env keeps these, or the containment they carry is gone with the knobs. */
-export const CONTAINED_CCRC_SEAMS: readonly string[] = ['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
+ *  from a contained env keeps these, or the containment they carry is gone with the knobs. Both values `ghContainedEnv`
+ *  sets, the probe's release seam (`containedReleaseAnswer`) and the codex auth library's endpoint (`containedAuthBase`,
+ *  fix round 2); `ccd-harness-integrity.test.ts` checks this list against what `ghContainedEnv` sets. */
+export const CONTAINED_CCRC_SEAMS: readonly string[] = ['CCRC_MODELS_PROBE_RELEASE_FIXTURE', 'CCRC_CODEX_AUTH_BASE'];
 
 /** Deletes every CCRC_ name from `env`, in place, except the containment seams (`CONTAINED_CCRC_SEAMS`) and the names in
- *  `keep`, and returns it. THE ONE STRIP: `ccd-harness-integrity.test.ts` refuses a hand-written `CCRC_` delete loop
- *  anywhere else under server/test, because each such loop dropped the probe's release seam until fix round 1 of
+ *  `keep`, and returns it. THE ONE STRIP: `ccd-harness-integrity.test.ts` refuses a hand-written one-line `CCRC_` delete
+ *  loop anywhere else under server/test (a one-line-shape guard: its comment names what it misses), because each such loop dropped the probe's release seam until fix round 1 of
  *  model-class-advance wave 2 (review A9). */
 export function stripCcrcKnobs(env: NodeJS.ProcessEnv, keep: readonly string[] = []): NodeJS.ProcessEnv {
   for (const k of Object.keys(env)) {

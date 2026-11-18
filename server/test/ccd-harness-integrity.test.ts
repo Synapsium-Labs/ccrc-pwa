@@ -25,7 +25,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { stringPieces } from './scan/parse.js';
 import { STUB_SEAM_GONE, stubFn } from './ccdStub.js';
-import { CONTAINED_CCRC_SEAMS, makeCcdHarness, stripCcrcKnobs, type CcdHarness } from './ccdWsHelpers.js';
+import { CONTAINED_CCRC_SEAMS, ghContainedEnv, makeCcdHarness, stripCcrcKnobs, type CcdHarness } from './ccdWsHelpers.js';
 import { pythonHeredocs } from './docsHelperPy.js';
 import { REAL_PYTHON3 } from './ccdDocsHelpers.js';
 
@@ -283,6 +283,11 @@ describe('every python heredoc a shipped shell script holds parses and compiles 
 // keeps the containment seams, so the strip has one owner, `stripCcrcKnobs` (ccdWsHelpers.ts). Each hand-written
 // `CCRC_` delete loop under server/test dropped the probe's release seam with the knobs, and the account suite met the
 // poisoned curl on CI.
+// A ONE-LINE-SHAPE GUARD (review N1, kept so by ruling): it catches a startsWith test of the CCRC_ prefix with a
+// delete after it on the same line, the `for … if (…) delete env[k]` loop and a one-line `.filter(…).forEach(… delete …)`. It does NOT
+// catch a multi-line braced delete (`if (…) {` then `delete env[k]` on the next line), a regex-form delete
+// (`/^CCRC_/.test(k)`), or the allow-list copy (`if (!k.startsWith('CCRC_')) env[k] = v`, which copies rather than
+// deletes), and the owner file is exempt by name, so a second loop inside it passes.
 describe('one strip of the CCRC_ knobs, which keeps the containment seams (D-8743)', () => {
   const STRIP = /startsWith\(\s*['"]CCRC_['"]\s*\)[^;\n]*\bdelete\b/;
   const OWNER = 'ccdWsHelpers.ts';
@@ -293,6 +298,22 @@ describe('one strip of the CCRC_ knobs, which keeps the containment seams (D-874
     const hits = files.flatMap((f) => fs.readFileSync(path.join(TEST_DIR, f), 'utf8').split('\n')
       .flatMap((l, i) => (STRIP.test(l) ? [`${f}:${i + 1}`] : [])));
     expect(hits).toEqual([]);
+  });
+
+  it('the kept list is every CCRC_ value ghContainedEnv sets, and a stripped contained env keeps both (fix round 2)', () => {
+    const home = fs.mkdtempSync(path.join(os.tmpdir(), 'ccrc-strip-seams-'));
+    try {
+      for (const opts of [{}, { systemd: true, tmux: true, net: true }]) {
+        const set = Object.keys(ghContainedEnv(home, {}, opts)).filter((k) => k.startsWith('CCRC_')).sort();
+        expect(set, 'a CCRC_ value ghContainedEnv sets is missing from CONTAINED_CCRC_SEAMS').toEqual([...CONTAINED_CCRC_SEAMS].sort());
+        const contained = ghContainedEnv(home, { CCRC_KNOB: '1' }, opts);
+        const stripped = stripCcrcKnobs({ ...contained });
+        expect(stripped['CCRC_KNOB']).toBeUndefined();
+        expect(stripped['CCRC_MODELS_PROBE_RELEASE_FIXTURE']).toBe(path.join(home, 'no-codex-release-answer'));
+        expect(stripped['CCRC_CODEX_AUTH_BASE'], 'the strip dropped the auth library\'s closed endpoint').toBe(contained['CCRC_CODEX_AUTH_BASE']);
+        expect(stripped['CCRC_CODEX_AUTH_BASE']).toMatch(/\S/);
+      }
+    } finally { fs.rmSync(home, { recursive: true, force: true }); }
   });
 
   it('the helper drops the knobs and keeps the seams and the names it is told to (CONTROL: the scan sees a loop)', () => {
