@@ -40,7 +40,13 @@ export function LinearItemControls({ item, handWords, enabled = true, onActed }:
     setBusy(true);
     setSaid(null);
     api.linearItemAct(item.id, body).then(
-      (answer) => { setBusy(false); setSaid({ refusal: false, text: answer.queued === true ? T.queued : T.sent }); onActed?.(); },
+      (answer) => {
+        setBusy(false);
+        // The act reached the server but nothing will run (no key serves the workspace): a plain status line, and the item stays open.
+        if (answer.queued === false) { setSaid({ refusal: false, text: T.notQueued }); return; }
+        setSaid({ refusal: false, text: answer.queued === true ? T.queued : T.sent });
+        onActed?.();
+      },
       (err: unknown) => { setBusy(false); setSaid({ refusal: true, text: linearItemErrorText(err) }); },
     );
   };

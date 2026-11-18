@@ -81,12 +81,38 @@ describe('the hierarchy items\' controls', () => {
     await waitFor(() => expect(call).toHaveBeenCalledWith(41, { act: 'keep' }));
   });
 
-  it('Check again sends {act:"check-again"} and says the check is queued', async () => {
+  it('Check again with queued:true says the check is queued, and tells onActed', async () => {
     const call = sent({ ok: true, queued: true });
-    controls({ verb: 'linear-initiatives', workspaceId: 'AAA' });
+    const onActed = vi.fn();
+    controls({ verb: 'linear-initiatives', workspaceId: 'AAA' }, { onActed });
     click('Check again');
     await waitFor(() => expect(call).toHaveBeenCalledWith(41, { act: 'check-again' }));
-    expect(await screen.findByRole('status')).toBeTruthy();
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toBe(LINEAR_ITEM_TEXT.queued);
+    expect(onActed).toHaveBeenCalledTimes(1);
+  });
+
+  it('Check again with queued:false says nothing was queued, is no refusal, and does not tell onActed', async () => {
+    sent({ ok: true, queued: false });
+    const onActed = vi.fn();
+    controls({ verb: 'linear-initiatives', workspaceId: 'AAA' }, { onActed });
+    click('Check again');
+    const status = await screen.findByRole('status');
+    expect(status.textContent).toBe(LINEAR_ITEM_TEXT.notQueued);
+    expect(status.textContent).not.toBe(LINEAR_ITEM_TEXT.sent);
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(onActed).not.toHaveBeenCalled();
+  });
+
+  it('Check again refused says the fixed refusal sentence and does not tell onActed', async () => {
+    vi.spyOn(api, 'linearItemAct').mockRejectedValue(new ApiError(409, { ok: false, error: 'item-act-mismatch' }));
+    const onActed = vi.fn();
+    controls({ verb: 'linear-initiatives', workspaceId: 'AAA' }, { onActed });
+    click('Check again');
+    const alert = await screen.findByRole('alert');
+    expect(alert.textContent).toContain('does not take this action');
+    expect(screen.queryByRole('status')).toBeNull();
+    expect(onActed).not.toHaveBeenCalled();
   });
 
   it('Name offers the live coordinators and sends {act:"name", owner} after its confirm', async () => {
@@ -117,8 +143,13 @@ describe('the hierarchy items\' controls', () => {
   });
 
   it('each group is named by a sentence from the words, not by its verb', () => {
-    for (const verb of ['linear-map', 'linear-report', 'linear-drift', 'linear-initiatives'] as const) {
-      const action = (verb === 'linear-drift' ? { verb, project: 'project-a' } : verb === 'linear-initiatives' ? { verb, project: 'project-a' } : verb === 'linear-map' ? { verb, migrationId: 3 } : { verb, migrationId: 3 }) as ItemAction;
+    const actions: ItemAction[] = [
+      { verb: 'linear-map', migrationId: 3 }, { verb: 'linear-report', migrationId: 3 }, { verb: 'linear-drift', bindingId: 8 },
+      { verb: 'linear-initiatives', workspaceId: 'AAA' }, { verb: 'linear-owner', project: 'project-a' },
+    ];
+    vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [] });
+    for (const action of actions) {
+      const verb = action.verb as keyof typeof LINEAR_GROUP_WORDS;
       const { container } = controls(action);
       const group = container.querySelector('[data-linear]')!;
       expect(group.getAttribute('aria-label')).toBe(LINEAR_GROUP_WORDS[verb]);
