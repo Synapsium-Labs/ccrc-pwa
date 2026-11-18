@@ -257,6 +257,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           break;
         case 'hash':
           replaceFragment(r.id);
+          // The policy says the frame did not scroll (a link to this very page spelled with its file name): this body's
+          // live mount opens the same document again at the anchor. `mount` is null before the mount lands and after a
+          // fallback or the body's end, so a late link opens nothing.
+          if (r.reopen) mount?.openAt?.(decodedFragment(r.id) ?? r.id);
           break;
         case 'sheet':
           setAsk({ kind: 'link', ask: { url: r.url, host: r.host, foreign: r.foreign } });

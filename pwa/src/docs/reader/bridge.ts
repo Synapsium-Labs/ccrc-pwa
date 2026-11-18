@@ -17,7 +17,12 @@
 // in; drawn on request or on open, it loads the text first, only for such a document, and a chunk that does not load
 // drops the scan, so the figures show their source and the page still mounts (the W8a plan's refinement (c)).
 //
-// `mountReader` never remounts: the library's `update` is not called, and a theme change is the library's `setPrefs`.
+// `mountReader` remounts only for `openAt` (a link to this very page, spelled with its file name): the old frame is
+// destroyed and the same document is mounted again at the anchor, through the same mount function and adapters. The
+// library's `update` is never called (it keeps the first mount's adapters, `focus` among them), and a theme change is the
+// library's `setPrefs`. Whether a mount focuses its frame is `policy.ts#readerMountFocusFor`'s, from one fact this file
+// reads: `el.ownerDocument.activeElement` is a connected element outside `el`, other than the body and the document
+// element. It is read once per library mount, after the last await and in the same synchronous run as the mount call.
 // The watchdog, the draw mode, whether a storage port is handed over, whether the history is carried and whose bar the
 // frame has are
 // `policy.ts#readerMountPlan`'s, by the input's `profile` (none for the Docs reader, `lab-draw` for the reader lab's
@@ -32,7 +37,7 @@ import { isDocsCommit } from '../../../../shared/docs';
 import { READER_STORE_PREFIX } from '../../lib/readerLimits';
 import { enumerablePageStorage, type EnumerableStoragePort } from '../../lib/storage';
 import {
-  READER_E17_MERMAID, readerMountPlan,
+  READER_E17_MERMAID, readerMountFocusFor, readerMountPlan,
   type ReaderChrome, type ReaderCommand, type ReaderE17Reading, type ReaderLink, type ReaderMountProfile,
 } from './policy';
 import { loadMermaidAsset, loadReaderAssets } from './assets';
@@ -97,6 +102,19 @@ export interface ReaderMount {
    *  and does nothing before `ready`). Call it from a tap's own handler. Absent: this mount has no frame to command (the
    *  assets did not load). */
   command?(name: ReaderCommand): void;
+  /** Opens the same document again at the anchor `id` (without `#`), for a link to this very page spelled with its file
+   *  name (completion plan Task 13): a new mount of the same document with `initialHash: id`, so no body is read again.
+   *  Does nothing after `destroy`. Absent: this mount has no frame (the assets did not load). */
+  openAt?(id: string): void;
+}
+
+/** Whether an element outside the reader holds focus right now: `el`'s document has an active element that is connected
+ *  and is neither the body, the document element, `el` nor anything inside `el`. The one fact the mount-focus decision
+ *  (`policy.ts#readerMountFocusFor`) takes; nothing is decided here. */
+function hostOwnsFocus(el: HTMLElement): boolean {
+  const doc = el.ownerDocument;
+  const active = doc.activeElement;
+  return active !== null && active.isConnected && active !== doc.body && active !== doc.documentElement && !el.contains(active);
 }
 
 /** A mount that holds nothing (the assets did not load): both calls do nothing. */
@@ -171,13 +189,18 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
   const port = plan.store ? (deps.store ?? enumerablePageStorage)() : null;
   const historyChanges = plan.history ? input.changes : undefined;
   const historyOpen = plan.history ? input.openVersion : undefined;
-  const adapters: HostAdapters = {
+  // The theme the next library mount starts with: the input's, then the latest `setPrefs` (a fresh mount does not know
+  // the old frame's prefs).
+  let theme = input.prefs.theme;
+  // Everything one library mount is handed except the document; `focus` is read at the call, so each mount decides it
+  // anew. Called synchronously, right after the last await (or at `openAt`), so the read is as fresh as the mount.
+  const adaptersNow = (): HostAdapters => ({
     assets,
     watchdogMs,
     ...(port === null ? {} : { store: port }),
     storePrefix: READER_STORE_PREFIX,
     ...(input.docKey === null ? {} : { docKey: input.docKey }),
-    prefs: { theme: input.prefs.theme },
+    prefs: { theme },
     mermaidDraw: plan.draw,
     ...(plan.draw === 'after-ready' ? { loadMermaid } : {}),
     ...(historyChanges === undefined ? {} : { changes: (sha: string) => historyChanges(sha) }),
@@ -190,15 +213,16 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
       ? { features: { chrome: { bar: false, topSpace: false } }, onProgress: (share: number) => input.onProgress?.(share) }
       : {}),
     title: input.title,
-    focus: true,
+    focus: readerMountFocusFor(input.profile, hostOwnsFocus(el)),
     onLink: (l) => input.onLink(readerLinkOf(l)),
     onHash: (id) => input.onHash(id),
     copy: (text, check) => input.copy(text, check.hidden),
     onReady: () => input.onReady(),
     onFallback: (r) => input.onFallback(r),
-  };
+  });
 
-  const frame = (deps.mount ?? mountDocFrame)(el, { document, adapters });
+  const mountFrame = deps.mount ?? mountDocFrame;
+  let frame = mountFrame(el, { document, adapters: adaptersNow() });
   let destroyed = false;
   return {
     destroy() {
@@ -208,11 +232,17 @@ export async function mountReader(el: HTMLElement, input: ReaderMountInput, deps
     },
     setPrefs(p) {
       if (destroyed) return;
+      theme = p.theme;
       frame.setPrefs({ theme: p.theme });
     },
     command(name) {
       if (destroyed) return;
       frame.command(name);
+    },
+    openAt(id) {
+      if (destroyed) return;
+      frame.destroy();
+      frame = mountFrame(el, { document: { ...document, initialHash: id }, adapters: adaptersNow() });
     },
   };
 }

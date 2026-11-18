@@ -14,7 +14,7 @@ import { replaceFragment } from '../src/lib/router';
 import type { DocLinkContextValue } from '../src/docs/DocLink';
 import {
   copyDecision, docsDrawFor, oneBarTools, READER_E17_MERMAID, readerBarTitle, readerBodyReducer, readerChromeFor,
-  readerDocKey, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
+  readerDocKey, readerMountFocusFor, readerMountPlan, readerPrefsOf, readerWatchdogMs, routeReaderLink,
   type ReaderBodyState, type ReaderChrome, type ReaderE17Reading, type ReaderLink,
 } from '../src/docs/reader/policy';
 import { THEMES } from '@ccrc/ui';
@@ -102,8 +102,15 @@ describe('routeReaderLink', () => {
     expect(routeReaderLink(ctx(), external('javascript:alert(1)', 'c.a.example'), 'b.a.example')).toEqual({ kind: 'inert' });
   });
 
-  it('a link to this same page with a fragment becomes a hash', () => {
-    expect(routeReaderLink(ctx(), { kind: 'relative', path: 'b.md', fragment: 'h' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'h' });
+  it('a link to this same page with a fragment becomes a hash that reopens the frame (the frame sent it to the host as a navigate)', () => {
+    expect(routeReaderLink(ctx(), { kind: 'relative', path: 'b.md', fragment: 'h' }, 'b.a.example'))
+      .toEqual({ kind: 'hash', id: 'h', reopen: true });
+  });
+
+  it('a relative link to another page stays in-app, and carries no reopen', () => {
+    const r = routeReaderLink(ctx(), { kind: 'relative', path: 'c.md', fragment: 'h' }, 'b.a.example');
+    expect(r.kind).toBe('in-app');
+    expect(r).not.toHaveProperty('reopen');
   });
 
   it('the comparison is exact and lower-cased', () => {
@@ -121,8 +128,23 @@ describe('routeReaderLink', () => {
     expect(r).toMatchObject({ scheme: 'https', host: 'github.com', foreign: true });
   });
 
-  it('a fragment link becomes a hash', () => {
-    expect(routeReaderLink(ctx(), { kind: 'fragment', id: 'sec' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'sec' });
+  it('a fragment link becomes a hash that does not reopen (the frame scrolls to an anchor it finds by itself)', () => {
+    expect(routeReaderLink(ctx(), { kind: 'fragment', id: 'sec' }, 'b.a.example')).toEqual({ kind: 'hash', id: 'sec', reopen: false });
+  });
+});
+
+describe('readerMountFocusFor', () => {
+  it('the Docs reader focuses its frame at mount when no outside element owns focus', () => {
+    expect(readerMountFocusFor(undefined, false)).toBe(true);
+  });
+
+  it('the Docs reader leaves focus alone when an element outside the reader owns it', () => {
+    expect(readerMountFocusFor(undefined, true)).toBe(false);
+  });
+
+  it('the reader lab focuses unconditionally, whoever owns focus', () => {
+    expect(readerMountFocusFor('lab-draw', false)).toBe(true);
+    expect(readerMountFocusFor('lab-draw', true)).toBe(true);
   });
 });
 

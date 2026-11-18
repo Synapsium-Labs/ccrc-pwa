@@ -101,7 +101,10 @@ interface Harness {
   readonly renderFn: ReturnType<typeof vi.fn<ReaderDeps['render']>>;
   readonly mountFn: ReturnType<typeof vi.fn<ReaderDeps['mount']>>;
   readonly imagesFn: ReturnType<typeof vi.fn<ReaderDeps['images']>>;
-  readonly handle: { destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn> };
+  readonly handle: {
+    destroy: ReturnType<typeof vi.fn>; setPrefs: ReturnType<typeof vi.fn>; command: ReturnType<typeof vi.fn>;
+    openAt: ReturnType<typeof vi.fn>;
+  };
   readonly inputs: ReaderMountInput[];
   readonly parser: ReturnType<typeof vi.fn<MarkdownParser>>;
   readonly onDraftAsset: ReturnType<typeof vi.fn<(delta: number) => void>>;
@@ -113,7 +116,7 @@ function harness(over: Partial<{
   outcome: ReaderRenderOutcome; mount: ReaderDeps['mount']; drafts: number;
 }> = {}): Harness {
   const inputs: ReaderMountInput[] = [];
-  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn() };
+  const handle = { destroy: vi.fn(), setPrefs: vi.fn(), command: vi.fn(), openAt: vi.fn() };
   const renderFn = vi.fn<ReaderDeps['render']>(async () => over.outcome ?? RENDERED);
   const mountFn = vi.fn<ReaderDeps['mount']>(over.mount ?? (async (_el, input) => {
     inputs.push(input);
@@ -169,6 +172,11 @@ function atWidth(width: number): void {
       addEventListener() {}, removeEventListener() {}, addListener() {}, removeListener() {}, dispatchEvent: () => false,
     };
   });
+}
+
+/** Lets what is pending settle: the mount's promise resolves and the body's run goes on past it. */
+async function settled(): Promise<void> {
+  await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
 }
 
 async function ready(h: Harness): Promise<ReaderMountInput> {
@@ -509,6 +517,74 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     const input = await ready(h);
     act(() => { input.onHash('part-2'); });
     expect(replaceFragment).toHaveBeenCalledWith('part-2');
+  });
+
+  it('a link to this very page spelled with its file name rewrites the address and opens the frame at its anchor, with no new body read', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h.handle.openAt).toHaveBeenCalledTimes(1);
+    expect(h.handle.openAt).toHaveBeenCalledWith('sec');
+    expect(replaceFragment).toHaveBeenCalledWith('sec');
+    expect(navigate).not.toHaveBeenCalled();
+    await settled();
+    expect(h.renderFn).toHaveBeenCalledTimes(1);
+    expect(h.imagesFn).toHaveBeenCalledTimes(1);
+    expect(h.mountFn).toHaveBeenCalledTimes(1);
+    expect(h.handle.destroy).not.toHaveBeenCalled();
+  });
+
+  it('the anchor reaches openAt decoded, and the address bar keeps the link`s own spelling', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'caf%C3%A9' }); });
+    expect(h.handle.openAt).toHaveBeenCalledWith('café');
+    expect(replaceFragment).toHaveBeenCalledWith('caf%C3%A9');
+  });
+
+  it('a #fragment link rewrites the address and does not reopen the frame', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onLink({ kind: 'fragment', id: 'sec' }); });
+    expect(replaceFragment).toHaveBeenCalledWith('sec');
+    expect(h.handle.openAt).not.toHaveBeenCalled();
+  });
+
+  it('a mount with no openAt takes a same-page link as an address rewrite alone', async () => {
+    const h = harness({ mount: async () => ({ destroy: vi.fn(), setPrefs: vi.fn() }) as ReaderMount });
+    render(frame(h));
+    await waitFor(() => expect(h.mountFn).toHaveBeenCalledTimes(1));
+    await settled();
+    const input = h.mountFn.mock.calls[0]?.[1] as ReaderMountInput;
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(replaceFragment).toHaveBeenCalledWith('sec');
+    expect(navigate).not.toHaveBeenCalled();
+  });
+
+  it('a same-page link that arrives after the body fell back, or ended, opens nothing', async () => {
+    const h1 = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h1));
+    const fellBack = await ready(h1);
+    await settled();
+    act(() => { fellBack.onFallback('timeout'); });
+    await screen.findByText(READER_FALLBACK_NOTE);
+    act(() => { fellBack.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h1.handle.openAt).not.toHaveBeenCalled();
+    cleanup();
+    const h2 = harness();
+    const r2 = render(frame(h2));
+    const ended = await ready(h2);
+    await settled();
+    r2.unmount();
+    act(() => { ended.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h2.handle.openAt).not.toHaveBeenCalled();
   });
 });
 
