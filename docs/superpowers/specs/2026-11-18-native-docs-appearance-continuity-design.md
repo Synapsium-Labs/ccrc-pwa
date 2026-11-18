@@ -73,15 +73,15 @@ flowchart LR
   - `sectionCase`: `none` or `uppercase`, for the frame's own section labels.
 - `fonts` are optional faces for the frame's sans and mono roles, carried as font assets at mount (§2.2).
 
-**Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. The 30 slots:
+**Base colours only.** Version 1's colour slots are base colours. The library derives every tint, hover, table head, inline-code and bar background from them with `color-mix` in its own stylesheet, because ccrc's own tints change form from palette to palette: `rgba(...)` in one, `color-mix(...)` in another. A derived tint holds at most 6% of its colour, so coloured text on its own tint keeps 4.5:1 (§5). Every semantic slot is a colour the library draws as text, so it maps to ccrc's text variant, never to a fill. The 29 slots:
 - surfaces: `bg`, `surface`, `surface2`;
 - ink: `text`, `text-muted`, `text-faint`;
 - edges: `border`, `rule`;
 - accent: `accent`, `accent-ink`, `focus`;
-- semantic: `ok`, `wait`, `no`, `info`, `chg`, `chg-del`;
+- semantic, drawn as text: `ok`, `wait`, `no`, `info`, `chg`;
 - code: `code-block-bg`, `code-ink`, and `syn-comment`, `syn-keyword`, `syn-string`, `syn-number`, `syn-function`, `syn-type`, `syn-tag`, `syn-attr`, `syn-punct`, `syn-deleted`, `syn-inserted`, which replace the hard-coded `.hljs-*` hex.
 
-The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spells it a second time (§3). Each ccrc token mapped to these slots was measured on 2026-11-18 to resolve to a plain `#rrggbb` in all twelve palettes, through `var()` chains, both default blocks merged.
+The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spells it a second time (§3). Each ccrc token mapped to these slots was measured on 2026-11-18 to resolve to a plain `#rrggbb` in all twelve palettes, through `var()` chains, both default blocks merged, and every pair §5 names was measured against its floor (the leaf plan's Results).
 
 **Why values and not a catalogue.** The frame needs one appearance at a time. The values for that appearance are all it can use, and they reveal nothing the frame could act on. A catalogue would put a second copy of ccrc's palettes in the library or in every seed (Decision X1-1, §12).
 
@@ -114,8 +114,8 @@ This section says how the reader uses ccrc's catalogue without copying it, and w
   | `text`, `text-muted`, `text-faint` | `--ink-primary`, `--ink-secondary`, `--ink-tertiary` |
   | `border`, `rule` | `--edge-strong`, `--edge-subtle` |
   | `accent`, `accent-ink`, `focus` | `--accent`, `--ink-on-accent`, `--accent` |
-  | `ok`, `wait`, `no`, `info` | `--status-done`, `--status-attention`, `--status-dead`, `--acct-blue` |
-  | `chg`, `chg-del` | `--diff-add`, `--diff-del` |
+  | `ok`, `wait`, `no`, `info` | `--status-done-text`, `--status-attention-text`, `--status-dead-text`, `--ink-secondary` |
+  | `chg` ("changed since", magenta) | `--acct-magenta` |
   | `code-block-bg`, `code-ink` | `--bg-well`, `--ink-on-well` |
   | `syn-<name>` (eleven) | `--syn-<name>` |
   | `radius`, `radiusSmall` | `--r-md`, `--r-sm` |
@@ -188,14 +188,19 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 
 | Element | Today | With the contract |
 |---|---|---|
-| Body text, links, borders | Library light or dark palette | ccrc's ink, accent and edges |
+| Body text, links, borders | Library light or dark palette | ccrc's ink, accent and edges. Edges are decorative, as in ccrc: no floor |
 | Tables | `--th-bg`, `--surface`, `--surface2`, `--border` | The same slots, from ccrc's raised and well surfaces |
 | Code blocks | Library background, hard-coded `.hljs-*` hex | ccrc's well and `--syn-*` tokens. Wells stay dark in every palette, as in ccrc's chat |
 | Mermaid | Fixed warm palette on a white plate, inverted by a filter in dark | Colours derived from the slots by the library's `mermaidThemeOf` (`surface`, `surface2`, `text`, `border`, `accent`). No plate and no filter while hosted |
 | Focus | `outline: 2px solid var(--accent)` | The same rule on the `focus` slot, ccrc's accent |
-| Semantic colours | `--ok`, `--wait`, `--no`, `--info` | ccrc's `--status-done`, `--status-attention`, `--status-dead` and `--acct-blue` |
+| Semantic colours | `--ok`, `--wait`, `--no`, `--info`, `--chg` | ccrc's text variants `--status-done-text`, `--status-attention-text`, `--status-dead-text`, then `--ink-secondary`, and `--acct-magenta` for "changed since". Fills, dots and tints derive from them |
 
-**The contrast gate.** The library exports `APPEARANCE_PAIRS`: each pair of slots its stylesheet puts in front of one another, with a floor. Body text, links, table text, code tokens and Mermaid labels need 4.5:1. The focus ring, borders that bound controls, and Mermaid lines need 3:1. ccrc's test computes the mapped values for every palette, from `tokens.css` through the gate's existing parser (`pwa/design/audit.mjs`), and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults.
+**The contrast gate.** The library exports `APPEARANCE_PAIRS`: each pair of slots its stylesheet puts in front of one another, with a floor.
+- **4.5:1:** body text, links, every semantic text colour, table text, code tokens and Mermaid labels. Each is measured on all three grounds (`bg`, `surface`, `surface2`), or on the well for code, and on the derived tints it is drawn on.
+- **3:1:** the focus ring against `bg`, and Mermaid lines against the figure ground.
+- **No floor: edges.** `border` and `rule` are decorative, as ccrc's own gate treats its edges (`pwa/design/contrast-check.mjs` holds that no edge token clears 3:1 in every palette). Measured: `border` on `bg` is 1.54:1 at worst. A frame control is identified by its label, at 4.5:1, and by the focus ring, never by its border alone.
+
+ccrc's test computes the mapped values for every palette and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults. Measured 2026-11-18 under this map, in all twelve palettes: every 4.5:1 pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark) and `accent` on `surface2` at 4.57 (Phosphor Daylight). The focus ring is 4.92:1 at worst, and coloured text on its own 6% tint over `bg` is 4.56:1 at worst. At an 8% tint that last pair falls to 4.43:1 (Phosphor Daylight), which is why tints hold at most 6%.
 
 ## 6. Aa while hosted
 
@@ -259,7 +264,7 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 | Open to `ready` | hosted median of 9 opens at most 1.10 x the BASE median of 9, desktop Chromium, same runner | `frame-cost` browser row |
 | Change while open | frame root shows the new values within 100 ms. Same iframe and nonce. Scroll within 1 px | `reader-appearance` browser row |
 | Mermaid redraw | one figure per task, no single gap over E17's 200 ms | `reader-appearance` browser row |
-| Contrast | 4.5:1 text, links, code, table and figure labels. 3:1 focus ring, control borders, figure lines | unit gate, every palette, both skins |
+| Contrast | 4.5:1 text, links, semantic text, code, table and figure labels, on every ground and tint they are drawn on. 3:1 focus ring and figure lines. Edges have no floor | unit gate, every palette, both skins |
 
 ## 10. The library's part
 
@@ -352,6 +357,7 @@ Each decision is a technical call within the operator's requirement, made and ar
 | X1-3 | How a change while open travels | (a) a new parent op on the existing port; (b) widen `prefs` with appearance keys; (c) remount | (a). The `prefs` op is a closed set of enum words, and nested data breaks the parser's flat rule. (c) loses reading position and costs a full open | Proposed |
 | X1-4 | Change signal | (a) observe the root's `data-theme` and `data-skin`; (b) subscribe to the two stores plus the media query | (a). It reads the applied outcome, so Follow the system flips and every writer are covered by one observer | Proposed |
 | X1-5 | Bad values | (a) all or nothing per group, hosted with library colours on failure; (b) per slot; (c) fall back to the plain view | (a) for colour, (b) for skin slots and fonts. A partial palette can break contrast, and appearance never justifies losing the rich view | Proposed |
+| X1-12 | Semantic colours | (a) ccrc's text variants, with fills and tints derived; (b) ccrc's fill tokens; (c) separate text and fill slots | (a). The library draws these colours as text, and ccrc's fills miss 4.5:1 there: `--diff-add` is 1.69:1 in Phosphor Daylight, `--status-dead` 3.85:1 in Nord. (c) doubles the slots for no visible gain. `chg` keeps its magenta "changed since" meaning through `--acct-magenta`, where `--diff-add` green would change it | Proposed |
 | X1-11 | Tints and composites | (a) base colours only, the library derives tints with `color-mix`; (b) carry ccrc's tint tokens and resolve them through a probe element | (a). ccrc's tints change form between palettes, so (b) needs a colour parser on both sides for no visible gain | Proposed |
 | X1-6 | Typography | (a) pass ccrc's two faces as font assets; (b) the library ships Geist; (c) keep library faces | (a). One home for ccrc's typefaces, and the frame cannot fetch them. (b) couples the library to one host. (c) misses typography | Proposed |
 | X1-7 | Density and controls | (a) carry the skin's radius, popover row height and section-label case, and keep the frame's bar and reading layout; (b) carry every skin token, the bar included; (c) radius only | (a). It aligns the controls a reader touches with the skin. The operator's own constraints fix the rest: the reading layout is kept, and the bar is held by the one-bar and desktop-fit budgets (at most 1 px). (b) breaks those budgets. (c) leaves density unaligned | Proposed |

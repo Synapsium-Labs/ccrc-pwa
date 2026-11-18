@@ -18,7 +18,7 @@
 - No second copy of the palette or skin catalogue anywhere under `pwa/src/docs/` or `pwa/src/readerLab/`; the only reader-side artefact is `READER_APPEARANCE_MAP`, a slot-to-token mapping.
 - No value the adapter sends contains `;`, `{`, `}`, `url(` or `var(`; colours are `#rrggbb` or `#rrggbbaa` only.
 - Colour slots are all or nothing: one unreadable mapped colour sends mode only for that change. Shape and font slots fall back one by one. Appearance never drops the reader to the plain view.
-- Contrast floors: 4.5:1 for body text, links, code tokens, table text and figure labels; 3:1 for the focus ring, control borders and figure lines.
+- Contrast floors: 4.5:1 for body text, links, semantic text, code tokens, table text and figure labels, on every ground and derived tint they are drawn on; 3:1 for the focus ring and figure lines; no floor for decorative edges. A derived tint holds at most 6% of its colour.
 - Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc at most 196 608 characters over the same document at the 1.1.0 pin; hosted open-to-`ready` median at most 1.10 x BASE median; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
 - The reader lab mounts with no appearance (spec X1-10).
 - Heavy tests, typecheck and browser runs go through `ccrc test`, in the foreground, with a timeout of at least 600000 ms. Mutations run in sequence from saved copies, and each is restored and hash-checked, never with `git checkout`.
@@ -115,7 +115,7 @@ export function resolvePaletteTokens(
 ): { readonly tokens: ReadonlyMap<string, string>; readonly colourScheme: string };
 ```
 
-The map is spec §3's table, slot for slot: 30 colour slots and 4 skin slots. Each mapped colour token was measured to resolve to `#rrggbb` in all twelve palettes (2026-11-18, Results). A pair that misses its floor under this map in some palette stops the wave and is reported. It is not remapped silently.
+The map is spec §3's table, slot for slot. Each mapped colour token was measured to resolve to `#rrggbb` in all twelve palettes, and every pair to meet its floor (2026-11-18, Results, "Contrast under the map"). A pair that misses its floor under this map in some palette stops the wave and is reported. It is not remapped silently.
 
 - [ ] **Step 1: Write the failing pure rows** in `reader-appearance.test.ts`:
   - `normaliseHostColour`:
@@ -360,6 +360,30 @@ Unused from run 2631's block: 8761.
   - The 29 distinct colour tokens the map names (focus and accent share `--accent`), `--accent-on-well`, and the 2 radius tokens resolve to `#rrggbb` or whole px in all 12 palettes: 0 misses.
   - Every palette declares `color-scheme` as `light` or `dark`.
   - Skin values: `--row-h` is 52 px for Refined and 32 px for Instrument under a fine pointer; `--case-section` is `none` or `uppercase`.
+
+### Contrast under the map (fix round 1, F1)
+
+Measured 2026-11-18 with a script over `ui/src/styles/tokens.css` (both default blocks merged, `var()` chains followed, WCAG 2.1 relative luminance), worst palette per pair:
+
+| Pair | Worst | Palette | Floor |
+|---|---|---|---|
+| `text-faint` on `surface2` | 4.52 | Solarized Dark | 4.5 |
+| `accent` on `surface2` | 4.57 | Phosphor Daylight | 4.5 |
+| `chg` (`--acct-magenta`) on `surface2` | 4.73 | Solarized Dark | 4.5 |
+| `wait` (`--status-attention-text`) on `surface2` | 4.77 | Solarized Dark | 4.5 |
+| `no` (`--status-dead-text`) on `surface2` | 4.77 | Solarized Dark | 4.5 |
+| `ok` (`--status-done-text`) on `surface2` | 4.82 | Nord | 4.5 |
+| `accent` (focus) on `bg` | 4.92 | Phosphor Daylight | 3 |
+| `accent-ink` on `accent` | 5.19 | GitHub Light | 4.5 |
+| `syn-comment` on `code-block-bg` | 5.24 | Solarized Light | 4.5 |
+| `info` (`--ink-secondary`) on `surface2` | 5.54 | Catppuccin Mocha | 4.5 |
+| `code-ink` on `code-block-bg` | 6.49 | Solarized Dark | 4.5 |
+| `text` on `th-bg` (6% accent over `bg`) | 7.04 | Catppuccin Latte | 4.5 |
+| coloured text on its own 6% tint over `bg` | 4.56 | Phosphor Daylight (accent) | 4.5 |
+| coloured text on its own 8% tint over `bg` | 4.43 | Phosphor Daylight (accent) | fails, so tints hold at most 6% |
+| `border` (`--edge-strong`) on `bg` | 1.54 | Phosphor Daylight | none: decorative |
+
+Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on the well, is higher. The review's measurement of the earlier fill mapping (`--diff-add` 1.69:1, `--status-dead` 3.85:1) is why the semantic slots moved to text variants.
 
 ### Commands
 
