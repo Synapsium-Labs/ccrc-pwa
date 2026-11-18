@@ -24,8 +24,8 @@ import type { Rung } from '../../shared/overlord-ladder.js';
 import { fakeTime } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
-// Boot coherence reads the head and each authority table, so each fixture creates all three from their real migrations.
-const fixtureMigrations = ['overlord_authority_head', 'overlord_designation', 'overlord_ladder'].map((table) => {
+// Boot coherence reads the head and each authority table, so each fixture creates all four from their real migrations.
+const fixtureMigrations = ['overlord_authority_head', 'overlord_designation', 'overlord_ladder', 'decision_rows'].map((table) => {
   const sql = MIGRATIONS.find((migration) => migration.includes(`CREATE TABLE ${table} (`));
   if (sql === undefined) throw new Error(`migration not found for ${table}`);
   return sql;

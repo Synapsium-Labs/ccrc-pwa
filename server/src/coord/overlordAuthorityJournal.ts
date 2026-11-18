@@ -39,7 +39,12 @@ export function overlordAuthorityFileAt(ccrcDir: string, ops?: AppendOnlyFsOps):
 /** Every Overlord authority table whose rows say "this box has chosen something", read by boot coherence beside the head row
  *  (Table 7.6a's "missing, beside any Overlord row"). Designation A added `overlord_designation` (X2); the ladder added
  *  `overlord_ladder` and `overlord_latches`. Names only: each is a table this build's migrations create. */
-export const OVERLORD_AUTHORITY_TABLES: readonly string[] = ['overlord_designation', 'overlord_ladder', 'overlord_latches'];
+export const OVERLORD_AUTHORITY_TABLES: readonly string[] = [
+  'overlord_designation', 'overlord_ladder', 'overlord_latches',
+  // Decision model B: a decision-model row's arming (`decisionModelStore.ts#moveDecisionRowInTx`). Never seeded: a row is
+  // inserted by its first move, journal record first, so a box that upgrades with no head row still boots coherent.
+  'decision_rows',
+];
 
 /** A read the writer could not make, named by what it could not read (review F6: a head row it could not read keeps the
  *  `rows` word), and the guard's `unmeasured` word for each. */

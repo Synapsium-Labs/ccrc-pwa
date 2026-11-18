@@ -104,6 +104,12 @@ Additional committed growth/caps, documentation, ring and single-definition guar
 
 The server mint remains authority journal B's work, as the departure states; console mapping and console-result branding remain carried to gates PR B. No main absorption belongs to this round. The coordinator requires no further review after these fixes; exact-tip CI and actual CodeQL remain due after the single completed-round push.
 
+## Landing after handoffs and decision model B
+
+The coordinator authorized one landing merge of main `368a8066c`, preserving migrations 97 and 98 and placing the ladder at 99. Migration, census, authority-table, fixture and floor rows retain both sides; the shared decision-model record case remains verbatim. The only code conflict was the continuity import block, separately licensed as an additive union with no function-body change. Source typing passed with every unioned import retained. The initial covering run had 1,090 passing cases and six failures: three exposed the ladder fixture's missing decision-model migration, and three timed out. Under ruling 575 the fixture now includes `decision_rows`, with no assertion or production-function change; the complete affected files then passed alone: ladder store 114, run-close 21, mail 61 and Renew now 18. An earlier covering attempt and fixture-typing attempt were killed by the shared memory cap; an unsupported runner option stopped another attempt before any test ran. A second full fixture-typing attempt, with native concurrency one and a 1 GiB soft memory limit, also exited 137 after the shared slice recorded four OOM kills; neither attempt is green evidence. Database and remaining landing verification, followed by exact-tip CI, are pending.
+
+The two generation readers do not answer the same question: `sessionLiveGeneration` selects the latest supplied row by its own `sessionId` and returns that raw row or null, whereas `liveGenerationOf` reads the designation-selected identity and lane-effective state, distinguishing no generation from an unmeasured read; they are not consolidated here.
+
 ## Identity integration after gates A
 
 The coordinator authorized one absorption of main after gates A landed, followed by the ladder's identity conversion.

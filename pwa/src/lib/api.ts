@@ -36,11 +36,17 @@ import {
 } from '../docs/failures';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
+import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { EpicView, HierarchyAnswer, HierarchyProjectRow, PlanView } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
-import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
+import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
+
+/** `GET /api/projects/:project/upkeep`'s answer (`hierarchyRoutes.ts`): the Upkeep epic (null before first use) and the inbound closes Linear refused (`at` is the server's `actedAt`, which may be null). */
+export interface UpkeepClose { readonly identifier: string; readonly teamKey: string; readonly word: string; readonly at: number | null }
+export interface UpkeepAnswer { readonly ok: true; readonly epic: EpicView | null; readonly notClosed: readonly UpkeepClose[] }
 
 /** `GET`/`POST /api/face`'s answer. */
 export interface FaceAnswer { readonly character: CharacterName; readonly updatedAt: number }
@@ -550,6 +556,18 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  clears each). The answer is the stored row, read back after the write, and is what the card shows. */
     saveLinking: (project: string, body: LinkingWriteBody) =>
       postJson<{ ok: true; linking: ProjectLinkingWire }>(`/api/projects/${encodeURIComponent(project)}/linking`, body),
+    /** The hierarchy settings (D-8184): `GET /api/hierarchy`, `POST /api/projects/:project/hierarchy` (the stored settings), and
+     *  `POST /api/hierarchy/owner` (one coordinator for every project). */
+    hierarchy: () => getJson<HierarchyAnswer>('/api/hierarchy'),
+    saveHierarchy: (project: string, body: Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>) =>
+      postJson<{ ok: true; settings: typeof body }>(`/api/projects/${encodeURIComponent(project)}/hierarchy`, body),
+    /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused. */
+    plan: (slug: string) => getJson<{ ok: true; plan: PlanView }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
+    upkeep: (project: string) => getJson<UpkeepAnswer>(`/api/projects/${encodeURIComponent(project)}/upkeep`),
+    /** `POST /api/items/:id/linear` (D-8184): one act on a hierarchy item (map, report, drift, initiatives, owner). */
+    linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>
+      postJson<{ ok: true; queued?: boolean }>(`/api/items/${id}/linear`, body),
+    ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: number }>('/api/hierarchy/owner', { linearOwner }),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>
@@ -596,6 +614,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  (`FleetSession.limitWait`). `POST /api/sessions/:id/limit-wait`, no body; `409 not-waiting` when the record closed
      *  before the tap (the session moved on its own, or its limit cleared). The row's own door: it moves nothing. */
     limitWait: (id: string) => post(`${sid(id)}/limit-wait`),
+    /** Overlord W1a hand-offs: the operator's "Renew now" for a long-lived session. `POST /api/sessions/:id/renew`, body
+     *  `{}`; `409 renew-not-long-lived` / `409 renew-pending` raise `ApiError` with the word. Session-gated. Its answer says
+     *  whether the press was made while continuity was shadow (`shadow`, review 2312 F1); an unreadable answer is `unreadable`. */
+    renewNow: (id: string) => postRead<{ readonly ok: true; readonly id: number; readonly shadow?: boolean } | 'unreadable'>(
+      `${sid(id)}/renew`, 'unreadable', {}),
     /** The terminal drawer's scrollback — the pane's own history, read with
      *  `capture-pane`. `lines` is the server's number, echoed back: this side
      *  never names one, so there is nothing for the two to disagree about.
@@ -1021,6 +1044,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `POST /api/coord/plain-auto-memory`: `{choice}`. `postJsonOr`, for `setCoordCaps`' reason. */
     setPlainAutoMemory: (choice: PlainAutoMemoryChoice) =>
       postJsonOr<(PlainAutoMemoryView & { readonly ok: true }) | 'unreadable'>('/api/coord/plain-auto-memory', 'unreadable', { choice }),
+    /** `GET /api/coord/renewal-mode` (Overlord W1a hand-offs): Settings › Automation › When soft renewals happen, `when-away`
+     *  or `on-schedule` (`mode` null when the stored word could not be read). Session-gated when armed; no box token. */
+    renewalMode: () => getJson<RenewalModeView & { readonly ok: true }>('/api/coord/renewal-mode'),
+    /** `POST /api/coord/renewal-mode`: `{mode}`. `postJsonOr`, for `setCoordCaps`' reason. */
+    setRenewalMode: (mode: RenewalMode) =>
+      postJsonOr<(RenewalModeView & { readonly ok: true }) | 'unreadable'>('/api/coord/renewal-mode', 'unreadable', { mode }),
     /** `GET /api/testbox` (test box plan TB9, D-7411; spec 2026-10-28 §2.7): `{ok, testbox}`, the block the server's
      *  poll last decided, `null` before its first pass. Settings › Automation › Test box reads it through
      *  `useTestboxView`, whose `asTestboxBlock` is the wire guard, so the type here is the envelope only. */

@@ -315,7 +315,9 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
-  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches'] as const;
+  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches',
+  'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
+  'decision_rows', 'decision_host', 'decision_lines'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -420,10 +422,19 @@ describe(TABLES_PIN, () => {
       // stamp writer (the ruling joins it in PR B). `mailedAt` and `ruled` get column cases in PR B.
       claim_collisions: ['server/src/coord/claimCollisions.ts#recordCollisions'],
       programme_pairs: ['applyPairMoves', 'stampPairGoalsInTx'].map((f) => `server/src/coord/programmePairsStore.ts#${f}`),
+      // The renewal hand-offs (Overlord W1a): the Renew now door's request, the prompt route's mark and the lane's quiet of it.
+      continuity_renew_requests: ['server/src/continuity/continuityStore.ts#insertRenewRequest'],
+      operator_marks: ['server/src/continuity/continuityStore.ts#putOperatorMark'],
+      operator_mark_quiet: ['server/src/continuity/continuityStore.ts#advanceMarkQuiet'],
       // The decision-model records (Overlord W2, plan w2-decision-model.md Task 4): one answer per key, one writer; the day counts'
-      // reservation and its settle, the boot release settling through the same writer. PR B adds `recordAnchorRun`.
+      // reservation and its settle, the boot release settling through the same writer; the anchor columns' one writer (PR B).
       decision_records: ['server/src/coord/decisionModelStore.ts#recordDecision'],
-      decision_days: ['reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      decision_days: ['recordAnchorRun', 'reserveDecisionCalls', 'settleDecisionCalls'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
+      // The decision model's arming (Overlord W2 decision model B, Task 6): a row's one writer, journal record first; the host's
+      // one writer, in the key doors' transaction; a line's admission, and its canary columns.
+      decision_rows: ['server/src/coord/decisionModelStore.ts#moveDecisionRowInTx'],
+      decision_host: ['server/src/coord/decisionModelStore.ts#setDecisionHostInTx'],
+      decision_lines: ['admitDecisionLine', 'recordCanary'].map((f) => `server/src/coord/decisionModelStore.ts#${f}`),
       // The daily backstop (Overlord W1 renewal readings A): its seed row, and its door's one writer.
       renewal_backstop_settings: ['server/src/continuity/continuityStore.ts#setBackstop', 'server/src/coord/schema.ts#(module)'],
       // What a programme says is left (Overlord W2 remaining work A): one writer of both tables, reached only from the

@@ -101,7 +101,7 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWENTY-TWO files register routes since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
+/** TWENTY-THREE files register routes since the decision-model doors (`server/src/coord/decisionModelRoutes.ts`, Overlord W2 decision model B: six routes on five paths, session-gated, registered from `server.ts`); TWENTY-TWO files register routes since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
  *  box-token route, registered from `registerCoordRoutes` and written in a file of its own); THIRTEEN since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
@@ -136,6 +136,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('continuity/routes.ts'),
   ...scanRoutes('coord/overlordRoutes.ts'),
   ...scanRoutes('operatorModel/nameListRoutes.ts'),
+  ...scanRoutes('coord/decisionModelRoutes.ts'),
 ];
 
 /** The three websocket upgrades — the same registrations, told apart by their
@@ -707,9 +708,17 @@ describe('the scanner is looking at something', () => {
     // /api/programmes/:slug/plan/take` and `POST /api/teams/:team/plan/triage` in `coord/planRoutes.ts`, two machine lanes in the
     // EXEMPT table, and `GET /api/projects/:project/upkeep` in `coord/hierarchyRoutes.ts`, session-gated and NOT EXEMPT: the HTTP
     // half 259 -> 262, the gated count 162 -> 163, the exempt-HTTP count 96 -> 98.
-    // 269 with the ladder GET and three writes: HTTP 262 -> 266, gated 163 -> 167, exempt stays 98.
+    // 268 since the renewal hand-offs (Overlord W1a), in `continuity/routes.ts`: `POST /api/sessions/:id/renew` and `GET`/`POST
+    // /api/coord/renewal-mode`, session-gated and NOT EXEMPT, no box token: the HTTP half 262 -> 265, the gated count
+    // 163 -> 166, the exempt-HTTP count stays 98.
+    // 274 since the decision-model doors (Overlord W2 decision model B), in `coord/decisionModelRoutes.ts`, a routes file of its own:
+    // the read `GET /api/decision-model` and the five writes (arm, off, ceiling, the key's `PUT` and `DELETE`), each session-gated and
+    // NOT EXEMPT, no box token; the five writes take the account gate, so each is in `FLAG_AWARE`: the HTTP half 265 -> 271, the gated
+    // count 166 -> 172, the exempt-HTTP count stays 98.
+    // 278 with the ladder GET and three writes: HTTP 271 -> 275, gated 172 -> 176, exempt stays 98.
     // Lowering works dark and a clear takes step-up.
-    expect(ROUTES.length).toBe(269);
+    expect(ROUTES.length).toBe(278);
+    expect(scanRoutes('coord/decisionModelRoutes.ts').length).toBe(6);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
     expect(ROUTES.filter(isWs).length + ROUTES.filter((r) => !isWs(r)).length).toBe(ROUTES.length);
@@ -890,7 +899,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 269 scanned + the static wildcard when the bundle is built.
+    // 278 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1578,9 +1587,14 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     'POST /api/overlord/account-set', 'POST /api/overlord/model',
     // Clearing a latch always asks the account gate, unlike lowering or Pause.
     'POST /api/overlord/latches/:cause/clear',
+    // The decision-model doors' five writes (Overlord W2, decision model B): each takes the account gate with `cap: null`, so dark
+    // each answers `auth-off` (501); armed with a session the arm, key PUT, and a widening off or ceiling ask the step-up first, and
+    // the rest reach their handler, which with no coordination store answers `not-configured`: BY DESIGN. The read is not here.
+    'POST /api/decision-model/rows/:id/arm', 'POST /api/decision-model/rows/:id/off', 'POST /api/decision-model/rows/:id/ceiling',
+    'PUT /api/decision-model/key', 'DELETE /api/decision-model/key',
   ]);
 
-  it('FLAG_AWARE is exactly those twenty-six — joining it is how a route leaves the sweep', () => {
+  it('FLAG_AWARE is exactly those thirty-one — joining it is how a route leaves the sweep', () => {
     // Review F2. The set is self-checking in ONE direction (a member is held to an
     // exact 501 dark) and nothing pinned its size, so a future route — Task 8's
     // passkey endpoints plausibly 501 when the gate is dark — could join it and
@@ -1596,6 +1610,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
     // prevent, arrived at by automation.
     expect([...FLAG_AWARE].sort()).toEqual([
       'DELETE /api/auth/passkey/:id',
+      'DELETE /api/decision-model/key',
       'DELETE /api/linear/connection',
       'DELETE /api/linear/workspaces/:id',
       'DELETE /api/overlord/designate',
@@ -1612,12 +1627,16 @@ describe('with CCRC_AUTH off — the shipped default', () => {
       'POST /api/auth/step-up/finish',
       'POST /api/auth/step-up/passphrase',
       'POST /api/auth/step-up/start',
+      'POST /api/decision-model/rows/:id/arm',
+      'POST /api/decision-model/rows/:id/ceiling',
+      'POST /api/decision-model/rows/:id/off',
       'POST /api/linear/workspaces',
       'POST /api/linear/workspaces/:id/check',
       'POST /api/overlord/account-set',
       'POST /api/overlord/designate',
       'POST /api/overlord/latches/:cause/clear',
       'POST /api/overlord/model',
+      'PUT /api/decision-model/key',
       'PUT /api/items/:id/secret',
       'PUT /api/linear/connection',
       'PUT /api/overlord/private-names',
@@ -1629,7 +1648,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 266 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 275 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1693,7 +1712,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 266 HTTP routes, not the 98 exempt.
+          //    is not itself flag-aware — the assertion that covers all 275 HTTP routes, not the 98 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

@@ -89,5 +89,8 @@ export const NOT_OVERLORD_DOORS: Readonly<Record<string, { readonly file: string
   'POST /api/sessions/:id/timers/:timerId/cancel': { file: CONTINUITY, why: "the operator's cancel of a session's timer: session-gated, no box token" },
   'GET /api/continuity/renewal-backstop': { file: CONTINUITY, why: "the operator's read of the daily renewal backstop: session-gated, no box token" },
   'POST /api/continuity/renewal-backstop': { file: CONTINUITY, why: "the operator's daily renewal backstop setting: session-gated, no box token" },
+  'POST /api/sessions/:id/renew': { file: CONTINUITY, why: "the operator's Renew now on one session: session-gated, no box token" },
+  'GET /api/coord/renewal-mode': { file: CONTINUITY, why: "the operator's read of when soft renewals happen: session-gated, no box token" },
+  'POST /api/coord/renewal-mode': { file: CONTINUITY, why: "the operator's setting of when soft renewals happen: session-gated, no box token" },
 };
 
