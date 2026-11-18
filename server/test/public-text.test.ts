@@ -18,6 +18,7 @@ import { seedRoster } from './helpers.js';
 import { CANARY } from './private-names.mjs';
 import type { GateDecision } from '../src/auth/gate.js';
 import { mkTmp } from './tmpHelpers.js';
+import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 
 const EMAIL = ['person', '@', 'acme', '.', 'pro'].join('');
 /** A neutral fake tracker key: no installer's key is spelled in this tree. */
@@ -122,7 +123,7 @@ beforeEach(async () => {
   lock = Promise.resolve();
   app = Fastify();
   registerPlanRoutes(app, {
-    coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }),
+    coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS,
     sessionAuth: () => NO, authEnabled: false, readLinearStore: async () => ({ kind: 'unreadable', code: 'ENOENT' }),
     runOfSession: () => null, now: () => 1_000,
   });
@@ -193,7 +194,7 @@ describe('the plan verbs check public text', () => {
   it('the routes refuse an installer\'s private tracker key handed in through privateTrackerKeys', async () => {
     const withKeys = Fastify();
     registerPlanRoutes(withKeys, {
-      coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }),
+      coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS,
       sessionAuth: () => NO, authEnabled: false, readLinearStore: async () => ({ kind: 'unreadable', code: 'ENOENT' }),
       runOfSession: () => null, now: () => 1_000, privateTrackerKeys: [FAKE_KEY],
     });
