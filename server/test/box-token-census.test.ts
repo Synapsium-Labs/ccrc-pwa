@@ -1371,13 +1371,16 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     }
   });
 
-  it('a `/*` inside a line comment or inside a string opens no comment: the code after it is still read', () => {
-    // CONTROL: each planted file holds a later `*/`, so a scan that blanked block comments first would read from the `/*`
-    // to it as one comment and miss the guarded call between.
-    const inLineComment = "// the route GET /* is named here\nconsole.warn('x');\n/* c */ const a = 1;";
-    const inString = 'const key = "GET /*";\nimport fs from \'node:fs\';\n/* c */ const a = 1;';
-    expect(labKeeps('x', inLineComment), inLineComment).toEqual(['x writes a log line']);
-    expect(labKeeps('x', inString), inString).toEqual(['x loads fs']);
+  // CONTROL: each planted file holds a `/*`, then a guarded call, then a later `*/`, so a scan that blanked block comments
+  // first, or that did not keep that kind of string whole, would read from the `/*` to the `*/` as one comment and miss
+  // the call between. One case per shape, so each reports on its own: the line comment and the three kinds of string.
+  it.each([
+    ['a line comment', "// the route GET /* is named here\nconsole.warn('x');\n/* c */ const a = 1;", 'x writes a log line'],
+    ['a double-quoted string', 'const key = "GET /*";\nimport fs from \'node:fs\';\n/* c */ const a = 1;', 'x loads fs'],
+    ['a single-quoted string', "const key = 'GET /*';\nconst f = require('node:fs');\n/* c */ const a = 1;", 'x loads fs'],
+    ['a template literal', "const key = `GET /*`;\nprocess.stdout.write('x');\n/* c */ const a = 1;", 'x writes a log line'],
+  ])('a `/*` inside %s opens no comment: the code after it is still read', (_where, src, seen) => {
+    expect(labKeeps('x', src), src).toEqual([seen]);
   });
 
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {
