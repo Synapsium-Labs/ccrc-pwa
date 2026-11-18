@@ -100,6 +100,8 @@ Each shared predicate term was mutated separately and killed by both actor suite
 
 Independent final verification passed the coordinator's nine covering files and 571 cases, including the complete mail and writer censuses and mutation floors. The run queued 688 seconds for a test slot, then executed in 292.66 seconds. Full server source and tests-inclusive typing passed with bounded native compiler resources. An implementer covering attempt stopped while queued has no result claimed. Earlier limitations and the first-run `red` / `unclear` signal remain unchanged.
 
+Additional committed growth/caps, documentation, ring and single-definition guards ran 56 files: 55 passed, with 1,808 cases passing and one existing deviation-reference anti-vacuity case timing out at 20 seconds. The complete deviation-reference file then passed alone, 34/34 in 15.21 seconds, without changing its bound or code. Armed growth remains schema +25, store +16 and server composition +3 against merge-base `59f68dc`, with all other measured rows unchanged and no waiver or over-limit row. The ledger and whitespace guards passed.
+
 The server mint remains authority journal B's work, as the departure states; console mapping and console-result branding remain carried to gates PR B. No main absorption belongs to this round. The coordinator requires no further review after these fixes; exact-tip CI and actual CodeQL remain due after the single completed-round push.
 
 ## Identity integration after gates A
