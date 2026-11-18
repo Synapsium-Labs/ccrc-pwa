@@ -15,7 +15,7 @@ export const LINEAR_ITEM_TEXT = {
   noneLive: 'No coordinator is live now, so there is none to name. Start one, then name it.',
   unread: 'The coordinators could not be read, so none can be named now. Reload the item to try again.',
   queued: 'The check is queued. This item closes when Linear answers.', sent: 'Sent.',
-  notQueued: 'No Linear key serves this workspace, so no check was queued. The item stays open.',
+  notQueued: 'Nothing was queued: this server has no check it can run for this workspace (no Linear key serves it, or the plan sync is off). The item stays open.',
 } as const;
 
 /** What each control group is called to a screen reader (the group's `aria-label`): a sentence, never the verb. */

@@ -382,6 +382,16 @@ describe('Linear team key and the template PR (D-8147)', () => {
     expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
   });
 
+  it('an older server (the hierarchy route answers 404) draws no owner, no initiatives toggle and no failure sentence', async () => {
+    vi.spyOn(api, 'hierarchy').mockRejectedValue(new ApiError(404, { ok: false }));
+    mount(props());
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalled());
+    await screen.findByLabelText(LINKING_ADD_TEXT.teamKey);
+    expect(screen.queryByText(LINKING_ADD_TEXT.ownersUnread)).toBeNull();
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
+    expect(screen.queryByRole('checkbox', { name: HIERARCHY_TEXT.initiatives })).toBeNull();
+  });
+
   it('a team key the box refuses is said in its fixed sentence, and the project is still added', async () => {
     vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: 'bad-team-key', detail: 'box text' }));
     mount(props());

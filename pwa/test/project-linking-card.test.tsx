@@ -629,6 +629,52 @@ describe('the hierarchy settings', () => {
     await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
   });
 
+  it.each([502, 503])('a %i answer to a hierarchy write may follow a commit: the row stays locked until a read newer than the write lands', async (status) => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const save = vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(status, { ok: false, error: 'write-failed' }));
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a', { initiatives: 'off' })])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+  });
+
+  it('a 502 answer to a team-key write locks the row behind a re-read too', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(502, { ok: false, error: 'write-failed' }));
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.change(keyField('project-a'), { target: { value: 'BBB' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a')])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+  });
+
+  it('a project missing from the hierarchy answer is drawn at the server defaults, and a write sends them with the change', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([]));
+    expect(await within(rowOf('project-a')).findByText('Default: none live')).toBeInTheDocument();
+    expect(ownerSelect('project-a').value).toBe('');
+    expect(initiativesBox('project-a')).toBeChecked();
+    expect(within(rowOf('project-a')).getByText('Not migrated')).toBeInTheDocument();
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: null, ownsTeam: false } });
+    const held1 = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { initiatives: 'off', linearOwner: null, ownsTeam: false }));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    await act(async () => { held1.resolve(hier([hrow('project-a', { initiatives: 'off', teamKey: null })])); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(initiativesBox('project-a')).not.toBeChecked();
+  });
+
   it('a stamp the clock cannot place says no date rather than throwing', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state: 'migrated', stateAt: 1e20 })]));
     expect(await within(rowOf('project-a')).findByText('Migrated')).toBeInTheDocument();

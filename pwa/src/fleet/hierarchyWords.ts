@@ -2,6 +2,7 @@
 // the hierarchy state line say (Linear hierarchy design 2026-11-10 §11.1 and §7.5, D-8184). L1: pure, no I/O. The sentences a
 // refusal says are `refusalWords.ts`'s (`linkingErrorText`); the box's own text never reaches the screen.
 import type { HierarchyProjectRow } from '../../../shared/plan';
+import { ApiError } from '../lib/apiError';
 import { isPlaceableInstant, releaseDate } from '../lib/format';
 
 /** The labels. Short words only. */
@@ -21,6 +22,20 @@ export const HIERARCHY_TEXT = {
   rereadFailed: 'The hierarchy settings could not be read again. What is shown may be out of date, and a row you changed stays locked until they are read again.',
   readAgain: 'Read again',
 } as const;
+
+/** The ONE reader of "the hierarchy route is absent": an older server answers the read with a 404, which is not a failed read. The
+ *  linking card and the add-project sheet both draw no hierarchy controls and say nothing for it. */
+export const hierarchyAbsent = (err: unknown): boolean => err instanceof ApiError && err.status === 404;
+
+/** The row of a project the hierarchy answer does not list, at the values the server's own rule gives it: the answer lists only
+ *  projects with a stored linking row or a programme home (`planStore.ts` `hierarchyProjectsOf`), so an absent project has no
+ *  linking row (team key null, initiatives on, no owner named, owns no team: the column defaults of `setHierarchySettings`'s
+ *  insert) and is no programme's home, so `latestProgrammeCoordinator` finds none (`planPolicy.ts` `linearOwnerOfProject`:
+ *  source none, not live), and it has no migration state, item or inbound issue. The write accepts such a project. */
+export const defaultHierarchyRow = (project: string): HierarchyProjectRow => ({
+  project, teamKey: null, initiatives: 'on', linearOwner: null, ownsTeam: false,
+  ownerNow: { id: null, source: 'none', live: false }, state: 'not-migrated', stateAt: null, itemId: null, inboundWaiting: 0,
+});
 
 /** The ONE reader of `ownerNow.project`: the project the effective owner was decided for. Absence (an older server) reads as the
  *  project's own owner. */

@@ -22,11 +22,11 @@ import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/pl
 import { ResultLine, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
 import { itemPath } from '../../ledgers/ledgerWords';
 import {
-  HIERARCHY_TEXT, coordinatorWords, defaultOwnerWords, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
+  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
 import { upkeepPath } from '../../lib/routes';
-import { ApiError } from '../../lib/apiError';
+import { writeOutcomeUnknown } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
 import { candidateLabel, candidateWhy, candidatesShown, linkingRowsOf, teamLinkLine } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
@@ -85,8 +85,8 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
   raise: (seq: number) => void; track: (d: 1 | -1) => void; result: ReturnType<typeof useResultLine>;
 }): ReactNode {
   const ownerId = useId();
-  const h = answer.projects.find((p) => p.project === name);
-  if (h === undefined) return null;
+  // A project the answer does not list is drawn at the server's defaults (`defaultHierarchyRow`), and a write sends them.
+  const h = answer.projects.find((p) => p.project === name) ?? defaultHierarchyRow(name);
   const write = (patch: Partial<Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>>): void => {
     setBusy(true);
     track(1);
@@ -98,8 +98,8 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
         // A write can change other rows on the server (an owning-project write clears its siblings), so it raises the card's floor.
         () => { result.say(LINKING_TEXT.saved); raise(reread()); },
         (err: unknown) => {
-          // A write whose result is unknown (not a refusal) may have landed: lock behind a read, as after a success.
-          if (!(err instanceof ApiError)) raise(reread());
+          // A write whose result is unknown (no answer, or a 5xx that can follow a commit) may have landed: lock behind a read, as after a success.
+          if (writeOutcomeUnknown(err)) raise(reread());
           result.say(linkingErrorText(err), 'refusal');
         },
       )
@@ -162,7 +162,7 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
       .then(
         (a) => { onStored(name, a.linking); setNeed(reread()); result.say(LINKING_TEXT.saved); },
         (err: unknown) => {
-          if (!(err instanceof ApiError)) setNeed(reread());
+          if (writeOutcomeUnknown(err)) setNeed(reread());
           result.say(linkingErrorText(err), 'refusal');
         },
       )
@@ -277,7 +277,7 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
     void api.ownerForAll(pick)
       // It wrote every row: every row stays locked until a read at least as new as this write has landed (the card's floor).
       .then(() => { result.say(HIERARCHY_TEXT.allDone); setFloor(reread()); }, (err: unknown) => {
-        if (!(err instanceof ApiError)) setFloor(reread());
+        if (writeOutcomeUnknown(err)) setFloor(reread());
         result.say(linkingErrorText(err), 'refusal');
       })
       .finally(() => { track(-1); setBusy(false); });
@@ -327,7 +327,7 @@ export function ProjectLinkingCard(): ReactNode {
       (err: unknown) => {
         if (mine <= landedRef.current) return;
         setFailedSeq((f) => Math.max(f, mine));
-        setHier((h) => (h.kind === 'read' ? h : { kind: err instanceof ApiError && err.status === 404 ? 'absent' : 'failed' }));
+        setHier((h) => (h.kind === 'read' ? h : { kind: hierarchyAbsent(err) ? 'absent' : 'failed' }));
       },
     );
     return mine;

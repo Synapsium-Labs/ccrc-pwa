@@ -99,6 +99,7 @@ describe('the hierarchy items\' controls', () => {
     click('Check again');
     const status = await screen.findByRole('status');
     expect(status.textContent).toBe(LINEAR_ITEM_TEXT.notQueued);
+    expect(status.textContent).toMatch(/no Linear key serves it, or the plan sync is off/);
     expect(status.textContent).not.toBe(LINEAR_ITEM_TEXT.sent);
     expect(screen.queryByRole('alert')).toBeNull();
     expect(onActed).not.toHaveBeenCalled();

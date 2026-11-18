@@ -13,7 +13,7 @@
 import { useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { OptionRow, RadioFieldset, Select, toast } from '@ccrc/ui';
-import { HIERARCHY_TEXT, coordinatorWords } from './hierarchyWords';
+import { HIERARCHY_TEXT, coordinatorWords, hierarchyAbsent } from './hierarchyWords';
 import type { ProjectAddBody, ProjectAddSource } from '../../../shared/projectAdd';
 import type { ProjectAddOutcome } from './useProjectRows';
 import { NAME_FIELD_CLASS, PlainTextField } from './WorkspaceNameField';
@@ -85,7 +85,7 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
   /** The hierarchy fields (D-8184): the owner chosen (empty: the default), the initiatives toggle, and the coordinators to choose from. */
   const [owner, setOwner] = useState('');
   const [initiatives, setInitiatives] = useState(true);
-  const [coordinators, setCoordinators] = useState<readonly { id: string; live: boolean }[] | 'unread'>([]);
+  const [coordinators, setCoordinators] = useState<readonly { id: string; live: boolean }[] | 'unread' | 'absent'>([]);
   const ownerId = useId();
   // Bumped whenever the form stops showing: an answer issued under an older generation belongs to a form that is gone.
   const generation = useRef(0);
@@ -93,7 +93,7 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
   useEffect(() => {
     if (!active || !linking || loadCoordinators === undefined) return;
     let live = true;
-    loadCoordinators().then((c) => { if (live) setCoordinators(c); }, () => { if (live) setCoordinators('unread'); });
+    loadCoordinators().then((c) => { if (live) setCoordinators(c); }, (err: unknown) => { if (live) setCoordinators(hierarchyAbsent(err) ? 'absent' : 'unread'); });
     return () => { live = false; };
   }, [active, linking, loadCoordinators]);
 
@@ -204,7 +204,7 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
             onEnter={submit}
           />
           {coordinators === 'unread' && <p role="status" className={NAME_FIELD_CLASS.hint}>{LINKING_ADD_TEXT.ownersUnread}</p>}
-          {coordinators !== 'unread' && coordinators.length > 0 && (
+          {coordinators !== 'unread' && coordinators !== 'absent' && coordinators.length > 0 && (
             <div className="grid gap-1">
               <label htmlFor={ownerId} className={NAME_FIELD_CLASS.hint}>{LINKING_ADD_TEXT.owner}</label>
               <Select id={ownerId} value={owner} disabled={adding} onChange={(e) => setOwner(e.target.value)}>
@@ -213,7 +213,8 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
               </Select>
             </div>
           )}
-          <OptionRow label={HIERARCHY_TEXT.initiatives} checked={initiatives} disabled={adding} onClick={() => setInitiatives((v) => !v)} />
+          {/* An older server has no hierarchy route: no controls whose save would 404, and nothing said. */}
+          {coordinators !== 'absent' && <OptionRow label={HIERARCHY_TEXT.initiatives} checked={initiatives} disabled={adding} onClick={() => setInitiatives((v) => !v)} />}
           {form.source === 'github' && (
             <OptionRow label={LINKING_ADD_TEXT.template} checked={template} disabled={adding} onClick={() => setTemplate((t) => !t)} />
           )}
