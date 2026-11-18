@@ -69,7 +69,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 **Files:** Modify `shared/docs.ts`; Test `server/test/docs-shared.test.ts`, `server/test/docs-parity.test.ts`.
 
 **Interfaces:**
-- Produces: `DOCS_RANGE_FRAME_BYTES`, `DOCS_RANGE_MAX_BYTES`, `DOCS_PDF_INLINE_MAX_BYTES`, `DOCS_IMAGE_VIEW_MAX_PIXELS`, `DOCS_RANGE_PREPARE_BUDGET_MS` (value set from lab RANGE-L1, Step 0); `type DocsRangePin = { kind: 'blob'; sha: Sha } | { kind: 'fp'; sha: Sha } | { kind: 'stat'; size: number; mtimeNs: string }`; `interface DocsRangePrepared { snapshot: string; size: number; digest: Sha }`; `interface DocsRangeFrame { snapshot: string; offset: number; bytesB64: string; digest: Sha; total: number }`; range failure words `snapshot-gone`, `draft-changed`, `range-too-large`, `prepare-busy`.
+- Produces: `DOCS_RANGE_FRAME_BYTES`, `DOCS_RANGE_MAX_BYTES`, `DOCS_PDF_INLINE_MAX_BYTES`, `DOCS_IMAGE_VIEW_MAX_PIXELS`, `DOCS_RANGE_PREPARE_BUDGET_MS` (value set from lab RANGE-L1, Step 0); `type DocsRangePin = { kind: 'blob'; sha: Sha } | { kind: 'fp'; sha: Sha } | { kind: 'stat'; size: number; mtimeNs: string }`; `DocsEntry.draft.mtimeNs?: string` (additive, a decimal string of nanoseconds); `statPinOf(e: DocsEntry): DocsRangePin | null` (the one reader: absent or not decimal gives `null`); `EntryView.pin: DocsRangePin | null`; `interface DocsRangePrepared { snapshot: string; size: number; digest: Sha }`; `interface DocsRangeFrame { snapshot: string; offset: number; bytesB64: string; digest: Sha; total: number }`; range failure words `snapshot-gone`, `draft-changed`, `range-too-large`, `prepare-busy`.
 
 - [ ] **Step 0: Lab RANGE-L1.** On a fixture HOME on the fleet box, time `cp` plus sha256 of a 64 MiB file five times; record median and worst in Results; set `DOCS_RANGE_PREPARE_BUDGET_MS` to three times the worst, at least 10000.
 - [ ] **Step 1: Failing tests.** `docs-shared: range ceilings are their own literals` (each constant equals its spec value and none is an alias of another); `docs-parity: ccd range literals equal shared`.
@@ -112,12 +112,12 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P1.5: Markdown in parts, and the overlay cap
 
-**Files:** Create `pwa/src/docs/range/mdParts.ts`; Modify `pwa/src/docs/DocsLeaf.tsx`, `shared/docs.ts#entryView`; Test `pwa/test/docs-md-parts.test.ts` (new), `server/test/docs-shared.test.ts`.
+**Files:** Create `pwa/src/docs/range/mdParts.ts`; Modify `ccd/ccd` (the docs-tree draft entry's `mtimeNs`, from the leaf check's `lstat` `st_mtime_ns`), `pwa/src/docs/DocsLeaf.tsx`, `shared/docs.ts#entryView`, `shared/docs.ts#statPinOf`; Test `pwa/test/docs-md-parts.test.ts` (new), `server/test/docs-shared.test.ts`, `server/test/ccd-docs-tree.test.ts`.
 
 **Interfaces:**
-- Produces: `splitMarkdownParts(text: string, maxBytes: number): { parts: { start: number; end: number; continued: boolean }[] }` (cuts at top-level headings outside fences; a section above `maxBytes` cut at a blank line outside fences); part ids map `Map<string, number>` from the worker pre-pass; `entryView`: a regular draft file with `fp: null` and size at most `DOCS_RANGE_MAX_BYTES` now `opens: 'draft'` with `pin: stat`.
+- Produces: `splitMarkdownParts(text: string, maxBytes: number): { parts: { start: number; end: number; continued: boolean }[] }` (cuts at top-level headings outside fences; a section above `maxBytes` cut at a blank line outside fences); part ids map `Map<string, number>` from the worker pre-pass; `entryView`: a regular draft file with `fp: null`, size at most `DOCS_RANGE_MAX_BYTES` and a readable `mtimeNs` now `opens: 'draft'` with `pin: { kind: 'stat', size, mtimeNs }`; without `mtimeNs` it stays withheld `too-large`.
 
-- [ ] **Step 1: Failing tests:** `md parts: never cuts inside a fence`; `md parts: every part at most 2 MiB`; `md parts: a link into part 3 opens part 3`; `md parts: a part the budget refuses keeps its ids unknown and opens part 1 with a note`; `entryView: a 5 MiB draft opens through its snapshot`; `entryView: a 65 MiB draft stays withheld too-large`.
+- [ ] **Step 1: Failing tests:** `md parts: never cuts inside a fence`; `md parts: every part at most 2 MiB`; `md parts: a link into part 3 opens part 3`; `md parts: a part the budget refuses keeps its ids unknown and opens part 1 with a note`; `entryView: a 5 MiB draft opens through its snapshot`; `entryView: a 65 MiB draft stays withheld too-large`; `entryView: a draft without mtimeNs stays withheld (an older ccd)`; `docs-tree: a draft entry carries mtimeNs as a decimal string`.
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(docs): Markdown in parts and the overlay cap (X2 P1)`.
 
 ## Wave P2: outside folders
@@ -135,7 +135,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Files:** Modify `ccd/ccd` (`cmd_docs_folder_read`, walker), `agent/src/whitelist.ts` (`['docs-folder-read','--label']`); Test `server/test/ccd-docs-folder-read.test.ts` (new).
 
-**Interfaces:** Produces `ccd docs-folder-read --label L --op tree` → `DocsFolderTreeOk { label; entries: { section; path; kind; size; mtimeMs; fp: Sha | null }[]; unlisted }`; `--op show --section S --path X --fingerprint F --max-bytes N`; `--op prepare|range` as P1.2 with the label in the bound tuple. Reads only the six section directories below the held folder descriptor, `O_NOFOLLOW` at every step.
+**Interfaces:** Produces `ccd docs-folder-read --label L --op tree` → `DocsFolderTreeOk { label; entries: { section; path; kind; size; mtimeNs: string; fp: Sha | null }[]; unlisted }` (the same `mtimeNs` as the docs-tree draft entry); `--op show --section S --path X --fingerprint F --max-bytes N`; `--op prepare|range` as P1.2 with the label in the bound tuple. Reads only the six section directories below the held folder descriptor, `O_NOFOLLOW` at every step.
 
 - [ ] **Step 1: Failing tests:** `folder read: only the six sections list`; `folder read: a component swapped for a symlink after add refuses`; `folder read: an escaping symlink is listed, never read`; `folder read: a FIFO is listed, never opened`; `folder read: a directory loop ends`; `folder read: dot components skipped`; `folder read: no absolute path in any answer` (scan of every answer shape); `folder range: a frame after remove refuses`.
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(ccd): docs-folder-read (X2 P2)`.
@@ -342,6 +342,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.48 | P4.2 | Resolve a bare name to the tag before the branches | ref: a name that is both a branch and a tag opens the branch |
 | M11.49 | P5.3 | Hand a stale place of another visit to the router instead of skipping it | places: stale places after navigating away cost no extra Back |
 | M11.50 | P5.2 | Import `resolveItemLink` from the render job | docs-ring: resolveItemLink is imported only by trackerLinkJob.ts |
+| M11.51 | P1.5 | Default a missing `mtimeNs` to `"0"` in `statPinOf` | entryView: a draft without mtimeNs stays withheld |
 | M11.56 | P2.3 | Drop `docs-folder --add` from the hook's jq verb lists | session hook: docs-folder --add is denied in a child |
 
 ## Deviations found
