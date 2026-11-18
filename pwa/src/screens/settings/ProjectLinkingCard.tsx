@@ -130,9 +130,9 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, setNeed, r
   );
 }
 
-function LinkingRow({ name, linking, now, onStored, answer, landed, reread }: {
+function LinkingRow({ name, linking, now, onStored, answer, landed, floor, reread }: {
   name: string; linking: ProjectLinkingWire; now: number; onStored: (project: string, linking: ProjectLinkingWire) => void;
-  answer: HierarchyAnswer | null; landed: number; reread: () => number;
+  answer: HierarchyAnswer | null; landed: number; floor: number; reread: () => number;
 }): ReactNode {
   const keyId = useId();
   const overrideId = useId();
@@ -233,7 +233,7 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, reread }: {
         )}
         {pr !== null && <TextLink href={pr}>{LINKING_TEXT.templatePr}</TextLink>}
       </div>
-      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={landed < need} setBusy={setBusy} setNeed={setNeed} result={result} />}
+      {answer !== null && <HierarchyCell name={name} answer={answer} reread={reread} busy={busy} locked={landed < Math.max(need, floor)} setBusy={setBusy} setNeed={setNeed} result={result} />}
       <div className="linking-result"><ResultLine line={result.line} /></div>
       <QuickConfirm
         open={asking}
@@ -253,7 +253,7 @@ function withTemplatePresent(l: ProjectLinkingWire): ProjectLinkingWire {
 }
 
 /** The card's one act on every project (D-8184): pick a coordinator, then confirm. The answer is read back, not assumed. */
-function OwnerForAll({ answer, reread }: { answer: HierarchyAnswer; reread: () => Promise<void> }): ReactNode {
+function OwnerForAll({ answer, reread, setFloor }: { answer: HierarchyAnswer; reread: () => number; setFloor: (seq: number) => void }): ReactNode {
   const pickId = useId();
   const [pick, setPick] = useState('');
   const [asking, setAsking] = useState(false);
@@ -263,7 +263,8 @@ function OwnerForAll({ answer, reread }: { answer: HierarchyAnswer; reread: () =
     setBusy(true);
     result.clear();
     void api.ownerForAll(pick)
-      .then(() => { result.say(HIERARCHY_TEXT.allDone); return reread(); }, (err: unknown) => result.say(linkingErrorText(err), 'refusal'))
+      // It wrote every row: every row stays locked until a read at least as new as this write has landed (the card's floor).
+      .then(() => { result.say(HIERARCHY_TEXT.allDone); setFloor(reread()); }, (err: unknown) => result.say(linkingErrorText(err), 'refusal'))
       .finally(() => setBusy(false));
   };
   return (
@@ -298,9 +299,9 @@ export function ProjectLinkingCard(): ReactNode {
   // the number of the read its own write started.
   const seqRef = useRef(0);
   const landedRef = useRef(0);
-  const start = useCallback((): { seq: number; done: Promise<void> } => {
+  const reread = useCallback((): number => {
     const mine = ++seqRef.current;
-    const done = api.hierarchy().then(
+    void api.hierarchy().then(
       (answer) => {
         if (mine <= landedRef.current) return;
         landedRef.current = mine;
@@ -311,10 +312,10 @@ export function ProjectLinkingCard(): ReactNode {
         setHier((h) => (h.kind === 'read' ? { ...h, stale: true } : { kind: err instanceof ApiError && err.status === 404 ? 'absent' : 'failed' }));
       },
     );
-    return { seq: mine, done };
+    return mine;
   }, []);
-  const reread = useCallback((): number => start().seq, [start]);
-  const rereadDone = useCallback((): Promise<void> => start().done, [start]);
+  // The seq of the read the last owner-for-all save needs: a floor every row's lock also checks.
+  const [floor, setFloor] = useState(0);
 
   useEffect(() => {
     let live = true;
@@ -339,7 +340,7 @@ export function ProjectLinkingCard(): ReactNode {
       : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
           <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} reread={reread} />)}
+            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} reread={reread} />)}
           </ul>
         );
   }
@@ -350,7 +351,7 @@ export function ProjectLinkingCard(): ReactNode {
           <p className="settings-note">{HIERARCHY_TEXT.rereadFailed}</p>
           <Button variant="ghost" onClick={() => reread()}>{HIERARCHY_TEXT.readAgain}</Button>
         </div>}{body}
-        {answer !== null && read.kind === 'read' && read.rows.length > 0 && <OwnerForAll answer={answer} reread={rereadDone} />}</div>
+        {answer !== null && read.kind === 'read' && read.rows.length > 0 && <OwnerForAll answer={answer} reread={reread} setFloor={setFloor} />}</div>
     </Section>
   );
 }

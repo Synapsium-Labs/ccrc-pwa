@@ -478,6 +478,45 @@ describe('the hierarchy settings', () => {
     expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
   });
 
+  it('after an owner-for-all save every row stays locked until a read as new as it has landed, then writes the stored owner', async () => {
+    const save = await twoRows();
+    vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 2 });
+    const held1 = held<HierarchyAnswer>();
+    const stored = hier([hrow('project-a', { linearOwner: 'coord-b' }), hrow('project-b', { teamKey: 'BBB', linearOwner: 'coord-b' })]);
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => held1.promise);
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    expect(initiativesBox('project-a')).toBeDisabled();
+    expect(save).not.toHaveBeenCalled();
+    await act(async () => { held1.resolve(stored); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(1));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('a failed re-read after an owner-for-all save keeps every row locked until Read again lands', async () => {
+    await twoRows();
+    vi.spyOn(api, 'ownerForAll').mockResolvedValue({ ok: true, projects: 2 });
+    vi.mocked(api.hierarchy).mockRejectedValue(new TypeError('offline'));
+    const region = screen.getByRole('region', { name: SETTINGS_CARDS.security.linking.title });
+    fireEvent.change(await within(region).findByLabelText(HIERARCHY_TEXT.allPick), { target: { value: 'coord-b' } });
+    fireEvent.click(within(region).getByRole('button', { name: HIERARCHY_TEXT.allAct }));
+    fireEvent.click(await screen.findByRole('button', { name: HIERARCHY_TEXT.allConfirm }));
+    expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(ownerSelect('project-b')).toBeDisabled();
+    vi.mocked(api.hierarchy).mockImplementation(async () => hier([hrow('project-a', { linearOwner: 'coord-b' }), hrow('project-b', { teamKey: 'BBB', linearOwner: 'coord-b' })]));
+    fireEvent.click(screen.getByRole('button', { name: HIERARCHY_TEXT.readAgain }));
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+    expect(ownerSelect('project-a')).not.toBeDisabled();
+  });
+
   it('a stamp the clock cannot place says no date rather than throwing', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state: 'migrated', stateAt: 1e20 })]));
     expect(await within(rowOf('project-a')).findByText('Migrated')).toBeInTheDocument();
