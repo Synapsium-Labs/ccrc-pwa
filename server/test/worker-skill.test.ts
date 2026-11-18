@@ -25,6 +25,9 @@ import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
 import { STALL_RESUMING_KINDS, STALL_WAKE_KINDS } from '../src/coord/stall.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
+import { TICKET_KINDS } from '../../shared/plan.js';
+import { parsePlanTicketAdd } from '../src/coord/planPolicy.js';
+import { clientRoutes } from './ccrcApiTable.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/worker-skill');
@@ -1053,5 +1056,43 @@ describe('the worker skill: the Linear section links by the repository\'s visibi
 
   it('it names no tracker id of this repository', () => {
     expect(linear).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
+  });
+});
+
+// Linear hierarchy wave 6 (D-8185, plan Task 6.2): a worker files the work it leaves for later as a follow-up ticket of its
+// own run's epic through `plan ticket-add`, never as a Linear issue, and the Linear skill says the hierarchy is ccrc's.
+describe('the worker skill: follow-ups go into the plan (D-8185)', () => {
+  const linear = skill.slice(skill.indexOf('\n## Linear\n'), skill.indexOf('\n## When something is wrong'));
+  const block = (): string => {
+    const m = /```bash\n("\$API" plan ticket-add <slug> --json - <<JSON\n(\{[^\n]+\})\nJSON\n)```/.exec(linear);
+    expect(m, 'the Linear section has no executable `plan ticket-add` block').not.toBeNull();
+    return m![2]!;
+  };
+
+  it('the worker files follow-ups with plan ticket-add into its own epic', () => {
+    const flat = linear.replace(/\s+/g, ' ');
+    expect(flat).toContain('**A follow-up goes into the plan, never straight into Linear.**');
+    expect(flat).toContain('a `follow-up` ticket in your own run\'s epic');
+    expect(flat).toContain('`plan show <slug>`');
+    expect(flat).toContain('`plan-owned`');
+    expect(clientRoutes().map((r) => r.key)).toEqual(expect.arrayContaining(['plan.ticket-add', 'plan.show']));
+    expect(TICKET_KINDS as readonly string[]).toContain('follow-up');
+  });
+
+  it('its example body is one the route parses, as a follow-up', () => {
+    const body = JSON.parse(block().replace(/<your run's epic>/g, 'w1-capture').replace(/<new key>/g, 'w1-later')
+      .replace(/<what is left>/g, 'Write the notes')) as unknown;
+    const parsed = parsePlanTicketAdd(body);
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    expect(parsed.ok && parsed.add.ticket.kind).toBe('follow-up');
+  });
+
+  it('the Linear skill says the hierarchy is ccrc\'s', () => {
+    const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(linearSkill).toContain('**The hierarchy is ccrc\'s.**');
+    expect(linearSkill).toContain('that restore comment is ccrc\'s own');
+    expect(linearSkill).toContain('Never edit one of these by hand');
+    expect(linearSkill).toContain('never file a hierarchy object or a ticket there with `linear create`');
+    expect(linearSkill).toContain('`plan ticket-add`');
   });
 });
