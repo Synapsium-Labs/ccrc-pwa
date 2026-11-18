@@ -405,7 +405,9 @@ All of run 2209's reserve is defined: 8660, 8661, 8662.
   back button is one element that a single phone-head shell keeps across that swap, so it retains focus and the next Tab
   follows the one bar's order. The compact head's Share, Export and Page details have no counterpart in the same place in
   the one bar (Share and Export move into its panel, and its title opens the panel), so focus on one of them drops to the
-  page body when the swap happens. Two ways out are excluded: refocusing an equivalent control after the swap (a
+  page body when the swap happens. So does focus on a control inside the open Page details panel (a crumb, the truth
+  line's links, GitHub or Open committed version): the swap closes the panel, as the two heads did before the shell, and
+  draws its content anew, so focus is never left on a hidden control. Two ways out are excluded: refocusing an equivalent control after the swap (a
   mount-then-refocus), and moving those controls, which would change what the phone draws (both 2026-11-06 phone blocks
   stay byte for byte, and the one bar's layout and order are unchanged). Issued from run 2436's reserve; 8731 and 8732 stay
   in reserve.

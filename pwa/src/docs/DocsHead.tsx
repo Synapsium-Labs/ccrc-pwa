@@ -1162,8 +1162,10 @@ function PhoneHead(p: CompactProps & { readonly tree: DocsTreeOk; readonly bar: 
         id={panelId} className="docs-more-panel" role="region" aria-label={DOCS_HEAD_TEXT.more} onKeyDown={onKeyDown}
         hidden={!open}
       >
-        <Crumbs key={p.crumbs.at(-1)?.href} crumbs={p.crumbs} unfold />
-        <TruthLine page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
+        {/* Keyed by the state, so the swap draws the panel's content anew, as the two heads did before this shell: a
+            control focused inside the open panel is not left focused, hidden, once the swap closes it (D-8730). */}
+        <Crumbs key={`${bar === null ? 'row' : 'bar'}:${p.crumbs.at(-1)?.href ?? ''}`} crumbs={p.crumbs} unfold />
+        <TruthLine key={bar === null ? 'row' : 'bar'} page={page} visit={visit} tree={tree} receivedAt={p.receivedAt} now={p.now} />
         {bar === null
           ? <CompactPanelTail tree={tree} head={head} />
           : (

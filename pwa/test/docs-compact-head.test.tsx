@@ -478,6 +478,20 @@ describe('the phone head is one shell across the swap at ready (asks 554 and 555
     expect(document.activeElement).toBe(nodes.back);
   });
 
+  it('a control focused inside the open panel is drawn anew at the swap, so it is not left focused and hidden (D-8730)', () => {
+    const { el, bar } = phone();
+    const { rerender } = render(el(null));
+    fireEvent.click(more());
+    const link = region().querySelector<HTMLElement>('a[href]');
+    expect(link, 'the open panel holds a link (a crumb)').not.toBeNull();
+    link!.focus();
+    expect(document.activeElement).toBe(link);
+    rerender(el(bar));
+    expect(region(), 'the swap closes the panel').toHaveAttribute('hidden');
+    expect(link!.isConnected, 'the focused link was drawn anew, not kept inside the closed panel').toBe(false);
+    expect(document.activeElement, 'so focus is not left on a hidden control').toBe(document.body);
+  });
+
   it('the swap replaces what differs: Page details gives way to the title, and each names the one panel', () => {
     const { el, bar } = phone();
     const { rerender } = render(el(null));
