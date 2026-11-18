@@ -103,6 +103,8 @@ import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { ladderConditionInputs } from './coord/overlordLadderRead.js';
+import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
@@ -274,7 +276,7 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
-  '/api/portfolio',
+  '/api/portfolio', '/api/overlord/ladder',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2299,7 +2301,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
-    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    ladder: deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY },
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({

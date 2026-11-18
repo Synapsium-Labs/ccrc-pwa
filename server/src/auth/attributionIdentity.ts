@@ -27,6 +27,10 @@ const MINTED = new WeakSet<object>();
 export const isRecordedActor = (a: unknown): a is RecordedActor =>
   typeof a === 'object' && a !== null && MINTED.has(a);
 
+/** An operator admitted by the account gate, with adapter provenance intact. */
+export const isAccountGateOperator = (a: unknown): a is RecordedActor =>
+  isRecordedActor(a) && a.kind === 'operator' && a.issuer === 'account-gate' && a.strength === 'operator';
+
 const mint = (actor: ActorWire): RecordedActor => {
   const frozen = Object.freeze({ ...actor }) as RecordedActor;
   MINTED.add(frozen);

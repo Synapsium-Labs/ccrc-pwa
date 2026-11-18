@@ -839,11 +839,12 @@ describe('Build 7 nouns', () => {
     // The Overlord authority journal (Overlord W1, H27): `overlordAuthorityJournal.ts` is `overlord_authority_head`'s one writer,
     // inside its caller's transaction, and its read; it names the handle by `import type`, and every method takes it as an argument.
     // The designation (Overlord W1, C2): `overlordDesignationStore.ts` is `overlord_designation`'s SQL, in `ledgersStore.ts`' idiom.
+    // The ladder (Overlord W1, C5): `overlordLadderStore.ts` is `overlord_ladder`'s and `overlord_latches`' SQL, in the same idiom.
     // Overlaps (Overlord W2): `claimCollisions.ts` is `claim_collisions`' one writer and its read, and `programmePairsStore.ts`
     // is `programme_pairs`' writers and reads, in `answerMarkStore.ts`' idiom.
     // The decision-model records (Overlord W2): `decisionModelStore.ts` is `decision_records`' and `decision_days`' SQL, in
     // `ledgersStore.ts`' idiom; the one caller reaches it through the `DecisionAskStore` port and never holds the handle.
-    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts',
+    const HANDLE_HOLDERS = new Set(['store.ts', 'rundefsTx.ts', 'routes.ts', 'db.ts', 'schema.ts', 'tx.ts', 'ledgersStore.ts', 'reviewCapStore.ts', 'linkingStore.ts', 'coordCallsStore.ts', 'practiceCasesStore.ts', 'planStore.ts', 'claudeBuildsStore.ts', 'pushOutboxStore.ts', 'portfolioStore.ts', 'answerMarkStore.ts', 'overlordAuthorityJournal.ts', 'overlordLadderStore.ts',
       'responsesStore.ts', 'claimCollisions.ts', 'programmePairsStore.ts', 'decisionModelStore.ts',
       'programmeFactsStore.ts', 'overlordDesignationStore.ts']);
     const coordFiles = sources(coordDir);

@@ -754,10 +754,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2),
-    // and MIGRATIONS[98] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
+    // and MIGRATIONS[99] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups, D-8734, D-8735).
-    expect(COORD_SCHEMA_VERSION).toBe(99);
-    expect(MIGRATIONS.length).toBe(99);
+    expect(COORD_SCHEMA_VERSION).toBe(100);
+    expect(MIGRATIONS.length).toBe(100);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -881,9 +882,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[95] (the designation actor columns, gates A),
     // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2),
-    // and MIGRATIONS[98] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
+    // and MIGRATIONS[99] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(99);
+    expect(COORD_SCHEMA_VERSION).toBe(100);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1834,7 +1836,8 @@ describe('coord.db: migration 12 — runs.coordProject', () => {
   it('a database from a NEWER build still READS — rollback is real', () => {
     const dir = mkTmp('ccrc-mig12-fwd-');
     const p = path.join(dir, '.ccrc', 'coord.db');
-    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    // a newer build at any schema length: one past this build's version, derived, never a hand-kept literal (review 2524 merge)
+    const db = openCoordDb(p); db.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 1}`); db.close();
     expect(() => openCoordDb(p).close()).not.toThrow();
   });
 });

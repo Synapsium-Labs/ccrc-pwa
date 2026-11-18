@@ -216,12 +216,15 @@ rotation, and this file describes the lane, not its availability.
 `mv -f`, the repo's rule for any file another process reads):
 
 ```json
-{ "probe": "codex", "fetchedAt": 1789000000, "stale": false,
+{ "probe": "codex", "fetchedAt": 1789000000, "stale": false, "clientVersion": "0.170.0",
   "models": [ { "id": "gpt-6-astra", "label": "GPT-6-Astra", "context": 272000,
                 "maxContext": 872000, "efforts": ["low","medium","high","xhigh","max","ultra"],
                 "hidden": false, "priceIn": null, "priceOut": null } ] }
 ```
 
+`clientVersion` (a Codex catalogue only, D-8743) records the Codex client
+version the catalogue was fetched as, a plain `X.Y.Z`; older readers ignore it,
+and a catalogue fetched before it, or through the test seam, has none.
 `probe` records which probe wrote it (the registry file's `probe`; the
 account-connections `provider` is not on `main` and is not this file's
 concern). Absent file = **never probed**, a distinct state from an empty
@@ -256,10 +259,28 @@ One probe per lane, selected by the registry file's `probe`:
 
 | provider | probe | credential | notes |
 |---|---|---|---|
-| `codex` (ChatGPT/Codex) | `GET https://chatgpt.com/backend-api/codex/models?client_version=0.170.0` | the lane's OAuth (`$CHATGPT_TOKEN_DIR/auth.json`, refreshed by LiteLLM's `Authenticator`) + `ChatGPT-Account-Id` | the same call `ccgpt` documents; `client_version` is a constant in the probe, bumped deliberately |
+| `codex` (ChatGPT/Codex) | `GET https://chatgpt.com/backend-api/codex/models?client_version=<version>` | the lane's OAuth (`$CHATGPT_TOKEN_DIR/auth.json`, refreshed by LiteLLM's `Authenticator`) + `ChatGPT-Account-Id` | the same call `ccgpt` documents; `<version>` tracks the published Codex CLI release (amended 2026-11-18, D-8743, below the table) |
 | `openrouter` | `GET https://openrouter.ai/api/v1/models` | none for the list; the lane's key for `/models/{author}/{slug}/endpoints` | catalogue is NOT filtered by the ownership whitelist (that needs one endpoints call per model); the check happens at **discovery-add** (§8): the endpoints call runs once and the UI shows which whitelisted providers serve the model, refusing the add if none do |
 | `compatible` | `GET <baseUrl>/v1/models` | the lane's token | best effort; a 404 leaves "never probed" and the discovery list must be explicit |
 | (Anthropic lanes) | none | — | no registry file; classes are client defaults |
+
+**Amendment, 2026-11-18 (D-8743, model-class-advance wave 2):** the Codex
+client version is no longer bumped by hand. The probe asks as the greater of
+the published Codex CLI release (npm's `@openai/codex` at its `latest`
+dist-tag, a plain `X.Y.Z` only) and its shipped constant `CODEX_CLIENT_VERSION`,
+which stays as a floor and is never undercut. The release is looked up at most
+once an hour for the whole box and cached in
+`~/.ccrc/codex-client-release.json`. The lookup itself is bounded at 10 s by
+curl, and its whole worst case, the lock wait included, is about 30 s; a
+failed or slow lookup uses the cached release, else the floor, and never fails
+the catalogue fetch. It runs only once the lane's credential has passed its
+gate, so a run that sent nothing asked npm for nothing.
+No credential goes to npm. The request's user-agent carries the same version,
+and the catalogue records it as `clientVersion` (§4.2). This reverses the
+original "bumped deliberately" rule under the owner's rule of 2026-10-07 that
+nobody keeps model currency up by hand: a newer client version can list a
+model the bridge serves badly, and each class move still waits on a passing
+canary.
 
 `ccrc models refresh [<id>|--all]` runs the probe(s), writes the catalogue,
 then runs the materialiser's LiteLLM step for `codex` lanes if the visible

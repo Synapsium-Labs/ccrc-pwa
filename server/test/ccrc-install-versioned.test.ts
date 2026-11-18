@@ -5,6 +5,7 @@ import { spawnSync } from 'node:child_process';
 import { mkdirSync, readFileSync, writeFileSync, existsSync, statSync, readdirSync, rmSync, symlinkSync, utimesSync, lstatSync, readlinkSync } from 'node:fs';
 import path, { join } from 'node:path';
 import { mkTmp, removeTmpFixturesEachTest } from './tmpHelpers.js';
+import { stripCcrcKnobs } from './ccdWsHelpers.js';
 import { ccrcContainedEnv } from './ccrcContainment.js';
 import { assertNoRealTool } from './containedTools.js';
 import { itLinux, itDarwin } from './platformFixtures.js';
@@ -241,7 +242,7 @@ describe('ccrc install: the versioned tree (W6 Task 2)', () => {
     // Wave 9 R10d (D-3818): from `ccrcContainedEnv`, with its own `sourced-poison` still prepended — it answers first.
     const env = ccrcContainedEnv(home, process.env, { managers: true, curl: 'poison' });
     env['PATH'] = `${poison}:${env['PATH'] ?? ''}`;
-    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    stripCcrcKnobs(env);
     return env;
   };
   const sourced = (home: string, ccrc: string, snippet: string): Result => {

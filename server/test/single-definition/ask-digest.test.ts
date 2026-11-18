@@ -6,6 +6,7 @@ import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
 import { FORBIDDEN_CCD_VERBS } from '../../src/coord/approvalguard.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
+import { parseFile, parseSource, type CallSite } from '../scan/parse.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -1173,6 +1174,16 @@ describe('the approval wait\'s constants and canonical forms each have one home 
 describe('the approvals server half\'s vocabulary and windows each have one home (D-5298, D-5441)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
   const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=`);
+  // Only the ladder's typed witness receivers are unrelated to the claimant decision. Any other receiver or bare call stays visible.
+  const claimantCall = (file: string, call: CallSite): boolean => call.name === 'heldFor' && !(
+    (file === 'server/src/coord/overlordLadderRead.ts' && call.callee === 'witness.heldFor') ||
+    (file === 'server/src/coord/overlordRoutes.ts' && call.callee === '(ladder.witness ?? NO_WITNESS_YET).heldFor'));
+  it('CONTROL: claimant calls remain visible while the independent witness method is not', () => {
+    const calls = parseSource('heldFor(x); d.heldFor(x); witness.heldFor(x);').calls;
+    expect(calls.filter((c) => claimantCall('server/src/coord/overlordLadderRead.ts', c)).map((c) => c.callee)).toEqual(['heldFor', 'd.heldFor']);
+    expect(decl('heldFor').test('function heldFor() {}')).toBe(true);
+    expect(decl('heldFor').test('interface NarrowingWitness { heldFor(n: number): boolean }')).toBe(false);
+  });
   it('CONTROL: the pattern sees a declaration and passes over a use', () => {
     expect(decl('ApprovalState').test('import { type ApprovalState, isApprovalState } from')).toBe(false);
     expect(decl('approvalWindowMs').test('export function approvalWindowMs(agentId: string): number {')).toBe(true);
@@ -1196,7 +1207,8 @@ describe('the approvals server half\'s vocabulary and windows each have one home
     // so did the hold's (`raise`, D-7028; W3 Q3d, named exception 2), so `watch.ts` leaves the list; and the rule
     // handler's moved into the claimant's core (`rule`, D-7030; W3 Q3f, named exception 2), so `coord/routes.ts` leaves
     // it too.
-    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/questions.ts']);
+    const callers = ALL.filter((f) => /\bheldFor\b/.test(stallCode(f)) && parseFile(f).calls.some((c) => claimantCall(rel(f), c))).map(rel).sort();
+    expect(callers).toEqual(['server/src/coord/questions.ts']);
   });
   it('the 60 000 ms window is spelled nowhere but its home', () => {
     expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);

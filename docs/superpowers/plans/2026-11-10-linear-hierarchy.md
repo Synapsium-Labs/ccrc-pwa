@@ -1696,15 +1696,17 @@ Every task here adds jsdom tests (`pwa/test/*.test.tsx`) and a browser file run 
 | 1280, 1470 | The row's first line holds name, key and visibility; the second the owner select, toggle and state |
 | 1920 | One grid line per row; the state line wraps under the row only when long |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the empty owner option names the default and whether it is live`, `saving the owner renders the stored row`,
+- [x] **Step 1: Write the failing tests** — jsdom: `the empty owner option names the default and whether it is live`, `saving the owner renders the stored row`,
   `the owning-project control shows only for a shared key`, `the state line links the map item`, `a refusal shows its fixed sentence`;
   browser: no sideways scroll, no clipped text with a long project name, the table above, all twenty views.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement**; words in `hierarchyWords.ts`.
-- [ ] **Step 4: Run to pass** — both.
-- [ ] **Step 5: Commit** — `feat(console): the Linear owner and hierarchy settings per project (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`, then the browser file.
+- [x] **Step 3: Implement**; words in `hierarchyWords.ts`.
+- [x] **Step 4: Run to pass** — both.
+- [x] **Step 5: Commit** — `feat(console): the Linear owner and hierarchy settings per project (D-8184)`.
 
 ### Task 5.2: The programme page's Plan section
+
+Not built: the work map's Work card (desktop-polish) replaces this section, by the ledger's ruling of 2026-11-16. Its boxes stay unticked.
 
 **Files:** Create `pwa/src/ledgers/PlanSection.tsx`, `pwa/src/ledgers/planWords.ts`; Modify
 `pwa/src/ledgers/ProgrammeScreen.tsx`, `pwa/src/ledgers/ledgers.css`, `pwa/src/lib/api.ts` (`plan(slug)`);
@@ -1750,14 +1752,14 @@ is Task 4.3's); Test `pwa/test/epic-screen.test.tsx`, `pwa/browser/epic-page.bro
 | 1280, 1470 | Checkpoints and tickets side by side |
 | 1920 | The same, each ticket's run state inline |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `evidence {pr} links the pull request, {itemId} the item, {path} the Docs reader`,
+- [x] **Step 1: Write the failing tests** — jsdom: `evidence {pr} links the pull request, {itemId} the item, {path} the Docs reader`,
   `a ticket with a run links /runs/<id>`, `an unknown epic key says "No such epic in this programme"`,
   `the Upkeep page lists its tickets and no checkpoints`, `matchRoute parses both new paths and refuses a bad slug`;
   browser (`epic-page.browser.test.ts`): the table above in twenty views.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/epic-screen.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement** both screens over one `EpicBody` component and the two route rows.
-- [ ] **Step 4: Run to pass** — both, plus `test/app.test.tsx` (the route table's matches).
-- [ ] **Step 5: Commit** — `feat(console): the epic and Upkeep pages (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/epic-screen.test.tsx`, then the browser file.
+- [x] **Step 3: Implement** both screens over one `EpicBody` component and the two route rows.
+- [x] **Step 4: Run to pass** — both, plus `test/app.test.tsx` (the route table's matches).
+- [x] **Step 5: Commit** — `feat(console): the epic and Upkeep pages (D-8184)`.
 
 ### Task 5.4: The five hierarchy items' controls
 
@@ -1782,15 +1784,15 @@ dispatches a linear action to it; `carriesControls`), `pwa/src/ledgers/ItemView.
 
 The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DOOR_WORDS['hand-to-coordinator']`).
 
-- [ ] **Step 1: Write the failing tests** — jsdom: one per act, asserting the body sent (`{act:'approve'}`,
+- [x] **Step 1: Write the failing tests** — jsdom: one per act, asserting the body sent (`{act:'approve'}`,
   `{act:'return', note}`, `{act:'put-back'}`, `{act:'done'}`, `{act:'hand'}`, `{act:'keep'}`, `{act:'check-again'}`,
   `{act:'name', owner}`); `an act the server refuses shows its fixed sentence`; `the map's counts come before its groups`;
   browser (`linear-items.browser.test.ts`): the table above in twenty views, the act bar visible at 360 with a
   200-issue map scrolled to its middle.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/linear-item-controls.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement** `LinearItemControls` and the two bodies; `ItemControls` dispatches on `isLinearItemAction`.
-- [ ] **Step 4: Run to pass** — both, plus `test/item-view.test.tsx`.
-- [ ] **Step 5: Commit** — `feat(console): the hierarchy items' controls (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/linear-item-controls.test.tsx`, then the browser file.
+- [x] **Step 3: Implement** `LinearItemControls` and the two bodies; `ItemControls` dispatches on `isLinearItemAction`.
+- [x] **Step 4: Run to pass** — both, plus `test/item-view.test.tsx`.
+- [x] **Step 5: Commit** — `feat(console): the hierarchy items' controls (D-8184)`.
 
 ---
 
