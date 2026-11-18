@@ -150,6 +150,23 @@ describe('ladder actor authority', () => {
       expect(r.entries).toEqual([]);
     } finally { r.db.exec('ROLLBACK'); r.db.close(); }
   });
+  it('rejects a console raise before opening a store transaction', () => {
+    const r = rig();
+    r.db.exec('BEGIN');
+    try {
+      expect(r.store.setRung(r.journal, { from: 'off', to: 'chat', actor: identity.console(false, null), at: 2, opKey: 'op' }))
+        .toEqual({ ok: false, reason: 'actor' });
+      expect(r.entries).toEqual([]);
+    } finally { r.db.exec('ROLLBACK'); r.db.close(); }
+  });
+  it('rejects an invalid destination at the start of the in-transaction writer', () => {
+    const r = rig();
+    const input = { from: 'off', to: 'bogus', actor: operator, at: 2, opKey: 'op' } as unknown as RungMoveInput;
+    expect(tx(r.db, () => setRungInTx(r.db, r.journal, input))).toEqual({ ok: false, error: 'bad-entry' });
+    expect(r.entries).toEqual([]);
+    expect(r.db.prepare('SELECT operatorRung, actor FROM overlord_ladder').get()).toMatchObject({ operatorRung: 'off', actor: 'old' });
+    r.db.close();
+  });
   it('the in-transaction rung writer refuses a console result for a measured raise', () => {
     const r = rig();
     const input: RungMoveInput = { from: 'off', to: 'chat', actor: identity.console(false, null), at: 2, opKey: 'op' };

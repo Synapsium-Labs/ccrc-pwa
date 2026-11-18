@@ -218,6 +218,7 @@ export function journalPendingInTx(db: DatabaseSync, journal: AuthorityAppender,
  *  `journalPendingInTx`, then re-reads the rung, appends `authority-rung {from, to}`, and reacts to the answer (question 3).
  *  Writes nothing (answers `changed: false`) when the row already holds `to`; over an absent row `chat` is the rung held. */
 export function setRungInTx(db: DatabaseSync, journal: AuthorityAppender, move: RungMoveInput): LadderWrite {
+  if (!isRung(move.to)) return { ok: false, error: 'bad-entry' };
   const before = heldRung(db);
   const wordBefore = before === null ? LADDER_DEFAULT_RUNG : before.operatorRung;
   // An unknown word normalizes to full for the journal, but may only be braked to off.
