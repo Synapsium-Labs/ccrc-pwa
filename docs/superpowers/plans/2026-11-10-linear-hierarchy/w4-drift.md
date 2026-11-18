@@ -175,12 +175,22 @@ migration is 92. Every fix has a test seen red against the code before it.
 
 The review read 6e4a12a3c with the full panel; round 2's fixes were all built as ruled, and six of its eight mutations went
 red. The coordinator ruled a short, closed list for this round (mail 23411), and carried the rest to a follow-up run after
-landing (below). Main was merged four times in this round, each on the coordinator's word: done tests A (#2964) took 92,
+landing (below). Main was merged five times in this round, each on the coordinator's word: done tests A (#2964) took 92,
 the work map WM0 (#2974) took 93 (its phases, the `plan phase-ref` lane and row, `plan-phases-v1`, and the refusal words
 `unknown-ref` and `bad-carry`, kept beside this wave's), designation C (#2992) added two session-gated Settings doors
 (route counts only), and, after the queue dropped the PR, forecasts A (#2987) took 94 and added the `forecasts` lane beside
 this wave's `linearDrift` (51 monotonic lanes), so the migration is 95 (coord-db pins 95; the run-close replay undoes back
-to 53 and replays forty-two). The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 163 gated, 98 exempt, 86
+to 53 and replays forty-two). Then the Overlord's other lanes A (#2996) landed, and this pull request became the second
+lander of that crossing (`plan-doors-grow-on-the-hierarchy-wave` in its notes): this wave's two plan write doors join
+`OTHER_LANES` as `plan-door` rows, `planTake` (`POST /api/programmes/:slug/plan/take`) and `planTriage`
+(`POST /api/teams/:team/plan/triage`, the triage door keyed on its team), each `overlord-uses-its-doors`. `plan/take`
+registers through `door('planTake', …)`. The triage door's `teamDoor` takes a lane and asks `refuseOtherLane` right
+after attribution, before the Linear store read and `serial`, as `door` does. Main still ended at 94, so the migration stays 95,
+and no route was added. #2996's census was widened on the coordinator's ruling (mail 23830) to read this wave's two
+shapes with the same meaning. A plan-door row goes through `door('<lane>', …)` or `teamDoor('<lane>', …)` exactly once,
+the `door` slice ends at `teamDoor`, `callerOf` is held to `opts.attribute`, and a twin order check holds `teamDoor`.
+Its routes suite refuses the two doors with the other seven and admits a plain session past the lane. The pin suite
+is unedited. The census re-counted on the merged tree: 265 routes with the sockets (262 HTTP), 163 gated, 98 exempt, 86
 box-token machine lanes (89 with notify, pools/epoch and updates/intent), and 88 `ccrc-api` rows. Every fix has a test seen red before it: against the previous
 code for F2, A-2, A-3 and A-8, and, for the test-only F1, F4 and A-5, by mutating the line each guards.
 
