@@ -60,6 +60,8 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | `pwa/src/docs/reader/hostAppearance.ts` (new) | L3 | 4 | `readHostAppearance(doc)` over `getComputedStyle` |
 | `pwa/src/docs/reader/assets.ts` | L3 | 4 | `loadReaderFonts()` |
 | `pwa/src/docs/reader/bridge.ts` | L3 | 4 | `appearance` at mount, `setAppearance`, contract detection, fonts |
+| `pwa/src/docs/reader/policy.ts` | L1 | 4 | `readerMountPlan` gains `appearance: boolean` |
+| `pwa/test/reader-policy.test.ts` | — | 4 | The two `readerMountPlan` `.toEqual` rows gain the field |
 | `pwa/test/reader-bridge.test.ts` | — | 4 | Bridge rows |
 | `pwa/src/docs/ReaderFrame.tsx` | L4 | 5 | Seed, post-mount resend, follow, coalesce |
 | `pwa/test/reader-frame.test.tsx` | — | 5 | Frame rows |
@@ -172,7 +174,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 
 **Files:**
 - Create: `pwa/src/docs/reader/hostAppearance.ts`
-- Modify: `pwa/src/docs/reader/bridge.ts`, `pwa/src/docs/reader/assets.ts`, `pwa/test/reader-bridge.test.ts`
+- Modify: `pwa/src/docs/reader/bridge.ts`, `pwa/src/docs/reader/assets.ts`, `pwa/src/docs/reader/policy.ts`, `pwa/test/reader-bridge.test.ts`, `pwa/test/reader-policy.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2's `readerAppearanceOf`, `ReaderAppearanceOutcome`; Task 1's `APPEARANCE_CONTRACT`, `HostAdapters.appearance`, `FrameAssets.fonts`, `DocFrame.setAppearance`.
@@ -208,9 +210,10 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
   - **while open, mode only:** `setAppearance` calls `DocFrame.setPrefs({theme})` once;
   - **after `destroy()`**, `setAppearance` does nothing;
   - **the lab:** with `profile: 'lab-draw'`, no `appearance` is passed and `input.appearance` is never called;
+  - **the plan:** in `reader-policy.test.ts`, the Docs row (`readerMountPlan(undefined, 100, chrome, e17)`) expects `{ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true, appearance: true }`, and the lab row (`readerMountPlan('lab-draw', …)`) expects `{ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }`. Both rows exist on `main` today without the field, so they go red until Step 3;
   - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly;
   - **only the verdict is passed:** with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
-- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts`). Expected: FAIL on the new rows only.
+- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts`). Expected: FAIL on the new rows and the two changed `readerMountPlan` rows only.
 - [ ] **Step 3: Implement.**
   - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer is checked against `READER_APPEARANCE_CONTRACTS`.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
