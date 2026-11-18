@@ -9,7 +9,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type PlanChanges, type PlanStorePort } from '../src/coord/planStore.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
-import { PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_DISPATCH_WAIT_MS, PlanSync, prOfRunFrom } from '../src/linear/planSync.js';
+import { PLAN_SYNC_BACKOFF_MS, PLAN_SYNC_DEBOUNCE_MS, PLAN_SYNC_DISPATCH_WAIT_MS, PlanSync, prOfRunFrom } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
@@ -33,7 +33,7 @@ const ok = (value: Record<string, unknown> = {}, created: string | null = null):
 interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; t: { now: number }; asks: CcrcOpAsk[];
   respond: { current: (ask: CcrcOpAsk) => CcrcOpOutcome | Promise<CcrcOpOutcome> };
-  prs: Map<number, { number: number; branch: string | null }>; sync: PlanSync; runs: number[]; epicId: number;
+  prs: Map<number, { number: number; branch: string | null }>; sync: PlanSync; runs: number[]; epicId: number; ccrcDir: string;
 }
 let dirs: string[] = [];
 let counter = 100;
@@ -50,7 +50,7 @@ async function rig(o: { mode?: 'private' | 'public'; runs?: number; noSlot?: boo
     OWNER, T, { home: 'project-a', title: 'Programme A' });
   const plan = planStorePort(db);
   const epicId = plan.planOf(SLUG).epics[0]!.id;
-  const r = { db, coord, plan, t: { now: T }, asks: [] as CcrcOpAsk[], prs: new Map(), runs: [] as number[], epicId, respond: { current: (ask: CcrcOpAsk): CcrcOpOutcome => {
+  const r = { db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], prs: new Map(), runs: [] as number[], epicId, respond: { current: (ask: CcrcOpAsk): CcrcOpOutcome => {
     if (ask.op.endsWith('Create')) { const id = U(counter++); return ok(ask.op === 'issueCreate' ? { id, identifier: `AAA-${counter}` } : { id }, id); }
     if (ask.op.endsWith('Update') || ask.op === 'issueLink') return ok({ id: ask.target });
     if (ask.op === 'initiativesByName' || ask.op === 'projectsByName') return ok({ nodes: [] });
@@ -107,6 +107,26 @@ describe('the dispatch wait (D-8182, §5.6)', () => {
     expect(links(r)[0]!.target).toBe(ticketBinding(r)!.identifier);
     await tick(r); await tick(r);
     expect(links(r)).toHaveLength(1);                                    // sent once
+  });
+
+  it('D-8183 (round 1 A4): a pass with no PR known sends no update and no second link; a new URL is linked once', async () => {
+    const r = await rig({ mode: 'public' });
+    await tick(r);
+    const updates = (): number => ops(r).filter((o) => o === 'issueUpdate').length;
+    r.prs.set(r.runs[0]!, { number: 7, branch: null });
+    await tick(r);
+    expect(links(r)).toHaveLength(1);
+    const n = updates();
+    r.prs.delete(r.runs[0]!);                                            // a pass where no PR is known (the fleet listing has moved on)
+    await tick(r); await tick(r);
+    expect(updates()).toBe(n);                                           // no update
+    r.prs.set(r.runs[0]!, { number: 7, branch: null });
+    await tick(r); await tick(r);
+    expect(links(r)).toHaveLength(1);                                    // and no second link when it is known again
+    expect(updates()).toBe(n);
+    r.prs.set(r.runs[0]!, { number: 8, branch: null });                  // a new URL is linked once
+    await tick(r); await tick(r);
+    expect(links(r).map((a) => a.input['url'])).toEqual(['https://github.com/owner/repo/pull/7', 'https://github.com/owner/repo/pull/8']);
   });
 
   it('a link answered conflict counts as made, and is not sent again', async () => {
@@ -279,6 +299,29 @@ describe('final-review fixes (D-8182)', () => {
     expect(await r.sync.dispatchSlug(r.runs[0]!, undefined)).toBeUndefined();
     expect(r.asks).toHaveLength(n);
     expect((r.db.prepare('SELECT dueAt FROM plan_sync_due WHERE program = ?').get(SLUG) as { dueAt: number }).dueAt).toBe(held);
+  });
+
+  it('D-8183: a dispatch whose ticket\'s workspace is held starts no pass, though the programme\'s own row is due again', async () => {
+    const r = await rig();
+    await seedSlot(r.ccrcDir, 'b');
+    r.db.prepare("INSERT INTO project_linking (project, teamKey, override) VALUES ('project-b', 'BBB', 'private')").run();
+    applyPlanChanges(r.db, SLUG, { ...NO_PLAN_CHANGES(), epics: { insert: [{ key: 'e2', project: 'project-b', waves: [1], ordinal: 1, title: 'Epic two', summary: 'Summary two' }], update: [], drop: [] } } as PlanChanges, OWNER, T, null);
+    // workspace a answers rate-limited with a long wait (its hold is long), workspace b unreachable (its hold is the short backoff)
+    r.respond.current = (ask) => {
+      if (ask.op === 'projectCreate' && ask.workspaceId === WS.a.id) return { ok: false, word: 'rate-limited', retryAfterS: 300 };
+      if (ask.op === 'projectCreate') return { ok: false, word: 'unreachable', maybeSent: false };
+      if (ask.op.endsWith('Create')) { const id = U(counter++); return ok({ id }, id); }
+      return { ok: false, word: 'not-found', maybeSent: false };
+    };
+    await tick(r);
+    const due = (r.db.prepare('SELECT dueAt FROM plan_sync_due WHERE program = ?').get(SLUG) as { dueAt: number }).dueAt;
+    expect(due - r.t.now).toBe(PLAN_SYNC_BACKOFF_MS[0]);                 // the earliest hold: workspace b's
+    r.t.now = due + 1_000;                                              // b's hold has passed, a's has not
+    expect(r.plan.heldSyncUntil(SLUG, r.t.now)).toBeNull();            // the row itself is not held any more
+    const n = r.asks.length;
+    expect(await r.sync.ensureTicketBound(r.runs[0]!, 5_000)).toEqual({ identifier: null });
+    expect(await r.sync.dispatchSlug(r.runs[0]!, undefined)).toBeUndefined();
+    expect(r.asks).toHaveLength(n);                                     // no pass started for it
   });
 
   it('M-5: ensureTicketBound answers at once for a ticket already bound with an identifier, sending nothing', async () => {

@@ -39,7 +39,7 @@ export type CcrcShaped =
 
 type JournalOp = LinearCcrcJournalOp | 'create' | 'update' | 'comment' | 'link';
 type HierarchyKey = keyof typeof LINEAR_HIERARCHY_DOCUMENTS;
-export type CcrcOpName = HierarchyKey | 'issueCreate' | 'issueUpdate' | 'issueComment' | 'issueLink';
+export type CcrcOpName = HierarchyKey | 'issueCreate' | 'issueUpdate' | 'issueComment' | 'issueLink' | 'initiativeComment' | 'projectComment';
 
 export interface CcrcOpRow {
   op: CcrcOpName;
@@ -276,7 +276,7 @@ const read = (op: CcrcOpName, document: string, variables: CcrcOpRow['variables'
 const write = (op: CcrcOpName, document: string, journalOp: JournalOp, variables: CcrcOpRow['variables'], shape: CcrcOpRow['shape']): CcrcOpRow =>
   row({ op, class: 'write', document, journalOp, variables, shape });
 
-/** THE CCRC OPERATION TABLE: one row per operation, the hierarchy documents and the four issue rows (which reuse the
+/** THE CCRC OPERATION TABLE: one row per operation, the hierarchy documents, the four issue rows and the two comment rows (which reuse the
  *  session documents' text, the answers read for their ids only). */
 export const LINEAR_CCRC_OPS: Readonly<Record<CcrcOpName, CcrcOpRow>> = Object.freeze({
   initiativeById: read('initiativeById', D.initiativeById, readVars('id'), oneShape('initiative', initiativeRecord, 'initiative')),
@@ -316,5 +316,9 @@ export const LINEAR_CCRC_OPS: Readonly<Record<CcrcOpName, CcrcOpRow>> = Object.f
   issueUpdate: write('issueUpdate', LINEAR_DOCUMENTS.update, 'update', updateVars(...ISSUE_KEYS),
     writeShape('issueUpdate', 'issue', false, true)),
   issueComment: write('issueComment', LINEAR_DOCUMENTS.comment, 'comment', createVars('issueId', 'body'), writeShape('commentCreate', 'comment', true)),
+  // D-8183 (FX2 answer 3): the session comment document's input also takes `initiativeId` and `projectId`, so the drift pass
+  // comments on an initiative or a project with the same document and no new text in `ops.ts`.
+  initiativeComment: write('initiativeComment', LINEAR_DOCUMENTS.comment, 'comment', createVars('initiativeId', 'body'), writeShape('commentCreate', 'comment', true)),
+  projectComment: write('projectComment', LINEAR_DOCUMENTS.comment, 'comment', createVars('projectId', 'body'), writeShape('commentCreate', 'comment', true)),
   issueLink: write('issueLink', LINEAR_DOCUMENTS.link, 'link', readVars('issueId', 'url', 'title'), writeShape('attachmentLinkURL', 'attachment', true)),
 });
