@@ -32,7 +32,7 @@
 - Cancel or navigation in the middle of a 64 MiB read: every frame dropped, nothing saved, the console still answers. Owned by Task P1.4 (`range reassembly: cancel drops every frame`).
 - A folder removed while a page of it is open: the next read refuses and the page says the folder is gone. Owned by Task P2.3 (`folder: removed while open`).
 - A PDF whose links, JavaScript or launch actions try to leave the frame: nothing navigates, nothing opens. Owned by Task P3.2 (`pdf frame: link annotation does not navigate`).
-- Back pressed after the doc was replaced by another (stale places): the router handles it and the old frame gets nothing. Owned by Task P5.3 (`places: an entry of an earlier mount goes to the router`).
+- Back pressed after the doc was replaced by another (stale places): the stale places are skipped, one Back shows the earlier doc, and the old frame gets nothing. Owned by Task P5.3 (`places: stale places after navigating away cost no extra Back`).
 
 ---
 
@@ -258,10 +258,10 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 **Files:** Create `pwa/src/docs/reader/places.ts` (L1 decider); Modify `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/readerHistory.ts`, rich-docs spec §4.4; Test `pwa/test/reader-places.test.ts` (new), browser `pwa/test/browser/reader-places.browser.test.ts` (new).
 
-**Interfaces:** Produces `decideBack(popped: unknown, mount: { id: string; places: Place[]; pendingSeq: number | null }): { kind: 'close-overlay' } | { kind: 'goto'; id: string } | { kind: 'consume' } | { kind: 'router' }`; `PLACES_MAX = 50`.
+**Interfaces:** Produces `decideBack(popped: unknown, visit: { id: string; places: Place[]; pendingSeq: number | null }): { kind: 'close-overlay' } | { kind: 'goto'; id: string } | { kind: 'consume' } | { kind: 'skip' } | { kind: 'router' }`, consulted before the router on every `popstate`; `skip` calls `history.back()` again, at most `PLACES_MAX` times in a row; `PLACES_MAX = 50` per doc visit; a pushed entry's URL is `location.href` unchanged.
 
 - [ ] **Step 0: Precondition, lab E16 per engine** (desktop Chromium and Firefox in the harness; phones in F): does a tap in the frame give the console activation for `pushState`? Record; where it fails, the row is recorded failed for that engine, and Esc and Close still work.
-- [ ] **Step 1: Failing tests:** the spec §4.7 list (`places: overlay Back closes it`, `places: Esc then exactly one Back consumed`, `places: jump then Back returns`, `places: 51 places push 50`, `places: an entry of an earlier mount goes to the router`, `places: router synthetic popstate not consumed`, `places: pushed entry keeps only`, `places: place with a URL refused by the parser`).
+- [ ] **Step 1: Failing tests:** the spec §4.7 list (`places: overlay Back closes it`, `places: Esc then exactly one Back consumed`, `places: jump then Back returns`, `places: 51 places push 50`, `places: a remount of the same doc keeps the visit's budget`, `places: stale places after navigating away cost no extra Back`, `places: the pushed entry's URL is the doc's current URL`, `places: an entry with no docsPlace goes to the router`, `places: router synthetic popstate not consumed`, `places: pushed entry keeps only`, `places: place with a URL refused by the parser`).
 - [ ] **Step 2 to 4:** run, implement, run.
 - [ ] **Step 5: Amend rich-docs §4.4.** In the `hash` row, after "The parent calls `replaceState` with the fragment", add "; a `place` pushes an entry instead (amended <date>; X2 P5, D-8763)"; in the `command` row, after "Sent only from a tap on ccrc's own bar", add ", or on a Back that pops a place, for `close-overlay` and `goto` (amended <date>; X2 P5, D-8763)"; add rows for `place`, `close-overlay`, `goto`.
 - [ ] **Step 6: Commit** `feat(docs): Back closes the overlay and returns from a jump (X2 P5, D-8763)`.
@@ -337,6 +337,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.46 | P6.1 | Let `style` through `printAllow` | print tree: the allow-list drops style, handlers and foreign URLs |
 | M11.47 | P4.1 | Draw the project page's section rows without their docs | project page: each section lists its docs |
 | M11.48 | P4.2 | Resolve a bare name to the tag before the branches | ref: a name that is both a branch and a tag opens the branch |
+| M11.49 | P5.3 | Hand a stale place of another visit to the router instead of skipping it | places: stale places after navigating away cost no extra Back |
 | M11.56 | P2.3 | Drop `docs-folder --add` from the hook's jq verb lists | session hook: docs-folder --add is denied in a child |
 
 ## Deviations found
