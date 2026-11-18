@@ -10,9 +10,9 @@ defined in the plan's "Deviations found" as D-8752 to D-8756, and cited here.
 - `POST /api/models/:lane`, body exactly `{action: 'hold' | 'release' | 'revert', class}`, registered from its own
   file, `server/src/laneModelsRoutes.ts` (L4, D-8754). Every decision is in `server/src/laneModelsAct.ts` (L1, pure).
   It is session-gated by the global gate (no EXEMPT row) and takes no box token. The box-token census reads its file as
-  a door family of its own (`MODELS_DOORS`, both directions). The route count moved 274 -> 275 (HTTP 271 -> 272, gated
-  173 -> 174, exempt 98, twenty-four route files), recounted from the merged list after the second merge of `main`, whose
-  renewal and decision-model doors took it to 274.
+  a door family of its own (`MODELS_DOORS`, both directions). The route count moved 278 -> 279 (HTTP 275 -> 276, gated
+  177 -> 178, exempt 98, twenty-four route files), recounted from the merged list after the third merge of `main`, whose
+  renewal, decision-model and ladder doors took it to 278.
 - The answer to a done act carries the lane's `LaneModelsRead`, from a `show` started after the act: it never joins a
   `show` already in flight (D-8756). It starts a show of its own rather than invalidating the in-flight map when an act
   ends, which is simpler and holds on both arms (the local arm has no gate, so a joined show may predate the act's write).
