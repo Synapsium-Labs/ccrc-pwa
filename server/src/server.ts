@@ -93,6 +93,7 @@ import { compactRefusal } from './continuity/compactOwner.js';
 import { laneArmRowViewOf } from './coord/laneArm.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { incarnationOf } from './coord/delegationLeaseDoor.js';
+import { attributionIdentity } from './auth/attributionIdentity.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
 import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
@@ -2188,6 +2189,11 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
     runCcd: deps.runCcd, fleetState: () => deps.fleetState,
   });
+  // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
+  const identity = attributionIdentity({
+    attribute: (id, uuid, field) => attributionVerdict(deps.io, deps.cfg, id, uuid, field),
+    incarnation: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+  });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(),
@@ -2287,7 +2293,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
-    gate: accountGate, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({
@@ -2688,14 +2694,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return answer;
   });
 
-  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, identity, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token, except the
   // goals read (D-8126), which takes a session OR the box token, so it is handed `authEnabled`, `sessionAuth` and the token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
   // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip). The PL6 follow-up's
   // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
-    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
+    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, identity, ccrcDir: deps.cfg.ccrcDir,
     // The operator's act on an end-request item runs the abandon arm in the same hold the abandon route uses (D-8076).
     withAbandon: coordRoutes.withAbandon, sendClose: sendCloseOutcome,
     authEnabled: deps.cfg.authEnabled, sessionAuth, mailToken: () => deps.mailToken ?? null,
