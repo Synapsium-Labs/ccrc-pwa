@@ -44,7 +44,7 @@
 | P2 outside folders | P2.1 to P2.4 | P1 | `ccd/ccd` (`docs-folder`, `docs-folder-read`, walker, registry), `shared/docs.ts` (folder block), `agent/src/whitelist.ts`, `server/src/ccdargv.ts`, `server/src/docs/folderRoutes.ts` (new), `server/src/docs/{policy,ports,ccdsource}.ts`, `server/test/box-token-census.test.ts`, `pwa/src/screens/settings/DocsFoldersSection.tsx` (new), `pwa/src/docs/{DocsIndexView,DocsTreeView,docsTree,docsLinks,DocsBanners}.tsx/ts`, `CLAUDE.md` (census and SAFETY sentences), the classifier's forbidden row and the child deny rules (`server/src/coord/approvalguard.ts`, `shared/api.ts#childDenyRules`) |
 | P3 PDF frame | P3.1 to P3.3 | P1, P2 | `shared/docs.ts` (`pdf` class, magic), `pwa/src/docs/pdf/**` (new: `PdfFrame.tsx`, `pdfPolicy.ts`, `pdfSrcdoc.ts`), `pwa/package.json` and lock (`pdfjs-dist`), `pwa/src/docs/DocsLeaf.tsx` (pdf branch), third-party notices |
 | P4 listings, refs, settings store | P4.1 to P4.4 | P2 | `ccd/ccd` (index newest, ref resolution), `shared/docs.ts` (index field, ref grammar, `ico`), `shared/docsTracker.ts` (new, L0 checker), `server/src/coord/{schema,store}.ts` (`docs_settings`), `server/src/docs/settingsRoutes.ts` (new), `server/test/box-token-census.test.ts`, `pwa/src/screens/settings/DocsSettingsSection.tsx` (new), `pwa/src/docs/{DocsIndexView,docsTree,docsLinks}.tsx/ts`, `CLAUDE.md` (census sentence) |
-| P6 print stage 1 and the page loader | P6.1 to P6.2 | X1's host wave, P4 | `pwa/src/docs/print/**` (new), `pwa/src/docs/DocsHead.tsx` (Print row), `pwa/src/docs/docs.css` (print rules), `pwa/src/docs/mockup/{load,plan,policy}.ts`, `pwa/src/docs/mockup/shim.ts` (new) |
+| P6 print stage 1 and the page loader | P6.1 to P6.2 | X1's host wave, P4 | `pwa/src/docs/print/**` (new), `pwa/src/lib/printTreeJob.ts` (new), `pwa/src/lib/markdownWorker.ts` (the `print-tree` job's dispatch), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row), `pwa/src/docs/docs.css` (print rules), `pwa/src/docs/mockup/{load,plan,policy}.ts`, `pwa/src/docs/mockup/shim.ts` (new) |
 | P5 reading layer | P5.1 to P5.5 | the library release, P6 | `pwa/package.json` and lock (library pin), `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/reader/{bridge,policy,places}.ts` (`places.ts` new), `pwa/src/docs/readerHistory.ts`, `pwa/src/docs/DocsHead.tsx` (Layout row), `pwa/src/docs/print/**` (stage 2), the docs worker job (`pwa/src/lib/docsRunner*`), rich-docs spec §3.3 and §4.4 |
 
 Every wave ends with the common acceptance cycle of the completion plan (exact-tip CI and CodeQL, privacy scan, review run).
@@ -58,7 +58,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 | AR-3 | Large files | Real fixtures at 2 MiB, 4 MiB and 64 MiB, one byte below, at and above each: Markdown in parts, an image view, Download; over 64 MiB the plain sentence and nothing partial; a draft above 4 MiB opens through its snapshot (the overlay-cap decision). Peak page memory measured on the phone. | P1 |
 | AR-4 | PDFs | List, open inline and download one PDF below, at and above 4 MiB; no network from the frame or its worker; links do not navigate; phone and desktop. | P3 |
 | AR-5 | Tracker links | Configure two rules in Settings; matching item ids link through the external-link sheet; a non-match stays text; a rule with a placeholder beside the host is refused; no tracker is named in the shipped code. | P4, P5 |
-| AR-6 | Complete parity inventory | Run every row of the spec's §2 on both readers, side by side, on the same docs. Print (stage 1 and stage 2, drawn figures), figure-overlay Back-to-close and Back from a jump, and the old-origin-state disposition (C1, as the operator rules it) are each evidenced explicitly. | All |
+| AR-6 | Complete parity inventory | Run every row of the spec's §2 on both readers, side by side, on the same docs. Print (rows PR1 to PR11 of the spec's §4.6, with stage 2's drawn figures and the library's print mode), figure-overlay Back-to-close and Back from a jump, and the old-origin-state disposition (C1, as the operator rules it) are each evidenced explicitly. | All |
 
 ---
 
@@ -218,11 +218,13 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P6.1: Print stage 1
 
-**Files:** Create `pwa/src/docs/print/{PrintView.tsx,printTree.ts}`; Modify `pwa/src/docs/DocsHead.tsx` (Print row in Page details), `pwa/src/docs/docs.css` (`@media print`); Test `pwa/test/docs-print.test.tsx` (new), browser `pwa/test/browser/docs-print.browser.test.ts` (new).
+**Files:** Create `pwa/src/docs/print/{PrintView.tsx,printTree.ts}`, `pwa/src/lib/printTreeJob.ts` (the worker's lazy `print-tree` job, as `readerRenderJob.ts` is for `render`); Modify `pwa/src/lib/markdownWorker.ts` (dispatch `kind: 'print-tree'`), `pwa/package.json` and lock (the HTML parser), `pwa/src/docs/DocsHead.tsx` (Print row in Page details), `pwa/src/docs/docs.css` (`@media print`); Test `pwa/test/docs-print.test.tsx` (new), `pwa/test/print-tree.test.ts` (new), browser `pwa/test/browser/docs-print.browser.test.ts` (new).
 
-**Interfaces:** Produces `preparePrintTree(doc, worker): Promise<PrintTree | null>` (started after the reader's `ready`, parse budgets apply); `<PrintView tree figures?>`; `PRINT_WAIT_MS = 10000`.
+**Interfaces:** Produces `answerPrintTreeJob(job: { id: number; kind: 'print-tree'; src: string }): PrintTreeReply` in the worker: the library's `render` (as the reader's job, same gate and limits), then the HTML parser, then `printAllow(tree): PrintTree` (L1, pure: the spec §4.6 allow-list, elements and attributes by name); `preparePrintTree(doc, runner): Promise<PrintTree | null>` (started after the reader's `ready`, parse budgets apply); `<PrintView tree figures?>` (React only, never `dangerouslySetInnerHTML`); `PRINT_WAIT_MS = 10000`.
 
-- [ ] **Step 1: Failing tests:** `print: tree parsed only after ready, never on the main thread`; `print: beforeprint mounts from the prepared tree, afterprint unmounts`; `print: Ctrl+P before the tree is ready prints the one-line page`; `print: figures print as source with caption`; `print: no allow-modals anywhere` (existing token scans stay green); browser: `print: page.pdf holds every block of the fixture` (Chromium).
+- [ ] **Step 0: The parser dependency.** Choose one HTML-to-tree parser that runs in a worker without a DOM (`hast-util-from-html`, parse5-based, is the default choice); record version, integrity, provenance, `npm audit signatures` and its import list in Results; exact pin, no caret.
+
+- [ ] **Step 1: Failing tests:** `print tree: the allow-list drops style, handlers and foreign URLs` (a fixture holding `style`, `onclick`, an `href` to another origin, `srcset` and an `svg` element: each gone, its text kept); `print tree: details open, sup, sub, kbd and comment anchors are elements` (the PR2 blocks, from the render output); `print view: no dangerouslySetInnerHTML in pwa/src/docs/print` (source scan); `print: tree parsed only after ready, never on the main thread`; `print: beforeprint mounts from the prepared tree, afterprint unmounts`; `print: Ctrl+P before the tree is ready prints the one-line page`; `print: figures print as source with caption`; `print: no allow-modals anywhere` (existing token scans stay green); browser: `print: page.pdf holds every PR1 and PR2 block of the fixture` (Chromium).
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): Print from ccrc's window (X2 P6)`.
 
 ### Task P6.2: Sibling modules, import maps and fetch within the walls
@@ -273,12 +275,12 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P5.5: Print stage 2, drawn figures
 
-**Files:** Modify `pwa/src/docs/print/**`, `pwa/src/docs/reader/bridge.ts`; Test `pwa/test/docs-print-figures.test.ts` (new); lab PRINT-L1.
+**Files:** Modify `pwa/src/docs/print/**`, `pwa/src/lib/printTreeJob.ts` (asks `render` for its print mode), `pwa/src/docs/reader/bridge.ts`; Test `pwa/test/docs-print-figures.test.ts` (new), `pwa/test/print-tree.test.ts`; lab PRINT-L1.
 
 **Interfaces:** Produces `checkFigurePng(b64: string): Promise<{ ok: true; blob: Blob } | { ok: false; why: 'not-png' | 'too-large' | 'too-wide' | 'decode' }>` (signature, 1 MiB, 2048 px, decode with `createImageBitmap`, re-encode on a console canvas); caps 64 figures and 16 MiB.
 
 - [ ] **Step 0: Lab PRINT-L1:** a 30-figure document's print-mode draw on desktop and phone; record; if out of line, stop and report the numbers to the coordinator.
-- [ ] **Step 1: Failing tests:** `print figures: non-PNG refused`; `print figures: 1 MiB plus one refused before decode`; `print figures: 4096 px refused`; `print figures: 65th refused`; `print figures: missing after 10 s prints source with the note`; `print figures: images are blob: URLs of re-encoded bytes`.
+- [ ] **Step 1: Failing tests:** `print mode: facts, byline and reading time, In short and Where things stand boxes, section numbers, status labels and the review strip's counts print` (one assertion per spec §4.6 row PR3 to PR8, from the library's print mode, through the same allow-list); `print mode: the library's scoped print stylesheet is loaded under the print root only`; `print figures: non-PNG refused`; `print figures: 1 MiB plus one refused before decode`; `print figures: 4096 px refused`; `print figures: 65th refused`; `print figures: missing after 10 s prints source with the note`; `print figures: images are blob: URLs of re-encoded bytes`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): drawn figures in print (X2 P5)`.
 
 ## Mutation rows
@@ -332,6 +334,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.43 | P5.5 | Decode before the size check | print figures: 1 MiB plus one refused before decode |
 | M11.44 | P5.5 | Use the frame's bytes without re-encoding | print figures: images are re-encoded |
 | M11.45 | P5.5 | Wait without a deadline | print figures: missing after 10 s prints source |
+| M11.46 | P6.1 | Let `style` through `printAllow` | print tree: the allow-list drops style, handlers and foreign URLs |
 
 ## Deviations found
 
