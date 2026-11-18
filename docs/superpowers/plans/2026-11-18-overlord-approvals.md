@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Plan** · 2026-11-18 · Status: Proposed, revised after reviews 2536 and 2553 (fix round 2) · Programme: Overlord (slug
+**Plan** · 2026-11-18 · Status: Proposed, revised after reviews 2536, 2553 and 2565 (fix round 3, the last) · Programme: Overlord (slug
 `overlord`, issue #2491) · Builds on: `docs/superpowers/specs/2026-10-17-coordinator-first-routing-design.md` (the
 approvals lane) and `docs/superpowers/specs/2026-11-09-overlord-design.md` (§6.1, §6.7, §7.1, §12, §14; amended in
 this pull request)
@@ -58,8 +58,8 @@ this pull request)
   children from writing the shape, and the park turns the one that slips through into a row on Waiting on you, not a
   menu nobody sees.
 - **The operator's three answers** are recorded as yes, the coordinator's provisional ruling (§5).
-- **Check on review:** PR 3's row model, PR 5's decline path and PR 6's v1 table, as fix round 2 answers review 2553
-  (§10).
+- **Where the reviews stand:** fix round 3 is the last plan round. PR 3, PR 5 and PR 6 each get their own build
+  review (§10).
 
 ## 1. Goal, scope and the direction this plan builds on
 
@@ -235,10 +235,15 @@ is `sent`, or one of the skip words:
   programme and the ruling's authority (coordinator, Overlord or operator), and the redacted rows. From PR 5 the
   Overlord's `ordinary` allows count under their own word, `overlord-ordinary`, so M38's card shows how many there
   are.
-- **The read-prompt count, for PR 6's gate (E1).** Each row and census row also keeps its statements' command words,
-  taken from the classifier's statement list at mint, never an operand. The read counts the prompts reaching the
-  operator whose every command is one of `cat`, `head`, `tail`, `wc`, `ls` or `stat`. That count is what §3.6's gate
-  reads.
+- **The read-prompt count, for PR 6's gate (E1, F7).** Each minted row keeps two facts computed at mint, never an
+  operand:
+  - its statements' command words, from the classifier's statement list;
+  - **`literalInRoot`:** "every argument is a literal path inside a root", computed by one L1 decider in
+    `approvalguard.ts`. PR 1 ships it, and PR 6's family decider reuses it for its literal rule, so the gate and the
+    family can never disagree.
+  - **What the gate counts:** held, deny-current, `escalate` rows whose every command is one of `cat`, `head`, `tail`,
+    `wc`, `ls` or `stat`, with `literalInRoot` true, that reached the operator. So `cat ~/x`, `cat $X` and `cat *` never
+    count. Paths 1, 2 and 7 mint no row, so they never count.
 - **Who may read it:** it is session-gated, so the operator's console reads it. The Overlord's door process reads it
   once W2's identity port names it.
 - **What it never answers:** an unredacted input. Its privacy is the redacted input's (`APPROVAL_INPUT_RETENTION_DAYS`).
@@ -409,12 +414,27 @@ it goes to the operator's pane as today.*
 coordinator declined it under `mayHold`, while the park lane is live. The hook prints the park deny, and a later
 ruling is recorded on the park.
 
+- **Decided once, at mint (F1, review 2565; the coordinator's ruling).** The hook acts on the `201`'s park word, taken
+  at mint, so the server decides at mint too, never later from the live lane.
+  - **The word.** The request route decides `live`, `shadow` or `capped` when it mints the row, from the park lane,
+    the key's cap and sign-in. While sign-in is dark the word is `shadow`, because a parked `escalate` prompt would
+    have no door (F12).
+  - **Stored and reserved.** The word is stored on the row as `parkWord`. A `live` word reserves one of the key's
+    three park slots in the same transaction. A row ruled inside its window releases its slot.
+  - **Returned.** The same word goes back in the `201`. The hook and the decider therefore read one decision.
+  - **At the cap.** A retry loop at the cap is told `capped` at mint, so the hook never prints "parked" for a row that
+    will not park.
+  - **Sign-in dark after mint.** A row minted `live` still parks. Its coordinator may still rule an `ordinary` row,
+    and an `escalate` row stales at the horizon. The park deny has already told the model the command did not run.
 - **One decider, one write site.** `decideApprovalLapse` (`server/src/coord/questionPolicy.ts`, L1) gains a `park`
-  answer beside `lapse` and `stale`, in the same function. Its inputs gain the park lane's state, the park's retry
-  count, the row's `fetchedAt` and, from AP2, a coordinator's decline.
-  - It answers `park` for a `held` row at or past `notifyAt` while the lane is live and the key is under its cap.
-    Otherwise it answers `lapse`, as today.
-  - It answers `stale` for a `parked` row only at its park's horizon.
+  answer beside `lapse` and `stale`, in the same function. Its inputs gain the row's stored `parkWord` and
+  `fetchedAt`, the park's horizon and whether the park is void, and from AP2 a coordinator's decline with `mayHold`'s
+  verdict (F10).
+  - **A `held` row at or past `notifyAt`:** `park` when its stored word is `live`. Otherwise `lapse`, as today.
+  - **A decline (AP2), before `notifyAt`:** `park` when the stored word is `live` and `mayHold` is true (the park lane
+    and the "Overlord approvals" lane both live, §3.5). Otherwise the door writes `declined`, as today.
+  - **A `parked` row:** `stale` at its park's horizon, or at once when its park is void (its run closed, F16), so a
+    void park leaves Waiting on you.
   - One write site in the questions owner, `parkApproval`, writes the state. The lapse sweep and, from AP2, the decline
     door each ask the decider and call that site. No other code writes `parked`.
 - **Every closed vocabulary that lists approval states,** and what PR 3 does to each:
@@ -427,29 +447,43 @@ ruling is recorded on the park.
 | `APPROVAL_HOOK_STOP_STATES` and its bash copy | `shared/api.ts`, `ccd/session-hook.sh` | unchanged: the hook does not stop silently on `parked`. It gains its own `parked` arm, which prints the park deny and returns |
 | The scan that holds the two copies equal | `server/test/single-definition/ask-digest.test.ts` | pins that `parked` is in the state map and not in the stop list, and that the bash arm's word equals the TS literal |
 | The census's count by state | the census read (§3.1, Task 1.4) | counts `parked` |
+| The lapse sweep's read of a child's rows, and `decideDeferredApprovalPush` (F4) | `server/src/coord/questions.ts` (`lapseApprovals`), `server/src/coord/questionPolicy.ts` | the read gains `parked`. The push decider answers `drop` for an entry covering a `parked` row: its push is the outbox's (§3.3.2), and the dialog is never pushed for a pane press |
+| `markApprovalOperator`, `markApprovalOperatorRows` (F4) | `server/src/coord/store.ts` | match `parked` too. A pane answer on a parked row marks it `operator` and voids its park, so a later ruling can never allow the next identical command |
+| `approvalDecision` (F9) | `server/src/coord/digest.ts` | a `parked` case: "parked, with <holder>". A ruling moved onto the park keeps its allow or deny line |
+| The ruling read (F9) | the approvals request routes in `server/src/coord/routes.ts` | answers `{state: 'parked'}` with no ruling; the hook's `parked` arm reads it |
+| The store's other state readers (F9) | `approvalsInState` and its siblings in `server/src/coord/store.ts`; `withCoordinator` in `server/src/fleet.ts` | each takes `parked` only where its caller wants it: the stale sweep does, the lapse sweep and `withCoordinator` do not (a parked row shows on Waiting on you, not as a held approval on the coordinator's card) |
 
-*Table 3f. The approval-state vocabularies `parked` touches.*
+*Table 3f. The approval-state vocabularies and readers `parked` touches.*
 
 - **An older build.** An older server reads a `parked` row off disk as `unknown`, which it never writes and never
   rules. An older hook ignores the `park` field, polls to its own deadline and prints nothing, so the menu paints.
   Both fail towards the operator, and Task 3.1 has the `unknown` read case.
 - **The last poll (F8-c).** The hook polls about every 2 s and checks its deadline first, so a ruling taken in the
   last interval can go unfetched.
-  - The ruling read records `fetchedAt` on the row the first time it serves a ruling. The questions owner is its one
-    writer.
-  - At `notifyAt` plus the ruled grace, the decider answers `park` for an `allowed` or `denied` row with no
-    `fetchedAt`. The write site moves the ruling onto the park, so the retry meets it and the coordinator's ruling is
-    not lost.
+  - The ruling read records `fetchedAt` on the row the first time it serves a ruling, and only when it serves it at
+    least the ruled grace before the record's `expiresAt`. A ruling served later may expire on the fleet clock before
+    the verifier reads it, so it counts as unfetched (F2-a). The questions owner is the field's one writer.
+  - The decider answers `park` for an `allowed` or `denied` row with no `fetchedAt` under four conditions (F2):
+    - its stored `parkWord` is `live`, so never in shadow, where the menu painted and the operator may have answered;
+    - it was minted after PR 3 is Live, which a non-null `parkWord` proves, so older rows are never moved and nothing
+      is backfilled;
+    - it is at or past `notifyAt` plus the ruled grace;
+    - it is before the hook's ceiling (`askAt + APPROVAL_HOOK_WAIT_S`), the upper bound. After that the row is left.
+  - The write site moves the ruling onto the park, so the retry meets it and the coordinator's ruling is not lost.
+  - **The nudge site.** The nudge mail is sent by `parkApproval` when it moves a ruling, and by the park's ruling
+    write for any later ruling. It is one function in the questions owner, and no door or sweep sends it.
 - **The park key.** It is the child's registry id, the run id, and the sha256 of `[tool_name, cwd, tool_input]` in
   canonical form. It leaves out Claude Code's `session_id` and the agent id. The registry id survives a roll, and the
   key's input is exactly what a retry repeats.
   - **The run id (F8-d).** Registry ids are recycled, so a new child at a reused id, in a new run, never meets a
     ruling given for the old one.
-  - **A park is void when its run closes or its first row is purged.** The questions owner already reads the run's
-    state for `heldFor`, and already purges approval rows in its retention pass. The retry's park lookup re-reads the
-    run's state through that same store read and treats a closed run's park as void. The retention pass deletes the
-    parks whose first row it purges, in the same transaction. No new sweep and no new writer.
-  - **The prune (T8-4).** The same pass deletes a park at its horizon plus the redacted input's retention
+  - **A park is void when its run closes.** The questions owner already reads the run's state for `heldFor`. The
+    retry's park lookup, and the stale sweep's decider input, re-read it through that same store read and treat a
+    closed run's park as void. No new sweep and no new writer.
+  - **No purge trigger (F8, review 2565).** Approval rows are never deleted: the retention pass only clears the
+    redacted input (`pruneApprovalInputs` is an `UPDATE`) and keeps the row as the journal. So nothing voids a park on
+    a row purge.
+  - **The prune (T8-4).** The retention pass deletes a park row at its horizon plus the redacted input's retention
     (`APPROVAL_INPUT_RETENTION_DAYS`).
   - A ruling is still signed for one request: the retry's own session, agent, digest, nonce and row, as the verifier
     checks today.
@@ -461,9 +495,21 @@ ruling is recorded on the park.
   - the horizon (2 h from the first park);
   - the retry count;
   - the ruling, once a principal gives one: its verdict, its authority, its reason and its use (one);
+  - **the coordinator's verdicts on the key (F3, review 2565):** whether its coordinator declined any row of the key,
+    and whether it denied any. Every decline and deny of a row of the key is written here, in the same transaction as
+    the row's own write;
   - its state.
-  - **The first ruling wins (T8-4).** A second principal's ruling on a park that already holds one is refused
-    `park-ruled`, a new word in `APPROVAL_REFUSALS` and `REFUSAL_STATUS` (a `409`).
+  - **The first unspent ruling wins (T8-4, F5).** A second principal's ruling on a park that holds an unspent ruling is
+    refused `park-ruled`, a new word in `APPROVAL_REFUSALS` and `REFUSAL_STATUS` (a `409`). A spend, or a refusal at
+    signing, clears the park's ruling, so a dead ruling never blocks the operator's later Allow.
+- **The coordinator's verdicts are read from the park, not the row (F3, F15).** One key can hold several rows: R1 can
+  lapse and park while its retry R2 is declined or denied. So:
+  - **A deny is final for every authority.** When the park records a coordinator's deny, no allow on that key is
+    signed for anyone, the Overlord and the operator included. A deny is never held.
+  - **A decline narrows the Overlord.** When the park records a coordinator's decline, the Overlord may still allow a
+    `read-only` request under a live grant, because a decline there means "cannot allow", which is the family's
+    purpose. It may never allow an `ordinary` request on that key: parity holds only on a lapse.
+  - The parity check, the signing site's re-check (§3.4) and deny-finality each read the park's verdicts.
 - **One row per request.** Every request, a retry included, mints its own row with its own nonce. A row is never
   rewritten to a new nonce, so no fact gets a second writer.
 - **A retry is classified again** from the input it carries. The row keeps no input past its window (no retained
@@ -473,23 +519,34 @@ ruling is recorded on the park.
 - **The rule door accepts a parked row** until its horizon. It does not answer `hook-gone` for it. The ruling is
   recorded on the park, not signed then.
   - **When the retry arrives,** the server signs a ruling for the retry's row and nonce through the one signing site
-    (§3.4). That site re-runs the guard against the fresh class and `denyCurrent`, re-checks that a `coordinator`
-    ruler is still the run's claimant (F8-b), then marks the park's use spent.
+    (§3.4). That site re-runs the guard against the fresh class and `denyCurrent`, and re-checks that a `coordinator`
+    ruler is still the run's claimant (F8-b).
+  - **The spend is one atomic step (F6).** The asynchronous checks (`heldFor`'s claimant read) run first. Then, in one
+    synchronous section on the coordination store, the site re-reads the park, checks the ruling is unspent and inside
+    the horizon, signs, and compare-and-sets the use from 0 to 1 together with storing the retry row's ruling. Today's
+    `takeApprovalForRule` is the pattern. The loser of two concurrent retries is held fresh.
   - **A retry that meets a ruling sends no coordinator brief (T8-4).** The brief mail at mint is skipped when the
     park already holds a ruling for the retry's key.
   - **A second identical request after that** is held fresh. The ruling is one-shot.
 - **Lapse and stale carve out `parked`,** through the decider above: the lapse sweep never lapses a `parked` row, and
   the stale sweep stales it only at its park's horizon.
-- **The third park of one key** is the last (T8-4). The server answers the next retry's request with
-  `park: capped` in its `201`, a word of its own, so `shadow` keeps one meaning. The hook parks only on an exact
-  `live`, so it prints nothing, as today, and the menu paints. The census counts `capped`. So a loop cannot grow.
+- **The third park slot of one key** is the last (T8-4). Slots are reserved at mint (above), so the next request of
+  that key is told `park: capped` in its `201`, a word of its own, so `shadow` keeps one meaning. The hook parks only
+  on an exact `live`, so it prints nothing, as today, and the menu paints. The census counts `capped`. So a loop
+  cannot grow.
+- **The park deny's text (F16)** tells the model to wait, so immediate retries do not spend the cap: "approval <n> is
+  parked for a ruling. Do not run this command again now: wait for the mail that says it was ruled, then run the same
+  command again, unchanged." The hook's `parked` arm prints it only for a `parked` state read from the ruling read, or
+  at its deadline on a `live` word. A void park's rows are staled (above), so the arm never meets one.
 
 #### 3.3.2 What the operator sees, and when (F9)
 
 - **The row reaches Waiting on you at park time,** not at the horizon. It sits in a group that says who holds it:
   "with your coordinator", or from AP2 "with the Overlord".
   - The operator may rule it there at once.
-  - Its push follows the row's level, as any item's does.
+  - **Its push is the outbox's (F16).** The outbox sends it at park time in AP1, and at `overlordUntil` when the row
+    is held for the Overlord. The deferred-dialog push answers `drop` for a parked row (Table 3f), so one push owner
+    stands for each parked row.
   - **When it is first seen.** The row is listed at park time: 60 s on the main thread and 180 s on a subagent, the
     moments today's push fires. From AP2, a row held for the Overlord keeps its listing, and its push waits for the
     Overlord's window (§3.5), 180 s to start. So the first push is the same as today in AP1, and up to three minutes
@@ -505,6 +562,9 @@ ruling is recorded on the park.
     digest, nonce and row. The retry meets it through the hook's verifier.
   - **No parked prompt is answered by pressing a menu (T3-3).** A prompt that is not parked (`forbidden`, released at
     mint, the capped retry, shadow mode, an unroutable prompt) still reaches the console's existing dialog, as today.
+    The park deny normally clears the dialog within one poll. If a press lands in that interval anyway, through the
+    `session-<id>` arm, it marks the parked row `operator` and voids its park (Table 3f, F4), so no ruling on that
+    park can later allow the next identical command.
   - Two identical prompts meet one ruling once. The second is held fresh.
 - **The hook names who ruled (T3-4).** Today it prints "denied by your coordinator: …" for every deny. On a v2 record
   it prints the record's authority instead ("your coordinator", "the Overlord" or "the operator").
@@ -520,9 +580,9 @@ ruling is recorded on the park.
 The park is a lane, not a marker:
 
 - **Where it lives.** It is a row on the Shadow lanes card (`lane-arm`), held in the coordination store.
-- **How the hook learns its state.** The server's `201` reply to a request carries `park: live|shadow|capped`. The
-  hook parks only on an exact `live`. An absent field means shadow, and `capped` means the key's last park is spent
-  (§3.3.1).
+- **How the hook learns its state.** The server's `201` reply to a request carries `park: live|shadow|capped`, the
+  word decided and stored at mint (§3.3.1). The hook parks only on an exact `live`. An absent field means shadow, and
+  `capped` means the key's last park slot is taken.
 - **In shadow,** the hook prints nothing, as today, and the server records `wouldPark` on the row.
 - **What it adds.** No registry marker, and no `ccd` verb. Arming it `live` is the operator's, behind the card's
   existing step-up, and refused while sign-in is dark.
@@ -568,9 +628,11 @@ through it. Every signed ruling goes through one function in the questions owner
 `ApprovalSigner.signRuling`. It runs the guard first: the class, `denyCurrent`, the authority's ceiling, from PR 6 the
 family, and for authority `coordinator` the claimant: the ruler must still be the run's claimant when the ruling is
 signed (F8-b, review 2553). A park's ruling is signed at retry, up to 2 h after it was given, so a reclaim heir's child
-never meets the earlier claimant's allow. From PR 5, for authority `overlord`, the guard also checks at signing that
-the "Overlord approvals" lane reads `live` (N2, §3.6), that `answer-approval` is still armed, and, for an `ordinary`
-allow, that the row's coordinator let it lapse rather than declined it. The guard covers:
+never meets the earlier claimant's allow. For every authority, the guard refuses an allow on a key whose park records
+a coordinator's deny (§3.3.1, F3). From PR 5, for authority `overlord`, the guard also checks at signing that the
+"Overlord approvals" lane reads `live` (N2, §3.6) and that `answer-approval` is still armed. For an `ordinary` allow it
+checks that the park records no coordinator decline on the key: parity holds only on a lapse (F3, F15). A `read-only`
+allow is admitted on a declined key. The guard covers:
 
 - the claimant's rule door;
 - a grant hit at mint;
@@ -590,18 +652,25 @@ that Table 6.7b applies to asks.
   `approvalReleased` pushes the operator at once and drops the hold, and the hook stops on `declined` and prints
   nothing, so the menu paints. The Overlord could never see a declined row.
   - **From PR 5, under `mayHold`,** the release door does not write `declined`. It records the coordinator's decline
-    on the row and asks `decideApprovalLapse`, which answers `park`, and `parkApproval` parks the row (§3.3.1). It
-    sets `overlordUntil` and defers the operator's push to it, as an ask's `cannot-decide` release does (spec §6.2).
-    The hook sees `parked` on its next poll and prints the park deny.
-  - **When `mayHold` is false,** or the park lane is not live, the door writes `declined` and pushes at once, as
-    today.
-  - **A coordinator's deny stays final.** It is a signed verdict, printed by the hook, and never held.
+    on the row and on the park key (§3.3.1, F3), and asks `decideApprovalLapse`, which answers `park` for a row whose
+    stored word is `live`; `parkApproval` parks the row. It sets `overlordUntil` and defers the operator's push to it,
+    as an ask's `cannot-decide` release does (spec §6.2). The hook sees `parked` on its next poll and prints the park
+    deny.
+  - **When `mayHold` is false,** or the row's stored word is not `live`, the door writes `declined` and pushes at
+    once, as today. The decline is still recorded on the park key.
+  - **A coordinator's deny stays final, for every authority, on the whole key.** It is a signed verdict, printed by the
+    hook, never held, and recorded on the park key, so no later allow of that key is signed for anyone (F3, F15).
 - **The Overlord's window is the park's (fix round 2).** The coordinator keeps its windows: 60 s on the main thread
   and 180 s on a subagent. No hook waits longer. A row the Overlord's tier takes is parked first, on either thread,
   and held under `mayHold` for one window: `overlordUntil` is set at park time to C22's ask window, 180 s to start,
   then set by shadow's measured 90th percentile. The operator's push is deferred to it. The Overlord rules the parked
-  row, and the retry meets its ruling as it meets any park ruling. The approval kind is held only while the park lane
-  is live.
+  row, and the retry meets its ruling as it meets any park ruling.
+- **Held only while both lanes are live (F11, review 2565; the coordinator's ruling).** The approval kind is held only
+  while the park lane and the "Overlord approvals" lane both read `live`. Otherwise no row parks for the Overlord and
+  no push is deferred for it, because every Overlord ruling would be refused at signing.
+  - **In the Overlord lane's shadow,** the Overlord's would-be ruling is recorded on the row as a would-rule record
+    (`overlordWouldRule`). It is never written on the park, never signed and never met by a retry. The row goes to the
+    operator as in AP1.
 - **What does not enter.** Rows released at mint go to the operator as today, counted in the census: `run-unclaimed`,
   `run-other-programme`, `run-unattributed`, `parent-not-live`, `parent-unmeasured`, `forbidden`, `truncated` and
   `unparseable`.
@@ -612,8 +681,8 @@ that Table 6.7b applies to asks.
   condition of H18 applies unchanged. The kind is a new case of the one decider, not a parallel predicate.
   - `mayHold` and the act catalogue are spec-only until W3's second step, so PR 5 is built on top of that step.
 - **The Overlord's acts.** `answer-approval` denies with a reason, which needs no grant. It allows two things:
-  - **An `ordinary` row, by parity (the coordinator's ruling of 2026-11-18).** Only a row its coordinator held and let
-    lapse, not one it declined. Only `ordinary`, under today's v1 signer and verifier, with no new key: a v2 record,
+  - **An `ordinary` row, by parity (the coordinator's ruling of 2026-11-18).** Only on a key whose park records a
+    lapse and no coordinator decline or deny (F3). Only `ordinary`, under today's v1 signer and verifier, with no new key: a v2 record,
     authority `overlord`, signed with the main key. Never on a row whose deny is not current. Each allow is counted
     as `overlord-ordinary` in the census (§3.1).
     - **Why it is an exception.** An `ordinary` allow can delete inside a root, which is irreversible. It is the one
@@ -622,11 +691,12 @@ that Table 6.7b applies to asks.
       Overlord settle prompts before the operator. Without it, every `ordinary` prompt a busy coordinator lets lapse
       reaches the operator, which is the share M38 must bring down. It stands on the operator's answer to open
       question 2.
-  - **A `read-only` request (PR 6),** as §3.6 admits, under a live grant naming the family.
+  - **A `read-only` request (PR 6),** as §3.6 admits, under a live grant naming the family, on a lapsed or a declined
+    key (F15).
   - It may also escalate to the operator with a brief, or `attach-brief`. It answers only through its own door, behind
     the designation, the fence and the authority decider (§7.1).
-  - On a row its coordinator declined, it may deny or escalate, never allow: the parity allow covers only a row the
-    coordinator let lapse.
+  - **On a declined key** it may deny, escalate, or allow `read-only` under a grant, never allow `ordinary`. **On a
+    key its coordinator denied** it may not allow at all: the deny is final for every authority.
 - **The hold's columns are the row's.** The row keeps its coordinator, so a late coordinator ruling still counts
   (D-5289). The tier adds two columns, `overlordUntil` and `overlordOutcome`, from the asks tier's closed list (§6.1).
   Retention follows Table 6.7c with no new cause.
@@ -650,8 +720,9 @@ revoke on its own.
 prompts under bypass only when `blockReadsOutsideWorkingDirectories` is set, and nothing in this tree sets it. So
 PR 6 may match few prompts, and it is about 600 classifier lines and 1,500 test lines.
 
-- **The gate.** PR 6 is dispatched only if, over M38's two-week baseline (§3.1), the census's read-prompt count is at
-  least 10% of the prompts reaching the operator and at least 5 a week.
+- **The gate.** PR 6 is dispatched only if, over M38's two-week baseline (§3.1), the census's read-prompt count (held,
+  deny-current, `escalate`, the six commands, `literalInRoot` true) is at least 10% of the prompts reaching the operator
+  and at least 5 a week.
 - **The settings read.** The gate's note also records a measured read of the fleet's effective settings: whether any
   account home or managed file sets `blockReadsOutsideWorkingDirectories`.
 - **Below the gate,** PR 6 moves to Later with its design intact, and AP2 ends at PR 5.
@@ -684,6 +755,17 @@ and `diff` reads directories (below). `cmp` goes with them.
   named `!` and `-delete` in the working directory, `find . -name *` became `find . -name ! -delete`, which the
   classifier never saw. The child controls the files in its working directory, so no unquoted metacharacter is
   admitted anywhere, option values included.
+- **Words are judged after quote removal (F13, review 2565).** The decider strips quotes first, then decides option or
+  operand, because GNU getopt permutes arguments and `cat '-'` or `tail '-f' x` is an option to the binary.
+  - Any word starting with `-` that is not in the command's table is refused, quoted or not, wherever it stands. A
+    bare `--` is refused.
+  - At least one path operand is required, so `ls` alone, which lists a working directory that may be outside a root,
+    is refused.
+  - Double quotes are refused (`cat "x"`): only single quotes or the plain safe set.
+  - A redirect is admitted only in the three exact spellings: no `> /dev/null`, `1>` or `&>`.
+- **The names run what the shell resolves (F13, unmeasured).** A function or alias from the shell snapshot, or a
+  `PATH` entry inside a root, could make one of the six names run a program the child wrote. Task 6.0 measures
+  whether the fleet's shell snapshot defines any of the six or puts a root on `PATH`, and the gate fails if it does.
 
 - **The source rule.** A write that moves or copies (`mv`, `cp`, `tar -x`, `git archive`) is outside v1. Any later
   family that admits one must also require every source inside the roots, since `mv` of an outside file into the temp
@@ -865,6 +947,8 @@ This plan records its calls by slug. The coordinator mints D-numbers for any dev
 | `prevention-before-routing` | Fewer prompts raised (PR P) | a new reviewer clause; widen clause 9 | Widen clause 9 in place; the brief sentence, the prose-names line and Table 3d go in the coordinator skill's references, pinned | Ruled (fix round 1) |
 | `envelope-kept-per-agent` | The erased envelope | a main-thread carry; one list keyed by agent | One additive list keyed by agent id, removed only by that agent's own events | Proposed |
 | `overlord-window-is-the-park` | The Overlord's window | a longer hook wait, to 480 s; the park | The park on both threads: the coordinator keeps 60 s and 180 s, and a row the Overlord's tier takes is parked and held for one window (C22's ask window), the operator's push deferred to it. No second clock beside the park | Ruled (fix round 2) |
+| `park-decided-at-mint` | When the park is decided | at `notifyAt` from the live lane; at mint | At mint: the word is stored on the row, a slot is reserved, and the decider reads the stored word, so the hook and the server act on one decision (F1, review 2565) | Ruled (fix round 3) |
+| `verdicts-on-the-park-key` | Where a coordinator's decline and deny are read | the row; the park key | The park key: one key holds several rows, so the parity check, the signing site and deny-finality read the park. A deny is final for every authority; a decline still admits a `read-only` allow under a grant (F3, F15) | Ruled (fix round 3) |
 | `parked-is-a-row-state` | How a parked row is represented | a column with a join to the park table; a new row state | A new state, `parked`, decided only by `decideApprovalLapse` and written at one site, derived by every closed approval-state vocabulary (Table 3f) | Ruled (fix round 2) |
 | `decline-parks-for-the-overlord` | A coordinator's decline in AP2 | terminal as today; drop declined rows from the tier; park for the Overlord | Under `mayHold`, a decline parks the row and defers the operator's push for the Overlord's window, as an ask's `cannot-decide` release does. A coordinator's deny stays final | Ruled (fix round 2) |
 | `read-only-gated-on-the-census` | When PR 6 is built | unconditionally; on the census | Only when the census shows read prompts at least 10% of what reaches the operator and at least 5 a week (§3.6) | Ruled (fix round 2) |
@@ -908,11 +992,12 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
 - **New calls C71 to C76 in Table 13a:**
   - C71: the stale digest (`stale-deny-routes-capped`);
   - C72: the park (`approval-park-is-deny-and-retry`, `operator-allow-is-signed`, `park-is-a-lane`,
-    `parked-is-a-row-state`);
+    `parked-is-a-row-state`, `park-decided-at-mint`);
   - C73: standing grants (`grants-are-scoped-and-expire`);
   - C74: the census (`approval-census-first`, `hook-reports-route-as-a-fact`);
   - C75: the Overlord's tier and families (`overlord-holds-only-held-rows`, `overlord-approval-is-a-mayhold-case`,
-    `overlord-window-is-the-park`, `decline-parks-for-the-overlord`, `families-on-an-allowlist`,
+    `overlord-window-is-the-park`, `decline-parks-for-the-overlord`, `verdicts-on-the-park-key`,
+    `families-on-an-allowlist`,
     `read-only-gated-on-the-census`, `overlord-ordinary-by-parity`);
   - C76: the second key (`wide-key-is-separately-pinned`), with Table 3g's record per authority, and the
     "Overlord approvals" lane (`overlord-approvals-lane`).
@@ -921,7 +1006,10 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
   - the Non-goal "No change to approvals routing (C17)" keeps only its second clause, "no widening of what a
     coordinator may allow";
   - C66's "Approvals stay as today (C17)" now points at C75 and M38.
-- **Table 6.7b's approvals row** reads the park's window, not a 480 s bound, and names the decline path.
+- **Table 6.7b's approvals row** reads the park's window, not a 480 s bound, and names the decline path. Its class
+  reads `escalate` or an `ordinary` lapse, and it is held only while both lanes are live (F11, F14).
+- **Table 7.1a's `answer-approval` row:** the grant applies to the `read-only` allow only; the parity allow needs none
+  (F14).
 - **§12 gains M38.**
 - **§14 gains waves AP1 and AP2,** with a capability word per PR.
 - **Later.** The entry "Approvals through the Overlord" is removed, and an entry for holding mint-time released rows
@@ -948,7 +1036,8 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
   `201` reply as `park: live|shadow|capped`. It adds no registry marker and no `ccd` verb (F10).
 - **So is "Overlord approvals"** (PR 5, N2): a second Shadow lanes row, read only by the one signing site.
 - **Wire.** Every new field and word is additive: `route`, `approvals[]`, `denyDigest` (advisory), `denyCurrent`,
-  `park`, the row state `parked`, `fetchedAt`, and the record's `v: 2`. `FLEET_PROTO` is not bumped. An older peer omitting a field is read through one
+  `park`, `parkWord`, the row state `parked`, `fetchedAt`, `literalInRoot`, `overlordWouldRule`, and the record's
+  `v: 2`. `FLEET_PROTO` is not bumped. An older peer omitting a field is read through one
   reader per field.
 - **Capability words, one per PR (F16).** In each case the hook's request to an older server fails, so it prints
   nothing: the safe direction.
@@ -983,7 +1072,7 @@ These edits to `docs/superpowers/specs/2026-11-09-overlord-design.md` land with 
 |---|---|---|---|---|
 | 0 | first, alone | The digest history (both sides of a rewrite, the locked trim, the uninstall), the hook's routing of a known stamp, the server's history read over the agent link, `denyCurrent` from the route closure, the rule door's `deny-not-current` refusal, the trusted-file deny | nothing | +40 ccd install, +30 hook, +140 server; +500 tests |
 | P | alone | Reviewer clause 9 widened in place; the brief sentence, the prose-names line and Table 3d in the coordinator skill's references, pinned | nothing | +40 skill text; +30 tests (the pins) |
-| 1 | AP1 | The census: the envelope's `route`, `approval_census`, the census read, push source binding, the M38 card | PR 0 | +450 server, +40 hook, +150 pwa; +500 tests |
+| 1 | AP1 | The census: the envelope's `route`, `approval_census`, the census read, push source binding, the command words and `literalInRoot` at mint, the M38 card | PR 0 | +500 server, +40 hook, +150 pwa; +600 tests |
 | 2 | AP1 | The per-agent envelope list with its hook fix (path 6); the untrusted-build item | PR 1 | +80 server, +120 hook, +60 pwa; +550 tests |
 | 3 | AP1 | The park: the `parked` state and the lapse decider's `park` answer, `approval_parks` and its prune, the parked-aware rule door, the last-poll move, the one signing site with its claimant check (PR 3 needs it first, for the park's ruling at retry), the operator door's `approval-<n>` arm, record v2 and the verifier's v2 rule for `operator`, the hook's `parked` arm and authority wording, the child's nudge, the Shadow lanes row | PR 2 | +550 server, +120 hook, +60 verifier, +60 shared, +100 pwa; +1,300 tests |
 | 4 | AP1 | Standing grants: the table, the door, `shapeKey`, `grantCovers`, the claimant re-check, the grant path through PR 3's one signing site | PR 3 | +400 server, +80 classifier; +600 tests; +60 skill reference |
@@ -1088,11 +1177,16 @@ grows.*
 
 - [ ] Red: the read answers counts by path, state, release reason, class, thread, deny currency and programme, and
   never an unredacted input. It carries an authority column (N3): `coordinator` for every ruled row in PR 1, read
-  from the ruling record once PR 3 writes record v2, and from PR 5 with `overlord-ordinary` counted apart. An outbox row for an approval push carries its source. The
-  read-prompt count counts a prompt whose every command is one of the six read commands, and no other; the row keeps
-  command words, never an operand.
-- [ ] Green: the L1 `approvalCensusOf(rows)`, the session-gated door, and the census sites.
-- [ ] Mutation: let the read return `input` unredacted. The privacy case reds.
+  from the ruling record once PR 3 writes record v2, and from PR 5 with `overlord-ordinary` counted apart. An outbox
+  row for an approval push carries its source.
+- [ ] Red, the read-prompt count (F7): it counts only held, deny-current, `escalate` rows whose every command is one
+  of the six read commands and whose `literalInRoot` is true. `cat src/a.ts` counts; `cat ~/x`, `cat $X`, `cat *`, a
+  released row, a deny-not-current row and a census row of paths 1, 2 or 7 do not. The row keeps command words and the
+  boolean, never an operand.
+- [ ] Green: the L1 `approvalCensusOf(rows)`, the L1 `literalInRoot` decider in `approvalguard.ts`, computed at mint,
+  the session-gated door, and the census sites.
+- [ ] Mutations: let the read return `input` unredacted, and the privacy case reds. Count a row with `literalInRoot`
+  false, and the glob case reds.
 
 ### Task 1.5: The M38 card (PR 1, `pwa/`)
 
@@ -1125,9 +1219,16 @@ grows.*
 
 ### Task 3.1: The park's row model (PR 3)
 
-- [ ] Red, `questionPolicy` (L1): `decideApprovalLapse` answers `park` for a `held` row at `notifyAt` while the lane
-  is live and the key is under its cap, `lapse` otherwise; `stale` for a `parked` row only at its horizon; `park` for
-  an `allowed` or `denied` row with no `fetchedAt` past `notifyAt` plus the ruled grace.
+- [ ] Red, the mint decision (F1): the request route decides the park word at mint, stores it as `parkWord`, reserves
+  a slot for `live`, and returns the same word in the `201`; a row ruled inside its window releases its slot; while
+  sign-in is dark the word is `shadow`. **The cap race:** a retry loop of one key whose fourth request mints while
+  three slots are taken is told `capped` at mint, and no request is ever told `live` and then left unparked.
+- [ ] Red, `questionPolicy` (L1): `decideApprovalLapse` reads the stored `parkWord`, never the live lane. It answers
+  `park` for a `held` row at `notifyAt` whose word is `live`, `lapse` otherwise; `stale` for a `parked` row at its
+  horizon or when its park is void. The last-poll move (F2): `park` for an `allowed` or `denied` row with no
+  `fetchedAt` only when its word is `live`, past `notifyAt` plus the ruled grace and before the hook's ceiling; never
+  for a row with no `parkWord` (minted before PR 3) and never in shadow. `fetchedAt` is not recorded for a ruling
+  served later than the ruled grace before `expiresAt`.
 - [ ] Red, `approval-park.test.ts`:
   - **The state.** `parked` is written only through `parkApproval`, and a census of writers fails on a second one.
     `APPROVAL_STATE_MAP` holds it; `APPROVAL_HOOK_STOP_STATES` and its bash copy do not (the ask-digest scan).
@@ -1135,34 +1236,50 @@ grows.*
   - **The key.** It is computed from the registry id, the run id and `[tool_name, cwd, tool_input]`, never Claude
     Code's `session_id` or the agent id. A new child at a recycled registry id, in a new run, does not meet the old
     ruling.
-  - **Void and prune.** A closed run's park is void at the retry's lookup. Purging a park's first row deletes the park
-    in the same transaction. A park past its horizon plus retention is pruned.
+  - **Void and prune.** A closed run's park is void at the retry's lookup, and its `parked` rows are staled, so they
+    leave Waiting on you. A park past its horizon plus retention is pruned. No case attaches to a row purge, because
+    approval rows are never deleted (F8).
   - **Rows.** Each retry mints its own row and nonce, linked to the park. No row's nonce is ever rewritten.
   - **The rule door.** It accepts a parked row until the horizon, records the ruling on the park, and signs nothing
-    then. A second principal's ruling on a ruled park is refused `park-ruled`.
-  - **The last poll.** A row ruled `allowed` that the hook never fetched moves onto the park at lapse, and the retry
-    meets that ruling.
+    then. A second principal's ruling on a park holding an unspent ruling is refused `park-ruled`. After a spend, or a
+    refusal at signing, the park's ruling is cleared and a new ruling is accepted (F5).
+  - **The last poll.** A row ruled `allowed` that the hook never fetched, minted `live`, moves onto the park at lapse,
+    the nudge is sent from the one nudge site, and the retry meets that ruling. A historical row with no `parkWord`, and
+    a row minted in shadow, are never moved (F2).
+  - **Table 3f's readers (F4, F9).** A deferred push covering a `parked` row answers `drop`. A pane press on a
+    `parked` row through `markApprovalOperator` or `markApprovalOperatorRows` marks it `operator` and voids its park,
+    and a later ruling on that park allows nothing. The daily digest prints a `parked` line. The ruling read answers a
+    `parked` state with no ruling. `withCoordinator` does not list a parked row.
+  - **The coordinator's verdicts on the key (F3).** A decline or a deny of any row of a key is written on its park in
+    the same transaction as the row.
   - **The retry.** It is classified again. A same-or-lower class meets the ruling, through the one signing site, and
     spends it. A higher class is held fresh. A retry that meets a ruling sends no coordinator brief.
   - **The heir (F8-b).** A coordinator's ruling on a park, followed by a reclaim, is not signed for the heir's
     child's retry: the signing site refuses a ruler who is no longer the run's claimant.
-  - **The sweeps.** The lapse sweep never lapses a `parked` row, and the stale sweep stales it only at the horizon.
-  - **The cap.** At the third park of one key, the next request's `201` carries `park: capped`, and it is not parked.
-- [ ] Green: the state in every vocabulary of Table 3f, the decider's `park` answer, `parkApproval`, `fetchedAt`,
-  `approval_parks` with its one writer and its prune, and the signing site's claimant check.
+  - **The sweeps.** The lapse sweep never lapses a `parked` row, and the stale sweep stales it only at the horizon or
+    when its park is void.
+  - **The cap.** With three slots of one key taken, the next request's `201` carries `park: capped` at mint, and it is
+    not parked.
+- [ ] Green: the mint decision and `parkWord`, the state in every vocabulary and reader of Table 3f, the decider's
+  `park` answer, `parkApproval` and its nudge, `fetchedAt`, `approval_parks` with its one writer, its verdicts and its
+  prune, and the signing site's claimant check.
 - [ ] Mutations:
   - add the agent id to the key, and the new-subagent case reds;
   - drop the run id from the key, and the recycled-id case reds;
   - rewrite a parked row's nonce, and the one-writer case reds;
   - let a retry meet a ruling at a higher class, and the reclassify case reds;
   - skip the signing site's claimant check, and the heir case reds;
-  - skip the last-poll move, and the unfetched-ruling case reds;
+  - skip the last-poll move, and the unfetched-ruling case reds; drop its `parkWord` condition, and the historical-row
+    and shadow cases red;
+  - let the decider read the live lane instead of the stored word, and the cap-race case reds;
+  - leave `parked` out of `markApprovalOperator`, and the pane-press case reds;
   - drop the cap, and the loop case reds.
 
 ### Task 3.2: The hook's park, the lane and the window (PR 3)
 
 - [ ] Red, hook (fixture home, stubbed client):
-  - **On `park: live`,** a request whose window ends unruled prints the park deny. The deny names the row.
+  - **On `park: live`,** a request whose window ends unruled prints the park deny. The deny names the row and tells
+    the model to wait for the mail, not to retry now (F16).
   - **On a `parked` answer from the ruling read,** the hook's `parked` arm prints the park deny and returns.
   - **On `park: shadow`, `park: capped` or no field,** the hook prints nothing.
   - **On the retry,** a ruling recorded on the park is printed on the first poll.
@@ -1194,11 +1311,14 @@ grows.*
   and both park. The operator rules once. No menu is pressed. The first retry meets the ruling, and the second is held
   fresh and must not be allowed by it. (In shadow the same case paints two menus, which the operator answers in the
   pane as today.)
+- [ ] Red, the concurrent retries (F6): two retries of one key interleave across the signing site's asynchronous
+  claimant read. Exactly one is signed and spends the ruling; the other is held fresh.
 - [ ] Red, the verifier: Table 3b's v1, `coordinator` and `operator` rows, in `approval-verify.test.ts`, which carries
   the verifier's documented second copy. A v2 record with authority `coordinator` is refused.
 - [ ] Green: record v2, the verifier's v2 rule for `operator`, the door's new arm, and the nudge mail.
-- [ ] Mutations: let one ruling serve two uses, and the identical-prompts case reds. Accept a v2 `coordinator` record,
-  and the verifier case reds. Call a press function from the new arm, and the no-press case reds.
+- [ ] Mutations: let one ruling serve two uses, and the identical-prompts case reds. Make the spend a non-atomic
+  check-then-mark, and the concurrent-retries case reds. Accept a v2 `coordinator` record, and the verifier case reds.
+  Call a press function from the new arm, and the no-press case reds.
 
 ### Task 4.1: Grants, the door, the matcher and the one signing site (PR 4)
 
@@ -1225,35 +1345,48 @@ grows.*
     record under the main key, and the census counts it as `overlord-ordinary`;
   - no parity allow on an `ordinary` row the coordinator declined, on a row whose deny is not current, or on an
     `escalate` row; the verifier refuses an `overlord` record on an `ordinary` row signed with the wide key;
-  - the approval kind is not held while the park lane is not live;
+  - **both lanes (F11):** the approval kind is not held unless the park lane and the "Overlord approvals" lane both
+    read `live`. In the Overlord lane's shadow, the Overlord's ruling is recorded on the row as `overlordWouldRule`,
+    never on the park, and a retry never meets it;
   - **the lane (N2):** the one signing site refuses every record with authority `overlord`, deny or allow, while the
     "Overlord approvals" lane reads off or shadow, and the row goes on to the operator; it signs once the lane reads
     `live`;
-  - **at retry:** a parity allow recorded on a park is not signed if, by the retry, `answer-approval` was disarmed;
-    and the signing site re-checks that the row's coordinator let it lapse.
+  - **at retry:** a parity allow recorded on a park is not signed if, by the retry, `answer-approval` was disarmed.
+- [ ] Red, the verdicts on the key (F3, F15):
+  - **R1 lapses, R2 is declined:** R1 lapses and parks, and its retry R2 is declined by the coordinator. An Overlord
+    `ordinary` allow on R1 is refused at signing. An Overlord `read-only` allow under a live grant on the same key is
+    signed (F15);
+  - **R1 lapses, R2 is denied:** an allow on R1 is refused at signing for every authority, the Overlord's and the
+    operator's included;
+  - **R1 lapses alone:** the parity allow is signed.
 - [ ] Red, the decline door (F12, review 2553):
   - **under `mayHold`,** a coordinator's decline (`cannot-decide`) does not write `declined`. The row becomes
     `parked` through the decider and `parkApproval`, `overlordUntil` is set to the Overlord's window, and the operator's
     push is deferred to it: no push fires at the decline;
   - the hook, polling, sees `parked` and prints the park deny, not nothing;
   - at `overlordUntil` with no Overlord ruling, the deferred push fires once;
-  - **when `mayHold` is false,** or the park lane is not live, the decline writes `declined` and pushes at once, as
-    today;
-  - **a coordinator's deny stays final:** it is printed by the hook and never held.
+  - **when `mayHold` is false,** or the row's stored park word is not `live`, the decline writes `declined` and pushes
+    at once, as today, and is still recorded on the park key;
+  - **a coordinator's deny stays final:** it is printed by the hook, never held, and recorded on the park key.
 - [ ] Green: the new case, `answer-approval` in `OVERLORD_ACT_KINDS`, the decline door's arm, its push deferral
   through the outbox's `held` decision, and the door behind the designation, the fence and the authority decider.
 - [ ] Mutations: drop the arming check, and the disarmed case reds. Admit a mint-released row, and the released case
   reds. Admit a declined row to the parity allow, and the declined case reds. Push at the decline under `mayHold`, and
   the deferral case reds. Hold a coordinator's deny, and the deny-final case reds. Skip the lane check at the signing
-  site, and the lane case reds.
+  site, and the lane case reds. Read the decline or deny from the row instead of the park, and the R1/R2 cases red.
+  Refuse a `read-only` allow on a declined key, and the F15 case reds.
 
 ### Task 6.0: The census gate (PR 6, before any code)
 
-- [ ] Read the census's read-prompt count over M38's two-week baseline (§3.1). Record in the PR's note the count, its
-  share of what reached the operator, and a measured read of whether any account home or managed settings file sets
-  `blockReadsOutsideWorkingDirectories`.
-- [ ] Build PR 6 only if the share is at least 10% and the count at least 5 a week. Otherwise mail the coordinator
-  the figures, and PR 6 moves to Later. This task changes no code.
+- [ ] Read the census's read-prompt count over M38's two-week baseline (§3.1). It counts only held, deny-current,
+  `escalate` rows of the six commands with `literalInRoot` true (F7). Paths 1, 2 and 7 mint no row and never count.
+- [ ] Record in the PR's note:
+  - the count, and its share of what reached the operator;
+  - a measured read of whether any account home or managed settings file sets `blockReadsOutsideWorkingDirectories`;
+  - a measured read of whether the fleet's shell snapshot defines a function or alias named for any of the six, or
+    puts a root on `PATH` (F13).
+- [ ] Build PR 6 only if the share is at least 10%, the count at least 5 a week, and the shell read finds none of
+  the six redefined. Otherwise mail the coordinator the figures, and PR 6 moves to Later. This task changes no code.
 
 ### Task 6.1: The `read-only` family, on its allowlist (PR 6)
 
@@ -1266,6 +1399,9 @@ grows.*
     `cat $X`, `cat "$X"`; and the shapes the review named, `find . -name *` and `grep -e *`.
   - **Attached and long options:** `head -n5 x`, `tail -c5 x`, `tail -f x`, `tail --follow x`, `stat -c %n x`,
     `wc --files0-from=x`; an option after the first operand; a `-` operand.
+  - **Options after quote removal (F13):** `cat '-'`, `tail '-f' x`, `wc '--files0-from=x'`, `cat x '-n'` (a quoted
+    option after the first operand, which GNU getopt permutes); a bare `--`; `ls` with no operand; `cat "x"` (double
+    quotes); the redirect spellings `cat x > /dev/null`, `cat x 1>/dev/null` and `cat x &>/dev/null`.
   - **Environment:** an assignment or prefix before the command (`GREP_OPTIONS=x cat y`, `LD_PRELOAD=x cat y`,
     `BASH_ENV=x cat y`).
   - **Moves, copies and links:** `mv` of an outside file into the temp root; `cp -r ~ <temp root>`; `ln -s` and
@@ -1282,9 +1418,11 @@ grows.*
 - [ ] Red, the admitted cases: each of the six commands with each allowed option on an in-root literal path, quoted
   and unquoted; `head -n 5 'x'`; `ls -la x`.
 - [ ] Red, the property: `forbidden` never has a family.
-- [ ] Green: `approvalFamily` in `approvalguard.ts` (L1), as closed option tables with the literal rule.
+- [ ] Green: `approvalFamily` in `approvalguard.ts` (L1), as closed option tables with the literal rule, reusing PR 1's
+  `literalInRoot` decider.
 - [ ] Mutations, each with a case that reds: admit a glob segment in an argument; admit an attached option argument;
-  admit an environment prefix; admit `grep`; admit `>` to an in-root path; admit `ln`.
+  admit an environment prefix; admit `grep`; admit `>` to an in-root path; admit `ln`; decide option or operand before
+  quote removal; admit a command with no operand.
 
 ### Task 6.2: The wide key and the `overlord` authority (PR 6)
 
@@ -1302,8 +1440,32 @@ grows.*
 
 ## 10. Review focus, and what the fix rounds changed
 
-The third review checks PR 3's row model, PR 5's decline path and PR 6's v1 table. Table 10b says where each of
-review 2553's findings now stands, and Table 10 does the same for review 2536's.
+Fix round 3 is the last plan round: the coordinator lands the plan from its wave-done, and PR 3, PR 5 and PR 6 each
+get their own build review. Table 10c says where each of review 2565's findings stands, Table 10b does the same for
+review 2553's, and Table 10 for review 2536's.
+
+| Finding (review 2565) | Where it is answered |
+|---|---|
+| F1: the cap race, park decided late | §3.3.1 (decided once, at mint: `parkWord`, the reserved slot), §3.3.3, Task 3.1's cap-race case and mutation |
+| F2: the last-poll move unbounded | §3.3.1 (`live` word only, rows minted after PR 3 only, the hook's ceiling as upper bound, the skew margin on `fetchedAt`, the one nudge site), Task 3.1 |
+| F3: decline and deny read from one row | §3.3.1 (the verdicts on the park key), §3.4's guard, §3.5, Task 5.1's R1/R2 cases and mutation |
+| F4: a pane press on a parked row | Table 3f (`decideDeferredApprovalPush` drops, `markApprovalOperator*` include `parked` and void the park), §3.3.2, Task 3.1 |
+| F5: `park-ruled` on a dead ruling | §3.3.1 (only an unspent ruling blocks; a spend or a signing refusal clears it), Task 3.1 |
+| F6: the spend not atomic | §3.3.1 (async checks, then one synchronous compare-and-set), Task 3.3's concurrent-retries case and mutation |
+| F7: the gate counts refused shapes | §3.1 (`literalInRoot` at mint), §3.6's gate, Task 1.4, Task 6.0 (paths 1, 2 and 7 never count) |
+| F8: no row purge exists | §3.3.1 (the purge trigger dropped; run close and the horizon prune stay), Task 3.1 |
+| F9: unnamed state readers | Table 3f (the digest, the ruling read, the store's readers, `withCoordinator`), Task 3.1 |
+| F10: the decider's inputs | §3.3.1 (the decline rule, `mayHold`'s verdict, the horizon and the void park as inputs) |
+| F11: the Overlord lane's shadow | §3.5 (held only while both lanes are live; shadow is `overlordWouldRule`, never on the park), Task 5.1 |
+| F12: sign-in dark after arming | §3.3.1 (the word is `shadow` while dark at mint; what a row minted `live` does after) |
+| F13: the corpus gaps and the shell's names | §3.6 (quote removal first, the refusals, the shell read), Task 6.0, Task 6.1 |
+| F14: spec Tables 7.1a and 6.7b | the spec rows, §6 |
+| F15: `read-only` on a declined key | §3.3.1, §3.4's guard, §3.5 (admitted under a grant; `ordinary` never; a deny final for all), Task 5.1 |
+| F16: the deny text, void parks, the push owner | §3.3.1 (the text, void rows staled), §3.3.2 (the outbox owns the push) |
+
+*Table 10c. Review 2565's findings, and where fix round 3 answers them.*
+
+Review 2553's findings, as fix round 2 answered them:
 
 | Finding (review 2553) | Where it is answered |
 |---|---|
@@ -1400,6 +1562,9 @@ coordinator mints its number.
   - PR 3's `parked` state, the operator door's new arm, the claimant at signing, the last poll and the park key's run
     id;
   - PR 0's server history read, failing closed.
+- **Review 2565's rulings, fix round 3:** the park decided once at mint; the coordinator's verdicts read from the park
+  key, a deny final for every authority and a `read-only` allow admitted on a declined key; the approval kind held only
+  while both lanes are live; the census's `literalInRoot` fact for PR 6's gate.
 - **The three operator questions.** They are answered yes, provisionally, by the coordinator.
 
 ### Waiting on you
