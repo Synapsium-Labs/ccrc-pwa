@@ -12,7 +12,8 @@ import type { ProjectAddOutcome } from '../src/fleet/useProjectRows';
 import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { useProjectAddForm } from '../src/fleet/AddProjectForm';
-import { LINKING_REFUSAL_TEXT } from '../src/lib/refusalWords';
+import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
+import { HIERARCHY_TEXT } from '../src/fleet/hierarchyWords';
 import { LINKING_ADD_TEXT } from '../src/fleet/projectAddWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
@@ -348,6 +349,37 @@ describe('Linear team key and the template PR (D-8147)', () => {
     await waitFor(() => expect(save).toHaveBeenCalledWith('repo', { teamKey: 'KEY', override: null }));
     expect(await screen.findByText(`${projectAddedText('repo', 'github')} ${LINKING_ADD_TEXT.keySaved('KEY')}`)).toBeInTheDocument();
     expect(p.onClose).toHaveBeenCalled();
+  });
+
+  it('a chosen owner and an initiatives switch-off are saved after the add (D-8184)', async () => {
+    vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] });
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: 'coord-a', ownsTeam: false } });
+    mount(props());
+    fillClone();
+    fireEvent.change(await screen.findByLabelText(LINKING_ADD_TEXT.owner), { target: { value: 'coord-a' } });
+    fireEvent.click(screen.getByRole('checkbox', { name: HIERARCHY_TEXT.initiatives }));
+    fireEvent.click(confirm());
+    await waitFor(() => expect(save).toHaveBeenCalledWith('repo', { initiatives: 'off', linearOwner: 'coord-a', ownsTeam: false }));
+    expect(await screen.findByText(`${projectAddedText('repo', 'github')} ${LINKING_ADD_TEXT.hierarchySaved}`)).toBeInTheDocument();
+  });
+
+  it('an owner the box refuses is said in its fixed sentence, and the project is still added (D-8184)', async () => {
+    vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }] });
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'box text' }));
+    mount(props());
+    fillClone();
+    fireEvent.change(await screen.findByLabelText(LINKING_ADD_TEXT.owner), { target: { value: 'coord-a' } });
+    fireEvent.click(confirm());
+    const toastText = await screen.findByText(new RegExp(`^${projectAddedText('repo', 'github')} `));
+    expect(toastText.textContent).toContain(LINKING_ADD_TEXT.hierarchyFailed(LINKING_ROUTE_TEXT['write-failed']));
+    expect(toastText.textContent).not.toContain('box text');
+  });
+
+  it('coordinators that cannot be read are said, not a silently missing owner select', async () => {
+    vi.spyOn(api, 'hierarchy').mockRejectedValue(new Error('offline'));
+    mount(props());
+    expect(await screen.findByText(LINKING_ADD_TEXT.ownersUnread)).toBeInTheDocument();
+    expect(screen.queryByLabelText(LINKING_ADD_TEXT.owner)).toBeNull();
   });
 
   it('a team key the box refuses is said in its fixed sentence, and the project is still added', async () => {

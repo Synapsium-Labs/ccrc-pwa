@@ -39,6 +39,7 @@ import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
+import type { HierarchyAnswer, HierarchyProjectRow } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
@@ -550,6 +551,12 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  clears each). The answer is the stored row, read back after the write, and is what the card shows. */
     saveLinking: (project: string, body: LinkingWriteBody) =>
       postJson<{ ok: true; linking: ProjectLinkingWire }>(`/api/projects/${encodeURIComponent(project)}/linking`, body),
+    /** The hierarchy settings (D-8184): `GET /api/hierarchy`, `POST /api/projects/:project/hierarchy` (the stored settings), and
+     *  `POST /api/hierarchy/owner` (one coordinator for every project). */
+    hierarchy: () => getJson<HierarchyAnswer>('/api/hierarchy'),
+    saveHierarchy: (project: string, body: Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>) =>
+      postJson<{ ok: true; settings: typeof body }>(`/api/projects/${encodeURIComponent(project)}/hierarchy`, body),
+    ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: unknown }>('/api/hierarchy/owner', { linearOwner }),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>

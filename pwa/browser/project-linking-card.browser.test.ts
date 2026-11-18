@@ -59,8 +59,21 @@ const PROJECTS = [
 /** D-8405: the route answers one row per checkout directory, so project-a arrives three times; the card draws it once. */
 const SERVED = [...PROJECTS, { ...PROJECTS[0]!, workdir: '/w2/project-a' }, { ...PROJECTS[0]!, workdir: '/w3/project-a' }];
 
+/** The hierarchy answer (D-8184): project-a and project-c share `KEY`, so their owning-project control draws too. */
+const HIER = {
+  ok: true,
+  coordinators: [{ id: 'cc-coord-a', live: true }, { id: 'cc-coord-with-a-rather-long-identifier-b', live: false }],
+  projects: [...new Set(PROJECTS.map((p) => p.name))].map((project, i) => ({
+    project, teamKey: PROJECTS.find((p) => p.name === project)!.linking.teamKey, initiatives: 'on', linearOwner: null,
+    ownerNow: { id: 'cc-coord-a', source: 'default', live: true }, ownsTeam: false,
+    state: i === 0 ? 'map-waiting' : i === 1 ? 'migrated' : 'not-migrated', stateAt: NOW - 86_400_000, itemId: i === 0 ? 7 : null,
+    inboundWaiting: i === 0 ? 3 : 0,
+  })),
+};
+
 const FIXTURE: AppFixture = {
   api: {
+    '/api/hierarchy': HIER,
     '/api/accounts': { accounts: [], projected: null, roster: [] },
     '/api/feed': { events: [] },
     '/api/projects': { roots: ['/w'], projects: SERVED },
@@ -90,7 +103,13 @@ interface RowMeasure {
   /** D-8405: the automatic link's line and each candidate's button and evidence line. */
   extras: Box[];
 }
+/** D-8184: one row's hierarchy cell: where it sits, its owner select, and its parts. */
+interface HierMeasure { cell: Box; owner: Box; parts: Box[]; owning: boolean; stateKids: Box[] }
+/** D-8184: the card's all-projects act: its box, label, select and button. */
+interface AllMeasure { box: Box; label: Box; select: Box; button: Box }
 interface Measured {
+  all: AllMeasure;
+  hier: Record<string, HierMeasure>;
   viewport: number; pageScrollWidth: number; pageClientWidth: number;
   section: { scrollWidth: number; clientWidth: number; box: Box };
   body: { scrollWidth: number; clientWidth: number; box: Box };
@@ -126,7 +145,22 @@ const measure = (el: Element): Measured => {
       extras: [...r.querySelectorAll('.linking-auto, .linking-candidate button, .linking-candidate p')].map(box),
     };
   });
+  const hier: Record<string, HierMeasure> = {};
+  for (const r of el.querySelectorAll('[data-linking-row]')) {
+    const cell = r.querySelector('[data-linking-hier]');
+    if (cell === null) continue;
+    hier[r.getAttribute('data-linking-row') ?? ''] = {
+      cell: box(cell), owner: box(one(cell, '.linking-owner select')),
+      parts: [...cell.querySelectorAll('.linking-owner, .linking-toggles, .linking-state')].map(box),
+      owning: cell.querySelectorAll('[role="checkbox"]').length === 2,
+      stateKids: [...cell.querySelectorAll('.linking-state > *')].map(box),
+    };
+  }
+  const allEl = one(el, '[data-linking-all]');
+  const all: AllMeasure = { box: box(allEl), label: box(one(allEl, 'label')), select: box(one(allEl, 'select')), button: box(one(allEl, 'button')) };
   return {
+    all,
+    hier,
     viewport: window.innerWidth,
     pageScrollWidth: document.documentElement.scrollWidth,
     pageClientWidth: document.documentElement.clientWidth,
@@ -219,6 +253,39 @@ describe('Settings › Security › Project linking, per width, skin and theme (
                 const [field, save] = r.keyLine;
                 expect(Math.abs(save!.top - field!.top), `${at}: ${r.name}'s Save is not beside its field (key cell ${Math.round(r.cells.key.width)}px, field ${Math.round(field!.width)}px, Save ${Math.round(save!.width)}px)`).toBeLessThan(8);
               }
+            }
+            // D-8184: every project's row has its hierarchy cell inside it; the owning-project control draws for the shared key only.
+            expect(Object.keys(m.hier), `${at}: a hierarchy cell per row`).toEqual(PROJECTS.map((p) => p.name));
+            expect(Object.entries(m.hier).filter(([, h]) => h.owning).map(([n]) => n).sort(), `${at}: the shared key`).toEqual(['project-a', 'project-c']);
+            for (const r of m.rows) {
+              const h = m.hier[r.name]!;
+              expect(h.cell.right, `${at}: ${r.name}'s hierarchy cell runs past its row`).toBeLessThanOrEqual(r.row.right + 0.5);
+              expect(h.cell.top, `${at}: ${r.name}'s hierarchy cell is not under the first line`).toBeGreaterThan(r.cells.name.top + 1);
+              const [owner, toggles, state] = h.parts as [Box, Box, Box];
+              if (cardWidth < 480) {
+                expect(h.owner.width, `${at}: ${r.name}'s owner select is not full width`).toBeGreaterThan(r.row.width - 2);
+                expect(toggles.top).toBeGreaterThanOrEqual(owner.bottom - 0.5);
+                expect(state.top).toBeGreaterThanOrEqual(toggles.bottom - 0.5);
+              } else {
+                for (const c of [toggles, state]) expect(Math.abs(c.top - owner.top), `${at}: ${r.name}'s second line at ${cardWidth}px`).toBeLessThan(1);
+              }
+            }
+            // The all-projects act sits at the card's end, under every row, and wraps nothing past the card.
+            const { all } = m;
+            expect(all.box.top, `${at}: the all-projects act is not at the card's end`).toBeGreaterThanOrEqual(m.rows[m.rows.length - 1]!.row.bottom - 0.5);
+            expect(all.box.right, `${at}: the all-projects act runs past the card`).toBeLessThanOrEqual(m.body.box.right + 0.5);
+            if (cardWidth < 480) {
+              expect(all.select.width, `${at}: the all-projects select is not full width`).toBeGreaterThan(all.box.width - 2);
+              expect(all.button.width, `${at}: the all-projects button is not full width`).toBeGreaterThan(all.box.width - 2);
+              expect(all.button.top).toBeGreaterThanOrEqual(all.select.bottom - 0.5);
+            } else {
+              expect(all.button.left, `${at}: the all-projects button is not beside its select`).toBeGreaterThanOrEqual(all.select.right - 0.5);
+              expect(Math.abs(all.button.bottom - all.select.bottom), `${at}: the all-projects button and select do not share a line`).toBeLessThan(2);
+            }
+            // The state line wraps inside its cell, never past it (project-a's reads "3 inbound issues wait for an owner").
+            for (const r of m.rows) {
+              const h = m.hier[r.name]!;
+              for (const k of h.stateKids) expect(k.right, `${at}: ${r.name}'s state line runs past its cell`).toBeLessThanOrEqual(h.parts[2]!.right + 0.5);
             }
             expect(errors).toEqual([]);
           } finally {
