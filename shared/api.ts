@@ -13495,6 +13495,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `approval-unreadable` the row could not be read back.
  *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
  *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `deny-not-current`    an allow of a row whose child runs under older deny rules than the box's (approvals PR 0).
  *  `declined`            the claimant handed this row over and may not rule it later.
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
@@ -13502,7 +13503,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
 export const APPROVAL_REFUSALS = [
   'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
   'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
-  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+  'guard-forbidden', 'guard-escalate', 'deny-not-current', 'declined', 'hook-gone', 'already-ruled',
 ] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
 
