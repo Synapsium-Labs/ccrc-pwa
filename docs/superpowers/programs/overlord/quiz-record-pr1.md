@@ -167,6 +167,38 @@ Every value sourcing and the batches read, with W2's signed defaults from `OPEN_
 - Departures, by slug: **step0b-names-carry-the-build** (`buildTokenOf`'s fold and hash, where the review wrote
   `v<version>`); **step0b-reprobe-rounds** now covers round 0 too (no round runs under the driver's `step0bRunName`).
 
+## Fix round 3 (the merge queue's node floor, the coordinator's ruling)
+
+The queue's run failed one case on `node floor (22.16.0)`: the SIGINT case (waiver condition 3, the stop), on `no run
+after the signal: expected 1 to be +0`. A pull request's fast run never runs the node floor.
+
+- **The cause: the test's own race, not a spawn after the signal.** The case planted one sleeping arm run (`q[0]`), waited
+  for its pid file, counted the stub's log lines, then sent SIGINT. The batch runs two lanes, so while `q[0]` slept, the
+  other lane went on spawning `q[1]`, `q[2]` and `q[3]`'s two attempts, one after another. A stub writes its log line when
+  it starts, a few tens of milliseconds after its spawn, so a run that lane spawned before the signal, but that logged
+  after the count, was counted as a run after the signal. A slower runner widens that window, which is why the node
+  floor's job hit it.
+- **Measured.** On one CPU (`taskset -c 0`), six runs of the old case counted 10, 11 or 12 log lines at the signal: the
+  other lane was still part-way through its questions every time. With 150 ms between the count and the signal, the old
+  case counted 1 to 3 runs as after the signal in five of six runs (`9/12`, `11/12`, `10/12`, `12/12`, `9/12`, `10/12`).
+  Every one of those runs was spawned before the signal.
+- **The module and the driver are unchanged.** The driver's stop is what condition 3 asks for: the handler sets the
+  stop, every lane yields twice to the loop and checks it before each spawn, and a run's post-close stretch checks it
+  too (`refuseIfStopping`'s doc). Nothing showed a run starting after the handler ran.
+- **The fix, in the test only.** Every question's arm run now sleeps, and the signal goes only once both lanes hold a live
+  run, each already logged (a stub writes its pid file after its log line). No run is then in flight when the signal
+  lands: a lane spawns again only after its run closes, past the driver's yield and stop check. So every log line past
+  the count is a run spawned after the signal, which is exactly what condition 3 forbids. The case checks that both
+  sleepers were stopped, kills any sleeper left by its group, and asserts `spawnedAfter` first. With the same 150 ms gap
+  on one CPU, six runs counted 0 every time, each exiting 2 with both sleepers stopped.
+- **Still red without the handler.** With the module's `process.on` for the stop signals removed (applied to a copy and
+  restored from it with `cmp`), the case fails: `expected [ null, 'SIGINT' ] to deeply equal [ 2, null ]`. With the
+  driver's `refuseIfStopping` made a no-op in a scratch copy (restored with `cmp`, the driver's bytes unchanged), it
+  fails too, though on the refusal word rather than the count: the run SIGTERMed by the stop closes into an
+  `out-refused` before any lane spawns again.
+- **On Node 22.16.0:** the full run dispatched on this branch's head runs the node floor; its result is in the
+  wave-done.
+
 ## An incident to report
 
 While assembling Task 2's byte check, a shell `eval` of a badly built command string ran `deploy/history-replay.mjs`

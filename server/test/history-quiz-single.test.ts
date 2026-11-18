@@ -468,11 +468,15 @@ describe('Task 4: arms runs step 0b\'s probes first, then the treatment arm alon
 });
 
 /** The stop (waiver condition 3): the module in a child process, as the operator runs it, its store reads stood in through
- *  main's deps by a wrapper this case writes; one question's arm run sleeps, so a SIGINT lands while it is live. */
+ *  main's deps by a wrapper this case writes. Every question's arm run sleeps, and the signal is sent only once both of
+ *  the batch's lanes (its concurrency, 2) hold a live run, each already logged (a stub writes its pid file after its log
+ *  line). So no run is in flight when the signal lands: a lane spawns again only after its run closes, past the driver's
+ *  yield and stop check, and every log line past the count is a run spawned after the signal (fix round 3: with one
+ *  sleeper, the other lane went on spawning its questions, and a run it started before the signal but logged after the
+ *  count was counted as one after it). */
 async function stopRun(): Promise<{ status: number | null; signal: string | null; stderr: string; childAlive: boolean; spawnedAfter: number; summary: boolean }> {
   const w = await week();
-  const sleeper = w.q[0]!;
-  put(w.home, w.mode, payloadOf(sleeper.qid), '.sleep', '20000');
+  for (const e of w.q) put(w.home, w.mode, payloadOf(e.qid as string), '.sleep', '20000');
   const wrapper = join(mkTmp('ccrc-qs-wrap-'), 'run.mjs');
   writeFileSync(wrapper, `const m = await import(${JSON.stringify(pathToFileURL(SCRIPT).href)});
 const deps = {
@@ -486,32 +490,36 @@ process.exitCode = await m.main(process.argv.slice(2), { HOME: process.env.HOME,
     const child = spawn(process.execPath, ['--no-warnings', wrapper, ...w.argv()], { cwd: w.home, env, stdio: ['ignore', 'ignore', 'pipe'] });
     let stderr = '';
     child.stderr.on('data', (b: Buffer) => { stderr += b.toString('utf8'); });
-    const pidFile = join(w.home, STUB_DIR, `${keyOf(w.mode, payloadOf(sleeper.qid))}.pid`);
+    const pidFiles = w.q.map((e) => join(w.home, STUB_DIR, `${keyOf(w.mode, payloadOf(e.qid as string))}.pid`));
+    const started = (): string[] => pidFiles.filter((f) => existsSync(f));
     const deadline = Date.now() + 30_000;
-    while (!existsSync(pidFile) && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
-    if (!existsSync(pidFile)) { child.kill('SIGKILL'); throw new Error(`fixture: the sleeping arm run never started: ${stderr}`); }
-    const stubPid = Number(readFileSync(pidFile, 'utf8'));
+    while (started().length < 2 && Date.now() < deadline) await new Promise((r) => setTimeout(r, 50));
+    if (started().length !== 2) { child.kill('SIGKILL'); throw new Error(`fixture: both lanes' sleeping arm runs never started: ${stderr}`); }
+    const stubPids = started().map((f) => Number(readFileSync(f, 'utf8')));
     const before = runs(w.home).length;
     child.kill('SIGINT');
     const done = await new Promise<{ status: number | null; signal: string | null }>((resolve) => child.on('close', (status, signal) => resolve({ status, signal })));
-    const alive = (): boolean => { try { process.kill(stubPid, 0); return true; } catch { return false; } };
+    const spawnedAfter = runs(w.home).length - before;
+    const live = (pid: number): boolean => { try { process.kill(pid, 0); return true; } catch { return false; } };
+    const alive = (): boolean => stubPids.some(live);
     const until = Date.now() + 8_000;
     while (alive() && Date.now() < until) await new Promise((r) => setTimeout(r, 50));
     const childAlive = alive();
-    if (childAlive) { try { process.kill(-stubPid, 'SIGKILL'); } catch { /* gone */ } }
-    return { ...done, stderr, childAlive, spawnedAfter: runs(w.home).length - before, summary: existsSync(join(w.out, 'quiz', 'arms-summary.json')) };
+    // Any sleeper still running, the two counted and any a broken stop let start, is killed by its group.
+    for (const f of started()) { try { process.kill(-Number(readFileSync(f, 'utf8')), 'SIGKILL'); } catch { /* gone */ } }
+    return { ...done, stderr, childAlive, spawnedAfter, summary: existsSync(join(w.out, 'quiz', 'arms-summary.json')) };
   } finally {
     // the wrapper and the week's directories go with the case's mkTmp fixtures
   }
 }
 
 describe('Task 4: the stop (waiver condition 3)', () => {
-  it('a SIGINT while an arm run is live signals that run\'s group; nothing further is spawned or written, and it refuses interrupted', async () => {
+  it('a SIGINT while both lanes\' arm runs are live signals their groups; nothing further is spawned or written, and it refuses interrupted', async () => {
     const r = await stopRun();
+    expect(r.spawnedAfter, 'no run after the signal').toBe(0);
     expect([r.status, r.signal]).toEqual([2, null]);
     expect(r.stderr).toMatch(/ccrc history-quiz-single: interrupted: SIGINT received/);
-    expect(r.childAlive, 'the live arm run was stopped').toBe(false);
-    expect(r.spawnedAfter, 'no run after the signal').toBe(0);
+    expect(r.childAlive, 'both live arm runs were stopped').toBe(false);
     expect(r.summary, 'no summary after interrupted').toBe(false);
   }, 60_000);
 });
