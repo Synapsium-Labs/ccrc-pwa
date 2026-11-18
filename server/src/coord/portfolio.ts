@@ -18,7 +18,11 @@ import {
 } from '../../../shared/portfolio.js';
 import { NEVER_STARTED_DETAIL } from '../../../shared/programmes.js';
 import { percentile } from '../perf/stats.js';
-import { doneCycles, earliestDispatch, isOpenRun, rebuiltWave, wavesOf, type Wave } from './programmeMeasures.js';
+import { doneCycles, earliestDispatch, isOpenRun, rebuiltWave, waveSpend, wavesOf, type Wave } from './programmeMeasures.js';
+import { EDGE_CLEARING_SHIPPED, type ProgrammeEdge, type RunSpendRow, type SealedForecast } from '../../../shared/programmeFacts.js';
+import type { PortfolioW2Facts } from '../../../shared/portfolio.js';
+import { forecastCalibration, type ScoredSeal } from './forecast.js';
+import { criticalPath } from './programmeHealth.js';
 
 const DAY_MS = 24 * 3_600_000;
 const WINDOW_MS = PORTFOLIO_WINDOW_DAYS * DAY_MS;
@@ -176,7 +180,75 @@ function entryOf(
   };
 }
 
-/** The listed programmes (question 7) in `portfolioOrder`, each with W1's measures. Pure; `now` is the caller's. */
+// ── W2's measures (forecasts B, plan w2-forecasts-health.md Task 8) ─────────────────────────────────────────────────
+// Shown, never computed here: the health word is the newest row the forecast lane recorded (`programmeHealth` runs only
+// there, question 7, F7), and the dates are the newest seal's (no Monte Carlo at a read). Computed at each read: the
+// edges listed, the spend roll-up, the critical path and the fleet's calibration.
+
+/** The entry's newest seal: an open unforecastable seal is its own reading, never "pending" (review 2414 F9). */
+function forecastEntry(seal: SealedForecast | undefined): PortfolioEntry['forecast'] {
+  if (seal === undefined) return undefined;
+  const f = seal.forecast;
+  if (f === 'unreadable') return { kind: 'unreadable', sealedAt: seal.sealedAt };
+  if (f.kind === 'unforecastable') return { kind: 'unforecastable', reason: f.reason, sealedAt: seal.sealedAt };
+  return { kind: 'forecast', medianAt: f.medianAt, p85At: f.p85At, n: f.n, source: f.source, sealedAt: seal.sealedAt, outcome: seal.outcome };
+}
+
+const SPEND_KINDS: readonly string[] = ['work', 'review'];
+
+/** The index's question 22 over one programme (question 10, ruled): measured `run_spend` rows, plus each open run's
+ *  session's fresh live reading once per session. A closed run with no measured row, an open run whose session has no fresh
+ *  reading, and a dispatched open run with no session count in `runsUnmeasured`, never as 0. */
+function spendEntry(runs: readonly PortfolioRun[], waves: readonly Wave[], w2: PortfolioW2Facts, now: number): NonNullable<PortfolioEntry['spend']> {
+  const ids = new Set(runs.map((r) => r.id));
+  const rows = new Map<number, RunSpendRow>(w2.spend.filter((r) => ids.has(r.runId)).map((r) => [r.runId, r] as const));
+  const byClass: Record<string, number> = {};
+  let total = 0, runsUnmeasured = 0;
+  const add = (cls: string | null, cost: number): void => { total += cost; const k = cls ?? 'unknown'; byClass[k] = (byClass[k] ?? 0) + cost; };
+  for (const r of runs) {
+    if (!SPEND_KINDS.includes(r.kind) || isOpenRun(r)) continue;
+    const row = rows.get(r.id);
+    if (row !== undefined && row.state === 'measured' && row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;
+  }
+  const counted = new Set<string>();
+  const openSpend = new Set(runs.filter((r) => SPEND_KINDS.includes(r.kind) && isOpenRun(r)).map((r) => r.id));
+  const liveIds = new Set(w2.live.map((l) => l.runId));
+  // A dispatched open run with no session has no reading: unmeasured. One never dispatched has run no session yet.
+  for (const r of runs) if (openSpend.has(r.id) && r.dispatchedAt !== null && !liveIds.has(r.id)) runsUnmeasured += 1;
+  for (const l of w2.live) {
+    if (!openSpend.has(l.runId)) continue;
+    const fresh = l.reading.kind === 'reading' && !l.reading.stale && l.reading.cost !== null ? l.reading : null;
+    if (fresh === null) { runsUnmeasured += 1; continue; }
+    if (counted.has(l.sessionId)) continue;
+    counted.add(l.sessionId);
+    add(fresh.class, fresh.cost!);
+  }
+  const perWave = waveSpend(waves, runs, rows, now - WINDOW_MS, now);
+  return { total, byClass, perWaveMedian: perWave.medianPerWave, wavesMeasured: perWave.measured, wavesUnmeasured: perWave.unmeasured,
+    runsUnmeasured, attributed: true, coordinatorExcluded: true, classAtClose: true };
+}
+
+/** The W2 fields of one entry. */
+function w2Entry(slug: string, runs: readonly PortfolioRun[], w2: PortfolioW2Facts, now: number): Partial<PortfolioEntry> {
+  const health = w2.health.find((h) => h.program === slug);
+  const seals = w2.seals.filter((x) => x.program === slug);
+  const edgesBy = new Map<string, ProgrammeEdge[]>();
+  for (const e of w2.edges) { const l = edgesBy.get(e.program) ?? []; l.push(e); edgesBy.set(e.program, l); }
+  const runProgram = new Map(w2.edgeRuns.map((r) => [r.runId, r.program] as const));
+  const dated = new Map(w2.newestDated.map((d) => [d.program, d.p85At] as const));
+  const forecast = forecastEntry(seals[seals.length - 1]);
+  return {
+    ...(health === undefined ? {} : { health: { word: health.word, evidence: health.evidence, at: health.at } }),
+    ...(forecast === undefined ? {} : { forecast }),
+    edges: { list: edgesBy.get(slug) ?? [], clearingShipped: EDGE_CLEARING_SHIPPED },
+    spend: spendEntry(runs, wavesOf(runs), w2, now),
+    criticalPath: criticalPath(slug, (p) => edgesBy.get(p) ?? [], (id) => runProgram.get(id) ?? null, (p) => dated.get(p) ?? null,
+      EDGE_CLEARING_SHIPPED),
+  };
+}
+
+/** The listed programmes (question 7) in `portfolioOrder`, each with W1's measures and, when the facts carry them, W2's;
+ *  the view's calibration is the fleet's (M30). Pure; `now` is the caller's. */
 export function portfolioFor(facts: PortfolioFacts, now: number): PortfolioView {
   const rankOf = new Map(facts.ranks.map((r) => [r.program, r] as const));
   const group = <T extends { program: string }>(xs: readonly T[]): Map<string, T[]> => {
@@ -189,7 +261,12 @@ export function portfolioFor(facts: PortfolioFacts, now: number): PortfolioView 
   const bySlug = new Map(shown.map((p) => [p.slug, p] as const));
   const programmes = portfolioOrder(facts.ranks, shown).map((slug) => {
     const p = bySlug.get(slug)!;
-    return entryOf(p, rankOf.get(slug), runsOf.get(slug) ?? [], itemsOf.get(slug) ?? [], asksOf.get(slug) ?? [], now);
+    const runs = runsOf.get(slug) ?? [];
+    const entry = entryOf(p, rankOf.get(slug), runs, itemsOf.get(slug) ?? [], asksOf.get(slug) ?? [], now);
+    return facts.w2 === undefined ? entry : { ...entry, ...w2Entry(slug, runs, facts.w2, now) };
   });
-  return { at: now, revision: facts.revision, programmes };
+  if (facts.w2 === undefined) return { at: now, revision: facts.revision, programmes };
+  const scored = facts.w2.scored.flatMap((x): ScoredSeal[] =>
+    x.scoredAt !== null && (x.outcome === 'met' || x.outcome === 'missed') ? [{ scoredAt: x.scoredAt, outcome: x.outcome }] : []);
+  return { at: now, revision: facts.revision, programmes, calibration: forecastCalibration(scored, now) };
 }

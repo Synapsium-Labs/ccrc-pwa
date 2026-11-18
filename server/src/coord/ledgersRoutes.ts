@@ -49,6 +49,7 @@ import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
 import { parseRankWrite, type PortfolioView } from '../../../shared/portfolio.js';
 import { portfolioFor } from './portfolio.js';
+import type { SpendUsageRead } from './portfolioStore.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
@@ -627,6 +628,10 @@ export interface LedgerOperatorDeps {
   /** The live signal for an open ask (Overlord W1, portfolio): the watcher's `liveAskKey`, or a reader answering `unmeasured`
    *  when no watcher runs, so a released ask then counts as unmeasured, never as live. */
   liveAsk: LiveAskRead;
+  /** The usage sweep's reading of an open run's session for the portfolio's spend read (Overlord W2 forecasts B): the
+   *  watcher's `liveSpendReading`. Absent (a test, or no watcher): every reading is `not-ready`, so live spend reads as
+   *  unmeasured, never 0. */
+  liveSpend?: SpendUsageRead;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -766,7 +771,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   // account gate and works while sign-in is dark, recording `flag-off` then (slug rank-works-dark), as the `lane-arm` and
   // `run-close` switches do; armed, it records the session's device actor. It awaits nothing between its read and its
   // write, so `setPortfolioRank`'s revision check inside one transaction is the whole guard against a stale tab.
-  const portfolioView = (coord: CoordStore, now: number): PortfolioView => portfolioFor(coord.portfolioFacts(now, deps.liveAsk), now);
+  const portfolioView = (coord: CoordStore, now: number): PortfolioView =>
+    portfolioFor(coord.portfolioFacts(now, deps.liveAsk, deps.liveSpend ?? (() => ({ kind: 'not-ready' as const }))), now);
   app.get('/api/portfolio', (_req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');

@@ -9,7 +9,10 @@ import { familyClassOf } from '../../shared/models.js';
 export const USAGE_FRESH_S = 30 * 60;
 
 export type UsageRead =
-  | { kind: 'reading'; usage: SessionUsage }
+  /** `uuid`: the sidecar's `session_id`, the conversation the reading was taken in (Overlord W2 forecasts B: the spend
+   *  arm counts a reading only in the run's own conversation, `clear-restarts-cost-by-session-id`); null when the
+   *  sidecar has none. Beside `usage`, not inside it, so the fleet wire's `SessionUsage` is unchanged. */
+  | { kind: 'reading'; usage: SessionUsage; uuid: string | null }
   | { kind: 'absent' }
   | { kind: 'unreadable' }
   | { kind: 'malformed' };
@@ -36,7 +39,7 @@ export function parseUsageSidecar(content: string, nowS: number): Extract<UsageR
   const ts = num(o['ts']);
   if (ts === null) return { kind: 'malformed' };
   const model = str(o['model']);
-  return { kind: 'reading', usage: {
+  return { kind: 'reading', uuid: str(o['uuid']), usage: {
     ts, model,
     class: model === null ? null : familyClassOf(model),
     effort: str(o['effort']),

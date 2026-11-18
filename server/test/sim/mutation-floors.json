@@ -182,5 +182,6 @@
   "server/src/coord/programmeHealth.ts#healthChangeVerdict": 1,
   "server/src/coord/programmeMeasures.ts#waveSpend": 1,
   "server/src/coord/programmeMeasures.ts#wavesOf": 1,
-  "server/src/coord/programmeMeasures.ts#doneCycles": 1
+  "server/src/coord/programmeMeasures.ts#doneCycles": 1,
+  "server/src/coord/programmeMeasures.ts#runSpendVerdict": 1
 }

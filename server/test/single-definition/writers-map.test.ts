@@ -315,7 +315,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
-  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts'] as const;
+  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts',
+  'programme_health', 'run_spend'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -427,6 +428,10 @@ describe(TABLES_PIN, () => {
       // The sealed forecasts (Overlord W2 forecasts A, plan w2-forecasts-health.md Task 3): the seal arm's INSERT and the
       // score arm's outcome write, each reached only from its arm of the forecast lane.
       programme_forecasts: ['scoreForecast', 'sealForecast'].map((f) => `server/src/coord/programmeFactsStore.ts#${f}`),
+      // Health changes and what each run cost (Overlord W2 forecasts B, plan w2-forecasts-health.md Task 7): one writer
+      // each, reached only from its arm of the forecast lane.
+      programme_health: ['server/src/coord/programmeFactsStore.ts#appendHealth'],
+      run_spend: ['server/src/coord/programmeFactsStore.ts#recordRunSpend'],
     });
   });
 
@@ -580,6 +585,14 @@ describe(TABLES_PIN, () => {
     const text = readFileSync(path.join(ccrcRoot, 'server/src/coord/programmeFactsStore.ts'), 'utf8');
     const updates = [...uncommented(text).matchAll(/UPDATE\s+programme_forecasts\s+SET\s+(.*?)\s+WHERE\s+(.*?)["`]\)/g)];
     expect(updates.map((m) => [m[1], m[2]])).toEqual([['outcome = ?, scoredAt = ?', "id = ? AND outcome = 'open'"]]);
+  });
+  // Health changes and what each run cost (Overlord W2 forecasts B, plan w2-forecasts-health.md Task 7): each writer is reached
+  // only from its arm of the forecast lane.
+  it.each([['appendHealth', 'healthArm'], ['recordRunSpend', 'spendArm']])('%s is called exactly once outside the store, inside the forecast lane\'s %s', (fn, arm) => {
+    expect(callSitesOf(fn)(ALL.filter((f) => rel(f).startsWith('server/src/')))).toEqual([
+      `server/src/coord/forecastLane.ts#${arm}`,
+      `${S}${fn}`,
+    ]);
   });
   // THE MARKS' READERS (review 2196 F2): no decider reads a mark. `answerMarksOf` is called by the two operator views alone,
   // and `FROM answer_marks` is spelled in the store alone, so a new reader (a gate, a dispatch rule) reds here first.

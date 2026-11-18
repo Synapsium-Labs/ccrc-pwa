@@ -7,6 +7,10 @@
 // MEASURE is the server's, computed at read time by `portfolioFor` and never stored. A measure with no data is `null` with
 // `n: 0`, never 0, and what the read could not judge is counted (`cycleUnmeasured`, `itemsUnmeasured`, `asksUnmeasured`).
 import type { RunKind } from './api.js';
+import type {
+  Calibration, Forecast, HealthEvidence, HealthRow, ProgrammeEdge, ProgrammeHealthWord, RemainingStatement, RunSpendRow,
+  SealedForecast, UnforecastableReason,
+} from './programmeFacts.js';
 
 /** Table 5.6a's classes of service, in band order: the rank orders by class first, then by position inside the class. */
 export type ServiceClass = 'expedite' | 'fixed-date' | 'standard' | 'background';
@@ -49,10 +53,32 @@ export interface PortfolioAsk {
   id: number; program: string; state: string; releasedAt: number | null;
   answeredAt: number | null; answeredBy: string | null; live: boolean | 'unmeasured' | null;
 }
-/** What the facts read hands `portfolioFor`. `revision` is 0 when the rank was never written. */
+/** An open run's session reading for the spend read (Overlord W2 forecasts B): the usage sweep's newest reading, `none`
+ *  when the session has none, or `not-ready` before the sweep's first pass in this process. Never 0 for "no reading". */
+export type LiveSpendReading =
+  | { readonly kind: 'reading'; readonly cost: number | null; readonly class: string | null; readonly stale: boolean }
+  | { readonly kind: 'none' } | { readonly kind: 'not-ready' };
+/** The facts `portfolioFor`'s W2 measures read (forecasts B), every list fleet-bounded by the facts read:
+ *  `seals` the listed programmes' seals, oldest first; `scored` the seals scored in the calibration span, fleet-wide;
+ *  `health` each listed programme's newest `programme_health` row; `edges` every edge not met, fleet-wide, with
+ *  `edgeRuns` the programme of each `run-closed` target and `newestDated` each programme's newest seal's 85% date (null
+ *  for an unforecastable or unreadable newest seal), so the critical path can cross programmes the portfolio does not
+ *  list; `spend` the listed programmes' `run_spend` rows; `live` each open run's session reading; `statements` the
+ *  listed programmes' statements in the health window; `lastMoves` each listed programme's newest state change of an
+ *  open work run (else that run's open; null with none). */
+export interface PortfolioW2Facts {
+  seals: readonly SealedForecast[]; scored: readonly SealedForecast[]; health: readonly HealthRow[];
+  edges: readonly ProgrammeEdge[]; edgeRuns: readonly { runId: number; program: string }[];
+  newestDated: readonly { program: string; p85At: number | null }[];
+  spend: readonly RunSpendRow[]; live: readonly { runId: number; sessionId: string; reading: LiveSpendReading }[];
+  statements: readonly RemainingStatement[]; lastMoves: readonly { program: string; at: number | null }[];
+}
+/** What the facts read hands `portfolioFor`. `revision` is 0 when the rank was never written. `w2` is absent only where
+ *  a caller builds W1's facts alone (a test); the facts read always sets it. */
 export interface PortfolioFacts {
   programmes: readonly PortfolioProgramme[]; ranks: readonly RankRow[]; revision: number;
   runs: readonly PortfolioRun[]; items: readonly PortfolioItem[]; asks: readonly PortfolioAsk[];
+  w2?: PortfolioW2Facts;
 }
 /** A duration series: `n` samples, and null for both figures when `n` is 0, never 0. */
 export interface Measure { n: number; medianMs: number | null; p85Ms: number | null }
@@ -87,8 +113,34 @@ export interface PortfolioEntry {
   /** Asks that reached the operator and whose end no live signal shows. */
   asksUnmeasured: number;
   blocking: { items: readonly { id: number; title: string }[]; asks: number };
+  // ── Overlord W2 (forecasts B): every field optional, so an older server's entry lacks them and the console reads the
+  // absence as "not measured on this server". ──
+  /** The newest `programme_health` row, as the forecast lane recorded it (never recomputed at a read). Absent: no row
+   *  yet. A word or evidence this build cannot read is `unreadable`. */
+  health?: { word: ProgrammeHealthWord | 'unreadable'; evidence: HealthEvidence | 'unreadable'; at: number };
+  /** The newest seal: its dates, `n`, source and seal time; or `unforecastable` with its reason (an open unforecastable
+   *  seal is never pending: it has no date to be scored at, review 2414 F9); or `unreadable`. Absent: no seal yet. */
+  forecast?:
+    | { kind: 'forecast'; medianAt: number; p85At: number; n: number; source: Extract<Forecast, { kind: 'forecast' }>['source']; sealedAt: number; outcome: SealedForecast['outcome'] }
+    | { kind: 'unforecastable'; reason: UnforecastableReason; sealedAt: number }
+    | { kind: 'unreadable'; sealedAt: number };
+  /** Every edge not met: `open`, `target-ended` and `target-unmeasurable`. Only an `open` edge can block, and only once
+   *  `clearingShipped` (remaining work B's edge arm) is true; until then every edge is listed as "clearing not shipped". */
+  edges?: { list: readonly ProgrammeEdge[]; clearingShipped: boolean };
+  /** What the programme's runs cost (the index's question 22): `measured` `run_spend` rows plus the fresh live readings of
+   *  open runs' sessions, one per session, by model class. A run with no measured row or no fresh reading counts in
+   *  `runsUnmeasured`, never as 0. `perWaveMedian` is over the work waves closed in the window whose every run is
+   *  measured (`wavesUnmeasured` counts the rest). The coordinator's own spend is outside the total. */
+  spend?: {
+    total: number; byClass: Readonly<Record<string, number>>; perWaveMedian: number | null; wavesMeasured: number;
+    wavesUnmeasured: number; runsUnmeasured: number; attributed: true; coordinatorExcluded: true; classAtClose: true;
+  };
+  /** The chain of open `needs-landed` edges through other programmes, with the latest 85% date on it. */
+  criticalPath?: { chain: readonly string[]; latestP85At: number | null; unmeasured: readonly string[]; cut: boolean };
 }
-export interface PortfolioView { at: number; revision: number; programmes: readonly PortfolioEntry[] }
+/** `calibration` (forecasts B): the fleet's share of sealed 85% dates met, on four weekly cuts (M30). Absent: an older
+ *  server, or W1's facts alone. */
+export interface PortfolioView { at: number; revision: number; programmes: readonly PortfolioEntry[]; calibration?: Calibration }
 
 /** One entry of a rank write's `order`: `fixedDate` (`YYYY-MM-DD`) is carried on `fixed-date` alone. */
 export interface RankOrderEntry { slug: string; cls: ServiceClass; fixedDate: string | null }

@@ -1,12 +1,15 @@
-// Overlord W2, forecasts A (plan w2-forecasts-health.md, Task 4): the forecast lane's seal and score arms, over a fixture
+// Overlord W2, forecasts A (plan w2-forecasts-health.md, Task 4) and B (Task 7): the forecast lane's seal, score, spend and
+// health arms, over a fixture
 // coord.db, with seeded entropy (`fakeTime`) and `now` handed in, as the watcher hands its wall reading in. No watcher is
 // built here: the lane's row is `lane-schedule.test.ts`'s, and its clock is the time-ports census's.
-import { describe, it, expect, beforeEach } from 'vitest';
+import { describe, it, expect, beforeEach, vi } from 'vitest';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { forecastProgramme } from '../src/coord/forecast.js';
-import { runForecastLane, type ForecastLanePort } from '../src/coord/forecastLane.js';
+import { runForecastLane, type ForecastLanePort, type ForecastLive, type UsageRead } from '../src/coord/forecastLane.js';
+import type { SpendReading } from '../src/coord/programmeMeasures.js';
+import type { HealthVerdict } from '../../shared/programmeFacts.js';
 import { fakeTime } from './fakeTime.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -175,5 +178,224 @@ describe('the score arm', () => {
     runForecastLane(coord, T0 + 30 * MIN, entropy());
     runForecastLane(coord, T0 + 400 * DAY, entropy());
     expect(seals(coord).find((x) => x.closingRunId === r)).toMatchObject({ outcome: 'open', scoredAt: null });
+  });
+});
+
+// ── Forecasts B: the spend arm and the health arm (plan w2-forecasts-health.md, Task 7) ─────────────────────────────
+// The same real CoordStore as the port. `ForecastLive` is built here: a usage port whose readiness and readings the test
+// sets, a notice spy (the lane's only sink: it has no push, no mail), and the live-ask and live-spend ports the health arm
+// hands the portfolio's facts.
+
+const spendRun = (c: CoordStore, o: { program?: string; wave?: number; kind?: string; openedAt: number; dispatchedAt: number | null;
+  closedAt: number | null; sessionId: string | null; reviews?: number | null }): number =>
+  Number(c.db.prepare(
+    "INSERT INTO runs (program, wave, project, state, kind, reviews, openedAt, dispatchedAt, closedAt, sessionId, claimedBy) VALUES (?, ?, 'project-a', ?, ?, ?, ?, ?, ?, ?, 'lane-a-project-a')",
+  ).run(o.program ?? 'prog-a', o.wave ?? 1, o.closedAt === null ? 'working' : 'done', o.kind ?? 'work', o.reviews ?? null, o.openedAt, o.dispatchedAt,
+    o.closedAt, o.sessionId).lastInsertRowid);
+const rowOf = (c: CoordStore, runId: number) => c.db.prepare('SELECT runId, at, state, cost, class, readAt, startCost FROM run_spend WHERE runId = ?').get(runId);
+const reading = (o: Partial<SpendReading> = {}): SpendReading =>
+  ({ readAt: T0 - HOUR - 5 * MIN, cost: 3.5, class: 'opus', stale: false, sidecarUuid: 'conv-1', conversationUuid: 'conv-1', ...o });
+
+interface Harness { live: ForecastLive; ready: { value: boolean }; readings: Map<string, SpendReading>; notice: ReturnType<typeof vi.fn> }
+const harness = (spendSince = T0 - DAY): Harness => {
+  const ready = { value: true };
+  const readings = new Map<string, SpendReading>();
+  const usage: UsageRead = { ready: () => ready.value, reading: (id) => readings.get(id) ?? null };
+  const notice = vi.fn();
+  const live: ForecastLive = { usage, spendSince, liveAsk: () => ({ kind: 'unmeasured' }), liveSpend: () => ({ kind: 'none' }), notice };
+  return { live, ready, readings, notice };
+};
+
+describe('the spend arm', () => {
+  const closed = (c: CoordStore, sessionId: string | null, o: { wave?: number; kind?: string; dispatchedAt?: number; closedAt?: number } = {}) =>
+    spendRun(c, { wave: o.wave ?? 1, kind: o.kind, openedAt: T0 - 6 * HOUR, dispatchedAt: o.dispatchedAt ?? T0 - 5 * HOUR, closedAt: o.closedAt ?? T0 - HOUR, sessionId });
+
+  it('a closed run with an in-window, fresh, same-conversation reading gets a measured row', () => {
+    const h = harness();
+    const r = closed(coord, 'sess-a');
+    h.readings.set('sess-a', reading());
+    expect(runForecastLane(coord, T0, entropy(), h.live)).toMatchObject({ spent: 1, spendWaiting: false, failed: [] });
+    expect(rowOf(coord, r)).toEqual({ runId: r, at: T0, state: 'measured', cost: 3.5, class: 'opus', readAt: T0 - HOUR - 5 * MIN, startCost: null });
+  });
+
+  it('a review run is recorded too', () => {
+    const h = harness();
+    const r = closed(coord, 'sess-r', { kind: 'review', wave: 2 });
+    h.readings.set('sess-r', reading());
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, r)).toMatchObject({ state: 'measured', cost: 3.5 });
+  });
+
+  it('a reading older than the run\'s dispatch gets outside, with no cost', () => {
+    const h = harness();
+    const r = closed(coord, 'sess-a');
+    h.readings.set('sess-a', reading({ readAt: T0 - 5 * HOUR - 1 }));
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, r)).toMatchObject({ state: 'outside', cost: null, class: 'opus', readAt: T0 - 5 * HOUR - 1 });
+  });
+
+  it('a stale reading gets outside', () => {
+    const h = harness();
+    const r = closed(coord, 'sess-a');
+    h.readings.set('sess-a', reading({ stale: true }));
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, r)).toMatchObject({ state: 'outside', cost: null });
+  });
+
+  it('a session dispatched to a later run gets outside for the earlier one, and the later run measures', () => {
+    const h = harness();
+    const early = closed(coord, 'sess-a', { wave: 1, dispatchedAt: T0 - 5 * HOUR, closedAt: T0 - 3 * HOUR });
+    const later = closed(coord, 'sess-a', { wave: 2, dispatchedAt: T0 - 2 * HOUR, closedAt: T0 - HOUR });
+    h.readings.set('sess-a', reading());
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, early)).toMatchObject({ state: 'outside', cost: null });
+    expect(rowOf(coord, later)).toMatchObject({ state: 'measured', cost: 3.5 });
+  });
+
+  it('no reading, and no session, get absent', () => {
+    const h = harness();
+    const noReading = closed(coord, 'sess-x', { wave: 1 });
+    const noSession = closed(coord, null, { wave: 2 });
+    runForecastLane(coord, T0, entropy(), h.live);
+    expect(rowOf(coord, noReading)).toMatchObject({ state: 'absent', cost: null, class: null, readAt: null });
+    expect(rowOf(coord, noSession)).toMatchObject({ state: 'absent', cost: null });
+  });
+
+  it('while the usage sweep has not run, nothing is written and the pass says so; the run is recorded on the first pass after it has (the boot guard)', () => {
+    const h = harness();
+    h.ready.value = false;
+    const r = closed(coord, 'sess-a');
+    h.readings.set('sess-a', reading());
+    expect(runForecastLane(coord, T0, entropy(), h.live)).toMatchObject({ spent: 0, spendWaiting: true, failed: [] });
+    expect(rowOf(coord, r)).toBeUndefined();
+    h.ready.value = true;
+    expect(runForecastLane(coord, T0 + MIN, entropy(), h.live)).toMatchObject({ spent: 1, spendWaiting: false });
+    expect(rowOf(coord, r)).toMatchObject({ state: 'measured', at: T0 + MIN });
+  });
+
+  it('a run closed before the first pass and before any run_spend row gets no row (no backfill)', () => {
+    const h = harness(T0 - 2 * HOUR);
+    const old = closed(coord, 'sess-a', { wave: 1, closedAt: T0 - 3 * HOUR });
+    const fresh = closed(coord, 'sess-b', { wave: 2, closedAt: T0 - HOUR });
+    h.readings.set('sess-a', reading());
+    h.readings.set('sess-b', reading());
+    expect(runForecastLane(coord, T0, entropy(), h.live)).toMatchObject({ spent: 1 });
+    expect(rowOf(coord, old)).toBeUndefined();
+    expect(rowOf(coord, fresh)).toMatchObject({ state: 'measured' });
+  });
+
+  it('a second pass changes nothing', () => {
+    const h = harness();
+    closed(coord, 'sess-a', { wave: 1 });
+    closed(coord, null, { wave: 2 });
+    h.readings.set('sess-a', reading());
+    runForecastLane(coord, T0, entropy(), h.live);
+    const before = coord.db.prepare('SELECT * FROM run_spend ORDER BY runId').all();
+    h.readings.set('sess-a', reading({ cost: 99, readAt: T0 - HOUR - MIN }));
+    expect(runForecastLane(coord, T0 + 2 * MIN, entropy(), h.live)).toMatchObject({ spent: 0, failed: [] });
+    expect(coord.db.prepare('SELECT * FROM run_spend ORDER BY runId').all()).toEqual(before);
+  });
+
+  it('with no live ports the arms do not run at all', () => {
+    closed(coord, 'sess-a');
+    expect(runForecastLane(coord, T0, entropy())).toMatchObject({ spent: 0, spendWaiting: false, healthChanged: 0, notices: 0 });
+    expect(coord.db.prepare('SELECT COUNT(*) AS n FROM run_spend').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('the health arm', () => {
+  const healthRows = (c: CoordStore, program = 'prog-a') =>
+    c.db.prepare('SELECT word, noticed, at FROM programme_health WHERE program = ? ORDER BY id').all(program) as { word: string; noticed: number; at: number }[];
+  /** A programme with an open run and one open `blocking` item: the health decider's first row says `blocked-on-you`. */
+  const block = (c: CoordStore): void => {
+    c.db.prepare("INSERT INTO operator_items (program, raisedBy, kind, title, why, how, neededBy, state, raisedAt) VALUES ('prog-a', 'coordinator', 'do', 'decide', 'w', '[]', 'blocking', 'open', ?)").run(T0 - HOUR);
+  };
+  const unblock = (c: CoordStore): void => { c.db.prepare("UPDATE operator_items SET state = 'done', closedAt = ?").run(T0); };
+  const open = (c: CoordStore): void => {
+    spendRun(c, { openedAt: T0 - 2 * HOUR, dispatchedAt: T0 - 2 * HOUR, closedAt: null, sessionId: null });
+  };
+
+  it('a programme\'s first row is recorded with no notice, and a repeat of the same word appends none', () => {
+    const h = harness();
+    open(coord);
+    expect(runForecastLane(coord, T0, entropy(), h.live)).toMatchObject({ healthChanged: 1, notices: 0, failed: [] });
+    expect(healthRows(coord)).toHaveLength(1);
+    expect(healthRows(coord)[0]).toMatchObject({ noticed: 0, at: T0 });
+    expect(runForecastLane(coord, T0 + MIN, entropy(), h.live)).toMatchObject({ healthChanged: 0, notices: 0 });
+    expect(healthRows(coord)).toHaveLength(1);
+    expect(h.notice).not.toHaveBeenCalled();
+  });
+
+  it('a worse word records one notice naming the programme and the word, and a row with noticed 1', () => {
+    const h = harness();
+    open(coord);
+    runForecastLane(coord, T0, entropy(), h.live);
+    const first = healthRows(coord)[0]!.word;
+    block(coord);
+    const pass = runForecastLane(coord, T0 + MIN, entropy(), h.live);
+    expect(pass).toMatchObject({ healthChanged: 1, notices: 1, failed: [] });
+    expect(first).not.toBe('blocked-on-you');
+    expect(healthRows(coord).map((r) => [r.word, r.noticed])).toEqual([[first, 0], ['blocked-on-you', 1]]);
+    expect(h.notice).toHaveBeenCalledTimes(1);
+    expect(h.notice.mock.calls[0]![0]).toBe('prog-a');
+    expect((h.notice.mock.calls[0]![1] as HealthVerdict).word).toBe('blocked-on-you');
+  });
+
+  it('a flap back and worse again inside 24 hours changes the rows but records no second notice', () => {
+    const h = harness();
+    open(coord);
+    runForecastLane(coord, T0, entropy(), h.live);
+    block(coord);
+    runForecastLane(coord, T0 + MIN, entropy(), h.live);
+    unblock(coord);
+    expect(runForecastLane(coord, T0 + 2 * MIN, entropy(), h.live)).toMatchObject({ healthChanged: 1, notices: 0 });
+    block(coord);
+    expect(runForecastLane(coord, T0 + 3 * MIN, entropy(), h.live)).toMatchObject({ healthChanged: 1, notices: 0 });
+    expect(healthRows(coord).map((r) => [r.word, r.noticed]).filter(([w]) => w === 'blocked-on-you')).toEqual([['blocked-on-you', 1], ['blocked-on-you', 0]]);
+    expect(h.notice).toHaveBeenCalledTimes(1);
+    // A day on, the same worsening is a new notice.
+    unblock(coord);
+    runForecastLane(coord, T0 + 25 * HOUR, entropy(), h.live);
+    block(coord);
+    expect(runForecastLane(coord, T0 + 25 * HOUR + MIN, entropy(), h.live)).toMatchObject({ notices: 1 });
+    expect(h.notice).toHaveBeenCalledTimes(2);
+  });
+
+  it('a better word records a row and no notice', () => {
+    const h = harness();
+    open(coord);
+    block(coord);
+    runForecastLane(coord, T0, entropy(), h.live);
+    unblock(coord);
+    expect(runForecastLane(coord, T0 + MIN, entropy(), h.live)).toMatchObject({ healthChanged: 1, notices: 0 });
+    expect(healthRows(coord).map((r) => [r.word, r.noticed])).toEqual([['blocked-on-you', 0], [healthRows(coord)[1]!.word, 0]]);
+    expect(healthRows(coord)[1]!.word).not.toBe('blocked-on-you');
+    expect(h.notice).not.toHaveBeenCalled();
+  });
+
+  it('the arm\'s only sink is the notice spy: a worse word pushes and mails nothing', () => {
+    const h = harness();
+    open(coord);
+    runForecastLane(coord, T0, entropy(), h.live);
+    block(coord);
+    const before = ['push_outbox', 'mail', 'feed_events'].map((t) => coord.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get());
+    runForecastLane(coord, T0 + MIN, entropy(), h.live);
+    expect(['push_outbox', 'mail', 'feed_events'].map((t) => coord.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get())).toEqual(before);
+    expect(h.notice).toHaveBeenCalledTimes(1);
+  });
+
+  it('a throw in portfolioFacts is recorded in failed and the seal arm\'s work still stands', () => {
+    const h = harness();
+    history(coord, 'prog-a');
+    const r = run(coord, 'prog-a', 23, T0 - 2 * DAY, T0 - 2 * MIN);
+    state(coord, 'prog-a', r, 2, 3, T0 - MIN);
+    open(coord);
+    const port: ForecastLanePort = Object.assign(Object.create(coord) as CoordStore, {
+      portfolioFacts: () => { throw new Error('runs unreadable'); },
+    });
+    const pass = runForecastLane(port, T0, entropy(), h.live);
+    expect(pass).toMatchObject({ sealed: 1, healthChanged: 0, notices: 0, failed: ['health: runs unreadable'] });
+    expect(seals(coord).filter((x) => x.closingRunId === r)).toHaveLength(1);
+    expect(healthRows(coord)).toEqual([]);
   });
 });

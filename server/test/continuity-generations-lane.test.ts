@@ -538,7 +538,7 @@ const SNAPSHOT_FACTS: CardFacts = {
 };
 const SNAPSHOT = snapshotFactsJson(SNAPSHOT_FACTS);
 /** A usage reading; `ts` is the statusline's clock in epoch SECONDS (1 by default: older than any compaction line). */
-const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale,
 } });
 const lines = (n: number, at: number): CompactionsRead => ({ kind: 'lines', skipped: 0, eventsAbsent: false,

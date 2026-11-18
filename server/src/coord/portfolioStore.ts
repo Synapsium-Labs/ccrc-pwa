@@ -20,9 +20,15 @@ import {
   type PortfolioAsk, type PortfolioFacts, type PortfolioItem, type PortfolioProgramme, type PortfolioRun, type RankRow, type RankWrite,
 } from '../../../shared/portfolio.js';
 import { isRebuiltRun } from '../../../shared/programmes.js';
+import { CALIBRATION_CUT_STEP_DAYS, CALIBRATION_CUTS, CALIBRATION_WINDOW_DAYS, HEALTH_WINDOW_DAYS } from '../../../shared/programmeFacts.js';
+import type { LiveSpendReading, PortfolioW2Facts } from '../../../shared/portfolio.js';
 import type { LiveAskRead } from './ports.js';
+import { forecastsOf, newestHealthOf, openEdgesOf, remainingSince, spendOf } from './programmeFactsStore.js';
 import { tx } from './tx.js';
 export type { LiveAskRead, PortfolioFacts, RankWrite };
+/** The usage sweep's reading of a session for the spend read, declared by this read: `not-ready` before the sweep's
+ *  first pass in this process, `none` when the session has no reading. The watcher's `currentUsage` serves it. */
+export type SpendUsageRead = (sessionId: string) => LiveSpendReading;
 
 /** `setPortfolioRank`'s answer: the new revision; or, having written nothing, `unknownSlug`, the first `order` slug no
  *  `programs` row names (the door's `not-found`), or `rank-changed` with the current revision. */
@@ -87,7 +93,9 @@ const NEWEST_ASK = '(a.id = (SELECT MAX(b.id) FROM asks b WHERE b.childId = a.ch
  *  older one released before the window cannot be live, so it is outside the window: asks-unmeasured-is-windowed). For
  *  each `released` or `declined` ask that is its child's newest row it asks `liveAsk(childId)`: the row's own key reads
  *  `live: true`, any other key or `null` `false`, and `unmeasured` stays `'unmeasured'`. Every other ask carries `live: null`. */
-export function portfolioFacts(db: DatabaseSync, now: number, terminalStatesSql: string, liveAsk: LiveAskRead): PortfolioFacts {
+export function portfolioFacts(
+  db: DatabaseSync, now: number, terminalStatesSql: string, liveAsk: LiveAskRead, usage: SpendUsageRead,
+): PortfolioFacts {
   const from = now - PORTFOLIO_WINDOW_DAYS * 24 * 3_600_000;
   const listed = LISTED(terminalStatesSql);
   const openItems = `(${OPEN_ITEM_STATES.map((s) => `'${s}'`).join(', ')})`;
@@ -120,5 +128,41 @@ export function portfolioFacts(db: DatabaseSync, now: number, terminalStatesSql:
     const read = liveAsk(childId);
     return { ...a, live: read.kind === 'unmeasured' ? 'unmeasured' : read.key === askKey };
   });
-  return { programmes, ranks, revision: revisionOf(db), runs, items, asks };
+  return { programmes, ranks, revision: revisionOf(db), runs, items, asks, w2: w2Facts(db, now, programmes.map((p) => p.slug), terminalStatesSql, usage) };
+}
+
+const DAY_MS = 24 * 3_600_000;
+/** The scored seals calibration's four cuts read: the oldest cut's window reaches back this far. */
+const SCORED_SPAN_MS = ((CALIBRATION_CUTS - 1) * CALIBRATION_CUT_STEP_DAYS + CALIBRATION_WINDOW_DAYS) * DAY_MS;
+
+/** The W2 facts (forecasts B), each list bounded as `PortfolioW2Facts` says. */
+function w2Facts(db: DatabaseSync, now: number, slugs: readonly string[], terminal: string, usage: SpendUsageRead): PortfolioW2Facts {
+  const seals = slugs.flatMap((program) => forecastsOf(db, { program }));
+  const edgePrograms = (db.prepare('SELECT DISTINCT program FROM programme_edges ORDER BY program').all() as unknown as { program: string }[])
+    .map((r) => r.program);
+  const edges = openEdgesOf(db, edgePrograms);
+  const targetRuns = [...new Set(edges.flatMap((e) => (e.target?.predicate === 'run-closed' ? [e.target.runId] : [])))];
+  const runProgram = db.prepare('SELECT program FROM runs WHERE id = ?');
+  const edgeRuns = targetRuns.flatMap((runId) => {
+    const r = runProgram.get(runId) as { program: string | null } | undefined;
+    return r === undefined || r.program === null ? [] : [{ runId, program: r.program }];
+  });
+  const newestDated = (db.prepare(
+    'SELECT f.program AS program, f.p85At AS p85At FROM programme_forecasts f ' +
+    'WHERE f.id = (SELECT MAX(g.id) FROM programme_forecasts g WHERE g.program = f.program) ORDER BY f.program',
+  ).all() as unknown as { program: string; p85At: number | null }[]);
+  const marks = slugs.map(() => '?').join(', ');
+  const live = slugs.length === 0 ? [] : (db.prepare(
+    `SELECT id AS runId, sessionId FROM runs WHERE program IN (${marks}) AND state NOT IN ${terminal} AND sessionId IS NOT NULL ORDER BY id`,
+  ).all(...slugs) as unknown as { runId: number; sessionId: string }[]).map((r) => ({ ...r, reading: usage(r.sessionId) }));
+  const statements = remainingSince(db, slugs, now - HEALTH_WINDOW_DAYS * DAY_MS);
+  const lastMove = db.prepare(
+    `SELECT MAX(COALESCE((SELECT MAX(e.at) FROM run_events e WHERE e.runId = r.id AND e.fromState <> e.toState), r.openedAt)) AS at ` +
+    `FROM runs r WHERE r.program = ? AND r.kind = 'work' AND r.state NOT IN ${terminal}`,
+  );
+  const lastMoves = slugs.map((program) => ({ program, at: (lastMove.get(program) as { at: number | null }).at }));
+  return {
+    seals, scored: forecastsOf(db, { scoredSince: now - SCORED_SPAN_MS }), health: newestHealthOf(db, slugs),
+    edges, edgeRuns, newestDated, spend: spendOf(db, slugs), live, statements, lastMoves,
+  };
 }

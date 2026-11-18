@@ -29,9 +29,10 @@ export const CRITICAL_PATH_KEY = 'server/src/coord/programmeHealth.ts#criticalPa
 export const HEALTH_CHANGE_KEY = 'server/src/coord/programmeHealth.ts#healthChangeVerdict';
 export const WAVE_SPEND_KEY = 'server/src/coord/programmeMeasures.ts#waveSpend';
 export const WAVES_KEY = 'server/src/coord/programmeMeasures.ts#wavesOf';
+export const RUN_SPEND_VERDICT_KEY = 'server/src/coord/programmeMeasures.ts#runSpendVerdict';
 
 export type HealthModule = Pick<typeof Health, 'programmeHealth' | 'healthFactsOf' | 'criticalPath' | 'healthChangeVerdict'>;
-export type MeasuresModule = Pick<typeof Measures, 'waveSpend' | 'wavesOf' | 'bucketOf' | 'isOpenRun' | 'closedIn' | 'doneCycles'>;
+export type MeasuresModule = Pick<typeof Measures, 'waveSpend' | 'wavesOf' | 'bucketOf' | 'isOpenRun' | 'closedIn' | 'doneCycles' | 'runSpendVerdict'>;
 export interface Case<M> { name: string; run: (m: M) => void }
 
 const HOUR = 3_600_000;
@@ -555,6 +556,63 @@ export function measuresCases(): Case<MeasuresModule>[] {
     expect(m.closedIn(open!, 0, 99 * DAY)).toBe(false);
     expect(m.closedIn(m.wavesOf([run({ id: 3, state: 'failed', closedAt: 5 * DAY })])[0]!, 0, 99 * DAY)).toBe(true);
   });
+
+  // ── runSpendVerdict (forecasts B, Task 7; question 10, ruled): what one closed run cost ─────────────────────────────
+  const GRACE = 10 * 60_000;
+  const DISPATCHED = NOW - 3 * HOUR;
+  const CLOSED = NOW - HOUR;
+  const spendRun = (o: Partial<{ sessionId: string | null; dispatchedAt: number | null; closedAt: number; redispatched: boolean }> = {}) =>
+    ({ sessionId: 'sess-a', dispatchedAt: DISPATCHED, closedAt: CLOSED, redispatched: false, ...o });
+  const reading = (o: Partial<{ readAt: number; cost: number | null; class: string | null; stale: boolean; sidecarUuid: string | null; conversationUuid: string | null }> = {}) =>
+    ({ readAt: CLOSED - 5 * 60_000, cost: 4.25, class: 'opus', stale: false, sidecarUuid: 'conv-1', conversationUuid: 'conv-1', ...o });
+  const OUTSIDE = (r: { class: string | null; readAt: number }) => ({ state: 'outside', cost: null, class: r.class, readAt: r.readAt });
+
+  add('runSpendVerdict: an in-window, fresh, same-conversation reading is measured, with its cost, class and time', (m) => {
+    const r = reading();
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual({ state: 'measured', cost: 4.25, class: 'opus', readAt: r.readAt });
+    expect(m.runSpendVerdict(spendRun(), reading({ readAt: DISPATCHED }))).toMatchObject({ state: 'measured', readAt: DISPATCHED });
+  });
+  add('runSpendVerdict: a reading older than the run\'s dispatch is outside, with no cost (the earlier wave\'s conversation)', (m) => {
+    const r = reading({ readAt: DISPATCHED - 1 });
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: a reading later than the close plus 10 minutes is outside; at exactly +10 minutes it is measured', (m) => {
+    const late = reading({ readAt: CLOSED + GRACE + 1 });
+    expect(m.runSpendVerdict(spendRun(), late)).toEqual(OUTSIDE(late));
+    expect(m.runSpendVerdict(spendRun(), reading({ readAt: CLOSED + GRACE }))).toMatchObject({ state: 'measured', cost: 4.25 });
+  });
+  add('runSpendVerdict: a stale reading is outside', (m) => {
+    const r = reading({ stale: true });
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: a run whose session was dispatched to a later run is outside', (m) => {
+    const r = reading();
+    expect(m.runSpendVerdict(spendRun({ redispatched: true }), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: a reading taken in another conversation than the session\'s current one is outside', (m) => {
+    const r = reading({ sidecarUuid: 'conv-0', conversationUuid: 'conv-1' });
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+  });
+  add('runSpendVerdict: a reading with no session id of its own is outside, even when the registry has none either', (m) => {
+    const r = reading({ sidecarUuid: null, conversationUuid: null });
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual(OUTSIDE(r));
+    const r2 = reading({ sidecarUuid: null, conversationUuid: 'conv-1' });
+    expect(m.runSpendVerdict(spendRun(), r2)).toEqual(OUTSIDE(r2));
+  });
+  add('runSpendVerdict: no session or no reading is absent, with no cost, class or time', (m) => {
+    const absent = { state: 'absent', cost: null, class: null, readAt: null };
+    expect(m.runSpendVerdict(spendRun({ sessionId: null }), reading())).toEqual(absent);
+    expect(m.runSpendVerdict(spendRun(), null)).toEqual(absent);
+    expect(m.runSpendVerdict(spendRun({ sessionId: null }), null)).toEqual(absent);
+  });
+  add('runSpendVerdict: a reading with no cost figure is absent, never 0; its class and time stay as evidence', (m) => {
+    const r = reading({ cost: null });
+    expect(m.runSpendVerdict(spendRun(), r)).toEqual({ state: 'absent', cost: null, class: 'opus', readAt: r.readAt });
+  });
+  add('runSpendVerdict: a run with no dispatch time is outside, never measured', (m) => {
+    const r = reading();
+    expect(m.runSpendVerdict(spendRun({ dispatchedAt: null }), r)).toEqual(OUTSIDE(r));
+  });
   return cases;
 }
 
@@ -641,13 +699,32 @@ export const DONE_CYCLES_SET: MutantSet<MeasuresModule> = {
 
 /** The wave rule moved out of portfolio.ts, with the three mutants (P-FOR-2, -12, -19) that named it there. */
 export const WAVES_SET: MutantSet<MeasuresModule> = {
-  modulePath: MEASURES_TS, suite: suiteOf(measuresCases().filter((c) => !c.name.startsWith('waveSpend'))),
+  modulePath: MEASURES_TS, suite: suiteOf(measuresCases().filter((c) => !c.name.startsWith('waveSpend') && !c.name.startsWith('runSpendVerdict'))),
   mutants: [
     { id: 'WV-1', old: 'if (!countsAsWave(r.kind)) continue;', new: "if (r.kind === 'unknown') continue;" },
     { id: 'WV-2', old: 'open: isOpenRun(r), r', new: 'open: false, r' },
     { id: 'WV-3', old: "isRunState(state) ? WAVE_BUCKET[state] : 'working'", new: "isRunState(state) ? WAVE_BUCKET[state] : 'queued'" },
     { id: 'WV-4', old: "(w.bucket === 'done' || w.bucket === 'failed') &&", new: "w.bucket === 'done' &&" },
     { id: 'WV-5', old: 'at !== null && at >= from && at <= to;', new: 'at !== null && at >= from && at < to;' },
+  ],
+};
+
+/** What one closed run cost (forecasts B, Task 7): the plan's red checks (`absent` recorded as cost 0; the window test
+ *  dropped), and one mutant for each other clause of the `measured` test. */
+export const RUN_SPEND_VERDICT_SET: MutantSet<MeasuresModule> = {
+  modulePath: MEASURES_TS, suite: suiteOf(measuresCases().filter((c) => c.name.startsWith('runSpendVerdict'))),
+  mutants: [
+    { id: 'RS-1', old: 'if (inWindow && !reading.stale', new: 'if (!reading.stale' },
+    { id: 'RS-2', old: '&& !reading.stale &&', new: '&&' },
+    { id: 'RS-3', old: '&& !run.redispatched &&', new: '&&' },
+    { id: 'RS-4', old: '&& sameConversation)', new: ')' },
+    { id: 'RS-5', old: 'reading.readAt <= run.closedAt + GRACE_MS', new: 'reading.readAt < run.closedAt + GRACE_MS' },
+    { id: 'RS-6', old: "if (reading.cost === null) return { state: 'absent', cost: null, ...evidence };", new: "if (reading.cost === null) return { state: 'absent', cost: 0, ...evidence };" },
+    { id: 'RS-7', old: "return { state: 'absent', cost: null, class: null, readAt: null };", new: "return { state: 'absent', cost: 0, class: null, readAt: null };" },
+    { id: 'RS-8', old: 'reading.sidecarUuid !== null && reading.sidecarUuid === reading.conversationUuid', new: 'reading.sidecarUuid === reading.conversationUuid' },
+    { id: 'RS-9', old: 'reading.readAt >= run.dispatchedAt', new: 'reading.readAt > run.dispatchedAt' },
+    { id: 'RS-10', old: 'run.dispatchedAt !== null && reading.readAt >= run.dispatchedAt', new: 'reading.readAt >= (run.dispatchedAt ?? 0)' },
+    { id: 'RS-11', old: "return { state: 'measured', cost: reading.cost, ...evidence };", new: "return { state: 'measured', cost: null, ...evidence };" },
   ],
 };
 
@@ -659,4 +736,5 @@ export const PROGRAMME_HEALTH_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [WAVE_SPEND_KEY]: WAVE_SPEND_SET as MutantSet<never>,
   [WAVES_KEY]: WAVES_SET as MutantSet<never>,
   [DONE_CYCLES_KEY]: DONE_CYCLES_SET as MutantSet<never>,
+  [RUN_SPEND_VERDICT_KEY]: RUN_SPEND_VERDICT_SET as MutantSet<never>,
 };

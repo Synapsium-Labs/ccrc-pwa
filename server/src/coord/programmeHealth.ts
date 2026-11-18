@@ -14,8 +14,10 @@ import {
   type HealthEvidence, type HealthRow, type HealthVerdict, type ProgrammeEdge, type ProgrammeHealthWord, type RemainingStatement,
   type RunSpendRow, type SealedForecast,
 } from '../../../shared/programmeFacts.js';
-import { isCalendarDate, type PortfolioEntry, type PortfolioRun, type ServiceClass } from '../../../shared/portfolio.js';
-import { closedIn, wavesOf, waveSpend, type Wave } from './programmeMeasures.js';
+import { isCalendarDate, type PortfolioEntry, type PortfolioFacts, type PortfolioRun, type ServiceClass } from '../../../shared/portfolio.js';
+import { operatorShownAt } from '../../../shared/ledgers.js';
+import { percentile } from '../perf/stats.js';
+import { closedIn, doneCycles, wavesOf, waveSpend, type Wave } from './programmeMeasures.js';
 
 const HOUR_MS = 3_600_000;
 const DAY_MS = 24 * HOUR_MS;
@@ -120,6 +122,29 @@ export function healthFactsOf(entry: PortfolioEntry, x: HealthExtras, now: numbe
     scope,
     spendRecent: spendIn(waves, x, now - window, now),
     spendEarlier: spendIn(waves, x, now - 2 * window, now - window - 1),
+  };
+}
+
+/** The lane's extra facts for one programme, read out of the portfolio's facts (the same read the portfolio door makes):
+ *  its runs, seals, statements and spend rows; its last move; the edges it holds and the items shown to the operator;
+ *  and the fleet's 85th percentile done-wave cycle over every listed programme, null with no sample. Facts without W2's
+ *  lists answer every list empty. */
+export function healthExtrasFrom(facts: PortfolioFacts, slug: string, now: number, clearingShipped: boolean): HealthExtras {
+  const w2 = facts.w2;
+  const programs = new Set(facts.programmes.map((p) => p.slug));
+  const byProgram = new Map<string, PortfolioRun[]>();
+  for (const r of facts.runs) { if (!programs.has(r.program)) continue; const l = byProgram.get(r.program) ?? []; l.push(r); byProgram.set(r.program, l); }
+  const fleet = [...byProgram.values()].flatMap((runs) => doneCycles(wavesOf(runs).filter((w) => w.bucket === 'done')).cycles);
+  return {
+    runs: byProgram.get(slug) ?? [],
+    seals: (w2?.seals ?? []).filter((x) => x.program === slug),
+    statements: (w2?.statements ?? []).filter((x) => x.program === slug),
+    lastMoveAt: w2?.lastMoves.find((m) => m.program === slug)?.at ?? null,
+    fleetCycleP85Ms: fleet.length === 0 ? null : percentile(fleet, 85),
+    spend: new Map((w2?.spend ?? []).map((r) => [r.runId, r] as const)),
+    edges: (w2?.edges ?? []).filter((e) => e.program === slug),
+    shownItemIds: new Set(facts.items.filter((i) => { const at = operatorShownAt(i); return at !== null && at <= now; }).map((i) => i.id)),
+    clearingShipped,
   };
 }
 

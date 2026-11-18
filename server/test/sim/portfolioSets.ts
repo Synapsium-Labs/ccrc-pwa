@@ -70,6 +70,19 @@ export const PORTFOLIO_FOR_SET = set([
   { id: 'P-FOR-29', old: 'Math.max(0, now - Math.min(...started))', new: '(now - Math.min(...started))' },
   { id: 'P-FOR-30', old: 'const started = open.filter((w) => !rebuiltWave(w))', new: 'const started = open' },
   { id: 'P-FOR-32', old: 'oldestOpenUnmeasured: open.filter(rebuiltWave).length,', new: 'oldestOpenUnmeasured: 0,' },
+  // W2's measures (forecasts B, Task 8): the shown row, F9's own reading, the spend read's unmeasured counts and dedupe.
+  { id: 'P-FOR-W1', old: "if (f.kind === 'unforecastable') return { kind: 'unforecastable', reason: f.reason, sealedAt: seal.sealedAt };", new: '' },
+  { id: 'P-FOR-W2', old: "row.state === 'measured' && row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;", new: "row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;" },
+  { id: 'P-FOR-W3', old: 'add(row.class, row.cost); else runsUnmeasured += 1;', new: 'add(row.class, row.cost); else add(null, 0);' },
+  { id: 'P-FOR-W4', old: 'if (counted.has(l.sessionId)) continue;', new: '' },
+  { id: 'P-FOR-W5', old: "!l.reading.stale && l.reading.cost", new: 'l.reading.cost' },
+  { id: 'P-FOR-W6', old: 'if (fresh === null) { runsUnmeasured += 1; continue; }', new: 'if (fresh === null) continue;' },
+  { id: 'P-FOR-W7', old: 'if (!openSpend.has(l.runId)) continue;', new: 'if (!ids.has(l.runId)) continue;' },
+  { id: 'P-FOR-W8', old: 'r.dispatchedAt !== null && !liveIds', new: '!liveIds' },
+  { id: 'P-FOR-W9', old: '&& !liveIds.has(r.id)) runsUnmeasured += 1;', new: '&& false) runsUnmeasured += 1;' },
+  { id: 'P-FOR-W10', old: '...(health === undefined ? {} : { health: { word: health.word, evidence: health.evidence, at: health.at } }),', new: '' },
+  { id: 'P-FOR-W11', old: 'const forecast = forecastEntry(seals[seals.length - 1]);', new: 'const forecast = forecastEntry(seals[0]);' },
+  { id: 'P-FOR-W12', old: "if (!SPEND_KINDS.includes(r.kind) || isOpenRun(r)) continue;", new: 'if (isOpenRun(r)) continue;' },
 ]);
 
 export const PORTFOLIO_MUTANT_SETS: Record<string, MutantSet<never>> = {

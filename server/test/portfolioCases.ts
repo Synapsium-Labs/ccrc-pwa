@@ -3,8 +3,9 @@
 // `sim/portfolioSets.ts` against each mutant, so one list of cases is both the suite and the mutation floor's judge.
 import { expect } from 'vitest';
 import type {
-  PortfolioAsk, PortfolioFacts, PortfolioItem, PortfolioProgramme, PortfolioRun, RankRow, ServiceClass,
+  LiveSpendReading, PortfolioAsk, PortfolioFacts, PortfolioItem, PortfolioProgramme, PortfolioRun, PortfolioW2Facts, RankRow, ServiceClass,
 } from '../../shared/portfolio.js';
+import type { Forecast, HealthRow, ProgrammeEdge, RunSpendRow, SealedForecast } from '../../shared/programmeFacts.js';
 import type * as Portfolio from '../src/coord/portfolio.js';
 
 export type PortfolioModule = Pick<typeof Portfolio, 'portfolioOrder' | 'itemWaitMs' | 'portfolioFor'>;
@@ -354,7 +355,191 @@ export const PURITY_CASES: PortfolioCase[] = [
   } },
 ];
 
+// ── Overlord W2, forecasts B (plan w2-forecasts-health.md, Task 8): the W2 measures over hand-built `w2` facts ──────────
+
+const w2 = (o: Partial<PortfolioW2Facts> = {}): PortfolioW2Facts => ({
+  seals: [], scored: [], health: [], edges: [], edgeRuns: [], newestDated: [], spend: [], live: [], statements: [], lastMoves: [], ...o,
+});
+const seal = (id: number, forecast: Forecast | 'unreadable', o: Partial<SealedForecast> = {}): SealedForecast => ({
+  id, program: 'prog-a', closingRunId: 500 + id, sealedAt: NOW - 3 * DAY + id, asOf: NOW - 3 * DAY, statementId: null, lo: 1, hi: 2,
+  forecast, outcome: 'open', scoredAt: null, ...o,
+});
+const dated = (p85At: number, n = 20): Forecast => ({ kind: 'forecast', medianAt: p85At - DAY, p85At, n, source: 'own', seed: 4 });
+const scoredSeal = (id: number, outcome: 'met' | 'missed', scoredAt: number): SealedForecast =>
+  seal(id, dated(scoredAt - DAY), { outcome, scoredAt });
+const healthRow = (word: HealthRow['word'], at = NOW - HOUR): HealthRow =>
+  ({ id: 1, program: 'prog-a', at, word, evidence: { matched: word === 'steady' ? null : `${word}:arm`, values: { x: 1 }, unmeasured: [] } });
+const edge = (id: number, o: Partial<ProgrammeEdge> = {}): ProgrammeEdge => ({
+  id, program: 'prog-a', kind: 'needs-landed', target: { predicate: 'run-closed', runId: 900 }, why: 'needs it', state: 'open',
+  openedAt: NOW - DAY, openedBy: 'lane-a-project-a', endedAt: null, evidence: null, unmeasuredSince: null, ...o,
+});
+const spendRow = (runId: number, state: RunSpendRow['state'], cost: number | null, cls: string | null = 'opus'): RunSpendRow =>
+  ({ runId, at: NOW - HOUR, state, cost, class: cls, readAt: NOW - HOUR });
+const reading = (cost: number | null, o: { stale?: boolean; cls?: string | null } = {}): LiveSpendReading =>
+  ({ kind: 'reading', cost, class: o.cls === undefined ? 'opus' : o.cls, stale: o.stale === true });
+const SPEND_ZERO = { total: 0, byClass: {}, perWaveMedian: null, wavesMeasured: 0, wavesUnmeasured: 0, runsUnmeasured: 0,
+  attributed: true, coordinatorExcluded: true, classAtClose: true };
+const w2entry = (m: PortfolioModule, f: Partial<PortfolioFacts>, w: Partial<PortfolioW2Facts>) => entry(m, { ...facts(f), w2: w2(w) });
+
+export const W2_CASES: PortfolioCase[] = [
+  { name: 'W2 characterization: facts with empty w2 lists gain exactly edges, spend and criticalPath, and no health and no forecast', run: (m) => {
+    const f = facts({ runs: [run({ id: 1, wave: 1 }), run({ id: 2, wave: 2, state: 'done' })] });
+    const w1 = entry(m, f);
+    for (const k of ['health', 'forecast', 'edges', 'spend', 'criticalPath']) expect(k in w1).toBe(false);
+    expect(m.portfolioFor(f, NOW).calibration).toBeUndefined();
+    const e = entry(m, { ...f, w2: w2() });
+    expect(e).toStrictEqual({
+      ...w1,
+      edges: { list: [], clearingShipped: false },
+      // The closed run has no row: unmeasured, never 0. The open run was dispatched and has no session, so no reading
+      // speaks for it: unmeasured too.
+      spend: { ...SPEND_ZERO, wavesUnmeasured: 1, runsUnmeasured: 2 },
+      criticalPath: { chain: ['prog-a'], latestP85At: null, unmeasured: ['prog-a'], cut: false },
+    });
+    expect('health' in e).toBe(false);
+    expect('forecast' in e).toBe(false);
+    // A dispatched open run with no session is unmeasured; one never dispatched has spent nothing and is not counted.
+    expect(entry(m, { ...facts({ runs: [run({ id: 1 })] }), w2: w2() }).spend).toEqual({ ...SPEND_ZERO, runsUnmeasured: 1 });
+    expect(entry(m, { ...facts({ runs: [run({ id: 1, state: 'planned', dispatchedAt: null })] }), w2: w2() }).spend).toEqual(SPEND_ZERO);
+    // A live reading of a run outside the spend kinds is not this programme's spend.
+    expect(entry(m, { ...facts({ runs: [run({ id: 1, kind: 'unknown' })] }), w2: w2({ live: [{ runId: 1, sessionId: 'sess-a', reading: reading(5) }] }) }).spend)
+      .toEqual(SPEND_ZERO);
+    // A closed run outside the spend kinds is never recorded, so its missing row is not unmeasured spend.
+    expect(entry(m, { ...facts({ runs: [run({ id: 1, kind: 'unknown', state: 'done' }), run({ id: 2, wave: 2, state: 'planned', dispatchedAt: null })] }), w2: w2() }).spend).toMatchObject({ runsUnmeasured: 0, total: 0 });
+  } },
+
+  // ── the forecast ──
+  { name: 'an entry carries the newest seal\'s dates, n, source, seal time and outcome', run: (m) => {
+    const old = seal(1, dated(NOW + 3 * DAY, 11));
+    const newest = seal(2, dated(NOW + 9 * DAY, 23), { sealedAt: NOW - 2 * HOUR });
+    const e = w2entry(m, {}, { seals: [old, newest] });
+    expect(e.forecast).toStrictEqual({ kind: 'forecast', medianAt: NOW + 8 * DAY, p85At: NOW + 9 * DAY, n: 23, source: 'own', sealedAt: NOW - 2 * HOUR, outcome: 'open' });
+    expect(w2entry(m, {}, { seals: [old, { ...newest, outcome: 'met', scoredAt: NOW }] }).forecast).toMatchObject({ outcome: 'met' });
+  } },
+  { name: 'an unforecastable newest seal carries its reason and no date, and is never pending (F9)', run: (m) => {
+    const e = w2entry(m, {}, { seals: [seal(1, dated(NOW + DAY)), seal(2, { kind: 'unforecastable', reason: 'no-remaining' }, { sealedAt: NOW - HOUR })] });
+    expect(e.forecast).toStrictEqual({ kind: 'unforecastable', reason: 'no-remaining', sealedAt: NOW - HOUR });
+  } },
+  { name: 'an unreadable newest seal is carried as unreadable, not dropped and not the older one', run: (m) => {
+    const e = w2entry(m, {}, { seals: [seal(1, dated(NOW + DAY)), seal(2, 'unreadable', { outcome: 'unreadable', sealedAt: NOW - HOUR })] });
+    expect(e.forecast).toStrictEqual({ kind: 'unreadable', sealedAt: NOW - HOUR });
+  } },
+  { name: 'a seal of another programme is not this entry\'s', run: (m) => {
+    expect(w2entry(m, {}, { seals: [seal(1, dated(NOW + DAY), { program: 'prog-b' })] }).forecast).toBeUndefined();
+  } },
+
+  // ── calibration ──
+  { name: 'the view\'s calibration reads unmeasured with fewer than 8 scored seals per cut, and measured with 8', run: (m) => {
+    const seven = Array.from({ length: 7 }, (_, i) => scoredSeal(i + 1, 'met', NOW - 25 * DAY + i));
+    const read = (scored: SealedForecast[]) => m.portfolioFor({ ...facts({}), w2: w2({ scored }) }, NOW).calibration!;
+    const few = read(seven);
+    expect(few.state).toBe('unmeasured');
+    expect(few.cuts).toHaveLength(4);
+    expect(few.cuts.map((c) => [c.n, c.share])).toEqual([[7, null], [7, null], [7, null], [7, null]]);
+    expect(read([]).cuts.map((c) => c.n)).toEqual([0, 0, 0, 0]);
+    // Eight seals scored 25 days ago lie inside all four cuts' windows: 7 met of 8 is inside the band.
+    const eight = [...seven, scoredSeal(8, 'missed', NOW - 25 * DAY + 8)];
+    expect(read(eight)).toMatchObject({ state: 'calibrated', cuts: [{ n: 8, met: 7, share: 7 / 8 }, { n: 8 }, { n: 8 }, { n: 8 }] });
+    // All eight met is a share of 1, outside the band on every cut.
+    expect(read([...seven, scoredSeal(8, 'met', NOW - 25 * DAY + 8)]).state).toBe('uncalibrated');
+  } },
+  { name: 'an open or unreadable seal in the scored list is never read as scored', run: (m) => {
+    const scored = Array.from({ length: 8 }, (_, i) => scoredSeal(i + 1, 'met', NOW - 25 * DAY + i));
+    const noise = [seal(20, dated(NOW), { outcome: 'open' }), seal(21, dated(NOW), { outcome: 'unreadable', scoredAt: NOW - DAY })];
+    expect(m.portfolioFor({ ...facts({}), w2: w2({ scored: [...scored, ...noise] }) }, NOW).calibration!.cuts[0]).toMatchObject({ n: 8 });
+  } },
+
+  // ── health: shown, never computed (F7) ──
+  { name: 'the entry\'s health is the newest programme_health row, even when the facts would now give another word (F7)', run: (m) => {
+    const blocked = { items: [item({ id: 61, neededBy: 'blocking' })] };
+    const f = facts({ ...blocked, runs: [run({ id: 1 })] });
+    // The facts say blocked-on-you now; the lane recorded `steady` an hour ago, and that is what the entry shows.
+    expect(entry(m, f).blocking.items).toHaveLength(1);
+    const e = entry(m, { ...f, w2: w2({ health: [healthRow('steady')] }) });
+    expect(e.health).toStrictEqual({ word: 'steady', evidence: { matched: null, values: { x: 1 }, unmeasured: [] }, at: NOW - HOUR });
+    expect(entry(m, { ...f, w2: w2({ health: [healthRow('stalled', NOW - 2 * HOUR)] }) }).health).toMatchObject({ word: 'stalled', at: NOW - 2 * HOUR });
+  } },
+  { name: 'a health row this build cannot read is carried as unreadable; another programme\'s row is not this entry\'s', run: (m) => {
+    const row: HealthRow = { id: 2, program: 'prog-a', at: NOW - HOUR, word: 'unreadable', evidence: 'unreadable' };
+    expect(w2entry(m, {}, { health: [row] }).health).toStrictEqual({ word: 'unreadable', evidence: 'unreadable', at: NOW - HOUR });
+    expect(w2entry(m, {}, { health: [{ ...healthRow('steady'), program: 'prog-b' }] }).health).toBeUndefined();
+  } },
+
+  // ── edges (F1) ──
+  { name: 'a target-ended and a target-unmeasurable edge are listed, and do not block nor enter the critical path', run: (m) => {
+    const without = w2entry(m, {}, {});
+    const edges = [edge(1, { state: 'target-ended', endedAt: NOW - HOUR }), edge(2, { state: 'target-unmeasurable', unmeasuredSince: NOW - HOUR })];
+    const e = w2entry(m, {}, { edges, edgeRuns: [{ runId: 900, program: 'prog-b' }], newestDated: [{ program: 'prog-b', p85At: NOW + DAY }] });
+    expect(e.edges).toEqual({ list: edges, clearingShipped: false });
+    expect(e.blocking).toEqual(without.blocking);
+    expect(e.criticalPath).toEqual(without.criticalPath);
+    expect(e.criticalPath!.chain).toEqual(['prog-a']);
+  } },
+  { name: 'with clearing not shipped, every edge is listed as such and none enters the critical path (F1)', run: (m) => {
+    const open = edge(1);
+    const decision = edge(2, { kind: 'needs-decision', target: { predicate: 'operator-confirms', itemId: 7 } });
+    const other = edge(3, { program: 'prog-b' });
+    const e = w2entry(m, {}, { edges: [open, decision, other], edgeRuns: [{ runId: 900, program: 'prog-b' }], newestDated: [{ program: 'prog-b', p85At: NOW + 5 * DAY }] });
+    expect(e.edges).toEqual({ list: [open, decision], clearingShipped: false });
+    expect(e.criticalPath).toEqual({ chain: ['prog-a'], latestP85At: null, unmeasured: ['prog-a'], cut: false });
+    expect(e.blocking).toEqual({ items: [], asks: 0 });
+  } },
+  { name: 'the critical path carries the programme\'s own newest 85% date, and names a programme with none unmeasured', run: (m) => {
+    const e = w2entry(m, {}, { newestDated: [{ program: 'prog-a', p85At: NOW + 4 * DAY }] });
+    expect(e.criticalPath).toEqual({ chain: ['prog-a'], latestP85At: NOW + 4 * DAY, unmeasured: [], cut: false });
+    expect(w2entry(m, {}, { newestDated: [{ program: 'prog-a', p85At: null }] }).criticalPath).toMatchObject({ latestP85At: null, unmeasured: ['prog-a'] });
+  } },
+
+  // ── spend ──
+  { name: 'spend sums the measured rows by class, over closed work and review runs', run: (m) => {
+    const runs = [run({ id: 71, wave: 1, state: 'done' }), run({ id: 72, wave: 2, state: 'done' }), run({ id: 73, wave: 2, kind: 'review', reviews: 72, state: 'done' }), run({ id: 74, wave: 3, state: 'done' })];
+    const e = w2entry(m, { runs, ranks: [rank('prog-a', 'standard', 1)] }, { spend: [spendRow(71, 'measured', 3, 'opus'), spendRow(72, 'measured', 1.5, 'sonnet'), spendRow(73, 'measured', 2, 'opus'), spendRow(74, 'measured', 4, 'opus')] });
+    expect(e.spend).toMatchObject({ total: 10.5, byClass: { opus: 9, sonnet: 1.5 }, runsUnmeasured: 0, wavesMeasured: 3, wavesUnmeasured: 0, perWaveMedian: 3.5 });
+    expect(e.spend).toMatchObject({ attributed: true, coordinatorExcluded: true, classAtClose: true });
+  } },
+  { name: 'spend counts an absent, an outside, an unreadable and a missing row, and a measured row with no cost, in runsUnmeasured, never as 0', run: (m) => {
+    const runs = [1, 2, 3, 4, 5, 6, 7].map((i) => run({ id: 80 + i, wave: i, state: 'done' }));
+    const e = w2entry(m, { runs, ranks: [rank('prog-a', 'standard', 1)] }, { spend: [
+      spendRow(81, 'measured', 2), spendRow(82, 'absent', null, null), spendRow(83, 'outside', 9), spendRow(84, 'unreadable', 9),
+      spendRow(85, 'measured', null),
+      // 86 has no row at all.
+      spendRow(87, 'measured', 1),
+    ] });
+    expect(e.spend).toMatchObject({ total: 3, byClass: { opus: 3 }, runsUnmeasured: 5 });
+    // Nothing measured at all: the total is 0 and every run is unmeasured, which is not the same as costing 0.
+    const none = w2entry(m, { runs, ranks: [rank('prog-a', 'standard', 1)] }, { spend: [spendRow(82, 'absent', 0, null)] });
+    expect(none.spend).toMatchObject({ total: 0, byClass: {}, runsUnmeasured: 7, perWaveMedian: null, wavesUnmeasured: 7 });
+  } },
+  { name: 'spend adds an open run\'s fresh live reading, and counts a session shared by two open runs once', run: (m) => {
+    const runs = [run({ id: 91, wave: 1 }), run({ id: 92, wave: 2 })];
+    const e = w2entry(m, { runs }, { live: [
+      { runId: 91, sessionId: 'sess-a', reading: reading(2) }, { runId: 92, sessionId: 'sess-a', reading: reading(2) },
+    ] });
+    expect(e.spend).toMatchObject({ total: 2, byClass: { opus: 2 }, runsUnmeasured: 0 });
+    const two = w2entry(m, { runs }, { live: [
+      { runId: 91, sessionId: 'sess-a', reading: reading(2) }, { runId: 92, sessionId: 'sess-b', reading: reading(5, { cls: 'sonnet' }) },
+    ] });
+    expect(two.spend).toMatchObject({ total: 7, byClass: { opus: 2, sonnet: 5 }, runsUnmeasured: 0 });
+  } },
+  { name: 'spend leaves a stale live reading out and counts the run unmeasured; so for no reading, no cost and not-ready', run: (m) => {
+    const runs = [run({ id: 101, wave: 1 }), run({ id: 102, wave: 2 }), run({ id: 103, wave: 3 }), run({ id: 104, wave: 4 })];
+    const e = w2entry(m, { runs }, { live: [
+      { runId: 101, sessionId: 'sess-a', reading: reading(8, { stale: true }) }, { runId: 102, sessionId: 'sess-b', reading: { kind: 'none' } },
+      { runId: 103, sessionId: 'sess-c', reading: reading(null) }, { runId: 104, sessionId: 'sess-d', reading: { kind: 'not-ready' } },
+    ] });
+    expect(e.spend).toMatchObject({ total: 0, byClass: {}, runsUnmeasured: 4 });
+  } },
+  { name: 'spend adds the measured rows and the live readings together, and another programme\'s runs are not counted', run: (m) => {
+    const runs = [run({ id: 111, wave: 1, state: 'done' }), run({ id: 112, wave: 2 })];
+    const e = w2entry(m, { runs }, {
+      spend: [spendRow(111, 'measured', 3), spendRow(999, 'measured', 1000)],
+      live: [{ runId: 112, sessionId: 'sess-a', reading: reading(4) }, { runId: 998, sessionId: 'sess-z', reading: reading(1000) }],
+    });
+    expect(e.spend).toMatchObject({ total: 7, byClass: { opus: 7 }, runsUnmeasured: 0 });
+  } },
+];
+
 export const ALL_PORTFOLIO_CASES: PortfolioCase[] = [
   ...ORDER_CASES, ...LIST_CASES, ...WAVE_CASES, ...CYCLE_CASES, ...ENDING_CASES, ...ITEM_CASES, ...ASK_CASES, ...BLOCKING_CASES,
-  ...PURITY_CASES,
+  ...PURITY_CASES, ...W2_CASES,
 ];
