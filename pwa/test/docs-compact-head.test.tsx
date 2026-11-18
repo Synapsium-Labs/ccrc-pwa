@@ -432,8 +432,9 @@ describe('Page details (refinements (c), (d), (f))', () => {
 });
 
 describe('the phone head is one shell across the swap at ready (asks 554 and 555)', () => {
-  /** A leaf page on the phone with its tree `ok`, and a bar the reader publishes once it is ready on ccrc's bar. */
-  function phone(): { readonly el: (bar: ReaderBar | null) => ReactNode; readonly bar: ReaderBar } {
+  /** A leaf page on the phone with its tree `ok`, and a bar the reader publishes once it is ready on ccrc's bar. `url` is
+   *  the page's (a version page's carries `at`). */
+  function phone(url = '/docs/demo/specs/a.md'): { readonly el: (bar: ReaderBar | null) => ReactNode; readonly bar: ReaderBar } {
     atWidth(412);
     const tree = treeOk({ entries: [entry('specs', 'a.md')] });
     const visit: DocsVisit = {
@@ -443,7 +444,7 @@ describe('the phone head is one shell across the swap at ready (asks 554 and 555
       retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
-    const page = pageAt('/docs/demo/specs/a.md');
+    const page = pageAt(url);
     return { bar, el: (b) => <DocsHead page={page} visit={visit} tree={tree} readerBar={b} /> };
   }
   const back = (): HTMLElement => {
@@ -454,6 +455,11 @@ describe('the phone head is one shell across the swap at ready (asks 554 and 555
   const row = (): HTMLElement => document.querySelector<HTMLElement>('.docs-head .docs-compact-bar')!;
   const region = (): HTMLElement => document.querySelector<HTMLElement>('.docs-head .docs-more-panel')!;
   const title = (): HTMLElement => document.querySelector<HTMLElement>('.docs-head .docs-title')!;
+  const truthLine = (): HTMLElement => {
+    const el = region().querySelector<HTMLElement>('.docs-truth');
+    if (el === null) throw new Error('the panel holds no truth line');
+    return el;
+  };
 
   it('back, the row, the panel and the header are the same DOM nodes once the bar is published, and nothing refocuses', () => {
     const { el, bar } = phone();
@@ -489,6 +495,24 @@ describe('the phone head is one shell across the swap at ready (asks 554 and 555
     rerender(el(bar));
     expect(region(), 'the swap closes the panel').toHaveAttribute('hidden');
     expect(link!.isConnected, 'the focused link was drawn anew, not kept inside the closed panel').toBe(false);
+    expect(document.activeElement, 'so focus is not left on a hidden control').toBe(document.body);
+  });
+
+  // The case above focuses a crumb, so it pins the crumbs' key only. The truth line under them holds controls of its own
+  // (D-8730 names them with the panel): the copy-commit button on every leaf, and Back to the latest on a version page.
+  it.each([
+    ['the copy-commit button', '/docs/demo/specs/a.md', () => within(truthLine()).getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit })],
+    ['a version page\'s Back to the latest', `/docs/demo/specs/a.md?at=${'9'.repeat(40)}`, () => within(truthLine()).getByRole('link', { name: DOCS_HEAD_TEXT.backToLatest })],
+  ] as const)('the truth line is drawn anew at the swap too: %s, focused in the open panel, is not left focused and hidden (D-8730)', (_what, url, control) => {
+    const { el, bar } = phone(url);
+    const { rerender } = render(el(null));
+    fireEvent.click(more());
+    const c = control();
+    c.focus();
+    expect(document.activeElement).toBe(c);
+    rerender(el(bar));
+    expect(region(), 'the swap closes the panel').toHaveAttribute('hidden');
+    expect(c.isConnected, 'the focused truth-line control was drawn anew, not kept inside the closed panel').toBe(false);
     expect(document.activeElement, 'so focus is not left on a hidden control').toBe(document.body);
   });
 
