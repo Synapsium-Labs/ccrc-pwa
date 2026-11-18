@@ -475,6 +475,47 @@ It returned 1 critical, 8 important and 10 minor findings. Each was fixed, or re
 
 At `41d3ade8d`, every required check and CodeQL passed. The repo's review judge, which is not a required check, was red on one blocking reason, `promise-delta-missing`: the new spec had no `promise-delta` fence. Fixed by spec §13, which uses the template's "none - <reason>" form.
 
+### Fix round 1 (review run 2645, round 1 of 3, at `a2d472ea4`; the coordinator's mail 25349)
+
+There is one commit per finding, then this Results commit. The coordinator ruled F3 and F6. Every other fix follows the report's direction.
+
+| Finding | Disposition |
+|---|---|
+| F1: fill tokens in text slots; border 3:1 | Fixed. Semantic slots map to ccrc's `-text` variants, and `chg` to `--acct-magenta`. Edges are decorative, with no floor, as in ccrc's own gate. Tints hold at most 6%. Every pair is measured ("Contrast under the map", above) |
+| F2: `term`, `id`, `violet`, `path` unslotted | Fixed. They are slots now (33 colour slots), mapped to lane hues and secondary ink and measured. Spec §10 names every derived colour and its source |
+| F3 (ruled): density and controls | Fixed. Popover elevation and the section-label type are skin slots (10 in all). Spec §2.3 lists all 31 ccrc skin tokens, carried or rejected, with values and reasons. X1-7 is Ruled |
+| F4: rows did not observe the claims | Fixed. AP-1 and AP-2 assert slot values, faces, skin values and an unchanged reading layout. AP-6 checks that width, font and folds persist with no stored theme. New rows AP-M15 to AP-M18 |
+| F5: two spellings and mechanisms | Fixed. The op carries the contract's one shape. D-8759 states the `FontFace` path and the §4.4 op table. Contrast reads through the palette helper. The scan's no-stylesheet part has both a run-time and a source check. D-8761 defines the §3.2 return-shape departure |
+| F6 (ruled): Aa's copy in the library | Fixed. The contract carries a validated `label`, and the library's neutral default names no host. ccrc sends its ruled copy, with new row AP-M19 |
+| F7: conflicting bad-value rules | Fixed. `parseAppearance` never throws for a slot value and returns a verdict. The frame applies it to the seed and to every op. ccrc sends only the verdict and spells no range, so its colour normaliser is gone |
+| F8: overloaded seam | Fixed. `libraryContract: () => number \| 'none'`, with the row and AP-M8 to match |
+| F9: parser claim | Fixed. The claim is restated, and X1-3 rests on keeping appearance out of persisted prefs |
+| F10: fonts against the srcdoc budget | Fixed. The budget is three measured parts (187 640 faces, at most 32 768 library growth over 781 099, at most 4 096 seed). The optional font split is dropped: it saves at most 76 364 and breaks a 1.1.0-style host |
+| F11: undeclared files | Fixed. `policy.ts`, `reader-policy.test.ts` and the changed `.toEqual` rows are in Task 4 |
+| F12: mode-only trigger lost | Fixed. A mode-only mount keeps its `[prefs]` effect, with a new row and AP-M20 |
+| A1 to A4 | Fixed. The fonts are pinned to the `ui` files, and the cap's unit is stated. #3026 is shown as merged, the median of 9 is stated, and AP-3's action is aligned. BASE is taken at Task 1, the font route is named, and the two terms are defined. One read per library mount |
+| X2 room (the coordinator's note) | Fixed. §8 and the library's boundary test pin only this contract's own additions, so X2's frame-to-parent op can ship in the same library release |
+
+**The adversarial re-pass** (Opus · high, over the changed sections). It found no critical issue, 4 important and 9 minor. Its own recomputation reproduced all 17 contrast rows. Dispositions:
+
+| Re-pass finding | Disposition |
+|---|---|
+| I-1: Refined's `--elev-pop` is `rgba()`, refused by a hex-only rule, and the shadow grammar was unbounded | Fixed. `popShadow` has an exact bounded grammar that fits both measured forms (14 distinct values over 12 palettes x 2 skins). Part 2 requires an empty `refused` list |
+| I-2: AP-M15 could stay green | Fixed. The full-map row asserts both key sets against `APPEARANCE_SLOTS` and an empty `refused` |
+| I-3: "hosted" read from an overloaded null | Fixed. `ReaderMount.seed` is `{hosted: true, stamp}` or `{hosted: false}`, and a mount that is not hosted never reads the root |
+| I-4: the srcdoc ceiling over the wrong BASE | Fixed. The browser row is at most 191 736 over a BASE taken at the new pin. Task 1 measures the library's part |
+| M-5: two more pinned `readerMountPlan` rows | Fixed. Named in Task 4 |
+| M-6: stale Results counts | Fixed |
+| M-7: D-8761 missing from Task 7 | Fixed |
+| M-8: tint ground unstated | Fixed. Tints mix over `bg` or `surface`, never `surface2`. Measured: 4.23:1 at 6% and 4.40:1 at 3% on `surface2` |
+| M-9: types missing from §10 | Fixed |
+| M-10: the library could reach the main bundle | Fixed. The bridge alone reads the root (`follow`), `ReaderFrame` imports no value from `docs/reader/`, the two modules join `READER_ADAPTERS`, and new row AP-M21 |
+| M-11: semantic colours lose hue in some palettes | Accepted and recorded in X1-12: these are ccrc's own text colours |
+| M-12: label rules | Fixed. UTF-16 code units, bidi and format characters refused, empty refused, and the test names `ccrc` |
+| M-13: scan part numbers differed | Fixed. Parts 1 to 4 follow spec §3, and part 5 is §5's contrast |
+
+The library 1.1.0 copy used for every library read this round is the installed package from another ccrc worktree, copied read-only to this session's scratch after the D2 worktree was reclaimed. Version 1.1.0 was confirmed.
+
 ### Carried
 
 - The library programme plans wave L from spec §10. Its release and ccrc's re-pin are the operator's.
