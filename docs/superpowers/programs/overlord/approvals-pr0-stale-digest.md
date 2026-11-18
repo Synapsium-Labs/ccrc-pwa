@@ -22,11 +22,28 @@ numbers.
 - **The server.** `denyStandingOf` (L1) answers `current`, `history` or `none` from the child's spawn digest, the
   managed file's digest and the history. The raise refuses `deny-not-engaged` only for `none`, and mints a `history`
   child's row held, its class left as the classifier gave it, with `approvals.denyCurrent = 0` (ruling F5; migration
-  100 by position on today's main). The rule door asks `approvalAllowRefusal` (L1), which refuses an allow on a row
+  101 by position, after the quiz record's 100 (#2991); forecasts B takes 101 too, so whichever lands second
+  renumbers). The rule door asks `approvalAllowRefusal` (L1), which refuses an allow on a row
   whose deny rules are not current with a new word, `deny-not-current` (`APPROVAL_REFUSALS`, `REFUSAL_STATUS`, a
   `409`). It answers after `guard-forbidden` and before `guard-escalate`, whatever the row's class: the fact is the
   child's, so it answers the same before and after a server restart. A deny is signed and a hand-over works as
   before. The brief tells the claimant the child runs under older deny rules and offers no allow.
+
+## The held route file (the operator's ruling on item 436)
+
+`server/src/coord/routes.ts` is held by run 1850. Run 1850's coordinator declined this PR's proposal. The operator
+then ruled on item 436 that Overlord PRs edit the held files now, and that run 1850 merges later. This PR makes
+exactly the three hunks it proposed, and no other change to that file:
+
+1. **The import.** One line after `import { heldFor } from './heldFor.js';`:
+   `import { CHILD_DENY_DIGESTS_FILE, denyStandingOf, type DenyStanding } from './approvalDenyFloor.js';`
+2. **The closure.** `denyEngaged` (a yes or no) is replaced by `denyStanding`, with its doc comment. It reads the
+   managed deny file and the history with the measured read, keeps the bash-pin check, and asks `denyStandingOf`
+   (L1) for `current`, `history` or `none`.
+3. **The raise deps.** `denyEngaged` becomes `denyStanding` in `raiseDeps`.
+
+The three are inseparable: without them, every approval request answers 500, because the raise calls
+`d.denyStanding`.
 
 ## Task 0.1: does a running Claude Code re-read a changed `--settings` file?
 
