@@ -16,6 +16,7 @@
 - Both 2026-11-06 phone blocks stay byte for byte. Phone 412 x 915: title at most 61 px, console part at most 48 px, tap floor 44 px; tablet and desktop at most 1 px from a fresh BASE, measured per skin.
 - The library version is exact (no `^`), and M8.12 still holds: CSP hashes equal the embedded script bytes, `assets.json` sha256 matches. Its release, signed tag and the exact version ccrc pins are the operator's.
 - No second copy of the palette or skin catalogue anywhere under `pwa/src/docs/` or `pwa/src/readerLab/`; the only reader-side artefact is `READER_APPEARANCE_MAP`, a slot-to-token mapping.
+- Two terms (spec §7): a *mode-only mount* is a library without a supported contract, which gets `prefs.theme` only; a *hosted mount without colours* carries an `appearance` whose colour group the validator dropped.
 - One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
 - Contrast floors: 4.5:1 for body text, links, semantic text, code tokens, table text and figure labels, on every ground and derived tint they are drawn on; 3:1 for the focus ring and figure lines; no floor for decorative edges. A derived tint holds at most 6% of its colour.
 - Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters, the library's frame-asset growth at most 32 768 over 1.1.0's 781 099, the appearance seed at most 4 096, so at most 224 504 in all; hosted open-to-`ready` median of 9 opens at most 1.10 x the BASE median of 9; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
@@ -197,7 +198,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
 ```
 
 - `readHostAppearance` calls `getComputedStyle(doc.documentElement)` once, and reads `color-scheme` and the mapped tokens through `getPropertyValue`. Its stamp has the same shape as Task 3's.
-- `loadReaderFonts` reads the design system's own `Geist-Variable.woff2` and `GeistMono-Variable.woff2` through an inline asset import. No font file is copied into `pwa/`. The fonts load on their own path, beside the assets. If they fail, the bridge mounts without `fonts`, and never calls `onFallback('assets')` for them.
+- `loadReaderFonts` reads the design system's own `Geist-Variable.woff2` and `GeistMono-Variable.woff2` through an inline asset import: `@/fonts/Geist-Variable.woff2?inline` and `@/fonts/GeistMono-Variable.woff2?inline`, through pwa's `@` alias to `ui/src` (`pwa/vite.config.ts`). It strips the `data:` prefix to the base64. No font file is copied into `pwa/`. The fonts load on their own path, beside the assets. If they fail, the bridge mounts without `fonts`, and never calls `onFallback('assets')` for them.
 - On a hosted mount, `setAppearance` sends `DocFrame.setAppearance` with the outcome's value, a value with no colour group included. It never calls `setPrefs` with a theme. On a mode-only mount (contract unsupported), it sends `setPrefs({theme})`.
 
 - [ ] **Step 1: Write the failing rows** in `reader-bridge.test.ts`, with a fake `mount`:
@@ -250,7 +251,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
 
 Each row reads the frame's computed values through the existing harness's frame inspection, the way `reader-frame.browser.test.ts` reads the frame today. No new parent listener is added.
 
-- [ ] **Step 1: Take BASE.** Before any edit, take the per-skin `PHH-FIGURE` and `T10-FIGURES worst` lines, and `frame-cost`'s open-to-`ready` median of 9 opens at the Task 1 pin, with no appearance. Record them in Results.
+- [ ] **Step 1: Take BASE.** At Task 1's commit, before any edit of Tasks 2 to 5, take the per-skin `PHH-FIGURE` and `T10-FIGURES worst` lines, and `frame-cost`'s open-to-`ready` median of 9 opens at the Task 1 pin, with no appearance. Record them in Results.
 - [ ] **Step 2: Write the rows**, each named by its acceptance id:
   - **AP-1 and AP-2:** iterate `SKINS` x (`THEMES` plus Follow the system under emulated light and dark), and print the count. In every open, assert:
     - each colour slot's computed value on the frame root equals the host's computed value for its mapped token (both lower-cased), and the frame's `color-scheme` equals the host's;
