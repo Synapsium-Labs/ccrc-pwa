@@ -9813,6 +9813,7 @@ export class CoordStore {
   censusRowsIn(fromMs: number, toMs: number): census.CensusRowsResult { return census.censusRowsIn(this.db, fromMs, toMs); }
   approvalRowsForCensus(fromMs: number, toMs: number): census.ApprovalCensusSourceResult { return census.approvalRowsForCensus(this.db, fromMs, toMs); }
   approvalPushSources(fromMs: number, toMs: number): Readonly<Record<string, number>> { return census.approvalPushSources(this.db, fromMs, toMs); }
+  censusRunSpans(fromMs: number, toMs: number): census.CensusRunSpansResult { return census.censusRunSpans(this.db, fromMs, toMs); }
 
   /** A child's rows in the given states, oldest first. */
   approvalsForChild(childId: string, states: readonly ApprovalState[]): ApprovalsReadResult {
@@ -9933,11 +9934,12 @@ export class CoordStore {
   }
 
   /** The retention (spec §6.7): every row minted before `now - APPROVAL_INPUT_RETENTION_DAYS` loses its redacted
-   *  input, and the row itself is kept as the journal. Returns the count cleared. */
+   *  input and its command words (approvals PR 1, review 2638 F11b: a command name is kept as written, so it goes with
+   *  the input), and the row itself is kept as the journal. Returns the count cleared. */
   pruneApprovalInputs(now: number): number {
     const before = now - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000;
     const res = this.db.prepare(
-      'UPDATE approvals SET inputRedacted = NULL WHERE askAt < ? AND inputRedacted IS NOT NULL',
+      'UPDATE approvals SET inputRedacted = NULL, commandWords = NULL WHERE askAt < ? AND (inputRedacted IS NOT NULL OR commandWords IS NOT NULL)',
     ).run(before);
     return Number(res.changes);
   }

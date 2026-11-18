@@ -45,7 +45,10 @@ Departures are listed by slug. The coordinator mints the numbers.
   the gate's forks (the deny digest, the forbidden match, the canonical form and its digest, the nonce) run before
   the `waiting` write. Every other session pays one file test.
 - `route-patch-after-request`: what only the request can tell is patched by a second hook write, made only when the
-  file still holds the hook's own bytes. A write lost to another event leaves `sent`, and that prompt is uncounted.
+  file still holds the hook's own bytes. A write lost to another event leaves `sent`; with no minted row that prompt is
+  `unmeasured` (`sent-no-row`), not uncounted. An event writing inside the one-jq-fork window between the patch's
+  compare and its `mv` is overwritten, as any two hook writes race (the hookstate write takes no lock; review 2638 F11a,
+  the comment now says so).
 - `released-at-mint-not-path-2`: the request route answers a row minted released with a refusal
   (`approval-released`), so the envelope reads `request-refused:approval-released`. The census reads that as a minted
   row (path 3, counted from the row), never path 2.
@@ -54,16 +57,45 @@ Departures are listed by slug. The coordinator mints the numbers.
   words and mine are reconciled at my landing merge.
 - `forbidden-match-unrun`: a forbidden match that could not run reads as `forbidden` (fail closed); nothing is sent
   either way.
-- `census-key`: an envelope's census row is keyed by the session and the envelope's own stamp (`updatedAt`), not by
-  the summary: two identical prompts are two prompts. A menu with no envelope is keyed by its dialog and first
-  sighting, so a server restart while that menu stands can count it twice.
+- `census-key`: an envelope's census row is keyed by the session and the envelope's own stamp (`updatedAt`). A sighting
+  is decided ONCE (review 2638 F1, F2): a restamp of the same envelope (same tool and summary) under the same menu is
+  the same prompt, and new envelope content under the same menu labels starts a new sighting. A menu with no envelope is
+  keyed by its dialog and first sighting, so a server restart while that menu stands can count it again.
 - `census-thread-not-agent-id`: the envelope carries no agent id (PR 2's per-agent list will), so a census row keeps
   its thread (`main`, `subagent`, or none for a menu with no envelope) in place of the agent id.
-- `envelope-erased-rule`: path 6 is a parsed menu whose first option is `Yes` and one of whose options begins `No`,
-  with no envelope, and no approvals row for the child within the hook's longest wait before the sighting.
-- `older-hook-not-counted`: an envelope with no route word, or one this build does not know, is not counted.
+- `envelope-erased-rule` (revised by the rulings on review 2638 F1, F2 and F5): path 6 is a parsed menu whose first
+  option is `Yes` and one of whose options begins `No`, with a hook state but no envelope, decided only once the
+  watcher's settle window has passed (`ASK_SETTLE_TICKS`, D-5290, the same bound the deferred first raise uses), and
+  with no minted row near it. A TIGHT match (the same thread, a row held or released, `askAt` within
+  `CENSUS_MATCH_MS` of the first sighting) is that row's prompt; any other row of the child within the hook's longest
+  wait is `unmeasured` (`near-miss`). A menu that clears inside the window is `unmeasured` (`cleared-early`), and one
+  with no hook state at all is `unmeasured` (`hookstate-gone`), never path 6.
+- `unmeasured-counted` (replaces `older-hook-not-counted`; rulings on F3, F5 and F6): every prompt the census cannot
+  place is one `unmeasured` row with its `why` (a census row's new `why` column; `unknown-state` for a minted row), and
+  the read counts them on their own (`unmeasured`, `byUnmeasured`), never in `reachedOperator` or M38: an envelope with
+  no route word (`no-route`, an older hook), a route word this build does not know (`unknown-route`), a `sent` request
+  with no minted row within `CENSUS_ROW_WAIT_MS` (`sent-no-row`), a minted row's unknown state (`unknown-state`), and
+  the three above.
+- `minted-row-matched-not-timed` (F7, F9b): a `sent` or failed request's minted row is found by the same thread and
+  `askAt` since just before the first sighting, on the server's clock, never against the fleet box's `updatedAt`. A
+  `request-failed` with such a row counts as that row, never path 2 as well.
+- `table-2a-state-mapping` (ruling on F3): `allowed`/`denied` are ruled (0); `held` is held; a row minted released is
+  path 3; `declined` (the claimant handed it over) and `stale` (the hook's ceiling passed with no principal) are their
+  own words and reach the operator; `operator` answered inside the claimant's window (`ruledAt < notifyAt`) is
+  `operator-first`; a lapse (released at `notifyAt`, or answered by the operator after it) is `escalate` (5) or
+  `lapsed` (4) by class; any other state is `unmeasured`.
+- `m38-programme-days-from-runs` (ruling on F4): M38's denominator is the distinct (programme, UTC day) pairs on which
+  the programme had a run open, read from the runs, prompt or none, so a day prevention emptied still counts. Its
+  numerator is a programme's prompts that reached the operator. Root sessions' prompts (and any with no programme) are
+  reported beside it (`rootReached`), never inside it. The card states the rule in its caption.
+- `summary-cut-before-mask` (F8): the hook cuts the summary at 200 characters before the server can mask it, so a cut
+  summary drops its trailing word (which may be the front of a secret) before it is masked and stored.
+- `command-words-retention` (F11b): the approvals' daily retention clears a row's `commandWords` with its input.
+- `card-deny-currency-note` (F11c): while any counted row's deny currency is unmeasured, the card says the read-prompt
+  count treats every row as current.
 - `push-source-column`: the binding is a `pushSource` column on the outbox row, written by the unbound insert, since
-  approval pushes are unbound. A held prompt's deferred push names its newest covered row.
+  approval pushes are unbound. A held prompt's deferred push names its newest covered row, and the "with coordinator"
+  replacement push for a held prompt carries the sighting's source too (review 2638 F9a).
 - `deny-current-unmeasured-until-pr0`: PR 0's `denyCurrent` column is not on `main` yet, so the read counts deny
   currency as `unmeasured` until my landing merge reads the column (owed in that merge).
 - `no-capability-word`: `approval-census-v1` is not added. Nothing would read it: the route word is additive, and an
@@ -90,6 +122,10 @@ Departures are listed by slug. The coordinator mints the numbers.
 - `hook-gate-compacted`: the gate's checks are folded so the hook grows by at most 40 net code lines (the growth
   check's limit), with no waiver: one jq request body with the truncation as a branch, and paired checks that share a
   word on one line.
+- `literal-in-root-carry-for-pr6` (F10, carry): `literalInRoot` is looser than its name: an option's attached argument
+  (`wc --files0-from=/etc/list`, `ls -I/etc`) stands as an option, and a command with no path operand is true even with
+  no trusted cwd. PR 6 must not take it alone as the read rule; its closed option tables and the mutation "admit an
+  attached option argument" are the plan's. The read-prompt count here is inflated by these shapes, by a small amount.
 - `characterization-runtime`: Task 1.1's file takes about 150 s, almost all of it the shared approvals fixture
   (about 6 s a case).
 - `baseline-dates`: the card states the baseline rule; the Live dates of PR 0, PR P and PR 1 are owed to this note

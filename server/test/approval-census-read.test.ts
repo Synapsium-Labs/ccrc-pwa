@@ -10,7 +10,9 @@ import Fastify from 'fastify';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { approvalCommandWords, literalInRoot, type ApprovalCtx } from '../src/coord/approvalguard.js';
-import { approvalCensusOf, censusPathOfApproval, isReadPrompt, CENSUS_SUMMARY_MAX, type CensusApprovalRow, type CensusOwnRow } from '../src/coord/approvalCensus.js';
+import {
+  approvalCensusOf, censusPathOfApproval, isReadPrompt, programmeDaysOf, CENSUS_SUMMARY_MAX, type CensusApprovalRow, type CensusOwnRow,
+} from '../src/coord/approvalCensus.js';
 import { registerApprovalCensusRoutes } from '../src/coord/approvalCensusRoutes.js';
 import { heldFor } from '../src/coord/heldFor.js';
 import { rulingsAllowedHere } from '../src/coord/approvalsign.js';
@@ -51,23 +53,35 @@ describe('approvalCommandWords: the statement list\'s command words', () => {
 
 const row = (over: Partial<CensusApprovalRow>): CensusApprovalRow => ({
   id: 1, childId: 'lane-a-child', agentId: '', tool: 'Bash', inputRedacted: 'cat src/a.ts', class: 'escalate', state: 'released',
-  releaseReason: null, askAt: Date.UTC(2026, 10, 18, 12), programme: 'overlord', denyCurrent: null, commandWords: ['cat'], literalInRoot: true,
-  ...over,
+  releaseReason: null, askAt: Date.UTC(2026, 10, 18, 12), notifyAt: Date.UTC(2026, 10, 18, 12, 1), ruledAt: null, programme: 'overlord',
+  denyCurrent: null, commandWords: ['cat'], literalInRoot: true, ...over,
 });
 const own = (over: Partial<CensusOwnRow>): CensusOwnRow => ({
-  id: 1, sessionId: 'lane-a-child', path: 'hook-skipped', route: 'deny-unknown', thread: 'main', tool: 'Bash', summary: 'rm -rf build',
+  id: 1, sessionId: 'lane-a-child', path: 'hook-skipped', why: null, route: 'deny-unknown', thread: 'main', tool: 'Bash', summary: 'rm -rf build',
   programme: 'overlord', seenAt: Date.UTC(2026, 10, 18, 13), ...over,
 });
+const facts = (state: string, over: Partial<{ releaseReason: string | null; class: string; notifyAt: number | null; ruledAt: number | null }> = {}) =>
+  ({ state, releaseReason: null, class: 'ordinary', notifyAt: 60_000, ruledAt: null, ...over });
 
-describe('censusPathOfApproval: where a minted row went (Table 2a)', () => {
-  it('ruled, held, released at mint, escalate and lapsed, with their authority', () => {
-    expect(censusPathOfApproval({ state: 'allowed', releaseReason: null, class: 'ordinary' })).toEqual({ path: 'ruled', authority: 'coordinator', reachedOperator: false });
-    expect(censusPathOfApproval({ state: 'denied', releaseReason: null, class: 'escalate' })).toEqual({ path: 'ruled', authority: 'coordinator', reachedOperator: false });
-    expect(censusPathOfApproval({ state: 'held', releaseReason: null, class: 'escalate' })).toEqual({ path: 'held', authority: 'none', reachedOperator: false });
-    expect(censusPathOfApproval({ state: 'released', releaseReason: 'run-unclaimed', class: 'escalate' })).toMatchObject({ path: 'released-at-mint', reachedOperator: true });
-    expect(censusPathOfApproval({ state: 'operator', releaseReason: null, class: 'escalate' })).toMatchObject({ path: 'escalate', authority: 'operator' });
-    expect(censusPathOfApproval({ state: 'stale', releaseReason: null, class: 'ordinary' })).toMatchObject({ path: 'lapsed', authority: 'operator' });
-    expect(censusPathOfApproval({ state: 'declined', releaseReason: null, class: 'ordinary' })).toMatchObject({ path: 'lapsed', reachedOperator: true });
+describe('censusPathOfApproval: where a minted row went (Table 2a, and the ruling on review 2638 F3)', () => {
+  it('ruled, held, released at mint, and a lapse (escalate or lapsed by class), with their authority', () => {
+    expect(censusPathOfApproval(facts('allowed'))).toEqual({ path: 'ruled', authority: 'coordinator', reachedOperator: false });
+    expect(censusPathOfApproval(facts('denied', { class: 'escalate' }))).toEqual({ path: 'ruled', authority: 'coordinator', reachedOperator: false });
+    expect(censusPathOfApproval(facts('held', { class: 'escalate' }))).toEqual({ path: 'held', authority: 'none', reachedOperator: false });
+    expect(censusPathOfApproval(facts('released', { releaseReason: 'run-unclaimed', class: 'escalate' }))).toMatchObject({ path: 'released-at-mint', reachedOperator: true });
+    expect(censusPathOfApproval(facts('released'))).toEqual({ path: 'lapsed', authority: 'operator', reachedOperator: true });
+    expect(censusPathOfApproval(facts('released', { class: 'escalate' }))).toMatchObject({ path: 'escalate', authority: 'operator' });
+    // Answered by the operator after the window: a lapse.
+    expect(censusPathOfApproval(facts('operator', { ruledAt: 90_000 }))).toMatchObject({ path: 'lapsed', reachedOperator: true });
+  });
+  it('`declined` and `stale` are their own words and reached the operator; an answer inside the window is `operator-first`', () => {
+    expect(censusPathOfApproval(facts('declined', { ruledAt: 10_000 }))).toEqual({ path: 'declined', authority: 'operator', reachedOperator: true });
+    expect(censusPathOfApproval(facts('stale'))).toEqual({ path: 'stale', authority: 'operator', reachedOperator: true });
+    expect(censusPathOfApproval(facts('operator', { ruledAt: 10_000 }))).toEqual({ path: 'operator-first', authority: 'operator', reachedOperator: true });
+  });
+  it('a state this build does not know is unmeasured: it reached nobody the census can name', () => {
+    expect(censusPathOfApproval(facts('unknown'))).toEqual({ path: 'unmeasured', authority: 'none', reachedOperator: false });
+    expect(censusPathOfApproval(facts('weird'))).toEqual({ path: 'unmeasured', authority: 'none', reachedOperator: false });
   });
 });
 
@@ -82,56 +96,78 @@ describe('the read-prompt count, PR 6\'s gate (F7)', () => {
     expect(isReadPrompt(row({ class: 'ordinary' }))).toBe(false);
     expect(isReadPrompt(row({ state: 'denied' }))).toBe(false);                   // the coordinator settled it
     expect(isReadPrompt(row({ state: 'held' }))).toBe(false);
+    expect(isReadPrompt(row({ state: 'unknown' }))).toBe(false);                  // unmeasured
     expect(isReadPrompt(row({ commandWords: ['cat', 'rm'] }))).toBe(false);
     expect(isReadPrompt(row({ commandWords: null }))).toBe(false);
   });
   it('a census row of paths 1, 2 or 7 never counts', () => {
-    const w = approvalCensusOf({ days: 14, fromMs: 0, toMs: 1, approvals: [],
+    const w = approvalCensusOf({ days: 14, fromMs: 0, toMs: 1, approvals: [], runs: [],
       census: [own({ path: 'hook-skipped' }), own({ id: 2, path: 'refused-at-mint' }), own({ id: 3, path: 'not-a-child' })], pushesBySource: {} });
     expect(w.readPrompts).toBe(0);
   });
 });
 
 describe('approvalCensusOf: the counts, M38 and the rows', () => {
+  const FROM = Date.UTC(2026, 10, 17); const TO = Date.UTC(2026, 10, 19);
   const w: ApprovalCensusWire = approvalCensusOf({
-    days: 14, fromMs: 0, toMs: 1,
+    days: 2, fromMs: FROM, toMs: TO,
     approvals: [
       row({ id: 1 }),
       row({ id: 2, state: 'allowed', class: 'ordinary', commandWords: ['rm'], literalInRoot: false }),
       row({ id: 3, state: 'released', releaseReason: 'run-unclaimed', agentId: 'agent-1', programme: null, askAt: Date.UTC(2026, 10, 17, 9) }),
       row({ id: 4, state: 'held' }),
+      row({ id: 5, state: 'unknown' }),
     ],
-    census: [own({ id: 9, thread: null, path: 'envelope-erased', route: null, tool: null, summary: null })],
+    census: [
+      own({ id: 9, thread: null, path: 'envelope-erased', route: null, tool: null, summary: null }),
+      own({ id: 10, thread: null, path: 'unmeasured', why: 'near-miss', route: null, tool: null, summary: null }),
+    ],
+    // The `overlord` programme had a run open on both days; `programme-b` on the 18th only, and raised no prompt.
+    runs: [
+      { programme: 'overlord', openedAt: Date.UTC(2026, 10, 10), closedAt: null },
+      { programme: 'programme-b', openedAt: Date.UTC(2026, 10, 18, 8), closedAt: Date.UTC(2026, 10, 18, 9) },
+      { programme: 'programme-c', openedAt: Date.UTC(2026, 10, 1), closedAt: Date.UTC(2026, 10, 2) },
+    ],
     pushesBySource: { approval: 3, census: 1 },
   });
-  it('counts every row by its words', () => {
-    expect(w.total).toBe(5);
+  it('counts every row by its words; the unmeasured on their own, never as reaching the operator', () => {
+    expect(w.total).toBe(7);
     expect(w.reachedOperator).toBe(3);
-    expect(w.byPath).toEqual({ escalate: 1, ruled: 1, 'released-at-mint': 1, held: 1, 'envelope-erased': 1 });
-    expect(w.byAuthority).toEqual({ operator: 3, coordinator: 1, none: 1 });
-    expect(w.byThread).toEqual({ main: 3, subagent: 1, unknown: 1 });
-    expect(w.byDenyCurrent).toEqual({ unmeasured: 5 });
-    expect(w.byProgramme).toEqual({ overlord: 4, '(none)': 1 });
+    expect(w.unmeasured).toBe(2);
+    expect(w.byUnmeasured).toEqual({ 'unknown-state': 1, 'near-miss': 1 });
+    expect(w.byPath).toEqual({ escalate: 1, ruled: 1, 'released-at-mint': 1, held: 1, 'envelope-erased': 1, unmeasured: 2 });
+    expect(w.byAuthority).toEqual({ operator: 3, coordinator: 1, none: 3 });
+    expect(w.byThread).toEqual({ main: 4, subagent: 1, unknown: 2 });
+    expect(w.byDenyCurrent).toEqual({ unmeasured: 7 });
+    expect(w.byProgramme).toEqual({ overlord: 6, '(none)': 1 });
     expect(w.byReleaseReason).toEqual({ 'run-unclaimed': 1 });
     expect(w.readPrompts).toBe(1);
     expect(w.pushesBySource).toEqual({ approval: 3, census: 1 });
   });
-  it('M38: the prompts that reached the operator, per programme-day, by day and path', () => {
-    expect(w.m38.programmeDays).toBe(2);
-    expect(w.m38.perProgrammeDay).toBe(1.5);
-    expect(w.m38.byDay).toEqual([
-      { day: '2026-11-17', reachedOperator: 1, byPath: { 'released-at-mint': 1 } },
-      { day: '2026-11-18', reachedOperator: 2, byPath: { escalate: 1, 'envelope-erased': 1 } },
-    ]);
+  it('M38 (ruling F4): a programme\'s prompts over the days it had a run open, prompt or none; root prompts beside it', () => {
+    expect(w.m38.programmeDays).toBe(3);
+    expect(w.m38.programmeReached).toBe(2);
+    expect(w.m38.perProgrammeDay).toBeCloseTo(2 / 3);
+    expect(w.m38.rootReached).toBe(1);
+    expect(w.m38.byDay).toEqual([{ day: '2026-11-18', reachedOperator: 2, byPath: { escalate: 1, 'envelope-erased': 1 } }]);
   });
-  it('M38 with nothing in the window is null, never zero', () => {
-    expect(approvalCensusOf({ days: 14, fromMs: 0, toMs: 1, approvals: [], census: [], pushesBySource: {} }).m38.perProgrammeDay).toBeNull();
+  it('M38 with no programme-days is null; with programme-days and nothing reaching the operator it is a measured zero', () => {
+    expect(approvalCensusOf({ days: 1, fromMs: FROM, toMs: TO, approvals: [], census: [], runs: [], pushesBySource: {} }).m38.perProgrammeDay).toBeNull();
+    const quiet = approvalCensusOf({ days: 1, fromMs: FROM, toMs: TO, approvals: [], census: [], pushesBySource: {},
+      runs: [{ programme: 'overlord', openedAt: FROM, closedAt: null }] });
+    expect(quiet.m38).toMatchObject({ programmeDays: 2, perProgrammeDay: 0 });
+  });
+  it('programmeDaysOf: a run counts each UTC day it was open inside the window, once per programme', () => {
+    const D = 86_400_000;
+    expect(programmeDaysOf([{ programme: 'p', openedAt: FROM + 3_600_000, closedAt: FROM + D + 60_000 }], FROM, TO)).toBe(2);
+    expect(programmeDaysOf([{ programme: 'p', openedAt: FROM, closedAt: null }, { programme: 'p', openedAt: FROM, closedAt: FROM + 1 }], FROM, TO)).toBe(2);
+    expect(programmeDaysOf([{ programme: 'p', openedAt: TO + 1, closedAt: null }], FROM, TO)).toBe(0);
   });
   it('never an input: each row carries exactly the wire\'s fields, and a summary is the redacted one, cut to 200 characters', () => {
     const keys: Array<keyof ApprovalCensusRowWire> = ['source', 'id', 'at', 'day', 'sessionId', 'programme', 'thread', 'tool', 'summary', 'path',
-      'route', 'state', 'releaseReason', 'class', 'denyCurrent', 'authority', 'reachedOperator', 'readPrompt'];
+      'why', 'route', 'state', 'releaseReason', 'class', 'denyCurrent', 'authority', 'reachedOperator', 'readPrompt'];
     for (const r of w.rows) expect(Object.keys(r).sort()).toEqual([...keys].sort());
-    const long = approvalCensusOf({ days: 1, fromMs: 0, toMs: 1, approvals: [row({ inputRedacted: `cat ${'a'.repeat(400)}` })], census: [], pushesBySource: {} });
+    const long = approvalCensusOf({ days: 1, fromMs: 0, toMs: 1, approvals: [row({ inputRedacted: `cat ${'a'.repeat(400)}` })], census: [], runs: [], pushesBySource: {} });
     expect(long.rows[0]!.summary).toHaveLength(CENSUS_SUMMARY_MAX);
   });
 });
@@ -158,7 +194,7 @@ describe('GET of the census: session-gated, counts only', () => {
       releaseReason: 'run-unclaimed', commandWords: ['cat'], literalInRoot: true });
     c.insertApproval({ childId: 'lane-a-child', parentId: 'lane-a-coord', runId: null, digest: 'a'.repeat(64), nonce: 'c'.repeat(32), agentId: '',
       tool: 'Bash', inputRedacted: 'old', truncated: false, class: 'escalate', askAt: NOW - 30 * 86_400_000, notifyAt: NOW });
-    c.insertCensusRow({ sessionId: 'lane-a-child', sightingKey: 'env:1', path: 'hook-skipped', route: 'no-key', thread: 'main', tool: 'Bash',
+    c.insertCensusRow({ sessionId: 'lane-a-child', sightingKey: 'env:1', path: 'hook-skipped', why: null, route: 'no-key', thread: 'main', tool: 'Bash',
       summary: 'rm -rf build', runId: null, seenAt: NOW - 60_000 });
     const a = await app(c);
     const res = await a.inject({ method: 'GET', url: '/api/approvals/census?days=7' });
@@ -183,6 +219,21 @@ describe('GET of the census: session-gated, counts only', () => {
     const res = await a.inject({ method: 'GET', url: '/api/approvals/census' });
     expect(res.statusCode).toBe(503);
     expect(res.json()).toMatchObject({ ok: false, error: 'unavailable' });
+  });
+});
+
+describe('the approvals\' retention clears the command words with the input (review 2638 F11b)', () => {
+  it('a row past the retention loses its input and its command words; a newer row keeps both', () => {
+    const c = store();
+    const mintAt = (askAt: number, nonce: string): number => c.insertApproval({ childId: 'lane-a-child', parentId: 'lane-a-coord', runId: null,
+      digest: 'a'.repeat(64), nonce: nonce.repeat(32), agentId: '', tool: 'Bash', inputRedacted: 'cat src/a.ts', truncated: false, class: 'escalate',
+      askAt, notifyAt: askAt + 60_000, commandWords: ['/bin/cat'], literalInRoot: true });
+    const old = mintAt(NOW - 40 * 86_400_000, 'b');
+    const fresh = mintAt(NOW, 'c');
+    c.pruneApprovalInputs(NOW);
+    const read = (id: number): unknown => c.db.prepare('SELECT inputRedacted, commandWords FROM approvals WHERE id = ?').get(id);
+    expect(read(old)).toEqual({ inputRedacted: null, commandWords: null });
+    expect(read(fresh)).toEqual({ inputRedacted: 'cat src/a.ts', commandWords: '["/bin/cat"]' });
   });
 });
 

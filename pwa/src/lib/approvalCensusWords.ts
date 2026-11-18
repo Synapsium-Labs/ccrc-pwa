@@ -13,11 +13,15 @@ export const APPROVAL_PATH_LABELS: Readonly<Record<ApprovalCensusPath, string>> 
   escalate: 'Held, could not be allowed',
   'envelope-erased': 'Menu with no context',
   'not-a-child': 'Not a child session',
+  declined: 'Handed over by the coordinator',
+  stale: 'Stood past the hook\'s wait',
+  'operator-first': 'Answered by you before the coordinator',
   held: 'Still held',
+  unmeasured: 'Could not be placed',
 };
 
-/** The paths that do not reach the operator: settled by the coordinator, or not yet decided. */
-const NOT_REACHING: readonly ApprovalCensusPath[] = ['ruled', 'held'];
+/** The paths that do not reach the operator: settled by the coordinator, not yet decided, or not placed. */
+const NOT_REACHING: readonly ApprovalCensusPath[] = ['ruled', 'held', 'unmeasured'];
 export const OPERATOR_REACHING_PATHS: readonly ApprovalCensusPath[] =
   APPROVAL_CENSUS_PATHS.filter((p) => !NOT_REACHING.includes(p));
 
@@ -29,24 +33,30 @@ export const APPROVAL_CENSUS_TEXT = {
     + 'prevention clause if they were live by then.',
   pathsHead: 'Where they came from',
   noPaths: 'No path reached you.',
+  programmeDay: 'A programme-day is a programme with a run open that day, whether or not it raised a prompt.',
+  noProgrammeDays: 'No programme had a run open in this window, so there is no figure.',
+  denyUnmeasured: 'The deny file\'s currency is not measured yet, so every row is counted as current.',
 } as const;
 
 /** The wire guard: the answer whole, or null. Only the fields this card reads are checked. */
 export function asApprovalCensus(raw: unknown): ApprovalCensusWire | null {
   if (!isRecord(raw) || raw.ok !== true || typeof raw.days !== 'number') return null;
-  if (!isRecord(raw.byPath) || typeof raw.readPrompts !== 'number') return null;
+  if (!isRecord(raw.byPath) || typeof raw.readPrompts !== 'number' || typeof raw.unmeasured !== 'number') return null;
+  if (!isRecord(raw.byDenyCurrent)) return null;
   const m = raw.m38;
   if (!isRecord(m) || !Array.isArray(m.byDay)) return null;
+  if (typeof m.programmeDays !== 'number' || typeof m.programmeReached !== 'number' || typeof m.rootReached !== 'number') return null;
   if (m.perProgrammeDay !== null && typeof m.perProgrammeDay !== 'number') return null;
   return raw as unknown as ApprovalCensusWire;
 }
 
 const dayWord = (n: number): string => (n === 1 ? 'day' : 'days');
 
-/** The headline figure: one decimal, or null when nothing reached the operator. */
+/** The headline figure: one decimal, or null when there are no programme-days or nothing of a programme reached the
+ *  operator (each said in a sentence of its own, never a bare 0). */
 export function m38Figure(w: ApprovalCensusWire): string | null {
   const v = w.m38.perProgrammeDay;
-  return v === null ? null : v.toFixed(1);
+  return v === null || w.m38.programmeReached === 0 ? null : v.toFixed(1);
 }
 
 export function m38Sentence(days: number): string {
@@ -59,6 +69,20 @@ export function m38NoneSentence(days: number): string {
 
 export function readPromptsLine(n: number): string {
   return `Read prompts (the read-only family's gate): ${n}`;
+}
+
+/** Root sessions' prompts that reached the operator: beside the ratio, never inside it. */
+export function rootPromptsLine(n: number): string {
+  return `Root sessions' prompts you answered (not in the figure): ${n}`;
+}
+
+export function unmeasuredLine(n: number): string {
+  return `Prompts the census could not place: ${n}`;
+}
+
+/** Whether any row's deny currency is unmeasured (PR 0's fact not read yet): the read-prompt count says so. */
+export function denyCurrencyUnmeasured(w: ApprovalCensusWire): boolean {
+  return (w.byDenyCurrent['unmeasured'] ?? 0) > 0;
 }
 
 export interface PathLine { readonly path: ApprovalCensusPath; readonly label: string; readonly count: number }

@@ -62,7 +62,7 @@ export type WatcherCoordMember =
   | 'absorbParkEscalation' | 'activeClaims' | 'advanceCursor' | 'advanceLanding' | 'advanceMarkQuiet' | 'advanceObserved'
   | 'answerRenewCall' | 'applyPairMoves' | 'approvalById' | 'approvalPushSources' | 'approvalRowsForCensus' | 'approvalsForChild' | 'approvalsInState' | 'askById'
   | 'askForCorrection' | 'autoContinueHeldUntil' | 'backOff' | 'backstopRead' | 'baselineParkBox' | 'bigCallsIn' | 'bindingRunsOf' | 'bindingsOf' | 'bumpReplayCount'
-  | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'censusRowsIn' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
+  | 'callById' | 'cancelDeliveriesTo' | 'cancelTimer' | 'cardReadOfStart' | 'censusRowsIn' | 'censusRunSpans' | 'checksRows' | 'childReclaimCoordinatorClaims' | 'childReclaimSessionIds'
   | 'childStaleActivity' | 'claimDigestDay' | 'claimHistory' | 'claimRenewCall' | 'claudeBuilds' | 'clearShadowWalk' | 'closeRun' | 'closedProgrammeClaimants' | 'closedSpotProbes' | 'collectLaneRow' | 'collisionsSince' | 'commitDeadCoordinatorBreakerState'
   | 'coordPlacementStamps' | 'countDelegationEventsAtOrBelow' | 'currentAskFor' | 'currentAsksFor' | 'currentEpisode'
   | 'db' | 'deadAnchors' | 'deadCoordinatorBreakerHeldLatest' | 'deadCoordinatorBreakerState' | 'deadCoordinatorJournalRows'

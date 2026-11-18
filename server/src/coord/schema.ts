@@ -3818,7 +3818,8 @@ export const MIGRATIONS: readonly string[] = [
 
   // ── 101: user_version 100 -> 101 ─────────────────────────────────────────
   // The approval census (approvals plan 2026-11-18, §3.1, Tasks 1.3 and 1.4): `approval_census`, one row per permission
-  // prompt that leaves no approvals row (Table 2a's paths 1, 2, 6 and 7), written ONLY by the questions owner's census
+  // prompt that leaves no approvals row (Table 2a's paths 1, 2, 6 and 7, and `unmeasured` with its `why` for a prompt
+  // the census cannot place), written ONLY by the questions owner's census
   // (`approvalCensusStore.ts#insertCensusRow`, through `coord/questions.ts`) the first time it sees the prompt, keyed by
   // the session and the sighting so a repeat sighting writes none (`approval_census_one_per_sighting`). `summary` is the
   // envelope's summary through the egress masker and the redactor, cleared at `APPROVAL_INPUT_RETENTION_DAYS` as an
@@ -3837,6 +3838,7 @@ export const MIGRATIONS: readonly string[] = [
     sessionId   TEXT    NOT NULL,
     sightingKey TEXT    NOT NULL,
     path        TEXT    NOT NULL,
+    why         TEXT,
     route       TEXT,
     thread      TEXT    CHECK (thread IS NULL OR thread IN ('main', 'subagent')),
     tool        TEXT,

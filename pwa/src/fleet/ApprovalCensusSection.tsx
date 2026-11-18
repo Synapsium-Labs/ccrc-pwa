@@ -1,5 +1,6 @@
 // Approvals plan 2026-11-18 §3.1 (M38): Settings › Security › Permission prompts (M38), after Approvals. Read only: the
-// census read's counter (prompts that reached the operator, per programme-day) and the paths they took. Its words are
+// census read's counter (a programme's prompts that reached the operator, per programme-day: a programme with a run open
+// that day), the paths they took, root sessions' prompts beside it and the prompts the census could not place. Its words are
 // `lib/approvalCensusWords`. A failed read says "unmeasured" and never a 0; a window with nothing reaching the operator
 // says so in a sentence of its own.
 import { useState, type ReactNode } from 'react';
@@ -8,7 +9,8 @@ import type { ApprovalCensusWire } from '../../../shared/approval-census';
 import { api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import {
-  APPROVAL_CENSUS_TEXT, asApprovalCensus, m38Figure, m38NoneSentence, m38Sentence, operatorPathLines, readPromptsLine,
+  APPROVAL_CENSUS_TEXT, asApprovalCensus, denyCurrencyUnmeasured, m38Figure, m38NoneSentence, m38Sentence, operatorPathLines,
+  readPromptsLine, rootPromptsLine, unmeasuredLine,
 } from '../lib/approvalCensusWords';
 import { SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS } from './settingsText';
 
@@ -54,9 +56,12 @@ function CensusBody({ census, stale }: { census: ApprovalCensusWire; stale: bool
           <p className={SETTINGS_NOW_CLASS.head}>{figure}</p>
           <p className={SETTINGS_NOW_CLASS.note}>{m38Sentence(census.days)}</p>
         </>
+      ) : census.m38.programmeDays === 0 ? (
+        <p className={SETTINGS_NOW_CLASS.note}>{APPROVAL_CENSUS_TEXT.noProgrammeDays}</p>
       ) : (
         <p className={SETTINGS_NOW_CLASS.note}>{m38NoneSentence(census.days)}</p>
       )}
+      <p className={SETTINGS_NOW_CLASS.note}>{APPROVAL_CENSUS_TEXT.programmeDay}</p>
       {lines.length > 0 && (
         <ul data-census-paths="" style={{ listStyle: 'none', margin: 0, padding: 0, display: 'grid', gap: 'var(--sp-1)' }}>
           {lines.map((l) => (
@@ -64,7 +69,10 @@ function CensusBody({ census, stale }: { census: ApprovalCensusWire; stale: bool
           ))}
         </ul>
       )}
+      {census.m38.rootReached > 0 && <p data-census-root="" className={SETTINGS_NOW_CLASS.note}>{rootPromptsLine(census.m38.rootReached)}</p>}
+      {census.unmeasured > 0 && <p data-census-unmeasured="" className={SETTINGS_NOW_CLASS.note}>{unmeasuredLine(census.unmeasured)}</p>}
       <p className={SETTINGS_NOW_CLASS.note}>{readPromptsLine(census.readPrompts)}</p>
+      {denyCurrencyUnmeasured(census) && <p className={SETTINGS_NOW_CLASS.note}>{APPROVAL_CENSUS_TEXT.denyUnmeasured}</p>}
       <p className={SETTINGS_NOW_CLASS.note}>{APPROVAL_CENSUS_TEXT.baseline}</p>
     </>
   );

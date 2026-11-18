@@ -61,13 +61,20 @@ export function approvalRouteWord(r: ApprovalRoute): string {
  *  `released-at-mint` 3  minted `released` with its reason (no claimant, forbidden, truncated, unparseable)
  *  `lapsed`           4  held for the claimant (an `ordinary` row), and reached the operator unruled
  *  `escalate`         5  held, class `escalate` (the claimant may deny or hand over, never allow), reached the operator
- *  `envelope-erased`  6  an approval-shaped menu with no approval envelope in the hook state
+ *  `envelope-erased`  6  an approval-shaped menu with no approval envelope in the hook state, past the settle window
  *  `not-a-child`      7  a root session's prompt, or a child the request route did not recognise
+ *  `declined`         4  held, and the claimant handed it over (a deliberate act): it reached the operator
+ *  `stale`            4  held, and the hook's ceiling passed with no principal: the menu stood, only the operator could
+ *                        answer it, so it reached the operator
+ *  `operator-first`   4  held, and the operator answered at the pane (or the dialog closed) inside the claimant's window
  *  `held`             -  minted held and still inside its window: not yet decided
+ *  `unmeasured`       -  the census cannot place it (a row state this build does not know, or a sighting it cannot
+ *                        decide; `why` says which): counted on its own, never in M38's numerator
+ * `lapsed` is a lapse only: a row released at `notifyAt`, or answered by the operator after it.
  */
 export const APPROVAL_CENSUS_PATH_MAP = {
   ruled: 0, 'hook-skipped': 1, 'refused-at-mint': 2, 'released-at-mint': 3, lapsed: 4, escalate: 5,
-  'envelope-erased': 6, 'not-a-child': 7, held: -1,
+  'envelope-erased': 6, 'not-a-child': 7, declined: 4, stale: 4, 'operator-first': 4, held: -1, unmeasured: -1,
 } as const satisfies Record<string, number>;
 export type ApprovalCensusPath = keyof typeof APPROVAL_CENSUS_PATH_MAP;
 export const APPROVAL_CENSUS_PATHS = Object.keys(APPROVAL_CENSUS_PATH_MAP) as ApprovalCensusPath[];
@@ -76,9 +83,32 @@ export function isApprovalCensusPath(v: unknown): v is ApprovalCensusPath {
   return typeof v === 'string' && Object.prototype.hasOwnProperty.call(APPROVAL_CENSUS_PATH_MAP, v);
 }
 
-/** The paths a census row (not a minted row) can carry: the ones that leave no approvals row (§3.1). */
-export type ApprovalCensusRowPath = Extract<ApprovalCensusPath, 'hook-skipped' | 'refused-at-mint' | 'envelope-erased' | 'not-a-child'>;
-export const APPROVAL_CENSUS_ROW_PATHS: readonly ApprovalCensusRowPath[] = ['hook-skipped', 'refused-at-mint', 'envelope-erased', 'not-a-child'];
+/** The paths a census row (not a minted row) can carry: the ones that leave no approvals row (§3.1), and `unmeasured`
+ *  for a painted prompt the census could not place. */
+export type ApprovalCensusRowPath = Extract<ApprovalCensusPath, 'hook-skipped' | 'refused-at-mint' | 'envelope-erased' | 'not-a-child' | 'unmeasured'>;
+export const APPROVAL_CENSUS_ROW_PATHS: readonly ApprovalCensusRowPath[] = ['hook-skipped', 'refused-at-mint', 'envelope-erased', 'not-a-child', 'unmeasured'];
+
+/**
+ * Why a prompt is `unmeasured` (a census row's `why`, or a minted row's):
+ *  `hookstate-gone`  the menu stood with no hook state to read (none yet, or aged out): whether an envelope was ever
+ *                    written cannot be told
+ *  `cleared-early`   no envelope, and the menu cleared inside the settle window: a late envelope cannot be told from
+ *                    an erased one
+ *  `near-miss`       no envelope, and a minted row of the child near the sighting that is not a tight match: the menu
+ *                    may be that row's or a prompt whose envelope was erased
+ *  `no-route`        an approval envelope with no route word (a hook from before the census)
+ *  `unknown-route`   a route word this build does not know
+ *  `sent-no-row`     the hook sent the request and no minted row of the child arrived for it
+ *  `unknown-state`   a minted row whose state this build does not know
+ */
+export const APPROVAL_CENSUS_UNMEASURED_MAP = {
+  'hookstate-gone': true, 'cleared-early': true, 'near-miss': true, 'no-route': true, 'unknown-route': true, 'sent-no-row': true, 'unknown-state': true,
+} as const satisfies Record<string, true>;
+export type ApprovalCensusUnmeasured = keyof typeof APPROVAL_CENSUS_UNMEASURED_MAP;
+export const APPROVAL_CENSUS_UNMEASURED = Object.keys(APPROVAL_CENSUS_UNMEASURED_MAP) as ApprovalCensusUnmeasured[];
+export function isApprovalCensusUnmeasured(v: unknown): v is ApprovalCensusUnmeasured {
+  return typeof v === 'string' && Object.prototype.hasOwnProperty.call(APPROVAL_CENSUS_UNMEASURED_MAP, v);
+}
 
 /** Whose answer settled a prompt (N3): the claimant `coordinator` (every ruled row in PR 1), the `operator` (every prompt
  *  that reached them), or `none` while a row is still held. The Overlord's word joins in PR 5. */
@@ -93,7 +123,8 @@ export const APPROVAL_CENSUS_DENY_CURRENCY_MAP: Readonly<Record<ApprovalCensusDe
 /** A word the census's coordination files quote: a path or a deny currency. These ride the read's counts and a census
  *  row's `path`, never a mail rejection or a run refusal (the mail-routes token census admits them through this guard). */
 export function isApprovalCensusWord(tok: string): boolean {
-  return isApprovalCensusPath(tok) || Object.prototype.hasOwnProperty.call(APPROVAL_CENSUS_DENY_CURRENCY_MAP, tok);
+  return isApprovalCensusPath(tok) || isApprovalCensusUnmeasured(tok)
+    || Object.prototype.hasOwnProperty.call(APPROVAL_CENSUS_DENY_CURRENCY_MAP, tok);
 }
 
 /** The six read commands PR 6's gate counts (§3.6): each argument a path, no write. */
@@ -118,6 +149,8 @@ export interface ApprovalCensusRowWire {
   readonly tool: string | null;
   readonly summary: string | null;
   readonly path: ApprovalCensusPath;
+  /** Why the row is `unmeasured`; null on every other path. */
+  readonly why: ApprovalCensusUnmeasured | null;
   readonly route: string | null;
   readonly state: string | null;
   readonly releaseReason: string | null;
@@ -134,14 +167,19 @@ export interface ApprovalCensusRowWire {
 /** A count, keyed by its word (a path, a state, a reason, ...). */
 export type ApprovalCensusCounts = Readonly<Record<string, number>>;
 
-/** The census read's answer. `m38` is the counter: prompts that reached the operator, per programme-day, by path. */
+/** The census read's answer. `m38` is the counter: a programme's prompts that reached the operator, per programme-day,
+ *  with root sessions' prompts and the unmeasured beside it, never inside it. */
 export interface ApprovalCensusWire {
   readonly ok: true;
   readonly days: number;
   readonly fromMs: number;
   readonly toMs: number;
   readonly total: number;
+  /** Every prompt that reached the operator, root sessions' included (M38's numerator is `m38.programmeReached`). */
   readonly reachedOperator: number;
+  /** The prompts the census could not place, and why: never in `reachedOperator` or M38. */
+  readonly unmeasured: number;
+  readonly byUnmeasured: ApprovalCensusCounts;
   readonly byPath: ApprovalCensusCounts;
   readonly byState: ApprovalCensusCounts;
   readonly byReleaseReason: ApprovalCensusCounts;
@@ -153,11 +191,17 @@ export interface ApprovalCensusWire {
   readonly byRoute: ApprovalCensusCounts;
   readonly readPrompts: number;
   readonly m38: {
-    /** Distinct (programme, day) pairs with any prompt in the window; a root session's prompt counts under no programme. */
+    /** Distinct (programme, UTC day) pairs in the window on which the programme had a run open, read from the runs,
+     *  whether or not it raised a prompt: a day prevention emptied still counts. */
     readonly programmeDays: number;
-    /** Prompts that reached the operator, divided by `programmeDays`; `null` when there were none. */
+    /** A programme's prompts (a minted or census row with a programme) that reached the operator: M38's numerator. */
+    readonly programmeReached: number;
+    /** `programmeReached` divided by `programmeDays`; `null` when there are no programme-days. */
     readonly perProgrammeDay: number | null;
-    /** Per UTC day, oldest first: the prompts that reached the operator, by path. */
+    /** Prompts with no programme that reached the operator (root sessions, path 7, and children no run names): reported
+     *  beside the ratio, never inside it. */
+    readonly rootReached: number;
+    /** Per UTC day, oldest first: the programmes' prompts that reached the operator, by path. */
     readonly byDay: readonly { readonly day: string; readonly reachedOperator: number; readonly byPath: ApprovalCensusCounts }[];
   };
   /** The pushes the outbox sent for approval prompts in the window, by their source kind (`approval` or `census`). */

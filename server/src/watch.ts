@@ -9778,9 +9778,12 @@ export class FleetWatcher {
             } else {
               this.actionlessAsks.delete(r.id);
               if (outcome.kind === 'held') {
+                // Its source too (approvals PR 1, review 2638 F9a): every approval push carries one.
+                const heldSource = this.questions.pushSourceOf(r.id);
                 this.pushOne({
                   kind: 'ask', sessionId: r.id, project: r.project,
                   title: '❓ Question', body: withCoordinatorBody(outcome.parent),
+                  ...(heldSource !== undefined ? { source: heldSource } : {}),
                 }, this.activeProjects);
               }
             }

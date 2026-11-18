@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, render, screen, waitFor, within } from '@testing-library/react';
 import { APPROVAL_CENSUS_PATHS, type ApprovalCensusWire } from '../../shared/approval-census';
 import { ApprovalCensusSection } from '../src/fleet/ApprovalCensusSection';
-import { APPROVAL_PATH_LABELS, OPERATOR_REACHING_PATHS, operatorPathLines } from '../src/lib/approvalCensusWords';
+import { APPROVAL_CENSUS_TEXT, APPROVAL_PATH_LABELS, OPERATOR_REACHING_PATHS, operatorPathLines } from '../src/lib/approvalCensusWords';
 import { ApiError, api } from '../src/lib/api';
 import { clearScreenCache } from '../src/lib/screenCache';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
@@ -16,11 +16,11 @@ afterEach(() => {
 });
 
 const wire = (over: Partial<ApprovalCensusWire['m38']> = {}, readPrompts = 4): ApprovalCensusWire => ({
-  ok: true, days: 14, fromMs: 0, toMs: 1, total: 20, reachedOperator: 9,
-  byPath: {}, byState: {}, byReleaseReason: {}, byClass: {}, byThread: {}, byDenyCurrent: {}, byProgramme: {},
+  ok: true, days: 14, fromMs: 0, toMs: 1, total: 20, reachedOperator: 9, unmeasured: 0, byUnmeasured: {},
+  byPath: {}, byState: {}, byReleaseReason: {}, byClass: {}, byThread: {}, byDenyCurrent: { current: 20 }, byProgramme: {},
   byAuthority: {}, byRoute: {}, readPrompts,
   m38: {
-    programmeDays: 6, perProgrammeDay: 1.5,
+    programmeDays: 6, programmeReached: 9, perProgrammeDay: 1.5, rootReached: 0,
     byDay: [
       { day: '2026-11-16', reachedOperator: 5, byPath: { lapsed: 3, 'hook-skipped': 1, ruled: 40, held: 2 } },
       { day: '2026-11-17', reachedOperator: 4, byPath: { lapsed: 1, 'not-a-child': 3, ruled: 9 } },
@@ -48,12 +48,41 @@ describe('Settings › Automation › Permission prompts (M38)', () => {
     expect(card().textContent).not.toMatch(/\b0(\.0)?\b/);
   });
 
-  it('a null figure says none reached you, not unmeasured and not 0.0', async () => {
-    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ perProgrammeDay: null, byDay: [] }));
+  it('a measured zero (programme-days, nothing reached you) says none reached you, not unmeasured and not 0.0', async () => {
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ perProgrammeDay: 0, programmeReached: 0, byDay: [] }));
     render(<ApprovalCensusSection />);
     expect(await within(card()).findByText('None reached you in the last 14 days')).toBeInTheDocument();
     expect(within(card()).queryByText('unmeasured')).not.toBeInTheDocument();
     expect(card().textContent).not.toContain('0.0');
+  });
+
+  it('no programme-days says so in its own sentence, never a figure (ruling F4)', async () => {
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ programmeDays: 0, programmeReached: 0, perProgrammeDay: null, byDay: [] }));
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText(APPROVAL_CENSUS_TEXT.noProgrammeDays)).toBeInTheDocument();
+    expect(within(card()).queryByText(/None reached you/)).not.toBeInTheDocument();
+  });
+
+  it('states what a programme-day is, and puts root prompts and the unplaced beside the figure, never in it', async () => {
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue({ ...wire({ rootReached: 3 }), unmeasured: 2, byUnmeasured: { 'near-miss': 2 } });
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText('1.5')).toBeInTheDocument();
+    expect(within(card()).getByText(APPROVAL_CENSUS_TEXT.programmeDay)).toBeInTheDocument();
+    expect(within(card()).getByText("Root sessions' prompts you answered (not in the figure): 3")).toBeInTheDocument();
+    expect(within(card()).getByText('Prompts the census could not place: 2')).toBeInTheDocument();
+  });
+
+  it('a read-prompt count over rows whose deny currency is unmeasured says so (F11c)', async () => {
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue({ ...wire(), byDenyCurrent: { unmeasured: 20 } });
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText(APPROVAL_CENSUS_TEXT.denyUnmeasured)).toBeInTheDocument();
+  });
+
+  it('an answer without the counter\'s new fields (an older server) is unmeasured, never a figure', async () => {
+    const { unmeasured: _u, ...older } = wire();
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(older as never);
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText('unmeasured')).toBeInTheDocument();
   });
 
   it('lists the paths that reached the operator with counts, and ruled and held are not among them', async () => {
@@ -77,6 +106,7 @@ describe('the words', () => {
     expect(Object.keys(APPROVAL_PATH_LABELS).sort()).toEqual([...APPROVAL_CENSUS_PATHS].sort());
     expect(OPERATOR_REACHING_PATHS).not.toContain('ruled');
     expect(OPERATOR_REACHING_PATHS).not.toContain('held');
+    expect(OPERATOR_REACHING_PATHS).not.toContain('unmeasured');
     expect(operatorPathLines(wire()).map((l) => l.path)).toEqual(['lapsed', 'not-a-child', 'hook-skipped']);
   });
 });

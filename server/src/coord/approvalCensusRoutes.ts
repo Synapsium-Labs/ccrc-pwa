@@ -48,14 +48,17 @@ export function registerApprovalCensusRoutes(app: FastifyInstance, deps: Approva
       return refuseRoute(reply, 'unavailable', { detail: `the approval census cannot be read (${e instanceof Error ? e.message : String(e)})` });
     }
     if (read === undefined) return refuseRoute(reply, 'not-configured', { detail: 'this server has no coordination store' });
-    const { approvals, census, pushes } = read;
+    const { approvals, census, runs, pushes } = read;
     if (!approvals.ok) return refuseRoute(reply, 'unavailable', { detail: `the approvals rows cannot be read (${approvals.detail})` });
     if (!census.ok) return refuseRoute(reply, 'unavailable', { detail: `the census rows cannot be read (${census.detail})` });
+    // M38's denominator: a runs read that fails is said so, never a census over no programme-days.
+    if (!runs.ok) return refuseRoute(reply, 'unavailable', { detail: `the runs cannot be read (${runs.detail})` });
     return approvalCensusOf({
       days, fromMs, toMs,
       // The deny-currency fact is read once approvals PR 0's column is on the row; until then a row does not say.
       approvals: approvals.rows.map((a) => ({ ...a, denyCurrent: null })),
       census: census.rows,
+      runs: runs.rows,
       pushesBySource: pushes,
     });
   });
