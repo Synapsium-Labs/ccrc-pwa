@@ -53,6 +53,7 @@ import type { BoundRowRef, BoundWrite } from './pushOutboxStore.js';
 import { changeLatch } from '../changeLatch.js';
 import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
 import { approvalClass, rootsForChild } from './approvalguard.js';
+import { approvalAllowRefusal, type DenyStanding } from './approvalDenyFloor.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
@@ -364,7 +365,8 @@ export interface ApprovalRaiseRequest {
 
 /** What `raiseApproval` reads, named and passed in, never reached for. Built ONCE in `registerCoordRoutes` from its own
  *  closures, unchanged: `signerFor` stays there (`GET /api/approvals/key` and the rule handler read it too),
- *  `denyEngaged` stays there (round 2's D-6205 edits it where it is), and so do `liveVersionOf` and
+ *  `denyStanding` stays there (round 2's D-6205 edits it where it is; approvals PR 0 widened it from a yes or no to
+ *  `current`, `history` or `none`), and so do `liveVersionOf` and
  *  `journalDigestMismatch`. `heldFor` and `rulingsAllowedHere` are the real functions, passed so this file imports no
  *  outer ring at runtime. `coord`, `io`, `cfg` and `tmux` are the server's, for `readRegistry`, `heldFor`,
  *  `rootsForChild` and `queueSystemMail`. */
@@ -378,7 +380,7 @@ export interface ApprovalRaiseDeps {
   readonly signerFor: () => ApprovalSigner | null;
   readonly rulingsAllowedHere: typeof rulingsAllowedHere;
   readonly heldFor: typeof heldFor;
-  readonly denyEngaged: (rec: SessionRecord) => Promise<boolean>;
+  readonly denyStanding: (rec: SessionRecord) => Promise<DenyStanding>;
   readonly liveVersionOf: (rec: SessionRecord) => Promise<string | null>;
   readonly journalDigestMismatch: (sessionId: string, now: number) => void;
 }
@@ -587,7 +589,11 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const recs = await readRegistry(d.io, d.cfg);
     const rec = recs.find((r) => r.id === sessionId) ?? null;
     if (rec === null || rec.child.kind !== 'child') return { kind: 'not-a-child' };
-    if (!(await d.denyEngaged(rec))) return { kind: 'deny-not-engaged' };
+    // Approvals PR 0: a child under an older deny file the installer's history names is routed and held like any other,
+    // its row recording `denyCurrent: false`, so the rule door refuses its allow; a digest in neither is not engaged.
+    const standing = await d.denyStanding(rec);
+    if (standing === 'none') return { kind: 'deny-not-engaged' };
+    const denyCurrent = standing === 'current';
     // D-8289: the build is trusted only when the record says its capture passed (`buildTrustOf`, the one decider); a record
     // that cannot be read trusts nothing. The verdict carries the typed reason, and the detail says it in words.
     const version = await d.liveVersionOf(rec);
@@ -650,7 +656,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const stored = redactedStored(d.masker.maskText(shown));
     const id = coord.insertApproval({
       childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
-      inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt,
+      inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt, denyCurrent,
       ...(releaseReason === null ? {} : { releaseReason }),
     });
     if (releaseReason !== null) {
@@ -660,7 +666,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     approvalInputs.set(id, { tool, input, cwd: cwdTrusted ? cwd : null, until: notifyAt });
     queueSystemMail(coord, null, {
       fromId: 'operator', toId: parent, runId: null, kind: 'question', subject: approvalNudgeSubject(id),
-      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt }),
+      body: renderApprovalBrief({ id, childId: rec.id, tool, agentId, inputRedacted: stored, class: cls, digest, notifyAt, denyCurrent }),
     });
     return { kind: 'minted', id, waitS: Math.floor((notifyAt - now) / 1000) };
   };
@@ -1647,8 +1653,10 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const held = approvalInputs.get(id);
       const again = held === undefined ? 'escalate'
         : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: cfg.home }), cwd: held.cwd });
-      if (again === 'forbidden') return refused('guard-forbidden');
-      if (row.class !== 'ordinary' || again !== 'ordinary') return refused('guard-escalate');
+      // The allow check is L1's (`approvalAllowRefusal`): either class short of `ordinary`, or a row whose child runs
+      // under older deny rules than the box's (approvals PR 0, the row's own `denyCurrent`), is refused.
+      const refusal = approvalAllowRefusal(row.class, again, row.denyCurrent);
+      if (refusal !== null) return refused(refusal);
     }
     const signer = d.signerFor();
     if (signer === null) return refused('internal', { detail: 'the approval signing key is not loaded' });

@@ -12,9 +12,11 @@ import type { ApprovalClass } from './approvalguard.js';
  *
  * Now the install spine (`ccd/install-session-hooks.sh`, the file's one writer) keeps `$REG/child-deny.digests`, one
  * `<digest> <epoch ms>` line per digest the managed file has had, newest last, at most `CHILD_DENY_DIGESTS_MAX` lines.
- * A child whose digest that history names is routed and held, but its allow is capped: `approvalClassFloor` makes its
- * class at least `escalate`, so a coordinator may deny it or hand it over, never allow it (spec §6.6's guarantee, kept for
- * allows). A digest in neither the managed file nor the history is refused `deny-not-engaged`, as before.
+ * A child whose digest that history names is routed and held, its class left as the classifier gave it, and the row
+ * records "deny current" as its own fact (`approvals.denyCurrent`). The rule door asks `approvalAllowRefusal`, which
+ * refuses an allow on a row whose deny rules are not current, so a coordinator may deny it or hand it over, never allow
+ * it (spec §6.6's guarantee, kept for allows). A digest in neither the managed file nor the history is refused
+ * `deny-not-engaged`, as before.
  */
 
 /** The installer's digest history, beside the managed deny file in the registry. Its one writer is the install spine. */
@@ -47,9 +49,13 @@ export function denyStandingOf(child: string | null, managed: string | null, his
   return 'none';
 }
 
-/** The class floor: under the current deny rules a class is itself; under older rules `ordinary` rises to `escalate`,
- *  and nothing ever falls (`forbidden` stays `forbidden`). */
-export function approvalClassFloor(cls: ApprovalClass, denyCurrent: boolean): ApprovalClass {
-  if (denyCurrent) return cls;
-  return cls === 'ordinary' ? 'escalate' : cls;
+/** Why an allow is refused at the rule door, or null when it may be signed. `rowClass` is the class stored at mint (a
+ *  string: a word a newer build wrote is not `ordinary`), `again` the classifier run once more over the input held for
+ *  the window (`escalate` when none is held), and `denyCurrent` the row's own fact. Forbidden on either side is
+ *  `guard-forbidden`; anything short of `ordinary` on both sides under current deny rules is `guard-escalate`. A deny
+ *  or a hand-over never asks: they stay open on every row. */
+export function approvalAllowRefusal(rowClass: string, again: ApprovalClass, denyCurrent: boolean): 'guard-forbidden' | 'guard-escalate' | null {
+  if (rowClass === 'forbidden' || again === 'forbidden') return 'guard-forbidden';
+  if (rowClass !== 'ordinary' || again !== 'ordinary' || !denyCurrent) return 'guard-escalate';
+  return null;
 }

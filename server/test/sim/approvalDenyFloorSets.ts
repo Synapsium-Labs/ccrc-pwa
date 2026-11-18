@@ -36,19 +36,22 @@ export const DENY_STANDING_SET: MutantSet<ApprovalDenyFloorModule> = {
   suite,
 };
 
-export const CLASS_FLOOR_SET: MutantSet<ApprovalDenyFloorModule> = {
+export const ALLOW_REFUSAL_SET: MutantSet<ApprovalDenyFloorModule> = {
   modulePath: MODULE_TS,
   mutants: [
-    { id: 'CF-1 the floor ignores the digest', old: '  if (denyCurrent) return cls;\n', new: '  return cls;\n' },
-    { id: 'CF-2 the floor is applied under current rules too', old: '  if (denyCurrent) return cls;\n', new: '' },
-    { id: 'CF-3 the floor lowers forbidden', old: 'return cls === \'ordinary\' ? \'escalate\' : cls;', new: 'return \'escalate\';' },
-    { id: 'CF-4 the floor raises to forbidden', old: 'return cls === \'ordinary\' ? \'escalate\' : cls;', new: 'return cls === \'ordinary\' ? \'forbidden\' : cls;' },
-    { id: 'CF-5 the floor inverted', old: '  if (denyCurrent) return cls;\n', new: '  if (!denyCurrent) return cls;\n' },
+    { id: 'AR-1 the allow ignores deny currency', old: ' || !denyCurrent) return \'guard-escalate\';', new: ') return \'guard-escalate\';' },
+    { id: 'AR-2 the allow ignores the row class', old: 'if (rowClass !== \'ordinary\' || again', new: 'if (again' },
+    { id: 'AR-3 the allow ignores the class again', old: ' || again !== \'ordinary\' || !denyCurrent', new: ' || !denyCurrent' },
+    { id: 'AR-4 forbidden on the row not seen', old: 'if (rowClass === \'forbidden\' || again === \'forbidden\')', new: 'if (again === \'forbidden\')' },
+    { id: 'AR-5 forbidden again not seen', old: 'if (rowClass === \'forbidden\' || again === \'forbidden\')', new: 'if (rowClass === \'forbidden\')' },
+    { id: 'AR-6 currency inverted', old: ' || !denyCurrent) return \'guard-escalate\';', new: ' || denyCurrent) return \'guard-escalate\';' },
+    { id: 'AR-7 a stale row is forbidden', old: 'if (rowClass === \'forbidden\' || again === \'forbidden\') return', new: 'if (rowClass === \'forbidden\' || again === \'forbidden\' || !denyCurrent) return' },
+    { id: 'AR-8 forbidden answered as escalate', old: '=== \'forbidden\') return \'guard-forbidden\';', new: '=== \'forbidden\') return \'guard-escalate\';' },
   ],
   suite,
 };
 
 export const APPROVAL_DENY_FLOOR_MUTANT_SETS: Record<string, MutantSet<never>> = {
   'server/src/coord/approvalDenyFloor.ts#denyStandingOf': DENY_STANDING_SET as MutantSet<never>,
-  'server/src/coord/approvalDenyFloor.ts#approvalClassFloor': CLASS_FLOOR_SET as MutantSet<never>,
+  'server/src/coord/approvalDenyFloor.ts#approvalAllowRefusal': ALLOW_REFUSAL_SET as MutantSet<never>,
 };

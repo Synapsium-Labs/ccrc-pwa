@@ -1,13 +1,13 @@
 // The stale deny digest's two deciders, case by case (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md
-// §3.2.1, Task 0.4): `denyStandingOf` (current, history or none, from the child's spawn digest, the managed file's
-// digest and the installer's digest history) and `approvalClassFloor` (a child under older deny rules is never
-// `ordinary`). One list of named cases, run by `approvalDenyFloor.test.ts` and by the mutation floors'
+// §3.2.1, Task 0.4, as the coordinator's plan-review rulings of 2026-11-18 reshaped it): `denyStandingOf` (current,
+// history or none, from the child's spawn digest, the managed file's digest and the installer's digest history) and
+// `approvalAllowRefusal` (the rule door's allow check: no allow on a row whose deny rules are not current). One list of named cases, run by `approvalDenyFloor.test.ts` and by the mutation floors'
 // `approvalDenyFloorSets.ts` over a mutated copy of the module. Neutral digests only.
 import { expect } from 'vitest';
 
 export interface ApprovalDenyFloorModule {
   denyStandingOf(child: string | null, managed: string | null, history: string | null): 'current' | 'history' | 'none';
-  approvalClassFloor(cls: 'ordinary' | 'escalate' | 'forbidden', denyCurrent: boolean): 'ordinary' | 'escalate' | 'forbidden';
+  approvalAllowRefusal(rowClass: string, again: 'ordinary' | 'escalate' | 'forbidden', denyCurrent: boolean): 'guard-forbidden' | 'guard-escalate' | null;
   readonly CHILD_DENY_DIGESTS_FILE: string;
   readonly CHILD_DENY_DIGESTS_MAX: number;
 }
@@ -76,14 +76,22 @@ export const APPROVAL_DENY_FLOOR_CASES: readonly DenyFloorCase[] = [
     // Trailing blank lines are not lines of the history: they do not push the oldest out.
     expect(m.denyStandingOf(ds[1]!, B, `${text}\n\n`)).toBe('history');
   } },
-  { name: 'the floor: under the current rules every class is itself', run: (m) => {
-    expect(m.approvalClassFloor('ordinary', true)).toBe('ordinary');
-    expect(m.approvalClassFloor('escalate', true)).toBe('escalate');
-    expect(m.approvalClassFloor('forbidden', true)).toBe('forbidden');
+  { name: 'the allow check: an ordinary row, ordinary again, under current rules may be signed', run: (m) => {
+    expect(m.approvalAllowRefusal('ordinary', 'ordinary', true)).toBeNull();
   } },
-  { name: 'the floor: under older rules ordinary rises to escalate, and nothing falls', run: (m) => {
-    expect(m.approvalClassFloor('ordinary', false)).toBe('escalate');
-    expect(m.approvalClassFloor('escalate', false)).toBe('escalate');
-    expect(m.approvalClassFloor('forbidden', false)).toBe('forbidden');
+  { name: 'the allow check: a row whose deny rules are not current is refused guard-escalate, though ordinary', run: (m) => {
+    expect(m.approvalAllowRefusal('ordinary', 'ordinary', false)).toBe('guard-escalate');
+    expect(m.approvalAllowRefusal('escalate', 'ordinary', false)).toBe('guard-escalate');
+  } },
+  { name: 'the allow check: escalate on either side is guard-escalate, whatever the rules', run: (m) => {
+    expect(m.approvalAllowRefusal('escalate', 'ordinary', true)).toBe('guard-escalate');
+    expect(m.approvalAllowRefusal('ordinary', 'escalate', true)).toBe('guard-escalate');
+    expect(m.approvalAllowRefusal('a-newer-word', 'ordinary', true)).toBe('guard-escalate');
+  } },
+  { name: 'the allow check: forbidden on either side is guard-forbidden, before any other word', run: (m) => {
+    expect(m.approvalAllowRefusal('forbidden', 'ordinary', true)).toBe('guard-forbidden');
+    expect(m.approvalAllowRefusal('ordinary', 'forbidden', true)).toBe('guard-forbidden');
+    expect(m.approvalAllowRefusal('forbidden', 'escalate', false)).toBe('guard-forbidden');
+    expect(m.approvalAllowRefusal('escalate', 'forbidden', false)).toBe('guard-forbidden');
   } },
 ];

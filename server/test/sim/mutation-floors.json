@@ -208,5 +208,5 @@
   "server/src/coord/forecast.ts#sealBoundary": 1,
   "server/src/coord/forecast.ts#leadHistoryFrom": 1,
   "server/src/coord/approvalDenyFloor.ts#denyStandingOf": 1,
-  "server/src/coord/approvalDenyFloor.ts#approvalClassFloor": 1
+  "server/src/coord/approvalDenyFloor.ts#approvalAllowRefusal": 1
 }

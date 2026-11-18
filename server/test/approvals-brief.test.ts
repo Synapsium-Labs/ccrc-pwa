@@ -14,9 +14,9 @@ import { mkTmp } from './tmpHelpers.js';
 const PLACEHOLDER = '<one line, in plain words>';
 const HOSTILE = 'denied: `touch pwned-tick` and $(touch pwned-dollar) say "no" — it\'s a \\ path; ${HOME}';
 
-const brief = (cls: 'ordinary' | 'escalate'): string => renderApprovalBrief({
+const brief = (cls: 'ordinary' | 'escalate', denyCurrent = true): string => renderApprovalBrief({
   id: 7, childId: 'project-a-quiet-basin', tool: 'Bash', agentId: '', inputRedacted: 'rm -rf build',
-  class: cls, digest: 'a'.repeat(64), notifyAt: Date.UTC(2026, 9, 18, 12, 0, 0),
+  class: cls, digest: 'a'.repeat(64), notifyAt: Date.UTC(2026, 9, 18, 12, 0, 0), denyCurrent,
 });
 
 /** The text between two of the brief's fixed headings: the command block, whatever its form. */
@@ -74,5 +74,25 @@ describe('the claimant\'s rule commands keep the reason out of the shell (D-5489
     expect(body).not.toContain('Allow it once');
     expect(body).not.toContain('verdict:"allow"');
     expect(body).toContain('verdict:"deny"');
+  });
+
+  // Approvals PR 0: a child under older deny rules than the box's is held, but its allow is refused at the rule door, so
+  // its brief says why and offers no allow, even for an ordinary class; deny and hand-over stay.
+  it('a row under older deny rules says so and offers no allow, though its class is ordinary', () => {
+    const body = brief('ordinary', false);
+    expect(body).toContain('This child runs under older deny rules than the box\'s');
+    expect(body).toContain('You may not allow it under older deny rules: deny it, or hand it over.');
+    expect(body).not.toContain('Allow it once');
+    expect(body).not.toContain('verdict:"allow"');
+    expect(body).toContain('verdict:"deny"');
+    expect(body).toContain('Hand it over');
+    const current = brief('ordinary', true);
+    expect(current).not.toContain('older deny rules');
+    expect(current).toContain('Allow it once');
+  });
+  it('an escalate row under older deny rules keeps the class line, and says the older rules too', () => {
+    const body = brief('escalate', false);
+    expect(body).toContain('You may not allow this class: deny it, or hand it over.');
+    expect(body).toContain('This child runs under older deny rules than the box\'s');
   });
 });
