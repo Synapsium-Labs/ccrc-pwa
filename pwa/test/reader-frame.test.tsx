@@ -313,7 +313,11 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(input.document.initialHash).toBe('part');
     expect(input.document.result.html).toBe('<p>x</p>');
     expect(input.prefs).toEqual({ theme: 'light' });
-    await waitFor(() => expect(h.consumed).toHaveBeenCalledTimes(1));
+    // The fragment is spent when the frame reports ready, not when the mount resolves (completion plan Task 13).
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+    act(() => { input.onReady(); });
+    expect(h.consumed).toHaveBeenCalledTimes(1);
   });
 
   it('F1: a percent-encoded fragment is decoded before the frame is seeded; a malformed escape stays raw', async () => {
@@ -348,6 +352,62 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
     await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
     expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a mount that resolves and then falls back before ready keeps the fragment for the plain view (completion plan Task 13)', async () => {
+    const h = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h, { pending: 'part' }));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onFallback('timeout'); });
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(await screen.findByRole('heading', { name: 'Formatted' })).toBeInTheDocument();
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a mount that resolves and then reports ready spends the fragment exactly once', async () => {
+    const h = harness();
+    render(frame(h, { pending: 'part' }));
+    const input = await ready(h);
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+    act(() => { input.onReady(); });
+    expect(h.consumed).toHaveBeenCalledTimes(1);
+    act(() => { input.onReady(); });
+    await settled();
+    expect(h.consumed).toHaveBeenCalledTimes(1);
+  });
+
+  it('a body with no pending fragment spends nothing at ready', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    await settled();
+    expect(h.consumed).not.toHaveBeenCalled();
+  });
+
+  it('a ready after the body fell back, or after it ended, spends nothing', async () => {
+    const h1 = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h1, { pending: 'part' }));
+    const fellBack = await ready(h1);
+    await settled();
+    act(() => { fellBack.onFallback('timeout'); });
+    await screen.findByText(READER_FALLBACK_NOTE);
+    act(() => { fellBack.onReady(); });
+    expect(h1.consumed).not.toHaveBeenCalled();
+    cleanup();
+    const h2 = harness();
+    const r2 = render(frame(h2, { pending: 'part' }));
+    const ended = await ready(h2);
+    await settled();
+    r2.unmount();
+    act(() => { ended.onReady(); });
+    expect(h2.consumed).not.toHaveBeenCalled();
   });
 
   it('a mount that rejects keeps the fragment for the plain view', async () => {
@@ -989,6 +1049,31 @@ describe('the default reader (spec 4.1)', () => {
       expect(spy).not.toHaveBeenCalled();
     } finally {
       if (saved !== undefined) Object.defineProperty(globalThis, 'Worker', saved);
+    }
+  });
+});
+
+describe('a deep link survives a fallback raised after the mount resolved (completion plan Task 13)', () => {
+  it('the real plain view scrolls the element the fragment names', async () => {
+    const scroll = vi.spyOn(HTMLElement.prototype, 'scrollIntoView').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const parser: MarkdownParser = async (src) => parseMarkdown(src, 'docs');
+    const h = harness();
+    history.pushState(null, '', '/docs/demo/specs/a.md#user-content-fn-1');
+    try {
+      const { container } = render(<DocsScreen
+        path="/docs/demo/specs/a.md" search="" loaders={fakeLoaders({ file: okFile('Body.[^1]\n\n[^1]: The note.\n') }).loaders}
+        parser={parser} reader={h.reader}
+      />);
+      const input = await ready(h);
+      expect(input.document.initialHash).toBe('user-content-fn-1');
+      await settled();
+      act(() => { input.onFallback('timeout'); });
+      expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+      await waitFor(() => expect(scroll).toHaveBeenCalledTimes(1));
+      expect(scroll.mock.contexts[0]).toBe(container.querySelector('article li#user-content-fn-1'));
+    } finally {
+      history.replaceState(null, '', '/');
     }
   });
 });

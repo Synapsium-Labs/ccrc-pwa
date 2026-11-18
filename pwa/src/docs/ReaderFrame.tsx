@@ -104,7 +104,7 @@ export interface ReaderFrameProps {
   readonly opened?: { readonly pin: DocPin; readonly page: DocsPageLocation & { kind: 'path' }; readonly only: string | null };
   /** The visit's pending fragment: handed to the frame as its `initialHash` when it mounts. */
   readonly pendingFragment: string | null;
-  /** Called once the fragment is handed over. */
+  /** Called once, when this body's frame reports `ready` with the fragment handed to it. */
   onFragmentConsumed(): void;
 }
 
@@ -372,12 +372,15 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       // The bar is read once, here: the frame keeps it for its life (refinement (f)).
       const chrome = cur.barSlot?.chrome ?? 'frame-bar';
       const progress = chrome === 'host-bar' ? createReaderProgress() : null;
+      /** The fragment this mount was handed: `onReady` spends it. */
+      const handedFragment = cur.props.pendingFragment;
+      let spent = false;
       const input: ReaderMountInput = {
         document: {
           result: outcome.result,
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
-          initialHash: decodedFragment(cur.props.pendingFragment),
+          initialHash: decodedFragment(handedFragment),
         },
         // The W8a plan's refinement (k) and Task 12: the commit a committed doc was read at, or the head a draft was read over
         // with its flag, with the doc's commits and the day filter. Absent for a served hash that is not a full commit.
@@ -394,7 +397,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         onHash: replaceFragment,
         copy: onCopy,
         onReady: () => {
-          if (!ac.signal.aborted && !landed) dispatch({ e: 'ready' });
+          if (ac.signal.aborted || landed) return;
+          dispatch({ e: 'ready' });
+          // The fragment is spent here, once and only for this body: a fallback raised before `ready`, after the mount has
+          // resolved included, keeps it for the plain view's scroll.
+          if (!spent && handedFragment !== null) {
+            spent = true;
+            live.current.props.onFragmentConsumed();
+          }
         },
         onFallback: (r) => fallBack(String(r)),
         chrome,
@@ -423,8 +433,6 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           progress,
         });
       }
-      // The fragment is spent only once the frame is up: a fallback before this keeps it for the plain view's scroll.
-      if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();
       const latest = live.current.prefs;
       if (latest !== seededPrefs.current) {
         seededPrefs.current = latest;
