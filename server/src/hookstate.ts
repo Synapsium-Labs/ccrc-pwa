@@ -156,7 +156,16 @@ function reviveAsk(raw: unknown): HookAsk {
     if (!isRecord(approvalRaw) || typeof approvalRaw['tool'] !== 'string' || typeof approvalRaw['summary'] !== 'string') {
       throw new Malformed('ask.approval');
     }
-    return { approval: { tool: approvalRaw['tool'], summary: approvalRaw['summary'] } };
+    // The hook's route word (approvals plan Task 1.2), ADDITIVE: absent on an older hook's envelope, and anything but a
+    // short string is dropped rather than failing the whole state, so a bad word never costs the prompt its envelope.
+    // `shared/approval-census.ts#parseApprovalRoute` is what reads the word; here it is only carried.
+    const route = approvalRaw['route'];
+    return {
+      approval: {
+        tool: approvalRaw['tool'], summary: approvalRaw['summary'],
+        ...(typeof route === 'string' && route.length > 0 && route.length <= 64 ? { route } : {}),
+      },
+    };
   }
   throw new Malformed('ask');
 }
