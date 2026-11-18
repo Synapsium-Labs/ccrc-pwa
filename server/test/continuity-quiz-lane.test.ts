@@ -81,9 +81,9 @@ describe('quizLaneVerdict (L1)', () => {
 });
 
 describe('the item says what, how and why, and names every condition', () => {
-  for (const baseline of [false, true]) {
-    it(`fits the item's bounds and carries the four conditions (baseline recorded: ${String(baseline)})`, () => {
-      const t = quizItemText('2026-W47', baseline);
+  for (const [baseline, waits] of [[false, false], [true, false], [false, true], [true, true]] as const) {
+    it(`fits the item's bounds and carries the four conditions (baseline recorded: ${String(baseline)}, a run waits: ${String(waits)})`, () => {
+      const t = quizItemText('2026-W47', baseline, waits);
       expect(t.title.length).toBeLessThanOrEqual(ITEM_TITLE_MAX);
       expect(t.title).toContain('2026-W47');
       expect(t.why.length).toBeLessThanOrEqual(ITEM_TEXT_MAX);
@@ -156,6 +156,15 @@ describe('the lane over the store', () => {
     expect(runQuizLane(port, MON + DAY, () => {})).toEqual({ kind: 'hold', why: 'recorded' });
     expect(runQuizLane(port, MON + 8 * DAY, () => {})).toMatchObject({ kind: 'raised' });
     expect(quizItems(coord).map((i) => i.title)).toEqual([quizItemText('2026-W48', true).title]);
+  });
+
+  // Review 2449 F2 (ruled: raise-time text is enough): the item's text is fixed when it is raised, so it always says what to do
+  // with a run recorded later in the week, and says exactly that one waits when one does at raise time.
+  it('the item always says to Confirm or Discard a run recorded this week, and says one waits when one does', () => {
+    expect(quizItemText('2026-W47', false).how[0]).toMatch(/^If you recorded a run this week, Confirm or Discard it on the Shadow lanes card/);
+    expect(quizItemText('2026-W47', true, false).how[0]).toMatch(/^If you recorded a run this week, Confirm or Discard it/);
+    expect(quizItemText('2026-W47', false, true).how[0]).toMatch(/^A recorded run is waiting for your Confirm or Discard on the Shadow lanes card/);
+    expect(quizItemText('2026-W47', false, true).how.join('\n')).not.toMatch(/If you recorded a run this week/);
   });
 
   // Review 2442 F2 replaced review 2121 F2's pin ("a pending run holds its week"): a session holding the box token could post

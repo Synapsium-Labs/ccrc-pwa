@@ -181,13 +181,15 @@ const QUIZ_RECORD_SET: MutantSet<Quiz> = {
     { id: 'D22', old: "|| share['num'] !== n.correct", new: '' },
     { id: 'D23', old: 'Object.keys(inputs).length !== QUIZ_INPUT_KEYS.length || ', new: '' },
     // Review 2442 F3: the pending cap, and its bound.
-    { id: 'D24', old: 'if (i.pending >= QUIZ_PENDING_CAP) {', new: 'if (false) {' },
-    { id: 'D25', old: 'if (i.pending >= QUIZ_PENDING_CAP) {', new: 'if (i.pending > QUIZ_PENDING_CAP) {' },
+    { id: 'D24', old: 'if (!i.recorded && i.pending >= QUIZ_PENDING_CAP) {', new: 'if (false) {' },
+    { id: 'D25', old: 'if (!i.recorded && i.pending >= QUIZ_PENDING_CAP) {', new: 'if (!i.recorded && i.pending > QUIZ_PENDING_CAP) {' },
+    // Review 2449 F3: a resend of a report already recorded answers its row before the cap.
+    { id: 'D26', old: 'if (!i.recorded && i.pending >= QUIZ_PENDING_CAP) {', new: 'if (i.pending >= QUIZ_PENDING_CAP) {' },
   ],
   suite(m): Record<string, SuiteCase> {
-    const verdict = (r: Record<string, unknown>, claimed?: string, pending = 0) => {
+    const verdict = (r: Record<string, unknown>, claimed?: string, pending = 0, recorded = false) => {
       const text = JSON.stringify(r);
-      return m.quizRecordVerdict({ text, claimedSha: claimed ?? sha256(text), measuredSha: sha256(text), now: NOW, pending });
+      return m.quizRecordVerdict({ text, claimedSha: claimed ?? sha256(text), measuredSha: sha256(text), now: NOW, pending, recorded });
     };
     const inputs = (over: Record<string, unknown>) => singleReport({ inputs: { ...(singleReport()['inputs'] as object), ...over } });
     const refuses = (r: Record<string, unknown>, field: string): void => { expect(verdict(r)).toMatchObject({ ok: false, field }); };
@@ -232,6 +234,9 @@ const QUIZ_RECORD_SET: MutantSet<Quiz> = {
       'five pending runs refuse a sixth with its own word, and four leave room': () => {
         expect(verdict(singleReport(), undefined, 5)).toMatchObject({ ok: false, field: 'pending', word: 'quiz-pending-full' });
         expect(verdict(singleReport(), undefined, 4)).toMatchObject({ ok: true });
+      },
+      'a report already recorded passes the cap, so its resend answers its own row': () => {
+        expect(verdict(singleReport(), undefined, 5, true)).toMatchObject({ ok: true });
       },
     };
   },
@@ -294,6 +299,8 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
     { id: 'L8', old: '|| !f.pendingWaits.ok)', new: ')' },
     { id: 'L9', old: 'quizItemText(f.week.key, f.baseline.exists, f.pendingWaits.value)', new: 'quizItemText(f.week.key, f.baseline.exists)' },
     { id: 'L10', old: 'const waiting = pendingWaits', new: 'const waiting = false' },
+    // Review 2449 F2: the item always carries what to do with a run recorded this week.
+    { id: 'L11', old: '  const how = [\n    waiting,', new: '  const how = [\n    ...(pendingWaits ? [waiting] : []),' },
   ],
   suite(m): Record<string, SuiteCase> {
     const facts = (over: Partial<Facts> = {}): Facts => ({
@@ -314,6 +321,7 @@ const QUIZ_LANE_SET: MutantSet<Quiz> = {
         expect(v).toEqual({ kind: 'raise', item: m.quizItemText('2026-W47', false, true) });
         expect(v.kind === 'raise' && v.item.how[0]).toMatch(/^A recorded run is waiting for your Confirm or Discard on the Shadow lanes card/);
         expect(m.quizItemText('2026-W47', false, false).how[0]).not.toMatch(/waiting/);
+        expect(m.quizItemText('2026-W47', false, false).how[0]).toMatch(/^If you recorded a run this week, Confirm or Discard it/);
       },
       'a run recorded at the week\'s first ms counts': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON] } }))).toEqual({ kind: 'hold', why: 'recorded' }); },
       'a run of last week does not': () => { expect(m.quizLaneVerdict(facts({ recordedAts: { ok: true, value: [MON - 1] } })).kind).toBe('raise'); },

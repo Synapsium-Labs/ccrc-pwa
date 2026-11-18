@@ -221,10 +221,11 @@ function fracOf(v: unknown): Frac | null {
  *  11. the inputs are the four hex64 values and nothing else, and `inputs.frozen_sha256` is the top level's (`inputs`); the
  *      mapped record goes to `validQuizReport`, whose refusal passes on unchanged (its `lo <= score <= hi` is OQ4's refusal:
  *      an interval that misses its score is refused, never clamped);
- *  12. fewer than `QUIZ_PENDING_CAP` other runs are pending (`pending`, the word `quiz-pending-full`). `pending` is what the
- *      door counted, leaving out a row with this report's sha, so a resend still answers its first row. */
+ *  12. unless this report is already recorded (`recorded`: a resend answers its own row and state, whatever its state; review
+ *      2449 F3), fewer than `QUIZ_PENDING_CAP` runs are pending (`pending`, the word `quiz-pending-full`). */
 export function quizRecordVerdict(i: {
   readonly text: string; readonly claimedSha: unknown; readonly measuredSha: string; readonly now: number; readonly pending: number;
+  readonly recorded: boolean;
 }): QuizRecordVerdict {
   const no = (field: string, detail: string): QuizRecordVerdict => ({ ok: false, field, detail });
   if (!isSha(i.claimedSha) || i.claimedSha !== i.measuredSha) return no('sha256', 'the sha256 is not the sha of the report\'s bytes');
@@ -280,7 +281,7 @@ export function quizRecordVerdict(i: {
     ccrcRelease: b['ccrc_release'], claudeBuilds: b['claude_code_versions'], steerArmed: b['steer_armed'], agentsOnArmed: b['agents_on_armed'],
   });
   if (!mapped.ok) return mapped;
-  if (i.pending >= QUIZ_PENDING_CAP) {
+  if (!i.recorded && i.pending >= QUIZ_PENDING_CAP) {
     return { ok: false, field: 'pending', word: QUIZ_RECORD_REFUSALS.pendingFull,
       detail: `${i.pending} recorded runs already wait for your Confirm or Discard on the Shadow lanes card` };
   }
@@ -333,12 +334,15 @@ export function quizItemText(weekKey: string, baselineExists: boolean, pendingWa
       : 'No baseline is recorded yet: this run becomes it if every W1a shadow lane is still in shadow when you record it, and '
         + 'no W1a lane can go live until it exists.')
     + ' Nothing waits on this week\'s run but the record itself.';
+  // The text is fixed when the lane raises the item (review 2449 F2, ruled: raise-time text is enough), so it always says what
+  // to do with a run recorded later in the week, and says exactly that one waits when one does at raise time.
   const waiting = pendingWaits
-    ? ['A recorded run is waiting for your Confirm or Discard on the Shadow lanes card (Settings, Automation, Shadow lanes): '
-      + 'a pending run does not count, so this week stays open until you rule on it or record another.']
-    : [];
+    ? 'A recorded run is waiting for your Confirm or Discard on the Shadow lanes card (Settings, Automation, Shadow lanes): '
+      + 'a pending run does not count, so this week stays open until you rule on it or record another.'
+    : 'If you recorded a run this week, Confirm or Discard it on the Shadow lanes card (Settings, Automation, Shadow lanes): '
+      + 'a pending run does not count, so this week stays open until you rule on it.';
   const how = [
-    ...waiting,
+    waiting,
     'On the fleet box, in your own shell, never in a session\'s pane and never while a W2 window is open, run history\'s '
       + 'single-arm quiz by hand as its runbook says (quiz-record-runbook.md, in the Overlord programme\'s docs): once, its '
       + 'setup, source, freeze and marker steps; each week, arms (it runs step 0b\'s probes first and stops if one fails), judge '

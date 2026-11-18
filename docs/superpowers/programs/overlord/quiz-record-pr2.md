@@ -86,6 +86,13 @@ recorded-by-is-a-verb-trace, baseline-read-carries-its-date, single-arm-share-ov
   beside the settings modes, and the contract runs in both modes. F7 the body limit is six times the verb's 64 KiB plus 4 KiB,
   which `jq`'s worst escaping always fits. F8 as the departure above. F9 the verb treats a set-but-empty `CLAUDECODE` as a
   session. F10 as the departure above. Each new case was measured red against its guard and green with it.
+- **Fix round 2 after review 2449** (ruling 23970; F1 to F3 of round 1 met): F1 the runbook says to match the run id and the
+  sha prefix only, since the card's `by` trace is whatever the poster sent. F2 (ruled: raise-time text is enough) the weekly
+  item always carries a line saying to Confirm or Discard on the Shadow lanes card a run recorded this week, and keeps the
+  exact "a recorded run is waiting" line when one waits at raise time (mutant L11). F3 a resend of a report already recorded,
+  in any state, answers its own row and state before the pending cap (`quizStore.ts#quizReportRecorded`, the verdict's
+  `recorded`; mutant D26; the route case runs with five pending); `quizPendingCount` now counts every pending row. F4 no change
+  (the ruled trade: at most five lookalike runs, each named by id and sha). The new cases were measured red before the code.
 - **A second absorption** (the coordinator's word, after the first CI on 761f1ff5e): other lanes A (#2996) landed a census
   that places every write door in one class, and the record door had none. Main was merged once more and the door took a
   `launch-profile` row in `overlord-other-lanes-census.test.ts`'s `NOT_REFUSED` (box token only; a session holding the token

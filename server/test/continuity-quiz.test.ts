@@ -11,7 +11,8 @@ import {
   type QuizReport, type QuizRunExtra, type W1aArmRow,
 } from '../src/continuity/quiz.js';
 import {
-  insertQuizRun, quizBaselineRead, quizPendingCount, quizPendingRead, quizPendingWaits, quizRecordedAts, quizRuns, ruleQuizRun,
+  insertQuizRun, quizBaselineRead, quizPendingCount, quizPendingRead, quizPendingWaits, quizRecordedAts, quizReportRecorded, quizRuns,
+  ruleQuizRun,
 } from '../src/continuity/quizStore.js';
 import { LANE_ARM_LANES } from '../../shared/lane-arm.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -240,8 +241,9 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     expect(quizPendingWaits(coord.db)).toEqual({ ok: true, value: true });
     rule(coord, d, 'confirm', read);
     expect(quizRecordedAts(coord.db)).toEqual({ ok: true, value: [4000] });
-    expect(quizPendingCount(coord.db, SHA('f'))).toBe(2);
-    expect(quizPendingCount(coord.db, SHA('d'))).toBe(1);
+    expect(quizPendingCount(coord.db)).toBe(2);
+    // Review 2449 F3: a recorded report is recorded in any state; one never posted is not.
+    expect([SHA('a'), SHA('c'), SHA('d'), SHA('e'), SHA('f')].map((x) => quizReportRecorded(coord.db, x))).toEqual([true, true, true, true, false]);
     expect(quizPendingRead(coord.db)).toEqual({ ok: true, runs: [[a, 1000, SHA('a')], [c, 3000, SHA('d')]].map(([id, recordedAt, sha]) => ({
       id, recordedAt, reportShaPrefix: String(sha).slice(0, 12), recordedBy: 'quiz-record op both 2026-11-17T00:00:00Z',
       measuredAt: Date.UTC(2026, 10, 16, 9), score: 0.71, lo: 0.62, hi: 0.79, questions: 40, families: 6, answered: 38, runFailed: 1, absent: 1,
@@ -259,7 +261,8 @@ describe('continuity_quiz_runs (the record: one inserter, one ruler)', () => {
     expect(quizRecordedAts(coord.db)).toMatchObject({ ok: false });
     expect(quizPendingRead(coord.db)).toMatchObject({ ok: false });
     expect(quizPendingWaits(coord.db)).toMatchObject({ ok: false });
-    expect(() => quizPendingCount(coord.db, SHA('a'))).toThrow();
+    expect(() => quizPendingCount(coord.db)).toThrow();
+    expect(() => quizReportRecorded(coord.db, SHA('a'))).toThrow();
     expect(ins(coord)).toEqual({ ok: false, kind: 'write-failed' });
     expect(rule(coord, 1, 'confirm', read)).toEqual({ ok: false, kind: 'write-failed' });
   });

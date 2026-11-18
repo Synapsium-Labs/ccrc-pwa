@@ -172,6 +172,21 @@ describe('POST /api/continuity/quiz-runs (the record door, box token)', () => {
     expect(runs.ok && runs.rows.filter((x) => x.state === 'pending')).toHaveLength(QUIZ_PENDING_CAP);
   });
 
+  it('with five pending, a resend of a confirmed or a discarded report answers its own row and state, never the cap (review 2449 F3)', async () => {
+    const r = await rig();
+    const ruled = async (n: number, action: 'confirm' | 'discard'): Promise<number> => {
+      const id = json(await record(r, bodyOf(r, { n_families: n })))['id'] as number;
+      ruleQuizRun(r.coord.db, { id, action, at: r.now, by: 'device-a' }, (lane) => r.coord.laneArmSetting(lane));
+      return id;
+    };
+    const confirmed = await ruled(10, 'confirm');
+    const discarded = await ruled(11, 'discard');
+    for (let k = 0; k < QUIZ_PENDING_CAP; k += 1) await record(r, bodyOf(r, { n_families: 34 - k }));
+    expect(json(await record(r, bodyOf(r, { n_families: 20 })))).toMatchObject({ error: 'quiz-pending-full' });
+    expect(json(await record(r, bodyOf(r, { n_families: 10 })))).toEqual({ ok: true, id: confirmed, fresh: false, state: 'confirmed' });
+    expect(json(await record(r, bodyOf(r, { n_families: 11 })))).toEqual({ ok: true, id: discarded, fresh: false, state: 'discarded' });
+  });
+
   it('the body limit takes the verb\'s largest report after JSON escaping, so the door reads it, never a 413 (review 2442 F7)', async () => {
     const r = await rig();
     const text = '\u0001'.repeat(64 * 1024);

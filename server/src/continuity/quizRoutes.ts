@@ -21,7 +21,7 @@ import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
 import { refuseRoute } from '../refuse.js';
 import { isQuizRuleAction, quizRecordVerdict } from './quiz.js';
-import { insertQuizRun, quizPendingCount, ruleQuizRun } from './quizStore.js';
+import { insertQuizRun, quizPendingCount, quizReportRecorded, ruleQuizRun } from './quizStore.js';
 
 /** The record door's body cap (review 2442 F7): the verb refuses a report over 64 KiB, and `jq` writes each byte of it as at
  *  most six characters (`\u00XX`), so six times that plus room for the sha, the trace and the keys always fits. */
@@ -72,12 +72,13 @@ export function registerQuizRoutes(app: FastifyInstance, deps: QuizRouteDeps): v
     if (deps.coord === undefined) return notConfigured(reply);
     const now = deps.wall();
     const measuredSha = createHash('sha256').update(report, 'utf8').digest('hex');
-    // The count, the verdict and the insert run with no await between them, so no other record lands in between.
+    // The reads, the verdict and the insert run with no await between them, so no other record lands in between.
     let pending: number;
-    try { pending = quizPendingCount(deps.coord.db, measuredSha); } catch {
+    let recorded: boolean;
+    try { pending = quizPendingCount(deps.coord.db); recorded = quizReportRecorded(deps.coord.db, measuredSha); } catch {
       return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be read' });
     }
-    const v = quizRecordVerdict({ text: report, claimedSha: sha256, measuredSha, now, pending });
+    const v = quizRecordVerdict({ text: report, claimedSha: sha256, measuredSha, now, pending, recorded });
     if (!v.ok) return refuseRoute(reply, v.word ?? 'bad-request', { field: v.field, detail: v.detail });
     const r = insertQuizRun(deps.coord.db, { report: v.report, extra: v.extra, recordedBy, recordedAt: now });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_quiz_runs could not be written' });

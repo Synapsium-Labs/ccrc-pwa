@@ -171,8 +171,14 @@ export function quizPendingWaits(db: DatabaseSync): { ok: true; value: boolean }
 
 /** How many runs are pending, leaving out a row with `exceptSha` (a resend of that report): the record door's count for the
  *  pending cap. It throws on a failed read, and the door answers `write-failed`. */
-export function quizPendingCount(db: DatabaseSync, exceptSha: string): number {
-  return (db.prepare("SELECT count(*) AS n FROM continuity_quiz_runs WHERE state = 'pending' AND reportSha != ?").get(exceptSha) as { n: number }).n;
+export function quizPendingCount(db: DatabaseSync): number {
+  return (db.prepare("SELECT count(*) AS n FROM continuity_quiz_runs WHERE state = 'pending'").get() as { n: number }).n;
+}
+
+/** Whether a report with this sha is already recorded, in any state (review 2449 F3: its resend answers its own row before the
+ *  pending cap). Throws on a failed read, as `quizPendingCount` does. */
+export function quizReportRecorded(db: DatabaseSync, reportSha: string): boolean {
+  return db.prepare('SELECT 1 FROM continuity_quiz_runs WHERE reportSha = ?').get(reportSha) !== undefined;
 }
 
 /** Whether a confirmed baseline row exists, and when it was recorded: the lane-arm door's fact (`decideLaneArmPost`), the quiz
