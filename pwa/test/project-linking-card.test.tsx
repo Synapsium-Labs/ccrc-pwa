@@ -396,16 +396,86 @@ describe('the hierarchy settings', () => {
     expect(initiativesBox('project-b').getAttribute('aria-checked')).toBe('false');
   });
 
-  it('a failed re-read after a write keeps the last good answer and its controls, and says the re-read failed', async () => {
+  const OFF = { initiatives: 'off', linearOwner: null, ownsTeam: false } as const;
+  const bothOff = (): HierarchyAnswer => hier([hrow('project-a', { initiatives: 'off' }), hrow('project-b', { teamKey: 'BBB', initiatives: 'off' })]);
+  const aOffBOn = (): HierarchyAnswer => hier([hrow('project-a', { initiatives: 'off' }), hrow('project-b', { teamKey: 'BBB' })]);
+  const twoRows = async (): Promise<ReturnType<typeof vi.spyOn>> => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'BBB' }))],
+      hier([hrow('project-a'), hrow('project-b', { teamKey: 'BBB' })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    return vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: OFF });
+  };
+
+  it('a failed re-read after a write keeps the row locked, says so, and a read again unlocks it on the server\'s answer', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
     await within(rowOf('project-a')).findByText('Default: coord-a (live)');
-    vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: { initiatives: 'off', linearOwner: null, ownsTeam: false } });
+    const save = vi.spyOn(api, 'saveHierarchy').mockResolvedValue({ ok: true, settings: OFF });
     vi.mocked(api.hierarchy).mockRejectedValue(new TypeError('offline'));
     fireEvent.click(initiativesBox('project-a'));
     expect(await screen.findByText(HIERARCHY_TEXT.rereadFailed)).toBeInTheDocument();
     expect(screen.queryByText(HIERARCHY_TEXT.unreadable)).toBeNull();
     expect(ownerSelect('project-a')).toBeInTheDocument();
+    // Still locked: no change can be made, so no body carries the old answer.
+    expect(ownerSelect('project-a')).toBeDisabled();
+    expect(initiativesBox('project-a')).toBeDisabled();
+    expect(save).toHaveBeenCalledTimes(1);
+    // Read again: the server's stored answer lands, the row unlocks, and the next body carries it.
+    vi.mocked(api.hierarchy).mockImplementation(async () => hier([hrow('project-a', { initiatives: 'off' })]));
+    fireEvent.click(screen.getByRole('button', { name: HIERARCHY_TEXT.readAgain }));
     await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(screen.queryByText(HIERARCHY_TEXT.rereadFailed)).toBeNull();
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(2));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('two rows write at once and the first re-read lands first: each row unlocks on a read newer than its own write', async () => {
+    const save = await twoRows();
+    const first = held<HierarchyAnswer>();
+    const second = held<HierarchyAnswer>();
+    // Later reads (a control change's) answer with what the server now stores.
+    vi.mocked(api.hierarchy).mockImplementation(async () => bothOff());
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    fireEvent.click(initiativesBox('project-b'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(3));
+    await act(async () => { first.resolve(aOffBOn()); });
+    // A's own read landed: A unlocks on an answer newer than its write. B's has not: B stays locked.
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    expect(ownerSelect('project-b')).toBeDisabled();
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+    await act(async () => { second.resolve(bothOff()); });
+    await waitFor(() => expect(ownerSelect('project-b')).not.toBeDisabled());
+    fireEvent.change(ownerSelect('project-b'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(4));
+    expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+  });
+
+  it('two rows write at once and the newer re-read lands first: the older one is dropped and both rows end on the stored values', async () => {
+    const save = await twoRows();
+    const first = held<HierarchyAnswer>();
+    const second = held<HierarchyAnswer>();
+    vi.mocked(api.hierarchy).mockImplementation(async () => bothOff());
+    vi.mocked(api.hierarchy).mockImplementationOnce(() => first.promise).mockImplementationOnce(() => second.promise);
+    fireEvent.click(initiativesBox('project-a'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    fireEvent.click(initiativesBox('project-b'));
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(3));
+    await act(async () => { second.resolve(bothOff()); });
+    await waitFor(() => expect(ownerSelect('project-a')).not.toBeDisabled());
+    await act(async () => { first.resolve(aOffBOn()); });
+    // The older answer was dropped: B still reads off, and nothing relocked.
+    expect(initiativesBox('project-b').getAttribute('aria-checked')).toBe('false');
+    expect(ownerSelect('project-a')).not.toBeDisabled();
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(3));
+    expect(save).toHaveBeenLastCalledWith('project-a', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
+    fireEvent.change(ownerSelect('project-b'), { target: { value: 'coord-b' } });
+    await waitFor(() => expect(save).toHaveBeenCalledTimes(4));
+    expect(save).toHaveBeenLastCalledWith('project-b', { initiatives: 'off', linearOwner: 'coord-b', ownsTeam: false });
   });
 
   it('a stamp the clock cannot place says no date rather than throwing', async () => {

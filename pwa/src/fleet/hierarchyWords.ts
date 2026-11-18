@@ -18,7 +18,8 @@ export const HIERARCHY_TEXT = {
   allTitle: 'Make this coordinator the owner of every project?',
   allDone: 'Saved. Every project now names that coordinator.',
   unreadable: 'The hierarchy settings could not be read. Reload this page to try again.',
-  rereadFailed: 'The hierarchy settings could not be read again. What is shown may be out of date. Reload this page to try again.',
+  rereadFailed: 'The hierarchy settings could not be read again. What is shown may be out of date, and a row you changed stays locked until they are read again.',
+  readAgain: 'Read again',
   defaultNamed: "Default: the latest programme's coordinator",
 } as const;
 
