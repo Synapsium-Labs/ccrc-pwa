@@ -751,7 +751,8 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[93] (programme_forecasts, the sealed forecasts, Overlord W2 forecasts A),
     // and MIGRATIONS[94] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183),
     // and MIGRATIONS[95] (the designation actor columns, Overlord W1 gates A),
-    // and MIGRATIONS[96] (linear_drift_cursors and linear_inbound_notes, Linear hierarchy wave 4 follow-ups, D-8734).
+    // and MIGRATIONS[96] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
+    // follow-ups, D-8734, D-8735).
     expect(COORD_SCHEMA_VERSION).toBe(97);
     expect(MIGRATIONS.length).toBe(97);
   });

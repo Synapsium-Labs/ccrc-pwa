@@ -15,6 +15,7 @@ import {
   type PhaseRefKind, type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
 import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
+import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
 import { tx } from './tx.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -802,12 +803,15 @@ export interface InboundRow {
   mailedTo: string | null; mailedAt: number | null; handedTo: string | null; reason: string | null; actedAt: number | null; state: InboundState;
   /** The operator item a `raise` made for the row (D-8183): the link from a `raised` row to its answer. */
   itemId: number | null;
+  /** Why a `retired` row left the lane (review 2457 F4, D-8735); null for every other state, and for a row retired before the column. */
+  retiredWhy: RetireWhy | null;
 }
 const inboundRow = (r: Raw): InboundRow => ({
   linearId: r.linearId as string, workspaceId: r.workspaceId as string, teamKey: r.teamKey as string, identifier: r.identifier as string,
   title: r.title as string, body: (r.body as string | null) ?? null, seenAt: r.seenAt as number, mailedTo: (r.mailedTo as string | null) ?? null,
   mailedAt: (r.mailedAt as number | null) ?? null, handedTo: (r.handedTo as string | null) ?? null, reason: (r.reason as string | null) ?? null,
   actedAt: (r.actedAt as number | null) ?? null, state: r.state as InboundState, itemId: (r.itemId as number | null) ?? null,
+  retiredWhy: retireWhyOf(r.retiredWhy),
 });
 /** A new issue is inserted `waiting`; a known one keeps its state and only refreshes `title` and `body`. The text is cut
  *  visibly to the plan's ticket bounds first (`fitInboundText`, D-8705): this is the one writer. */
@@ -828,17 +832,30 @@ export function inboundOf(db: DatabaseSync, linearId: string): InboundRow | null
   const r = db.prepare('SELECT * FROM linear_inbound WHERE linearId = ?').get(linearId) as Raw | undefined;
   return r === undefined ? null : inboundRow(r);
 }
-const INBOUND_PATCH_COLUMNS = ['state', 'mailedTo', 'mailedAt', 'handedTo', 'reason', 'actedAt', 'itemId'] as const;
+const INBOUND_PATCH_COLUMNS = ['state', 'mailedTo', 'mailedAt', 'handedTo', 'reason', 'actedAt', 'itemId', 'retiredWhy'] as const;
 /** Set the named columns of one row; a column not named stays. The column names come from the list above, never the caller. */
 export function setInboundState(
   db: DatabaseSync, linearId: string,
-  patch: Partial<{ state: InboundState; mailedTo: string | null; mailedAt: number | null; handedTo: string | null; reason: string | null; actedAt: number | null; itemId: number | null }>,
+  patch: Partial<{ state: InboundState; mailedTo: string | null; mailedAt: number | null; handedTo: string | null; reason: string | null; actedAt: number | null; itemId: number | null; retiredWhy: RetireWhy | null }>,
 ): void {
   const cols = INBOUND_PATCH_COLUMNS.filter((c) => patch[c] !== undefined);
   if (cols.length === 0) return;
   db.prepare(`UPDATE linear_inbound SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE linearId = ?`)
     .run(...cols.map((c) => patch[c] as string | number | null), linearId);
 }
+/** THE ONE RETIRE of a stored inbound row (review 2457 F4, A6; D-8735): the state, its cause and the deletion of the row's stored note
+ *  are ONE act, so no retire leaves an orphan note behind and none leaves a row retired with no cause. A row that is not retirable now
+ *  (`inboundRetirable`: taken, placed, an acted close, already retired, or gone) is left as it is and the answer is false: a door's
+ *  re-read ran outside the transaction, so the row is judged again here. The caller holds the transaction (`retireInbound` opens one). */
+export function retireInboundInTx(db: DatabaseSync, linearId: string, why: RetireWhy): boolean {
+  const row = inboundOf(db, linearId);
+  if (row === null || !inboundRetirable(row)) return false;
+  setInboundState(db, linearId, { state: 'retired', retiredWhy: why });
+  clearInboundNote(db, linearId);
+  return true;
+}
+/** `retireInboundInTx` in a transaction of its own. */
+export function retireInbound(db: DatabaseSync, linearId: string, why: RetireWhy): boolean { return tx(db, () => retireInboundInTx(db, linearId, why)); }
 export function inboundByState(db: DatabaseSync, workspaceId: string | null, states: InboundState[]): InboundRow[] {
   if (states.length === 0) return [];
   const marks = states.map(() => '?').join(', ');
@@ -1070,7 +1087,7 @@ const PORT_FUNCTIONS = {
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,
   managedTeams, issueBound, driftMarkOf, setDriftMark, driftCursorsOf, setDriftCursor, graceBindingsOf, lastDriftEventOf, recordDrift, driftRestoresOf, lastDriftCommentAt, markDriftCommented, driftEventsOf,
-  setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, inboundByState, inboundWaiting, streaksOf, setStreak,
+  setDriftSince, setDriftItem, upsertInbound, inboundOf, setInboundState, retireInboundInTx, retireInbound, inboundByState, inboundWaiting, streaksOf, setStreak,
   settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, bindingsInWorkspace, dueKeyOfBinding, managedSince,
   upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier, handedInboundByIdentifier,
   upkeepTicketByIdentifier, setInboundNote, inboundNoteOf, clearInboundNote, placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, boundLinearIdsOf, upkeepProjectsOf, inTransaction,

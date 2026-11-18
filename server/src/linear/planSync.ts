@@ -48,10 +48,10 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
-import { restoreHoldVerdict, restoredDescription } from './driftPolicy.js';
+import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
-  withoutPutBack, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  withoutPutBack, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -80,7 +80,9 @@ export interface RestoreTarget {
   /** The drift is in the project's link to its initiative (or the initiative's to it): the link is made again under the restore's own
    *  request id. Absent: the update alone (an update keeps the stored link mark, D-8183, so the sync sends no second link). */
   link?: boolean;
-  comment?: { body: string; requestId: string };
+  /** The drift comment: `body` names values and passes the public-text check before it is sent; refused (review 2457 F3), the
+   *  restore's field writes still go and `fallbackBody`, ccrc's own words naming the fields only, goes instead. */
+  comment?: { body: string; fallbackBody: string; requestId: string };
   restoredLine?: { line: string; linearDescription: string | null };
   /** An issue's grace stands (§7.3, `graceVerdict`): its update goes without its state, as C12's `state-held` sends it, so a
    *  restore of another field in the same pass never ends the grace (review 2386 A5). */
@@ -322,26 +324,30 @@ export class PlanSync {
         ({ bindingId: t.bindingId, outcome: o, ...(word === undefined ? {} : { word }), commented });
       // Round 6 P3: a restore is a write, so it asks every hold the sync keeps, inside the flight and before it sends: the programme's
       // persisted failure hold here, its workspace's and its key's per target below. Nothing is sent and the drift read comes again.
+      // Review 2457 A3: a hold answers `deferred` only for a target that would otherwise be sent; a moot target is `moot` held or not
+      // (`restoreTargetVerdict`), so the snapshot is read even while the programme is held (read-only then: a held programme advances
+      // no episode and asks for no fill).
       const now = this.deps.now();
-      if (restoreHoldVerdict({ programmeHeldUntil: this.deps.plan.heldSyncUntil(key, now), releaseAt: 0, now }) === 'defer') return targets.map((t) => outcome(t, 'deferred'));
+      const programmeHeld = restoreHoldVerdict({ programmeHeldUntil: this.deps.plan.heldSyncUntil(key, now), releaseAt: 0, now }) === 'defer';
       const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
       if (store.kind === 'unreadable') return targets.map((t) => outcome(t, 'deferred'));
-      const built = this.snapshot(key, store);
+      const built = this.snapshot(key, store, programmeHeld);
       if (built === null) return targets.map((t) => outcome(t, 'moot'));
       const heldTarget = (t: RestoreTarget): boolean => {
         const ws = built.snap.bindings.find((x) => x.id === t.bindingId)?.workspaceId;
         return ws !== undefined && restoreHoldVerdict({ programmeHeldUntil: null, releaseAt: this.releaseOf(key, ws), now: this.deps.now() }) === 'defer';
       };
-      const live = targets.filter((t) => {
+      const verdicts = new Map(targets.map((t) => {
         const b = built.snap.bindings.find((x) => x.id === t.bindingId);
-        return b !== undefined && b.state === 'bound' && b.linearId !== null && b.fingerprint === t.seen && !heldTarget(t);
-      });
-      const force = new Map(live.map((t) => [t.bindingId, t.tag] as const));
+        const moot = !(b !== undefined && b.state === 'bound' && b.linearId !== null && b.fingerprint === t.seen);
+        return [t.bindingId, restoreTargetVerdict({ moot, programmeHeld, targetHeld: heldTarget(t) })] as const;
+      }));
+      const force = new Map(targets.filter((t) => verdicts.get(t.bindingId) === 'send').map((t) => [t.bindingId, t.tag] as const));
       const steps = planSyncSteps(built.snap, { force }).steps;
       const deadlineAt = this.deps.now() + PLAN_SYNC_TICK_DEADLINE_MS;
       const out: RestoreOutcome[] = [];
       for (const t of targets) {
-        if (!force.has(t.bindingId)) { out.push(outcome(t, heldTarget(t) ? 'deferred' : 'moot')); continue; }
+        if (!force.has(t.bindingId)) { out.push(outcome(t, verdicts.get(t.bindingId) === 'moot' ? 'moot' : 'deferred')); continue; }
         const mine = steps.filter((x): x is Restorable => (x.kind === 'update' || (x.kind === 'link' && t.link === true)) && x.bindingId === t.bindingId);
         if (mine.length === 0) { out.push(outcome(t, 'deferred')); continue; }          // nothing to send (a skip): the sync's own pass says why
         let flow: Flow = 'next';
@@ -358,7 +364,7 @@ export class PlanSync {
         // nothing sent because the key or the slot is missing is `deferred`: either way no comment and no record.
         if (!note.wrote) { out.push(outcome(t, note.same ? 'moot' : 'deferred')); continue; }
         if (b === null || b.state !== 'bound' || b.fingerprint !== final) { out.push(outcome(t, 'deferred')); continue; }
-        const commented = t.comment === undefined ? false : await this.restoreComment(b, t.comment, built, pass);
+        const commented = t.comment === undefined ? false : await this.restoreComment(key, b, t.comment, built, pass);
         out.push(outcome(t, 'restored', undefined, commented));
       }
       return out;
@@ -375,17 +381,25 @@ export class PlanSync {
   }
 
   /** The drift comment on a restored object: an initiative, a project or an issue (never a milestone). A `conflict` answer is a
-   *  comment made already (the same request id). Answers whether it was sent or found made. */
-  private async restoreComment(b: BindingRow, c: { body: string; requestId: string }, built: NonNullable<ReturnType<PlanSync['snapshot']>>, pass: RestorePass): Promise<boolean> {
+   *  comment made already (the same request id). Answers whether it was sent or found made.
+   *
+   *  PUBLIC TEXT (review 2457 F3, the coordinator's ruling; spec §6.1): the comment passes the same check as every sync step's text
+   *  (`textRefusalOf`, with the binding's project facts and the installer's private tracker keys) before it is sent. Refused, the
+   *  restore's field writes have gone already and the comment is the fixed fallback (`restoreCommentChoice`), and the refusal is told
+   *  once to the owner in a fixed sentence (`mailRestoreTextRefused`), as a sync step's text refusal is told: it fails no binding
+   *  here, since the fields were put back. */
+  private async restoreComment(slug: string, b: BindingRow, c: { body: string; fallbackBody: string; requestId: string }, built: NonNullable<ReturnType<PlanSync['snapshot']>>, pass: RestorePass): Promise<boolean> {
     const slot = built.slots.get(b.workspaceId);
     if (slot === undefined || b.linearId === null) return false;
+    const chosen = restoreCommentChoice(c, textRefusalOf([c.body], textFactsOf(built.snap, b), built.snap.privateTrackerKeys));
+    if (chosen.refused) this.mailRestoreTextRefused(slug, b, built.snap.plan);
     const [op, key, target, teamKey] = b.localKind === 'programme' ? ['initiativeComment', 'initiativeId', b.linearId, null] as const
       : b.localKind === 'epic' ? ['projectComment', 'projectId', b.linearId, b.teamKey] as const
       : b.localKind === 'ticket' ? ['issueComment', 'issueId', b.identifier ?? b.linearId, b.teamKey] as const : [null, null, null, null] as const;
     if (op === null) return false;
     const out = await this.deps.call({
       op, pass, lane: 'sync', slot: slot.ref, workspaceId: b.workspaceId, teamKey, target, fields: ['body'],
-      input: { requestId: c.requestId, [key]: b.linearId, body: c.body },
+      input: { requestId: c.requestId, [key]: b.linearId, body: chosen.body },
     });
     return out.ok || (out.word === 'linear-invalid' && out.detail === 'conflict');
   }
@@ -991,6 +1005,15 @@ export class PlanSync {
     const key = s.local.kind === 'programme' ? s.slug : this.planKeyOf(s.plan, s.local);
     this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} ${word} (${s.slug})`,
       `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`);
+  }
+
+  /** Review 2457 F3: a restore comment the public-text check refused, told once per object, in a fixed sentence (never a value, never
+   *  the check's class). The comment went out as ccrc's fallback naming the fields only, and the restore's field writes went. */
+  private mailRestoreTextRefused(slug: string, b: BindingRow, plan: StoredPlan): void {
+    const local: Local = { kind: b.localKind, id: b.localId };
+    const key = b.localKind === 'programme' ? slug : this.planKeyOf(plan, local);
+    this.mailOnce(slug, `Linear sync: ${OBJECT_WORD[b.localKind]} ${key} restore-comment text-public (${slug})`,
+      `The Linear sync put back the ${OBJECT_WORD[b.localKind]} ${key} of ${slug} after it was changed in Linear, but the comment it would have left named text that is not safe to post in a public project. It left a comment that names only the fields it put back.`);
   }
 
   /** C16: a refused PR link, told once per ticket and word, in a fixed sentence (never the URL). */

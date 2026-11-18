@@ -13,11 +13,14 @@ trailer.
   guard proved by mutating its line and running the test (restored from a saved copy each time).
 - **Departures:** D-8733 drift-reads-every-team, D-8734 drift-cursor-and-return-tables, D-8735 inbound-retired, D-8736
   w4fu-words. Defined in the plan; summarised below.
-- **One migration**, entry 97: `linear_drift_cursors` and `linear_inbound_notes`, new tables only. Main ended at 95 at
-  build time (D-8673), and Overlord gates A (#2993) landed first and took 96, so this entry moved to 97 in the one merge of
-  main, and the run-close replay covers forty-four.
-- **Growth:** `watch.ts`, `server.ts`, `coord/store.ts`, `coord/routes.ts` and `coord/delegation-checkpoint.ts` are
-  untouched; `shared/api.ts` is line-neutral (one cap word on the two existing `plan-phases-v1` lines).
+- **One migration**, entry 97: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
+  `linear_inbound.retiredWhy`; additive only. Main ended at 95 at build time (D-8673), and Overlord gates A (#2993) landed
+  first and took 96, so this entry moved to 97 in the one merge of main, and the run-close replay covers forty-four.
+- **Growth:** `watch.ts`, `coord/store.ts`, `coord/routes.ts` and `coord/delegation-checkpoint.ts` are untouched;
+  `server.ts` gains one line (fix round 1: the plan routes' `inboundRecheck` option, by the ladder's consent, mail 24088);
+  `shared/api.ts` is line-neutral (one cap word on the two existing `plan-phases-v1` lines).
+- **Fix round 1** (review run 2457, the coordinator's rulings, mail 24080): F1 to F4 and A1 to A6, each with its test, in
+  the section of that name below.
 - **No live Linear call, capture or probe**, and no Linear key read: every test runs on the recorded and constructed
   fixtures, faked at the pass's `call` or at callLinear's FetchLike.
 
@@ -28,7 +31,7 @@ trailer.
 | 1 | Restores honour every hold (round 6 P3) | `PlanSync#restore` asks the programme's persisted failure hold (`heldSyncUntil`) and each target's workspace and key hold (`releaseOf`) inside the flight, before it sends; a held target is `deferred` and nothing is sent (`restoreHoldVerdict`, L1). The drift pass skips a workspace whose key is refused (`driftReadHeld`), and a drift read answered 401 goes through the plan sync's one owner, `keyRefusedByRead` (the `linear-unauthorised` deferral on the sync's own schedule, under a key of its own; `keyReadAnswered` resets its step), so a 401 holds both lanes (A-3). | `drift-pass.test.ts` "restores and drift reads honour every hold": failure-held, workspace-held and key-refused restores send nothing (`expected 'restored' to be 'deferred'`); a read's 401 blocks the workspace for the sync and the next tick makes no call; the hold is on the sync's schedule; another workspace still gets its pass |
 | 2 | A stored inbound row whose issue completes or is canceled is retired (round 4 F1; D-8735) | `retired` joins `INBOUND_STATES`. `inboundRetireVerdict` (L1) retires a `waiting`, `mailed`, `handed`, `raised` or closed-not-acted row whose issue reads completed, canceled or ccrc's own; `taken`/`placed` rows are never touched. `detect` judges every stored row it reads; a raised row's open item settles in the same transaction. Take, triage and the close refuse a retired row through their existing state checks (`issue-not-inbound`). A reopened issue returns to `waiting` and its owner is mailed once more, under a subject carrying the reopen's time (`linear_inbound_notes`, `kind` `reopened`). | `plan-inbound.test.ts`: stored-then-completed for each state (`expected 'handed' to be 'retired'`, …), a raised row's item settles, closed-not-acted is never written, taken/placed untouched, reopen mailed twice and three times; `plan-vocabulary.test.ts` pins the word |
 | 3 | A lost-reply create is ccrc's own, never inbound (round 5 F2, round 6 P1) | `ccrcIssueIds` (`planPolicy.ts`, the one builder) is every id a binding of the workspace holds plus each pending ticket's create id (`requestIdOf('ticket', localId, workspaceId)`, D-8722). `detect` reads it from `bindingsInWorkspace`; a stored row for such an issue is retired; `placeInboundInUpkeep` and `takeInboundIntoEpic` refuse, inside their transaction, an issue already held (`heldByCcrc`), so one issue never gets a second ticket. | `plan-inbound.test.ts`: a pending create stores and mails nothing (`expected { n: 1 } to deeply equal { n: +0 }`); a stored row is retired and take refused with no second binding; the composites refuse before and after `markBound` |
-| 4 | The drift pass reads ccrc's record before Linear (round 5 F1) | The pass reads the workspace's bindings (`bindingsInWorkspace`) BEFORE its changed* reads. A node whose binding's fingerprint or state moved since (`syncWroteSince`) is skipped whole: no event, restore or record; the sync's write moved Linear's `updatedAt`, so the next pass reads it. `seen` is the pre-read fingerprint, so the restore's own moot check catches a later write too. A project's planned milestones are judged only when the pre-read record bound them (`milestonesJudged`). Pre-read rather than an `updatedAt` comparison: that would set Linear's clock against ccrc's. | `drift-pass.test.ts` "the pass reads ccrc's record before Linear": a sync write between the read and the compare sends no comment or restore and records nothing (`expected [ {op:'issueUpdate'…} ] to deeply equal []`); a stale project node missing a milestone the sync just made raises nothing |
+| 4 | The drift pass reads ccrc's record before Linear (round 5 F1) | The pass reads the workspace's bindings (`bindingsInWorkspace`) BEFORE its changed* reads. A node whose binding's fingerprint or state moved since (`syncWroteSince`) is skipped whole: no event, restore or record; the sync's write moved Linear's `updatedAt`, so the next pass reads it. `seen` is the pre-read fingerprint, so the restore's own moot check catches a later write too. A project's planned milestones are judged only when the pre-read record bound them (`milestonesJudged`). Pre-read rather than an `updatedAt` comparison: that would set Linear's clock against ccrc's. | `drift-pass.test.ts` "the skip of a node a sync write moved has a test that goes red without it (review 2457 F1)": a sync write after the read leaves no grace stamp (`setDriftSince`), no due mark (`markSyncDue`), no unrestorable event and no item; each red with the `syncWroteSince` call deleted. (The test this row first cited, "a sync write landing after the Linear read is skipped", stays green without the skip: the restore's own moot check catches that write, so it proves the moot check, not the skip.) "the pass reads ccrc's record before Linear": a stale project node missing a milestone the sync just made raises nothing |
 | 5 | Drift scope follows the binding (round 6 P2; D-8733) | `changedIssues` asks every team key the slot lists; an issue of an unmanaged team that no pre-read binding holds is dropped at the read (`keepIssueNode`), before the compare, the grace re-read, inbound detect or any record sees it. `driftScoped` (L1): an issue or a project by its binding's team, a milestone by its planned project's binding, an initiative by its projects' bindings. A moved-out issue is restored with its planned team; a milestone moved into an unbound project is unrestorable and raises the item at once; a graced issue moved out has its grace decided, so its by-id re-read ends. | `drift-pass.test.ts` "drift scope follows the binding": moved-out issue restored (`expected [] to have a length of 1`); the read asks every team; the milestone raises; the grace re-read stops; a foreign issue leaves no row, event, mail or item and never reaches `viaFleet` (`expected ['ZZZ-1'] to not include 'ZZZ-1'`) |
 | 6 | A page-capped read never skips a change (F3, round 6 P4; D-8734) | A kind that stops at `DRIFT_MAX_PAGES` keeps its sweep in `linear_drift_cursors` (`since`, Linear's `after`, the newest `updatedAt` read so far, `startedAt`) and the next pass goes on from it with the same `since`. A finished sweep deletes the row and moves the watermark to its newest read, never past `startedAt` less `DRIFT_SWEEP_MARGIN_MS` (five minutes), so a change made behind the cursor while the sweep walked is read again; order-free (`sweepStep`, `sweepWatermark`). A restore deferred in any pass of the sweep holds the watermark at `since` to the end. A read refused `linear-invalid` or `malformed` drops the cursor and restarts the sweep; a retry word keeps it (`driftCursorAfterFailure`). | `drift-pass.test.ts` "a sweep that spans passes": two passes, no node skipped, the mark moves after the last page; a change behind the cursor is read on the next sweep (the coordinator's test); the cursor survives a new pass over a fresh port; a stale cursor restarts. Red by mutation: with the cap out of `sweepWatermark`, `expected '…08:50:00.000Z' to be '…08:15:00.000Z'` |
 | 7 | The malformed count is per issue (round 4 F2) | Test only. | `plan-inbound.test.ts` "four malformed answers to one close never count against another close's first": red with `this.malformed` keyed by `row.workspaceId` (`expected { …(14) } to match object { state: 'closed', actedAt: null }`) |
@@ -53,9 +56,12 @@ Tests for a pure function written after its pass-level test (`restoreHoldVerdict
 - **D-8734, drift-cursor-and-return-tables.** Migration 97: `linear_drift_cursors` and `linear_inbound_notes`. The margin
   `DRIFT_SWEEP_MARGIN_MS` is ccrc's clock against Linear's `updatedAt`; a skew larger than five minutes with ccrc ahead would
   narrow it, and nothing measures Linear's clock (Linear's `updatedAt` order is unmeasured too, so nothing relies on it).
-- **D-8735, inbound-retired.** As in the table. A retired row keeps its `reason` (a close's reason stays a close's reason);
-  the retire's cause is not stored.
+- **D-8735, inbound-retired.** As in the table, amended by fix round 1 (F4). A retired row keeps its `reason` (a close's
+  reason stays a close's reason); the retire's cause is stored in `linear_inbound.retiredWhy` (`completed`, `canceled`,
+  `ccrc-own`, `moved-out`), and a reopen clears it. An issue that left the managed teams is retired `moved-out`: the doors
+  re-read it by id and the lane re-reads unseen open rows at a bounded interval (below).
 - **D-8736, w4fu-words.** `plan-inbound-v1` and `no-linear-owner`; a dismiss of a drift item answers the existing `not-open`.
+  It states spec §7.4's Hand change (fix round 1, A4).
 
 ## Decisions the brief left to the build
 
@@ -66,6 +72,7 @@ Tests for a pure function written after its pass-level test (`restoreHoldVerdict
 - **`targetDate` and `sortOrder` name Linear's side** (item 9): closed-grammar scalars, neither free text nor ids. An
   initiative's `status` names no Linear side: the directory cannot confirm it.
 - **A held target that is also moot answers `moot`** (item 1): only a target that would otherwise be sent becomes `deferred`.
+  Fix round 1 (A3) made the code follow this: the moot check runs before both holds (`restoreTargetVerdict`).
 - **A restore deferred in an earlier pass of a continuing sweep** (item 6) is carried in the cursor (`newest` equal to
   `since`, which no real read gives, since Linear returns only nodes newer than `since`), so the sweep's end leaves the
   watermark at `since`; a finished sweep that ended on a deferral deletes its cursor and keeps the old watermark.
@@ -89,15 +96,54 @@ lines, so the second lander keeps both); `shared/plan.ts` (consent given to wave
 ## Suites run (fleet slice, `--maxWorkers=2`, ≤ 12 files a command)
 
 - drift-pass, drift-policy, plan-inbound, plan-sync, plan-sync-lane, plan-sync-lifecycle, plan-sync-policy, plan-sync-owned,
-  plan-sync-description, plan-dispatch-wait, plan-dispatch-route, linear-items: 506 passed.
+  plan-sync-description, plan-dispatch-wait, plan-dispatch-route, linear-items: 506 passed; 555 at the fix round 1 tip.
 - plan-store, plan-routes, plan-policy, plan-vocabulary, ccrc-api, census-w3/claimant, ledgers-policy, ledgers-store,
-  refusal-status, single-definition/plan, single-definition/refusal-table, server-caps: 599 passed.
+  refusal-status, single-definition/plan, single-definition/refusal-table, server-caps: 599 passed; 604 at the fix round 1
+  tip.
 - overlord-other-lanes-census, -pin, -routes, hierarchy-routes, lane-schedule, linear-proxy-routes,
   single-definition/vocabularies, single-definition/done-test-reader, run-close-switch, mail-routes, public-text,
-  plan-phases: 559 passed.
+  plan-phases: 560 passed (corrected in fix round 1, A5: measured again at the new tip; the reviewer measured 560 too).
 - The guard suites (growth-check, growth-caps, deviation-refs, anchors, citations, token-shared, auth-gate,
   box-token-census, ccrc-api-closed, topology-clean, oss-metadata, ownership), coord-db alone, the PWA's refusal-words
   suite, and the server typecheck: see the PR body for the final counts at the pushed tip.
+
+## Fix round 1 (review run 2457)
+
+Each fix has a test seen red first, against the code before it or, for a test-only fix, by mutating the guarded line and
+restoring it from a saved copy.
+
+| # | What changed | Test (red measured) |
+|---|---|---|
+| F1 | Test only: the round 5 skip's call site in the compare loop (`syncWroteSince`). The item 4 row's citation is corrected. | `drift-pass.test.ts` "the skip of a node a sync write moved has a test that goes red without it (review 2457 F1)": no grace stamp, no due mark, no unrestorable event, no item; all three red with the call deleted |
+| F2 | The take door's choice is `handedRowOf` (`planPolicy.ts`, L1): the only row, else the programme home's workspace's, else none. | `plan-inbound.test.ts` "the take door chooses between two handed rows of one identifier (review 2457 F2)": the home's row is taken and the other stays handed; a home that does not decide, or none, answers `issue-not-inbound` with no binding, no row moved and no mail. Red against `handedRows[0]` (3 tests, e.g. `expected [ 200, '' ] to deeply equal [ 409, 'issue-not-inbound' ]`) |
+| F3 | The restore comment passes `publicTextVerdict` with each binding's project linking mode and team key (`textRefusalOf`, `textFactsOf`, `planSyncPolicy.ts`, the one owner the sync steps use too; `restoreCommentChoice`, `driftPolicy.ts`). Refused, the fields are still restored and the comment is the fallback sentence naming only the fields (`restoreFallbackCommentOf`). The refusal is told as the sync step's text refusals are: one owner mail per object, no Linear write of the text. A milestone's Restored line already names only fields (pinned). | `drift-pass.test.ts` "the restore comment is public text (review 2457 F3)": a refused name gives the fallback, the fields restored, the refusal told once; a clean name gives the valued comment; a private project is not checked. Red before the fix |
+| F4 | A stored row whose issue left the managed teams is retired `moved-out`. (1) `plan take` and `plan triage` re-read each candidate row's issue by id BEFORE the run writers' mutex (`PlanRouteOpts.inboundRecheck`, wired in `server.ts` to `DriftPass#recheckInbound`, the inbound lane's by-id `issueOwned` read through the one rate service; a 401 goes to `keyRefusedByRead`), judged in L1 (`inboundRecheckOf`, `inboundDoorVerdict`): moved out, completed, canceled or not found, the row is retired with its cause and the door refuses `issue-not-inbound`, binding nothing. The close's `act` re-reads before its comment and cancel: moved out, it retires the row and writes nothing in Linear. (2) After each workspace pass's `detect`, `InboundLane#recheckStored` re-reads by id the open stored rows the pass did not see, each at most once per `INBOUND_RECHECK_MS` (6 hours), at most `INBOUND_RECHECK_MAX_PER_PASS` (20) a pass, the longest unchecked first; the last-read time is in memory only. (3) A retire writes only the state and the cause on the existing row (`retireInbound`, the one writer); the re-read's answer is used and dropped. (4) A moved-out issue read open in a managed team again is reopened (`waiting`, the cause cleared) and its owner mailed once more. | `plan-inbound.test.ts` "the doors re-read the issue by id and retire a row whose issue left the managed teams": each take body and triage decision, not-found and completed, still managed, unmeasured, a 401, no reader, both close paths (mutation: the take gate out, 7 red; the triage gate, 6; the re-read in `act`, 3). "the lane retires an open stored row whose issue moved out, within a named interval": not before the interval then once; every open state; a failed read; a 401; the move back in reopened and mailed; the re-read stores nothing of the issue (row fields unchanged, no other row, no text in any table, no log line) (mutation: the call after `detect` out, 6 red; the interval at 0, 8). "every retire writes its cause, and a reopen clears it" (red before: `expected [ undefined, undefined, undefined ] to deeply equal [ 'completed', 'canceled', 'ccrc-own' ]`) |
+| A1 | Test only. | `drift-pass.test.ts` "a key that recovers starts the read ladder from its first step again (A1)": red with `keyReadAnswered` deleted from the pass, and with `PlanSync#keyReadAnswered` a no-op |
+| A2 | Test only. | `drift-pass.test.ts` "a graced re-read answered 401 holds the key for both lanes and restores nothing (A2)": red with the `keyRefusedByRead` call there deleted |
+| A3 | `restore` decides moot first, for the per-target hold and the failure-held programme row (`restoreTargetVerdict`, L1: `moot`, `defer` or `send`); a held programme reads its snapshot read-only and sends nothing. | `drift-pass.test.ts` "a held target that is also moot answers moot (review 2457 A3)": failure-held and key-refused, a moot target is moot and a target to send deferred; a held, moot target does not hold its kind's watermark; a held target to send still does. Red before the fix |
+| A4 | D-8736 states spec §7.4's Hand change (plan amendment, wave 5's consent, mail 24086). | — |
+| A5 | The third suite group's figure: 560 at the new tip (above). | — |
+| A6 | A retire deletes the row's stored inbound note in the same transaction (`retireInboundInTx`/`retireInbound`, `planStore.ts`, the one retire; a row not retirable now is left as it is). | `plan-inbound.test.ts` "a retire deletes the row's stored inbound note (review 2457 A6)" (red before: `expected { kind: 'returned', …(3) } to be null`); `plan-store.test.ts` "the one retire of an inbound row" (mutation: the note delete out, 2 red; the retirable guard out, 1) |
+
+**The re-read's cost per pass** (F4 part 2). The pass runs every `DRIFT_PASS_MS` (30 minutes), so with N open stored rows a
+workspace pays N reads per 6 hours: N/12 reads a pass on average, never more than 20 in one pass. After a restart (the
+last-read times are in memory) the first passes read at most 20 rows each until every row is read once. While Linear or
+the key fails, one read a pass: the first read that cannot be made ends the walk. Every read is one rate-service call on
+lane `sync`, like the pass's own.
+
+**Decisions the rulings left to the build:**
+
+- **A door's read that cannot be made** (no reader wired, no key or slot, Linear or the key refused) refuses `unreachable`,
+  the Linear read's existing 503, only for a decision that binds the issue (a take into an epic, an Upkeep placement, a
+  hand), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, because the close's `act`
+  re-reads before it writes in Linear and the next read retires the row.
+- **An issue Linear no longer answers** (`not-found`: deleted, or out of the key's sight) is no issue in a managed team,
+  so it is retired `moved-out`. A workspace with no managed team now is not judged: no call is made.
+- **A restore comment's refusal** is told by owner mail, once per object, as the sync's text refusals are, and writes no
+  `linear_events` row (the refused text is not stored). A programme binding's comment is judged by every epic's project's
+  facts; an unknown project is mode `unknown`, public.
+- **The retire rule and its words** (`RETIRE_WHYS`, `inboundRetirable`) live in `server/src/linear/inboundRetire.ts`, L1,
+  so the plan store and the inbound policy both reach them without importing each other.
 
 ## Carried, not built here
 

@@ -14,6 +14,7 @@ import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { withCcrcProvenance } from './hierarchyOps.js';
 import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
 import type { InboundNote, InboundRow } from '../coord/planStore.js';
+import { inboundRetirable, type RetireWhy } from './inboundRetire.js';
 import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
@@ -216,10 +217,9 @@ export function raisedItemInput(row: InboundText, note: string | undefined): Rai
 
 // ── Retirement (round 4 F1, round 5 F2; D-8735) ──
 
-/** The states a stored row may be retired from: a row the owner, a coordinator or the operator still has to act on, and a close
- *  not yet written to Linear. `taken` and `placed` are bound tickets (the drift pass's, never this lane's). */
-const RETIRABLE: ReadonlySet<string> = new Set(['waiting', 'mailed', 'handed', 'raised', 'closed']);
-export type RetireWhy = 'completed' | 'canceled' | 'ccrc-own';
+/** Which rows may be retired, and why a row was, are `inboundRetire.ts`'s (`inboundRetirable`, `RETIRE_WHYS`): the store's one retire asks
+ *  the same rule. */
+export type { RetireWhy };
 export type InboundRetireVerdict = { kind: 'keep' } | { kind: 'retire'; why: RetireWhy } | { kind: 'reopen' };
 
 /** What a pass that read a STORED row's issue does with the row (D-8735). `detect` upserts only open issues, so without this a
@@ -232,7 +232,7 @@ export function inboundRetireVerdict(
   row: Pick<InboundRow, 'state' | 'actedAt'>, o: { stateType: string; own: boolean; inbound: boolean },
 ): InboundRetireVerdict {
   if (row.state === 'retired') return o.inbound ? { kind: 'reopen' } : { kind: 'keep' };
-  if (!RETIRABLE.has(row.state) || (row.state === 'closed' && row.actedAt !== null)) return { kind: 'keep' };
+  if (!inboundRetirable(row)) return { kind: 'keep' };
   if (o.own) return { kind: 'retire', why: 'ccrc-own' };
   if (o.stateType === 'completed' || o.stateType === 'canceled') return { kind: 'retire', why: o.stateType };
   return { kind: 'keep' };
@@ -253,4 +253,56 @@ export function inboundReopenedMail(row: InboundText, iso: string): { subject: s
     subject: `Linear inbound: ${row.identifier} was reopened (${iso})`,
     body: [`The issue ${row.identifier} was completed or canceled and is open again in Linear, so it waits for your triage once more.`, first.body].join('\n\n'),
   };
+}
+
+
+// ── The re-read of a stored row by id (review 2457 F4, D-8733) ──
+
+/** How long a stored open row waits between two by-id re-reads of its issue (D-8733). In this process's memory only: a restart costs
+ *  one read per row. The worst cost per pass is `rows due / (interval / pass period)` on average, and never more than
+ *  `INBOUND_RECHECK_MAX_PER_PASS` reads in one pass. */
+export const INBOUND_RECHECK_MS = 6 * 3_600_000;
+/** The most rows one pass re-reads (the longest unchecked first), so a restart with many open rows does not spend a burst of reads at
+ *  once: the rest wait for the next pass. */
+export const INBOUND_RECHECK_MAX_PER_PASS = 20;
+
+/** What the by-id re-read of a stored row's issue means (decided here, read by the lane and the doors): still open in a managed team,
+ *  to be retired with a cause, or not measured. The answer is used and dropped: no field of the issue is kept. */
+export type InboundRecheck = { kind: 'managed' } | { kind: 'retire'; why: RetireWhy } | { kind: 'unmeasured'; word: string | null };
+
+/** The by-id read of an issue, judged against the workspace's managed teams (D-8733: inbound counts only issues now in a managed
+ *  team). `null` is the issue Linear no longer shows (`not-found`: deleted, or out of the key's sight), which is no issue in a managed
+ *  team either (with no managed team in the workspace at all, nothing is judged). An issue in a team that is not managed is `moved-out` (the scope rule, before its state); a completed or canceled one
+ *  in a managed team is retired by that state, as `inboundRetireVerdict` does for a node the changed read returned. An answer without
+ *  the two fields is not measured. */
+export function inboundRecheckOf(issue: { teamKey?: unknown; stateType?: unknown } | null, managed: ReadonlySet<string>): InboundRecheck {
+  // a workspace with no managed team now is a state this lane does not judge rows by: nothing is retired on it
+  if (managed.size === 0) return { kind: 'unmeasured', word: null };
+  if (issue === null) return { kind: 'retire', why: 'moved-out' };
+  const { teamKey, stateType } = issue;
+  if (typeof teamKey !== 'string' || typeof stateType !== 'string') return { kind: 'unmeasured', word: 'malformed' };
+  if (!managed.has(teamKey.toUpperCase())) return { kind: 'retire', why: 'moved-out' };
+  if (stateType === 'completed' || stateType === 'canceled') return { kind: 'retire', why: stateType };
+  return { kind: 'managed' };
+}
+
+/** The rows the lane re-reads in this pass: open stored rows (`inboundRetirable`) the pass's changed read did not return, never
+ *  checked or last checked a whole interval ago, the longest unchecked first, at most `max`. */
+export function inboundRecheckDue<R extends Pick<InboundRow, 'linearId' | 'state' | 'actedAt'>>(
+  rows: readonly R[], seen: ReadonlySet<string>, checkedAt: ReadonlyMap<string, number>, now: number, max: number = INBOUND_RECHECK_MAX_PER_PASS,
+): R[] {
+  const due = rows.filter((r) => inboundRetirable(r) && !seen.has(r.linearId) && now - (checkedAt.get(r.linearId) ?? Number.NEGATIVE_INFINITY) >= INBOUND_RECHECK_MS);
+  return due.sort((a, b) => (checkedAt.get(a.linearId) ?? Number.NEGATIVE_INFINITY) - (checkedAt.get(b.linearId) ?? Number.NEGATIVE_INFINITY)).slice(0, max);
+}
+
+/** What a door (`plan take`, `plan triage`) does with a row once its issue was re-read: act as before; retire the row and refuse
+ *  `issue-not-inbound` (nothing is bound, whatever the decision was); or, when the read could not be made, refuse `unreachable` for a
+ *  decision that BINDS the issue into a plan (`binds`: a take into an epic, an Upkeep placement, a hand), so a moved-out issue is
+ *  never bound unseen. A decision that only moves the row (a close, a raise, a return) goes on: the lane's close re-reads before it
+ *  writes anything in Linear (`act`), and the row is retired by the next read that can be made. The word is the Linear read's
+ *  existing one (the Connect routes' 503: Linear did not answer, a retry helps). */
+export type InboundDoorVerdict = { kind: 'go' } | { kind: 'retire'; why: RetireWhy; word: 'issue-not-inbound' } | { kind: 'refuse'; word: 'unreachable' };
+export function inboundDoorVerdict(answer: InboundRecheck | undefined, binds: boolean): InboundDoorVerdict {
+  if (answer === undefined || answer.kind === 'unmeasured') return binds ? { kind: 'refuse', word: 'unreachable' } : { kind: 'go' };
+  return answer.kind === 'managed' ? { kind: 'go' } : { kind: 'retire', why: answer.why, word: 'issue-not-inbound' };
 }

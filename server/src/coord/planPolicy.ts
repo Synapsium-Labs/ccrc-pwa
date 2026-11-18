@@ -760,6 +760,14 @@ export function ccrcIssueIds(bindings: ReadonlyArray<Pick<BindingRow, 'localKind
   return ids;
 }
 
+/** `plan take`'s choice among the rows handed to a programme under one identifier (review 2457 F2, round 4 A2): the only row, else
+ *  the one of the programme home's workspace; when the home does not decide (no home, or a workspace no row holds), none is chosen,
+ *  never a guess. */
+export function handedRowOf<R extends Pick<InboundRow, 'workspaceId'>>(rows: readonly R[], homeWorkspace: string | null): R | null {
+  if (rows.length === 1) return rows[0]!;
+  return homeWorkspace === null ? null : rows.find((x) => x.workspaceId === homeWorkspace) ?? null;
+}
+
 /** An inbound issue's reporter text, cut visibly to the plan's ticket bounds before it is stored (D-8705): the title to
  *  `PLAN_BOUNDS.titleChars` code points, the body to `PLAN_BOUNDS.bodyBytes` UTF-8 bytes, never splitting a code point. A
  *  title's cut ends with `…`; a body's cut ends with a line holding `…`. Text inside its bound is returned unchanged. */

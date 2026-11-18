@@ -3703,9 +3703,11 @@ export const MIGRATIONS: readonly string[] = [
   // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
   // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this
   // build, D-8735: a word in a TEXT column, no schema change, and an older build reads such a row as a state none of its sweeps
-  // select.)
+  // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
+  // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
   //
-  // NEW TABLES ONLY, rule 3: an older build opening a file at `user_version 97` warns, reads as-is, names neither and boots.
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 97` warns, reads as-is, names none of these and boots
+  // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
   // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, so this,
   // the second lander, takes 97. RE-MEASURE the slot before the PR and before merge (it must print 96 before this entry is counted):
   //     git fetch origin main
@@ -3714,6 +3716,7 @@ export const MIGRATIONS: readonly string[] = [
   CREATE TABLE linear_drift_cursors (workspaceId TEXT NOT NULL, kind TEXT NOT NULL, since TEXT NOT NULL, after TEXT NOT NULL,
     newest TEXT, startedAt INTEGER NOT NULL, PRIMARY KEY (workspaceId, kind));
   CREATE TABLE linear_inbound_notes (linearId TEXT PRIMARY KEY, kind TEXT NOT NULL, program TEXT, note TEXT, at INTEGER NOT NULL);
+  ALTER TABLE linear_inbound ADD COLUMN retiredWhy TEXT;
   `,
 ];
 

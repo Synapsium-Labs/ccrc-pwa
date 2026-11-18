@@ -21,12 +21,16 @@ import { tx } from '../coord/tx.js';
 import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
-import { answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRetireVerdict, keyWaitMail, noCancelMail, ownerItemInput, type InboundHold } from './inboundPolicy.js';
+import {
+  answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckOf, inboundRetireVerdict,
+  keyWaitMail, noCancelMail, ownerItemInput, type InboundHold, type InboundRecheck, type RetireWhy,
+} from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
 import { uuidOf } from './planSyncPolicy.js';
 import type { DriftPassDeps } from './driftPass.js';
+import type { LinearStoreRead } from './store.js';
 
 type Deps = Pick<DriftPassDeps, 'coord' | 'plan' | 'planSync' | 'readLinearStore' | 'call' | 'now' | 'presenceOf' | 'viaFleet' | 'directory'>;
 type Node = Record<string, unknown>;
@@ -49,6 +53,9 @@ export class InboundLane {
   /** Each close's own count of malformed answers, by its issue's linearId: what the give-up counts (review 2408 F2), as the plan
    *  sync counts a binding's. In this process, as `holds` is; a close done whole or given up drops its count. */
   private readonly malformed = new Map<string, number>();
+  /** When each open stored row's issue was last read, by its linearId: by a pass's changed read or by this lane's own by-id re-read
+   *  (`recheckStored`). In memory like `holds` (D-8733): nothing new is stored, and a restart costs one read per row. */
+  private readonly checked = new Map<string, number>();
 
   constructor(private readonly deps: Deps) {}
 
@@ -74,12 +81,12 @@ export class InboundLane {
       const stored = this.deps.plan.inboundOf(f.linearId);
       if (stored !== null) {
         const v = inboundRetireVerdict(stored, { stateType: f.stateType, own: bound.has(f.linearId) || viaFleet.has(f.identifier), inbound });
-        if (v.kind === 'retire') { this.retire(stored, now); continue; }
+        if (v.kind === 'retire') { this.retire(stored, v.why, now); continue; }
         if (v.kind === 'reopen') {
           // the row's `reason` is a close's and stays; the reopen is a note (review of d4c372f12), written with the state
           const { plan, coord } = this.deps;
           tx(coord.db, () => {
-            plan.setInboundState(f.linearId, { state: 'waiting', mailedTo: null, mailedAt: null, handedTo: null, itemId: null });
+            plan.setInboundState(f.linearId, { state: 'waiting', mailedTo: null, mailedAt: null, handedTo: null, itemId: null, retiredWhy: null });
             plan.setInboundNote(f.linearId, { kind: 'reopened', at: now });
           });
         }
@@ -89,16 +96,77 @@ export class InboundLane {
     }
   }
 
-  /** A stored row leaves the lane (D-8735). A `raised` row's open or checking operator item settles in the same transaction as
-   *  the state, so no item is left asking about an issue that is gone. */
-  private retire(row: InboundRow, now: number): void {
+  /** A stored row leaves the lane (D-8735) with its cause: the state, `retiredWhy` and the deletion of its stored note are one act
+   *  (`retireInboundInTx`, review 2457 A6). A `raised` row's open or checking operator item settles in the same transaction, so no
+   *  item is left asking about an issue that is gone. Writes nothing of the issue that was read: only the state and the cause. */
+  private retire(row: InboundRow, why: RetireWhy, now: number): void {
     const { coord, plan } = this.deps;
-    const write = (): void => plan.setInboundState(row.linearId, { state: 'retired' });
     const item = row.state === 'raised' && row.itemId !== null ? coord.itemById(row.itemId) : null;
     if (item !== null && (item.state === 'open' || item.state === 'checking')) {
-      coord.moveItemWithMail(item.id, 'settle', 'ccrc', { note: 'The issue is no longer inbound in Linear.' }, now, { programmeHasOpenRun: false }, write);
+      coord.moveItemWithMail(item.id, 'settle', 'ccrc', { note: 'The issue is no longer inbound in Linear.' }, now, { programmeHasOpenRun: false }, () => plan.retireInboundInTx(row.linearId, why));
     } else {
-      tx(coord.db, write);
+      plan.retireInbound(row.linearId, why);
+    }
+  }
+
+  // ── The by-id re-read of a stored row (review 2457 F4, D-8733) ──
+
+  /** The workspace's managed team keys, upper-case. */
+  private managedOf(workspaceId: string): Set<string> {
+    return new Set(this.deps.plan.managedTeams().filter((m) => m.workspaceId === workspaceId).map((m) => m.teamKey.toUpperCase()));
+  }
+
+  /** ONE by-id read of a stored row's issue, through the one rate service, judged by `inboundRecheckOf`. It reads the issue and
+   *  drops it: no field of it is kept, written or logged here. No side effect: a caller makes what a refused key means (the one
+   *  owner, `keyRefusedByRead`, or the close's own `refused`). A workspace whose key is refused now is not asked. */
+  private async readById(row: InboundRow, slot: SlotInfo): Promise<InboundRecheck> {
+    const { planSync } = this.deps;
+    const managed = this.managedOf(row.workspaceId);
+    if (managed.size === 0) return inboundRecheckOf({}, managed);                    // no managed team now: nothing is judged, nothing is asked
+    if (planSync.keyBlockedUntil(row.workspaceId) > this.deps.now()) return { kind: 'unmeasured', word: 'linear-unauthorised' };
+    const out = await this.deps.call({
+      op: 'issueOwned', pass: 'drift-restore', lane: 'sync', slot: slot.ref, workspaceId: row.workspaceId, teamKey: row.teamKey, target: null, fields: [], input: { id: row.linearId },
+    });
+    if (!out.ok) return out.word === 'not-found' ? inboundRecheckOf(null, managed) : { kind: 'unmeasured', word: out.word };
+    const issue = out.value['issue'];
+    return inboundRecheckOf(issue !== null && typeof issue === 'object' && !Array.isArray(issue) ? issue as Node : {}, managed);
+  }
+
+  /** A refused key on a re-read goes to the plan sync's one owner, as the pass's reads do (A-3). */
+  private noteKey(row: InboundRow, slot: SlotInfo, answer: InboundRecheck): void {
+    if (answer.kind === 'unmeasured' && answer.word === 'linear-unauthorised' && this.deps.planSync.keyBlockedUntil(row.workspaceId) <= this.deps.now()) {
+      this.deps.planSync.keyRefusedByRead(row.workspaceId, slot);
+    }
+  }
+
+  /** The doors' re-read (`plan take`, `plan triage`): the stored row's issue, by id. An unmeasured answer is any case the read
+   *  could not be made (no key, no slot, Linear or the key refused). */
+  async recheck(row: InboundRow): Promise<InboundRecheck> {
+    const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
+    const slot = slotsOf(store).get(row.workspaceId);
+    if (slot === undefined) return { kind: 'unmeasured', word: null };
+    const answer = await this.readById(row, slot);
+    this.noteKey(row, slot, answer);
+    return answer;
+  }
+
+  /** After a workspace pass: each open stored row (`inboundRetirable`) the pass's changed read did not return is read by id, at most
+   *  once per `INBOUND_RECHECK_MS` and at most `INBOUND_RECHECK_MAX_PER_PASS` rows a pass, and retired `moved-out` (or completed or
+   *  canceled) when its issue no longer reads open in a managed team. A row the changed read returned counts as read now (`detect`
+   *  judged it). The first read that cannot be made ends the walk: Linear or the key is the trouble for the whole workspace, so a
+   *  failure costs one read a pass. */
+  async recheckStored(workspaceId: string, slot: SlotInfo, seen: ReadonlySet<string>, now: number): Promise<void> {
+    const rows = this.deps.plan.inboundByState(workspaceId, ['waiting', 'mailed', 'handed', 'raised', 'closed']);
+    const open = new Set(rows.map((r) => r.linearId));
+    for (const id of this.checked.keys()) if (!open.has(id)) this.checked.delete(id);
+    for (const id of seen) if (open.has(id)) this.checked.set(id, now);
+    for (const row of inboundRecheckDue(rows, seen, this.checked, now)) {
+      const answer = await this.readById(row, slot);
+      if (answer.kind === 'unmeasured') { this.noteKey(row, slot, answer); return; }
+      this.checked.set(row.linearId, now);
+      if (answer.kind !== 'retire') continue;
+      const fresh = this.deps.plan.inboundOf(row.linearId);
+      if (fresh !== null) this.retire(fresh, answer.why, now);
     }
   }
 
@@ -207,6 +275,11 @@ export class InboundLane {
       await planSync.withFlight(`inbound:${row.linearId}`, async () => {
         const fresh = plan.inboundOf(row.linearId);
         if (fresh === null || fresh.state !== 'closed' || fresh.actedAt !== null) return;
+        // the issue is re-read by id first (review 2457 F4): one that left the managed teams is retired and nothing is written in
+        // Linear; a read that cannot be made is a refused step of the close (the same words, holds and mails), and writes nothing
+        const seen = await this.readById(fresh, slot);
+        if (seen.kind === 'retire') { this.retire(fresh, seen.why, this.deps.now()); return; }
+        if (seen.kind === 'unmeasured') { if (seen.word !== null) this.refused(fresh, { word: seen.word }, slot); return; }
         const base = { pass: 'inbound', lane: 'sync', slot: slot.ref, workspaceId: row.workspaceId, teamKey: row.teamKey, target: row.identifier } as const;
         const comment = await this.deps.call({
           ...base, op: 'issueComment', fields: ['body'],

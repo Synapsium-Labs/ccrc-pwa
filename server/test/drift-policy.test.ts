@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent,
   restoreComment, restoredDescription, restoredLine, withoutRestoredLines, type OwnedFields,
-  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreHoldVerdict, restoreSides, syncWroteSince, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
+  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreCommentChoice, restoreFallbackCommentOf, restoreHoldVerdict, restoreSides, restoreTargetVerdict, syncWroteSince, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
   UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, restorableFields,
   DRIFT_KEEP_NOTE, DRIFT_SWEEP_MARGIN_MS, closedByKeep, driftCursorAfterFailure, handRoute, sweepStep, sweepWatermark,
 } from '../src/linear/driftPolicy.js';
@@ -493,5 +493,39 @@ describe('handRoute (A-7)', () => {
     expect(handRoute({ upkeep: true, coordinator: null, owner: null })).toEqual({ to: 'none' });
     expect(handRoute({ upkeep: true, coordinator: null, owner: { id: null, gone: true } })).toEqual({ to: 'none' });
     expect(handRoute({ upkeep: false, coordinator: null, owner: { id: 'owner-b', gone: true } })).toEqual({ to: 'none' });
+  });
+});
+
+// Review 2457 A3: a held target that is also moot answers moot; only a target that would otherwise be sent is deferred.
+describe('restoreTargetVerdict (review 2457 A3)', () => {
+  it('moot comes first, held or not', () => {
+    expect(restoreTargetVerdict({ moot: true, programmeHeld: false, targetHeld: false })).toBe('moot');
+    expect(restoreTargetVerdict({ moot: true, programmeHeld: true, targetHeld: false })).toBe('moot');
+    expect(restoreTargetVerdict({ moot: true, programmeHeld: false, targetHeld: true })).toBe('moot');
+    expect(restoreTargetVerdict({ moot: true, programmeHeld: true, targetHeld: true })).toBe('moot');
+  });
+  it('a target to send is deferred by either hold, and sent with none', () => {
+    expect(restoreTargetVerdict({ moot: false, programmeHeld: true, targetHeld: false })).toBe('defer');
+    expect(restoreTargetVerdict({ moot: false, programmeHeld: false, targetHeld: true })).toBe('defer');
+    expect(restoreTargetVerdict({ moot: false, programmeHeld: false, targetHeld: false })).toBe('send');
+  });
+});
+
+// Review 2457 F3: the restore comment's fallback names the fields only; the choice follows the public-text check.
+describe('the restore comment under the public-text check (review 2457 F3)', () => {
+  const AT = Date.parse('2026-11-18T12:00:00Z');
+  it('the fallback names the fields and the day and no value', () => {
+    const body = restoreFallbackCommentOf('issue', ['projectId', 'title'], AT);
+    expect(body).toContain("ccrc restored this issue's project. It had been changed on 2026-11-18.");
+    expect(body).toContain("ccrc restored this issue's title. It had been changed on 2026-11-18.");
+    expect(body).toContain(LINEAR_CCRC_PROVENANCE_LINE.trim());
+  });
+  it('a refusal chooses the fallback and says so; a pass keeps the valued body', () => {
+    const c = { body: 'valued', fallbackBody: 'fallback' };
+    expect(restoreCommentChoice(c, null)).toEqual({ body: 'valued', refused: false });
+    expect(restoreCommentChoice(c, 'tracker id')).toEqual({ body: 'fallback', refused: true });
+  });
+  it("a milestone's Restored line names the fields, never a value", () => {
+    expect(restoredLine(['name', 'targetDate'], AT)).toBe("Restored on 2026-11-18: ccrc put back this milestone's name and target date.");
   });
 });

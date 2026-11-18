@@ -167,6 +167,15 @@ export function restoreHoldVerdict(o: { programmeHeldUntil: number | null; relea
   return o.programmeHeldUntil !== null || o.releaseAt > o.now ? 'defer' : 'send';
 }
 
+/** What a restore does with one target (review 2457 A3, the note's decision): a target that is moot (its binding is gone, no longer
+ *  bound, or its fingerprint is no longer the one the pass read, so a sync write landed first) answers `moot` FIRST, held or not, so
+ *  a moot target never holds its kind's watermark; only a target that would otherwise be sent is `defer`red by a hold (the
+ *  programme row's failure hold, the target's workspace or key hold), and a held programme still SENDS nothing. */
+export function restoreTargetVerdict(o: { moot: boolean; programmeHeld: boolean; targetHeld: boolean }): 'moot' | 'defer' | 'send' {
+  if (o.moot) return 'moot';
+  return o.programmeHeld || o.targetHeld ? 'defer' : 'send';
+}
+
 /** Whether a workspace's drift read may go now: not while its key's refusal stands (the plan sync's one owner of that hold, A-3).
  *  The tick takes the next workspace instead, so one blocked key never starves the others. */
 export function driftReadHeld(keyBlockedUntil: number, now: number): boolean { return keyBlockedUntil > now; }
@@ -451,6 +460,18 @@ export function restoreComment(kind: DriftKind, field: string, planned: string |
 export function restoreCommentOf(kind: DriftKind, changes: readonly { field: string; planned: string | null; was: string | null }[], at: number): string {
   const body = `${changes.map((c) => sentenceOf(kind, c.field, c.planned, c.was, at)).join(' ')} ${TAIL}`;
   return withCcrcProvenance(egress(body));
+}
+
+/** The restore comment's fallback (review 2457 F3): ccrc's own fixed sentences naming the fields restored and the day, no value from
+ *  either side. Sent in place of the valued comment when `publicTextVerdict` refuses that one. */
+export function restoreFallbackCommentOf(kind: DriftKind, fields: readonly string[], at: number): string {
+  return restoreCommentOf(kind, fields.map((field) => ({ field, planned: null, was: null })), at);
+}
+
+/** The restore comment to send (review 2457 F3): the valued one, unless the public-text check refused it (`refusal`, the check's
+ *  class, null when it passed), when the fallback goes; `refused` tells the caller to record the refusal. */
+export function restoreCommentChoice(c: { body: string; fallbackBody: string }, refusal: string | null): { body: string; refused: boolean } {
+  return refusal === null ? { body: c.body, refused: false } : { body: c.fallbackBody, refused: true };
 }
 
 /** The Restored line a milestone's description takes for the field(s) put back: every one is named, `a, b and c` (a line a restore

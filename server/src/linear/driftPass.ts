@@ -28,7 +28,7 @@
  * raises the operator's item at once; so does a refused restore and the third restore of one binding within a week.
  */
 import type { CoordStore } from '../coord/store.js';
-import type { BindingRow, DriftCursor, DriftKindWord, DriftWatermarks, PlanStorePort } from '../coord/planStore.js';
+import type { BindingRow, DriftCursor, DriftKindWord, DriftWatermarks, InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { linearOwnerOfProject } from '../coord/planPolicy.js';
 import { HIERARCHY_ITEM_REFUSALS, type HierarchyItemRefusal } from '../../../shared/refusal.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
@@ -46,13 +46,14 @@ import {
   DRIFT_PASS_MS, DRIFT_PERSIST, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, syncWroteSince, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
   graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
   shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
-  DRIFT_KEEP_NOTE, closedByKeep, driftCursorAfterFailure, handRoute, sweepStep,
+  DRIFT_KEEP_NOTE, closedByKeep, driftCursorAfterFailure, handRoute, restoreFallbackCommentOf, sweepStep,
 } from './driftPolicy.js';
 import { PLAN_SYNC_CALL_TIMEOUT_MS, slotsOf, type PlanSync, type RestoreOutcome, type RestoreTarget, type SlotInfo } from './planSync.js';
 import { requestIdOf, type PlannedOwned } from './planSyncPolicy.js';
 import type { LinearStoreRead } from './store.js';
 import type { LinearDirectoryRead } from './directory.js';
 import { InboundLane } from './inboundLane.js';
+import type { InboundRecheck } from './inboundPolicy.js';
 
 /** The most pages of one document a pass follows (a runaway guard): past it the pass keeps a cursor and the next pass goes on
  *  from it (`sweepStep`, review 2408 F3, D-8734). */
@@ -205,6 +206,7 @@ export class DriftPass {
 
     // D-8183: an issue no binding holds, filed in a managed team outside ccrc, is inbound (the lane stores it; the beat mails it).
     this.inbound.detect(ws, read.nodes.issue, managed, now);
+    await this.inbound.recheckStored(ws, slot, new Set(read.nodes.issue.flatMap((n) => (typeof n['id'] === 'string' ? [n['id']] : []))), now);   // review 2457 F4
 
     // One restore per programme key, then each outcome recorded.
     const raise: { binding: BindingRow; kind: DriftKind; key: string; why: DriftRaiseWhy; word: string | null }[] = [];
@@ -407,7 +409,10 @@ export class DriftPass {
     }
     if (!commentDue(plan.lastDriftCommentAt(s.binding.id), now)) return target;      // once a day, item open or not (D-8721)
     const body = restoreCommentOf(s.kind, s.fields.map((f) => ({ field: f, ...restoreSides(f, s.planned[f], s.linear[f], facts) })), now);
-    return { ...target, comment: { body, requestId: requestIdOf(LOCAL_OF[s.kind], s.local.id, ws, `restore-${now}`) } };
+    // The valued body is public text and is checked before it is sent (review 2457 F3, in `PlanSync#restoreComment`, which holds the
+    // project facts); the fallback names the fields only, ccrc's own words.
+    const fallbackBody = restoreFallbackCommentOf(s.kind, s.fields, now);
+    return { ...target, comment: { body, fallbackBody, requestId: requestIdOf(LOCAL_OF[s.kind], s.local.id, ws, `restore-${now}`) } };
   }
 
   // ── The persistent-drift item ──
@@ -504,6 +509,9 @@ export class DriftPass {
     const { plan, presenceOf } = this.deps;
     return linearOwnerOfProject(project, plan.hierarchyProjectsOf(), { latestProgrammeCoordinator: (p) => plan.latestProgrammeCoordinator(p), presence: presenceOf });
   }
+
+  /** A stored inbound row's issue, re-read by id (review 2457 F4, D-8733), for `plan take` and `plan triage`: the inbound lane's own read. */
+  recheckInbound(row: InboundRow): Promise<InboundRecheck> { return this.inbound.recheck(row); }
 }
 
 /** The newest `updatedAt` of a read's nodes, or null when it returned none. */

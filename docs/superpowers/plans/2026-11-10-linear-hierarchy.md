@@ -292,13 +292,20 @@ number from `POST /api/ledger/deviations`.
 - **D-8735 (2026-11-18)** — inbound-retired: `INBOUND_STATES` gains `retired`. A stored row whose issue Linear reads
   completed or canceled, or that turns out ccrc's own (a binding holds it, or a pending ticket's create was sent with its
   id), is retired from `waiting`, `mailed`, `handed`, `raised` or `closed` not yet acted; take, triage and the close refuse
-  it `issue-not-inbound`, and a raised row's open item settles (review run 2427 F1, round 5 F2). An issue reopened later
-  returns to `waiting` and its owner is mailed once more, under a subject carrying the reopen's time. Record: the wave 4
-  follow-ups note.
+  it `issue-not-inbound`, and a raised row's open item settles (review run 2427 F1, round 5 F2). A stored row whose issue
+  moved out of a managed team is retired too, with its own cause, `moved-out` (review run 2457 F4, D-8733's "inbound counts
+  only issues now in a managed team"): take, triage and the close re-read the issue by id before acting and refuse it
+  `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. The retire
+  writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
+  existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
+  `waiting` and its owner is mailed once more, under a subject carrying the reopen's time. Record: the wave 4 follow-ups note.
 - **D-8736 (2026-11-18)** — w4fu-words: the server cap `plan-inbound-v1` (the client refuses `plan.take` and `plan.triage`
   `capability-missing` without it, review run 2427 A1) and the refusal `no-linear-owner` (409: Hand on a persistent-drift
   item whose project has no usable Linear owner; the item stays open, A-7). A dismiss of a `linear-drift` item answers the
-  existing `not-open`, as an action item's tick does (A-1). Record: the wave 4 follow-ups note.
+  existing `not-open`, as an action item's tick does (A-1). This changes spec §7.4's Hand (review run 2457 A4): Hand for an
+  Upkeep binding, or for a programme with no coordinator, now mails the home project's Linear owner, with no programme, in
+  the same transaction as the settle; with no usable owner (none named, or gone) it is refused `no-linear-owner`. Record: the
+  wave 4 follow-ups note.
 
 ## Global Constraints
 
