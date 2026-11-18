@@ -6,9 +6,9 @@
 
 - **What this is.** The design for "Share for review" (#1420). The owner of an uncommitted spec or plan sends a reviewer a private link. The link opens a frozen, read-only copy of the page as the owner saw it, under a "Draft, not committed" banner. Retirement of the standalone reader waits on this feature (the operator's ruling of 2026-10-25: retirement drops no feature).
 - **What is already fixed.** The operator ruled on 2026-10-25 (#1420): the copy is a frozen snapshot taken at share time; the owner sees "newer draft available" and can re-share; nothing reads the live draft through the link. This spec does not re-open that ruling.
-- **What was decided on 2026-11-18.** Readers need no ccrc session: the link is a capability (answered on this wave's ask, the recommended option). Comments are allowed only from someone signed in to the console, and never count as merge approval (answered on this wave's second ask).
+- **What was decided on 2026-11-18.** The coordinator released both product asks to the operator, and both were answered. Readers need no ccrc session: the link is a capability (the recommended option). Comments are allowed, but only from someone signed in to the console, and they never count as merge approval. Comments ship as their own follow-on wave with their own threat model (§3.6), so the core feature does not depend on them.
 - **What this spec decides.** The snapshot is Export's own file (`buildExport`, `ccrc-docs-export/1`), built in the owner's browser and uploaded once. The server keeps it in a new store of its own, outside `coord.db`, never backed up. The link carries its secret in the URL fragment, which browsers never send to a server, a proxy or a link-preview robot, and the secret is posted only when the reader taps "Open draft". A small ccrc page shows the copy in a frame with an empty sandbox. Revoke, expiry, retention and early removal on commit each delete the bytes before they answer.
-- **What changes for the console.** Eight new routes in a new server module. Six are session-gated owner and comment doors; two are open to a link holder: a fixed page and one read door that never touches the fleet box. The auth gate gains a ninth exempt class. Nothing is built in this wave, and nothing is waiting on you.
+- **What changes for the console.** New routes in a new server module: four session-gated owner doors, two session-gated comment doors (the follow-on wave), and two routes open to a link holder, a fixed page and one read door that never touches the fleet box. The auth gate gains a ninth exempt class. Nothing is built in this wave, and nothing is waiting on you.
 
 ## 1. Threat model
 
@@ -154,9 +154,19 @@ The page reads `location.hash`, clears it with `history.replaceState`, and shows
 
 **The read door** (`POST /api/review/open`, body `{token}`) answers 200 with the bytes and three headers (`x-ccrc-review-shared-at`, `x-ccrc-review-version`, `x-ccrc-review-idle-days`), or one identical 404. It sends `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Content-Type: application/octet-stream` and `Content-Disposition: attachment`, and no CORS headers. It reads no cookie and no box token.
 
-### 3.6 Comments from signed-in readers
+### 3.6 Comments from signed-in readers (follow-on wave)
 
-Comments are adopted for signed-in readers only (answered on this wave's ask, 2026-11-18). On the review page, after the copy opens, the page asks the thread door. A 200 means the browser holds a console session: the page shows "Notes from reviewers. Not a pull request review.", the existing notes and a text box. A 401 or `auth-off` hides all three, so a reader without a session sees only the copy.
+The operator adopted comments for signed-in readers only (this wave's ask, released by the coordinator and answered on 2026-11-18). As the coordinator directed for an adopted comment feature, they are a follow-on: the leaf plan's wave R5, after the core waves R1-R4, which neither need nor anticipate them. They carry their own threat model.
+
+| # | Threat | Rule |
+|---|---|---|
+| C1 | An anonymous note, from a link holder or on a dark console | Both comment doors are session-gated and refuse `auth-off` while sign-in is dark |
+| C2 | Stored markup runs in the console | A note is plain text everywhere: React text nodes, never the Markdown component or an HTML sink; control characters other than newline are removed |
+| C3 | Flooding a share | At most 100 notes a share, at most 2000 characters each; only a session can write |
+| C4 | A note read as approval | "Notes from reviewers. Not a pull request review." heads every list; the review module imports no forge or pull-request module (a scan) |
+| C5 | The thread door confirms that a token is live | Only to a signed-in session, which can list every share anyway; unknown tokens get the read door's one 404 |
+
+On the review page, after the copy opens, the page asks the thread door. A 200 means the browser holds a console session: the page shows "Notes from reviewers. Not a pull request review.", the existing notes and a text box. A 401 or `auth-off` hides all three, so a reader without a session sees only the copy.
 
 | Rule | Value |
 |---|---|
@@ -241,8 +251,8 @@ Every new route names its gate under the box-token census rules. None consults t
 | `GET /api/review/shares` (the owner's list, optionally by project, section and path) | Session-gated; links only when armed | `REVIEW_DOORS` | `bad-query` |
 | `POST /api/review/shares/:id/pin` (body `{pinned}`) | Session-gated | `REVIEW_DOORS` | `unknown-share` |
 | `POST /api/review/shares/:id/revoke` | Session-gated; never refused while the share exists | `REVIEW_DOORS` | `unknown-share` |
-| `POST /api/review/thread` (body `{token}`) | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | one 404 for every unknown token |
-| `POST /api/review/comment` (body `{token, text}`) | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | `too-long`, `too-many`, 404 |
+| `POST /api/review/thread` (body `{token}`), wave R5 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | one 404 for every unknown token |
+| `POST /api/review/comment` (body `{token, text}`), wave R5 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | `too-long`, `too-many`, 404 |
 | `POST /api/review/open` (the read) | `EXEMPT`, new class 9 "draft review by capability"; the token in the body is the credential | `REVIEW_DOORS`; `auth-gate.test.ts` class list and number words; README auth paragraph; a never-read scan like the reader lab's (no cookie, no box token, no fleet port, no ccd argv) | one identical 404 for every failure; 429 `busy` past 4 streaming reads |
 | `GET /review` (the review page) | `EXEMPT`, class 9 | As the read door | none |
 
@@ -254,8 +264,8 @@ Technical choices are decided here with their reason. The two product choices we
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
-| X3-1 | Access model | Capability link; signed-in only; both; link plus passcode | Capability link, token in the fragment, posted after a tap (§3.5) | Ruled |
-| X3-2 | Reviewer comments | None; anonymous comments; signed-in comments | Signed-in comments only, plain text, never merge approval (§3.6) | Ruled |
+| X3-1 | Access model | Capability link; signed-in only; both; link plus passcode | Capability link, token in the fragment, posted after a tap (§3.5); the operator's answer | Ruled |
+| X3-2 | Reviewer comments | None; anonymous comments; signed-in comments | Signed-in comments only, plain text, never merge approval, as a follow-on wave (§3.6); the operator's answer | Ruled |
 | X3-3 | Who builds the snapshot | Owner's browser with Export's builder; server renders from ccd reads | The browser, `buildExport` with `purpose: 'review'`: one builder, the bytes the owner saw, no fleet read | Proposed |
 | X3-4 | Where the token travels | Path; query; fragment; fragment plus a tap | Fragment, posted in a body after a tap (T1-T3) | Proposed |
 | X3-5 | How the copy is shown | Served as a top-level document; empty-sandbox frame in a fixed page | Empty-sandbox frame, links inert inside and listed outside: opaque origin, no script, the mockup Export pattern | Proposed |
@@ -309,8 +319,8 @@ The real-browser leg proves what jsdom cannot: the copy runs no script and canno
 - The snapshot is frozen at share time, the owner sees "newer draft available" and re-shares, and nothing reads the live draft through the link (operator, #1420, 2026-10-25).
 - Draft review is required before the standalone reader retires (operator, 2026-10-25: retirement drops no feature).
 - The committed Share and Export are not the draft store (ledger, recorded draft decision).
-- Readers need no ccrc session: a capability link, meeting the recorded no-session criterion as written (this wave's ask, answered 2026-11-18).
-- Comments come only from signed-in readers and never count as merge approval (this wave's second ask, answered 2026-11-18; the ledger's rule).
+- Readers need no ccrc session: a capability link, meeting the recorded no-session criterion as written (operator, this wave's ask, released by the coordinator and answered 2026-11-18).
+- Comments come only from signed-in readers and never count as merge approval (operator, this wave's second ask, answered 2026-11-18; the ledger's rule). They ship as a follow-on wave (coordinator's direction for an adopted comment feature).
 
 ### Waiting on you
 
