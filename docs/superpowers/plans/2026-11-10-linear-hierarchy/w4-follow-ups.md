@@ -13,17 +13,20 @@ trailer.
   guard proved by mutating its line and running the test (restored from a saved copy each time).
 - **Departures:** D-8733 drift-reads-every-team, D-8734 drift-cursor-and-return-tables, D-8735 inbound-retired, D-8736
   w4fu-words. Defined in the plan; summarised below.
-- **One migration**, entry 99: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
+- **One migration**, entry 100: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
   `linear_inbound.retiredWhy`; additive only. Main ended at 95 at build time (D-8673). Overlord gates A (#2993) landed
   first and took 96, so this entry moved to 97 in the first merge of main; the renewal hand-offs (#2934) then took 97, so
   fix round 1's merge of main (the branch read conflicting) moved it to 98; the decision model B (#2990) then took 98, so
-  a second merge in fix round 1, on the coordinator's word (mail 24328), moved it to 99, and the run-close replay covers
-  forty-six.
+  a second merge in fix round 1, on the coordinator's word (mail 24328), moved it to 99; the Overlord's ladder (#2994) then
+  took 99, so fix round 2's one merge of main (mail 24639) moved it to 100, and the run-close replay covers forty-seven.
+  That merge also changed one line of `coord-db.test.ts` on the coordinator's word (mail 24658): the case "a database from a
+  NEWER build still READS" set `user_version` 99, which at 100 entries is no longer newer (red: "migration 100 failed:
+  table linear_drift_cursors already exists"), so it now sets `COORD_SCHEMA_VERSION + 1`, a newer build at any length.
 - **Growth:** `watch.ts`, `coord/store.ts`, `coord/routes.ts` and `coord/delegation-checkpoint.ts` are untouched;
   `server.ts` gains one line (fix round 1: the plan routes' `inboundRecheck` option, by the ladder's consent, mail 24088);
   `shared/api.ts` is line-neutral (one cap word on the two existing `plan-phases-v1` lines).
 - **Fix round 1** (review run 2457, the coordinator's rulings, mail 24080): F1 to F4 and A1 to A6, each with its test, in
-  the section of that name below.
+  the section of that name below. **Fix round 2** (review run 2524, mail 24639): F1 to F3 and A1 to A5, in its own section.
 - **No live Linear call, capture or probe**, and no Linear key read: every test runs on the recorded and constructed
   fixtures, faked at the pass's `call` or at callLinear's FetchLike.
 
@@ -56,7 +59,7 @@ Tests for a pure function written after its pass-level test (`restoreHoldVerdict
   teams since the watermark, read and dropped, in the same pages of 100 (one rate-service call per page, on lane `sync`,
   like every other read). For a workspace whose unmanaged teams are busy this can reach the page cap, which D-8734's cursor
   now spreads across passes without skipping a change.
-- **D-8734, drift-cursor-and-return-tables.** Migration 99: `linear_drift_cursors`, `linear_inbound_notes` and `linear_inbound.retiredWhy`. The margin
+- **D-8734, drift-cursor-and-return-tables.** Migration 100: `linear_drift_cursors`, `linear_inbound_notes` and `linear_inbound.retiredWhy`. The margin
   `DRIFT_SWEEP_MARGIN_MS` is ccrc's clock against Linear's `updatedAt`; a skew larger than five minutes with ccrc ahead would
   narrow it, and nothing measures Linear's clock (Linear's `updatedAt` order is unmeasured too, so nothing relies on it).
 - **D-8735, inbound-retired.** As in the table, amended by fix round 1 (F4). A retired row keeps its `reason` (a close's
@@ -99,13 +102,19 @@ lines, so the second lander keeps both); `shared/plan.ts` (consent given to wave
 ## Suites run (fleet slice, `--maxWorkers=2`, ≤ 12 files a command)
 
 - drift-pass, drift-policy, plan-inbound, plan-sync, plan-sync-lane, plan-sync-lifecycle, plan-sync-policy, plan-sync-owned,
-  plan-sync-description, plan-dispatch-wait, plan-dispatch-route, linear-items: 506 passed; 555 at the fix round 1 tip.
+  plan-sync-description, plan-dispatch-wait, plan-dispatch-route, linear-items: 506 passed; 555 at the fix round 1 tip; 574 at the fix round 2 tip.
 - plan-store, plan-routes, plan-policy, plan-vocabulary, ccrc-api, census-w3/claimant, ledgers-policy, ledgers-store,
   refusal-status, single-definition/plan, single-definition/refusal-table, server-caps: 599 passed; 604 at the fix round 1
-  tip.
+  tip; 605 at the fix round 2 tip.
 - overlord-other-lanes-census, -pin, -routes, hierarchy-routes, lane-schedule, linear-proxy-routes,
   single-definition/vocabularies, single-definition/done-test-reader, run-close-switch, mail-routes, public-text,
-  plan-phases: 560 passed (corrected in fix round 1, A5: measured again at the new tip; the reviewer measured 560 too).
+  plan-phases: 560 passed at the fix round 1 commit (A5); 563 at the fix round 2 tip (A3: the merges of main added three
+  tests, one in hierarchy-routes and two in lane-schedule; the reviewer measured 563 at 58d8ed47b).
+- Fix round 2 also: plan-inbound-policy and coord-policy-rings 37; coord-db alone 149; the guard suites above 740 passed,
+  3 skipped; the server typecheck clean; and the test-directory compile check in four batches over every file of `test/`
+  (less `types/`), `test-e2e/` and the package root (the whole tests project is killed by the slice's memory cap), with no
+  error in the server's files (the only errors are `agent/src`'s missing `ws` module: no `node_modules` in that package in
+  this worktree, and the branch changes nothing under `agent/`).
 - The guard suites (growth-check, growth-caps, deviation-refs, anchors, citations, token-shared, auth-gate,
   box-token-census, ccrc-api-closed, topology-clean, oss-metadata, ownership), coord-db alone, the PWA's refusal-words
   suite, and the server typecheck: see the PR body for the final counts at the pushed tip.
@@ -128,11 +137,16 @@ restoring it from a saved copy.
 | A5 | The third suite group's figure: 560 at the new tip (above). | — |
 | A6 | A retire deletes the row's stored inbound note in the same transaction (`retireInboundInTx`/`retireInbound`, `planStore.ts`, the one retire; a row not retirable now is left as it is). | `plan-inbound.test.ts` "a retire deletes the row's stored inbound note (review 2457 A6)" (red before: `expected { kind: 'returned', …(3) } to be null`); `plan-store.test.ts` "the one retire of an inbound row" (mutation: the note delete out, 2 red; the retirable guard out, 1) |
 
-**The re-read's cost per pass** (F4 part 2). The pass runs every `DRIFT_PASS_MS` (30 minutes), so with N open stored rows a
-workspace pays N reads per 6 hours: N/12 reads a pass on average, never more than 20 in one pass. After a restart (the
-last-read times are in memory) the first passes read at most 20 rows each until every row is read once. While Linear or
-the key fails, one read a pass: the first read that cannot be made ends the walk. Every read is one rate-service call on
-lane `sync`, like the pass's own.
+**The re-read's cost per pass** (F4 part 2; corrected in fix round 2, F1 and F2). The pass runs every `DRIFT_PASS_MS`
+(30 minutes), so with N open stored rows a workspace pays N reads per 6 hours: N/12 reads a pass of that workspace on
+average, never more than 20 in one pass. This holds per workspace whatever the number of workspaces: the last-read times
+are kept per workspace, so one workspace's pass never prunes another's (until fix round 2 it did, and with two or more
+workspaces each open row was read at every pass of its workspace). After a restart (the last-read times are in memory)
+the first passes read at most 20 rows each until every row is read once. Only a workspace-wide answer ends the walk: the
+key's refusal, a transport or rate failure, a policy or journal outage, an unreadable store or no managed team
+(`inboundRecheckStops`); while one stands, one read a pass. An answer about one row (`malformed`, `linear-forbidden`,
+`linear-invalid`, `not-found`) marks that row checked and the walk goes on; the row is not retired and nothing of it is
+stored. Every read is one rate-service call on lane `sync`, like the pass's own.
 
 **Decisions the rulings left to the build:**
 
@@ -147,6 +161,23 @@ lane `sync`, like the pass's own.
   facts; an unknown project is mode `unknown`, public.
 - **The retire rule and its words** (`RETIRE_WHYS`, `inboundRetirable`) live in `server/src/linear/inboundRetire.ts`, L1,
   so the plan store and the inbound policy both reach them without importing each other.
+
+## Fix round 2 (review run 2524)
+
+Each fix has a test seen red first, against the code before it (all seventeen new inbound tests ran red against fix round
+1's source, which was then put back from saved copies) or, for a test-only item, by mutating the guarded line and restoring
+it from a saved copy.
+
+| # | What changed | Test (red measured) |
+|---|---|---|
+| F1 | `InboundLane#recheckStored` keeps its last-read times per workspace and prunes only its own workspace's ids. | `plan-inbound.test.ts` "the lane's re-read is bounded per row whatever the number of workspaces (review 2524 F1)": two managed workspaces whose passes alternate read each open row at most once per `INBOUND_RECHECK_MS` (red: `AAA-12: expected [ true, false ] to deeply equal [ true, true ]`) |
+| F2 | `inboundRecheckStops` (`inboundPolicy.ts`, L1, typed from Linear's answer words): only a workspace-wide answer ends the lane's walk; an answer about one row marks the row checked and the walk goes on. | `plan-inbound.test.ts` "only a workspace-wide answer stops the lane's walk (review 2524 F2)": a malformed answer, then a `linear-forbidden` one, each followed by a moved-out row retired in the same pass (red: `expected { …(15) } to match object { state: 'retired', …(1) }`), and a transport failure that still stops after one read; `plan-inbound-policy.test.ts` "inboundRecheckStops" |
+| F3 | Two bindings of one workspace holding one Linear id: the lowest id is the binding (`bindingByLinearIdOf`, `driftPolicy.ts`, L1), the store's own rule (`bindingByLinearId`), which the pass's pre-read and `projectOf` follow. No uniqueness constraint, no migration (the coordinator's ruling). | `drift-pass.test.ts` "two bindings of one workspace holding one linearId: the lowest id is the binding (review 2524 F3)": the node's drift is compared and restored once (red: `expected [] to deeply equal [ 'Ticket t1' ]`); the store's reader and the pre-read pick the same binding; `drift-policy.test.ts` "bindingByLinearIdOf" |
+| A1 | `plan take` refuses `issue-not-inbound` at once when handed rows exist and the home does not decide; `upkeepTicketByIdentifier` is keyed by the programme home's workspace (with none, only an identifier no other workspace's ticket holds resolves, as `inboundByIdentifier` does). | `plan-inbound.test.ts` "plan take never reaches another workspace's Upkeep ticket (review 2524 A1)": with no handed row, and with handed rows the home does not decide (red: `expected [ 409, 'ticket-workspace-mismatch' ]` and `[ 200, '' ]` to equal `[ 409, 'issue-not-inbound' ]`) |
+| A2 | Test only. | `plan-inbound.test.ts` "every cause is walked at pass level": `canceled` by id through take, triage, the close's `act` and the lane; an unreadable Linear store (rejecting, or answering unreadable) on the door's re-read (mutation: the `canceled` arm of `inboundRecheckOf` out, 3 red; the re-read answering managed with no slot, 2 red) |
+| A3 | The note's three suite-group figures, measured again at the new tip (above). | — |
+| A4 | The reopen mail names the row's own retire cause (`REOPEN_PHRASES`, `inboundReopenedMail`), read from `retiredWhy` before the reopen clears it and carried on the `reopened` note's `note` column (ccrc's word; nothing of the issue). | `plan-inbound.test.ts` "the reopen mail names the row's own retire cause (review 2524 A4)": completed, canceled, moved out, ccrc's own and none, each by its exact sentence (red before: the mail said "completed or canceled"); `plan-store.test.ts` the reopened note round trip |
+| A5 | Test only. | `drift-pass.test.ts` "keyReadAnswered resets the step of the read ladder and of no other key (A1; review 2524 A5)": a second workspace's key holds its step (mutation: `keyReadAnswered` clearing every read key, red: `expected 1800000033000 to be 1800000603000`) |
 
 ## Carried, not built here
 
