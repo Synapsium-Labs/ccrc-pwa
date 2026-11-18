@@ -265,7 +265,7 @@ settled, the deviations already ledgered, the shape of the wave and the
 routing the matrix derives from it — class, effort, subagent class, workflow
 mode, and the subagent effort the worker should name on its calls
 (`references/routing-matrix.md`, clause 13) — and whatever the last review
-run's report, and your ruling on it, decided.
+run's report, and your ruling on it, decided. Every brief for an Agent-tool subagent, a workflow `agent()` call or an implementer carries both sentences of `references/approval-prompts.md`, word for word. (A worker's own subagent briefs carry the rule through worker clause 5.)
 
 **Every brief for a wave in ANOTHER project carries three immutable-plan
 coordinates:** `homeRepoRoot`, the absolute path to the home repository root;

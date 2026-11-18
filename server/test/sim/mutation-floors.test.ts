@@ -38,6 +38,7 @@ import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
 import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
+import { BINOMIAL_BOUND_MUTANT_SETS } from './binomialBoundSets.js';
 import { PROGRAMME_FACTS_MUTANT_SETS } from './programmeFactsSets.js';
 import { OVERLAPS_MUTANT_SETS } from './overlapsSets.js';
 import { PRIVATE_NAMES_MUTANT_SETS } from './privateNamesSets.js';
@@ -46,6 +47,7 @@ import { GATE_MUTANT_SETS } from './gateSets.js';
 import { OTHER_LANES_MUTANT_SETS } from './otherLanesSets.js';
 import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
+import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { simulate } from './run.js';
@@ -204,6 +206,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
   ...DESIGNATION_MUTANT_SETS,
+  ...BINOMIAL_BOUND_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,
   ...PROGRAMME_FACTS_MUTANT_SETS,
   ...OVERLAPS_MUTANT_SETS,
@@ -213,6 +216,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...OTHER_LANES_MUTANT_SETS,
   ...PLAN_PHASES_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
+  ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
 };

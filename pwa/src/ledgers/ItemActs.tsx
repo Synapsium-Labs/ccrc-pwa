@@ -17,7 +17,8 @@ import type { ReactNode } from 'react';
 import { Button, cn } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
-  isCloseRefusedAction, isEndRunAction, isReleaseReviewAction, type CloseRefusedAction, type ItemDoor, type ItemView, type ReleaseReviewAction,
+  isCloseRefusedAction, isEndRunAction, isLinearItemAction, isReleaseReviewAction, type CloseRefusedAction, type LinearActionVerb, type ItemDoor, type ItemView,
+  type LinearItemAction, type ReleaseReviewAction,
 } from '../../../shared/ledgers';
 import { AbandonSheet, abandonChildOf } from '../fleet/AbandonSheet';
 import { KeepRunSheet, type KeepRunTarget } from '../fleet/KeepRunSheet';
@@ -28,6 +29,7 @@ import { resumeHeirs } from '../fleet/resumeHeirs';
 import { inAppClick } from '../fleet/settingsText';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { workerOf } from '../fleet/runWords';
+import { LinearItemControls } from './LinearItemControls';
 import { GHOST_ANCHOR } from '../lib/ghostAnchor';
 import { runPath, sessionPath } from '../lib/routes';
 import './ledgers.css';
@@ -86,10 +88,22 @@ export const releaseReviewOf = (item: ItemView): ReleaseReviewAction | null => {
   return isReleaseReviewAction(action) && item.state === 'open' ? action : null;
 };
 
-/** Does this item carry controls of its own (an end request, a refused close, or a review child to release)? The row then lays
- *  them beside itself. */
+/** Where an item's controls are drawn: a row of the Waiting list, or the item's own page. */
+export type ControlsPlace = 'row' | 'item';
+/** The hierarchy actions whose controls are light enough for a row (Hand and Keep, Check again). The map's Approve and the report's
+ *  Put back need the body on screen and Name needs the coordinator list, so those three are the item page's alone. */
+const ROW_LINEAR_VERBS: ReadonlySet<LinearActionVerb> = new Set<LinearActionVerb>(['linear-drift', 'linear-initiatives']);
+
+/** The hierarchy action an open item carries at `place`, or `null` (Linear hierarchy, D-8184). */
+export const linearOf = (item: ItemView, place: ControlsPlace = 'item'): LinearItemAction | null => {
+  const action = item.action ?? null;
+  return isLinearItemAction(action) && item.state === 'open' && (place === 'item' || ROW_LINEAR_VERBS.has(action.verb)) ? action : null;
+};
+
+/** Does this item carry controls of its own (an end request, a refused close, a review child to release, or a light hierarchy act)? The row then
+ *  lays them beside itself. */
 export const carriesControls = (item: ItemView, runs: readonly RunSummary[] | null): boolean =>
-  endRunOf(item, runs) !== null || closeRefusedOf(item) !== null || releaseReviewOf(item) !== null;
+  endRunOf(item, runs) !== null || closeRefusedOf(item) !== null || releaseReviewOf(item) !== null || linearOf(item, 'row') !== null;
 
 /** The sheets and the targets that open them. Render `sheets` once, anywhere under the screen. `sessions` (the fleet
  *  rows heard, or `null`) lets the abandon sheet say whether the run's workspace is a child's. `onActed` is told when an
@@ -190,10 +204,14 @@ export function ReleaseReviewControls({ item, acts, enabled = true }: { item: It
   );
 }
 
-/** Whatever controls an item carries: an end request's two, a refused close's doors, a review child's Release, or nothing. */
-export function ItemControls(props: { item: ItemView; runs: readonly RunSummary[] | null; acts: ItemActs; enabled?: boolean }): ReactNode {
+/** Whatever controls an item carries at `place`: an end request's two, a refused close's doors, a review child's Release, a hierarchy
+ *  item's acts (on a row only Hand, Keep and Check again; the item page draws all five items'), or nothing. */
+export function ItemControls({ place = 'item', ...props }: {
+  item: ItemView; runs: readonly RunSummary[] | null; acts: ItemActs; enabled?: boolean; onActed?: () => void; place?: ControlsPlace;
+}): ReactNode {
   return (
     <>
+      {linearOf(props.item, place) !== null && <LinearItemControls item={props.item} handWords={ITEM_DOOR_WORDS['hand-to-coordinator']} enabled={props.enabled ?? true} onActed={props.onActed} />}
       <EndRunControls {...props} />
       <CloseRefusedControls {...props} />
       <ReleaseReviewControls {...props} />

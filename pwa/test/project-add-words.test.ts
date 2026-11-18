@@ -6,6 +6,7 @@ import { ApiError } from '../src/lib/apiError';
 import {
   PROJECT_ADD_HINT, PROJECT_ADD_REFUSAL_TEXT, cloneFailureOf, formVerdict, prefillName, projectAddOutcomeUnknown,
   projectAddRefusalText, projectAddedText, projectOfferText, projectSearchOffer, type ProjectAddForm,
+  hasLinkingChoice,
 } from '../src/fleet/projectAddWords';
 import { PROJECT_NAME_MAX } from '../../shared/projectAdd';
 import { PROJECT_ADD_REFUSALS } from '../../shared/refusal';
@@ -286,5 +287,16 @@ describe('projectOfferText', () => {
       .toMatch(/under a name you give it/);
     expect(projectOfferText({ kind: 'empty', name: 'fresh-idea' }))
       .toEqual({ title: 'Create empty project fresh-idea', detail: 'A new git repository on the fleet box' });
+  });
+});
+
+describe('hasLinkingChoice (D-8184)', () => {
+  it('an owner or an initiatives switch-off is a choice, as the key and the template are', () => {
+    expect(hasLinkingChoice(undefined)).toBe(false);
+    expect(hasLinkingChoice({ teamKey: null, template: false })).toBe(false);
+    expect(hasLinkingChoice({ teamKey: null, template: false, owner: null, initiativesOff: false })).toBe(false);
+    expect(hasLinkingChoice({ teamKey: null, template: false, owner: 'coord-a' })).toBe(true);
+    expect(hasLinkingChoice({ teamKey: null, template: false, initiativesOff: true })).toBe(true);
+    expect(hasLinkingChoice({ teamKey: 'KEY', template: false })).toBe(true);
   });
 });

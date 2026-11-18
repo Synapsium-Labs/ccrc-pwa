@@ -1,17 +1,24 @@
 // Overlord W2, the decision-model port (plan docs/superpowers/plans/2026-11-16-overlord-w2/w2-decision-model.md, Task 2):
 // the cases over `planDecision`, `serveCap`, `maintainCap`, `bandOf`, `isPrivateAddress`, `isLiteralHost`,
-// `encodeDecisionRequest`, `decisionRequestGroups` and `readDecisionAnswers`, each over hand-built inputs. `decision-model-decide.test.ts` runs them against the real module and
-// `sim/decisionModelSets.ts` against each mutant, so one list of cases is both the suite and the mutation floor's judge.
+// `encodeDecisionRequest`, `decisionRequestGroups`, `readDecisionAnswers`, `applyDecision` and `gateOutcome` (PR B, Task 8) and,
+// in the second half, over `decisionLines.ts` (Tasks 6 to 8), each over hand-built inputs. `decision-model-decide.test.ts`
+// and `decision-model-lines.test.ts` run them against the real modules and `sim/decisionModelSets.ts` against each mutant,
+// so one list of cases is both the suite and the mutation floor's judge.
 import { expect } from 'vitest';
 import {
-  DECISION_QUESTIONS, DECISION_ROW_DEFAULT, DECISION_ROW_IDS,
-  type DecisionRowId, type DecisionRowSide,
+  DECISION_BANDS, DECISION_OUTCOMES, DECISION_QUESTIONS, DECISION_ROW_DEFAULT, DECISION_ROW_IDS,
+  type DecisionBand, type DecisionCheck, type DecisionRowId, type DecisionRowSide,
 } from '../../shared/decisionModel.js';
+import { upperBound95 } from '../../shared/binomialBound.js';
 import type * as DecisionModel from '../src/coord/decisionModel.js';
-import type { DecisionFields, DecisionQuestionKey, PlanInput } from '../src/coord/decisionModel.js';
+import type { DecisionEffect, DecisionFields, DecisionQuestionKey, PlanInput } from '../src/coord/decisionModel.js';
+import type * as DecisionLines from '../src/coord/decisionLines.js';
+import type { DecisionLineFacts, LabelledAnswer } from '../src/coord/decisionLines.js';
+import { CANARY, entriesOf, entryOf } from './private-names.mjs';
 
 export type DecisionModelModule = Pick<typeof DecisionModel, 'planDecision' | 'serveCap' | 'maintainCap' | 'bandOf'
-  | 'isPrivateAddress' | 'isLiteralHost' | 'encodeDecisionRequest' | 'decisionRequestGroups' | 'readDecisionAnswers'>;
+  | 'isPrivateAddress' | 'isLiteralHost' | 'encodeDecisionRequest' | 'decisionRequestGroups' | 'readDecisionAnswers'
+  | 'applyDecision' | 'gateOutcome' | 'decisionEgressOf'>;
 
 export interface DecisionModelCase { name: string; run: (m: DecisionModelModule) => void }
 
@@ -453,6 +460,1045 @@ export const READ_CASES: DecisionModelCase[] = [
   } },
 ];
 
+// ── applyDecision and gateOutcome (PR B, Task 8) ───────────────────────────────────────────────────────────────────────
+
+const ARMED_GATE: DecisionRowSide = { mode: 'armed', ceiling: 600, armedLine: { id: 3, line: 0.9 }, held: false };
+const ARMED_ADVICE: DecisionRowSide = { mode: 'armed', ceiling: 600, armedLine: null, held: false };
+const HELD_ADVICE: DecisionRowSide = { ...ARMED_ADVICE, held: true };
+const OFF: DecisionRowSide = DECISION_ROW_DEFAULT;
+const bandOfP = (p: number): DecisionBand => (p < 0.25 ? 'unlikely' : p < 0.5 ? 'doubtful' : p < 0.75 ? 'likely' : 'very-likely');
+
+type Answered = Extract<DecisionCheck, { outcome: 'answered' }>;
+/** An answered check gathered under line 3 on the local host, as `LOCAL` is today's host. */
+export const answered = (row: DecisionRowId, o: Partial<Answered> = {}): Answered => {
+  const p = o.p ?? 0.97;
+  return { row, outcome: 'answered', revision: DECISION_QUESTIONS[row].revision, modelId: 'model-a', hostKind: 'local',
+    origin: 'http://127.0.0.1:9000', lineGen: 3, recordId: null, verdict: 'yes', p, band: bandOfP(p), ms: 10, attempts: 1,
+    reused: false, egress: 'not-hosted', ...o };
+};
+const missed = (row: DecisionRowId, outcome: Exclude<DecisionCheck['outcome'], 'answered'>): DecisionCheck =>
+  ({ row, outcome, why: null, ms: 10, attempts: 1 });
+/** The key a gate's armed line was admitted under, as `answered` is gathered under it (F3, review 2418). */
+const keyOf = (row: DecisionRowId, o: Partial<NonNullable<Parameters<DecisionModelModule['applyDecision']>[1]['armedLineKey']>> = {}):
+  NonNullable<Parameters<DecisionModelModule['applyDecision']>[1]['armedLineKey']> =>
+  ({ id: 3, revision: DECISION_QUESTIONS[row].revision, hostKind: 'local', origin: LOCAL.origin, modelId: 'model-a', ...o });
+const nowFor = (row: DecisionRowId, side: DecisionRowSide, o: Partial<Parameters<DecisionModelModule['applyDecision']>[1]> = {}):
+  Parameters<DecisionModelModule['applyDecision']>[1] =>
+  ({ row: DECISION_QUESTIONS[row], side, currentLine: { id: 3, line: 0.9 }, host: LOCAL, armedLineKey: keyOf(row), ...o });
+const GATE = 'scope.widens' as const;
+const ADVICE_YN = 'relay.method' as const;
+const CHOICE = 'programme.pick' as const;
+const failure = (row: DecisionRowId): DecisionEffect => (DECISION_QUESTIONS[row].direction === 'gate' ? 'shut' : 'skipped');
+
+export const APPLY_CASES: DecisionModelCase[] = [
+  { name: 'apply 1: an off row is skipped, whatever the check is', run: (m) => {
+    for (const row of DECISION_ROW_IDS) {
+      expect(m.applyDecision(answered(row), nowFor(row, OFF)), row).toBe('skipped');
+      for (const outcome of DECISION_OUTCOMES.filter((o) => o !== 'answered')) expect(m.applyDecision(missed(row, outcome), nowFor(row, OFF))).toBe('skipped');
+    }
+  } },
+  { name: 'apply 2: a held armed gate is shut, even for a perfect answer', run: (m) => {
+    expect(m.applyDecision(answered(GATE), nowFor(GATE, ARMED_HELD))).toBe('shut');
+    expect(m.applyDecision(missed(GATE, 'unavailable'), nowFor(GATE, ARMED_HELD))).toBe('shut');
+    expect(m.applyDecision(answered(GATE), nowFor(GATE, ARMED_GATE))).toBe('clear-yes');
+  } },
+  { name: 'apply 3: a shadow row, and a held armed advice row, answer shadow (a record only), before the check is read', run: (m) => {
+    for (const row of DECISION_ROW_IDS) {
+      expect(m.applyDecision(answered(row), nowFor(row, SHADOW)), row).toBe('shadow');
+      expect(m.applyDecision(missed(row, 'refused'), nowFor(row, SHADOW)), row).toBe('shadow');
+      expect(m.applyDecision(answered(row, { lineGen: 99, hostKind: 'hosted' }), nowFor(row, SHADOW)), row).toBe('shadow');
+    }
+    expect(m.applyDecision(answered(ADVICE_YN), nowFor(ADVICE_YN, HELD_ADVICE))).toBe('shadow');
+    expect(m.applyDecision(missed(ADVICE_YN, 'unavailable'), nowFor(ADVICE_YN, HELD_ADVICE))).toBe('shadow');
+    expect(m.applyDecision(answered(ADVICE_YN), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('clear-yes');
+  } },
+  { name: 'apply 4: a check that is no answer is shut for a gate and skipped for advice', run: (m) => {
+    for (const outcome of DECISION_OUTCOMES.filter((o) => o !== 'answered')) {
+      expect(m.applyDecision(missed(GATE, outcome), nowFor(GATE, ARMED_GATE)), outcome).toBe('shut');
+      expect(m.applyDecision(missed(ADVICE_YN, outcome), nowFor(ADVICE_YN, ARMED_ADVICE)), outcome).toBe('skipped');
+      expect(m.applyDecision(missed(CHOICE, outcome), nowFor(CHOICE, ARMED_ADVICE)), outcome).toBe('skipped');
+    }
+  } },
+  { name: 'apply 5: an answer gathered under another host kind, origin or model is not today\'s', run: (m) => {
+    const other = [{ hostKind: 'hosted' as const }, { origin: 'http://127.0.0.1:9001' }, { modelId: 'model-b' }];
+    for (const o of other) {
+      expect(m.applyDecision(answered(GATE, o), nowFor(GATE, ARMED_GATE)), JSON.stringify(o)).toBe('shut');
+      expect(m.applyDecision(answered(ADVICE_YN, o), nowFor(ADVICE_YN, ARMED_ADVICE)), JSON.stringify(o)).toBe('skipped');
+    }
+    expect(m.applyDecision(answered(GATE), nowFor(GATE, ARMED_GATE, { host: null }))).toBe('shut');
+    expect(m.applyDecision(answered(ADVICE_YN), nowFor(ADVICE_YN, ARMED_ADVICE, { host: null }))).toBe('skipped');
+    expect(m.applyDecision(answered(GATE), nowFor(GATE, ARMED_GATE, { host: { ...LOCAL, kind: 'zero-retention' } }))).toBe('shut');
+  } },
+  { name: 'apply 6: the line used is none, or not the line the answer was gathered under', run: (m) => {
+    expect(m.applyDecision(answered(GATE, { lineGen: 4 }), nowFor(GATE, ARMED_GATE))).toBe('shut');
+    expect(m.applyDecision(answered(GATE), nowFor(GATE, { ...ARMED_GATE, armedLine: null }))).toBe('shut');
+    expect(m.applyDecision(answered(ADVICE_YN, { lineGen: 4 }), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('skipped');
+    expect(m.applyDecision(answered(ADVICE_YN), nowFor(ADVICE_YN, ARMED_ADVICE, { currentLine: null }))).toBe('skipped');
+    expect(m.applyDecision(answered(CHOICE, { lineGen: 0, verdict: { option: 'programme-a' } }), nowFor(CHOICE, ARMED_ADVICE, { currentLine: null }))).toBe('skipped');
+  } },
+  { name: 'apply 6: an armed gate gathered under its own line clears while a newer current line exists (review 2262 F3); an advice row uses the current line', run: (m) => {
+    const newer = { currentLine: { id: 7, line: 0.5 } };
+    expect(m.applyDecision(answered(GATE, { lineGen: 3, p: 0.92 }), nowFor(GATE, ARMED_GATE, newer))).toBe('clear-yes');
+    expect(m.applyDecision(answered(GATE, { lineGen: 7, p: 0.92 }), nowFor(GATE, ARMED_GATE, newer))).toBe('shut');
+    // The gate's own line is 0.9, not the newer 0.5.
+    expect(m.applyDecision(answered(GATE, { lineGen: 3, p: 0.7 }), nowFor(GATE, ARMED_GATE, newer))).toBe('shut');
+    // An advice row has no armed line: it reads the current one, whatever its side holds.
+    const advice = { ...ARMED_ADVICE, armedLine: { id: 3, line: 0.9 } };
+    expect(m.applyDecision(answered(ADVICE_YN, { lineGen: 7, p: 0.6 }), nowFor(ADVICE_YN, advice, newer))).toBe('clear-yes');
+    expect(m.applyDecision(answered(ADVICE_YN, { lineGen: 3, p: 0.97 }), nowFor(ADVICE_YN, advice, newer))).toBe('skipped');
+  } },
+  { name: 'apply 6: a gate\'s armed line key must match the check in revision, host kind, origin and model (review 2418 F3)', run: (m) => {
+    // The line id matches (3) and everything else is today's: only the key differs.
+    const keyed = (armedLineKey: ReturnType<typeof keyOf> | null): DecisionEffect => m.applyDecision(answered(GATE), nowFor(GATE, ARMED_GATE, { armedLineKey }));
+    expect(keyed(keyOf(GATE))).toBe('clear-yes');
+    expect(keyed(null)).toBe('shut');
+    expect(keyed(keyOf(GATE, { revision: `${DECISION_QUESTIONS[GATE].revision}-other` }))).toBe('shut');
+    expect(keyed(keyOf(GATE, { hostKind: 'hosted' }))).toBe('shut');
+    expect(keyed(keyOf(GATE, { origin: 'http://127.0.0.1:9001' }))).toBe('shut');
+    expect(keyed(keyOf(GATE, { modelId: 'model-b' }))).toBe('shut');
+    // The CURRENT line's key passed for an older armed line (review 2431 L4): every field is today's, but the id is not the
+    // armed line's, so the gate shuts.
+    expect(keyed(keyOf(GATE, { id: 4 }))).toBe('shut');
+    // A missed check is shut with or without a key, as before.
+    expect(m.applyDecision(missed(GATE, 'unavailable'), nowFor(GATE, ARMED_GATE, { armedLineKey: null }))).toBe('shut');
+    // Advice has no armed line: the key is not read, so a null or a foreign one still clears.
+    for (const armedLineKey of [null, keyOf(ADVICE_YN, { revision: 'other-revision', modelId: 'model-b' })]) {
+      expect(m.applyDecision(answered(ADVICE_YN), nowFor(ADVICE_YN, ARMED_ADVICE, { armedLineKey }))).toBe('clear-yes');
+      expect(m.applyDecision(answered(CHOICE, { verdict: { option: 'programme-a' } }), nowFor(CHOICE, ARMED_ADVICE, { armedLineKey }))).toEqual({ pick: 'programme-a' });
+    }
+  } },
+  { name: 'apply 7: an unsure answer is shut for a gate and unsure for advice', run: (m) => {
+    expect(m.applyDecision(answered(GATE, { verdict: 'unsure', p: 0.99 }), nowFor(GATE, ARMED_GATE))).toBe('shut');
+    expect(m.applyDecision(answered(ADVICE_YN, { verdict: 'unsure', p: 0.99 }), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('unsure');
+    expect(m.applyDecision(answered(CHOICE, { verdict: 'unsure', p: 0.99 }), nowFor(CHOICE, ARMED_ADVICE))).toBe('unsure');
+  } },
+  { name: 'apply 8 and 9: a yes-or-no row clears yes at the line, and otherwise shuts a gate or clears no for advice', run: (m) => {
+    expect(m.applyDecision(answered(GATE, { p: 0.9 }), nowFor(GATE, ARMED_GATE))).toBe('clear-yes');
+    expect(m.applyDecision(answered(GATE, { p: 0.8999 }), nowFor(GATE, ARMED_GATE))).toBe('shut');
+    expect(m.applyDecision(answered(GATE, { verdict: 'no', p: 0.1 }), nowFor(GATE, ARMED_GATE))).toBe('shut');
+    expect(m.applyDecision(answered(ADVICE_YN, { p: 0.9 }), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('clear-yes');
+    expect(m.applyDecision(answered(ADVICE_YN, { p: 0.8999 }), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('clear-no');
+    expect(m.applyDecision(answered(ADVICE_YN, { verdict: 'no', p: 0.1 }), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('clear-no');
+    // A no that carries a high p is inconsistent, and reads as a no, never as a yes.
+    expect(m.applyDecision(answered(ADVICE_YN, { verdict: 'no', p: 0.99 }), nowFor(ADVICE_YN, ARMED_ADVICE))).toBe('clear-no');
+    expect(m.applyDecision(answered(GATE, { verdict: 'no', p: 0.99 }), nowFor(GATE, ARMED_GATE))).toBe('shut');
+  } },
+  { name: 'apply 10 and 11: a choice row picks its option at the line, picks none, or is unsure below it', run: (m) => {
+    const at = (verdict: Answered['verdict'], p: number): DecisionEffect => m.applyDecision(answered(CHOICE, { verdict, p }), nowFor(CHOICE, ARMED_ADVICE));
+    expect(at({ option: 'programme-a' }, 0.9)).toEqual({ pick: 'programme-a' });
+    expect(at({ option: 'programme-b' }, 0.97)).toEqual({ pick: 'programme-b' });
+    expect(at('none', 0.9)).toBe('none-picked');
+    expect(at({ option: 'programme-a' }, 0.8999)).toBe('unsure');
+    expect(at('none', 0.8999)).toBe('unsure');
+    // A yes or a no on a choice row is not an option.
+    expect(at('yes', 0.99)).toBe('unsure');
+    expect(at('no', 0.99)).toBe('unsure');
+  } },
+  { name: 'apply: a check of another row than the one asked about is a caller\'s bug and throws', run: (m) => {
+    expect(() => m.applyDecision(answered(GATE), nowFor(ADVICE_YN, ARMED_ADVICE))).toThrow();
+  } },
+  { name: 'apply: no input outside rows 8 and 10 gives clear-yes or a pick, over a generated grid', run: (m) => {
+    const sides: DecisionRowSide[] = [OFF, SHADOW, ARMED_GATE, ARMED_HELD, ARMED_ADVICE, HELD_ADVICE, { ...ARMED_GATE, armedLine: { id: 4, line: 0.5 } },
+      { ...ARMED_ADVICE, armedLine: { id: 3, line: 0.9 } }, { ...OFF, armedLine: { id: 3, line: 0.9 } }];
+    const verdicts: Answered['verdict'][] = ['yes', 'no', 'unsure', 'none', { option: 'programme-a' }];
+    const ps = [0, 0.3, 0.5, 0.89, 0.9, 0.95, 1];
+    const hosts = [LOCAL, { ...LOCAL, kind: 'hosted' as const }, { ...LOCAL, origin: 'http://127.0.0.1:1' }, { ...LOCAL, modelId: 'model-z' }, null];
+    const lines = [{ id: 3, line: 0.9 }, { id: 3, line: 0.6 }, { id: 8, line: 0.9 }, null];
+    let clear = 0;
+    let picks = 0;
+    for (const row of DECISION_ROW_IDS) {
+      const q = DECISION_QUESTIONS[row];
+      for (const side of sides) for (const verdict of verdicts) for (const p of ps) for (const host of hosts) for (const currentLine of lines) {
+        for (const lineGen of [3, 8]) {
+          const check = answered(row, { verdict, p, lineGen });
+          const effect = m.applyDecision(check, nowFor(row, side, { host, currentLine }));
+          const used = q.direction === 'gate' ? side.armedLine : currentLine;
+          const rows8and10 = side.mode === 'armed' && !(q.direction === 'gate' && side.held) && !(side.held && q.direction === 'advice')
+            && host !== null && host.kind === check.hostKind && host.origin === check.origin && host.modelId === check.modelId
+            && used !== null && used.id === lineGen && p >= used.line;
+          const at = `${row} ${JSON.stringify([side, verdict, p, host, currentLine, lineGen])}`;
+          if (effect === 'clear-yes') {
+            clear++;
+            expect(rows8and10 && q.type === 'yes-no' && verdict === 'yes', at).toBe(true);
+          }
+          if (typeof effect === 'object' || effect === 'none-picked') {
+            picks++;
+            expect(rows8and10 && q.type === 'choice' && (typeof verdict === 'object' || verdict === 'none'), at).toBe(true);
+          }
+          if (q.direction === 'gate') expect(['skipped', 'shadow', 'shut', 'clear-yes'], at).toContain(effect);
+          if (side.mode === 'off') expect(effect, at).toBe('skipped');
+          if (side.mode === 'shadow') expect(effect, at).toBe('shadow');
+        }
+      }
+    }
+    // The grid reaches both rows it guards.
+    expect(clear).toBeGreaterThan(0);
+    expect(picks).toBeGreaterThan(0);
+  } },
+];
+
+const EFFECTS: readonly DecisionEffect[] = ['clear-yes', 'clear-no', 'unsure', { pick: 'programme-a' }, 'none-picked', 'shadow', 'skipped', 'shut'];
+export const GATE_OUTCOME_CASES: DecisionModelCase[] = [
+  { name: 'gateOutcome: clear-yes, skipped and shadow leave the code verdict as it was; every other effect goes to the operator', run: (m) => {
+    const verdict = { widen: false };
+    for (const effect of EFFECTS) {
+      const same = effect === 'clear-yes' || effect === 'skipped' || effect === 'shadow';
+      const out = m.gateOutcome(verdict, effect);
+      if (same) expect(out, JSON.stringify(effect)).toBe(verdict);
+      else expect(out, JSON.stringify(effect)).toBe('to-operator');
+    }
+  } },
+  { name: 'gateOutcome: never wider than the row disarmed, whatever the code verdict', run: (m) => {
+    for (const verdict of ['allow', 'refuse', 'ask', 0, false] as const) {
+      expect(m.gateOutcome(verdict, 'skipped'), String(verdict)).toBe(verdict);
+      for (const effect of EFFECTS) {
+        const out = m.gateOutcome(verdict, effect);
+        expect([verdict, 'to-operator'], JSON.stringify(effect)).toContain(out);
+      }
+    }
+  } },
+];
+
+// ── decisionEgressOf (review 2418 F2) ────────────────────────────────────────────────────────────────────────────────
+
+/** A fixture list under a fixture key, the canary first, with one SYNTHETIC name; the key is no secret. */
+const EGRESS_KEY = 'fixture-egress-key-a-0001';
+const NAME = 'zz-alpha';
+const egressList = (key = EGRESS_KEY, builtUnder = key): { state: 'list'; list: { key: string; entries: ReturnType<typeof entriesOf> } } =>
+  ({ state: 'list', list: { key, entries: [entryOf(CANARY, 'part', builtUnder), ...entriesOf(NAME, 'part', builtUnder)] } });
+
+export const EGRESS_CASES: DecisionModelCase[] = [
+  { name: 'egress 1: a text that hits an entry is hit; one that does not is clear', run: (m) => {
+    const list = egressList();
+    expect(m.decisionEgressOf([`the ${NAME} programme`], list)).toBe('hit');
+    expect(m.decisionEgressOf(['the next programme'], list)).toBe('clear');
+    expect(m.decisionEgressOf([], list), 'no text at all is clear').toBe('clear');
+  } },
+  { name: 'egress 2: any one of several texts hitting is a hit; none is clear', run: (m) => {
+    const list = egressList();
+    expect(m.decisionEgressOf(['clean one', `has ${NAME}`, 'clean two'], list)).toBe('hit');
+    expect(m.decisionEgressOf([`has ${NAME}`, 'clean one', 'clean two'], list)).toBe('hit');
+    expect(m.decisionEgressOf(['clean one', 'clean two', `has ${NAME}`], list)).toBe('hit');
+    expect(m.decisionEgressOf(['clean one', 'clean two', 'clean three'], list)).toBe('clear');
+  } },
+  { name: 'egress 3: no list ever uploaded is no-list, and a list that cannot be read is unreadable, text or none', run: (m) => {
+    expect(m.decisionEgressOf([`has ${NAME}`], { state: 'none' })).toBe('no-list');
+    expect(m.decisionEgressOf([], { state: 'none' })).toBe('no-list');
+    expect(m.decisionEgressOf([`has ${NAME}`], { state: 'unreadable' })).toBe('unreadable');
+    expect(m.decisionEgressOf(['clean'], { state: 'unreadable' })).toBe('unreadable');
+    expect(m.decisionEgressOf([], { state: 'unreadable' })).toBe('unreadable');
+  } },
+  { name: 'egress 4: a list the matcher will not trust is unreadable, never clear, even for a text with the name', run: (m) => {
+    // Entries built under one key and scanned under another: the canary does not match.
+    const wrongKey = egressList(EGRESS_KEY, 'fixture-egress-key-b-0002');
+    expect(m.decisionEgressOf(['clean'], wrongKey)).toBe('unreadable');
+    expect(m.decisionEgressOf([`has ${NAME}`], wrongKey)).toBe('unreadable');
+    // A key under the matcher's floor.
+    expect(m.decisionEgressOf(['clean'], egressList('short'))).toBe('unreadable');
+    // No entries.
+    expect(m.decisionEgressOf(['clean'], { state: 'list', list: { key: EGRESS_KEY, entries: [] } })).toBe('unreadable');
+    // A hit text before the throw does not make it a hit.
+    expect(m.decisionEgressOf([`has ${NAME}`, 'clean'], wrongKey)).toBe('unreadable');
+  } },
+];
+
 export const ALL_DECISION_MODEL_CASES: DecisionModelCase[] = [
   ...PLAN_CASES, ...CAP_CASES, ...BAND_CASES, ...ADDRESS_CASES, ...ENCODE_CASES, ...GROUP_CASES, ...READ_CASES,
+  ...APPLY_CASES, ...GATE_OUTCOME_CASES, ...EGRESS_CASES,
+];
+
+// ═══ decisionLines.ts (Tasks 6 to 8) ═══════════════════════════════════════════════════════════════════════════════════
+
+export type DecisionLinesModule = Pick<typeof DecisionLines, 'isDecisionGate' | 'decisionRowDirection' | 'lineCounts' | 'admitLine'
+  | 'canaryCrossed' | 'canaryVerdict' | 'anchorDrift' | 'decideRowArm' | 'decideRowOff' | 'offFallback' | 'decideRowCeiling'
+  | 'keyDoorHostname' | 'decideKeyDoor' | 'decisionStepUp' | 'heldOnHostChange' | 'heldOnKeyRemoval' | 'decisionModelViewOf'
+  | 'armedAndFree' | 'lineUnderKey' | 'armedLineBoundFails'>;
+export interface DecisionLinesCase { name: string; run: (m: DecisionLinesModule) => void }
+
+const side = (mode: DecisionRowSide['mode'], o: { ceiling?: number; line?: [number, number]; held?: boolean } = {}): DecisionRowSide =>
+  ({ mode, ceiling: o.ceiling ?? 600, armedLine: o.line === undefined ? null : { id: o.line[0], line: o.line[1] }, held: o.held ?? false });
+const ADVICE = 'relay.method' as const;
+
+// ── decisionRowDirection (Task 6) ─────────────────────────────────────────────────────────────────────────────────────
+
+export const DIRECTION_CASES: DecisionLinesCase[] = [
+  { name: 'direction 1: a higher ceiling widens, a lower one narrows, for a gate and for advice', run: (m) => {
+    for (const gate of [true, false]) {
+      expect(m.decisionRowDirection(gate, side('shadow'), side('shadow', { ceiling: 700 }))).toBe('widens');
+      expect(m.decisionRowDirection(gate, side('shadow'), side('shadow', { ceiling: 300 }))).toBe('narrows');
+      expect(m.decisionRowDirection(gate, side('shadow'), side('shadow'))).toBe('narrows');
+      expect(m.decisionRowDirection(gate, side('armed', { held: true }), side('armed', { held: true, ceiling: 100 }))).toBe('narrows');
+    }
+    // Row 1 comes first: a stricter line with a higher ceiling still widens.
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.8] }), side('armed', { line: [4, 0.9], ceiling: 700 }))).toBe('widens');
+  } },
+  { name: 'direction 2: off to shadow or armed is new spend and widens; shadow to off narrows', run: (m) => {
+    for (const gate of [true, false]) {
+      expect(m.decisionRowDirection(gate, side('off'), side('shadow'))).toBe('widens');
+      expect(m.decisionRowDirection(gate, side('off'), side('armed', { line: [3, 0.9] }))).toBe('widens');
+      expect(m.decisionRowDirection(gate, side('shadow'), side('off'))).toBe('narrows');
+      expect(m.decisionRowDirection(gate, side('off'), side('off'))).toBe('narrows');
+    }
+    expect(m.decisionRowDirection(false, side('off'), side('off', { ceiling: 100 }))).toBe('narrows');
+  } },
+  { name: 'direction 3: a gate armed or held that stops shutting widens; advice does not', run: (m) => {
+    const armed = side('armed', { line: [3, 0.9] });
+    const held = side('armed', { line: [3, 0.9], held: true });
+    expect(m.decisionRowDirection(true, armed, side('off'))).toBe('widens');
+    expect(m.decisionRowDirection(true, armed, side('shadow'))).toBe('widens');
+    expect(m.decisionRowDirection(true, held, side('off'))).toBe('widens');
+    expect(m.decisionRowDirection(true, held, side('shadow'))).toBe('widens');
+    // A held row whose mode already reads shadow still shut as a gate.
+    expect(m.decisionRowDirection(true, side('shadow', { held: true }), side('off'))).toBe('widens');
+    expect(m.decisionRowDirection(false, side('armed'), side('off'))).toBe('narrows');
+    expect(m.decisionRowDirection(false, side('armed'), side('shadow'))).toBe('narrows');
+    expect(m.decisionRowDirection(false, side('armed', { held: true }), side('off'))).toBe('narrows');
+  } },
+  { name: 'direction 4: a held gate let through again widens, and armed to held narrows', run: (m) => {
+    const held = side('armed', { line: [3, 0.9], held: true });
+    const armed = side('armed', { line: [3, 0.9] });
+    expect(m.decisionRowDirection(true, held, armed)).toBe('widens');
+    expect(m.decisionRowDirection(true, held, side('armed', { line: [4, 0.95] }))).toBe('widens');
+    expect(m.decisionRowDirection(true, armed, held)).toBe('narrows');
+    expect(m.decisionRowDirection(false, armed, side('armed', { held: true }))).toBe('narrows');
+    // Held to held, with nothing else moved, narrows.
+    expect(m.decisionRowDirection(true, held, held)).toBe('narrows');
+  } },
+  { name: 'direction 5: an armed gate\'s line to 0.9 from 0.8 narrows, to 0.8 from 0.9 widens, a different id at the same value widens', run: (m) => {
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.8] }), side('armed', { line: [4, 0.9] }))).toBe('narrows');
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('armed', { line: [4, 0.8] }))).toBe('widens');
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('armed', { line: [4, 0.9] }))).toBe('widens');
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('armed', { line: [3, 0.8] }))).toBe('widens');
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('armed', { line: [3, 0.9] }))).toBe('narrows');
+    // The same id at a higher value is still strictly stricter.
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.8] }), side('armed', { line: [3, 0.85] }))).toBe('narrows');
+    // An armed gate with no line on either side is not provably stricter.
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('armed'))).toBe('widens');
+    expect(m.decisionRowDirection(true, side('armed'), side('armed', { line: [3, 0.9] }))).toBe('widens');
+    // Row 5 reads armed, not held, on both sides.
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('armed', { line: [4, 0.8], held: true }))).toBe('narrows');
+    // Advice has no line to ease.
+    expect(m.decisionRowDirection(false, side('armed', { line: [3, 0.9] }), side('armed', { line: [4, 0.8] }))).toBe('narrows');
+  } },
+  { name: 'direction: an advice row armed to off narrows (it was never a gate)', run: (m) => {
+    expect(m.decisionRowDirection(false, side('armed'), side('off'))).toBe('narrows');
+    expect(m.decisionRowDirection(true, side('armed', { line: [3, 0.9] }), side('off'))).toBe('widens');
+  } },
+  { name: 'isDecisionGate: only the catalogue\'s gate rows', run: (m) => {
+    for (const row of DECISION_ROW_IDS) expect(m.isDecisionGate(row), row).toBe(DECISION_QUESTIONS[row].direction === 'gate');
+    expect(m.isDecisionGate('scope.widens')).toBe(true);
+    expect(m.isDecisionGate('relay.method')).toBe(false);
+  } },
+];
+
+// ── lineCounts and admitLine (Task 8, question 17) ────────────────────────────────────────────────────────────────────
+
+const YN = 'relay.method' as const;
+const la = (verdict: LabelledAnswer['verdict'], p: number, label: LabelledAnswer['label']): LabelledAnswer => ({ p, verdict, label });
+const many = (n: number, c: LabelledAnswer): LabelledAnswer[] => Array.from({ length: n }, () => c);
+const opt = (o: string): { option: string } => ({ option: o });
+
+export const LINE_CASES: DecisionLinesCase[] = [
+  { name: 'lineCounts, yes-or-no: n is the clear yeses at the line, an error is a label no; unsure and no answers are not in n', run: (m) => {
+    const cases = [la('yes', 0.95, 'yes'), la('yes', 0.95, 'no'), la('yes', 0.9, 'no'), la('yes', 0.8, 'no'), la('unsure', 0.99, 'no'),
+      la('no', 0.99, 'no'), la('no', 0.99, 'yes'), la(opt('a'), 0.99, 'no'), la('none', 0.99, 'no')];
+    for (const id of [YN, 'scope.widens', 'programme.any'] as const) {
+      const row = DECISION_QUESTIONS[id];
+      expect(m.lineCounts(row, cases, 0.95), id).toEqual({ n: 2, errors: 1 });
+      expect(m.lineCounts(row, cases, 0.9), id).toEqual({ n: 3, errors: 2 });
+      expect(m.lineCounts(row, cases, 0.8), id).toEqual({ n: 4, errors: 3 });
+      expect(m.lineCounts(row, cases, 0.5), id).toEqual({ n: 4, errors: 3 });
+      expect(m.lineCounts(row, cases, 0.99), id).toEqual({ n: 0, errors: 0 });
+    }
+    // A label of yes or none is no error for a yes.
+    expect(m.lineCounts(DECISION_QUESTIONS[YN], [la('yes', 0.99, 'yes'), la('yes', 0.99, 'none')], 0.9)).toEqual({ n: 2, errors: 0 });
+  } },
+  { name: 'lineCounts, choice: n is the cases naming an option at the line; an error is another option or none; none and unsure are not in n', run: (m) => {
+    const row = DECISION_QUESTIONS['programme.pick'];
+    const cases = [la(opt('a'), 0.95, opt('a')), la(opt('a'), 0.95, opt('b')), la(opt('b'), 0.95, 'none'), la(opt('a'), 0.7, opt('b')),
+      la('none', 0.99, opt('a')), la('none', 0.99, 'none'), la('unsure', 0.99, opt('a')), la('yes', 0.99, 'yes')];
+    expect(m.lineCounts(row, cases, 0.9)).toEqual({ n: 3, errors: 2 });
+    expect(m.lineCounts(row, cases, 0.7)).toEqual({ n: 4, errors: 3 });
+    expect(m.lineCounts(row, cases, 0.99)).toEqual({ n: 0, errors: 0 });
+    expect(m.lineCounts(row, [la(opt('a'), 0.9, opt('a'))], 0.9)).toEqual({ n: 1, errors: 0 });
+  } },
+  { name: 'admitLine: 29 clean cases pass a 10% row, 28 do not, and nothing is admitted from none', run: (m) => {
+    const row = DECISION_QUESTIONS[YN];
+    const got = m.admitLine(row, many(29, la('yes', 0.96, 'yes')));
+    expect(got).toMatchObject({ admitted: true, line: 0.5, labelled: 29, errors: 0 });
+    if (got.admitted) expect(got.bound).toBeCloseTo(upperBound95(0, 29), 12);
+    expect(m.admitLine(row, many(28, la('yes', 0.96, 'yes')))).toEqual({ admitted: false, triedFirst: 0.95 });
+    expect(m.admitLine(row, [])).toEqual({ admitted: false, triedFirst: 0.95 });
+  } },
+  { name: 'admitLine: a gate\'s 5% target needs 59 clean cases, not 58', run: (m) => {
+    const row = DECISION_QUESTIONS['scope.widens'];
+    expect(m.admitLine(row, many(59, la('yes', 0.96, 'yes'))).admitted).toBe(true);
+    expect(m.admitLine(row, many(58, la('yes', 0.96, 'yes')))).toEqual({ admitted: false, triedFirst: 0.95 });
+  } },
+  { name: 'admitLine: fixed sequence, strictest first, stopped at the first that fails: a looser line that would pass is never tried', run: (m) => {
+    const row = DECISION_QUESTIONS[YN];
+    // 0.95 passes (29 clean), 0.9 passes (same 29), 0.85 fails (one error at 0.87 makes 1 of 30), 0.8 would pass (100 clean at 0.82).
+    const cases = [...many(29, la('yes', 0.97, 'yes')), la('yes', 0.87, 'no'), ...many(100, la('yes', 0.82, 'yes'))];
+    expect(m.lineCounts(row, cases, 0.85)).toEqual({ n: 30, errors: 1 });
+    expect(upperBound95(1, 30)).toBeGreaterThan(0.1);
+    expect(m.lineCounts(row, cases, 0.8)).toEqual({ n: 130, errors: 1 });
+    expect(upperBound95(1, 130)).toBeLessThan(0.1);
+    const got = m.admitLine(row, cases);
+    expect(got).toMatchObject({ admitted: true, line: 0.9, labelled: 29, errors: 0 });
+  } },
+  { name: 'admitLine: the last line that passed is admitted, with the counts at that line', run: (m) => {
+    const row = DECISION_QUESTIONS[YN];
+    // 29 clean at 0.97 pass 0.95 and 0.9; at 0.7 a case with an error enters and fails the bound.
+    const cases = [...many(29, la('yes', 0.97, 'yes')), ...many(3, la('yes', 0.72, 'yes')), la('yes', 0.71, 'no')];
+    const got = m.admitLine(row, cases);
+    expect(got).toMatchObject({ admitted: true, line: 0.75, labelled: 29, errors: 0 });
+  } },
+  { name: 'admitLine: a bound at the target passes, one over fails (the test is over, not at)', run: (m) => {
+    const row = { ...DECISION_QUESTIONS[YN], target: upperBound95(0, 29) } as typeof DECISION_QUESTIONS[typeof YN];
+    expect(m.admitLine(row, many(29, la('yes', 0.96, 'yes'))).admitted).toBe(true);
+    expect(m.admitLine({ ...row, target: upperBound95(0, 29) - 1e-9 } as typeof row, many(29, la('yes', 0.96, 'yes'))).admitted).toBe(false);
+  } },
+  { name: 'admitLine: an unsure and a none answer are not in n, and a wrong option is an error on a choice row', run: (m) => {
+    const yn = DECISION_QUESTIONS[YN];
+    expect(m.admitLine(yn, [...many(28, la('yes', 0.96, 'yes')), ...many(9, la('unsure', 0.99, 'no'))])).toEqual({ admitted: false, triedFirst: 0.95 });
+    const pick = DECISION_QUESTIONS['programme.pick'];
+    const clean = many(29, la(opt('a'), 0.96, opt('a')));
+    expect(m.admitLine(pick, clean)).toMatchObject({ admitted: true, labelled: 29, errors: 0 });
+    expect(m.admitLine(pick, [...clean, ...many(40, la('none', 0.99, 'none'))])).toMatchObject({ admitted: true, labelled: 29 });
+    expect(m.admitLine(pick, [...many(28, la(opt('a'), 0.96, opt('a'))), la(opt('a'), 0.96, opt('b'))])).toEqual({ admitted: false, triedFirst: 0.95 });
+    expect(m.admitLine(pick, [...many(28, la(opt('a'), 0.96, opt('a'))), la(opt('a'), 0.96, 'none')])).toEqual({ admitted: false, triedFirst: 0.95 });
+    // A `none` label on a yes-or-no row is no error; an error among enough cases still passes.
+    const big = [...many(150, la('yes', 0.96, 'yes')), la('yes', 0.96, 'no')];
+    expect(m.admitLine(yn, big)).toMatchObject({ admitted: true, labelled: 151, errors: 1 });
+  } },
+];
+
+// ── canaryCrossed, canaryVerdict and anchorDrift (Task 8, questions 17 and 18) ────────────────────────────────────────
+
+const cc = (id: DecisionRowId, m: DecisionLinesModule, plain: LabelledAnswer['verdict'], plainP: number, pert: LabelledAnswer['verdict'], pertP: number, line = 0.9): boolean =>
+  m.canaryCrossed(DECISION_QUESTIONS[id], line, plain, plainP, pert, pertP);
+
+export const CANARY_CASES: DecisionLinesCase[] = [
+  { name: 'canaryCrossed, an attacker who wants no: the plain answer marks at the line and the perturbed one does not', run: (m) => {
+    expect(cc(ADVICE, m, 'yes', 0.95, 'no', 0.1)).toBe(true);
+    expect(cc(ADVICE, m, 'yes', 0.95, 'yes', 0.5)).toBe(true);
+    expect(cc(ADVICE, m, 'yes', 0.95, 'yes', 0.8999)).toBe(true);
+    expect(cc(ADVICE, m, 'yes', 0.9, 'unsure', 0.9)).toBe(true);
+    expect(cc(ADVICE, m, 'yes', 0.95, opt('a'), 0.99)).toBe(true);
+    expect(cc(ADVICE, m, 'yes', 0.95, 'yes', 0.9)).toBe(false);
+    expect(cc(ADVICE, m, 'yes', 0.95, 'yes', 0.99)).toBe(false);
+    // The plain answer is not a mark: nothing was lost.
+    expect(cc(ADVICE, m, 'yes', 0.8999, 'no', 0.1)).toBe(false);
+    expect(cc(ADVICE, m, 'no', 0.1, 'no', 0.1)).toBe(false);
+    expect(cc(ADVICE, m, 'unsure', 0.99, 'no', 0.1)).toBe(false);
+    // Away from the attacker\'s answer: a mark gained is no crossing.
+    expect(cc(ADVICE, m, 'no', 0.1, 'yes', 0.99)).toBe(false);
+  } },
+  { name: 'canaryCrossed, an attacker who wants yes: the plain answer is not a clear yes and the perturbed one is', run: (m) => {
+    expect(cc('scope.widens', m, 'no', 0.1, 'yes', 0.95)).toBe(true);
+    expect(cc('scope.widens', m, 'unsure', 0.99, 'yes', 0.95)).toBe(true);
+    expect(cc('scope.widens', m, 'yes', 0.5, 'yes', 0.9)).toBe(true);
+    expect(cc('scope.widens', m, 'yes', 0.8999, 'yes', 0.9)).toBe(true);
+    expect(cc('scope.widens', m, 'yes', 0.95, 'yes', 0.99)).toBe(false);
+    expect(cc('scope.widens', m, 'yes', 0.95, 'no', 0.1)).toBe(false);
+    expect(cc('scope.widens', m, 'no', 0.1, 'yes', 0.8999)).toBe(false);
+    expect(cc('scope.widens', m, 'no', 0.1, 'unsure', 0.99)).toBe(false);
+    expect(cc('scope.widens', m, 'no', 0.1, 'no', 0.1)).toBe(false);
+  } },
+  { name: 'canaryCrossed, an attacker who wants an option: the perturbed answer names a different option, none and unsure included', run: (m) => {
+    const pick = 'programme.pick' as const;
+    expect(cc(pick, m, opt('a'), 0.95, opt('b'), 0.95)).toBe(true);
+    expect(cc(pick, m, opt('a'), 0.95, 'none', 0.95)).toBe(true);
+    expect(cc(pick, m, opt('a'), 0.95, 'unsure', 0.95)).toBe(true);
+    expect(cc(pick, m, opt('a'), 0.95, opt('a'), 0.5)).toBe(true);
+    expect(cc(pick, m, opt('a'), 0.95, opt('a'), 0.95)).toBe(false);
+    expect(cc(pick, m, opt('a'), 0.95, opt('a'), 0.99)).toBe(false);
+    // An option exactly at the line is named there.
+    expect(cc(pick, m, opt('a'), 0.9, opt('a'), 0.95)).toBe(false);
+    expect(cc(pick, m, opt('a'), 0.9, opt('b'), 0.9)).toBe(true);
+    // A pick gained from no pick is a move toward an option.
+    expect(cc(pick, m, 'none', 0.95, opt('b'), 0.95)).toBe(true);
+    expect(cc(pick, m, 'unsure', 0.95, opt('b'), 0.95)).toBe(true);
+    expect(cc(pick, m, opt('a'), 0.5, opt('b'), 0.95)).toBe(true);
+    // Neither names an option at the line: the answer moved away from an option, or stayed.
+    expect(cc(pick, m, 'none', 0.95, 'unsure', 0.95)).toBe(false);
+    expect(cc(pick, m, 'unsure', 0.95, 'none', 0.95)).toBe(false);
+    expect(cc(pick, m, opt('a'), 0.5, opt('b'), 0.5)).toBe(false);
+    expect(cc(pick, m, opt('a'), 0.5, 'none', 0.95)).toBe(false);
+    expect(cc(pick, m, 'none', 0.95, 'none', 0.95)).toBe(false);
+  } },
+  { name: 'canaryVerdict: 0 asked has not run, a partial set is incomplete, and 5% of the full set is the line (295: 14 held, 15 unmet)', run: (m) => {
+    expect(m.canaryVerdict(0, 0, 295)).toBe('not-run');
+    expect(m.canaryVerdict(0, 0, 0)).toBe('not-run');
+    expect(m.canaryVerdict(5, 0, 0)).toBe('not-run');
+    expect(m.canaryVerdict(1, 0, 295)).toBe('incomplete');
+    expect(m.canaryVerdict(100, 0, 295)).toBe('incomplete');
+    expect(m.canaryVerdict(294, 0, 295)).toBe('incomplete');
+    expect(m.canaryVerdict(294, 20, 295)).toBe('incomplete');
+    expect(m.canaryVerdict(295, 0, 295)).toBe('held');
+    expect(m.canaryVerdict(295, 14, 295)).toBe('held');
+    expect(m.canaryVerdict(295, 15, 295)).toBe('unmet');
+    expect(m.canaryVerdict(295, 295, 295)).toBe('unmet');
+    expect(m.canaryVerdict(145, 7, 145)).toBe('held');
+    expect(m.canaryVerdict(145, 8, 145)).toBe('unmet');
+    expect(m.canaryVerdict(20, 1, 20)).toBe('held');
+    expect(m.canaryVerdict(20, 2, 20)).toBe('unmet');
+  } },
+  { name: 'anchorDrift: 3 of 20 moved holds, 4 fires, position by position', run: (m) => {
+    const base: DecisionBand[] = Array.from({ length: 20 }, (_, i) => DECISION_BANDS[i % 4]!);
+    const moved = (n: number, from = 0): DecisionBand[] => base.map((b, i) => (i >= from && i < from + n ? DECISION_BANDS[(DECISION_BANDS.indexOf(b) + 1) % 4]! : b));
+    expect(m.anchorDrift(base, base)).toBe(false);
+    expect(m.anchorDrift(base, moved(3))).toBe(false);
+    expect(m.anchorDrift(base, moved(4))).toBe(true);
+    expect(m.anchorDrift(base, moved(3, 17))).toBe(false);
+    expect(m.anchorDrift(base, moved(4, 16))).toBe(true);
+    expect(m.anchorDrift(base, moved(20))).toBe(true);
+    // Moving to a far band counts the same as moving to the next.
+    expect(m.anchorDrift(base.map(() => 'unlikely' as const), base.map((_, i) => (i < 4 ? 'very-likely' as const : 'unlikely' as const)))).toBe(true);
+    // The same shares in another order are drift: the comparison is by position.
+    const swapped = [...base.slice(10), ...base.slice(0, 10)];
+    expect(m.anchorDrift(base, swapped)).toBe(true);
+  } },
+  { name: 'anchorDrift: a set that is not 20 on both sides cannot be shown not to have drifted, so it counts as drift', run: (m) => {
+    const base: DecisionBand[] = Array.from({ length: 20 }, () => 'likely' as const);
+    expect(m.anchorDrift(base.slice(0, 19), base)).toBe(true);
+    expect(m.anchorDrift(base, base.slice(0, 19))).toBe(true);
+    expect(m.anchorDrift(base.slice(0, 19), base.slice(0, 19))).toBe(true);
+    expect(m.anchorDrift([...base, 'likely'], [...base, 'likely'])).toBe(true);
+    expect(m.anchorDrift([], [])).toBe(true);
+    expect(m.anchorDrift(base, [])).toBe(true);
+  } },
+];
+
+// ── the doors (Task 7) ──────────────────────────────────────────────────────────────────────────────────────────────
+
+const lf = (id: number, o: Partial<DecisionLineFacts> = {}): DecisionLineFacts =>
+  ({ id, line: 0.9, underToday: true, canaryAsked: 295, canaryExpected: 295, canaryCrossed: 0, ...o });
+type ArmInput = Parameters<DecisionLinesModule['decideRowArm']>[0];
+const SHADOW_SIDE = side('shadow', { ceiling: 700 });
+const arm = (o: Partial<ArmInput> = {}, body: unknown = { mode: 'armed', expected: SHADOW_SIDE }): ArmInput => ({
+  rowId: 'scope.widens', body, host: { kind: 'local' }, keySet: true, currentLine: lf(5),
+  lineById: (id) => (id === 5 ? lf(5) : id === 3 ? lf(3, { line: 0.8 }) : null), ...o });
+const refusal = (refusal: string): { ok: false; refusal: string; detail: string } => ({ ok: false, refusal, detail: expect.any(String) as string });
+const moved = (row: DecisionRowId, expected: DecisionRowSide, to: DecisionRowSide, heldCause: string | null = null): unknown =>
+  ({ ok: true, row, expected, to, heldCause });
+
+export const ARM_CASES: DecisionLinesCase[] = [
+  { name: 'arm 1: a row that is not in the catalogue is decision-row-unknown, before the body is read', run: (m) => {
+    for (const rowId of ['nope', '', '__proto__', 'constructor', 'toString', 'scope.widens ']) {
+      expect(m.decideRowArm(arm({ rowId }, null)), rowId).toEqual(refusal('decision-row-unknown'));
+    }
+  } },
+  { name: 'arm 2: a body that is not exactly mode, expected and an optional line is bad-request', run: (m) => {
+    const e = SHADOW_SIDE;
+    const bad: unknown[] = [null, 'armed', 7, [], [{ mode: 'armed', expected: e }], {}, { mode: 'armed' }, { expected: e }, { mode: 'armed', expected: e, extra: 1 },
+      { mode: 'armed', expected: e, line: 0 }, { mode: 'armed', expected: e, line: -1 }, { mode: 'armed', expected: e, line: 1.5 },
+      { mode: 'armed', expected: e, line: '5' }, { mode: 'armed', expected: e, line: null }, { mode: 'armed', expected: e, line: undefined },
+      { mode: 'armed', expected: e, line: Number.NaN }, { mode: 'armed', expected: e, line: 2 ** 53 },
+      { mode: 'off', expected: e }, { mode: 'ARMED', expected: e }, { mode: 7, expected: e }, { mode: null, expected: e },
+      { mode: 'armed', expected: null }, { mode: 'armed', expected: { ...e, ceiling: 10 } }, { mode: 'armed', expected: { mode: 'shadow' } },
+      { mode: 'armed', expected: { ...e, extra: 1 } }, { mode: 'armed', expected: { ...e, armedLine: { id: 0, line: 0.9 } } },
+      { mode: 'armed', expected: { ...e, mode: 'on' } }];
+    for (const body of bad) expect(m.decideRowArm(arm({}, body)), JSON.stringify(body)).toEqual(refusal('bad-request'));
+    // A body with a bad shape is refused before the host is read.
+    expect(m.decideRowArm(arm({ host: null, keySet: false }, {}))).toEqual(refusal('bad-request'));
+    // line and mode shadow are fine together; a valid line is a positive safe integer.
+    expect(m.decideRowArm(arm({}, { mode: 'shadow', expected: e, line: 5 })).ok).toBe(true);
+    expect(m.decideRowArm(arm({}, { mode: 'armed', expected: e, line: 1 }))).toEqual(refusal('line-not-admitted'));
+  } },
+  { name: 'arm 3: no host or no key is key-unset', run: (m) => {
+    expect(m.decideRowArm(arm({ host: null }))).toEqual(refusal('key-unset'));
+    expect(m.decideRowArm(arm({ keySet: false }))).toEqual(refusal('key-unset'));
+    expect(m.decideRowArm(arm({ host: { kind: 'hosted' }, keySet: false }))).toEqual(refusal('key-unset'));
+    expect(m.decideRowArm(arm({ host: null, currentLine: null }))).toEqual(refusal('key-unset'));
+  } },
+  { name: 'arm 4: a private-state row is never armed or shadowed on a hosted host (index Q10)', run: (m) => {
+    for (const rowId of ['scope.widens', 'readback.omits', 'readback.adds']) {
+      for (const mode of ['shadow', 'armed']) {
+        expect(m.decideRowArm(arm({ rowId, host: { kind: 'hosted' }, currentLine: null }, { mode, expected: SHADOW_SIDE })), `${rowId} ${mode}`).toEqual(refusal('private-state-host'));
+      }
+      expect(m.decideRowArm(arm({ rowId, host: { kind: 'zero-retention' } }, { mode: 'shadow', expected: SHADOW_SIDE })).ok, rowId).toBe(true);
+      expect(m.decideRowArm(arm({ rowId, host: { kind: 'local' } }, { mode: 'shadow', expected: SHADOW_SIDE })).ok, rowId).toBe(true);
+    }
+    for (const rowId of ['relay.method', 'programme.pick', 'programme.any', 'goals.conflict']) {
+      expect(m.decideRowArm(arm({ rowId, host: { kind: 'hosted' } }, { mode: 'shadow', expected: SHADOW_SIDE })).ok, rowId).toBe(true);
+    }
+  } },
+  { name: 'arm 5: armed needs an admitted line under today, the current one when line is named', run: (m) => {
+    const body = (extra: object = {}): unknown => ({ mode: 'armed', expected: SHADOW_SIDE, ...extra });
+    expect(m.decideRowArm(arm({ currentLine: null }, body()))).toEqual(refusal('line-not-admitted'));
+    expect(m.decideRowArm(arm({ currentLine: null }, body({ line: 5 })))).toEqual(refusal('line-not-admitted'));
+    // A line named other than the current one.
+    expect(m.decideRowArm(arm({}, body({ line: 3 })))).toEqual(refusal('line-not-admitted'));
+    expect(m.decideRowArm(arm({}, body({ line: 99 })))).toEqual(refusal('line-not-admitted'));
+    // The current line is not under today\'s host, model and revision, or the lookup finds nothing.
+    expect(m.decideRowArm(arm({ lineById: () => lf(5, { underToday: false }) }, body()))).toEqual(refusal('line-not-admitted'));
+    expect(m.decideRowArm(arm({ lineById: () => lf(5, { underToday: false }) }, body({ line: 5 })))).toEqual(refusal('line-not-admitted'));
+    expect(m.decideRowArm(arm({ lineById: () => null }, body()))).toEqual(refusal('line-not-admitted'));
+    expect(m.decideRowArm(arm({ lineById: () => null }, body({ line: 5 })))).toEqual(refusal('line-not-admitted'));
+    // A gate armed on an older line, line omitted: that line must still stand under today.
+    const armedOld = side('armed', { ceiling: 700, line: [3, 0.8] });
+    expect(m.decideRowArm(arm({ lineById: (id) => (id === 5 ? lf(5) : null) }, body({ expected: armedOld })))).toEqual(refusal('line-not-admitted'));
+    expect(m.decideRowArm(arm({ lineById: (id) => (id === 5 ? lf(5) : lf(3, { underToday: false })) }, body({ expected: armedOld })))).toEqual(refusal('line-not-admitted'));
+    // Shadow needs no line at all.
+    expect(m.decideRowArm(arm({ currentLine: null, lineById: () => null }, { mode: 'shadow', expected: SHADOW_SIDE })).ok).toBe(true);
+  } },
+  { name: 'arm 6: armed needs the canary complete and held: 100 of 295 asked with 0 crossed is canary-unmet', run: (m) => {
+    const withCanary = (o: Partial<DecisionLineFacts>): Partial<ArmInput> => ({ currentLine: lf(5, o), lineById: () => lf(5, o) });
+    expect(m.decideRowArm(arm(withCanary({ canaryAsked: 100 })))).toEqual(refusal('canary-unmet'));
+    expect(m.decideRowArm(arm(withCanary({ canaryAsked: 0 })))).toEqual(refusal('canary-unmet'));
+    expect(m.decideRowArm(arm(withCanary({ canaryAsked: 294 })))).toEqual(refusal('canary-unmet'));
+    expect(m.decideRowArm(arm(withCanary({ canaryCrossed: 15 })))).toEqual(refusal('canary-unmet'));
+    expect(m.decideRowArm(arm(withCanary({ canaryCrossed: 14 }))).ok).toBe(true);
+    expect(m.decideRowArm(arm(withCanary({ canaryAsked: 0, canaryExpected: 0 })))).toEqual(refusal('canary-unmet'));
+    // Shadow is not gated by a canary.
+    expect(m.decideRowArm(arm(withCanary({ canaryAsked: 0 }), { mode: 'shadow', expected: SHADOW_SIDE })).ok).toBe(true);
+    // The canary is read from the line named, not from the current one.
+    const armedOld = side('armed', { ceiling: 700, line: [3, 0.8] });
+    expect(m.decideRowArm(arm({ lineById: (id) => (id === 3 ? lf(3, { canaryAsked: 5 }) : lf(5)) }, { mode: 'armed', expected: armedOld }))).toEqual(refusal('canary-unmet'));
+  } },
+  { name: 'arm 7: the move: a gate takes the line it arms on, advice takes none, shadow takes none, the ceiling is unchanged', run: (m) => {
+    // A gate, shadow to armed: the current line, with its value from the line\'s own facts.
+    expect(m.decideRowArm(arm())).toEqual(moved('scope.widens', SHADOW_SIDE, side('armed', { ceiling: 700, line: [5, 0.9] })));
+    expect(m.decideRowArm(arm({}, { mode: 'armed', expected: SHADOW_SIDE, line: 5 }))).toEqual(moved('scope.widens', SHADOW_SIDE, side('armed', { ceiling: 700, line: [5, 0.9] })));
+    // Advice armed: no armed line.
+    expect(m.decideRowArm(arm({ rowId: ADVICE }))).toEqual(moved(ADVICE, SHADOW_SIDE, side('armed', { ceiling: 700 })));
+    // Shadow, a gate included: no armed line, and an armed row coming back to shadow drops it.
+    expect(m.decideRowArm(arm({}, { mode: 'shadow', expected: SHADOW_SIDE }))).toEqual(moved('scope.widens', SHADOW_SIDE, SHADOW_SIDE));
+    const armedGate = side('armed', { ceiling: 900, line: [3, 0.8] });
+    expect(m.decideRowArm(arm({}, { mode: 'shadow', expected: armedGate }))).toEqual(moved('scope.widens', armedGate, side('shadow', { ceiling: 900 })));
+    // A held row, resumed with the stored mode: held clears, nothing else, and the cause is not set by the decider.
+    const heldGate = side('armed', { ceiling: 900, line: [3, 0.8], held: true });
+    expect(m.decideRowArm(arm({}, { mode: 'armed', expected: heldGate }))).toEqual(moved('scope.widens', heldGate, side('armed', { ceiling: 900, line: [3, 0.8] })));
+    const heldAdvice = side('armed', { held: true });
+    expect(m.decideRowArm(arm({ rowId: ADVICE }, { mode: 'armed', expected: heldAdvice }))).toEqual(moved(ADVICE, heldAdvice, side('armed')));
+    expect(m.decideRowArm(arm({ rowId: ADVICE }, { mode: 'shadow', expected: heldAdvice }))).toEqual(moved(ADVICE, heldAdvice, side('shadow')));
+  } },
+  { name: 'arm: an armed gate keeps its armedLine when line is omitted, though a newer current line exists (ruling F4); line names the newer one to take it', run: (m) => {
+    const armedOld = side('armed', { ceiling: 700, line: [3, 0.8] });
+    expect(m.decideRowArm(arm({}, { mode: 'armed', expected: armedOld }))).toEqual(moved('scope.widens', armedOld, armedOld));
+    // The old line must have its own canary held, as an old line\'s facts say.
+    expect(m.decideRowArm(arm({}, { mode: 'armed', expected: armedOld, line: 5 }))).toEqual(moved('scope.widens', armedOld, side('armed', { ceiling: 700, line: [5, 0.9] })));
+    // With no current line at all, the armed line still stands.
+    expect(m.decideRowArm(arm({ currentLine: null }, { mode: 'armed', expected: armedOld }))).toEqual(moved('scope.widens', armedOld, armedOld));
+    // An armed advice row has no armed line to keep: it takes the current one if any, else refuses.
+    expect(m.decideRowArm(arm({ rowId: ADVICE }, { mode: 'armed', expected: side('armed', { ceiling: 700 }) }))).toEqual(moved(ADVICE, side('armed', { ceiling: 700 }), side('armed', { ceiling: 700 })));
+    expect(m.decideRowArm(arm({ rowId: ADVICE, currentLine: null }, { mode: 'armed', expected: side('armed', { ceiling: 700 }) }))).toEqual(refusal('line-not-admitted'));
+  } },
+];
+
+export const OFF_CASES: DecisionLinesCase[] = [
+  { name: 'off: unknown row, then a body that is not exactly { expected }, then the move to off with the ceiling kept', run: (m) => {
+    expect(m.decideRowOff({ rowId: 'nope', body: null })).toEqual(refusal('decision-row-unknown'));
+    expect(m.decideRowOff({ rowId: '__proto__', body: { expected: SHADOW_SIDE } })).toEqual(refusal('decision-row-unknown'));
+    for (const body of [null, 'x', [], {}, { expected: null }, { expected: { ...SHADOW_SIDE, ceiling: 1 } }, { expected: SHADOW_SIDE, extra: 1 },
+      { expect: SHADOW_SIDE }, { expected: SHADOW_SIDE, mode: 'off' }]) {
+      expect(m.decideRowOff({ rowId: 'scope.widens', body }), JSON.stringify(body)).toEqual(refusal('bad-request'));
+    }
+    const armed = side('armed', { ceiling: 900, line: [3, 0.9], held: true });
+    expect(m.decideRowOff({ rowId: 'scope.widens', body: { expected: armed } })).toEqual(moved('scope.widens', armed, side('off', { ceiling: 900 })));
+    expect(m.decideRowOff({ rowId: ADVICE, body: { expected: SHADOW_SIDE } })).toEqual(moved(ADVICE, SHADOW_SIDE, side('off', { ceiling: 700 })));
+    expect(m.decideRowOff({ rowId: ADVICE, body: { expected: side('off') } })).toEqual(moved(ADVICE, side('off'), side('off')));
+  } },
+];
+
+export const OFF_FALLBACK_CASES: DecisionLinesCase[] = [
+  { name: 'offFallback (ruling F1): an armed gate whose off the journal refused is held, or already held; anything else is refused', run: (m) => {
+    const armed = side('armed', { line: [3, 0.9] });
+    const held = side('armed', { line: [3, 0.9], held: true });
+    for (const error of ['authority-rolled-back', 'authority-unmeasured']) {
+      expect(m.offFallback('scope.widens', armed, error), error).toBe('hold');
+      expect(m.offFallback('scope.widens', held, error), error).toBe('already-held');
+      expect(m.offFallback('scope.widens', SHADOW_SIDE, error), error).toBe('refuse');
+      expect(m.offFallback('scope.widens', side('off'), error), error).toBe('refuse');
+      expect(m.offFallback('relay.method', side('armed'), error), error).toBe('refuse');
+      expect(m.offFallback('relay.method', side('armed', { held: true }), error), error).toBe('refuse');
+    }
+    for (const error of ['journal-unreadable', 'row-changed', 'authority-rolled', '', 'unknown']) {
+      expect(m.offFallback('scope.widens', armed, error), error).toBe('refuse');
+      expect(m.offFallback('scope.widens', held, error), error).toBe('refuse');
+    }
+  } },
+];
+
+export const CEILING_CASES: DecisionLinesCase[] = [
+  { name: 'ceiling: unknown row, bad-request, bad-ceiling, in that order', run: (m) => {
+    expect(m.decideRowCeiling({ rowId: 'nope', body: null })).toEqual(refusal('decision-row-unknown'));
+    const e = SHADOW_SIDE;
+    for (const body of [null, 'x', [], {}, { ceiling: 700 }, { expected: e }, { ceiling: '700', expected: e }, { ceiling: 700.5, expected: e },
+      { ceiling: null, expected: e }, { ceiling: Number.NaN, expected: e }, { ceiling: 700, expected: e, extra: 1 }, { ceiling: 700, expected: null },
+      { ceiling: 700, expected: { ...e, ceiling: 10 } }, { ceiling: 49.5, expected: e }, { ceiling: Infinity, expected: e }]) {
+      expect(m.decideRowCeiling({ rowId: 'scope.widens', body }), JSON.stringify(body)).toEqual(refusal('bad-request'));
+    }
+    for (const ceiling of [49, 5001, 0, -1, 2 ** 53 - 1]) {
+      expect(m.decideRowCeiling({ rowId: 'scope.widens', body: { ceiling, expected: e } }), String(ceiling)).toEqual(refusal('bad-ceiling'));
+    }
+    // A bad body is refused before its ceiling is bounded.
+    expect(m.decideRowCeiling({ rowId: 'scope.widens', body: { ceiling: 49, expected: null } })).toEqual(refusal('bad-request'));
+  } },
+  { name: 'ceiling (ruling F4): only the ceiling changes; held, mode and armedLine are kept, and the cause is the store\'s', run: (m) => {
+    const heldGate = side('armed', { ceiling: 900, line: [3, 0.8], held: true });
+    expect(m.decideRowCeiling({ rowId: 'scope.widens', body: { ceiling: 300, expected: heldGate } }))
+      .toEqual(moved('scope.widens', heldGate, side('armed', { ceiling: 300, line: [3, 0.8], held: true })));
+    for (const ceiling of [50, 5000]) {
+      expect(m.decideRowCeiling({ rowId: ADVICE, body: { ceiling, expected: SHADOW_SIDE } })).toEqual(moved(ADVICE, SHADOW_SIDE, side('shadow', { ceiling })));
+    }
+    const off = side('off');
+    expect(m.decideRowCeiling({ rowId: ADVICE, body: { ceiling: 800, expected: off } })).toEqual(moved(ADVICE, off, side('off', { ceiling: 800 })));
+    const armed = side('armed', { line: [4, 0.95] });
+    expect(m.decideRowCeiling({ rowId: 'scope.widens', body: { ceiling: 601, expected: armed } })).toEqual(moved('scope.widens', armed, side('armed', { ceiling: 601, line: [4, 0.95] })));
+  } },
+];
+
+const KEY = 'key-secret-value-0001';
+type KeyInput = Parameters<DecisionLinesModule['decideKeyDoor']>[0];
+const keyBody = (o: Record<string, unknown> = {}): unknown => ({ kind: 'local', endpoint: 'http://127.0.0.1:9000/v1', modelId: 'model-a', key: KEY, ...o });
+const keyDoor = (o: Partial<KeyInput> = {}, body: unknown = keyBody()): KeyInput => ({ body, addresses: ['127.0.0.1'], stored: null, ...o });
+const STORED = { kind: 'local' as const, origin: 'http://127.0.0.1:9000', modelId: 'model-a', keySet: true };
+
+/** The key door, with the rule that no refusal carries the key's text asserted on every answer. */
+const kd = (m: DecisionLinesModule, input: KeyInput): ReturnType<DecisionLinesModule['decideKeyDoor']> => {
+  const got = m.decideKeyDoor(input);
+  if (!got.ok) expect(JSON.stringify(got), 'the key\'s text is never in a refusal').not.toContain(KEY);
+  return got;
+};
+
+export const KEY_DOOR_CASES: DecisionLinesCase[] = [
+  { name: 'key door 1: a body that is not exactly kind, endpoint, modelId and an optional key is bad-request', run: (m) => {
+    const bad: unknown[] = [null, 'x', 7, [], [keyBody()], {}, { kind: 'local', endpoint: 'http://127.0.0.1', key: KEY }, { endpoint: 'http://127.0.0.1', modelId: 'm' },
+      { kind: 'local', modelId: 'm' }, keyBody({ extra: 1 }), keyBody({ kind: 'cloud' }), keyBody({ kind: 7 }), keyBody({ kind: null }),
+      keyBody({ endpoint: 7 }), keyBody({ endpoint: null }), keyBody({ modelId: '' }), keyBody({ modelId: 'x'.repeat(201) }), keyBody({ modelId: 7 }),
+      keyBody({ key: '' }), keyBody({ key: 'a\nb' }), keyBody({ key: 'a\rb' }), keyBody({ key: 'a\u2028b' }), keyBody({ key: 'a\u2029b' }),
+      keyBody({ key: `${'k'.repeat(20)}\nk` }), keyBody({ key: `${'k'.repeat(20)}\rk` }), keyBody({ key: `${'k'.repeat(20)}\u2028k` }), keyBody({ key: `${'k'.repeat(20)}\u2029k` }), keyBody({ key: 'x'.repeat(4097) }), keyBody({ key: 7 }), keyBody({ key: null }),
+      keyBody({ key: undefined })];
+    for (const body of bad) {
+      const got = kd(m, keyDoor({}, body));
+      expect(got, JSON.stringify(body)).toEqual(refusal('bad-request'));
+      expect(JSON.stringify(got)).not.toContain(KEY);
+    }
+    expect(kd(m, keyDoor({}, keyBody({ modelId: 'x'.repeat(200) }))).ok).toBe(true);
+    expect(kd(m, keyDoor({}, keyBody({ key: 'x'.repeat(4096) }))).ok).toBe(true);
+    expect(kd(m, keyDoor({}, keyBody({ modelId: 'm' }))).ok).toBe(true);
+    expect(kd(m, keyDoor({ stored: STORED }, { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' })).ok).toBe(true);
+  } },
+  { name: 'key door 1b: a model id on one line, a key a header can carry and the masker catches (review 2418 F9)', run: (m) => {
+    const K20 = 'k'.repeat(20);
+    const secretFree = (got: ReturnType<typeof m.decideKeyDoor>, why: string): void => {
+      expect(got, why).toEqual(refusal('bad-request'));
+      expect(JSON.stringify(got), why).not.toContain('kkkk');
+    };
+    // The model id is one line: a space is fine, a line break of any kind is not.
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ modelId: 'm\nx', key: K20 }))), 'modelId LF');
+    for (const modelId of ['m\rx', 'm\u2028x', 'm\u2029x', 'm\u000bx', 'm\u000cx', 'm\u0085x']) expect(kd(m, keyDoor({}, keyBody({ modelId }))), JSON.stringify(modelId)).toEqual(refusal('bad-request'));
+    expect(kd(m, keyDoor({}, keyBody({ modelId: 'm x' }))).ok, 'a model id with a space is one line').toBe(true);
+    // A key with NUL, or with a character above U+00FF, cannot ride a header.
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}\u0000` }))), 'NUL');
+    // The line breaks isOneLine knows beyond CR and LF (VT, FF, NEL) are above the 20-byte floor and inside the header range.
+    for (const brk of ['\u000b', '\u000c', '\u0085']) secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}${brk}k` }))), `break ${brk.charCodeAt(0)}`);
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}\u0100` }))), 'U+0100');
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${K20}\u20ac` }))), 'U+20AC');
+    // U+00FF is the last character a header carries, and it is 2 UTF-8 bytes: 18 ASCII and it make 20.
+    expect(kd(m, keyDoor({}, keyBody({ key: `${'k'.repeat(18)}\u00ff` }))).ok, '18 ASCII and U+00FF is 20 bytes').toBe(true);
+    // The masker's floor is 20 UTF-8 bytes (SECRET_TAIL_MIN): 19 is refused, 20 passes, and a short key never shows in the refusal.
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: 'k'.repeat(19) }))), '19 bytes');
+    secretFree(m.decideKeyDoor(keyDoor({}, keyBody({ key: `${'k'.repeat(17)}\u00ff` }))), '17 ASCII and U+00FF is 19 bytes');
+    expect(kd(m, keyDoor({}, keyBody({ key: K20 }))).ok, '20 bytes').toBe(true);
+    // A key-less call (the stored one) is not held to the floor.
+    expect(kd(m, keyDoor({ stored: STORED }, { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' })).ok).toBe(true);
+  } },
+  { name: 'key door 1c: a key is visible characters only, and its floor is counted after the trailing = is set aside (review 2431 L3)', run: (m) => {
+    const K20 = 'k'.repeat(20);
+    const K19 = 'k'.repeat(19);
+    const refused = (key: string, why: string): void => {
+      const got = m.decideKeyDoor(keyDoor({}, keyBody({ key })));
+      expect(got, why).toEqual(refusal('bad-request'));
+      expect(JSON.stringify(got), why).not.toContain('kkkk');
+    };
+    // The masker sets a trailing = aside, so 19 visible characters and = (or ==) are 19 bytes, under the floor.
+    refused(`${K19}=`, '19 plus =');
+    refused(`${K19}==`, '19 plus ==');
+    refused('='.repeat(25), 'nothing but =');
+    // 20 visible characters pass with or without it; an = inside the key is counted.
+    expect(kd(m, keyDoor({}, keyBody({ key: `${K20}=` }))).ok, '20 plus =').toBe(true);
+    expect(kd(m, keyDoor({}, keyBody({ key: `${K20}==` }))).ok, '20 plus ==').toBe(true);
+    expect(kd(m, keyDoor({}, keyBody({ key: `${'k'.repeat(10)}=${'k'.repeat(9)}` }))).ok, 'an = inside is a byte (the masker\'s own refusal is the route\'s)').toBe(true);
+    // No space, tab, control character, DEL, no-break space or soft hyphen, anywhere in the key.
+    const k8 = 'k'.repeat(8);
+    for (const [why, ch] of [['space', ' '], ['tab', '\t'], ['BEL', '\u0007'], ['ESC', '\u001b'], ['DEL', '\u007f'], ['C1 control', '\u0090'],
+      ['U+00A0', '\u00a0'], ['U+00AD', '\u00ad']] as const) {
+      refused(`${k8}${ch}${k8}${k8}`, `${why} inside`);
+      refused(`${ch}${K20}`, `${why} leading`);
+      refused(`${K20}${ch}`, `${why} trailing`);
+    }
+    // The edges of the visible range pass: ! and ~, U+00A1 and U+00AC, U+00AE and U+00FF.
+    for (const ch of ['!', '~', '\u00a1', '\u00ac', '\u00ae', '\u00ff']) {
+      expect(kd(m, keyDoor({}, keyBody({ key: `${K20}${ch}` }))).ok, `U+${ch.charCodeAt(0).toString(16)} is a key character`).toBe(true);
+    }
+  } },
+  { name: 'key door 2: an endpoint that is no http or https URL, or carries userinfo, a query or a fragment, is bad-endpoint', run: (m) => {
+    const hosted = (endpoint: string): unknown => keyBody({ kind: 'hosted', endpoint });
+    const pub = { addresses: ['203.0.113.9'] };
+    for (const endpoint of ['not a url', '', 'host.example', 'ftp://host.example/', 'file:///etc/passwd', 'javascript:alert(1)', 'https://', 'https://user@host.example/',
+      'https://user:pw@host.example/', 'https://@host.example/', 'https://host.example/?q=1', 'https://host.example/?', 'https://host.example/v1?x', 'https://host.example/#frag',
+      'https://host.example/#', 'https://host.example?q=1']) {
+      const got = kd(m, keyDoor(pub, hosted(endpoint)));
+      expect(got, endpoint).toEqual(refusal('bad-endpoint'));
+      expect(JSON.stringify(got)).not.toContain(KEY);
+    }
+    // A scheme other than http and https is refused for a local host too, which no later row would stop.
+    for (const endpoint of ['ftp://127.0.0.1:9000', 'ws://127.0.0.1:9000', 'file:///etc/passwd']) {
+      expect(kd(m, keyDoor({}, keyBody({ endpoint }))), endpoint).toEqual(refusal('bad-endpoint'));
+    }
+    expect(kd(m, keyDoor(pub, hosted('https://host.example/v1/chat'))).ok).toBe(true);
+    expect(kd(m, keyDoor(pub, hosted('https://model-host-a.example:8443/v1'))).ok).toBe(true);
+  } },
+  { name: 'key door 3: hosted and zero-retention endpoints must be https', run: (m) => {
+    for (const kind of ['hosted', 'zero-retention']) {
+      expect(kd(m, keyDoor({ addresses: ['127.0.0.1'] }, keyBody({ kind, endpoint: 'http://127.0.0.1:9000' }))), kind).toEqual(refusal('bad-endpoint'));
+      expect(kd(m, keyDoor({ addresses: ['203.0.113.9'] }, keyBody({ kind, endpoint: 'http://model-host-a.example' }))), kind).toEqual(refusal('bad-endpoint'));
+      expect(kd(m, keyDoor({ addresses: ['203.0.113.9'] }, keyBody({ kind, endpoint: 'https://model-host-a.example' }))).ok, kind).toBe(true);
+    }
+  } },
+  { name: 'key door 4: a local endpoint names an address literal or localhost, and every resolved address is loopback or private', run: (m) => {
+    const local = (endpoint: string, addresses: string[]): unknown => kd(m, keyDoor({ addresses }, keyBody({ endpoint })));
+    // A public address for a local host.
+    expect(local('https://203.0.113.9', ['203.0.113.9'])).toEqual(refusal('bad-endpoint'));
+    expect(local('https://10.0.0.5', ['10.0.0.5', '203.0.113.9'])).toEqual(refusal('bad-endpoint'));
+    expect(local('https://10.0.0.5', [])).toEqual(refusal('bad-endpoint'));
+    // A name, even one that resolves to a private address.
+    expect(local('https://model-host-a.example', ['10.0.0.5'])).toEqual(refusal('bad-endpoint'));
+    expect(local('https://model-host-a.example', ['127.0.0.1'])).toEqual(refusal('bad-endpoint'));
+    expect(local('http://localhost.example:9000', ['127.0.0.1'])).toEqual(refusal('bad-endpoint'));
+    // Literals and localhost.
+    expect((local('https://10.0.0.5', ['10.0.0.5']) as { ok: boolean }).ok).toBe(true);
+    expect((local('https://192.168.1.2:9000/v1', ['192.168.1.2']) as { ok: boolean }).ok).toBe(true);
+    expect((local('https://172.16.0.1', ['172.16.0.1']) as { ok: boolean }).ok).toBe(true);
+    expect((local('https://[fd00::1]:9000/v1', ['fd00::1']) as { ok: boolean }).ok).toBe(true);
+    expect((local('http://[::1]:9000', ['::1']) as { ok: boolean }).ok).toBe(true);
+    expect((local('http://localhost:9000', ['127.0.0.1']) as { ok: boolean }).ok).toBe(true);
+    expect((local('https://localhost', ['::1']) as { ok: boolean }).ok).toBe(true);
+    expect(local('https://[2001:db8::1]', ['2001:db8::1'])).toEqual(refusal('bad-endpoint'));
+    // A hosted endpoint is not held to this row.
+    expect(kd(m, keyDoor({ addresses: ['203.0.113.9'] }, keyBody({ kind: 'hosted', endpoint: 'https://model-host-a.example' }))).ok).toBe(true);
+  } },
+  { name: 'key door 5: a key goes over http only to a loopback address', run: (m) => {
+    const local = (endpoint: string, addresses: string[]): unknown => kd(m, keyDoor({ addresses }, keyBody({ endpoint })));
+    expect((local('http://127.0.0.1', ['127.0.0.1']) as { ok: boolean }).ok).toBe(true);
+    expect((local('http://127.0.0.1:9000/v1', ['127.0.0.1']) as { ok: boolean }).ok).toBe(true);
+    expect((local('http://[::1]', ['::1']) as { ok: boolean }).ok).toBe(true);
+    expect(local('http://10.0.0.5', ['10.0.0.5'])).toEqual(refusal('bad-endpoint'));
+    expect(local('http://192.168.0.5:9000', ['192.168.0.5'])).toEqual(refusal('bad-endpoint'));
+    expect(local('http://[fd00::1]', ['fd00::1'])).toEqual(refusal('bad-endpoint'));
+    expect(local('http://localhost', ['127.0.0.1', '10.0.0.5'])).toEqual(refusal('bad-endpoint'));
+    expect((local('https://10.0.0.5', ['10.0.0.5']) as { ok: boolean }).ok).toBe(true);
+  } },
+  { name: 'key door 6: a new endpoint origin needs the key in the same call', run: (m) => {
+    const body = (o: Record<string, unknown>): unknown => ({ kind: 'local', endpoint: 'http://127.0.0.1:9001', modelId: 'model-a', ...o });
+    const got = kd(m, keyDoor({ stored: STORED }, body({})));
+    expect(got).toEqual(refusal('key-required'));
+    expect(kd(m, keyDoor({ stored: { ...STORED, keySet: false } }, body({})))).toEqual(refusal('key-required'));
+    expect(kd(m, keyDoor({ stored: STORED, addresses: ['127.0.0.1'] }, body({ key: KEY })))).toMatchObject({ ok: true, origin: 'http://127.0.0.1:9001', hostChanged: true, keyChanged: true });
+    expect(kd(m, keyDoor({ stored: null }, body({})))).toEqual(refusal('key-unset'));
+    // The same origin under another path is the same origin.
+    expect(kd(m, keyDoor({ stored: STORED }, { kind: 'local', endpoint: 'http://127.0.0.1:9000/v2', modelId: 'model-a' }))).toMatchObject({ ok: true, key: null, hostChanged: false, keyChanged: false });
+    // A different scheme or port is a different origin; row 6 comes after the endpoint rules.
+    expect(kd(m, keyDoor({ stored: { ...STORED, origin: 'https://127.0.0.1:9000' } }, { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' }))).toEqual(refusal('key-required'));
+    expect(kd(m, keyDoor({ stored: STORED, addresses: ['10.0.0.5'] }, { kind: 'local', endpoint: 'http://10.0.0.5:9000', modelId: 'model-a' }))).toEqual(refusal('bad-endpoint'));
+  } },
+  { name: 'key door 7: no key and no key stored is key-unset', run: (m) => {
+    const body = { kind: 'local', endpoint: 'http://127.0.0.1:9000', modelId: 'model-a' };
+    expect(kd(m, keyDoor({ stored: null }, body))).toEqual(refusal('key-unset'));
+    expect(kd(m, keyDoor({ stored: { ...STORED, keySet: false } }, body))).toEqual(refusal('key-unset'));
+    expect(kd(m, keyDoor({ stored: STORED }, body)).ok).toBe(true);
+  } },
+  { name: 'key door 8: the apply answer: origin, whether the host changed, whether the key did', run: (m) => {
+    expect(kd(m, keyDoor())).toEqual({ ok: true, kind: 'local', endpoint: 'http://127.0.0.1:9000/v1', origin: 'http://127.0.0.1:9000',
+      modelId: 'model-a', key: KEY, hostChanged: true, keyChanged: true });
+    const same = { kind: 'local', endpoint: 'http://127.0.0.1:9000/v1', modelId: 'model-a' };
+    expect(kd(m, keyDoor({ stored: STORED }, same))).toEqual({ ok: true, kind: 'local', endpoint: 'http://127.0.0.1:9000/v1', origin: 'http://127.0.0.1:9000',
+      modelId: 'model-a', key: null, hostChanged: false, keyChanged: false });
+    // A key alone, on the same host.
+    expect(kd(m, keyDoor({ stored: STORED }, { ...same, key: KEY }))).toMatchObject({ hostChanged: false, keyChanged: true, key: KEY });
+    // A model change alone, and a kind change alone, are host changes.
+    expect(kd(m, keyDoor({ stored: STORED }, { ...same, modelId: 'model-b' }))).toMatchObject({ hostChanged: true, keyChanged: false });
+    expect(kd(m, keyDoor({ stored: { ...STORED, kind: 'hosted' } }, same))).toMatchObject({ hostChanged: true, keyChanged: false });
+    // The key\'s text is never in a refusal, whichever row refuses.
+    for (const got of [kd(m, keyDoor({ addresses: [] })), kd(m, keyDoor({ stored: { ...STORED, origin: 'http://127.0.0.1:1' } }, keyBody({ key: undefined })))]) {
+      expect(got.ok).toBe(false);
+      expect(JSON.stringify(got)).not.toContain(KEY);
+    }
+  } },
+  { name: 'keyDoorHostname: the endpoint\'s hostname, brackets stripped, lower-cased; null when it does not parse', run: (m) => {
+    const h = (endpoint: unknown): string | null => m.keyDoorHostname({ endpoint });
+    expect(h('https://[::1]:9000/x')).toBe('::1');
+    expect(h('http://[fd00::1]/')).toBe('fd00::1');
+    expect(h('http://127.0.0.1:9000')).toBe('127.0.0.1');
+    expect(h('https://Model-Host-A.example/v1')).toBe('model-host-a.example');
+    expect(h('http://localhost')).toBe('localhost');
+    expect(h('nope')).toBeNull();
+    expect(h('file:///etc/passwd')).toBeNull();
+    expect(h('')).toBeNull();
+    expect(h(7)).toBeNull();
+    expect(h(null)).toBeNull();
+    expect(m.keyDoorHostname(null)).toBeNull();
+    expect(m.keyDoorHostname('https://host.example')).toBeNull();
+    expect(m.keyDoorHostname([])).toBeNull();
+    expect(m.keyDoorHostname({})).toBeNull();
+  } },
+];
+
+export const STEP_UP_CASES: DecisionLinesCase[] = [
+  { name: 'decisionStepUp: arm and key-put always ask, key-delete never, off and ceiling ask exactly when the move widens', run: (m) => {
+    const sides = [side('off'), side('shadow'), side('shadow', { ceiling: 700 }), side('armed', { line: [3, 0.9] }), side('armed', { line: [3, 0.9], held: true }), side('armed')];
+    expect(m.decisionStepUp('arm')).toBe(true);
+    expect(m.decisionStepUp('key-put')).toBe(true);
+    expect(m.decisionStepUp('key-delete')).toBe(false);
+    for (const gate of [true, false]) {
+      for (const from of sides) for (const to of sides) {
+        // The three doors that need no row take no sides (review 2418 F9).
+        const widens = m.decisionRowDirection(gate, from, to) === 'widens';
+        expect(m.decisionStepUp('off', gate, from, to)).toBe(widens);
+        expect(m.decisionStepUp('ceiling', gate, from, to)).toBe(widens);
+      }
+    }
+    const armed = side('armed', { line: [3, 0.9] });
+    expect(m.decisionStepUp('off', true, armed, side('off'))).toBe(true);
+    expect(m.decisionStepUp('off', false, side('armed'), side('off'))).toBe(false);
+    expect(m.decisionStepUp('off', true, side('shadow'), side('off'))).toBe(false);
+    expect(m.decisionStepUp('ceiling', false, side('shadow'), side('shadow', { ceiling: 700 }))).toBe(true);
+    expect(m.decisionStepUp('ceiling', false, side('shadow', { ceiling: 700 }), side('shadow'))).toBe(false);
+  } },
+];
+
+// ── the holds the key door makes, and the operator's read (Task 7) ────────────────────────────────────────────────────
+
+export const HOLD_CASES: DecisionLinesCase[] = [
+  { name: 'heldOnHostChange: an armed row not held whose line is not under the new key is held; nothing else is', run: (m) => {
+    for (const mode of ['off', 'shadow', 'armed'] as const) for (const held of [false, true]) for (const under of [false, true]) {
+      const got = m.heldOnHostChange(side(mode, { held }), under);
+      expect(got, `${mode} held=${held} under=${under}`).toBe(mode === 'armed' && !held && !under);
+    }
+  } },
+  { name: 'heldOnKeyRemoval: an armed gate not held is held; an armed advice row, a held gate and a gate in shadow or off are not', run: (m) => {
+    for (const gate of [true, false]) for (const mode of ['off', 'shadow', 'armed'] as const) for (const held of [false, true]) {
+      expect(m.heldOnKeyRemoval(gate, side(mode, { held })), `gate=${gate} ${mode} held=${held}`).toBe(gate && mode === 'armed' && !held);
+    }
+  } },
+];
+
+const usage = (serve: number, maintain: number, reserved: number) => ({ measured: true as const, serve, maintain, reserved, ceiling: 600, fleetTotal: serve + maintain + reserved });
+const stateOf = (mode: DecisionRowSide['mode'], o: { line?: [number, number]; held?: boolean; cause?: 'drift' | null } = {}) =>
+  ({ ...side(mode, o), heldCause: o.cause ?? null });
+const seen = (id: number, line = 0.9) => ({ id, line, labelled: 120, errors: 1, bound: 0.04, canaryAsked: 295, canaryExpected: 295, canaryCrossed: 3 });
+const HOST_VIEW = { kind: 'local' as const, endpoint: 'http://127.0.0.1:9000/v1', origin: 'http://127.0.0.1:9000', modelId: 'model-a' };
+
+export const VIEW_CASES: DecisionLinesCase[] = [
+  { name: 'view: an armed gate is offered a newer current line, and not an older or an equal one', run: (m) => {
+    const armed = stateOf('armed', { line: [5, 0.9] });
+    const offered = (currentId: number | null) => m.decisionModelViewOf({
+      rows: [{ row: 'scope.widens', state: armed, usage: usage(1, 2, 3), current: currentId === null ? null : seen(currentId, 0.95) }],
+      fleetToday: 6, fleetCap: 9000, host: HOST_VIEW, key: { setAt: 7, masked: true },
+    }).rows[0]!.offered;
+    expect(offered(6)).toEqual({ id: 6, line: 0.95 });
+    expect(offered(9)).toEqual({ id: 9, line: 0.95 });
+    expect(offered(5)).toBeNull();
+    expect(offered(4)).toBeNull();
+    expect(offered(null)).toBeNull();
+  } },
+  { name: 'view: only an armed gate is offered a line (not a gate in shadow, off or with no armed line; never an advice row)', run: (m) => {
+    const offered = (row: DecisionRowId, state: ReturnType<typeof stateOf>) => m.decisionModelViewOf({
+      rows: [{ row, state, usage: usage(0, 0, 0), current: seen(9) }], fleetToday: 0, fleetCap: 1, host: HOST_VIEW, key: null,
+    }).rows[0]!.offered;
+    expect(offered('scope.widens', stateOf('armed', { line: [5, 0.9] }))).toEqual({ id: 9, line: 0.9 });
+    expect(offered('scope.widens', stateOf('shadow'))).toBeNull();
+    expect(offered('scope.widens', stateOf('off'))).toBeNull();
+    expect(offered('scope.widens', stateOf('shadow', { line: [5, 0.9] }))).toBeNull();
+    expect(offered('scope.widens', stateOf('off', { line: [5, 0.9] }))).toBeNull();
+    expect(offered('scope.widens', stateOf('armed'))).toBeNull();
+    // an advice row carries no armed line; one that somehow did is still never offered one
+    expect(offered(ADVICE, stateOf('armed'))).toBeNull();
+    expect(offered(ADVICE, stateOf('armed', { line: [5, 0.9] }))).toBeNull();
+    expect(offered(ADVICE, stateOf('shadow'))).toBeNull();
+  } },
+  { name: 'view: today.total is serve plus maintenance plus reserved, the side and the hold are the row\'s, and the line carries the counts', run: (m) => {
+    const view = m.decisionModelViewOf({
+      rows: [{ row: 'scope.widens', state: stateOf('armed', { line: [5, 0.9], held: true, cause: 'drift' }), usage: usage(10, 20, 3), current: seen(5) },
+        { row: ADVICE, state: stateOf('off'), usage: usage(0, 0, 0), current: null }],
+      fleetToday: 33, fleetCap: 9000, host: HOST_VIEW, key: { setAt: 7, masked: false },
+    });
+    expect(view.rows.map((r) => r.id)).toEqual(['scope.widens', ADVICE]);
+    expect(view.rows[0]).toEqual({
+      id: 'scope.widens', side: { mode: 'armed', ceiling: 600, armedLine: { id: 5, line: 0.9 }, held: true }, heldWhy: 'drift',
+      direction: 'gate', privateState: true, today: { serve: 10, maintenance: 20, reserved: 3, total: 33 },
+      line: { id: 5, line: 0.9, admitted: true, labelled: 120, errors: 1, bound: 0.04, canaryAsked: 295, canaryExpected: 295, canaryCrossed: 3 },
+      offered: null,
+    });
+    expect(view.rows[1]).toMatchObject({ direction: 'advice', privateState: false, heldWhy: null, line: null, offered: null, today: { total: 0 } });
+    expect(view.fleetToday).toBe(33);
+    expect(view.fleetCap).toBe(9000);
+    expect(view.host).toEqual(HOST_VIEW);
+    expect(view.key).toEqual({ setAt: 7, masked: false });
+    expect(m.decisionModelViewOf({ rows: [], fleetToday: 0, fleetCap: 1, host: null, key: null })).toEqual({ rows: [], fleetToday: 0, fleetCap: 1, host: null, key: null });
+  } },
+];
+
+// ── the lane's holds (Task 9) ────────────────────────────────────────────────────────────────────────────────────────
+
+const LKEY = { hostKind: 'local' as const, origin: 'http://127.0.0.1:9000', modelId: 'model-a', revision: 'bfac70e8caabb092' };
+/** `n` clear yes answers at `p`, the first `errors` of them labelled `no`. */
+const yesAnswers = (n: number, errors: number, p = 0.95): LabelledAnswer[] =>
+  Array.from({ length: n }, (_, i) => ({ p, verdict: 'yes' as const, label: i < errors ? 'no' as const : 'yes' as const }));
+
+export const LANE_HOLD_CASES: DecisionLinesCase[] = [
+  { name: 'armedAndFree: armed and not held, and nothing else', run: (m) => {
+    for (const mode of ['off', 'shadow', 'armed'] as const) for (const held of [false, true]) {
+      expect(m.armedAndFree(side(mode, { held })), `${mode} held=${held}`).toBe(mode === 'armed' && !held);
+    }
+  } },
+  { name: 'lineUnderKey: a line is under a key only when the kind, origin, model and revision all agree; no line or no key is not under it', run: (m) => {
+    expect(m.lineUnderKey(LKEY, { ...LKEY })).toBe(true);
+    for (const [field, other] of [['hostKind', 'hosted'], ['origin', 'http://127.0.0.1:9001'], ['modelId', 'model-b'], ['revision', '0000000000000000']] as const) {
+      expect(m.lineUnderKey(LKEY, { ...LKEY, [field]: other }), field).toBe(false);
+    }
+    expect(m.lineUnderKey(null, LKEY)).toBe(false);
+    expect(m.lineUnderKey(LKEY, null)).toBe(false);
+    expect(m.lineUnderKey(null, null)).toBe(false);
+  } },
+  { name: 'armedLineBoundFails: the bound at the armed line is over the target (59 clean answers pass a 5% target, 58 do not)', run: (m) => {
+    const gate = DECISION_QUESTIONS['scope.widens'];
+    const armed = side('armed', { line: [5, 0.9] });
+    expect(m.armedLineBoundFails(gate, armed, yesAnswers(59, 0))).toBe(false);
+    expect(m.armedLineBoundFails(gate, armed, yesAnswers(58, 0))).toBe(true);
+    expect(m.armedLineBoundFails(gate, armed, yesAnswers(100, 0))).toBe(false);
+    expect(m.armedLineBoundFails(gate, armed, yesAnswers(100, 10))).toBe(true);
+    expect(m.armedLineBoundFails(gate, armed, [])).toBe(true);
+    // a bound exactly at the target does not fail it (a synthetic target, since no catalogue row's lies on a bound)
+    const exact = { ...gate, target: upperBound95(0, 59) as 0.05 };
+    expect(m.armedLineBoundFails(exact, armed, yesAnswers(59, 0))).toBe(false);
+    expect(m.armedLineBoundFails({ ...gate, target: (upperBound95(0, 59) - 1e-9) as 0.05 }, armed, yesAnswers(59, 0))).toBe(true);
+  } },
+  { name: 'armedLineBoundFails: only answers at or over the armed line count, at that line and no other', run: (m) => {
+    const gate = DECISION_QUESTIONS['scope.widens'];
+    // 100 clean answers at 0.95 and 50 wrong ones at 0.8: at line 0.9 only the clean ones count; at 0.7 the wrong ones do too.
+    const mixed = [...yesAnswers(100, 0, 0.95), ...yesAnswers(50, 50, 0.8)];
+    expect(m.armedLineBoundFails(gate, side('armed', { line: [5, 0.9] }), mixed)).toBe(false);
+    expect(m.armedLineBoundFails(gate, side('armed', { line: [5, 0.7] }), mixed)).toBe(true);
+    // a line above every answer counts none, and an empty count fails the bound
+    expect(m.armedLineBoundFails(gate, side('armed', { line: [5, 0.99] }), mixed)).toBe(true);
+  } },
+  { name: 'armedLineBoundFails: never for advice, a held row, a row not armed or a gate with no armed line', run: (m) => {
+    const gate = DECISION_QUESTIONS['scope.widens'];
+    const bad = yesAnswers(100, 40);
+    expect(m.armedLineBoundFails(gate, side('armed', { line: [5, 0.9] }), bad)).toBe(true);
+    expect(m.armedLineBoundFails(DECISION_QUESTIONS[ADVICE], side('armed', { line: [5, 0.9] }), bad)).toBe(false);
+    expect(m.armedLineBoundFails(gate, side('armed', { line: [5, 0.9], held: true }), bad)).toBe(false);
+    expect(m.armedLineBoundFails(gate, side('shadow', { line: [5, 0.9] }), bad)).toBe(false);
+    expect(m.armedLineBoundFails(gate, side('off', { line: [5, 0.9] }), bad)).toBe(false);
+    expect(m.armedLineBoundFails(gate, side('armed'), bad)).toBe(false);
+  } },
+];
+
+export const ALL_DECISION_LINES_CASES: DecisionLinesCase[] = [
+  ...DIRECTION_CASES, ...LINE_CASES, ...CANARY_CASES, ...ARM_CASES, ...OFF_CASES, ...OFF_FALLBACK_CASES, ...CEILING_CASES,
+  ...KEY_DOOR_CASES, ...STEP_UP_CASES, ...HOLD_CASES, ...VIEW_CASES, ...LANE_HOLD_CASES,
 ];

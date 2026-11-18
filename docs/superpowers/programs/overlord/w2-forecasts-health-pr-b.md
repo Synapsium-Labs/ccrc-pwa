@@ -9,17 +9,19 @@ numbers. No D-number is defined here.
 - **Built:** the health words, worst first, and their limits (`shared/programmeFacts.ts`); the `health` kind of the
   trigger table; `programmeHealth`, `healthFactsOf`, `healthExtrasFrom`, `criticalPath` and `healthChangeVerdict`
   (`server/src/coord/programmeHealth.ts`, L1); `waveSpend`, `doneCycles` and `runSpendVerdict` beside the wave rule
-  (`server/src/coord/programmeMeasures.ts`, L1); migration 98, `programme_health` and `run_spend`, each with one writer,
+  (`server/src/coord/programmeMeasures.ts`, L1); migration 101, `programme_health` and `run_spend`, each with one writer,
   and `runs.dispatchConversation` (fix round 1, F3), written by the dispatch;
   the forecast lane's spend and health arms; and `portfolioFor`'s W2 measures: the newest health row, the newest seal,
   the edges, the spend read, the critical path and the fleet's calibration.
 - **Live at merge** (the index's question 20): the health arm records rows and record-only notices (none on a
   programme's first row, at most one per programme and word a day); the spend arm records rows for runs closed from its
   first pass on; the portfolio read gains optional fields. Nothing pushes.
-- **Migration slot:** 98. Built at 95, the next free on `main` at `5d8d3d0d3` (forecasts A took 94). The Linear
+- **Migration slot:** 101. Built at 95, the next free on `main` at `5d8d3d0d3` (forecasts A took 94). The Linear
   hierarchy's wave 4 (#2982) landed 95, gates A (#2993) 96 and the renewal hand-offs (#2934) 97 first, so three
   absorptions of `main` (each under the coordinator's ruling or standing license, migration, census and floor rows only)
-  renumbered it to 96, 97 and then 98. Other PRs land ahead of this one, so it renumbers again at its landing merge.
+  renumbered it to 96, 97 and then 98. Decision model B (#2990) then took 98, the ladder (#2994) 99 and the quiz record
+  (#2991) 100, so the landing merge (main at `23bf97b6c`, on the coordinator's landing mail) made it 101. In that merge
+  the only code hunk was `watch.ts`'s import block, resolved on the coordinator's word, keeping both sides.
 
 ## 1. Departures from the plan, by slug
 

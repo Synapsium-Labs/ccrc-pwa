@@ -3,7 +3,7 @@
 // (`LANE_ARM_TEXT`, `shared/lane-arm.ts`); nothing here retypes one.
 import {
   LANE_ARM_TEXT, isLaneArmChoice, isLaneArmImport, isLaneArmLane, laneArmGate, laneArmLive,
-  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmRowView, type LaneArmView,
+  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmQuizPending, type LaneArmQuizView, type LaneArmRowView, type LaneArmView,
 } from '../../../shared/lane-arm';
 import { isOneOf, isRecord } from '../lib/wire';
 
@@ -28,6 +28,55 @@ function asRow(raw: unknown): LaneArmRowView | null {
   return { lane, stored: stored as LaneArmRowView['stored'], detail, live, updatedAt, imported: imp, marker };
 }
 
+const QUIZ_COUNTS = ['questions', 'families', 'answered', 'runFailed', 'absent'] as const;
+const isFiniteNum = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v);
+
+/** One pending quiz run, whole, or null. */
+function asQuizPending(raw: unknown): LaneArmQuizPending | null {
+  if (!isRecord(raw)) return null;
+  const { id, recordedAt, reportShaPrefix, recordedBy, measuredAt, score, lo, hi } = raw;
+  if (!isFiniteNum(id) || !isFiniteNum(recordedAt) || !isFiniteNum(measuredAt) || !isFiniteNum(score) || !isFiniteNum(lo) || !isFiniteNum(hi)) return null;
+  if (typeof reportShaPrefix !== 'string' || typeof recordedBy !== 'string') return null;
+  const counts: number[] = [];
+  for (const k of QUIZ_COUNTS) {
+    const v = raw[k];
+    if (!isFiniteNum(v)) return null;
+    counts.push(v);
+  }
+  const [questions, families, answered, runFailed, absent] = counts as [number, number, number, number, number];
+  return { id, recordedAt, reportShaPrefix, recordedBy, measuredAt, score, lo, hi, questions, families, answered, runFailed, absent };
+}
+
+/** The quiz block, whole, or null (a malformed one is dropped: the card then shows no block, never a throw). */
+function asQuizView(raw: unknown): LaneArmQuizView | null {
+  if (!isRecord(raw) || !isRecord(raw.baseline) || !isRecord(raw.pending)) return null;
+  const b = raw.baseline;
+  let baseline: LaneArmQuizView['baseline'];
+  if (b.state === 'recorded' && isFiniteNum(b.at)) baseline = { state: 'recorded', at: b.at };
+  else if (b.state === 'not-yet') baseline = { state: 'not-yet' };
+  else if (b.state === 'unreadable' && typeof b.detail === 'string') baseline = { state: 'unreadable', detail: b.detail };
+  else return null;
+  const p = raw.pending;
+  if (p.ok === true && Array.isArray(p.runs)) {
+    const runs: LaneArmQuizPending[] = [];
+    for (const r of p.runs) {
+      const run = asQuizPending(r);
+      if (run === null) return null;
+      runs.push(run);
+    }
+    return { baseline, pending: { ok: true, runs } };
+  }
+  if (p.ok === false && typeof p.detail === 'string') return { baseline, pending: { ok: false, detail: p.detail } };
+  return null;
+}
+
+/** A quiz date as the card says it, in UTC and labelled so: "2026-11-24 UTC" (slug quiz-card-dates-are-utc, review 2442
+ *  F10): the quiz week is UTC (slug quiz-week-is-utc), so a run's date and the weekly item's week always agree, and the label
+ *  keeps anyone from reading it as local time. */
+export function laneArmQuizDate(ms: number): string {
+  return `${new Date(ms).toISOString().slice(0, 10)} UTC`;
+}
+
 /** The view, whole, or null. A row this build does not know (a newer server's lane) is left out, not a failure. */
 export function asLaneArmView(raw: unknown): LaneArmView | null {
   if (!isRecord(raw) || !Array.isArray(raw.lanes)) return null;
@@ -38,7 +87,8 @@ export function asLaneArmView(raw: unknown): LaneArmView | null {
     if (row === null) return null;
     lanes.push(row);
   }
-  return { lanes };
+  const quiz = raw.quizBaseline === undefined ? null : asQuizView(raw.quizBaseline);
+  return quiz === null ? { lanes } : { lanes, quizBaseline: quiz };
 }
 
 /** A 409's body read as the server's confirm, or null when it is not one. */

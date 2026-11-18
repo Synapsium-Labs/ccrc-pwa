@@ -37,6 +37,10 @@ export const QUIZ_LANE_PERIOD_MS = 86_400_000;
 /** The forecast lane's look (Overlord W2 forecasts A): once a minute, so a seal lands within a minute of its boundary, and
  *  forecasts B's spend arm reads a closed run's session before its workspace is reclaimed. */
 export const FORECAST_LANE_PERIOD_MS = 60_000;
+/** The decision model's anchor-set lane's look (Overlord W2, the decision model PR B): once a day, the quiz lane's period by
+ *  reference. The anchors are re-asked daily because drift is counted in days (question 10: 4 of 20 moved against the line's
+ *  baseline), and the maintenance cap that bounds a pass is a UTC day's, so a pass that runs short resumes the next day. */
+export const DECISION_ANCHOR_PERIOD_MS = QUIZ_LANE_PERIOD_MS;
 
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
@@ -204,7 +208,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts';
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -406,6 +410,14 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
   { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
+  // The decision model's anchor-set lane (Overlord W2, plan `w2-decision-model.md` Task 9, Table 11.1c): one pass at a time, once a
+  // day on the quiz lane's period by reference. It re-asks the anchors, admits lines and runs the canary through `gatherDecisions`
+  // on the maintenance count, holds an armed row that drifted, and asks nothing of a row that is off, so every row ships quiet.
+  // A pass catches a throw in one row and goes on; a thrown pass is caught here.
+  {
+    name: 'decisionAnchors', cadenceMs: DECISION_ANCHOR_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the decision anchors lane failed',
+    derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'drift is counted in days against a UTC-day maintenance cap, so the lane looks once a day, as the quiz lane does' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {

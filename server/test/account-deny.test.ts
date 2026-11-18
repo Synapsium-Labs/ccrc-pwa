@@ -131,6 +131,15 @@ describe('the managed account deny file (D-6202)', () => {
     expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets-notes.md' })).toBeUndefined();
   });
 
+  it('the list refuses a Read of the server-level slots, the decision model\'s key among them (Overlord W2 decision model B, review 2262 F20): the glob matches the dot-directory', () => {
+    for (const f of ['.server/decision-model-key.secret', '.server/decision-model-key.json', '.server/private-names-key.secret']) {
+      expect(anyRule('Read', { file_path: `~/.ccrc/operator-secrets/${f}` }), f).toBe('Read(~/.ccrc/operator-secrets/**)');
+    }
+    // a sibling directory that only begins like the store is not the store
+    expect(anyRule('Read', { file_path: '~/.ccrc/operator-secrets-notes/.server/decision-model-key.secret' })).toBeUndefined();
+    // (a write under the store is the session hook's account arm, `session-hook-account-deny.test.ts`, not a deny-file rule)
+  });
+
   it('the list refuses a Read of the operator private store, journal, quarantine, backup copy and restore leftovers (Overlord W1 private store A, spec §9.4)', () => {
     const rules: Array<[string, string]> = [
       ['~/.ccrc/operator-model.db*', '~/.ccrc/operator-model.db'], ['~/.ccrc/operator-model.db*', '~/.ccrc/operator-model.db-wal'],

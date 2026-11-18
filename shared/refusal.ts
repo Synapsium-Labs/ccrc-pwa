@@ -206,6 +206,10 @@ export type EndRequestRefusal = (typeof END_REQUEST_REFUSALS)[keyof typeof END_R
  *  for it. */
 export const CARD_REFUSALS = { cardChanged: 'card-changed' } as const;
 export type CardRefusal = (typeof CARD_REFUSALS)[keyof typeof CARD_REFUSALS];
+/** The replay quiz's record door's own word (W1a quiz record, review 2442 F3): five recorded runs already wait for the
+ *  operator's Confirm or Discard, so a sixth is refused rather than added. Box-facing: `ccrc quiz-record` prints it. */
+export const QUIZ_RECORD_REFUSALS = { pendingFull: 'quiz-pending-full' } as const;
+export type QuizRecordRefusal = (typeof QUIZ_RECORD_REFUSALS)[keyof typeof QUIZ_RECORD_REFUSALS];
 /** The loads door's own word (Overlord W1 sandbox, Task 5): a report whose `reportId` names no start the server has recorded
  *  for that session yet. 404, and the hook keeps the report and resends it, as it does for the start report's door. */
 export const START_LOADS_REFUSALS = { unknownStart: 'unknown-start' } as const;
@@ -334,6 +338,19 @@ export function isOverlordRefusal(v: unknown): v is OverlordRefusal {
   return typeof v === 'string' && (OVERLORD_REFUSAL_WORDS as readonly string[]).includes(v);
 }
 
+/** The Overlord's decision-model doors (Overlord W2, decision model B; plan question 13; spec Table 11.6), each with its one
+ *  status, declared once here and spread into `REFUSAL_STATUS` (`TIMER_REFUSALS`' idiom). CHOSEN by this file's family rule:
+ *  404 for a row the catalogue does not hold, 400 for a body the operator can fix, 409 for a state of the world (no key, a
+ *  private-state row on a hosted host, no admitted line, an incomplete or crossed canary, a new origin without its key, a row
+ *  changed since it was read), 503 for a key stored whose host record was not written (as `stored-not-ticked` is). The
+ *  journal's refusals reuse `authority-rolled-back` and `journal-unreadable`. Decided by `server/src/coord/decisionLines.ts`. */
+export const DECISION_MODEL_REFUSALS = {
+  'decision-row-unknown': 404, 'key-unset': 409, 'key-required': 409, 'private-state-host': 409, 'line-not-admitted': 409,
+  'canary-unmet': 409, 'bad-ceiling': 400, 'bad-endpoint': 400, 'row-changed': 409, 'stored-not-applied': 503,
+  'removed-not-held': 503,
+} as const;
+export type DecisionModelRefusal = keyof typeof DECISION_MODEL_REFUSALS;
+
 /** The approval routes' own words (plan Task 16, D-5298): typed from the start, as D-5381 set out to make them. */
 export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | CollectLaneRouteRefusal | SwapRefusal | GenericRefusal
   | ApprovalRefusal | DigestRefusal | StepUpRefusal | AccountGateRefusal | WsCreateRefusal | WsTitleRefusal | ProjectAddRefusal
@@ -356,6 +373,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | EndRequestRefusal
   // The card door (Overlord W1a): its one word of its own.
   | CardRefusal
+  // The replay quiz's record door: its one word of its own.
+  | QuizRecordRefusal
   // The loads door (Overlord W1 sandbox): its one word of its own.
   | StartLoadsRefusal
   // The note door (Overlord W1a): its five words of its own.
@@ -366,6 +385,8 @@ export type RouteRefusal = ClaimRefusal | MailRouteRefusal | UpdateRouteError | 
   | TimerRefusal
   // The Overlord's W1 and W2 words (the vocabulary pieces), each with its status in `OVERLORD_REFUSALS`.
   | OverlordRefusal
+  // The decision-model doors (Overlord W2, decision model B): their ten words, each with its status in `DECISION_MODEL_REFUSALS`.
+  | DecisionModelRefusal
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732): their four words of their own.
   | AccountRouteRefusal
   // The test box connect routes (D-8166): their one word of their own.
@@ -571,6 +592,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   [END_REQUEST_REFUSALS.notYours]: 403, [END_REQUEST_REFUSALS.alreadyAsked]: 409, [END_REQUEST_REFUSALS.recentlyAsked]: 409,
   // The card door (Overlord W1a): CHOSEN, not measured. 409: the card the caller pages through was superseded by a newer render.
   [CARD_REFUSALS.cardChanged]: 409,
+  // The replay quiz's record door: CHOSEN, not measured. 409, as `timer-cap`: the cap is a state of the box, not a fault in the
+  // body; a Confirm or a Discard on the card frees a place.
+  [QUIZ_RECORD_REFUSALS.pendingFull]: 409,
   // The loads door (Overlord W1 sandbox): CHOSEN, not measured. 404: no start of this session's own, a startup or a resume,
   // carries the report's id yet; the hook keeps the report and resends it, as for the start door's 404.
   [START_LOADS_REFUSALS.unknownStart]: 404,
@@ -588,6 +612,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // sends one until its piece lands.
   ...OVERLORD_REFUSALS,
   ...HANDOFF_REFUSALS,
+  ...DECISION_MODEL_REFUSALS,
   // D-8126: CHOSEN, not measured. 400 for both: the coordinator sent a list of the wrong shape, or a change with nothing
   // to stand on; either is theirs to fix, as `bad-in-short`.
   [LEDGER_ROUTE_REFUSALS.badDoneWhen]: 400, [LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling]: 400,

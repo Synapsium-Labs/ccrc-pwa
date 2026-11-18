@@ -173,6 +173,9 @@ export interface Catalogue {
   fetchedAt: number;
   stale: boolean;
   lastError?: string;
+  /** D-8743: the Codex client version a Codex catalogue was fetched as, a plain `X.Y.Z`. Absent on any other probe's
+   *  catalogue, and on a Codex catalogue fetched before the field or through the probe's test seam. */
+  clientVersion?: string;
   models: CatalogueModel[];
 }
 

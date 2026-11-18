@@ -37,9 +37,14 @@ export function overlordAuthorityFileAt(ccrcDir: string, ops?: AppendOnlyFsOps):
 }
 
 /** Every Overlord authority table whose rows say "this box has chosen something", read by boot coherence beside the head row
- *  (Table 7.6a's "missing, beside any Overlord row"). Designation A added `overlord_designation` (X2); the ladder adds its tables,
- *  in its own pull request. Names only: each is a table this build's migrations create. */
-export const OVERLORD_AUTHORITY_TABLES: readonly string[] = ['overlord_designation'];
+ *  (Table 7.6a's "missing, beside any Overlord row"). Designation A added `overlord_designation` (X2); the ladder added
+ *  `overlord_ladder` and `overlord_latches`. Names only: each is a table this build's migrations create. */
+export const OVERLORD_AUTHORITY_TABLES: readonly string[] = [
+  'overlord_designation', 'overlord_ladder', 'overlord_latches',
+  // Decision model B: a decision-model row's arming (`decisionModelStore.ts#moveDecisionRowInTx`). Never seeded: a row is
+  // inserted by its first move, journal record first, so a box that upgrades with no head row still boots coherent.
+  'decision_rows',
+];
 
 /** A read the writer could not make, named by what it could not read (review F6: a head row it could not read keeps the
  *  `rows` word), and the guard's `unmeasured` word for each. */
@@ -66,6 +71,25 @@ export type AuthorityAppend =
   | { ok: false; error: AuthorityAppendError; detail: string };
 /** `bad-entry` is a caller's error, as `not-in-transaction` is: the entry the grammar refuses, never a journal state. */
 export type AuthorityAppendError = 'not-in-transaction' | 'bad-entry' | 'authority-rolled-back' | 'authority-unmeasured' | 'journal-append';
+
+/** Ladder fallback when the authority journal is unavailable. Narrowings land as unjournalled rows; widenings fail closed.
+ *  The designation fallback remains separate: its doors require the designation store and journal together. */
+export const NO_LADDER_AUTHORITY = {
+  appendInTx(db: DatabaseSync, entry: OverlordAuthorityMove): AuthorityAppend {
+    let inTx: boolean;
+    try { inTx = db.isTransaction; } catch { inTx = false; }
+    if (!inTx) return { ok: false, error: 'not-in-transaction', detail: 'an authority record requires a transaction' };
+    let move: OverlordAuthorityMove;
+    try {
+      const parsed = authorityEntry(canonicalAuthorityMove(entry));
+      if (parsed.kind === 'authority-restore-confirmed') throw new Error('confirm is not a move');
+      move = parsed;
+    } catch (err) { return { ok: false, error: 'bad-entry', detail: err instanceof Error ? err.message : String(err) }; }
+    return authorityDirection(move) === 'narrows'
+      ? { ok: true, kind: 'row-only', state: { kind: 'unmeasured', why: 'journal' } }
+      : { ok: false, error: 'authority-unmeasured', detail: 'the authority journal is unavailable' };
+  },
+};
 
 /** The whole file, verified, for boot coherence and Confirm. */
 export type AuthorityFileRead = AuthorityFileSeen<OverlordAuthorityEntry>;
@@ -184,6 +208,11 @@ export class OverlordAuthorityJournal {
    * residual; the ladder and designation PRs pin the duty with a test). Append before writing any row of a table in
    * `OVERLORD_AUTHORITY_TABLES` in the same transaction: a listed table's row with no record before it reads `missing` (review
    * F9). An account set's pool lists are sorted and de-duplicated here, so their order is the row's, never the journal's.
+   *
+   * The ONE retained-origin exception (ladder Q20): `journalPendingInTx` may state the retained `recordFrom` when recording
+   * an already-applied narrowing. The fold must see the chain from its last recorded value. Catch-up only stamps the record's
+   * sequence and clears its pending-origin marker; it never changes the rung, a latch's cap or any other authority value.
+   * Every ordinary writer still states the current row's value, read in this transaction.
    */
   appendInTx(db: DatabaseSync, entry: OverlordAuthorityMove): AuthorityAppend {
     let inTx: boolean;
