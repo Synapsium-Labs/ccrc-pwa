@@ -36,9 +36,25 @@ is taken here.
   loader's variable. The census of `__CCD_LAYOUT` readers admits `_door_prog_ok`'s one read, in the docs front's form.
 - **`installer-stages-a-sixth-slot`**: the entry installer's staging pattern admitted slots 1 to 4; the sixth library
   stages in slot 5, so the pattern admits `[12345]`.
-- **`door-functions-in-c10`**: `ccd/contexts.tsv` places `_door_prog_ok` and `_door_purge` in C10, the session host (the door process is a
-  process the session hosts), so `_reg_purge -> _door_purge` is a cross-context edge, and so are the helper's calls back to C1's
-  `_reg_id_ok` and `_reg_purge_unremoved`; `contexts-edges.tsv` carries all three.
+- **`door-functions-unmapped-until-landing`** (the coordinator's ruling (a)): the context map reads the ccd libraries
+  through `CCD_LIB_FILES` in `server/test/consolidationCensus.ts`, a file another run holds, which declined this PR's one
+  entry for `ccd/lib/door.sh`. So the map carries no rows for `_door_prog_ok` and `_door_purge` and none of their three
+  edges, and the map does not guard `door.sh`'s functions until landing. The rows were built and measured: both in C10, the
+  session host (the door process is a process the session hosts), with `_reg_purge -> _door_purge` and the helper's calls
+  back to C1's `_reg_id_ok` and `_reg_purge_unremoved` as cross-context edges. At landing, the `CCD_LIB_FILES` entry, the
+  two rows and the three edges go back together, as one inseparable group, in the exact proposal to that file's holder
+  beside the README hunks.
+- **`readme-hunks-at-landing`** (the coordinator's ruling): README's auth paragraph (the machine-lane count word and the
+  act-key door's name), its library paragraphs and its restore-list line are not in this PR. README is held by another run,
+  which declined them. `box-token-census.test.ts`' "README states the DERIVED lane counts" is red until they land.
+- **`migration-100-by-position`**: the ladder (#2994) landed migration 99 first, so this PR's migration is 100, renumbered
+  at the absorption of `main` (positional, the brief's rule).
+- **`door-prog-ok-names-no-tool`**: `_door_prog_ok` reads the program with a bounded `cat` and pipes the bytes into the
+  loader's hashing command, so it names no GNU-only tool (`macos-platform.test.ts`). A read cut short fails the pipe
+  (`pipefail`) or hashes short, and either refuses.
+- **`entropy-read-lazily`**: the composition root first read `deps.time.entropy` while building the routes, which threw for
+  every suite that builds the server without a time port (the first full run's 151 reds). It is a closure now, as the wall
+  clock beside it is.
 - **`program-pin-not-rendered-in-a1`**: `__CCD_DOOR_SHA256`, the door program's pin, lands as `stamp-at-install` and the
   entry installer does not render it in A1: the program and its pin are installed together in A2. Until then an
   installed body's `_door_prog_ok` refuses (a placeholder pin), and nothing in A1 calls it outside the tests.

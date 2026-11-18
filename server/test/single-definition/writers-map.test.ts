@@ -315,7 +315,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'push_outbox', 'operator_items', 'portfolio_rank', 'portfolio_rank_revision',
   'continuity_start_loads', 'answer_marks', 'overlord_authority_head',
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
-  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts',
+  'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches',
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines',
   'continuity_act_keys'] as const;
@@ -402,6 +402,11 @@ describe(TABLES_PIN, () => {
       // The migration's one-time pending-actor backfill is SQL in MIGRATIONS' string, so the scanner names its module.
       overlord_designation: [...['bindPendingGeneration', 'designatePending', 'failPending', 'goLive', 'retire', 'setAccountSet', 'setModelClass', 'stopDone']
         .map((f) => `server/src/coord/overlordDesignationStore.ts#${f}`), 'server/src/coord/schema.ts#(module)'],
+      // The ladder (Overlord W1, C5): the rung row's two writers (the doors' and Confirm's) and the catch-up's stamp; each latch row's
+      // raise, clear, Confirm's insert and stamp, and the catch-up's stamp.
+      overlord_ladder: ['applyRestoreInTx', 'journalPendingInTx', 'setRungInTx'].map((f) => `server/src/coord/overlordLadderStore.ts#${f}`),
+      overlord_latches: ['applyRestoreInTx', 'clearLatchInTx', 'journalPendingInTx', 'raiseLatchInTx']
+        .map((f) => `server/src/coord/overlordLadderStore.ts#${f}`),
       // The response record (Overlord W1 responses A): the sender's insert and verdict, which is also the deleter by the
       // push's verdict (a never-delivered row holding no receipt, review 2214 F2); the receipts door's one insert, and
       // nothing deletes a receipt; the boot's record.

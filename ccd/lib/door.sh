@@ -27,18 +27,18 @@ DOOR_REG_DIR=.door
 _door_prog_ok() {   # path -> 0 iff the door program at path is a readable regular file, not a link, and (installed) its SHA-256 is the pin
   # The pin is `__CCD_DOOR_SHA256` (ccd/ccd, rendered at install time, as the redactor's are). A SOURCE CHECKOUT (the loader's
   # published `__CCD_LAYOUT`) skips the digest, as `_docs_front` does for the redactor: nothing was installed to pin. An
-  # installed body whose pin is still the placeholder refuses: the program was never installed with it. The hash reads the file
-  # by name under `_plat_timeout`, so a file swapped for a FIFO after the check cannot hold the spawn; the hashing command is
-  # the one the loader chose (`__CCD_HASH_CMD`), its function form spelled as its tool so the bound can run it.
+  # installed body whose pin is still the placeholder refuses: the program was never installed with it. The file is read by a
+  # `cat` under `_plat_timeout`, so a file swapped for a FIFO after the check cannot hold the spawn, and its bytes are piped into
+  # the hashing command the loader chose (`__CCD_HASH_CMD`, the `_plat_sha256` shim or a fixed tool path), so no tool is named
+  # here. A read cut short hashes short, or fails the pipe (`pipefail`), and either refuses.
   local LC_ALL=C IFS=' ' p="${1-}" sum
   local -a h
   h=("${__CCD_HASH_CMD[@]}")   # a copy, so the loader's one writer of __CCD_HASH_CMD stays _ccd_lib_load (ccd-lib-load.test.ts)
   [[ -n "$p" && ! -L "$p" && -f "$p" && -r "$p" ]] || return 1
   [[ $__CCD_LAYOUT == source ]] && return 0
   [[ "${__CCD_DOOR_SHA256-}" =~ ^[0-9a-f]{64}$ ]] || return 1
-  if [[ "${h[0]-}" == _plat_sha256 ]]; then h=(sha256sum); [ "$CCD_OS" = darwin ] && h=(shasum -a 256); fi
   (( ${#h[@]} > 0 )) || return 1
-  sum=$(_plat_timeout 5 "${h[@]}" "$p" 2>/dev/null) || return 1
+  sum=$(_plat_timeout 5 cat -- "$p" 2>/dev/null | "${h[@]}" 2>/dev/null) || return 1
   [[ "${sum%% *}" == "$__CCD_DOOR_SHA256" ]]
 }
 _door_purge() {   # id -> remove $REG/.door/<id>/'s four named files and the directory once empty; rc as _reg_purge's unlinks

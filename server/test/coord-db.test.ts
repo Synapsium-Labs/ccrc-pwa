@@ -753,10 +753,11 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[95] (the designation actor columns, Overlord W1 gates A),
     // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a),
-    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2),
-    // and MIGRATIONS[98] (continuity_act_keys and continuity_starts.doorNonceSha256, the door process's act key, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(99);
-    expect(MIGRATIONS.length).toBe(99);
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
+    // and MIGRATIONS[99] (continuity_act_keys and continuity_starts.doorNonceSha256, the door process's act key, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(100);
+    expect(MIGRATIONS.length).toBe(100);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -879,9 +880,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4),
     // and MIGRATIONS[95] (the designation actor columns, gates A),
     // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
-    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2),
-    // and MIGRATIONS[98] (continuity_act_keys and the start's nonce hash, Overlord W1 door process); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(99);
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2); the migration above is still entry 11.
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
+    // and MIGRATIONS[99] (continuity_act_keys and the start's nonce hash, Overlord W1 door process).
+    expect(COORD_SCHEMA_VERSION).toBe(100);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1834,7 +1836,9 @@ describe('coord.db: migration 12 — runs.coordProject', () => {
   it('a database from a NEWER build still READS — rollback is real', () => {
     const dir = mkTmp('ccrc-mig12-fwd-');
     const p = path.join(dir, '.ccrc', 'coord.db');
-    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    // One past the version this build writes, so the file is always a NEWER build's, however many migrations land
+    // (a literal 99 became an older build's once migration 100 landed: Overlord W1 door process A1).
+    const db = openCoordDb(p); db.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 1}`); db.close();
     expect(() => openCoordDb(p).close()).not.toThrow();
   });
 });

@@ -7,8 +7,8 @@
 # server/test/ccd-contexts.test.ts holds it: every definition has exactly one row, every row names a definition,
 # and the cross-context reference count may only shrink. A NEW FUNCTION NEEDS A ROW in the same change.
 # Rows are in definition order, ccd/ccd first and then its libraries in load order, ccd/lib/disk-retention.sh (D-6913)
-# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5), ccd/lib/pool-set.sh (the Overlord's W1),
-# ccd/lib/long-lived.sh (the Overlord's W1 ccd arms) and ccd/lib/door.sh (the Overlord's door process), which ccd loads at its foot:
+# ccd/lib/train-proof.sh (D-7463), ccd/lib/delegation-lease.sh (wave 5), ccd/lib/pool-set.sh (the Overlord's W1) and
+# ccd/lib/long-lived.sh (the Overlord's W1 ccd arms), which ccd loads at its foot:
 # <function name><TAB><context>.
 _tmx_sock	C10
 _tmx_argv	C10
@@ -983,5 +983,3 @@ _fresh_pick_ok	C1
 _fresh_pick_field_to	C1
 _fresh_pick_least_to	C1
 _fresh_pick_to	C1
-_door_prog_ok	C10
-_door_purge	C10

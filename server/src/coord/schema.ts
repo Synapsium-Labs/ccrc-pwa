@@ -3747,7 +3747,43 @@ export const MIGRATIONS: readonly string[] = [
   CREATE INDEX decision_lines_by_key ON decision_lines (row, hostKind, origin, modelId, revision, id);
   `,
 
-  // ── 99: user_version 98 -> 99 ────────────────────────────────────────────
+  // ── 99: user_version 98 -> 99 ─────────────────────────────────────────────
+  // The Overlord's ladder (spec §7.5, H25; W1, plan `w1-ladder.md` Task 2): `overlord_ladder`, the operator's rung (one row, none
+  // seeded: an absent row reads `chat`), and `overlord_latches`, one row per latch with its cause and cap (a cleared row stays as
+  // history; one cause has at most one standing row). The rung words carry no CHECK: `shared/overlord-ladder.ts#RUNGS` is their one
+  // home. One writer each, named in `overlordLadderStore.ts`. NEW TABLES ONLY, nothing on an existing table: an older build opening
+  // a file at `user_version 99` takes rule 3, never names them. The slot is POSITIONAL, so it is renumbered at landing on the
+  // coordinator's word, as sibling W1 pieces add migrations too. RE-MEASURE the slot before the PR and before merge (it must print
+  // 98 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE overlord_ladder (
+    id             INTEGER PRIMARY KEY CHECK (id = 1),
+    operatorRung   TEXT NOT NULL,
+    actor          TEXT NOT NULL,
+    updatedAt      INTEGER NOT NULL,
+    recordSequence INTEGER,
+    recordFrom     TEXT,
+    narrowedAt     INTEGER,
+    CHECK ((recordSequence IS NULL) OR (recordFrom IS NULL))
+  );
+  CREATE TABLE overlord_latches (
+    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+    cause          TEXT NOT NULL,
+    cap            TEXT NOT NULL,
+    detail         TEXT NOT NULL,
+    raisedAt       INTEGER NOT NULL,
+    raisedBy       TEXT NOT NULL,
+    raiseSequence  INTEGER,
+    clearedAt      INTEGER, clearedBy TEXT, clearSequence INTEGER,
+    CHECK ((clearedAt IS NULL) = (clearedBy IS NULL)),
+    CHECK ((clearedAt IS NULL) = (clearSequence IS NULL))
+  );
+  CREATE UNIQUE INDEX overlord_latches_standing ON overlord_latches(cause) WHERE clearedAt IS NULL;
+  `,
+
+  // ── 100: user_version 99 -> 100 ──────────────────────────────────────────
   // The door process's act key (Overlord spec §3.3.11 H12 "The fence", Table 11.1a's row `continuity_generations`; W1, plan
   // `w1-door-process.md` Task 1). `continuity_act_keys`, one row per generation, ever: the launch nonce's sha256 (UNIQUE, so a
   // nonce binds at most one generation) and the key's sha256, never the key. THREE WRITERS, ONE ROW, in
@@ -3755,8 +3791,8 @@ export const MIGRATIONS: readonly string[] = [
   // `advanceActCounter` (`counter`, only upward). `continuity_starts.doorNonceSha256`: the hash the spawn bound to a start,
   // written by `insertStart` alone; null for an older hook's start, which binds no nonce. A NEW TABLE and a NULLABLE COLUMN: an
   // older build at this `user_version` takes rule 3, never names the table, and its `insertStart` names its columns, so the
-  // column reads null. The second of the PRs holding 99 to land renumbers (positional; the coordinator's brief, 2026-11-18).
-  // RE-MEASURE the slot before the PR and before merge (it must print 98 before this entry is counted):
+  // column reads null. The ladder (#2994) landed 99 first, so this is 100 by position (the coordinator's brief, 2026-11-18).
+  // RE-MEASURE the slot before the PR and before merge (it must print 99 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

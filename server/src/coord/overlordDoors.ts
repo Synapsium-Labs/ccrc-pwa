@@ -8,7 +8,7 @@
 // reports, the sandbox and the ladder). `overlord-doors-census.test.ts` reads the table against the routes files in both
 // directions: every row is registered in its file, and every registration of `coord/overlordRoutes.ts` and
 // `continuity/routes.ts` has a row or a `NOT_OVERLORD_DOORS` entry. DEPARTURE: the ladder's two columns (`ladderClass`, `act`)
-// are not here, because the ladder is not on main yet; gates B adds them with its rows.
+// are not here yet; gates B adds them for the Overlord's own doors. The ladder's operator doors are listed below.
 import type { VerbClass } from '../../../shared/overlord-identity.js';
 
 export type HttpMethod = 'GET' | 'POST' | 'PUT' | 'DELETE';
@@ -52,6 +52,10 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   designation: operator('GET', '/api/overlord/designation', OVERLORD, 'view'),
   model: operator('POST', '/api/overlord/model', OVERLORD, 'admin'),
   'account-set': operator('POST', '/api/overlord/account-set', OVERLORD, 'admin'),
+  ladder: operator('GET', '/api/overlord/ladder', OVERLORD, 'view'),
+  rung: operator('POST', '/api/overlord/rung', OVERLORD, 'admin'),
+  pause: operator('POST', '/api/overlord/pause', OVERLORD, 'admin'),
+  'latch-clear': operator('POST', '/api/overlord/latches/:cause/clear', OVERLORD, 'admin'),
   'portfolio-rank': operator('POST', '/api/portfolio/rank', LEDGERS, 'admin'),
   'goals-ratify': operator('POST', '/api/programmes/:slug/goals/ratify', LEDGERS, 'admin'),
   'private-names-read': operator('GET', '/api/overlord/private-names', 'server/src/operatorModel/nameListRoutes.ts', 'view'),
@@ -78,6 +82,7 @@ export function doorRow(key: string): DoorRow {
 export const NOT_OVERLORD_DOORS: Readonly<Record<string, { readonly file: string; readonly why: string }>> = {
   'POST /api/sessions/:id/start': { file: CONTINUITY, why: "the hook's SessionStart report: a box-token machine lane in the hook's group" },
   'POST /api/sessions/:id/start/loads': { file: CONTINUITY, why: "the hook's report of what a start loaded: the hook's group, box token" },
+  'POST /api/sessions/:id/act-key': { file: CONTINUITY, why: "the door process's one claim of its act key: a box-token machine lane, before any fence (W1 door process A1)" },
   'POST /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'GET /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'POST /api/timers/:id/cancel': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
