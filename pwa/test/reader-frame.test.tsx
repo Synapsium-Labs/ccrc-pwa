@@ -625,6 +625,37 @@ describe('what the frame reports (spec 4.1, M8.7, M8.19)', () => {
     act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
     expect(replaceFragment).toHaveBeenCalledWith('sec');
     expect(navigate).not.toHaveBeenCalled();
+    expect(h.onFragment, 'no frame opens at the anchor, so the visit is handed nothing').not.toHaveBeenCalled();
+  });
+
+  it('the visit holds a same-page link\'s anchor until the frame opened at it is ready (review of Task 13, minor 3)', async () => {
+    const h = harness();
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    expect(h.consumed, 'no fragment was handed to the first frame').not.toHaveBeenCalled();
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    expect(h.onFragment).toHaveBeenCalledWith('sec', location.pathname + location.search);
+    expect(h.consumed).not.toHaveBeenCalled();
+    act(() => { input.onReady(); });
+    expect(h.consumed, 'the frame opened at the anchor is up: the visit lets it go').toHaveBeenCalledTimes(1);
+    act(() => { input.onReady(); });
+    expect(h.consumed, 'once').toHaveBeenCalledTimes(1);
+  });
+
+  it('a fallback of the frame opened at a same-page anchor leaves the anchor with the visit, for the plain view\'s scroll', async () => {
+    const h = harness();
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    render(frame(h));
+    const input = await ready(h);
+    await settled();
+    act(() => { input.onReady(); });
+    act(() => { input.onLink({ kind: 'relative', path: 'a.md', fragment: 'sec' }); });
+    act(() => { input.onFallback('timeout'); });
+    expect(await screen.findByText(READER_FALLBACK_NOTE)).toBeInTheDocument();
+    expect(h.onFragment).toHaveBeenCalledWith('sec', location.pathname + location.search);
+    expect(h.consumed).not.toHaveBeenCalled();
   });
 
   it('a same-page link that arrives after the body fell back, or ended, opens nothing', async () => {

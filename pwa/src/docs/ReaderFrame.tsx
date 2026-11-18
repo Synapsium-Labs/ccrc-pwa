@@ -116,15 +116,19 @@ type Ask =
 
 const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0, auth: 0 };
 
-/** The pending fragment as the frame's `initialHash`: the address bar holds it percent-encoded, and the frame matches
- *  decoded ids. A malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
-function decodedFragment(fragment: string | null): string | null {
-  if (fragment === null) return null;
+/** A fragment as the frame matches it: the address bar holds it percent-encoded, and the frame matches decoded ids. A
+ *  malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
+function decodedId(fragment: string): string {
   try {
     return decodeURIComponent(fragment);
   } catch {
     return fragment;
   }
+}
+
+/** The pending fragment as the frame's `initialHash` (`decodedId`), or none. */
+function decodedFragment(fragment: string | null): string | null {
+  return fragment === null ? null : decodedId(fragment);
 }
 
 /** What was thrown, for the console only: an error's name and message, else its type. */
@@ -215,6 +219,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     let uncount: ((delta: number) => void) | null = null;
     /** The listener for sign-in: subscribed before the images walk, and kept after it only when the walk reported a 401. */
     let unwatchAuth: (() => void) | null = null;
+    /** The anchor a same-page link last opened the frame at, held by the visit until the frame opened at it is ready. */
+    let reopened: string | null = null;
 
     const drop = (): void => {
       mount?.destroy();
@@ -258,9 +264,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         case 'hash':
           replaceFragment(r.id);
           // The policy says the frame did not scroll (a link to this very page spelled with its file name): this body's
-          // live mount opens the same document again at the anchor. `mount` is null before the mount lands and after a
-          // fallback or the body's end, so a late link opens nothing.
-          if (r.reopen) mount?.openAt?.(decodedFragment(r.id) ?? r.id);
+          // live mount opens the same document again at the anchor. The visit holds the anchor too, so a fallback of the
+          // frame opened at it lands the plain view there; that frame's `ready` spends it. `mount` is null before the mount
+          // lands and after a fallback or the body's end, so a late link opens nothing.
+          if (r.reopen && mount !== null && mount.openAt !== undefined) {
+            reopened = r.id;
+            cur.link.onFragment(r.id, location.pathname + location.search);
+            mount.openAt(decodedId(r.id));
+          }
           break;
         case 'sheet':
           setAsk({ kind: 'link', ask: { url: r.url, host: r.host, foreign: r.foreign } });
@@ -403,6 +414,10 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           // resolved included, keeps it for the plain view's scroll.
           if (!spent && handedFragment !== null) {
             spent = true;
+            live.current.props.onFragmentConsumed();
+          } else if (reopened !== null) {
+            // The frame opened at a same-page link's anchor is up: the visit no longer holds the anchor for the plain view.
+            reopened = null;
             live.current.props.onFragmentConsumed();
           }
         },
