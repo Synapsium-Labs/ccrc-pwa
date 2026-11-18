@@ -21,6 +21,10 @@ export const MESSAGE_MOVE_KEY = 'server/src/operatorModel/messages.ts#messageMov
 export const DELIVERY_STAGE_KEY = 'server/src/operatorModel/messages.ts#deliveryStageOf';
 export const CAP_TEXT_KEY = 'server/src/operatorModel/messages.ts#capMessageText';
 export const NEXT_ID_KEY = 'server/src/operatorModel/messages.ts#nextMessageId';
+export const BOOT_SETTLEMENT_KEY = 'server/src/operatorModel/messages.ts#bootSettlement';
+export const NUDGE_RECOVERY_KEY = 'server/src/operatorModel/messages.ts#nudgeRecovery';
+export const SETTLEMENT_MARK_KEY = 'server/src/operatorModel/messages.ts#settlementMarkOf';
+export const PROMPT_TARGET_KEY = 'server/src/operatorModel/messages.ts#promptTargetVerdict';
 
 type State = 'recorded' | 'queued' | 'delivered' | 'picked-up' | 'settled' | 'spent';
 type Event = 'queue' | 'deliver' | 'pick-up' | 'settle' | 'spend' | 'unsettle';
@@ -231,6 +235,129 @@ export function privacyEntryCases(m: Pick<PrivacyJournalModule, 'privacyJournalE
   };
 }
 
+// ---------- bootSettlement and nudgeRecovery (Task 6) ----------
+
+const NA = { kind: 'not-applicable' } as const;
+const UNMEAS = { kind: 'unmeasured', why: 'x' } as const;
+const meas = (...ids: number[]) => ({ kind: 'measured', cited: new Set(ids) }) as const;
+const VIEW = {} as never;
+const designated = (sessionId: string, term = 1) => ({ kind: 'designated', sessionId, term, row: VIEW }) as const;
+const NOT_DESIGNATED = { kind: 'not-designated', row: null } as const;
+const UNMEASURED_DESIGNATION = { kind: 'unmeasured', why: 'fixture' } as const;
+
+export function bootSettlementCases(m: Pick<OperatorModelDeciders, 'bootSettlement'>): Record<string, SuiteCase> {
+  return {
+    'a row that is not settled is kept under every read': () => {
+      for (const state of ['recorded', 'queued', 'delivered', 'picked-up', 'spent'] as const)
+        for (const c of [NA, UNMEAS, meas(4), meas()]) expect(m.bootSettlement({ id: 4, state, settledBy: null }, c)).toBe('keep');
+    },
+    'acknowledge and mark stay settled under every read': () => {
+      for (const settledBy of ['acknowledge', 'mark'] as const)
+        for (const c of [NA, UNMEAS, meas(4), meas()]) expect(m.bootSettlement({ id: 4, state: 'settled', settledBy }, c)).toBe('keep');
+    },
+    'cite: unsettle only on a measured read that does not cite it; keep when it does': () => {
+      const row = { id: 4, state: 'settled', settledBy: 'cite' } as const;
+      expect(m.bootSettlement(row, meas(4))).toBe('keep');
+      expect(m.bootSettlement(row, meas(5))).toBe('unsettle');
+      expect(m.bootSettlement(row, meas())).toBe('unsettle');
+    },
+    'cite under not-applicable reads unjudged, never unsettle': () => {
+      expect(m.bootSettlement({ id: 4, state: 'settled', settledBy: 'cite' }, NA)).toBe('unjudged');
+    },
+    'cite under an unmeasured read reads unjudged, never unsettle': () => {
+      expect(m.bootSettlement({ id: 4, state: 'settled', settledBy: 'cite' }, UNMEAS)).toBe('unjudged');
+    },
+    'a settlement this build cannot name is unjudged, never unsettled': () => {
+      expect(m.bootSettlement({ id: 4, state: 'settled', settledBy: 'unknown' }, meas())).toBe('unjudged');
+      expect(m.bootSettlement({ id: 4, state: 'settled', settledBy: null }, meas())).toBe('unjudged');
+    },
+  };
+}
+
+export function nudgeRecoveryCases(m: Pick<OperatorModelDeciders, 'nudgeRecovery'>): Record<string, SuiteCase> {
+  const S = 'lane-a-project-a';
+  const OTHER = 'lane-b-project-a';
+  return {
+    'a mail that exists links, whoever is designated': () => {
+      expect(m.nudgeRecovery({ sessionId: S }, true, designated(S))).toBe('link');
+      expect(m.nudgeRecovery({ sessionId: S }, true, designated(OTHER))).toBe('link');
+      expect(m.nudgeRecovery({ sessionId: S }, true, NOT_DESIGNATED)).toBe('link');
+    },
+    'no mail and the row\'s own session designated queues': () => {
+      expect(m.nudgeRecovery({ sessionId: S }, false, designated(S))).toBe('queue');
+    },
+    'no mail and another session, or none, designated waits': () => {
+      expect(m.nudgeRecovery({ sessionId: S }, false, designated(OTHER))).toBe('wait');
+      expect(m.nudgeRecovery({ sessionId: S }, false, NOT_DESIGNATED)).toBe('wait');
+    },
+    'an unmeasured designation is unjudged, with or without a mail': () => {
+      expect(m.nudgeRecovery({ sessionId: S }, true, UNMEASURED_DESIGNATION)).toBe('unjudged');
+      expect(m.nudgeRecovery({ sessionId: S }, false, UNMEASURED_DESIGNATION)).toBe('unjudged');
+    },
+    'the session is compared whatever the term': () => {
+      expect(m.nudgeRecovery({ sessionId: S }, false, designated(S, 99))).toBe('queue');
+    },
+  };
+}
+
+// ---------- settlementMarkOf and promptTargetVerdict (Task 5) ----------
+
+export function settlementMarkCases(m: Pick<OperatorModelDeciders, 'settlementMarkOf'>): Record<string, SuiteCase> {
+  return {
+    'a whole message that is /icommand, or I command in any letter case with one space, marks': () => {
+      for (const t of ['/icommand', 'I command', 'i COMMAND', 'I Command', 'i command']) expect(m.settlementMarkOf(t), t).toBe('mark');
+    },
+    'spaces and newlines around the whole message do not matter': () => {
+      for (const t of ['  /icommand', '/icommand  ', ' I command ', '\nI command\n', '\t/icommand\t']) expect(m.settlementMarkOf(t), JSON.stringify(t)).toBe('mark');
+    },
+    'two spaces, a tail, a head or a substring are an ordinary message': () => {
+      for (const t of ['I  command', '/icommand now', 'I command you', 'please, I command', 'I command.', 'and /icommand', 'Icommand', '/ICOMMAND now', '']) {
+        expect(m.settlementMarkOf(t), JSON.stringify(t)).toBe('none');
+      }
+    },
+    'another line in the message is an ordinary message': () => {
+      expect(m.settlementMarkOf('I command\nand more')).toBe('none');
+      expect(m.settlementMarkOf('hello\n/icommand')).toBe('none');
+    },
+  };
+}
+
+export function promptTargetCases(m: Pick<OperatorModelDeciders, 'promptTargetVerdict'>): Record<string, SuiteCase> {
+  const S = 'lane-a-project-a';
+  const OTHER = 'lane-b-project-a';
+  const word = (v: ReturnType<OperatorModelDeciders['promptTargetVerdict']>) => (v.kind === 'refuse' ? `refuse ${v.word}` : v.kind);
+  return {
+    'an unmeasured designation refuses every prompt, the Overlord\'s id or another, with or without a term': () => {
+      for (const id of [S, OTHER]) for (const body of [{}, { overlordTerm: 1 }, { overlordTerm: 'x' }]) {
+        expect(word(m.promptTargetVerdict(UNMEASURED_DESIGNATION, id, body)), `${id} ${JSON.stringify(body)}`).toBe('refuse unmeasured');
+      }
+    },
+    'the designated session with no term, or its own term, is recorded at its term': () => {
+      expect(m.promptTargetVerdict(designated(S, 3), S, {})).toEqual({ kind: 'record', term: 3 });
+      expect(m.promptTargetVerdict(designated(S, 3), S, { overlordTerm: 3 })).toEqual({ kind: 'record', term: 3 });
+      expect(m.promptTargetVerdict(designated(S, 0), S, { overlordTerm: 0 })).toEqual({ kind: 'record', term: 0 });
+    },
+    'a term that is not the designation\'s refuses stale-designation, typing and recording nothing': () => {
+      expect(word(m.promptTargetVerdict(designated(S, 3), S, { overlordTerm: 2 }))).toBe('refuse stale-designation');
+      expect(word(m.promptTargetVerdict(designated(S, 3), S, { overlordTerm: 4 }))).toBe('refuse stale-designation');
+    },
+    'a retired designation\'s old session, or a rebound one\'s, with a term refuses stale-designation': () => {
+      expect(word(m.promptTargetVerdict(NOT_DESIGNATED, S, { overlordTerm: 1 }))).toBe('refuse stale-designation');
+      expect(word(m.promptTargetVerdict(designated(OTHER, 2), S, { overlordTerm: 1 }))).toBe('refuse stale-designation');
+      expect(word(m.promptTargetVerdict(designated(OTHER, 1), S, { overlordTerm: 1 }))).toBe('refuse stale-designation');
+    },
+    'any other session with no term is typed to, as today; so is every session when nobody is designated': () => {
+      expect(m.promptTargetVerdict(designated(OTHER, 2), S, {})).toEqual({ kind: 'type' });
+      expect(m.promptTargetVerdict(NOT_DESIGNATED, S, {})).toEqual({ kind: 'type' });
+    },
+    'a term present but not a non-negative safe integer is bad-request': () => {
+      for (const t of [-1, 1.5, '1', null, Number.NaN, Number.MAX_SAFE_INTEGER + 2, {}, true]) {
+        expect(word(m.promptTargetVerdict(designated(S, 1), S, { overlordTerm: t })), String(t)).toBe('refuse bad-request');
+      }
+    },
+  };
+}
+
 export const MESSAGE_MOVE_SET: MutantSet<OperatorModelDeciders> = {
   modulePath: MESSAGES_TS,
   suite: messageMoveCases,
@@ -293,11 +420,66 @@ export const PRIVACY_ENTRY_SET: MutantSet<PrivacyJournalModule> = {
   ],
 };
 
+export const BOOT_SETTLEMENT_SET: MutantSet<OperatorModelDeciders> = {
+  modulePath: MESSAGES_TS,
+  suite: bootSettlementCases,
+  mutants: [
+    { id: 'BS1 unmeasured read unsettles', old: "if (cites.kind !== 'measured') return 'unjudged';", new: "if (cites.kind === 'not-applicable') return 'unjudged';" },
+    { id: 'BS2 not-applicable unsettles', old: "if (cites.kind !== 'measured') return 'unjudged';", new: "if (cites.kind === 'unmeasured') return 'unjudged'; if (cites.kind !== 'measured') return 'unsettle';" },
+    { id: 'BS3 mark unsettled', old: "row.settledBy === 'acknowledge' || row.settledBy === 'mark'", new: "row.settledBy === 'acknowledge'" },
+    { id: 'BS4 unsettled kept as settled', old: "if (row.state !== 'settled') return 'keep';", new: "if (row.state !== 'settled') return 'unsettle';" },
+    { id: 'BS5 cited row unsettled', old: "cites.cited.has(row.id) ? 'keep' : 'unsettle'", new: "cites.cited.has(row.id) ? 'unsettle' : 'keep'" },
+    { id: 'BS6 unnamed settlement unsettles', old: "if (row.settledBy !== 'cite') return 'unjudged';", new: "if (row.settledBy !== 'cite') return 'unsettle';" },
+  ],
+};
+export const NUDGE_RECOVERY_SET: MutantSet<OperatorModelDeciders> = {
+  modulePath: MESSAGES_TS,
+  suite: nudgeRecoveryCases,
+  mutants: [
+    { id: 'NR1 queues when a mail exists', old: "if (found) return 'link';", new: "if (found) return 'queue';" },
+    { id: 'NR2 session ignored', old: "designation.kind === 'designated' && designation.sessionId === row.sessionId ?", new: "designation.kind === 'designated' ?" },
+    { id: 'NR3 unmeasured designation folded to wait', old: "if (designation.kind === 'unmeasured') return 'unjudged';", new: "if (designation.kind === 'unmeasured') return 'wait';" },
+    { id: 'NR4 term compared', old: "designation.sessionId === row.sessionId ?", new: "designation.sessionId === row.sessionId && designation.term === 1 ?" },
+    { id: 'NR5 mail ignored', old: "if (found) return 'link';", new: '' },
+  ],
+};
+
+export const SETTLEMENT_MARK_SET: MutantSet<OperatorModelDeciders> = {
+  modulePath: MESSAGES_TS,
+  suite: settlementMarkCases,
+  mutants: [
+    { id: 'SM1 substring matches', old: "return t === '/icommand' || /^i command$/i.test(t) ? 'mark' : 'none';", new: "return t.includes('/icommand') || /i command/i.test(t) ? 'mark' : 'none';" },
+    { id: 'SM2 case-sensitive', old: '/^i command$/i.test(t)', new: '/^I command$/.test(t)' },
+    { id: 'SM3 any run of spaces', old: '/^i command$/i.test(t)', new: '/^i +command$/i.test(t)' },
+    { id: 'SM4 untrimmed', old: 'const t = text.trim();', new: 'const t = text;' },
+    { id: 'SM5 a prefix matches', old: "t === '/icommand' ||", new: "t.startsWith('/icommand') ||" },
+  ],
+};
+export const PROMPT_TARGET_SET: MutantSet<OperatorModelDeciders> = {
+  modulePath: MESSAGES_TS,
+  suite: promptTargetCases,
+  mutants: [
+    { id: 'PT1 unmeasured types', old: "if (designation.kind === 'unmeasured') return { kind: 'refuse', word: 'unmeasured', detail: designation.why };", new: "if (designation.kind === 'unmeasured') return { kind: 'type' };" },
+    { id: 'PT2 unmeasured folded into not-designated', old: "if (designation.kind === 'unmeasured') return { kind: 'refuse', word: 'unmeasured', detail: designation.why };", new: "if (designation.kind === 'unmeasured') return { kind: 'refuse', word: 'stale-designation', detail: designation.why };" },
+    { id: 'PT3 stale term types', old: "if (term !== undefined && !(bound && designation.term === term)) {\n    return { kind: 'refuse', word: 'stale-designation',", new: "if (term !== undefined && !(bound && designation.term === term)) {\n    return { kind: 'type' }; return { kind: 'refuse', word: 'stale-designation'," },
+    { id: 'PT4 term ignored', old: 'designation.term === term', new: 'true' },
+    { id: 'PT5 session ignored', old: "designation.kind === 'designated' && designation.sessionId === sessionId", new: "designation.kind === 'designated'" },
+    { id: 'PT6 malformed term allowed', old: "Number.isSafeInteger(term) && term >= 0", new: 'true' },
+    { id: 'PT7 negative term allowed', old: 'Number.isSafeInteger(term) && term >= 0', new: 'Number.isSafeInteger(term)' },
+    { id: 'PT8 designated session typed', old: "return bound ? { kind: 'record', term: designation.term } : { kind: 'type' };", new: "return { kind: 'type' };" },
+    { id: 'PT9 other session recorded', old: "return bound ? { kind: 'record', term: designation.term } : { kind: 'type' };", new: "return designation.kind === 'designated' ? { kind: 'record', term: designation.term } : { kind: 'type' };" },
+  ],
+};
+
 export const OPERATOR_MODEL_MUTANT_SETS: Record<string, MutantSet<never>> = {
   [MESSAGE_MOVE_KEY]: MESSAGE_MOVE_SET as MutantSet<never>,
   [DELIVERY_STAGE_KEY]: DELIVERY_STAGE_SET as MutantSet<never>,
   [CAP_TEXT_KEY]: CAP_TEXT_SET as MutantSet<never>,
   [NEXT_ID_KEY]: NEXT_ID_SET as MutantSet<never>,
+  [BOOT_SETTLEMENT_KEY]: BOOT_SETTLEMENT_SET as MutantSet<never>,
+  [NUDGE_RECOVERY_KEY]: NUDGE_RECOVERY_SET as MutantSet<never>,
+  [SETTLEMENT_MARK_KEY]: SETTLEMENT_MARK_SET as MutantSet<never>,
+  [PROMPT_TARGET_KEY]: PROMPT_TARGET_SET as MutantSet<never>,
   [COHERENCE_KEY]: COHERENCE_SET as MutantSet<never>,
   [PRIVACY_ENTRY_KEY]: PRIVACY_ENTRY_SET as MutantSet<never>,
 };

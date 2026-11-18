@@ -1,6 +1,7 @@
 import { MAIL_ENVELOPE_FENCE, type MailKind } from '../../../shared/api.js';
 import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { MAIL_INBOX_FENCE_INFO, parseMailEnvelope } from '../../../shared/api.js';
+import { isOperatorMessageMail, operatorMessageIdOf, operatorMessageNudgeBody } from '../../../shared/operatorMessages.js';
 
 export interface EnvelopeInput {
   /** The DELIVERY id (`mail_deliveries.id`), not the mail id (`mail.id`) —
@@ -222,4 +223,32 @@ export function renderMailNudge(toId: string): string {
     `Invoke by that exact path — ~/.local/bin is not on this unit's PATH. ` +
     `The client resolves the server address and reads the box token itself, so you ` +
     `handle neither, and it works in a repo whose settings deny curl.`;
+}
+
+/** The operator-message nudge (open question 3, slug `message-nudge-rides-the-mail-lane`): the mail nudge's generic head, so
+ *  `sendPrompt`'s 24-character echo needle and the injected-prompt census are unchanged, then the message's id and its door.
+ *  One line, no `ccrc-api` and no mail-client words: the Overlord reads the message through its `messages` door, and the words
+ *  themselves are never typed. */
+export function renderOperatorMessageNudge(id: number): string {
+  return `${INJECTED_PROMPTS['mail-nudge'].text} ${operatorMessageNudgeBody(id)}`;
+}
+
+/** The line the mail lane types for one due delivery. An operator message's mail types its own fixed line; every other mail
+ *  types the id-agnostic `renderMailNudge`. `operatorMessageId` is set exactly for the first kind, for the lane's move on the
+ *  private store. Pure: it decides nothing about delivery. */
+export function mailNudgeOf(toId: string, origin: { readonly fromId: string; readonly subject: string } | null):
+  { readonly line: string; readonly operatorMessageId: number | null } {
+  const id = origin !== null && isOperatorMessageMail(origin) ? operatorMessageIdOf(origin.subject) : null;
+  return id === null ? { line: renderMailNudge(toId), operatorMessageId: null } : { line: renderOperatorMessageNudge(id), operatorMessageId: id };
+}
+
+/** `sendPrompt`'s resume rule for a nudge, given what the box holds now (`null`: unread). The generic nudge is id-agnostic, so any
+ *  leftover nudge may be resumed (`true`, the prefix mode). An operator message's line names its id, so only THIS delivery's own
+ *  line may be: `'whole'` presses Enter on a box that renders exactly the line and NEVER types (an empty box is
+ *  `nothing-to-submit`), so it is passed only when the box already holds the line, and otherwise no resume is asked: the line
+ *  is typed into an empty box, and any other text, another message's line included, is a draft (slug `whole-mode-never-types`). */
+export function resumeRuleOf(nudge: { readonly line: string; readonly operatorMessageId: number | null }, box: string | null):
+  { readonly resumeIfOwn: true } | { readonly resumeIfOwn: 'whole' } | Record<string, never> {
+  if (nudge.operatorMessageId === null) return { resumeIfOwn: true };
+  return box === nudge.line ? { resumeIfOwn: 'whole' } : {};
 }

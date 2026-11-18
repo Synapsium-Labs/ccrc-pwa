@@ -263,4 +263,8 @@ export interface Deps {
  *  WP10 on, `FleetWatcher`'s constructor takes this in place of `Deps`, so the watcher and its lane files hold no
  *  path to the whole store; until then nothing names it. A `Deps` is assignable to it, so `index.ts` hands the same
  *  bag on. */
-export type WatcherDeps = Omit<Deps, 'coord'> & { coord?: WatcherCoordPort };
+export type WatcherDeps = Omit<Deps, 'coord' | 'operatorModel'> & {
+  coord?: WatcherCoordPort;
+  /** The mail lane's operator-message branch moves one row, `deliver`, and nothing else on the private store. */
+  operatorModel?: Pick<OperatorModelStore, 'moveMessage'>;
+};

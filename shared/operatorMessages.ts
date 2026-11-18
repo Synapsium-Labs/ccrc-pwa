@@ -106,6 +106,18 @@ export function operatorMessageIdOf(subject: string): number | null {
 }
 export const isOperatorMessageMail = (m: { readonly fromId: string; readonly subject: string }): boolean =>
   m.fromId === OPERATOR_MESSAGE_SENDER && operatorMessageIdOf(m.subject) !== null;
+/** The nudge mail's body: the id and the `messages` door, never the text (the private store plan, Task 6; the route's
+ *  nudge and the boot pass's re-nudge say the same words). */
+export const operatorMessageNudgeBody = (id: number): string => `Operator message ${id}: read it with your messages door.`;
+/** The key under which the prompt route marks the operator's newest message to the designated session in W1a's
+ *  `operator_marks` (slug `overlord-mark-key`): `@` can begin no programme slug, so it names no programme. */
+export const OVERLORD_OPERATOR_MARK = '@overlord';
+
+/** The console's send key for one composed message (open question 17): 16 to 64 characters of `[A-Za-z0-9_-]`. */
+export const SEND_KEY_MIN_CHARS = 16;
+export const SEND_KEY_MAX_CHARS = 64;
+const SEND_KEY_SHAPE = new RegExp(`^[A-Za-z0-9_-]{${SEND_KEY_MIN_CHARS},${SEND_KEY_MAX_CHARS}}$`);
+export const isSendKey = (v: unknown): v is string => typeof v === 'string' && SEND_KEY_SHAPE.test(v);
 
 const READ_DOOR_MAP = {
   board: "the Overlord's board read",

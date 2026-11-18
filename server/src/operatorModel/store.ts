@@ -12,7 +12,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
-import { isMintedActor, type AccountActor } from '../accounts/audit.js';
+import { isRecordedActor } from '../auth/attributionIdentity.js';
+import type { RecordedActor } from '../auth/callerIdentity.js';
 import { tx } from '../coord/tx.js';
 import {
   MESSAGE_STATES, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
@@ -58,7 +59,9 @@ export interface MessageRecordInput {
   readonly at: number;
   readonly sessionId: string;
   readonly term: number;
-  readonly actor: AccountActor;
+  /** The account gate's pass through the identity port (`identity.operator`); the row stores its `subject` (slug
+   *  `message-actor-stores-the-subject`, the table's one `actor TEXT` column). */
+  readonly actor: RecordedActor;
   /** Masked by the route's act; capped here. */
   readonly text: string;
   /** The settlement mark (`settlementMarkOf`): the row is recorded `settled` by `mark`. */
@@ -121,7 +124,7 @@ export class OperatorModelStore {
    *  row. A send key this session already recorded answers that record (`replay`), and writes nothing; the same key with
    *  other text refuses `send-key-reused`. */
   recordMessage(m: MessageRecordInput): StoreWrite<MessageRecorded> {
-    if (!isMintedActor(m.actor)) return { ok: false, error: 'refused', detail: 'actor: not one the account gate minted' };
+    if (!isRecordedActor(m.actor)) return { ok: false, error: 'refused', detail: 'actor: not one the identity port minted' };
     if (typeof m.sessionId !== 'string' || !m.sessionId) return { ok: false, error: 'refused', detail: 'sessionId: empty' };
     if (!isCount(m.term)) return { ok: false, error: 'refused', detail: 'term: not a non-negative safe integer' };
     if (!isCount(m.at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
@@ -148,7 +151,7 @@ export class OperatorModelStore {
         this.db.prepare(
           'INSERT INTO operator_messages (id, at, sessionId, term, actor, sha256, sendKey, text, cut, state, settledAt, settledBy) '
           + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).run(issued.id, m.at, m.sessionId, m.term, String(m.actor), capped.sha256, m.composedKey, capped.text, capped.cut ? 1 : 0,
+        ).run(issued.id, m.at, m.sessionId, m.term, m.actor.subject, capped.sha256, m.composedKey, capped.text, capped.cut ? 1 : 0,
           state, m.mark ? m.at : null, m.mark ? 'mark' : null);
         return { ok: true, value: { id: issued.id, cut: capped.cut, state, replay: false } };
       });
