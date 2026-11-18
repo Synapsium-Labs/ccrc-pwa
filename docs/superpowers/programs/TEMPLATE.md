@@ -13,11 +13,14 @@ prior wave's transcript. Shape, verbatim from
 # Program: <slug>
 Spec: <link>   Plan: <link>   Workspace: <session id>
 ## Waves
-| # | scope | PRs | state |
+| # | scope | PRs | state | epic |
 ## Decisions & deviations     (why, not just what)
 ## Carried constraints        (findings deferred across waves — reviewers get these)
 ## Next-wave brief            (what the fresh session needs; nothing else)
 ```
+
+The Waves table's `epic` column, added after that spec, names the plan's epic that lists the wave
+(`references/plan.md` in the coordinator skill); a programme with no plan writes `—`.
 
 ## Handoffs are commits
 

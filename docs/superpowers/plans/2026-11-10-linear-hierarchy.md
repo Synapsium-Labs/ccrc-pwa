@@ -298,6 +298,18 @@ number from `POST /api/ledger/deviations`.
   applies once the key is no longer shared, and the note under the select names the owner now. Both are
   additive and absence permits: an older server's answer reads as the project's own owner and today's words. Record:
   the wave 5 note (the coordinator's rulings of fix rounds 1 and 2, run 2447).
+- **D-8739 (2026-11-18)** — skills-clause-later: Task 6.1's clause 21, the count word "twenty-one" above the coordinator
+  contract, and the matching count words in README.md and CLAUDE.md move to a follow-up PR of the skills epic. They are
+  held because the coordinator skill's pin file and README.md are frozen by the landing-order programme's run 1850 (#2837),
+  which refused a co-edit on 2026-11-18. Wave 6's PR ships the rest of Tasks 6.1 and 6.2; the tests for
+  `references/plan.md`, the open step and the ledger template's epic column live in a new file,
+  `server/test/coordinator-plan-reference.test.ts`. Until the follow-up lands, the rule that the operator acts on hierarchy
+  items in the console, and that a coordinator never answers one for them nor asks for those approvals in its turn text,
+  lives in the coordinator SKILL.md's Linear section and `references/plan.md`, not in the contract (amended in review
+  round 1, run 2580 F1). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
+  file's measured size with clause 21 (23872); wave 6's PR shrinks that file below `main`'s cap first, so the cap moves
+  by less than the clause's bytes (amended in review round 2, run 2590 A2). Record: the wave 6 note, which carries the
+  follow-up's exact content.
 
 ## Global Constraints
 
