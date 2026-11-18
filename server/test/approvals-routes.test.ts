@@ -133,6 +133,80 @@ describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)'
     expect(DENY_DIGEST).toMatch(/^[0-9a-f]{64}$/);
   });
 
+  // Approvals PR 0 (plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's plan-review rulings F5 and F6): a
+  // child spawned under an older deny file is held when the installer's digest history names its digest, its class left
+  // as the classifier gave it and its row recording that its deny rules are not current; the rule door refuses its
+  // allow, and a deny or a hand-over works. The server measures the standing itself: the hook's `denyDigest` decides
+  // nothing.
+  describe('a deny digest the installer\'s history names (approvals PR 0)', () => {
+    const DENY_PATH = (fx: Approvals): string => path.join(fx.home, '.cc-sessions', 'child-deny.settings.json');
+    const HISTORY = (fx: Approvals): string => path.join(fx.home, '.cc-sessions', 'child-deny.digests');
+    /** The deny list changes after the child's spawn; the history names the digest it was spawned with, then the new one. */
+    const changeDenyFile = (fx: Approvals, named = true): void => {
+      appendFileSync(DENY_PATH(fx), ' ');
+      const now = sha256(readFileSync(DENY_PATH(fx), 'utf8'));
+      writeFileSync(HISTORY(fx), `${named ? DENY_DIGEST : 'c'.repeat(64)} 1700000000000\n${now} 1700000000001\n`);
+    };
+    it('is minted held for the claimant, its class ordinary, denyCurrent false, and mailed', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const { res, id } = await ask(f);
+      expect(res.statusCode).toBe(201);
+      const row = rowOf(f, id);
+      expect({ state: row.state, class: row.class, denyCurrent: row.denyCurrent, parentId: row.parentId })
+        .toEqual({ state: 'held', class: 'ordinary', denyCurrent: false, parentId: PARENT });
+      expect(mailsTo(f, PARENT)).toHaveLength(1);
+      expect(mailsTo(f, PARENT)[0]!.body).toContain('older deny rules');
+    });
+    // MUTATION (Task 0.4, as ruling F5 reshaped it): let the allow check ignore the row's deny-current fact, and this reds.
+    it('its allow is refused guard-escalate, nothing signed; its deny is signed and verifies', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const { id, body } = await ask(f);
+      expect((await f.rule(id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
+      expect(rowOf(f, id).state).toBe('held');
+      expect((await f.rule(id, PARENT, 'deny')).json()).toEqual({ ok: true, state: 'denied' });
+      const got = (await f.ruling(id, body['nonce'] as string)).json() as { ruling: { record: Record<string, unknown>; sig: string } };
+      const expected = { sessionId: CHILD, agentId: '', digest: body['digest'], nonce: body['nonce'], rowId: id, now: Date.now() };
+      expect(verdictFor(got.ruling, expected, await keyOf(f))).toBe('deny deny by the fixture');
+    });
+    it('its hand-over works as for any held row', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const { id } = await ask(f);
+      expect((await f.release(id, PARENT)).statusCode).toBe(200);
+      expect(rowOf(f, id).state).toBe('declined');
+    });
+    it('a digest in neither the managed file nor the history is deny-not-engaged, nothing minted', async () => {
+      f = await standardFixture();
+      changeDenyFile(f, false);
+      expect((await ask(f)).res.json()).toMatchObject({ error: 'deny-not-engaged' });
+      expect(approvalCount(f.coord)).toBe(0);
+    });
+    it('a current child stays current whatever the history says, and its allow is signed', async () => {
+      f = await standardFixture();
+      writeFileSync(HISTORY(f), `${'c'.repeat(64)} 1700000000000\n${DENY_DIGEST} 1700000000001\n`);
+      const { id } = await ask(f);
+      expect(rowOf(f, id).denyCurrent).toBe(true);
+      expect((await f.rule(id, PARENT, 'allow')).json()).toEqual({ ok: true, state: 'allowed' });
+    });
+    it('the hook\'s denyDigest decides nothing: absent (an older hook) still routes a history child; a wrong one changes nothing', async () => {
+      f = await standardFixture();
+      changeDenyFile(f);
+      const plain = await ask(f);
+      expect(rowOf(f, plain.id).denyCurrent).toBe(false);
+      const wrong = await f.request({ ...requestBody(ORDINARY), denyDigest: 'f'.repeat(64) });
+      expect(wrong.statusCode).toBe(201);
+      expect(rowOf(f, (wrong.json() as { id: number }).id).denyCurrent).toBe(false);
+      const g = await standardFixture();
+      try {
+        const current = await g.request({ ...requestBody(ORDINARY), denyDigest: 'f'.repeat(64) });
+        expect(current.statusCode).toBe(201);
+        expect(rowOf(g, (current.json() as { id: number }).id).denyCurrent).toBe(true);
+      } finally { await g.close(); }
+    });
+  });
+
   it('role both without the opt-in is single-box, nothing minted; with it, minted', async () => {
     f = await standardFixture({ role: 'both' });
     expect((await ask(f)).res.json()).toMatchObject({ error: 'single-box' });
