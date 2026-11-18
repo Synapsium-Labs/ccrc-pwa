@@ -546,6 +546,14 @@ Each named capability maps to Task 17's matrix:
 | Appearance | R10 | Owned by X1's spec and plan |
 | Draft review | I20 | Owned by X3's spec and plan |
 
+## 11. Promise delta
+
+This design changes no Promise. It designs the required parity scope that the native Docs reader programme already records (#1418, #1420), and adds no capability or scenario.
+
+```promise-delta
+none - design of recorded required parity scope of the native Docs reader programme; no Promise capability or scenario changes
+```
+
 ## Where things stand
 
 ### Agreed

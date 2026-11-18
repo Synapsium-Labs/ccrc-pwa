@@ -367,3 +367,10 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 ### Census note for P4.3
 
 A new `coord.db` migration and a new docs constant can red tests outside the obvious set (migration counts, census suites, duration literals). P4.3 runs the server's migration and census suites in full before its push.
+
+### The repo's review judge
+
+At `bde0449dc`, every required check and CodeQL passed. The repo's review judge, which is not a required check, was red on two blocking reasons:
+
+- `promise-delta-missing`: the new spec had no `promise-delta` fence. Fixed by spec §11, in the template's "none - <reason>" form.
+- `pr1-files-invalid`: a first PR may hold one spec and at most one plan. This PR also amends the rich-docs spec's §6 parity table, which the wave's brief requires in the same PR, so it stays and is reported to the coordinator.
