@@ -306,7 +306,7 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 | One bar on a phone | the frame's own bar off, ccrc's bar only, per skin | as above |
 | Appearance payload | at most 4 KiB serialised, about 50 keys | unit row on the adapter's output |
 | Ops while open | at most 1 per animation frame, latest wins | unit row with a fake clock |
-| Hosted srcdoc growth | at most 192 KiB of characters over the same document at the 1.1.0 pin | `frame-cost` browser row (two faces of base64 are about 188 K) |
+| Hosted srcdoc growth, in three parts | (1) ccrc's two faces: exactly 187 640 characters of base64, pinned to the files. (2) The library's own growth: its frame assets (guard, bootstrap, enhance, stylesheet) at the new release at most 32 768 characters over 1.1.0's 781 099. (3) The appearance seed: at most 4 096. So a hosted mount grows by at most 224 504 characters over the same document at the 1.1.0 pin | (1) and (3): unit rows. (2): Task 1, read from the installed package. The total: `frame-cost` browser row |
 | Open to `ready` | hosted median of 9 opens at most 1.10 x the BASE median of 9, desktop Chromium, same runner | `frame-cost` browser row |
 | Change while open | frame root shows the new values within 100 ms. Same iframe and nonce. Scroll within 1 px | `reader-appearance` browser row |
 | Mermaid redraw | one figure per task, no single gap over E17's 200 ms | `reader-appearance` browser row |
@@ -353,7 +353,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 - While hosted, the stored prefs object never carries `theme`.
 - The frame's derived srcdoc cap rises by the fonts' cap.
 - While hosted, Mermaid draws with `mermaidThemeOf`, with no white plate and no invert filter, and figures already drawn are redrawn on a change, nearest first, one per task.
-- Optional: split the four inline fonts out of the stylesheet into font assets, so a host that supplies a sans face can leave the library's sans out. This would keep the srcdoc growth well under §9's 192 KiB.
+- The library's four faces stay inline in its stylesheet, exactly as in 1.1.0, so a host that supplies 1.1.0's four assets keeps working. ccrc's faces are additional, optional assets. Splitting the library's faces out would save at most its two sans faces, 76 364 characters (measured), and would change the asset set a 1.1.0-style host supplies, so it is not proposed.
 
 **Tests the library ships.**
 1. `parseAppearance`:
@@ -389,7 +389,8 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - while hosted, a `prefs` change never writes `theme`;
    - a font that fails its checks or `FontFace` load is dropped, and the mount reaches `ready`;
    - a document at the old srcdoc cap still mounts with both faces.
-8. Boundaries: `frameCsp()` is byte-identical to 1.1.0, and so is the frame-to-parent op set.
+8. Size: the frame assets (guard, bootstrap, enhance, stylesheet) grow by at most 32 768 characters over 1.1.0's 781 099.
+9. Boundaries: `frameCsp()` is byte-identical to 1.1.0, and so is the frame-to-parent op set.
 
 **Compatibility.** A 1.1.0 host keeps working unchanged against the new version. The new version's frame ignores nothing a 1.1.0 host sends. A host built for the new version that is pinned back to 1.1.0 fails to build, and does not fail at run time.
 

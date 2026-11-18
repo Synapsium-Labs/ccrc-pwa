@@ -18,7 +18,7 @@
 - No second copy of the palette or skin catalogue anywhere under `pwa/src/docs/` or `pwa/src/readerLab/`; the only reader-side artefact is `READER_APPEARANCE_MAP`, a slot-to-token mapping.
 - One bad-value rule, the library's: the adapter builds the raw contract from ccrc's tokens and passes it through the library's `parseAppearance`, then sends only its verdict. ccrc spells none of the library's ranges or grammars. In the verdict, colour slots are all or nothing, and skin slots and the label fall back one by one. Appearance never drops the reader to the plain view.
 - Contrast floors: 4.5:1 for body text, links, semantic text, code tokens, table text and figure labels, on every ground and derived tint they are drawn on; 3:1 for the focus ring and figure lines; no floor for decorative edges. A derived tint holds at most 6% of its colour.
-- Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc at most 196 608 characters over the same document at the 1.1.0 pin; hosted open-to-`ready` median at most 1.10 x BASE median; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
+- Budgets: payload at most 4 KiB serialised; at most one `appearance` op per animation frame, latest wins; hosted srcdoc growth over the same document at the 1.1.0 pin in three parts: ccrc's two faces exactly 187 640 characters, the library's frame-asset growth at most 32 768 over 1.1.0's 781 099, the appearance seed at most 4 096, so at most 224 504 in all; hosted open-to-`ready` median at most 1.10 x BASE median; a change while open shows on the frame root within 100 ms, same iframe and nonce, scroll within 1 px; Mermaid redraw one figure per task, no gap over 200 ms.
 - The reader lab mounts with no appearance (spec X1-10).
 - Heavy tests, typecheck and browser runs go through `ccrc test`, in the foreground, with a timeout of at least 600000 ms. Mutations run in sequence from saved copies, and each is restored and hash-checked, never with `git checkout`.
 - Commit on the workspace branch only. Private-name scan every changed file before each commit and before the push.
@@ -80,6 +80,7 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 
 - [ ] **Step 1:** Re-read the release the brief names: registry entry, tarball integrity, attestation, signed tag. A difference from the brief stops the wave.
 - [ ] **Step 2:** Set the exact version (no `^`) in `pwa/package.json` and install through the existing approved spine. `npm ls` of the library's package (the name `pwa/package.json` already carries) prints exactly that version.
+- [ ] **Step 2a: Measure the library's growth.** Sum the characters of the installed frame assets (guard, bootstrap, enhance, the frame stylesheet) and compare with 1.1.0's 781 099 (3 643, 30 153, 198 234 and 549 069, measured 2026-11-18). More than 32 768 over stops the wave and is reported: spec §9's budget is the library's to keep.
 - [ ] **Step 3:** Run the M8.12 rows through `ccrc test` (`./node_modules/.bin/vitest run test/reader-pin.test.ts test/reader-assets.test.ts`). Expected: PASS, with the new script hashes read from the package, never typed.
 - [ ] **Step 4:** Commit `pwa/package.json pwa/package-lock.json`: `deps(pwa): the shared library at <version>, the appearance contract`.
 
@@ -263,7 +264,7 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
-  - Extend `frame-cost` with the srcdoc-growth and open-to-`ready` budgets.
+  - Extend `frame-cost` with the srcdoc-growth budget (at most 224 504 characters over BASE) and the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
 - [ ] **Step 3: Run each file through `ccrc test`**, with `CCRC_CHROME` from the brief. Expected: PASS. Record each figure line beside BASE.
 - [ ] **Step 4: Measure the mutation rows** below, one at a time, from saved copies, restoring and hash-checking after each.
 - [ ] **Step 5: Commit** the four browser files: `test(docs): the appearance matrix and per-skin budgets`.
@@ -373,7 +374,7 @@ All of run 2631's block is defined: 8759, 8760, 8761.
   - the bridge is `v: 1`, and a frame ignores a parent op it does not know;
   - the frame's CSP is `style-src 'unsafe-inline' data:` and `font-src data:`;
   - the host's precedence is defaults, then stored, then host values.
-- **Frame asset sizes:** `reader.css` is 549 069 characters, 413 096 of them base64 fonts (4 faces); `enhance.js` 198 234; `bootstrap.js` 30 153; `guard.js` 3 643. ccrc's faces are 69 492 and 71 236 bytes, about 188 K characters as base64.
+- **Frame asset sizes:** `reader.css` is 549 069 characters, 413 096 of them base64 fonts (4 faces); `enhance.js` 198 234; `bootstrap.js` 30 153; `guard.js` 3 643; 781 099 in all. The library's faces, as base64: serif 163 148 and 173 584 (italic), sans 38 320 and 38 044 (italic). ccrc's faces are 69 492 and 71 236 bytes, exactly 187 640 characters as base64 (the seed does not escape base64). Spec §9 splits the srcdoc budget on these numbers (fix round 1, F10).
 - **The mapped tokens are literal in every palette.**
   - A script parsed `tokens.css`, merged both default blocks, took the default as `phosphor`, overlaid each `[data-theme]` block, and followed `var()` chains.
   - The 29 distinct colour tokens the map names (focus and accent share `--accent`), `--accent-on-well`, and the 2 radius tokens resolve to `#rrggbb` or whole px in all 12 palettes: 0 misses.
