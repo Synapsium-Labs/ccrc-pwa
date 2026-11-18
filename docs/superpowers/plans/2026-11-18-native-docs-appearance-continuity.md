@@ -202,7 +202,7 @@ setAppearance(r: HostAppearanceRead, theme: 'light' | 'dark' | 'auto'): void;
 - On a hosted mount, `setAppearance` sends `DocFrame.setAppearance` with the outcome's value, a value with no colour group included. It never calls `setPrefs` with a theme. On a mode-only mount (contract unsupported), it sends `setPrefs({theme})`.
 
 - [ ] **Step 1: Write the failing rows** in `reader-bridge.test.ts`, with a fake `mount`:
-  - **reads after the last await:** hold `deps.assets`, change what `input.appearance` answers while held, release; the adapters' `appearance` is the post-release answer, `seededStamp` is its stamp, and `appearance` was called exactly once, with no await between that call and `mount`;
+  - **reads after the last await:** hold `deps.assets`, change what `input.appearance` answers while held, release; the adapters' `appearance` is the post-release answer, `seededStamp` is its stamp, and `appearance` was called exactly once per library mount, with no await between that call and `mount`. An `openAt` remount, which rebuilds the adapters, reads once more, and its `seededStamp` is that read's stamp;
   - **an outcome of kind `appearance`** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
   - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `colour` group;
   - **fonts that fail to load** mount without `fonts`, and `onFallback` is never called;
