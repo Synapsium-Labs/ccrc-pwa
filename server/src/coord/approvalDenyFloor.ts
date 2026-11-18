@@ -52,10 +52,15 @@ export function denyStandingOf(child: string | null, managed: string | null, his
 /** Why an allow is refused at the rule door, or null when it may be signed. `rowClass` is the class stored at mint (a
  *  string: a word a newer build wrote is not `ordinary`), `again` the classifier run once more over the input held for
  *  the window (`escalate` when none is held), and `denyCurrent` the row's own fact. Forbidden on either side is
- *  `guard-forbidden`; anything short of `ordinary` on both sides under current deny rules is `guard-escalate`. A deny
- *  or a hand-over never asks: they stay open on every row. */
-export function approvalAllowRefusal(rowClass: string, again: ApprovalClass, denyCurrent: boolean): 'guard-forbidden' | 'guard-escalate' | null {
+ *  `guard-forbidden`, first. A row whose child runs under older deny rules than the box's is `deny-not-current`,
+ *  whatever its class: the fact is the child's, so it answers the same before and after a server restart. Anything
+ *  else short of `ordinary` on both sides is `guard-escalate`. A deny or a hand-over never asks: they stay open on
+ *  every row. */
+export function approvalAllowRefusal(
+  rowClass: string, again: ApprovalClass, denyCurrent: boolean,
+): 'guard-forbidden' | 'deny-not-current' | 'guard-escalate' | null {
   if (rowClass === 'forbidden' || again === 'forbidden') return 'guard-forbidden';
-  if (rowClass !== 'ordinary' || again !== 'ordinary' || !denyCurrent) return 'guard-escalate';
+  if (!denyCurrent) return 'deny-not-current';
+  if (rowClass !== 'ordinary' || again !== 'ordinary') return 'guard-escalate';
   return null;
 }

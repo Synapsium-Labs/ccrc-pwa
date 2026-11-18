@@ -1653,8 +1653,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const held = approvalInputs.get(id);
       const again = held === undefined ? 'escalate'
         : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: cfg.home }), cwd: held.cwd });
-      // The allow check is L1's (`approvalAllowRefusal`): either class short of `ordinary`, or a row whose child runs
-      // under older deny rules than the box's (approvals PR 0, the row's own `denyCurrent`), is refused.
+      // The allow check is L1's (`approvalAllowRefusal`): either class short of `ordinary` is refused, and a row whose
+      // child runs under older deny rules than the box's (approvals PR 0, the row's own `denyCurrent`) is refused
+      // `deny-not-current`.
       const refusal = approvalAllowRefusal(row.class, again, row.denyCurrent);
       if (refusal !== null) return refused(refusal);
     }

@@ -7,7 +7,7 @@ import { expect } from 'vitest';
 
 export interface ApprovalDenyFloorModule {
   denyStandingOf(child: string | null, managed: string | null, history: string | null): 'current' | 'history' | 'none';
-  approvalAllowRefusal(rowClass: string, again: 'ordinary' | 'escalate' | 'forbidden', denyCurrent: boolean): 'guard-forbidden' | 'guard-escalate' | null;
+  approvalAllowRefusal(rowClass: string, again: 'ordinary' | 'escalate' | 'forbidden', denyCurrent: boolean): 'guard-forbidden' | 'deny-not-current' | 'guard-escalate' | null;
   readonly CHILD_DENY_DIGESTS_FILE: string;
   readonly CHILD_DENY_DIGESTS_MAX: number;
 }
@@ -79,9 +79,10 @@ export const APPROVAL_DENY_FLOOR_CASES: readonly DenyFloorCase[] = [
   { name: 'the allow check: an ordinary row, ordinary again, under current rules may be signed', run: (m) => {
     expect(m.approvalAllowRefusal('ordinary', 'ordinary', true)).toBeNull();
   } },
-  { name: 'the allow check: a row whose deny rules are not current is refused guard-escalate, though ordinary', run: (m) => {
-    expect(m.approvalAllowRefusal('ordinary', 'ordinary', false)).toBe('guard-escalate');
-    expect(m.approvalAllowRefusal('escalate', 'ordinary', false)).toBe('guard-escalate');
+  { name: 'the allow check: a row whose deny rules are not current is refused deny-not-current, whatever its class short of forbidden', run: (m) => {
+    expect(m.approvalAllowRefusal('ordinary', 'ordinary', false)).toBe('deny-not-current');
+    expect(m.approvalAllowRefusal('escalate', 'ordinary', false)).toBe('deny-not-current');
+    expect(m.approvalAllowRefusal('ordinary', 'escalate', false)).toBe('deny-not-current');
   } },
   { name: 'the allow check: escalate on either side is guard-escalate, whatever the rules', run: (m) => {
     expect(m.approvalAllowRefusal('escalate', 'ordinary', true)).toBe('guard-escalate');

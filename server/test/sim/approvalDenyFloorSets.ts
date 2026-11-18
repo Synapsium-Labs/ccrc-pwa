@@ -39,14 +39,16 @@ export const DENY_STANDING_SET: MutantSet<ApprovalDenyFloorModule> = {
 export const ALLOW_REFUSAL_SET: MutantSet<ApprovalDenyFloorModule> = {
   modulePath: MODULE_TS,
   mutants: [
-    { id: 'AR-1 the allow ignores deny currency', old: ' || !denyCurrent) return \'guard-escalate\';', new: ') return \'guard-escalate\';' },
+    { id: 'AR-1 the allow ignores deny currency', old: '  if (!denyCurrent) return \'deny-not-current\';\n', new: '' },
     { id: 'AR-2 the allow ignores the row class', old: 'if (rowClass !== \'ordinary\' || again', new: 'if (again' },
-    { id: 'AR-3 the allow ignores the class again', old: ' || again !== \'ordinary\' || !denyCurrent', new: ' || !denyCurrent' },
+    { id: 'AR-3 the allow ignores the class again', old: ' || again !== \'ordinary\') return', new: ') return' },
     { id: 'AR-4 forbidden on the row not seen', old: 'if (rowClass === \'forbidden\' || again === \'forbidden\')', new: 'if (again === \'forbidden\')' },
     { id: 'AR-5 forbidden again not seen', old: 'if (rowClass === \'forbidden\' || again === \'forbidden\')', new: 'if (rowClass === \'forbidden\')' },
-    { id: 'AR-6 currency inverted', old: ' || !denyCurrent) return \'guard-escalate\';', new: ' || denyCurrent) return \'guard-escalate\';' },
-    { id: 'AR-7 a stale row is forbidden', old: 'if (rowClass === \'forbidden\' || again === \'forbidden\') return', new: 'if (rowClass === \'forbidden\' || again === \'forbidden\' || !denyCurrent) return' },
+    { id: 'AR-6 currency inverted', old: 'if (!denyCurrent) return', new: 'if (denyCurrent) return' },
+    { id: 'AR-7 a stale row is forbidden', old: 'if (!denyCurrent) return \'deny-not-current\';', new: 'if (!denyCurrent) return \'guard-forbidden\';' },
     { id: 'AR-8 forbidden answered as escalate', old: '=== \'forbidden\') return \'guard-forbidden\';', new: '=== \'forbidden\') return \'guard-escalate\';' },
+    { id: 'AR-9 a stale row answered as escalate', old: 'if (!denyCurrent) return \'deny-not-current\';', new: 'if (!denyCurrent) return \'guard-escalate\';' },
+    { id: 'AR-10 currency asked before forbidden', old: "  if (rowClass === 'forbidden' || again === 'forbidden') return 'guard-forbidden';\n  if (!denyCurrent) return 'deny-not-current';\n", new: "  if (!denyCurrent) return 'deny-not-current';\n  if (rowClass === 'forbidden' || again === 'forbidden') return 'guard-forbidden';\n" },
   ],
   suite,
 };

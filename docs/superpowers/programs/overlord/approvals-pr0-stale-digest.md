@@ -1,8 +1,9 @@
 # Approvals PR 0: the stale deny digest — task note
 
-Programme `overlord` (#2491), plan `docs/superpowers/plans/2026-11-18-overlord-approvals.md` (#3036), §3.2.1,
-Table 3c and Tasks 0.1 to 0.4, as the coordinator's plan-review rulings of 2026-11-18 (F1, F5, F6, F7) reshaped
-them. Departures are named by slug; the coordinator mints their numbers.
+Programme `overlord` (#2491), plan `docs/superpowers/plans/2026-11-18-overlord-approvals.md` (#3036, on main as
+2375f6dcc), §3.2.1, Table 3c and Tasks 0.1 to 0.4. The coordinator's plan-review rulings of 2026-11-18 (F1, F5, F6,
+F7) are folded into that plan. Departures from the plan on main are named by slug; the coordinator mints their
+numbers.
 
 ## What shipped
 
@@ -22,7 +23,9 @@ them. Departures are named by slug; the coordinator mints their numbers.
   managed file's digest and the history. The raise refuses `deny-not-engaged` only for `none`, and mints a `history`
   child's row held, its class left as the classifier gave it, with `approvals.denyCurrent = 0` (ruling F5; migration
   100 by position on today's main). The rule door asks `approvalAllowRefusal` (L1), which refuses an allow on a row
-  whose deny rules are not current (`guard-escalate`, the existing word); a deny is signed and a hand-over works as
+  whose deny rules are not current with a new word, `deny-not-current` (`APPROVAL_REFUSALS`, `REFUSAL_STATUS`, a
+  `409`). It answers after `guard-forbidden` and before `guard-escalate`, whatever the row's class: the fact is the
+  child's, so it answers the same before and after a server restart. A deny is signed and a hand-over works as
   before. The brief tells the claimant the child runs under older deny rules and offers no allow.
 
 ## Task 0.1: does a running Claude Code re-read a changed `--settings` file?
@@ -40,25 +43,24 @@ touch credentials. The finding above rests on reading the build's code.
 
 ## Departures (by slug)
 
-- `history-records-current-when-absent`: the plan's Task 0.2 said "no line for an unchanged file". Ruling F1
-  replaces this: the current file's digest is written whenever it is not the last line. So a box whose deny file is
-  older than the history writes one line on its first run, without rewriting the file.
-- `history-records-outgoing-digest`: ruling F1. A rewrite records the outgoing digest before the incoming one.
-- `deny-current-is-a-row-fact`: the plan's `approvalClassFloor(class, denyCurrent)` would have raised the class at
-  mint. Ruling F5 replaces it: the class stays the classifier's, `approvals.denyCurrent` records the fact, and
-  `approvalAllowRefusal(rowClass, again, denyCurrent)` decides at the rule door. This adds a migration, which the
-  plan did not have.
-- `deny-digest-advisory`: the hook sends `denyDigest`, but the server never reads it. The server measures the
-  standing itself, from the registry stamp, the managed file and the history (ruling F6). The request route
-  therefore needs no body change.
 - `brief-says-older-rules`: the brief to the claimant gains one line for a row whose deny rules are not current, and
   it offers no allow for that row. Without it, a coordinator mailed an `ordinary` stale row would try an allow that is
   then refused.
-- `no-capability-word`: §7 lists `approval-deny-history-v1`. Nothing reads it. An older server refuses a history
-  digest with `deny-not-engaged`, and an older hook never sends one, so both directions already fail toward the
-  operator without the word. It is not added.
-- `uninstall-removes-history`: `_uninst_cc_sessions` removes the history with the deny file. The plan did not
-  mention this.
+- `no-capability-word`: §7 lists `approval-deny-history-v1`. Nothing reads it, and no approval capability word
+  exists in the tree yet. An older server refuses a history digest with `deny-not-engaged`, and an older hook never
+  sends one, so both directions already fail toward the operator without the word. It is not added.
+- `no-installer-lock`: §3.2.1 says the trim happens "under the installer's existing lock". The install spine has no
+  lock. The trim is still safe against a concurrent install: the spine writes the new history to a temporary file
+  named by its own process id, beside the history, then moves it into place with one atomic rename (`mv -f`). A
+  reader therefore never sees a half-written or interleaved file, and two installs never write the same temporary
+  file. What a race can cost: two installs that read the old history at once each rename their own copy, and the
+  later rename wins, so the earlier one's new line can be lost. Installs run from the update and doctor paths, one at
+  a time in practice. The next install records the current digest again whenever it is not the last line.
+- `failed-write-records-the-file-left`: Task 0.2 says a failed write of the managed file appends nothing. The spine
+  instead records the digest of the file the failed write left in place, when that digest is not already last. That
+  file is the installed one, so the history still never names a file that was not installed, which is the reason the
+  plan gives. A guard to skip the history on a failed write was not added: no fixture can fail the deny file's write
+  while leaving the history writable, so no test could turn it red.
 
 ## Accepted costs and residuals
 
@@ -88,4 +90,5 @@ first mutant, and the restore was checked byte for byte.
   not anchored, a symlinked history read, the history read on the current path, the truncated body without
   `denyDigest`, `denyDigest` sent for a current digest). Write deny: the new alternative removed reds 6 cases.
 - L1 deciders: in `server/test/sim/mutation-floors.json`, `denyStandingOf` (17 mutants) and `approvalAllowRefusal`
-  (8 mutants), every mutant killed, floor 1.
+  (10 mutants: among them the currency check dropped, inverted, answered as `guard-forbidden` or as
+  `guard-escalate`, and asked before forbidden), every mutant killed, floor 1.
