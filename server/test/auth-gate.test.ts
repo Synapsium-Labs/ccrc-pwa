@@ -101,7 +101,7 @@ function scanRoutes(file: string): ScannedRoute[] {
     .map((m) => ({ method: m[1]!.toUpperCase(), routePath: m[2]!, file }));
 }
 
-/** TWENTY-TWO files register routes since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
+/** TWENTY-THREE files register routes since the Models sheet's write door (`server/src/laneModelsRoutes.ts`, model-class-advance R4: its one session-gated route); TWENTY-TWO since the Overlord's designation doors (`server/src/coord/overlordRoutes.ts`, Overlord W1 designation A: three session-gated routes; designation C adds its two Settings doors to the same file); TWENTY-ONE since the remaining-work door (`server/src/coord/programmeRemainingRoute.ts`, Overlord W2: its one
  *  box-token route, registered from `registerCoordRoutes` and written in a file of its own); THIRTEEN since the test box connect routes (`server/src/testboxAdmin.ts`, plan TC12, D-8166: its two session-only routes); TWELVE since the coordinator call record's door (`server/src/coord/coordCallsRoute.ts`, D-8126: its one box-token route, registered from
  *  `registerCoordRoutes` and written in a file of its own); ELEVEN since the review-rounds door (`server/src/coord/reviewRoundsRoute.ts`, D-8125); TEN since the reader lab's door (`server/src/readerLab/routes.ts`, the reader lab plan Task 3: its three run routes and the probe pair); NINE since the programme ledgers' PL3 (`server/src/coord/ledgersRoutes.ts`, the coordinator's nine, registered from
  *  `registerCoordRoutes` but written in a file of their own); EIGHT since the Linear proxy (`server/src/linear/proxyRoutes.ts`, #1444 plan task LK9: its
@@ -710,10 +710,12 @@ describe('the scanner is looking at something', () => {
     // half 259 -> 262, the gated count 162 -> 163, the exempt-HTTP count 96 -> 98.
     // 268 since the renewal hand-offs (Overlord W1a), in `continuity/routes.ts`: `POST /api/sessions/:id/renew` and `GET`/`POST
     // /api/coord/renewal-mode`, session-gated and NOT EXEMPT, no box token: the HTTP half 262 -> 265, the gated count
-    // 163 -> 166, the exempt-HTTP count stays 98.
+    // 164 -> 167, the exempt-HTTP count stays 98. (The gated figures in this tally trail the derived value, the HTTP half
+    // less the exempt-HTTP count, by one since D-8075's `GET /api/programmes` above; the last two entries are corrected,
+    // the older ones stand as the tally recorded them.)
     // 269 since the Models sheet's write door (model-class-advance R4), in `laneModelsRoutes.ts`, a routes file of its own:
     // `POST /api/models/:lane`, session-gated and NOT EXEMPT, no box token: the HTTP half 265 -> 266, the gated count
-    // 166 -> 167, the exempt-HTTP count stays 98.
+    // 167 -> 168 (266 less the exempt-HTTP 98), the exempt-HTTP count stays 98.
     expect(ROUTES.length).toBe(269);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);

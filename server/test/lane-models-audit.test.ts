@@ -40,12 +40,13 @@ const SHOW = exited({
 });
 const HOLD = exited({ ok: true, op: 'hold', class: C1, changed: true, id: LANE });
 
+const spyWarn = () => vi.spyOn(console, 'warn').mockImplementation(() => undefined);
 const stubPty = (): PtyLike => ({ onData: () => ({ dispose: () => {} }), write: () => {}, resize: () => {}, kill: () => {} });
 
 describe('POST /api/models/:lane, built through buildServer with sign-in armed: the audit line names the measured device', () => {
   let app: FastifyInstance | undefined;
-  let warn: ReturnType<typeof vi.spyOn>;
-  beforeEach(() => { warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined); });
+  let warn: ReturnType<typeof spyWarn>;
+  beforeEach(() => { warn = spyWarn(); });
   afterEach(async () => { warn.mockRestore(); if (app) await app.close(); app = undefined; });
 
   async function signedIn(label: string): Promise<{ cookie: string; token: string; asked: string[] }> {
