@@ -4,10 +4,10 @@
 // from its last byte, and its docstring said it reads every break as `ROW_BREAK` reads it forward; nothing pinned that.
 // A brute force over every string of 1 to 8 bytes over x, LF, CR, space and NUL agreed on every forward break but one
 // family: a CR LF (or CR CR LF), blanks (or none), then a CR. Forward, the CR LF is one break, the blanks a blank row,
-// the CR another break; back from that CR, `breakStartAt` reads LF, blanks, CR as one break starting at the LF. Kept: a reader
-// that walks back over breaks steps further back, onto the row before, which can only join more rows to a key's chain
-// (fail closed), and the readers that stop there read the LF's CR as text before the run, as forward. This row pins the
-// agreement everywhere else and the one difference exactly, so a change to either side is a red suite.
+// the CR another break; back from that CR, `breakStartAt` reads LF, blanks, CR as one break starting at the LF. Kept:
+// a reader that walks back over breaks steps further back, onto the row before, which can only join more rows to a
+// key's chain (fail closed), and the readers that stop there read the LF's CR as text before the run, as forward. This
+// row pins the agreement everywhere else and the one difference exactly, so a change to either side is a red suite.
 import { describe, it, expect } from 'vitest';
 import { ROW_BREAK } from '../src/accounts/shapes.js';
 import { breakStartAt } from '../src/accounts/mask.js';
@@ -33,7 +33,7 @@ const crAfterCrLfBlanks = (t: string, s: number, e: number): number | null => {
 };
 
 describe('D-8749 — breakStartAt reads each row break back to where ROW_BREAK reads it from (review 2445 F2)', () => {
-  it('every string of 1 to 8 bytes over x, LF, CR, space and NUL: the same start, but for the CR LF, blanks, CR family', () => {
+  it('every string of 1 to 8 bytes over x, LF, CR, space and NUL: one start, but for the CR LF, blanks, CR family', () => {
     const forward = new RegExp(ROW_BREAK, 'g');
     let breaks = 0;
     const family: string[] = [];
