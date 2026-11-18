@@ -53,7 +53,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 | Row | Task 17 row | Installed action and observation | Waves |
 |---|---|---|---|
-| AR-1 | Outside folders | Add a non-repo folder in Settings, open its six sections, see "Not in a repository" and each file's modified time; history, changes, versions, GitHub and Share are off with reasons; a symlink out is listed and never read; reads refused while sign-in is dark; Remove ends access. No Git conversion. | P2 |
+| AR-1 | Outside folders | Add a non-repo folder in Settings, open its six sections, see "Not in a repository" and each file's modified time; history, changes, versions, GitHub and Share are off with reasons; a symlink out is listed and never read; reads refused while sign-in is dark; no absolute path of the folder appears in any page, error body or log line (the redaction check); Remove ends access. No Git conversion. | P2 |
 | AR-2 | Layout variants | Open a doc in `default`, `classic`, `editorial`, `review` and `guided` (Page details, and `?variant=` with the standalone names); the choice persists per device; each is usable at 412×915, 1280×800 and 1920×1080; each follows ccrc's appearance while hosted (theme and fonts through the appearance slots, as X1's merged contract defines them) and passes its contrast pairs. | P5 |
 | AR-3 | Large files | Real fixtures at 2 MiB, 4 MiB and 64 MiB, one byte below, at and above each: Markdown in parts, an image view, Download; over 64 MiB the plain sentence and nothing partial; a draft above 4 MiB opens through its snapshot (the overlay-cap decision). Peak page memory measured on the phone. | P1 |
 | AR-4 | PDFs | List, open inline and download one PDF below, at and above 4 MiB; no network from the frame or its worker; links do not navigate; phone and desktop. | P3 |
@@ -273,9 +273,9 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P5.4: Reading-layer flags
 
-**Files:** Modify `pwa/src/docs/reader/{bridge,policy}.ts`, `pwa/src/docs/readerHistory.ts`; Test `pwa/test/reader-flags.test.ts` (new).
+**Files:** Modify `pwa/src/docs/reader/{bridge,policy}.ts`, `pwa/src/docs/readerHistory.ts` (the comparison base per doc in session storage, under `ccrc:reader:v1:`); Test `pwa/test/reader-flags.test.ts` (new).
 
-- [ ] **Step 1: Failing tests:** `flags: rules on in the seed`; `flags: addressees you and operator, qualifiers`; `flags: In short switch on`; `flags: reload keeps the comparison base`.
+- [ ] **Step 1: Failing tests:** `flags: rules on in the seed`; `flags: addressees you and operator, qualifiers`; `flags: In short switch on`; `flags: reload keeps the comparison base`; `flags: a link back to the doc keeps the comparison base in this tab`; `flags: another tab starts without it`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): reading-layer flags (X2 P5)`.
 
 ### Task P5.5: Print stage 2, drawn figures
