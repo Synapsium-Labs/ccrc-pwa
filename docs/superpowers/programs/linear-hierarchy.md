@@ -319,5 +319,5 @@ beyond this programme's own. Its brief carries:
   - a 503 `unavailable` answered before any write reads as unconfirmed (A7);
 - the pilot team first, the pilot's report to the operator before any other team, and approvals in the console only.
 
-New departures take numbers from the block allocated on 2026-11-18 (D-8739 to D-8742 are still free), issued by the
+New departures take numbers from the block allocated on 2026-11-18 (numbers 8739 to 8742 are still free), issued by the
 coordinator.
