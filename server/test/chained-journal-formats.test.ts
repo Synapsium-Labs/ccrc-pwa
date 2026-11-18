@@ -163,6 +163,24 @@ describe('the kinds census', () => {
     for (const n of names) expect(FORMATS[n]!.format.kinds.length, n).toBeGreaterThan(0);
   });
 
+  it('the authority journal\'s decision-row kind is its own: in its table, in no other format\'s, and each other grammar refuses it for the kind (Overlord W2, decision model B)', () => {
+    const kind = 'authority-decision-row';
+    expect(FORMATS['overlordAuthority']!.format.kinds).toContain(kind);
+    const others = names.filter((n) => n !== 'overlordAuthority');
+    for (const n of others) {
+      expect(FORMATS[n]!.format.kinds, n).not.toContain(kind);
+      let err: unknown = null;
+      try { FORMATS[n]!.format.entry({ ...FORMATS[n]!.sample, kind }); } catch (e) { err = e; }
+      expect(err, `${n} refuses ${kind}`).toBeInstanceOf(refusalClassOf(FORMATS[n]!.format));
+      expect((err as Error).message, n).toContain(JSON.stringify(kind));
+    }
+    // and the authority grammar takes its own sample of the kind, so the swap above is the only thing wrong with the others'
+    expect(() => FORMATS['overlordAuthority']!.format.entry({
+      kind, opKey: 'op-1', row: 'scope.widens', gate: true,
+      from: { mode: 'off', ceiling: 600, armedLine: null, held: false }, to: { mode: 'shadow', ceiling: 600, armedLine: null, held: false },
+    })).not.toThrow();
+  });
+
   it('the kinds tables are pairwise disjoint', () => {
     for (const a of names) for (const b of names) {
       if (a >= b) continue;

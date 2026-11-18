@@ -296,7 +296,7 @@ const { App } = await import('../src/app');
 const { navigate } = await import('../src/lib/router');
 const { initSkin, setSkin } = await import('../src/lib/skin');
 const { useFleetStore } = await import('../src/stores/fleet');
-const { ROUTES } = await import('../src/lib/routes');
+const { ROUTES, epicPath, upkeepPath } = await import('../src/lib/routes');
 const { DESK_DOORS, DOOR_WORDS_QUERY, HOME_DOOR_NAME } = await import('../src/skins/instrument/TopBar');
 const { fleetSummary } = await import('../src/fleet/fleetSummary');
 const { ack, FEED_ACK_KEY, resetAcks } = await import('../src/lib/seen');
@@ -459,6 +459,7 @@ const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
 const ROUTE_PATHS: Record<string, string> = {
   fleet: '/', session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
   programme: '/programmes/prog-a', run: '/runs/410', 'runs-advanced': '/runs/advanced',
+  epic: epicPath('prog-a', 'e1'), upkeep: upkeepPath('project-a'),
 };
 
 describe('the desk top bar (desk-nav Task A)', () => {
