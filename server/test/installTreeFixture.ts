@@ -183,6 +183,7 @@ export const TREE_FILES = [
   'ccd/lib/pool-set.sh',
   // Its fifth library (the Overlord's ccd arms): read, pinned and published exactly as the others.
   'ccd/lib/long-lived.sh',
+  'ccd/lib/door.sh',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
