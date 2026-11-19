@@ -83,6 +83,9 @@ describe('ccd skill-ensure', () => {
       const r = ccd(['--wrapper', id]);
       expect(r.status, `id ${JSON.stringify(id)}`).toBe(2);
       expect(r.stdout).toBe('');
+      // F9 (review 2807): an id outside the roster's class is refused by ccd's OWN class check, before the roster is
+      // asked, so deleting that check is red here and not hidden behind the roster lookup's refusal.
+      if (id !== 'nobody') expect(r.stderr, `id ${JSON.stringify(id)}`).toContain(`ccd: bad wrapper id: ${id}`);
     }
     expect(fs.existsSync(path.join(home, '.claude-a', 'skills'))).toBe(false);
     expect(fs.existsSync(path.join(home, 'ccrc-backups'))).toBe(false);
@@ -124,5 +127,12 @@ describe('ccd skill-ensure', () => {
 
   it('the server builds exactly [skill-ensure, --wrapper, id]', () => {
     expect([...CCD_ARGV.skillEnsure('claude-a')]).toEqual(['skill-ensure', '--wrapper', 'claude-a']);
+  });
+
+  it('the builder refuses every id outside the roster\'s class before anything is sent (F4, review 2807)', () => {
+    for (const id of ['', 'Lane-a', '-x', '--homes', 'a/b', '../x', 'a\n', 'lane-a\n', ' lane-a', 'lane_a', `l${'a'.repeat(32)}`]) {
+      expect(() => CCD_ARGV.skillEnsure(id), JSON.stringify(id)).toThrow(/account id/);
+    }
+    expect([...CCD_ARGV.skillEnsure(`l${'a'.repeat(31)}`)]).toEqual(['skill-ensure', '--wrapper', `l${'a'.repeat(31)}`]);
   });
 });
