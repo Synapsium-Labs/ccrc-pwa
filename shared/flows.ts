@@ -349,10 +349,12 @@ export function skeletonFlowDoc(title: string): FlowDoc {
 
 /** The wire (spec §8). A flow's list row, its versions, and the two answers the Flows screen reads. */
 export interface FlowSource { template: string; version: number }
-export interface FlowSummary { id: number; title: string; source: FlowSource | null; updatedAt: number; latestVersion: number | null }
+/** `pinnedBy` (wave 2): how many programmes pin this flow; absent from an older server reads as 0. */
+export interface FlowSummary { id: number; title: string; source: FlowSource | null; updatedAt: number; latestVersion: number | null; pinnedBy?: number }
 export interface FlowVersionRow { version: number; publishedAt: number }
 export interface FlowTemplateView { id: string; version: number; title: string; note: string; doc: FlowDoc }
-export interface FlowsListAnswer { flows: FlowSummary[]; templates: FlowTemplateView[] }
+/** `defaultFlowId` (wave 2): the flow new programmes pin; absent from an older server reads as null. */
+export interface FlowsListAnswer { flows: FlowSummary[]; templates: FlowTemplateView[]; defaultFlowId?: number | null }
 /** One flow. `draft` keeps the read's distinction: an unreadable draft carries its reason and no problems. */
 export interface FlowAnswer {
   flow: FlowSummary;
