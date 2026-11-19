@@ -1638,14 +1638,45 @@ describe('D-8728 — the forms C41 left open (review 2411)', () => {
       // the blank row before it, and the whole key showed; `main` reads the CR CR LF back from its second CR, through the
       // kept CR LF, blanks, CR family, crosses the blank row and masks the rows before the cut: 360 key bytes show, at
       // every placement from 54,000 to 54,600 bytes of other lines before (**measured**, `c45.md` §14). Pinned at `main`'s
-      // figure, not at 0: the bytes that show at `main` are the carried `drawer-consecutive-breaks`.
+      // figure, not at 0: the bytes that show at `main` are the carried `drawer-consecutive-breaks`. The break one row
+      // earlier (breaks[39]) at 54,320 bytes before is da2c4569d's other window (review 2644 M2): `main` shows 400 there.
+      const key = keyOf(2_000, 2585);
+      const m = fingerprinted(key);
+      try {
+        const shown = shownOf(key);
+        const { text: t0, breaks } = rowsOf(key, 40, 1_800, '\r\n');
+        const cells = [[40, 54_000, 360], [40, 54_296, 360], [39, 54_320, 400]] as const;
+        for (const [name, sep] of [['64 blanks', `\r\n${' '.repeat(64)}\r\r\n`], ['an SGR', '\r\n\x1b[0m\r\r\n']] as const) {
+          for (const [row, n0, atMain] of cells) {
+            const b = breaks[row]!;
+            const text = t0.slice(0, b) + sep + t0.slice(b + 2);
+            const out = await m.maskTextSliced(`${ordinary(n0).slice(0, n0)}\n${text}\n${'tail line\n'.repeat(30)}`, { rows: true });
+            expect(shown(out), `${name}, breaks[${row}], ${n0} bytes before`).toBeLessThanOrEqual(atMain);
+            expect(count(out, SECRET_MASK), `${name}, breaks[${row}], ${n0} bytes before: marks`).toBeGreaterThan(0);
+          }
+        }
+      } finally {
+        m.close();
+      }
+    }, 300_000);
+
+    it('pane history past the cap: a CR LF, 64 blanks or an SGR, one CR LF or two, then CR CR LF breaks the key no worse than main (review 2644 F1)', async () => {
+      // Review 2644 F1: the round-2 row's construction with a CR LF (or two) right before the CR CR LF, after the blank
+      // row. At b1b092d3c `breakStartAt` read that CR CR LF back to its first CR when a CR LF came right before it, the
+      // cap's step back stopped at the blank row, and the whole key showed with no mark; `main`, and the tip, read it back
+      // from its second CR and cross the CR LF and the blank row: 360 key bytes show, as in the round-2 row (**measured**,
+      // `c45.md` §15). Pinned at `main`'s figure for the same reason as that row.
       const key = keyOf(2_000, 2585);
       const m = fingerprinted(key);
       try {
         const shown = shownOf(key);
         const { text: t0, breaks } = rowsOf(key, 40, 1_800, '\r\n');
         const b = breaks[40]!;
-        for (const [name, sep] of [['64 blanks', `\r\n${' '.repeat(64)}\r\r\n`], ['an SGR', '\r\n\x1b[0m\r\r\n']] as const) {
+        const forms = [
+          ['64 blanks, CR LF', `\r\n${' '.repeat(64)}\r\n\r\r\n`], ['an SGR, CR LF', '\r\n\x1b[0m\r\n\r\r\n'],
+          ['64 blanks, two CR LFs', `\r\n${' '.repeat(64)}\r\n\r\n\r\r\n`],
+        ] as const;
+        for (const [name, sep] of forms) {
           const text = t0.slice(0, b) + sep + t0.slice(b + 2);
           for (const n0 of [54_000, 54_296]) {
             const out = await m.maskTextSliced(`${ordinary(n0).slice(0, n0)}\n${text}\n${'tail line\n'.repeat(30)}`, { rows: true });

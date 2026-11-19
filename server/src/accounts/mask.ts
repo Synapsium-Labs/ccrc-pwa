@@ -1316,18 +1316,21 @@ const UNFINISHED_ESC = /\x1b(?:\[[0-?]*[ -/]*|\][^\x07\x1b]*\x1b?|[PX^_][^\x1b]*
 const ROW_TAIL_MIN_BYTES = 8;
 /** The start of the row break that ends at `j` (`t[j - 1]` its last byte), read back the way `ROW_BREAK` reads it
  *  forward, or null: no row break ends there. One family differs (review 2445 F2, pinned by mask-break-grammar's brute
- *  force): a CR LF, blanks or none, then a CR; and a CR LF, blanks, then a CR CR LF (below). Forward that is the CR LF, a blank row and a CR; back from the CR it is
- *  LF, blanks, CR, one break that starts at the CR LF's LF. Kept, as it fails closed: a reader that steps back over
- *  breaks (the cap's step back) reaches the row before the blank row and reads its run, a chain that can only mask
- *  more; a reader that stops at the start (`chainBack`, `rowTailAt`) finds the CR LF's CR before it, text that is no
- *  run, and ends there as it does forward. A CR CR LF reads back from its LF to its first CR, unless blanks and a LF
- *  come before that CR: then it reads back to its second CR, as a CR LF. Where that LF has no CR before it, the first
- *  CR ends a LF, blanks, CR break, so that is the forward reading (a CR right before a LF is always in the break that
- *  LF ends; C45 fix round, review 2514 F1). Where it is a CR LF's LF, forward reads CR LF, blanks, CR CR LF, and this is
- *  the kept family's second member, as at `main` (which read every CR CR LF back from its second CR): the cap's step back
- *  then reads the first CR through the family and crosses the blank row to the key's run; stopping at the first CR read
- *  the blank row as the end and masked nothing (review 2585 F1, the whole key in pane history where `main` showed 360
- *  bytes). An index where no forward break ends (a LF a CR may follow) answers the start of the break it would be in:
+ *  force): a CR LF, blanks or none, then a CR; and a CR LF, blanks or none, then a CR CR LF (below). Forward the first is
+ *  the CR LF, a blank row and a CR; back from the CR it is LF, blanks, CR, one break that starts at the CR LF's LF.
+ *  Kept, as it fails closed: a reader that steps back over breaks (the cap's step back) reaches the row before the
+ *  blank row and reads its run, a chain that can only mask more; a reader that stops at the start (`chainBack`,
+ *  `rowTailAt`) finds the CR LF's CR before it, text that is no run, and ends there as it does forward. A CR CR LF
+ *  reads back from its LF to its second CR, as a CR LF, when a LF comes right before its first CR or before the blanks
+ *  that come right before it; otherwise to its first CR. Where that LF has no CR before it, the first CR ends a LF,
+ *  blanks or none, CR break, so that is the forward reading (a CR right before a LF is always in the break that LF
+ *  ends; C45 fix round, review 2514 F1). Where it is a CR LF's LF, forward reads the CR LF, then one CR CR LF break
+ *  (blanks between or none), and this is the kept family's second member (with blanks) and third (with none, a CR LF
+ *  right before the CR CR LF), as at `main`, which read every CR CR LF back from its second CR. The cap's step back
+ *  then reads the first CR through the family and crosses the blank row to the key's run. Stopping at the first CR
+ *  read the blank row as the end and masked nothing: review 2585 F1 (CR LF, blanks, CR CR LF) and review 2644 F1 (CR
+ *  LF, blanks, CR LF, CR CR LF), the whole key in pane history where `main` showed 360 bytes. An index where no
+ *  forward break ends (a LF a CR may follow) answers the start of the break it would be in:
  *  each caller passes an index just after a LF or a CR and reads forward from the start it is given, or steps further
  *  back (review 2514 F7, review 2585 F8). */
 export function breakStartAt(t: string, j: number): number | null {
@@ -1337,7 +1340,7 @@ export function breakStartAt(t: string, j: number): number | null {
     if (j < 3 || t[j - 3] !== '\r') return j - 2;
     let k = j - 3;
     while (k > 0 && (t[k - 1] === ' ' || t[k - 1] === '\t' || t[k - 1] === '\0')) k--;
-    return k > 0 && t[k - 1] === '\n' && (t[k - 2] !== '\r' || k < j - 3) ? j - 2 : j - 3;
+    return k > 0 && t[k - 1] === '\n' ? j - 2 : j - 3;
   }
   if (c !== '\r') return null;
   let k = j - 1;
