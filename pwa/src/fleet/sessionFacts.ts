@@ -16,7 +16,8 @@
 //     `coordinator`, first on the context line, because every session the operator creates is one from its first
 //     turn and the operator should see which rows are. The branch beside it shortens to what is left of the budget.
 //   • The HEADER is the full set — a SUPERSET of the card: every card fact under
-//     the same key, with its full text, plus everything the card leaves out.
+//     the same key, with its full text, plus everything the card leaves out. There is ONE allowance (D-8771): the
+//     status word's background count, which the header keeps and the card drops (`HEADER_COUNT_ALLOWANCES`).
 //     `cardFacts(f)` ⊆ `headerFacts(f)` is pinned by `card-header-facts.test.tsx`.
 //
 // Measured before this file (390px, both skins): a child's card read `idle ·
@@ -248,10 +249,14 @@ const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATO
  *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
 export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
 
-/** D-8771: the card's words for a working row's delegated background work (D-5231): `in background`, uncounted; the
+/** D-8771: the words `backgroundWords` puts after its count (`in background`), TAKEN FROM ITS OWN OUTPUT, so the words are
+ *  spelt once, in `shared/api.ts`: a reword there reaches the card's uncounted form and the allowance below together. */
+const BACKGROUND_UNCOUNTED = backgroundWords({ count: 1, kinds: [] }).text.replace(/^\d+ /, '');
+
+/** D-8771: the card's words for a working row's delegated background work (D-5231): the words with no count; the
  *  title carries the count and the kinds. The header's own words are `backgroundWords` (`N in background`). */
 function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
-  return { text: 'in background', title: `${b.count} in background${b.kinds.length > 0 ? `: ${b.kinds.join(', ')}` : ''}` };
+  return { text: BACKGROUND_UNCOUNTED, title: `${b.count} ${backgroundWords(b).title}` };
 }
 
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
@@ -458,9 +463,10 @@ export function cardFacts(f: SessionFactSet): CardFacts {
 /** What the HEADER shows: every fact, in reading order. A superset of `cardFacts`. */
 export function headerFacts(f: SessionFactSet): Fact[] {
   const s = f.session;
+  const statusTitle = headerStatusTitle(f);
   const out: Fact[] = [
     { key: 'name', text: f.name },
-    { key: 'status', text: headerStatusText(f), ...(f.statusTitle === undefined ? {} : { title: f.statusTitle }) },
+    { key: 'status', text: headerStatusText(f), ...(statusTitle === undefined ? {} : { title: statusTitle }) },
     { key: 'lane', text: f.lane.name, ...(f.lane.label === undefined ? {} : { title: f.lane.label }) },
   ];
   if (f.coordinatorRole) out.push(ROLE_FACT);
@@ -492,11 +498,17 @@ export function headerFacts(f: SessionFactSet): Fact[] {
 }
 
 /** The ONE allowance to the subset rule (D-8771, the coordinator's ruling of 2026-11-19): the header keeps a count the card
- *  dropped, so the header's `working · 2 in background` holds the card's `working · in background`. A row names the fact key
- *  it applies to, the header's count (`count`) and the card's spelling of the same words (`card`); no other key and no other
- *  words are allowed, and `card-header-facts.test.tsx` reds if this table loses its row or gains a wider one. */
+ *  dropped, so the header's `working · 2 in background` holds the card's `working · in background`, and a card that says the
+ *  header's own words, count and all, is held too. A row names the fact key it applies to, the header's count (`count`) and
+ *  the card's spelling of the same words (`card`), both built from `BACKGROUND_UNCOUNTED`, which is `backgroundWords`' own
+ *  words, so nothing is spelt twice; no other key and no other words are allowed, and `card-header-facts.test.tsx` reds if
+ *  this table loses its row, gains a wider one or changes the regex's flags. */
 export const HEADER_COUNT_ALLOWANCES: readonly { readonly key: FactKey; readonly count: RegExp; readonly card: string }[] = [
-  { key: 'status', count: / · \d+ in background$/, card: ' · in background' },
+  {
+    key: 'status',
+    count: new RegExp(` · \\d+ ${BACKGROUND_UNCOUNTED.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`),
+    card: ` · ${BACKGROUND_UNCOUNTED}`,
+  },
 ];
 
 /** The subset rule, as a predicate the test and the harness both call: every card fact has a header fact under its
@@ -507,13 +519,14 @@ export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
   // D-8771: the card carries no `delegated` fact, so D-7782's comparison of it by count is gone; every key is a prefix test.
-  // The header's form of a fact is its text with its row of `HEADER_COUNT_ALLOWANCES` applied, if it has one: the single
-  // place the prefix rule is bent (D-8771), and it is data, not a second comparison.
-  const headerForm = (h: Fact): string => {
+  // The header's forms of a fact are its own text and that text with its row of `HEADER_COUNT_ALLOWANCES` applied, if it has
+  // one: the single place the prefix rule is bent (D-8771), data in the one comparison, not a second comparison. A card
+  // fact equal to the header word for word holds by the first form, one without the count by the second.
+  const forms = (h: Fact): string[] => {
     const a = HEADER_COUNT_ALLOWANCES.find((x) => x.key === h.key);
-    return a === undefined ? h.text : h.text.replace(a.count, a.card);
+    return a === undefined ? [h.text] : [h.text, h.text.replace(a.count, a.card)];
   };
-  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && headerForm(h).startsWith(c.text);
+  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && forms(h).some((t) => t.startsWith(c.text));
   return shown.filter((c) => !header.some((h) => holds(c, h)));
 }
 
@@ -558,6 +571,12 @@ export function headerStatusWord(input: {
     case 'archived': return statusLabel('archived');
     case 'dead': return STATE_WORD.dead;
   }
+}
+
+/** The header's status fact's title (L1-2, D-8771): the header's OWN background words (`backgroundWords`, the kinds, no count), or the
+ *  with-coordinator title; never the card's (`statusTitle`, which carries the count and is the card's). */
+function headerStatusTitle(f: SessionFactSet): string | undefined {
+  return f.stateTone === 'coordinator' ? f.statusTitle : f.background?.title;
 }
 
 /** The header's status fact for the model's own row: the clock-free form of `headerStatusWord`. The
