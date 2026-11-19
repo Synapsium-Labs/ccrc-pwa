@@ -64,7 +64,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
 - Produces:
   - the constants in Global Constraints;
   - `type ReviewRemoval = 'revoked' | 'expired' | 'committed' | 'retention'` and `REVIEW_REMOVALS`, derived from a record keyed by it;
-  - `type ReviewCreateRefusal = 'auth-off' | 'too-large' | 'store-full' | 'store-unreadable' | 'bad-source'`;
+  - `type ReviewCreateRefusal = 'too-large' | 'store-full' | 'store-unreadable' | 'bad-source'` (`auth-off` is the account gate's word, never this type's);
   - `interface ReviewSource { project: string; section: DocSectionSlug; path: string; branch: string; head: string; servedRef: string; baseCommit: string; fp: string; committedBlob: string | null }`;
   - `interface ReviewShareWire { id: string; source: ReviewSource; version: number; sharedAt: number; firstSharedAt: number; idleSince: number; lastViewedAt: number | null; pinned: boolean; sha256: string; size: number; credentialShapes: number; link: string | null; removed: { why: ReviewRemoval; at: number } | null }`;
   - `isReviewToken(s: string): boolean`, `isReviewSource(x: unknown): x is ReviewSource` (project and path by the docs grammars `isDocsRelPath` and the project predicate, section in `DOC_SECTION_SLUGS`, `branch` and `servedRef` by the docs ref grammar, `head`, `baseCommit` and `committedBlob` 40-hex, `fp` 64-hex).
@@ -89,10 +89,10 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
   - `expiryOf(e, now): { live: true } | { live: false; why: 'expired' | 'retention' }` — `retention` when `now - e.firstSharedAt >= REVIEW_RETENTION_MS`, pinned or not; else `expired` when `!e.pinned && now - e.idleSince >= REVIEW_IDLE_MS`;
   - `commitVerdict(e, tree: DocsTreeOk | null): 'keep' | 'committed' | 'unmeasured'` — `unmeasured` when `tree` is null, `tree.ref.served` differs from `e.source.servedRef`, or no entry has the share's section and path; `committed` when `(entry.committed?.blob ?? null) !== e.source.committedBlob`; else `keep`;
   - `viewDue(e, now): boolean` — `e.lastViewedAt === null || now - e.lastViewedAt >= REVIEW_VIEW_COARSEN_MS`;
-  - `admitCreate({ authArmed, size, live, storeBytes, replacing }): { ok: true } | { ok: false; why: ReviewCreateRefusal }` — order `auth-off`, `too-large`, `store-full` (live count without the replaced share, bytes net of it);
+  - `admitCreate({ size, live, storeBytes, replacing }): { ok: true } | { ok: false; why: 'too-large' | 'store-full' }` — order `too-large`, `store-full` (live count without the replaced share, bytes net of it). `auth-off` is never decided here: the account gate is its one writer;
   - `projectList(entries, tombstones, { armed, signedIn, origin }): ReviewShareWire[]` — `link` is `${origin}/review#${token}` only when both flags hold, else `null`.
 
-- [ ] **Step 1: Write the failing tests**, one `it` per row: `expired` at exactly `REVIEW_IDLE_MS` after `idleSince`, live 1 ms before; a pinned share with `idleSince` 60 days ago and `firstSharedAt` 10 days ago is live; pinned at 30 days old is `retention`; `commitVerdict` is `committed` for a changed blob and for `null` to a blob, `keep` for an equal blob, `unmeasured` for a null tree, for a tree served at another ref, and for a missing entry, and for a same-path entry in another section; `viewDue` false at 59 999 ms and true at 60 000 ms; `admitCreate` gives `auth-off` before `too-large`, refuses the 65th live share, admits a re-share when the store is exactly full; `projectList` gives `link: null` dark and signed out, and `https://h.example/review#<43 chars>` when both hold.
+- [ ] **Step 1: Write the failing tests**, one `it` per row: `expired` at exactly `REVIEW_IDLE_MS` after `idleSince`, live 1 ms before; a pinned share with `idleSince` 60 days ago and `firstSharedAt` 10 days ago is live; pinned at 30 days old is `retention`; `commitVerdict` is `committed` for a changed blob and for `null` to a blob, `keep` for an equal blob, `unmeasured` for a null tree, for a tree served at another ref, and for a missing entry, and for a same-path entry in another section; `viewDue` false at 59 999 ms and true at 60 000 ms; `admitCreate` gives `too-large` before `store-full`, refuses the 65th live share, admits a re-share when the store is exactly full; `projectList` gives `link: null` dark and signed out, and `https://h.example/review#<43 chars>` when both hold.
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/review-policy.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** both files.
 - [ ] **Step 4: Run** it and `test/rings`. Expected: PASS (add the files' ring rows where a rings suite asks, red first).
@@ -140,15 +140,16 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
 
 **Files:**
 - Create: `server/src/review/routes.ts`
-- Modify: `server/src/server.ts` (one plugin registering the read door; the page routes are R2.2's, the owner doors R3.1's); `server/src/auth/gate.ts` (`EXEMPT` gains `POST /api/review/open`, class 9 "draft review by capability: the token in the body is the credential; the door reads no session", and the header's class count); `server/test/auth-gate.test.ts` (nine classes); `server/test/box-token-census.test.ts` (`REVIEW_SRC`, hand-kept `REVIEW_DOORS`, both directions, a planted token call seen, the never-read scan); `README.md` (auth paragraph: class 9); the base spec (D-8765's sentences, below), claimed at R1's run-open
+- Modify: `server/src/server.ts` (the read door's own plugin: its own `bodyLimit` of `REVIEW_OPEN_BODY_BYTES`, its own `setErrorHandler` answering the one 404 for every body, parse, content-type and limit failure, and the marker check first; the page routes are R2.2's, the owner doors R3.1's); `server/src/auth/gate.ts` (`EXEMPT` gains `POST /api/review/open`, class 9 "draft review by capability: the token in the body is the credential; the door reads no session", and the header's class count); `server/test/auth-gate.test.ts` (nine classes); `server/test/box-token-census.test.ts` (`REVIEW_SRC`, hand-kept `REVIEW_DOORS`, both directions, a planted token call seen, the never-read scan); `README.md` (auth paragraph: class 9); the base spec (D-8765's sentences, below), claimed at R1's run-open
 - Test: `server/test/review-routes.test.ts`, `server/test/review-backup.test.ts`
 
 **Interfaces:**
 - Consumes: R1.1-R1.4.
 - Produces the read door of spec §5 (no route of R1 can create a share, so an R1 release hands out no link; tests seed the store through its own interface):
+  - `REVIEW_MARKER_HEADER = 'x-ccrc-review'` with value `'1'` (L0, `shared/docsReview.ts`, which R2's page imports), checked before any token lookup;
   - `POST /api/review/open` body `{ token }`, `bodyLimit` `REVIEW_OPEN_BODY_BYTES` — 200 `application/octet-stream`, `Content-Disposition: attachment`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and `x-ccrc-review-shared-at`, `x-ccrc-review-version`, `x-ccrc-review-idle-days`; otherwise 404 `{"ok":false,"error":"not-found"}` with the same four headers; 429 `busy` past `REVIEW_OPEN_STREAMS` reads in flight; no rate-limit config.
 
-- [ ] **Step 1: Write the failing route tests** (`buildServer` on a fixture HOME, armed and dark, the store seeded through `put`): open with the token is 200, byte-identical to the seeded bytes, with each header; **M-X3.1**: unknown, 42-character, revoked and expired tokens give byte-identical 404s (status, headers less `date`, body); open sets `lastViewedAt` and a second open 30 s later does not rewrite it; `remove` through the store then open is 404 with no tick between; open behaves the same with a cookie and with the box token; open makes zero `runCcd` calls (a `runCcd` that throws).
+- [ ] **Step 1: Write the failing route tests** (`buildServer` on a fixture HOME, armed and dark, the store seeded through `put`): open with the token is 200, byte-identical to the seeded bytes, with each header; **M-X3.1**: unknown, 42-character, revoked and expired tokens, a request without the marker header, a 257-byte body, malformed JSON and a `text/plain` body all give byte-identical 404s (status, headers less `date`, body), and the marker-less, oversize and malformed ones make zero store lookups (a store whose `byToken` counts calls); these cases run on the real `buildServer`, armed with no cookie and dark; open sets `lastViewedAt` and a second open 30 s later does not rewrite it; `remove` through the store then open is 404 with no tick between; open behaves the same with a cookie and with the box token; open makes zero `runCcd` calls (a `runCcd` that throws).
 - [ ] **Step 2: Write the census and gate tests**: `REVIEW_DOORS` equals the one registration; none consults the box token; only the open door is `EXEMPT`, with "reason 9"; the never-read scan finds none of `req.cookies`, `checkMailToken`, `requireMailToken`, `runCcd`, `ReviewTreeReader` or `docs.readers` in the open door's handler, with a planted control for each; `auth-gate.test.ts`'s class list has nine entries and `gate.ts`'s number words read nine.
 - [ ] **Step 3: Write M-X3.7**, `review-backup.test.ts`: it reads `ccd/ccrc#_upd_backup_set`, `#cmd_backup` and `deploy/deploy.sh`'s backup lines, and fails if any copied path is `~/.ccrc/review-shares`, `~/.ccrc` itself or `$HOME`, with planted controls for each.
 - [ ] **Step 4: Run** `ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/review-backup.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL on each new case.
@@ -167,7 +168,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
 - Modify: `pwa/vite.config.ts` (`build.rollupOptions.input` gains `review`; workbox `globIgnores` gains `review.html`); the base spec's M5.16 and the rich-docs spec's A2b and M8.10 (D-8767's sentences), claimed at R2's run-open; `pwa/test/docs-scans.test.ts` (`new DOMParser(` allowed in `pwa/src/review/main.ts` beside `parse.ts`, with a planted control)
 - Test: `pwa/test/review-page.test.ts` (jsdom)
 
-- [ ] **Step 1: Write the failing tests** (**M-X3.10**): after load, `location.hash` is empty and no request has been made; the only control is "Open draft", and the POST to `/api/review/open` happens only on its click, with the token in the JSON body; on 200 the frame's `sandbox` attribute is the empty string and its `srcdoc` equals the response text; the banner reads "Draft, not committed. Shared for review on {date}. Read-only."; "Links in this copy" lists each `https:` href of the bytes once, as `<a rel="noreferrer noopener" target="_blank">`, and no `javascript:` or `data:` href; a 404 shows exactly "This link has expired, was revoked, or never existed." and no frame.
+- [ ] **Step 1: Write the failing tests** (**M-X3.10**): after load, `location.hash` is empty and no request has been made; the only control is "Open draft", and the POST to `/api/review/open` happens only on its click, with the token in the JSON body and the header `REVIEW_MARKER_HEADER: 1` imported from `shared/docsReview.ts`; on 200 the frame's `sandbox` attribute is the empty string and its `srcdoc` equals the response text; the banner reads "Draft, not committed. Shared for review on {date}. Read-only."; "Links in this copy" lists each `https:` href of the bytes once, as `<a rel="noreferrer noopener" target="_blank">`, and no `javascript:` or `data:` href; a 404 shows exactly "This link has expired, was revoked, or never existed." and no frame.
 - [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/review-page.test.ts test/docs-scans.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the page and its entry.
 - [ ] **Step 4: Run** them, then `ccrc test -- npm run build` and a check that the built service worker's precache list has no `review.html` (a case in `test/browser-dist.test.ts`). Expected: PASS.
@@ -207,17 +208,17 @@ R3 is the first release that can make a link, so it follows R2: the page and its
 ### Task R3.1: The owner doors
 
 **Files:**
-- Modify: `server/src/review/routes.ts` (`registerReviewOwnerRoutes`), `server/src/server.ts` (one plugin installing `installDocsRequestPolicy` and registering the owner doors), `server/test/auth-gate.test.ts` (`FLAG_AWARE` gains the create door), `server/test/box-token-census.test.ts` (`REVIEW_DOORS` seven: R1's open door, R2's two page routes, these four)
+- Modify: `server/src/review/routes.ts` (`registerReviewOwnerRoutes`, whose create handler calls the account gate first with `{ cap: null }`), `server/src/server.ts` (a second plugin for the owner doors, without the docs provenance policy), `server/test/auth-gate.test.ts` (`FLAG_AWARE` gains the create door, as the account routes are listed), `server/test/box-token-census.test.ts` (`REVIEW_DOORS` seven: R1's open door, R2's two page routes, these four)
 - Test: `server/test/review-routes.test.ts`
 
 **Interfaces:**
 - Consumes: R1.1-R1.5.
 - Produces:
-  - `POST /api/review/shares` — body `{ source: ReviewSource; bytes: string /* base64 */; credentialShapes: number }`, `bodyLimit` = `Math.ceil(DOCS_EXPORT_MAX_BYTES * 4 / 3) + 4096`; `{ ok: true; share: ReviewShareWire }` or `{ ok: false; why }` (403 `auth-off`, 413 `too-large`, 409 `store-full`, 503 `store-unreadable`, 400 `bad-source`);
+  - `POST /api/review/shares` — body `{ source: ReviewSource; bytes: string /* base64 */; credentialShapes: number }`, `bodyLimit` = `Math.ceil(DOCS_EXPORT_MAX_BYTES * 4 / 3) + 4096`; `{ ok: true; share: ReviewShareWire }` or `{ ok: false; why }` (the account gate's `auth-off` dark, 413 `too-large`, 409 `store-full`, 503 `store-unreadable`, 400 `bad-source`);
   - `GET /api/review/shares?project=&section=&path=` (each optional; all absent lists every share) — `{ ok: true; shares }`, 400 `bad-query`;
   - `POST /api/review/shares/:id/pin` body `{ pinned: boolean }`; `POST /api/review/shares/:id/revoke` — `{ ok: true; share }` or 404 `unknown-share`.
 
-- [ ] **Step 1: Write the failing tests:** create dark is 403 `auth-off`; create armed and signed in gives a share whose `link` is `https://<origin>/review#<43 chars>`, and opening it through R1's door gives the uploaded bytes; the list on a dark gate, over shares made armed, gives every `link` as `null`; a snapshot of `DOCS_EXPORT_MAX_BYTES + 1` bytes is 413; the 65th live share is 409; `REVIEW_DOORS` equals the seven registrations and none of the four is `EXEMPT`.
+- [ ] **Step 1: Write the failing tests** (real `buildServer`): create dark answers exactly what the account gate answers for `auth-off` (its status and body, measured, not restated); create armed without a session is 401; create armed and signed in gives a share whose `link` is `https://<origin>/review#<43 chars>`, and opening it through R1's door gives the uploaded bytes; the list on a dark gate, over shares made armed, gives every `link` as `null`; a snapshot of `DOCS_EXPORT_MAX_BYTES + 1` bytes is 413; the 65th live share is 409; `REVIEW_DOORS` equals the seven registrations and none of the four is `EXEMPT`.
 - [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the four doors.
 - [ ] **Step 4: Run** them. Expected: PASS.
@@ -283,11 +284,11 @@ The operator adopted comments from signed-in readers only; spec §3.6 and its th
 
 **Interfaces:**
 - Produces:
-  - `admitComment(e, text, authArmed): { ok: true; text: string } | { ok: false; why: 'auth-off' | 'too-long' | 'too-many' }` — removes control characters other than `\n`, then measures;
+  - `admitComment(e, text): { ok: true; text: string } | { ok: false; why: 'too-long' | 'too-many' }` — removes control characters other than `\n`, then measures; both comment doors call the account gate first, the one writer of `auth-off`;
   - `POST /api/review/thread` body `{ token }` — `{ ok: true; comments }`, 403 `auth-off`, the read door's one 404;
   - `POST /api/review/comment` body `{ token, text }` — `{ ok: true; comments }`, 403 `auth-off`, 400 `too-long`, 409 `too-many`, the one 404.
 
-- [ ] **Step 1: Write the failing tests:** `admitComment` refuses 2001 characters after stripping and the 101st note, and gives `auth-off` dark; comment and thread are 403 dark and 401 armed without a session; armed and signed in, a note appends with the share's current version and the thread returns it byte for byte as plain text; a re-share keeps the notes; revoke deletes them and the tombstone keeps only the count; the forge-import scan is green, and red on a planted import.
+- [ ] **Step 1: Write the failing tests:** `admitComment` refuses 2001 characters after stripping and the 101st note; comment and thread answer the account gate's `auth-off` dark and 401 armed without a session; armed and signed in, a note appends with the share's current version and the thread returns it byte for byte as plain text; a re-share keeps the notes; revoke deletes them and the tombstone keeps only the count; the forge-import scan is green, and red on a planted import.
 - [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-comments.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the fields, the decider, the store write and the two doors.
 - [ ] **Step 4: Run** them and `test/single-definition`, `test/rings`. Expected: PASS.
@@ -320,7 +321,9 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R1-M5 | `review/policy.ts` | another served ref is not `unmeasured` | `review-policy`, `review-sweep` served-ref row (M-X3.5) |
 | NDR-X3-R1-M6 | `review/policy.ts` | `unmeasured` answers `committed` | `review-policy`, `review-sweep` (M-X3.5) |
 | NDR-X3-R3-M101 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
-| NDR-X3-R3-M102 | `review/policy.ts` | `admitCreate` drops `auth-off` | `review-policy`, `review-routes` (M-X3.8) |
+| NDR-X3-R3-M102 | `review/routes.ts` | the create handler skips the account gate | `review-routes` dark create (M-X3.8) |
+| NDR-X3-R1-M103 | `review/routes.ts` | the marker check moved after the token lookup | `review-routes` marker-less lookup count (M-X3.1) |
+| NDR-X3-R1-M104 | `review/routes.ts` | the plugin's error handler removed, so the server's default answers a bad body | `review-routes` oversize and malformed rows (M-X3.1) |
 | NDR-X3-R1-M11 | `review/store.ts` | `markViewed` skips the version re-read | `review-store` revoke-during-read (M-X3.2) |
 | NDR-X3-R1-M12 | `review/store.ts` | `remove` deletes from memory last | `review-routes` revoke-then-open (M-X3.2) |
 | NDR-X3-R1-M13 | `review/store.ts` | the index written before the bytes | `review-store` crash row |
@@ -347,7 +350,7 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R2-M5 | `vite.config.ts` | drop `review.html` from `globIgnores` | `browser-dist` precache row, browser installed-PWA row (M-X3.12) |
 | NDR-X3-R2-M6 | `sw-denylist.ts` | drop the `/review` entry | `sw-denylist` (M-X3.12) |
 | NDR-X3-R2-M7 | `review/routes.ts` | `GET /review.html` serves the file | `review-routes` (M-X3.12) |
-| NDR-X3-R4-M1 | `review/policy.ts` | `admitComment` drops `auth-off` | `review-comments` dark rows (M-X3.8, C1) |
+| NDR-X3-R4-M1 | `review/routes.ts` | the comment handler skips the account gate | `review-comments` dark rows (M-X3.8, C1) |
 | NDR-X3-R4-M2 | `review/policy.ts` | caps raised to 200 notes or 4000 characters | `review-comments` (M-X3.9, C3) |
 | NDR-X3-R4-M3 | `review/policy.ts` | control characters kept | `review-comments` |
 | NDR-X3-R4-M4 | `review/ReviewList.tsx` | a note rendered through the Markdown component | `docs-review-comments` literal row (M-X3.15, C2) |

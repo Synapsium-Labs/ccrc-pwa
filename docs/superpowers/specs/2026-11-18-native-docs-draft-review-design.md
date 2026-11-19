@@ -41,7 +41,7 @@ The asset is the content of an uncommitted document and of the files it embeds. 
 | T7 | A live read of the working tree through the link | The read door asks the fleet box for the draft | Forbidden by the operator's ruling. The read door holds no fleet port and no ccd argv; a scan pins it (§7, M-X3.6) |
 | T8 | The snapshot carries more than the owner saw | Hidden assets, other files, secrets | The snapshot is exactly Export's file of the open page: what the page already held, nothing fetched for it. The share sheet lists every inlined file (draft ones marked), every omitted file and every link target before the owner confirms. A credential-shaped string holds the share until the owner confirms it (§3.4) |
 | T9 | A revoked or expired link still opens | A cache, a copy, a restored backup, a cached page | Revoke and expiry delete the bytes and the index entry before they answer. `Cache-Control: no-store` on every review response. The service worker never caches or answers the review page (§3.5). The store is never backed up or restored, so no restore brings a link back (§4) |
-| T10 | An outside caller creates, manages or comments | The session doors reached without a session | Every owner and comment door is behind the session gate. Create and comment refuse while sign-in is dark (`auth-off`), as other doors that publish or record in the operator's name do. The list never returns a link unless the gate is armed and the caller is signed in |
+| T10 | An outside caller creates, manages or comments | The session doors reached without a session | Every owner and comment door is behind the session gate. Create and comment call the account gate first (`server/src/accounts/gate.ts`, `cap: null`), the one chokepoint that refuses `auth-off` while sign-in is dark, as the other doors that act in the operator's name do; review policy never re-decides it. The list never returns a link unless the gate is armed and the caller is signed in |
 | T11 | Disk or memory exhaustion | Many or large snapshots, many comments | One live share per file, at most 64 live shares, at most 256 MiB stored, each snapshot at most `DOCS_EXPORT_MAX_BYTES` (10 MiB), at most 100 comments a share of at most 2000 characters each. Create refuses `store-full` and `too-large`. Only a signed-in owner can create |
 | T12 | A comment is mistaken for approval, or carries markup | Comments | Comments come only from a signed-in session, are shown as plain text (never Markdown or HTML), make no forge call, and read "Notes from reviewers. Not a pull request review." They count for nothing toward merge |
 
@@ -51,10 +51,10 @@ The gate is armed when `CCRC_AUTH=on`; unarmed ("dark"), every route answers `fl
 
 | Door | Gate armed | Gate dark |
 |---|---|---|
-| Create or re-share | Needs a session | Refused `auth-off`: no new link is made on an open console |
+| Create or re-share | Needs a session; the account gate passes it | The account gate's `auth-off`: no new link is made on an open console |
 | List the owner's shares | Needs a session; links included | Answers, but with no links: a dark console never hands out a capability |
 | Pin, unpin, revoke | Needs a session | Open, like every door on a dark console. Revoke must always work |
-| Read or add comments | Needs a session | Refused `auth-off`: on a dark console a comment would be anonymous |
+| Read or add comments | Needs a session; the account gate passes it | The account gate's `auth-off`: on a dark console a comment would be anonymous |
 | Review page `GET /review` | Exempt (class 9) | Open |
 | Read door `POST /api/review/open` | Exempt (class 9); the token is the credential | Open; the token is still the credential |
 
@@ -154,7 +154,7 @@ The link is `https://<console origin>/review#<token>`. The token alone opens the
 
 The page reads `location.hash`, clears it with `history.replaceState`, and shows one button, "Open draft". Only the tap posts the token. On success it draws its own banner ("Draft, not committed. Shared for review on {date}. Read-only."), then "Links in this copy" (every `https:` link target found in the bytes by an inert `DOMParser` parse, each a top-level `<a rel="noreferrer noopener" target="_blank">` showing its full URL), then `<iframe sandbox="" srcdoc>` holding the bytes. Inside the frame every link is inert: `frame-src` falls back to `'none'`, which blocks the frame's own navigations, and the empty sandbox blocks popups. On any failure the page shows one sentence: "This link has expired, was revoked, or never existed." A srcdoc frame loads under `frame-src 'none'` as the shell's own frames do (rich-docs measured E1, E11). The page adds no message channel and reads no frame DOM, and it changes neither the reader frame's sandbox nor the shell's CSP.
 
-**The read door** (`POST /api/review/open`, body `{token}`) answers 200 with the bytes and three headers (`x-ccrc-review-shared-at`, `x-ccrc-review-version`, `x-ccrc-review-idle-days`), or one identical 404. It sends `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Content-Type: application/octet-stream` and `Content-Disposition: attachment`, and no CORS headers. It reads no cookie and no box token.
+**The read door** (`POST /api/review/open`, body `{token}`) answers 200 with the bytes and three headers (`x-ccrc-review-shared-at`, `x-ccrc-review-version`, `x-ccrc-review-idle-days`), or one identical 404. It has a plugin of its own, not the docs provenance plugin: its own 256-byte body limit and its own error handler, which turns every body, parse, content-type and limit failure into that same 404, so no failure tells a caller more than "not found"; the only other answer is 429 `busy` (§1.2 T5). The review page sends a fixed marker header of its own, `x-ccrc-review: 1`, and the door checks it before any token lookup: a request without it gets the 404 at once. A cross-site page can only send it after a CORS preflight, which the door never answers, so a cross-site simple request is refused before the store is touched (coordinator's ruling on review finding F1). It sends `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Content-Type: application/octet-stream` and `Content-Disposition: attachment`, and no CORS headers. It reads no cookie and no box token.
 
 ### 3.6 Comments from signed-in readers (follow-on wave)
 
@@ -162,7 +162,7 @@ The operator adopted comments for signed-in readers only (this wave's ask, relea
 
 | # | Threat | Rule |
 |---|---|---|
-| C1 | An anonymous note, from a link holder or on a dark console | Both comment doors are session-gated and refuse `auth-off` while sign-in is dark |
+| C1 | An anonymous note, from a link holder or on a dark console | Both comment doors are session-gated and call the account gate first, which refuses `auth-off` while sign-in is dark |
 | C2 | Stored markup runs in the console | A note is plain text everywhere: React text nodes, never the Markdown component or an HTML sink; control characters other than newline are removed |
 | C3 | Flooding a share | At most 100 notes a share, at most 2000 characters each; only a session can write |
 | C4 | A note read as approval | "Notes from reviewers. Not a pull request review." heads every list; the review module imports no forge or pull-request module (a scan) |
@@ -245,16 +245,16 @@ The store is a new storage owner. This section names its one writer, its durabil
 
 ## 5. Routes and their gates
 
-Every new route names its gate under the box-token census rules. None consults the box token: they are operator doors and a capability door, not machine lanes. They live in a new server module, `server/src/review/`, so the docs module's own guards (every `/api/docs` route in `docs/routes.ts`, the docs ring list) stay as they are. The JSON doors are registered in a plugin that installs the docs provenance policy (`installDocsRequestPolicy`: marker header, same-origin, no navigations); the page route sits outside it, because it is a navigation.
+Every new route names its gate under the box-token census rules. None consults the box token: they are operator doors and a capability door, not machine lanes. They live in a new server module, `server/src/review/`, so the docs module's own guards (every `/api/docs` route in `docs/routes.ts`, the docs ring list) stay as they are. The read door has a plugin of its own, with its own body limit, error handler and marker header (§3.5). The owner and comment doors sit in a second plugin and call the account gate first. The page routes sit outside both, because the page is a navigation. The tests of every door run against the real `buildServer` registration, never only a harness.
 
 | Route | Gate | Census | Refusals |
 |---|---|---|---|
-| `POST /api/review/shares` (create or re-share) | Session-gated; refuses `auth-off` while sign-in is dark | Hand-kept `REVIEW_DOORS` in `box-token-census.test.ts`; the routes file is read as a lane source of its own | `auth-off`, `too-large`, `store-full`, `store-unreadable`, `bad-source` |
+| `POST /api/review/shares` (create or re-share) | Session-gated; the account gate first (`cap: null`), `auth-off` while sign-in is dark; in `FLAG_AWARE` | Hand-kept `REVIEW_DOORS` in `box-token-census.test.ts`; the routes file is read as a lane source of its own | `auth-off`, `too-large`, `store-full`, `store-unreadable`, `bad-source` |
 | `GET /api/review/shares` (the owner's list, optionally by project, section and path) | Session-gated; links only when armed | `REVIEW_DOORS` | `bad-query` |
 | `POST /api/review/shares/:id/pin` (body `{pinned}`) | Session-gated | `REVIEW_DOORS` | `unknown-share` |
 | `POST /api/review/shares/:id/revoke` | Session-gated; never refused while the share exists | `REVIEW_DOORS` | `unknown-share` |
-| `POST /api/review/thread` (body `{token}`), wave R4 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | one 404 for every unknown token |
-| `POST /api/review/comment` (body `{token, text}`), wave R4 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | `too-long`, `too-many`, 404 |
+| `POST /api/review/thread` (body `{token}`), wave R4 | Session-gated; the account gate first, `auth-off` dark | `REVIEW_DOORS` | one 404 for every unknown token |
+| `POST /api/review/comment` (body `{token, text}`), wave R4 | Session-gated; the account gate first, `auth-off` dark | `REVIEW_DOORS` | `too-long`, `too-many`, 404 |
 | `POST /api/review/open` (the read) | `EXEMPT`, new class 9 "draft review by capability"; the token in the body is the credential | `REVIEW_DOORS`; `auth-gate.test.ts` class list and number words; README auth paragraph; a never-read scan like the reader lab's (no cookie, no box token, no fleet port, no ccd argv) | one identical 404 for every failure; 429 `busy` past 4 streaming reads |
 | `GET /review` (the review page) | `EXEMPT`, class 9 | As the read door | none |
 
@@ -300,14 +300,14 @@ Every guard ships with a test that goes red when the guard is removed. The leaf 
 
 | Row | Guard | Mutation that must go red |
 |---|---|---|
-| M-X3.1 | Identical 404 for unknown, malformed, revoked and expired tokens | Answer 410 for revoked, or a different body for malformed |
+| M-X3.1 | Identical 404 for unknown, malformed, revoked and expired tokens, a missing marker header and every body failure | Answer 410 for revoked; a different body for malformed; the docs error shape for an oversize body; look the token up before the marker check |
 | M-X3.2 | Revoke removes before it answers, and a late view cannot write it back | Answer first, delete after; or let `markViewed` skip the version check |
 | M-X3.3 | Read-time expiry decision | Remove it; a share past its idle time is served |
 | M-X3.4 | One idle clock, reset by view, re-share and unpin; Pin stops idle only | Count from creation; skip the reset on re-share; let Pin stop retention |
 | M-X3.5 | Early removal compares committed blobs at the recorded served ref | Compare `fp`; read the branch's local ref; remove on `unmeasured` |
 | M-X3.6 | The read door holds no fleet port and no ccd argv, reads no cookie and no box token | Import the docs tree reader into the read door's handler |
 | M-X3.7 | Store never backed up | Add the directory, or any parent of it, to the backup set |
-| M-X3.8 | Create and comment refuse `auth-off` dark; list hides links dark | Drop any one check |
+| M-X3.8 | Create and comment pass the account gate first; list hides links dark | Skip the account gate on either door; drop the dark check in the list |
 | M-X3.9 | Caps: 10 MiB, 64 shares, 256 MiB, 100 comments, 2000 characters | Raise or drop any one |
 | M-X3.10 | Review page: hash cleared, token posted only on the tap, empty sandbox, CSP as written | Keep the hash; post on load; add `allow-scripts`; add `'unsafe-inline'` to `script-src` |
 | M-X3.11 | Response headers: no-store, no-referrer, attachment, octet-stream | Drop any one |
