@@ -50,6 +50,16 @@ import { NONCE_SHA256_SHAPE, claimWhyText } from '../../../shared/continuity-doo
 import { actKeyClaimVerdict } from './actKey.js';
 import { actKeyByNonce, issueActKey, noteRefusedClaim } from './actKeyStore.js';
 import type { GateClaim, GateRun } from '../coord/overlordGateRun.js';
+import type { StoreRead, StoreWrite } from '../operatorModel/store.js';
+import { hookReportOf } from './hookReports.js';
+import { insertHookReport } from './hookReportStore.js';
+
+/** The report door's port into the private store (C11), declared by its consumer: the composition root builds it from the
+ *  store's `messageSessionOf` and `moveMessage(id, 'pick-up', 'hook', at)`. No C3 file imports the store itself. */
+export interface MessagePickUp {
+  sessionOf(id: number): StoreRead<{ readonly sessionId: string } | 'absent'>;
+  pickUp(id: number, at: number): StoreWrite<{ readonly changed: boolean }>;
+}
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -63,6 +73,9 @@ export interface ContinuityRouteDeps {
   /** The server's entropy (`deps.time.entropy`): the act key the claim door mints, 32 bytes as hex. Absent on a server built
    *  without one (a test of another door): the claim door answers `unavailable`, as for an absent store. */
   entropy?: Pick<Entropy, 'hex'>;
+  /** The report door's `picked-up` port. Absent (a server built without the private store, a test of another door): that kind
+   *  answers `unavailable`; every other kind is the table's. */
+  pickUp?: MessagePickUp;
   /** The timer read's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** THE ONE GATE (Overlord W1 gates B, §11.2; `coord/overlordGateRun.ts`): the six start doors and the card's recording page
@@ -359,6 +372,53 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       : refuseRoute(reply, 'write-failed', { detail: 'continuity_act_keys could not be written' });
     console.warn(`ccrc-server: act-key: issued to ${id} for generation ${v.n}`);
     return reply.code(200).send({ ok: true, generation: v.n, key });
+  });
+
+  /**
+   * `POST /api/sessions/:id/report` (Overlord W1 door process B1; spec §3.6 H1, Table 11.1e "The hook's reports"): the session
+   * hook's one door, one kind a body. A box-token machine lane, an `auth/gate.ts` EXEMPT entry, modelled on the act-key door:
+   * the token first, then the path's session is the sender (`not-owner`), then `fromUuid`'s shape and `hookReportOf` (400
+   * `bad-request`, the field in `detail`), then the registry's attribution of `fromUuid`. A `picked-up` report asks the port
+   * who owns the message (`absent` 404 `unknown-message`, another session's 403 `not-owner`, unmeasured 502) and then moves it,
+   * answering 200 `{ ok, changed }`: a message already past picked up is `changed: false`, never a refusal. Every other kind is
+   * one `insertHookReport` row, 200 `{ ok, id }`. A failed write is 502 `unmeasured`. The witness key is a call digest of a
+   * tool's input, so no line this door logs names one.
+   */
+  app.post('/api/sessions/:id/report', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/report');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    if (b['fromId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'fromId must be the session the path names' });
+    const uuid = b['fromUuid'];
+    if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const v = hookReportOf(b);
+    if (!v.ok) return refuseRoute(reply, 'bad-request', { detail: v.field });
+    const attributed = await deps.attribute(id, uuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const report = v.report;
+    if (report.kind === 'picked-up') {
+      const port = deps.pickUp;
+      if (port === undefined) return refuseRoute(reply, 'unavailable');
+      const owner = port.sessionOf(report.messageId);
+      if (owner.kind !== 'measured') return refuseRoute(reply, 'unmeasured', { detail: 'the private store could not say whose message that is' });
+      if (owner.value === 'absent') return refuseRoute(reply, 'unknown-message', { detail: 'no operator message on record has that id' });
+      if (owner.value.sessionId !== id) return refuseRoute(reply, 'not-owner', { detail: 'that message is not this session\'s' });
+      const moved = port.pickUp(report.messageId, deps.wall());
+      if (!moved.ok) return refuseRoute(reply, 'unmeasured', { detail: 'the message could not be moved to picked up' });
+      return reply.code(200).send({ ok: true, changed: moved.value.changed });
+    }
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const stored = insertHookReport(coord.db, id, report, deps.wall());
+    if (!stored.ok) return refuseRoute(reply, 'unmeasured', { detail: 'continuity_hook_reports could not be written' });
+    return reply.code(200).send({ ok: true, id: stored.value.id });
   });
 
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that

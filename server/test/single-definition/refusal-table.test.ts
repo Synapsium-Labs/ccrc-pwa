@@ -172,7 +172,7 @@ const W1_GROUP: Readonly<Record<string, number>> = {
   'not-the-overlord': 403, 'capability-missing': 501, 'overlord-off': 409, 'rung-below': 403, 'overlord-exists': 409,
   'overlord-body-alive': 409, 'overlord-single-account': 409, 'overlord-sandbox-unmet': 409, 'launch-profile-unmet': 409,
   'overlord-attempt-pending': 409, 'authority-unrecorded': 503,
-  'authority-rolled-back': 503, 'stale-designation': 409, 'stale-generation': 409, 'card-unread': 409, 'unwitnessed': 409,
+  'authority-rolled-back': 503, 'stale-designation': 409, 'stale-generation': 409, 'card-unread': 409, 'unwitnessed': 409, 'unknown-message': 404,
   'overlord-uses-its-doors': 403, 'overlord-not-a-coordinator': 403, 'history-unreachable': 503, 'read-ceiling': 429,
 };
 

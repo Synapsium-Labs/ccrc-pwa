@@ -3,7 +3,7 @@
 #
 # Runs on the HOT PATH of every tool call in every fleet session, so the
 # contract is absolute: exit 0 on every path, write atomically or not at
-# all, no network — and on the HOT PATH, no locks and no waiting. FIVE declared exceptions, all OFF the hot path:
+# all, no network — and on the HOT PATH, no locks and no waiting. SIX declared exceptions, five OFF the hot path and the sixth on a door tool's PreToolUse alone:
 # the first two in the compaction arms alone, the helper's one hookstate-first, COMPACT_HELPER_TIMEOUT-bounded,
 # locally resolved `timeout`/`gtimeout` deadline; and, since D-2605, the row's
 # permanent stable lock, taken with a bounded `flock -w` of COMPACT_LOCK_WAIT
@@ -14,6 +14,10 @@
 # (no roster line on any failure), made even when unarmed (shadow). The FOURTH (Overlord W1a): the start report, a send on a non-child SessionStart and a resend pass on it and on UserPromptSubmit, all inside at most 4 s, and since the anchor piece inside what the invocation's one network budget has left (`_hook_start_report`), fail-open. The FIFTH (Overlord W1a, the anchor piece): the anchor, one `_hook_timeout 4` read
 # (`ccrc-api card --anchor`) on a non-child SessionStart, and on the first UserPromptSubmit after an automatic compaction
 # that brought no start (`_hook_anchor_owed`, after the hookstate write), fail-open (today's role card, no prompt context).
+# The SIXTH (Overlord W1 door process B1): the hook's reports, a session with a door's side sends through `_hook_door_report`
+# (`ccrc-api sessions report`), each one `_hook_timeout` of REPORT_TIMEOUT_S (3 s) inside the same budget, on every PreToolUse of a door tool (the
+# witness, after every deny arm), SubagentStart, SubagentStop, a quiet Stop and a UserPromptSubmit carrying a nudge line: fail-open, spooled and
+# retried never, and no hookstate write. A PreToolUse of any other tool pays nothing for it.
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
 # worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —
@@ -6308,6 +6312,24 @@ _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest
   apr_route=sent
 }
 if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate || true; fi
+# ── THE HOOK'S REPORTS (Overlord W1 door process B1, Task 7; spec §3.6 H1, §3.3.10 C55, §3.8, §7.4) ────────────────────
+# A session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a fact, never a role's name), never a child, tells
+# the server what it really saw through ONE sender and ONE door, `ccrc-api sessions report <id> --json -`, a body to a kind (`HOOK_REPORT_KINDS`,
+# shared/continuity-reports.ts): the WITNESS of a door tool call, after every deny arm above has let it through (the sha256 of the tool's
+# full name, one newline and `jq -cS` of its input, `{}` when absent: plan question 6, which the door process computes the same way);
+# a subagent's start and stop (`aid`, the roster's id); `readers-clear` on a main-turn Stop with no background work (where the roster
+# empties, so one lost stop heals at the next quiet turn end); and "picked up", each prompt line that is EXACTLY the private store's nudge line
+# (`renderOperatorMessageNudge`, server/src/coord/envelope.ts; session-hook-door-reports.test.ts holds `DOOR_NUDGE_JQ` to it). Each is a SIDE
+# SEND: it writes nothing to the hookstate, spools nothing, retries nothing and fails open. It is the SIXTH declared network exception (see the
+# header): `_hook_net_bound` gives it at most REPORT_TIMEOUT_S (a copy of the L0 constant, held equal by its test) of the invocation's one budget.
+REPORT_TIMEOUT_S=3
+_hook_door_report() { _hook_net_bound "$(( REPORT_TIMEOUT_S * 1000 ))" || return 0; printf '%s\n' "$1" | _hook_timeout "$NET_B" "$HOME/.local/bin/ccrc-api" sessions report "$id" --json - >/dev/null 2>&1 || { (( $? == 124 )) && HOOK_NET_HUNG=1; return 0; }; }   # <body JSON> -> one send; any failure is silent
+DOOR_NUDGE_JQ='def nudge: "ccrc-mail: you have new mail. Operator message " as $h | ": read it with your messages door." as $t | if startswith($h) and endswith($t) and length > ($h | length) + ($t | length) then .[($h | length):-($t | length)] | select((length <= 15 or (length == 16 and . <= "9007199254740991")) and (explode | all(. >= 48 and . <= 57) and .[0] != 48)) | tonumber else empty end;'
+_hook_door_arms() {   # -> the event's reports, one `_hook_door_report` each
+  local k="" q="" l; [[ "${tool:-}" == mcp__door__?* && "$pre_json" != *'"permissionDecision":"deny"'* ]] && k=$(printf '%s\n%s' "$tool" "$(jq -cS '.tool_input // {}' <<<"$payload")" | _apr_sha256); [[ -z "$paid" && "$bg" == 0 ]] && q=1
+  while IFS= read -r l; do _hook_door_report "$l"; done < <(jq -c --arg id "$id" --arg k "$k" --arg a "$aid" --arg j "${tmsub:+1}" --arg q "$q" --argjson at "$(_hook_epoch_ms)" "$DOOR_NUDGE_JQ"'(.session_id // "" | tostring) as $u | (.hook_event_name // "") as $e | (if $e == "PreToolUse" and $k != "" then {kind: "witness", key: $k, tool: .tool_name, agentId: (if $a != "" and ($j == "1" or ((.agent_type | type) == "string" and .agent_type != "")) then $a else null end)} elif $e == "SubagentStart" and $a != "" then {kind: "reader-start", agentId: $a, agentType: (.agent_type | if type == "string" then .[0:128] else null end)} elif $e == "SubagentStop" and $a != "" then {kind: "reader-stop", agentId: $a} elif $e == "Stop" and $q == "1" then {kind: "readers-clear"} elif $e == "UserPromptSubmit" then (.prompt | strings | split("\n")[] | nudge | {kind: "picked-up", messageId: .}) else empty end) + {fromId: $id, fromUuid: $u, at: $at}' <<<"$payload" 2>/dev/null)
+}
+[[ "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ && ! -e "$REG/$id.child" && ! -L "$REG/$id.child" ]] && { _hook_door_arms || true; }
 
 # Transitions to working/done clear the ask: an answered question must not
 # stay sticky on the sheet. (A carried write keeps the ask it carried, D-5232.)

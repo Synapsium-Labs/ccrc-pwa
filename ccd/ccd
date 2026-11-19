@@ -9399,6 +9399,9 @@ EOF
   # test box card runs (`GET /api/testbox/admin` and `POST /api/testbox/admin/:sub`). It gates a SERVER DECISION, whether to
   # offer the card's acts at all, so those routes answer `501 unsupported` against a box that has not taken this deploy.
   echo testbox-admin-v1
+  # `door-witness-v1` (Overlord W1 door process B1): THIS copy of ccd and its installed client carry the witness key, the digest header
+  # `ccrc-api` puts on a fenced door call (`x-ccrc-witness-key`), which the report door's witness check reads.
+  echo door-witness-v1
   # `pools-v1` says THIS copy of ccd honours project pool tags. What that
   # means AS OF THIS COMMIT, stated so later waves cannot read it as more:
   # it reads `$POOLS_DIR/<project>` (Task 1), and `_pool_ok` (Task 2) is now

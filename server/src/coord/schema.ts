@@ -4037,6 +4037,24 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
   `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The session hook's reports and the witness checks (Overlord W1 door process B1, plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-door-process.md` Task 7). `continuity_hook_reports`: what the hook says
+  // its session did (a door tool call's witness, a reader's start and stop, a quiet turn's end clearing the readers, a model
+  // switch), one row a report; `receivedAt` is the server's clock and the one every window reads, `at` the hook's own. One
+  // writer, `hookReportStore.ts#insertHookReport`, which prunes its own rows past their keep (witness 24 h, the rest 7 days) in
+  // the same transaction. `picked-up` is never a row: it moves the operator's message. `continuity_witness_checks`: gates B's
+  // check of a witness (Task 9); nothing writes it in this change, and its `witnessId` is UNIQUE so a witness is used once.
+  // TWO NEW TABLES AND ONE INDEX, nothing else: an older build opening a file at this `user_version` takes rule 3 and never names
+  // them. The slot is the next free one by position (after 109); whoever lands second renumbers (the standing license).
+  `
+  CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT, agentId TEXT,
+    detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);
+  CREATE INDEX continuity_hook_reports_by_key ON continuity_hook_reports (sessionId, kind, key, receivedAt);
+  CREATE TABLE continuity_witness_checks (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, generationId INTEGER NOT NULL, witnessKey TEXT,
+    witnessId INTEGER UNIQUE, outcome TEXT NOT NULL, why TEXT, at INTEGER NOT NULL);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
