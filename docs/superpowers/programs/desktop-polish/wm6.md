@@ -178,4 +178,13 @@ to 15 (`uptime` before each), on the tree before the fix round's commit:
 | server compile check (`tsc --noEmit -p tsconfig.json`) | clean |
 | server test-project compile check (`tsc --noEmit -p test/tsconfig.tests.json`) | **killed by the test slice's memory cap again** (exit 137, run alone; it is the whole 3,203-file project). **Narrower measured substitute:** a scratch project of this change's own files, `planPolicy.ts`, `openRun.ts`, `shared/plan.ts`, the three changed test files, `planEpicForOpenCases.ts`, `sim/planEpicWavesSets.ts`, `sim/mutation-floors.test.ts` and `sim/mutate.ts` with their imports, compiled clean (exit 0, no output); I removed the scratch file. Review 2791 measured the whole project clean at the previous tip, and CI's `typecheck-tests` is the arbiter for this one |
 
-GUARD_RUNS
+Run on the committed fix-round head (`95bb03254`, after `git fetch origin main`), all measured:
+
+| Run | Result |
+|---|---|
+| `deviation-refs` | 34 passed |
+| `dtbd` | 1 passed |
+| `topology-clean` | 61 passed |
+| `ledger-guard.mjs --base origin/main` | exit 0, passed by the head's `Ledger-Edit` trailer, which now names the plan edit it covers; layout ok. `ci-ledger-guard.test.ts`: 32 passed |
+| the private-names scan (the canonical `private-names.mjs` against the operator's local list), tracked tree | exit 0, empty output |
+| `git merge-tree` against `origin/HEAD` | exit 0: clean. Main has moved by two commits since the build's head (a mask-slice change and the mail times change), neither touching this branch's files, and I did not merge it |
