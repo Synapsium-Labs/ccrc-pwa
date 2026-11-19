@@ -17,6 +17,7 @@
   "server/src/continuity/compactions.ts#compactionsSince": 1,
   "server/src/continuity/generationMachine.ts#generationStep": 1,
   "server/src/coord/mailPace.ts#mailPaceOf": 1,
+  "server/src/coord/urgentMail.ts#urgentSenderVerdict": 1,
   "pwa/src/face/mood.ts#moodOf": 1,
   "pwa/src/face/mood.ts#shownMood": 1,
   "pwa/src/face/splash.ts#splashShows": 1,
@@ -229,6 +230,10 @@
   "server/src/coord/forecast.ts#leadHistoryFrom": 1,
   "server/src/coord/approvalDenyFloor.ts#denyStandingOf": 1,
   "server/src/coord/approvalDenyFloor.ts#approvalAllowRefusal": 1,
+  "server/src/coord/approvalEnvelope.ts#approvalEntryFor": 1,
+  "server/src/coord/approvalEnvelope.ts#paintedApprovalOf": 1,
+  "server/src/coord/untrustedBuildItem.ts#untrustedBuildItemOf": 1,
+  "server/src/coord/untrustedBuildItem.ts#untrustedBuildItemsToSettle": 1,
   "server/src/coord/programmeHealth.ts#programmeHealth": 1,
   "server/src/coord/programmeHealth.ts#healthFactsOf": 1,
   "server/src/coord/programmeHealth.ts#criticalPath": 1,
@@ -246,5 +251,9 @@
   "server/src/coord/workMap.ts#workMapOf": 1,
   "server/src/coord/workMap.ts#doneEvidenceVerdict": 1,
   "server/src/coord/workMap.ts#verdictsReadOf": 1,
-  "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1
+  "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1,
+  "server/src/coord/overlordGate.ts#callerStandingOf": 1,
+  "server/src/coord/overlordGate.ts#fenceVerdict": 1,
+  "server/src/coord/overlordGate.ts#counterVerdict": 1,
+  "server/src/coord/overlordGate.ts#overlordGate": 1
 }

@@ -55,6 +55,8 @@ import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from 
 import { approvalClass, approvalCommandWords, literalInRoot, rootsForChild } from './approvalguard.js';
 import { approvalAllowRefusal, type DenyStanding } from './approvalDenyFloor.js';
 import { censusSightingOf, type CensusEnvelope } from './approvalCensus.js';
+import { paintedApprovalOf } from './approvalEnvelope.js';
+import { openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, untrustedBuildItemOf } from './untrustedBuildItem.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
@@ -602,6 +604,23 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     for (const [k, v] of approvalInputs) if (v.until <= now) approvalInputs.delete(k);
   };
 
+  /** Approvals PR 2 (Task 2.2): a `version-unverified` refusal raises the build's one Waiting on you item, keyed by the build
+   *  (`untrustedBuildItemOf` decides; an open item for the build raises nothing). The read and the raise run with no await
+   *  between, so two refusals in one process never raise two. A failure is logged once per cause and never changes the
+   *  refusal. */
+  const untrustedWarn = changeLatch<string>();
+  const raiseUntrustedBuildItem = (coord: WatcherCoordPort, version: string | null, reason: BuildUntrustedReason, now: number): void => {
+    try {
+      const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, now).open);
+      const input = untrustedBuildItemOf(new Set(open.map((i) => i.build)), version, reason);
+      if (input !== null) coord.raiseItem(input, now, 'ccrc');
+      untrustedWarn.clear();
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (untrustedWarn.changed(why)) console.warn(`ccrc-server: untrusted build item not raised (${why})`);
+    }
+  };
+
   const raiseApproval = async (request: ApprovalRaiseRequest, d: ApprovalRaiseDeps, now: number): Promise<ApprovalRaiseVerdict> => {
     const { sessionId, digest, nonce, canonical, truncated } = request;
     const coord = d.coord;
@@ -627,6 +646,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     try { records = coord.claudeBuilds(); } catch { records = null; }
     const trust = buildTrustOf(records, version);
     if (trust.kind === 'untrusted') {
+      raiseUntrustedBuildItem(coord, version, trust.reason, now);
       return { kind: 'version-unverified', trust: trust.reason, detail: `this child's live Claude Code build is not trusted: ${buildUntrustedSentence(trust.reason, version)}` };
     }
 
@@ -912,17 +932,19 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * trace) but not sent, and the approval half sends it when the window ends, the claimant hands the prompt over, or
    * the hook has not resolved a ruled prompt. Any failure answers `none`: the prompt raises as today.
    */
-  const holdApproval = (r: SessionRecord, dialog: Dialog, hs: HookState): RaiseVerdict => {
+  const holdApproval = (r: SessionRecord, dialog: Dialog, hs: HookState, agentId: string): RaiseVerdict => {
     const coord = deps.coord;
     if (!coord) return { kind: 'none' };
     try {
       const now = Date.now();
       const read = coord.approvalsForChild(r.id, ['held']);
       if (!read.ok) return { kind: 'none' };
-      // Only the main thread's rows (D-5491): the painted menu is the main thread's, because a background subagent's
-      // is painted only after its hook returns (D-5440; a fleet child's subagents are background ones, D-5443). A
-      // subagent's held row neither withholds this push nor is marked `operator` when this dialog clears.
-      const open = read.rows.filter((x) => x.agentId === '' && now < x.notifyAt && x.releaseReason === null);
+      // Only the painted prompt's own thread's rows (D-5491): `agentId` is '' for the main thread's menu, and a subagent's
+      // id when the hook's per-agent list says the painted menu is that subagent's (approvals PR 2, `paintedApprovalOf`).
+      // A background subagent's menu is painted only after its hook returns (D-5440; a fleet child's subagents are
+      // background ones, D-5443), so its row is rarely still inside its window here; another agent's held row neither
+      // withholds this push nor is marked `operator` when this dialog clears.
+      const open = read.rows.filter((x) => x.agentId === agentId && now < x.notifyAt && x.releaseReason === null);
       if (open.length === 0) return { kind: 'none' };
       const ev = askHoldPayload(r, hs, dialog, null); // the builder the restart re-seed shares (D-5925)
       setHeldApproval(r.id, { until: Math.max(...open.map((x) => x.notifyAt)), dialogId: dialog.id, rowIds: open.map((x) => x.id), ev });
@@ -998,11 +1020,14 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     r: SessionRecord, dialog: Dialog, hs: HookState | null, actions: PushPayload['actions'] | null, recs: readonly SessionRecord[],
   ): Promise<RaiseVerdict> => {
     const none = { kind: 'none' } as const;
-    const ask = hs?.ask ?? null;
+    // Approvals PR 2 (Task 2.1): the painted prompt's envelope, a subagent's from the hook's per-agent list when the menu
+    // is that subagent's, else hook state's own `ask` as before.
+    const painted = paintedApprovalOf(hs, dialog, Date.now());
+    const ask = painted.ask;
     // D-5298 (plan Task 16): a permission prompt is held when its child's hook already asked and the server minted a
     // row HELD for the claimant (`POST /api/approvals` decided the claimant rule, the kill switches and the gates); the
     // push waits for that row's window. No row, or none still inside its window: the prompt raises as today.
-    if (hs !== null && ask !== null && 'approval' in ask) return holdApproval(r, dialog, hs);
+    if (hs !== null && ask !== null && 'approval' in ask) return holdApproval(r, dialog, hs, painted.entry?.agentId ?? '');
     if (actions === null || hs === null || ask === null || !('questions' in ask)) return none;
     const coord = deps.coord;
     if (!coord || asksDisabled) return none;
@@ -1501,7 +1526,11 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const censusSightings = new Map<string, CensusSightingState>();
   const censusWarn = changeLatch<string>();
   const maskSummary = (text: string): string => redactedStored(deps.masker === undefined ? text : deps.masker.maskText(text));
-  const envelopeContent = (e: CensusEnvelope): string => `${e.ask.approval.tool}\u0000${e.ask.approval.summary}`;
+  // A subagent entry's envelope is that prompt by its agent and its own stamp too (approvals PR 2, review 2752 F3): two
+  // subagents asking the same command are two prompts, so the second's menu, painted under the same menu labels within
+  // `ASK_SETTLE_TICKS`, starts its own sighting and gets its own decision. A main-thread envelope's restamp stays one prompt.
+  const envelopeContent = (e: CensusEnvelope): string => `${e.ask.approval.tool}\u0000${e.ask.approval.summary}`
+    + (e.agentId === undefined ? '' : `\u0000${e.agentId}\u0000${e.updatedAt}`);
 
   /** One decision of a sighting, this tick or at its end: the child's rows minted since the hook's longest wait before the
    *  first sighting, the L1 decider, then the one write (a census row) or the push's source (the minted row). */
@@ -1569,9 +1598,13 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const observeCensus = (r: SessionRecord, dialog: Dialog, hs: HookState | null, now: number): void => {
     const coord = deps.coord;
     if (!coord) return;
-    const ask = hs?.ask ?? null;
-    const env: CensusEnvelope | null = hs !== null && ask !== null && 'approval' in ask
-      ? { ask, updatedAt: hs.updatedAt, waitBy: hs.waitBy === 'subagent' ? 'subagent' : null } : null;
+    // Approvals PR 2 (Task 2.1): a subagent's prompt from the hook's per-agent list is keyed by its own stamp and agent, so
+    // a sibling's event between ticks (which rewrites hook state's `ask` and stamp) leaves one sighting and one row.
+    const painted = paintedApprovalOf(hs, dialog, now);
+    const ask = painted.ask;
+    const env: CensusEnvelope | null = hs === null || ask === null || !('approval' in ask) ? null
+      : painted.entry !== null ? { ask, updatedAt: painted.entry.at, waitBy: 'subagent', agentId: painted.entry.agentId }
+      : { ask, updatedAt: hs.updatedAt, waitBy: hs.waitBy === 'subagent' ? 'subagent' : null };
     let s = censusSightings.get(r.id);
     // A new sighting: another dialog, or new envelope content under the same menu labels (a new prompt); a restamp of the
     // same envelope is the same prompt.

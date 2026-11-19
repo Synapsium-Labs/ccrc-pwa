@@ -746,7 +746,7 @@ describe('the payload parse needs no regex engine', () => {
     // is spelled on one physical line because nothing may be added above the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line README cites; the delegation spool's definitions (`DSP_DEFS`), spliced in
     // by the shell only for a payload that names a delegation tool or event; the spool's extra output expression (`dsp_out`); and the launch record's
     // output expression (`lrc_out`). All four are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
-    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" \'', '" <<<"$payload"');
+    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r ap_call; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" \'', '" <<<"$payload"');
     const spoolDefs = between("DSP_DEFS='", "'; dsp_dir=");
     const spoolOut = between("dsp_out=', ((", ") | .[])'");
     const lrcOut = between("lrc_out=', (", ")'");
@@ -755,7 +755,7 @@ describe('the payload parse needs no regex engine', () => {
     // and close on the program's own text.
     expect(parse.startsWith('def keep(f):'), 'the payload parse program opens on its first definition').toBe(true);
     expect(parse).toContain('.agent_id');
-    expect(parse.endsWith('else "" end)\'"$dsp_out$lrc_out'), 'and closes on its last term, the raw id or nothing, then the spool\'s output and the launch record\'s').toBe(true);
+    expect(parse.endsWith('else "" end) catch "")\'"$dsp_out$lrc_out'), 'and closes on its last term, the call key in its `try` or nothing, then the spool\'s output and the launch record\'s').toBe(true);
     expect(parse, 'the id alphabet and its length bound are spelled once, by name').toContain('def idch:');
     expect(parse).toContain('def idmax: 64;');
     expect(spoolDefs.startsWith('def maxline:'), 'the spool\'s definitions open on their first').toBe(true);

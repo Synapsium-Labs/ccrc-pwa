@@ -3,14 +3,14 @@ import { DatabaseSync } from 'node:sqlite';
 import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import Fastify from 'fastify';
 import { registerOverlordRoutes, type OverlordRouteDeps } from '../src/coord/overlordRoutes.js';
 import { setRungInTx, raiseLatchInTx, clearLatchInTx, type AuthorityAppender, type RungMoveInput, type LatchClearInput } from '../src/coord/overlordLadderStore.js';
 import { tx } from '../src/coord/db.js';
 
 const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
-const operator = identity.operator(actorOf('device-a', 'abcdef0123456789'));
+const operator = identity.operator(gateActorOf('device-a', 'abcdef0123456789'));
 if (false) {
   // @ts-expect-error strings are never ladder actors
   const rung: RungMoveInput = { from: 'off', to: 'chat', actor: 'device-a', at: 1, opKey: 'op' };
@@ -59,7 +59,7 @@ describe('actor refusal at the route', () => {
     const coord = { ladderRungRead: r.store.ladderRungRead.bind(r.store), ladderRows: r.store.ladderRows.bind(r.store),
       setRung: () => ({ ok: false as const, reason: 'actor' as const }), clearLatch: r.store.clearLatch.bind(r.store) };
     registerOverlordRoutes(app, { identity, coord: r.store, facts: { authority: () => ({ kind: 'unmeasured', why: 'private-text' }) },
-      serial: async (f: () => unknown) => f(), gate: () => ({ pass: true, actor: actorOf('private-actor', '') }),
+      serial: async (f: () => unknown) => f(), gate: () => ({ pass: true, actor: gateActorOf('private-actor', '') }),
       ladder: { coord, inputs: { 'generation-degraded': () => 'lifted', 'rung-word-missing': () => 'lifted' }, serverCaps: [] },
       journal: r.journal, clock: { wall: () => 10 }, entropy: { hex: () => 'abcd' },
     } as unknown as OverlordRouteDeps);

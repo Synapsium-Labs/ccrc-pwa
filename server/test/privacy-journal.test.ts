@@ -4,7 +4,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import type { DatabaseSync } from 'node:sqlite';
 import { existsSync, mkdirSync, readFileSync, readdirSync, renameSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { chainedJournalFileAt } from '../src/chainedJournalFile.js';
 import { DELEGATION_JOURNAL_FORMAT } from '../src/coord/delegation-journal.js';
@@ -18,7 +18,7 @@ import { privacyCoherenceCases } from './sim/operatorModelSets.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ACTOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('Fixture browser', 'abcdef0123456789'));
+  .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 const NOW = 1_800_000_000_000;
 const opened: DatabaseSync[] = [];
 afterEach(() => { for (const db of opened.splice(0)) if (db.isOpen) db.close(); });

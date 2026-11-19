@@ -39,9 +39,12 @@ export interface CensusMintedRow {
   readonly id: number; readonly askAt: number; readonly agentId: string; readonly state: string;
 }
 
-/** The last approval envelope a sighting saw: its ask, the hook state's stamp and its thread. */
+/** The last approval envelope a sighting saw: its ask, the hook state's stamp and its thread. `agentId` (approvals PR 2,
+ *  Task 2.1) is set when the envelope came from the hook's per-agent list: `updatedAt` is then the entry's own stamp, and
+ *  its minted row is that agent's (`ownRow`), never merely its thread's. */
 export interface CensusEnvelope {
   readonly ask: Extract<HookAsk, { approval: unknown }>; readonly updatedAt: number; readonly waitBy: 'subagent' | null;
+  readonly agentId?: string;
 }
 
 /** What the owner knows of a painted prompt when it decides: this tick's hook state, and the sighting's memory. */
@@ -97,8 +100,8 @@ const threadOf = (agentId: string): 'main' | 'subagent' => (agentId === '' ? 'ma
 /** A request's own minted row (review 2667 F-C): the newest row of the thread that is still open (held or released, so
  *  its menu still stands) within the hook's whole wait before the first sighting, or any row of the thread minted
  *  beside the sighting. A sighting that starts late (a restart, a repaint, a flicker) still finds its row. */
-function ownRow(x: CensusSightingInput, thread: 'main' | 'subagent'): CensusMintedRow | undefined {
-  return [...x.minted].reverse().find((m) => threadOf(m.agentId) === thread
+function ownRow(x: CensusSightingInput, thread: 'main' | 'subagent', agentId: string | undefined): CensusMintedRow | undefined {
+  return [...x.minted].reverse().find((m) => (agentId === undefined ? threadOf(m.agentId) === thread : m.agentId === agentId)
     && ((OPEN_STATES.has(m.state) && m.askAt >= x.firstSeenAt - HOOK_WAIT_MS) || m.askAt >= x.firstSeenAt - CENSUS_MATCH_MS));
 }
 
@@ -130,7 +133,7 @@ export function censusSightingOf(x: CensusSightingInput): CensusSighting {
     if (route.kind === 'refused' && route.word !== 'approval-released') {
       return write(route.word === 'not-a-child' ? 'not-a-child' : 'refused-at-mint', null);
     }
-    const row = ownRow(x, thread);
+    const row = ownRow(x, thread, env.agentId);
     if (row !== undefined) return { kind: 'none', mintedId: row.id };
     if (route.kind === 'failed') return write('refused-at-mint', null);
     return x.ending || x.now - x.firstSeenAt >= CENSUS_ROW_WAIT_MS ? write('unmeasured', 'sent-no-row') : WAIT;

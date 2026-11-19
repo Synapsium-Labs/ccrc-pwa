@@ -53,6 +53,7 @@ import {
 } from '../../shared/programmeFacts.js';
 import { isServiceClass } from '../../shared/portfolio.js';
 import { isApprovalCensusWord } from '../../shared/approval-census.js';
+import { BUILD_UNTRUSTED_REASONS } from '../../shared/claudeBuildTrust.js';
 import { isClaimsMoveRefusal, isDriftKind, isRunSpendUnmeasuredReason, isStuckCause, isStuckReason, isRunWaitsOn } from '../../shared/api.js';
 import { isDelegationPolicyKebab } from '../src/coord/delegation-policy.js';
 import { isDelegationCompactionKebab } from '../src/coord/delegation-compaction.js';
@@ -67,6 +68,7 @@ import { isStaleArchiveKebab } from '../src/coord/staleArchive.js';
 import { isDriftLaneTag } from '../src/coord/driftLane.js';
 import { isAnswerMarkKebab } from '../src/coord/answerMarks.js';
 import { isDesignationKebab } from '../src/coord/overlordDesignation.js';
+import { isOverlordGateKebab } from '../src/coord/overlordGate.js';
 import { isLadderKebab } from '../src/coord/overlordLadder.js';
 import { isOverlapsKebab } from '../src/coord/overlaps.js';
 import { isDoneTestKebab } from '../src/coord/doneTests.js';
@@ -1243,6 +1245,10 @@ describe('the rejection table is total, in both directions', () => {
         || isDesignationKebab(tok)
         // THE LADDER: its effect, narrowing and local decision words come from their owning runtime maps.
         || isLadderKebab(tok)
+        // THE OVERLORD GATE (W1 gates B): `coord/overlordGate.ts` names a caller's standing, the fence's and the witness's
+        // reasons, what the runner records and the facts' arms as literals. None rides a `refused` or `reject.code` (the
+        // refusal words are `OVERLORD_REFUSALS`'); admitted through that decider's own maps, never NOT_CODES.
+        || isOverlordGateKebab(tok)
         // THE OTHER WRITE LANES (Overlord W1 other lanes): `coord/otherLanes.ts` names its lanes' `via` column and its verdict's
         // own kinds as literals. A word rides the lane table or the decider's answer, never a `refused` or `reject.code`; the
         // refusal words are `OVERLORD_REFUSALS`' (admitted above). Admitted through the exported guard, never NOT_CODES.
@@ -1271,11 +1277,15 @@ describe('the rejection table is total, in both directions', () => {
         // census row's `path`, never a `refused` or `reject.code`. Admitted through L0's guard, derived from
         // `APPROVAL_CENSUS_PATH_MAP` and `APPROVAL_CENSUS_DENY_CURRENCY_MAP`, never NOT_CODES.
         || isApprovalCensusWord(tok)
+        // THE UNTRUSTED-BUILD ITEM (approvals plan 2026-11-18 PR 2): `coord/untrustedBuildItem.ts` names the build-trust
+        // reasons that raise an item (`'not-captured'`, ...). A word decides whether an item is raised, never a `refused` or
+        // `reject.code`. Admitted through L0's list, `BUILD_UNTRUSTED_REASONS` (D-8289), never NOT_CODES.
+        || (BUILD_UNTRUSTED_REASONS as readonly string[]).includes(tok)
         // The door registry's own keys identify routes only there; another quoting file needs its own guard.
         || isOverlordDoorWordHere(tok, outsideDoors)
         // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.
         || isActorIssuerWordHere(tok, outsideIssuers),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason or approval census word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason or Overlord gate word`).toBe(true);
     }
   });
 });

@@ -151,6 +151,42 @@ describe('ModelsSheet: what it shows', () => {
     expect(screen.queryByTestId('models-read-state')).toBeNull();
   });
 
+  // Follow-up transient-beside-kept-answer (item 1): a kept answer that names no model, beside a transient word: the sheet
+  // says both, the kept answer's words and the transient line, and says "reads again" once, in the transient line.
+  describe('a kept answer that names no model, beside a transient word', () => {
+    const KEPT: readonly LaneModelsRead[] = [
+      { kind: 'unreadable' }, { kind: 'unreadable', code: 'roster-absent' }, { kind: 'unsupported' },
+      { kind: 'refused', why: 'bad-lane' }, { kind: 'absent', laneKind: 'never-made' }, { kind: 'absent' },
+    ];
+    for (const kept of KEPT) {
+      for (const word of ['busy', 'not-started'] as const) {
+        it(`${JSON.stringify(kept)} beside ${word}`, async () => {
+          put(laneModelsKey('lane-a'), wire(kept), Date.now());
+          const { load } = mount({ kind: word });
+          await waitFor(() => expect(load).toHaveBeenCalled());
+          const line = await screen.findByTestId('models-read-transient');
+          expect(line.getAttribute('data-kind')).toBe(word);
+          expect(line.textContent).toBe(laneReadWords({ kind: word }));
+          const state = screen.getByTestId('models-read-state');
+          expect(state.getAttribute('data-kind')).toBe(kept.kind);
+          expect(state.textContent).toContain(laneReadWords(kept)!);
+          expect(state.textContent).not.toMatch(/reads? (the lane )?again/i);
+          expect(screen.queryAllByRole('button', { name: /hold|release|revert/i })).toHaveLength(0);
+        });
+      }
+    }
+
+    // An Anthropic lane's absent is by design, as on the picker (F1): its words alone, no transient line.
+    it.each(['busy', 'not-started'] as const)('an Anthropic absent beside %s says its own words only', async (word) => {
+      put(laneModelsKey('lane-a'), wire({ kind: 'absent', laneKind: 'anthropic' }), Date.now());
+      const { load } = mount({ kind: word });
+      await waitFor(() => expect(load).toHaveBeenCalled());
+      await act(async () => { await Promise.resolve(); });
+      expect(screen.getByTestId('models-read-state').textContent).toMatch(/Anthropic lane/);
+      expect(screen.queryByTestId('models-read-transient')).toBeNull();
+    });
+  });
+
   it('the model picker says why it names no model, and says nothing over a read', () => {
     const opts = [{ label: 'Opus class', route: { field: 'class' as const, value: 'opus' }, readback: '', active: false }];
     render(<PickSheet open onClose={() => {}} eyebrow="model" title="Choose a model" options={opts} onPick={() => {}}

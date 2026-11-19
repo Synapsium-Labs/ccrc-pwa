@@ -48,7 +48,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import {
   bindPendingGeneration, designatePending, failPending, goLive, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -77,7 +77,7 @@ const STATES = ['no-row', 'live-with-owed-stop', 'pending-only'] as const;
 type State = typeof STATES[number];
 const fakeJournal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('operator-a', '0123456789abcdef'));
+  .operator(gateActorOf('operator-a', '0123456789abcdef'));
 
 function seedDesignation(db: DatabaseSync, st: State): void {
   const row = (): unknown => db.prepare('SELECT sessionId, pendingId, stopsOwed FROM overlord_designation').get();
