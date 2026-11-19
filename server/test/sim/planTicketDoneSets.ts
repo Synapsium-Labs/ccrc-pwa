@@ -58,17 +58,26 @@ export const TICKET_DONE_VERDICT_SET = set([
   // F2: the evidence-already-stored rule, its auto-ticket exception, and a pull request being one project's.
   { id: 'ST-1', old: '  if (taken !== undefined) return refuse(', new: '  if (false) return refuse(' },
   { id: 'ST-2', old: "  const ownAuto = 'runId' in ev && f.run !== null ? f.run.ticketId : null;", new: '  const ownAuto = null;' },
-  { id: 'ST-3', old: "? s.evidence.pr === ev.pr && s.project === t.project\n", new: '? s.evidence.pr === ev.pr\n' },
-  { id: 'ST-4', old: "('runId' in s.evidence ? s.evidence.runId === ev.runId\n", new: "('runId' in s.evidence ? true\n" },
+  { id: 'ST-3', old: "? se.pr === ev.pr && s.project === t.project\n", new: '? se.pr === ev.pr\n' },
+  { id: 'ST-4', old: "'runId' in se ? se.runId === ev.runId\n", new: "'runId' in se ? true\n" },
   // Review 2429 F5: a run id is global, so a run stored on another project's ticket still counts.
-  { id: 'ST-5', old: "('runId' in s.evidence ? s.evidence.runId === ev.runId\n", new: "('runId' in s.evidence ? s.evidence.runId === ev.runId && s.project === t.project\n" },
+  { id: 'ST-5', old: "'runId' in se ? se.runId === ev.runId\n", new: "'runId' in se ? se.runId === ev.runId && s.project === t.project\n" },
   // Review 2429 F2 (the coordinator's ruling): a run and the pull request it carried are one piece of work, each direction;
-  // the link read whole; a pull request is one project's on the link too; the run's own auto ticket on the pr side.
-  { id: 'ST-6', old: ": pairs.some((p) => p.project === s.project && p.pr === (s.evidence as { pr: number }).pr && p.runId === ev.runId))", new: ': false)' },
-  { id: 'ST-7', old: ": !isAutoTicketKey(s.key) && pairs.some((p) => p.project === t.project && p.pr === ev.pr && p.runId === (s.evidence as { runId: number }).runId))", new: ': false)' },
+  // the link read whole; a pull request is one project's on the link too.
+  { id: 'ST-6', old: ': pairs.some((p) => p.project === s.project && p.pr === se.pr && p.runId === ev.runId);', new: ': false;' },
+  { id: 'ST-7', old: ': ties.some((p) => p.runId === se.runId && s.ticketId !== ownAutoOf(p));', new: ': false;' },
   { id: 'ST-8', old: "  if (f.links.kind === 'unreadable') return refuse(", new: '  if (false) return refuse(' },
   { id: 'ST-9', old: 'pairs.some((p) => p.project === s.project && p.pr ===', new: 'pairs.some((p) => p.pr ===' },
-  { id: 'ST-10', old: ': !isAutoTicketKey(s.key) && pairs.some(', new: ': pairs.some(' },
+  // Review 2712 F2: on the { pr } side only the linked run's OWN auto ticket folds in (by ticket id), not any auto ticket.
+  { id: 'ST-10', old: 's.ticketId !== ownAutoOf(p));', new: '!isAutoTicketKey(s.key));' },
+  // Review 2712 F1: a pull request whose run holds another declared ticket refuses, stored evidence or not; the run holding
+  // this very ticket does not.
+  { id: 'ST-11', old: '  if (holding !== undefined && holding.holder !== null) {', new: '  if (false) {' },
+  { id: 'ST-12', old: 'p.holder !== null && p.holder.ticketId !== t.id && !isAutoTicketKey(p.holder.key)', new: 'p.holder !== null && !isAutoTicketKey(p.holder.key)' },
+  // Review 2712 F3: stored evidence that reads as neither kind refuses.
+  { id: 'ST-13', old: '  if (unread !== undefined) return refuse(', new: '  if (false) return refuse(' },
+  // Review 2712 F8: the { pr } side's ties are this ticket's project's only.
+  { id: 'ST-14', old: 'pairs.filter((p) => p.project === t.project && p.pr === ev.pr)', new: 'pairs.filter((p) => p.pr === ev.pr)' },
 ]);
 
 export const LANDED_FACT_SET = set([

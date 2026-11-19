@@ -476,11 +476,12 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       const read = coord.readLanding(t.project);
       landed = read.ok ? landedFactOf(read.facts.entries, evidence.pr) : { kind: 'unreadable', detail: read.error };
     }
+    // Every stored evidence goes to the verdict as the reader gave it, `malformed` included: the verdict decides (review 2712 F3).
     const storedEvidence = plan.doneFactsOf(slug).flatMap((d) =>
-      d.evidence === null || d.evidence === 'malformed' ? [] : [{ ticketId: d.ticketId, key: d.key, project: d.project, evidence: d.evidence }]);
+      d.evidence === null ? [] : [{ ticketId: d.ticketId, key: d.key, project: d.project, evidence: d.evidence }]);
     const v = ticketDoneVerdict({
       program: slug, ticket: { id: t.id, key: t.key, project: t.project, state: t.state, runId: t.runId }, evidence, run, landed,
-      stored: storedEvidence, links: evidenceLinksOf(coord, evidence, t.project, storedEvidence),
+      stored: storedEvidence, links: evidenceLinksOf(coord, plan, evidence, t.project, storedEvidence),
     });
     if (!v.ok) return { refuse: v.word, detail: v.detail };
     plan.markTicketDone(t.id, evidence, opts.now());

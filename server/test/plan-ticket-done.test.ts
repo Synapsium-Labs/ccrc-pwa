@@ -67,10 +67,11 @@ const landPr = (c: CoordStore, pr: number, project = 'project-a'): void => {
   if (!land.ok) throw new Error('fixture land refused');
 };
 
-/** A work run of prog-a in `wave` (no ticket named, so its own ticket is the auto ticket `run-<id>`) that carried pull
- *  request `pr`: pinned at merging, landed on project-a's line, then closed done. The landing entry names this run. */
-const landedRun = async (x: CharWorld, pr: number, wave = 1): Promise<number> => {
-  const r = await openRun(x, { ...BASE, wave });
+/** A work run of prog-a in `wave` that carried pull request `pr`: pinned at merging, landed on project-a's line, then
+ *  closed done. The landing entry names this run. With no `ticket` named its own ticket is the auto ticket `run-<id>`;
+ *  with `close: false` it stays at merging, holding its ticket (review 2712 F1). */
+const landedRun = async (x: CharWorld, pr: number, wave = 1, o: { ticket?: string; close?: boolean } = {}): Promise<number> => {
+  const r = await openRun(x, { ...BASE, wave, ...(o.ticket === undefined ? {} : { ticket: o.ticket }) });
   expect(r.statusCode, r.body).toBe(200);
   const id = idOf(r);
   x.coord.setSession(id, `project-a-ws${pr}`);
@@ -79,7 +80,7 @@ const landedRun = async (x: CharWorld, pr: number, wave = 1): Promise<number> =>
   if (!pin.ok) throw new Error('fixture pin refused');
   const land = x.coord.advanceLanding({ kind: 'land', project: 'project-a', pr, by: 'reader', at: 5000, outcome: MERGED, expect: null });
   if (!land.ok) throw new Error('fixture land refused');
-  step(x.coord, id, 'closing', 'done');
+  if (o.close !== false) step(x.coord, id, 'closing', 'done');
   return id;
 };
 
@@ -114,7 +115,8 @@ describe('done carries its time and evidence (D11)', () => {
 describe('the migration back-fills a done ticket\'s evidence and time from its run (F1)', () => {
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('doneEvidence')) + 1;
   it('the migration back-fills a done ticket\'s evidence and time from its run', () => {
-    expect(SLOT, 'no MIGRATIONS entry adds doneEvidence').toBeGreaterThanOrEqual(94);
+    // Its own slot, exactly: entry 103, user_version 104 (review 2712 F9). A landed migration never moves.
+    expect(SLOT, 'no MIGRATIONS entry adds doneEvidence').toBe(104);
     const p = path.join(mkTmp('ccrc-ticket-done-'), '.ccrc', 'coord.db');
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
@@ -249,6 +251,32 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     expect(factsOf(x, 'w0-t5')!.evidence).toBeNull();
   });
 
+  it('a run holding its ticket and the pull request it carried close one ticket: R holds T1, N lands, T2 with { pr: N } is refused (review 2712 F1)', async () => {
+    const x = await world([], true);
+    await planVerb(x, 'prog-a', '', SIX);
+    const r = await landedRun(x, 11, 1, { ticket: 'w0-t1', close: false });
+    expect(ticketIn(await show(x), 'w0-t1')).toMatchObject({ state: 'started' });
+    expect(factsOf(x, 'w0-t1')!.evidence).toBeNull();
+    const byPr = await done(x, { ticket: 'w0-t2', evidence: { pr: 11 } });
+    expect(refusal(byPr)).toEqual([409, 'evidence-unverified']);
+    expect((byPr.json() as { detail: string }).detail).toContain('w0-t1');
+    step(x.coord, r, 'closing', 'done');
+    expect(factsOf(x, 'w0-t1')!.evidence).toEqual({ runId: r });
+    expect(factsOf(x, 'w0-t2')!.evidence).toBeNull();
+  });
+
+  it('refuses evidence while another ticket stores evidence that cannot be read (review 2712 F3)', async () => {
+    const x = await world([], true);
+    await planVerb(x, 'prog-a', '', SIX);
+    landPr(x.coord, 7);
+    landPr(x.coord, 8);
+    expect((await done(x, { ticket: 'w0-t4', evidence: { pr: 8 } })).statusCode).toBe(200);
+    x.coord.db.prepare("UPDATE plan_tickets SET doneEvidence = '{\"pr\":\"8\"}' WHERE program = 'prog-a' AND key = 'w0-t4'").run();
+    expect(factsOf(x, 'w0-t4')!.evidence).toBe('malformed');
+    expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { pr: 7 } }))).toEqual([409, 'evidence-unverified']);
+    expect(factsOf(x, 'w0-t2')!.evidence).toBeNull();
+  });
+
   it('refuses a run that cannot be read (review 2429 F3)', async () => {
     const x = await world();
     await planVerb(x, 'prog-a', '', SIX);
@@ -267,7 +295,7 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     expect((await done(x, { ticket: 'w0-t4', evidence: { pr: 8 } })).statusCode).toBe(200);
     const real = x.coord.readLanding.bind(x.coord);
     const fenced = () => ({ ok: false as const, error: 'landing-journal-unavailable' as const, recovery: 'replay' as const });
-    // No ticket stores a { runId } yet, so no link is read: the { pr } is refused by its own landing read.
+    // The { pr } is refused by its own landing read, before the link the same line would give.
     x.coord.readLanding = fenced;
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { pr: 7 } }))).toEqual([409, 'evidence-unverified']);
     x.coord.readLanding = real;
@@ -279,7 +307,7 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     expect(factsOf(x, 'w0-t3')!.evidence).toBeNull();
   });
 
-  it('markTicketDone leaves a ticket a run holds (started) and a done ticket unchanged (review 2429 F7)', async () => {
+  it('markTicketDone leaves a ticket a run holds (started, or open with a planned run) and a done ticket unchanged (review 2429 F7, review 2712 F4)', async () => {
     const x = await world();
     await planVerb(x, 'prog-a', '', SIX);
     const finished = await openRun(x, { ...BASE, wave: 1, ticket: 'w0-t3' });
@@ -287,11 +315,15 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     const held = await openRun(x, { ...BASE, title: 'another', wave: 1, ticket: 'w0-t1' });
     expect(held.statusCode, held.body).toBe(200);
     step(x.coord, idOf(held), 'dispatched', 'working');
-    const KEYS = ['w0-t1', 'w0-t3'];
+    // A planned run holds its ticket while the ticket is still open: the guard's `runId IS NULL` half.
+    const planned = await openRun(x, { ...BASE, title: 'planned', wave: 2, ticket: 'w1-t1' });
+    expect(planned.statusCode, planned.body).toBe(200);
+    const KEYS = ['w0-t1', 'w0-t3', 'w1-t1'];
     const rows = () => x.plan.planOf('prog-a').epics.flatMap((e) => e.tickets).filter((t) => KEYS.includes(t.key)).map((t) => ({ ...t }));
     const before = rows();
     const facts = KEYS.map((k) => factsOf(x, k));
-    expect(before.map((t) => [t.key, t.state, t.runId])).toEqual([['w0-t1', 'started', idOf(held)], ['w0-t3', 'done', idOf(finished)]]);
+    expect(before.map((t) => [t.key, t.state, t.runId])).toEqual([['w0-t1', 'started', idOf(held)], ['w0-t3', 'done', idOf(finished)],
+      ['w1-t1', 'open', idOf(planned)]]);
     for (const t of before) x.plan.markTicketDone(t.id, { pr: 99 }, 123);
     expect(rows()).toEqual(before);
     expect(KEYS.map((k) => factsOf(x, k))).toEqual(facts);
