@@ -25,6 +25,7 @@ export const FASTIFY_L4_ALLOWLIST: EntrySet = {
   'server/src/coord/hierarchyRoutes.ts': { reason: "the per-project hierarchy settings' HTTP routes (Linear hierarchy, D-8181): a project's settings, the owner for all, and the read", since: '2026-11-10' },
   'server/src/coord/endRequest.ts': { reason: "the end-request route's handler (D-8076), a session's ask to the operator", since: '2026-11-08' },
   'server/src/coord/coordCallsRoute.ts': { reason: "the coordinator call record's HTTP route (D-8126)", since: '2026-11-09' },
+  'server/src/flows/outcomeRoute.ts': { reason: "a coordinator's flow outcome, recorded in shadow (Flows wave 3b)", since: '2026-11-19' },
   'server/src/coord/programmeRemainingRoute.ts': { reason: "the coordinator's remaining-work door (Overlord W2 remaining work A)", since: '2026-11-16' },
   'server/src/coord/delegationBackfillRoutes.ts': { reason: "the one-time pass's door over the broker's unmeasured records: the dry run's GET and the pass's or undo's POST, session-gated (session helpers S2, D-8874)", since: '2026-11-21' },
   'server/src/coord/decisionModelRoutes.ts': { reason: "the operator's decision-model doors: the read, arm, off, ceiling and the key's PUT and DELETE (Overlord W2, decision model B)", since: '2026-11-17' },

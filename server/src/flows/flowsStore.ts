@@ -158,3 +158,22 @@ export function flowProgrammes(db: DatabaseSync, flowId: number, terminalSql: st
     });
   });
 }
+
+// ── Wave 3b: the outcomes coordinators report, recorded in shadow ─────────────────────────────────────────────────
+
+export interface FlowOutcomeRow {
+  id: number; program: string; flowId: number; version: number; blockId: string; outcome: string; nextBlock: string;
+  wouldSend: string; byId: string; at: number;
+}
+
+/** Records one reported outcome and what the engine would do next. Inserted once, never updated. */
+export function recordFlowOutcome(db: DatabaseSync, r: Omit<FlowOutcomeRow, 'id'>): number {
+  const res = db.prepare(`INSERT INTO flow_outcomes (program, flowId, version, blockId, outcome, nextBlock, wouldSend, byId, at)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(r.program, r.flowId, r.version, r.blockId, r.outcome, r.nextBlock, r.wouldSend, r.byId, r.at);
+  return Number(res.lastInsertRowid);
+}
+
+/** A programme's newest reported outcome, or null. */
+export function lastFlowOutcome(db: DatabaseSync, program: string): FlowOutcomeRow | null {
+  return (db.prepare('SELECT * FROM flow_outcomes WHERE program = ? ORDER BY at DESC, id DESC LIMIT 1').get(program) as unknown as FlowOutcomeRow | undefined) ?? null;
+}

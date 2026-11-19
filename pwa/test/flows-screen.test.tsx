@@ -193,7 +193,8 @@ describe('the programmes on a flow (flows wave 3a)', () => {
     const answer: FlowAnswer = { ...base, flow: { ...base.flow, pinnedBy: 2 } };
     const programmes = [
       { slug: 'programme-a', title: 'Programme A', version: 1, position: { blockId: 'dispatch', why: 'run 12 is dispatched (wave 1 of 2)' } },
-      { slug: 'programme-b', title: 'Programme B', version: 1, position: { blockId: null, why: 'before the first wave' } },
+      { slug: 'programme-b', title: 'Programme B', version: 1, position: { blockId: null, why: 'before the first wave' },
+        lastOutcome: { blockId: 'dispatch', outcome: 'dispatched', nextBlock: 'verify', wouldSend: 'observe verify', at: 1 } },
     ];
     stubServer((c) => (c.url.endsWith('/programmes') ? { body: { programmes } } : { body: answer }));
     render(<FlowsScreen openId={4} />);
@@ -202,6 +203,7 @@ describe('the programmes on a flow (flows wave 3a)', () => {
     expect(screen.getByText('run 12 is dispatched (wave 1 of 2)')).toBeInTheDocument();
     expect(screen.getByText('v1 · not on a step')).toBeInTheDocument();
     expect(screen.getByText('before the first wave')).toBeInTheDocument();
+    expect(screen.getByText('Last reported: Dispatch the wave → dispatched; the flow would observe verify (not acted on yet)')).toBeInTheDocument();
   });
 
   it('asks nothing for a flow no programme pins', async () => {

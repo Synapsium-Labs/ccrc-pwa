@@ -405,6 +405,9 @@ function ProgrammesOnFlow({ id, doc }: { id: number; doc: FlowDoc }): ReactNode 
             <span className={TITLED}>
               <span className="text-ink-primary">{r.title}</span>
               <span className={SECTION_PURPOSE}>{r.position.why}</span>
+              {r.lastOutcome !== undefined && (
+                <span className={SECTION_PURPOSE}>{`Last reported: ${doc.blocks.find((b) => b.id === r.lastOutcome!.blockId)?.title ?? r.lastOutcome.blockId} → ${r.lastOutcome.outcome}; the flow would ${r.lastOutcome.wouldSend} (not acted on yet)`}</span>
+              )}
             </span>
             <span className={MONO_META}>{`v${r.version} · ${r.position.blockId === null ? 'not on a step'
               : doc.blocks.find((b) => b.id === r.position.blockId)?.title ?? r.position.blockId}`}</span>

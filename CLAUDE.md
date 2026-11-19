@@ -606,6 +606,8 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   `POST /api/coord/programmes/:slug/calls` (D-8126; its handler is in `server/src/coord/coordCallsRoute.ts`, a lane source of its own
   for the census, attribution- then ownership-checked the same way, and in the EXEMPT table) and the remaining-work door
   `POST /api/coord/programmes/:slug/remaining` (Overlord W2; its handler is in `server/src/coord/programmeRemainingRoute.ts`,
+  a lane source of its own, checked the same way and in the EXEMPT table) and the flow outcome door
+  `POST /api/coord/programmes/:slug/flow-outcome` (Flows wave 3b, shadow only; its handler is in `server/src/flows/outcomeRoute.ts`,
   a lane source of its own, checked the same way and in the EXEMPT table) all call
   `requireMailToken` outside both (the intent door, where a session declares its own coordinator
   intent through `ccrc-api`, is attribution-checked and sits in `auth/gate.ts`'s EXEMPT table like the claim lanes: its only
