@@ -170,10 +170,6 @@ export function SessionMeta({
           {glance.marker !== null && glance.marker.key !== 'spawn' && (
             <Marker fact={glance.marker} full={false} />
           )}
-          {/* R9: the row's attached delegation entries, every liveness, on a live or dead row (D-7781): one chip after the marker. */}
-          {glance.delegated !== null && (
-            <span className="sess-meta-chip" title={glance.delegated.title}>{glance.delegated.text}</span>
-          )}
         </span>
         {(glance.role !== null || context !== null) && (
           <span className="sess-meta sess-meta--context" style={metaStyle}>
@@ -228,8 +224,8 @@ export function SessionMeta({
         </button>
       )}
       {/* Delegation visibility (spec §5): every entry this session started, a disclosure in the subagent toggle's shape: a
-          REAL `<button>`, `aria-controls` only while the list exists (`SessionDetails` draws it). Its count is never
-          smaller than the card's chip, which counts only the attached entries (D-7782). */}
+          REAL `<button>`, `aria-controls` only while the list exists (`SessionDetails` draws it). Header only: the fleet
+          list's row draws no count of these entries (D-8771). */}
       {f.delegated !== null && (
         <button
           type="button"

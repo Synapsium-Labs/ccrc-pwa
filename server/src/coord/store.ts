@@ -55,7 +55,8 @@ import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
-import type { UrgentRole } from './urgentMail.js';
+import type { KeyedMail } from './mailKey.js';
+import { urgentSenderVerdict, type UrgentRole, type UrgentVerdict } from './urgentMail.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -1496,6 +1497,12 @@ export const MAIL_RUN_CLOSED_ERROR = 'run closed';
  */
 export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
 
+/** The insert met `mail_client_key_once` (Overlord wave 164, review 2725 F5): another send stored this sender's key between
+ *  the ingress's read and its insert. The route then reads the stored mail and asks `mailKeyVerdict` again, so the loser of
+ *  that race answers `same` or `key-conflict`, never a 500. Any other error is not this one. */
+export const isMailClientKeyClash = (e: unknown): boolean =>
+  e instanceof Error && /UNIQUE constraint failed: mail\.fromId, mail\.clientKey/.test(e.message);
+
 /**
  * The occupant-change park (design 2026-09-08 §4), and it is its OWN sentence
  * rather than a reuse of the two above. `MAIL_RECLAIM_CANCELLED_ERROR` reads
@@ -1720,7 +1727,10 @@ const MAIL_ROW_COLUMNS =
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
   'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
   // D-5838: when the park began, for the strip's `parked` line.
-  'd.parkedAt AS parkedAt';
+  'd.parkedAt AS parkedAt, ' +
+  // Mid-turn mail PR 1: the three stored times and the replay count, as TEXT (D-2545's reason: a wider integer throws).
+  'CAST(d.deliveredAt AS TEXT) AS deliveredAtText, CAST(d.ingestedAt AS TEXT) AS ingestedAtText, ' +
+  'CAST(d.ackedAt AS TEXT) AS ackedAtText, CAST(d.replayCount AS TEXT) AS replayCountText';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
@@ -1728,7 +1738,17 @@ interface MailRowDb {
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
   parkedAt: number | null;
+  deliveredAtText: string | null; ingestedAtText: string | null; ackedAtText: string | null; replayCountText: string | null;
 }
+
+/** One stored delivery number onto the wire (mid-turn mail PR 1): present only when its text is the one canonical
+ *  spelling of a positive safe integer (`parseCanonicalPositiveSafeInteger`), so a missing, fractional, textual,
+ *  hexadecimal, zero or unsafe value is absent, never zero. `replayCount` alone may also be zero, its column's default:
+ *  a first delivery not yet replayed. */
+const mailNumber = (key: 'deliveredAt' | 'ingestedAt' | 'ackedAt' | 'replayCount', text: string | null): Partial<MailSummary> => {
+  const v = key === 'replayCount' && text === '0' ? 0 : parseCanonicalPositiveSafeInteger(text);
+  return v === null ? {} : { [key]: v };
+};
 
 /** A route argument can never ask either mail read to walk more history (or
  *  more outstanding rows) than is reasonable to JSON-stringify into one
@@ -6814,18 +6834,45 @@ export class CoordStore {
 
   /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
    *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
-   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `urgentAs` (mid-turn
-   *  mail, plan Task 2.2): the sender's role for an urgent mail, which only the mail ingress passes, on
-   *  `urgentSenderVerdict`'s `allowed`; absent or null for every other mail. This is that column's one writer too. */
+   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `clientKey` (Overlord
+   *  wave 164): the sender's idempotency key, which only the mail ingress passes, on `mailKeyVerdict`'s `new`; absent or
+   *  null for every other mail. This is that column's one writer too, and `mail_client_key_once` refuses a second row
+   *  with the same sender and key (`isMailClientKeyClash` names that refusal). `inReplyTo`: the delivery id the send
+   *  named, as sent, which the key compares (review 2725 F1); absent or null when it named none. `urgentAs` (mid-turn
+   *  mail, plan Task 2.2): the sender's role for an urgent mail, on `urgentSenderVerdict`'s `allowed`; absent or null for
+   *  every other mail. This is that column's one writer too. Only the mail ingress will pass it, and no caller passes it
+   *  until that ingress lands (`ingress-waits-for-routes`), so every row stays not urgent. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[]; answersMail?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null;
+                  inReplyTo?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, urgentAs) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo, ' +
+      'urgentAs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null, m.urgentAs ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null, m.urgentAs ?? null);
     return { id: Number(res.lastInsertRowid) };
+  }
+
+  /** The mail `fromId` stored under `clientKey` (Overlord wave 164), as `mailKeyVerdict` compares it, or null when this
+   *  sender stored none under that key. `mail_client_key_once` makes the row unique. A stored `kind` outside the sendable
+   *  vocabulary cannot equal a request's, so it is read as it is; `artifacts` that do not parse as a list of strings read as
+   *  `['']`, which no request carries (the ingress admits absolute paths only), so the decider answers `conflict`, never
+   *  `same`, on a row it cannot read. */
+  mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
+    const row = this.db.prepare(
+      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo FROM mail WHERE fromId = ? AND clientKey = ?',
+    ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
+      body: string; artifacts: string; inReplyTo: number | null } | undefined;
+    if (row === undefined) return null;
+    const UNREADABLE: readonly string[] = [''];
+    let artifacts: readonly string[] = UNREADABLE;
+    try {
+      const parsed: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
+    } catch { /* UNREADABLE stands */ }
+    return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
+      body: row.body, artifacts, inReplyTo: row.inReplyTo };
   }
 
   /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would
@@ -6839,10 +6886,27 @@ export class CoordStore {
     return holds;
   }
 
-  /** Whether `fromId` has an urgent mail to `toId` (the resolved recipient) still on the hold's set: the ingress's
-   *  `urgent-outstanding` test (spec §3.1, plan P4), asked inside the insert's transaction so two sends cannot both pass. */
+  /** Whether `fromId` has an urgent mail to `toId` (the resolved recipient) still on the hold's set: the fact behind
+   *  `urgent-outstanding` (spec §3.1, plan P4). */
   urgentOutstanding(fromId: string, toId: string): boolean {
     return this.urgentRows('AND m.fromId = ? AND d.toId = ? ', [fromId, toId]).length > 0;
+  }
+
+  /** Whether `fromId` may mark its mail to `toId` (the resolved recipient) urgent now (spec §3.1, plan P2 to P4): this
+   *  store reads the facts once, from the binding's one view, the designation and the pair's outstanding urgent mail,
+   *  and `urgentSenderVerdict` (L1) decides. An unreadable claimant series is `unmeasured`, never an empty one. The
+   *  ingress (which waits for its own PR, `ingress-waits-for-routes`) asks with no `await` between this read and its
+   *  insert, so two sends cannot both pass. */
+  urgentVerdict(fromId: string, toId: string): UrgentVerdict {
+    const recipient = this.bindingsOf(toId);
+    let recipientClaimants: readonly string[] | 'unmeasured';
+    try { recipientClaimants = recipient.claimants(); } catch { recipientClaimants = 'unmeasured'; }
+    const claims = recipient.claimant();
+    const d = this.designationRead();
+    return urgentSenderVerdict({ senderId: fromId, recipientId: toId, recipientClaimants,
+      recipientClaimsOpenRun: claims.ok ? claims.siblings.length > 0 : 'unmeasured',
+      designation: d.kind === 'designated' ? { kind: d.kind, sessionId: d.sessionId } : { kind: d.kind },
+      outstanding: this.urgentOutstanding(fromId, toId) });
   }
 
   private urgentRows(and: string, args: readonly string[]): unknown[] {
@@ -7183,6 +7247,8 @@ export class CoordStore {
       // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
       // keeps its park columns as history, and the wire must not call it parked.
       parkedAt: r.state === 'queued' ? r.parkedAt : null,
+      ...mailNumber('deliveredAt', r.deliveredAtText), ...mailNumber('ingestedAt', r.ingestedAtText),
+      ...mailNumber('ackedAt', r.ackedAtText), ...mailNumber('replayCount', r.replayCountText),
     }));
   }
 

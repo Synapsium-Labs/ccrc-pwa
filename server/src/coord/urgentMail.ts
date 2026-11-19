@@ -16,9 +16,11 @@
  * never changes what an old mail says (P1).
  */
 
-/** The sender's role for an urgent delivery, stored in `mail.urgentAs` (P1). */
-export const URGENT_ROLES = ['coordinator', 'overlord'] as const;
-export type UrgentRole = (typeof URGENT_ROLES)[number];
+import type { MailHoldRole } from '../../../shared/mailHold.js';
+
+/** The sender's role for an urgent delivery, stored in `mail.urgentAs` (P1). The words have one home, the hold's
+ *  `shared/mailHold.ts#MAILHOLD_ROLES` (ruling `urgent-role-words-two-homes`). */
+export type UrgentRole = MailHoldRole;
 
 /** The designation as this rule reads it: whether a session is designated, and which. */
 export type UrgentDesignationFact =
@@ -37,9 +39,12 @@ export interface UrgentFacts {
   /** Whether the recipient claims a non-terminal run (`bindingsOf(recipient).claimant()`), or `unmeasured`. */
   readonly recipientClaimsOpenRun: boolean | 'unmeasured';
   readonly designation: UrgentDesignationFact;
+  /** Whether an urgent mail from the sender to the recipient is still outstanding (`CoordStore.urgentOutstanding`,
+   *  plan P4): one per sender and recipient. */
+  readonly outstanding: boolean;
 }
 
-export type UrgentRefusal = 'urgent-not-allowed' | 'urgent-unmeasured';
+export type UrgentRefusal = 'urgent-not-allowed' | 'urgent-unmeasured' | 'urgent-outstanding';
 
 export type UrgentVerdict =
   | { readonly kind: 'allowed'; readonly role: UrgentRole }
@@ -47,9 +52,21 @@ export type UrgentVerdict =
 
 const refused = (code: UrgentRefusal, detail: string): UrgentVerdict => ({ kind: 'refused', code, detail });
 
-/** The sender rule (spec §3.1, plan P2 and P3). The coordinator arm is asked first, so a sender that qualifies both ways
- *  is stored as `coordinator` when it claims the recipient's run. */
+/** The sender rule (spec §3.1, plan P2 to P4). Who may send is asked first, so a sender the rule refuses hears why, not
+ *  that a mail is outstanding; an allowed sender with an urgent mail to the same recipient still unread is
+ *  `urgent-outstanding`. */
 export function urgentSenderVerdict(f: UrgentFacts): UrgentVerdict {
+  const v = senderVerdict(f);
+  if (v.kind === 'allowed' && f.outstanding) {
+    return refused('urgent-outstanding',
+      `an urgent mail from ${f.senderId} to ${f.recipientId} is still unread; send this one without urgent`);
+  }
+  return v;
+}
+
+/** Who may mark it (spec §3.1, plan P2 and P3). The coordinator arm is asked first, so a sender that qualifies both ways
+ *  is stored as `coordinator` when it claims the recipient's run. */
+function senderVerdict(f: UrgentFacts): UrgentVerdict {
   if (f.senderId === f.recipientId) {
     return refused('urgent-not-allowed', 'a session never marks its own mail urgent');
   }

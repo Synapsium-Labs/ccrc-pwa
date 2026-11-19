@@ -4244,6 +4244,43 @@ the server test typecheck, single-definition, deviation-refs, dtbd and topology-
 
 **Rollback.** A plain revert.
 
+### Task C46: the fleet list drops the subagent and delegated counts (D-8771) — now
+
+**Why.** The operator, 2026-11-19: "the number of subagents in a session is noise at this point on the left panel. It's
+information useful only inside the session running them." A session's row in the fleet list (the left panel on desktop,
+the session list on a phone) no longer draws a count of its subagents or delegated entries. The session's header and
+details keep every one of those facts, unchanged: the subagent disclosure, the delegated-entries disclosure and their lists.
+
+**Files.** `pwa/src/fleet/SessionMeta.tsx` (the card's `N delegated` chip, R9, D-7781, is gone), `sessionFacts.ts`
+(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix, with one data row
+(`HEADER_COUNT_ALLOWANCES`) for the status word's count digits; a working row's `N in background` reads `in background` on the card), `SessionLine.tsx`
+(the `delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
+`delegationWords.ts` (`delegationParts` answers the bare words `delegated` and `worktrees`; `DelegatedSummary.count`
+removed), `rollup.ts` (`SummaryPart.n` optional, a worker part still counted, `partWords` the one spelling) and
+`programmeBoxes.ts` (a comment). A coordinator's fold line and a programme box's footer are a separate grouping the
+operator taps to open the delegated rows, so they stay and drop only the numbers (the coordinator's ruling of 2026-11-19).
+Tests: `card-header-facts`, `project-card`, `session-line`, `rollup`, `fleet-rollup-render`, `fleet-screen`, `nestFleet`
+and `delegation-words`, and the real-Chrome `delegation-rows`. The two delegation specs carry a dated amendment each.
+
+**Measured.** Which pins were red at `main` and which only guard, and every figure and what was not measured, are in
+`docs/superpowers/programs/desktop-polish/c46.md`. The PR body carries the plan's matrix (before and after, Refined and
+Instrument, dark and light, at 360, 390, 1280 and 1920) and its Departures.
+
+**Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, or counts its background work, in its
+text, titles or accessible names; the header still draws both disclosures and its background count; the delegated rows
+stay reachable through their fold line.
+
+- **D-8771** — `fleet-list-drops-subagent-counts`: Task C46, issued on 2026-11-19. The fleet list draws no count of a
+  session's subagents, delegated entries or delegated background work (the operator's ruling of 2026-11-19). D-7781's card
+  chip is superseded on the card, and D-7782, which had only a card side, is retired whole: the card no longer has a
+  `delegated` fact, so D-5545's prefix rule holds for every key again, with one allowance for the status word, whose header
+  form keeps the count the card dropped (`working · N in background`): one data row (`HEADER_COUNT_ALLOWANCES`, key `status`)
+  read by the rule's own comparison, so no second comparison and no other key or words are allowed. The header keeps D-7781's count of every entry, its
+  disclosure and its background count. A coordinator's fold line and a programme box's footer keep their delegated rows and
+  say `delegated` and `worktrees` with no number.
+
+**Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

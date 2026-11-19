@@ -97,11 +97,11 @@ Same `fromId`/`fromUuid` pair as the ack, checked the same way. `artifacts`,
 when given, must be **absolute paths** — the ingress refuses a relative one
 `bad-kind` — because the recipient reads the file directly, from whatever
 directory its own turn happens to be in, not from this session's.
-An optional `"urgent":true` marks a mail urgent, which only a run's coordinator may set, on mail to that run's own
-worker or reviewer: the 202 then echoes `"urgent":true` (a missing echo means not urgent), and the ingress refuses
-`urgent-not-allowed` (403) for any other sender, `urgent-unmeasured` (503) when it could not read the facts that
-decide (retry later), and `urgent-outstanding` (409) while your earlier urgent mail to that recipient is still
-unread (send this one without `urgent`).
+Urgent mail is not open yet: `POST /api/mail` ignores an `"urgent"` field until its ingress lands, so no mail is
+urgent and no 202 echoes it. Once it lands, only a run's coordinator may set `"urgent":true`, on mail to that run's own
+worker or reviewer, and the ingress refuses `urgent-not-allowed` (403) for any other sender, `urgent-unmeasured` (503)
+when it could not read the facts that decide (retry later), and `urgent-outstanding` (409) while your earlier urgent
+mail to that recipient is still unread (send this one without `urgent`).
 
 **One `kind`/`subject` pair has a body SHAPE rather than free prose:** a
 worker's `status`/`wave-done`, whose four fingerprint fields the coordinator

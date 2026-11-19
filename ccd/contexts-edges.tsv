@@ -52,6 +52,7 @@ _dispatch_swap -> _svc_run_detached
 _docs_py -> _gh_repo_slug
 _door_purge -> _reg_id_ok
 _door_purge -> _reg_purge_unremoved
+_door_spawn -> _reg_id_ok
 _end_cause -> _reg_get
 _end_cause -> _tmx
 _end_note_gone -> _inflight_write
@@ -98,6 +99,7 @@ _pr_bind_facts -> _reg_get
 _pr_num_valid -> _child_runid_valid
 _profile_digest_ok -> _reg_get_to
 _profile_digest_ok -> _route_get
+_profile_spawn_compose -> _door_spawn
 _profile_spawn_compose -> _reg_get_to
 _profile_spawn_compose -> _route_bytes
 _profile_spawn_compose -> _route_get

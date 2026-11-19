@@ -113,8 +113,10 @@ export function bookOf(last: LastRead, askedAt: number): BookState {
 export const BOOK_STATES_RECORDED: readonly BookState[] = BOOK_STATES.filter((b) => b !== 'closed');
 
 /** The page text of one round: what to do, each question as one untrusted block with its choices, and the command that
- *  answers. Split into pages by the card's own pager (`cardPages`), so a page stays under the tool result cut. */
-export function probePages(roundId: string, kind: ProbeRoundKind, questions: readonly ProbeQuestion[]): readonly string[] {
+ *  answers. Split into pages by the card's own pager (`cardPages`), so a page stays under the tool result cut. `door` (the
+ *  client's `--door`, the door process's reads: Overlord W1 door process A2) names the `probe_answer` door and its input in
+ *  place of the shell command, for a session that has no shell. */
+export function probePages(roundId: string, kind: ProbeRoundKind, questions: readonly ProbeQuestion[], door = false): readonly string[] {
   const head = [
     `Probe round ${roundId} (${kind}): ${questions.length} question(s), closed-book. Answer from memory, without reading your card,`
       + ' your notes or any file first.',
@@ -126,6 +128,7 @@ export function probePages(roundId: string, kind: ProbeRoundKind, questions: rea
     return `${q.id} (${q.cls})\n${untrustedBlock(body, PROBE_BLOCK_CAP_BYTES, 'not shown in full', CARD_TEXT_PREFACE)}`;
   });
   const example = JSON.stringify({ roundId, answers: questions.map((q) => ({ id: q.id, answer: '<your answer>' })) });
-  const tail = `Answer them all in one call: ccrc-api probe answer --json - <<'JSON'\n${example}\nJSON`;
+  const tail = door ? `Answer them all in one call with the probe_answer door, its input:\n${example}`
+    : `Answer them all in one call: ccrc-api probe answer --json - <<'JSON'\n${example}\nJSON`;
   return cardPages([...head, '', ...blocks, '', tail].join('\n'));
 }

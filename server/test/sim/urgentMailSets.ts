@@ -19,7 +19,7 @@ const OVERLORD = 'lane-a-overlord';
 /** A worker of one open run `COORD` claims, sent mail by `COORD`, with nobody designated. Each case overrides a field. */
 const base = (over: Partial<UrgentFacts> = {}): UrgentFacts => ({
   senderId: COORD, recipientId: WORKER, recipientClaimants: [COORD], recipientClaimsOpenRun: false,
-  designation: { kind: 'not-designated' }, ...over,
+  designation: { kind: 'not-designated' }, outstanding: false, ...over,
 });
 
 export function urgentSenderVerdictCases(m: UrgentMailModule): Record<string, SuiteCase> {
@@ -72,6 +72,15 @@ export function urgentSenderVerdictCases(m: UrgentMailModule): Record<string, Su
       allowed(base({ senderId: OVERLORD, recipientId: COORD, recipientClaimants: [OVERLORD],
         recipientClaimsOpenRun: true, designation: { kind: 'designated', sessionId: OVERLORD } }), 'coordinator');
     },
+    'an allowed sender with an urgent mail to the same recipient still outstanding: urgent-outstanding': () => {
+      expect(code(base({ outstanding: true }))).toBe('urgent-outstanding');
+      expect(code(base({ senderId: OVERLORD, recipientId: COORD, recipientClaimants: [], recipientClaimsOpenRun: true,
+        designation: { kind: 'designated', sessionId: OVERLORD }, outstanding: true }))).toBe('urgent-outstanding');
+    },
+    'a refused sender hears the rule, not the outstanding mail': () => {
+      expect(code(base({ recipientClaimants: [OTHER_COORD], outstanding: true }))).toBe('urgent-not-allowed');
+      expect(code(base({ recipientClaimants: 'unmeasured', outstanding: true }))).toBe('urgent-unmeasured');
+    },
     'a session never marks its own mail urgent': () => {
       expect(code(base({ senderId: COORD, recipientId: COORD, recipientClaimants: [COORD], recipientClaimsOpenRun: true,
         designation: { kind: 'designated', sessionId: COORD } }))).toBe('urgent-not-allowed');
@@ -94,6 +103,9 @@ const URGENT_SENDER_SET: MutantSet<UrgentMailModule> = {
     { id: 'U8', old: 'if (f.senderId === f.recipientId) {', new: 'if (false) {' },
     { id: 'U9', old: "if (claimants === 'unmeasured') {", new: 'if (false) {' },
     { id: 'U10', old: "if (d.kind === 'unmeasured') {", new: 'if (false) {' },
+    { id: 'U11', old: "if (v.kind === 'allowed' && f.outstanding) {", new: 'if (false) {' },
+    { id: 'U12', old: "if (v.kind === 'allowed' && f.outstanding) {", new: 'if (f.outstanding) {' },
+    { id: 'U13', old: "if (v.kind === 'allowed' && f.outstanding) {", new: "if (v.kind === 'allowed') {" },
   ],
   suite: urgentSenderVerdictCases,
 };

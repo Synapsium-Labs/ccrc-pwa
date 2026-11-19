@@ -2,14 +2,19 @@
 // `sim/urgentMailSets.ts`, so `mutation-floors.test.ts` runs the same cases against each mutant of the decider.
 import { describe, expect, it } from 'vitest';
 import * as urgentMail from '../src/coord/urgentMail.js';
+import { MAILHOLD_ROLES } from '../../shared/mailHold.js';
 import { runMutants } from './sim/mutate.js';
 import { URGENT_MAIL_MUTANT_SETS, urgentSenderVerdictCases } from './sim/urgentMailSets.js';
 
 describe('urgentSenderVerdict (spec §3.1, plan P2 and P3)', () => {
   for (const [name, fn] of Object.entries(urgentSenderVerdictCases(urgentMail))) it(name, fn);
 
-  it('stores one of two role words, and nothing else', () => {
-    expect([...urgentMail.URGENT_ROLES]).toEqual(['coordinator', 'overlord']);
+  it('answers only the hold\'s role words (shared/mailHold.ts#MAILHOLD_ROLES)', () => {
+    const base = { senderId: 'sess-a', recipientId: 'sess-b', recipientClaimsOpenRun: true, outstanding: false } as const;
+    const asCoord = urgentMail.urgentSenderVerdict({ ...base, recipientClaimants: ['sess-a'], designation: { kind: 'not-designated' } });
+    const asOverlord = urgentMail.urgentSenderVerdict({ ...base, recipientClaimants: [], designation: { kind: 'designated', sessionId: 'sess-a' } });
+    const roles = [asCoord, asOverlord].map((v) => (v.kind === 'allowed' ? v.role : v.kind));
+    expect(roles).toEqual([...MAILHOLD_ROLES]);
   });
 
   it('every mutant of the decider is killed by the cases above', async () => {

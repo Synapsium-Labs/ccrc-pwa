@@ -5,9 +5,10 @@ import {
   ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, type AnchorGeneration, type CardFacts, type CardItem, type CardRun, type Fact,
 } from '../../shared/continuity-card.js';
 import { utf8Bytes } from '../../shared/utf8.js';
+import { DELTA_MAX_BYTES } from '../../shared/continuity-door.js';
 import {
-  ANCHOR_CEILING, ANCHOR_HASH_CHARS, ANCHOR_INSTRUCTION, ANCHOR_PREFIX, ANCHOR_START_NOT_REPORTED, anchorAnswer, anchorGeneration, renderAnchor,
-  type AnchorInput,
+  ANCHOR_CEILING, ANCHOR_HASH_CHARS, ANCHOR_INSTRUCTION, ANCHOR_PREFIX, ANCHOR_START_NOT_REPORTED, DELTA_PREFIX, anchorAnswer, anchorGeneration,
+  renderAnchor, type AnchorInput,
 } from '../src/continuity/anchor.js';
 
 const AT = Date.UTC(2026, 10, 14, 12, 0, 0);
@@ -179,5 +180,30 @@ describe('anchorAnswer: the door\'s answer, dark until the anchor-slot row is li
     expect(anchorAnswer(true, { form: 'prompt', hash: HASH, text: 'ccrc-anchor: y' }))
       .toEqual({ ok: true, part: 'anchor', form: 'prompt', hash: HASH, text: 'ccrc-anchor: y' });
     expect(anchorAnswer(true, { form: 'fork' })).toEqual({ ok: true, part: 'anchor', form: 'fork', live: true });
+  });
+});
+
+describe('renderAnchor: the delta form (C38 "a delta on every prompt"; door process A2, Task 6)', () => {
+  it('one line: the prefix, the canaries of the prompt form, then the counts', () => {
+    const t = renderAnchor(facts({ runs: read([run(1, 'prog-a')]), notes: read([]) }), input(), 'delta');
+    expect(t).toBe(`${DELTA_PREFIX} term 2 · generation 5 · card ${HASH.slice(0, ANCHOR_HASH_CHARS)} · 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes`);
+    expect(lines(t)).toHaveLength(1);
+  });
+  it('its ceiling is DELTA_MAX_BYTES (300) UTF-8 bytes, and its worst case fits with the canaries whole', () => {
+    expect(ANCHOR_CEILING.delta).toBe(DELTA_MAX_BYTES);
+    expect(DELTA_MAX_BYTES).toBe(300);
+    const big = Number.MAX_SAFE_INTEGER;
+    const f = facts({ role: 'undecided', roleWhy: 'r', runs: unmeasured('r'), itemsRaised: unmeasured('i'), notes: unmeasured('n'),
+      mailOutstanding: read(Array.from({ length: 9999 }, () => ({}) as never)), mailMore: true });
+    const t = renderAnchor(f, input({ kind: 'live', term: big, n: big, starting: true }), 'delta');
+    expect(utf8Bytes(t)).toBeLessThanOrEqual(300);
+    expect(t.startsWith(`${DELTA_PREFIX} term ${big} · generation ${big + 1} starting · card ${HASH.slice(0, ANCHOR_HASH_CHARS)}`), t).toBe(true);
+    expect(t.endsWith('notes unmeasured'), 'nothing was cut').toBe(true);
+  });
+  it('it carries no role line and no instruction, so no row text and no shell command reach the prompt', () => {
+    const t = renderAnchor(facts({ runs: read([run(1, 'prog-key')]) }), input(), 'delta', () => { throw new Error('mask is never called'); });
+    expect(t).not.toContain('role:');
+    expect(t).not.toContain('prog-key');
+    expect(t).not.toContain('ccrc-api');
   });
 });

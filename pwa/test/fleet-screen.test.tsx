@@ -3392,7 +3392,8 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     };
     // coord-a's two children fold into its one summary line (D-6088's W/D rule, W4-U31); open it and both groups.
     const line = card().querySelector('.proj-children-toggle');
-    expect(line?.textContent).toContain('1 delegated · 1 worktree');
+    expect([...line!.querySelectorAll('.proj-children-part')].map((p) => p.textContent), 'the exact parts, no count before either word')
+      .toEqual(['delegated', 'worktrees']);
     fireEvent.click(line!);
     fireEvent.click(within(card()).getByRole('button', { name: /Offline coordinator \(2\)/ }));
     fireEvent.click(within(card()).getByRole('button', { name: /Unowned work \(1\)/ }));
@@ -3408,8 +3409,8 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     ]);
     expect(chips).toEqual([[], [], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], [], []]);
     expect(card().textContent).not.toContain('unrecognised');
-    // No delegation row, toggle or chip says running in its title either: the page's titles, read off the DOM.
-    const titles = [...card().querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title], .sess-meta-chip[title]')]
+    // No delegation row or toggle says running in its title either: the page's titles, read off the DOM.
+    const titles = [...card().querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title]')]
       .map((e) => e.getAttribute('title') ?? '');
     expect(titles.length).toBeGreaterThan(0);
     for (const t of titles) expect(t, t).not.toMatch(/running/i);
@@ -3466,8 +3467,8 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     expect(cellsOf(body)).toEqual([['agent', 'map the tree', 'stop not seen', 'from coord-gone']]);
     expect(within(list).getAllByText('map the tree')).toHaveLength(1);
     expect(Number(list.getAttribute('data-delegation-unplaced'))).toBe(cellsOf(body).length);
-    // Spec §9, "No running claim": no delegation row, toggle or chip on the list says running in its title.
-    const titles = [...list.querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title], .sess-meta-chip[title]')]
+    // Spec §9, "No running claim": no delegation row or toggle on the list says running in its title.
+    const titles = [...list.querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title]')]
       .map((e) => e.getAttribute('title') ?? '');
     expect(titles.length).toBeGreaterThan(1);
     for (const t of titles) expect(t, t).not.toMatch(/running/i);

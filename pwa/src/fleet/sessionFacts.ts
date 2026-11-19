@@ -114,8 +114,6 @@ export interface Fact {
   readonly text: string;
   readonly short?: string;
   readonly title?: string;
-  /** The count the subset rule compares instead of the text: the `delegated` fact only (D-7782). */
-  readonly count?: number;
 }
 
 /** What the model is told. Everything a CARD knows is here; the header passes the same. */
@@ -133,7 +131,7 @@ export interface FactInput {
   readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
-  /** The delegation entries this session started: on the card, the ones `nestFleet` attached to its row; in the header, every one (`activitiesStartedBy`). Absent or `null` = none known. */
+  /** The delegation entries this session started: every one (`activitiesStartedBy`), for the header. The card takes none (D-8771). Absent or `null` = none known. */
   readonly delegated?: readonly DelegationActivityWire[] | null;
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
    *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
@@ -186,7 +184,7 @@ export interface SessionFactSet {
   readonly offPool: string | null;
   readonly orphan: 'gone' | 'hibernated' | null;
   readonly orphanTitle: string | null;
-  /** The session's recorded delegation entries as one chip and the header's list (`delegatedChip`): every entry it is
+  /** The session's recorded delegation entries as the header's disclosure and list (`delegatedChip`): every entry it is
    *  handed, of every liveness, on a live row and a dead one alike (D-7781); `null` when handed none. */
   readonly delegated: DelegatedSummary | null;
   /** D-8276: the session's Claude Code build against the fleet's newest (`claudeBuildOf`). */
@@ -250,6 +248,12 @@ const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATO
  *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
 export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
 
+/** D-8771: the card's words for a working row's delegated background work (D-5231): `in background`, uncounted; the
+ *  title carries the count and the kinds. The header's own words are `backgroundWords` (`N in background`). */
+function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
+  return { text: 'in background', title: `${b.count} in background${b.kinds.length > 0 ? `: ${b.kinds.join(', ')}` : ''}` };
+}
+
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
@@ -281,6 +285,9 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     && turnStall(session, now);
   const turnAge = wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
   const bgWords = state === 'working' && bg !== null ? backgroundWords(bg) : null;
+  // D-8771: the card says `in background` and not how many (the operator ruled a count of a session's delegated work noise
+  // in the fleet list); the count and the kinds stay in the word's title, and the header keeps its count (`bgWords`).
+  const cardBgWords = state === 'working' && bg !== null ? cardBackgroundWords(bg) : null;
 
   const fault = substrateFault(session);
   const substrate = fault === null ? null : {
@@ -314,8 +321,8 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     // background work (D-5231). They are WHAT the lamp means, not extra facts.
     statusText: asleepAt !== null ? hibernatedWords(asleepAt, now)
       : wcWords !== null ? wcWords.text
-      : bgWords !== null ? `${state} · ${bgWords.text}` : state,
-    statusTitle: wcWords?.title ?? bgWords?.title,
+      : cardBgWords !== null ? `${state} · ${cardBgWords.text}` : state,
+    statusTitle: wcWords?.title ?? cardBgWords?.title,
     stateTone: wcWords !== null ? 'coordinator' : state,
     coordinatorRole: coordinatorRole(session),
     workingOn,
@@ -358,7 +365,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     offPool,
     orphan: coordinator === 'dead' ? 'gone' : coordinator === 'hibernated' ? 'hibernated' : null,
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
-    // D-7781: no dead shortcut. A dead worker's entries stay one tap from its row.
+    // D-7781: no dead shortcut. A dead worker's entries stay in its header's disclosure (the fleet list's row has none, D-8771).
     delegated: delegatedChip(delegated ?? []),
     build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
@@ -429,8 +436,6 @@ export interface CardFacts {
   readonly role: Fact | null;
   readonly marker: Fact | null;
   readonly workingOn: Fact | null;
-  /** The row's attached delegation entries, every liveness (D-7781). */
-  readonly delegated: Fact | null;
 }
 
 export function cardFacts(f: SessionFactSet): CardFacts {
@@ -447,8 +452,6 @@ export function cardFacts(f: SessionFactSet): CardFacts {
     role,
     marker: markers(f)[0] ?? null,
     workingOn: f.workingOn === null ? null : { key: 'working-on', text: f.workingOn, title: `works on ${f.workingOn}’s code` },
-    delegated: f.delegated === null ? null
-      : { key: 'delegated', text: f.delegated.text, title: f.delegated.title, count: f.delegated.count },
   };
 }
 
@@ -476,7 +479,7 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   if (f.subagents !== null && f.subagents.length > 0) {
     out.push({ key: 'subagents', text: `${f.subagents.length} subagent${f.subagents.length === 1 ? '' : 's'}` });
   }
-  if (f.delegated !== null) out.push({ key: 'delegated', text: f.delegated.text, title: f.delegated.title, count: f.delegated.count });
+  if (f.delegated !== null) out.push({ key: 'delegated', text: f.delegated.text, title: f.delegated.title });
   if (f.askState !== null) out.push({ key: 'ask-state', text: f.askState.label, title: f.askState.title });
   if (f.graph !== null) {
     out.push({ key: 'graph', text: `graph ${f.graph.reads}${f.graph.gated === null ? '' : ` · gated ${f.graph.gated}`}` });
@@ -488,18 +491,29 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   return out;
 }
 
+/** The ONE allowance to the subset rule (D-8771, the coordinator's ruling of 2026-11-19): the header keeps a count the card
+ *  dropped, so the header's `working · 2 in background` holds the card's `working · in background`. A row names the fact key
+ *  it applies to, the header's count (`count`) and the card's spelling of the same words (`card`); no other key and no other
+ *  words are allowed, and `card-header-facts.test.tsx` reds if this table loses its row or gains a wider one. */
+export const HEADER_COUNT_ALLOWANCES: readonly { readonly key: FactKey; readonly count: RegExp; readonly card: string }[] = [
+  { key: 'status', count: / · \d+ in background$/, card: ' · in background' },
+];
+
 /** The subset rule, as a predicate the test and the harness both call: every card fact has a header fact under its
- *  key carrying its FULL text, or, for `delegated`, at least its count. */
+ *  key carrying its FULL text. */
 export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact[] {
-  const shown = [card.name, card.status, card.context, card.role, card.marker, card.workingOn, card.delegated]
+  const shown = [card.name, card.status, card.context, card.role, card.marker, card.workingOn]
     .filter((x): x is Fact => x !== null);
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
-  // D-7782: `delegated` is compared by COUNT. The card counts a row's attached entries and the header every entry
-  // the session started, a superset, so `3 delegated` holds the card's `1 delegated` though neither text begins the other.
-  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && (c.key === 'delegated'
-    ? c.count !== undefined && h.count !== undefined && h.count >= c.count
-    : h.text.startsWith(c.text));
+  // D-8771: the card carries no `delegated` fact, so D-7782's comparison of it by count is gone; every key is a prefix test.
+  // The header's form of a fact is its text with its row of `HEADER_COUNT_ALLOWANCES` applied, if it has one: the single
+  // place the prefix rule is bent (D-8771), and it is data, not a second comparison.
+  const headerForm = (h: Fact): string => {
+    const a = HEADER_COUNT_ALLOWANCES.find((x) => x.key === h.key);
+    return a === undefined ? h.text : h.text.replace(a.count, a.card);
+  };
+  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && headerForm(h).startsWith(c.text);
   return shown.filter((c) => !header.some((h) => holds(c, h)));
 }
 

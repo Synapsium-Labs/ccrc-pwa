@@ -311,7 +311,7 @@ const workersWord = (n: number): string => (n === 1 ? 'worker' : 'workers');
 /** The footer's words, the existing children toggle's: folded, `2 more workers · 1 working` over the workers the tray
  *  hides; open, `hide 3 workers`. `null` when the rollup did not fold the children, or folded nothing away. A box's
  *  delegated work and worktrees (wave 4) are never counted as workers: after the worker words, the rollup's own
- *  `n delegated` and `n worktree(s)` (`delegatedWords`) over the same rows. */
+ *  `delegated` and `worktrees` (`delegatedWords`, no number: D-8771) over the same rows. */
 export function footerWords(b: ProgrammeBoxView, tray: Tray): readonly string[] | null {
   if (tray.summary === null) return null;
   if (tray.summary.expanded) {

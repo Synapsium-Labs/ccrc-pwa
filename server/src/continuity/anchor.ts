@@ -16,6 +16,12 @@
  * and the instruction always print whole. The hook's own clip at the same number cuts from the end and so never meets a
  * text from here.
  *
+ * THE DELTA FORM (C38, "a delta on every prompt"; plan `w1-door-process.md` Task 6): one line of at most `DELTA_MAX_BYTES`,
+ * which the door process fetches every minute and caches for the hook to print on every prompt with no network call. Its
+ * canaries come first (term, generation and card hash, as the prompt form's), then the counts, so a cut at its ceiling takes
+ * counts and never a canary. It carries no row's text and no instruction: the first line and the card door send the session
+ * to its card. The rules version joins when the anchor's does.
+ *
  * THE NULL RULE. A fact that could not be read renders as `unmeasured`, never as zero and never as an empty anchor.
  *
  * MASKED BEFORE IT IS FITTED. The role line is the one part a row's text reaches (a programme slug, the role's reason), and
@@ -37,6 +43,7 @@
 import {
   ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, type AnchorForm, type AnchorGeneration, type CardFacts, type CardItem, type Fact,
 } from '../../../shared/continuity-card.js';
+import { DELTA_MAX_BYTES } from '../../../shared/continuity-door.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
 import { oneLine } from './card.js';
 
@@ -78,12 +85,16 @@ export function anchorAnswer(live: boolean, served: AnchorServed): AnchorAnswer 
 }
 
 /** The forms `renderAnchor` draws (the `fork` form has no text: the hook prints its own line). */
-export type AnchorTextForm = 'start' | 'prompt';
+export type AnchorTextForm = 'start' | 'prompt' | 'delta';
 
 /** Every anchor line begins with this, so the hook's context, and a reader, can tell the slot's text from the others. */
 export const ANCHOR_PREFIX = 'ccrc-anchor:';
+/** The delta's line begins with this, so the prompt's context tells it from the anchor's. */
+export const DELTA_PREFIX = 'ccrc-delta:';
 /** The one instruction (C38), the anchor's last line. */
 export const ANCHOR_INSTRUCTION = "Your card is the server's record of what stands. Read it now with `ccrc-api card`, before anything else.";
+/** The Overlord's form of it (door process A2, review 2735 F3): the Overlord has no shell and reads its card through its door. */
+export const ANCHOR_INSTRUCTION_DOOR = "Your card is the server's record of what stands. Read it now with your card door, before anything else.";
 /** What the start form's generation canary ends with, in place of the card hash (slug anchor-before-start-report). */
 export const ANCHOR_START_NOT_REPORTED = '(this start not yet reported)';
 /** The canary's card hash is this many hex characters of the card's sha256. */
@@ -95,7 +106,7 @@ const CUT = '…';
 
 /** The ceiling of each form, in UTF-8 bytes. */
 export const ANCHOR_CEILING: Readonly<Record<AnchorTextForm, number>> = {
-  start: ANCHOR_CARD_MAX_CHARS, prompt: ANCHOR_PROMPT_MAX_CHARS,
+  start: ANCHOR_CARD_MAX_CHARS, prompt: ANCHOR_PROMPT_MAX_CHARS, delta: DELTA_MAX_BYTES,
 };
 
 /** What the anchor reads beside the card's facts: the card's hash (the masked, trimmed card's sha256, as the card door
@@ -116,7 +127,7 @@ function roleLine(f: CardFacts): string {
 
 /** The canaries: term, generation (`n`, or `n+1 starting` while the session's newest start is not yet minted) and, on the
  *  prompt form, the card hash; the start form names its generation as the one before this start, and no hash. */
-function canaryLine(a: AnchorInput, form: AnchorTextForm): string {
+function canaryLine(a: AnchorInput, form: 'start' | 'prompt'): string {
   const g = a.generation;
   const term = g.kind === 'live' ? String(g.term) : g.kind === 'none' ? 'none' : ANCHOR_UNMEASURED;
   const gen = g.kind === 'live' ? (g.starting ? `${g.n + 1} starting` : String(g.n)) : g.kind === 'none' ? 'none' : ANCHOR_UNMEASURED;
@@ -139,11 +150,12 @@ function itemsCount(f: CardFacts): string {
 }
 
 /** The counts: runs, open items and asks, outstanding mail (`more than N` when the card read its cap), notes. */
-function countsLine(f: CardFacts): string {
+function counts(f: CardFacts): readonly string[] {
   const mail = f.mailOutstanding.kind === 'read' && f.mailMore ? `more than ${f.mailOutstanding.value.length} outstanding mail`
     : count(f.mailOutstanding, 'outstanding mail');
-  return `counts: ${[count(f.runs, 'runs'), itemsCount(f), mail, count(f.notes, 'notes')].join(' · ')}`;
+  return [count(f.runs, 'runs'), itemsCount(f), mail, count(f.notes, 'notes')];
 }
+const countsLine = (f: CardFacts): string => `counts: ${counts(f).join(' · ')}`;
 
 /** `text` cut to at most `maxBytes` UTF-8 bytes on a code point, ending in the cut mark when anything was cut. */
 function fitBytes(text: string, maxBytes: number): string {
@@ -163,7 +175,10 @@ function fitBytes(text: string, maxBytes: number): string {
 /** The anchor's text for one form, at most its ceiling in UTF-8 bytes (`ANCHOR_CEILING`). The fixed lines are never cut
  *  (about 260 bytes at their longest, so the role line always has room); the role line, masked first, takes what is left. */
 export function renderAnchor(f: CardFacts, a: AnchorInput, form: AnchorTextForm, mask: (text: string) => string = (t) => t): string {
-  const tail = form === 'start' ? [canaryLine(a, form), countsLine(f), ANCHOR_INSTRUCTION] : [canaryLine(a, form), ANCHOR_INSTRUCTION];
+  // The delta: one line, the canaries first, cut from the end at its ceiling, so a cut keeps them (nothing reaches `mask`).
+  if (form === 'delta') return fitBytes([`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)].join(' · '), ANCHOR_CEILING.delta);
+  const instruction = f.role === 'overlord' ? ANCHOR_INSTRUCTION_DOOR : ANCHOR_INSTRUCTION;
+  const tail = form === 'start' ? [canaryLine(a, form), countsLine(f), instruction] : [canaryLine(a, form), instruction];
   const fixed = tail.join('\n');
   // The prompt form is bounded by construction (two safe integers, twelve hex characters, fixed words), never cut: its
   // worst case is pinned under `ANCHOR_PROMPT_MAX_CHARS` by a test, and it carries no row's text, so nothing reaches `mask`.

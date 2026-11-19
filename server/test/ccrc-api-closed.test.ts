@@ -302,8 +302,9 @@ describe('the client stays closed', () => {
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
     // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
     // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
-    // (the next test holds that), the shape `asks list --parent` already has.
-    expect(cases.sort()).toEqual(['--by', '--json', '--session']);
+    // (the next test holds that), the shape `asks list --parent` already has. `--key` (Overlord wave 164) carries no identity
+    // either: it is `mail send`'s idempotency key, refused on every other row, and `ccrc-api-mail-key.test.ts` holds it.
+    expect(cases.sort()).toEqual(['--by', '--json', '--key', '--session']);
   });
 
   it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
@@ -446,8 +447,8 @@ describe('the client stays closed', () => {
     // the operator's `ccrc quiz-record` posts its body through it, no splice and no fill; coordinator ruling, slug
     // quiz-record-posts-through-the-client) to eighty-nine.
     // `sessions.act-key` (Overlord W1 door process A1; the door process's own body, carrying the nonce, no splice and no fill)
-    // to ninety.
-    expect(routeKeys().size).toBe(90);
+    // to ninety. `plan.ticket-done` (programme work map WM1) to ninety-one, the way `plan.phase-ref` does it.
+    expect(routeKeys().size).toBe(91);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

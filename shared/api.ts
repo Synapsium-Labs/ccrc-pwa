@@ -5535,6 +5535,14 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** The optional idempotency key on `POST /api/mail` (Overlord wave 164, `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+ *  A sender that may retry a send names one; the ingress keeps one mail per (`fromId`, `clientKey`) and answers a retry of the same
+ *  mail with the original id and `already: true`. The shape is `ccd/ccrc-api`'s `SAFE_RE` (letters, digits, `_`, `-`) with a length
+ *  bound, so the client's `--key` and the route accept the same words; absent or null is no key. */
+export const MAIL_CLIENT_KEY_MAX = 128;
+export const isMailClientKey = (value: unknown): value is string =>
+  typeof value === 'string' && value.length >= 1 && value.length <= MAIL_CLIENT_KEY_MAX && /^[A-Za-z0-9_-]+$/.test(value);
+
 /** Numeric fields rendered into a run hold use this one exact domain at every
  *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
  *  integers can lose identity or switch to exponent punctuation the session hook
@@ -6337,6 +6345,8 @@ export const MAIL_REJECT_CODES = [
   // docstring already makes for 'paused'); the both-directions membership
   // scan still covers it.
   'duplicate', 'peer-quota',
+  // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
+  'key-conflict',
   // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's two answers and one outstanding per pair.
   'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured',
   // delivery
@@ -6499,11 +6509,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `profiledigest` (Overlord W1 sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it
  * stands, ccd renders the row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create
  * is its one recorded second writer), and an empty value clears it.
+ * `mailhold` (mid-turn mail spec 2026-11-19 §3.3) is the urgent-mail hold's lease, in `shared/mailHold.ts`'s grammar. Its
+ * one writer is the mail-hold projection lane; ccd refuses it at the mint and from a session's shell, and an empty value
+ * clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest', 'mailhold'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, and the pool set's two (W1),
- *  written by the designation's doors.
+ *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, the pool set's two (W1),
+ *  written by the designation's doors, and the mail-hold projection's `mailhold`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
@@ -6780,7 +6793,10 @@ export type RunRefuseCode =
   | 'intent-held'   // D-8085: another programme's run holds a landing intent this dispatch names
   // D-8181: the plan's refusals of a run (Linear hierarchy design): the wave names no planned epic, the programme has no
   // plan, the reserved programme, a ticket another run holds or that is dropped, and a plan the coordinator closed.
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed';
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
+  // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
+  // into an epic with an open declared ticket no run holds must name one.
+  | 'ticket-required';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6793,6 +6809,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
+  'ticket-required': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -8150,6 +8167,32 @@ export interface MailSummary {
    * means "nothing to say about a park".
    */
   parkedAt?: number | null;
+  /**
+   * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times and its replay count, so a reader can
+   * measure how long a mail waited and how long it stayed unread. `at` above is when the mail row was inserted (the
+   * server's clock).
+   *
+   * `deliveredAt` is the time at the START of the sweep pass that last put the nudge into the recipient's pane
+   * (`mailPass`'s `now`, written by `markDelivered` once the send succeeds; the server's clock), so it is earlier than
+   * the moment the nudge was typed, by the pass's earlier reads and sends. A replay re-dates it: on a replayed row it is
+   * the latest delivery, not the first, and `replayCount` says how many replays there were (0 for none).
+   *
+   * `ingestedAt` is the time of the first `UserPromptSubmit` edge of ANY kind (an operator prompt, another mail's nudge,
+   * a brief, not only this mail's) that the mail sweep sampled from the recipient's hook state after a delivery, on the
+   * FLEET BOX's clock (`markIngested`, from `sampleEdge`, every `MAIL_SWEEP_MS`, 10 s). It is written once and a replay
+   * does not move it, so it can precede `deliveredAt`; a fast turn can overwrite the edge before a sample sees it, so it
+   * can be missing or a later prompt's time.
+   *
+   * `ackedAt` is when an ack committed (`markAcked`, the server's clock): the recipient's, through the ack route, or, for
+   * an operator-message nudge, the nudge lane's own ack at the delivery, so there it equals `deliveredAt`.
+   *
+   * ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent when the stored value is
+   * not the canonical spelling of a positive whole number (zero too, except `replayCount`'s), never zero.
+   */
+  deliveredAt?: number;
+  ingestedAt?: number;
+  ackedAt?: number;
+  replayCount?: number;
 }
 
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
@@ -12345,7 +12388,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-ticket-done-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12417,6 +12460,12 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
    *  Added by the change that builds the route and the client row, cut after them. */
   'plan-phases-v1': true,
+  /** Programme work map WM1 (D-8727): this server stores a ticket's done time and evidence (`plan_tickets.doneAt` and
+   *  `doneEvidence`), answers `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`; `evidence-unverified`),
+   *  and refuses `ticket-required` at `runs open` in a phased plan. `ccrc-api plan ticket-done` refuses
+   *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the route and
+   *  the client row, cut after them. */
+  'plan-ticket-done-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */

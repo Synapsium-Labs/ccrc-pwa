@@ -239,7 +239,9 @@ describe('the acceptance: stored plans and runs open, as before WM0', () => {
     expect(await readCharacterizationPlans(x)).toEqual(JSON.parse(readFileSync(FIXTURE, 'utf8')));
   });
 
-  it('runs open is unchanged for every plan: a phased plan opens a run with or without a ticket as before', async () => {
+  // WM0 opened every run as before; WM1 (D-8727, spec §4.1 D10) changes exactly one thing here: in a phased plan, a run with
+  // no ticket into an epic that holds an open declared ticket no run holds is refused `ticket-required`, and naming one opens it.
+  it('runs open in a phased plan: a named ticket opens as before, and a run with no ticket names one (WM1\'s ticket-required)', async () => {
     const x = await world();
     await buildCharacterizationPlans(x);
     expect((await planVerb(x, 'prog-a', '', { ...SIX, phases: [ph('p1', [e('w5')]), ph('p2', [e('w4')])] })).statusCode).toBe(200);
@@ -248,10 +250,13 @@ describe('the acceptance: stored plans and runs open, as before WM0', () => {
     const named = await openRun(x, { ...base, program: 'prog-a', wave: 6, ticket: 'w5-t1' });
     const bare = await openRun(x, { ...base, title: 'later, no ticket', program: 'prog-a', wave: 5 });
     const b2 = await openRun(x, { ...base, program: 'prog-b', wave: 2, waveOf: 2 });
-    expect([named.statusCode, bare.statusCode, b2.statusCode], `${named.body} ${bare.body} ${b2.body}`).toEqual([200, 200, 200]);
-    // A run opens once per wave (a second open of the wave replays the first), so the bare run takes wave 5, epic w4.
+    const word = (r: { json: () => unknown }) => (r.json() as { refused?: string }).refused;
+    expect([named.statusCode, bare.statusCode, b2.statusCode, word(bare), word(b2)], `${named.body} ${bare.body} ${b2.body}`)
+      .toEqual([200, 409, 409, 'ticket-required', 'ticket-required']);
+    const bareNamed = await openRun(x, { ...base, title: 'later, named', program: 'prog-a', wave: 5, ticket: 'w4-t1' });
+    const b2Named = await openRun(x, { ...base, program: 'prog-b', wave: 2, waveOf: 2, ticket: 'only-t2' });
+    expect([bareNamed.statusCode, b2Named.statusCode], `${bareNamed.body} ${b2Named.body}`).toEqual([200, 200]);
     const held = (k: string) => x.plan.planOf('prog-a').epics.find((ep) => ep.key === k)!.tickets.filter((tk) => tk.runId !== null).map((tk) => tk.key);
-    expect([held('w5'), held('w4')]).toEqual([['w5-t1'], [`run-${(bare.json() as { id: number }).id}`]]);
-    expect(x.plan.planOf('prog-b').epics[0]!.tickets.some((tk) => tk.key === `run-${(b2.json() as { id: number }).id}`)).toBe(true);
+    expect([held('w5'), held('w4')]).toEqual([['w5-t1'], ['w4-t1']]);
   });
 });

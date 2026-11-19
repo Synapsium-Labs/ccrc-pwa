@@ -177,9 +177,10 @@ describe('the table', () => {
     expect(REFUSAL_STATUS.unmeasured).toBe(502);
   });
 
-  it('the nine plan-door rows refuse the bound body with overlord-uses-its-doors', () => {
+  it('the ten plan-door rows refuse the bound body with overlord-uses-its-doors', () => {
     const planRows = OTHER_LANE_KEYS.filter((l) => OTHER_LANES[l].via === 'plan-door');
-    expect(planRows).toEqual(['planDeclare', 'planMet', 'planTickets', 'planTicketsMove', 'planEpicsDrop', 'planPhaseRefs', 'planClose',
+    // `planTicketsDone`: the programme work map WM1's `plan ticket-done` door, a row like its plan siblings (#2996's rule).
+    expect(planRows).toEqual(['planDeclare', 'planMet', 'planTickets', 'planTicketsMove', 'planEpicsDrop', 'planPhaseRefs', 'planTicketsDone', 'planClose',
       'planTake', 'planTriage']);
     for (const lane of planRows) {
       expect(verdict(lane, BODY, designated(BODY))).toMatchObject({ kind: 'refuse', word: 'overlord-uses-its-doors' });

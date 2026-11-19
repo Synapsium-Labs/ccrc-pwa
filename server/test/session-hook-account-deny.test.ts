@@ -187,6 +187,17 @@ describe('the account arm denies on every session (D-6202)', () => {
     expect(fire(id, 'Bash', { command: 'cat ~/.cc-sessions/lane-a-project-a.wrapper' }, extra)).toBeNull();
   });
 
+  it.each(CALLERS)('%s: every file door process A2 writes under the door directory is refused: the config, the delta cache and both temp files', (_c, id, extra) => {
+    for (const name of ['mcp.json', 'mcp.json.tmp', 'delta', 'delta.tmp']) {
+      const f = `~/.cc-sessions/.door/lane-a-project-a/${name}`;
+      for (const command of [`cat ${f}`, `cat "$HOME/.cc-sessions/.door/lane-a-project-a/${name}"`, `cp ${f} /tmp/x`, `echo x > ${f}`]) {
+        expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+      }
+      for (const [tool, input] of [['Read', { file_path: f }], ['Edit', { file_path: f, old_string: 'a', new_string: 'b' }],
+        ['Write', { file_path: f, content: 'y' }]] as const) expect(fire(id, tool, input, extra), `${tool} ${name}`).not.toBeNull();
+    }
+  });
+
   it.each(CALLERS)('%s: a direct delete under the store is refused, whatever verb deletes it (the PL6 follow-up: the Remove door is the operator\'s)', (_c, id, extra) => {
     for (const command of [
       'rm ~/.ccrc/operator-secrets/prog-a/x.secret', 'rm -f "$HOME/.ccrc/operator-secrets/prog-a/x.json"', 'rm -rf ~/.ccrc/operator-secrets',

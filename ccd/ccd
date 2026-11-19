@@ -1735,7 +1735,10 @@ COMPACT_NOTE_FLOOR=1800         # D-2013 — min seconds between swap.log lines 
 # ROUTE_FIELD it names a class and is checked against `CCRC_SUBAGENT_CLASSES`;
 # inside an `inert` list it is the FIELD's name, stamped by a lane that composed
 # no `CLAUDE_CODE_SUBAGENT_MODEL` whatever class the field held.
-ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest)
+ROUTE_FIELDS=(class effort subagent workflow compact browser degraded inert profile automem compactwindow precompact poolset acctorder profiledigest mailhold)
+# `mailhold` (mid-turn mail spec 2026-11-19 §3.3): the furthest `until` may sit past this box's clock at a write,
+# `shared/mailHold.ts#MAILHOLD_REACH_S` (`mailhold-parity.test.ts` holds the two equal).
+MAILHOLD_REACH_S=360
 ROUTE_CLASSES="fable opus sonnet haiku default"
 ROUTE_EFFORTS="auto low medium high xhigh max ultracode"
 # THE SLIDER'S STOPS, IN THE ORDER THE SLIDER PUTS THEM (D-2808, measured on a
@@ -9461,6 +9464,9 @@ EOF
   # surface (flags, settings, environment and the workspace entries) or refuse the spawn, and refuse a swap or a start
   # that would end a pane it then cannot respawn. Printed only by a build that has every part; designation needs it.
   echo launch-surface-v1
+  # `route-mailhold-v1` (mid-turn mail spec §3.3): `mailhold` is a lane-only route field, bounded at the write site. A server
+  # that does not see this token composes no marker, and the hold is off on this box.
+  echo route-mailhold-v1
   # pool-sync-installed / pool-sync-absent — whether this box pulls the projection `_pool_ok` reads (D-8015). `account-pools`
   # says this ccd CAN honour a central tag; with no timer unit nothing ever pulls one, so `_acct_pool_state` falls back to
   # the declared roster and a tag set from the PWA binds only the server. One measured fact, so exactly one word, and
@@ -10094,7 +10100,7 @@ cmd_account_pane() {   # ccd account-pane --id <id> [--method setup-token|openai
 }
 
 cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--actor <text>] [--reason <text>]
-  # An empty value (`--set compact=`, `--set compactwindow=`, `--set poolset=`, `--set acctorder=`) removes that field; every other field refuses it.
+  # An empty value (`--set compact=`, `--set compactwindow=`, `--set poolset=`, `--set acctorder=`, `--set mailhold=`) removes that field; every other field refuses it.
   # Routing spec 2026-09-14 §5.3. WRITES THE RECORD; TYPES ONLY UNDER `--apply`.
   # Without that flag — the COORDINATOR's form, and the default — a session
   # running this against a worker types nothing into that worker's pane and ccd
@@ -10110,7 +10116,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # the log and the journal, never its bytes — the file is writable by any
   # session on the box and a multi-line value would forge log lines.
   local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--apply] [--actor <text>] [--reason <text>]"
-  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert
+  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert now tries=0
   local -a sets=()
   while (( $# )); do
     case "$1" in
@@ -10141,11 +10147,13 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     # a-session-shell-cannot-write-its-own-set): from pool set PR A2 a standing set binds placement. The designate door,
     # composed by the server, is not a session's shell. Before the empty-value clear, so a clear is refused too.
     [[ ( "$f" == poolset || "$f" == acctorder ) && -n "${CLAUDECODE:-}" ]] && die "pool-set-operator-only: a Claude Code session may not write $f"
+    # `mailhold` is the projection lane's alone (mid-turn mail spec §3.3), and a session's shell never writes or clears it.
+    [[ "$f" == mailhold && -n "${CLAUDECODE:-}" ]] && die "mailhold-lane-only: a Claude Code session may not write mailhold"
     # AN EMPTY VALUE CLEARS a compaction field (the launch-profile lane, review 2024 F2 c): the field is removed, which every
     # reader takes as absent (ccd's own threshold, no auto-compact window). The pool set's two clear the same way (the
     # designation's retire and rebind, plan slug poolset-empty-value-clears), and so does `profiledigest` (Overlord W1 sandbox:
-    # retire, rebind and a failed pending designation). No other field has an empty form.
-    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest ) ]] && continue
+    # retire, rebind and a failed pending designation), and so does `mailhold` (the projection's clear). No other field has an empty form.
+    [[ -z "$v" && ( "$f" == compact || "$f" == compactwindow || "$f" == poolset || "$f" == acctorder || "$f" == profiledigest || "$f" == mailhold ) ]] && continue
     # THREE ANSWERS, THREE SENTENCES (fix round 2, Finding 1). `_route_valid`
     # answers 2 when the field's vocabulary itself could not be read — `subagent`,
     # whose list is PROJECTED into `$HOME/.ccrc/accounts.sh` by `ccrc install`, and
@@ -10162,6 +10170,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
       *) die "bad value for $f ($(_route_bytes "$v") bytes) — not in its vocabulary" ;;
     esac
     _route_fable_shell "$f" "$v" && die "fable-operator-only: a Claude Code session may not select class fable"
+    # MAILHOLD'S LEASE IS BOUNDED HERE, AT THE WRITE SITE ONLY (mid-turn mail spec §3.3, plan P14): `_route_valid` also
+    # judges stored values, and a wall-clock bound there would refuse a standing marker after a clock step.
+    if [[ "$f" == mailhold ]]; then printf -v now '%(%s)T' -1; (( 10#${v%%:*} <= now + MAILHOLD_REACH_S )) || die "mailhold-far: until is more than ${MAILHOLD_REACH_S}s past this box's clock"; fi
   done
   # Haiku takes no effort level: the PAIR is refused whether it arrives in one
   # call or across two (the record on disk is half of the pair).
@@ -10200,6 +10211,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     _lc_done route "$id" "" dec.actor "$actor" dec.reason "$reason" detail "$f: ${old:-∅} -> ${v:-∅}"
     echo "$(date '+%F %T') route $id: $f ${old:-∅} -> ${v:-∅}${actor:+ [actor=$actor]}${reason:+ ($reason)}" >> "$REG/swap.log"
     echo "set $id $f=$v"
+    [[ "$f" == mailhold ]] || tries=1
     # A `degraded` STAMP IS ABOUT THE CLASS IT REPLACED, so a new class may void
     # it — one reader for that decision, `_route_stale_degrade_clear`.
     if [[ "$f" == class ]]; then _route_stale_degrade_clear "$id" "$v"; fi
@@ -10210,8 +10222,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # saying "try again" — so a counter measured against the old record may not
   # keep the new one from ever reaching the pane. Before the `--apply` gate, not
   # after: the coordinator's plain form writes the record the tick will apply,
-  # and it must not inherit a spent budget either.
-  _route_tries_clear "$id"
+  # and it must not inherit a spent budget either. A write of `mailhold` alone changes nothing pending, so it leaves the
+  # budget as it stands (mid-turn mail plan P13): the projection's renewals must never reset a route's retries.
+  (( tries )) && _route_tries_clear "$id"
   (( apply )) || return 0
   # THE SETTLE-APPLIED FIELDS ARE RECORDED AT WRITE TIME. `workflow`, `subagent`
   # and `compact` have no keystroke — they are an argv `--settings` key, an env
@@ -22236,8 +22249,9 @@ _route_any() {   # id — 0 iff ANY routing field file exists (spec §5.1: a ses
   # for the same reason: the session hook's PreCompact refusal arm reads it, and nothing here. THE POOL SET'S TWO (`poolset`,
   # `acctorder`; the Overlord's W1, plan slug pool-fields-outside-route-any) decide placement, never the spawn's model or flags.
   # Nor `profiledigest` (Overlord W1 sandbox): `_profile_spawn_compose` reads it, and an Overlord row is not a routed row.
+  # Nor `mailhold` (mid-turn mail spec §3.3): the session hook reads it, and a held row is not a routed row.
   local f
-  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
+  for f in "${ROUTE_FIELDS[@]}"; do case "$f" in browser|profile|automem|compactwindow|precompact|poolset|acctorder|profiledigest|mailhold) ;; *) [[ -e "$REG/$1.$f" ]] && return 0 ;; esac; done
   return 1
 }
 # @ccd-lib:poolset — a session's pool set (the Overlord's W1, C46): its bounds, its spelling's parser and the ordered list's shape check, which `_route_valid` reads, live in ccd/lib/pool-set.sh
@@ -22287,6 +22301,9 @@ _route_valid() {   # field value — THREE answers, because two of them are two 
     # `profiledigest` (Overlord W1 sandbox, Task 3): the sha256 the server expects of the row `profile` names. While it
     # stands, `_profile_spawn_compose` renders the row's surface whole or refuses the spawn.
     profiledigest) [[ "$v" =~ ^[0-9a-f]{64}$ ]] ;;
+    # `mailhold` (mid-turn mail spec §3.3): the grammar and the two role words only, copied character for character from
+    # `shared/mailHold.ts#MAILHOLD_RE_BODY`. The bound on `until` is `cmd_route`'s, at the write site.
+    mailhold) [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ ]] ;;
     # `degraded` is the four CLASS names WITHOUT `default` — a session cannot
     # degrade TO "no override" — and they are DERIVED from `ROUTE_CLASSES`
     # rather than typed a second time three lines below the first (controller
@@ -22400,7 +22417,8 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
     # THE POOL SET IS NEVER MINTED (the Overlord's W1, plan slug route-argv-refuses-the-set): `ws-add`, `start` and `enable`
     # place their account BEFORE they write the record, so a set on their `--route` would mint a session outside the set it
     # was handed. Only `ccd route --session` writes one, and it is `cmd_route`'s to accept, so this refusal is argv-only.
-    [[ "$f" == poolset || "$f" == acctorder ]] && die "'$f' is written only by ccd route --session; nothing was touched"
+    # `mailhold` is refused here too (mid-turn mail spec §3.3): the projection lane is its one writer, never a mint.
+    [[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"
     # ONE VALUE PER FIELD, and this refusal has NO counterpart in `cmd_route`
     # (controller ruling S4-R4) — it is the one place the two validators are
     # allowed to differ in ARMS rather than wording, because only this side
@@ -26358,6 +26376,7 @@ _profile_launch_ok() {   # id [make] -> 0 iff the digest holds and, under a stan
 _profile_refused() {   # id why -> journal one launch-profile-refused line; the caller returns 1
   echo "$(date '+%F %T') launch-profile-refused $1: $2 — no pane started" >> "$REG/swap.log"; echo "ccd: error: $1: launch profile refused: $2" >&2
 }
+# @ccd-lib:doorspawn — the door process's spawn step, `_door_spawn` (the Overlord's W1, spec §3.6 H1), which writes its tool-server config, lives in ccd/lib/door.sh
 _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never half-applies; rc 1 only under a standing profiledigest
   local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" src="$LAUNCH_PROFILES_JSON"
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
@@ -26391,6 +26410,7 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS:+$PROFILE_SPAWN_FLAGS }$pflags"
   [[ "$PROFILE_SPAWN_FLAGS" == *"--remote-control "* ]] && prc=on || prc=off
   PROFILE_SPAWN_ENV="${penv:+$penv }CCRC_LAUNCH_PROFILE=$p:$d CCRC_LAUNCH_RC=$prc"
+  _door_spawn "$id" || { _profile_refused "$id" "door process: $DOOR_SPAWN_WHY"; return 1; }
 }
 # THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes
