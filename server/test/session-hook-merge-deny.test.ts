@@ -1847,7 +1847,7 @@ describe('the mail hold\'s head grammar finds `gh pr merge` where GH_MERGE_RE do
       { encoding: 'utf8' });
     expect(gh.status, gh.stderr).toBe(0);
     const mod = spawnSync('jq', ['-L', path.resolve(__dirname, '../../ccd/lib'), '-r', '--args',
-      'include "mail-hold"; $ARGS.positional[] | if (mh_acts("") | index("gh pr merge")) != null then "1" else "0" end', ...stripped],
+      'include "mail-hold"; $ARGS.positional[] | if (mh_acts | index("gh pr merge")) != null then "1" else "0" end', ...stripped],
       { input: 'null', encoding: 'utf8' });
     expect(mod.status, mod.stderr).toBe(0);
     const rows = (out: string): string[] => out.trim().split('\n');

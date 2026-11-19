@@ -4260,13 +4260,17 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # of main, `gh pr merge`, `ccd pr-admin-merge`) and adds one fixed line to every other main-thread tool call (E). It is
 # CALLED ONCE, AFTER THE LAST DENY ARM (P5, slug last-deny-arm), and only while no deny is built: a deny already built is
 # kept byte for byte, and both arms overwrite advice (the graph arm's Read nudge, the landing advisory's nudge). It is
-# defined here, beside the precompact read, because its marker read is the same kind: builtins only, one `[[ -f ]]`, a
+# defined here, above the child deny arm, because the growth check's counter reads that arm's jq string `"<<_"` as a
+# heredoc that never closes and counts every line after it (slug growth-counter-false-heredoc). Its marker read is the
+# precompact read's kind: builtins only, one `[[ -f ]]`, a
 # bounded `read` refusing a symlink, the grammar's regular expression (MAILHOLD_RE_BODY in shared/mailHold.ts, copied
 # character for character; mailhold-parity.test.ts holds the three readers equal) and the inline clock, compared with
 # `10#` (P14). A call that finds no marker pays the `[[ -f ]]` and nothing more.
 # The matcher, the texts and the log's decision live in `ccd/lib/mail-hold.jq` (its header says how), so this function
-# keeps the read, the strip (its own MERGE_STRIP_JQ call with the merge deny's arguments, on a Bash call whose payload
-# holds a gated word; the merge deny's call site stays as it is, so the strip may run twice, P6) and the writes. The
+# keeps the read, the strip (its own MERGE_STRIP_JQ call with the merge deny's arguments, after the module's `mh_prep`
+# in the same jq, on a Bash call whose `tool_input.command` holds a gated word, read with builtins from the payload's
+# text: from `"command":"` to the next `","`, which no JSON string holds; the merge deny's call site stays as it is,
+# so the strip may run twice, P6) and the writes. The
 # module returns text, and `_hook_deny_json` or `_hook_nudge_json` builds the envelope (P15).
 # FAIL OPEN (D3): an unreadable or malformed marker, a lapsed or far one, a missing module (logged `module-missing`
 # once a hold), a failing jq and `$REG/mail-disabled` hold nothing. SHADOW until armed (P7): `$REG/mailhold-notice-live`
@@ -4277,7 +4281,7 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # directory and moved over), rotated to `.1` past 1 MiB, its size tested only when a line is appended. A `Stop` while
 # a marker file stands appends one `stop` line (P9): the turn end the B trigger's read compares with `ackedAt`.
 _hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) and the shadow log; nothing without a marker
-  local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log"
+  local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" c="" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log"
   [[ -f "$f" && ! -L "$f" && ! -e "$REG/mail-disabled" ]] || return 0
   { IFS= read -r -d '' -n 256 v < "$f"; } 2>/dev/null   # the bytes as ccd wrote them, no trim, past a newline (195 at most)
   if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
@@ -4287,8 +4291,9 @@ _hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) a
   fi
   if [[ "$event" == Stop ]]; then l="$now"$'\t'"$id"$'\tstop\t-\t'"$dl"$'\t-\n'
   elif [[ -n "$st" ]]; then
-    if [[ "${tool:-}" == Bash && ( "$payload" == *push* || "$payload" == *commit* || "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ]]; then
-      ran=1 strip=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || strip=""
+    c=${payload#*\"command\":\"} c=${c%%\",\"*}   # the command, and at most the payload's tail after it (F7)
+    if [[ "${tool:-}" == Bash && ( "$c" == *push* || "$c" == *commit* || "$c" == *merge* || "$c" == *pull* || "$c" == *rebase* ) ]]; then
+      ran=1 strip=$(jq -L "$ROSTER_CARD_LIB" -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "include \"mail-hold\"; mh_prep | $MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || strip=""
     fi
     [[ "$st" == live || -n "$ran" ]] || return 0
     [[ -f "$d/$id" && ! -L "$d/$id" ]] && { IFS= read -r -d '' -n 4096 seen < "$d/$id"; } 2>/dev/null

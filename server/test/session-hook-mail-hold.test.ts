@@ -110,13 +110,39 @@ describe('a live marker', () => {
     live('overlord.7');
     expect(bash('git push origin HEAD').stdout).toBe(denyEnvelope(A('git push', '7', 'the Overlord')));
   });
-  it('the two paths the strip feeds, end to end: a quoted target on the raw text, and the over-cap kinds', () => {
+  it('the two paths the strip feeds, end to end: a quoted target (unquoted by mh_prep in the hook\'s own strip call), and the over-cap kinds', () => {
     live();
     expect(bash('git merge "origin/main"').deny).toBe(A('git merge', '42', 'its coordinator'));
     expect(bash("git rebase 'main'").deny).toBe(A('git rebase', '42', 'its coordinator'));
+    expect(bash('git pull origin "HEAD"').deny).toBe(A('git pull', '42', 'its coordinator'));
+    expect(bash('git merge --no-ff -m "sync (weekly)" origin/main').deny).toBe(A('git merge', '42', 'its coordinator'));
+    expect(bash('git merge feature-x -m "x; git merge main y"').context).toBe(E('42', 'its coordinator'));
     const over = `echo ${'x'.repeat(CAP)} && git push`;
     expect(bash(over).deny).toMatch(new RegExp(`^${A('git push', '42', 'its coordinator').replace(/[.*+?^${}()|[\]\\]/g, '\\$&')} This command is ${Buffer.byteLength(over)} bytes`));
     expect(bash(`echo ${'y'.repeat(CAP + 10)}`).context).toBe(E('42', 'its coordinator'));
+  });
+});
+
+describe('the strip\'s pre-filter reads the command, not the whole payload (fix round 1, F7)', () => {
+  it('a working directory named after a gated verb starts no strip call of the block; a gated command does', () => {
+    const realJq = spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8' }).stdout.trim();
+    const calls = path.join(home, 'jq-calls');
+    fs.writeFileSync(path.join(harnessBin(home), 'jq'), `#!/bin/sh\nprintf '%s\\037\\n' "$*" >> '${calls}'\nexec '${realJq}' "$@"\n`, { mode: 0o755 });
+    const named = path.join(home, 'merge-push-demo');
+    fs.mkdirSync(named);
+    live();
+    const strips = (command: string, cwd: string): number => {
+      fs.writeFileSync(calls, '');
+      expect(bash(command, { cwd }).context, command).toBe(E('42', 'its coordinator'));
+      return fs.readFileSync(calls, 'utf8').split('\u001f\n').filter((a) => a.includes('mh_prep')).length;
+    };
+    expect(strips('ls', named), 'cwd holds merge and push, the command neither').toBe(0);
+    expect(strips('ls', home)).toBe(0);
+    // The field after the command: the read ends at the command's closing quote.
+    fs.writeFileSync(calls, '');
+    expect(run(base({ tool_name: 'Bash', tool_input: { command: 'ls', description: 'Push the branch, then merge it' } })).context).toBe(E('42', 'its coordinator'));
+    expect(fs.readFileSync(calls, 'utf8').split('\u001f\n').filter((a) => a.includes('mh_prep')), 'a description naming the verbs').toEqual([]);
+    expect(strips('git status && git log --grep push', home), 'CONTROL: a command holding a gated word is stripped').toBe(1);
   });
 });
 

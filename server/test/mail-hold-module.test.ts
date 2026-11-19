@@ -18,10 +18,11 @@ const CAP = Number((/^MERGE_PARSE_CAP=(\d+)$/m.exec(HOOK_TEXT) ?? [])[1]);
 interface Verdict { outcome: string; text: string; log: string; seen: string }
 interface Opts { thread?: string; pairs?: string; state?: string; armed?: string; seen?: string; ran?: string; strip?: string | null }
 
-/** The strip's answer for one command, as the hook's `$( )` capture holds it (trailing newlines cut). */
+/** The strip's answer for one command, as the hook's `$( )` capture holds it (trailing newlines cut): the module's
+ *  `mh_prep`, then the hook's MERGE_STRIP_JQ, in one jq, as the hook's own call composes them. */
 const strip = (payload: string): string => {
-  const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', ALLOW, STRIP],
-    { input: payload, encoding: 'utf8' });
+  const r = spawnSync('jq', ['-L', LIB, '-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', ALLOW,
+    `include "mail-hold"; mh_prep | ${STRIP}`], { input: payload, encoding: 'utf8' });
   expect(r.status, r.stderr).toBe(0);
   return r.stdout.replace(/\n+$/, '');
 };
@@ -89,7 +90,7 @@ describe('denied, the act word given', () => {
   it.each(WRAPPERS)('%j is held past its wrapper or prefix', (c, act) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') }); });
   it.each(RESERVED)('%j is held past its reserved word', (c, act) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') }); });
   it.each(DOOR)('%j, the admin-merge door, is held', (c) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A('ccd pr-admin-merge', '42', 'its coordinator') }); });
-  it.each([['git merge "origin/main"', 'git merge'], ["git rebase 'main'", 'git rebase']])('%j: the quoted target is read on the raw text', (c, act) => {
+  it.each([['git merge "origin/main"', 'git merge'], ["git rebase 'main'", 'git rebase']])('%j: the quoted target is unquoted before the strip (mh_prep)', (c, act) => {
     expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') });
   });
   it('each sync target, alone (Table 6: one mutant per target)', () => {
@@ -97,6 +98,97 @@ describe('denied, the act word given', () => {
       ['git rebase origin/HEAD', 'git rebase'], ['git pull origin HEAD', 'git pull']] as const) {
       expect(hold(c), c).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') });
     }
+  });
+});
+
+// Fix round 1 (review 2788). Each row is one shape the review measured; the target is read in the verb's own command.
+describe('the sync target is tied to its head (F1, F5)', () => {
+  const HELD: Array<[string, string]> = [
+    ['git merge --no-ff -m "sync (weekly)" origin/main', 'git merge'], ['git merge -m "sync; ok" origin/main', 'git merge'],
+    ['git pull $(echo origin) main', 'git pull'], ['git -C "my repo" pull origin main', 'git pull'],
+    ["git -C 'a b' rebase origin/main", 'git rebase'], ['git -c "user.name=A B" merge main', 'git merge'],
+    ['GIT_AUTHOR_NAME="A B" git merge main', 'git merge'], ["git rebase -x 'make (all)' origin/main", 'git rebase'],
+    ['git merge -m $(date +%F) main', 'git merge'], ['git -C repo pull origin main', 'git pull'],
+    ['git merge -m "sync weekly" origin/main', 'git merge'],
+  ];
+  it.each(HELD)('%j is held as %s', (c, act) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') }); });
+  it.each([
+    'git merge feature-x -m "x; git merge main y"', 'git pull origin feature-x && echo "done; git pull origin main later"',
+    'git rebase feature <<EOF\ngit rebase main now\nEOF', 'git merge feature-x && echo "merged main"',
+    'git merge feature-x; echo main',
+  ])('%j: a target outside the verb\'s command holds nothing', (c) => {
+    expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
+  });
+});
+
+describe('only an option known to take an argument takes the next word (F3)', () => {
+  it.each([
+    'git --no-pager stash push', 'git -P stash push -m wip', 'git --no-pager log --grep commit', 'git -P log -S push',
+    'git -C push status', 'git --no-pager log --grep merge origin/main', 'git --no-pager grep push src/',
+  ])('%j is no gated act', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
+  // One row per option with an argument (each a mutant: drop it from the list and its row passes).
+  it.each([
+    ['git -C x push', 'git push'], ['git -c k=v push', 'git push'], ['git --git-dir x push', 'git push'],
+    ['git --work-tree x push', 'git push'], ['git --namespace x push', 'git push'], ['git --config-env a=B push', 'git push'],
+    ['git --exec-path x push', 'git push'], ['git --super-prefix x push', 'git push'], ['git -C "my repo" push', 'git push'],
+    ['gh -R o/r pr merge 42', 'gh pr merge'], ['gh --repo o/r pr merge 42', 'gh pr merge'], ['gh pr -R o/r merge 42', 'gh pr merge'],
+  ])('%j: the option takes its argument, and the act is held', (c, act) => {
+    expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') });
+  });
+});
+
+describe('naming main: the quoted HEAD (F4) and the ruled forms (F13)', () => {
+  it.each([
+    ['git pull origin "HEAD"', 'git pull'], ["git pull origin 'HEAD'", 'git pull'], ['git pull origin "main"', 'git pull'],
+    ['git pull origin main:foo', 'git pull'], ['git pull origin +main', 'git pull'], ['git pull origin +main:main', 'git pull'],
+    ['git pull origin refs/heads/main', 'git pull'], ['git merge refs/heads/main', 'git merge'],
+    ['git merge refs/remotes/origin/main', 'git merge'], ['git merge origin/main~1', 'git merge'], ['git merge origin/main^0', 'git merge'],
+    ['git merge origin/main~', 'git merge'], ['git rebase --onto=origin/main x', 'git rebase'], ['git rebase --onto origin/main x', 'git rebase'],
+    ['git rebase --onto=main x', 'git rebase'],
+  ])('%j is held as %s', (c, act) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') }); });
+  // The residuals of an accident guard (F13's ruling), and look-alikes that name no main.
+  it.each([
+    'git merge FETCH_HEAD', 'git fetch origin main && git rebase FETCH_HEAD', 'git pull', 'git merge upstream/main',
+    'git merge @{u}', 'git -c alias.p=push p', 'git merge mainline', 'git merge main-fix', 'git pull origin maintenance',
+    'git merge refs/heads/main-old', 'git pull origin main-x:foo',
+  ])('%j is no gated act', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
+});
+
+describe('the quoted-word pre-pass, mh_prep', () => {
+  it('a quoted command word of plain characters is the same word to bash, so `"git" push` is held', () => {
+    expect(hold('"git" push')).toMatchObject({ outcome: 'deny', text: A('git push', '42', 'its coordinator') });
+  });
+  it.each(['echo "git push"', 'git log --grep "push"', "echo 'git' push", 'git log "x"'])(
+    '%j stays no gated act', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
+  it('a span holding a blank or a separator is left for the strip', () => {
+    const r = spawnSync('jq', ['-L', LIB, '-n', '-r', '--arg', 'c', `git merge "a b" 'x;y' "main" 'origin/HEAD'`,
+      'include "mail-hold"; $c | mh_unq'], { encoding: 'utf8' });
+    expect(r.stdout.trim()).toBe(`git merge "a b" 'x;y' main origin/HEAD`);
+  });
+});
+
+describe('over the cap, the raw read is a superset (F2)', () => {
+  const pads: Array<[string, (c: string) => string]> = [
+    ['padding after', (c) => `${c}; echo ${'x'.repeat(CAP)}`], ['padding before', (c) => `echo ${'y'.repeat(CAP)}; ${c}`],
+    ['after an echo filler', (c) => `echo ${'z'.repeat(CAP)} && ${c}`],
+  ];
+  const ACTS: Array<[string, string]> = [
+    ['git -C $(pwd) push', 'git push'], ['git -C "$(git rev-parse --show-toplevel)" push origin HEAD', 'git push'],
+    ['gh -R $(echo o/r) pr merge 42', 'gh pr merge'], ['git -C $(cd x; pwd) push', 'git push'],
+    ['git merge -m "sync; ok" origin/main', 'git merge'], ['git -c "a;b" push', 'git push'],
+  ];
+  for (const [layout, pad] of pads) {
+    it.each(ACTS)(`%j (${layout}) is held as %s`, (c, act) => {
+      const v = hold(pad(c));
+      expect(v.outcome).toBe('deny');
+      expect(v.text.startsWith(A(act, '42', 'its coordinator') + ' This command is ')).toBe(true);
+    });
+  }
+  it('CONTROL: segments still end at a separator outside a quote: padded `git status; echo push` holds nothing', () => {
+    expect(hold(`git status; echo push; echo ${'x'.repeat(CAP)}`)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
+  });
+  it('an unfinished strip reads the union: a push the stripped read finds and the raw read misses is held', () => {
+    expect(hold(`git -c 'a;b' push; echo "unterminated`)).toMatchObject({ outcome: 'deny', text: A('git push', '42', 'its coordinator') });
   });
 });
 
