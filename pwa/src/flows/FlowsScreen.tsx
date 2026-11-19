@@ -29,7 +29,14 @@ const STACK = 'grid gap-2';
 const ACTIONS = 'flex flex-wrap gap-2';
 /** A line of text with its button at the end. */
 const LINE = 'flex flex-wrap items-center justify-between gap-3';
-const failWord = (e: unknown): string => (e instanceof Error ? e.message : String(e));
+/** A refusal's word, with the server's detail when it sent one (wave 2: "conflict: pinned by 1 programme"). */
+const failWord = (e: unknown): string => {
+  const detail = e instanceof ApiError ? (e.body as { detail?: unknown } | null)?.detail : undefined;
+  const word = e instanceof Error ? e.message : String(e);
+  return typeof detail === 'string' && detail !== '' ? `${word}: ${detail}` : word;
+};
+/** Wave 2: how many programmes pin a flow. */
+const pinnedWord = (n: number): string => `pinned by ${n} programme${n === 1 ? '' : 's'}`;
 
 export function FlowsScreen(p: { readonly openId?: number }): ReactNode {
   return p.openId === undefined ? <FlowsList /> : <FlowEditor key={p.openId} id={p.openId} />;
@@ -110,6 +117,8 @@ function FlowsList(): ReactNode {
                     <span className="min-w-0 flex-1 truncate text-left">{f.title}</span>
                     {f.source !== null && <Chip>{`from ${f.source.template} v${f.source.version}`}</Chip>}
                     <Chip>{f.latestVersion === null ? 'draft' : `v${f.latestVersion}`}</Chip>
+                    {f.id === list.defaultFlowId && <Chip>new programmes</Chip>}
+                    {(f.pinnedBy ?? 0) > 0 && <Chip>{pinnedWord(f.pinnedBy ?? 0)}</Chip>}
                   </ListRow>
                 ))}
             </Section>
@@ -186,6 +195,11 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
       saveBytes(flowFileName(r.doc.doc.title, v), new TextEncoder().encode(flowExportJson(r.doc.doc, v)));
     }, (e: unknown) => setNote(`Not saved: ${failWord(e)}`));
   };
+  const setDefault = (on: boolean): void => {
+    setBusy(true);
+    api.setDefaultFlow(on ? p.id : null).then(() => { setBusy(false); load(); },
+      (e: unknown) => { setBusy(false); setNote(`Not changed: ${failWord(e)}`); });
+  };
   const remove = (): void => {
     api.deleteFlow(p.id).then(() => navigate('/flows'), (e: unknown) => setNote(`Not deleted: ${failWord(e)}`));
   };
@@ -205,6 +219,7 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
       <div className="flex flex-wrap items-center gap-2">
         {answer.flow.source !== null && <Chip>{`copy of ${answer.flow.source.template} v${answer.flow.source.version}`}</Chip>}
         <Chip>{dirty ? 'unsaved changes' : answer.versions.length === 0 ? 'draft, never published' : `published v${answer.versions.at(-1)!.version}`}</Chip>
+        {(answer.flow.pinnedBy ?? 0) > 0 && <Chip>{pinnedWord(answer.flow.pinnedBy ?? 0)}</Chip>}
         <p className={SECTION_PURPOSE} role="status">{note}</p>
       </div>
       {doc === null ? (
@@ -255,7 +270,7 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
               ? <Section title="Step"><p className={SECTION_PURPOSE}>Select a step in the outline.</p></Section>
               : <Inspector doc={doc} block={block} onEdit={edit} onSelect={setSelected} />}
           </div>
-          <Section title="Versions" scope={`${answer.versions.length}`} purpose="A published version never changes. Programmes will pin one. Save one as a file to share it.">
+          <Section title="Versions" scope={`${answer.versions.length}`} purpose="A published version never changes. A programme pins one when it starts. Save one as a file to share it.">
             {answer.versions.length === 0
               ? <p className={SECTION_PURPOSE}>Nothing published yet.</p>
               : answer.versions.map((v) => (
@@ -264,6 +279,14 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
                   <Button variant="ghost" size="fit" aria-label={`Save v${v.version} as a file`} onClick={() => exportVersion(v.version)}>Save as file</Button>
                 </div>
               ))}
+            {answer.isDefault === true ? (
+              <div className={LINE}>
+                <span className={SECTION_PURPOSE}>New programmes pin this flow's newest version.</span>
+                <Button variant="ghost" size="fit" disabled={busy} onClick={() => setDefault(false)}>Stop using for new programmes</Button>
+              </div>
+            ) : answer.versions.length > 0 && (
+              <Button variant="ghost" size="fit" disabled={busy} onClick={() => setDefault(true)}>Use for new programmes</Button>
+            )}
             <Button variant="danger-ghost" size="fit" onClick={() => setConfirmDelete(true)}>Delete this flow</Button>
           </Section>
         </>

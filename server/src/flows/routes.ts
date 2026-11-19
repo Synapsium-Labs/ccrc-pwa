@@ -48,7 +48,7 @@ export function registerFlowsRoutes(app: FastifyInstance, opts: FlowsRouteOpts):
     if (!read.ok) return refuseRoute(reply, 'unavailable', { detail: read.detail });
     if (read.value === null) return refuseRoute(reply, 'not-found');
     const { draft, versions, ...flow } = read.value;
-    const answer: FlowAnswer = { flow, draft, problems: problemsOf(draft), versions };
+    const answer: FlowAnswer = { flow, draft, problems: problemsOf(draft), versions, isDefault: opts.coord.readDefaultFlow() === id };
     return answer;
   });
 
