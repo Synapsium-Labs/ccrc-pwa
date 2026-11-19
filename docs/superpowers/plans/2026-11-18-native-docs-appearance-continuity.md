@@ -315,6 +315,7 @@ Each row reads the frame's computed values through the existing harness's frame 
   - §3.2's `mountDocFrame` return shape gains `setAppearance(a: Appearance): void` (D-8761);
   - §4.3 gains a row for ccrc's two faces;
   - §3.2's `prefs`, `chrome` row and G7 say the hosted theme is ccrc's.
+  - §4.7, what ccrc imports (review 2714 M7, D-8759): the `./frame` row gains the appearance exports ccrc now imports (`APPEARANCE_CONTRACT`, `APPEARANCE_SLOTS`, `APPEARANCE_PAIRS`, `parseAppearance`, `mermaidThemeOf` and the `Appearance` type), and its "Where ccrc uses it" cell becomes Task 4's allow-list, `docs/reader/bridge.ts`, `docs/reader/assets.ts`, `docs/reader/labPolicy.ts` and `docs/reader/appearance.ts`, in place of "In `docs/reader/` only"; the bridge bullet's adapters gain the `appearance` adapter and its assets the `fonts` asset; and the M8.10 bullet says the `./frame` home is that allow-list. The lab bullet's "`./frame`'s one home" is read the same way, `labPolicy.ts` being on the list.
 - [ ] **Step 2: Run the related suites:**
   - full pwa unit, typecheck and built suites;
   - from `pwa/`: `reader-*`, `docs-*`, `theme-catalogue`, `skin-catalogue`, `contrast`;
