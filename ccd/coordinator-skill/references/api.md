@@ -105,8 +105,9 @@ JSON
 takes `{"close":{"why":"…"}}` and `{"return":{"note":"…"}}`. Refusals, all on `error`: `not-linear-owner` (only the
 team's Linear owner triages), `issue-not-inbound` (the issue is not waiting, or was not handed to you),
 `plan-bad-body` (a hand to your own programme without an `epic`, a close without a reason), `linear-text-public`,
-`not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed` and
-`reserved-programme`.
+`not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed`,
+`reserved-programme`, `unreachable` (Linear could not be read to confirm the issue is still inbound; a retry helps) and
+the client's own `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a

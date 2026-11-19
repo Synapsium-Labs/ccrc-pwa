@@ -141,6 +141,10 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps\)/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
+    // the API reference's inbound refusal list says the same (by its holder's consent)
+    const api = flat(read('references', 'api.md'));
+    expect(api).toMatch(/`unreachable` \([^)]*a retry helps\)/);
+    expect(api).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
   });
 
   it('a ticket names its project when its work lands outside the home project (review 2580 A4)', () => {
