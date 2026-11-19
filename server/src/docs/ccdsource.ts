@@ -35,9 +35,15 @@ import {
   type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
   type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
+  docsRangePinText, type DocsRangeFrameOk, type DocsRangePreparedOk,
 } from '../../../shared/docs.js';
-import { DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, type DocsJob } from './policy.js';
-import type { DocsFetchRun, DocsFetcher, DocsLogRead, DocsReader, DocsShowAsk, DocsShowRead } from './ports.js';
+import {
+  DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, RANGE_PREPARE_JOB, rangeFrameJob, type DocsJob, type DocsRangeFrameAsk,
+  type DocsRangeTarget,
+} from './policy.js';
+import type {
+  DocsFetchRun, DocsFetcher, DocsLogRead, DocsRangeFrameRead, DocsRangePrepareRead, DocsReader, DocsShowAsk, DocsShowRead,
+} from './ports.js';
 
 /** What both adapters are built from. `fleetState` is the server's live fleet state, read at each call (the server
  *  refreshes `ccdVerbs` from `ccd caps`); `undefined` means only "this server holds no fleet state object", which
@@ -74,7 +80,8 @@ type DocsReadCall =
   | { verb: 'docs-index' }
   | { verb: 'docs-tree'; project: string; ref: DocsRefSpec | null }
   | { verb: 'docs-show'; project: string; pin: DocPin; ask: DocsShowAsk }
-  | { verb: 'docs-log'; project: string; log: DocsLogAsk };
+  | { verb: 'docs-log'; project: string; log: DocsLogAsk }
+  | { verb: 'docs-show-range'; project: string; target: DocsRangeTarget; frame: DocsRangeFrameAsk | null };
 
 /** What a gated executor hands back: the run's raw result, or the gate's own failure body. */
 type DocsRan = { ok: true; res: CcdResult } | DocsFailureBody;
@@ -130,12 +137,14 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
   const can = ccdCan(deps.fleetState, call.verb === 'docs-index' ? 'docsIndex'
     : call.verb === 'docs-tree' ? 'docsTree'
       : call.verb === 'docs-log' ? 'docsLog'
-        : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
+        : call.verb === 'docs-show-range' ? 'docsShowRange'
+          : call.pin.kind === 'committed' ? 'docsShowCommitted' : 'docsShowDraft');
   if (!can) return fail('unsupported');
   // The rich-docs spec's G1 (W5b): a section that came with DOCS_SECTIONS_CAP is named to ccd only on a box that lists
   // that token, so a new server only ever under-calls an old fleet. `null`: this call names no section. Decided before
   // any exec, like the two answers above.
-  const section = call.verb === 'docs-show' ? call.pin.section : call.verb === 'docs-log' ? call.log.section : null;
+  const section = call.verb === 'docs-show' ? call.pin.section : call.verb === 'docs-log' ? call.log.section
+    : call.verb === 'docs-show-range' ? call.target.section : null;
   if (section !== null && DOCS_SECTION_GATED[section] && !docsSectionsServed(deps.fleetState)) {
     return fail('unsupported');
   }
@@ -160,6 +169,12 @@ async function readDocs(deps: CcdDocsDeps, call: DocsReadCall): Promise<DocsRan>
       return {
         ok: true,
         res: await deps.runCcd(CCD_ARGV.docsLog(call.project, call.log.commit, call.log.section, call.log.path)),
+      };
+    case 'docs-show-range':
+      return {
+        ok: true,
+        res: await deps.runCcd(CCD_ARGV.docsShowRange(call.project, call.target.where, call.target.section,
+          call.target.path, docsRangePinText(call.target.pin), call.frame ?? 'prepare')),
       };
   }
 }
@@ -294,6 +309,22 @@ function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; 
   return { ok: true, bytes };
 }
 
+/**
+ * A range frame held to its ask (the range analogue of check 8), in this order, the first fault winning, each
+ * `malformed-answer`: the frame echoes the snapshot and offset it was asked for (`{why:'pin'}`); its `bytesB64` is
+ * canonical base64 (it re-encodes to exactly itself, so no stray character, padding or bits ride along) holding at most the
+ * asked length, and its sha256 is `digest` (`{why:'integrity'}`). The browser checks the same digest again on its side;
+ * this is the server's own, so a broken ccd is named here and not by every client.
+ */
+function checkRangeFrame(ans: DocsRangeFrameOk, ask: DocsRangeFrameAsk): DocsRangeFrameOk | DocsFailureBody {
+  if (typeof ans.bytesB64 !== 'string') return showFault('schema');
+  if (ans.snapshot !== ask.snapshot || ans.offset !== ask.offset) return showFault('pin');
+  const bytes = Buffer.from(ans.bytesB64, 'base64');
+  if (bytes.toString('base64') !== ans.bytesB64 || bytes.length > ask.length) return showFault('integrity');
+  if (createHash('sha256').update(bytes).digest('hex') !== ans.digest) return showFault('integrity');
+  return ans;
+}
+
 /** The deepest level the second redaction pass walks, counting a failure body's own values as level 1 (a leaf counts
  *  too). The deepest legitimate context is `tried[i].ref`, level 3; a body nested past this is not ccd's contract, and
  *  an unbounded walk lets a line nested tens of thousands deep (well inside the listing bound) overflow the stack. */
@@ -359,6 +390,19 @@ export function ccdDocsReader(deps: CcdDocsDeps): DocsReader {
         return answer.commit === ask.commit && answer.section === ask.section && answer.path === ask.path
           ? { ok: true, answer } : fail('malformed-answer', { why: 'pin' });
       }),
+    // X2 P1: both calls name the same verb through `readDocs`' one gate, so each runs the `docsShowRange` row's check (no
+    // `docs-range-v1`, no exec). A prepare is held to `RANGE_PREPARE_JOB`'s wire bound, a frame to its own length's.
+    range: {
+      prepare: async (src, target): Promise<DocsRangePrepareRead> => settle(
+        await readDocs(deps, { verb: 'docs-show-range', project: src.project, target, frame: null }), 'docs-show-range',
+        RANGE_PREPARE_JOB, (line) => ({ ok: true, answer: line as unknown as DocsRangePreparedOk })),
+      frame: async (src, target, frame): Promise<DocsRangeFrameRead> => settle(
+        await readDocs(deps, { verb: 'docs-show-range', project: src.project, target, frame }), 'docs-show-range',
+        rangeFrameJob(frame.length), (line) => {
+          const checked = checkRangeFrame(line as unknown as DocsRangeFrameOk, frame);
+          return checked.ok ? { ok: true, answer: checked } : checked;
+        }),
+    },
   };
 }
 

@@ -11,11 +11,14 @@
 import {
   DOCS_ALLOWED_CONTENT_TYPES, DOCS_CLASS_CAP, DOCS_ENVELOPE_RESERVE, DOCS_LOG_AUTHOR_MAX_CHARS, DOCS_LOG_MAX_ENTRIES,
   DOCS_LOG_MAX_WIRE_BYTES, DOCS_LOG_SUBJECT_MAX_CHARS, DOCS_MAX_LISTING_WIRE_BYTES, DOCS_PIN_KEYS,
-  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_RASTER_EXT, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
-  DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRefText, isDocsBareRef, isDocsCommit,
-  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRelPath, isDocsSection, parseDocsRef, redactDocsText, sniffRaster,
+  DOCS_QUALIFIED_PREFIX_RE_BODY, DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, DOCS_RASTER_EXT, DOCS_RASTER_TYPES,
+  DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE,
+  DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRangePinText, docsRefText, isDocsBareRef, isDocsCommit,
+  isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRangeSnapshot, isDocsRelPath, isDocsSection,
+  parseDocsRangeCount, parseDocsRangePinText, parseDocsRef, redactDocsText, sniffRaster,
   type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
-  type DocsFetchOk, type DocsFileResponse, type DocsLogAsk, type DocsRefreshFetch, type DocsRefreshResponse, type DocsRefSpec,
+  type DocsFetchOk, type DocsFileResponse, type DocsLogAsk, type DocsRangePin, type DocsRefreshFetch,
+  type DocsRefreshResponse, type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsTreeResponse, type DocsVerb, type RasterMime, type RasterType,
 } from '../../../shared/docs.js';
 
@@ -197,15 +200,31 @@ export function refreshDue(tree: DocsTreeOk): boolean {
 // `docsApi` writes every value through `encodeURIComponent`, so only a hand-typed URL meets a bare `+`, and it reads
 // as a space.
 
-/** The four GET routes whose query `parseDocsApiQuery` reads. The refresh POST's body is `parseDocsRefreshBody`'s. */
-export type DocsApiRoute = 'projects' | 'tree' | 'file' | 'history';
+/** The five GET routes whose query `parseDocsApiQuery` reads. The refresh POST's body is `parseDocsRefreshBody`'s. */
+export type DocsApiRoute = 'projects' | 'tree' | 'file' | 'history' | 'range';
+
+/** Where a range read's leaf is: a committed doc at its commit, or a draft at its branch and head, as ccd's
+ *  `docs-show-range` takes it. The file route's `servedRef` and `fp` are not here: ccd never reads them, and the range pin
+ *  is the pin. */
+export type DocsRangeWhere = { commit: string } | { branch: string; head: string };
+
+/** The leaf a range read is of: its place and its range pin. */
+export interface DocsRangeTarget { where: DocsRangeWhere; section: DocSectionSlug; path: string; pin: DocsRangePin }
+
+/** One frame asked of a prepared snapshot. */
+export interface DocsRangeFrameAsk { snapshot: string; offset: number; length: number }
+
+/** A range query as `parseDocsApiQuery` leaves it: every value in its grammar, no cross-field bound checked yet
+ *  (`docsRangePlan` does that). `frame: null` is a prepare, one meaning. */
+export interface DocsRangeQuery { target: DocsRangeTarget; frame: DocsRangeFrameAsk | null }
 
 /** A GET request, parsed. `ref: null` is the default view (the query has no `ref` key), one meaning. */
 export type DocsApiRequest =
   | { route: 'projects' }
   | { route: 'tree'; ref: DocsRefSpec | null }
   | { route: 'file'; pin: DocPin }
-  | { route: 'history'; ask: DocsLogAsk };
+  | { route: 'history'; ask: DocsLogAsk }
+  | { route: 'range'; query: DocsRangeQuery };
 
 /** The pin keys by name, in `DOCS_PIN_KEYS`'s order: a committed pin's two, then a draft pin's three. */
 const [PIN_COMMIT, PIN_SERVED_REF, PIN_BRANCH, PIN_HEAD, PIN_FP] = DOCS_PIN_KEYS;
@@ -219,13 +238,17 @@ const API_KEYS: Readonly<Record<DocsApiRoute, readonly string[]>> = {
   tree: ['ref'],
   file: [...DOCS_PIN_KEYS, 'section', 'path'],
   history: [PIN_COMMIT, 'section', 'path'],
+  range: [PIN_COMMIT, PIN_BRANCH, PIN_HEAD, 'section', 'path', 'pin', 'prepare', 'snapshot', 'offset', 'length'],
 };
 
 /** The refresh body's keys: exactly these two (section 3.4). */
 const REFRESH_KEYS: readonly string[] = ['ref', 'reason'];
 
-/** `bad-query`, with the key it names when it names one (`pin-shape` and a non-object body name none). */
-function badQuery(why: 'unknown' | 'repeated' | 'pin-shape' | 'body', key?: string): DocsFailureBody {
+/** `bad-query`, with the key it names when it names one (`pin-shape` and a non-object body name none). The two range
+ *  reasons: `range-step`, a query that is neither exactly a prepare (`prepare=1`) nor exactly a frame (`snapshot`,
+ *  `offset`, `length`); `range-number`, an `offset` or `length` outside its count grammar, or a `length` of zero. */
+function badQuery(why: 'unknown' | 'repeated' | 'pin-shape' | 'body' | 'range-step' | 'range-number', key?: string):
+  DocsFailureBody {
   return key === undefined ? { ok: false, failure: 'bad-query', why } : { ok: false, failure: 'bad-query', key, why };
 }
 
@@ -299,6 +322,54 @@ function parseFilePin(query: Readonly<Record<string, unknown>>): { ok: true; pin
 }
 
 /**
+ * A range query (X2 spec 4.3). The shape first, before any value is read, each a `bad-query`: the place's keys are
+ * exactly `commit` or exactly `branch` and `head`, and `section`, `path` and `pin` are present (`pin-shape`); the step is
+ * `prepare` alone or `snapshot`, `offset` and `length` together (`range-step`). Then each value in ccd's argv order, the
+ * first fault winning: `commit` (bad-commit), or `branch` (bad-ref, BARE only) and `head` (bad-commit); `section`; `path`;
+ * `pin` (bad-fingerprint: ccd's own word for a pin outside the three forms); then `prepare` (the value `1`, else
+ * `range-step`), or `snapshot` (a snapshot id, else `snapshot-gone`, ccd's own word for an id that names none), `offset`
+ * and `length` (a count, and a length of at least 1, else `range-number`). Whether the pin's kind suits the place, and the
+ * bounds, are `docsRangePlan`'s.
+ */
+function parseRangeQuery(query: Readonly<Record<string, unknown>>): { ok: true; query: DocsRangeQuery } | DocsFailureBody {
+  const placeKeys = [PIN_COMMIT, PIN_BRANCH, PIN_HEAD].filter((k) => Object.hasOwn(query, k));
+  const committed = sameKeys(placeKeys, [PIN_COMMIT]);
+  if ((!committed && !sameKeys(placeKeys, [PIN_BRANCH, PIN_HEAD])) || !Object.hasOwn(query, 'section')
+    || !Object.hasOwn(query, 'path') || !Object.hasOwn(query, 'pin')) return badQuery('pin-shape');
+  const frameKeys = ['snapshot', 'offset', 'length'].filter((k) => Object.hasOwn(query, k));
+  const prepare = Object.hasOwn(query, 'prepare');
+  if (!(prepare ? frameKeys.length === 0 : frameKeys.length === 3)) return badQuery('range-step');
+  let where: DocsRangeWhere;
+  if (committed) {
+    const commit = own(query, PIN_COMMIT);
+    if (!isText(commit) || !isDocsCommit(commit)) return refused('bad-commit');
+    where = { commit };
+  } else {
+    const branch = own(query, PIN_BRANCH);
+    if (!isText(branch) || !isDocsBareRef(branch)) return refused('bad-ref');
+    const head = own(query, PIN_HEAD);
+    if (!isText(head) || !isDocsCommit(head)) return refused('bad-commit');
+    where = { branch, head };
+  }
+  const place = parsePinPlace(query);
+  if (!place.ok) return place;
+  const pinText = own(query, 'pin');
+  const pin = isText(pinText) ? parseDocsRangePinText(pinText) : null;
+  if (pin === null) return refused('bad-fingerprint');
+  const target: DocsRangeTarget = { where, section: place.section, path: place.path, pin };
+  if (prepare) return own(query, 'prepare') === '1' ? { ok: true, query: { target, frame: null } } : badQuery('range-step', 'prepare');
+  const snapshot = own(query, 'snapshot');
+  if (!isText(snapshot) || !isDocsRangeSnapshot(snapshot)) return refused('snapshot-gone');
+  const offsetText = own(query, 'offset');
+  const offset = isText(offsetText) ? parseDocsRangeCount(offsetText) : null;
+  if (offset === null) return badQuery('range-number', 'offset');
+  const lengthText = own(query, 'length');
+  const length = isText(lengthText) ? parseDocsRangeCount(lengthText) : null;
+  if (length === null || length === 0) return badQuery('range-number', 'length');
+  return { ok: true, query: { target, frame: { snapshot, offset, length } } };
+}
+
+/**
  * Parse a docs GET route's query (section 3.4 "Parameter rules"; M3.4's L1 half). One fixed precedence, so one
  * query has one answer whatever order its keys arrived in:
  * 1. an unknown key: `bad-query {key, why:'unknown'}`, the first in code-unit order;
@@ -329,6 +400,10 @@ export function parseDocsApiQuery(route: DocsApiRoute, query: Readonly<Record<st
     if (!isText(commit) || !isDocsCommit(commit)) return refused('bad-commit');
     const place = parsePinPlace(query);
     return place.ok ? { ok: true, req: { route, ask: { commit, section: place.section, path: place.path } } } : place;
+  }
+  if (route === 'range') {
+    const range = parseRangeQuery(query);
+    return range.ok ? { ok: true, req: { route, query: range.query } } : range;
   }
   const pin = parseFilePin(query);
   return pin.ok ? { ok: true, req: { route, pin: pin.pin } } : pin;
@@ -483,6 +558,47 @@ export const LISTING_JOB: Readonly<DocsJob> =
 /** The estimate of every history job: ccd's framed log bound on both sides (rich-docs spec G4). Frozen, as above. */
 export const HISTORY_JOB: Readonly<DocsJob> =
   Object.freeze({ raw: DOCS_LOG_MAX_WIRE_BYTES, wire: DOCS_LOG_MAX_WIRE_BYTES });
+
+/** The estimate of every range prepare: it carries no file bytes, only the snapshot's id, size and digest, so no content
+ *  (`raw` 0) and one envelope's reserve on the wire. It still holds a lane exec for as long as ccd copies and hashes
+ *  (up to ccd's own 20 s). Frozen, as above. */
+export const RANGE_PREPARE_JOB: Readonly<DocsJob> = Object.freeze({ raw: 0, wire: DOCS_ENVELOPE_RESERVE });
+
+/** The estimate of one range frame of `length` raw bytes: those bytes, and their base64 framing (`showWire`). `length`
+ *  is the frame's asked length, which `docsRangePlan` has held to `DOCS_RANGE_FRAME_BYTES`, so a frame is never large. */
+export function rangeFrameJob(length: number): DocsJob {
+  return { raw: length, wire: showWire(length) };
+}
+
+/** What `docsRangePlan` decided: the leaf, the step (`frame: null` is a prepare, one meaning) and the lane job. */
+export type DocsRangePlan = { ok: true; target: DocsRangeTarget; frame: DocsRangeFrameAsk | null; job: DocsJob };
+
+/**
+ * Plan one range read from the parsed query alone (X2 spec 4.3, the plan's P1.3; pure, no exec), the first refusal
+ * winning:
+ * 1. The pin's kind suits the place: a committed doc takes a `blob` pin, a draft an `fp` or a `stat` pin; any other is
+ *    `bad-fingerprint`, ccd's own word.
+ * 2. A stat pin whose size passes `DOCS_RANGE_MAX_BYTES`: `range-too-large {size, cap}`, ccd's word for it, so the prepare
+ *    is never sent.
+ * 3. A frame: a length above `DOCS_RANGE_FRAME_BYTES`, or a range that ends past `DOCS_RANGE_MAX_BYTES`:
+ *    `range-too-large {size, cap}` with the asked length (or end) and the bound it broke.
+ * The job is `RANGE_PREPARE_JOB`, or `rangeFrameJob` of the frame's length.
+ */
+export function docsRangePlan(q: DocsRangeQuery): DocsRangePlan | DocsFailureBody {
+  const { target, frame } = q;
+  if (('commit' in target.where) !== (target.pin.kind === 'blob')) return refused('bad-fingerprint');
+  if (target.pin.kind === 'stat' && target.pin.size > DOCS_RANGE_MAX_BYTES) {
+    return { ok: false, failure: 'range-too-large', size: target.pin.size, cap: DOCS_RANGE_MAX_BYTES };
+  }
+  if (frame === null) return { ok: true, target, frame, job: RANGE_PREPARE_JOB };
+  if (frame.length > DOCS_RANGE_FRAME_BYTES) {
+    return { ok: false, failure: 'range-too-large', size: frame.length, cap: DOCS_RANGE_FRAME_BYTES };
+  }
+  if (frame.offset + frame.length > DOCS_RANGE_MAX_BYTES) {
+    return { ok: false, failure: 'range-too-large', size: frame.offset + frame.length, cap: DOCS_RANGE_MAX_BYTES };
+  }
+  return { ok: true, target, frame, job: rangeFrameJob(frame.length) };
+}
 
 /** A show's server-side plan: the path's class, the `--max-bytes` it sends ccd, and the lane job it books. */
 export interface DocsShowPlan { cls: DocContentClass; maxBytes: number; job: DocsJob }
@@ -718,6 +834,7 @@ const KEY_TREE = 'tree';
 const KEY_SHOW = 'show';
 const KEY_REFRESH = 'refresh';
 const KEY_LOG = 'log';
+const KEY_RANGE = 'range';
 const KEY_PROJECT = 'project';
 const KEY_BLOB = 'blob';
 const KEY_LISTING = 'listing';
@@ -758,6 +875,15 @@ export function docsRefreshFlightKey(node: string, project: string, branch: stri
  *  joiner, so no generation is needed. */
 export function docsLogFlightKey(node: string, project: string, ask: DocsLogAsk): string {
   return docsKey(KEY_LOG, [node, project, ask.commit, ask.section, ask.path]);
+}
+
+/** A range flight (X2 P1): the leaf's place, section, path and range pin, then the step: `prepare`, or the snapshot,
+ *  offset and length. The same prepare, or the same frame of one snapshot, is the same answer for every joiner. */
+export function docsRangeFlightKey(node: string, project: string, target: DocsRangeTarget,
+  frame: DocsRangeFrameAsk | null): string {
+  const where = 'commit' in target.where ? ['committed', target.where.commit] : ['draft', target.where.branch, target.where.head];
+  const step = frame === null ? ['prepare'] : ['frame', frame.snapshot, String(frame.offset), String(frame.length)];
+  return docsKey(KEY_RANGE, [node, project, ...where, target.section, target.path, docsRangePinText(target.pin), ...step]);
 }
 
 /** One project on one node: the generation counter's key and the fetch lane's queue key. */
@@ -968,6 +1094,31 @@ export function docsAnswerShape(verb: DocsVerb, answer: unknown): { ok: true } |
   if (verb === 'docs-index' && !indexShapeOk(answer)) return schemaFault();
   if (verb === 'docs-log' && !logShapeOk(answer)) return schemaFault();
   return { ok: true };
+}
+
+/**
+ * The shape a range answer must have before the route believes it (X2 P1; `docsAnswerShape` for the plain-object and
+ * depth checks first, then the fields the route sends), `malformed-answer {why:'schema'}` on the first fault:
+ * - a prepare: `snapshot` a snapshot id, `size` a byte count within `DOCS_RANGE_MAX_BYTES`, `digest` a fingerprint;
+ * - a frame: `snapshot` a snapshot id, `offset` and `total` byte counts, `digest` a fingerprint, and `bytesB64` text no
+ *   longer than a full frame's base64 (`showWire` less its reserve). Whether the bytes are canonical base64 and hash to
+ *   `digest` is the adapter's check, which needs a hash this file has no access to.
+ */
+export function docsRangeAnswerShape(step: 'prepare' | 'frame', answer: unknown): { ok: true } | DocsFailureBody {
+  const base = docsAnswerShape('docs-show-range', answer);
+  if (!base.ok) return base;
+  const a = answer as AnswerRecord;
+  const snapshot = own(a, 'snapshot');
+  const digest = own(a, 'digest');
+  if (!isText(snapshot) || !isDocsRangeSnapshot(snapshot) || !isText(digest) || !isDocsFingerprint(digest)) return schemaFault();
+  if (step === 'prepare') {
+    const size = own(a, 'size');
+    return isByteCount(size) && size <= DOCS_RANGE_MAX_BYTES ? { ok: true } : schemaFault();
+  }
+  const bytes = own(a, 'bytesB64');
+  const framed = showWire(DOCS_RANGE_FRAME_BYTES) - DOCS_ENVELOPE_RESERVE;
+  return isByteCount(own(a, 'offset')) && isByteCount(own(a, 'total')) && isText(bytes) && bytes.length <= framed
+    ? { ok: true } : schemaFault();
 }
 
 // ===== The show bound, the raster check and the file representation (section 3.6, section 5.2; refinement (g)) =====

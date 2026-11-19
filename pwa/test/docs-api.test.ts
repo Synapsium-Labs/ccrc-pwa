@@ -3,8 +3,9 @@
 // a raster is checked twice on the client (M5.18). Every fetch is injected: no case reaches a server.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, docsApi, type DocPin,
+  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, docsApi, type DocPin, type DocsRangePin,
 } from '../../shared/docs';
+import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 import { ApiError, createApi } from '../src/lib/api';
 import { authLost, clearAuthLost } from '../src/lib/auth';
 import type { DocsLoaders } from '../src/docs/failures';
@@ -342,5 +343,69 @@ describe('api.docs.history: the history loader beside DocsLoaders (refinement (s
     const beside: 'history' extends keyof DocsLoaders ? never : true = true;
     expect(beside).toBe(true);
     expect(Object.keys(fakeLoaders().loaders).sort()).toEqual(['file', 'projects', 'raster', 'refresh', 'tree']);
+  });
+});
+
+describe('api.docs.range: the range loader beside DocsLoaders (X2 P1.3)', () => {
+  const SNAP = 'e'.repeat(32);
+  const BLOB: DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
+  const STAT: DocsRangePin = { kind: 'stat', size: 5, mtimeNs: '1700000000000000000' };
+  const target = (pin: DocPin, range: DocsRangePin): RangeTarget => ({ project: 'demo', pin, range, size: 5 });
+  const PREPARED = { snapshot: SNAP, size: 5, digest: 'd'.repeat(64) };
+  const FRAME = { snapshot: SNAP, offset: 0, bytesB64: 'AAAAAAA=', digest: 'd'.repeat(64), total: 5 };
+  const sig = new AbortController().signal;
+
+  it('prepare GETs docsApi.rangePrepare for a committed leaf with the marker header and resolves the prepared value', async () => {
+    const { api, spy } = apiOver(async () => jsonResponse(200, { ok: true, prepared: PREPARED }));
+    const got = await api.docs.range.prepare(target(committed('a.md'), BLOB), sig);
+    expect(got).toEqual({ s: 'ok', value: PREPARED });
+    const [url, init] = callOf(spy);
+    expect(url).toBe(docsApi.rangePrepare('demo', committed('a.md'), BLOB));
+    expect(url).toBe(`/api/docs/demo/range?commit=${C}&section=specs&path=a.md&pin=blob%3A${'b'.repeat(40)}&prepare=1`);
+    expect(init.method).toBeUndefined();
+    expect(new Headers(init.headers).get(DOCS_REQUEST_HEADER)).toBe(DOCS_REQUEST_HEADER_VALUE);
+    expect(init.signal).toBe(sig);
+  });
+
+  it('frame GETs docsApi.rangeFrame for a draft leaf by its branch and head, behind its stat pin, and resolves the frame value', async () => {
+    const { api, spy } = apiOver(async () => jsonResponse(200, { ok: true, frame: FRAME }));
+    const got = await api.docs.range.frame(target(DRAFT, STAT), SNAP, 524288, 7, sig);
+    expect(got).toEqual({ s: 'ok', value: FRAME });
+    const [url, init] = callOf(spy);
+    expect(url).toBe(docsApi.rangeFrame('demo', DRAFT, STAT, SNAP, 524288, 7));
+    expect(url).toBe(`/api/docs/demo/range?branch=ws%2Fa&head=${'d'.repeat(40)}&section=plans&path=a%20b%2Bc.md`
+      + `&pin=stat%3A5%3A1700000000000000000&snapshot=${SNAP}&offset=524288&length=7`);
+    expect(new Headers(init.headers).get(DOCS_REQUEST_HEADER)).toBe(DOCS_REQUEST_HEADER_VALUE);
+    expect(init.signal).toBe(sig);
+  });
+
+  it('a docs failure body resolves {s:failed} on both calls, and an answer without its field is unexpected-response', async () => {
+    const body = { ok: false, failure: 'snapshot-gone' };
+    const gone = apiOver(async () => jsonResponse(409, body));
+    expect(await gone.api.docs.range.prepare(target(committed('a.md'), BLOB), sig)).toEqual({ s: 'failed', body });
+    expect(await gone.api.docs.range.frame(target(committed('a.md'), BLOB), SNAP, 0, 1, sig)).toEqual({ s: 'failed', body });
+    const bare = apiOver(async () => jsonResponse(200, { ok: true }));
+    const unexpected = { s: 'unexpected-response', status: 200, contentType: 'application/json; charset=utf-8' };
+    expect(await bare.api.docs.range.prepare(target(committed('a.md'), BLOB), sig)).toEqual(unexpected);
+    expect(await bare.api.docs.range.frame(target(committed('a.md'), BLOB), SNAP, 0, 1, sig)).toEqual(unexpected);
+  });
+
+  it('a 401 raises the login overlay, offline answers unreachable, and an aborted signal rejects with its reason', async () => {
+    const auth = apiOver(async () => jsonResponse(401, { ok: false, error: 'unauthenticated', verdict: 'no-session' }));
+    expect(await auth.api.docs.range.prepare(target(committed('a.md'), BLOB), sig)).toEqual({ s: 'auth' });
+    expect(authLost()).toEqual({ lost: true, verdict: 'no-session' });
+    const offline = apiOver(async () => { throw new TypeError('Failed to fetch'); });
+    expect(await offline.api.docs.range.frame(target(committed('a.md'), BLOB), SNAP, 0, 1, sig)).toEqual({ s: 'unreachable' });
+    const ctl = new AbortController();
+    const reason = new Error('gone');
+    const aborted = apiOver(async () => { ctl.abort(reason); throw new TypeError('aborted'); });
+    await expect(aborted.api.docs.range.prepare(target(committed('a.md'), BLOB), ctl.signal)).rejects.toBe(reason);
+  });
+
+  it('the loader is the readRange interface, and DocsLoaders names no range member', () => {
+    const loader: RangeLoader = createApi(vi.fn() as unknown as typeof fetch).docs.range;
+    expect(Object.keys(loader).sort()).toEqual(['frame', 'prepare']);
+    const beside: 'range' extends keyof DocsLoaders ? never : true = true;
+    expect(beside).toBe(true);
   });
 });

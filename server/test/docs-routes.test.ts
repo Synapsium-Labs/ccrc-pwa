@@ -14,7 +14,7 @@ import { writeFileSync } from 'node:fs';
 import path from 'node:path';
 import type { AddressInfo } from 'node:net';
 import Fastify, { type FastifyInstance } from 'fastify';
-import { DOCS_CAP, DOCS_LOG_CAP, DOCS_SECTIONS_CAP } from '../src/ccdargv.js';
+import { DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP, DOCS_SECTIONS_CAP } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/lifecycle.js';
 import { UNMEASURED } from '../src/exec.js';
 import {
@@ -33,7 +33,8 @@ import {
   DOCS_REFUSAL_LOG_MS, LISTING_JOB, parseDocsApiQuery, refreshDue,
 } from '../src/docs/policy.js';
 import {
-  DOCS_RESPONSE_HEADERS, docsApi, type DocPin, type DocsFailureBody, type DocsFailure, type DocsFetchOk,
+  DOCS_RANGE_FRAME_BYTES, DOCS_RESPONSE_HEADERS, docsApi, type DocPin, type DocsFailureBody, type DocsFailure,
+  type DocsFetchOk, type DocsRangeFrame, type DocsRangePin,
 } from '../../shared/docs.js';
 import {
   FIXTURE_COMMIT, FIXTURE_SERVED, PWA_HEADERS, blocker, committedEntry, docsApp, faultRes, indexOk, line, nodeLanes,
@@ -1686,5 +1687,200 @@ describe('W5b-1 T10: GET /api/docs/:project/history (rich-docs spec G4, M9.8)', 
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
     expect(res.headers['content-type']).toBe('application/json; charset=utf-8');
+  });
+});
+
+// ===== X2 P1.3: GET /api/docs/:project/range (spec 4.3) =====
+//
+// Over the real adapter and a scripted `CcdRunner`, as the history cases above, through Fastify's real query parser.
+// A frame answer is built from real bytes (the digest is their sha256), so the adapter's own check passes; the cases that
+// break it say so.
+describe('X2 P1.3: GET /api/docs/:project/range', () => {
+  /** A file of two frames: one full frame and 1000 bytes. */
+  const FILE = Buffer.alloc(DOCS_RANGE_FRAME_BYTES + 1000, 7);
+  const SNAP = 'e'.repeat(32);
+  const BLOB: DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
+  const STAT: DocsRangePin = { kind: 'stat', size: FILE.length, mtimeNs: '1700000000000000000' };
+  const COMMITTED_PIN: DocPin = {
+    kind: 'committed', commit: FIXTURE_COMMIT, servedRef: FIXTURE_SERVED, section: 'specs', path: 'a.md',
+  };
+  const DRAFT_PIN: DocPin = { kind: 'draft', branch: 'ws/a', head: FIXTURE_COMMIT, section: 'specs', path: 'a.md', fp: FP };
+  const RANGE_VERBS = ['caps', DOCS_CAP, DOCS_RANGE_CAP];
+  const rangeLine = (o: Record<string, unknown>): string => line({ v: 1, verb: 'docs-show-range', ok: true, elapsedMs: 2, ...o });
+  /** The scripted ccd: a prepare answers the snapshot of `FILE`, a frame the slice it is asked for. */
+  const ccd = (argv: string[]): CcdResult => {
+    const at = (flag: string): string => argv[argv.indexOf(flag) + 1]!;
+    if (argv.includes('--prepare')) return okRes(rangeLine({ snapshot: SNAP, size: FILE.length, digest: sha256Hex(FILE) }));
+    const offset = Number(at('--offset'));
+    const bytes = FILE.subarray(offset, offset + Number(at('--length')));
+    return okRes(rangeLine({
+      snapshot: at('--snapshot'), offset, bytesB64: bytes.toString('base64'), digest: sha256Hex(bytes), total: FILE.length,
+    }));
+  };
+  const prepareUrl = (pin: DocPin = COMMITTED_PIN, range: DocsRangePin = BLOB): string => docsApi.rangePrepare('demo', pin, range);
+  const frameUrl = (offset: number, length: number, pin: DocPin = COMMITTED_PIN, range: DocsRangePin = BLOB): string =>
+    docsApi.rangeFrame('demo', pin, range, SNAP, offset, length);
+
+  it('docs-routes: range prepare then frames', async () => {
+    const rec = scripted(ccd);
+    const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+    const prepared = await app.inject({ url: prepareUrl(), headers: PWA_HEADERS });
+    expect(prepared.statusCode, prepared.body).toBe(200);
+    expect(prepared.json()).toStrictEqual({ ok: true, prepared: { snapshot: SNAP, size: FILE.length, digest: sha256Hex(FILE) } });
+    expect(prepared.headers['cache-control']).toBe('no-store');
+    const got: Buffer[] = [];
+    for (const [offset, length] of [[0, DOCS_RANGE_FRAME_BYTES], [DOCS_RANGE_FRAME_BYTES, 1000]] as const) {
+      const res = await app.inject({ url: frameUrl(offset, length), headers: PWA_HEADERS });
+      expect(res.statusCode, res.body).toBe(200);
+      const body = res.json() as { ok: true; frame: DocsRangeFrame };
+      expect(Object.keys(body.frame).sort()).toEqual(['bytesB64', 'digest', 'offset', 'snapshot', 'total']);
+      expect(body.frame).toMatchObject({ snapshot: SNAP, offset, total: FILE.length });
+      got.push(Buffer.from(body.frame.bytesB64, 'base64'));
+    }
+    expect(Buffer.concat(got).equals(FILE)).toBe(true);
+    // The argv ccd was sent: the committed place (no `--ref`, no fingerprint), the range pin, then each step.
+    const place = ['docs-show-range', '--project', 'demo', '--commit', FIXTURE_COMMIT, '--section', 'specs', '--path', 'a.md',
+      '--pin', `blob:${BLOB.sha}`];
+    expect(rec.calls).toEqual([
+      [...place, '--prepare'],
+      [...place, '--snapshot', SNAP, '--offset', '0', '--length', String(DOCS_RANGE_FRAME_BYTES)],
+      [...place, '--snapshot', SNAP, '--offset', String(DOCS_RANGE_FRAME_BYTES), '--length', '1000'],
+    ]);
+  });
+
+  it('a draft leaf is named to ccd by its branch and head, behind a stat pin or an fp pin', async () => {
+    const rec = scripted(ccd);
+    const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+    expect((await app.inject({ url: prepareUrl(DRAFT_PIN, STAT), headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect((await app.inject({ url: frameUrl(0, 10, DRAFT_PIN, { kind: 'fp', sha: FP }), headers: PWA_HEADERS })).statusCode).toBe(200);
+    const place = ['docs-show-range', '--project', 'demo', '--draft-branch', 'ws/a', '--head', FIXTURE_COMMIT, '--section', 'specs',
+      '--path', 'a.md'];
+    expect(rec.calls).toEqual([
+      [...place, '--pin', `stat:${FILE.length}:1700000000000000000`, '--prepare'],
+      [...place, '--pin', `fp:${FP}`, '--snapshot', SNAP, '--offset', '0', '--length', '10'],
+    ]);
+  });
+
+  it('docs-routes: range without the docs marker is 403', async () => {
+    const rec = scripted(ccd);
+    const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+    const res = await app.inject({ url: prepareUrl() });
+    expect(res.statusCode).toBe(403);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'foreign-request', why: 'marker' });
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('a HEAD matches no range route: 404, zero execs', async () => {
+    const rec = scripted(ccd);
+    const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+    expect((await app.inject({ method: 'HEAD', url: prepareUrl(), headers: PWA_HEADERS })).statusCode).toBe(404);
+    expect(rec.calls).toEqual([]);
+  });
+
+  const BASE_Q = `commit=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=blob%3A${'b'.repeat(40)}`;
+  const REFUSED: readonly (readonly [string, string, number, DocsFailureBody])[] = [
+    ['a frame of one byte over the frame bytes', `${BASE_Q}&snapshot=${SNAP}&offset=0&length=${DOCS_RANGE_FRAME_BYTES + 1}`, 413,
+      { ok: false, failure: 'range-too-large', size: DOCS_RANGE_FRAME_BYTES + 1, cap: DOCS_RANGE_FRAME_BYTES }],
+    ['a frame ending past the range ceiling', `${BASE_Q}&snapshot=${SNAP}&offset=67108864&length=1`, 413,
+      { ok: false, failure: 'range-too-large', size: 67108865, cap: 67108864 }],
+    ['a length of zero', `${BASE_Q}&snapshot=${SNAP}&offset=0&length=0`, 400, badQuery('range-number', 'length')],
+    ['an offset with a leading zero', `${BASE_Q}&snapshot=${SNAP}&offset=01&length=1`, 400, badQuery('range-number', 'offset')],
+    ['a length that is not a number', `${BASE_Q}&snapshot=${SNAP}&offset=0&length=1e3`, 400, badQuery('range-number', 'length')],
+    ['a snapshot that is no id', `${BASE_Q}&snapshot=nope&offset=0&length=1`, 409, word('snapshot-gone')],
+    ['no step', BASE_Q, 400, badQuery('range-step')],
+    ['a prepare and a frame together', `${BASE_Q}&prepare=1&snapshot=${SNAP}&offset=0&length=1`, 400, badQuery('range-step')],
+    ['a frame without its length', `${BASE_Q}&snapshot=${SNAP}&offset=0`, 400, badQuery('range-step')],
+    ['a prepare that is not 1', `${BASE_Q}&prepare=yes`, 400, badQuery('range-step', 'prepare')],
+    ['no pin', `commit=${FIXTURE_COMMIT}&section=specs&path=a.md&prepare=1`, 400, badQuery('pin-shape')],
+    ['a mixed place', `${BASE_Q}&branch=ws%2Fa&prepare=1`, 400, badQuery('pin-shape')],
+    ['a draft place without its head', `branch=ws%2Fa&section=specs&path=a.md&pin=fp%3A${FP}&prepare=1`, 400, badQuery('pin-shape')],
+    ['the file route\'s servedRef', `${BASE_Q}&servedRef=${enc(FIXTURE_SERVED)}&prepare=1`, 400, badQuery('unknown', 'servedRef')],
+    ['a repeated pin', `${BASE_Q}&pin=x&prepare=1`, 400, badQuery('repeated', 'pin')],
+    ['a pin outside the three forms', `commit=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=sha%3Aabc&prepare=1`, 400, word('bad-fingerprint')],
+    ['an fp pin on a committed leaf', `commit=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=fp%3A${FP}&prepare=1`, 400, word('bad-fingerprint')],
+    ['a blob pin on a draft leaf', `branch=ws%2Fa&head=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=blob%3A${'b'.repeat(40)}&prepare=1`, 400,
+      word('bad-fingerprint')],
+    ['a stat pin on a committed leaf', `commit=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=stat%3A1%3A1&prepare=1`, 400, word('bad-fingerprint')],
+    ['a stat pin of a file above the range ceiling on a draft leaf',
+      `branch=ws%2Fa&head=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=stat%3A67108865%3A1&prepare=1`, 413,
+      { ok: false, failure: 'range-too-large', size: 67108865, cap: 67108864 }],
+    ['a commit that is not one', `commit=x&section=specs&path=a.md&pin=blob%3A${'b'.repeat(40)}&prepare=1`, 400, word('bad-commit')],
+    ['a qualified branch', `branch=refs%2Fheads%2Fa&head=${FIXTURE_COMMIT}&section=specs&path=a.md&pin=fp%3A${FP}&prepare=1`, 400, word('bad-ref')],
+  ];
+  it.each(REFUSED)('refuses %s with its word and zero execs', async (_what, query, status, body) => {
+    const rec = scripted(ccd);
+    const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+    const res = await app.inject({ url: `/api/docs/demo/range?${query}`, headers: PWA_HEADERS });
+    expect(res.statusCode, res.body).toBe(status);
+    expect(res.json()).toStrictEqual(body);
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('over a fleet without docs-range-v1 it is 501 unsupported with zero execs, and over no list 503 caps-unknown', async () => {
+    const rec = scripted(ccd);
+    const { app, state } = await open({ run: rec.run, verbs: ['caps', DOCS_CAP, DOCS_LOG_CAP] });
+    const res = await app.inject({ url: prepareUrl(), headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(501);
+    expect(res.json()).toStrictEqual(word('unsupported'));
+    state.ccdVerbs = null;
+    expect((await app.inject({ url: frameUrl(0, 1), headers: PWA_HEADERS })).statusCode).toBe(503);
+    expect(rec.calls).toEqual([]);
+  });
+
+  it('ccd\'s failure words ride through with their own statuses', async () => {
+    const cases: readonly (readonly [string, number])[] = [
+      ['snapshot-gone', 409], ['range-too-large', 413], ['prepare-busy', 503], ['draft-changed', 409],
+    ];
+    for (const [failure, status] of cases) {
+      const rec = scripted(() => okRes(line({ v: 1, verb: 'docs-show-range', ok: false, elapsedMs: 1, failure })));
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: frameUrl(0, 1), headers: PWA_HEADERS });
+      expect(res.statusCode, failure).toBe(status);
+      expect(res.json(), failure).toStrictEqual(word(failure as DocsFailure));
+    }
+  });
+
+  it('a frame whose bytes do not hash to its digest, or whose offset is not the asked one, is a 502 malformed-answer', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const good = ccd;
+    const bad = (over: Record<string, unknown>) => (argv: string[]): CcdResult => {
+      const ok = good(argv);
+      return okRes(line({ ...JSON.parse(ok.stdout), ...over }));
+    };
+    const cases: readonly (readonly [Record<string, unknown>, string])[] = [
+      [{ digest: 'a'.repeat(64) }, 'integrity'], [{ offset: 7 }, 'pin'], [{ bytesB64: 'AAA' }, 'integrity'],
+    ];
+    for (const [over, why] of cases) {
+      const rec = scripted(bad(over));
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: frameUrl(0, 10), headers: PWA_HEADERS });
+      expect(res.statusCode, why).toBe(502);
+      expect(res.json(), why).toStrictEqual({ ok: false, failure: 'malformed-answer', why });
+    }
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a prepare answer that fails its shape is a 502 malformed-answer, logged', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const over of [{ size: 67108865 }, { snapshot: 'nope' }, { digest: 'x' }, { size: -1 }]) {
+      const rec = scripted(() => okRes(rangeLine({ snapshot: SNAP, size: 5, digest: FP, ...over })));
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: prepareUrl(), headers: PWA_HEADERS });
+      expect(res.statusCode, JSON.stringify(over)).toBe(502);
+      expect(res.json()).toMatchObject({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    }
+    expect(warn).toHaveBeenCalledWith('ccrc-server: docs range prepare answer failed its shape check');
+  });
+
+  it('two identical frames share one flight', async () => {
+    const b = blocker<CcdResult>();
+    const rec = scripted(() => b.exec());
+    const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+    const both = Promise.all([1, 2].map(() => app.inject({ url: frameUrl(0, 10), headers: PWA_HEADERS })));
+    await until(() => rec.calls.length === 1, 'the one docs-show-range exec');
+    for (let turn = 0; turn < 50; turn++) await new Promise<void>((resolve) => setImmediate(resolve));
+    b.release(0, ccd(rec.calls[0]!));
+    expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
+    expect(rec.calls).toHaveLength(1);
   });
 });

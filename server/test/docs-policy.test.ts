@@ -2027,3 +2027,157 @@ describe('W5b-1 T9: the history flight key and job (rich-docs spec G4)', () => {
     expect(Object.isFrozen(HISTORY_JOB)).toBe(true);
   });
 });
+
+// ===== X2 P1.3: the range query, its plan, its flight key and its gate =====
+import {
+  RANGE_PREPARE_JOB, docsRangeAnswerShape, docsRangeFlightKey, docsRangePlan, rangeFrameJob, type DocsRangeQuery,
+} from '../src/docs/policy.js';
+import { DOCS_CAP, DOCS_RANGE_CAP, type CcdArgv } from '../src/ccdargv.js';
+import { ccdDocsReader } from '../src/docs/ccdsource.js';
+import type { CcdResult } from '../src/lifecycle.js';
+import {
+  DOCS_ENVELOPE_RESERVE, DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, docsRangePinText, parseDocsRangeCount,
+  parseDocsRangePinText, type DocsRangePin,
+} from '../../shared/docs.js';
+
+describe('X2 P1.3: the range plan, query and gate', () => {
+  const C = 'a'.repeat(40);
+  const SNAP = 'e'.repeat(32);
+  const BLOB: DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
+  const FP: DocsRangePin = { kind: 'fp', sha: 'c'.repeat(64) };
+  const STAT: DocsRangePin = { kind: 'stat', size: 10, mtimeNs: '1700000000000000000' };
+  const committed = (pin: DocsRangePin = BLOB): DocsRangeQuery['target'] =>
+    ({ where: { commit: C }, section: 'specs', path: 'a.md', pin });
+  const draft = (pin: DocsRangePin = FP): DocsRangeQuery['target'] =>
+    ({ where: { branch: 'ws/a', head: C }, section: 'specs', path: 'a.md', pin });
+  const frame = (offset: number, length: number): NonNullable<DocsRangeQuery['frame']> => ({ snapshot: SNAP, offset, length });
+
+  it('docs-policy: range plan refuses length above DOCS_RANGE_FRAME_BYTES', () => {
+    expect(DOCS_RANGE_FRAME_BYTES).toBe(524288);
+    expect(docsRangePlan({ target: committed(), frame: frame(0, DOCS_RANGE_FRAME_BYTES) })).toMatchObject({ ok: true });
+    expect(docsRangePlan({ target: committed(), frame: frame(0, DOCS_RANGE_FRAME_BYTES + 1) }))
+      .toStrictEqual({ ok: false, failure: 'range-too-large', size: DOCS_RANGE_FRAME_BYTES + 1, cap: DOCS_RANGE_FRAME_BYTES });
+  });
+
+  it('a frame may end at the range ceiling and not one byte past it', () => {
+    expect(docsRangePlan({ target: committed(), frame: frame(DOCS_RANGE_MAX_BYTES - 1, 1) })).toMatchObject({ ok: true });
+    expect(docsRangePlan({ target: committed(), frame: frame(DOCS_RANGE_MAX_BYTES, 1) }))
+      .toStrictEqual({ ok: false, failure: 'range-too-large', size: DOCS_RANGE_MAX_BYTES + 1, cap: DOCS_RANGE_MAX_BYTES });
+  });
+
+  it('a stat pin of the ceiling\'s size plans, and one byte more is range-too-large for a prepare and a frame alike', () => {
+    const at = { kind: 'stat', size: DOCS_RANGE_MAX_BYTES, mtimeNs: '1' } as const;
+    const over = { kind: 'stat', size: DOCS_RANGE_MAX_BYTES + 1, mtimeNs: '1' } as const;
+    expect(docsRangePlan({ target: draft(at), frame: null })).toMatchObject({ ok: true });
+    for (const step of [null, frame(0, 1)]) {
+      expect(docsRangePlan({ target: draft(over), frame: step }))
+        .toStrictEqual({ ok: false, failure: 'range-too-large', size: DOCS_RANGE_MAX_BYTES + 1, cap: DOCS_RANGE_MAX_BYTES });
+    }
+  });
+
+  it('a committed leaf takes a blob pin only, a draft an fp or a stat pin (ccd\'s own bad-fingerprint otherwise)', () => {
+    const word = { ok: false, failure: 'bad-fingerprint' };
+    expect(docsRangePlan({ target: committed(FP), frame: null })).toStrictEqual(word);
+    expect(docsRangePlan({ target: committed(STAT), frame: null })).toStrictEqual(word);
+    expect(docsRangePlan({ target: draft(BLOB), frame: null })).toStrictEqual(word);
+    expect(docsRangePlan({ target: committed(BLOB), frame: null })).toMatchObject({ ok: true });
+    expect(docsRangePlan({ target: draft(FP), frame: null })).toMatchObject({ ok: true });
+    expect(docsRangePlan({ target: draft(STAT), frame: null })).toMatchObject({ ok: true });
+  });
+
+  it('the jobs: a prepare carries no content, a frame its own length framed as base64', () => {
+    expect(RANGE_PREPARE_JOB).toStrictEqual({ raw: 0, wire: DOCS_ENVELOPE_RESERVE });
+    expect(Object.isFrozen(RANGE_PREPARE_JOB)).toBe(true);
+    expect(rangeFrameJob(DOCS_RANGE_FRAME_BYTES)).toStrictEqual({ raw: 524288, wire: showWire(524288) });
+    expect(docsRangePlan({ target: committed(), frame: null })).toMatchObject({ job: RANGE_PREPARE_JOB });
+    expect(docsRangePlan({ target: committed(), frame: frame(0, 100) })).toMatchObject({ job: { raw: 100, wire: showWire(100) } });
+    expect(laneLarge(rangeFrameJob(DOCS_RANGE_FRAME_BYTES))).toBe(false);
+  });
+
+  it('the pin text round-trips through its one writer and its one reader, and each form refuses its near miss', () => {
+    for (const pin of [BLOB, FP, STAT, { kind: 'stat', size: 0, mtimeNs: '0' } as const]) {
+      expect(parseDocsRangePinText(docsRangePinText(pin))).toStrictEqual(pin);
+    }
+    for (const bad of ['', 'blob:', `blob:${'b'.repeat(39)}`, `fp:${'c'.repeat(63)}`, `fp:${'C'.repeat(64)}`, 'stat:1', 'stat:01:1',
+      'stat:12345678901:1', 'stat:1:01', 'stat:-1:1', 'stat:1:1:1', `sha:${'b'.repeat(40)}`, `blob:${'b'.repeat(40)}:`]) {
+      expect(parseDocsRangePinText(bad), bad).toBeNull();
+    }
+    expect(parseDocsRangeCount('0')).toBe(0);
+    expect(parseDocsRangeCount('9999999999')).toBe(9999999999);
+    for (const bad of ['', '00', '01', '10000000000', '-1', '1.5', ' 1', '1e3']) expect(parseDocsRangeCount(bad), bad).toBeNull();
+  });
+
+  const Q = { commit: C, section: 'specs', path: 'a.md', pin: docsRangePinText(BLOB) };
+  it('the query parser reads a prepare and a frame, and a repeated or an unknown key first', () => {
+    expect(parseDocsApiQuery('range', { ...Q, prepare: '1' })).toStrictEqual({
+      ok: true, req: { route: 'range', query: { target: committed(), frame: null } },
+    });
+    expect(parseDocsApiQuery('range', { ...Q, snapshot: SNAP, offset: '5', length: '6' })).toStrictEqual({
+      ok: true, req: { route: 'range', query: { target: committed(), frame: frame(5, 6) } },
+    });
+    expect(parseDocsApiQuery('range', { ...Q, prepare: '1', node: 'x' })).toStrictEqual(
+      { ok: false, failure: 'bad-query', key: 'node', why: 'unknown' });
+    expect(parseDocsApiQuery('range', { ...Q, prepare: ['1', '1'] })).toStrictEqual(
+      { ok: false, failure: 'bad-query', key: 'prepare', why: 'repeated' });
+  });
+
+  it('docs-policy: no range for a ccd without docs-range-v1 (unsupported, zero execs)', async () => {
+    const calls: string[][] = [];
+    const run = async (argv: CcdArgv): Promise<CcdResult> => {
+      calls.push([...argv]);
+      return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
+    };
+    const src = { node: 'n', project: 'demo' };
+    for (const verbs of [['caps', DOCS_CAP], ['caps', 'docs-show-range'], ['caps']]) {
+      const reader = ccdDocsReader({ runCcd: run, fleetState: { ccdVerbs: verbs } });
+      const unsupported = { ok: false, failure: 'unsupported' };
+      expect(await reader.range.prepare(src, committed()), verbs.join()).toStrictEqual(unsupported);
+      expect(await reader.range.frame(src, committed(), frame(0, 1)), verbs.join()).toStrictEqual(unsupported);
+    }
+    for (const fleetState of [{ ccdVerbs: null }, undefined]) {
+      const reader = ccdDocsReader({ runCcd: run, fleetState });
+      expect(await reader.range.prepare(src, committed())).toStrictEqual({ ok: false, failure: 'caps-unknown' });
+    }
+    expect(calls).toEqual([]);
+    // With the token, each call is one exec.
+    const ready = ccdDocsReader({ runCcd: run, fleetState: { ccdVerbs: ['caps', DOCS_CAP, DOCS_RANGE_CAP] } });
+    await ready.range.prepare(src, committed());
+    expect(calls).toHaveLength(1);
+    expect(calls[0]![0]).toBe('docs-show-range');
+  });
+
+  it('the answer shape: a prepare and a frame each need their fields, and nothing deeper than the answer bound', () => {
+    const prepare = { snapshot: SNAP, size: 5, digest: 'c'.repeat(64) };
+    const framed = { snapshot: SNAP, offset: 0, bytesB64: 'AAAA', digest: 'c'.repeat(64), total: 5 };
+    expect(docsRangeAnswerShape('prepare', prepare)).toStrictEqual({ ok: true });
+    expect(docsRangeAnswerShape('frame', framed)).toStrictEqual({ ok: true });
+    for (const bad of [{ ...prepare, size: DOCS_RANGE_MAX_BYTES + 1 }, { ...prepare, size: 1.5 }, { ...prepare, snapshot: 'x' },
+      { ...prepare, digest: 'x' }, { ...prepare, size: undefined }, 5, null, []]) {
+      expect(docsRangeAnswerShape('prepare', bad), JSON.stringify(bad)).toMatchObject({ failure: 'malformed-answer', why: 'schema' });
+    }
+    for (const bad of [{ ...framed, offset: -1 }, { ...framed, total: 'x' }, { ...framed, bytesB64: 5 }, { ...framed, digest: 'x' },
+      { ...framed, bytesB64: 'A'.repeat(699053) }]) {
+      expect(docsRangeAnswerShape('frame', bad), JSON.stringify(bad)).toMatchObject({ failure: 'malformed-answer', why: 'schema' });
+    }
+    expect(docsRangeAnswerShape('frame', { ...framed, bytesB64: 'A'.repeat(699052) })).toStrictEqual({ ok: true });
+  });
+
+  it('the flight key differs by each field, and by prepare against frame', () => {
+    const base = docsRangeFlightKey('n', 'demo', committed(), null);
+    const others = [
+      docsRangeFlightKey('m', 'demo', committed(), null), docsRangeFlightKey('n', 'other', committed(), null),
+      docsRangeFlightKey('n', 'demo', draft(), null),
+      docsRangeFlightKey('n', 'demo', { ...committed(), where: { commit: 'b'.repeat(40) } }, null),
+      docsRangeFlightKey('n', 'demo', { ...committed(), section: 'plans' }, null),
+      docsRangeFlightKey('n', 'demo', { ...committed(), path: 'b.md' }, null),
+      docsRangeFlightKey('n', 'demo', committed({ kind: 'blob', sha: 'd'.repeat(40) }), null),
+      docsRangeFlightKey('n', 'demo', committed(), frame(0, 1)),
+    ];
+    expect(new Set([base, ...others]).size).toBe(others.length + 1);
+    const framed = docsRangeFlightKey('n', 'demo', committed(), frame(0, 1));
+    expect(docsRangeFlightKey('n', 'demo', committed(), frame(1, 1))).not.toBe(framed);
+    expect(docsRangeFlightKey('n', 'demo', committed(), frame(0, 2))).not.toBe(framed);
+    expect(docsRangeFlightKey('n', 'demo', committed(), { ...frame(0, 1), snapshot: 'f'.repeat(32) })).not.toBe(framed);
+    expect(docsRangeFlightKey('n', 'demo', committed(), frame(0, 1))).toBe(framed);
+  });
+});

@@ -821,7 +821,7 @@ rdVitest.describe('docs runner: the hardened git runner (spec section 2 (a))', (
   rdVitest.it('pins the four budget literals, each on one line, where the budget test will read them', () => {
     const src = rdPy.docsHelperSource();
     rdVitest.expect(rdPy.pyLiteral(src, 'HELPER_DEADLINE_S'))
-      .toBe("{'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}");
+      .toBe("{'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20}");
     rdVitest.expect(rdPy.pyLiteral(src, 'CALL_S'))
       .toBe("{'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5,'log':8}");
     rdVitest.expect(rdPy.pyLiteral(src, 'KILL_GRACE_S')).toBe('2');

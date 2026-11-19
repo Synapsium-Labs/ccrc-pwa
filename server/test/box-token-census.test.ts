@@ -1148,6 +1148,7 @@ describe('the docs surface: five session-gated doors, no box token, no /docs rou
    *  and compare in both directions, so a route there cannot join or leave without this literal moving. */
   const DOCS_DOORS = ['/api/docs/projects', '/api/docs/:project/tree', '/api/docs/:project/file',
     '/api/docs/:project/history',
+    '/api/docs/:project/range',
     '/api/docs/:project/refresh'];
   const REGISTERED = registrationsIn(DOCS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);

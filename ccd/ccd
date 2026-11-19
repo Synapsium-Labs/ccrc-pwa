@@ -45460,7 +45460,7 @@ import time
 # Budgets. Each literal is ONE line, so W2's budget test can extract it. A verb
 # builds one Deadline from HELPER_DEADLINE_S at its start; each git call it
 # makes is bounded by min(CALL_S[its class], what is left of that deadline).
-HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10}
+HELPER_DEADLINE_S={'docs-index':12,'docs-tree':12,'docs-show':7,'docs-fetch':45,'docs-log':10,'docs-show-range':20}
 CALL_S={'ref':5,'list':8,'count':2,'show':5,'onref':2,'fetch':40,'index':5,'log':8}
 KILL_GRACE_S=2
 REDACT_BUDGET_MS=900
@@ -48816,10 +48816,12 @@ RANGE_FUTURE_SKEW_MS=5000
 # every frame measures the opened `.bin` again and answers snapshot-gone on any difference.
 RANGE_IDENTITY_KEYS=('ino', 'mtime_ns', 'ctime_ns')
 RANGE_LOCK_WAIT_S=5
+# A prepare that did not complete waits at most this long for the lock to give its place back; past it, its reservation
+# expires instead. Short, so a prepare that ran out its deadline still ends inside the runner's budget.
+RANGE_ABORT_LOCK_WAIT_S=1
 RANGE_COPY_CHUNK=1048576
 RANGE_SMALL_FILE_MAX_BYTES=4096
 RANGE_BOUND_FILE_MAX_BYTES=32
-RANGE_DEADLINE_S=20
 
 RangeArgs = namedtuple('RangeArgs', ['project', 'commit', 'branch', 'head', 'section', 'path', 'pin',
                                      'snapshot', 'offset', 'length'])
@@ -48892,7 +48894,9 @@ def range_cache_dir(ctx):
     return os.path.join(os.path.dirname(ctx.reg), RANGE_CACHE_NAME)
 
 
-RangeCache = namedtuple('RangeCache', ['path', 'fd'])
+# `dl`: the verb's one Deadline (HELPER_DEADLINE_S['docs-show-range']), which bounds every lock wait and the copy, so
+# the whole verb, git, waits and copy alike, ends inside it; None outside a verb (a unit's own cache).
+RangeCache = namedtuple('RangeCache', ['path', 'fd', 'dl'], defaults=(None,))
 
 
 def range_open_dir(cdir):
@@ -48923,14 +48927,18 @@ def range_open_dir(cdir):
     return RangeCache(cdir, fd)
 
 
-def range_lock(cache):
+def range_lock(cache, wait_s=None, deadline=True):
     """The cache's lock, held until the returned descriptor is closed: one flock on `lock`, polled for at most
-    RANGE_LOCK_WAIT_S (a holder is short, so a longer wait is a busy cache: prepare-busy)."""
+    `wait_s` (RANGE_LOCK_WAIT_S by default; a holder is short, so a longer wait is a busy cache: prepare-busy), and never
+    past what is left of the verb's deadline unless `deadline` is False (the abort's own short wait)."""
     fd = os.open('lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=cache.fd)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RuntimeError('docs range cache: the lock is not a regular file')
-        end = SYS.monotonic() + RANGE_LOCK_WAIT_S
+        wait = RANGE_LOCK_WAIT_S if wait_s is None else wait_s
+        if deadline and cache.dl is not None:
+            wait = min(wait, cache.dl.left())
+        end = SYS.monotonic() + wait
         while True:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
@@ -49183,7 +49191,7 @@ def range_abort(cache, rid):
     """A prepare that did not complete gives up its place and its partial copy. It never raises: what it cannot remove
     now (the lock is busy) expires with its reservation."""
     try:
-        fd = range_lock(cache)
+        fd = range_lock(cache, wait_s=RANGE_ABORT_LOCK_WAIT_S, deadline=False)
     except BaseException:
         return
     try:
@@ -49225,6 +49233,8 @@ def range_copy(cache, rid, size, read, check_after, want_digest):
             while view:
                 view = view[os.write(fd, view):]
             if (SYS.monotonic() - t0) * 1000 > DOCS_RANGE_PREPARE_BUDGET_MS:
+                raise fail('prepare-busy')
+            if cache.dl is not None and cache.dl.left() <= 0:
                 raise fail('prepare-busy')
     finally:
         os.close(fd)
@@ -49369,12 +49379,15 @@ def range_frame(cache, a):
 def verb_show_range(ctx, a):
     """docs-show-range: a prepare's {snapshot, size, digest} or a frame's {snapshot, offset, bytesB64, digest, total}.
     Every call opens the cache and takes its lock first, so expired entries are removed by any range call. A frame reads
-    nothing but the cache; only a prepare runs git or walks a worktree, under RANGE_DEADLINE_S."""
-    cache = range_open_dir(range_cache_dir(ctx))
+    nothing but the cache; only a prepare runs git or walks a worktree. ONE Deadline, the verb's row of HELPER_DEADLINE_S,
+    bounds it all: each git call, each lock wait and the copy; a prepare that runs it out answers prepare-busy, and its
+    clean-up waits at most RANGE_ABORT_LOCK_WAIT_S more."""
+    dl = Deadline(HELPER_DEADLINE_S['docs-show-range'])
+    cache = range_open_dir(range_cache_dir(ctx))._replace(dl=dl)
     try:
         if a.snapshot is not None:
             return range_frame(cache, a)
-        return range_prepare(ctx, a, Deadline(RANGE_DEADLINE_S), cache)
+        return range_prepare(ctx, a, dl, cache)
     finally:
         os.close(cache.fd)
 

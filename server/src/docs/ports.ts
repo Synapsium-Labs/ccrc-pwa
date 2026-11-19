@@ -12,9 +12,10 @@
 // The failure arm is the whole `DocsFailureBody`, not a narrower per-operation union (refinement (d)): ccd's per-verb
 // word set is not a checked contract, so a narrower static type would claim what the adapter cannot measure.
 import type {
-  DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRefSpec, DocsShowOk, DocsTreeOk,
+  DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRangeFrameOk, DocsRangePreparedOk,
+  DocsRefSpec, DocsShowOk, DocsTreeOk,
 } from '../../../shared/docs.js';
-import type { DocsJob } from './policy.js';
+import type { DocsJob, DocsRangeFrameAsk, DocsRangeTarget } from './policy.js';
 
 /** Which fleet node answers a project-less read. An implementation is bound to one node at construction; W3's node
  *  map selects it, and passes the id through so every port operation names its node the same way. */
@@ -46,8 +47,27 @@ export type DocsFetchRun = { ok: true; answer: DocsFetchOk } | DocsFailureBody;
 /** `docs-log`'s answer, carried verbatim once it echoes the ask, or the failure (rich-docs spec G4). */
 export type DocsLogRead = { ok: true; answer: DocsLogOk } | DocsFailureBody;
 
-/** The four reads. None of them writes anything on the fleet (section 2 (g)'s wall 1: the read registration is built
- *  with this port alone and holds no fetcher). */
+/** `docs-show-range --prepare`'s ok line (the snapshot's id, size and digest), carried verbatim, or the failure. */
+export type DocsRangePrepareRead = { ok: true; answer: DocsRangePreparedOk } | DocsFailureBody;
+
+/** `docs-show-range --snapshot …`'s ok line, carried verbatim once the adapter has held it to the ask (the snapshot and
+ *  offset it echoes, its bytes canonical base64 within the asked length and hashing to its digest), or the failure. */
+export type DocsRangeFrameRead = { ok: true; answer: DocsRangeFrameOk } | DocsFailureBody;
+
+/** One file read by range (X2 spec 4.3), a prepare and then frames of what it snapshotted. Both answer their own named
+ *  result type under the port's one failure contract: every gate, transport, ccd and classification condition (an
+ *  unsupported or unmeasured box, `snapshot-gone`, `range-too-large`, `prepare-busy`, `draft-changed`, a malformed
+ *  answer) is a failure BODY carrying its word, never a `null` and never a rejection. A prepare writes a private
+ *  snapshot into ccd's own range cache on the fleet box and nothing else; a frame reads only that cache. */
+export interface DocsRangeRead {
+  /** Snapshot `target`'s pinned bytes. */
+  prepare(src: DocsSourceId, target: DocsRangeTarget): Promise<DocsRangePrepareRead>;
+  /** One frame of a snapshot `prepare` made for `target`; `frame` is what L1's `docsRangePlan` admitted. */
+  frame(src: DocsSourceId, target: DocsRangeTarget, frame: DocsRangeFrameAsk): Promise<DocsRangeFrameRead>;
+}
+
+/** The five reads. None of them writes anything on the fleet but the range prepare's private cache (section 2 (g)'s wall
+ *  1: the read registration is built with this port alone and holds no fetcher). */
 export interface DocsReader {
   /** Every project on the node (`docs-index --all`). */
   index(at: DocsNodeId): Promise<DocsIndexRead>;
@@ -58,6 +78,8 @@ export interface DocsReader {
   show(src: DocsSourceId, pin: DocPin, ask: DocsShowAsk): Promise<DocsShowRead>;
   /** One doc's history from `ask.commit` back (rich-docs spec G4); `ask` is what L1's history parser admitted. */
   log(src: DocsSourceId, ask: DocsLogAsk): Promise<DocsLogRead>;
+  /** One file in frames (X2 spec 4.3), for a file above what `show` carries. */
+  range: DocsRangeRead;
 }
 
 /** The one docs operation that writes (a git fetch on the fleet), held apart so a read route cannot reach it. */

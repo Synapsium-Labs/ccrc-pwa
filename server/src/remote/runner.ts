@@ -187,6 +187,10 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   'docs-fetch': 60_000,
   // docs-log (rich-docs spec G4, W5b): helper deadline 10 s, so 10 + 2 + the redactor's 0.9 + 5 = 17.9 s < 20 s.
   'docs-log': 20_000,
+  // docs-show-range (X2 P1.2, P1.3): a prepare is bounded by ccd's own `RANGE_DEADLINE_S` (20 s) rather than a
+  // `HELPER_DEADLINE_S` row, and a frame reads only the cache. 20 + the 2 s grace + 5 s = 27 s < 30 s, so the agent never
+  // kills ccd before its own deadline fires; `docs-budget.test.ts` holds the inequality from source.
+  'docs-show-range': 30_000,
 };
 
 /** The deps-shed SHADOW's own, shorter row (D-7278): `ws-shed-deps … --dry-run` runs every rung and removes nothing, so

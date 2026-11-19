@@ -18,16 +18,18 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { installDocsRequestPolicy, installDocsResponsePolicy, sendDocsFailure } from '../src/docs/hooks.js';
 import { DOCS_CACHE_IMMUTABLE, docsBusyBody } from '../src/docs/policy.js';
 import { buildServer, type Deps } from '../src/server.js';
-import { DOCS_CAP, DOCS_LOG_CAP } from '../src/ccdargv.js';
+import { DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP } from '../src/ccdargv.js';
 import { hashLine, type ScryptParams } from '../src/auth/secret.js';
 import type { ExecResult, Runner } from '../src/exec.js';
 import type { FleetState } from '../src/fleetstate.js';
 import {
   DOCS_API_PREFIX, DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, DOCS_RESPONSE_HEADERS, docsApi,
-  type DocPin, type DocsFailureBody,
+  type DocPin, type DocsFailureBody, type DocsRangePin,
 } from '../../shared/docs.js';
 import type { DocsComposition } from '../src/docs/routes.js';
-import { FIXTURE_COMMIT, FIXTURE_SERVED, indexOk, line, nodeLanes, showLine, treeOk } from './docsRouteHelpers.js';
+import {
+  FIXTURE_COMMIT, FIXTURE_SERVED, indexOk, line, nodeLanes, sha256Hex, showLine, treeOk,
+} from './docsRouteHelpers.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -456,12 +458,15 @@ describe('W3 T3: hooks.ts spells none of the response-policy headers (it sets wh
 /** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
 const M54_PASSPHRASE = 'correct horse battery staple';
 const M54_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
-/** The five docs routes as `METHOD path` keys (section 3.4; the history route, rich-docs spec G4): what the derived set
- *  must equal. */
+/** The six docs routes as `METHOD path` keys (section 3.4; the history route, rich-docs spec G4; the range route, X2 P1):
+ *  what the derived set must equal. */
 const M54_DOCS_KEYS = [
-  'GET /api/docs/:project/file', 'GET /api/docs/:project/history', 'GET /api/docs/:project/tree',
-  'GET /api/docs/projects', 'POST /api/docs/:project/refresh',
+  'GET /api/docs/:project/file', 'GET /api/docs/:project/history', 'GET /api/docs/:project/range',
+  'GET /api/docs/:project/tree', 'GET /api/docs/projects', 'POST /api/docs/:project/refresh',
 ];
+/** The range recipe's pin and snapshot, and the frame the runner answers for it (the fixture's own four bytes). */
+const M54_RANGE_PIN: DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
+const M54_SNAPSHOT = 'e'.repeat(32);
 /** The bytes the fixture show answers, and the committed pin the file route is read through. */
 const M54_MD = new TextEncoder().encode('# a\n');
 const M54_PIN: DocPin = {
@@ -490,6 +495,10 @@ const RECIPES: Readonly<Record<string, { ok: M54Req; refused: M54Req }>> = {
   'GET /api/docs/:project/history': {
     ok: { method: 'GET', url: docsApi.history('demo', M54_LOG_ASK) },
     refused: { method: 'GET', url: `${docsApi.history('demo', M54_LOG_ASK)}&commit=x` },
+  },
+  'GET /api/docs/:project/range': {
+    ok: { method: 'GET', url: docsApi.rangePrepare('demo', M54_PIN, M54_RANGE_PIN) },
+    refused: { method: 'GET', url: `${docsApi.rangePrepare('demo', M54_PIN, M54_RANGE_PIN)}&branch=main` },
   },
   'POST /api/docs/:project/refresh': {
     ok: { method: 'POST', url: docsApi.refresh('demo'), payload: JSON.stringify({ ref: null, reason: 'manual' }) },
@@ -555,6 +564,14 @@ async function m54Server(o: { auth?: boolean; fault?: boolean } = {}): Promise<{
         entries: [{ sha: FIXTURE_COMMIT, parent: null, date: '2026-11-01T10:00:00+00:00', author: 'demo', subject: 'add a' }],
       }));
     }
+    if (args[0] === 'docs-show-range') {
+      return m54Exit(0, line(args.includes('--prepare')
+        ? { v: 1, verb: 'docs-show-range', ok: true, elapsedMs: 3, snapshot: M54_SNAPSHOT, size: M54_MD.byteLength, digest: sha256Hex(M54_MD) }
+        : {
+          v: 1, verb: 'docs-show-range', ok: true, elapsedMs: 3, snapshot: M54_SNAPSHOT, offset: 0,
+          bytesB64: Buffer.from(M54_MD).toString('base64'), digest: sha256Hex(M54_MD), total: M54_MD.byteLength,
+        }));
+    }
     if (args[0] === 'docs-fetch') {
       return m54Exit(0, line({
         v: 1, verb: 'docs-fetch', ok: true, elapsedMs: 6, branch: 'main', trackedRef: FIXTURE_SERVED,
@@ -570,7 +587,7 @@ async function m54Server(o: { auth?: boolean; fault?: boolean } = {}): Promise<{
       `${await hashLine(M54_PASSPHRASE, M54_FAST_PARAMS, 1)}\n`, { mode: 0o600 });
   }
   const state: FleetState = {
-    connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP, DOCS_LOG_CAP], rosterFp: null, build: null,
+    connected: true, downSince: null, ccdVerbs: ['caps', DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP], rosterFp: null, build: null,
   };
   const deps: Deps = {
     ...base, cfg: { ...base.cfg, authEnabled: o.auth ?? false, cookieSecure: false }, fleetState: state,
@@ -603,9 +620,31 @@ function expectDecorated(key: string, res: { statusCode: number; headers: Record
 }
 
 describe('M5.4 — every docs route in the real server\'s table carries the four headers (section 5.3, section 5.8)', () => {
-  it('the derived set: the real table under /api/docs is exactly the five docs routes, and the walk read every row', async () => {
+  it('the derived set: the real table under /api/docs is exactly the six docs routes, and the walk read every row', async () => {
     const { app } = await m54Server();
     expect(derivedDocsRoutes(app)).toEqual(M54_DOCS_KEYS);
+  });
+
+  it('docs-headers: range answers carry the base 5.3 headers', async () => {
+    const { app, state } = await m54Server();
+    const prepare = docsApi.rangePrepare('demo', M54_PIN, M54_RANGE_PIN);
+    const frame = docsApi.rangeFrame('demo', M54_PIN, M54_RANGE_PIN, M54_SNAPSHOT, 0, M54_MD.byteLength);
+    // A prepare and a frame (200), a refused query (400) and a box without the range token (501), each answered with the
+    // four headers and `no-store` on the failures.
+    const ok = [await app.inject({ url: prepare, headers: PWA }), await app.inject({ url: frame, headers: PWA })];
+    expect(ok.map((r) => r.statusCode)).toEqual([200, 200]);
+    for (const res of ok) {
+      expectDecorated('range 200', res);
+      expect(res.headers['cache-control']).toBe('no-store');
+      expect(res.headers['content-type']).toBe(JSON_TYPE);
+    }
+    const refused = await app.inject({ url: `${prepare}&snapshot=${M54_SNAPSHOT}`, headers: PWA });
+    expect(refused.statusCode).toBe(400);
+    expectDecorated('range 400', refused);
+    state.ccdVerbs = ['caps', DOCS_CAP];
+    const unsupported = await app.inject({ url: prepare, headers: PWA });
+    expect(unsupported.statusCode).toBe(501);
+    expectDecorated('range 501', unsupported);
   });
 
   it('a 200: dark, the PWA headers, ok answers (the POST with its JSON body)', async () => {
@@ -630,7 +669,7 @@ describe('M5.4 — every docs route in the real server\'s table carries the four
     const { app, state } = await m54Server({ fault: true });
     for (const key of derivedDocsRoutes(app)) {
       const req = recipeFor(key).ok;
-      state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP, DOCS_LOG_CAP];
+      state.ccdVerbs = req.method === 'POST' ? null : ['caps', DOCS_CAP, DOCS_LOG_CAP, DOCS_RANGE_CAP];
       const res = await sendM54(app, req, PWA);
       expect(res.statusCode, key).toBe(req.method === 'POST' ? 503 : 502);
       expectDecorated(key, res);

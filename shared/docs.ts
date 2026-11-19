@@ -624,6 +624,42 @@ export function statPin(size: number | null, mtimeNs: string | undefined): DocsR
   return { kind: 'stat', size, mtimeNs };
 }
 
+/** A stat pin's size as ccd's `RANGE_STAT_SIZE_RE` reads it: zero, or one to ten digits with no leading zero. */
+const RANGE_STAT_SIZE_RE = fullMatcher('0|[1-9][0-9]{0,9}');
+/** A range snapshot's id as ccd's `RANGE_SNAPSHOT_RE` reads it: 32 lower-case hex digits. */
+const RANGE_SNAPSHOT_RE = fullMatcher('[0-9a-f]{32}');
+
+/** The wire form of a range pin, the value of `docs-show-range --pin` and of the range route's `pin` key:
+ *  `blob:<sha>`, `fp:<sha256>` or `stat:<size>:<mtimeNs>`. The one writer; `parseDocsRangePinText` is its one reader. */
+export function docsRangePinText(pin: DocsRangePin): string {
+  return pin.kind === 'stat' ? `stat:${pin.size}:${pin.mtimeNs}` : `${pin.kind}:${pin.sha}`;
+}
+
+/** THE one reader of a range pin's wire form, by the grammars ccd's `range_pin` holds (`isDocsCommit`,
+ *  `isDocsFingerprint`, a stat size of at most ten digits and `isDocsMtimeNs`). `null` has one meaning: the text is in
+ *  none of the three forms. */
+export function parseDocsRangePinText(s: string): DocsRangePin | null {
+  if (typeof s !== 'string') return null;
+  const parts = s.split(':');
+  if (parts.length === 2 && parts[0] === 'blob' && isDocsCommit(parts[1]!)) return { kind: 'blob', sha: parts[1]! };
+  if (parts.length === 2 && parts[0] === 'fp' && isDocsFingerprint(parts[1]!)) return { kind: 'fp', sha: parts[1]! };
+  if (parts.length === 3 && parts[0] === 'stat' && RANGE_STAT_SIZE_RE.test(parts[1]!) && isDocsMtimeNs(parts[2]!)) {
+    return { kind: 'stat', size: Number(parts[1]), mtimeNs: parts[2]! };
+  }
+  return null;
+}
+
+/** A byte count as ccd reads a range's `--offset` (and the digits of a stat pin's size): zero, or one to ten digits with
+ *  no leading zero. `null` has one meaning: the text is not one. */
+export function parseDocsRangeCount(s: string): number | null {
+  return typeof s === 'string' && RANGE_STAT_SIZE_RE.test(s) ? Number(s) : null;
+}
+
+/** Whether `s` names a range snapshot (ccd answers any other id `snapshot-gone`, so the server refuses it first). */
+export function isDocsRangeSnapshot(s: string): boolean {
+  return typeof s === 'string' && RANGE_SNAPSHOT_RE.test(s);
+}
+
 /** `docs-show-range --prepare`'s answer: the private snapshot's id, its size and the sha256 of its bytes. No file
  *  bytes ride a prepare. */
 export interface DocsRangePrepared { snapshot: string; size: number; digest: Sha }
@@ -846,6 +882,10 @@ export type DocsRefreshFetch =
   | { state: 'skipped'; why: 'local-ref' };
 export interface DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: DocsTreeResponse | DocsFailureBody }
 export interface DocsHistoryResponse { ok: true; log: DocsLogOk }
+/** The range route's two 200s (X2 P1, spec 4.3): a prepare's snapshot, and one frame of it. Each carries exactly the
+ *  fields of ccd's answer that the PWA reads, never ccd's envelope. */
+export interface DocsRangePrepareResponse { ok: true; prepared: DocsRangePrepared }
+export interface DocsRangeFrameResponse { ok: true; frame: DocsRangeFrame }
 
 // ---------------------------------------------------------------------------
 // (G) resolveDocRef (spec 4.11): where a link or an image reference inside a
@@ -1435,6 +1475,14 @@ function apiQuery(pairs: readonly (readonly [string, string])[]): string {
   return '?' + pairs.map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
 }
 
+/** A range URL's place keys, in ccd's argv order: a committed doc's commit, section, path; a draft's branch, head,
+ *  section, path. */
+function rangePlace(pin: DocPin): (readonly [string, string])[] {
+  return pin.kind === 'committed'
+    ? [['commit', pin.commit], ['section', pin.section], ['path', pin.path]]
+    : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path]];
+}
+
 /** The ONE docs API URL builder (spec 3.2). Keys are written in one fixed order whatever order the pin's fields
  *  were spelled in: committed commit, servedRef, section, path; draft branch, head, section, path, fp. It
  *  validates nothing; the server's L1 query parser does, with the same predicates. */
@@ -1450,4 +1498,14 @@ export const docsApi = {
   /** One doc's history (rich-docs spec G4): commit, section, path, in ccd's argv order. */
   history: (project: string, ask: DocsLogAsk): string => apiProjectPath(project) + '/history'
     + apiQuery([['commit', ask.commit], ['section', ask.section], ['path', ask.path]]),
+  /** One range read's prepare (X2 P1, spec 4.3): the leaf's place as ccd takes it (a committed doc's `commit`, a draft's
+   *  `branch` and `head`; neither the file route's `servedRef` nor `fp`, which ccd never reads, the range pin being the
+   *  pin), then section, path and the range pin's wire form, then `prepare=1`. */
+  rangePrepare: (project: string, pin: DocPin, range: DocsRangePin): string =>
+    apiProjectPath(project) + '/range' + apiQuery([...rangePlace(pin), ['pin', docsRangePinText(range)], ['prepare', '1']]),
+  /** One frame of a prepared snapshot: the same place and pin, then `snapshot`, `offset` and `length`. */
+  rangeFrame: (project: string, pin: DocPin, range: DocsRangePin, snapshot: string, offset: number, length: number): string =>
+    apiProjectPath(project) + '/range' + apiQuery([
+      ...rangePlace(pin), ['pin', docsRangePinText(range)],
+      ['snapshot', snapshot], ['offset', String(offset)], ['length', String(length)]]),
 };
