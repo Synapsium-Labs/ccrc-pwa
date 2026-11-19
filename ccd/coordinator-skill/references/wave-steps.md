@@ -260,3 +260,14 @@ not after.
    and nothing is reclaimed while it is.
    The program is not done; close the other run. Do not archive the workspace
    yourself unless the operator asks.
+
+## The brief and clause 5
+
+**Clause 5, read against a brief that no longer carries the protocol.** "The
+template is the shape" is the LEDGER template (`references/ledger-template.md`),
+never a list of protocol sentences to reproduce in each brief — the standing
+worker protocol ships as the `ccrc-worker` skill, dispatch names it in the
+prefix of every brief mail, and a brief that re-types it is longer rather than
+safer. What clause 5 leaves to your judgement is this WAVE's content; the one
+protocol sentence it does NOT leave to judgement is the branch-discipline line
+(step 2 above, and `references/wave-lifecycle-2-dispatch.md`).

@@ -48,6 +48,7 @@ are on before you act. Read it again after a compaction, which keeps none of the
   its own beside it, with every call and every refusal: read the one for your step.
 - `references/api.md`: how to call the API through `ccrc-api`, and what each refusal
   means.
+- `references/decision-procedure.md`: how to decide instead of asking (clause 21).
 - `references/plan.md`: the plan, its verbs, and the Linear owner's triage.
 - `references/cross-project.md`: a wave that runs in another project than the
   programme's home.
@@ -80,14 +81,8 @@ per step, and the dispatch route is the chokepoint (clause 1's "never runs
 rule stated against the mail route too, since a `/clear` mailed as a message
 would be no less a second writer).
 
-**Clause 5, read against a brief that no longer carries the protocol.** "The
-template is the shape" is the LEDGER template (`references/ledger-template.md`),
-never a list of protocol sentences to reproduce in each brief — the standing
-worker protocol ships as the `ccrc-worker` skill, dispatch names it in the
-prefix of every brief mail, and a brief that re-types it is longer rather than
-safer. What clause 5 leaves to your judgement is this WAVE's content; the one
-protocol sentence it does NOT leave to judgement is the branch-discipline line
-(step 2 below, and `references/wave-lifecycle.md` §2).
+**Clause 5 and the brief:** `references/wave-steps.md` says what a brief carries
+and what the worker skill carries for it.
 
 ## What you are
 
@@ -105,22 +100,14 @@ given one by hand — which is precisely why a hold is not a thing to resume
 from: present or absent, it settles nothing. Ask `GET /api/runs`.
 
 **One real constraint on that resumability, and it is the SESSION ID, not the
-workspace:** `POST /api/runs`'s `claimedBy` is your tmux-derived session id
-(below), and the server refuses any later call for this program whose
-`claimedBy` differs from whichever session first opened it
-(`claimed-by-another` — clause 8). A fresh coordinator resumes cleanly ONLY if
-the operator revives it under that SAME id — the id-preserving revive, never a
-re-creation that recomputes one from an account and a project. Revived under a
-different id (the operator's own placement rule may pick any least-loaded
-home), every `POST /api/runs` call for this program then answers
-`claimed-by-another` naming a session that may no longer even exist, and no
-call named in this corpus ever rewrites `claimedBy`, so it does not lapse on
-its own. Handing the program to a different session is an operator act, from
-the console — outside this session's reach for the reason clause 4's pause
-marker is. From in here it is a stop and a report, never a retry.
-`references/resume.md` is the runbook for all of it: how to measure which run
-is open, the two id-preserving revives, the wave-N re-kickoff text and where
-the console sends it from, and what is left when the id is already lost.
+workspace:** `POST /api/runs`'s `claimedBy` is your tmux-derived session id, and a
+call for this program from any other id answers `claimed-by-another` (clause 8);
+no call named in this corpus ever rewrites `claimedBy`. A fresh coordinator
+resumes cleanly only when the operator revives it under that same id. Handing the
+program to a different session is an operator act (class O4, from the console):
+park that thread and work the rest. `references/resume.md` is the runbook: which
+run is open, the two id-preserving revives, the wave-N re-kickoff text, and what
+is left when the id is lost.
 
 ## Learn who you are, first
 
@@ -159,8 +146,15 @@ the diff is never read by this session.
 
 ## When something is wrong
 
-- **A dispatch is refused `paused`.** Stop. Report to the operator. Do not
-  touch the file.
+Every stop is a class or a recovery, never a report that waits:
+`references/decision-procedure.md` holds the classes (O1 to O6, P1 to P4), and
+the step files give each refusal its recovery.
+
+- **A dispatch is refused `paused`.** Read whether `$REG/coordinator-paused`
+  exists, and never touch the file. Present: the operator's pause, so no
+  dispatch, in-place bind or self-work on new waves, while non-dispatch work
+  continues. Absent: the registry could not be listed, a fault retried with
+  backoff (P3).
 - **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
   woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
@@ -168,9 +162,13 @@ the diff is never read by this session.
 - **Your own run row disagrees with the ledger.** The run row is the machine's
   record and the ledger is the human's; if they disagree, the ledger is what a
   reviewer will read, so fix the ledger in a commit and say so in the report.
-- **You cannot reach the server.** Nothing is invented and nothing is done by
-  hand: stop and report. A program that stalls honestly is recoverable.
-
+- **A mail or ack is refused `stale-uuid`.** Derive your identity again
+  (`ccrc-api whoami`) and resend once; a second is P4.
+- **You cannot reach the server.** Nothing is invented or done by hand in its
+  place. Retry with backoff (P3), each retry recorded with `ccrc-api calls record`
+  as a `block` call with `wakeOn: time:<epoch ms>`, and work every thread that
+  does not need it. When the server itself is down, say so in the turn's text and
+  end the turn.
 ## Linear
 
 Load the `ccrc-linear` skill for Linear work (never a Linear MCP tool, a connector or
