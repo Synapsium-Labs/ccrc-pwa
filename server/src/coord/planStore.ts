@@ -645,7 +645,10 @@ export function bindingsOf(db: DatabaseSync, program: string): BindingRow[] {
 export function bindingsInWorkspace(db: DatabaseSync, workspaceId: string): BindingRow[] {
   return db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? ORDER BY id').all(workspaceId) as unknown as BindingRow[];
 }
-/** The binding holding a Linear object in a workspace (the drift pass maps each node it reads to its binding, D-8183), or null. */
+/** The binding holding a Linear object in a workspace (the drift pass maps each node it reads to its binding, D-8183), or null.
+ *  The lowest binding id wins when two hold one Linear id. Legitimately different from its twin `driftPolicy.ts#bindingByLinearIdOf`
+ *  (the same rule): that is an L1 reader over rows the pass already holds, this is the store's SQL point read; the two are
+ *  pinned to agree by drift-pass.test.ts ("the two twins agree on a duplicate"). */
 export function bindingByLinearId(db: DatabaseSync, workspaceId: string, linearId: string): BindingRow | null {
   const r = db.prepare('SELECT * FROM linear_bindings WHERE workspaceId = ? AND linearId = ? ORDER BY id LIMIT 1').get(workspaceId, linearId);
   return (r as BindingRow | undefined) ?? null;

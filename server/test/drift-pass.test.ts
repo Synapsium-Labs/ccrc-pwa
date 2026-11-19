@@ -1344,6 +1344,19 @@ describe('two bindings of one workspace holding one linearId: the lowest id is t
     expect(r.plan.bindingByLinearId(b.workspaceId, b.linearId!)!.id).toBe(b.id);
     expect(bindingByLinearIdOf(r.plan.bindingsInWorkspace(b.workspaceId)).get(b.linearId!)!.id).toBe(b.id);
   });
+
+  it('the two twins agree on a duplicate whatever order the rows reach the L1 reader in (round 3 F6, D-8183)', async () => {
+    const r = await synced(await rig());
+    const b = bindingOf(r, 'ticket');
+    r.db.prepare(`INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, fingerprint, syncedAt, state)
+      SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
+    const rows = r.plan.bindingsInWorkspace(b.workspaceId);
+    const stored = r.plan.bindingByLinearId(b.workspaceId, b.linearId!)!.id;
+    expect(rows.filter((x) => x.linearId === b.linearId).length).toBeGreaterThan(1);
+    // ascending (the store's own order) and reversed (a first-wins reader would pick the higher id)
+    expect(bindingByLinearIdOf(rows).get(b.linearId!)!.id).toBe(stored);
+    expect(bindingByLinearIdOf([...rows].reverse()).get(b.linearId!)!.id).toBe(stored);
+  });
 });
 
 describe('the read hold of a refused key (review 2457 A1, A2)', () => {

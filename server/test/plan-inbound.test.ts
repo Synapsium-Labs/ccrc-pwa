@@ -1257,6 +1257,26 @@ describe('the malformed count is per issue (round 4 F2)', () => {
     expect(rowOf(r, 13)).toMatchObject({ state: 'closed', actedAt: null });   // held, not given up
     expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
   });
+
+  it('a count left by one issue of a workspace never counts against another issue of it (round 3 F3, D-8183)', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'malformed';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    for (const wait of [30_000, 120_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(3);          // the first issue stands at three malformed answers
+    r.plan.setInboundState(U(12), { actedAt: r.t.now });                             // it leaves the lane with its count unspent (never given up)
+    await triage(r, { issue: 'AAA-13', decision: 'close', reason: 'noise' });
+    r.asks.length = 0;
+    // the second issue has its own count: a count shared by the workspace (3) would reach the give-up at its second answer
+    await passAt(r, r.t.now + 1_800_000);
+    await passAt(r, r.t.now + 1_800_000);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(2);
+    expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
+    expect(rowOf(r, 13)).toMatchObject({ state: 'closed', actedAt: null });
+  });
 });
 
 describe('the close path of a take with no project judges the text as a public project (round 5 A5)', () => {

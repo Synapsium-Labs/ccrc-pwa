@@ -215,7 +215,10 @@ export function milestonesJudged(planned: readonly string[], boundBeforeRead: Re
 /** THE binding of each Linear id among a workspace's bindings (review 2524 F3): the LOWEST binding id holding it. No uniqueness rules
  *  out two bindings of one workspace holding one Linear id, so one rule picks between them, and it is the store's own
  *  (`bindingByLinearId`, `ORDER BY id LIMIT 1`): the pass's pre-read follows it, so the compare and its `syncWroteSince` check read
- *  the same row. Rows in any order; a binding with no Linear id holds nothing. */
+ *  the same row. Rows in any order; a binding with no Linear id holds nothing.
+ *  Legitimately different from its twin `planStore.ts#bindingByLinearId` (the same rule, written twice on purpose): this is an L1
+ *  reader over rows the pass already holds, the store's is an SQL point read (L3), and L1 may not call the store. Pinned to
+ *  agree by drift-pass.test.ts ("the two twins agree on a duplicate"). */
 export function bindingByLinearIdOf<B extends { id: number; linearId: string | null }>(rows: readonly B[]): Map<string, B> {
   const out = new Map<string, B>();
   for (const b of rows) {
