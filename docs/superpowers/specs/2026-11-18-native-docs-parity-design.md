@@ -547,7 +547,7 @@ Proposed shares for X2:
 - **Total share: 1 166 336 characters,** which is 1 139 KiB. It covers 71 905 plus 1 094 052, which is 1 165 957, rounded up.
 - **Frame share: 72 704 characters,** which is 71 KiB. It covers the default layout's frame growth, 71 905, rounded up, because no layout's assets may exceed the default bundle.
 - **The layout bound is an assumption, not a measurement.** It assumes each of X2's four layouts fits within the default enhance bundle at X2's landing. Test 8's layout row enforces that at the landing, but nothing measured in 1.1.0 shows it: the standalone reader's layout ratios (0.12 to 0.39 of its default) do not carry over, because a library layout also carries the shared modules.
-- **The shares are a ceiling, which test 8 enforces.** If X2's real code exceeds either share, the library wave stops and asks the coordinator, with its measured rows. It never raises its own share.
+- **The shares are a ceiling, which test 8 enforces.** The landing that introduces test 8's tables records X2's shares, as the coordinator set them, in its shares table, before any X2 landing, and test 8 reads a design's shares from the shares table at each landing's first parent, never from the landing itself (X1 spec §10, test 8). So X2's own landing cannot raise them. If X2's real code exceeds either share, the library wave stops and asks the coordinator, with its measured rows. It never raises its own share.
 
 So the largest hosted frame grows over 1.1.0 by at most 224 504 (X1's three parts) plus 72 704, which is 297 208 characters, plus this design's seed fields at their caps. A layout that cannot keep test 8's layout row, or a measured row above either share, stops that library change, and it goes to the coordinator with its numbers.
 
