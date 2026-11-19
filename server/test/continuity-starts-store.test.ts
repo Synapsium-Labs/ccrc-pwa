@@ -24,8 +24,12 @@ describe('continuity_starts', () => {
     expect(s.insertStart(start())).toEqual({ ok: true, id: 1, fresh: true });
     const row = { id: 1, sessionId: 'lane-a-project-a', reportId: 'r-0001-abcd', uuid: '11111111-2222-3333-4444-555555555555',
       source: 'clear', model: 'claude-opus-5-5', rowIncarnation: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: NOW - 50, receivedAt: NOW };
-    expect(rows(s)).toEqual([row]);
+    // The door process's nonce hash (Overlord W1 door process A1): absent on the insert, it is stored null; the reads that
+    // predate it do not answer it (`continuity-act-key-store.test.ts` reads it through the claim's two reads).
+    expect(rows(s)).toEqual([{ ...row, doorNonceSha256: null }]);
     expect(s.startsSince(0)).toEqual({ ok: true, rows: [row] });
+    s.insertStart(start({ reportId: 'r-0002-abcd', doorNonceSha256: 'f'.repeat(64) }));
+    expect(rows(s)[1]).toMatchObject({ reportId: 'r-0002-abcd', doorNonceSha256: 'f'.repeat(64) });
   });
 
   it('a resend of the same (sessionId, reportId) is one row and answers fresh: false with the first row\'s id', () => {

@@ -754,12 +754,13 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
     // hand-offs, Overlord W1a),
     // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
-    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder).
-    // and MIGRATIONS[99] (the replay quiz run's state, counts and ruling on continuity_quiz_runs, Overlord W1a quiz record).
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
+    // and MIGRATIONS[99] (the replay quiz run's state, counts and ruling on continuity_quiz_runs, Overlord W1a quiz record),
     // and MIGRATIONS[100] (programme_health, run_spend and runs.dispatchConversation, Overlord W2 forecasts B),
-    // and MIGRATIONS[101] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0).
-    expect(COORD_SCHEMA_VERSION).toBe(102);
-    expect(MIGRATIONS.length).toBe(102);
+    // and MIGRATIONS[101] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0),
+    // and MIGRATIONS[102] (continuity_act_keys and continuity_starts.doorNonceSha256, the door process's act key, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(103);
+    expect(MIGRATIONS.length).toBe(103);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -886,8 +887,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
     // and MIGRATIONS[99] (the replay quiz run's state and counts, Overlord W1a quiz record),
     // and MIGRATIONS[100] (programme_health, run_spend and runs.dispatchConversation, Overlord W2 forecasts B),
-    // and MIGRATIONS[101] (approvals.denyCurrent, Overlord approvals PR 0); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(102);
+    // and MIGRATIONS[101] (approvals.denyCurrent, Overlord approvals PR 0),
+    // and MIGRATIONS[102] (continuity_act_keys and the start's nonce hash, Overlord W1 door process); the migration above is
+    // still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(103);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1003,14 +1006,16 @@ describe('coord.db: continuity_starts, the start report\'s record (Overlord §3.
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_starts')) + 1;
   interface ColumnInfo { name: string; type: string; notnull: number; pk: number }
   const ENTRY = /^CREATE TABLE continuity_starts \([^;]*\);\s*CREATE INDEX continuity_starts_by_session ON continuity_starts\(sessionId, receivedAt\);$/;
-  it('a NEW TABLE and an INDEX, nothing on an existing table: nine columns, the id its key, one row per report id', () => {
+  it('a NEW TABLE and an INDEX, nothing on an existing table: nine columns (a tenth added later), the id its key, one row per report id', () => {
     expect(SLOT, 'no MIGRATIONS entry creates continuity_starts').toBeGreaterThanOrEqual(64);
     const db = openCoordDb(dbPathIn(mkTmp('ccrc-coord-')));
     const cols = (db.prepare("SELECT name, type, \"notnull\", pk FROM pragma_table_info('continuity_starts')").all() as unknown as ColumnInfo[])
       .map((c) => [c.name, c.type, c.notnull, c.pk]);
     expect(cols).toEqual([['id', 'INTEGER', 0, 1], ['sessionId', 'TEXT', 1, 0], ['reportId', 'TEXT', 1, 0], ['uuid', 'TEXT', 1, 0],
       ['source', 'TEXT', 1, 0], ['model', 'TEXT', 0, 0], ['rowIncarnation', 'TEXT', 0, 0], ['reportedAt', 'INTEGER', 1, 0],
-      ['receivedAt', 'INTEGER', 1, 0]]);
+      ['receivedAt', 'INTEGER', 1, 0],
+      // The tenth, a later migration's nullable column (Overlord W1 door process A1: the launch nonce's sha256 the spawn bound).
+      ['doorNonceSha256', 'TEXT', 0, 0]]);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim(), 'the migration CREATEs one table and one index and alters nothing')
       .toMatch(ENTRY);
     db.close();
