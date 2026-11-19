@@ -58,7 +58,7 @@ Review run 2850 read the branch at `d1bb9ffee` and confirmed 13 findings (F1 to 
 | F13 | `CONTENT_HEADERS` is pinned to literals. The bad-frame bytes never reach the client. Rows for every named limit and fence. Spies on every `console` method |
 | A1 to A13 | COOP wording; the PR body's Parity line; the message rule; `/clear`'s CSP and the gate's words; P1's real names; no outward import and a null size rule; sources quoted only for what they say; real Task 17 rows; doctor's Host; golden answers for the browser harness; a section path and no port default; grants argued and section roots narrowed; token crossing named |
 
-Mutation rows now run MX5.1 to MX5.69. The adversarial pass was run again over the changed sections before this round's wave-done.
+Mutation rows now run MX5.1 to MX5.69. The adversarial pass ran again over the round's diff before this wave-done: one Opus (high) read found 4 important and 9 minor defects and no security regression, and confirmed every quoted passage byte for byte. All 13 are fixed in this round. The important four: the seam keeps `buildServer`'s body, because four tests read it; the wait is 90 s, so six large files load whole; the fence admits a same-origin download; and the bytes port has a `busy` word.
 
 ## Measured, and how
 
