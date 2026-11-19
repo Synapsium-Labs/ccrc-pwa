@@ -56,14 +56,14 @@ flowchart LR
   P["ccrc preference<br/>theme.ts and skin.ts"] --> R["Root stamp<br/>data-theme and data-skin"]
   R --> T["Applied tokens<br/>tokens.css and skins.css"]
   T --> M["Adapter reads mapped tokens<br/>one mapping table"]
-  M --> C{"Library has<br/>the contract?"}
+  M --> C{"Library contract<br/>ccrc supports?"}
   C -->|yes| V["Library parseAppearance<br/>verdict slot by slot"]
   V --> A["Seed at mount<br/>appearance op while open"]
   C -->|no| F["Mode-only mount<br/>prefs.theme, as today"]
   A --> X["Frame root<br/>library-owned custom properties"]
   F --> X
 ```
-*Figure 1. Where appearance comes from and how it reaches the frame. The catalogue stays on the left, and only resolved values cross. The library's own validator decides every value: a refused colour drops the colour group, and the frame stays hosted in the library's colours for the mode. A refused skin slot drops only itself. Only a library without the contract leaves ccrc on today's mode-only mount.*
+*Figure 1. Where appearance comes from and how it reaches the frame. The catalogue stays on the left, and only resolved values cross. The library's own validator decides every value: a refused colour drops the colour group, and the frame stays hosted in the library's colours for the mode. A refused skin slot drops only itself. Only a library without a contract version ccrc supports, either none or a newer one, leaves ccrc on today's mode-only mount (§7).*
 
 **The contract (library-owned).**
 - `mode` is `light`, `dark` or `auto`: the resolved direction. It sets `color-scheme` and the library's defaults for any slot the host leaves out.
@@ -244,10 +244,12 @@ sequenceDiagram
   RF->>RF: stamp equals seed, nothing to send
   U->>H: switches skin to Instrument
   H-->>RF: stamp changes
-  RF->>F: appearance op on the port
+  RF->>B: follow, once per animation frame
+  B->>H: read mapped tokens again
+  B->>F: appearance op on the port
   F->>F: apply in place, redraw drawn figures
 ```
-*Figure 3. A lazy open with a change during the chunk load, then a change while open. The seed is read after the last await, so the first change needs no follow-up op. The second rides the existing port as one `appearance` op.*
+*Figure 3. A lazy open with a change during the chunk load, then a change while open. The seed is read after the last await, so the first change needs no follow-up op. For the second, `ReaderFrame` asks the bridge to follow, and the bridge reads the root again and sends one `appearance` op on the existing port.*
 
 **Mermaid on a change.** Figures already drawn are redrawn in the new colours, nearest first, one per task. Figures not yet drawn are drawn in the new colours when their turn comes. A newer appearance cancels the redraws still queued for an older one, so a burst never stacks redraws. Production stays on request (E17-READING does-not-hold), so few figures are drawn at any moment.
 
