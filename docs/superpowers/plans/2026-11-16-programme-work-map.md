@@ -146,6 +146,7 @@ touches any.*
 | `server/src/server.ts` | WM2 | L5 wiring | `registerPlanRoutes` gains the run verdicts reader |
 | `server/src/coord/store.ts` | WM1, WM2 | L3 | Reads: a run's state and programme, a landing entry's state (WM1); every work run of one programme with its ticket's key (WM2) |
 | `server/src/auth/gate.ts` | WM0, WM1 | L4 | The two new routes' EXEMPT rows, like their siblings |
+| `server/src/coord/otherLanes.ts` | WM1 | L1 | `planTicketsDone`, the ticket-done door's row: it refuses the Overlord's body like every plan door (#2996's rule; D-8727) |
 | `ccd/ccrc-api` | WM0, WM1 | bash | The `plan phase-ref` and `plan ticket-done` rows, behind their caps |
 | `server/src/coord/workMap.ts` | WM2 | L1 | New: `workMapOf` |
 | `pwa/src/ledgers/workMapWords.ts`, `pwa/src/ledgers/WorkCard.tsx`, `pwa/src/ledgers/ledgers.css` | WM3 | L1, L4 | New card and its words |
@@ -566,10 +567,15 @@ client row and route exist when it merges (the rule the hierarchy's Task 6.1 pin
   coordinator declares its epics and tickets (the work) and its phases (the sequence), each phase referencing the epics
   and tickets it takes on; records a slip with `plan phase-ref` and `op: 'carry'`; adds a ticket (`plan ticket-add`) in
   the same act that adds the task to its plan file; names the ticket at `runs open` (`ticket-required` in a phased plan,
-  with its recovery); and records a ticket finished another way with `plan ticket-done` and the run that did it. It
-  names `unknown-ref`, `bad-carry` and `evidence-unverified`, each with its recovery, and adds `ticket-required` with
-  its recovery to `references/api.md` too, so `coordinator-skill.test.ts`'s pin of the plan-added run refusals in both
-  files goes from five to six (F8 of review 2268); Files gains `ccd/coordinator-skill/references/api.md`.
+  with its recovery; `ticket-required` is already in `references/plan.md`, by #3001); and records a ticket finished
+  another way with `plan ticket-done` and the run that did it. It names `unknown-ref`, `bad-carry` and
+  `evidence-unverified`, each with its recovery, and adds `ticket-required` with its recovery to `references/api.md`, so
+  `coordinator-skill.test.ts`'s pin of the plan-added run refusals in both files goes from five to six (F8 of review
+  2268); Files gains `ccd/coordinator-skill/references/api.md`.
+- [ ] **Step 1b:** In the same act that names `evidence-unverified` in `references/plan.md`, delete WM1's `NOT_MET` row
+  for `evidence-unverified` in `server/test/coordinator-plan-reference.test.ts` (and `ticket-done` from its
+  `WORK_MAP_VERBS` once the verb is documented), so the test checks the word and the verb from then on; the row does not
+  go red by itself when the word is named (D-8727, `evidence-unverified-not-met-until-wm5`).
 - [ ] **Step 2:** The notice and the back-fill. A skill reaches a home only once its installer has run there, so the
   desktop-polish coordinator also mails every live programme's coordinator (from `ccrc-api runs list`, each open
   programme's claimant) once this task merges: declare the plan at your next wave boundary with `plan put` (epics and
@@ -682,13 +688,26 @@ Task WM1 departs under its own number:
   landed when any of its entries is `landed`; and the client refuses `capability-missing`, as WM0's row does. After
   review 2429, on the coordinator's ruling (fix round 1, its F2): `run-and-its-pr-are-one-work`, a run and the pull
   request it carried are one piece of work, so a `{ pr }` the landing line ties to a run stored on another ticket does not
-  verify, nor a `{ runId }` tied to a pull request stored on another (the run's own auto ticket still folds in on either
-  side). The link is read only from `landing_entries`, through `CoordStore.readLanding`, by `evidenceLinksOf` in
+  verify, nor a `{ runId }` tied to a pull request stored on another (the linked run's own auto ticket still folds in on
+  either side, compared by ticket id: review 2712 F2). The link is read only from `landing_entries`, through `CoordStore.readLanding`, by `evidenceLinksOf` in
   `planRunFacts.ts`, which hands the pure verdict its pairs; nothing reads `runs.closePr` or the lineage, and a link that
   cannot be read refuses `evidence-unverified`, as `unreadable-evidence-refuses` does. The `ticket-required` line in the
   coordinator's `ccd/coordinator-skill/references/plan.md` (outside WM1's Files, added when the coordinator-skill guard went
   red) ships in WM1r, the rules half, for the repository's review judge's rules-mixed reason: a pull request that changes a
-  rules file changes nothing else (review 2429 F14). The task
+  rules file changes nothing else (review 2429 F14); WM1r landed as #3001. After review 2712, on the coordinator's rulings
+  (fix round 2): `pr-whose-run-holds-a-ticket` (its F1), a `{ pr }` the landing line ties to a run that holds another
+  declared ticket does not verify either, whether or not that ticket stores evidence yet, so one run and the pull request
+  it carried cannot close two tickets in either order; the hold is read through its one owner, `plan.ticketOfRun`, by
+  `evidenceLinksOf`, which now always reads a `{ pr }`'s own project's line; and `malformed-evidence-refuses` (its F3),
+  stored evidence that reads as neither kind goes to the verdict as it was read and refuses `evidence-unverified`, since
+  it could be this evidence. Three changes outside WM1's Files, each on the coordinator's word: `ticket-done-is-a-plan-lane`,
+  the door is the `OTHER_LANES` row `planTicketsDone` in `server/src/coord/otherLanes.ts`, which refuses the Overlord's body
+  as every plan write door does under #2996's rule (`overlord-other-lanes.test.ts` counts ten plan-door rows, and the
+  route suite drives the door); `act-key-pinned-at-its-slot`, #3035's act-key store test pinned its migration as the last
+  entry, so WM1's later migration turned it red: it now finds the entry by content at slot 102 exactly; and
+  `evidence-unverified-not-met-until-wm5`, #3040's plan-reference test gives `evidence-unverified` a `NOT_MET` row until WM5
+  names the word in `references/plan.md` and deletes the row. On 2026-11-19, the spec's WM5 sentence that WM5 adds
+  `ticket-required` to `references/plan.md` is done already, by #3001. The task
   note (`docs/superpowers/programs/desktop-polish/wm1.md`) gives the migration slot, each row and what reds it, and the
   mutants.
 

@@ -24,8 +24,10 @@ const plan = (): string => read('references', 'plan.md');
  *  `plan map-propose` has no row until Task 7.2, and joins the check then. */
 const WORK_MAP_VERBS: ReadonlySet<string> = new Set(['phase-ref', 'ticket-done']);
 
-/** The plan's refusal words a coordinator never meets from a plan verb by wave 6, each with where it is answered. A word added
- *  to `PLAN_REFUSALS` later reds the check below until `plan.md` names it or this table says where it is answered. */
+/** The plan's refusal words `plan.md` need not name yet, each with where it is answered: the words a coordinator never meets
+ *  from a plan verb by wave 6, and a later word whose verb `plan.md` does not document yet (programme work map WM1's
+ *  `evidence-unverified`, which `plan ticket-done` returns; WM5 names it and deletes its row, as its Step 1b says). A word
+ *  added to `PLAN_REFUSALS` later reds the check below until `plan.md` names it or this table says where it is answered. */
 const NOT_MET: Readonly<Record<string, string>> = {
   'map-rewrites-plan': 'wave 7, plan map-propose',
   'map-incomplete': 'wave 7, plan map-propose',

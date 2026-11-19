@@ -709,7 +709,8 @@ describe('the scanner is looking at something', () => {
     // HTTP half less the exempt-HTTP count, 257 - 96 = 161, and EXEMPT's 97 entries on main were those 96 plus `GET /*`.)
     // 262 since the designation's Settings doors (Overlord W1 designation C), in the same file: `POST /api/overlord/model` and
     // `POST /api/overlord/account-set`, session-gated and NOT EXEMPT, no box token: the HTTP half 257 -> 259, the gated count
-    // 160 -> 162, the exempt-HTTP count stays 96.
+    // 161 -> 163 (257 - 96 and 259 - 96), the exempt-HTTP count stays 96. (It said 160 -> 162, on the basis the WM0 line above
+    // corrects; review 2712 F9.)
     // 265 since the inbound path (Linear hierarchy W4 Task 4.3, D-8183), merged after the designation's Settings doors: `POST
     // /api/programmes/:slug/plan/take` and `POST /api/teams/:team/plan/triage` in `coord/planRoutes.ts`, two machine lanes in the
     // EXEMPT table, and `GET /api/projects/:project/upkeep` in `coord/hierarchyRoutes.ts`, session-gated and NOT EXEMPT: the HTTP
