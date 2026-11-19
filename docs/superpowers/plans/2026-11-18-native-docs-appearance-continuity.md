@@ -170,7 +170,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 - Create: `pwa/src/lib/appearance.ts`, `pwa/test/host-appearance.test.tsx`
 
 **Interfaces:**
-- Produces: `export function useHostAppearance(): string`. The stamp is `` `${data-skin ?? ''}|${data-theme ?? ''}` `` of `document.documentElement`, kept by one `MutationObserver` with `attributeFilter: ['data-skin', 'data-theme']`, through `useSyncExternalStore`.
+- Produces: `export function appearanceStamp(root: HTMLElement): string`, the one stamp function: `` `${data-skin ?? ''}|${data-theme ?? ''}` `` of `root`. And `export function useHostAppearance(): string`, which answers `appearanceStamp(document.documentElement)`, kept by one `MutationObserver` with `attributeFilter: ['data-skin', 'data-theme']`, through `useSyncExternalStore`. Both live in this main-bundle module, and Task 4's `readHostAppearance` imports `appearanceStamp` from it (review 2676 A9 (1), carried at X4), so the stamp has one writer.
 
 - [ ] **Step 1: Write the failing rows:**
   - renders the current stamp;
@@ -178,7 +178,8 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
   - `applySkin('instrument', root)` re-renders with `instrument|`;
   - **a system flip moves the stamp:** with stored choice `system`, `initTheme` given a fake media query that flips to light moves the stamp to `|light`;
   - a change to any other attribute does not re-render;
-  - unmounting the last subscriber disconnects the observer.
+  - unmounting the last subscriber disconnects the observer;
+  - **one stamp:** for roots carrying each of `''`, `'instrument'` and `'refined'` as `data-skin` and `''` and `'nord'` as `data-theme`, `useHostAppearance()` answers exactly `appearanceStamp(root)`.
 - [ ] **Step 2: Run to red** (`test/host-appearance.test.tsx`). Expected: FAIL, the module is missing.
 - [ ] **Step 3: Implement** `useHostAppearance` in `pwa/src/lib/appearance.ts`. It has one observer shared by all subscribers, created on first subscribe.
 - [ ] **Step 4: Run to green.** Expected: PASS.
@@ -207,15 +208,17 @@ readonly fonts?: () => Promise<{ sans: string; mono: string }>;
 // ReaderMount gains
 readonly seed: { readonly hosted: true; readonly stamp: string } | { readonly hosted: false };
 follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root and send DocFrame.setAppearance; not hosted: setPrefs({theme})
+// bridge.ts: the one hosted decision (F6)
+function isHostedMount(plan: ReaderMountPlan, contract: number | 'none', input: ReaderMountInput): boolean; // supported && plan.appearance && input.appearanceRoot
 ```
 
-- **Hosted, explicitly.** A mount is hosted when `readerAppearanceSupported(contract answer)` is true and it was given an `appearanceRoot`. The bridge decides this before any read, through that one function, so `readHostAppearance` runs on hosted mounts only and a `{hosted: true}` seed always carries an appearance. A mount that is not hosted never reads the root. `seed` says which case holds, with no overloaded null.
-- `readHostAppearance` calls `getComputedStyle(root)` once, and reads `color-scheme` and the mapped tokens through `getPropertyValue`. Its stamp has the same shape as Task 3's. It runs `readerAppearanceOf`, so it imports `appearance.ts`, which imports the library's `./frame` entry. Only `bridge.ts` imports it, and the main bundle reaches `bridge.ts` only through `lazyMountReader`'s dynamic import. `ReaderFrame.tsx` imports neither file by value.
+- **Hosted, explicitly, decided once.** A mount is hosted when all three hold: `readerAppearanceSupported(contract answer)` is true, `readerMountPlan(...).appearance` is true (it is false for `lab-draw`), and the mount was given an `appearanceRoot`. One function in `bridge.ts`, `isHostedMount(plan, contract, input)`, decides it before any read, and nothing else in ccrc combines the three (review 2676 F6, carried at X4). So `readHostAppearance` runs on hosted mounts only, a `{hosted: true}` seed always carries an appearance, and a mount that is not hosted never reads the root. `seed` says which case holds, with no overloaded null.
+- `readHostAppearance` calls `getComputedStyle(root)` once, and reads `color-scheme` and the mapped tokens through `getPropertyValue`. Its stamp is Task 3's `appearanceStamp(root)`, imported from `pwa/src/lib/appearance.ts`: it builds no stamp of its own. It runs `readerAppearanceOf`, so it imports `appearance.ts`, which imports the library's `./frame` entry. Only `bridge.ts` imports it, and the main bundle reaches `bridge.ts` only through `lazyMountReader`'s dynamic import. `ReaderFrame.tsx` imports neither file by value.
 - `loadReaderFonts` reads the design system's own `Geist-Variable.woff2` and `GeistMono-Variable.woff2` through an inline asset import: `@/fonts/Geist-Variable.woff2?inline` and `@/fonts/GeistMono-Variable.woff2?inline`, through pwa's `@` alias to `ui/src` (`pwa/vite.config.ts`). It strips the `data:` prefix to the base64. No font file is copied into `pwa/`. The fonts load on their own path, beside the assets. If they fail, the bridge mounts without `fonts`, and never calls `onFallback('assets')` for them.
 - On a hosted mount, `follow` re-reads the root and sends `DocFrame.setAppearance` with the verdict, a verdict with no colour group included. It never calls `setPrefs` with a theme. On a mount that is not hosted, it sends `setPrefs({theme})`.
 
 - [ ] **Step 1: Write the failing rows** in `reader-bridge.test.ts`, with a fake `mount`:
-  - **reads after the last await:** hold `deps.assets`, change the root's tokens and `data-theme` while held, release. The adapters' `appearance` is the post-release verdict, `seed` is `{hosted: true, stamp}` with the post-release stamp, and the root was read exactly once per library mount, with no await between that read and `mount`. An `openAt` remount, which rebuilds the adapters, reads once more, and its stamp updates `seed`;
+  - **reads after the last await:** three holds, one case each: hold `deps.assets`, hold the Mermaid wait, and hold `deps.fonts`. In each, change the root's tokens and `data-theme` while held, then release. The adapters' `appearance` is the post-release verdict, `seed` is `{hosted: true, stamp}` with the post-release stamp, and the root was read exactly once per library mount, after all three settled, with no await between that read and `mount`. An `openAt` remount, which rebuilds the adapters, reads once more, and its stamp updates `seed` (review 2676 F7, carried at X4);
   - **a hosted mount** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
   - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `colour` group;
   - **fonts that fail to load** mount without `fonts`, and `onFallback` is never called;
@@ -225,7 +228,7 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
   - **one warning per drop:** a mount whose outcome has `dropped` set calls `console.warn` once, with a message starting `ccrc-reader: ` and naming `dropped.why` and `dropped.token`; a second `follow` with the same drop warns again only if the token or the why changed;
   - **while open, mode only:** `follow` calls `DocFrame.setPrefs({theme})` once and reads nothing;
   - **after `destroy()`**, `follow` does nothing;
-  - **the lab:** with `profile: 'lab-draw'`, no `appearance` is passed, `seed` is `{hosted: false}` and the root is never read;
+  - **the lab:** with `profile: 'lab-draw'` and an `appearanceRoot` given, so that only the plan's `appearance: false` can decide it, no `appearance` is passed, `seed` is `{hosted: false}` and the root is never read (a spy on `getComputedStyle` sees no call);
   - **the plan:** in `reader-policy.test.ts`, the Docs row (`readerMountPlan(undefined, 100, chrome, e17)`) expects `{ draw: docsDrawFor(e17), watchdogMs: readerWatchdogMs(100), store: true, chrome, history: true, appearance: true }`, and the lab row (`readerMountPlan('lab-draw', …)`) expects `{ draw: 'auto', watchdogMs: READER_LAB_DRAW_WATCHDOG_MS, store: false, chrome: 'frame-bar', history: false, appearance: false }`. Both rows exist on `main` today without the field, so they go red until Step 3. So do the two rows of `reader-bridge.test.ts`'s case "readerMountPlan is the one decision, and only lab-draw maps to drawing on open", which gain `appearance: false` (lab-draw) and `appearance: true` (Docs);
   - **the main bundle stays library-free:** in `docs-scans.test.ts`:
     - `READER_ADAPTERS` becomes `['src/docs/reader/bridge', 'src/docs/reader/assets', 'src/docs/reader/hostAppearance', 'src/docs/reader/appearance']`;
@@ -234,7 +237,7 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
   - **the font route's one importer:** `assets.ts` is the first file to import through the `@/` alias, which `shadcn-alias.test.ts` pins as unused ("nothing in the tree imports `@/` yet"). That case becomes: the files under `ui/src` and `pwa/src` that import `@/` are exactly `['pwa/src/docs/reader/assets.ts']`. Its pattern gains the dynamic form, `import\s*\(\s*'@\/`, beside `(?:from|import)\s+'@\/`. Planted in a tree copy, a second static importer and a dynamic `import('@/fonts/x.woff2?inline')` each red it;
   - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly;
   - **only the verdict is passed:** the row first asserts that `parseAppearance` refuses `radius: '99px'`. Then, with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
-- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts test/shadcn-alias.test.ts`). Expected: FAIL on the new rows, the four changed `readerMountPlan` rows (two in each file), and `shadcn-alias`'s changed case, which expects `assets.ts` to import `@/` before it does. `docs-scans` stays green here: no source imports the new modules yet, and its planted case passes on a tree copy once `READER_ADAPTERS` names them.
+- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts test/shadcn-alias.test.ts`). Expected: FAIL on the new rows, the four changed `readerMountPlan` rows (two in each file), `shadcn-alias`'s changed case, which expects `assets.ts` to import `@/` before it does, and `docs-scans`' "Library imports" case on its new count: the uses of `hostAppearance` and of the reader's `appearance` are exactly three, and before Step 3 there are none. Its planted case passes on a tree copy once `READER_ADAPTERS` names them. Two modules are called `appearance`, `pwa/src/lib/appearance.ts` (Task 3) and `pwa/src/docs/reader/appearance.ts` (Task 2), and the count tells them apart by import specifier, as the case already counts: only a specifier that resolves to `src/docs/reader/appearance` counts, so `hostAppearance.ts`'s import of `../../lib/appearance` (A9 (1)) is not one of the three (review 2676 A3, carried at X4).
 - [ ] **Step 3: Implement.**
   - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer goes to `readerAppearanceSupported`, the one place that decides support.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
@@ -246,9 +249,10 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
 
 **Files:**
 - Modify: `pwa/src/docs/ReaderFrame.tsx`, `pwa/test/reader-frame.test.tsx`
+- Modify, the `ReaderMount` fakes outside this plan's other Files (review 2676 F5, carried at X4): `pwa/test/docs-one-bar.test.tsx`, `pwa/test/docs-version.test.tsx`, `pwa/test/reader-history-adapter.test.tsx`, `pwa/test/tap-targets.test.tsx` and `pwa/test/reader-lab-run.test.ts`. Each fake gains `seed: {hosted: false}` and a `follow` that records its calls. `ReaderFrame` reads a missing `seed` as `{hosted: false}`, so a fake older than Task 4's type still mounts as not hosted at run time, and `reader-lab-run.test.ts`'s `satisfies ReaderMount` typechecks once its fake carries both.
 
 **Interfaces:**
-- Consumes: Task 3's `useHostAppearance`; Task 4's `ReaderMountInput.appearanceRoot`, `ReaderMount.seed` and `ReaderMount.follow`, as types. It imports no value from the four `READER_ADAPTERS` (`bridge.ts`, `assets.ts`, `hostAppearance.ts`, `appearance.ts`) other than the existing dynamic `import()` of the bridge (the main-bundle scan, Task 4). Its existing value imports of `reader/history`, `reader/policy` and `reader/readerText` stay.
+- Consumes: Task 3's `useHostAppearance`; Task 4's `ReaderMountInput.appearanceRoot`, `ReaderMount.seed` and `ReaderMount.follow`, as types. It imports no value from the four `READER_ADAPTERS` (`bridge.ts`, `assets.ts`, `hostAppearance.ts`, `appearance.ts`) other than `lazyMountReader`'s two existing dynamic imports, of the bridge and of `./reader/assets` (the main-bundle scan, Task 4). Its existing value imports of `reader/history`, `reader/policy` and `reader/readerText` stay, and so does `lazyMountReader`'s second dynamic import, `./reader/assets`, beside the bridge's.
 
 - [ ] **Step 1: Write the failing rows** in `reader-frame.test.tsx`:
   - **seed:** the mount input's `appearanceRoot` is `document.documentElement`;
@@ -256,10 +260,11 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
   - **while open:** on a hosted mount, each stamp change calls `follow`, and the reader keeps the same mount (no `destroy`, no second `mount`);
   - **coalesces to the latest per frame:** three stamp changes, each in its own task (separate `await`s), inside one faked animation frame call `follow` once. Without the coalescing they would call it three times. Changes made in one task arrive as one observer callback, so they cannot show the difference;
   - **the mode-only fallback:** on a mount whose `seed` is `{hosted: false}`, `readerPrefsOf(useThemeChoice(), THEMES)` feeds `follow`'s theme, as today's `setPrefs` does;
-  - **the mode-only trigger:** on a mount whose `seed` is `{hosted: false}`, on a dark device, Follow the system → Phosphor leaves the stamp unchanged but moves the derived mode from `'auto'` to `'dark'`. The kept `[prefs]` effect calls `follow('dark')` exactly once. On a mount whose `seed` is `{hosted: true}`, the same change calls nothing.
+  - **the mode-only trigger:** on a mount whose `seed` is `{hosted: false}`, on a dark device, Follow the system → Phosphor leaves the stamp unchanged but moves the derived mode from `'auto'` to `'dark'`. The kept `[prefs]` effect calls `follow('dark')` exactly once. On a mount whose `seed` is `{hosted: true}`, the same change calls nothing;
+  - **a fake with no seed:** a mount object that has no `seed` field mounts, is treated as `{hosted: false}`, and gets today's `setPrefs`-shaped `follow` calls.
 - [ ] **Step 2: Run to red** (`test/reader-frame.test.tsx`). Expected: FAIL on the new rows only.
 - [ ] **Step 3: Implement.** Branch on the mount's `seed.hosted`. Hosted: compare stamps against `seed.stamp`. Not hosted: keep today's `[prefs]` effect and `seededPrefs`, calling `follow`. Keep `live.current` for the latest stamp and mode. Coalesce with one `requestAnimationFrame` handle that is local to the effect and cancelled on cleanup.
-- [ ] **Step 4: Run to green**, plus `test/reader-bridge.test.ts`. Expected: PASS.
+- [ ] **Step 4: Run to green**, plus `test/reader-bridge.test.ts` and the five fake files: `test/docs-one-bar.test.tsx test/docs-version.test.tsx test/reader-history-adapter.test.tsx test/tap-targets.test.tsx test/reader-lab-run.test.ts`, and pwa's typecheck of its tests. Expected: PASS.
 - [ ] **Step 5: Commit**: `feat(docs): the reader follows ccrc's appearance while open`.
 
 ### Task 6: The browser matrix
@@ -321,11 +326,11 @@ Task 17's row: "Exercise both canonical skins, all twelve canonical palettes and
 | Row | Clause | Wave C row | F action (installed) |
 |---|---|---|---|
 | AP-1 | both canonical skins | Task 6 AP-1 | Open a doc under Refined and Instrument; frame values and faces are ccrc's |
-| AP-2 | all twelve palettes and Follow the system | Task 6 AP-2; Task 2 parts 2 and 5 | 14 appearances x 2 skins, the count read from the discovered catalogue |
+| AP-2 | all twelve palettes and Follow the system | Task 6 AP-2; Task 2 parts 2 and 5 | 14 appearances x 2 skins, the count read from the discovered catalogue. Once more on a phone engine (WebKit, on F's device item): the live verdict refused nothing, so the grammars hold on that engine's `getPropertyValue` text, which Chromium alone does not show (review 2676 A7, carried at X4) |
 | AP-3 | ordinary open | Task 6 AP-3 | With a stale reader theme stored, values at first `ready` are the host's. On a device, no light-then-dark flash is seen. Paint before first paint is the library's own test (spec §10) |
 | AP-4 | lazy open | Task 4 "reads after the last await"; Task 6 AP-4 | Change during the chunk hold; the seed is the latest |
 | AP-5 | changes while open under the reviewed contract | Task 5; Task 6 AP-5 | Cycle, flip, switch; in place, within 100 ms, figures redrawn |
-| AP-6 | native chrome, typography, surfaces, focus, accessibility | Task 2 part 5; Task 6 AP-6 | Pairs meet floors on the installed frame; focus visible; Aa line; in Tokyo Night and Nord a changed block shows a double bar and an attention rule a single one; in GitHub Light term, id and ordinary links show three underline styles; in Phosphor `ok` and `info` dots differ in shape |
+| AP-6 | native chrome, typography, surfaces, focus, accessibility | Task 2 part 5; Task 6 AP-6 | Pairs meet floors on the installed frame; focus visible; Aa line. In every palette where `chg` collides with another meaning's hue (Tokyo Night, beside `wait`; Nord, Gruvbox Dark and One Dark, equal to `violet`), a changed block shows a double bar and an attention rule a single one. In every palette where `term` has no hue (GitHub Light, Solarized Light, Catppuccin Latte), term, id and ordinary links show three underline styles, and in both Solarized palettes, where `id` equals `accent`, an id link and an ordinary link differ by underline. In Phosphor and Phosphor Daylight, where `ok` equals `info`, the two dots differ in shape (review 2676 A2, carried at X4) |
 | AP-7 | retained phone and desktop geometry budgets | Task 6 AP-7 | One bar, and 61, 48, 44 px on a phone; at most 1 px on tablet and desktop, per skin |
 | AP-8 | no independent catalogue or mode-only substitution | Task 2 parts 3 and 4; Task 6 AP-8 | Scan green; the bridge sent `appearance` |
 
@@ -339,6 +344,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M2 | Drop one slot from `READER_APPEARANCE_MAP` | Task 2 coverage (and typecheck) |
 | AP-M3 | Add `['nord', 'dracula']` to a file under `pwa/src/docs/` | Task 2 part 3 |
 | AP-M4 | Move the appearance read above the assets await | Task 4 "reads after the last await"; AP-4 |
+| AP-M22 | Move the appearance read between the assets await and the Mermaid wait, and, as a second run, before the fonts load settles | Task 4 "reads after the last await" (its Mermaid-wait and fonts cases) |
 | AP-M5 | `ReaderFrame` ignores stamp changes | Task 5 "while open"; AP-5 |
 | AP-M6 | One unreadable colour leaves that slot out, instead of dropping the colour group | Task 2 "one colour token answering `''`" |
 | AP-M7 | Map `text ← --ink-disabled` | Task 2 part 5, in at least one palette |
@@ -346,7 +352,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M9 | Remove the per-frame coalescing | Task 5 "coalesces to the latest per frame" |
 | AP-M10 | `readerAppearanceOf` returns the raw contract and skips `parseAppearance` | Task 2 "a skin token whose value the library refuses" |
 | AP-M11 | `useHostAppearance` reads the stored choice instead of the root | Task 3 "a system flip moves the stamp" |
-| AP-M12 | The lab profile passes `appearance` | Task 4 "the lab" |
+| AP-M12 | `isHostedMount` ignores `readerMountPlan(...).appearance`, so a lab-draw mount given an `appearanceRoot` is hosted | Task 4 "the lab" (an `appearanceRoot` is given there, so the root test alone cannot keep it green) |
 | AP-M13 | A hosted mount sends neither `appearance` nor `prefs.theme`, so the stored theme rules | Task 6 AP-3 (stale stored theme) |
 | AP-M14 | A dropped colour group sends `setPrefs({theme})` instead of an appearance with no colours | Task 4 "while open, hosted" |
 | AP-M15 | `readerAppearanceOf` leaves the skin group out | Task 2 "every mapped token" row (its `skin` keys no longer equal `APPEARANCE_SLOTS.skin`); AP-1 skin assertions |
