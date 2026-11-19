@@ -26,6 +26,8 @@ import { localIO } from '../src/io.js';
 import { degradedReadIO } from './ioDoubles.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { findTemplate } from '../src/flows/templates.js';
+import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 
 const PROJECT = 'demo';
 const NEW_ID = 'demo-quiet-basin';
@@ -44,6 +46,8 @@ const seedRow = (home: string, id: string): void => {
 };
 
 interface Cfg {
+  /** Flows wave 2: runs on the store before the programme's row is first written (a default flow, say). */
+  beforeOpen?: (coord: CoordStore) => void;
   /** Plant a real SKILL.md in the wrapper's config dir. */
   installed: boolean;
   /** Force the SKILL.md read to fail (the remote-fleet shape: a dropped round trip). */
@@ -58,6 +62,7 @@ const harness = async (cfg: Cfg) => {
   mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
 
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+  cfg.beforeOpen?.(coord);
   const opened = coord.openRun({
     program: 'program-leverage', title: 'F2', project: PROJECT,
     wave: 1, waveOf: 8, claimedBy: 'ccrc-pwa-coordinator',
@@ -215,5 +220,28 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
     expect(pre, 'no skill-preflight row was written').toBeDefined();
     expect(pre!.toState).toBe('dispatched');
     expect(pre!.fromState).toBe('dispatched');
+  });
+});
+
+// Flows wave 2 (plan 2026-11-19-flows-w2 Task 4): every work dispatch records the brief the pinned flow would compose.
+describe('the flow brief shadow on a dispatch', () => {
+  it('records no-flow when the programme pinned none, and the brief is untouched', async () => {
+    const h = await harness({ installed: true });
+    await h.dispatch();
+    expect(h.details()).toContain('flow-brief:no-flow');
+  });
+
+  it('records the composed brief\'s size beside today\'s, with what the server could not fill', async () => {
+    let flowId = 0;
+    const h = await harness({ installed: true, beforeOpen: (coord) => {
+      const doc = structuredClone(findTemplate('ccrc')!.doc);
+      flowId = coord.createFlow(doc, { template: 'ccrc', version: 1 }, 1);
+      coord.publishFlow(flowId, doc, 2);
+      coord.setDefaultFlow(flowId);
+    } });
+    expect(await h.dispatch()).toMatchObject({ ok: true });
+    const today = new TextEncoder().encode(`${WORKER_KICKOFF_PREFIX}go`).length;
+    const line = h.details().find((d) => d?.startsWith('flow-brief:'));
+    expect(line).toMatch(new RegExp(`^flow-brief:composed ${flowId}@1 bytes=\\d+ today=${today} missing=plan\\.path$`));
   });
 });
