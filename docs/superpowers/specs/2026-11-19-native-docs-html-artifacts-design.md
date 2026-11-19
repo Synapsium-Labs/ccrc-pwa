@@ -202,7 +202,7 @@ stateDiagram-v2
 |---|---|---|
 | Idle expiry | 60 minutes since the last request on it | A page left open but unused stops working within an hour |
 | Absolute expiry | 12 hours since mint, or 2 hours when the manifest holds any uncommitted file (`ARTIFACT_MAX_AGE_DRAFT_MS`) | Bounds a token kept in history, or carried out of the page (§7, A11). Drafts are the content a repository's writers do not already hold, so their window is shorter |
-| Session binding | Valid only while the minting session verifies (same compare, generation and TTL rules as the gate) | Sign-out, session expiry or a passphrase change ends every capability that session minted, with no extra act |
+| Session binding | Valid only while the minting session verifies (same compare, generation and TTL rules as the gate). The current secret generation is measured on every request, uncached, as the gate does, and an absent or unusable secret ends every capability | Sign-out, session expiry or a passphrase change ends every capability that session minted, with no extra act |
 | Live limit | 32 a box, 16 a session | Bounds memory and the operator's list |
 | Storage | Memory only | A restart revokes everything. This is safe, and the operator just opens again |
 | Revocation | Revoke one or Revoke all in Page details and the Docs index. Dead before the answer | The operator's control |
@@ -461,6 +461,7 @@ This section names every new file and door with its ring, context and owner, und
 | `server/src/artifacts/policy.ts` | L1 | The site rule, the config decision, mint admission, the manifest scope, the CSP and header builders, the fetch-metadata fence, the budget decisions |
 | `server/src/artifacts/ports.ts` | L2 | `ArtifactBytes` (pinned reads), `ArtifactTree` (the manifest's tree read), `SessionLiveness` (the minting session lives or not), each with its failure contract |
 | `server/src/artifacts/store.ts` | L3 | The in-memory capability store, its one writer |
+| `server/src/artifacts/liveness.ts` | L3 | The `SessionLiveness` adapter: the session store's `livenessOf` against the secret generation measured on each call |
 | `server/src/artifacts/wrapper.ts` | L1 | The wrapper document, a pure builder with every value escaped |
 | `server/src/artifacts/routes.ts` | L4 | The four artifact routes, on the artifact instance |
 | `server/src/docs/routes.ts` | L4 (exists) | Gains the five mint-side doors |
