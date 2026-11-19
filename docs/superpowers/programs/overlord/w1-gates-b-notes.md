@@ -150,9 +150,9 @@ cases above.
 
 ## For the coordinator
 
-- **Migration 107**: main reached 106 with programme work map WM1 (#2997), so this PR's table is 107, renumbered at the one
-  absorption of `main` (clause 16's conflict trigger; the brief's standing license for additive migration, census and floor
-  conflicts). The mid-turn mail PR 2 also holds a migration in its own merge; whichever lands second renumbers (its holder
+- **Migration 108**: main reached 106 with programme work map WM1 (#2997) and 107 with the Linear wave 4 follow-ups (#3021), so this PR's table is 108, renumbered at the
+  two absorptions of `main` (each on the conflict probe, the second during fix round 1 so the PR had a merge ref for its fast
+  run; both under the brief's standing license, every conflict an additive migration or pin line). The mid-turn mail PR 2 also holds a migration in its own merge; whichever lands second renumbers (its holder
   agreed the four additive co-edits: schema, the two version pins, the rollback fixture, the floors).
 - **Local measurements the box could not make**: the floors suite's two `pwa/src/face/mood.ts` sets fail to load here
   (`@ccrc/ui` is not installed in this worktree's `pwa/`), and `secret-mask`'s "typed slowly" case is the known local timing

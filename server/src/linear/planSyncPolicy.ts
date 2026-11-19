@@ -245,6 +245,33 @@ export interface SyncDecision { steps: SyncStep[]; failedInputs: FailedInputs[];
  *  to be sent: never a `failed` or a `pending` one. */
 export interface PlannedOwned { bindingId: number; kind: DriftKind; local: Local; owned: OwnedFields; current: boolean }
 
+/** The public-text check of one write's texts (§6.1), the ONE place a sync step's text is judged: the class that refused it, or null.
+ *  Every project fact that speaks for the object is asked, a `public` or `unknown` one with its team key. The sync's steps and the
+ *  drift restore's comment (review 2457 F3) both come here. */
+export function textRefusalOf(texts: readonly string[], facts: readonly { teamKey: string | null; mode: LinkingMode }[], privateKeys: readonly string[]): string | null {
+  const text = texts.join('\n');
+  for (const f of facts) {
+    const v = publicTextVerdict(text, f.teamKey, f.mode, privateKeys);
+    if (!v.ok) return v.class;
+  }
+  return null;
+}
+
+/** The project facts that speak for a binding's text (review 2457 F3): a ticket's and an epic's own project; an initiative's, every
+ *  epic's of the plan (the strictest reading: the one fact set `planSyncSteps` picks per workspace is a subset of it); a checkpoint's
+ *  epic's. A project the snapshot does not describe is judged as `unknown`, public (§6.1), with the binding's own team. */
+export function textFactsOf(s: Pick<SyncSnapshot, 'plan' | 'projects'>, b: Pick<BindingRow, 'localKind' | 'localId' | 'teamKey'>): { teamKey: string | null; mode: LinkingMode }[] {
+  const unknown = { teamKey: b.teamKey, mode: 'unknown' } as const;
+  const factOf = (project: string): { teamKey: string | null; mode: LinkingMode } => s.projects.find((p) => p.project === project) ?? unknown;
+  const epics = s.plan.epics;
+  const projects: string[] = b.localKind === 'programme' ? epics.map((e) => e.project)
+    : b.localKind === 'epic' ? epics.filter((e) => e.id === b.localId).map((e) => e.project)
+      : b.localKind === 'checkpoint' ? epics.filter((e) => e.checkpoints.some((c) => c.id === b.localId)).map((e) => e.project)
+        : epics.flatMap((e) => e.tickets.filter((t) => t.id === b.localId).map((t) => t.project));
+  const facts = [...new Set(projects)].map(factOf);
+  return facts.length > 0 ? facts : [unknown];
+}
+
 /** `opts.force` (the drift restore, Task 4.2): a binding id in it is treated as NOT current, so its absolute update is emitted
  *  though its fingerprint is current, and a forced project whose initiative is live also emits its link step, under a requestId
  *  of the map's tag (`restore-<tag>`), so a link deleted in Linear is made again instead of answered `conflict` by its old id. */
@@ -265,14 +292,7 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     const team = ws?.teams.find((t) => t.key.toLowerCase() === fact.teamKey!.toLowerCase());
     return ws === undefined || team === undefined ? { ok: false } : { ok: true, fact, workspaceId: ws.workspaceId, teamKey: fact.teamKey, teamId: team.id, ws };
   };
-  const textRefusal = (texts: string[], facts: { teamKey: string | null; mode: LinkingMode }[]): string | null => {
-    const text = texts.join('\n');
-    for (const f of facts) {
-      const v = publicTextVerdict(text, f.teamKey, f.mode, s.privateTrackerKeys);
-      if (!v.ok) return v.class;
-    }
-    return null;
-  };
+  const textRefusal = (texts: string[], facts: { teamKey: string | null; mode: LinkingMode }[]): string | null => textRefusalOf(texts, facts, s.privateTrackerKeys);
 
   interface Decide {
     phase: number; kind: BindingKind; id: number; workspaceId: string; teamKey: string | null; op: { create: CcrcOpName; update: CcrcOpName };
