@@ -366,13 +366,18 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     const probe = src.split('\n').find((l) => l.includes('xfs_info "$m"'))!;
     expect(probe, 'the walk starts at the root').toContain('d=$p; while [ ! -d "$d" ]; do d=$(dirname "$d"); done;');
     expect(probe, 'never at the root\'s parent').not.toContain('d=$(dirname "$p");');
-    // the walk itself, run for real: a root that exists is its own answer; a missing one answers its nearest ancestor
-    const walk = 'p=$1; d=$p; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; printf %s "$d"';
+    // the SHIPPED probe body, cut out of the source and run for real with stub findmnt and xfs_info that answer the
+    // directory they were asked about: a root that exists is its own answer; a missing one answers its nearest ancestor
+    const body = /sh -c '(p=\$1;[^']*xfs_info "\$m")' sh "\$root"/.exec(probe)![1]!;
     const dir = mkTmp('ccrc-tb-probe-');
-    {
-      expect(spawnSync('sh', ['-c', walk, 'sh', dir], { encoding: 'utf8' }).stdout).toBe(dir);
-      expect(spawnSync('sh', ['-c', walk, 'sh', path.join(dir, 'missing', 'deeper')], { encoding: 'utf8' }).stdout).toBe(dir);
-    }
+    const bin = join(dir, 'bin'); mkdirSync(bin);
+    writeFileSync(join(bin, 'findmnt'), '#!/bin/sh\nfor a; do last=$a; done; printf %s "$last"\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'xfs_info'), '#!/bin/sh\nprintf %s "$1"\n', { mode: 0o755 });
+    const ask = (root: string): string =>
+      spawnSync('sh', ['-c', body, 'sh', root], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH ?? ''}` } }).stdout;
+    const root = join(dir, 'root'); mkdirSync(root);
+    expect(ask(root), 'an existing root is read itself, not its parent').toBe(root);
+    expect(ask(join(dir, 'missing', 'deeper')), 'a missing root answers its nearest existing ancestor').toBe(dir);
   });
 
   it('before the first connect the storage check measures the card\'s starting root (an absolute path), never the login user\'s home; once connected, the box\'s own', () => {
