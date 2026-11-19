@@ -220,8 +220,10 @@ describe('--route on ws-add (routing spec §5.3, the dispatch wave)', () => {
 
   // The Overlord W1 pool set (plan w1-pool-set.md, open question 10, the coordinator's ruling on review 2085 F2): a set
   // is written only by `ccd route --session`, never at a mint, which places its account before it writes the record.
-  it('the pool set\'s two fields are refused on the argv, before anything is minted (route-argv-refuses-the-set)', () => {
-    for (const kv of ['poolset=pool-a', 'acctorder=claude-a']) {
+  // `mailhold` too (mid-turn mail plan Task 3.2): the projection lane is its one writer. A VALID value, so dropping the
+  // refusal would mint the field rather than refuse it as a bad value.
+  it('the pool set\'s two fields and mailhold are refused on the argv, before anything is minted (route-argv-refuses-the-set)', () => {
+    for (const kv of ['poolset=pool-a', 'acctorder=claude-a', 'mailhold=1795000000:coordinator.1']) {
       const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --route ${kv} demo`);
       expect(r.status, kv).toBe(1);
       expect(r.out, kv).toContain(`'${kv.split('=')[0]}' is written only by ccd route --session; nothing was touched`);
@@ -392,6 +394,13 @@ describe('--route on start and enable (routing spec §5.3)', () => {
     const e = shStatus(`${START_SPAWNLESS} cmd_enable --route acctorder=claude-a claude-a demo`);
     expect(e.status).toBe(1);
     expect(e.out).toContain("'acctorder' is written only by ccd route --session; nothing was touched");
+    // `mailhold` (mid-turn mail plan Task 3.2), on both verbs, with a valid value.
+    const sm = shStatus(`${START_SPAWNLESS} cmd_start --route mailhold=1795000000:coordinator.1 claude demo`);
+    expect(sm.status).toBe(1);
+    expect(sm.out).toContain("'mailhold' is written only by ccd route --session; nothing was touched");
+    const em = shStatus(`${START_SPAWNLESS} cmd_enable --route mailhold=1795000000:overlord.2 claude-a demo`);
+    expect(em.status).toBe(1);
+    expect(em.out).toContain("'mailhold' is written only by ccd route --session; nothing was touched");
     for (const id of ['claude-demo', 'claude-a-demo']) {
       expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.uuid`)), id).toBe(false);
       expect(fs.existsSync(path.join(h.home, '.cc-sessions', `${id}.wrapper`)), id).toBe(false);
@@ -634,12 +643,13 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // write loop's LAST one wins the RECORD — so a repeat is two answers to one
     // question. The signature line moved with it (`seen=""`), which is why the
     // count is five rather than four plus one. SIX since the Overlord W1's pool set: the refusal of `poolset` and
-    // `acctorder` on a mint's `--route` (open question 10), argv-only because `cmd_route` is the set's one writer.
+    // `acctorder` on a mint's `--route` (open question 10), argv-only because `cmd_route` is the set's one writer; the same
+    // line refuses `mailhold` (mid-turn mail plan Task 3.2), whose one writer is the projection lane through `cmd_route`.
     expect(only).toEqual([
       `local kv f v rc cls="" eff="" seen=""`,
       `for kv in "$@"; do`,
       `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
-      `[[ "$f" == poolset || "$f" == acctorder ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
+      `[[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,
       `_route_word_in "$f" "$seen" && die "--route $f given twice — one value per field; nothing was touched"; seen+="$f "`,
       `return 0`,
     ]);
