@@ -57,6 +57,9 @@ describe('decideApprovalLapse: the approval half\'s row clock (sweepApprovals)',
     ['released at the ceiling: stale', r('released', NOW - ceiling, NOW - 1), 'stale'],
     ['allowed past both: none', r('allowed', NOW - ceiling, NOW - 1), 'none'],
     ['operator past both: none', r('operator', NOW - ceiling, NOW - 1), 'none'],
+    // Approvals PR 3: the stored park word (`approval-park-policy.test.ts` holds every park arm).
+    ['held at notifyAt, stored live: park', { ...r('held', NOW - 1_000, NOW), parkWord: 'live' as const }, 'park'],
+    ['held at notifyAt, stored shadow: the lapse records wouldPark', { ...r('held', NOW - 1_000, NOW), parkWord: 'shadow' as const }, 'shadow-park'],
   ];
   it.each(rows)('%s', (_name, input, want) => {
     expect(decideApprovalLapse(input, NOW)).toBe(want);

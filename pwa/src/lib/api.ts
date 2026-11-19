@@ -1113,6 +1113,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
         headers: { 'content-type': 'application/json', accept: 'application/json' },
         body: JSON.stringify({ value }),
       })).json() as Promise<SecretSaveAnswer>,
+    /** The operator's ruling on a parked permission prompt (approvals PR 3), posted to the questions answer door as
+     *  `{kind: 'approval', verdict}`. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`,
+     *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, and `kind-mismatch` until that arm is wired) rejects with an
+     *  `ApiError` like every non-2xx. */
+    answerParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
+      (await request(`/api/questions/approval-${id}/answer`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', accept: 'application/json' },
+        body: JSON.stringify({ kind: 'approval', verdict }),
+      })).json().catch(() => ({})),
     /** `POST /api/continuity/quiz-runs/:id/rule` (Overlord W1a, the replay quiz record): the operator confirms or discards one pending
      *  quiz run. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`, `bad-request` with
      *  `already <state>`, …) rejects with an `ApiError` like every non-2xx. */
