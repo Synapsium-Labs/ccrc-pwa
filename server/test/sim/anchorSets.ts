@@ -48,6 +48,11 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
     { id: 'A10', old: "if (f.role === 'undecided') return `role: undecided (${oneLine(f.roleWhy)})`;", new: "if (f.role === 'undecided') return 'role: undecided';" },
     // Fix round 1, F2: the start form read as if its start were reported, with the card hash it cannot vouch for.
     { id: 'A11', old: "  if (form === 'start') return `term ${term} · generation ${gen} ${ANCHOR_START_NOT_REPORTED}`;\n", new: '' },
+    // Door process A2, Task 6: the delta form, its canaries, its counts and its one line.
+    { id: 'D1', old: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)]", new: "[`${DELTA_PREFIX} ${canaryLine(a, 'start')}`, ...counts(f)]" },
+    { id: 'D2', old: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)]", new: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`]" },
+    { id: 'D3', old: "  if (form === 'delta') return fitBytes(", new: "  if (form === ('none' as string)) return fitBytes(" },
+    { id: 'D4', old: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)]", new: "[...counts(f), `${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`]" },
   ],
   suite(m): Record<string, SuiteCase> {
     return {
@@ -87,6 +92,20 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
         expect(t).toContain('role: undecided (its runs could not be read)');
         expect(t).toContain('term unmeasured · generation unmeasured (this start not yet reported)');
         expect(t).toContain('counts: runs unmeasured · open items and asks unmeasured · 0 outstanding mail · notes unmeasured');
+      },
+      'the delta is one line, canaries first, then the counts, under 300 bytes': () => {
+        const t = m.renderAnchor(facts({ runs: read([run(1, 'prog-a')]) }), LIVE, 'delta');
+        expect(t).toBe(`${m.DELTA_PREFIX} term 2 · generation 5 · card ${HASH.slice(0, 12)} · 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes`);
+        expect(utf8Bytes(t)).toBeLessThanOrEqual(300);
+      },
+      'the delta carries no role line and no instruction, and says unmeasured for unread facts': () => {
+        const f = facts({ role: 'undecided', roleWhy: 'x', runs: unmeasured('r'), notes: unmeasured('n') });
+        const t = m.renderAnchor(f, gen({ kind: 'unmeasured', what: 'g' }), 'delta');
+        expect(t.split('\n')).toHaveLength(1);
+        expect(t).not.toContain('role:');
+        expect(t).not.toContain(m.ANCHOR_INSTRUCTION);
+        expect(t).toContain('term unmeasured · generation unmeasured · card');
+        expect(t).toContain('runs unmeasured');
       },
       'the role line is masked before it is fitted': () => {
         const t = m.renderAnchor(facts({ runs: read([run(1, 'prog-key')]) }), LIVE, 'start', (s) => s.replace('prog-key', '[masked]'));

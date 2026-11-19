@@ -388,7 +388,7 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
 
   it('SHADOW (the seed): every form answers dark with no text, naming the part and its form, and writes nothing', async () => {
     app = await open();
-    for (const form of [undefined, 'start', 'prompt', 'fork']) {
+    for (const form of [undefined, 'start', 'prompt', 'fork', 'delta']) {
       const res = await anchor(app, form);
       expect([res.statusCode, res.json()], String(form)).toEqual([200, { ok: true, part: 'anchor', form: form ?? 'start', dark: true }]);
     }
@@ -435,6 +435,22 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     expect(p.form).toBe('prompt');
     expect(p.text.split('\n')).toEqual([`ccrc-anchor: term none · generation none · card ${c.hash.slice(0, 12)}`, ANCHOR_INSTRUCTION]);
     expect(Buffer.byteLength(p.text, 'utf8')).toBeLessThanOrEqual(ANCHOR_PROMPT_MAX_CHARS);
+    // The delta form (door process A2, Task 6): one line, the prompt form's canaries then the counts, under 300 bytes,
+    // naming the same card hash, and, like every anchor, no snapshot, no read and no stamp.
+    const d = (await anchor(app, 'delta')).json() as { form: string; hash: string; text: string };
+    expect([d.form, d.hash]).toEqual(['delta', c.hash]);
+    expect(d.text).toBe(`ccrc-delta: term none · generation none · card ${c.hash.slice(0, 12)} · 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes`);
+    expect(Buffer.byteLength(d.text, 'utf8')).toBeLessThanOrEqual(300);
+    expect(stamps(), 'the delta stamps no card read').toEqual([{ door: 'card' }]);
+  });
+
+  it('SHADOW: the delta is not logged (the door process fetches it every minute; slug delta-shadow-not-logged)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    try {
+      app = await open();
+      await anchor(app, 'delta');
+      expect(warn.mock.calls.flat().map(String).filter((l) => l.startsWith('ccrc-server: anchor-slot shadow:'))).toEqual([]);
+    } finally { warn.mockRestore(); }
   });
 
   describe('the designation (Overlord W1 designation A, Task 3, X5): anchorReads asks for the generation identity', () => {

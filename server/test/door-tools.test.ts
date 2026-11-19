@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DOOR_TOOLS, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS,
+  DOOR_TOOLS, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS,
 } from '../../ccd/door-process.mjs';
 import * as shared from '../../shared/continuity-door.js';
 
@@ -91,6 +91,10 @@ describe('DOOR_TOOLS', () => {
     expect(CLAIM_RETRY_MAX_MS).toBe(shared.CLAIM_RETRY_MAX_MS);
   });
 
-  // TODO(coordinator): once shared/continuity-door.ts exports DELTA_REFRESH_MS and DELTA_LEASE_MS, assert here that
-  // door-process.mjs's DELTA_REFRESH_MS and DELTA_LEASE_MS equal them (import the two from the program beside the others above).
+  it('the delta cache\'s refresh and lease equal shared/continuity-door.ts\'s, and the hook\'s byte bound its DELTA_MAX_BYTES', () => {
+    expect(DELTA_REFRESH_MS).toBe(shared.DELTA_REFRESH_MS);
+    expect(DELTA_LEASE_MS).toBe(shared.DELTA_LEASE_MS);
+    const hook = fs.readFileSync(path.join(ROOT, 'ccd/session-hook.sh'), 'utf8');
+    expect(/^DOOR_DELTA_MAX_BYTES=(\d+)$/m.exec(hook)?.[1]).toBe(String(shared.DELTA_MAX_BYTES));
+  });
 });

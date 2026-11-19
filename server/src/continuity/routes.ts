@@ -425,7 +425,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const form = q['form'] ?? 'start';
     if (part !== undefined && part !== 'anchor') return refuseRoute(reply, 'bad-request', { detail: 'part is anchor, or absent for the card' });
     if (part === undefined && q['form'] !== undefined) return refuseRoute(reply, 'bad-request', { detail: 'form is part=anchor\'s' });
-    if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt or fork' });
+    if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt, fork or delta' });
     // The conversation's start as this request began, before its first await (review 2087 F3).
     const key = memoKey(id, uuid);
     const begun = startOf(key);
@@ -443,9 +443,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const hash = sha256(text);
     if (part === 'anchor') {
       const { live, newest } = anchorReads(coord, id);
-      const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, form === 'prompt' ? 'prompt' : 'start', (t) => masker.maskText(t));
-      if (!anchorLive) logShadowAnchor(id, form, hash, anchor);
-      return reply.code(200).send(anchorAnswer(anchorLive, { form: form === 'prompt' ? 'prompt' : 'start', hash, text: anchor }));
+      const textForm = form === 'prompt' || form === 'delta' ? form : 'start';
+      const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, textForm, (t) => masker.maskText(t));
+      // The delta is fetched every minute by the door process, so its shadow is not logged (slug delta-shadow-not-logged).
+      if (!anchorLive && textForm !== 'delta') logShadowAnchor(id, form, hash, anchor);
+      return reply.code(200).send(anchorAnswer(anchorLive, { form: textForm, hash, text: anchor }));
     }
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);
@@ -919,11 +921,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   const mask = (text: string): string => (deps.masker ?? SHAPE_ONLY_MASKER).maskText(text);
 
   /**
-   * `GET /api/sessions/:id/probe?byId&byUuid[&page]`: the caller's open round (its newest with no answer), every question
+   * `GET /api/sessions/:id/probe?byId&byUuid[&page][&door=1]`: the caller's open round (its newest with no answer), every question
    * masked and rendered as untrusted data, never with what it expects. One page per call (`probePages`, the card's pager):
    * `200 { ok, roundId, kind, page, pages, questions: [{ id, cls }], text }`. `probe-none-open` 409 when no round of the
    * caller's is open; `unmeasured` 502 when the rounds could not be read. The text carries session-written text and is masked
-   * here, field by field before it is rendered (`secret-mask.test.ts` lists the route under INLINE, as the card).
+   * here, field by field before it is rendered (`secret-mask.test.ts` lists the route under INLINE, as the card). `door=1` (the
+   * door process's read) phrases the page's tail as the `probe_answer` door, not a shell command.
    */
   app.get('/api/sessions/:id/probe', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -945,7 +948,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const first = open.rows[0];
     if (first === undefined) return refuseRoute(reply, PROBE_REFUSALS.noneOpen, { detail: 'no probe round of yours is open' });
     const questions = open.rows.map((r) => maskedQuestion(r, mask));
-    const pages = probePages(first.roundId, first.kind, questions);
+    const pages = probePages(first.roundId, first.kind, questions, c.b['door'] === '1');
     const page = Number(pageRaw);
     if (page > pages.length) return refuseRoute(reply, 'bad-request', { detail: `the round has ${pages.length} page(s)` });
     return reply.code(200).send({

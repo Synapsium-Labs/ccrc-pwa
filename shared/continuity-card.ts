@@ -203,9 +203,10 @@ export const ANCHOR_CARD_MAX_CHARS = 1_500;
 /** The prompt's anchor after an automatic compaction: the canaries and the instruction only (W0-04 measured a 600-character
  *  UserPromptSubmit context arriving with the prompt). */
 export const ANCHOR_PROMPT_MAX_CHARS = 600;
-/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction) and `fork` (no
- *  text: the door answers whether the slot is live, and the hook prints its one refusal line). */
-const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork', true>> = { start: true, prompt: true, fork: true };
+/** The anchor's forms: `start` (role, canaries, counts, instruction), `prompt` (canaries and instruction), `fork` (no
+ *  text: the door answers whether the slot is live, and the hook prints its one refusal line) and `delta` (one line, the
+ *  canaries then the counts, which the door process caches for the hook's every prompt: Overlord W1 door process A2). */
+const ANCHOR_FORM_MAP: Readonly<Record<'start' | 'prompt' | 'fork' | 'delta', true>> = { start: true, prompt: true, fork: true, delta: true };
 export type AnchorForm = keyof typeof ANCHOR_FORM_MAP;
 export const ANCHOR_FORMS = Object.keys(ANCHOR_FORM_MAP) as readonly AnchorForm[];
 export function isAnchorForm(v: unknown): v is AnchorForm {

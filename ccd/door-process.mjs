@@ -164,6 +164,7 @@ export function createDoor(opts) {
   const st = { nonce: HEX64.test(opts.nonce ?? '') ? opts.nonce : null, key: null, generation: null, counter: 0,
     nextClaimAt: 0, backoff: CLAIM_RETRY_MIN_MS, who: null, refused: false };
   let chain = Promise.resolve();
+  /** @type {<T>(fn: () => Promise<T>) => Promise<T>} */
   const serial = (fn) => { const p = chain.then(fn, fn); chain = p.then(() => {}, () => {}); return p; };
   /** A child's environment: the base with no nonce and no fence variable, then only the fence this call carries. */
   const childEnv = (extra) => {
@@ -222,7 +223,8 @@ export function createDoor(opts) {
     } catch { try { fs.rmSync(tmp, { force: true }); } catch { /* the lease lapses */ } }
   }
 
-  /** One tool call: `{ text, isError }`, or `null` for a tool this table does not serve. */
+  /** One tool call: `{ text, isError }`, or `null` for a tool this table does not serve.
+   *  @param {string} name @param {unknown} input @returns {Promise<{ text: string, isError: boolean } | null>} */
   async function call(name, input) {
     const row = DOOR_TOOLS.find((r) => r.name === name);
     if (!row) return null;
