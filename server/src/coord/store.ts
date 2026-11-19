@@ -1709,7 +1709,10 @@ const MAIL_ROW_COLUMNS =
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
   'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
   // D-5838: when the park began, for the strip's `parked` line.
-  'd.parkedAt AS parkedAt';
+  'd.parkedAt AS parkedAt, ' +
+  // Mid-turn mail PR 1: the three stored times, as TEXT for `persistedInt` (D-2545's reason: a wider integer throws).
+  'CAST(d.deliveredAt AS TEXT) AS deliveredAtText, CAST(d.ingestedAt AS TEXT) AS ingestedAtText, ' +
+  'CAST(d.ackedAt AS TEXT) AS ackedAtText';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
@@ -1717,7 +1720,15 @@ interface MailRowDb {
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
   parkedAt: number | null;
+  deliveredAtText: string | null; ingestedAtText: string | null; ackedAtText: string | null;
 }
+
+/** One stored delivery time onto the wire: present only when it is a positive safe integer (`persistedInt`), so a
+ *  missing, fractional, textual, zero or unsafe value is absent, never zero (mid-turn mail PR 1). */
+const mailTime = (key: 'deliveredAt' | 'ingestedAt' | 'ackedAt', text: string | null): Partial<MailSummary> => {
+  const v = text === null ? null : persistedInt(text, key);
+  return v !== null && v.ok ? { [key]: v.value } : {};
+};
 
 /** A route argument can never ask either mail read to walk more history (or
  *  more outstanding rows) than is reasonable to JSON-stringify into one
@@ -7147,6 +7158,8 @@ export class CoordStore {
       // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
       // keeps its park columns as history, and the wire must not call it parked.
       parkedAt: r.state === 'queued' ? r.parkedAt : null,
+      ...mailTime('deliveredAt', r.deliveredAtText), ...mailTime('ingestedAt', r.ingestedAtText),
+      ...mailTime('ackedAt', r.ackedAtText),
     }));
   }
 

@@ -8148,6 +8148,17 @@ export interface MailSummary {
    * means "nothing to say about a park".
    */
   parkedAt?: number | null;
+  /**
+   * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times, so a reader can measure how long a mail
+   * waited and how long it stayed unread. `at` above is when the mail row was inserted. `deliveredAt` is when the lane
+   * last put the nudge into the recipient's pane (a replay re-dates it, so for a replayed row it is the latest delivery,
+   * not the first). `ingestedAt` is when the recipient's `UserPromptSubmit` hook saw the nudge arrive. `ackedAt` is when
+   * the recipient acked it. ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent
+   * when the stored value is not a positive whole number, never zero.
+   */
+  deliveredAt?: number;
+  ingestedAt?: number;
+  ackedAt?: number;
 }
 
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
