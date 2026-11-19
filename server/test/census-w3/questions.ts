@@ -228,7 +228,8 @@ export function questionDoorIns(root: string = REPO): DoorInSite[] {
 
 /** The `CoordStore` question methods, a CLOSED list (slug question-census): every public `CoordStore` method whose
  *  name says ask, approval or question is on it, or on `NOT_QUESTION_STORE_METHODS`, and the census test reds on a
- *  method on neither (`coordStoreQuestionShapedMethods`). 34 (answer marks B added `askMarkTargets` and `askMarkRead`). */
+ *  method on neither (`coordStoreQuestionShapedMethods`). 35 (answer marks B added `askMarkTargets` and `askMarkRead`;
+ *  approvals PR 1 `approvalRowsForCensus`, which the census read reaches through `questions.ts#censusSources`). */
 export const QUESTION_STORE_METHODS: readonly string[] = [
   'askById', 'insertAsk', 'asksForParent', 'heldAskFor', 'currentAskFor', 'currentAsksFor', 'takeAskForAnswer', 'untakeAsk',
   'settleAsk', 'releaseAsk', 'declineAsk', 'staleAsk', 'restampAsk', 'heldQuestionRows', 'heldApprovalRowsByChild',
@@ -238,6 +239,8 @@ export const QUESTION_STORE_METHODS: readonly string[] = [
   // Overlord W1, answer marks B: the reads of the asks the operator has, reached through `questions.ts#markableAsks` and
   // `questions.ts#askForMark`.
   'askMarkTargets', 'askMarkRead',
+  // Approvals PR 1: the census read's minted rows, reached through `questions.ts#censusSources`.
+  'approvalRowsForCensus',
 ];
 
 /** Public `CoordStore` methods whose names look like a question method and are not one, each with why. */
@@ -246,6 +249,7 @@ export const NOT_QUESTION_STORE_METHODS: Readonly<Record<string, string>> = {
   digestDay: "the digest's send ledger, not a question table",
   claimDigestDay: "the digest's send ledger, not a question table",
   insertDigestResponses: "the response record's digest lines (Overlord W1 responses B), not a question table",
+  approvalPushSources: "the push outbox's source column counted for the approval census (approvals PR 1), not a question table",
 };
 
 /** The public `CoordStore` methods (no `private`) whose name says ask, approval, question or digest: the set

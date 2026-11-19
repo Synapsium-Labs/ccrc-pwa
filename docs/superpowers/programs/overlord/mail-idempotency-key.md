@@ -36,8 +36,9 @@ the first copy is acked, and it does not apply to run mail at all. `ccd/ccrc-api
 ## 3. The migration slot
 
 Main stood at 102 entries when this was cut. Door A1 (#3035) then landed 103, so after one absorption (the branch
-conflicted in the slot) the entry is 104 by position. Approvals PR 1 (#3043) has since landed 104 and #3021 is promised
-105, so the entry takes the next free slot at its landing merge, under the coordinator's standing license.
+conflicted in the slot) the entry was 104 by position. Approvals PR 1 (#3043) then landed 104, so at the landing merge
+of fix round 1 it is 105. The Linear follow-up (#3021) was promised 105 too and has not landed, so the coordinator squares
+that with its coordinator; whichever lands second renumbers.
 
 ## 4. Tests and mutation measurement
 

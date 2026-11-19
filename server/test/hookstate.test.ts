@@ -68,6 +68,20 @@ describe('readHookState', () => {
     expect(out?.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la' } });
   });
 
+  it('the approval envelope\'s route word is carried, and a bad one is dropped without failing the read (approvals PR 1, Task 1.2)', async () => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base({ state: 'waiting', waitBy: 'subagent', ask: { approval: { tool: 'Bash', summary: 'ls -la', route: 'deny-unknown' } } }));
+    const out = await readHookState(localIO, reg, ID, UUID, NOW);
+    expect(out?.ask).toEqual({ approval: { tool: 'Bash', summary: 'ls -la', route: 'deny-unknown' } });
+    expect(out?.waitBy).toBe('subagent');
+    for (const bad of [7, '', 'x'.repeat(65), null]) {
+      seed(reg, ID, base({ state: 'waiting', ask: { approval: { tool: 'Bash', summary: 'ls', route: bad } } }));
+      const r = await readHookState(localIO, reg, ID, UUID, NOW);
+      expect(r?.ask, String(bad)).toEqual({ approval: { tool: 'Bash', summary: 'ls' } });
+      expect(r?.waitBy).toBeUndefined();
+    }
+  });
+
   it('a real Claude questions shape — extra fields on both the option and the question — still round-trips', async () => {
     // Pins tolerance: `session-hook.sh` copies `tool_input.questions` VERBATIM
     // off the AskUserQuestion tool call (see server/test/fixtures/
