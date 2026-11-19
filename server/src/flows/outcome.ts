@@ -1,15 +1,18 @@
 // A flow outcome a coordinator reports, and where the flow would go next (Flows wave 3b, plan `2026-11-20-flows-w3b.md`).
 // Ring: L1, context Coordination (C5): pure. The engine's SHADOW: the answer is recorded (`flowsStore.recordFlowOutcome`)
 // and returned, and nothing is sent. Only an instruction or a skill block takes a reported outcome: a protocol step is the
-// run machine's to observe (spec §5) and a gate is the server's to measure (wave 4).
+// run machine's to observe (spec §5) and a gate is the server's to measure (wave 4), except an `attested` gate (wave 4a):
+// the coordinator reports its outcome WITH the evidence, and the record names who attested it. The server runs nothing.
 import { renderFlowPrompt, type FlowDoc, type FlowParse, type FlowVar } from '../../../shared/flows.js';
 
 export type OutcomeVerdict =
-  | { ok: true; blockId: string; outcome: string; next: string; wouldSend: string }
+  | { ok: true; blockId: string; outcome: string; next: string; wouldSend: string; evidence: string | null }
   | { ok: false; refusal: 'bad-request' | 'conflict'; detail: string };
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const utf8 = (s: string): number => new TextEncoder().encode(s).length;
+/** The most an attested gate's evidence may hold (characters). */
+export const EVIDENCE_MAX = 2000;
 
 /** What entering `next` would do: compose a prompt (its size and what the server could not fill), observe a protocol
  *  step, or measure a gate. */
@@ -39,11 +42,16 @@ export function decideOutcome(
   const at = d.blocks.find((x) => x.id === block);
   if (!at) return { ok: false, refusal: 'conflict', detail: `${block} is not a block of the pinned flow` };
   if (at.kind === 'protocol') return { ok: false, refusal: 'conflict', detail: `${block} is ccrc's own step: the run machine reports it` };
-  if (at.kind === 'gate') return { ok: false, refusal: 'conflict', detail: `${block} is a gate: the server measures it` };
+  const attested = at.kind === 'gate' && at.gate?.kind === 'attested';
+  if (at.kind === 'gate' && !attested) return { ok: false, refusal: 'conflict', detail: `${block} is a gate: the server measures it` };
+  const ev = b['evidence'];
+  if (attested && (typeof ev !== 'string' || ev.trim() === '' || ev.length > EVIDENCE_MAX)) {
+    return { ok: false, refusal: 'bad-request', detail: `an attested gate takes evidence: one to ${EVIDENCE_MAX} characters` };
+  }
   if (!at.outcomes.includes(outcome)) {
     return { ok: false, refusal: 'conflict', detail: `${block} answers ${at.outcomes.join(' or ')}, not ${outcome}` };
   }
   const edge = d.edges.find((e) => e.from === block && e.outcome === outcome);
   if (!edge) return { ok: false, refusal: 'conflict', detail: `${block}'s ${outcome} leads nowhere in the pinned flow` };
-  return { ok: true, blockId: block, outcome, next: edge.to, wouldSend: wouldSendOf(d, edge.to, vars) };
+  return { ok: true, blockId: block, outcome, next: edge.to, wouldSend: wouldSendOf(d, edge.to, vars), evidence: attested ? (ev as string) : null };
 }
