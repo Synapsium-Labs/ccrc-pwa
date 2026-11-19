@@ -2712,7 +2712,7 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     panePids: new Map<string, number | null>([[COORD, COORD_PID]]), records: [regRow(COORD, COORD_UUID)], refused: new Set(),
   });
   const sessions = [fleetRow(COORD)];
-  const setup = async (): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; runId: number }> => {
+  const setup = async (): Promise<{ h: Harness; coord: CoordStore; w: FleetWatcher; runId: number; sent: PushPayload[] }> => {
     const r = await rig();
     seedRegistry(r.h.home, COORD, COORD_UUID);
     seedCoordLive(r.h);
@@ -2728,7 +2728,7 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     }
     at(T0);
     r.coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: opened.id, kind: 'status', subject: WAVE_DONE_SUBJECT, body: 'b', artifacts: [] });
-    return { h: r.h, coord: r.coord, w: r.w, runId: opened.id };
+    return { h: r.h, coord: r.coord, w: r.w, runId: opened.id, sent: r.sent };
   };
   const ballMail = (coord: CoordStore): MailRow[] => operatorMail(coord).filter((m) => m.subject.startsWith('stall:coord-ball:'));
 
@@ -2744,6 +2744,14 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     expect(mailBody(coord, sent[0]!.id)).toContain('Continue per coordinator clause 21');
     await sweepThrough(w, sessions, W2_LIVE, tickWith(), RUNG_AT + 60_000, RUNG_AT + 60_000);
     expect(ballMail(coord)).toHaveLength(1);
+  });
+
+  it('a coordinator whose only run is inactive gets the rung alone: held mail raises no mail-stuck push, as before the rung', async () => {
+    const { coord, w, sent } = await setup();
+    const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
+    coord.queueDelivery(m.id, COORD, 'envelope');
+    await sweepThrough(w, sessions, W2_LIVE, tickWith(), T0 + MAIL_STUCK_MS + 60_000, T0 + MAIL_STUCK_MS + 3 * STALL_SWEEP_MS);
+    expect(sent.filter((p) => p.tag?.includes('-mail-stuck-'))).toEqual([]);
   });
 
   it('w2 unarmed: the rung records its shadow line and sends nothing', async () => {
@@ -2793,6 +2801,13 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
         await w.sweepBlockWakes(sess, tick);
       }
     };
+
+    it('the poll starts the lane on every tick that reaches the stall watch', async () => {
+      const { w } = await setup();
+      const lane = vi.spyOn(w, 'sweepBlockWakes').mockResolvedValue(undefined);
+      await w.tick();
+      expect(lane).toHaveBeenCalled();
+    });
 
     it('time: nothing before its time; at it, one mail, and a later sweep sends no more', async () => {
       const { coord, w } = await setup();

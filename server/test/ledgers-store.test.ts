@@ -375,6 +375,18 @@ describe('the spec pin and the modifications (plan PL2)', () => {
       pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
   });
 
+  it('programmeHasBlockingItem is true only while an open item of that programme waits at the blocking level (D-8126)', () => {
+    const s = mk();
+    openRunFor(s, 'prog-a', 'lane-a');
+    raise(s, { neededBy: 'soon', soonLabel: 'before wave 6' });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(false);
+    const id = raise(s, { neededBy: 'blocking', soonLabel: null });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(true);
+    expect(s.programmeHasBlockingItem('prog-z')).toBe(false);
+    s.moveItem(id, 'withdraw', 'coordinator', {}, NOW + 1, live);
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(false);
+  });
+
   it('isPinned is true only for a programme that has a spec pin (R7)', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
