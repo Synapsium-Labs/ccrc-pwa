@@ -159,7 +159,22 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2` unless said
 | server compile (`tsconfig.json`) | clean before the server wiring line, and clean after it (queued about 40 minutes for a slot) | 15, 8.5 |
 | tests compile (`test/tsconfig.tests.json`) | killed by the slice's memory cap three times (exit 137); a narrowed config naming only this task's six test files and their imports compiled clean. The narrowed config was a temporary file in `server/test/`, removed after the run | 8.8 |
 
-## 7. For later
+## 7. CI's first fast run, and its fix
+
+CI's fast run on the first push (`710d115a0`) was red in three server shards, three real breaks this task's local runs had
+not selected (measured from the job logs):
+
+| Shard | Test | Cause | Fix |
+|---|---|---|---|
+| 7 | `mail-routes.test.ts`, every quoted kebab token in `server/src/coord` is declared | the map's words (`state-unknown` first) were quoted in `workMap.ts` and admitted by no guard | `shared/plan.ts` declares the map's other words as lists too (`WORK_SOURCES`, `WORK_VERDICT_READS`, `WORK_UNREADABLE`), the view's types read from them, and `isPlanKebab` admits all five lists. It builds its set on first use, because the lists sit below it, beside the view. The single-definition pin names the three new lists |
+| 8 | `overlord-other-lanes-pin.test.ts`, the six plan doors, `plan show stays open` | its inline snapshot records the whole plan read's answer, which now carries `work` | that one inline snapshot regenerated (`-u` filtered to the case), a one-line diff, with the claim holder's consent (gates-b, claim 5572, mail delivery 26459) |
+| 4 | `plan-phases.test.ts`, the stored plans read the same as before | the WM0 characterization compares the whole answer with a fixture taken before WM0 | `planPhasesFixture.ts#readCharacterizationPlans` sets `work` aside, so the case still pins that `plan` reads as before; the fixture is unchanged |
+
+After the fix (load 13.2 to 15.3): `plan-phases`, `mail-routes`, `single-definition/plan`, `work-map`, `plan-routes`,
+`plan-ticket-done` 309 of 309; `overlord-other-lanes-pin` with `plan-phases` 72 of 72; `ccrc-api`'s plan cases 23 of 23;
+a narrowed compile of every changed test file and `server.ts` (its config in the session's temp root) clean.
+
+## 8. For later
 
 - When the hierarchy's Task 4.3 stores a programme ticket's close apart from a drop, the route fills `closed` from it.
 - WM3 draws the view; `epicPath(slug, key)` (`pwa/src/lib/routes.ts`) is the epic row's link.

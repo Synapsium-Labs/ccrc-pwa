@@ -83,12 +83,15 @@ export type PlanRefusal = (typeof PLAN_REFUSALS)[number];
 
 /** The kebab words of this vocabulary, for the mail-routes census (`mail-routes.test.ts`): a quoted kebab word in
  *  `server/src/coord` is a declared code or passes an exported guard, and this is the guard for the plan's. */
-const PLAN_KEBAB: ReadonlySet<string> = new Set<string>([
+/** Built on first use, because the work map's lists (programme work map WM2, D-8779) are declared further down, beside the
+ *  view they type. */
+let planKebab: ReadonlySet<string> | null = null;
+export const isPlanKebab = (tok: string): boolean => (planKebab ??= new Set<string>([
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
   ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
   ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
-]);
-export const isPlanKebab = (tok: string): boolean => PLAN_KEBAB.has(tok);
+  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, ...WORK_UNREADABLE,
+])).has(tok);
 
 // ── Wire types ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -180,6 +183,15 @@ export type WorkStatus = (typeof WORK_STATUSES)[number];
 export const WORK_GROUPS = ['done', 'in-progress', 'waiting-on-you', 'held', 'not-started', 'dropped', 'closed',
   'left-open', 'failed'] as const;
 export type WorkGroup = (typeof WORK_GROUPS)[number];
+/** Where the map comes from (spec §5.1, D19): `ended` when the plan has an end; `plan` with a ticket to count;
+ *  `declared-empty` when `plan put` ran with nothing to count; `runs` (no plan) otherwise. */
+export const WORK_SOURCES = ['plan', 'declared-empty', 'ended', 'runs'] as const;
+export type WorkSource = (typeof WORK_SOURCES)[number];
+/** The run verdicts reader's state on the map: `not-read` skips the stuck and blocked rows (Table 6 rows 7 and 8). */
+export const WORK_VERDICT_READS = ['read', 'not-read'] as const;
+/** Why `work` could not be read: the store's word for a run read that answers a failure, or `read-failed` for a read that
+ *  throws. */
+export const WORK_UNREADABLE = ['run-unreadable', 'read-failed'] as const;
 /** One ticket (or, in the no-plan fallback, one work run) on the map. */
 export interface WorkItemView {
   key: string;
@@ -231,12 +243,9 @@ export interface WorkEpicView {
   items: string[];
 }
 export interface WorkMapView {
-  /** `ended` when the plan has an end; `plan` with a ticket to count; `declared-empty` when `plan put` ran with nothing to
-   *  count; `runs` (no plan) otherwise (spec §5.1, D19). */
-  source: 'plan' | 'declared-empty' | 'ended' | 'runs';
+  source: WorkSource;
   end: { outcome: PlanEndOutcome; why: string | null; at: number } | null;
-  /** The run verdicts reader's state: `not-read` skips the stuck and blocked rows (Table 6 rows 7 and 8) and says so. */
-  verdicts: 'read' | 'not-read';
+  verdicts: (typeof WORK_VERDICT_READS)[number];
   /** Each ticket once (each run once in the fallback). */
   counts: Record<WorkGroup, number>;
   items: WorkItemView[];
@@ -255,7 +264,7 @@ export interface WorkMapView {
   runs: { items: WorkItemView[]; waves: { from: number; to: number } | null } | null;
 }
 /** The plan read's `work` field: the map, or why the reads behind it failed (D19). Absent means an older server. */
-export type WorkAnswer = WorkMapView | { unreadable: string };
+export type WorkAnswer = WorkMapView | { unreadable: (typeof WORK_UNREADABLE)[number] };
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
   ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };
