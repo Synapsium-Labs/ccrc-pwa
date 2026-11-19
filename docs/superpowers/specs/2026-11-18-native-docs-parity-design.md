@@ -510,7 +510,7 @@ This section is the parity request to the shared renderer library, the public li
 
 | Change | Rows | Compatibility |
 |---|---|---|
-| Layouts `classic`, `editorial`, `review`, `guided` beside `default`, each its own enhance bundle and script hash; the frame policy built for the chosen layout | R19 | Additive; a host that names no layout gets `default` |
+| Layouts `classic`, `editorial`, `review`, `guided` beside `default`, each its own enhance bundle and script hash, none larger than the default bundle at the same commit; the frame policy and the srcdoc cap built for the chosen layout | R19 | Additive; a host that names no layout gets `default` |
 | Every layout, `default` included, uses the appearance slots and passes the appearance pairs' contrast gate in hosted mode: the appearance slots and pairs as X1's merged contract defines them. The library's conformance and contrast suites run per layout, and each layout's srcdoc is held to its cap per layout, with X1's fonts in it | R19, R10 | A constraint on the layouts above; a layout that fails it does not ship |
 | The render step returns the doc's item values (from the byline item fact, a promise-delta `item:` line and the legacy item header), at most 50 of at most 100 characters; the seed accepts resolved item links (value and href) and draws them; the library carries no default tracker | R20 | Additive; no links seeded means items stay text |
 | Frame-to-host op `place {kind: 'overlay' \| 'overlay-closed'}`; the existing `hash` op carries `push` and `from` additively (the navigation layer computes them today; the 1.1 bridge drops them); host commands `close-overlay` and `goto {id, from?}`, `from` the library's anchor token | R13, R14 | Additive; the frame sends `place`, and `push` and `from` on `hash`, only when the seed says the host accepts them, so a 1.1 host never counts them as refused |
@@ -519,6 +519,30 @@ This section is the parity request to the shared renderer library, the public li
 | A print mode of `render` that emits, statically and inside the render's own allowlist, the blocks its enhance step builds on the frame's DOM: the facts panel, byline and reading time, the eyebrow, In short and Where things stand boxes, section numbers, status labels, the review strip's counts, and, when the host turns `rules` on, rule paragraphs with their heads and status pills and the rules index; and a print stylesheet scoped under one root class | R21 (PR3 to PR8, PR11, PR13 to PR15) | Additive; off unless the host asks |
 
 Every addition rides the existing port, the existing host parser and `BRIDGE_LIMITS` (with the per-op caps above), and the bridge's version stays 1, as when `mermaid`, `command` and `progress` were added. None adds a channel, a window listener, parent-DOM access or a CSP source. ccrc adopts the release with the existing exact-pin, provenance and import-list checks (rich-docs §4.7), in wave P5.
+
+**Size, and X2's share (proposed here; the coordinator sets it at the library-input wave's acceptance).** X1's library test 8 counts this design (X1 spec §10, as the library-input wave X4 amended it). It keeps one row per design in commit order, append-only, with two totals: `total`, every `FRAME_MANIFEST` entry and every layout bundle, Mermaid's included, and `frame`, the largest set one frame inlines. X1's contract lands first, and X2's commits append their own rows. Its layouts are per-layout enhance bundles, of which a frame inlines one:
+- **In `total`,** every layout bundle counts, because any one may be inlined.
+- **In `frame`,** only the largest bundle counts, beside the entries every frame inlines.
+- **A layout is never larger than the default bundle** at the same commit (test 8's layout row). So a layout cannot raise the largest frame, and a layout bundle counts only against the design whose commit adds it.
+- **The srcdoc cap is derived per layout,** from the entries that layout's frame inlines, every seed field at its cap and X1's faces' cap. ccrc's `frame-cost` row takes its BASE per layout at the new pin (wave P5).
+
+The proposal, from comparators measured in 1.1.0. These are estimates of X2's code, not measurements of it: X2's commits measure their own rows.
+
+| Part | Comparator, measured in 1.1.0 | Estimate |
+|---|---|---|
+| 1.1.0's default enhance bundle | `frame/enhance.js`, 198 215 characters, minified. Its 47 modules, each minified alone with terser, sum to 208 219, so bundling saves a factor of 0.952 | the baseline |
+| `place`, `push` and `from` on `hash`, `close-overlay` and `goto` | the modules they extend, minified alone: `nav` 5 997, `overlays` 855 and `commands` 594, 7 446 in all | at most 7 446 |
+| Item links drawn from the seed | `xrefs` 916 and `mentions` 1 063, 1 979 in all | at most 1 979 |
+| `print-figures`: draw each figure for print, rasterise it and send it at pace | `diagram-tools` 18 181, the figure tools and full-screen view | at most 18 181 |
+| The default bundle's growth | the three rows above, 27 606, times 0.952 | 26 281 |
+| Print mode | the enhance modules that build those blocks today: `editorial` 9 162, `strip` 3 695, `status` 2 411, `rules` 3 716 and `plans` 5 008, 23 992 in all | 0 in test 8. Print mode is in `render`, which ccrc's parse worker runs, and its stylesheet loads in ccrc's print view. Neither is a frame asset, so its growth is reported beside test 8 and not counted in it |
+| Four layout bundles (`classic`, `editorial`, `review`, `guided`) | the standalone reader's layout scripts, against its default's 158 456 bytes: `classic` 18 700, editorial 39 502, guided 55 490 and review 61 577 (0.12 to 0.39 of the default). A library layout also carries the shared modules, so each is bounded by test 8's layout row, not by these ratios | each at most the default bundle at X2's commit: at most 198 215 plus X1's growth (at most 32 768) plus 26 281, which is 257 264. Four: at most 1 029 056 |
+
+Proposed shares for X2:
+- **Total share: 1 056 768 characters,** which is 1 032 KiB. It covers 26 281 plus 1 029 056, which is 1 055 337, rounded up.
+- **Frame share: 26 624 characters,** which is 26 KiB. It covers the default bundle's 26 281, rounded up, because no layout may exceed the default.
+
+So the largest hosted frame grows over 1.1.0 by at most 224 504 (X1's three parts) plus 26 624, which is 251 128 characters. The bootstrap's parser rows for the new ops have no comparator and are left unmeasured, inside the rounding. A layout that cannot keep test 8's layout row, or a measured row above either share, stops that library commit, and it goes to the coordinator with its numbers.
 
 ## 7. New server surfaces, their gates and rings
 
