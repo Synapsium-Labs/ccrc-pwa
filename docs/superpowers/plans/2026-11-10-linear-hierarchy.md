@@ -1833,6 +1833,10 @@ executable block runs).
   `plan map-propose` lands with its row and route in Task 7.2, and naming it here would turn both the closed-corpus
   parity and `coordinator-skill.test.ts`'s route check red.
 
+Built in part by #3040 (wave 6): `references/plan.md` and SKILL.md's §Linear pointer. The clause, its count word, the
+cap raise and the rest of this task's files are the follow-up ticket `w6-clause` (D-8739). The Overlord's autonomy
+clause (D-8126) takes number 21, so this clause lands as 22.
+
 - [ ] **Step 1: Write the failing tests** — `clause 21 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
   `the ledger template's waves table has an epic column`; the ratchet's R4/R6 hold.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
@@ -1848,12 +1852,12 @@ managed object), `server/test/skill-size-caps.json` only if lowered; Test `serve
 `server/test/skill-size-ratchet.test.ts`, `server/test/ccrc-api-closed.test.ts` (the worker's executable
 `ccrc-api plan ticket-add` block joins its pinned list).
 
-- [ ] **Step 1: Write the failing tests** — `the worker files follow-ups with plan ticket-add into its own epic`;
+- [x] **Step 1: Write the failing tests** — `the worker files follow-ups with plan ticket-add into its own epic`;
   `the Linear skill says the hierarchy is ccrc's`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/worker-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
-- [ ] **Step 3: Write** the text, net size within each cap.
-- [ ] **Step 4: Run to pass** — same command.
-- [ ] **Step 5: Commit** — `docs(skills): the worker's follow-ups and the Linear skill's hierarchy rule (D-8185)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/worker-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
+- [x] **Step 3: Write** the text, net size within each cap.
+- [x] **Step 4: Run to pass** — same command.
+- [x] **Step 5: Commit** — `docs(skills): the worker's follow-ups and the Linear skill's hierarchy rule (D-8185)`.
 
 ---
 
