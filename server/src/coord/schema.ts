@@ -3941,6 +3941,27 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE mail ADD COLUMN inReplyTo INTEGER;
   CREATE UNIQUE INDEX mail_client_key_once ON mail(fromId, clientKey) WHERE clientKey IS NOT NULL;
   `,
+
+  // ── 106: user_version 105 -> 106 ──────────────────────────────────────────
+  // The gate's fence refusals (Overlord W1 gates B, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 5,
+  // slug witness-after-the-fence): a refused `stale-generation` write at an Overlord door, recorded as a counted fact for a
+  // later cause row, since a forger without the act key never reaches the witness. `why` is the fence's reason word
+  // (no-live-generation, generation-mismatch, key-unissued, key-mismatch, no-key, fork, ended); `generationId` is NULL when
+  // no live generation was read. One writer, `overlordGateStore.ts#recordFenceRefusal`, which prunes rows older than 30
+  // days in the same transaction. The act key is never a column. ONE NEW TABLE AND ITS INDEX, nothing else: an older build
+  // opening a file at this `user_version` takes rule 3 and never names the table. The slot is the next free one by
+  // position; whoever lands second renumbers (the coordinator's standing license).
+  `
+  CREATE TABLE overlord_fence_refusals (
+    id           INTEGER PRIMARY KEY,
+    sessionId    TEXT    NOT NULL,
+    generationId INTEGER,
+    door         TEXT    NOT NULL,
+    why          TEXT    NOT NULL,
+    at           INTEGER NOT NULL
+  );
+  CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
