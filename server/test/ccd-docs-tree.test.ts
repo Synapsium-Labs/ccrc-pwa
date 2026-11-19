@@ -1913,8 +1913,11 @@ function t14cannedStatus(canned: string): string[] {
 const t14row = (state: string, facts: Record<string, unknown>, trust = 'status'): Record<string, unknown> =>
   ({ state, ...facts, trust });
 const T14_ABSENT = { kind: 'absent', size: null, fp: null };
+/** A regular file's facts carry its modified time (X2 P1.5, `mtimeNs`): a decimal string, whatever its value. The value
+ *  itself is pinned against `fstat` in "docs-tree draft entries carry mtimeNs" at the end of this file. */
+const T14_MTIME = expect.stringMatching(/^(?:0|[1-9][0-9]{0,18})$/);
 const t14file = (body: string): Record<string, unknown> =>
-  ({ kind: 'file', size: Buffer.byteLength(body), fp: t14sha(body) });
+  ({ kind: 'file', size: Buffer.byteLength(body), fp: t14sha(body), mtimeNs: T14_MTIME });
 const t14withheld = (kind: string): Record<string, unknown> => ({ kind, size: null, fp: null });
 
 describe('docs draft snapshot (docs W1a Task 14)', () => {
@@ -1960,7 +1963,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
         'specs:c.md': t14row('deleted', T14_ABSENT),
         'specs:d.md': t14row('deleted', T14_ABSENT),
         'specs:e.md': t14row('typechange', t14withheld('symlink')),
-        'specs:f.md': t14row('conflicted', { kind: 'file', size: conflicted.length, fp: t14sha(conflicted) }),
+        'specs:f.md': t14row('conflicted', { kind: 'file', size: conflicted.length, fp: t14sha(conflicted), mtimeNs: T14_MTIME }),
         'specs:g.md': t14row('added', t14file('g new\n')),
         'specs:i.md': t14row('untracked', t14file('i.md body\n')),
       });
@@ -2284,7 +2287,7 @@ describe('docs draft snapshot (docs W1a Task 14)', () => {
       const { wt, head } = t14holder({ [`${T14_S}a.md`]: 'aaaa\n' });
       t14fs.writeFileSync(t14path.join(wt, T14_S, 'big.md'), 'y'.repeat(2000));
       const low = t14phase({ served: head, env: { CCD_DOCS_MAX_FILE_BYTES: '1000' } });
-      expect(low.rows['specs:big.md']).toEqual(t14row('untracked', { kind: 'file', size: 2000, fp: null }));
+      expect(low.rows['specs:big.md']).toEqual(t14row('untracked', { kind: 'file', size: 2000, fp: null, mtimeNs: T14_MTIME }));
       const ctl = t14phase({ served: head });
       expect(ctl.rows['specs:big.md']).toEqual(t14row('untracked', t14file('y'.repeat(2000))));
     }, 60000);
@@ -2659,7 +2662,7 @@ describe('docs draft snapshot guards (docs W1a Task 14, G8)', () => {
     ].join('\n'));
     expect(got).toEqual([
       [{ kind: 'unreadable', size: null, fp: null, errno: 'EIO' }, null],
-      [{ kind: 'file', size: 11, fp: null }, null],
+      [{ kind: 'file', size: 11, fp: null, mtimeNs: T14_MTIME }, null],
       'budget-spent',
     ]);
   }, 60000);
@@ -2848,7 +2851,7 @@ type T15Answer = Record<string, unknown> & {
 const t15sha = (b: string): string => t15createHash('sha256').update(b).digest('hex');
 /** A draft row for a regular file the snapshot read whole, as `status` classified it. */
 const t15row = (state: string, body: string): Record<string, unknown> =>
-  ({ state, kind: 'file', size: Buffer.byteLength(body), fp: t15sha(body), trust: 'status' });
+  ({ state, kind: 'file', size: Buffer.byteLength(body), fp: t15sha(body), mtimeNs: T14_MTIME, trust: 'status' });
 const t15write = (dir: string, rel: string, body: string): void => {
   t15fs.mkdirSync(t15path.dirname(t15path.join(dir, rel)), { recursive: true });
   t15fs.writeFileSync(t15path.join(dir, rel), body);
@@ -3770,4 +3773,32 @@ vT10.describe('six sections (rich-docs spec G1, W5b)', () => {
       ['vision', 'v.md'], ['promise', 'p.md'], ['promise', 'sub/q.md'],
     ]);
   });
+});
+
+// X2 P1.5 (ccd half), spec 2026-11-18 section 4.3 "Where the time comes from": a draft entry carries the leaf's modified
+// time as `mtimeNs`, a decimal string, from the same fstat its size comes from. Appended with its own names, as the
+// blocks above are.
+describe('docs-tree draft entries carry mtimeNs (X2 P1.5)', () => {
+  it('docs-tree: a draft entry carries mtimeNs as a decimal string', () => {
+    const { wt } = t15fixture();
+    t15write(wt, `${T15_SPECS}/big.md`, 'y'.repeat(2000));
+    const mtimeOf = (rel: string): string => t15fs.statSync(t15path.join(wt, T15_SPECS, rel), { bigint: true }).mtimeNs.toString();
+    // The CCD_DOCS_MAX_FILE_BYTES knob lowers the hash ceiling to 1000, so big.md is above it: size kept, fp null.
+    const t = t15tree(['--ref', 'refs/heads/ws/a'], { CCD_DOCS_MAX_FILE_BYTES: '1000' });
+    const drafts = t15drafted(t) as Record<string, { size: number | null; fp: string | null; mtimeNs?: unknown }>;
+    expect(Object.keys(drafts).sort()).toEqual(['specs:a.md', 'specs:big.md', 'specs:new.md']);
+    for (const [key, rel] of [['specs:a.md', 'a.md'], ['specs:new.md', 'new.md'], ['specs:big.md', 'big.md']] as const) {
+      const d = drafts[key]!;
+      expect(typeof d.mtimeNs, `${key}: a string, never a number`).toBe('string');
+      expect(d.mtimeNs, `${key} equals the file's st_mtime_ns`).toBe(mtimeOf(rel));
+      expect(d.mtimeNs).toMatch(/^(?:0|[1-9][0-9]{0,18})$/);
+    }
+    expect(drafts['specs:big.md']).toMatchObject({ size: 2000, fp: null });
+    expect(drafts['specs:a.md']!.fp).toMatch(/^[0-9a-f]{64}$/);
+    // A deleted draft has no leaf to stat: no mtimeNs.
+    t15fs.rmSync(t15path.join(wt, T15_SPECS, 'a.md'));
+    const gone = t15drafted(t15tree(['--ref', 'refs/heads/ws/a'])) as Record<string, Record<string, unknown>>;
+    expect(gone['specs:a.md']).toMatchObject({ state: 'deleted', kind: 'absent' });
+    expect(gone['specs:a.md']).not.toHaveProperty('mtimeNs');
+  }, 60000);
 });

@@ -37,6 +37,8 @@ const SPEC_STATUS: readonly (readonly [word: string, status: number])[] = [
   // Draft pins (show).
   ['worktree-gone', 409], ['ambiguous-worktree', 409], ['untrusted-worktree', 422], ['worktree-moved', 409],
   ['draft-changed', 409],
+  // Range reads (X2 P1.2).
+  ['snapshot-gone', 409], ['range-too-large', 413], ['prepare-busy', 503],
   // Fetch.
   ['remote-absent', 422], ['remote-branch-absent', 404], ['fetch-auth-failed', 502], ['fetch-rejected-objects', 502],
   ['fetch-transport', 502], ['ref-locked', 409], ['fetch-too-soon', 429], ['fetch-timeout', 504], ['fetch-failed', 502],
@@ -53,9 +55,9 @@ const SPEC_STATUS: readonly (readonly [word: string, status: number])[] = [
 describe('DOCS_FAILURE_HTTP (row 53, L1 half): every word has the status the spec gives it', () => {
   const words = SPEC_STATUS.map(([w]) => w);
 
-  it('the transcribed table is whole: 58 distinct words, exactly the vocabulary, in both directions', () => {
-    expect(SPEC_STATUS).toHaveLength(58);
-    expect(new Set(words).size, 'a word transcribed twice').toBe(58);
+  it('the transcribed table is whole: 61 distinct words, exactly the vocabulary, in both directions', () => {
+    expect(SPEC_STATUS).toHaveLength(61);
+    expect(new Set(words).size, 'a word transcribed twice').toBe(61);
     expect([...words].sort()).toEqual(Object.keys(DOCS_FAILURES).sort());
   });
 

@@ -294,6 +294,11 @@ export const DOCS_FAILURES = {
   'untrusted-worktree': 'ccd',
   'worktree-moved': 'ccd',
   'draft-changed': 'ccd',
+  // Range reads (X2 P1, `docs-show-range`): a snapshot the cache no longer holds, a request over a range bound, and a
+  // prepare the cache or its budget cannot take now.
+  'snapshot-gone': 'ccd',
+  'range-too-large': 'ccd',
+  'prepare-busy': 'ccd',
   // Fetch.
   'remote-absent': 'ccd',
   'remote-branch-absent': 'ccd',
@@ -379,6 +384,11 @@ export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = {
   'untrusted-worktree': 'none',
   'worktree-moved': 'auto',
   'draft-changed': 'auto',
+  // The PWA starts again from prepare once; a bound the request itself broke never succeeds by repeating it; a busy
+  // prepare is the reader's to retry.
+  'snapshot-gone': 'auto',
+  'range-too-large': 'none',
+  'prepare-busy': 'manual',
   'remote-absent': 'none',
   'remote-branch-absent': 'none',
   'fetch-auth-failed': 'none',
@@ -465,7 +475,7 @@ type DocsTriedRef = { ref: string; result: 'resolved' | 'absent' | 'dangling' | 
  * - `root`: unknown-project (ccd's projects root).
  * - `owner`, `branch`: linked-worktree, shared-repo.
  * - `tried`, `suggest`, `hint`: unresolved-ref. `ref`, `type`: ref-not-commit.
- * - `kind`: not-a-file. `size`, `cap`: too-large. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
+ * - `kind`: not-a-file. `size`, `cap`: too-large and range-too-large. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
  * - `candidates`: ambiguous-worktree. `why`: untrusted-worktree, malformed-answer, foreign-request, bad-query.
  * - `head`: worktree-moved. `now`: draft-changed. `lockAgeMs`: ref-locked.
  * - `step`, `rc`, `stderrHead`: git-failed, git-timeout. `signal`: ccd-killed. `code`, `stderrHead`: ccd-fault.
@@ -535,11 +545,11 @@ export function redactDocsText(s: string): string {
 // Spec 2026-10-01 section 2 (b) "Types", with section 3.5's additive amendments (`onRef`, `github`) folded in.
 // Additive only: no FLEET_PROTO bump. Every ccd answer is one JSON line: `{v:1, verb, ok, elapsedMs, ...}`.
 
-export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log';
+export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log' | 'docs-show-range';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_VERB_MAP: Record<DocsVerb, true> = {
-  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true, 'docs-log': true,
+  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true, 'docs-log': true, 'docs-show-range': true,
 };
 export const DOCS_VERBS: readonly DocsVerb[] = Object.keys(DOCS_VERB_MAP) as DocsVerb[];
 
@@ -649,6 +659,16 @@ export interface DocsShowOk {
   commit?: Sha; blob?: Sha; mode?: string; onRef?: 'contains' | 'not-contained' | 'unmeasured';
   /** Draft only; `fp === sha256`. */
   worktree?: string; branch?: string; head?: Sha; fp?: Sha;
+}
+
+/** `docs-show-range --prepare`'s ok line (X2 P1): the envelope and `DocsRangePrepared`, which carries no file bytes. */
+export interface DocsRangePreparedOk extends DocsRangePrepared {
+  v: 1; verb: 'docs-show-range'; ok: true; elapsedMs: number;
+}
+
+/** `docs-show-range --snapshot ...`'s ok line (X2 P1): the envelope and `DocsRangeFrame`, one frame of the snapshot. */
+export interface DocsRangeFrameOk extends DocsRangeFrame {
+  v: 1; verb: 'docs-show-range'; ok: true; elapsedMs: number;
 }
 
 export interface DocsFetchOk {

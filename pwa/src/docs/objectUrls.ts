@@ -7,6 +7,7 @@
 import { DOCS_RASTER_TYPES, contentClass, type DocPin, type DocsShowOk, type RasterMime } from '../../../shared/docs';
 import { api } from '../lib/api';
 import { DOCS_SHOW_NO_BYTES } from './docsText';
+import { b64Bytes } from './range/rangePolicy';
 import type { DocsAnswer, DocsLoaders } from './failures';
 
 /** The four raster MIME types, from the table and nowhere else. */
@@ -49,18 +50,7 @@ export function downloadExport(result: { readonly name: string; readonly bytes: 
 /** A docs-show answer's bytes: `utf8` text encoded as UTF-8, `base64` decoded. `null` has ONE meaning: the answer
  *  holds no bytes in the field its encoding names (the field is missing, or the base64 does not decode). */
 export function showBytes(show: DocsShowOk): Uint8Array<ArrayBuffer> | null {
-  if (show.encoding === 'base64') {
-    if (typeof show.b64 !== 'string') return null;
-    let binary: string;
-    try {
-      binary = atob(show.b64);
-    } catch {
-      return null;
-    }
-    const out = new Uint8Array(binary.length);
-    for (let i = 0; i < binary.length; i += 1) out[i] = binary.charCodeAt(i);
-    return out;
-  }
+  if (show.encoding === 'base64') return typeof show.b64 === 'string' ? b64Bytes(show.b64) : null;
   return typeof show.text === 'string' ? new TextEncoder().encode(show.text) : null;
 }
 

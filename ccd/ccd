@@ -9543,6 +9543,7 @@ EOF
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
   echo docs-sections-v2   # native Docs reader W5b (rich-docs spec G1): SECTIONS in the Docs helper holds vision and promise; the server names either only behind this word
   echo docs-log; echo docs-log-v1   # native Docs reader W5b (rich-docs spec G4): the verb, and the token that says it takes exactly this argv; the server sends it only behind the token
+  echo docs-show-range; echo docs-range-v1   # native Docs parity X2 P1.2 (spec 2026-11-18 section 4.3): one file read by range, a snapshot prepare then frames; the verb, and the token that says it takes exactly these four argv shapes; the server sends it only behind the token
   # ws-title-v1 / ws-wrapper-v1 — this ccd takes `--title <text>` and `--wrapper <lane>` on `ws-add` (named workspaces S1,
   # design 2026-10-20 §4.1). Two tokens, because the two flags are separable: the server sends each only behind its own
   # word, and PLACES IT BEFORE THE PROJECT. An older ccd binds an unknown `--` token as a positional (D-6164): leading,
@@ -45065,6 +45066,39 @@ cmd_docs_log() {   # --project P --commit C --section S --path X; one doc's comm
   _docs_py docs-log "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
 }
 
+_docs_range_nums_ok() {   # OFFSET LENGTH -> 0 iff OFFSET is 0|[1-9][0-9]{0,9} and LENGTH is [1-9][0-9]{0,9} (local LC_ALL=C)
+  local LC_ALL=C
+  [[ "${1-}" =~ ^(0|[1-9][0-9]{0,9})$ && "${2-}" =~ ^[1-9][0-9]{0,9}$ ]]
+}
+
+cmd_docs_show_range() {   # --project P (--commit C | --draft-branch B --head H) --section S --path X --pin PIN (--prepare | --snapshot ID --offset O --length L)
+  # One file read by range (X2 spec 2026-11-18 section 4.3, plan P1.2): a prepare that copies the pinned bytes once into a
+  # private snapshot, then frames of that snapshot. Four shapes and no other: committed prepare 11 tokens, draft prepare 13,
+  # committed frame 16, draft frame 18. The helper reads each value by fixed index and validates it; the front checks the
+  # shape and the two numbers' grammar (a bad shape is rc 1 with an empty stdout, the server-bug class).
+  local at=0 tail=()
+  if [[ "${1-}" == --project && "${3-}" == --commit && "${5-}" == --section && "${7-}" == --path && "${9-}" == --pin ]]; then
+    at=11
+  elif [[ "${1-}" == --project && "${3-}" == --draft-branch && "${5-}" == --head && "${7-}" == --section \
+          && "${9-}" == --path && "${11-}" == --pin ]]; then
+    at=13
+  fi
+  local shape=bad
+  if (( at > 0 )); then
+    tail=("${@:at}")
+    if [[ ${#tail[@]} -eq 1 && "${tail[0]}" == --prepare ]]; then
+      shape=prepare
+    elif [[ ${#tail[@]} -eq 6 && "${tail[0]}" == --snapshot && "${tail[2]}" == --offset && "${tail[4]}" == --length ]] \
+         && _docs_range_nums_ok "${tail[3]}" "${tail[5]}"; then
+      shape=frame
+    fi
+  fi
+  [[ "$shape" != bad ]] \
+    || die "usage: ccd docs-show-range --project P (--commit C | --draft-branch B --head H) --section S --path X --pin PIN (--prepare | --snapshot ID --offset O --length L)"
+  _docs_front docs-show-range || return 0
+  _docs_py docs-show-range "$PROJECTS_ROOT" "$WORKTREES_ROOT" "$REG" "$@" </dev/null
+}
+
 _docs_py() {   # verb projects_root worktrees_root reg [verb argv...]; the Docs helper (spec 2026-10-01 §2)
   # Embedded for `_pr_py`'s reason: ~/.local/bin/ccd is a COPY, so a sibling
   # file would be a second deployment step, and a way for `ccd caps` to
@@ -45143,8 +45177,12 @@ DOCS_LOG_MAX_ENTRIES=100
 DOCS_LOG_SUBJECT_MAX_CHARS=200
 DOCS_LOG_AUTHOR_MAX_CHARS=100
 DOCS_LOG_MAX_WIRE_BYTES=131072
+DOCS_RANGE_FRAME_BYTES=524288
+DOCS_RANGE_MAX_BYTES=67108864
+DOCS_RANGE_PREPARE_BUDGET_MS=10000
+MTIME_NS_RE=r'0|[1-9][0-9]{0,18}'
 # FAILURES is DOCS_CCD_FAILURES: every word a ccd docs answer may carry.
-FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
+FAILURES=frozenset({'bad-project','bad-ref','bad-commit','bad-section','bad-path','bad-fingerprint','unknown-project','not-a-git-repo','linked-worktree','shared-repo','partial-clone','repo-unreadable','no-default-branch','unresolved-ref','ref-not-commit','unknown-commit','not-a-commit','object-missing','absent-path','not-a-file','symlink-in-path','too-large','too-many-entries','unreadable-path','worktree-gone','ambiguous-worktree','untrusted-worktree','worktree-moved','draft-changed','snapshot-gone','range-too-large','prepare-busy','remote-absent','remote-branch-absent','fetch-auth-failed','fetch-rejected-objects','fetch-transport','ref-locked','fetch-too-soon','fetch-timeout','fetch-failed','git-failed','git-timeout','helper-unavailable','helper-failed'})
 # docs-parity: end
 
 # ===== docs: core =====
@@ -45350,7 +45388,8 @@ def read_args(verb, rest):
 
     Order: tree -- project, ref (bare or qualified). show committed -- project, commit, ref (qualified
     only), section, path. show draft -- project, draft branch (bare), head, section, path, fingerprint.
-    fetch -- project, branch (bare). log -- project, commit, section, path. --max-bytes is the front's grammar: re-asserted, never refused."""
+    fetch -- project, branch (bare). log -- project, commit, section, path. range -- see range_args (the range
+    section). --max-bytes is the front's grammar: re-asserted, never refused."""
     rest = list(rest)
     if verb == 'docs-index':
         _contract(rest == ['--all'], 'docs-index takes exactly --all')
@@ -45394,6 +45433,8 @@ def read_args(verb, rest):
         rel = valid_rel_path(raw_path)
         _refuse(rel is not None, 'bad-path')
         return LogArgs(project, commit, section, rel)
+    if verb == 'docs-show-range':
+        return range_args(rest)
     raise RuntimeError('docs argv contract: no argument reader for ' + repr(verb))
 
 # ===== docs: runner =====
@@ -47474,13 +47515,17 @@ def _draft_read(fd, limit):
 
 
 def draft_facts(trusted, rel, budget, fmt):
-    """One draft path's facts -> ({kind, size, fp[, errno]}, blob | None).
+    """One draft path's facts -> ({kind, size, fp[, mtimeNs][, errno]}, blob | None).
     The walk gives the kind (DRAFT_KIND_OF_WALK names the two refused-middle
     kinds in the wire's words). A regular file that passes the leaf checks and
     is at most file_ceiling() is read ONCE: fp is the sha256 of those bytes, a
     content hash and never stat data (MM2), size is their length, and blob is
     their git blob id in `fmt`, which never reaches the wire. A larger file
     keeps its size with fp None. Every other kind has size None and fp None.
+    A regular file's facts also carry mtimeNs (X2 P1.5, spec 4.3): the leaf's
+    st_mtime_ns as a decimal string, from the fstat of the descriptor the walk
+    opened, the stat its size comes from; it is what a stat pin names for a
+    file with no fp. It never replaces fp: the hash stays the read capability.
     The read draws on `budget` (a HashBudget); a file that would pass it raises
     DraftBudgetSpent."""
     fd, kind, err, st = walk_leaf(trusted.fd, rel, trusted.dev)
@@ -47489,10 +47534,11 @@ def draft_facts(trusted, rel, budget, fmt):
         if err is not None:
             facts['errno'] = err
         return facts, None
+    mtime_ns = str(st.st_mtime_ns)
     try:
         cap = file_ceiling()
         if st.st_size > cap:
-            return {'kind': 'file', 'size': st.st_size, 'fp': None}, None
+            return {'kind': 'file', 'size': st.st_size, 'fp': None, 'mtimeNs': mtime_ns}, None
         left = budget.left()
         if st.st_size > left:
             raise DraftBudgetSpent()
@@ -47504,10 +47550,10 @@ def draft_facts(trusted, rel, budget, fmt):
         SYS.close(fd)
     budget.used += len(data)
     if len(data) > cap:
-        return {'kind': 'file', 'size': len(data), 'fp': None}, None
+        return {'kind': 'file', 'size': len(data), 'fp': None, 'mtimeNs': mtime_ns}, None
     if len(data) > left:
         raise DraftBudgetSpent()
-    return {'kind': 'file', 'size': len(data), 'fp': hashlib.sha256(data).hexdigest()}, blob_id(data, fmt)
+    return {'kind': 'file', 'size': len(data), 'fp': hashlib.sha256(data).hexdigest(), 'mtimeNs': mtime_ns}, blob_id(data, fmt)
 
 
 def _draft_place(path):
@@ -48176,9 +48222,13 @@ def show_object_type(repo, oid, dl):
     raise show_failed('cat-file', r, detail='unexpected cat-file --batch-check output')
 
 
-def read_committed(repo, a, dl):
+def read_committed(repo, a, dl, range_cap=None, want_blob=None):
     """The bytes of a.section/a.path at a.commit, as (data, blob, mode), in
-    section 2 (f)'s order:
+    section 2 (f)'s order. The two keywords are docs-show-range's prepare
+    (X2 P1.2): `want_blob`, the pin's blob, which the entry must be, else
+    absent-path before any read; and `range_cap`, which replaces step 5's
+    cap, min(--max-bytes, file_ceiling()), with the range ceiling, over which
+    the size is range-too-large {size, cap}. A docs-show passes neither.
     1. batch-check C: missing is unknown-commit, any other type than commit
        is not-a-commit;
     2. ONE ls-tree of the section at C; the section path is a constant;
@@ -48225,9 +48275,15 @@ def read_committed(repo, a, dl):
     mode, oid, size = hit
     if mode in SHOW_REFUSED_MODES:
         raise fail('not-a-file', kind=SHOW_REFUSED_MODES[mode])
-    cap = min(int(a.max_bytes), file_ceiling())
-    if size > cap:
-        raise fail('too-large', size=size, cap=cap)
+    if want_blob is not None and oid != want_blob:
+        raise fail('absent-path')
+    if range_cap is not None:
+        if size > range_cap:
+            raise fail('range-too-large', size=size, cap=range_cap)
+    else:
+        cap = min(int(a.max_bytes), file_ceiling())
+        if size > cap:
+            raise fail('too-large', size=size, cap=cap)
     r = show_git(repo, ['cat-file', 'blob', oid], dl, CALL_S['show'], stdout_cap=size + 1)
     if r.timed_out:
         raise fail('git-timeout', step='cat-file')
@@ -48721,10 +48777,524 @@ def verb_fetch(ctx, a, fetch_s=CALL_S['fetch'], total_s=HELPER_DEADLINE_S['docs-
             fields['rc'] = r.rc
     raise fail(word, **fields)
 
+# ===== docs: range =====
+# docs-show-range (X2 spec 2026-11-18 section 4.3, plan Task P1.2, D-8764): one file read in bounded frames from ONE
+# snapshot. A PREPARE checks the pin, copies the pinned bytes once into a private snapshot in ~/.cc-docs-range/, hashing
+# as it copies, and answers only {snapshot, size, digest}. A FRAME names that snapshot and the whole request it was
+# prepared for, and answers at most DOCS_RANGE_FRAME_BYTES of its bytes with their own sha256. The pin, by source:
+# committed `blob:<sha>` (the entry at the commit must be that blob), draft `fp:<sha256>` (the copy must hash to it) and
+# draft `stat:<size>:<mtimeNs>` (the opened descriptor's fstat must give both, before and after the copy). A draft is
+# found, trusted and walked exactly as docs-show's draft pin does it (_pin_holder, _pin_trust, _pin_leaf).
+# THE CACHE is ccd's own, outside the session registry and every swept temp root, mode 0700, with one flock on a lock
+# file in it. Under that lock every range call first removes what has expired, a prepare takes its place (a live
+# reservation: at most RANGE_MAX_PREPARES_LIVE at once, at most RANGE_MAX_PREPARES_PER_MINUTE started in a minute), then
+# reserves its size against the bound before it copies, evicting completed entries least recently used first (a
+# reservation is never evicted), and a prepare that cannot fit is prepare-busy. The copy itself runs outside the lock.
+# Files in the cache, by id (128 random bits, hex): <id>.resv (a reservation), <id>.part (its copy in progress), then
+# <id>.bin and <id>.meta (a completed snapshot and its binding); plus `lock`, `starts` (one start time in ms a line) and
+# an optional `bound` (a lower bound, read only as a regular file of at most 32 ASCII digits, opened O_NOFOLLOW and
+# O_NONBLOCK, anything else ignored). The helper never trusts a cache file it reads: bounded reads, regular files only.
+import fcntl
+
+# ccd's own limits, spelled once here; the three parity copies (frame, range ceiling, prepare budget) are in the block above.
+RANGE_CACHE_NAME='.cc-docs-range'
+RANGE_CACHE_BOUND_BYTES=536870912
+RANGE_MAX_PREPARES_LIVE=2
+RANGE_MAX_PREPARES_PER_MINUTE=6
+RANGE_MINUTE_MS=60000
+RANGE_ENTRY_TTL_MS=3600000
+RANGE_RESERVATION_TTL_MS=120000
+RANGE_LOCK_WAIT_S=5
+RANGE_COPY_CHUNK=1048576
+RANGE_SMALL_FILE_MAX_BYTES=4096
+RANGE_BOUND_FILE_MAX_BYTES=32
+RANGE_DEADLINE_S=20
+
+RangeArgs = namedtuple('RangeArgs', ['project', 'commit', 'branch', 'head', 'section', 'path', 'pin',
+                                     'snapshot', 'offset', 'length'])
+RANGE_SNAPSHOT_RE = r'[0-9a-f]{32}'
+RANGE_NAME_RE = r'([0-9a-f]{32})\.(meta|bin|part|resv)'
+RANGE_STAT_SIZE_RE = r'0|[1-9][0-9]{0,9}'
+
+
+def range_pin(s):
+    """The pin's parts: ('blob', sha), ('fp', sha256) or ('stat', size, mtime_ns), or None for a string outside the
+    grammar. The grammar is exact: `stat:` is a size of at most ten digits and a time in MTIME_NS_RE, no leading zero."""
+    parts = s.split(':')
+    if len(parts) == 2 and parts[0] == 'blob' and re.fullmatch(SHA_RE, parts[1]) is not None:
+        return ('blob', parts[1])
+    if len(parts) == 2 and parts[0] == 'fp' and re.fullmatch(FINGERPRINT_RE, parts[1]) is not None:
+        return ('fp', parts[1])
+    if (len(parts) == 3 and parts[0] == 'stat' and re.fullmatch(RANGE_STAT_SIZE_RE, parts[1]) is not None
+            and re.fullmatch(MTIME_NS_RE, parts[2]) is not None):
+        return ('stat', int(parts[1]), int(parts[2]))
+    return None
+
+
+def range_args(rest):
+    """docs-show-range's arguments, validated in argv order, the first refusal winning: project, commit (committed) or
+    draft branch (bare) and head, section, path, pin (a committed doc takes only a blob pin, a draft an fp or a stat
+    pin: any other is bad-fingerprint), then for a frame the snapshot id (one that is no id cannot name a snapshot:
+    snapshot-gone), offset and length. The front checked the shape and the numbers' grammar; those are re-asserted."""
+    rest = list(rest)
+    committed = len(rest) > 2 and rest[2] == '--commit'
+    flags = ('--project', '--commit') if committed else ('--project', '--draft-branch', '--head')
+    flags = flags + ('--section', '--path', '--pin')
+    prepare = rest[-1:] == ['--prepare']
+    if prepare:
+        vals = _values(rest[:-1], flags)
+    else:
+        vals = _values(rest, flags + ('--snapshot', '--offset', '--length'))
+    project = vals[0]
+    _refuse(valid_project(project), 'bad-project')
+    commit = branch = head = None
+    if committed:
+        commit, section, raw_path, pin = vals[1:5]
+        _refuse(valid_sha(commit), 'bad-commit')
+    else:
+        branch, head, section, raw_path, pin = vals[1:6]
+        _refuse(valid_bare_ref(branch), 'bad-ref')
+        _refuse(valid_sha(head), 'bad-commit')
+    _refuse(valid_section(section), 'bad-section')
+    rel = valid_rel_path(raw_path)
+    _refuse(rel is not None, 'bad-path')
+    parsed = range_pin(pin)
+    _refuse(parsed is not None and (parsed[0] == 'blob') == committed, 'bad-fingerprint')
+    if prepare:
+        return RangeArgs(project, commit, branch, head, section, rel, pin, None, None, None)
+    snapshot, offset, length = vals[-3:]
+    _contract(re.fullmatch(r'0|[1-9][0-9]{0,9}', offset) is not None, '--offset outside its grammar')
+    _contract(re.fullmatch(r'[1-9][0-9]{0,9}', length) is not None, '--length outside its grammar')
+    _refuse(re.fullmatch(RANGE_SNAPSHOT_RE, snapshot) is not None, 'snapshot-gone')
+    return RangeArgs(project, commit, branch, head, section, rel, pin, snapshot, int(offset), int(length))
+
+
+def range_bind(a):
+    """What a snapshot is bound to: the whole request but the step. A frame must equal it field for field."""
+    return {'project': a.project, 'commit': a.commit, 'branch': a.branch, 'head': a.head, 'section': a.section,
+            'path': a.path, 'pin': a.pin}
+
+
+def range_cache_dir(ctx):
+    """ccd's HOME is the parent of the session registry (ccd's REG is "$HOME/.cc-sessions", a constant), so the cache
+    is "$HOME/.cc-docs-range": derived from the root ccd hands in, never read from the environment."""
+    return os.path.join(os.path.dirname(ctx.reg), RANGE_CACHE_NAME)
+
+
+def range_open_dir(cdir):
+    """The cache directory, made 0700 if absent. A symlink, a non-directory or another user's directory in its place is a
+    contract break (helper-failed): nothing is ever read or written through it."""
+    try:
+        os.mkdir(cdir, 0o700)
+    except OSError as e:
+        if e.errno != errno.EEXIST:
+            raise
+    st = os.lstat(cdir)
+    if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
+        raise RuntimeError('docs range cache: not a directory of this user')
+    if stat.S_IMODE(st.st_mode) != 0o700:
+        os.chmod(cdir, 0o700)
+
+
+def range_lock(cdir):
+    """The cache's lock, held until the returned descriptor is closed: one flock on `lock`, polled for at most
+    RANGE_LOCK_WAIT_S (a holder is short, so a longer wait is a busy cache: prepare-busy)."""
+    fd = os.open(os.path.join(cdir, 'lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError('docs range cache: the lock is not a regular file')
+        end = SYS.monotonic() + RANGE_LOCK_WAIT_S
+        while True:
+            try:
+                fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                return fd
+            except OSError as e:
+                if e.errno not in (errno.EWOULDBLOCK, errno.EAGAIN, errno.EACCES):
+                    raise
+            if SYS.monotonic() >= end:
+                raise fail('prepare-busy')
+            time.sleep(0.02)
+    except BaseException:
+        os.close(fd)
+        raise
+
+
+def range_read_small(path, limit):
+    """At most `limit` bytes of a regular file, or None when it is absent, not regular, unreadable or longer. Opened
+    O_NOFOLLOW and O_NONBLOCK, so a symlink is refused and a FIFO cannot hang the call."""
+    try:
+        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+    except OSError:
+        return None
+    try:
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            return None
+        raw = os.read(fd, limit + 1)
+    except OSError:
+        return None
+    finally:
+        os.close(fd)
+    return raw if len(raw) <= limit else None
+
+
+def range_read_json(path):
+    raw = range_read_small(path, RANGE_SMALL_FILE_MAX_BYTES)
+    if raw is None:
+        return None
+    try:
+        obj = json.loads(raw.decode('ascii'))
+    except ValueError:
+        return None
+    return obj if isinstance(obj, dict) else None
+
+
+def range_write(path, body):
+    """`body` (bytes) written whole to `path` through a temporary name and a rename, so a reader never sees half of it.
+    Only ever called under the lock."""
+    tmp = path + '.tmp'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        os.write(fd, body)
+    finally:
+        os.close(fd)
+    os.rename(tmp, path)
+
+
+def range_remove(path):
+    try:
+        os.unlink(path)
+    except OSError as e:
+        if e.errno != errno.ENOENT:
+            raise
+
+
+def range_path(cdir, rid, kind):
+    return os.path.join(cdir, rid + '.' + kind)
+
+
+def range_is_int(v):
+    return isinstance(v, int) and not isinstance(v, bool) and v >= 0
+
+
+def range_scan(cdir, now):
+    """Under the lock: remove what is expired or junk, and return (entries, reservations).
+    entries: {id: {size, used, digest, bind}} for each completed snapshot (a valid .meta, its .bin, used within
+    RANGE_ENTRY_TTL_MS). reservations: {id: {size, at}} for each live one (a valid .resv younger than
+    RANGE_RESERVATION_TTL_MS). A record that does not parse, a snapshot missing a half, and an orphan copy are removed."""
+    kinds = {}
+    for name in os.listdir(cdir):
+        m = re.fullmatch(RANGE_NAME_RE, name)
+        if m is not None:
+            kinds.setdefault(m.group(1), set()).add(m.group(2))
+        elif name.endswith('.tmp'):
+            range_remove(os.path.join(cdir, name))
+    entries = {}
+    resvs = {}
+    for rid in sorted(kinds):
+        have = kinds[rid]
+        meta = range_read_json(range_path(cdir, rid, 'meta')) if 'meta' in have else None
+        resv = range_read_json(range_path(cdir, rid, 'resv')) if 'resv' in have else None
+        if 'meta' in have:
+            ok = (meta is not None and 'bin' in have and meta.get('id') == rid and range_is_int(meta.get('size'))
+                  and range_is_int(meta.get('used')) and isinstance(meta.get('digest'), str)
+                  and re.fullmatch(FINGERPRINT_RE, meta['digest']) is not None and isinstance(meta.get('bind'), dict)
+                  and now - meta['used'] <= RANGE_ENTRY_TTL_MS)
+            if ok:
+                entries[rid] = {'size': meta['size'], 'used': meta['used'], 'digest': meta['digest'], 'bind': meta['bind']}
+                for kind in ('resv', 'part'):
+                    if kind in have:
+                        range_remove(range_path(cdir, rid, kind))
+            else:
+                for kind in have:
+                    range_remove(range_path(cdir, rid, kind))
+        elif 'resv' in have:
+            ok = (resv is not None and resv.get('id') == rid and range_is_int(resv.get('size'))
+                  and range_is_int(resv.get('at')) and now - resv['at'] <= RANGE_RESERVATION_TTL_MS)
+            if ok:
+                resvs[rid] = {'size': resv['size'], 'at': resv['at']}
+            else:
+                for kind in have:
+                    range_remove(range_path(cdir, rid, kind))
+        else:
+            for kind in have:
+                range_remove(range_path(cdir, rid, kind))
+    return entries, resvs
+
+
+def range_bound(cdir):
+    """The cache's bound in bytes: RANGE_CACHE_BOUND_BYTES, or the value of the cache directory's `bound` file when that is
+    lower. The file counts only as a regular file, opened O_NOFOLLOW and O_NONBLOCK (a symlink is refused and a FIFO cannot
+    block), of at most RANGE_BOUND_FILE_MAX_BYTES bytes, every one an ASCII digit; anything else is ignored for the
+    constant. A value above the constant changes nothing, so a file can only make range reads refuse sooner."""
+    raw = range_read_small(os.path.join(cdir, 'bound'), RANGE_BOUND_FILE_MAX_BYTES)
+    if raw is None or re.fullmatch(rb'[0-9]{1,32}', raw) is None:
+        return RANGE_CACHE_BOUND_BYTES
+    return min(RANGE_CACHE_BOUND_BYTES, int(raw))
+
+
+def range_starts(cdir, now):
+    """The start times (ms) in `starts` within the last minute. A file that is not what this writes reads as empty."""
+    raw = range_read_small(os.path.join(cdir, 'starts'), RANGE_SMALL_FILE_MAX_BYTES)
+    if raw is None:
+        return []
+    out = []
+    for tok in raw.split():
+        if re.fullmatch(rb'[0-9]{1,15}', tok) is not None and 0 <= now - int(tok) < RANGE_MINUTE_MS:
+            out.append(int(tok))
+    return out
+
+
+def range_begin(cdir):
+    """Take a place for one prepare, under the lock -> its id. Expired entries go first; then a prepare is refused
+    prepare-busy when RANGE_MAX_PREPARES_LIVE reservations are live or RANGE_MAX_PREPARES_PER_MINUTE have started in the
+    last minute. Otherwise it records its start and a reservation of size 0: its slot, until range_reserve sizes it."""
+    fd = range_lock(cdir)
+    try:
+        now = SYS.now_ms()
+        _entries, resvs = range_scan(cdir, now)
+        starts = range_starts(cdir, now)
+        if len(resvs) >= RANGE_MAX_PREPARES_LIVE or len(starts) >= RANGE_MAX_PREPARES_PER_MINUTE:
+            raise fail('prepare-busy')
+        rid = os.urandom(16).hex()
+        range_write(os.path.join(cdir, 'starts'), ''.join('%d\n' % t for t in starts + [now]).encode('ascii'))
+        range_write(range_path(cdir, rid, 'resv'), line_of({'id': rid, 'size': 0, 'at': now}))
+        return rid
+    finally:
+        os.close(fd)
+
+
+def range_reserve(cdir, rid, size):
+    """Reserve `size` bytes for prepare `rid` against the bound, under the lock. What is already reserved by other
+    prepares counts and is never evicted; completed entries are evicted least recently used first until the size fits.
+    A size that cannot fit even with every entry gone is prepare-busy, and evicts nothing."""
+    fd = range_lock(cdir)
+    try:
+        now = SYS.now_ms()
+        entries, resvs = range_scan(cdir, now)
+        mine = resvs.get(rid)
+        if mine is None:
+            raise fail('prepare-busy')
+        bound = range_bound(cdir)
+        held = sum(r['size'] for k, r in resvs.items() if k != rid)
+        if held + size > bound:
+            raise fail('prepare-busy')
+        used = held + sum(e['size'] for e in entries.values())
+        for old in sorted(entries, key=lambda k: (entries[k]['used'], k)):
+            if used + size <= bound:
+                break
+            range_remove(range_path(cdir, old, 'meta'))
+            range_remove(range_path(cdir, old, 'bin'))
+            used -= entries[old]['size']
+        range_write(range_path(cdir, rid, 'resv'), line_of({'id': rid, 'size': size, 'at': mine['at']}))
+    finally:
+        os.close(fd)
+
+
+def range_commit(cdir, rid, a, size, digest):
+    """Complete prepare `rid`, under the lock: its copy becomes <id>.bin, its binding <id>.meta, and its reservation goes.
+    A reservation that expired meanwhile (a prepare that outlived RANGE_RESERVATION_TTL_MS) is prepare-busy."""
+    fd = range_lock(cdir)
+    try:
+        now = SYS.now_ms()
+        _entries, resvs = range_scan(cdir, now)
+        if rid not in resvs or not os.path.exists(range_path(cdir, rid, 'part')):
+            raise fail('prepare-busy')
+        os.rename(range_path(cdir, rid, 'part'), range_path(cdir, rid, 'bin'))
+        range_write(range_path(cdir, rid, 'meta'),
+                    line_of({'id': rid, 'size': size, 'digest': digest, 'used': now, 'bind': range_bind(a)}))
+        range_remove(range_path(cdir, rid, 'resv'))
+    finally:
+        os.close(fd)
+
+
+def range_abort(cdir, rid):
+    """A prepare that did not complete gives up its place and its partial copy. It never raises: what it cannot remove
+    now (the lock is busy) expires with its reservation."""
+    try:
+        fd = range_lock(cdir)
+    except BaseException:
+        return
+    try:
+        for kind in ('part', 'resv'):
+            range_remove(range_path(cdir, rid, kind))
+    except OSError:
+        pass
+    finally:
+        os.close(fd)
+
+
+def range_stat_matches(st, pin):
+    """A stat pin's check of an opened descriptor's fstat: the pinned size and the pinned modified time, to the
+    nanosecond. Run before the copy and again after it."""
+    return st.st_size == pin[1] and st.st_mtime_ns == pin[2]
+
+
+def range_copy(cdir, rid, size, read, check_after, want_digest):
+    """Copy `size` bytes from `read(n)` into <id>.part, hashing as it goes -> the sha256 hex. The copy ends past
+    DOCS_RANGE_PREPARE_BUDGET_MS with prepare-busy (the caller removes the partial copy). More or fewer bytes than
+    `size`, a failed `check_after`, or a digest other than `want_digest` is draft-changed: the file is not the one pinned."""
+    h = hashlib.sha256()
+    copied = 0
+    t0 = SYS.monotonic()
+    fd = os.open(range_path(cdir, rid, 'part'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    try:
+        while True:
+            chunk = read(RANGE_COPY_CHUNK)
+            if not chunk:
+                break
+            copied += len(chunk)
+            if copied > size:
+                raise fail('draft-changed', now='present')
+            h.update(chunk)
+            view = memoryview(chunk)
+            while view:
+                view = view[os.write(fd, view):]
+            if (SYS.monotonic() - t0) * 1000 > DOCS_RANGE_PREPARE_BUDGET_MS:
+                raise fail('prepare-busy')
+    finally:
+        os.close(fd)
+    if copied != size:
+        raise fail('draft-changed', now='present')
+    if check_after is not None:
+        check_after()
+    digest = h.hexdigest()
+    if want_digest is not None and digest != want_digest:
+        raise fail('draft-changed', now='present')
+    return digest
+
+
+def range_prepared(cdir, rid, a, size, read, check_after, want_digest):
+    """Reserve `size`, copy, commit -> the prepare's body {snapshot, size, digest}."""
+    range_reserve(cdir, rid, size)
+    digest = range_copy(cdir, rid, size, read, check_after, want_digest)
+    range_commit(cdir, rid, a, size, digest)
+    return {'snapshot': rid, 'size': size, 'digest': digest}
+
+
+def range_prepare_committed(ctx, a, dl, cdir, rid):
+    repo = discover(ctx, a.project, dl)
+    if len(a.commit) != SHOW_OID_HEX.get(repo.object_format):
+        raise fail('bad-commit')
+    want = range_pin(a.pin)[1]
+    data, _blob, _mode = read_committed(repo, a, dl, range_cap=DOCS_RANGE_MAX_BYTES, want_blob=want)
+    view = memoryview(data)
+    at = [0]
+
+    def read(n):
+        chunk = view[at[0]:at[0] + n]
+        at[0] += len(chunk)
+        return bytes(chunk)
+    return range_prepared(cdir, rid, a, len(data), read, None, None)
+
+
+def range_prepare_draft(ctx, a, dl, cdir, rid):
+    repo = discover(ctx, a.project, dl)
+    if len(a.head) != PIN_OID_HEX.get(repo.object_format):
+        raise fail('bad-commit')
+    pin = range_pin(a.pin)
+    trusted = _pin_trust(repo, _pin_holder(ctx, repo, a.branch, dl), dl)
+    leaf = None
+    try:
+        if trusted.head != a.head:
+            raise fail('worktree-moved', head=trusted.head)
+        leaf, st = _pin_leaf(trusted, SECTIONS[a.section] + '/' + a.path)
+        if st.st_size > DOCS_RANGE_MAX_BYTES:
+            raise fail('range-too-large', size=st.st_size, cap=DOCS_RANGE_MAX_BYTES)
+        if pin[0] == 'stat' and not range_stat_matches(st, pin):
+            raise fail('draft-changed', now='present')
+
+        def read(n):
+            try:
+                return SYS.read(leaf, n)
+            except OSError as e:
+                raise fail('unreadable-path', errno=_walk_errno(e.errno))
+
+        def check_after():
+            try:
+                now = SYS.fstat(leaf)
+            except OSError as e:
+                raise fail('unreadable-path', errno=_walk_errno(e.errno))
+            if any(getattr(now, k) != getattr(st, k) for k in PIN_STABLE_FIELDS):
+                raise fail('draft-changed', now='present')
+            if pin[0] == 'stat' and not range_stat_matches(now, pin):
+                raise fail('draft-changed', now='present')
+            head = _pin_git(trusted.path, DRAFT_HEAD_ARGS, dl).decode('ascii', 'replace').strip()
+            if head != a.head:
+                raise fail('worktree-moved', head=head)
+        return range_prepared(cdir, rid, a, st.st_size, read, check_after, pin[1] if pin[0] == 'fp' else None)
+    finally:
+        if leaf is not None:
+            SYS.close(leaf)
+        SYS.close(trusted.fd)
+
+
+def range_prepare(ctx, a, dl, cdir):
+    """docs-show-range --prepare: take a place, then source, reserve, copy and commit; a prepare that ends any other way
+    gives its place and its partial copy back."""
+    rid = range_begin(cdir)
+    done = False
+    try:
+        body = (range_prepare_committed if a.branch is None else range_prepare_draft)(ctx, a, dl, cdir, rid)
+        done = True
+        return body
+    finally:
+        if not done:
+            range_abort(cdir, rid)
+
+
+def range_frame(cdir, a):
+    """docs-show-range --snapshot: one frame, under the lock. The snapshot must exist, be unexpired and be bound to
+    exactly this request (any difference, or none: snapshot-gone); the length may not pass DOCS_RANGE_FRAME_BYTES nor the
+    range pass the snapshot's end (range-too-large); a read touches the entry's last use."""
+    fd = range_lock(cdir)
+    try:
+        now = SYS.now_ms()
+        entries, _resvs = range_scan(cdir, now)
+        e = entries.get(a.snapshot)
+        if e is None or e['bind'] != range_bind(a):
+            raise fail('snapshot-gone')
+        if a.length > DOCS_RANGE_FRAME_BYTES:
+            raise fail('range-too-large', size=a.length, cap=DOCS_RANGE_FRAME_BYTES)
+        if a.offset + a.length > e['size']:
+            raise fail('range-too-large', size=a.offset + a.length, cap=e['size'])
+        raw = None
+        bfd = None
+        try:
+            bfd = os.open(range_path(cdir, a.snapshot, 'bin'), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+            if stat.S_ISREG(os.fstat(bfd).st_mode) and os.fstat(bfd).st_size == e['size']:
+                raw = os.pread(bfd, a.length, a.offset)
+        except OSError:
+            raw = None
+        finally:
+            if bfd is not None:
+                os.close(bfd)
+        if raw is None or len(raw) != a.length:
+            # The copy is not the one the record describes: the snapshot is gone, whatever its record says.
+            range_remove(range_path(cdir, a.snapshot, 'meta'))
+            range_remove(range_path(cdir, a.snapshot, 'bin'))
+            raise fail('snapshot-gone')
+        range_write(range_path(cdir, a.snapshot, 'meta'),
+                    line_of({'id': a.snapshot, 'size': e['size'], 'digest': e['digest'], 'used': now, 'bind': e['bind']}))
+        return {'snapshot': a.snapshot, 'offset': a.offset, 'bytesB64': base64.b64encode(raw).decode('ascii'),
+                'digest': hashlib.sha256(raw).hexdigest(), 'total': e['size']}
+    finally:
+        os.close(fd)
+
+
+def verb_show_range(ctx, a):
+    """docs-show-range: a prepare's {snapshot, size, digest} or a frame's {snapshot, offset, bytesB64, digest, total}.
+    Every call opens the cache and takes its lock first, so expired entries are removed by any range call. A frame reads
+    nothing but the cache; only a prepare runs git or walks a worktree, under RANGE_DEADLINE_S."""
+    cdir = range_cache_dir(ctx)
+    range_open_dir(cdir)
+    if a.snapshot is not None:
+        return range_frame(cdir, a)
+    return range_prepare(ctx, a, Deadline(RANGE_DEADLINE_S), cdir)
+
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to
 # make run() reach a stand-in body.
-VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log}
+VERBS = {'docs-index': verb_index, 'docs-tree': verb_tree, 'docs-show': verb_show, 'docs-fetch': verb_fetch, 'docs-log': verb_log, 'docs-show-range': verb_show_range}
 
 # The verbs whose ok answer is a listing, bounded by guard_listing.
 LISTING_VERBS = ('docs-index', 'docs-tree')
@@ -49144,7 +49714,8 @@ case "${1:-}" in
   docs-show)  shift; cmd_docs_show "$@" ;;
   docs-fetch) shift; cmd_docs_fetch "$@" ;;
   docs-log)   shift; cmd_docs_log "$@" ;;
+  docs-show-range) shift; cmd_docs_show_range "$@" ;;
   version)   shift; cmd_version "$@" ;;
-  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|version} <args>" >&2; exit 1 ;;
+  *) echo "usage: ccd {start|ensure|supervise|enable|stop|forget|hibernate|swap|swap-self|carry-dedupe|prefer|ls|menu|attach|clip|caps|ws-add|ws-rm|ws-rename|ws-gc|ws-archive|ws-restore|ws-attic|ws-audit|path-users|ws-reap|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|ws-lease-audit|ws-hold|ws-release|ws-title|coord-pause|reclaim-pause|testbox-remote|pane-scope-stop|scope-sweep-busy|delegation-adopt|keep-awake|limit-watchdog|limit-wait|win-size|account-pane|project-pool|project-add|skill-ensure|route|pool-answer|pr-landing|repo-visibility|pr-template|pr-open|pr-admin-merge|pr-state|pr-train-prove|docs-index|docs-tree|docs-show|docs-fetch|docs-log|docs-show-range|version} <args>" >&2; exit 1 ;;
 esac
 fi

@@ -189,6 +189,10 @@ describe('docs failure vocabulary', () => {
     ['untrusted-worktree', 'ccd', 'none'],
     ['worktree-moved', 'ccd', 'auto'],
     ['draft-changed', 'ccd', 'auto'],
+    // Range reads (X2 P1.2)
+    ['snapshot-gone', 'ccd', 'auto'],
+    ['range-too-large', 'ccd', 'none'],
+    ['prepare-busy', 'ccd', 'manual'],
     // Fetch
     ['remote-absent', 'ccd', 'none'],
     ['remote-branch-absent', 'ccd', 'none'],
@@ -227,11 +231,11 @@ describe('docs failure vocabulary', () => {
   const sorted = (xs: readonly string[]): string[] => [...xs].sort();
 
   describe('DOCS_FAILURES and DOCS_FAILURE_RETRY (row 53, L0 half)', () => {
-    it('the hand table is whole: 58 distinct words, 42 ccd and 16 server', () => {
+    it('the hand table is whole: 61 distinct words, 45 ccd and 16 server', () => {
       const words = SPEC_WORDS.map(([w]) => w);
-      expect(new Set(words).size).toBe(58);
-      expect(words).toHaveLength(58);
-      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(42);
+      expect(new Set(words).size).toBe(61);
+      expect(words).toHaveLength(61);
+      expect(SPEC_WORDS.filter(([, o]) => o === 'ccd')).toHaveLength(45);
       expect(SPEC_WORDS.filter(([, o]) => o === 'server')).toHaveLength(16);
     });
 
@@ -269,10 +273,10 @@ describe('docs failure vocabulary', () => {
   });
 
   describe('DOCS_CCD_FAILURES', () => {
-    it('is exactly the 42 ccd words of the hand table, each once', () => {
+    it('is exactly the 45 ccd words of the hand table, each once', () => {
       const ccd = SPEC_WORDS.filter(([, o]) => o === 'ccd').map(([w]) => w);
-      expect(DOCS_CCD_FAILURES).toHaveLength(42);
-      expect(new Set(DOCS_CCD_FAILURES).size).toBe(42);
+      expect(DOCS_CCD_FAILURES).toHaveLength(45);
+      expect(new Set(DOCS_CCD_FAILURES).size).toBe(45);
       expect(sorted(DOCS_CCD_FAILURES)).toEqual(sorted(ccd));
     });
 

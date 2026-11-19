@@ -64,6 +64,11 @@ export const DOCS_FAILURE_HTTP: Record<DocsFailure, number> = {
   'untrusted-worktree': 422,
   'worktree-moved': 409,
   'draft-changed': 409,
+  // Range reads (X2 P1): a gone snapshot is a conflict the page retries from prepare; a bound the request broke is a 413
+  // as `too-large` is; a prepare the cache cannot take now is a 503.
+  'snapshot-gone': 409,
+  'range-too-large': 413,
+  'prepare-busy': 503,
   // Fetch.
   'remote-absent': 422,
   'remote-branch-absent': 404,
