@@ -3,7 +3,7 @@
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or
 > superpowers:executing-plans to implement this plan task by task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Plan** · 2026-11-19 · Status: Proposed · Programme: Overlord (slug `overlord`, issue #2491), wave 169 · Builds:
+**Plan** · 2026-11-19 · Status: Proposed, revised after review 2727 (fix round 1) · Programme: Overlord (slug `overlord`, issue #2491), wave 169 · Builds:
 `docs/superpowers/specs/2026-11-19-mid-turn-mail-design.md` (#3054, every decision of its §4 ruled) · Task note:
 `docs/superpowers/programs/overlord/mid-turn-mail-plan.md`
 
@@ -15,10 +15,11 @@
   (E). Nothing is typed into a pane, and nothing on the tool path reaches the network.
 - **Measure first (PR 1).** The mail wire serves `deliveredAt`, `ingestedAt` and `ackedAt`, three optional fields
   that use 3 of the 27 free code lines under `shared/api.ts`'s cap. That gives the baseline the hold must lower.
-- **Six pull requests, two of them alone.** PR 1 (the three times) and PR 0 (the rig check that E's line reaches the
-  model) stand alone. PR 2 marks mail urgent at the ingress. PR 3 adds the field to `ccd`, with one owner of its
+- **Seven pull requests, two of them alone.** PR 1 (the three times) and PR 0 (the rig check that E's line reaches
+  the model) stand alone. PR 2 marks mail urgent at the ingress. PR 3 adds the field to `ccd`, with one owner of its
   grammar in `shared/`. PR 4 is the projection lane that writes the marker, kicked by the ack. PR 5 is the hook's
-  arms, with the matcher, the ack-form check and the fixed texts in a new jq module, `ccd/lib/mail-hold.jq`.
+  marker read, E and A, with the matcher and the fixed texts in a new jq module, `ccd/lib/mail-hold.jq`. PR 6 is the
+  subagent ack refusal, in its own pull request so the hook stays under its growth limit.
 - **No growth waiver.** Every listed file stays under 40 net code lines per pull request (Table 5). New logic goes in
   new files: an L0 grammar, an L1 sender rule, an L1 projection decider, a lane file and the jq module.
 - **Everything ships dark.** The projection runs live from its first deploy, but the hook's arms ship shadow. Two
@@ -29,7 +30,8 @@
   order fails open.
 - **The plan's own calls** (§4): the urgent column stores the sender's role, not a boolean; the hook's three arms sit
   in one block after the last deny arm, which keeps every ordering rule of the spec; the hook appends a `stop` line to
-  the shadow log, so the measurement that would bring B back reads one file.
+  the shadow log, so the measurement that would bring B back reads one file; the log keeps one line per hold, not
+  per call; and the jq module computes the over-cap kinds itself, so `MERGE_STRIP_JQ` stays byte-identical.
 
 ## 1. Goal, scope and what the plan does not change
 
@@ -41,7 +43,8 @@ acts until the mail is read, and tells the recipient's main thread at its next t
 **In scope:**
 
 - the three times on `MailSummary` (D12);
-- the `urgent` field at the ingress, its echo, its sender rule and `urgent-outstanding` (spec §3.1);
+- the `urgent` field at the ingress, its echo, its sender rule and `urgent-outstanding` (spec §3.1), with the three
+  refusal words in `MAIL_REJECT_CODES`;
 - the hold, derived from the same predicate as `inboxFor` (spec §3.2);
 - the `mailhold` route field in `ccd`, its capability word and its one grammar owner (spec §3.3);
 - the projection lane, its lease and the ack's kick (spec §3.4);
@@ -75,6 +78,7 @@ owner by symbol, so the citation survives edits above it.
 | A run's close and a child's reclaim reject that run's or that recipient's outstanding rows with a deliberate-cancel error, which `ackableDeliverySql` excludes. | `server/src/coord/store.ts#cancelOutstandingDeliveries`, `#cancelDeliveriesTo`, `#DELIBERATE_CANCEL_ERRORS_SQL` |
 | The one rule for which run is a session's (the run it works on, or the runs it claims). | `server/src/coord/store.ts#bindingsOf`, `server/src/coord/runBinding.ts` |
 | The Overlord's designation: `designated`, `not-designated` or `unmeasured`. | `server/src/coord/store.ts#designationRead` |
+| The mail routes' refusal words are `MAIL_REJECT_CODES`, each with a status in `REFUSAL_STATUS`. A scan requires every quoted code-shaped token in `server/src/coord` to be declared ("every quoted kebab token in server/src/coord that looks like a code is declared"), and the coordinator skill's test requires every member to be named in the skill's text. | `shared/api.ts#MAIL_REJECT_CODES`, `shared/refusal.ts#REFUSAL_STATUS`, `server/test/mail-routes.test.ts`, `server/test/coordinator-skill.test.ts` |
 | `ccrc-api mail inbox` is show-only when fd 1 is a pipe or `/dev/null` (`$( )` included), and acks otherwise. | `ccd/ccrc-api` (`cmd_inbox`, `INBOX_BARE`) |
 
 ### 2.2 Lanes and route writes
@@ -85,9 +89,9 @@ owner by symbol, so the citation survives edits above it.
 | The mail row beats at `MAIL_SWEEP_MS` (10 s), flight `none`. The landing rows carry `staleAfterMs`. `decisionAnchors` is the last row, and a test pins it last. | `server/src/laneSchedule.ts`, `server/test/lane-schedule.test.ts` |
 | A lane is kicked by `Watcher.kick(name)`, which makes it due at the next tick. Today only the lifecycle and delegation lanes are kicked, both from inside the watcher. | `server/src/watch.ts` (`kick`), `server/src/laneRunner.ts` |
 | The launch-profile lane derives, diffs against `route.fields`, skips a row whose route names an unreadable field, and writes one `CCD_ARGV.routeSet` argv per session behind `ccdCan`. It maps `ccd`'s answer itself. | `server/src/continuity/profileLane.ts` |
-| The generations lane writes `precompact` through `routeSet` and maps `ccd`'s answer itself (`unreachable`, `written`, `refused`). | `server/src/continuity/renewalWiring.ts` (`routePrecompact`) |
+| The generations lane writes `precompact` through `routeSet` and maps `ccd`'s answer itself (`unreachable`, `written`, `refused`). Before it calls `ccd` it answers `capability-missing` on its own, which stays outside any shared helper. | `server/src/continuity/renewalWiring.ts` (`routePrecompact`) |
 | `ROUTE_WRITABLE_FIELDS` lists 13 fields, `precompact` tenth. `ROUTE_LANE_ONLY_FIELDS` is derived from `profile` on. `parseRouteFields` refuses a lane-only field at every door. | `shared/api.ts#ROUTE_WRITABLE_FIELDS`, `#ROUTE_LANE_ONLY_FIELDS`, `#parseRouteFields` |
-| The registry reads every `ROUTE_WRITABLE_FIELDS` file per session per pass, and names an unreadable listed one in `route.unreadable`. | `server/src/registry.ts` (the route read) |
+| The registry reads a `ROUTE_WRITABLE_FIELDS` file only where its directory listing names it (`listedMeasured`), and names an unreadable listed one in `route.unreadable`. For a session with no marker the new field costs a set lookup. | `server/src/registry.ts` (the route read) |
 | A capability word that is not a `CCD_ARGV` row is checked with `capSupported`, as `browser-route-v1` is. | `server/src/ccdargv.ts#capSupported`, `#BROWSER_ROUTE_CAP` |
 | The Shadow lanes card lists four lanes. | `shared/lane-arm.ts#LANE_ARM_LANES` |
 
@@ -142,6 +146,10 @@ These bind every task.
   - L0: `shared/mailHold.ts` holds the `mailhold` grammar, its bounds and its two role words, and imports nothing.
   - L1, pure: the sender rule (`server/src/coord/urgentMail.ts`), the projection decider
     (`server/src/coord/mailHoldPolicy.ts`), and the mapping of a `routeSet` answer (`server/src/routeSetOutcome.ts`).
+  - Contexts: the `coord/` files fall under C5's row. `server/src/routeSetOutcome.ts` is a top-level file, so PR 4
+    adds it by name to C2 Fleet Mutation's row, beside `ccdargv.ts`, in the ring and context table of
+    `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`; `server/test/rings/totality.test.ts` reds a
+    file no row reaches. `shared/mailHold.ts` is outside the table's packages.
   - L4: the projection pass (`server/src/coord/mailHoldLane.ts`), its lane row and its watcher wiring, and the routes.
     They decide nothing: the pass reads, asks the decider, and writes what it answered.
   - L5: `server/src/index.ts` and the route deps in `server/src/server.ts` wire the ack's kick.
@@ -177,17 +185,18 @@ The spec rules every design decision. These are the implementation choices it le
 |---|---|---|---|
 | P1 | How the urgent mark is stored | A boolean, the sender's role | One nullable text column, `urgentAs`, holding `coordinator` or `overlord`, written once at the insert. The marker needs each delivery's sender role (spec §3.3). Deciding it at the ingress fixes it, so a coordinator later designated as the Overlord, or a run that closes, never changes what an old mail says. Null means not urgent. |
 | P2 | Which reads decide the sender rule | The mail's `runId`, the recipient's bindings | The recipient's bindings (`bindingsOf`). A run's coordinator may mark mail urgent when the recipient works on a non-terminal run (work or review) that the sender claims. The Overlord may when it is the designated session and the recipient claims a non-terminal run. `runId` is not required. |
-| P3 | An unreadable fact in the sender rule | Fold into `urgent-not-allowed`, a word of its own | A word of its own, `urgent-unmeasured` (503), when the designation or the bindings cannot be read. Two conditions a sender handles differently never share one value. |
+| P3 | An unreadable fact in the sender rule, and where the words live | Fold into `urgent-not-allowed`, a word of its own; `MAIL_REJECT_CODES` or the generic refusals | A word of its own, `urgent-unmeasured` (503), when the designation or the bindings cannot be read: two conditions a sender handles differently never share one value. The three words join `MAIL_REJECT_CODES` beside `key-conflict` (#3056) (the coordinator's ruling, fix round 1), so a refused send is recorded as every mail refusal is. |
 | P4 | Where `urgent-outstanding` is decided | Before the transaction, inside it | Inside the insert's transaction, over the hold's fragment, so two concurrent sends cannot both pass. |
 | P5 | Where the hook's arms sit | E before the landing advisory and A after the deny arms, one block after the last deny arm | One block after the last deny arm (the fan-out routing deny today). Every ordering rule of spec §3.5 still holds: a deny already built wins, A overwrites advice, E overwrites advice (the graph nudge and the landing advisory alike) and never a deny. The landing advisory may build its nudge first, which costs one `jq` fork that E then replaces. It saves the hook a second block. |
-| P6 | How the hook reads the stripped command | Add `-L` to `MERGE_STRIP_JQ`'s call, a second `jq` call | A second call, over the strip's answer, with `-L`. The strip runs at most once per call: its entry gate widens to "a merge word, or a live or present marker and a gated word, or a joined subagent and a mail word". `MERGE_STRIP_JQ` keeps its text, and its over-cap answer adds the gated kinds (`push`, `commit`, `sync`, `admin-merge`) behind their own entry test. |
+| P6 | How the hook reads the stripped command, and the over-cap kinds | Add `-L` to `MERGE_STRIP_JQ`'s call, a second `jq` call; extend `ockinds`, compute the kinds in the module | A second call, the module's, with `-L`. `MERGE_STRIP_JQ` stays byte-identical, and so do the merge deny's gate and code (the coordinator's ruling, fix round 1). The arm reuses the strip's answer when the merge deny's call ran for this payload, and otherwise makes that same call itself, with the same arguments, so the strip runs at most once per call. Over `MERGE_PARSE_CAP` the module computes the gated kinds (`push`, `commit`, `sync`, `admin-merge`) itself from the raw payload it receives on stdin. |
 | P7 | The arming markers | One, two | Two, both with no writer in the tree: `$REG/mailhold-notice-live` arms E, and `$REG/mailhold-refuse-live` arms A and the subagent ack refusal. E is armed alone first (spec §7). |
-| P8 | The shadow log | A JSON line, a fixed tab-separated line | A fixed tab-separated line in `~/.ccrc/mail-hold-shadow.log`, appended with a builtin redirect, stopping past 256 KiB as the roster card's does: `<epoch> <session> <arm> <outcome> <delivery> <act>`. Arms: `notice`, `refuse`, `ack`, `stop`. Outcomes: `would`, `did`, `lapsed`, `far`, `module-missing`. It is written in both modes. |
+| P8 | The shadow log | One line per call and stop at a cap, one line per hold and rotate | A fixed tab-separated line in `~/.ccrc/mail-hold-shadow.log`, at most 120 bytes: `<epoch> <session> <arm> <outcome> <delivery> <act>`. Arms: `notice`, `refuse`, `ack`, `stop`. Outcomes: `would`, `did`, `lapsed`, `far`, `module-missing`. It is written in both modes. **One line per hold, not per call:** a per-session seen file, `~/.ccrc/mail-hold-shadow.d/<id>` (at most 4 KiB, read with one bounded builtin `read`), holds the `<arm>.<delivery>.<act>` keys already logged for the marker's current pairs, and is reset when the pairs change; the module decides from it whether a line is new. `stop` lines are one per turn. **Rotation:** past 1 MiB (about 9,000 lines) the log is renamed to `.1`, replacing the older one, and a new one starts. The size is tested only when a line is appended, which the seen file makes rare, by one `stat` fork. So a 300-call hold in shadow adds one `notice` line, and the evidence a week of shadow needs is never the part that is dropped. |
 | P9 | Turn ends for the B measurement | Read transcripts, log them | The hook appends a `stop` line on `Stop` while a marker file exists. The read is the shadow log and the mail's `ackedAt`, no transcript needed. |
 | P10 | The Shadow lanes card | Join `LANE_ARM_LANES`, not | Not. The projection has no shadow mode: it is live from its first deploy, nothing acts on its output until the hook's arms are armed, and a projection that stopped would leave stale markers. The arms' switches are fleet-box files the hook reads with a builtin, not server settings. A card row for them is Later. |
 | P11 | The `routeSet` answer helper | Each writer maps its own, one helper | One L1 helper, `routeSetOutcome(res)`, answering `written`, `unreachable` or `refused` with the first stderr line. The generations lane and the launch-profile lane move onto it in a commit of their own, behind characterization tests. |
 | P12 | Where `mailhold` sits in the two field lists | Beside `precompact`, at the end | At the end of `ROUTE_FIELDS` and of `ROUTE_WRITABLE_FIELDS`. `ROUTE_LANE_ONLY_FIELDS` is derived from `profile` on, so the field inherits lane-only. Either place changes the order pins, which the same pull request updates. |
 | P13 | The retry budget | Skip the clear for lane-only fields, for `mailhold` only | For `mailhold` only, as the spec says: `cmd_route` skips `_route_tries_clear` when every field written is `mailhold`. `precompact` clears it today; that is reported, not changed (§10). |
+| P14 | The digit widths | Unbounded, bounded | `until` is 1 to 11 digits and a delivery id 1 to 10, neither with a leading zero, as `_hook_server_cap` bounds `at`. Both bash readers compare with `10#`. Without the bound, a 25-digit value reads one way in bash (a wrapped integer) and another in JavaScript (`1e+23`). |
 
 ## 5. The PR split
 
@@ -200,33 +209,37 @@ flowchart LR
   P2["PR 2: urgent at the ingress, the hold's read"]
   P3["PR 3: the mailhold field in ccd, the grammar"]
   P4["PR 4: the projection lane, the ack's kick"]
-  P5["PR 5: the hook's arms, the jq module"]
+  P5["PR 5: the marker read, E and A, the jq module"]
+  P6["PR 6: the subagent ack refusal"]
   ARM["Arming: E alone, then A"]
   P2 --> P4
   P3 --> P4
   P3 --> P5
+  P5 --> P6
   P4 --> ARM
   P5 --> ARM
+  P6 --> ARM
   P0 --> ARM
   P1 --> ARM
 ```
-*Figure 1. Dependencies. PR 1 and PR 0 stand alone. PR 2 and PR 3 are independent of each other. Arming needs the
-writer, the arms, the rig answer and the baseline.*
+*Figure 1. Dependencies. PR 1 and PR 0 stand alone. PR 2 and PR 3 are independent of each other. Arming E needs PR 4,
+PR 5, the rig answer and the baseline; arming A needs PR 6 as well.*
 
 | PR | What it ships | Depends on | Listed-file growth (net code lines) | New files and tests |
 |---|---|---|---|---|
 | 1 | `deliveredAt`, `ingestedAt`, `ackedAt` on `MailSummary` | nothing | `shared/api.ts` +3 (24 free after), `store.ts` +6 | tests +120 |
 | 0 | The rig scenario for a `PreToolUse` `additionalContext` line, and its results note | nothing | none | scenario JSON, note |
-| 2 | The `urgentAs` column and its migration, the sender rule, `urgent-unmeasured`, `urgent-not-allowed`, `urgent-outstanding`, the echo, the hold's fragment and its read | nothing | `schema.ts` +14, `store.ts` +32, `routes.ts` +22 | `coord/urgentMail.ts` +70; tests +450 |
+| 2 | The `urgentAs` column and its migration, the sender rule, the three refusal words in `MAIL_REJECT_CODES` and `REFUSAL_STATUS`, the echo, the hold's fragment and its read, and one sentence naming the words in the coordinator skill's references | nothing | `shared/api.ts` +3 (21 free after PR 1 and PR 2, less what #3056 takes if it lands first), `schema.ts` +14, `store.ts` +32, `routes.ts` +22 | `coord/urgentMail.ts` +70, `shared/refusal.ts` +2; tests +450 |
 | 3 | The `mailhold` field in `ccd`, `route-mailhold-v1`, the L0 grammar, the parity corpus, `ROUTE_WRITABLE_FIELDS` | nothing | `ccd/ccd` +14, `shared/api.ts` 0 (one line edited in place) | `shared/mailHold.ts` +60, a corpus JSON; tests +400 |
-| 4 | The projection decider and pass, the lane row, the watcher's wiring, the ack's kick, the shared `routeSet` answer helper | PR 2, PR 3 | `watch.ts` +16, `routes.ts` +4, `server.ts` +2 | `coord/mailHoldPolicy.ts` +70, `coord/mailHoldLane.ts` +100, `routeSetOutcome.ts` +20 (and -8 in each of the two lanes it replaces in); tests +550 |
-| 5 | The marker read, the arms' block, the shadow log, the arming markers, `ccd/lib/mail-hold.jq` and its install, backup and uninstall | PR 3 | `session-hook.sh` +36, `ccd/ccrc` +3 | `ccd/lib/mail-hold.jq` +170, `deploy/deploy.sh` +2; tests +800 |
+| 4 | The projection decider and pass, the lane row, the watcher's wiring, the ack's kick, the shared `routeSet` answer helper and its C2 row in the ring and context table | PR 2, PR 3 | `watch.ts` +16, `routes.ts` +4, `server.ts` +2 | `coord/mailHoldPolicy.ts` +70, `coord/mailHoldLane.ts` +100, `routeSetOutcome.ts` +20 (and -8 in each of the two lanes it replaces in); tests +600 |
+| 5 | The marker read, the block with E and A, the shadow log with its seen file and rotation, the `Stop` line, the arming markers, `ccd/lib/mail-hold.jq` and its install, backup and uninstall | PR 3 | `session-hook.sh` +34, `ccd/ccrc` +3 | `ccd/lib/mail-hold.jq` +170, `deploy/deploy.sh` +2; tests +800 |
+| 6 | The subagent ack refusal: its arm in the block, its matcher and text in the module | PR 5 | `session-hook.sh` +8 | `ccd/lib/mail-hold.jq` +50; tests +250 |
 
-*Table 5. Six pull requests. Growth is the author's estimate. `growth-check` runs armed on every listed file a
-pull request grows, and no waiver is taken. If PR 5's hook growth measures over 40 at build, the subagent ack refusal
-moves to a pull request of its own (the spec's fallback split), never a waiver.*
+*Table 5. Seven pull requests. Growth is the author's estimate. `growth-check` runs armed on every listed file a pull
+request grows, and no waiver is taken. The subagent ack refusal is in PR 6 by plan (the spec's fallback split). If
+PR 5's hook growth still measures over 40, E and A split into two pull requests as well, never a waiver.*
 
-**Roll order.** PR 3 and PR 5 reach the fleet box, PR 2 and PR 4 the server. The wave that ships PR 4 and PR 5 rolls
+**Roll order.** PR 3, PR 5 and PR 6 reach the fleet box, PR 2 and PR 4 the server. The wave that ships PR 4 and PR 5 rolls
 server first (`--server-first`): the writer waits for `route-mailhold-v1`, and the arms ship shadow, so both orders
 fail open.
 
@@ -260,7 +273,8 @@ fail open.
   hold.
 - [ ] By hand, on the test box, with the Claude Code build the fleet runs: `rig.sh run <version> <file> <out-dir>`.
   Read the bundle's `reqs/`: each request after a tool result carries the canary, inside the turn.
-- [ ] Record the answer, the build and the date in `docs/superpowers/plans/2026-11-19-mid-turn-mail/e-rig.md`.
+- [ ] Record the answer, the build and the date in `docs/superpowers/programs/overlord/mid-turn-mail-e-rig.md`, a
+  task note.
   Nothing from the run is committed. A "no" stops arming E and is mailed to the coordinator: B returns as the
   reading half (spec §7).
 
@@ -310,11 +324,20 @@ fail open.
   - a second urgent mail from the same sender to the same recipient is refused `409 urgent-outstanding` while the
     first is on the hold's set, and is accepted once the first is acked, or rejected by the run's close;
   - the same second mail without `urgent` is accepted;
+  - while the first stands, an urgent mail to the same recipient from a different sender the rule allows is accepted
+    (the fixture: a coordinator that is also the worker of another coordinator's run, sent urgent mail first by that
+    run's coordinator, then by the Overlord), so the rule is keyed on the pair, never on the recipient alone;
   - two concurrent urgent sends to one recipient write one row (P4).
+- [ ] Red: `mail-routes.test.ts`'s scan ("every quoted kebab token in server/src/coord that looks like a code is
+  declared") goes red on the three new words until they are declared, and `coordinator-skill.test.ts`'s scan of every
+  `MAIL_REJECT_CODES` member goes red until the skill's text names them.
 - [ ] Green: the body read beside the others, the facts gathered in the route, the verdict, and the outstanding test
-  inside the insert's transaction over `ACKABLE_OUTSTANDING_SQL`.
-- [ ] Mutation: skip the outstanding test. The second-send case reds. Echo `urgent` on a refused send. The refusal
-  case reds. Drop the echo. The echo case reds.
+  inside the insert's transaction over `ACKABLE_OUTSTANDING_SQL`. The three words join `MAIL_REJECT_CODES` beside
+  `key-conflict` (#3056, or on its own line if #3056 has not landed), with 403, 409 and 503 in `REFUSAL_STATUS`, and
+  one sentence in the coordinator skill's references (`references/wave-lifecycle-3-mail.md`) names them; no pinned
+  clause changes. Measure `shared/api.ts`'s code lines after the change and record them in the PR body.
+- [ ] Mutation: skip the outstanding test. The second-send case reds. Key the test on the recipient alone. The
+  second-sender case reds. Echo `urgent` on a refused send. The refusal case reds. Drop the echo. The echo case reds.
 
 ### Task 2.5: The hold's read (PR 2)
 
@@ -333,13 +356,15 @@ fail open.
 - [ ] Red, `mailhold-grammar.test.ts`, over a corpus file `server/test/fixtures/mailhold-grammar.json`:
   - accepted: one pair, eight pairs, both roles;
   - refused: nine pairs, an unknown role, a zero or signed delivery id, a missing `until`, spaces, a trailing comma,
-    an empty value, a control character;
+    an empty value, a control character, a 12-digit `until`, an 11-digit delivery id, a leading zero in either, and a
+    25-digit number in either;
   - `renderMailHold` keeps the eight lowest delivery ids, ascending, from any larger set;
   - the bounds: `MAILHOLD_LEASE_S` 300, `MAILHOLD_REACH_S` 360, `MAILHOLD_RENEW_UNDER_S` 120,
     `MAILHOLD_MAX_PAIRS` 8.
 - [ ] Green: `shared/mailHold.ts`, importing nothing, with `parseMailHold`, `renderMailHold`, `mailHoldLive(until,
   now)` (`now < until <= now + 360`) and the regular expression body both bash readers copy.
-- [ ] Mutation: allow nine pairs. Its refusal reds. Make the upper bound `<`. The edge case reds.
+- [ ] Mutation: allow nine pairs. Its refusal reds. Make the upper bound `<`. The edge case reds. Widen `until` to 12
+  digits. Its corpus line reds. Allow a leading zero. Its corpus line reds.
 
 ### Task 3.2: The field in ccd (PR 3)
 
@@ -369,8 +394,10 @@ fail open.
 
 - [ ] Red, `mailhold-parity.test.ts`: every corpus line gets the same accept or refuse from `parseMailHold`, from
   `ccd route`'s `_route_valid` (fixture HOME), and, from PR 5 on, from the hook's builtin parse (a fixture hook run),
-  bounds and the eight-pair edge included, as `_hook_server_cap`'s copies are held to `parseServerCaps`.
-- [ ] Mutation: widen the bash role words by one. The parity reds.
+  bounds, the digit widths and the eight-pair edge included, as `_hook_server_cap`'s copies are held to
+  `parseServerCaps`. Both bash readers compare numbers with `10#`.
+- [ ] Mutation: widen the bash role words by one. The parity reds. Drop `10#` from a bash reader. The leading-zero
+  line reds.
 
 ### Task 3.4: `ROUTE_WRITABLE_FIELDS` (PR 3)
 
@@ -385,8 +412,10 @@ fail open.
 
 - [ ] Characterize, green on `main`: the generations lane's `routePrecompact` answers and the launch-profile lane's
   pass counts for a `ccd` result that did not run, ran and succeeded, and ran and failed.
-- [ ] Green: `server/src/routeSetOutcome.ts`, then, in a commit of its own, the two lanes call it. The
-  characterization tests change only their imports.
+- [ ] Green: `server/src/routeSetOutcome.ts`, taking the `runCcd` result only, so each lane's own pre-checks
+  (`capability-missing`, the launch-profile lane's `unsupported`) stay where they are. Add the file to C2's row in the
+  ring and context table, and run `server/test/rings/totality.test.ts`. Then, in a commit of its own, the two lanes
+  call it. The characterization tests change only their imports.
 
 ### Task 4.2: The projection decider (PR 4)
 
@@ -416,14 +445,18 @@ fail open.
   - a pass with no urgent mail outstanding and no marker writes nothing, after one store query;
   - a failed write is logged once per episode and retried next pass;
   - the lease's `until` comes from the clock port's `wall()`, never the monotonic clock;
-  - one `routeSet` argv per session, behind `capSupported(route-mailhold-v1)` and `ccdCan('routeSet')`.
+  - one `routeSet` argv per session, behind `capSupported(route-mailhold-v1)` and `ccdCan('routeSet')`;
+  - **under `mail-disabled`, end to end:** with `$REG/mail-disabled` present and a marker standing, the watcher's
+    `tick()` still runs the `mailHold` sweep, the pass sends exactly one clearing `routeSet` argv (the empty value) for
+    that session and no write, and an urgent delivery queued meanwhile adds no marker.
 - [ ] Red, `lane-schedule.test.ts`: the `mailHold` row beats at `MAIL_SWEEP_MS` by `derivedFrom`, flight `skip`,
   clock `mono`, a `staleAfterMs` of 60 s (under the 120 s renewal margin), placed after the `mail` row, and
   `decisionAnchors` stays last.
 - [ ] Green: `server/src/coord/mailHoldLane.ts`, the row, and the watcher's sweep, which runs whether or not
   `mail-disabled` stands.
 - [ ] Mutation: let the pass read the mail lane's due list instead of the store. The not-due renewal case reds.
-  Change the flight to `none`. The row pin reds.
+  Change the flight to `none`. The row pin reds. Return from the pass when `mail-disabled` stands. The end-to-end
+  case reds. Call the sweep from inside `mailPass`, after its first act. The end-to-end case reds.
 
 ### Task 4.4: The ack kicks the projection (PR 4)
 
@@ -436,87 +469,142 @@ fail open.
   `server/src/server.ts` as the watcher's `kick('mailHold')`.
 - [ ] Mutation: kick before the commit. The ordering case reds. Drop the kick. The first case reds.
 
-### Task 5.1: The jq module (PR 5)
+### Task 5.1: The jq module, the gated acts and the texts (PR 5)
 
-- [ ] Red, `mail-hold-module.test.ts`, running `jq -L ccd/lib` over payload fixtures. Each line of spec §6 that the
-  matcher decides is a case, one shape per case:
+- [ ] Red, `mail-hold-module.test.ts`, running `jq -L ccd/lib` over payload fixtures, one shape per case. Each line
+  of spec §6 the matcher decides is a case:
   - denied, the act word given: `git push`, `git commit`, `git pull origin main`, `git merge origin/main`,
-    `git rebase origin/HEAD`, `gh pr merge 42`, `cd repo && git push`, `git -C repo push`, `git -c k=v push`,
-    `git --git-dir=x push`, `env X=1 git commit -m x`, `VAR=x git push`, `timeout 30 git push`, `/usr/bin/git push`,
-    `git merge main`, `git merge "origin/main"`, `git rebase 'main'`, `gh -R o/r pr merge 42`, `ccd pr-admin-merge`,
-    `git -P push`, `git --bare push`, `git --config-env=a=B push`;
-  - denied, past each reserved word and wrapper of the head grammar: `if git push; then :; fi`, `! git push`,
-    `{ git push; }`, `while git pull origin main; do :; done`, `(git push)`, `x=$(git push)`, `time git push`,
-    `command git push`, `exec git push`, `nohup git push`, `sudo git push`, `a=1 b=2 git push`, and `ccd
-    pr-admin-merge` after `cd x &&`, after `VAR=x` and with a path;
+    `git rebase origin/HEAD`, `gh pr merge 42`, `git merge main`, `gh -R o/r pr merge 42`;
+  - denied past a head separator: `cd repo && git push`, `true; git push`, `true || git push`, `a | git push`,
+    `(git push)`, `x=$(git push)`, and a newline before `git push`;
+  - denied past git's own options: `git -C repo push`, `git -c k=v push`, `git --git-dir=x push`,
+    `git --work-tree=x push`, `git --no-pager push`, and, by shape, `git -P push`, `git --bare push`,
+    `git --config-env=a=B push`;
+  - denied past each wrapper and prefix: `time git push`, `env X=1 git commit -m x`, `command git push`,
+    `exec git push`, `nohup git push`, `sudo git push`, `timeout 30 git push`, `VAR=x git push`, `a=1 b=2 git push`,
+    and `/usr/bin/git push`;
+  - denied past each reserved word: `if git push; then :; fi`, `if true; then git push; fi`,
+    `if false; then :; else git push; fi`, `if false; then :; elif git push; then :; fi`,
+    `while git pull origin main; do :; done`, `for x in a; do git push; done`, `until git push; do :; done`,
+    `! git push`, `{ git push; }`;
+  - `ccd pr-admin-merge` in each position: at the start, after `cd x &&`, after `VAR=x`, and with a path;
+  - the quoted targets, read on the raw text: `git merge "origin/main"`, `git rebase 'main'`;
   - fail closed: an unterminated quote followed by `git push`; an over-cap command whose raw text holds `git push`,
-    refused with A's text plus the merge deny's advice to split the command or pass its text as a file;
+    refused with A's text plus the merge deny's advice to split the command or pass its text as a file (the module
+    computes the over-cap kinds from the raw payload, P6);
   - not gated: `gh pr create --body "notes; git push later"`, `echo "git push"`, a heredoc whose body holds
     `git push`, `git merge feature-x`, `git pull origin feature-x`, an over-cap command that holds no gated act;
-  - the ack forms in a subagent, refused: `mail ack`, bare `mail inbox`, `mail inbox > f`, `mail inbox >> f`,
-    `mail inbox &> f`, `mail inbox >&2`, `mail inbox 2>/dev/null`, `"$API" mail inbox`, `x=$(ccrc-api mail inbox)`
-    (fail closed: the matcher does not decide a substitution);
-  - the ack forms in a subagent, passed: `mail inbox | cat`, `mail inbox > /dev/null`, `mail list`, `mail fetch 7`;
-  - the texts: each of spec §3.5's four texts, byte for byte, with `<id>`, `<sender>` and `<act>` filled;
+  - the texts: E's line and A's two texts, byte for byte, with `<id>`, `<sender>` and `<act>` filled, and the
+    subagent text given only for the subagent thread;
   - the sender map: `coordinator` renders "its coordinator", `overlord` renders "the Overlord", and any other word
-    renders no text.
-- [ ] Green: `ccd/lib/mail-hold.jq`, defining the head grammar (the merge deny's method, written in jq), the gated
-  acts, the sync targets read on the raw command, the ack forms, the texts and the map.
+    renders no text;
+  - the log decision: a key already in the seen text gives no log line, a new one gives one line and the new seen
+    text.
 - [ ] Red, a parity case: on the merge deny's own corpus (`session-hook-merge-deny.test.ts`'s), the module's head
   grammar finds `gh pr merge` where `GH_MERGE_RE` does, and only there.
-- [ ] Mutation: drop one wrapper from the head grammar. Its case reds. Read sync targets on the stripped text only.
-  The quoted-target cases red. Accept `2>/dev/null` as show-only. Its case reds.
+- [ ] Green: `ccd/lib/mail-hold.jq`, defining the head grammar (the merge deny's method, written in jq), the gated
+  acts, the sync targets read on the raw text, the over-cap kinds, E's and A's texts, the sender map and the log
+  decision.
 
 ### Task 5.2: The hook's marker read and block (PR 5)
 
 - [ ] Red, `session-hook-mail-hold.test.ts`, in fixture HOMEs, with both arming markers present unless a case says
   otherwise:
-  - with no marker, a call pays one file test and nothing else is run (a stubbed `jq` on `PATH` counts zero calls on
-    an ungated Read);
+  - **no marker costs nothing new:** an ungated Read forks `jq` exactly as often as it does with the arm's code
+    absent, counted by a `jq` wrapper on `PATH` after a warm-up call, with a floor that the count is above zero (the
+    hook's own event parse), so the case cannot pass vacuously;
   - a live marker on an ungated main-thread call: E's line, the call proceeds;
   - a live marker on a gated main-thread call: A's main-thread text;
-  - an expired marker, and one whose `until` is beyond `now + 360`: the gated call proceeds, and the log records
-    `lapsed` or `far`;
+  - an expired marker (`until <= now`), a marker whose `until` is beyond `now + 360`, and one at exactly
+    `now + 360`: the first two let the gated call proceed and the log records `lapsed` or `far`; the third holds;
   - a symlinked or malformed marker: nothing, and nothing logged as `did`;
   - a deny an earlier arm built (the worker merge deny, the fan-out routing deny) is kept byte for byte, and neither
     A nor E replaces it; the worker merge deny's text is unchanged under a live marker;
   - the two paths the strip feeds, end to end: `git merge "origin/main"` and `git rebase 'main'` are refused (the
-    target read on the raw text), and an over-cap command holding `git push` is refused through the strip's over-cap
-    kinds, while one holding no gated act gets E's line;
+    target read on the raw text), and an over-cap command holding `git push` is refused through the module's over-cap
+    kinds, while one holding no gated act gets E's line; `MERGE_STRIP_JQ`'s text is byte-identical to `main`'s;
   - the graph arm's Read nudge does not suppress E's line; under a live marker the landing advisory's sync gives E's
     line, not the advisory's;
   - a joined subagent's `git push` gets the subagent text, and its ungated call gets no line;
-  - an unjoined `agent_id` gets the main-thread text;
-  - the joined subagent's ack forms are refused with and without a marker, and the passing forms pass;
+  - an unjoined `agent_id` gets the main-thread text, and E's line;
   - with `ccd/lib/mail-hold.jq` missing: nothing denied or said, and the log records `module-missing`;
   - with `$REG/mail-disabled` present: nothing refused or said;
-  - **shadow:** with neither arming marker, nothing is refused or said, and the log records `would` for the line,
-    the refusal and the ack refusal; with only `mailhold-notice-live`, E's line is said and A is `would`;
-  - on `Stop` with a marker file present, the log gains one `stop` line; with none, it gains nothing;
-  - the log stops growing past 256 KiB.
+  - **shadow:** with neither arming marker, nothing is refused or said, and the log records `would` for the line and
+    the refusal; with only `mailhold-notice-live`, E's line is said and A is `would`;
+  - **the log's bound:** a 300-call hold in shadow leaves one `notice would` line for that delivery, its `refuse`
+    lines one per act, and its `stop` lines one per turn; a new pair set starts the seen file again; past 1 MiB the
+    log moves to `.1` and the next line starts a new file;
+  - on `Stop` with a marker file present, the log gains one `stop` line; with none, it gains nothing.
 - [ ] Green, in `ccd/session-hook.sh`:
   - the marker read, beside `_hook_compact_refuse`'s: one `[[ -f ]]`, then a bounded `read` refusing a symlink, the
-    grammar's regular expression, and the inline clock;
-  - the strip's widened entry gate and the over-cap kinds (P6);
-  - one block after the last deny arm: the module called once, with `-L "$ROSTER_CARD_LIB"`, the payload
-    on stdin and the stripped command, the over-cap kinds, the thread and the arming words as arguments; it prints a
-    log line and an envelope, and the hook appends the one and keeps the other only under "no deny built yet";
-  - the `Stop` append;
+    grammar's regular expression, and the inline clock, compared with `10#`;
+  - one block after the last deny arm: the strip's answer reused, or the same `MERGE_STRIP_JQ` call made once (P6);
+    the module called once, with `-L "$ROSTER_CARD_LIB"`, the payload on stdin, and the stripped command, the cap, the
+    thread, the arming words and the seen text as arguments; it prints a log line, the new seen text and an envelope;
+    the hook appends the first, writes the second and keeps the third only under "no deny built yet";
+  - the `Stop` append, and the rotation;
   - the header's amendment: one more builtin read beside `precompact`'s, and no new exception.
 - [ ] Green, the install: `ccd/lib/mail-hold.jq` in `ccd/ccrc`'s install, backup and uninstall lists, in
   `deploy/deploy.sh`'s install and backup, and in `server/test/installTreeFixture.ts`.
 - [ ] Red, `single-definition`: no file in the tree writes `mailhold-notice-live` or `mailhold-refuse-live`.
-- [ ] Mutation: test the arming marker of E for A. The A-shadow case reds. Drop the "no deny built yet" guard. The
-  later-deny case reds. Drop the `tmsub` test from the ack refusal. The main-thread ack passes and its case reds.
-  Remove the lease's upper bound. The far-future case reds.
 - [ ] Run each `session-hook*` suite the change touches alone, and `session-hook-merge-deny.test.ts` and
   `session-hook-sync-advisory.test.ts` unchanged.
 
-### Task 5.3: Measure the hook's cost (PR 5)
+### Task 5.3: One mutation per guard (PR 5)
+
+Each row is one mutant, run with the mutation runner; the case named must go red. A row that names a list runs one
+mutant per member.
+
+| Guard | Mutation | Red case |
+|---|---|---|
+| Each head separator (`&&`, `;`, `\|\|`, `\|`, `(`, `$(`, newline) | drop it from the head grammar | its separator case |
+| Each git option skip (`-C`, `-c`, `--git-dir`, `--work-tree`, `--no-pager`) | drop it | its option case |
+| The by-shape option skip | replace it with a closed list of the five | `-P`, `--bare`, `--config-env` |
+| Each wrapper and prefix (`time`, `env`, `command`, `exec`, `nohup`, `sudo`, `timeout <n>`, `VAR=value`, a path) | drop it | its wrapper case |
+| Each reserved word (`if`, `then`, `else`, `elif`, `while`, `for`, `do`, `until`, `!`, `{`) | drop it | its reserved-word case |
+| `ccd pr-admin-merge` as an act | drop it | all four of its cases |
+| The sync targets on the raw text | read them on the stripped text only | both quoted-target cases |
+| Fail closed on an unterminated quote | answer "no act" for text the strip cannot finish | the unterminated-quote case |
+| The over-cap kinds | answer no kinds over the cap | the over-cap `git push` case |
+| The lease's lower bound (`now < until`) | drop it | the expired case |
+| The lease's upper bound (`until <= now + 360`) | drop it, then make it `<` | the far-future case, then the exact-edge case |
+| The subagent text | give the main-thread text to every thread | the joined subagent's `git push` |
+| No E line in a joined subagent | drop the `tmsub` test from E | the subagent's ungated call |
+| The join test, not the bare `agent_id` | test `paid` instead of `tmsub` | the unjoined `agent_id` case |
+| The sender map | render `overlord` as "its coordinator" | the map case |
+| The missing module | drop the file test, so `jq`'s error is taken as an answer | the missing-module case |
+| `mail-disabled` dark | drop the file test | the `mail-disabled` case |
+| E's arming marker | test A's marker for E | the E-only case |
+| A's arming marker | test E's marker for A | the E-only case's `would` |
+| "No deny built yet" | drop the guard | the earlier-deny case |
+| The seen file | log every call | the 300-call case |
+| The rotation | never rotate | the 1 MiB case |
+
+*Table 6. PR 5's mutations: one per guard and per spec §6 line, as spec §6 asks.*
+
+### Task 5.4: Measure the hook's cost (PR 5)
 
 - [ ] In a fixture HOME, time 200 `PreToolUse` calls of each kind (no marker, a live marker on a Read, a live marker
   on a gated Bash call) and record p50 and p95 in the PR body. This replaces the spec §3.6 estimate. No assertion is
   written on the numbers.
+
+### Task 6.1: The subagent ack refusal (PR 6)
+
+- [ ] Red, in `mail-hold-module.test.ts` and `session-hook-mail-hold.test.ts`:
+  - refused in a joined subagent, with and without a marker: `mail ack`, bare `mail inbox`, `mail inbox > f`,
+    `mail inbox >> f`, `mail inbox &> f`, `mail inbox >&2`, `mail inbox 2>/dev/null`, `"$API" mail inbox`, a path to
+    `ccrc-api`, and `x=$(ccrc-api mail inbox)` (stricter than `cmd_inbox`, which only shows under `$( )`: the matcher
+    does not decide a substitution, so it fails closed, §10);
+  - passed in a joined subagent: `mail inbox | cat`, `mail inbox > /dev/null`, `mail list`, `mail fetch 7`;
+  - passed on the main thread and for an unjoined `agent_id`;
+  - the text: the subagent ack refusal's text, byte for byte;
+  - shadow: with `mailhold-refuse-live` absent, nothing is refused and the log records `ack would` once per key.
+- [ ] Green: the ack forms and the text in the module; the arm in the hook's block, which, alone of the arms, runs
+  without a live marker, behind a builtin prefilter on the payload (`mail`, and `ack` or `inbox`).
+- [ ] Mutation, one per guard: drop the `tmsub` test (the main-thread ack is refused, and its pass case reds); gate
+  the arm on a live marker (the no-marker case reds); accept `2>/dev/null` as show-only (its case reds); accept
+  `>&2` (its case reds); accept any `>` target (the `> f` case reds); drop the variable head (`"$API"` reds); test
+  E's marker for the arm (the shadow case reds).
 
 ### Every PR
 
@@ -529,7 +617,7 @@ This section says how each arm leaves shadow, and what number reopens B.
 
 ```mermaid
 flowchart TD
-  S["PR 4 and PR 5 deployed, every arm shadow"]
+  S["PR 4, PR 5 and PR 6 deployed, every arm shadow"]
   R{"PR 0: the line reaches the model on the fleet's build?"}
   B["B returns as the reading half"]
   E["Arm E alone, the notice marker"]
@@ -552,8 +640,10 @@ either.*
   before the arm relies on it.
 - **The B trigger.** With E armed and A still shadow, over two weeks and at least 20 urgent mails: for each urgent
   delivery whose recipient's log holds a `notice did` line, compare the mail's `ackedAt` with the recipient's next
-  `stop` line after that notice. If more than one in five were acked only after that `stop`, B returns. The read is
-  recorded in `docs/superpowers/plans/2026-11-19-mid-turn-mail/e-measurement.md`.
+  `stop` line after that notice. If more than one in five were acked only after that `stop`, B returns. A delivery
+  whose recipient's log holds an `ack would` line for it is left out of the count: while the ack refusal is shadow, a
+  subagent's ack reads as "acked inside the turn" though the main thread may never have read the mail. The read is
+  recorded in `docs/superpowers/programs/overlord/mid-turn-mail-e-measurement.md`, a task note.
 - **A's arming.** A week of shadow: refusals it would have made, passes on a lapsed or far-future marker, and
   `module-missing`. The operator arms A from that evidence.
 
@@ -567,9 +657,12 @@ Each pull request gets its own build review. These are the points most likely to
   step. `mailhold` never resets the retry budget and never counts as routing.
 - **PR 4.** The pass derives from the store, never from the mail lane's due list. Its flight is `skip`. The kick is
   after the commit and never awaited. The pass writes only on appear, differ, renew and clear.
-- **PR 5.** The block runs after every deny arm and keeps an existing deny byte for byte. E is said only on the main
-  thread. The ack refusal holds without a marker. The module, missing or failing, makes the hook hold nothing. The
-  head grammar's parity with the merge deny holds on its corpus.
+- **PR 5.** The block runs after every deny arm and keeps an existing deny byte for byte. `MERGE_STRIP_JQ` and the
+  merge deny's gate are byte-identical to `main`'s. E is said only on the main thread. The module, missing or failing,
+  makes the hook hold nothing. The head grammar's parity with the merge deny holds on its corpus. The log keeps one
+  line per hold and rotates. Each row of Table 6 has its mutant.
+- **PR 6.** The ack refusal holds without a marker, and only in a joined subagent. No redirect that still acks
+  passes.
 - **Every PR.** No private name, no waiver, no numeric line citation, no new route or verb.
 
 | Round 3 (review 2710) | Where this plan answers it |
@@ -587,10 +680,37 @@ Each pull request gets its own build review. These are the points most likely to
 
 *Table 8. Review 2710's findings, from the excerpt the coordinator kept, and the tasks that carry them.*
 
+| Review 2727 (fix round 1) | Where this revision answers it |
+|---|---|
+| F1: the projection under `mail-disabled`, end to end | Task 4.3 (the watcher's tick, one clearing argv, and two mutations) |
+| F2: a mutation per guard | Table 6 (PR 5), Task 6.1 (PR 6) |
+| F3: the three refusal words' home (ruled: `MAIL_REJECT_CODES`) | P3, Task 2.4, Table 5 PR 2 |
+| F4: the helper's ring and context row | §3 (C2's row, beside `ccdargv.ts`), Task 4.1, Table 5 PR 4 |
+| F5: the result notes nested under `plans/` | Task 0.1, §7 (flat in `docs/superpowers/programs/overlord/`) |
+| F6: the no-marker case could not pass | Task 5.2 (counted as a delta, with a warm-up and a floor) |
+| F7: the shadow log's bound | P8 (one line per hold, rotation at 1 MiB), Task 5.2, Table 6 |
+| F8: `MERGE_STRIP_JQ` untouched (ruled) | P6, Task 5.1, Task 5.2 |
+| F9: the skew window | §9 |
+| F10: the digit widths | P14, Task 3.1, Task 3.3 |
+| M1: `$( )` refused, stricter | §10, Task 6.1 |
+| M2: `then`, `do`, `else`, `elif`, `until` | Task 5.1, Table 6 |
+| M3: a second sender to one recipient | Task 2.4 |
+| M4: `ack would` deliveries out of the B read | §7 |
+| M5, M6, M7: wording | §2.2, §9, §10, the task note |
+| M9: the ack refusal in its own PR | Table 5 (PR 6), Figure 1, Task 6.1 |
+
+*Table 8b. Review 2727's findings and where fix round 1 answers them.*
+
 ## 9. Risks the build measures
 
-- **The registry reads one more file per session per pass,** because the registry reads every
-  `ROUTE_WRITABLE_FIELDS` file. `precompact` added the same cost. PR 3 records the pass time before and after.
+- **The registry's cost is a set lookup** for a session with no marker, because it reads a route file only where its
+  listing names it, as for `precompact`. A session with a marker pays one more read. PR 3 records the pass time
+  before and after.
+- **The clock-skew window.** The design assumes time-synchronised boxes and tolerates a fleet clock from about 60 s
+  behind the server's to about 110 s ahead (spec §3.4). Further behind, ccd refuses every write (`until <= now + 360`
+  on the fleet clock); further ahead, a marker lapses between renewals and, at 300 s ahead, is never live. Both fail
+  open. The projection logs a refused write once per episode, and the shadow log's `far` and `lapsed` lines point at
+  either.
 - **A rollback after a state cache holds `mailhold`.** The persisted reader refuses a field it does not know
   (`reviveRoute`). Task 3.4 measures what the previous server does with such a cache, and the PR says it. If it drops
   the session's cached record rather than re-measuring it, the PR raises that before the merge.
@@ -605,7 +725,9 @@ numbers.
 | Slug | Finding | Where |
 |---|---|---|
 | `precompact-resets-route-tries` | `cmd_route` clears the retry budget on every write, so each `precompact` write by the generations lane resets a pending route's retry count. The spec's rule for `mailhold` (skip the clear) is not applied to `precompact`. | `ccd/ccd#cmd_route`, `#_route_tries_clear` |
-| `precompact-empty-clear` | The spec says `mailhold`'s empty-value clear sits beside `precompact`'s siblings. `precompact` itself has no empty-value clear: an empty value fails validation. The plan gives `mailhold` the clear, as the spec intends. | `ccd/ccd#cmd_route` |
+| `precompact-empty-clear` | An observation, possibly no deviation: `precompact` has no empty-value clear (an empty value fails validation), and the spec places `mailhold`'s clear "beside `precompact`'s siblings", which is where the plan puts it. | `ccd/ccd#cmd_route` |
+| `last-deny-arm` | The spec places E before the landing advisory and A after the deny arms. The plan meets both with one block after the last deny arm, the fan-out routing deny today (P5). | `ccd/session-hook.sh` |
+| `ack-substitution-stricter` | A departure from spec §3.5, which passes every `mail inbox` whose standard output is a pipe: under `$( )` it is one, so `cmd_inbox` only shows, but the matcher does not decide a substitution and refuses it in a joined subagent (fail closed). | `ccd/ccrc-api` (`cmd_inbox`), Task 6.1 |
 | `review-report-reclaimed` | The round-3 review report the brief named was reclaimed with its reviewer's clips while this wave read it. The coordinator sent what it kept, and Table 8 maps each of its findings to a task. | the brief |
 
 ## 11. Promise delta
@@ -623,10 +745,13 @@ none - an implementation plan whose arms ship shadow; the arming step carries an
 - Every design decision, ruled in the spec's §4 (2026-11-19), and the roll order, server first.
 - The brief's coverage: A, E as a shadow-first arm with its switch and B's trigger, placement and growth with no
   waiver, and the rig check before arming.
+- The coordinator's rulings of fix round 1 (review 2727): the three refusal words join `MAIL_REJECT_CODES`;
+  `MERGE_STRIP_JQ` stays byte-identical and the module computes the over-cap kinds; the ack refusal ships in its own
+  pull request; every other finding fixed as the report directs.
 
 ### Waiting on you
 
-- The coordinator: review of this plan, and the minting of any deviation numbers from §10.
+- The coordinator: the short second review of F1 to F8, and the minting of any deviation numbers from §10.
 - Nothing waits on the operator until arming (§7).
 
 ### Later
