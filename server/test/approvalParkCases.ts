@@ -5,7 +5,8 @@
 // `approval-park-policy.test.ts` and by the mutation floors' `sim/approvalParkSets.ts` over a mutated copy of each module.
 // Neutral fixtures only.
 import { expect } from 'vitest';
-import type { ApprovalParkWord, ApprovalRefusal, ParkedApprovalView } from '../../shared/api.js';
+import type { ApprovalRefusal } from '../../shared/api.js';
+import type { ApprovalParkWord, ParkedApprovalView } from '../../shared/approval-park.js';
 import type { ParkFacts, SigningFacts } from '../src/coord/approvalPark.js';
 import type { ApprovalLapse, ApprovalLapsePark, ApprovalLapseRow, DeferredApprovalPush, DeferredApprovalRows } from '../src/coord/questionPolicy.js';
 

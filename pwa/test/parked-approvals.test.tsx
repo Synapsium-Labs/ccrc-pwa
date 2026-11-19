@@ -1,7 +1,7 @@
 // The parked-approvals group of the Waiting screen (approvals PR 3). Neutral names only: the repository is public.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import type { ParkedApprovalView } from '../../shared/api';
+import type { ParkedApprovalView } from '../../shared/approval-park';
 import { WaitingScreen } from '../src/ledgers/WaitingScreen';
 import {
   PARKED_DEFAULT_REFUSAL, PARKED_HEADING, PARKED_REFUSAL_TEXT, parkedOldestFirst, parkedRefusalText, parkedRowLine, ruledLine,

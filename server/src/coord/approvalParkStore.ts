@@ -7,9 +7,7 @@
 // transaction. Rows are never deleted by an approval-row purge (there is none, F8): `pruneParks` deletes a park at its horizon
 // plus the approvals' input retention (T8-4).
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
-import {
-  APPROVAL_RULING_AUTHORITIES, type ApprovalParkWord, type ApprovalRulingAuthority,
-} from '../../../shared/api.js';
+import { APPROVAL_RULING_AUTHORITIES, type ApprovalParkWord, type ApprovalRulingAuthority } from '../../../shared/approval-park.js';
 import { parkHorizonFrom, parkWordAt } from './approvalPark.js';
 
 const STMTS = new WeakMap<DatabaseSync, Map<string, StatementSync>>();

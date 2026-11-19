@@ -14,7 +14,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { approvalParkDenyText } from '../../shared/api.js';
+import { approvalParkDenyText } from '../../shared/approval-park.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
 const CAPTURES = path.resolve(__dirname, 'fixtures/approvals/captures');

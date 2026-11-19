@@ -1,6 +1,6 @@
 // The words of the parked-approvals group on the Waiting screen (approvals PR 3): a child's permission prompt held for a
 // ruling. Pure (ring L1): every sentence the group says is here, and no colour carries meaning alone.
-import type { ParkedApprovalView } from '../../../shared/api';
+import type { ParkedApprovalView } from '../../../shared/approval-park';
 import { refusalText } from '../lib/refusalWords';
 
 export const PARKED_HEADING = 'Permission prompts parked, with your coordinator';

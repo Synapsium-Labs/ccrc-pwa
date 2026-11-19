@@ -171,62 +171,22 @@ import {
   DEAD_COORDINATOR_BREAKER_HELD_HEAD, DEAD_COORDINATOR_JOURNAL_ACTS, deadCoordinatorBreakerHeldDetail,
   splitDeadCoordinatorBreakerHeld, type DeadAnchor, type DeadCoordinatorBreakerMember, type DeadCoordinatorJournalRow,
 } from '../deadCoordinator.js';
-import {
-  CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_REFUSAL_CODES, REVIEW_DONE_SUBJECT,
-  isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason,
-  isLifecycleOutcome,
-  isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState,
-  isWorkItemState,
-  // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
-  isReleaseTag, isUpdateChannel,
-  // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
-  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isProvenanceState, isRequestKind, isStampRead,
-  isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords,
-  // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
-  isTagFileRead,
-  // R37 (D-8386): the supervisor sweep's record, `update.json`'s `sweep` key.
-  isUpdateSweepWord,
-  // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
+import { CLAIM_HARD_CAP_MS, CLAIM_LEASE_MS, DONE_REFUSAL_CODES, REVIEW_DONE_SUBJECT, isAskReleaseReason, isAskState, isClaimState, isDeviationAllocState, isLifecycleAct, isLifecycleGapReason, isLifecycleOutcome, isMailDeliveryState, isMailGate, isMailKind, isNotifyKind, isProgramState, isRunKind, isRunState, isWorkItemState, // design 2026-09-20 §6/§7 (W2): the release catalogue's tag guard and channel vocabulary.
+  isReleaseTag, isUpdateChannel, // design 2026-09-20 §6/§8/§10 (W2): the node inventory's vocabularies and the lease's two lists.
+  BUSY_UPDATE_STATES, isInstallState, isNodeOs, isProvenanceState, isRequestKind, isStampRead, isUpdatePhase, isUpdateState, PROVENANCE_DETAIL_PREFIX, SETTLED_UPDATE_STATES, validCapWords, // fix round 1, D-3213: the floor/previous read-state vocabulary beside `highestVersion`/`previousVersion`.
+  isTagFileRead, // R37 (D-8386): the supervisor sweep's record, `update.json`'s `sweep` key.
+  isUpdateSweepWord, // design 2026-09-20 §6/§9 (W2): the intent row's vocabularies, and the fleet-default scope — declared ONCE in
   // shared/api.ts (ruling R4), imported here and never spelled.
-  FLEET_SCOPE, isAutoMode, isNotifyMode,
-  LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN,
-  // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
+  FLEET_SCOPE, isAutoMode, isNotifyMode, LC_ACT_UNKNOWN, LC_OUTCOME_UNKNOWN, // D-1143: the kickoff cancellation keys on the SUBJECT, and the subject has
   // exactly one home — `shared/api.ts`, beside the body it labels. Its own
   // docstring gives the second reason it lives there rather than in
   // `coord/kickoff.ts`: "no hyphenated literal under `server/src/coord` for
   // `mail-routes.test.ts`'s scanner to arbitrate". Imported, never retyped.
-  isPositiveDecimalSafeInteger,
-  parseArmEventDetail,
-  // The coordination fence's two instants (`childReclaimCoordinatorClaims`) are
+  isPositiveDecimalSafeInteger, parseArmEventDetail, // The coordination fence's two instants (`childReclaimCoordinatorClaims`) are
   // read in their canonical spelling only.
-  parseCanonicalPositiveSafeInteger,
-  parseRouteEventDetail,
-  parseWaveDoneSignals,
-  PROGRAM_KICKOFF_SUBJECT,
-  RUN_HOLD_NUMBER_MAX,
-  IDLE_RUN_STATES, isRunClosedBy, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES,
-  TMPROOT_ID_MAX_CHARS,
-  WAVE_DONE_SUBJECT,
-  type AskMintReleaseReason, type AskReleaseReason, type AskState,
-  // plan Task 16 (D-5298): the approvals row's vocabularies.
-  APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
-  type ApprovalMintReleaseReason, type ApprovalParkWord, type ApprovalReleaseReason, type ApprovalState, isApprovalParkWord,
-  type ClaimConflict, type ClaimLapse, type ClaimRechain, type ClaimRechainEnd, type ClaimState, type ClaimSummary,
-  type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
-  type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
-  type MailDeliveryState, type MailGate,
-  type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent,
-  type NotifyEvent, type PeerDeliverable, type ProgramState,
-  type RouteFields, type RoutingEvent,
-  type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState,
-  type RunSummary, type RunFindAnswer, type RunHit, type ProgrammesAnswer,
-  type SetAccountPoolsRefuseCode,
-  type UpdateChannel,
-  type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind,
-  type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState,
-  type AutoMode, type NotifyMode, type DriftFinding, isDriftKind,
-  type WorkItemState, type LastReviewReport, type RunRefuseCode,
-} from '../../../shared/api.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
+  parseCanonicalPositiveSafeInteger, parseRouteEventDetail, parseWaveDoneSignals, PROGRAM_KICKOFF_SUBJECT, RUN_HOLD_NUMBER_MAX, IDLE_RUN_STATES, isRunClosedBy, transitionsFor, OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, TMPROOT_ID_MAX_CHARS, WAVE_DONE_SUBJECT, type AskMintReleaseReason, type AskReleaseReason, type AskState, // plan Task 16 (D-5298): the approvals row's vocabularies.
+  APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState, type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState, type ClaimConflict, type ClaimLapse, type ClaimRechain, type ClaimRechainEnd, type ClaimState, type ClaimSummary, type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState, type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome, type MailDeliveryState, type MailGate, type MailKind, type MailRejectCode, type MailSummary, type MirroredLifecycleEvent, type NotifyEvent, type PeerDeliverable, type ProgramState, type RouteFields, type RoutingEvent, type RunHealth, type RunItemTally, type RunKind, type RunSignals, type RunState, type RunSummary, type RunFindAnswer, type RunHit, type ProgrammesAnswer, type SetAccountPoolsRefuseCode, type UpdateChannel, type BusyUpdateState, type InstallState, type NodeOs, type NodeRole, type ProvenanceState, type RequestKind, type SettledUpdateState, type StampRead, type TagFileRead, type UpdatePhase, type UpdateState, type AutoMode, type NotifyMode, type DriftFinding, isDriftKind, type WorkItemState, type LastReviewReport, type RunRefuseCode } from '../../../shared/api.js';
+import { type ApprovalParkWord, isApprovalParkWord } from '../../../shared/approval-park.js'; import { programmeNameFromSlug, PEER_MAIL_WINDOW_MS } from '../../../shared/api.js'; import { isNodeRole } from '../../../shared/node-role.js';
 
 /** One entry in `$REG/<id>.prhistory` (appended by ccd/ccd's `_pr_py`). Re-declared as a TYPE
  *  here rather than parsed twice: `coord/prhistory.ts` owns the reader.

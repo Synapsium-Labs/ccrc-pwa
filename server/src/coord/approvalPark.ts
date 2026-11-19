@@ -9,10 +9,8 @@
 //  - `signingRefusal`: the ONE SIGNING SITE's guard (§3.4, F11), run before every signature;
 //  - `fetchedAtRecordable`: whether the ruling read may record `fetchedAt` (F8-c, F2-a);
 //  - `parkedApprovalViewOf`: a parked row as Waiting on you lists it (§3.3.2).
-import {
-  APPROVAL_PARK_HORIZON_MS, APPROVAL_PARK_SLOTS,
-  type ApprovalParkWord, type ApprovalRefusal, type ApprovalRulingAuthority, type ParkedApprovalView,
-} from '../../../shared/api.js';
+import { type ApprovalRefusal } from '../../../shared/api.js';
+import { APPROVAL_PARK_HORIZON_MS, APPROVAL_PARK_SLOTS, type ApprovalParkWord, type ApprovalRulingAuthority, type ParkedApprovalView } from '../../../shared/approval-park.js';
 
 /** The park's word at mint (§3.3.1): `shadow` while the park lane is not live or sign-in is dark (a parked `escalate`
  *  prompt would have no door, F12); otherwise `capped` when the key's `APPROVAL_PARK_SLOTS` are all taken, else `live`.

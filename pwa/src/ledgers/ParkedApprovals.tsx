@@ -3,7 +3,7 @@
 // shown again on `step-up-required`). Ring L4: every word is `parkedApprovalWords.ts`'s; the input is drawn as text only.
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button } from '@ccrc/ui';
-import type { ParkedApprovalView } from '../../../shared/api';
+import type { ParkedApprovalView } from '../../../shared/approval-park';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
 import { ApiError, api } from '../lib/api';

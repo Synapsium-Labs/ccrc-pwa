@@ -17,9 +17,8 @@ import {
 } from '../src/coord/questions.js';
 import { approvalOperatorArm } from '../src/coord/approvalParkDoor.js';
 import { approvalDecision } from '../src/coord/digest.js';
-import {
-  APPROVAL_INPUT_RETENTION_DAYS, APPROVAL_PARK_HORIZON_MS, approvalRulingBytes, isApprovalState, type ApprovalRulingRecordAny,
-} from '../../shared/api.js';
+import { APPROVAL_INPUT_RETENTION_DAYS, approvalRulingBytes, isApprovalState, type ApprovalRulingRecordAny } from '../../shared/api.js';
+import { APPROVAL_PARK_HORIZON_MS } from '../../shared/approval-park.js';
 import { APPROVAL_PARK_LANE } from '../../shared/lane-arm.js';
 import { CHILD, CHILD2, hookInput, PARENT, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
 

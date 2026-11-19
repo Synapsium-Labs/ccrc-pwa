@@ -34,12 +34,8 @@
 // `registerCoordRoutes`) is passed in as `ApprovalRaiseDeps` and imported here by type only, so `fleet.ts`'s runtime
 // import of `currentFor` stays inward and `rings/outward-edges.data.ts` gains no pair.
 import { createHash } from 'node:crypto';
-import {
-  APPROVAL_HOOK_WAIT_S, APPROVAL_INPUT_RETENTION_DAYS, APPROVAL_STATES, ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState,
-  type ApprovalMintReleaseReason, type ApprovalParkWord, type ApprovalRulingAnswer, type ApprovalRulingAuthority,
-  type ApprovalRulingRecordAny, type ApprovalState, type AskMintReleaseReason, type AskState,
-  type Dialog, type HookAsk, type HookAskQuestion, type ParkedApprovalView, TERMINAL_RUN_STATES,
-} from '../../../shared/api.js';
+import { APPROVAL_HOOK_WAIT_S, APPROVAL_INPUT_RETENTION_DAYS, APPROVAL_STATES, ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState, type ApprovalMintReleaseReason, type ApprovalRulingAnswer, type ApprovalRulingRecordAny, type ApprovalState, type AskMintReleaseReason, type AskState, type Dialog, type HookAsk, type HookAskQuestion, TERMINAL_RUN_STATES } from '../../../shared/api.js';
+import { type ApprovalParkWord, type ApprovalRulingAuthority, type ParkedApprovalView } from '../../../shared/approval-park.js';
 import { APPROVAL_PARK_LANE, laneArmGate, type LaneArmLane } from '../../../shared/lane-arm.js';
 import type { WaitingView } from '../../../shared/ledgers.js';
 import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal.js';

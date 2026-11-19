@@ -10,7 +10,8 @@
 // never compares states itself. The one rule the table cannot carry is the programme context: the
 // operator may dismiss only while the programme has no open run (spec D15), and `nextItemState` is
 // where that is decided.
-import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type ParkedApprovalView, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { ACTIVE_RUN_STATES, OUTSTANDING_DELIVERY_STATES, TERMINAL_RUN_STATES, isStuckReason, type CallView, type MailDeliveryState, type Presence, type RunKind, type RunState, type StuckReason } from './api.js';
+import { type ParkedApprovalView } from './approval-park.js';
 import { DOC_SECTIONS, DOC_SECTION_SLUGS } from './docs.js';
 import { utf8Bytes } from './utf8.js';
 import { PLAN_END_OUTCOMES, type PlanEndOutcome } from './plan.js';

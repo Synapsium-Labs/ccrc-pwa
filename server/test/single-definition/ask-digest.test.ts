@@ -1873,7 +1873,7 @@ describe('every forbidden ccd verb starts protected at the installed direct entr
 
 // Approvals PR 3 (plan 2026-11-18, Table 3f): `parked` is an approval state, held in the one state map, and NOT a hook stop
 // state, in shared/api.ts or in the hook's bash copy: the hook's own arm prints the park deny on it, and that arm's word is
-// the TypeScript literal. The park's words and constants are declared once, in shared/api.ts. APPENDED.
+// the TypeScript literal. The park's words and constants are declared once, in shared/approval-park.ts. APPENDED.
 describe('the park\'s state and words each have one home, and parked is no stop state (approvals PR 3)', () => {
   const api = readFileSync(path.join(ccrcRoot, 'shared', 'api.ts'), 'utf8');
   const hook = readFileSync(path.join(ccrcRoot, 'ccd', 'session-hook.sh'), 'utf8');
@@ -1890,11 +1890,11 @@ describe('the park\'s state and words each have one home, and parked is no stop 
     expect(hook).toMatch(/\[\[ "\$state" == parked \]\] && \{ _apr_park_print "\$rid"; return 0; \}/);
     expect(/parked: true/.test(api)).toBe(true);
   });
-  it('the park\'s words and constants are declared once, in shared/api.ts', () => {
+  it('the park\'s words and constants are declared once, in shared/approval-park.ts', () => {
     const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
     for (const c of ['APPROVAL_PARK_WORDS', 'APPROVAL_PARK_HORIZON_MS', 'APPROVAL_PARK_SLOTS', 'approvalParkDenyText',
       'APPROVAL_RULING_AUTHORITIES', 'APPROVAL_RULING_FAMILIES']) {
-      expect(holders(new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`)), c).toEqual(['shared/api.ts']);
+      expect(holders(new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b`)), c).toEqual(['shared/approval-park.ts']);
     }
   });
 });
