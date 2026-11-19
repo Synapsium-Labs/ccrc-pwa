@@ -1655,3 +1655,67 @@ describe('the docs-log caps and the framed size of a worst-case history answer (
       expect(framedLen(worst(FOUR, hex)), 'four-byte text answers too-many-entries, never a list').toBeGreaterThan(DOCS_LOG_MAX_WIRE_BYTES);
     });
 });
+
+// ===== X2 P1 Task P1.1: range ceilings and vocabulary (X2 spec section 4.3; plan Task P1.1) =====
+// Each ceiling is one constant in shared/docs.ts, its own integer literal (the caps block's rule), at the value the
+// spec's table and the plan's Global Constraints give. DOCS_RANGE_PREPARE_BUDGET_MS is set from lab RANGE-L1 (the
+// plan's Results). An import declaration is hoisted, so this one may sit at the end of the file.
+import * as docsR from '../../shared/docs.js';
+describe('X2 P1: the range ceilings, the stat pin and the range wire types', () => {
+  const RANGE_CEILINGS = {
+    DOCS_RANGE_FRAME_BYTES: 524288,
+    DOCS_RANGE_MAX_BYTES: 67108864,
+    DOCS_PDF_INLINE_MAX_BYTES: 4194304,
+    DOCS_IMAGE_VIEW_MAX_PIXELS: 67108864,
+    DOCS_IMAGE_VIEW_MAX_SIDE: 16384,
+    DOCS_RANGE_PREPARE_BUDGET_MS: 10000,
+  } as const;
+
+  it('range ceilings are their own literals: each holds its spec value, declared once as an integer literal, never an alias', () => {
+    const src = readFileSync(DOCS, 'utf8');
+    for (const [name, value] of Object.entries(RANGE_CEILINGS)) {
+      expect((docsR as Record<string, unknown>)[name], name).toBe(value);
+      const decl = src.match(new RegExp(`^export const ${name} = (.+);$`, 'm'));
+      expect(decl, `${name} is declared on one line`).not.toBeNull();
+      expect(decl![1], `${name} is an integer literal, not an alias of another constant`).toMatch(/^[1-9][0-9]*$/);
+      expect(src.match(new RegExp(`\\bexport const ${name}\\b`, 'g'))?.length, `${name} is declared once`).toBe(1);
+    }
+  });
+
+  it('a base64 frame plus the envelope fits the show guard; the range ceiling is a whole number of frames, and above the ccd ceiling, which stays 4 MiB', () => {
+    expect(4 * Math.ceil(docsR.DOCS_RANGE_FRAME_BYTES / 3) + docsR.DOCS_ENVELOPE_RESERVE).toBeLessThanOrEqual(docsR.DOCS_MAX_ANSWER_BYTES);
+    expect(docsR.DOCS_RANGE_FRAME_BYTES).toBeLessThan(docsR.DOCS_MAX_DOC_BYTES);
+    expect(docsR.DOCS_RANGE_MAX_BYTES).toBeGreaterThan(DOCS_MAX_FILE_BYTES);
+    expect(DOCS_MAX_FILE_BYTES).toBe(4194304);
+    expect(docsR.DOCS_RANGE_MAX_BYTES % docsR.DOCS_RANGE_FRAME_BYTES).toBe(0);
+  });
+
+  it('statPin: a whole byte count and a decimal mtimeNs give a stat pin', () => {
+    expect(docsR.statPin(5242880, '1795125141216123456')).toEqual({ kind: 'stat', size: 5242880, mtimeNs: '1795125141216123456' });
+    expect(docsR.statPin(0, '0')).toEqual({ kind: 'stat', size: 0, mtimeNs: '0' });
+    expect(docsR.statPin(Number.MAX_SAFE_INTEGER, '9'.repeat(19))).toEqual({ kind: 'stat', size: Number.MAX_SAFE_INTEGER, mtimeNs: '9'.repeat(19) });
+  });
+
+  it('statPin: an absent, empty or non-decimal mtimeNs, or a size that is not a whole byte count, gives null', () => {
+    expect(docsR.statPin(10, undefined)).toBeNull();
+    for (const bad of ['', '-1', '1.5', '01', ' 1', '1e9', '0x10', '1'.repeat(20), '١٢٣',
+      123 as unknown as string, ['123'] as unknown as string]) {
+      expect(docsR.statPin(10, bad), JSON.stringify(bad)).toBeNull();
+    }
+    for (const size of [null, -1, 1.5, Number.NaN, Number.MAX_SAFE_INTEGER + 1]) {
+      expect(docsR.statPin(size, '123'), String(size)).toBeNull();
+    }
+  });
+
+  it('the range wire types hold canned answers, and each survives the wire as JSON unchanged', () => {
+    const prepared: docsR.DocsRangePrepared = { snapshot: 's'.repeat(32), size: 5242880, digest: 'd'.repeat(64) };
+    const frame: docsR.DocsRangeFrame = { snapshot: 's'.repeat(32), offset: 0, bytesB64: 'AA==', digest: 'e'.repeat(64), total: 5242880 };
+    const pins: docsR.DocsRangePin[] = [
+      { kind: 'blob', sha: 'b'.repeat(40) }, { kind: 'fp', sha: 'f'.repeat(64) }, { kind: 'stat', size: 1, mtimeNs: '2' },
+    ];
+    const draft: NonNullable<docsR.DocsEntry['draft']> = {
+      state: 'modified', kind: 'file', size: 5242880, fp: null, trust: 'status', mtimeNs: '1795125141216123456',
+    };
+    expect(JSON.parse(JSON.stringify({ prepared, frame, pins, draft }))).toEqual({ prepared, frame, pins, draft });
+  });
+});

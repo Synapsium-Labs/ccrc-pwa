@@ -95,6 +95,23 @@ export const DOCS_STALE_MS = 600000;
 /** refreshDue: the age at which any other last attempt is due again. */
 export const DOCS_RETRY_FLOOR_MS = 60000;
 
+// The range ceilings (X2 spec section 4.3, C4: the coordinator's design default). None of them moves a class cap or
+// DOCS_MAX_FILE_BYTES: a file above 2 MiB is read in frames, never by raising a cap. From P1.2, ccd holds parity copies
+// of the two it enforces (the frame and the range ceiling; docs-parity.test.ts).
+/** ccd and the server: the most raw file bytes one `docs-show-range` frame carries (512 KiB). */
+export const DOCS_RANGE_FRAME_BYTES = 524288;
+/** The largest file read by range: Download, and the reassembled bytes behind any view (64 MiB). */
+export const DOCS_RANGE_MAX_BYTES = 67108864;
+/** The largest PDF opened in the PDF frame (wave P3); above it, Download only. Lowered, never raised, by lab PDF-L2. */
+export const DOCS_PDF_INLINE_MAX_BYTES = 4194304;
+/** The most pixels, read from the image header, of an image shown on its own page; above it, Download only. */
+export const DOCS_IMAGE_VIEW_MAX_PIXELS = 67108864;
+/** The widest or tallest side, read from the image header, of an image shown on its own page. */
+export const DOCS_IMAGE_VIEW_MAX_SIDE = 16384;
+/** The prepare's copy-and-hash budget, apart from the draft hash budget: three times lab RANGE-L1's worst 64 MiB
+ *  copy-and-hash on the fleet box (362 ms, 2026-11-19), floored at 10 s. */
+export const DOCS_RANGE_PREPARE_BUDGET_MS = 10000;
+
 // ---- (C) Value grammars (design section 2 (a)) -----------------------------------------------------------------
 //
 // Each grammar is a pattern BODY. TypeScript matches it as `new RegExp('^(?:' + body + ')$', 'u')`, built once at
@@ -120,6 +137,10 @@ export const DOCS_SHA_RE_BODY = '[0-9a-f]{40}|[0-9a-f]{64}';
 export const DOCS_FINGERPRINT_RE_BODY = '[0-9a-f]{64}';
 /** `--max-bytes N`: one to eight digits, no leading zero. ccd's bash front checks it; a bad N is a usage error. */
 export const DOCS_MAX_BYTES_RE_BODY = '[1-9][0-9]{0,7}';
+/** A listed modified time in nanoseconds (X2 P1, `DocsEntry.draft.mtimeNs` and the stat pin): a decimal string with
+ *  no sign and no leading zero, at most 19 digits, the widest a signed 64-bit `st_mtime_ns` prints. A time before 1970
+ *  is negative and matches nothing, so such a file gets no stat pin and stays withheld: it fails closed. */
+export const DOCS_MTIME_NS_RE_BODY = '0|[1-9][0-9]{0,18}';
 /** A section slug, generated from `DOC_SECTIONS`. */
 export const DOCS_SECTION_RE_BODY = DOC_SECTION_SLUGS.join('|');
 /** A section-relative path: not absolute, no trailing or doubled `/`, no `.` or `..` component, no C0 or C1
@@ -148,6 +169,7 @@ const QUALIFIED_PREFIX_RE = new RegExp('^' + DOCS_QUALIFIED_PREFIX_RE_BODY, 'u')
 const SHA_RE = fullMatcher(DOCS_SHA_RE_BODY);
 const FINGERPRINT_RE = fullMatcher(DOCS_FINGERPRINT_RE_BODY);
 const MAX_BYTES_RE = fullMatcher(DOCS_MAX_BYTES_RE_BODY);
+const MTIME_NS_RE = fullMatcher(DOCS_MTIME_NS_RE_BODY);
 const REL_PATH_RE = fullMatcher(DOCS_REL_PATH_RE_BODY);
 
 /** One code point class, built FROM the two declared lists (never a second hand-written list), plus `\p{Cs}`, a
@@ -200,6 +222,10 @@ export function isDocsFingerprint(s: string): boolean {
 
 export function isDocsMaxBytes(s: string): boolean {
   return typeof s === 'string' && MAX_BYTES_RE.test(s);
+}
+
+export function isDocsMtimeNs(s: string): boolean {
+  return typeof s === 'string' && MTIME_NS_RE.test(s);
 }
 
 /** A ref value, classified. The two grammars are disjoint: a bare name never starts with `refs/`. */
@@ -563,8 +589,38 @@ export interface DocsEntry {
     fp: Sha | null;
     errno?: string;
     trust: 'status' | 'hash';
+    /** X2 P1 (additive): the leaf's modified time in nanoseconds, a decimal string (it does not fit a JSON number
+     *  exactly), from the same `fstat` its size comes from. An older ccd sends none; read it only through `statPin`. */
+    mtimeNs?: string;
   };
 }
+
+// ---- The range read's wire (X2 spec section 4.3; plan Task P1.1) ----------------------------------------------
+
+/** What a range read is pinned to: a committed blob, a draft's fingerprint, or, for a draft or folder file the
+ *  listing could not fingerprint, its size and modified time as the listing measured them. */
+export type DocsRangePin =
+  | { kind: 'blob'; sha: Sha }
+  | { kind: 'fp'; sha: Sha }
+  | { kind: 'stat'; size: number; mtimeNs: string };
+
+/** THE one reader of a listed modified time (spec 4.3, "Where the time comes from"): a draft entry and a folder entry
+ *  each call it with their own fields. An absent `mtimeNs`, one outside `DOCS_MTIME_NS_RE_BODY` (a number or an array off
+ *  the wire included, which `isDocsMtimeNs` refuses before its pattern), or a size that is not a whole byte count gives
+ *  no pin, so an older ccd's file stays withheld rather than pinned to a guess. */
+export function statPin(size: number | null, mtimeNs: string | undefined): DocsRangePin | null {
+  if (size === null || !Number.isSafeInteger(size) || size < 0) return null;
+  if (mtimeNs === undefined || !isDocsMtimeNs(mtimeNs)) return null;
+  return { kind: 'stat', size, mtimeNs };
+}
+
+/** `docs-show-range --prepare`'s answer: the private snapshot's id, its size and the sha256 of its bytes. No file
+ *  bytes ride a prepare. */
+export interface DocsRangePrepared { snapshot: string; size: number; digest: Sha }
+
+/** One frame of a snapshot: at most `DOCS_RANGE_FRAME_BYTES` raw bytes from `offset`, base64, with the sha256 of
+ *  those bytes and the snapshot's whole size. */
+export interface DocsRangeFrame { snapshot: string; offset: number; bytesB64: string; digest: Sha; total: number }
 
 export type DraftsFacts =
   | {
