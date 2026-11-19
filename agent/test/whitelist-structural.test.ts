@@ -588,7 +588,7 @@ describe('mechanism 3, values — a prefix that grants more than it names is a b
   it('throws on a skill-ensure with no --wrapper, the wrong flag, or the flag out of place (D-8126)', () => {
     expect(() => auditExecWhitelist(withCcd([['skill-ensure']]))).toThrow(/only grantable with '--wrapper'/);
     expect(() => auditExecWhitelist(withCcd([['skill-ensure', '--all']]))).toThrow(/only grantable with '--wrapper'/);
-    expect(() => auditExecWhitelist(withCcd([['skill-ensure', 'claude-a', '--wrapper']]))).toThrow(/only grantable with '--wrapper'/);
+    expect(() => auditExecWhitelist(withCcd([['skill-ensure', 'lane-a', '--wrapper']]))).toThrow(/only grantable with '--wrapper'/);
     expect(() => auditExecWhitelist(withCcd([['skill-ensure', '--wrapper']]))).not.toThrow();
     expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === 'skill-ensure'), 'one skill-ensure grant, on --wrapper').toEqual([['skill-ensure', '--wrapper']]);
   });

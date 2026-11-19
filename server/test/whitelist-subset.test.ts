@@ -268,9 +268,9 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     const se = EXEC_WHITELIST.ccd.filter((p) => p[0] === 'skill-ensure');
     expect(se, 'exactly one skill-ensure grant').toEqual([['skill-ensure', '--wrapper']]);
     expect(isExecAllowed('ccd', ['skill-ensure'])).toBe(false);
-    expect(isExecAllowed('ccd', ['skill-ensure', 'claude-a'])).toBe(false);
+    expect(isExecAllowed('ccd', ['skill-ensure', 'lane-a'])).toBe(false);
     expect(isExecAllowed('ccd', ['skill-ensure', '--all'])).toBe(false);
-    expect(isExecAllowed('ccd', [...CCD_ARGV.skillEnsure('claude-a')])).toBe(true);
+    expect(isExecAllowed('ccd', [...CCD_ARGV.skillEnsure('lane-a')])).toBe(true);
   });
 
   // The project create (add-project spec 2026-11-04 §4) is granted on `--name` alone: the flag is its whole argument
@@ -663,7 +663,7 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
     projectPoolClear: ['project-pool', '--project', 'demo', '--clear'],
     projectAddClone: ['project-add', '--name', 'demo', '--url', 'https://github.com/o/r.git'],
     projectAddEmpty: ['project-add', '--name', 'demo', '--empty'],
-    skillEnsure: ['skill-ensure', '--wrapper', 'claude-a'],
+    skillEnsure: ['skill-ensure', '--wrapper', 'lane-a'],
     route: ['route', '--session', 'demo-quiet-basin', '--set', 'effort=high'],
     // Pairs in `ROUTE_WRITABLE_FIELDS` order — `class` before `effort` — not
     // the sample object's own key order, which happens to agree here; the
