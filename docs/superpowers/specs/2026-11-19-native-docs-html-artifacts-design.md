@@ -26,7 +26,7 @@ X2 designed an in-walls loader for HTML pages (X2 §4.8, wave P6): a `srcdoc` fr
 | Popups (`window.open`, `target="_blank"`) | 1 | `allow-popups` is forbidden |
 | WebAssembly | 1 | `wasm-unsafe-eval` is not in `MOCKUP_CSP` |
 | A page above 2 MiB | 1 | The HTML class cap |
-| Workers (counted inside the module rows) | Not counted alone | `worker-src` falls back to `'none'` |
+| Workers | Not counted by X2 | `worker-src` falls back to `'none'` |
 | Page downloads | Not counted alone | `allow-downloads` is forbidden |
 
 ### 1.2 The ruling, and what it changes
@@ -35,7 +35,7 @@ X2 designed an in-walls loader for HTML pages (X2 §4.8, wave P6): a `srcdoc` fr
 |---|---|
 | C3 waiting on you, recommendation (a): keep the walls (X2 §3) | Ruled 2026-11-19: support them, at artifact level, with the safety in the hosting. This spec is the "reviewed security design" X2's option (b) named |
 | The widening "priced, not designed" (X2 §4.8) | Designed here |
-| The completion plan's "no sandbox/CSP widening, no allow-modals" | Still binds every frame on the console's origin. The artifact tier is not on that origin (D-8787) |
+| The completion plan's Global Constraints against sandbox or CSP widening and `allow-modals` (quoted exactly in D-8787) | Still bind every frame on the console's origin. The artifact tier is not on that origin (D-8787) |
 
 ### 1.3 Boundaries that do not move
 
@@ -462,12 +462,12 @@ This section maps the standalone-only losses X2 measured onto how this design cl
 |---|---|---|---|---|
 | Sibling assets above 5 MiB in total | 3 | No total asset budget, per-file ceiling 64 MiB, streamed reads (§5) | Complete parity inventory (F12) | AR-A3 |
 | WebAssembly | 1 | `wasm-unsafe-eval`, `application/wasm` (§4.3, §5) | Complete parity inventory (F12) | AR-A3 |
-| Workers | in the module rows | `worker-src S blob:` (§4.3) | Complete parity inventory (F12) | AR-A3 |
+| Workers | not counted by X2 | `worker-src S blob:` (§4.3) | Complete parity inventory (F12) | AR-A3 |
 | A page above 2 MiB | 1 | Per-file ceiling 64 MiB, streamed (§5) | Complete parity inventory (F13), Large files | AR-A3 |
 | Dialogs | 2 | `allow-modals` on the artifact frame (§4.2), measured in every engine by ART-L9 | Complete parity inventory (F11) | AR-A2 |
 | Popups | 1 | `allow-popups` when the operator ticks windows (§4.2), with a usable handle measured by ART-L8 | Complete parity inventory (F11) | AR-A2 |
 | Page downloads | not counted alone | `allow-downloads` (§4.2, A3) | Complete parity inventory (F11) | AR-A2 |
-| Runtime fetches of siblings beyond the walls' set | 4 | Real same-origin `fetch` under `connect-src S` (§4.3) | Complete parity inventory (F12) | AR-A3 |
+| Runtime fetches beyond the walls' shim. X2 counts these 4 pages as running within the walls for the siblings its shim answers, so this is a widening, not a loss X2 records | 4 | Real same-origin `fetch` of any file in the manifest, under `connect-src S` (§4.3) | Complete parity inventory (F12) | AR-A3 |
 
 C3 and rows F11, F12 (beyond the walls) and F13 move from Conflict to Gap, designed here. A row moves from Gap to Same when its acceptance row passes on the installed release, with the artifact names set up. Two differences from the standalone reader are recorded, not waived. A page that fetches from an outside API fails, because `connect-src` takes no outside host. A page opened as an artifact runs in a new tab, not inline. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
 
