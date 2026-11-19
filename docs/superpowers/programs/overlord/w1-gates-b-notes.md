@@ -91,6 +91,21 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
   card door reads after a pass, so they build the door with `overlordGateFixture.ts#passGate`; their assertions are
   unchanged. No fixture can present a real pass today (`continuity-v1` is not held, and the witness is unbound).
 
+- **`gate-reads-the-designation-fact`** (the first fast run's ARCH-62 census red): the decider first matched the caller
+  against the binding and the pending attempt itself, two new run/session equality sites. It now asks
+  `roleOf.ts#designationFactFrom` and `designationFactOf`, the one owner of a session's place in the designation (pure L1,
+  L0 imports only), and adds only the incarnation from the row. So `overlordGate.ts` has one more runtime import than the
+  plan's "the ladder's deciders only", and the census holds no new site. Two mutants of its set moved to the new text.
+
+## The first fast run (PR #3076 at `5223a6bb6`)
+
+Red in three server shards. Two were this PR's and are fixed in the next push: the ARCH-62 census (above), and
+`plan-ticket-done.test.ts`, a fixture that main's WM1 (#2997) added with `actorOf`, which the absorption brought in and which
+now mints through `gateActorOf` like the others. The third, `ccd-harness-integrity`'s "no override names a function nothing
+ships", hit its 20 s budget on CI and passes alone here (13/13). `horkos` blocks on `proof-not-built` only (a non-author
+unblocks it; nothing in the PR fixes it), and routes on `test-edited` and `test-weakened`, which are the four restated
+cases above.
+
 ## For the coordinator
 
 - **Migration 107**: main reached 106 with programme work map WM1 (#2997), so this PR's table is 107, renumbered at the one

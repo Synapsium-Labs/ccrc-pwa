@@ -1,8 +1,10 @@
 // The Overlord gate order (Overlord W1, gates B; spec 2026-11-09 §11.2, §3.1, §3.3.11 H12, §7.4 C27, Table 11.6; plan
 // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 4). Ring L1, context C5: pure decisions over facts the
-// runner (`overlordGateRun.ts`, L4) gathered. Runtime imports: the ladder's two step deciders only; every other import is a
-// type. No `fs`, no Fastify, no clock: every fact arrives as an argument, each with its unmeasured arm, and no step reads an
-// unmeasured fact as a pass (the plan's slug `unmeasured-refuses-at-its-step`).
+// runner (`overlordGateRun.ts`, L4) gathered. Runtime imports: the ladder's two step deciders, and `roleOf.ts`'s pure
+// designation-fact deciders (L1), the one owner of a session's place in the designation (slug
+// gate-reads-the-designation-fact); every other import is a type. No `fs`, no Fastify, no clock: every fact arrives as an
+// argument, each with its unmeasured arm, and no step reads an unmeasured fact as a pass (slug
+// `unmeasured-refuses-at-its-step`).
 //
 // THE DECIDERS:
 //   - `callerStandingOf` (step 1): who the caller is to the designation, the incarnation checked against the binding at
@@ -18,6 +20,7 @@
 // `card-unread`), held there by `single-definition/core-vocab.test.ts`. Every word is typed as a `RouteRefusal`, so a word
 // `shared/refusal.ts` does not hold is a compile error, never a second spelling.
 import { offStep, rungStep } from './overlordLadder.js';
+import { designationFactFrom, designationFactOf } from '../roleOf.js';
 import type { DoorClass, EffectiveRung } from './overlordLadder.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import type { OverlordDoorRow } from './overlordDoors.js';
@@ -41,10 +44,15 @@ export type CallerStanding =
  *  attempt's body (its incarnation `null` until the create answers), or neither. A rebind's pending body is neither. */
 function placeOf(sessionId: string, designation: Exclude<DesignationRead, { kind: 'unmeasured' }>):
   { readonly kind: 'bound' | 'pending'; readonly incarnation: string | null } | null {
-  const bound = designation.kind === 'designated' ? designation.row.bound : null;
-  if (bound !== null && bound.sessionId === sessionId) return { kind: 'bound', incarnation: bound.generation };
+  // The session's place is the designation fact's one owner's (`roleOf.ts#designationFactOf`); the row adds its incarnation.
+  const fact = designationFactFrom(designation);
+  if (fact === 'unmeasured' || fact.kind === 'none') return null;
+  const place = designationFactOf(sessionId, fact);
+  if (place === 'live' && designation.kind === 'designated' && designation.row.bound !== null) {
+    return { kind: 'bound', incarnation: designation.row.bound.generation };
+  }
   const pending = designation.row?.pending ?? null;
-  if (pending !== null && pending.kind === 'designate' && pending.sessionId === sessionId) return { kind: 'pending', incarnation: pending.generation };
+  if (place === 'pending' && fact.pendingKind === 'designate' && pending !== null) return { kind: 'pending', incarnation: pending.generation };
   return null;
 }
 
