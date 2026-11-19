@@ -49,6 +49,7 @@ import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
 import { GATE_MUTANT_SETS } from './gateSets.js';
 import { OTHER_LANES_MUTANT_SETS } from './otherLanesSets.js';
 import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
+import { PLAN_TICKET_DONE_MUTANT_SETS } from './planTicketDoneSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
@@ -222,6 +223,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...GATE_MUTANT_SETS,
   ...OTHER_LANES_MUTANT_SETS,
   ...PLAN_PHASES_MUTANT_SETS,
+  ...PLAN_TICKET_DONE_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,

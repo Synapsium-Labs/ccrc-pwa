@@ -272,6 +272,12 @@ const INBOUND_DOORS: ReadonlyArray<readonly [name: string, route: string, url: (
   ['triage', 'POST /api/teams/:team/plan/triage', () => '/api/teams/AAA/plan/triage', { issue: 'AAA-12', decision: 'upkeep' },
     { status: 403, error: 'not-linear-owner' }],
 ];
+/** The programme work map WM1's `plan ticket-done` (#2997), a plan lane too (review 2712 F7): a plain session passes the lane
+ *  and is answered by the door's own evidence check (no landing entry for the pull request), never the Overlord's word. */
+const WORK_MAP_DOORS: typeof INBOUND_DOORS = [
+  ['ticket-done', 'POST /api/programmes/:slug/plan/tickets/done', (slug) => `/api/programmes/${slug}/plan/tickets/done`,
+    { ticket: 't1', evidence: { pr: 12 } }, { status: 409, error: 'evidence-unverified' }],
+];
 const inboundSend = (w: { app: World['app'] }, url: string, body: unknown, who_: { byId: string; byUuid: string }) =>
   w.app.inject({ method: 'POST', url: `${url}?byId=${who_.byId}&byUuid=${who_.byUuid}`, headers: TOK, payload: body as never });
 /** A plan programme with a plan and a ticket and NO owner: the arm that admits any attributed caller. */
@@ -290,7 +296,7 @@ function coreDoors(w: World): Door[] {
     name: `plan ${name}`, route: `POST /api/programmes/:slug/plan${suffix}`,
     call: (id, uuid) => planSend(w, 'prog-q', suffix, body(7), { byId: id, byUuid: uuid }),
   }));
-  for (const [name, route, url, body] of INBOUND_DOORS) {
+  for (const [name, route, url, body] of [...INBOUND_DOORS, ...WORK_MAP_DOORS]) {
     planDoors.push({ name: `plan ${name}`, route, call: (id, uuid) => inboundSend(w, url('prog-q'), body, { byId: id, byUuid: uuid }) });
   }
   return [
@@ -433,7 +439,7 @@ describe('a refused body is a real registry row, and the refusal is the lane\'s 
 });
 
 describe('the plan doors: the bound body on a programme with no owner', () => {
-  it('each of the nine is refused, and a plain session on a programme with no owner is admitted', async () => {
+  it('each of the ten is refused, and a plain session on a programme with no owner is admitted', async () => {
     const rig = await coreRig('live');
     const w = rig.w;
     const reads0 = storeReads.n;
@@ -450,8 +456,9 @@ describe('the plan doors: the bound body on a programme with no owner', () => {
       expect({ name, status: res.statusCode }, `${name}: ${res.body}`).toEqual({ name, status: 200 });
     }
     // The two inbound doors, with no inbound issue and no team owner seeded: the plain session passes the lane and is answered
-    // by the door's own check (take: the issue is not inbound; triage: the team has no Linear owner), never the Overlord's word.
-    for (const [name, , url, body, own] of INBOUND_DOORS) {
+    // by the door's own check (take: the issue is not inbound; triage: the team has no Linear owner), never the Overlord's word,
+    // and so is ticket-done (the pull request has no landing entry).
+    for (const [name, , url, body, own] of [...INBOUND_DOORS, ...WORK_MAP_DOORS]) {
       n += 1;
       const slug = `prog-c${n}`;
       await seedUnownedPlan(w, slug);

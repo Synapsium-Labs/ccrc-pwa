@@ -169,8 +169,9 @@ describe('the claimant client census (D-7320)', () => {
   // The goals read's gate (D-8126) is the third call and the call record's the fourth, each guarded by its own row test, `"$key" == 'goals.show'` and `'calls.record'`, before it.
   // The plan door's gate (D-8181) is the fifth, guarded by the plan rows' family test, `"$key" == plan.*`, before it.
   // The phases' gate (programme work map WM0, D-8715) is the sixth, guarded by its own row test, `"$key" == 'plan.phase-ref'`.
-  // The timers' gate (Overlord W1a, the timers piece) is the seventh, guarded by the timer rows' family test, `"$key" == timer.*`.
-  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 7, the claimant guard, the review-rounds loop, the goals read\'s gate, the call record\'s gate, the plan door\'s gate, the phases\' gate and the timers\' gate (D-7322, D-7324, D-8125, D-8126, D-8181, D-8715)', () => {
+  // The ticket-done gate (programme work map WM1, D-8727) is the seventh, guarded by its own row test, `"$key" == 'plan.ticket-done'`.
+  // The timers' gate (Overlord W1a, the timers piece) is the eighth, guarded by the timer rows' family test, `"$key" == timer.*`.
+  it('REAL, pinned since Q3j: cap-reader calls in ccrc-api: exactly 8, the claimant guard, the review-rounds loop, the goals read\'s gate, the call record\'s gate, the plan door\'s gate, the phases\' gate, the ticket-done gate and the timers\' gate (D-7322, D-7324, D-8125, D-8126, D-8181, D-8715, D-8727)', () => {
     expect(capReaderCalls().map((s) => [s.guarded, s.text.trim()])).toEqual([
       [false, 'if _api_server_cap "$rwant"; then'],
       [true, 'if [[ -n "$claimant" ]] && _api_server_cap "$want"; then'],
@@ -178,6 +179,7 @@ describe('the claimant client census (D-7320)', () => {
       [true, 'if [[ "$key" == \'calls.record\' ]] && ! _api_server_cap calls-v1 && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == \'plan.phase-ref\' ]] && ! _api_server_cap plan-phases-v1 && _api_server_cap \'\'; then'],
+      [true, 'if [[ "$key" == \'plan.ticket-done\' ]] && ! _api_server_cap plan-ticket-done-v1 && _api_server_cap \'\'; then'],
       [true, 'if [[ "$key" == timer.* ]] && ! _api_server_cap timers-v1 && _api_server_cap \'\'; then'],
     ]);
   });

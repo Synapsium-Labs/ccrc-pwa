@@ -93,10 +93,10 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
 
 ## For the coordinator
 
-- **Migration 106 on this branch, 107 or later at landing**: main ends at 105 (#3056). #2997 is queued at 106 and the mid-turn
-  mail PR 2 also holds 106 in its own merge; this PR renumbers to the next free slot when it absorbs main before landing
-  (mid-turn mail PR 2's holder agreed the four additive co-edits: schema, the two version pins, the rollback fixture, the
-  floors).
+- **Migration 107**: main reached 106 with programme work map WM1 (#2997), so this PR's table is 107, renumbered at the one
+  absorption of `main` (clause 16's conflict trigger; the brief's standing license for additive migration, census and floor
+  conflicts). The mid-turn mail PR 2 also holds a migration in its own merge; whichever lands second renumbers (its holder
+  agreed the four additive co-edits: schema, the two version pins, the rollback fixture, the floors).
 - **Local measurements the box could not make**: the floors suite's two `pwa/src/face/mood.ts` sets fail to load here
   (`@ccrc/ui` is not installed in this worktree's `pwa/`), and `secret-mask`'s "typed slowly" case is the known local timing
   red (door process A1's notes measured it red on a clean `main`). The whole tests-inclusive type check is OOM-killed in the

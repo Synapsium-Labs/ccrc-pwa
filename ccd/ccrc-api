@@ -21,14 +21,15 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, ninety rows, and nothing else; the
+#   * The route comes from ROUTES below, ninety-one rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
 #     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
-#     the ten `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
-#     `capability-missing` for `plan-phases-v1` (programme work map WM0), and the three
+#     the eleven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
+#     `capability-missing` for `plan-phases-v1` (programme work map WM0), `plan ticket-done` the same for
+#     `plan-ticket-done-v1` (WM1), and the three
 #     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
@@ -101,7 +102,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Ninety rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Ninety-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -323,6 +324,10 @@ declare -A ROUTES=(
   # `plan phase-ref` (programme work map WM0, D-8715): add or remove one reference of a phase, or carry a ticket to a later one.
   # Behind `plan-v1` like its siblings, and refused locally `capability-missing` when a CURRENT cap file omits `plan-phases-v1`.
   [plan.phase-ref]='POST|/api/programmes/{id}/plan/phases/refs|yes|-'
+  # `plan ticket-done` (programme work map WM1, D-8727): record a ticket finished another way, with a run or a landed pull
+  # request as its evidence. Behind `plan-v1` like its siblings, and refused locally `capability-missing` when a CURRENT cap
+  # file omits `plan-ticket-done-v1`.
+  [plan.ticket-done]='POST|/api/programmes/{id}/plan/tickets/done|yes|-'
   # The inbound path's two (D-8183): `plan.take`'s `{id}` is the programme's slug, `plan.triage`'s a Linear team key (a SAFE_RE shape).
   # Both carry the pane's identity in the query and take the caller's body whole, like the rows above.
   [plan.take]='POST|/api/programmes/{id}/plan/take|yes|-'
@@ -1476,6 +1481,12 @@ main() {
   # and nothing is sent; an absent, stale, torn or future file sends.
   if [[ "$key" == 'plan.phase-ref' ]] && ! _api_server_cap plan-phases-v1 && _api_server_cap ''; then
     refuse 'capability-missing' 'the server this box talks to does not keep phases yet (it does not advertise plan-phases-v1); no reference was changed'
+  fi
+
+  # THE TICKET-DONE GATE (programme work map WM1, D-8727), the same fail direction: a CURRENT, well-formed cap file that omits
+  # `plan-ticket-done-v1` says the server keeps no done evidence yet, so `capability-missing` is answered and nothing is sent.
+  if [[ "$key" == 'plan.ticket-done' ]] && ! _api_server_cap plan-ticket-done-v1 && _api_server_cap ''; then
+    refuse 'capability-missing' 'the server this box talks to does not record done evidence yet (it does not advertise plan-ticket-done-v1); no ticket was changed'
   fi
 
   # THE TIMERS' GATE (Overlord W1a, the timers piece, plan Task 11), the plan door's fail direction: a CURRENT, well-formed cap file

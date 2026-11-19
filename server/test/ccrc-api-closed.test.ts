@@ -447,8 +447,8 @@ describe('the client stays closed', () => {
     // the operator's `ccrc quiz-record` posts its body through it, no splice and no fill; coordinator ruling, slug
     // quiz-record-posts-through-the-client) to eighty-nine.
     // `sessions.act-key` (Overlord W1 door process A1; the door process's own body, carrying the nonce, no splice and no fill)
-    // to ninety.
-    expect(routeKeys().size).toBe(90);
+    // to ninety. `plan.ticket-done` (programme work map WM1) to ninety-one, the way `plan.phase-ref` does it.
+    expect(routeKeys().size).toBe(91);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
