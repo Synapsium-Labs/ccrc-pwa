@@ -15,7 +15,7 @@ import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession } from './fleetFixture';
 import { nestFleet as nestFleetOf, type CardDelegation, type FleetRow } from '../src/fleet/nestFleet';
 import { withRunBinding } from './runBindingFixture';
-import { activity, lease, unowned } from './delegationFixture';
+import { lease, unowned } from './delegationFixture';
 import { fingerprint, recording, type Recorded } from './characterise';
 
 /** W4-U0: every `nestFleet` call this file's cases make, recorded (see `characterise.ts`). */
@@ -317,12 +317,11 @@ describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4
     return rows;
   };
   const slice = (over: Partial<CardDelegation> = {}): CardDelegation =>
-    ({ card: 'ccrc-pwa', activities: [], leases: [], unowned: [], ...over });
+    ({ card: 'ccrc-pwa', leases: [], unowned: [], ...over });
   const dshape = (rows: readonly FleetRow[]): [string, number][] => rows.map((r) => {
     switch (r.kind) {
       case 'session': return [r.session.id, r.depth];
       case 'pending': return [`spawn:${r.run.id}`, r.depth];
-      case 'activity': return [`activity:${r.activity.activityId}`, r.depth];
       case 'lease': return [`lease:${r.lease.leaseId}`, r.depth];
       case 'unowned': return [`unowned:${r.item.adminRecord}`, r.depth];
       case 'delegation-group': return [`group:${r.group}(${r.count})`, r.depth];
@@ -342,40 +341,25 @@ describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4
   const worker = sess('worker-a', { workdir: '/work/project-a/.ccd/worker-a' });
   const programme = [run({ id: 7, claimedBy: 'coord-a', sessionId: 'worker-a' })];
 
-  it('W4-U12 (rule 8, depth 0): a coordinator\'s live activity and raw worktree nest one level under it, after its worker', () => {
-    const rows = nestD([coord, worker], programme,
-      slice({ activities: [activity()], leases: [lease({ sourceKind: 'raw' })] }));
-    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['activity:act-1', 1], ['lease:lease-1', 1]]);
+  it('W4-U12 (rule 8, depth 0): a coordinator\'s raw worktree nests one level under it, after its worker (D-8782: its activities draw no row, and a slice carries none)', () => {
+    const rows = nestD([coord, worker], programme, slice({ leases: [lease({ sourceKind: 'raw' })] }));
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['lease:lease-1', 1]]);
     expect(leaseRow(rows, 'lease-1').via).toBeNull();
     expect(leaseRow(rows, 'lease-1').group).toBeNull();
   });
 
-  it('W4-U13 (rule 8, one level): a worker\'s activity is never a row (D-8771: and no chip either); a worker\'s worktree sits under the coordinator, via the worker', () => {
-    const chip = activity({ activityId: 'a-chip', parentId: 'worker-a', placement: 'chip' });
-    const skewAct = activity({ activityId: 'a-skew', parentId: 'worker-a', placement: 'row' });
+  it('W4-U13 (rule 8, one level): a worker\'s worktree sits under the coordinator, via the worker, and no entry of the worker is a row (D-8771, D-8782)', () => {
     const viaLease = lease({ leaseId: 'l-via', parentId: 'coord-a', via: 'worker-a' });
     const skewLease = lease({ leaseId: 'l-skew', parentId: 'worker-a', via: null, firstObservedAt: '2026-10-26T11:00:00.000Z' });
-    const rows = nestD([coord, worker], programme, slice({ activities: [chip, skewAct], leases: [viaLease, skewLease] }));
+    const rows = nestD([coord, worker], programme, slice({ leases: [viaLease, skewLease] }));
     expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['lease:l-via', 1], ['lease:l-skew', 1]]);
     // D-8771: the fleet list keeps no count of a session's attached entries, so no row carries them.
     expect(sessionRow(rows, 'worker-a')).not.toHaveProperty('delegated');
     expect(sessionRow(rows, 'coord-a')).not.toHaveProperty('delegated');
-    // Both entries are still no row and not in the offline group: neither an activity row nor a group header is drawn.
-    expect(rows.filter((r) => r.kind === 'activity' || r.kind === 'delegation-group')).toEqual([]);
+    // No group header is drawn: nothing here is offline or unowned.
+    expect(rows.filter((r) => r.kind === 'delegation-group')).toEqual([]);
     expect(leaseRow(rows, 'l-via').via).toBe('worker-a');
     expect(leaseRow(rows, 'l-skew').via).toBe('worker-a');
-  });
-
-  it('W4-U13b (D-8771): a coordinator\'s own chip-placed activity is no row either, and no offline group', () => {
-    const own = activity({ activityId: 'a-coord-chip', parentId: 'coord-a', placement: 'chip' });
-    const rows = nestD([coord, worker], programme, slice({ activities: [own] }));
-    // Positive control: the sessions were drawn, so an empty activity filter is not an empty tree.
-    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1]]);
-    expect(rows.filter((r) => r.kind === 'activity' || r.kind === 'delegation-group')).toEqual([]);
-    expect(sessionRow(rows, 'coord-a')).not.toHaveProperty('delegated');
-    // The same activity placed as a row IS a row, so the chip placement is what hides it.
-    const placed = nestD([coord, worker], programme, slice({ activities: [{ ...own, placement: 'row' }] }));
-    expect(dshape(placed)).toEqual([['coord-a', 0], ['worker-a', 1], ['activity:a-coord-chip', 1]]);
   });
 
   it('W4-U14 (rule 7, programme wins): a worktree whose path is a listed session\'s workdir is not drawn', () => {
@@ -392,13 +376,12 @@ describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4
     expect(dshape(nestD([coord, worker], programme, null)).slice(0, 2)).toEqual(dshape(rows).slice(0, 2));
   });
 
-  it('W4-U16 (rule 9): a missing parent\'s worktree and an offline activity file under one "offline coordinator" group', () => {
+  it('W4-U16 (rule 9): a missing parent\'s worktree files under one "offline coordinator" group, which counts it alone', () => {
     const rows = nestD([coord, worker], programme, slice({
       leases: [lease({ leaseId: 'l-gone', parentId: 'coord-gone' })],
-      activities: [activity({ activityId: 'a-off', group: 'offline-coordinator' })],
     }));
     expect(dshape(rows)).toEqual([
-      ['coord-a', 0], ['worker-a', 1], ['group:offline-coordinator(2)', 0], ['lease:l-gone', 1], ['activity:a-off', 1],
+      ['coord-a', 0], ['worker-a', 1], ['group:offline-coordinator(1)', 0], ['lease:l-gone', 1],
     ]);
     expect(leaseRow(rows, 'l-gone').group).toBe('offline-coordinator');
   });
@@ -416,10 +399,9 @@ describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4
 
   it('W4-U18 (rule 11): a worktree nests with no run and with an ended, unmeasured state', () => {
     const rows = nestD([coord, worker], [], slice({
-      activities: [activity()],
       leases: [lease({ sourceKind: 'raw', liveness: 'ended', workspace: 'unmeasured' })],
     }));
-    expect(dshape(rows)).toEqual([['coord-a', 0], ['activity:act-1', 1], ['lease:lease-1', 1], ['worker-a', 0]]);
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['lease:lease-1', 1], ['worker-a', 0]]);
   });
 });
 
@@ -460,7 +442,7 @@ describe('W4-U0: today\'s tree, characterised before delegation rows (delegation
     for (const c of nestCalls) {
       const [sessions, runs] = c.args;
       expect(JSON.stringify(nestFleetOf(sessions, runs, null))).toBe(c.json);
-      expect(JSON.stringify(nestFleetOf(sessions, runs, { card: 'ccrc-pwa', activities: [], leases: [], unowned: [] }))).toBe(c.json);
+      expect(JSON.stringify(nestFleetOf(sessions, runs, { card: 'ccrc-pwa', leases: [], unowned: [] }))).toBe(c.json);
     }
   });
 });

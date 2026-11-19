@@ -247,8 +247,7 @@ describe('rollup — delegation rows under a coordinator (delegation broker wave
     card(rollupFleetOf(fleetTree(withRunBinding(sessions, runs), [], runs, {}, w), prefs, NOW, null).cards, 'project-c');
   const kinds = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =>
     r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'summary' ? [`» ${r.text}`, r.depth]
-      : r.kind === 'activity' ? [`activity:${r.activity.activityId}`, r.depth]
-        : r.kind === 'lease' ? [`lease:${r.lease.leaseId}`, r.depth] : [r.kind, r.depth]);
+      : r.kind === 'lease' ? [`lease:${r.lease.leaseId}`, r.depth] : [r.kind, r.depth]);
 
   it('W4-U24: one worker and one worktree are not folded; the worker stays visible, as it does today', () => {
     const { sessions, runs } = coordFleet(1);
@@ -256,19 +255,28 @@ describe('rollup — delegation rows under a coordinator (delegation broker wave
     expect(kinds(c.rows)).toEqual([['coord', 0], ['w1', 1], ['lease:l1', 1]]);
   });
 
-  it('W4-U25: one worker and two live activities: the line names them with no number (D-8771), and folded the worker stays while the activities hide', () => {
+  it('W4-U25 (D-8782): one worker and two live activities: the activities are no row and no word, so nothing folds and the worker stays', () => {
     const { sessions, runs } = coordFleet(1);
     const w = frame({ activities: [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })] });
-    const folded = rolled(sessions, runs, w);
-    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · delegated', 1], ['w1', 1]]);
-    const open = rolled(sessions, runs, w, toggleChildren(NO_ROLLUP_PREFS, 'coord'));
-    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · delegated', 1], ['w1', 1], ['activity:a1', 1], ['activity:a2', 1]]);
+    expect(kinds(rolled(sessions, runs, w).rows)).toEqual([['coord', 0], ['w1', 1]]);
+    expect(kinds(rolled(sessions, runs, w, toggleChildren(NO_ROLLUP_PREFS, 'coord')).rows)).toEqual([['coord', 0], ['w1', 1]]);
   });
 
-  it('W4-U26: a card whose only change is a live activity stays inactive (the class never reads a delegation row)', () => {
+  it('W4-U25b (D-8771, D-8782): one worker and two worktrees: the line names `worktrees` with no number, and with two activities beside them says no `delegated`', () => {
+    const { sessions, runs } = coordFleet(1);
+    const trees = [lease({ leaseId: 'l1', parentId: 'coord', project: 'project-c' }),
+      lease({ leaseId: 'l2', parentId: 'coord', project: 'project-c', adminRecord: 'agent-a2', canonicalPath: '/work/project-c/.claude/worktrees/agent-a2' })];
+    const acts = [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })];
+    const folded = rolled(sessions, runs, frame({ leases: trees, activities: acts }));
+    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · worktrees', 1], ['w1', 1]]);
+    const open = rolled(sessions, runs, frame({ leases: trees, activities: acts }), toggleChildren(NO_ROLLUP_PREFS, 'coord'));
+    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · worktrees', 1], ['w1', 1], ['lease:l1', 1], ['lease:l2', 1]]);
+  });
+
+  it('W4-U26: a card whose only change is a live activity stays inactive (the class never reads a delegation row, and an activity is no row: D-8782)', () => {
     const quiet = sess('coord', 'project-c', { role: 'coordinator' });
     const c = rolled([quiet], [], frame({ activities: [activity({ parentId: 'coord', lastEventAt: new Date(NOW).toISOString() })] }));
-    expect(kinds(c.rows)).toEqual([['coord', 0], ['activity:act-1', 1]]);
+    expect(kinds(c.rows)).toEqual([['coord', 0]]);
     expect(c.cls).toBe('inactive');
     expect(c.lastActive).toBe(NOW - 5 * HOUR);
   });

@@ -4356,6 +4356,45 @@ allowance table pins the regex's flags (L2-2), and the dead-session half of the 
 (L2-6). The wire comment for the activity placement is not touched here (item 13 left C47 by the coordinator's ruling).
 **Measured** (the mutants, the reds at `main` and the runs): `docs/superpowers/programs/desktop-polish/c46.md`, "C47".
 
+### Task C48: the fleet list drops subagent and workflow rows (D-8782) — now
+
+**Why.** The operator, 2026-11-19, on C46: "the number of subagents in a session is noise at this point on the left panel.
+It's information useful only inside the session running them." C46 (D-8771) and C47 took the counts off a session's row, and
+left the delegation rows themselves. The operator then sent a screenshot of rows still nested under a session in the left
+panel ("workflow · not confirmed", "agent · not confirmed", one per helper) and called it the same noise. So the rows go too.
+
+**Files.** `pwa/src/fleet/nestFleet.ts` (the `activity` row kind is removed, with its key, its ordering ahead of worktrees and
+its place in the `offline-coordinator` group; `CardDelegation` carries no activities), `fleetTree.ts` (the card rule no longer
+slices activities onto a card; `unplacedActivities` is unchanged), `rollup.ts` and `delegationWords.ts` (`delegationParts`
+answers only `worktrees`: the `delegated` word of a fold line and a programme box's footer is gone with the rows),
+`ProjectCard.tsx` (the activity row's view and its arm of the group-member test), and a comment in `programmeBoxes.ts`.
+`fleet.css` needed no change: every `proj-work` rule is shared by worktree rows, unowned rows and the session header's entry
+list. Tests: a new `c48-fleet-list-no-activity-rows`, and `nestFleet`, `fleetTree`, `rollup`, `delegation-words`,
+`project-card`, `fleet-rollup-render` and `fleet-screen` cases that held an activity row, rewritten to say there is none; the
+real-Chrome `delegation-rows` fixture keeps its activities in the frame to show none is drawn. The two delegation specs carry
+a dated amendment each.
+
+**What stays.** Worktree rows (leases) and their controls, unowned rows and the two groups' headers while a member exists,
+session rows, spawn rows and the programme tree; the session's own details, whose `N delegated` disclosure and list still
+carry every activity with its condition word and title; and the fleet foot's region of activities whose parent is not
+listed (`unplacedActivities`), which the ruling did not name.
+
+**Measured.** Which new cases were red at `main`, the files run and what was seen in a real browser are in
+`docs/superpowers/programs/desktop-polish/c48.md`.
+
+**Acceptance.** For a card whose session has an agent, a workflow and a worktree, the fleet list draws the session row and the
+worktree row and no text, title or accessible name of the agent or the workflow; an offline coordinator's activities draw no
+row and no group header; the session's details still list both activities.
+
+- **D-8782** — `fleet-list-drops-activity-rows`: Task C48, issued on 2026-11-19. The fleet list draws no row for a session's
+  subagents or workflows, under a listed parent or in the `offline-coordinator` group, and a group header with no member is
+  not drawn. The `activity` row kind has no producer, so it is removed with the view, the words and the rollup arm that only
+  it used; a fold line and a programme box's footer say `worktrees` and no longer `delegated`. This supersedes the delegation
+  broker's wave 4 rule (§5.8, rules 6 to 11) for activity rows in the fleet list only: worktree rows, unowned rows and the
+  programme tree keep it, and the session's own details keep every activity (the operator's ruling of 2026-11-19).
+
+**Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.

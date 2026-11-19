@@ -1565,22 +1565,29 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     expect(rowOf(frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'row' })] }))).toBe(none);
   });
 
-  it('a session in no programme folds three delegated activities into one line, as the rollup decided (main\'s boxes)', () => {
-    const w = frame({ activities: ['a1', 'a2', 'a3'].map((id) => activity({ activityId: id, parentId: 'coord-a' })) });
+  it('a session in no programme folds three worktrees into one line, as the rollup decided (main\'s boxes); its three activities add no row and no word (D-8782)', () => {
+    const w = frame({
+      leases: ['a1', 'a2', 'a3'].map((id) => lease({ leaseId: id, parentId: 'coord-a', adminRecord: `agent-${id}`,
+        canonicalPath: `/work/project-a/.claude/worktrees/agent-${id}` })),
+      activities: ['a1', 'a2', 'a3'].map((id) => activity({ activityId: id, parentId: 'coord-a' })),
+    });
     // A working session, so the card is active and open by default (rollup rule 2).
     const g = cardFor(w, [{ ...coordA, status: 'busy', bucket: 'working' }]);
     const drawn = (prefs: RollupPrefs) => render(<ProjectCard group={g} rollup={rollupCard(g, prefs, Date.now(), null)}
       onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />);
     const { container, unmount } = drawn(NO_ROLLUP_PREFS);
     expect(container.querySelector('section.pg-box'), 'coord-a claims no run: it is no box').toBeNull();
-    const line = screen.getByRole('button', { name: 'delegated' });
+    const line = screen.getByRole('button', { name: 'worktrees' });
     expect(line.getAttribute('aria-expanded')).toBe('false');
+    expect(container.textContent).not.toContain('delegated');
     expect(line.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
     expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
     unmount();
     const open = drawn(toggleChildren(NO_ROLLUP_PREFS, 'coord-a'));
-    expect(screen.getByRole('button', { name: 'delegated' }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: 'worktrees' }).getAttribute('aria-expanded')).toBe('true');
+    // Three worktree rows and no activity row.
     expect(open.container.querySelectorAll('.proj-work')).toHaveLength(3);
+    expect(open.container.textContent).not.toMatch(/explore the tree|not confirmed · /);
   });
 
   it('W4-U30: a group is a closed disclosure by default, opened under its composite key', async () => {
@@ -1598,7 +1605,7 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     expect(container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
 
-  it('VIS-P1: an offline-group row names the session it came from: its listed label, else its raw id', () => {
+  it('VIS-P1 (D-8782): an offline-group row names the session it came from: its listed label, else its raw id; an archived parent\'s activity is no row', () => {
     const arch = fleetSession({ id: 'coord-arch', project: 'project-a', workspace: null, name: 'old coordinator', archivedAt: 1_800_000_000_000 });
     const w = frame({
       activities: [activity({ activityId: 'a-arch', parentId: 'coord-arch', displayName: 'old work' })],
@@ -1610,13 +1617,13 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
       coordOf={(id) => (id === arch.id ? arch : null)} offlineOpen />);
     expect(parts(off.container)).toEqual([
       ['agent worktree', 'agent-o1', 'not confirmed', 'from coord-gone'],
-      ['agent', 'old work', 'not confirmed', 'from old coordinator'],
     ]);
+    expect(off.container.textContent).not.toContain('old work');
     off.unmount();
     // A row under its own session names no parent.
-    const nested = render(<ProjectCard group={cardFor(frame({ activities: [activity({ parentId: 'coord-a' })] }))}
+    const nested = render(<ProjectCard group={cardFor(frame({ leases: [lease({ parentId: 'coord-a' })] }))}
       onOpen={() => {}} onActions={() => {}} />);
-    expect(parts(nested.container)).toEqual([['agent', 'explore the tree', 'not confirmed']]);
+    expect(parts(nested.container)).toEqual([['agent worktree', 'agent-a1', 'not confirmed']]);
   });
 });
 

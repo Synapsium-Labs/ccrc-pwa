@@ -48,7 +48,7 @@ export type RolledRow =
 /** One count of a coordinator's worker line: `5 workers`, `1 needs you`. */
 export interface CountedPart { readonly n: number; readonly word: string }
 /** One part of a fold line: a count of workers, or, with no `n`, a bare word for rows the line does not count
- *  (`delegated`, `worktrees`, D-8771). */
+ *  (`worktrees`, D-8771; the `delegated` word went with the activity row, D-8782). */
 export type SummaryPart = CountedPart | { readonly n?: undefined; readonly word: string };
 
 /** A part as the line draws it: the one spelling, shared by the fold line, the programme box's footer and the row's text. */
@@ -92,14 +92,14 @@ export function nextRollupBoundary(sessions: readonly FleetSession[], now: numbe
   return next;
 }
 
-/** A coordinator's worker children (W) and its delegation children (D: delegated work and worktrees,
- *  delegation broker wave 4). */
+/** A coordinator's worker children (W) and its delegation children (D: worktrees, delegation broker wave 4; a
+ *  session's subagents and workflows are no row, so no D, D-8782). */
 export type WorkerRow = Extract<FleetRow, { kind: 'session' | 'pending' }>;
-type DelegatedRow = Extract<FleetRow, { kind: 'activity' | 'lease' }>;
+type DelegatedRow = Extract<FleetRow, { kind: 'lease' }>;
 export const isWorker = (r: FleetRow): r is WorkerRow => r.kind === 'session' || r.kind === 'pending';
-const isDelegated = (r: FleetRow): r is DelegatedRow => r.kind === 'activity' || r.kind === 'lease';
+const isDelegated = (r: FleetRow): r is DelegatedRow => r.kind === 'lease';
 
-/** A head's delegated work and worktrees as words (`delegated`, `worktrees`, uncounted: D-8771), its other children left
+/** A head's worktrees as a word (`worktrees`, uncounted: D-8771), its other children left
  *  out: the summary line's tail, and a programme box's footer's (`footerWords`), so the two never word them differently. */
 export const delegatedWords = (rows: readonly FleetRow[]): string[] => delegationParts(rows.filter(isDelegated)).map(partWords);
 

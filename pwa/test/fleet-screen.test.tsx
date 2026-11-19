@@ -3390,24 +3390,21 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
       if (c === undefined) throw new Error('no project-a card');
       return c;
     };
-    // coord-a's two children fold into its one summary line (D-6088's W/D rule, W4-U31); open it and both groups.
-    const line = card().querySelector('.proj-children-toggle');
-    expect([...line!.querySelectorAll('.proj-children-part')].map((p) => p.textContent), 'the exact parts, no count before either word')
-      .toEqual(['delegated', 'worktrees']);
-    fireEvent.click(line!);
-    fireEvent.click(within(card()).getByRole('button', { name: /Offline coordinator \(2\)/ }));
+    // D-8782: coord-a's two activities are no row, so its one worktree is its only delegation child and nothing folds (D-6088's
+    // W/D rule needs two); the offline group counts its one worktree, and the unowned group is as before.
+    expect(card().querySelector('.proj-children-toggle'), 'one worktree: no fold line, and no `delegated` word').toBeNull();
+    expect(card().textContent).not.toMatch(/delegated|regroup|reword/);
+    fireEvent.click(within(card()).getByRole('button', { name: /Offline coordinator \(1\)/ }));
     fireEvent.click(within(card()).getByRole('button', { name: /Unowned work \(1\)/ }));
     const cells = [...card().querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
     const chips = [...card().querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-chip')].map((c) => c.textContent));
-    // Under coord-a, activities first; then the offline group (worktrees, then activities); then the unowned group.
+    // Under coord-a, its worktree; then the offline group (its worktree); then the unowned group. No activity row anywhere.
     expect(cells).toEqual([
-      ['agent', 'reword', 'unmeasured'],
       ['agent worktree', 'agent-a2', 'not confirmed', 'unmeasured'],
       ['worktree', 'agent-a1', 'unmeasured', 'unmeasured', 'from coord-a'],
-      ['agent', 'regroup', 'not confirmed', 'from coord-a'],
       ['u-future', 'no owner found', 'unmeasured'],
     ]);
-    expect(chips).toEqual([[], [], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], [], []]);
+    expect(chips).toEqual([[], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], []]);
     expect(card().textContent).not.toContain('unrecognised');
     // No delegation row or toggle says running in its title either: the page's titles, read off the DOM.
     const titles = [...card().querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title]')]
@@ -3494,7 +3491,7 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     expect(list().hasAttribute('data-delegation-unplaced')).toBe(false);
   });
 
-  it('VIS-U3: an archived or released parent is still listed: its entries stay in its card\'s offline group, from its label, never in the region', () => {
+  it('VIS-U3 (D-8782): an archived or released parent is still listed: its entries are no row on its card and no group, and never in the region', () => {
     const store = makeLiveStore();
     renderFleet(<FleetScreen store={store} />);
     act(() => {
@@ -3514,12 +3511,11 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     const list = document.querySelector<HTMLElement>('.fleet-list')!;
     expect(list.hasAttribute('data-delegation-unplaced')).toBe(false);
     expect(within(list).queryByRole('button', { name: /session not listed/ })).toBeNull();
-    fireEvent.click(within(cardIn('project-a')).getByRole('button', { name: /Offline coordinator \(2\)/ }));
-    expect(cellsOf(cardIn('project-a'))).toEqual([
-      ['agent', 'old work', 'not confirmed', 'from old coordinator'],
-      // Its label, never its raw id (review 1424 e): the row names the listed session as the list names it.
-      ['agent', 'released work', 'not confirmed', 'from released worker'],
-    ]);
+    // D-8782: a listed parent's entries are no row on its card, so no offline group is drawn for them either; they are still in
+    // no region (the parent is listed), and the session's own details name them.
+    expect(cardIn('project-a').textContent).not.toMatch(/Offline coordinator|old work|released work/);
+    expect(cellsOf(cardIn('project-a'))).toEqual([]);
+    expect(within(list).queryByRole('button', { name: /Offline coordinator/ })).toBeNull();
   });
 
   it('VIS-U5 (review 1424 f): a malformed member, no string openedAt, is drawn in the region and nothing throws', () => {

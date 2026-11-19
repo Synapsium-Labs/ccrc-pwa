@@ -15,7 +15,7 @@ import { readFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { FleetScreen } from '../src/screens/FleetScreen';
 import { HOUR, MIN, NOW, asking, coordinatorFleet, sess } from './rollupFixture';
-import { activity, frame } from './delegationFixture';
+import { activity, frame, lease } from './delegationFixture';
 import { NEST_BRACKET } from '../src/fleet/ProjectCard';
 
 const makeStore = (): FleetStore => createFleetStore({
@@ -136,28 +136,54 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(cardOf('project-a').getAttribute('data-collapsed')).toBeNull();
   });
 
-  it('W4-U31: a folded coordinator names two live activities in its line, with no number (D-8771), and hides them; expanded, both nest', () => {
+  const trees = [
+    lease({ leaseId: 'l1', parentId: 'coord', project: 'project-c', adminRecord: 'agent-c1', canonicalPath: '/work/project-c/.claude/worktrees/agent-c1' }),
+    lease({ leaseId: 'l2', parentId: 'coord', project: 'project-c', adminRecord: 'agent-c2', canonicalPath: '/work/project-c/.claude/worktrees/agent-c2',
+      firstObservedAt: '2026-10-26T10:02:00.000Z' }),
+  ];
+  const acts = [
+    activity({ activityId: 'a1', parentId: 'coord', displayName: 'map the tree' }),
+    activity({ activityId: 'a2', parentId: 'coord', displayName: 'read the plan', openedAt: '2026-10-26T10:01:00.000Z' }),
+  ];
+
+  it('W4-U31: a folded coordinator names two worktrees in its line, with no number (D-8771), and hides them; expanded, both nest', () => {
     const store = mount(skin);
-    act(() => {
-      store.setState({ delegation: frame({ activities: [
-        activity({ activityId: 'a1', parentId: 'coord', displayName: 'map the tree' }),
-        activity({ activityId: 'a2', parentId: 'coord', displayName: 'read the plan', openedAt: '2026-10-26T10:01:00.000Z' }),
-      ] }) });
-    });
+    act(() => { store.setState({ delegation: frame({ leases: trees }) }); });
     const c = cardOf('project-c');
     // Task G2: the line is the programme box's footer, which counts what the tray hides: the four quiet workers, then
-    // the two activities, never as workers.
+    // the worktrees, never as workers.
     const line = within(c.querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
     expect([...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent))
-      .toEqual(['4 more workers', '2 working', 'delegated']);
+      .toEqual(['4 more workers', '2 working', 'worktrees']);
     expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
     fireEvent.click(line);
-    // Open, the footer hides the five workers and names the two activities apart from them.
+    // Open, the footer hides the five workers and names the worktrees apart from them.
     const open = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /^hide/ });
-    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', 'delegated']);
+    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', 'worktrees']);
     const rows = [...cardOf('project-c').querySelectorAll('.proj-work')];
     expect(rows).toHaveLength(2);
     for (const r of rows) expect(r.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
+  });
+
+  it('W4-U31b (D-8782): the same coordinator with two live activities and the two worktrees says no `delegated` and draws no activity row', () => {
+    const store = mount(skin);
+    act(() => { store.setState({ delegation: frame({ leases: trees, activities: acts }) }); });
+    const line = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
+    expect([...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent))
+      .toEqual(['4 more workers', '2 working', 'worktrees']);
+    fireEvent.click(line);
+    expect(cardOf('project-c').textContent).not.toMatch(/delegated|map the tree|read the plan/);
+    expect(cardOf('project-c').querySelectorAll('.proj-work')).toHaveLength(2);
+  });
+
+  it('W4-U31c (D-8782): activities alone add neither a word nor a row to the coordinator\'s footer', () => {
+    const only = mount(skin);
+    act(() => { only.setState({ delegation: frame({ activities: acts }) }); });
+    const c = cardOf('project-c');
+    expect(c.textContent).not.toMatch(/delegated|map the tree|read the plan/);
+    expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
+    const l = within(c.querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
+    expect([...l.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['4 more workers', '2 working']);
   });
 });
 

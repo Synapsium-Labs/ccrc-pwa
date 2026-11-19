@@ -51,7 +51,7 @@ import { openRunAt } from './openers';
 import { sessionLabel } from './sessionLabel';
 import { WorkLine } from './WorkLine';
 import {
-  ACT_VERB, ACT_WORD, ANSWER_UNREAD_WORD, GROUP_WORDS, actDoneWord, activityLine, confirmFor, controlName, controlsName, creatorChip,
+  ACT_VERB, ACT_WORD, ANSWER_UNREAD_WORD, GROUP_WORDS, actDoneWord, confirmFor, controlName, controlsName, creatorChip,
   inferredChip, leaseParentOf, listedLive, offerOf, offersControl, refusalWord, unownedControls, unownedLine, worktreeControls, worktreeLine,
   worktreeStateParts,
   type WorktreeControl, type WorkWords,
@@ -471,7 +471,7 @@ function ProjectCardView({
   // Delegation broker wave 4: a group's members render only while the operator holds it open; the header always does.
   const groupOpen: Readonly<Record<DelegationGroupKind, boolean>> = { 'offline-coordinator': offlineOpen, unowned: unownedOpen };
   const memberOf = (row: RolledRow): DelegationGroupKind | null =>
-    row.kind === 'activity' || row.kind === 'lease' || row.kind === 'unowned' ? row.group : null;
+    row.kind === 'lease' || row.kind === 'unowned' ? row.group : null;
   const shown = (row: RolledRow): boolean => { const g = memberOf(row); return g === null || groupOpen[g]; };
   // A row outside a box (a worker of a programme elsewhere, a row in no programme, a delegation group) draws its
   // children as the rollup folded them (`foldChildren`): its own segment of the rolled rows, a closed group's members
@@ -570,10 +570,6 @@ function ProjectCardView({
   );
 
   const rowBody = (row: FleetRow): ReactNode => {
-    if (row.kind === 'activity') {
-      const a = activityLine(row.activity, fromOf(row.group, row.activity.parentId));
-      return workLine(a);
-    }
     if (row.kind === 'lease') {
       const l = row.lease;
       const now = nowMs ?? Date.now();

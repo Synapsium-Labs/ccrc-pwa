@@ -4,10 +4,11 @@
 // every worktree with its chips and every group member fits its card at each width, with no sideways scroll.
 //
 // The fixture is one card, project-a: a programme (`port-api`: its coordinator, which has delegated work, and one worker,
-// whose live activity is a chip on its row and whose worktree sits under the coordinator `via` it) and a session in no
-// programme, whose delegated work and raw worktree (a long name and a long path, a works-on chip, `inferred` and the
-// creating Bash call) nest under it; both heads' folds are opened. Both groups are opened too: a worktree whose parent
-// is gone and one unowned tree. One activity's session is in no fleet list, so the fleet foot's region draws it, with a long name and a long raw session id; the region is opened too.
+// whose worktree sits under the coordinator `via` it, beside the coordinator's own) and a session in no programme, whose raw worktree (a long name and a
+// long path, a works-on chip, `inferred` and the creating Bash call) nests under it; both heads' folds are opened. Both groups
+// are opened too: a worktree whose parent is gone and one unowned tree. The frame also carries three listed sessions'
+// activities (an agent's and a workflow-less row, a chip), and the fleet list draws no row for any of them (D-8782). One activity's
+// session is in no fleet list, so the fleet foot's region draws it, with a long name and a long raw session id; the region is opened too.
 // Instrument is put in its project mode (`GROUP_MODE_KEY`), where it draws the same project cards as Refined.
 // Delegation broker wave 5, PR10: the frame is a newer server's, so the worktree rows carry their controls. The lone session's
 // raw worktree offers all three (Keep worktree, Attach to…, Not delegated) on the longest row; the worker's worktree is kept,
@@ -72,6 +73,10 @@ const DELEGATION = frame({
       canonicalPath: LONG_PATH, disposition: 'ephemeral', expiresAt: null }),
     lease({ leaseId: 'l-via', parentId: 'port-w1', adminRecord: 'agent-v1', canonicalPath: '/w/project-a/.claude/worktrees/agent-v1',
       disposition: 'adopted', expiresAt: new Date(NOW + 7 * 86_400_000).toISOString() }),
+    // The coordinator's own worktree, an older server's row (no controls): with the worker's, the coordinator has two
+    // delegation children, so its fold line names `worktrees` (D-8771) and the no-number pin below has a line to read.
+    lease({ leaseId: 'l-coord', parentId: 'port-coord', adminRecord: 'agent-c1', canonicalPath: '/w/project-a/.claude/worktrees/agent-c1',
+      firstObservedAt: '2026-10-26T10:02:00.000Z' }),
     lease({ leaseId: 'l-off', parentId: 'coord-gone', group: 'offline-coordinator', sourceKind: 'raw', adminRecord: 'agent-o1',
       canonicalPath: '/w/project-a/.claude/worktrees/agent-o1' }),
   ],
@@ -119,8 +124,8 @@ async function open(skin: string, theme: string, width: number) {
   }, [GROUP_MODE_KEY] as const);
   await opened.page.goto(server!.origin + '/');
   await opened.page.waitForSelector('.proj-group-toggle', { timeout: 20_000 });
-  // Both groups start closed, and the two heads' children fold (two of them reach `CHILD_FOLD_MIN`): open each, as the
-  // operator would, so every row is drawn.
+  // Both groups start closed: open each, as the operator would, so every row is drawn. A head's children that fold (two
+  // reach `CHILD_FOLD_MIN`) are opened too: the coordinator's two worktrees.
   for (const name of ['Offline coordinator', 'Unowned work']) {
     await opened.page.locator('.proj-group-toggle', { hasText: name }).click();
   }
@@ -379,8 +384,12 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           const sideScroll = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
           expect(sideScroll, 'sideways scroll').toBe(0);
           const rows = await page.evaluate(measureRows);
-          // The lone session's two, the coordinator's activity and the worker's worktree in the box, and one per group.
-          expect(rows, 'six delegation rows').toHaveLength(6);
+          // D-8782: the lone session's worktree, the coordinator's two in the box, and one per group. The three listed sessions'
+          // activities in the frame are no row, so none of their names is on the page.
+          expect(rows, 'five delegation rows').toHaveLength(5);
+          const said = await page.evaluate(() => document.querySelector('.fleet-list')?.textContent ?? '');
+          expect(said.length, 'positive control: the fleet list was read').toBeGreaterThan(0);
+          for (const gone of ['map every caller', 'read the plan', 'check the wire']) expect(said, `${gone}: no activity row`).not.toContain(gone);
           for (const row of rows) {
             expect(row.inCard, `${row.text}: inside its card`).toBe(true);
             expect(row.overflow, `${row.text}: nothing overflows the row`).toBeLessThanOrEqual(1);
@@ -397,19 +406,19 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           }
           // F1 (review 1424): a long name never hides the condition word or the `from` part, on a card or in the region.
           const words = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH, gapFloor: GAP_FLOOR_PX });
-          expect(words.filter((w) => w.hasCondition).length, 'every activity and worktree row has a condition word').toBe(6);
+          expect(words.filter((w) => w.hasCondition).length, 'every worktree row and the region\'s row has a condition word').toBe(5);
           if (width !== 390) {
             // Review 1435 G1: on the desk a name longer than the floor that fits is drawn whole, so the name grows. Asked
             // first, so a name that stops growing is named here rather than by the floor's sub-pixel margin below.
-            const fits = words.find((w) => w.text.includes('read the plan'));
-            expect(fits?.name, 'read the plan: has a name part').not.toBeNull();
-            expect(fits!.name!.cut, 'read the plan: drawn whole').toBe(false);
+            const fits = words.find((w) => w.text.includes('agent-v1'));
+            expect(fits?.name, 'agent-v1: has a name part').not.toBeNull();
+            expect(fits!.name!.cut, 'agent-v1: drawn whole').toBe(false);
           }
           expectWords(words);
           if (width === 390) {
-            // Review 1431 F3: the long names are cut, in a box that clips, with an ellipsis; and the region row's `from`
+            // Review 1431 F3: the long name is cut, in a box that clips, with an ellipsis; and the region row's `from`
             // part starts a line of its own, so the middot rule above is measured on a real wrapped line.
-            for (const long of ['map every caller', 'reconcile every reader']) {
+            for (const long of ['reconcile every reader']) {
               const row = words.find((w) => w.text.includes(long));
               expect(row?.name, `${long}: has a name part`).not.toBeNull();
               expect(row!.name!.cut, `${long}: its name is cut`).toBe(true);

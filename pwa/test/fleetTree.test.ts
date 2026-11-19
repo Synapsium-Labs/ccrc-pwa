@@ -9,7 +9,7 @@ import { fingerprint, recording, type Recorded } from './characterise';
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
-import { creatorChip, inferredChip } from '../src/fleet/delegationWords';
+import { activitiesStartedBy, creatorChip, inferredChip, readDelegation } from '../src/fleet/delegationWords';
 
 /** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
 const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
@@ -282,8 +282,8 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
   const mainB = fleetSession({ id: 'main-b', project: 'project-b', workspace: null, workdir: '/work/project-b' });
   /** `[card, [row ids]]`, in group order. */
   const ids = (groups: ReturnType<typeof fleetTreeOf>) => groups.map((g) => [g.project, g.rows.map((r) =>
-    r.kind === 'session' ? r.session.id : r.kind === 'lease' ? `lease:${r.lease.leaseId}` : r.kind === 'activity'
-      ? `activity:${r.activity.activityId}` : r.kind === 'unowned' ? `unowned:${r.item.adminRecord}`
+    r.kind === 'session' ? r.session.id : r.kind === 'lease' ? `lease:${r.lease.leaseId}`
+      : r.kind === 'unowned' ? `unowned:${r.item.adminRecord}`
         : r.kind === 'delegation-group' ? `group:${r.group}` : r.kind)] as const);
   const count = (groups: ReturnType<typeof fleetTreeOf>, pred: (r: (typeof groups)[number]['rows'][number]) => boolean) =>
     groups.reduce((n, g) => n + g.rows.filter(pred).length, 0);
@@ -315,10 +315,10 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
     expect(ids(groups).find(([p]) => p === 'project-b')![1]).toEqual(['main-b', 'lease:l-a', 'group:offline-coordinator', 'lease:l-gone']);
   });
 
-  it('W4-U36: an activity whose parent the fleet does not carry is on no card (the wire gives it no project)', () => {
-    const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' })] });
+  it('W4-U36: an activity whose parent the fleet does not carry is on no card (the wire gives it no project), and one whose parent it does carry draws no row either (D-8782)', () => {
+    const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' }), activity({ activityId: 'a-here', parentId: 'coord-a' })] });
     const groups = fleetTreeOf([coordA, mainB], [], [], {}, w);
-    expect(count(groups, (r) => r.kind === 'activity')).toBe(0);
+    expect(ids(groups)).toEqual([['project-a', ['coord-a']], ['project-b', ['main-b']]]);
     expect(unplacedActivities([coordA, mainB], w).map((a) => a.activityId)).toEqual(['a-gone']);
     expect(unplacedActivities([coordA, mainB], null)).toEqual([]);
     expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toEqual([]);
@@ -342,16 +342,17 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
     } as unknown as DelegationProjectionWire;
     const groups = fleetTreeOf([coordA, mainB], [], [], {}, future);
     expect(ids(groups)).toEqual([
-      ['project-a', ['coord-a', 'activity:a-words', 'lease:l-agent',
-        'group:offline-coordinator', 'lease:l-raw', 'activity:a-group', 'group:unowned', 'unowned:u-future']],
+      ['project-a', ['coord-a', 'lease:l-agent', 'group:offline-coordinator', 'lease:l-raw', 'group:unowned', 'unowned:u-future']],
       ['project-b', ['main-b']],
     ]);
     const rows = groups.flatMap((g) => g.rows);
-    expect(rows.flatMap((r) => (r.kind === 'delegation-group' ? [[r.group, r.count]] : []))).toEqual([['offline-coordinator', 2], ['unowned', 1]]);
-    const acts = new Map(rows.flatMap((r) => (r.kind === 'activity' ? [[r.activity.activityId, r.activity] as const] : [])));
+    expect(rows.flatMap((r) => (r.kind === 'delegation-group' ? [[r.group, r.count]] : []))).toEqual([['offline-coordinator', 1], ['unowned', 1]]);
+    // The two activities are no row (D-8782), and the frame's reader still files them: the session's details read it.
+    const acts = new Map(readDelegation(future).activities.map((a) => [a.activityId, a] as const));
     const trees = new Map(rows.flatMap((r) => (r.kind === 'lease' ? [[r.lease.leaseId, r.lease] as const] : [])));
     const items = rows.flatMap((r) => (r.kind === 'unowned' ? [r.item] : []));
     expect([acts.size, trees.size, items.length], 'every member is kept, once').toEqual([2, 2, 1]);
+    expect(rows.map((r) => r.kind)).not.toContain('activity' as never);
     expect(acts.get('a-group')).toMatchObject({ group: 'offline-coordinator', liveness: 'live', futureField: 1 });
     expect(acts.get('a-words')).toMatchObject({ group: 'parent', placement: 'row', liveness: 'unmeasured' });
     expect(trees.get('l-raw')).toMatchObject({ group: 'offline-coordinator', liveness: 'unmeasured', workspace: 'unmeasured' });
@@ -378,9 +379,10 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
       activity({ activityId: 'a-rel', parentId: 'w-rel' }),
     ] });
     expect(unplacedActivities([coordA, arch, rel], w).map((a) => a.activityId)).toEqual(['a-early', 'a-late']);
-    const off = fleetTreeOf([coordA, arch, rel], [], [], {}, w).flatMap((g) => g.rows)
-      .flatMap((r) => (r.kind === 'activity' && r.group === 'offline-coordinator' ? [r.activity.activityId] : []));
-    expect(off).toEqual(['a-arch', 'a-rel']);
+    // D-8782: those two are no row on that card (no offline group either); the frame still names them for their parents' details.
+    expect(ids(fleetTreeOf([coordA, arch, rel], [], [], {}, w)).flatMap(([, rows]) => rows)).toEqual(['coord-a']);
+    expect(activitiesStartedBy('coord-arch', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-arch']);
+    expect(activitiesStartedBy('w-rel', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-rel']);
   });
 });
 

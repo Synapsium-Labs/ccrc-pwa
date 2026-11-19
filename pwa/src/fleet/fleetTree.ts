@@ -130,25 +130,22 @@ export interface FleetTreeGroup extends FleetGroup {
   readonly hues: ReadonlyMap<string, ProgHue>;
 }
 
-/** THE CARD RULE for the `delegation` frame (delegation broker wave 4, spec §5.8): a row renders on its parent's
- *  card when the fleet carries the parent (cross-repo work nests on the coordinator's card); otherwise a worktree
- *  renders on its own `project`, and an activity on NO card, because the wire gives an activity no project (it is
- *  counted by `unplacedActivities` instead, never dropped silently). Unowned work renders on its `project`. Each
- *  slice is keyed by its card; the caller adds every key to the card list, so every placed row lands on a card. */
+/** THE CARD RULE for the `delegation` frame (delegation broker wave 4, spec §5.8): a worktree renders on its parent's
+ *  card when the fleet carries the parent (cross-repo work nests on the coordinator's card), otherwise on its own
+ *  `project`. Unowned work renders on its `project`. A session's activities are in NO slice: the fleet list draws no row
+ *  for one (D-8782), whatever the card its parent is on, and those whose parent the list does not carry are counted by
+ *  `unplacedActivities` instead, never dropped silently. Each slice is keyed by its card; the caller adds every key to
+ *  the card list, so every placed row lands on a card. */
 function delegationSlices(
   w: DelegationProjectionWire, cards: ReadonlyMap<string, string>,
 ): Map<string, CardDelegation> {
-  type Slot = { activities: DelegationActivityWire[]; leases: DelegationLeaseWire[]; unowned: DelegationUnownedWire[] };
+  type Slot = { leases: DelegationLeaseWire[]; unowned: DelegationUnownedWire[] };
   const out = new Map<string, Slot>();
   const slot = (card: string): Slot => {
-    const got = out.get(card) ?? { activities: [], leases: [], unowned: [] };
+    const got = out.get(card) ?? { leases: [], unowned: [] };
     out.set(card, got);
     return got;
   };
-  for (const a of w.activities) {
-    const card = cards.get(a.parentId);
-    if (card !== undefined) slot(card).activities.push(a);
-  }
   for (const l of w.leases) slot(cards.get(l.parentId) ?? l.project).leases.push(l);
   for (const u of w.unowned) slot(u.project).unowned.push(u);
   return new Map([...out].map(([card, d]) => [card, { card, ...d }] as const));
@@ -194,7 +191,7 @@ export function fleetTree(
       // binding names (`workerOf`, the run the label and header name), so a
       // worker two claimants' runs both name nests under the one its label says.
       rows: nestFleet(g.sessions, latestPerSession(mine, byId),
-        slices === null ? null : slices.get(g.project) ?? { card: g.project, activities: [], leases: [], unowned: [] }),
+        slices === null ? null : slices.get(g.project) ?? { card: g.project, leases: [], unowned: [] }),
       runs: mine,
       // A run homed here and working elsewhere, minus one whose worker renders
       // on this very card — that run is a bracketed row here already (spec §6).

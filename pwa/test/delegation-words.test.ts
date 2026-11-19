@@ -114,11 +114,10 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(delegatedChip([])).toBeNull();
   });
 
-  it('C46 (D-8771): a coordinator\'s delegation summary names delegated work and worktrees and counts neither', () => {
-    const rows = [{ kind: 'activity' as const }, { kind: 'activity' as const }, { kind: 'lease' as const }, { kind: 'lease' as const }];
-    expect(delegationParts(rows)).toEqual([{ word: 'delegated' }, { word: 'worktrees' }]);
-    expect(delegationParts(rows.slice(0, 1))).toEqual([{ word: 'delegated' }]);
-    expect(delegationParts(rows.slice(2, 3))).toEqual([{ word: 'worktrees' }]);
+  it('C46 (D-8771), C48 (D-8782): a coordinator\'s delegation summary names worktrees and counts them not; a session\'s subagents and workflows have no word there', () => {
+    const rows = [{ kind: 'lease' as const }, { kind: 'lease' as const }];
+    expect(delegationParts(rows)).toEqual([{ word: 'worktrees' }]);
+    expect(delegationParts(rows.slice(0, 1))).toEqual([{ word: 'worktrees' }]);
     expect(delegationParts([])).toEqual([]);
   });
 
@@ -144,7 +143,7 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     const l = lease({ sourceKind: 'raw' });
     for (const out of [inferredChip(l), creatorChip(l), creatorChip(lease({ sourceKind: 'raw', inferred: null })),
       worktreeLine(l, 'worker-a', 'project-b'), words.activityLine(activity()), words.unownedLine(unowned()),
-      delegatedChip([activity()]), delegationParts([{ kind: 'activity' }, { kind: 'lease' }])]) collect(out);
+      delegatedChip([activity()]), delegationParts([{ kind: 'lease' }])]) collect(out);
     expect(strings.length).toBeGreaterThan(20);
     for (const s of strings) expect(s, s).not.toMatch(/lease|adopt|retain|clean|spool/i);
 

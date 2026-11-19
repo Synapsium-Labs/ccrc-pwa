@@ -261,14 +261,12 @@ export function activitiesStartedBy(id: string, w: DelegationProjectionWire): re
   return w.activities.filter((a) => a.parentId === id);
 }
 
-/** The words a fold line uses for a coordinator's delegation children: `delegated`, `worktrees`. Neither is counted: the
- *  operator ruled the number of a session's delegated entries noise in the fleet list (D-8771), and the fold keeps the
- *  word so a line holding only these rows still says what it holds. A kind with no row says nothing. */
-export function delegationParts(rows: readonly { kind: 'activity' | 'lease' }[]): { readonly word: string }[] {
-  return [
-    ...(rows.some((r) => r.kind === 'activity') ? [{ word: 'delegated' }] : []),
-    ...(rows.some((r) => r.kind === 'lease') ? [{ word: 'worktrees' }] : []),
-  ];
+/** The word a fold line uses for a coordinator's delegation children: `worktrees`, uncounted (the operator ruled the number
+ *  of a session's delegated entries noise in the fleet list, D-8771; the fold keeps the word so a line holding only worktree
+ *  rows still says what it holds). A session's subagents and workflows are no row in the list (D-8782), so no word of theirs
+ *  stands here. No row says nothing. */
+export function delegationParts(rows: readonly { kind: 'lease' }[]): { readonly word: string }[] {
+  return rows.length > 0 ? [{ word: 'worktrees' }] : [];
 }
 
 // THE WORKTREE CONTROLS (delegation broker wave 5, PR10). The operator keeps a worktree, attaches an inferred one to its own
