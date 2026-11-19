@@ -27,8 +27,12 @@ export const LAUNCH_PROFILE_LANE = 'launch-profile';
  *  anchor, which the hook prints in its first slot at every start of a session that is not a child, a fork's one refusal
  *  line, and the anchor once after an automatic compaction that brought no start. */
 export const ANCHOR_SLOT_LANE = 'anchor-slot';
+/** The park's row (approvals plan 2026-11-18, §3.3.3 F10): a child's permission prompt whose window ends unruled is parked
+ *  (the hook prints a deny that says so, and the row reaches Waiting on you) instead of left to its pane's menu. In shadow
+ *  the request route stores `shadow` at mint and a lapse records `wouldPark`; live, it stores `live` while sign-in is armed. */
+export const APPROVAL_PARK_LANE = 'approval-park';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -212,6 +216,18 @@ export const LANE_ARM_TEXT = {
         + 'and to read its card) in place of the role card; a fork gets one line saying it has no card, and the first '
         + 'prompt after an automatic compaction carries the anchor once.',
       gate: null,
+    },
+    [APPROVAL_PARK_LANE]: {
+      legend: 'Park permission prompts',
+      shadowNote: 'A child\'s permission prompt whose coordinator does not rule it in time stays in the child\'s pane as '
+        + 'today; each one that would have been parked is recorded on its approval row.',
+      liveNote: 'A child\'s permission prompt whose coordinator does not rule it in time is parked: the child is told the '
+        + 'command did not run and to wait, the prompt is listed on Waiting on you, and a later ruling (its coordinator\'s, '
+        + 'or yours) is met by the child\'s retry of the same command.',
+      // INERT UNTIL PR 3b (the coordinator's split, 2026-11-19): the request route's park word, the ruling read's
+      // `fetchedAt` and the operator door's approval arm live in the held route file, so Live is refused here until then.
+      gate: 'This lane goes live once the request route carries the park\'s word, the ruling read records when a ruling '
+        + 'was fetched, and the operator\'s door takes an approval; until then nothing parks.',
     },
   },
   shadowLog: (path: string): string => `Shadow record: ${path} on the fleet box. Read it before going live.`,

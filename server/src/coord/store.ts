@@ -47,6 +47,7 @@ import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as census from './approvalCensusStore.js';
+import * as parks from './approvalParkStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
@@ -206,7 +207,7 @@ import {
   type AskMintReleaseReason, type AskReleaseReason, type AskState,
   // plan Task 16 (D-5298): the approvals row's vocabularies.
   APPROVAL_INPUT_RETENTION_DAYS, ASK_OPERATOR_PRINCIPAL, isApprovalReleaseReason, isApprovalState,
-  type ApprovalMintReleaseReason, type ApprovalReleaseReason, type ApprovalState,
+  type ApprovalMintReleaseReason, type ApprovalParkWord, type ApprovalReleaseReason, type ApprovalState, isApprovalParkWord,
   type ClaimConflict, type ClaimLapse, type ClaimRechain, type ClaimRechainEnd, type ClaimState, type ClaimSummary,
   type CoordCaps, type CoordCapsUsage, type DeviationAllocation, type DeviationAllocState,
   type LifecycleAct, type LifecycleGap, type LifecycleGapReason, type LifecycleOutcome,
@@ -1033,6 +1034,14 @@ export interface ApprovalRow {
    *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
    *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
   denyCurrent: boolean;
+  /** Approvals PR 3 (F1): the park's word decided at mint (`live`, `shadow`, `capped`), null on a row minted before PR 3 or
+   *  released at mint; a token this build does not know reads null, which never parks. `parkKey` is the key a retry
+   *  repeats (null with no word). `fetchedAt` is the ruling read's first serve of a ruling (F8-c), `wouldPark` the shadow's
+   *  record that the row would have parked. */
+  parkWord: ApprovalParkWord | null;
+  parkKey: string | null;
+  fetchedAt: number | null;
+  wouldPark: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -9823,14 +9832,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected, denyCurrent';
+    'answeredBy, toolUseId, corrected, denyCurrent, parkWord, parkKey, fetchedAt, wouldPark';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
-    denyCurrent: number;
+    denyCurrent: number; parkWord: string | null; parkKey: string | null; fetchedAt: number | null; wouldPark: number | null;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9855,6 +9864,8 @@ export class CoordStore {
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
         denyCurrent: r.denyCurrent === 1,
+        parkWord: isApprovalParkWord(r.parkWord) ? r.parkWord : null,
+        parkKey: r.parkKey, fetchedAt: r.fetchedAt === null ? null : Number(r.fetchedAt), wouldPark: r.wouldPark === 1,
       },
     };
   }
@@ -9927,26 +9938,42 @@ export class CoordStore {
      *  the grammar cannot list them) and `literalInRoot`. Absent: stored NULL, as on a row minted before them. */
     commandWords?: readonly string[] | null; literalInRoot?: boolean;
   }): number {
+    return this.insertApprovalAt(a).id;
+  }
+
+  /** `insertApproval` with the park's step (approvals PR 3, F1): given `park` (its key and the lane's and sign-in's state)
+   *  on a held row with a run, the word is decided INSIDE this transaction from the key's slots as read here, a `live`
+   *  word reserves a slot, and the row stores the word and key. Answers the id and the word (null: no park step ran). */
+  insertApprovalAt(a: Parameters<CoordStore['insertApproval']>[0] & {
+    park?: { key: string; laneLive: boolean; signedIn: boolean };
+  }): { id: number; parkWord: ApprovalParkWord | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot, parkWord, parkKey) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
+      // The park's word, decided here with the slots this transaction reads (the cap race, F1): only a held row with a run.
+      const park = a.park !== undefined && reason === null && a.runId !== null ? a.park : null;
+      const parkWord = park === null ? null : parks.reserveParkAtMint(this.db, {
+        key: park.key, childId: a.childId, runId: a.runId as number, laneLive: park.laneLive, signedIn: park.signedIn, now: a.askAt,
+      });
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
         a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
         a.commandWords === undefined || a.commandWords === null ? null : JSON.stringify(a.commandWords),
         a.literalInRoot === undefined ? null : (a.literalInRoot ? 1 : 0),
+        parkWord, park === null ? null : park.key,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
       }
-      return Number(exactId);
+      return { id: Number(exactId), parkWord };
     });
   }
 
@@ -9961,7 +9988,13 @@ export class CoordStore {
         'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
         "WHERE id = ? AND state IN ('held','released') AND releaseReason IS NULL",
       ).run(r.verdict === 'allow' ? 'allowed' : 'denied', r.verdict, r.reason, r.ruling, r.now, r.by, id);
-      if (Number(res.changes) > 0) return { ok: true as const };
+      if (Number(res.changes) > 0) {
+        // Approvals PR 3: a row ruled inside its window releases its park slot, and a coordinator's deny is recorded on the
+        // key's park in this same transaction (F3), so no later allow of the key is signed for anyone.
+        parks.releaseParkSlotOfRow(this.db, id);
+        if (r.verdict === 'deny' && r.by !== ASK_OPERATOR_PRINCIPAL) parks.noteCoordinatorVerdictOfRow(this.db, id, 'denied');
+        return { ok: true as const };
+      }
       const read = this.approvalById(id);
       if (!read.ok) throw new Error(`takeApprovalForRule: ${read.detail}`);
       if (read.row === null) return { ok: false as const, why: 'unknown-approval' as const };
@@ -9974,39 +10007,132 @@ export class CoordStore {
 
   /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
-    const res = this.db.prepare(
-      "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
-    ).run(now, by, id);
-    return Number(res.changes) > 0;
+    return tx(this.db, () => {
+      const res = this.db.prepare(
+        "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
+      ).run(now, by, id);
+      if (Number(res.changes) === 0) return false;
+      // Approvals PR 3 (F3): the coordinator's decline is recorded on the key's park in the row's own transaction.
+      parks.noteCoordinatorVerdictOfRow(this.db, id, 'declined');
+      return true;
+    });
   }
 
   /** The window's end (`notifyAt`, D-5441): `held` -> `released`. A row a principal acted on is untouched. */
-  lapseApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'released' WHERE id = ? AND state = 'held'").run(id);
+  lapseApproval(id: number, wouldPark = false): boolean {
+    // Approvals PR 3: a shadow lapse records that the row would have parked (`wouldPark`), with the lapse itself.
+    const res = this.db.prepare(`UPDATE approvals SET state = 'released'${wouldPark ? ', wouldPark = 1' : ''} WHERE id = ? AND state = 'held'`).run(id);
     return Number(res.changes) > 0;
   }
+
+  /** THE ONE WRITE of `parked` (approvals PR 3, F8-a), reached only through the questions owner's `parkApproval`: a `held`
+   *  row whose stored word is `live` (its window ended unruled), or an `allowed`/`denied` row the hook never fetched (the
+   *  last-poll move, F2), moves to `parked`, and its park records its first park. A moved ruling is recorded on the park as
+   *  the coordinator's, unless the park already holds an unspent ruling (the first wins). Answers whether the row moved. */
+  parkApprovalRow(id: number, now: number): boolean {
+    return tx(this.db, () => {
+      const read = this.approvalById(id);
+      if (!read.ok) throw new Error(`parkApprovalRow: ${read.detail}`);
+      const row = read.row;
+      if (row === null || row.parkWord !== 'live' || row.parkKey === null) return false;
+      const res = this.db.prepare(
+        "UPDATE approvals SET state = 'parked' WHERE id = ? AND parkWord = 'live' AND (state = 'held' OR (state IN ('allowed','denied') AND fetchedAt IS NULL))",
+      ).run(id);
+      if (Number(res.changes) === 0) return false;
+      parks.markFirstPark(this.db, row.parkKey, id, now);
+      if ((row.state === 'allowed' || row.state === 'denied') && row.verdict !== null) {
+        parks.recordParkRuling(this.db, row.parkKey, {
+          verdict: row.verdict, authority: 'coordinator', by: row.answeredBy ?? row.parentId, reason: row.reason ?? '',
+          class: row.class, rowId: id, now,
+        });
+      }
+      return true;
+    });
+  }
+
+  /** The last-poll move's read (approvals PR 3, F2): `allowed` or `denied` rows minted `live` at or after `sinceAskAt` (the
+   *  hook's ceiling bounds the move, so older rows are never read) whose ruling the hook never fetched, oldest first. */
+  approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
+    return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);
+  }
+
+  /** The ruling read's first serve of a ruling (approvals PR 3, F8-c): `fetchedAt`, written once. */
+  markApprovalFetched(id: number, now: number): boolean {
+    const res = this.db.prepare('UPDATE approvals SET fetchedAt = ? WHERE id = ? AND fetchedAt IS NULL').run(now, id);
+    return Number(res.changes) > 0;
+  }
+
+  /** One park by key (approvals PR 3), or null. */
+  approvalPark(key: string): parks.ParkRow | null { return parks.parkByKey(this.db, key); }
+
+  /** A principal's ruling recorded on a park (approvals PR 3, the rule door and the operator's door): written only when the
+   *  park holds no unspent ruling. Answers whether it was written. */
+  recordApprovalParkRuling(key: string, r: Parameters<typeof parks.recordParkRuling>[2]): boolean {
+    return tx(this.db, () => parks.recordParkRuling(this.db, key, r));
+  }
+
+  /** THE SPEND (approvals PR 3, F6), one synchronous transaction: the park is read again, its ruling given at `rulingAt`
+   *  must still be unspent; `sign` (synchronous) answers the signed ruling for the retry row, or null for a refusal at
+   *  signing; the ruling's use goes 0 -> 1 and, signed, the retry row takes it. A refusal at signing spends it too (F5).
+   *  Answers `met` (the row is ruled), `refused` (spent, the row held fresh) or `lost` (nothing changed: another retry spent
+   *  it, or the park moved). */
+  meetApprovalParkRuling(
+    key: string, rulingAt: number, rowId: number,
+    sign: (p: parks.ParkRow) => { by: string; verdict: 'allow' | 'deny'; reason: string; ruling: string } | null, now: number,
+  ): 'met' | 'refused' | 'lost' {
+    return tx(this.db, () => {
+      const p = parks.parkByKey(this.db, key);
+      if (p === null || p.voided || p.ruling === null || p.ruling.spent || p.ruling.at !== rulingAt) return 'lost';
+      if (p.horizon !== null && now >= p.horizon) return 'lost';
+      const signed = sign(p);
+      if (!parks.spendParkRuling(this.db, key, rulingAt)) return 'lost';
+      if (signed === null) return 'refused';
+      const res = this.db.prepare(
+        'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
+        "WHERE id = ? AND state = 'held' AND releaseReason IS NULL",
+      ).run(signed.verdict === 'allow' ? 'allowed' : 'denied', signed.verdict, signed.reason, signed.ruling, now, signed.by, rowId);
+      if (Number(res.changes) === 0) throw new Error('meetApprovalParkRuling: the retry row is no longer held');
+      parks.releaseParkSlotOfRow(this.db, rowId);
+      // The key's parked rows are settled by the met ruling (slug met-ruling-settles-the-key): they leave Waiting on you,
+      // and a later identical prompt is held fresh and may park again on the same key.
+      this.db.prepare("UPDATE approvals SET state = 'stale' WHERE parkKey = ? AND state = 'parked'").run(key);
+      return 'met';
+    });
+  }
+
+  /** The park's retention (approvals PR 3, T8-4): parks whose horizon passed before `before`. */
+  pruneApprovalParks(before: number): number { return tx(this.db, () => parks.pruneParks(this.db, before)); }
 
   /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
    *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
   markApprovalOperator(childId: string, now: number): number {
-    const res = this.db.prepare(
-      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released')",
-    ).run(now, ASK_OPERATOR_PRINCIPAL, childId);
-    return Number(res.changes);
+    return tx(this.db, () => {
+      // Approvals PR 3 (F4): a pane answer on a parked row marks it `operator` too, and voids its park first, so a later
+      // ruling on that park can never allow the next identical command.
+      parks.voidParksOfParkedRows(this.db, { childId });
+      const res = this.db.prepare(
+        "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released','parked')",
+      ).run(now, ASK_OPERATOR_PRINCIPAL, childId);
+      return Number(res.changes);
+    });
   }
 
   /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
   markApprovalOperatorRows(ids: readonly number[], now: number): number {
-    let n = 0;
-    const stmt = this.db.prepare(
-      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released')");
-    for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
-    return n;
+    return tx(this.db, () => {
+      parks.voidParksOfParkedRows(this.db, { ids });   // approvals PR 3 (F4), as `markApprovalOperator`
+      let n = 0;
+      const stmt = this.db.prepare(
+        "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
+      for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
+      return n;
+    });
   }
 
-  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`. */
+  /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
+   *  `parked` row's park reached its horizon or went void (approvals PR 3): `parked` -> `stale`. */
   staleApproval(id: number): boolean {
-    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released')").run(id);
+    const res = this.db.prepare("UPDATE approvals SET state = 'stale' WHERE id = ? AND state IN ('held','released','parked')").run(id);
     return Number(res.changes) > 0;
   }
 
