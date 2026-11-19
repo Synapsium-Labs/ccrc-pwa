@@ -339,6 +339,14 @@ This section says how each piece is proved before it goes live.
 - **Shadow evidence.** The arm's shadow log over a week: how many acts it would have refused, and how many of those
   were pushes made before the urgent mail was read. The operator arms it live from that evidence.
 
+## 6. Promise delta
+
+This spec is a design for review. It changes no Promise; the plan that builds it carries any delta.
+
+```promise-delta
+none - a design spec for review that ships no behaviour, and the build plan carries any Promise change
+```
+
 ## Where things stand
 
 ### Agreed
