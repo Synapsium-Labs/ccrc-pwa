@@ -23,6 +23,21 @@ No source file changes, so no listed file grows and `shared/api.ts`'s free lines
 | `context-is-a-system-message` | Observation, no departure: the line arrives as a `role: "system"` message right after the user message carrying the tool result, prefixed `PreToolUse:<tool> hook additional context: `, not inside the `tool_result` block. | Spec §7 asks whether the line arrives "with each tool result". It arrives directly after each one, which meets that. PR 5's fixed text is read after the prefix. |
 | `requests-not-transcript` | The answer is read from the requests the mock received (`reqs/`), as the plan says, not from the transcript as spec §7 says. | The request is what the model is given. The plan governs (worker clause 6). |
 
+## Fix round 1 (review 2754, the coordinator's rulings)
+
+Notes only; the scenario is unchanged.
+
+- **F1, ruled:** the result note gives the read as one runnable command over a bundle's `reqs/`, with its pass
+  condition (Table 2), and says the scenario generates evidence and asserts nothing. Measured on 2.1.328 from scratch
+  copies: with the hook deleted, or its matcher narrowed to Read, the run serves every label and writes no note, and
+  only the reader fails it. The asserting check, a mock matcher for `role: "system"` messages and a rig case that reds
+  on both mutants, is a carry for PR 5, with the review's reader contract, (a) to (e), copied into the note.
+- **F2:** on 2.1.312 a token-budget trailer follows the line in the same message (292 characters, not 241). The note
+  says so, drops "the text is the same on all four", and anchors the read at the start of the fixed text, never at the
+  message's end.
+- **F3:** the title and "In short" say "reaches the next request", not "the model"; heeding stays the B trigger's
+  later measurement.
+
 ## Checks run
 
 - `rig.sh check-scenario` on the new file: exit 0.
