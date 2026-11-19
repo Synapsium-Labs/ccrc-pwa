@@ -4364,6 +4364,7 @@ export class CoordStore {
   setDefaultFlow(id: number | null): ReturnType<typeof flows.setDefaultFlow> { return flows.setDefaultFlow(this.db, id); }
   flowPinnedBy(id: number): number { return flows.flowPinnedBy(this.db, id); }
   readProgrammeFlowPin(slug: string): flows.FlowPin | null { return flows.readProgrammeFlowPin(this.db, slug); }
+  flowProgrammes(flowId: number): flows.FlowsRead<flows.FlowProgrammeFacts[]> { return flows.flowProgrammes(this.db, flowId, TERMINAL_RUN_STATES_SQL); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
   askMarkRead(id: number, now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkRead { return answerMarks.askMarkRead(this.db, id, now, liveAsk); }
