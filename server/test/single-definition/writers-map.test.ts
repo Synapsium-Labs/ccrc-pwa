@@ -362,8 +362,10 @@ describe(TABLES_PIN, () => {
       // The push outbox (Overlord W1): `stampReach` is the one writer of `reachedOperatorAt`, on asks and on items.
       asks: [OUTBOX_REACH, ...['correctWithMail', 'declineAsk', 'insertAsk', 'pruneAskQuestions', 'releaseAsk', 'restampAsk', 'settleAsk',
         'staleAsk', 'takeAskForAnswer', 'untakeAsk'].map((m) => `${S}${m}`)],
-      approvals: ['correctWithMail', 'declineApproval', 'insertApproval', 'lapseApproval', 'markApprovalOperator',
-        'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
+      // The park (approvals PR 3): the one write of `parked`, the spend's retry row and settled key, and `fetchedAt`.
+      approvals: [...['markApprovalFetched', 'meetParkRuling', 'parkApprovalRow'].map((f) => `server/src/coord/approvalParkStore.ts#${f}`),
+        ...['correctWithMail', 'declineApproval', 'insertApprovalAt', 'lapseApproval', 'markApprovalOperator',
+          'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`)],
       // The approval census (approvals PR 1): its one writer, reached only through the questions owner, and its retention.
       approval_census: ['insertCensusRow', 'pruneCensusSummaries'].map((f) => `server/src/coord/approvalCensusStore.ts#${f}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
