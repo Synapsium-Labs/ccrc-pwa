@@ -475,7 +475,7 @@ Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on 
 | Mermaid (X4): series colours as lines on `surface2` | 4.52 | Solarized Dark | 3 |
 | Mermaid (X4): `accent` (the today line, an active task's outline) on `surface2` | 4.57 | Phosphor Daylight | 3 |
 | Mermaid (X4): `no` (a critical task's outline) on `surface2` | 4.77 | Solarized Dark | 3 |
-| Mermaid (X4): `accent` on `surface2`, a gantt task label Mermaid marks clickable (not drawn under `strict`) | 4.57 | Phosphor Daylight | 4.5 |
+| Mermaid (X4): `accent` on `surface2`, a gantt task label Mermaid marks clickable | 4.57 | Phosphor Daylight | 4.5 |
 | Mermaid (X4): `text-muted` on `surface2`, a vertical marker's text over a gantt row | 5.54 | Catppuccin Mocha | 4.5 |
 | Mermaid (X4, corrected in fix round 2, review 2714 F7): `text` on a gitGraph commit label, opaque `surface2` by the hosted rule, ground from pixels with the branch lines under it | 6.57 | Catppuccin Mocha | 4.5 |
 | Mermaid (X4): a mark inside a commit (`surface2` or `bg`) on its commit's series colour, `git0` to `git7` (corrected in X4 fix round 1, review 2694 F4) | 4.57 (`surface2` on `accent`) | Phosphor Daylight | 3 |
@@ -733,7 +733,7 @@ It found no critical issue, 9 important and 14 minor. It reproduced every X4 con
 | 11: the series worst palette differed between spec and plan, and `accent` and `no` read as 4.52 | Fixed. Solarized Dark, 4.515; `accent` 4.57 and `no` 4.77 stated apart |
 | 12: §5's Mermaid row missed the `text-muted` and `accent` labels and the `text` filled arrowhead | Fixed |
 | 13: `excludeBkgColor` missing from the literals; cScale unmentioned | Fixed: ten literals (superseded at fix round 1, review 2694 M4: fourteen); none of the 66 cScale, fillType and surface keys reaches a covered drawing, stated |
-| 14: drawn pairs with no row, and a fixture claiming every shape | Fixed. Cross pairs rows for a clickable label, marker text over a row, commit labels and in-commit marks; the fixture names the classic shapes. The clickable label is not drawn under `strict` and is said so |
+| 14: drawn pairs with no row, and a fixture claiming every shape | Fixed. Cross pairs rows for a clickable label, marker text over a row, commit labels and in-commit marks; the fixture names the classic shapes. |
 | 15: "old srcdoc cap" per layout was unclear | Fixed: 1.1.0's default cap, in every layout |
 | 16: X2's P5.1 lacked the per-layout `frame-cost` row | Fixed in X2's plan, Task P5.1 |
 | 17: X2's new seed fields were outside every share | Fixed in X2 §6: they are seed fields, counted by the derived srcdoc cap and the per-layout `frame-cost` row, not by test 8 |
