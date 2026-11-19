@@ -64,7 +64,7 @@ export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<C
         if (designation.kind !== 'designated') return offModelReading(designation, 'no-generation', { ok: false, detail: 'no designation' });
         const live = liveGenerationOf(deps.coord, designation.sessionId, deps.continuityGate);
         if (live === 'unmeasured' || live === 'no-generation') return offModelReading(designation, live, { ok: false, detail: 'no live generation' });
-        const sw = deps.coord.modelSwitchesOf === undefined ? { ok: false as const, detail: 'no model switch read' } : deps.coord.modelSwitchesOf(designation.sessionId, live.row.startReportedAt);
+        const sw = deps.coord.modelSwitchesOf === undefined ? { ok: false as const, detail: 'no model switch read' } : deps.coord.modelSwitchesOf(designation.sessionId, live.row.startId);
         const switches = sw.ok ? { ok: true as const, value: sw.value.map((r) => ({ how: r.how, toClass: r.to === null ? null : familyClassOf(r.to) })) } : sw;
         const answer = offModelOf({
           designatedClass: designation.row.model, startClass: live.row.model === null ? null : familyClassOf(live.row.model), switches,

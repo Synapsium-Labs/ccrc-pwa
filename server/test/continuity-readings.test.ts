@@ -16,7 +16,7 @@ import { LADDER_CAUSE_MAP, LADDER_CAUSES, RUNGS, rungRank, type Rung } from '../
 import * as ladder from '../src/coord/overlordLadder.js';
 import { effectiveRung } from '../src/coord/overlordLadder.js';
 import { ladderConditionInputs } from '../src/coord/overlordLadderRead.js';
-import { insertHookReport, modelSwitchesSince } from '../src/continuity/hookReportStore.js';
+import { insertHookReport, modelSwitchesSinceStart } from '../src/continuity/hookReportStore.js';
 import type { GenRow } from '../src/continuity/continuityStore.js';
 
 const facts = (operator: Rung | null, reading: 'standing' | 'lifted' | 'unmeasured') => effectiveRung({
@@ -52,12 +52,14 @@ describe('offModelReading', () => { for (const [n, fn] of Object.entries(offMode
 
 describe('ladderConditionInputs: off-model', () => {
   const START = 5_000;
-  const gen = (model: string | null) => ({ identity: 'overlord', sessionId: 'lane-a', state: 'active', shadowState: null, walk: null, model, startReportedAt: START }) as unknown as GenRow;
+  const gen = (model: string | null) => ({ identity: 'overlord', sessionId: 'lane-a', state: 'active', shadowState: null, walk: null, model, startId: 1, startReportedAt: START }) as unknown as GenRow;
   const make = (o: { designation?: DesignationRead; model?: string | null; gens?: 'none' | 'throw' }) => {
     const db = new DatabaseSync(':memory:');
     db.exec('CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT, agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);');
+    // The generation's start row: received by the server at START (the hook stamped it START as well, unless a case moves it).
+    db.exec(`CREATE TABLE continuity_starts (id INTEGER PRIMARY KEY, receivedAt INTEGER NOT NULL); INSERT INTO continuity_starts VALUES (1, ${START});`);
     const coord = {
-      modelSwitchesOf: (id: string, since: number) => modelSwitchesSince(db, id, since),
+      modelSwitchesOf: (id: string, startId: number) => modelSwitchesSinceStart(db, id, startId),
       designationRead: () => o.designation ?? designated('fable'),
       liveGenerations: () => { if (o.gens === 'throw') throw Error('x'); return { ok: true as const, rows: o.gens === 'none' ? [] : [gen(o.model === undefined ? 'claude-fable-5-1' : o.model)] }; },
       laneArmSetting: () => ({ kind: 'row' as const, choice: 'live' as const, updatedAt: 1, importedAt: null, imported: null }),
@@ -93,6 +95,18 @@ describe('ladderConditionInputs: off-model', () => {
     expect(input(c, ((): { class: string; stale: boolean } => ({ class: 'opus', stale: false })) as never)).toBe('standing');
     expect(input(c, ((): { class: string; stale: boolean } => ({ class: 'opus', stale: true })) as never)).toBe('lifted');
     expect(input(c, (() => null) as never)).toBe('lifted');
+  });
+  it('the window is the server clock: a switch received after the start stands even when the hook stamped the start later', () => {
+    const c = make({});
+    // The hook's clock runs an hour ahead: its `startReportedAt` is START + 1h, but the server received the start at START.
+    (c.coord as { liveGenerations: () => unknown }).liveGenerations = () => ({ ok: true, rows: [{ ...gen('claude-fable-5-1'), startReportedAt: START + 3_600_000 }] });
+    insertHookReport(c.db, 'lane-a', { kind: 'model-switch', how: 'switched', from: null, to: 'claude-opus-5-5', at: 1 } as never, START + 10);
+    expect(input(c)).toBe('standing');
+  });
+  it('a start row that cannot be found is unmeasured, never lifted', () => {
+    const c = make({});
+    c.db.exec('DELETE FROM continuity_starts');
+    expect(input(c)).toBe('unmeasured');
   });
   it('an unreadable switch table is unmeasured, never lifted', () => {
     const c = make({});

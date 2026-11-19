@@ -190,3 +190,11 @@ export function startReceivedAtOf(db: DatabaseSync, startId: number): HookStoreR
     return { ok: false, detail: `continuity_starts read failed: ${msg(e)}` };
   }
 }
+
+/** The session's model switches received at or after its generation's start, both by the SERVER's clock: the floor is the start
+ *  row's `receivedAt`, never the hook's `startReportedAt`, so a hook clock ahead of the server's cannot hide a switch from the
+ *  off-model condition (fail closed). A start row that is missing or unreadable is a failed read, never an empty list. */
+export function modelSwitchesSinceStart(db: DatabaseSync, sessionId: string, startId: number): HookStoreRead<ModelSwitchRow[]> {
+  const start = startReceivedAtOf(db, startId);
+  return start.ok ? modelSwitchesSince(db, sessionId, start.value) : start;
+}
