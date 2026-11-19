@@ -7,7 +7,7 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 
 | Piece | Where | Basis |
 |---|---|---|
-| Migration: `plan_tickets.doneAt INTEGER`, `plan_tickets.doneEvidence TEXT`, and the back-fill of every `done` ticket that names a run (`{"runId":n}` from its `runId`, `doneAt` from that run's `closedAt`) | `server/src/coord/schema.ts`, entry 105 (§2) | Measured: `plan-ticket-done.test.ts`'s back-fill case at the version before it |
+| Migration: `plan_tickets.doneAt INTEGER`, `plan_tickets.doneEvidence TEXT`, and the back-fill of every `done` ticket that names a run (`{"runId":n}` from its `runId`, `doneAt` from that run's `closedAt`) | `server/src/coord/schema.ts`, entry 106 (§2) | Measured: `plan-ticket-done.test.ts`'s back-fill case at the version before it |
 | The done arm of `onRunAdvancedInTx` writes `{ runId }` and the time | `server/src/coord/planStore.ts` | Measured: `a run closing done stores doneAt and its runId` |
 | `markTicketDone` (the verb's one writer: `done`, `doneAt`, `doneEvidence`, the epic settled, the sync due, one transaction); `doneFactsOf` and `ticketOfRun` (reads) | `planStore.ts`, on the port | Measured: the route cases |
 | `runMustNameTicket` (the `ticket-required` rule), `parsePlanTicketDone`, `ticketDoneVerdict` (the evidence rule as review 2375 F2 corrected it), `landedFactOf` | `server/src/coord/planPolicy.ts` (L1) | Measured: `planTicketDoneCases.ts` |
@@ -37,8 +37,13 @@ if it can, its `{ runId }` and that pull request could each close a ticket.
   `ccrc-api`, `coord-db`, `run-close-switch` and `sim/mutation-floors.json`), each resolved keeping both sides. Both
   sides had added one box-token lane, one `ccrc-api` row and one route, so the lines each wrote alike merged clean one
   short and were re-measured too (`ccd/ccrc-api`, `gate.ts`, `README.md`).
+- **The land-sync's merge**, on the coordinator's word (mail delivery 26229), after review 2740 ruled the PR safe to land:
+  the mail idempotency key (#3056) took 105, so the merge took `origin/main` at `c5b4d587c` (count 105), and this entry
+  is **106**. Three files conflicted (`schema.ts`, `coord-db`, `run-close-switch`), each resolved keeping both sides;
+  coord-db's version literals and `run-close-switch`'s replay count merged clean one short and were re-measured. After
+  it: 106 migrations, and `run-close-switch` replays fifty-three (54 through 106). The route counts did not move.
 - **Fix round 2's third merge**, on the coordinator's word (mail delivery 25954): the census of prompts (#3043) took 104,
-  so the merge took `origin/main` at `de1cbeddd` (count 104), and this entry is **105**. Three files conflicted
+  so the merge took `origin/main` at `de1cbeddd` (count 104), and this entry was 105. Three files conflicted
   (`schema.ts`, `auth-gate`, `coord-db`), each resolved keeping both sides; the lines each side wrote alike (coord-db's
   literals, auth-gate's route count, `gate.ts`'s route word, `run-close-switch`'s undo list and replay count) merged clean
   one short and were re-measured. After it: 105 migrations, 284 routes scanned, 281 at the gate's HTTP half, 101 exempt,
