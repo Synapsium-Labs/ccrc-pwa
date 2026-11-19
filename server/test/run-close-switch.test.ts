@@ -124,6 +124,7 @@ describe('the store: three states per group, default shadow', () => {
     fresh.exec('DROP TABLE linear_probe_settled; DROP TABLE linear_sync_streaks; DROP TABLE linear_inbound; DROP TABLE linear_migration_moves; DROP TABLE linear_migrations; DROP TABLE linear_drift_events; DROP TABLE linear_drift_marks;');
     fresh.exec('DROP TABLE decision_days; DROP TABLE decision_records;');
     fresh.exec('ALTER TABLE programs DROP COLUMN ratifiedBy; ALTER TABLE programs DROP COLUMN ratifiedAt; ALTER TABLE programs DROP COLUMN doneWhenBy; ALTER TABLE programme_modifications DROP COLUMN ratifiedBy; ALTER TABLE programme_modifications DROP COLUMN ratifiedAt; ALTER TABLE programs DROP COLUMN ratifiedActor; ALTER TABLE programme_modifications DROP COLUMN ratifiedActor;');
+    fresh.exec('DROP TABLE approval_census; ALTER TABLE approvals DROP COLUMN literalInRoot; ALTER TABLE approvals DROP COLUMN commandWords;');
     fresh.exec('DROP TABLE overlord_latches; DROP TABLE overlord_ladder;');
     fresh.exec('ALTER TABLE runs DROP COLUMN closePr;');
     fresh.exec('DROP TABLE overlord_designation; DROP TABLE renewal_backstop_settings; DROP TABLE response_settings; DROP TABLE response_boots; DROP TABLE response_receipts; DROP TABLE operator_responses;');

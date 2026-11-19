@@ -4924,7 +4924,9 @@ export interface HookAskQuestion {
  *  both, since `session-hook.sh` writes exactly one shape per waiting state. */
 export type HookAsk =
   | { questions: HookAskQuestion[] }
-  | { approval: { tool: string; summary: string } };
+  /** `route` (approvals plan 2026-11-18, Task 1.2): where the hook sent the prompt, or the first gate that stopped it,
+   *  as `shared/approval-census.ts#parseApprovalRoute` reads it. ADDITIVE: an older hook writes none. */
+  | { approval: { tool: string; summary: string; route?: string } };
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
