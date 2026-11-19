@@ -16,7 +16,10 @@
   §3.8). Appendix B says what those changed (Tables B6 and B8), and records the corrections the W1a builds measured
   (Table B5). On 2026-11-19 the operator gave R22: four kinds of act move from the operator's doors and the run's own
   coordinator to the Overlord, which are pause (the brake), lifting a review cap, stopping or abandoning a run, and
-  dispatch-cap changes (§2, §7.1.1, Table B10). This is the hardened edition of rev 8: an outside review's calls H1 to H39 are folded in, so that each
+  dispatch-cap changes (§2, §7.1.1, Table B10). The same day the operator gave R23: an autonomy mode the operator can
+  put the Overlord into, in which it makes all but the most critical decisions on Waiting on you itself, and the
+  Overlord's power to grant a coordinator autonomy and take it away (§2, §7.5.1, Table B11). This is the hardened
+  edition of rev 8: an outside review's calls H1 to H39 are folded in, so that each
   mechanism is stated once, as it now is. A builder's check was applied to rev 8 by its author. This edition was then
   checked in nine ways: a builder's check in four slices, its closed vocabularies and state machines, its names and
   numbers, its claims about the tree, and a red team. Their findings are folded in.
@@ -32,9 +35,9 @@
 
 This document defines no D-numbers. The programme's plan allocates them when its run opens. There are three series of
 numbered decisions, and the operator can approve or overturn each one by number:
-- **R1 to R22** are the operator's rulings (§2).
-- **C1 to C79** are the author's calls. §13 restates each one as it now stands. C61 to C69 carry R20, C70 carries
-  R21, C71 to C76 carry the approvals direction of 2026-11-18, and C77 to C79 carry R22.
+- **R1 to R23** are the operator's rulings (§2).
+- **C1 to C82** are the author's calls. §13 restates each one as it now stands. C61 to C69 carry R20, C70 carries
+  R21, C71 to C76 carry the approvals direction of 2026-11-18, C77 to C79 carry R22, and C80 to C82 carry R23.
 - **H1 to H39** are the hardening review's calls (§13.1). They have a series of their own, so that they never collide
   with the R and C series while the author keeps writing. Appendix A says what each one changed in rev 8.
 - **H40 to H45** follow from R16 and R17 (§6.9, §13.1). Appendix B gives the reason for each.
@@ -62,7 +65,9 @@ operator does with each message is measured, the two primitives of an always-on 
 go to the Overlord, and higher-level decisions stay with the operator. The operator marks the questions on Waiting on
 you that the Overlord could answer, and the answers they are unsure of, which train it and grant nothing (R21). It may
 apply the brake, give a run one more review round, and interrupt, abandon or reclaim runs on a reason the server
-measures, and it proposes dispatch-cap changes (R22). The operator also gave the hardening review three directions: build it so that it runs in containers soon, use a decision
+measures, and it proposes dispatch-cap changes (R22). The operator can put it into an autonomy mode in which it makes
+all but the most critical decisions itself, and it can give a coordinator that autonomy and take it away (R23). The
+operator also gave the hardening review three directions: build it so that it runs in containers soon, use a decision
 model for the yes-or-no questions that code cannot decide, and do not fence whole accounts off for it.
 
 **The design, in thirteen lines.**
@@ -96,7 +101,8 @@ model for the yes-or-no questions that code cannot decide, and do not fence whol
 - **Authority.** It starts as D-8126's operator-only list, unchanged. It relaxes one effect at a time through grants
   that expire, start in shadow and suspend by themselves. An autonomy ladder is computed from the operator's setting,
   from evidence and from live conditions: the server can only lower it. R22 adds brakes it may apply and run acts
-  that need a measured reason, and relaxes the list for one kind, a reclaim (§7).
+  that need a measured reason, and relaxes the list for one kind, a reclaim. R23 adds autonomy mode, a rung above
+  `full` bounded by a critical list that always stays the operator's (§7).
 - **Knowledge and evidence.** A private store holds what the operator said and what was learned about them, with the
   source of each entry derived by the server. The numbers that widen authority come from how decisions turned out, on
   picks the Overlord sealed before the operator answered, on answers the operator gave blind, and on replay as of a
@@ -276,6 +282,7 @@ in each row states the mechanism once.
 | R20 | **Timers, and measured responses** (the operator, 2026-11-14, on a comparison of this design with an article on building always-on agents, whose five primitives are an event inbox, timers, memory, permissions and an outbox): "Both: self-set follow-up timers (a timer row, one scheduler lane, mail delivery) and measuring how you respond to each message" | Any session may set itself a timer: a row of its identity and a stamp of its incarnation, never of a generation, with a note that is data, fired by one `LANE_SCHEDULE` row in the transaction that queues its mail. A timer never acts, and no session sets one for another. Each message to the operator gets one response row, sealed from measured facts, with `unmeasured` a word of its own. The attention budget reads a state per class of push: it starts quiet, the server may only make an unpinned class quieter, and a class interrupts only by the operator's tick, a choice that stands until they change it, or unpinned when they turn "start quiet" off (§3.3.12, §4.3, Appendix B) |
 | R21 | **Details to the Overlord, and two marks to train it** (the operator, 2026-11-15, in five sentences): "The point of overlord is to make many routine decisions for the operator. I'd like you to add a checkbox to 'waiting on you' that I can tick in order to help train what kinds of questions overlord should answer on my behalf." "Ok keep in mind that for many questions I'm asked I have low confidence in my answer and overlord would decide better." "I want to delegate details to overlord and higher level stuff stays with me." "The low confidence questions are ones where we're taking about specific implementation detail low level." "I can answer outcomes and tech direction questions, for sure, but I don't want to be answering every tech detail question if overlord confidence is high." | Details, the routine answers of class none, go to the Overlord, and higher-level decisions stay with the operator. Two boxes on each question row of Waiting on you the operator was shown, open or recently cleared: "The Overlord could answer this" and "I'm not sure of my answer". Each is one reversible value a row, every change kept. They grant nothing and are never answers. An answer marked unsure is no yardstick: never a hit, a miss or an agreeing blind answer. Both are gathered from W1, before any Overlord exists. The last sentence became a proposal, which the operator approved as written on 2026-11-16 (item 345): tech detail earned on measured outcomes and gated by calibrated confidence (§9.2.1, §9.5.1, C70, Appendix B) |
 | R22 | **The brakes, review rounds, run acts and the dispatch cap** (the operator, 2026-11-19, in the Overlord's own chat). Asked which of four kinds to add to the Overlord's acts, "pause, the brake", "lifting a review cap", "stopping or abandoning a run" and "dispatch-cap changes", the operator chose all four | Eight act kinds join the catalogue (§7.1.1, Table 7.1b). The Overlord may raise the coordination pause, or a narrower pause on one programme's starts, at `advise` and `full`, and may lift only a pause it raised itself, only at `full`. It may give a work run one more review round when that run's coordinator asked and the findings are being fixed. It may interrupt a programme's session, abandon a run and reclaim a programme whose coordinator is gone, as one-tap proposals at `advise`, and at `full` only on a reason the server measures again in the act's own transaction. Changing the dispatch cap stays a proposal for one tap at every rung, because it moves spend. Each kind rides a door that exists. None runs a destructive verb, and retiring stays `propose-retire`. The ruling relaxes D-8126's operator-only list for one kind, `reclaim-run` (O4), and for no other (C77 to C79, Appendix B) |
+| R23 | **Autonomy mode, and autonomy for coordinators** (the operator, 2026-11-19, in the Overlord's own chat): "Can add to overlord ability to grant autonomy mode to coordinators and also ability to take it away and ability for operator to put overlord into autonomy mode which enables [it] to make all but the most critical decisions in 'needs you' on it's own" | A fifth rung, `autonomous`, above `full`: the operator raises it behind the step-up and lowers it with one tap. There every kind of answer acts at once and the rung covers any answer outside the critical list, with no grant per effect, while every answer keeps its act row, brief, prediction and scoring. An overturn, any latch, a missed drill or a degraded generation latches it down to `full` until the operator clears it. One L0 critical list stays the operator's at every rung, pinned against D-8126. The Overlord grants and revokes a coordinator's autonomy, never wider than its own live rung and never over the critical list: a granted coordinator decides its own decide-items and records each as a decided-alone call before acting. The coordinator skill gains a clause (C80 to C82, §7.5.1, Appendix B) |
 
 *Table 2a. The operator's rulings, and the design each one became.*
 
@@ -4965,6 +4972,8 @@ Every act the Overlord can take is a row in one table. The server enforces the t
 | `lift-review-cap` (R22) | Give one work run one more review round, when that run's coordinator asked and its findings are being fixed | none | reversible while the round is unused; once a review run opened under it, `overturnableNow` answers that it cannot be undone | n/a | refuse | proposal for one tap | allow, when the kind is armed; shadow while it is not |
 | `interrupt-session`, `abandon-run` (R22) | Stop the turn in progress of a session that works for a programme; abandon one run | none (§7.1.1 says why for each) | compensable: a re-kick or a re-dispatch | n/a | refuse | proposal for one tap | allow on a measured reason, when the kind is armed; shadow while it is not |
 | `reclaim-run` (R22) | Hand a programme whose coordinator is measured gone to a named heir, through the reclaim door | O4, relaxed by R22 for this kind alone | compensable: the operator's reclaim to another heir | no | refuse | proposal for one tap | allow on a measured reason, when the kind is armed; shadow while it is not |
+| `grant-coordinator-autonomy`, `revoke-coordinator-autonomy` (R23) | Let one programme's coordinator decide its own decide-items outside the critical list, recording each; take that away | none: a grant is bounded by what the Overlord itself may do (§7.5.1) | reversible: a grant is revoked, a revocation granted again | n/a | refuse | grant: proposal for one tap; revoke: allow | allow |
+| `change-goal` (R23, an effect) | A goals version that changes a programme's goal or its definition of done | O3 | compensable | no: on the critical list (C81) | refuse | refuse | refuse |
 | `propose-dispatch-cap` (R22) | Propose raising or lowering the dispatch cap, the concurrent-run cap | none: it only proposes, and the change is the operator's tap on the caps door | reversible: a proposal is withdrawn | no: a cap moves spend | refuse | proposal for one tap | proposal for one tap |
 | `approve-spec`, `approve-dod`, `widen-scope` | Effects a grant may cover | O3 | compensable; whether an overturn can still honour it is measured when asked (`overturnableNow`) | yes | refuse | refuse | allow by grant, staged |
 | `state-a-fact` | Answer a `value` item: a fact only the operator holds | O5 | compensable | no: covered only by a stated entry resting on an operator message | refuse | refuse: it files a sealed prediction with its brief instead | allow |
@@ -5022,7 +5031,8 @@ shadow answer is always a sealed prediction filed with the brief (`seal-predicti
     start door, which stages an unrequested start as a proposal for one tap (§8.2).
 
   A class member is covered by a live grant in scope, a live command for the proposal, or, for the O3 matters C12
-  names, an `operator` request (§3.8). For `reclaim-run` alone, R22 covers its O4: the rung is `full`, the kind is
+  names, an `operator` request (§3.8). At `autonomous`, the rung covers any member outside the critical list (R23,
+§7.5.1). For `reclaim-run` alone, R22 covers its O4: the rung is `full`, the kind is
   armed, and its reason `claimant-gone` holds in the transaction. No grant covers it. For `state-a-fact` only, no grant covers O5. Its one cover is a cited entry
   that is `active` and `stated`, rests on an operator message, was confirmed by the operator or quotes a whole
   message, and has the item's subject (§6.7). It answers with the quoted span as the server renders it, never with
@@ -5181,8 +5191,10 @@ not wait on the refusal table's wave map, and a W3 word joins that map in the sa
 | `abandon-run` | `operate` | a re-dispatch: the correction door mails the coordinator, which opens the wave again and dispatches it; the Overlord opens no run (R12) | 2 a day per programme, 6 in all | `attributed` | `worker-dead`, `run-silent` or `end-requested` | W3, both steps |
 | `reclaim-run` | `operate` | the operator's reclaim to another heir (`POST /api/runs/:id/reclaim`), or the end of the programme through the archive door's `{programme:'end'}` path | 1 a day per programme, 2 in all | `attributed`; at `full` the ladder already needs a server measured `separate-user` or better (§7.4) | `claimant-gone` | W3, both steps |
 | `propose-dispatch-cap` | `operate` | the proposal is withdrawn; once tapped, the change is the operator's own act, and the operator sets the cap again in Settings | one open proposal, 2 a week | `attributed` | none | W3, step one |
+| `grant-coordinator-autonomy` (R23) | `operate` | `revoke-coordinator-autonomy`, by the Overlord, the operator's one tap or the server; and a correction mail for each decided-alone record the operator overturns (the correction door's `call` kind) | one live grant per programme, 3 grants a day in all | `attributed`; at `full` and above the ladder already needs a server measured `separate-user` or better (§7.4) | none | W3, step two |
+| `revoke-coordinator-autonomy` (R23) | `operate` | a grant again, under the grant's rules | none: it only narrows | `attributed` | none | W3, step two |
 
-*Table 7.1b. R22's kinds: the columns Table 7.1a does not show.*
+*Table 7.1b. R22's and R23's kinds: the columns Table 7.1a does not show. §7.5.1 gives R23's rules.*
 
 ```mermaid
 flowchart TD
@@ -5390,6 +5402,8 @@ No grant, command, rung or setting reaches these. Each is held by a row the serv
   ceilings, probes, drills, the audit sample, the replay, thresholds, measures and grants. The Overlord may propose
   changes to its own procedures, never to these (§9.7).
 - **R7 and R12.** A command never authorises a second Overlord or a piece of execution (C59).
+- **The critical list** (R23, C81). Neither autonomy mode nor a coordinator's autonomy reaches it, and a row the
+  operator marked "Ask me" is never answered by either, at any rung (§7.5.1).
 
 ### 7.4 Identity and isolation
 
@@ -5492,7 +5506,7 @@ it can forge attribution. Table 7.4a gives what such a caller can and cannot do 
 The ladder is the one dial for how much the Overlord may do on its own. Why a dial: autonomy is better set apart from
 capability (arXiv 2506.12469), and set so that it moves down by itself.
 
-- **H25. Four rungs.**
+- **H25. Four rungs, and a fifth since R23.**
   - `off`: every Overlord door refuses, except the card, probe and note doors. Routing is today's.
   - `chat`: it talks with the operator, reads, and keeps its own records (Table 7.1a). It takes no holds, and no act
     that reaches another session.
@@ -5500,8 +5514,10 @@ capability (arXiv 2506.12469), and set so that it moves down by itself.
     refuse. For each question it briefs, it files a sealed prediction with the brief instead, scored and never
     delivered (§9.5). A start or a re-kick is a proposal for one tap.
   - `full`: holds are live, and each armed kind of answer is delivered.
+  - `autonomous` (R23, from W3's second step): `full`, with every kind of answer treated as armed and the rung itself
+    covering any answer outside the critical list, with no grant (§7.5.1).
 - **Computed, never stepped.** The server stores three things:
-  - `operatorRung`: `off`, `chat`, `advise` or `full`, set by the operator;
+  - `operatorRung`: `off`, `chat`, `advise`, `full` or, from R23, `autonomous`, set by the operator;
   - `latchedCap`: the lowest cap of the standing latches. Each latch is a row with its cause and its cap, set by
     evidence of bad judgement or doubtful authority and cleared only by the operator, one cause at a time. A new
     latch never raises the cap. The row stores the cap it was raised with, and `effectiveRung` reads the stored cap,
@@ -5549,6 +5565,7 @@ capability (arXiv 2506.12469), and set so that it moves down by itself.
 | supervision debt: over 15 big answers unseen, or the oldest past 7 days (§9.6) | condition | new big answers escalate as briefs |
 | two weekly checks missed (§9.6) | condition | grant renewals and proposals pause |
 | the launch profile is not engaged (§3.6) | condition | every door but card, probe and note refuses `launch-profile-unmet` |
+| while the effective rung is `autonomous` (R23): an overturn, any other latch, a missed drill, or a generation `degraded` | latch, `autonomy-off`, with its cause | cap `full` (§7.5.1) |
 
 *Table 7.5a. What lowers the ladder. Each row is a server measurement, and each change is logged with its cause. A
 condition lifts by itself. A latch is cleared only by the operator.*
@@ -5612,6 +5629,147 @@ condition lifts by itself. A latch is cleared only by the operator.*
 - **The ladder needs `overlord-v1`.** `ccrc-api`'s Overlord verbs, the hook's card arm and clause 22 act only while
   the server's capability file carries it. After a rollback to an older server, everything takes today's path by
   itself (Table 11.1d lists the capability words).
+
+### 7.5.1 Autonomy mode, the critical list, and coordinator autonomy (R23)
+
+On 2026-11-19 the operator asked for two more things (R23): a mode they can put the Overlord into, in which it makes
+all but the most critical decisions on Waiting on you itself, and the Overlord's power to give a coordinator that
+kind of autonomy and to take it away. This subsection places the mode on the ladder, states the critical list, and
+says how a coordinator's autonomy is granted, recorded and lost. The programme's coordinator ruled the shape, and the
+operator may still correct the critical list.
+
+**C80. Autonomy mode is a fifth rung, `autonomous`, above `full`.**
+
+- **Why a rung, and not `full` with a standing armed set.** The ladder is the one dial (H25), and `effectiveRung` is
+  already the lowest of the operator's rung and every standing latch and condition. As a rung, the mode is stepped
+  down by every rule that already steps the ladder down, its record is the rung's authority record, a restore reads it
+  as the stricter value (§7.6), and nothing else learns a new switch. An armed set beside `full` would be a second
+  carrier of the same authority, which every reader of the rung would have to learn to read.
+- **The operator's switch.** Moving up to `autonomous` is a rung up, so it keeps the step-up and is journalled (§7.6).
+  Moving down is one tap with no step-up: the place's control lowers it to `full`, and Pause lowers it to `chat`
+  (§7.5). Its capability word is `overlord-autonomy-v1` (Table 11.1d).
+- **What it changes.** At `autonomous` every kind takes its `full` cell, and three things widen:
+  - every kind of answer (`answer-item`, `answer-ask`) is treated as armed, so it acts at once and never in shadow;
+  - an answer whose effect is outside the critical list needs no grant: the rung is the operator's standing cover
+    for it, the way a command covers one proposal. `overlordMayAct` reads the rung as that cover, and the act row's
+    authority is `autonomy:<rung record id>`;
+  - a grant-backed O3 answer outside the critical list is not staged behind a veto window: it acts at once, and the
+    operator overturns it from the Log or "Calls made for you".
+- **What it does not change.** Every answer still writes its act row, its brief and its sealed prediction, and the
+  server still scores each by how it turned out (§6.9). Holds, `mayHold`, admission, the breaker and the readiness
+  word work as at `full`. R22's kinds keep their own cells: at `autonomous` they take their `full` cells, so a run act
+  still needs its measured reason and its arming. The `ordinary` approval by parity keeps its own arming (§7.3).
+- **Only an isolated server reaches it.** On a `shared-user` server the ladder is capped at `advise` (§7.4), so the
+  mode is out of reach on a one-box install until the split install exists.
+- **It steps off by itself, and never comes back by itself.** While the effective rung is `autonomous`, each of these
+  raises the latch `autonomy-off`, with cap `full` and the cause, in the transaction that sees it:
+  - the operator's overturn of any act (`overturned`, §10.3);
+  - any other latch, which also applies its own cap;
+  - a missed drill;
+  - a generation `degraded`, which as a condition also caps the rung at `chat` while it lasts.
+
+  A latch is cleared only by the operator, one cause at a time, behind the step-up (§7.5), so the mode comes back only
+  when the operator clears it. The console says why it stepped off. A restore detected latches `chat` (Table 7.5a),
+  and Confirm reads the rung as the stricter of the database and the journal, so a restore never brings the mode back.
+
+**C81. The critical list: always the operator's, even in autonomy mode.**
+
+- **One L0 list, `OVERLORD_CRITICAL` (`shared/overlord.ts`), read by `overlordMayAct`.** Neither the mode's standing
+  cover nor a coordinator's autonomy ever reaches anything on it. At `autonomous` the decider answers `operator-only`
+  for a list member that no cover of the operator's own stands behind, exactly as at `full`: a live grant in scope or
+  a command, each the operator's act for one effect (§7.2, §3.8). The Overlord escalates with a brief. The list
+  covers:
+  - `message-people`, `publish` and `deploy` (O1);
+  - `spend`, and the dispatch cap, whose only kind is `propose-dispatch-cap` (O2);
+  - `secret-or-access`, accounts and sign-ins (O4);
+  - `reassign-programme` (O4). R22's `reclaim-run` keeps its own rule (§7.1.1): the mode adds nothing to it;
+  - `override-a-person` (O6);
+  - a change to a programme's goal or its definition of done: `approve-dod`, and a new effect, `change-goal`, for a
+    goals version that changes the goal or the definition of done (O3). Approving a spec or widening scope within the
+    goal (`approve-spec`, `widen-scope`) is not on the list;
+  - `state-a-fact` with no stated entry resting on an operator message (O5), the rule §7.1 already states;
+  - any effect whose reversibility is `irreversible`;
+  - any row the operator marked "Ask me".
+- **"Ask me", a third mark.** Beside R21's two marks, each question row of Waiting on you gets a third box, "Ask me".
+  Unlike the other two it narrows authority: a row so marked is never answered by the Overlord or a coordinator in
+  autonomy, at any rung. So it needs no step-up, and it works while sign-in is dark, as the other marks do. It is a
+  value of the same append-only table, `answer_marks`, through the same door. A programme the operator wants kept
+  wholly theirs is set `hands-off` (§7.5), which already holds nothing.
+- **A test pins the list against D-8126.** It fails if any kind of class O1, O2, O4 or O6, any irreversible kind, or
+  `approve-dod` or `change-goal` is missing from the list, and if `overlordMayAct` answers anything but
+  `operator-only` for a list member at `autonomous` with no grant or command behind it. A row marked "Ask me" is
+  refused at every rung, grant or not.
+
+**C82. Coordinator autonomy, granted and revoked by the Overlord.**
+
+- **Two kinds of act.** `grant-coordinator-autonomy` and `revoke-coordinator-autonomy` name one programme's
+  coordinator, by the programme's row and its incarnation, as a grant's scope does (§7.2).
+- **What a granted coordinator does.** It decides its own decide-items that are outside the critical list instead of
+  raising them. Before it acts on one, it records it as a decided-alone call: a row of D-8126's call record
+  (`coordinator_calls`, through `POST /api/coord/programmes/:slug/calls`), with its question, its options, its pick and
+  why, its stated `operatorClass` and effect, and the id of the autonomy grant it rests on. That last column is what
+  makes a call decided-alone. The Overlord and the operator see each one in "Calls made for you", and the operator
+  overturns it through the correction door's `call` kind, which mails the coordinator.
+- **How the server tells a decided-alone item from one the coordinator forgot to raise.** A decided-alone record
+  exists only as that row, written before the act, citing a grant the route measures live in its own transaction,
+  with a stated class the route checks against the critical list and §6.7's floors. A record whose grant is not live
+  is refused `no-autonomy`, and one whose class or effect meets the list is refused `critical-is-the-operators`; either
+  way the coordinator raises the item instead. A matter that was neither raised nor recorded leaves no row, as it does
+  today, so the server cannot see it. The coordinator's clause names the duty, and the Overlord's follow-up reads a
+  programme's work for decisions that carry neither.
+- **Never wider than the Overlord.** A grant records the Overlord's effective rung when it was made, and covers only
+  what the Overlord itself could then do without a grant. It is read live: a coordinator's record is covered only by
+  what both the grant and the Overlord's current rung allow, and never by anything on the critical list.
+- **Who may grant and revoke.** A grant is a proposal for one tap at `advise`, and allowed at `full` and `autonomous`.
+  A revocation is allowed at every rung from `advise` up, and the operator revokes from the programme's page with one
+  tap, with no step-up, because it narrows.
+- **The server revokes by itself,** in the transaction that sees the cause, and the console says why:
+  - when the Overlord's effective rung falls below the rung the grant recorded, such as when it leaves autonomy mode;
+  - when the stall watch measures the coordinator dead or stalled;
+  - when the operator overturns one of its decided-alone records.
+
+  A revoked grant never comes back by itself: the Overlord grants again, under the rules above.
+- **Where it lives.** One row per programme in `coordinator_autonomy`: the coordinator, the programme's incarnation,
+  the rung recorded, the act that granted it, its state (`live` or `revoked`) and the revocation's cause. Its one
+  writer is the pair of doors and the server's revocation lane, and every change is a record in the authority journal
+  (§7.6), so a restore never revives one. It is not a row of `overlord_grants`, legitimately: a grant covers one of the
+  Overlord's own effects and starts in shadow, while this covers a coordinator's decisions and is bounded by the
+  Overlord's live rung, with no shadow of its own.
+- **The coordinator skill gains one clause, clause 25 by working number** (§11.4). It acts only while the server
+  advertises `overlord-autonomy-v1`, and is pinned verbatim by `coordinator-skill.test.ts`: "When your programme holds
+  a live autonomy grant, decide a decide-item outside the critical list yourself: first record it with `ccrc-api calls
+  record`, naming the grant, your options, your pick and why; if the record is refused, raise the item. Never decide
+  an item on the critical list."
+- **Classes.** Both kinds are class none, by R23: the operator gave the Overlord this power, and a grant is bounded by
+  what the Overlord may do itself. A grant is reversible, and its compensator is the revocation plus a correction mail
+  for each decided-alone record the operator overturns.
+
+**Waves.**
+
+- **What an earlier wave can ship.** W2, with the act catalogue: `OVERLORD_CRITICAL`, `change-goal` and the test that
+  pins the list, which then guard every Overlord door; and the "Ask me" mark, which only narrows. D-8126's call record
+  gains its nullable grant column in W2 too, refused `no-autonomy` until grants exist.
+- **The rest ships in W3's second step, under `overlord-autonomy-v1`.** The `autonomous` rung needs the answer doors,
+  holds and per-kind arming, and coordinator autonomy needs the item doors and the act catalogue. So both ship there:
+  the rung, the `autonomy-off` latch, the two act kinds and `coordinator_autonomy`, the revocation lane, and clause 25.
+
+```mermaid
+flowchart TD
+  OP["The operator, behind the step-up"] -- "rung up" --> AU["autonomous<br/>answers act at once, no grant"]
+  AU -- "an overturn, any latch,<br/>a missed drill, a degraded generation" --> L["latch autonomy-off<br/>cap full, cleared by the operator only"]
+  AU -- "one tap, no step-up" --> FU["full"]
+  AU --> Q{"A question on Waiting on you"}
+  Q -- "on the critical list,<br/>or marked Ask me" --> OO["operator-only<br/>escalated with a brief"]
+  Q -- "outside the list" --> A["The Overlord answers<br/>act row, brief, sealed prediction"]
+  AU -- "grant-coordinator-autonomy" --> CA["coordinator_autonomy<br/>bounded by the Overlord's live rung"]
+  CA --> R{"A coordinator's decide-item"}
+  R -- "outside the list,<br/>grant live" --> DA["A decided-alone call<br/>recorded before it acts"]
+  R -- "on the list, or the record refused" --> RI["The coordinator raises the item"]
+  L -. "the rung falls below the grant's" .-> RV["The server revokes the grant"]
+```
+*Figure 13. Autonomy mode and coordinator autonomy. The mode is a rung the operator alone raises, and every step-down
+the ladder has, plus four of its own, lowers it until the operator clears the latch. The critical list stays the
+operator's at every rung, for the Overlord and for a coordinator it trusts.*
 
 ### 7.6 Authority that never comes back from a backup
 
@@ -6851,7 +7009,7 @@ server's evidence, so the server fills every field it can measure, and the Overl
 | targets | The programme, session, item, ask or run ids, each with the revision acted on |
 | reason | For R22's run acts: the reason's word, the observation row it rests on, and the run's revision when it was read. For a review round: the ask it answered and the fix it measured. For a brake: the pause record it wrote (§7.1.1) |
 | `summary`, `why` | The Overlord's own words, capped (Table 11.5b). The console draws them as its words, inert, never as system text |
-| `authority` | `own`, `operator-request:<id>`, `operator-command:<id>`, `grant:<id>` or, for `state-a-fact` only, `entry:<id>` (§9.3). `delegated` records that the operator settled the question this act briefed with "You decide", the operator's own answer through the operator's answer door, never an act of the Overlord's. It never counts as agreement (§3.8) |
+| `authority` | `own`, `operator-request:<id>`, `operator-command:<id>`, `grant:<id>`, `autonomy:<id>` for an answer the `autonomous` rung covers (§7.5.1) or, for `state-a-fact` only, `entry:<id>` (§9.3). `delegated` records that the operator settled the question this act briefed with "You decide", the operator's own answer through the operator's answer door, never an act of the Overlord's. It never counts as agreement (§3.8) |
 | `dissent` | The objection row, when it acted on a command against its advice (C59) |
 | `reversibility` | The catalogue's word |
 | state | An act state (Table 10.1b) |
@@ -7099,6 +7257,7 @@ name that owner.
 | `ratifiedBy` on each goals version | C5, L3 | `coord.db` | The goals doors, and the operator's answer that ratifies | none | W1 | yes | Ignores the column |
 | Retrospectives (the retrospective clause), with their measured outcomes | C5, L3 | `coord.db` | The retro door; the server attaches the outcome | none | W4b | yes | Ignores them |
 | `overlord_sequence` (append-only: sequence number, row kind and id, state, actor and its kind, at; beside it `overlord_sequence_pruned`, one row holding the highest number ever deleted) | C5, L3 | `coord.db` | One writer function, called inside each stamped transaction | Kept 90 days (Table 11.5b) | W1 | yes | Ignores it |
+| `coordinator_autonomy` (one row per programme: the coordinator, the programme's incarnation, the rung recorded, the granting act, the state `live` or `revoked`, and the revocation's cause), journalled in the authority journal; and the nullable grant column on D-8126's `coordinator_calls` that makes a call decided-alone (R23, C82) | C5, L3 | `coord.db` | The grant and revoke doors, and the server's revocation lane; the call record's one route for the column | none | W3, step two (the call record's column W2) | yes, and the authority journal is never copied: a restore never revives a grant | Ignores them: no coordinator decides alone, and every decide-item is raised |
 | `coord_pause_events` (append-only: scope, `fleet` or one programme; state, raised or lifted; actor; time; the act's id when the actor is the Overlord), and the programme scope of the pause itself (R22, C77) | C5, L3 | `coord.db` | The pause door's function, for the operator's door and the Overlord's alike | none | W2 | yes | Ignores them: a programme's pause stops nothing, and a lift of the Overlord's own pause is refused for want of a record |
 | `entries`, `entry_events`, `cursors` | OM, L3 | the private store | The model write door, typed ops | The daily distillation | W4 | yes | Ignores them |
 | The hashed private-name list | OM, L3 | the private store | The name-list upload door, behind the step-up | none | W2 | yes | Ignores it: no egress check runs |
@@ -7183,7 +7342,7 @@ tested over its whole input domain (§11.7).*
 
 | Piece | Context and ring | Store or file | Its one writer | Lane or timer | Wave | In a snapshot | What an older build does |
 |---|---|---|---|---|---|---|---|
-| Capability words, one per wave and one per step of W3: `continuity-v1` and `timers-v1` (W1a; the timers have a word of their own, so their piece need not wait for `continuity-v1`), `push-outbox-v1` and `overlord-v1` (W1), `overlord-route-v1` (W2), `overlord-brief-v1` (W3, step one: brief first), `overlord-answer-v1` (W3, step two: answer first), `overlord-learn-v1` (W4), `practice-v1` (W4b), `overlord-start-v1` (W5), `overlord-propose-v1` (W6) | K, L0 | the server capability file | The update sync on each node | Its lease | as listed | n/a | The word is missing: today's path. A door of a later wave refuses `capability-missing` and names its word |
+| Capability words, one per wave and one per step of W3: `continuity-v1` and `timers-v1` (W1a; the timers have a word of their own, so their piece need not wait for `continuity-v1`), `push-outbox-v1` and `overlord-v1` (W1), `overlord-route-v1` (W2), `overlord-brief-v1` (W3, step one: brief first), `overlord-answer-v1` (W3, step two: answer first), `overlord-learn-v1` (W4), `practice-v1` (W4b), `overlord-start-v1` (W5), `overlord-propose-v1` (W6); `overlord-autonomy-v1` (W3, step two, the `autonomous` rung and coordinator autonomy, R23) | K, L0 | the server capability file | The update sync on each node | Its lease | as listed | n/a | The word is missing: today's path. A door of a later wave refuses `capability-missing` and names its word |
 | ccd's capability words: `pool-set`, the account set on the route record, the pool rule's set and the read `ccd pool-answer` (W1), `hibernate-fresh`, the fresh-start flag (W1a), and `keep-awake-v1`, the sleep markers' verb (W1); and `launch-surface-v1`, `project-add`, `ws-title-v1` and `ws-wrapper-v1`, which the designation's create needs | K, L0; C1, C3 and C4 | `ccd caps`, which the agent caches at boot and re-reads on each capability refresh | ccd | Each capability refresh | as listed | n/a | Missing: without `hibernate-fresh` the renewal lane does not run; without any of them, designate and rebind refuse `capability-missing` |
 | The agent's capability word `overlord-history`, for the read-only history op | K, L0; C3 | the agent's capability list, read on each capability refresh | the agent | Each capability refresh | W1 | n/a | Missing, or advertised by more than one agent: the history door answers `history-unreachable`, as it does for a call that never ran (`unsupported`, `not-started`, `lost`, `timeout`). An outcome the agent answered is never that word |
 | Auto memory for `plain` sessions, a row of `SWITCHES` (`shared/switches.ts`) | K switches, L3 | `coord.db` settings | The Settings door | none | W1a | yes | Ignores it: auto memory stays off |
@@ -7216,6 +7375,7 @@ tested over its whole input domain (§11.7).*
 | The operator's answer marks, `POST /api/answer-marks`: one mark, `could-answer` or `unsure`, on one row of Waiting on you, an item or an ask, ticked or not; session-gated, no box token, no step-up; works while sign-in is dark, recording `flag-off` (§9.2.1) | C5, L4 | `answer_marks` | it | n/a | W1 | n/a | No route |
 | The goal-conflict ruling, on the board's Goal conflicts row | C5, L4 | `programme_pairs.ruled`, with the operator's choice | it | n/a | W2 | n/a | No route |
 | Relay, and `nudge-owner` under the relay's egress checks and ceilings (Table 11.5b): `POST /api/overlord/relay` | C5, L4 | mail and the act row | it | n/a | W2 | n/a | No route |
+| R23: the rung door's `autonomous` rung; `grant-coordinator-autonomy` and `revoke-coordinator-autonomy`, the Overlord's doors; the operator's one-tap revoke on the programme's page; the "Ask me" mark on the answer-mark door | C5, L4 | the ladder state; `coordinator_autonomy`; `answer_marks` | each its own move | the revocation lane, on each cause | W2 (the "Ask me" mark), W3 step two (the rest) | n/a | No route; the answer-mark door refuses the unknown mark |
 | R22's brakes: `pause-coordination`, `pause-programme-starts` and `lift-own-pause`, the Overlord's doors over the pause door's function; and the pause door's optional `programme` field, the operator's narrow pause | C5, L4 | the marker or the programme's scope, `coord_pause_events` and the act row | the pause door's function | n/a | W2 | n/a | No route; an older pause door ignores `programme` and pauses nothing |
 | R22's run acts and review round: `lift-review-cap`, `interrupt-session`, `abandon-run` and `reclaim-run`, the Overlord's doors over the review-cap store, the interrupt function and the abandon and reclaim doors' functions; `propose-dispatch-cap` among the propose doors | C5 and C6, L4 | `review_cap` and `review_cap_lifts`; the run and its events; the act row; proposals | each door's existing writer | n/a | W3, step one (proposals), step two (`full`) | n/a | No route |
 | Coordinator-facing: the request doors (`ack`, `decline`, `blocked`, `failed`), `POST /api/runs` with `requestId`, mail and `goals modify` with `requestId`, the remaining-work door, the act read. There is no report door: a coordinator's progress is mail that carries `requestId` | C5, L4 | `overlord_requests`, runs, mail, goals versions, `programme_remaining`, `programme_edges` | each its own move | n/a | W2 | n/a | No route; an older server drops `requestId` |
@@ -7405,7 +7565,7 @@ The skill is the Overlord's contract: numbered clauses, pinned verbatim by a tes
 
 ### 11.4 The coordinator skill
 
-The coordinator skill gains three clauses, each pinned verbatim by `coordinator-skill.test.ts`, like the others.
+The coordinator skill gains four clauses, each pinned verbatim by `coordinator-skill.test.ts`, like the others.
 
 - **Clause numbers are taken at merge, in landing order,** because the pin test requires 1 to N with no gaps. This
   spec's 22, 23 and 24 are working names for the Overlord clause, the recall clause and the retrospective clause. The
@@ -7425,6 +7585,10 @@ The coordinator skill gains three clauses, each pinned verbatim by `coordinator-
   `ccrc history` or the server before you act on it. Keep your notes current: what each open thread waits for and what
   you intend next."
 - **Clause 24, in W4b** (H37): "At a wave close, file a retro of at most three items, each resting on row ids."
+- **Clause 25, in W3's second step** (R23, C82), acting only while the server advertises `overlord-autonomy-v1`:
+  "When your programme holds a live autonomy grant, decide a decide-item outside the critical list yourself: first
+  record it with `ccrc-api calls record`, naming the grant, your options, your pick and why; if the record is refused,
+  raise the item. Never decide an item on the critical list."
 - **The doors clause 22 names arrive later.** `ccrc-api request ack` and the act read land in W2. Until then each
   refuses `capability-missing`, naming `overlord-route-v1`. `operatorClass`, the effect and an ask's release reason
   reach the raise and release doors in W3's first step. Until then those doors ignore the fields, as Table 11.1e
@@ -7493,6 +7657,7 @@ what each older build does (H32).
 | `requestId` on D-8126's goals door (`goals modify`) | A new column on a goals version | Ignored |
 | `timer` as a mail sender | Mail rows and deliveries | With `timers-v1` missing, nothing new is sent. Measured in the tree today: an older build's parked-mail lane reads an unknown role's `fromId` as a session id (`mailSender`, `server/src/watch.ts`), so a `timer` mail that parks under it sends one park notice, and a push, for a session named `timer` that does not exist; `overlord` mail meets the same. Timer mail already queued still delivers there: the older lane selects queued deliveries by state, with no sender filter (`dueDeliveries`). `ccrc rollback` below `timers-v1` does not wait for it (the timers plan, `no-rollback-wait`). Two more effects there, both bounded to timer mail already queued, measured at the `v0.0.1164` tag, the oldest build the plan measured: that build's stall watch counts a delivered run-bound timer mail as an exchange (its `stallFacts` filter leaves no sender out), and its `mailSender` reads `timer` as a session id. The plan's measurement adds that the park notice addressed to `timer` itself parks, so the escalation pushes a blocked notice naming `timer`; this tree does not re-measure that |
 | Timer states, response outcomes and class states | Their own new tables | Ignored |
+| The rung `autonomous` and the latch `autonomy-off` (R23) | The ladder's rung row and its latches | An older build reads a rung word it does not know. The rung's reader must read an unknown word as `chat`, never as `full`, and the plan pins that before `overlord-autonomy-v1` ships; a latch it does not know still caps by its stored cap (§7.5) |
 | A programme's pause (R22) | The programme scope of the pause, and `coord_pause_events` | Ignored: an older dispatch door stops nothing for that programme, so the programme dispatches again. The fleet pause is the marker, which every build reads. The operator who rolls back re-raises a programme's pause as the fleet pause if it must hold |
 
 *Table 11.5. New persisted words, and what makes a rollback over them safe.*
@@ -7885,7 +8050,8 @@ approved them on 2026-11-10 ("Where things stand"), and each can still be overtu
 (2026-11-15), proposed with its revision's pull request. C71 to C76 carry the operator's direction of 2026-11-18 that
 children's permission prompts go through the coordinators and the Overlord, proposed with the approvals plan's pull
 request (`docs/superpowers/plans/2026-11-18-overlord-approvals.md`). C77 to C79 carry R22 (2026-11-19), as the
-programme's coordinator ruled its rows, proposed with this revision's pull request. "Shaped by" names
+programme's coordinator ruled its rows, proposed with this revision's pull request. C80 to C82 carry R23
+(2026-11-19), ruled the same way and proposed with the same pull request. "Shaped by" names
 the hardening calls that changed a call from its rev 8 form. §13.1 lists every H call.
 
 | # | Call | Options considered | Chosen, and why | Status | Shaped by |
@@ -7969,6 +8135,9 @@ the hardening calls that changed a call from its rev 8 form. §13.1 lists every 
 | C77 | The Overlord's brakes (R22) | the operator's alone; raise and lift; raise, and lift only its own | Raise the coordination pause, or a pause on one programme's starts, at `advise` and `full`, refused at `chat`; lift only a pause the server records as its own, only at `full` (`lift-own-pause`, a kind of its own). Both ride the pause door's function, no new verb. The marker records no raiser, so every call of that function writes one `coord_pause_events` record, and a pause with no record of the Overlord's reads as the operator's. A programme's scope is new: the pause door gains an optional `programme` field, read by the dispatch door's one pause reader; whether `ProgramState`'s `paused` word carries it is the plan's question. Its own pause binds it. It never touches `mail-disabled`, the reclaim pause, the ladder or a Settings switch | Proposed with R22 | H25 |
 | C78 | One more review round (R22) | the operator's lift; D-8125's lift of three rounds; one round | One round, added through D-8125's one writer, with a `review_cap_lifts` row whose actor is `overlord`, only when the run's coordinator asked (the cap's ask, or its item naming the run) and a fix is measured after the last review. One unused round per run stands at a time. Refused `coord-lift-off` where the operator switched coordinator lifts off. A proposal at `advise`; at `full`, shadow until the operator arms the kind. The coordinator's own lift stays first | Proposed with R22 | |
 | C79 | Run acts on a measured reason (R22) | the operator's alone; on a coordinator's ask; on a measured reason | `interrupt-session` on `turn-frozen`, `abandon-run` on `worker-dead`, `run-silent` or `end-requested`, `reclaim-run` on `claimant-gone`, one closed vocabulary. The reason is gathered before the act's transaction and read again inside it, so a stale or unreadable reason refuses. A proposal at `advise`; at `full`, shadow until the operator arms each kind. They ride the interrupt function and the abandon and reclaim doors, and run no destructive verb. `reclaim-run` keeps D-8126's O4, which R22 relaxes for it alone; `abandon-run` and `interrupt-session` are class none. `end-requested` is the author's addition to the coordinator's examples, because an end request is the coordinator asking | Proposed with R22 | H24 |
+| C80 | Where autonomy mode sits (R23) | `full` with a standing armed set; a fifth rung | A fifth rung, `autonomous`, above `full`: the ladder is the one dial, so every step-down it has reaches the mode, its record is the rung's, and a restore reads it as the stricter value. There every kind of answer is armed, the rung covers any answer outside the critical list with no grant, and an O3 answer is not staged. An overturn, any latch, a missed drill or a degraded generation raises `autonomy-off`, cap `full`, which only the operator clears. Out of reach on a `shared-user` server | Proposed with R23 | H25, H26 |
+| C81 | The critical list (R23) | per-kind lists; one list | One L0 list, `OVERLORD_CRITICAL`, read by `overlordMayAct`: O1, O2 (the dispatch cap among it), O4 (`reassign-programme` among it), O6, `approve-dod` and a new effect `change-goal`, `state-a-fact` without its stated entry, every irreversible effect, and any row marked "Ask me", a third answer mark that only narrows. Neither the mode nor a coordinator's autonomy reaches it; the operator's own per-effect grants and commands are unchanged. A test pins it against D-8126. The operator may still correct the list | Proposed with R23 | |
+| C82 | Coordinator autonomy (R23) | a grant of `overlord_grants`; a table of its own | `grant-coordinator-autonomy` and `revoke-coordinator-autonomy`, one `coordinator_autonomy` row per programme, journalled: legitimately apart from `overlord_grants`, which covers the Overlord's own effects and starts in shadow. Never wider than the Overlord's live rung. A granted coordinator records each decided-alone call on D-8126's call record, naming the grant, before it acts; the route refuses `no-autonomy` or `critical-is-the-operators`, and the coordinator then raises the item. The server revokes when the rung falls below the grant's, when the coordinator measures dead or stalled, or on an overturn of one of its records. Coordinator clause 25 | Proposed with R23 | H24 |
 
 *Table 13a. The author's calls in their final form, and the hardening calls that shaped each one.*
 
@@ -8060,9 +8229,9 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 | W0, a spike | It changes nothing that runs: its test-only files ship in the tarball and do nothing. It measures what the design depends on: the hook's cap and the anchor slot; a fresh start as the renewal act, and its time; what a clear or a fresh start does to running readers, queued input and scheduled tasks; whether a compaction rotates the uuid; auto memory, forks, the subagent model, the model-switch hooks and a refused proactive compaction; the door process under a restricted launch (hooks, skills, the permission mode); reader types with no shell; nudge-and-read for the operator's messages; the statusline's token fields; whether the inbox socket can be used with the peer channel closed; a continuity record for each lane; whether its accounts bill Fable to usage credits; how closely the seven-day figure times the Fable share reading tracks the Fable allowance; how ccd picks an account today (no listed order exists yet: that is W1's build); the restart numbers and the first sweep after boot (§6.4); what an account's shared config directory loads into a session; how reliable the typed `/clear` is. It writes the first model of holds, readiness and generations (§11.7). Where the real thing does not exist yet (the renewal verb, probes), it measures the parts with stand-ins, and W1a measures again with the real ones |
 | W1a, continuity for every long-lived role | The one role table and its launch profiles; `continuity_generations`, the receipt and the renewal lane on the `SessionHost` port (in shadow: the `continuity` row's gate refuses Live, `lane-gated`, until the renewal act ships); the anchor slot and the card door; notes; compaction instructions (after history W3-1); probes and the weekly quiz; the trigger table (stall arms); coordinator clause 23; the skill-size ratchet, with caps measured at its merge, and each role skill's contract moved to the front of its file; the `MAIL_PACE` table (today's two rows first, behind a characterization test; total over `FLEET_ROLES`, with the Overlord's row, once the role table lands); the ports for time and chance; the simulator's skeleton; mutation floors for new deciders; the case lane in shadow; ccd's fresh-start flag and its capability word `hibernate-fresh`; the capability word `continuity-v1`; timers for coordinators and workers: `continuity_timers`, `TIMER_TRANSITIONS`, the timer doors and the operator's cancel, the `timers` row with its cleanup arm, the `timer` mail sender, pending timers on the card, worker clause 17 naming a timer as a wake, the timer hold in the stall watch's hold map, and the capability word `timers-v1` |
 | W1, designate and talk | The private store, with the operator's messages and the read ledger; the designation with its term and `designatedTerm`; the identity port and the isolation word; the door process and the reader types; the history door and its agent op; the sandbox check; the fence; ccd's sleep markers' verb and its capability word `keep-awake-v1`; the ladder at `chat`, and Pause; the readiness word; the inbox, with band 1 (the operator's messages), probes and the coalesced wake; the journal kernel, the authority journal, the privacy journal's file with its record of the highest message id issued, and the "Confirm the restore" door; the push outbox and its capability word `push-outbox-v1`; the account set on the designation, the pool rule's set and ccd's capability word `pool-set`, and the two-account check; the home, the chat with message ticks, the board; the portfolio rank, the limit samples and `portfolioFor`; the refusal on other write lanes; the invariant monitor and `overlord_sequence`, with its cursor read; the Overlord's timers, through its door process, stamped with `designatedTerm`; the response record: `operator_responses`, `response_receipts` and the receipts door, the response lane, and "I handled this elsewhere", recording only, with the per-send verdict of `PushService`, a random push id in each push's payload, and the service worker's `shown` and `opened` receipts; the operator's two answer marks on Waiting on you (R21); the capability word `overlord-v1` |
-| W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups, read-back flags and the Overlord's fired timers); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`, with the follow-up arm on a `LANE_SCHEDULE` row of its own; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; R22's brakes, `pause-coordination`, `pause-programme-starts` and `lift-own-pause`, with the pause door's `programme` scope and `coord_pause_events` (§7.1.1); the capability word `overlord-route-v1` |
+| W2, route and follow up | The act catalogue, `overlordMayAct`, revisions and operation keys, two-step acts and the act journal; requests as contracts, with `requestId` on runs, on mail and on `goals modify`, and the request doors; the home's Requests groups, the one-tap next steps, and what each request and programme cost; band 3 of the inbox (request moves, follow-ups, read-back flags and the Overlord's fired timers); the relay door with its checks, and the door that uploads the private-name list; `followUpDue`, with the follow-up arm on a `LANE_SCHEDULE` row of its own; overlaps and goal conflicts, with the operator's door that rules a goal-conflict pair; remaining work, forecasts, health and edges; the decision-model port, with its W2 rows in shadow, and the label queue and its cards; the ladder at `advise`; R22's brakes, `pause-coordination`, `pause-programme-starts` and `lift-own-pause`, with the pause door's `programme` scope and `coord_pause_events` (§7.1.1); R23's critical list, `OVERLORD_CRITICAL`, with `change-goal` and its pin against D-8126, the "Ask me" mark, and the call record's nullable grant column (§7.5.1); the capability word `overlord-route-v1` |
 | W3, step one: brief first | `operatorClass` and `effect` on rows, with the floors; the operator's profile, the place line, outcome tests, `decisionOutcome` and the three records (§6.9); briefs with their reveal modes, `answerExamined` and `decisionRank`; `attach-brief`, and the inbox's rows that wait for a brief; sealed predictions; the blind sample; proposals and commands; the attention budget and its Settings, in shadow, with the state and pin of each class of push, start quiet and the class step (§4.3); engagement per programme; the replay body and the scenario suite; the weekly check and the Week page, with the response figures; the handover brief; R22's proposals: `lift-review-cap`, `interrupt-session`, `abandon-run`, `reclaim-run` and `propose-dispatch-cap` at `advise` (§7.1.1); the capability word `overlord-brief-v1` |
-| W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the `full` cells of R22's kinds, `lift-own-pause` included, with `OVERLORD_ACT_REASONS`, each run act and the review round in shadow until the operator arms it (§7.1.1); the capability word `overlord-answer-v1` |
+| W3, step two: answer first | The holds, `mayHold`, retention and the breaker; the inbox's held rows, admission, packets and precedents; `askOrAct`; the answer and escalate doors; the grants door with all of H26, and staging; drills and the outside audit; background work; each kind of answer armed on evidence; the `full` cells of R22's kinds, `lift-own-pause` included, with `OVERLORD_ACT_REASONS`, each run act and the review round in shadow until the operator arms it (§7.1.1); the capability word `overlord-answer-v1`; and, under its own word `overlord-autonomy-v1`, R23's `autonomous` rung and its `autonomy-off` latch, `grant-coordinator-autonomy` and `revoke-coordinator-autonomy` with `coordinator_autonomy` and the revocation lane, and coordinator clause 25 (§7.5.1) |
 | W4, learn | The model and feed reads; the operator-model entries and their feeds; derived basis, candidates and the subject key; the distillation; About you; the privacy controls, and the learning events in the privacy journal; the replay run again, now with the model; the capability word `overlord-learn-v1` |
 | W4b, the playbook | Practice entries, the door and `practiceFor` over the trigger table, which started in W1a; the trigger key `response-quiet:<class>`, and response figures as entries' metrics and guards; cases and their reviews; coordinator clause 24; the capability word `practice-v1` |
 | W5, start and re-kick | The start and re-kick doors; retiring as a proposal; `portfolioFocus`; the capability word `overlord-start-v1` |
@@ -8099,6 +8268,9 @@ prerequisites gate W1, where the Overlord itself begins. Nothing in any wave is 
 - **R22's kinds land where their doors can carry them** (§7.1.1). The brakes need the act catalogue and the `advise`
   rung, so they ship in W2. The review round, the run acts and the dispatch-cap proposal need proposals, so they ship
   in W3's first step, and their `full` cells in W3's second, each in shadow until the operator arms it.
+- **R23 lands with the doors it needs** (§7.5.1). The critical list guards every door from W2, with the act catalogue,
+  and the "Ask me" mark ships there because it only narrows. The `autonomous` rung needs the answer doors, holds and
+  arming, and coordinator autonomy needs the item doors and the act catalogue, so both ship in W3's second step.
 - **A one-box install stays at `advise` until the split install exists.** No wave waits for it: a server measured
   `separate-user` or `separate-host` has the whole ladder. The split install is a design of its own (Later).
 - **Before W3 and W5, a proposal or a start goes to the operator.** Until proposals ship (W3), anything this design
@@ -8288,6 +8460,7 @@ body now states the plan's ruling, in its words. Appendix B's Table B7 lists eac
   Overlord's acts, "pause, the brake", "lifting a review cap", "stopping or abandoning a run" and "dispatch-cap
   changes", the operator chose all four (§2, §7.1.1, Appendix B, Table B10). It is the operator's act of widening
   authority, and it relaxes D-8126's operator-only list for one kind, `reclaim-run` (O4).
+- R23, the operator's ruling of 2026-11-19, in the Overlord's own chat: "Can add to overlord ability to grant autonomy mode to coordinators and also ability to take it away and ability for operator to put overlord into autonomy mode which enables [it] to make all but the most critical decisions in 'needs you' on it's own" (§2, §7.5.1, Appendix B, Table B11).
 - **The operator's answers of 2026-11-16** (Appendix B, Table B8):
   - **Item 345:** "Approve §9.5.1 as written." A detail cell may earn its record on measured outcomes instead of the
     operator's answers, gated on the Overlord's calibrated confidence; every other cell keeps the evaluation of
@@ -8355,6 +8528,15 @@ body now states the plan's ruling, in its words. Appendix B's Table B7 lists eac
   - one more review round only, through D-8125's writer, refused where you switched coordinator lifts off;
   - `end-requested`, a coordinator's end request, as a reason to abandon at `full`, beside the stall watch's verdicts;
   - `reclaim-run` keeping its O4 class, with R22 the one named exception to the D-8126 table test.
+- **C80 to C82, R23's rows (§7.5.1).** The coordinator ruled them, and you approve them on the same pull request, in
+  particular:
+  - autonomy mode as a fifth rung, `autonomous`, out of reach on a `shared-user` server, and stepped down to `full` by
+    an overturn, any latch, a missed drill or a degraded generation until you clear it;
+  - the critical list. You may still correct it. As written it holds O1, O2 with the dispatch cap, O4 with
+    `reassign-programme`, O6, `approve-dod` and `change-goal`, `state-a-fact` without its stated entry, every
+    irreversible effect, and any row you mark "Ask me". Your own per-effect grants and commands are unchanged by it;
+  - an O3 answer at `autonomous` that is not on the list acts at once, with no veto window;
+  - coordinator autonomy never wider than the Overlord's live rung, and coordinator clause 25 as quoted (§11.4).
 - **Which account pools the Overlord may draw from, and whether untagged accounts are among them.** You name them at
   the designate door or in Settings once W1's pool set is live. At least two accounts in them must be able to serve
   it (C46, C56). This spec names none.
@@ -8409,6 +8591,10 @@ body now states the plan's ruling, in its words. Appendix B's Table B7 lists eac
 - **The dispatch cap as an act** (R22). Today `propose-dispatch-cap` is a proposal at every rung, because a cap moves
   spend. Trigger: the operator taps the Overlord's cap proposals as proposed for a stretch they judge long enough, and
   asks for the act.
+- **An expiry for a coordinator's autonomy** (R23). Today it lasts until a cause revokes it. Trigger: decided-alone
+  records keep coming from a programme the operator no longer reads.
+- **"Ask me" for a whole kind of question** (R23), beside the row mark and a programme's `hands-off`. Trigger: the
+  operator marks many rows of one kind.
 - **A reason for an interrupt beyond `turn-frozen`** (R22). Trigger: the shadow record of `interrupt-session` shows
   turns the operator interrupted by hand that the Overlord's reason did not see.
 - **A read-only deliberation workflow for the Overlord** (C55). Trigger: the continuity programme shows a workflow
@@ -8763,6 +8949,23 @@ trail. The body states only the result.
 | The waves | None of these | The brakes in W2; the rest's proposals in W3's first step and their `full` cells in its second |
 
 *Table B10. What R22 changed.*
+
+**R23, 2026-11-19: autonomy mode, and autonomy for coordinators.** The operator wrote, in the Overlord's own chat:
+"Can add to overlord ability to grant autonomy mode to coordinators and also ability to take it away and ability for operator to put overlord into autonomy mode which enables [it] to make all but the most critical decisions in 'needs you' on it's own". The programme's coordinator ruled the shape; the operator may still correct the critical list. This table
+keeps the trail. The body states only the result.
+
+| What | Before | Now, and why |
+|---|---|---|
+| The ladder | Four rungs, `off` to `full` (H25) | A fifth, `autonomous`, raised by the operator behind the step-up and lowered with one tap. A rung, so every step-down the ladder has reaches it (C80) |
+| What covers an answer | A live grant in scope, a command, an operator request, or a stated entry | At `autonomous` the rung also covers any answer outside the critical list, with no grant per effect; answers act at once, never in shadow, and an O3 answer is not staged |
+| How the mode ends | Did not exist | An overturn, any latch, a missed drill or a degraded generation raises `autonomy-off`, cap `full`; only the operator clears it, and a restore never brings it back |
+| The critical list | Did not exist; D-8126's classes and the grant column | One L0 list, `OVERLORD_CRITICAL`, pinned against D-8126, that neither the mode nor a coordinator's autonomy reaches, with a new effect `change-goal` and a third answer mark, "Ask me", which only narrows (C81) |
+| A coordinator's decide-items | Always raised for the operator (D-8126) | Under a live autonomy grant, decided by the coordinator and recorded first as a decided-alone call on D-8126's call record; refused records are raised as before (C82) |
+| Who grants a coordinator autonomy | Nobody | The Overlord, never wider than its own live rung; the operator and the server revoke |
+| The coordinator skill | Clauses 22 to 24 by working number | Clause 25 too, under `overlord-autonomy-v1` |
+| The waves | None of this | The critical list and "Ask me" in W2; the rung and coordinator autonomy in W3's second step |
+
+*Table B11. What R23 changed.*
 
 ---
 
