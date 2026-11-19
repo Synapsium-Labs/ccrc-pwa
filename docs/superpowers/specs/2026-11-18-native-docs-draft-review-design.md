@@ -7,8 +7,8 @@
 - **What this is.** The design for "Share for review" (#1420). The owner of an uncommitted spec or plan sends a reviewer a private link. The link opens a frozen, read-only copy of the page as the owner saw it, under a "Draft, not committed" banner. Retirement of the standalone reader waits on this feature (the operator's ruling of 2026-10-25: retirement drops no feature).
 - **What is already fixed.** The operator ruled on 2026-10-25 (#1420): the copy is a frozen snapshot taken at share time; the owner sees "newer draft available" and can re-share; nothing reads the live draft through the link. This spec does not re-open that ruling.
 - **What was decided on 2026-11-18.** The coordinator released both product asks to the operator, and both were answered. Readers need no ccrc session: the link is a capability (the recommended option). Comments are allowed, but only from someone signed in to the console, and they never count as merge approval. Comments ship as their own follow-on wave with their own threat model (§3.6), so the core feature does not depend on them.
-- **What this spec decides.** "Share a draft for review" is its own action in Page details; Share itself is unchanged and still sends only the committed permalink. The snapshot is Export's own file (`buildExport`, `ccrc-docs-export/1`), built in the owner's browser and uploaded once. The server keeps it in a new store of its own, outside `coord.db`, never backed up. The link carries its secret in the URL fragment, which browsers never send to a server, a proxy or a link-preview robot, and the secret is posted only when the reader taps "Open draft". A small ccrc page shows the copy in a frame with an empty sandbox. Revoke, expiry, retention and early removal on commit each delete the bytes before they answer; only a send already running finishes.
-- **What changes for the console.** New routes in a new server module: four session-gated owner doors, two session-gated comment doors (the follow-on wave), and two routes open to a link holder, a fixed page and one read door that never touches the fleet box. The auth gate gains a ninth exempt class. Nothing is built in this wave, and nothing is waiting on you.
+- **What this spec decides.** "Share a draft for review" is its own action in Page details; Share itself is unchanged and still sends only the committed permalink. The snapshot is Export's own file (`buildExport`, `ccrc-docs-export/1`), built in the owner's browser and uploaded once. The server keeps it in a new store of its own, outside `coord.db`, never backed up. The link carries its secret in the URL fragment, which browsers never send to a server, a proxy or a link-preview robot, and the secret is posted only when the reader taps "Open draft". A small ccrc page shows the copy in a frame with an empty sandbox. Revoke, expiry, retention and early removal on commit each delete the bytes before they answer; only a send already running finishes, and a disk that refuses every write delays the deletion, never the 404.
+- **What changes for the console.** New routes in a new server module: four session-gated owner doors, two session-gated comment doors (the follow-on wave), and two routes open to a link holder, a fixed page and one read door that never touches the fleet box, plus two fixed 404 routes for the page's other spellings. The auth gate gains a ninth exempt class. Nothing is built in this wave, and nothing is waiting on you.
 
 ## 1. Threat model
 
@@ -180,7 +180,7 @@ On the review page, after the copy opens, the page asks the thread door. A 200 m
 
 ### 3.7 Lifecycle
 
-Each share has one state at a time. Every way out of `live` deletes the bytes before it answers, so the next read is a 404 with no window.
+Each share has one state at a time. Every way out of `live` deletes the bytes before it answers, so the next read is a 404 with no window; a disk that refuses every write delays the deletion, never the 404 (§4, write failures).
 
 ```mermaid
 stateDiagram-v2
@@ -260,7 +260,7 @@ Every new route names its gate under the box-token census rules. None consults t
 | `POST /api/review/open` (the read) | `EXEMPT`, new class 9 "draft review by capability"; the token in the body is the credential | `REVIEW_DOORS`; `auth-gate.test.ts` class list and number words; README auth paragraph; a never-read scan like the reader lab's (no cookie, no box token, no fleet port, no ccd argv) | one identical 404 for every failure but an oversize body, which is 413 `too-large`; 429 `busy` past 2 sends a share or 16 in all |
 | `GET /review` (the review page) | `EXEMPT`, class 9 | As the read door | none |
 
-`GET /review.html` and `GET /review/` are registered routes that always answer 404 and are not exempt (so a mistyped `/review/#token` never lands under the app shell's policy), a query string on `/review` reaches the page route, and the static plugin refuses the built file by every spelling, so it is never served without the page route's headers.
+`GET /review.html` and `GET /review/` are registered routes that answer 404 and are not exempt, so with the gate armed a caller without a session gets the gate's 401 first; either way a mistyped `/review/#token` never lands under the app shell's policy, a query string on `/review` reaches the page route, and the static plugin refuses the built file by every spelling, so it is never served without the page route's headers.
 
 ## 6. Decisions
 
