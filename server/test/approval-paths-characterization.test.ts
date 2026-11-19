@@ -163,7 +163,7 @@ const req = (input: Record<string, unknown> = ORDINARY, id = CHILD): ApprovalRai
 const raiseDeps = (fx: Approvals, over: Partial<ApprovalRaiseDeps> = {}): ApprovalRaiseDeps => ({
   coord: fx.coord, io: fx.deps.io, cfg: fx.deps.cfg, tmux: fx.deps.tmux, masker: SHAPE_ONLY_MASKER,
   signerFor: () => ({}) as never, rulingsAllowedHere, heldFor,
-  denyEngaged: async () => true, liveVersionOf: async () => '2.1.302', journalDigestMismatch: () => {},
+  denyStanding: async () => 'current' as const, liveVersionOf: async () => '2.1.302', journalDigestMismatch: () => {},
   ...over,
 });
 const stateOf = (fx: Approvals, id: number): string =>
@@ -174,7 +174,7 @@ describe('path 2: refused at mint, nothing minted (Table 2a row 2)', () => {
     ['single-box', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(), raiseDeps(fx, { rulingsAllowedHere: () => false }), NOW), 'single-box'],
     ['internal (no signer)', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(), raiseDeps(fx, { signerFor: () => null }), NOW), 'internal'],
     ['not-a-child (no child mark)', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(ORDINARY, DUNE), raiseDeps(fx), NOW), 'not-a-child'],
-    ['deny-not-engaged', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(), raiseDeps(fx, { denyEngaged: async () => false }), NOW), 'deny-not-engaged'],
+    ['deny-not-engaged', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(), raiseDeps(fx, { denyStanding: async () => 'none' as const }), NOW), 'deny-not-engaged'],
     ['version-unverified (build unread)', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(), raiseDeps(fx, { liveVersionOf: async () => null }), NOW), 'version-unverified'],
     ['digest-mismatch', (fx) => createQuestions({ coord: fx.coord }).raiseApproval({ ...req(), digest: 'a'.repeat(64) }, raiseDeps(fx), NOW), 'digest-mismatch'],
     ['run-unreadable (heldFor throws)', (fx) => createQuestions({ coord: fx.coord }).raiseApproval(req(), raiseDeps(fx, {
