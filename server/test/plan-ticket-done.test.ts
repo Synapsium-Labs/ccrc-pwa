@@ -17,7 +17,7 @@ import type { PlanView } from '../../shared/plan.js';
 import { DONE_CASES } from './planTicketDoneCases.js';
 import { charWorld, CHAR_COORD, CHAR_TOKEN, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
 import { mkTmp } from './tmpHelpers.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { bindPendingGeneration, designatePending, type AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
 
@@ -392,7 +392,7 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     const run = await doneBareRun(x);
     const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
     const operator = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-      .operator(actorOf('operator-a', '0123456789abcdef'));
+      .operator(gateActorOf('operator-a', '0123456789abcdef'));
     expect(designatePending(x.coord.db, journal, { sessionId: CHAR_COORD, deadlineAt: Date.now() + 60_000, model: 'opus',
       accountPools: { pools: ['pool-a'], untagged: false }, actor: operator, at: Date.now(), opKey: 'op-wm1' }).ok).toBe(true);
     expect(bindPendingGeneration(x.coord.db, CHAR_COORD, '11111111-2222-3333-4444-555555555555', Date.now())).toEqual({ ok: true, changed: true });

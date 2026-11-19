@@ -70,6 +70,23 @@ export function actorOf(device: string | null, idHash: string): AccountActor {
   return actor;
 }
 
+const GATE_ACTORS = new WeakSet<AccountActor>();
+
+/** THE ACCOUNT GATE'S MINT (Overlord W1 gates B, carry of gates A review F4): an {@link actorOf} actor that the account gate
+ *  passed, and nothing else. `CallerIdentity.operator` takes only such an actor, so the server's own actor (`actorOf('ccrc
+ *  server', '')`), a step-up audit row's or a test box's can never become an `operator`-strength account-gate actor. Only
+ *  `accounts/gate.ts` calls it in `server/src` (`single-definition/caller-identity.test.ts` holds that). It is also a minted
+ *  actor, so every audit writer takes it as before. */
+export function gateActorOf(device: string | null, idHash: string): AccountActor {
+  const actor = actorOf(device, idHash);
+  GATE_ACTORS.add(actor);
+  return actor;
+}
+
+/** True only for an actor {@link gateActorOf} minted: the account gate passed it. */
+export const isGateActor = (a: unknown): a is AccountActor =>
+  typeof a === 'object' && a !== null && GATE_ACTORS.has(a as AccountActor);
+
 /** The fleet node an act ran against, as the row records it: the node-id when the identity is known, otherwise
  *  NULL (unmeasured, or a collision). */
 export function knownFleetIdentity(cell: { current(): CurrentFleetIdentity } | undefined): string | null {
