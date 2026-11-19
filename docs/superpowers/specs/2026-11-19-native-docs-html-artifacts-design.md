@@ -54,7 +54,7 @@ X2 designed an in-walls loader for HTML pages (X2 §4.8, wave P6): a `srcdoc` fr
 | Practice | Source | Taken here |
 |---|---|---|
 | Untrusted active content goes on a separate sandbox domain that shares no cookies with the main site; copying the main site's credentials there would defeat the isolation | [Google security blog, 2012](https://security.googleblog.com/2012/08/content-hosting-for-modern-web.html) | A second site with no session (§2) |
-| A sandbox domain on the Public Suffix List makes each subdomain its own site. Cross-origin isolation headers are recommended for active content | [web.dev, securely hosting user data](https://web.dev/articles/securely-hosting-user-data) | The names are checked against the console's site (§2.3). COOP and CORP are set (§4.3) |
+| A sandbox domain on the Public Suffix List makes each subdomain its own site. Cross-origin isolation headers are recommended for active content | [web.dev, securely hosting user data](https://web.dev/articles/securely-hosting-user-data) | The names are checked against the console's site (§2.3). Every content response sets CORP (§4.3), and the wrapper sets COOP `same-origin-allow-popups` (§4.2) |
 | Claude's artifacts use "iFrame sandboxes with full-site process isolation" and "strict Content Security Policies (CSPs) to enforce limited and controlled network access" | [Simon Willison, How Anthropic built Artifacts, 2024](https://www.simonwillison.net/2024/Aug/28/how-anthropic-built-artifacts) | A sandboxed frame on another site. Network limited to the page's own files and confirmed hosts (§4) |
 | A meta-tag CSP inside an `allow-scripts` frame cannot be disabled from inside it, and a header CSP also carries directives a meta cannot, such as `frame-ancestors` | [Simon Willison, 2026](https://simonwillison.net/2026/Apr/3/test-csp-iframe-escape/) | Every artifact policy is a response header (§4.3) |
 | `duckdns.org` is on the Public Suffix List (private section) | [publicsuffix.org list](https://publicsuffix.org/list/public_suffix_list.dat), measured 2026-11-19 | Two DuckDNS names are two sites (§2.3) |
@@ -361,7 +361,7 @@ The fences bind browsers only. A client that is not a browser can send any heade
 
 | Path | Closed by |
 |---|---|
-| Console to tab | `rel="noopener"`, and the wrapper's `Cross-Origin-Opener-Policy: same-origin`. No `postMessage` is sent and none is listened for, so the `pwa/src` rule of no message listener holds |
+| Console to tab | `rel="noopener"`, on which this isolation rests. The wrapper's `Cross-Origin-Opener-Policy` is `same-origin-allow-popups` (§4.2), which keeps a window the page opens usable and does not itself sever the console. No `postMessage` is sent and none is listened for, so the `pwa/src` rule of no message listener holds |
 | Tab to console | Different site: the session cookie is host-only on the console's name (`server/src/auth/cookie.ts`, no `Domain`), so it is never sent to an artifact name. A request from the page to the console is cross-site: a write is refused by the gate's origin check (`foreign-origin`), and a read cannot be read back (no CORS). The docs plugin also refuses anything not same-origin (`foreign-request`) |
 | Secrets to the page | The mint answer goes to the console's tab only. The wrapper and the page receive the token (already in their URL) and the page's own files. No session id, box token, account name or console URL is ever written into the wrapper or any content response |
 
