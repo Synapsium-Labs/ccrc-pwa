@@ -3883,8 +3883,45 @@ export const MIGRATIONS: readonly string[] = [
     issuedAt INTEGER NOT NULL, counter INTEGER NOT NULL DEFAULT 0, claimsRefused INTEGER NOT NULL DEFAULT 0, lastRefusedAt INTEGER);
   ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT;
   `,
+  // ── 104: user_version 103 -> 104 ─────────────────────────────────────────
+  // The approval census (approvals plan 2026-11-18, §3.1, Tasks 1.3 and 1.4): `approval_census`, one row per permission
+  // prompt that leaves no approvals row (Table 2a's paths 1, 2, 6 and 7, and `unmeasured` with its `why` for a prompt
+  // the census cannot place), written ONLY by the questions owner's census
+  // (`approvalCensusStore.ts#insertCensusRow`, through `coord/questions.ts`) the first time it sees the prompt, keyed by
+  // the session and the sighting so a repeat sighting writes none (`approval_census_one_per_sighting`). `summary` is the
+  // envelope's summary through the egress masker and the redactor, cleared at `APPROVAL_INPUT_RETENTION_DAYS` as an
+  // approvals row's input is. Two facts each minted approvals row keeps from mint, never an operand: `commandWords` (the
+  // classifier's statement list's command words, JSON, NULL when it cannot list them) and `literalInRoot` (0 or 1). And
+  // `push_outbox.pushSource`, the approval push's source (`approval:<n>` or `census:<n>`), written by the unbound insert.
+  // NEW TABLE AND THREE NULLABLE COLUMNS: an older build opening a file at `user_version 104` takes rule 3 and boots, its
+  // inserts naming none of them. The slot is POSITIONAL, renumbered at this PR's landing merge on the coordinator's word
+  // (quiz PR 2, #2991, landed 100; forecasts B, #3003, landed 101; approvals PR 0, #3045, landed 102; door A1, #3035, landed 103; the Linear follow-up
+  // (#3021) takes 105 by the coordinators' agreement). RE-MEASURE the slot before the PR and before merge (it
+  // must print 103 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE approval_census (
+    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+    sessionId   TEXT    NOT NULL,
+    sightingKey TEXT    NOT NULL,
+    path        TEXT    NOT NULL,
+    why         TEXT,
+    route       TEXT,
+    thread      TEXT    CHECK (thread IS NULL OR thread IN ('main', 'subagent')),
+    tool        TEXT,
+    summary     TEXT,
+    runId       INTEGER,
+    seenAt      INTEGER NOT NULL
+  );
+  CREATE UNIQUE INDEX approval_census_one_per_sighting ON approval_census(sessionId, sightingKey);
+  CREATE INDEX approval_census_by_time ON approval_census(seenAt);
+  ALTER TABLE approvals ADD COLUMN commandWords TEXT;
+  ALTER TABLE approvals ADD COLUMN literalInRoot INTEGER CHECK (literalInRoot IS NULL OR literalInRoot IN (0, 1));
+  ALTER TABLE push_outbox ADD COLUMN pushSource TEXT;
+  `,
 
-  // ── 104: user_version 103 -> 104 ──────────────────────────────────────────
+  // ── 105: user_version 104 -> 105 ──────────────────────────────────────────
   // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
   // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
   // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
@@ -3900,13 +3937,13 @@ export const MIGRATIONS: readonly string[] = [
   // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
   // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
   //
-  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 104` warns, reads as-is, names none of these and boots
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 105` warns, reads as-is, names none of these and boots
   // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
   // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
   // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98, the Overlord's ladder (#2994) took 99, the quiz
-  // record (#2991) took 100, the health changes (#3003) took 101, approvals PR 0 (#3045) took 102 and door A1 (#3035)
-  // took 103, so this, the ninth lander, takes 104. RE-MEASURE the slot before the PR and before merge (it must print 103
-  // before this entry is counted):
+  // record (#2991) took 100, the health changes (#3003) took 101, approvals PR 0 (#3045) took 102, door A1 (#3035)
+  // took 103 and approvals PR 1 (#3043) took 104, so this, the tenth lander, takes 105. RE-MEASURE the slot before the PR
+  // and before merge (it must print 104 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

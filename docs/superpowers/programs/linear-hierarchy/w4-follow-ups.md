@@ -13,7 +13,7 @@ trailer.
   guard proved by mutating its line and running the test (restored from a saved copy each time).
 - **Departures:** D-8733 drift-reads-every-team, D-8734 drift-cursor-and-return-tables, D-8735 inbound-retired, D-8736
   w4fu-words. Defined in the plan; summarised below.
-- **One migration**, entry 104: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
+- **One migration**, entry 105: `linear_drift_cursors` and `linear_inbound_notes`, and (fix round 1, F4) the nullable
   `linear_inbound.retiredWhy`; additive only. Main ended at 95 at build time (D-8673). Overlord gates A (#2993) landed
   first and took 96, so this entry moved to 97 in the first merge of main; the renewal hand-offs (#2934) then took 97, so
   fix round 1's merge of main (the branch read conflicting) moved it to 98; the decision model B (#2990) then took 98, so
@@ -23,7 +23,11 @@ trailer.
   (coordinator mail 25044) moved it to 101, and the run-close replay covered forty-eight. The health changes (#3003) then
   took 101 before the merge review, so a second landing merge (coordinator mail 25451) moved it to 102, kept local. Approvals
   PR 0 (#3045) then took 102 and door A1 (#3035) 103, as the coordinators agreed (mail 25481), so the landing merge at
-  #3035's merge moved it to 104, and the run-close replay covers fifty-one (54 through 104).
+  #3035's merge moved it to 104, and the run-close replay covered fifty-one. CI on that tip (514fd6516) read red in one
+  server shard: the act-key store test pinned its own migration as the last entry ("expected 102 to be 103"), a test my
+  local gate had not run. Approvals PR 1 (#3043) then took 104 and carried the act-key test's position pin on main, so
+  the merge at #3043's merge (coordinator mail 25835) moved this entry to 105 with main's line for that test, and the
+  run-close replay covers fifty-two (54 through 105; main's comment said fifty).
   That merge also changed one line of `coord-db.test.ts` on the coordinator's word (mail 24658): the case "a database from a
   NEWER build still READS" set `user_version` 99, which at 100 entries is no longer newer (red: "migration 100 failed:
   table linear_drift_cursors already exists"), so it now sets `COORD_SCHEMA_VERSION + 1`, a newer build at any length. The
@@ -65,7 +69,7 @@ Tests for a pure function written after its pass-level test (`restoreHoldVerdict
   teams since the watermark, read and dropped, in the same pages of 100 (one rate-service call per page, on lane `sync`,
   like every other read). For a workspace whose unmanaged teams are busy this can reach the page cap, which D-8734's cursor
   now spreads across passes without skipping a change.
-- **D-8734, drift-cursor-and-return-tables.** Migration 104: `linear_drift_cursors`, `linear_inbound_notes` and `linear_inbound.retiredWhy`. The margin
+- **D-8734, drift-cursor-and-return-tables.** Migration 105: `linear_drift_cursors`, `linear_inbound_notes` and `linear_inbound.retiredWhy`. The margin
   `DRIFT_SWEEP_MARGIN_MS` is ccrc's clock against Linear's `updatedAt`; a skew larger than five minutes with ccrc ahead would
   narrow it, and nothing measures Linear's clock (Linear's `updatedAt` order is unmeasured too, so nothing relies on it).
 - **D-8735, inbound-retired.** As in the table, amended by fix round 1 (F4). A retired row keeps its `reason` (a close's

@@ -61,6 +61,9 @@ export interface NoticeOpts {
    *  presence and asks no `pushDue`: `viewing` is the record gate, as presence is for an unbound notice whatever the
    *  push service (review 2150 F1), and on `now` the row is sent. */
   readonly bound?: { readonly row: BoundRowTarget; readonly due: PushDue; readonly viewing: boolean; readonly settledOf: SettledOf };
+  /** An approval push's source (`approval:<n>` or `census:<n>`, approvals plan 2026-11-18, Task 1.4), kept on its outbox
+   *  row. It decides nothing here. */
+  readonly source?: string;
 }
 
 /** What happened: whether the ring recorded it, and the archive's fate (`'none'`: no `notifyLog` or no `coord`, or
@@ -162,7 +165,7 @@ function raise(deps: NoticeDeps, event: NoticeRecord, mode: NoticeMode, opts: No
   const due = pushDue({ event: 'reach', service: deps.push !== undefined, source: 'none', blocking: true, viewing: visible,
     settled: false, superseded: false, payload: true });
   // The notifier kind is the push's response-row label (Overlord W1, questions 2 and 18).
-  if (due.due === 'now') senderFor(deps).send(noticePayload(event, opts), { label: event.kind });
+  if (due.due === 'now') senderFor(deps).send(noticePayload(event, opts), { label: event.kind, ...(opts.source === undefined ? {} : { source: opts.source }) });
   return { recorded, archived };
 }
 

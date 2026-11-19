@@ -67,7 +67,7 @@ export interface PushSender {
   prepare(payload: PushPayload | null): PreparedPush;
   /** An unbound push: insert it claimed, send it now. `failed` is the caller's sentence for a rejected send. `label`, the
    *  notifier kind, gives the push a response row (Overlord W1, question 2); a push with none gets no row and no id. */
-  send(payload: PushPayload, opts?: { readonly failed?: string; readonly label?: string }): void;
+  send(payload: PushPayload, opts?: { readonly failed?: string; readonly label?: string; readonly source?: string }): void;
   /** A bound row its raising or arming transaction wrote `pending`: re-read its source, claim it, send it now. */
   sendRow(row: BoundRowTarget, settledOf: SettledOf): void;
   /** The lane's pass: the held items' reach, every due row sent in parallel, the purge. Resolves when the pass's attempts
@@ -215,7 +215,8 @@ export function senderFor(deps: SenderDeps): PushSender {
         let w: ReturnType<OutboxStorePort['insertUnboundRow']>;
         try {
           w = typeof masked.tag === 'string'
-            ? port.insertUnboundRow({ pushId, payload: masked as OutboxPayload, at }, responseOf(opts.label, null))
+            ? port.insertUnboundRow({ pushId, payload: masked as OutboxPayload, at, ...(opts.source === undefined ? {} : { pushSource: opts.source }) },
+              responseOf(opts.label, null))
             : { ok: false, detail: 'the payload has no tag' };
         } catch (e) { w = { ok: false, detail: message(e) }; }
         if (w.ok) {

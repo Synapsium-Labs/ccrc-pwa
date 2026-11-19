@@ -11,6 +11,7 @@ import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
 import type { OverridesView } from '../../../shared/overrides';
+import type { ApprovalCensusWire } from '../../../shared/approval-census';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -1022,6 +1023,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
      *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
     fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** The approval census read (approvals plan 2026-11-18, §3.1, M38): prompts by path and the per-programme-day counter over
+     *  the last `days` (the server defaults to 14). Session-gated; a store failure is 503 `unavailable` and no store is 501, and
+     *  both reject like every non-2xx, so a failed read is never told from an empty one by a value. The M38 card reads it. */
+    getApprovalCensus: (days?: number, opts?: ReadOpts) =>
+      getJson<ApprovalCensusWire>(days === undefined ? '/api/approvals/census' : `/api/approvals/census?days=${encodeURIComponent(String(days))}`, opts),
     /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
      *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
      *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */

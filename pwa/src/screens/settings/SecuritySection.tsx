@@ -1,6 +1,6 @@
 // Settings › Security (settings spec §3.3, §5.5; D-5503): the Sign-in gate card (`SignInGateCard.tsx`), then Your
 // sign-in and This session (`YourSignInCard.tsx`, `ThisSessionCard.tsx`; from Accounts, R2d, D-5508), then the Box
-// token card, then the Linear card (named workspaces S4b), then Project linking (D-8147), then Approvals (D-8382), each a
+// token card, then the Linear card (named workspaces S4b), then Project linking (D-8147), then Approvals (D-8382), then Permission prompts (M38, approvals plan §3.1), each a
 // `Section` with its scope. The slot before Box token
 // is reserved for "Recent account changes".
 // The auth status, the passkey list and the Linear connection the cards show are the frame's reads.
@@ -29,6 +29,7 @@ import type { LinearWorkspacesPoll } from '../../fleet/useLinearWorkspaces';
 import { LinearSection } from '../LinearSection';
 import { ProjectLinkingCard } from './ProjectLinkingCard';
 import { ApprovalsTopologyCard } from './ApprovalsTopologyCard';
+import { ApprovalCensusSection } from '../../fleet/ApprovalCensusSection';
 import { SignInGateCard } from './SignInGateCard';
 import { ThisSessionCard } from './ThisSessionCard';
 import { YourSignInCard } from './YourSignInCard';
@@ -219,9 +220,11 @@ export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
       {/* Project linking (D-8147) follows Linear: how each project's pull requests reach their ticket. It reads the
           project list itself, so it waits on neither poll. */}
       <ProjectLinkingCard />
-      {/* Approvals (D-8382), last: one read-only line on where approval rulings are minted and signed. It reads the
+      {/* Approvals (D-8382): one read-only line on where approval rulings are minted and signed. It reads the
           overrides route itself, so it waits on neither poll. */}
       <ApprovalsTopologyCard />
+      {/* Permission prompts (M38), after Approvals: the census counter, read only. It reads its own route. */}
+      <ApprovalCensusSection />
     </>
   );
 }

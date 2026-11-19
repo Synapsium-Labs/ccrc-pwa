@@ -85,6 +85,7 @@ import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/ro
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
 import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
+import { registerApprovalCensusRoutes } from './coord/approvalCensusRoutes.js';
 import { overridesViewNow } from './overridesRead.js';
 import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
@@ -261,6 +262,9 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/fleet', '/api/digest', '/api/sessions/:id/pr', '/api/sessions/:id/workspace/audit', '/api/coord/stall-watch',
   '/api/runs', '/api/runs/find', '/api/programmes', '/api/runs/:id', '/api/runs/:id/record', '/api/runs/:id/signals', '/api/lifecycle', '/api/peers', '/api/claims', '/api/ledger', '/api/landing', '/api/asks',
   '/api/approvals/:id', '/api/coord/review-cap/:id',
+  // The approval census's read (approvals PR 1): each row's summary is a prompt's command text, masked and redacted at
+  // write; the hook masks the answer again with the masker's current fingerprints.
+  '/api/approvals/census',
   // The programme ledgers (plan PL3): an item's title, reason and steps are written by sessions.
   '/api/programmes/:slug/items',
   // The operator's reads of the same text (plan PL4): the waiting list, and one programme's goals (an In short copy a session wrote).
@@ -2160,6 +2164,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
     actorOf: (req) => deviceActor(sessionAuth(req).device),
   });
+  // The approval census's read (approvals plan 2026-11-18, Task 1.4): session-gated, no box token, registered from its own
+  // file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`APPROVAL_CENSUS_DOORS`) read by name.
+  registerApprovalCensusRoutes(app, { sources: (fromMs, toMs) => questions.censusSources(fromMs, toMs), wall: () => deps.time.clock.wall() });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
   const accountGate = createAccountGate({
