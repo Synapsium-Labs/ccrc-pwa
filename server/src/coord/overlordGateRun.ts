@@ -160,8 +160,9 @@ export function overlordGateRun(deps: OverlordGateDeps):
         facts = k.kind === 'unmeasured' ? k : { kind: 'read', live: { id: live.id, n: live.n, term: live.term, key: k.key, counter: k.counter } };
       }
       fence = { presented, facts };
-      // @anchor op-key-slot: W2's operation-key lookup is read here and decided right after step 7, before step 7a (the act
-      // rows piece adds its port and its arm; its hash binds the door, the path parameters and the body).
+      // @anchor op-key-slot
+      // W2's operation-key lookup is read here and decided right after step 7, before step 7a (the act rows piece adds its
+      // port and its arm; its hash binds the door, the path parameters and the body).
       witness = live === null ? { kind: 'unmeasured', why: 'no live generation' }
         : attempt<WitnessVerdict>(() => deps.witness(claim.sessionId, live!.id, headerOf(req, WITNESS_KEY_HEADER)), (why) => ({ kind: 'unmeasured', why }));
     }

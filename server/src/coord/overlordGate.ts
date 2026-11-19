@@ -72,7 +72,10 @@ export function callerStandingOf(
 }
 
 /** Why a fence refused, as `overlord_fence_refusals.why` records it. */
-export type FenceWhy = 'no-live-generation' | 'generation-mismatch' | 'key-unissued' | 'key-mismatch' | 'no-key' | 'fork' | 'ended';
+const FENCE_WHY_MAP = {
+  'no-live-generation': true, 'generation-mismatch': true, 'key-unissued': true, 'key-mismatch': true, 'no-key': true, fork: true, ended: true,
+} as const;
+export type FenceWhy = keyof typeof FENCE_WHY_MAP;
 
 /** What the server holds for a write: the identity's live generation and its act key (door process A's row), the key
  *  already compared by digest in the runner. `unmeasured`: the rows or the act key could not be read (ruled, F12). */
@@ -123,11 +126,13 @@ export function counterVerdict(answer: 'advanced' | 'not-above' | 'ended' | 'unm
   return fenceRefuse('unavailable', 'the act counter could not be advanced');
 }
 
+/** Why a witness did not stand (door process B's reasons). */
+const WITNESS_WHY_MAP = { none: true, stale: true, used: true, 'reader-scope': true, 'before-generation': true } as const;
 /** Door process B's witness verdict (ruled, F5). Declared here until door process B lands, which then imports it from here.
  *  `witnessed` carries the witness row; a missing witness key reads `none`; an unreadable witness store is `unmeasured`. */
 export type WitnessVerdict =
   | { readonly kind: 'witnessed'; readonly witnessId: number }
-  | { readonly kind: 'unwitnessed'; readonly why: 'none' | 'stale' | 'used' | 'reader-scope' | 'before-generation' }
+  | { readonly kind: 'unwitnessed'; readonly why: keyof typeof WITNESS_WHY_MAP }
   | { readonly kind: 'unmeasured'; readonly why: string };
 
 /** What the runner records for the witness (question 10, door process B's `recordWitnessCheck`): `used` with its witness when
@@ -172,6 +177,20 @@ export type GateVerdict =
   | { readonly kind: 'hook' }   // a start door, and the caller is another session: served as before
   | { readonly kind: 'refuse'; readonly word: GateWord; readonly detail: string; readonly step: GateStep;
       readonly record: GateRecord; readonly why: FenceWhy | null };
+
+/** The gate's own words that are not refusal words, each map checked against the union it spells, so the coordination kebab
+ *  census (`mail-routes.test.ts`) admits them through `isOverlordGateKebab`, never by an allowlist pin. */
+const STANDING_KIND_MAP = {
+  designated: true, 'designated-pending': true, 'pending-unrecorded': true, 'other-incarnation': true, other: true, unmeasured: true,
+} as const satisfies Record<CallerStanding['kind'], true>;
+const GATE_RECORD_MAP = { 'fence-refusal': true, 'witness-unwitnessed': true } as const satisfies Record<NonNullable<GateRecord>, true>;
+const COUNTER_ANSWER_MAP = {
+  advanced: true, 'not-above': true, ended: true, unmeasured: true,
+} as const satisfies Record<Parameters<typeof counterVerdict>[0], true>;
+const FACT_ARM_MAP = { 'not-asked': true, 'read-door': true, 'start-door': true, 'read-current': true, 'read-stale': true } as const;
+export const isOverlordGateKebab = (word: string): boolean =>
+  [STANDING_KIND_MAP, FENCE_WHY_MAP, WITNESS_WHY_MAP, GATE_RECORD_MAP, COUNTER_ANSWER_MAP, FACT_ARM_MAP]
+    .some((m) => Object.prototype.hasOwnProperty.call(m, word));
 
 const refuse = (word: GateWord, step: GateStep, detail: string, record: GateRecord = null, why: FenceWhy | null = null): GateVerdict =>
   ({ kind: 'refuse', word, detail, step, record, why });

@@ -474,13 +474,19 @@ describe('liveGenerationOf reads the generation identity of the designation', ()
   };
   const noteGen = (id: number): unknown => (c().db.prepare('SELECT generationId FROM continuity_notes WHERE id = ?').get(id) as { generationId: number | null }).generationId;
 
-  it('a restart of the Overlord: the bound session\'s note records its overlord generation', async () => {
+  // Gates B (plan w1-gates.md Task 6, slug overlord-note-case-moves-behind-the-gate): the bound session's note now runs the
+  // gate order first. Its incarnation is checked at step 1 (this fixture's registry holds none, a measured absence), and a
+  // write needs `continuity-v1`, the act key and a witness, which no fixture can present until door process B binds its
+  // witness. So the door refuses it and writes nothing; which generation a passing note records is `liveGenerationOf`'s,
+  // pinned by its own characterization (`live-generation.test.ts`), and the passing path by the gate's suites.
+  it('a restart of the Overlord: the bound session\'s note is refused by the gate and writes nothing', async () => {
     app = await open();
     const run = runOf('prog-a', ID);
     c().designationRead = () => boundAs(ID);
-    const gen = mintAs('overlord', 'overlord');
-    const id = (await post(app, note({ kind: 'run', id: run }))).json().id as number;
-    expect(noteGen(id)).toBe(gen.id);
+    mintAs('overlord', 'overlord');
+    const res = await post(app, note({ kind: 'run', id: run }));
+    expect([res.statusCode, res.json().error]).toEqual([403, 'not-the-overlord']);
+    expect(rows()).toEqual([]);
   });
 
   it('a rebind with the old body live: the pending body\'s note finds no generation under its own id, never the old body\'s overlord row', async () => {
@@ -492,16 +498,17 @@ describe('liveGenerationOf reads the generation identity of the designation', ()
     expect(noteGen(id)).toBeNull();
   });
 
-  it('an unmeasured designation answers the door\'s unmeasured arm: 502 on a note and on a handover, and nothing is written', async () => {
+  // Gates B (question 13, ruled start-doors-fail-closed-on-an-unread-designation): the gate refuses every caller first.
+  it('an unmeasured designation is refused by the gate: 503 unavailable on a note and on a handover, and nothing is written', async () => {
     app = await open();
     const run = runOf('prog-a', ID);
     mintAs('overlord', 'overlord');
     for (const bad of [(): DesignationRead => ({ kind: 'unmeasured', why: 'x' }), (): DesignationRead => { throw new Error('locked'); }]) {
       c().designationRead = bad;
       const n = await post(app, note({ kind: 'run', id: run }));
-      expect([n.statusCode, n.json().error]).toEqual([502, 'unmeasured']);
+      expect([n.statusCode, n.json().error]).toEqual([503, 'unavailable']);
       const h = await handover(app, goodHandover(run));
-      expect([h.statusCode, h.json().error]).toEqual([502, 'unmeasured']);
+      expect([h.statusCode, h.json().error]).toEqual([503, 'unavailable']);
     }
     expect(rows()).toEqual([]);
   });

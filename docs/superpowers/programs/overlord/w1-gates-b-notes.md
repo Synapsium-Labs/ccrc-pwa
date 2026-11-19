@@ -62,7 +62,42 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
   Overlord's calls at the six start doors refuse `capability-missing` at step 2 until it lands. A coordinator is answered
   `hook` at step 1 and never reaches step 2.
 
+- **`witness-record-decided-in-l1`**: what the runner records for the witness (`used` with its id on a pass, `unwitnessed`
+  with its reason on a refusal at step 7a, nothing for an unmeasured witness) is `overlordGate.ts#witnessRecordOf`, so the
+  runner spells no gate word and `unwitnessed` has one `server/src` home (the core-vocab pin).
+- **`gate-words-admitted-by-a-derived-guard`**: the gate's own kebab words (a standing, the fence's and the witness's reasons,
+  what the runner records, the facts' arms) are admitted to the coordination kebab census through
+  `overlordGate.ts#isOverlordGateKebab`, built from that decider's maps, each checked against the union it spells where one
+  exists. The census's holder (approvals PR 2) agreed the one additive line.
+- **`stale-designation-has-three-holders`**: the plan says `stale-designation` is spelled only in `overlordGate.ts`. The
+  private store's prompt door already spells it (`operatorModel/messages.ts` and the prompt route in `server.ts`), so the
+  core-vocab pin holds those three exactly. `stale-generation`'s pinned holders are the gate, the claim door
+  (`continuity/actKey.ts`, `continuity/routes.ts`), the delegation lease's two files and `retire.ts`.
+- **`forged-card-read-on-a-one-page-card`**: a forged card read (attributed, no act key) of a one-page card meets the
+  recording page's fence on page 1, so it is answered 409 `stale-generation` (counted in `overlord_fence_refusals`) rather
+  than served; a longer card serves every page but the last. Either way no card read is recorded, as ruled.
+- **`gate-test-fixture`**: `server/test/overlordGateFixture.ts#hookGate` is the real runner over no designation, for the
+  suites that build the continuity routes by hand; every Overlord fact port throws there.
+- **`fixtures-mint-through-the-gate`**: the fifteen test files that mint a fixture operator for `identity.operator` now call
+  `gateActorOf`, with the same arguments and the same subject text; no assertion changed. Two of them were held by other
+  runs, whose holders agreed the edit (polish WM1 and approvals PR 2).
+
+- **`overlord-cases-move-behind-the-gate`**: four existing cases drove the bound Overlord, or an unmeasured designation,
+  through a start door and now meet the gate first. In `continuity-notes-route.test.ts`, the bound session's note is
+  refused by the gate (its fixture registry holds no incarnation, so `not-the-overlord`) and writes nothing; which
+  generation a passing note records stays pinned by `live-generation.test.ts`. An unmeasured designation now answers
+  503 `unavailable` at the gate on a note and on a handover, as question 13 rules, where it answered the door's 502
+  `unmeasured` before. In `continuity-card-route.test.ts`, the two anchor cases of the designated session test what the
+  card door reads after a pass, so they build the door with `overlordGateFixture.ts#passGate`; their assertions are
+  unchanged. No fixture can present a real pass today (`continuity-v1` is not held, and the witness is unbound).
+
 ## For the coordinator
 
-- **Migration 106**: main ends at 105 (#3056). The mid-turn mail PR 2 holds 106 in its own merge; whichever lands second
-  renumbers (its holder agreed the four additive co-edits: schema, the two version pins, the rollback fixture, the floors).
+- **Migration 106 on this branch, 107 or later at landing**: main ends at 105 (#3056). #2997 is queued at 106 and the mid-turn
+  mail PR 2 also holds 106 in its own merge; this PR renumbers to the next free slot when it absorbs main before landing
+  (mid-turn mail PR 2's holder agreed the four additive co-edits: schema, the two version pins, the rollback fixture, the
+  floors).
+- **Local measurements the box could not make**: the floors suite's two `pwa/src/face/mood.ts` sets fail to load here
+  (`@ccrc/ui` is not installed in this worktree's `pwa/`), and `secret-mask`'s "typed slowly" case is the known local timing
+  red (door process A1's notes measured it red on a clean `main`). The whole tests-inclusive type check is OOM-killed in the
+  test slice here. CI is the arbiter of all three.
