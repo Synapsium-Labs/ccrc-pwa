@@ -1,7 +1,7 @@
 # Mail a busy session sees mid-turn (design)
 
-**Spec** · 2026-11-19 · Status: revised after reviews 2688 and 2701 and the coordinator's rulings of fix rounds 1 and 2
-(2026-11-19) · Owner: the Overlord programme (#2491), wave 165 · Related:
+**Spec** · 2026-11-19 · Status: revised after reviews 2688, 2701 and 2710 and the coordinator's rulings of fix rounds 1
+to 3 (2026-11-19) · Owner: the Overlord programme (#2491), wave 165 · Related:
 `docs/superpowers/specs/2026-11-09-overlord-design.md` (§3.8, what it trusts),
 `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md` (the mail gate's idle rule) · Docs only: no code ships
 with it.
@@ -17,15 +17,15 @@ with it.
   - it adds one fixed line to the main thread's tool calls saying that urgent mail is waiting (E, the notice).
 - **No network on the tool path.** The marker travels on an argv the server is already granted (`ccd route`, as the
   `precompact` field does today). The hook reads a local file with shell builtins and asks the server nothing.
-- **Reading the mail lifts the hold within seconds.** A successful ack queues the marker's clear at once.
+- **Reading the mail lifts the hold within seconds.** A successful ack kicks the marker's clear at once.
 - **Ruled out: typing into a running turn (D).** Claude Code's rate-limit menu opens by itself mid-turn, and an Enter or
   a digit there can switch the session to usage credits. No unattended lane types into a running turn.
 - **Deferred: a pull client (B).** It returns only if E's line does not reach the model (§7 gives the number), or for a
   session with no ccrc hook.
 - **What the hold is, and is not.** It makes the worker *read* the mail before it acts. It does not make the worker
   obey it. The hook's text speaks in the harness's voice and adds no authority to the mail: how a worker weighs its
-  coordinator's mail stays with the worker's own skill (Overlord spec §3.8 on content). In version 1 only a run's
-  coordinator and the Overlord may mark mail urgent, and that check is attribution, not authentication.
+  coordinator's mail stays with the worker's own skill (§3.8: no mail content enters the hook's text). In version 1
+  only a run's coordinator and the Overlord may mark mail urgent, and that check is attribution, not authentication.
 - **Measured.** The wire cannot say how long a delivered mail waited (`deliveredAt` is stored but never served). In a
   52-minute sample through the API, four mails from a coordinator to a busy worker each waited at least 9 minutes
   (§1.3). The first build step serves the stored times, so the baseline is measured properly.
@@ -144,7 +144,8 @@ This section describes each option and what it reaches, then compares them on th
 
 The sender marks the mail urgent. While any urgent delivery to a session is outstanding, the session hook refuses that
 session's push, commit, merge of main and `gh pr merge`. The refusal names the delivery and `ccrc-api mail inbox`. The
-session reads the mail, which acks it. The ack queues the marker's clear, and the next attempt goes through.
+session reads the mail, which acks it. The ack kicks the marker's clear, and an attempt a few seconds later goes
+through.
 
 ```mermaid
 sequenceDiagram
@@ -163,7 +164,7 @@ sequenceDiagram
   H->>M: builtin read, lease current
   H-->>W: deny, read with mail inbox run bare, then retry
   W->>S: mail inbox (prints and acks)
-  S->>S: ack commits, then queues a projection for this worker
+  S->>S: ack commits, then kicks the projection lane
   S->>M: ccd route clears mailhold (seconds)
   W->>W: weighs the mail, then decides
   W->>H: PreToolUse, Bash git push (if it still should)
@@ -171,8 +172,8 @@ sequenceDiagram
   H-->>W: allow
 ```
 *Figure 2. A and E together. The notice line arrives on the next tool call, and the push is refused until the urgent
-mail is read. The ack queues the clear, so the marker is gone within seconds. Whether to push after reading stays the
-worker's call. The hook never asks the server anything.*
+mail is read. The ack kicks the clear, so the marker is gone within seconds. What happens next is governed by the
+recipient's role, not by the hook. The hook never asks the server anything.*
 
 ### 2.2 B. Pull client: a listener the session watches
 
@@ -298,14 +299,21 @@ plan that follows it.
   `ackableDeliverySql` and `OUTSTANDING_OR_ABANDONED_SQL`), shared as one fragment, never a second copy.
 - **What releases it.** An ack, which `mail inbox` makes when it prints the mail. A run's close and a child's reclaim
   also release it, by derivation: `cancelOutstandingDeliveries` and `cancelDeliveriesTo` move those rows to `rejected`
-  with a deliberate-cancel error, which the predicate excludes. No timer releases it.
-- **What keeps holding, correctly.** A delivery parked at the replay ceiling, a delivery never yet sent, and one to a
-  recipient the registry does not list all stay ackable and visible to `mail inbox`, so they keep holding, and the
-  recipient can end each by reading.
+  with a deliberate-cancel error, which the predicate excludes. The hold has no timer of its own: the 24-hour park
+  ceiling is the delivery lane's, not the hold's.
+- **What keeps holding, and what releases, exactly.** The hold is `inboxFor`'s set: a row whose state is not `acked`
+  or `rejected`, or a `rejected` row parked at the replay ceiling (`undeliverable`, `MAIL_REPLAY_CEILING_ERROR`).
+  - **Keeps holding:** any `queued` or `delivered` row (one never sent that parks stays `queued`, as do a backing-off
+    row and a replayed row), and the replay-ceiling reject while its run is not terminal and it has no heir. The
+    recipient can end each by reading.
+  - **Releases:** every other `rejected` row. That covers a never-sent row rejected at `MAIL_MAX_ATTEMPTS`, a recipient
+    proven absent, the 24-hour park ceiling (`MAIL_PARK_CEILING_MS`), the deliberate cancels (`'run closed'`,
+    `'child workspace reclaimed'`, both in `DELIBERATE_CANCEL_ERRORS_SQL`), and a replay-ceiling reject whose run has
+    closed.
 - **So the recipient can always end it.** Every row the hold counts is one that `mail inbox` prints and the ack door
   accepts. A test pins that set equality (§7), and a test closes a run with urgent mail unread and finds the hold gone.
-- **The hold lifts only on a main-thread ack, by the hook's refusal.** The ack route receives no agent identity, so the
-  server cannot tell who acked. The hook refuses the acking forms of mail in a joined subagent (§3.5).
+- **A subagent cannot lift it by acking.** The ack route receives no agent identity, so the server cannot tell who
+  acked. The hook refuses the acking forms of mail in a joined subagent (§3.5).
 
 ### 3.3 The carrier: a lane-only route field
 
@@ -316,12 +324,23 @@ already granted, so it needs no new ccd verb, no new agent grant and no new rout
 
 - `until` is epoch seconds, the end of the lease.
 - `role` is `coordinator` or `overlord`, the sender's role for that delivery, so the hook can name it without asking
-  the server. The one-outstanding rule allows one pair per sender, so a recipient holds at most a few pairs.
+  the server. The one-outstanding rule is per sender session, so a recipient holds one to three pairs in practice (a
+  reclaimed run's old and new coordinators, an old and a new Overlord designation).
+- **Overflow.** Past eight pairs the writer keeps the eight lowest delivery ids, so the marker always renews and the
+  hold never silently fails open.
+- **One owner of the grammar.** It has three readers: a server parser, ccd's `_route_valid` and the hook's builtin parse.
+  The grammar and its parser live once in L0 (`shared/`), and a corpus-driven parity test holds the two bash copies equal
+  to it, bounds and the eight-pair edge included, as `_hook_server_cap`'s copies are held to `parseServerCaps`.
+- The characters are safe for `ccd route`: it splits on the first `=`, `_reg_set` writes the bytes atomically, the
+  journal line is JSON-encoded, and the value is validated before `swap.log` sees it.
 
 **ccd's side is rows in existing tables,** as `precompact` was:
 
-- a `ROUTE_FIELDS` member, and a `_route_valid` row that checks the grammar above, the two role words, and that `until`
-  is no more than 360 seconds past ccd's own clock at the time of writing;
+- a `ROUTE_FIELDS` member, and a `_route_valid` row that checks the grammar above and the two role words only;
+- a write-site check in `cmd_route` that `until` is no more than 360 seconds past ccd's own clock, kept out of
+  `_route_valid` as `_route_fable_shell` is, because `_route_valid` also judges stored values (`_route_get`, and
+  `cmd_route`'s own read of the old value), and a wall-clock bound there would reject a standing marker after a clock
+  step;
 - the empty-value clear, beside `precompact`'s siblings;
 - a skip in `_route_any`, so the field never counts as routing;
 - a refusal in `_route_argv_check`, so `ws-add`, `start` and `enable` refuse `--route mailhold=…`, as they refuse
@@ -342,16 +361,35 @@ writes.
 ### 3.4 The projection: its writer, its schedule and its lease
 
 - **One writer,** a server lane that projects the hold (§3.2) onto the fleet box through `CCD_ARGV.routeSet`.
-- **A schedule of its own.** It is a row in the lane schedule (`server/src/laneSchedule.ts`), every 10 seconds, and does
-  not ride the mail lane's due work. `mailPass` returns early when nothing is due, and a delivered, unacked row is due
-  again only after `MAIL_REPLAY_MS` (600 seconds), so a writer inside it would let the lease lapse while the mail sat
-  unread. Each pass derives the hold for every recipient from the store, never from the mail lane's due list.
-- **Queued by the ack.** After a successful ack commits, the ack route queues one projection pass for that recipient,
-  outside its own transaction and never awaited, so the marker clears within seconds. The ack itself is unchanged.
+- **A lane row of its own.** The projection is a row in the lane schedule (`server/src/laneSchedule.ts`), flight
+  `skip` (one pass at a time), whose cadence follows the mail lane's by declared reference
+  (`derivedFrom: MAIL_SWEEP_MS`, never a second literal). It is not a step of `mailPass`, for three reasons that concern
+  the job, not the beat:
+  - It must run while `$REG/mail-disabled` stands, to clear markers, and `mailPass` returns at its first act on that
+    file.
+  - It must keep one pass at a time, because two passes that diff against the same measured field would write it twice.
+    The mail row is flight `none`, whose passes overlap and can outlast 10 seconds behind a `sendPrompt`.
+  - A slow `ccd route` round trip must not delay a delivery, nor a slow delivery let a lease lapse.
+
+  Each pass derives the hold for every listed recipient from the store, never from the mail lane's due list, which is
+  empty for most of a delivered row's life (a delivered, unacked row is due again only after `MAIL_REPLAY_MS`, 600
+  seconds). It runs whether or not any urgent delivery is outstanding: a pass with nothing held is one store query and
+  writes only to clear a standing marker. The row carries a `staleAfterMs`, as the landing rows do, so a hung `ccd`
+  write cannot hold it past a lease. Its shape is the launch-profile lane's (`server/src/continuity/profileLane.ts`):
+  derive, diff against the registry's measured `route.fields`, write the difference through `CCD_ARGV.routeSet` behind
+  `ccdCan`, and skip and count an unreadable route. The plan reuses one helper for mapping a `ccd` answer, which that
+  lane and the `precompact` writer each map themselves today, or records why not.
+- **Kicked by the ack.** After a successful ack commits, the ack route kicks the row (`kick`, as the lifecycle and
+  delegation lanes are kicked), outside its own transaction and never awaited. The next tick runs the pass, and a kick
+  that lands while a pass is in flight stays due and coalesces into one rerun. The ack itself is unchanged.
+- **Its own shadow.** The writer runs live from its first deploy, because the hook's arms ship shadow and nothing acts on
+  a marker until they are armed. The plan says whether the row joins the Shadow lanes card (`LANE_ARM_LANES`) or why it
+  does not.
 - **Reconciled against what is measured.** Each pass compares the derived hold with the field as the registry last
   measured it. It writes the field when a hold appears, when a measured marker differs from the derived one, and when
   the lease has under 120 seconds left. It writes the empty value when the derived hold is empty and a marker stands,
-  whoever wrote it. A forged or leftover marker therefore lasts at most one pass while the server is up.
+  whoever wrote it. A forged or leftover marker therefore lasts at most one pass while the server is up. A measured
+  field the registry names unreadable (`route.unreadable`) is skipped and counted, as the launch-profile lane does.
 - **Rows the registry does not list are skipped.** `cmd_route` dies `no such session` without `$REG/<id>.uuid`, so the
   pass never writes for an absent row, and an urgent mail to it simply holds nothing.
 - **A capability, so absence permits.** The writer composes the field only when the fleet box's `ccd caps` advertises
@@ -360,11 +398,15 @@ writes.
   taken as "no hold".
 - **`mail-disabled` darkens it.** While `$REG/mail-disabled` stands, the pass writes no marker and clears standing ones,
   and the hook also treats that file as dark (a builtin test). A fleet with mail switched off holds nothing.
-- **The lease, bounded on both sides.** The writer sets `until` 300 seconds ahead. The hook honours a marker only when
-  `now < until <= now + 360`, by the clock `_hook_server_cap` reads inline (`EPOCHREALTIME`, else
-  `printf -v now '%(%s)T' -1`), with no fork. The 60-second allowance covers clock skew between the two boxes, which
-  the design assumes are time-synchronised, as the pool epoch's lease does. A marker past either bound is ignored, and
-  the shadow log counts the far-future ones.
+- **The lease, bounded on both sides.** The writer sets `until` 300 seconds ahead, by the time port's `wall()`, never
+  the monotonic clock the rows throttle on. The hook honours a marker only when `now < until <= now + 360`, by the
+  clock `_hook_server_cap` reads inline (`EPOCHREALTIME`, else `printf -v now '%(%s)T' -1`), with no fork. A marker
+  past either bound is ignored, and the shadow log counts the far-future ones.
+- **The clock-skew window.** The design assumes time-synchronised boxes, as the pool epoch's lease does, and tolerates
+  a fleet clock from 60 seconds behind the server's to about 110 seconds ahead of it. Further behind, ccd refuses every
+  write (its bound is `until <= now + 360` on the fleet clock), and the hold is off, logged once per episode. Further
+  ahead, a marker lapses between renewals (a renewal comes about 180 seconds after a write), and at 300 seconds ahead
+  it is never live. Both fail open, and the shadow log's far-future and lapsed counts point at either.
 - **The harm a forged marker can do.** Any session on the box can write any session's route file by hand. A forged
   `mailhold` holds one session's gated acts. While the server is up, the next pass clears it within about 10 seconds.
   While the server is down, the hook honours it for at most one lease (360 seconds), and the forger must keep
@@ -379,7 +421,8 @@ writes.
 
 ### 3.5 The hook's arms
 
-Every arm first tests for a live marker, with builtins only. A call that finds none pays nothing more.
+Every arm but the subagent's ack refusal first tests for a live marker, with builtins only. A call that finds none
+pays nothing more.
 
 **The gated acts,** matched by the worker merge deny's method, never the landing-order advisory's:
 
@@ -392,13 +435,22 @@ Every arm first tests for a live marker, with builtins only. A call that finds n
   verb (`-C <dir>`, `-c <key>=<value>`, `--git-dir`, `--work-tree`, `--no-pager`) are skipped. A hold is about the
   session, not one repository.
 - The acts are: `git push`; `git commit`; `git merge`, `git pull` or `git rebase` naming `main`, `origin/main`,
-  `origin main`, `origin/HEAD` or `origin HEAD`; and `gh pr merge`, with gh's own flags before or between its words.
+  `origin main`, `origin/HEAD` or `origin HEAD`; `gh pr merge`, with gh's own flags before or between its words; and
+  `ccd pr-admin-merge`, the coordinator's admin merge, a landing as much as `gh pr merge` (urgent mail goes from the
+  Overlord to coordinators, and the existing merge deny does not cover a coordinator).
+- Git's options before the verb are skipped by shape, any `-…` word, not by a closed list, so `-P`, `--bare` and
+  `--config-env` count too.
+- A sync target the strip removed, such as `git merge "origin/main"` or `git rebase 'main'`, is matched on the raw text,
+  as the landing-order advisory reads it.
 - What the strip cannot complete keeps its raw text, so a gated act after it still matches (fail closed, as the merge
   deny). A command over `MERGE_PARSE_CAP` whose raw text reads as a gated act is refused while a hold stands, with the
-  merge deny's advice to split it or pass the text as a file.
+  merge deny's advice to split it or pass the text as a file. The over-cap read adds the gated kinds to
+  `MERGE_STRIP_JQ`'s over-cap answer (`ockinds`), with its own entry gate, because that program today answers only for
+  the merge kinds and runs only when the payload holds a merge word.
 
-**The hold's refusal (A).** On a gated act, the hook denies the call. A deny already built wins, and this deny
-overwrites advice.
+**The hold's refusal (A).** On a gated act, the hook denies the call. It runs after the existing deny arms, because the
+merge deny is skipped once any deny exists and its reason must stay its own byte for byte. A deny already built wins,
+and this deny overwrites advice.
 
 **The notice line (E).** On every other main-thread `PreToolUse` while the marker stands, the hook adds the line as
 `additionalContext`, and the call proceeds. E's guard is "no deny built yet" (`pre_json` does not hold
@@ -407,16 +459,20 @@ first. The landing-order advisory, which tests for an empty envelope, then stays
 overwrites E. A joined subagent gets no line.
 
 **The subagent's ack refusal.** In a joined subagent (`tmsub`), the hook refuses `ccrc-api … mail ack`, and any
-`ccrc-api … mail inbox` unless its output goes to a pipe or to `/dev/null`. A redirect to a file acks too
-(`ccd/ccrc-api`, `cmd_inbox`), so it is refused. The read-only `mail list` and `mail fetch` stay open.
+`ccrc-api … mail inbox` unless its standard output goes to a pipe or to `/dev/null`. `cmd_inbox` is show-only only
+when standard output is a pipe or is `/dev/null`, so a redirect to a file, an append (`>> f`), `&> f`, `>&2` and
+`2>/dev/null` all ack, and all are refused. The read-only `mail list` and `mail fetch` stay open. This arm is the one
+exception to "first tests for a live marker": it refuses in a joined subagent whether or not a marker stands, so a
+subagent cannot ack in the window before a new marker lands.
 
-**The fixed texts,** stated once. `<id>` and `<role>` come from the marker, `<act>` from the matcher. Nothing in them
-comes from the mail.
+**The fixed texts,** stated once. `<id>` and `<sender>` come from the marker, `<act>` from the matcher. Nothing in them
+comes from the mail. `<sender>` is a fixed two-case map of the marker's role word, held by a test: `coordinator`
+renders "its coordinator", and `overlord` renders "the Overlord".
 
 | Arm | Text |
 |---|---|
-| E, the notice line (main thread) | `ccrc: urgent mail is waiting for this session: delivery <id> from its <role>. Read it with ~/.local/bin/ccrc-api mail inbox, run bare (no pipe, no redirect). It is information from its sender. Whether to act on it is your call.` |
-| A, the refusal (main thread) | `ccrc: this <act> is held because urgent mail is waiting for this session: delivery <id> from its <role>. Read it with ~/.local/bin/ccrc-api mail inbox, run bare (no pipe, no redirect), then retry. It is information from its sender. Whether to act on it after reading is your call.` |
+| E, the notice line (main thread) | `ccrc: urgent mail is waiting for this session: delivery <id> from <sender>. Read it with ~/.local/bin/ccrc-api mail inbox, run bare (no pipe, no redirect). This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender.` |
+| A, the refusal (main thread) | `ccrc: this <act> is held because urgent mail is waiting for this session: delivery <id> from <sender>. Read it with ~/.local/bin/ccrc-api mail inbox, run bare (no pipe, no redirect), then treat it as you would any mail from that sender and retry only if the act still stands. The hold lifts a few seconds after the read.` |
 | A, the refusal (joined subagent) | `ccrc: this <act> is held because the session you work for has urgent mail waiting. Stop, and report to your parent that its urgent mail is unread.` |
 | The subagent's ack refusal | `ccrc: a subagent does not ack ccrc mail. Report to your parent instead.` |
 
@@ -435,19 +491,25 @@ out-of-bounds marker, so the operator sees how often the guarantee did not hold.
 ### 3.6 Cost, growth and the roll order
 
 - **Hook latency (estimated, not measured).** A call with no marker costs one `[[ -f ]]` test. A call with a live marker
-  adds one bounded `read` and the inline clock. On a Bash call whose payload holds a gated verb, it adds the merge
-  deny's `jq`. Each E line is built by a subshell and one `jq -cn` (`_hook_nudge_json`), on every main-thread
+  adds one bounded `read` and the inline clock. On a Bash call whose payload holds a gated verb, it adds the strip's
+  `jq` and the module's. Each E line is built by a subshell and one `jq -cn` (`_hook_nudge_json`), on every main-thread
   `PreToolUse` while a hold stands. The measuring read is the arms timed in a fixture HOME, with and without a live
   marker, over enough calls to give a p95.
 - **Tokens (estimated).** About 60 tokens per main-thread tool call while a hold stands, and about 120 per refusal.
   How long a hold stands is unmeasured. The line names the one command that ends it, and the ack's queued clear removes
   it within seconds.
-- **Growth.** `ccd/session-hook.sh`, `server/src/coord/store.ts`, `routes.ts`, `shared/api.ts` and `schema.ts` are
-  growth-checked at 40 net lines per file per PR. The hook sources no bash library (it is installed alone), so its arms
-  live in the hook itself, as the `precompact` reader does, and the plan asks for a growth waiver for the hook, as the
-  fan-out arm had (D-6798). A library would need an install path and a missing-file fallback the hook does not have,
-  and would count in the growth check's `ccd (program)` row. No new route is added, so the box-token census is
-  unchanged.
+- **Growth.** `ccd/session-hook.sh`, `store.ts`, `routes.ts`, `schema.ts` and `watch.ts` are listed at 40 net code
+  lines per PR; `shared/api.ts` is capped at 5,140 code lines (27 free at this tip, shared by every PR). No waiver is
+  taken. The hook keeps only the builtin marker read and bounds; the matcher, the ack-form check and the fixed texts go
+  in `ccd/lib/mail-hold.jq`, loaded with `jq -L "$ROSTER_CARD_LIB"` as `roster-card.jq` is, installed to
+  `~/.cc-sessions/lib/` through `ccd/ccrc`'s install, backup and uninstall lists and `deploy/deploy.sh`; a missing file
+  denies and says nothing (D3) and is counted in the shadow log. A `.jq` file is in no growth row.
+  - `MERGE_STRIP_JQ` is plain program text, passed with no `-L`, so the plan either adds `-L` to that call or makes a
+    second jq call over the stripped command, the one fork E's envelope already pays. The existing merge-deny
+    definitions stay where they are in this wave, because tests pin them.
+  - If the module is refused, the fallback is to split the hook's growth over three PRs (the marker read and E; A; the
+    ack refusal and the shadow log), each under 40.
+  - No new route is added, so the box-token census is unchanged.
 - **Roll order: server first,** for the wave that ships the field's writer and the hook's arms (the coordinator's
   ruling, 2026-11-19). The server writes nothing until the fleet box's `ccd caps` advertises `route-mailhold-v1`, so the
   other order is safe too, and both fail open.
@@ -460,32 +522,32 @@ owner.
 | Piece | Beside what | Reason |
 |---|---|---|
 | The hold's projection, the `mailhold` field | The mail lane's delivery | Not a delivery: it carries no body and moves no delivery row. It projects one server fact onto another host, the fleet box, where the hook runs. That host is one of the catalogue's "legitimately different" kinds. The store stays the one owner of delivery state, and the projection has one writer. |
+| The projection lane, the `mailhold` writer | The launch-profile lane (`continuity/profileLane.ts`) and the generations lane's `precompact` write (`continuity/renewalWiring.ts`) | It follows their pattern for a lane-only route field (derive from the store, diff against the registry's measured `route.fields`, write the difference through `CCD_ARGV.routeSet` behind `ccdCan`, skip and count an unreadable route). It is a third writer of a different field, never a second writer of one. It extends neither: launch-profile beats at 60 s, sits behind its Shadow lanes row, skips steer-cohort and role-unmeasured sessions and caps writes at five a pass, and generations acts only on a renewal. Beside the mail lane it is a different job, a projection onto the fleet box where the hook reads it with the server down (the catalogue's marker entries, K12 and the `.child` marker), and it has the opposite sign under `mail-disabled` (it clears). |
 | A, the hold's refusal | The mail lane's delivery | A time-of-check re-check at the act, another of the catalogue's kinds |
 | E, the notice line | The nudge | Types nothing and needs no idle pane. It is advice in the hook's existing advice channel, from the same marker. |
 | B, a pull client | The mail lane's delivery | Would be a second delivery path (another process). Deferred, its trigger stated in §7 |
 
 ## 4. Decisions
 
-The coordinator ruled the questions of fix rounds 1 and 2 on 2026-11-19. The author proposes the rest, for the
-coordinator to rule.
+The coordinator ruled every decision below on 2026-11-19, across fix rounds 1 to 3.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
-| D1 | Where the guarantee lives | The hook's hold, a pull client, nothing | The hold (A): the only option that stops a subagent and every session without set-up | Proposed |
+| D1 | Where the guarantee lives | The hook's hold, a pull client, nothing | The hold (A): the only option that stops a subagent and every session without set-up | Ruled |
 | D2 | What the hook reads | A local marker on a granted argv, a server read at gated commands, a box timer | A marker, the `mailhold` route field: no network on the tool path, and `precompact` is the precedent | Ruled |
 | D3 | When the hold cannot be read | Fail open, fail closed | Open: the hold is an accident guard, and fail-closed would stop every commit during a restart | Ruled |
 | D4 | Who may mark mail urgent | Named senders, any sender | In version 1, a run's coordinator to its own run, and the Overlord to coordinators | Ruled |
-| D5 | What releases the hold | The ack, a timer, the sender's run closing | An ack, or by derivation a close or reclaim. Never a timer. | Proposed |
-| D6 | What the refusal and the line show | Ids and role, the subject, the body | The fixed texts of §3.5: ids and the sender's role, never the subject or body | Proposed |
+| D5 | What releases the hold | The ack, a timer, the sender's run closing | An ack, or by derivation any release §3.2 lists. No timer of the hold's own. | Ruled |
+| D6 | What the refusal and the line show | Ids and role, the subject, the body | The fixed texts of §3.5 and the sender map: ids and the sender, never the subject or body | Ruled |
 | D7 | The reading half | E (marker and line), D (typed nudge), B (pull client) | E. D is ruled out, and B is the fallback if E's line does not reach the model. | Ruled |
 | D8 | Typing into a running turn | Allowed behind a gate, never | Never, for any unattended lane | Ruled |
 | D9 | Urgent volume | One outstanding per sender and recipient, unbounded | One outstanding: a second is refused `urgent-outstanding` | Ruled |
 | D10 | Acking in a subagent | Refuse the acking forms, rely on the skill convention | Refuse `mail ack`, and every `mail inbox` not piped or sent to `/dev/null`, in a joined subagent | Ruled |
 | D11 | Roll order | Server first, fleet first | Server first, with the cap making either order fail open | Ruled |
-| D12 | First step | Build the hold first, measure first | Measure first: serve `deliveredAt`, `ingestedAt` and `ackedAt` | Proposed |
-| D13 | How the ack clears the marker | Queue a projection after the ack, wait for the next pass, warn in the text | The ack queues one projection for its recipient, outside its transaction, never awaited | Ruled |
-| D14 | When the lease renews | On the mail lane's due work, on a schedule of its own | Its own lane row, every 10 seconds, while any urgent delivery is outstanding | Ruled |
-| D15 | How far ahead a marker may reach | Unbounded, bounded on both sides | `now < until <= now + 360`, in the hook and in `_route_valid` | Ruled |
+| D12 | First step | Build the hold first, measure first | Measure first: serve `deliveredAt`, `ingestedAt` and `ackedAt`, three optional fields within `shared/api.ts`'s free cap lines | Ruled |
+| D13 | How the ack clears the marker | Kick the projection after the ack, wait for the next pass, warn in the text | The ack kicks the projection row, outside its transaction, never awaited | Ruled |
+| D14 | When the lease renews | On the mail lane's due work, on a schedule of its own | Its own lane row at the mail lane's cadence, always: a pass with nothing urgent outstanding is one store query and writes only to clear a standing marker | Ruled |
+| D15 | How far ahead a marker may reach | Unbounded, bounded on both sides | `now < until <= now + 360`, in the hook and at ccd's write site | Ruled |
 
 ## 5. Promise delta
 
@@ -497,12 +559,16 @@ none - a design spec for review that ships no behaviour, and the build plan carr
 
 ## 6. Red cases the plan must carry
 
-Each line is a test that must fail when its rule is deleted. Under a live marker unless it says otherwise:
+Each line is a test, one shape per test, each with a mutation that reds when its rule is deleted. Under a live
+marker unless it says otherwise:
 
 - `git push`, `git commit`, `git pull origin main`, `git merge origin/main`, `git rebase origin/HEAD` and `gh pr merge 42`
   are each denied;
-- `cd repo && git push`, `git -C repo push`, `env X=1 git commit -m x`, `timeout 30 git push` and `/usr/bin/git push`
-  are each denied;
+- `cd repo && git push`, `git -C repo push`, `git -c k=v push`, `git --git-dir=x push`, `env X=1 git commit -m x`,
+  `VAR=x git push`, `timeout 30 git push` and `/usr/bin/git push` are each denied;
+- `git merge main`, `git merge "origin/main"`, `git rebase 'main'`, `gh -R o/r pr merge 42` and `ccd pr-admin-merge` are
+  each denied;
+- an unterminated quote followed by `git push` is denied (fail closed);
 - `git push` under an expired marker, and under one whose `until` is beyond `now + 360`, proceeds;
 - `gh pr create --body "notes; git push later"`, `echo "git push"` and a heredoc whose body holds `git push` each proceed
   with E's line and no deny;
@@ -512,8 +578,11 @@ Each line is a test that must fail when its rule is deleted. Under a live marker
 - the graph arm's Read nudge does not suppress E's line;
 - a joined subagent's `git push` gets the subagent text, and gets no E line on an ungated call;
 - an unjoined `agent_id` gets the main-thread text;
-- a joined subagent's `mail ack`, bare `mail inbox` and `mail inbox > f` are refused, and its `mail inbox | cat`,
+- a joined subagent's `mail ack`, bare `mail inbox`, `mail inbox > f`, `mail inbox >> f`, `mail inbox &> f`,
+  `mail inbox >&2` and `mail inbox 2>/dev/null` are refused, with or without a marker, and its `mail inbox | cat`,
   `mail inbox > /dev/null`, `mail list` and `mail fetch` pass;
+- the sender map renders "its coordinator" and "the Overlord";
+- with `ccd/lib/mail-hold.jq` missing, nothing is denied or said, and the shadow log counts it;
 - with `$REG/mail-disabled` present, nothing is refused or said.
 
 ## 7. Testing and proof
@@ -525,8 +594,10 @@ This section says how each piece is proved before it goes live.
 - **E's line reaches the model (B's trigger).** On the test box, with the fleet's Claude Code build, start a session
   whose hook adds a fixed `PreToolUse` `additionalContext` line, run a turn of several tool calls, and read the
   transcript: does the line arrive with each tool result, inside the turn? If it does not, B returns as the reading half.
-  Then arm E alone, with A still shadow, and measure for two weeks or at least 20 urgent mails: if more than one in five
-  urgent mails whose recipient met E's line inside a turn is acked only after that turn ended, B returns.
+  Then arm E alone, with A still shadow, and measure for two weeks and at least 20 urgent mails: if more than one in
+  five urgent mails whose recipient met E's line inside a turn is acked only after that turn ended, B returns. The turn
+  marker holds only the current turn, so the read is the shadow log's line times against each transcript's `Stop`
+  event times and the mail's `ackedAt`.
 - **The hold's set.** An L1 test that every delivery the hold counts is one `mail inbox` prints and the ack door
   accepts, and the reverse for urgent rows. A case that closes the run with urgent mail unread, and one that reclaims the
   child, each finding the hold gone.
@@ -547,15 +618,14 @@ This section says how each piece is proved before it goes live.
 ### Agreed
 
 - The problem and the two measured claims (§1.2), from the brief of 2026-11-19 and the tree at `ba2f67dac`.
-- The coordinator's rulings of fix rounds 1 and 2 (2026-11-19): D2 to D4, D7 to D11, and D13 to D15. D is ruled out, E
-  is the reading half, and the operator does not mark urgent in version 1.
+- The coordinator's rulings of fix rounds 1 to 3 (2026-11-19): every decision of §4. D is ruled out, E is the reading
+  half, the operator does not mark urgent in version 1, and the hook's matcher and texts go in an installed jq module.
 - The operator's direction of 2026-11-19 that a client library is acceptable on its merits. This spec weighs it (§2.2)
   and defers it, with its trigger stated (§7).
 
 ### Waiting on you
 
-- The coordinator: the third review, on review 2701's F1 to F23, and a ruling on D1, D5, D6 and D12, which the author
-  proposes.
+- The coordinator: the landing of this spec on green checks (review 2710 was the last review round).
 - Nothing waits on the operator.
 
 ### Later

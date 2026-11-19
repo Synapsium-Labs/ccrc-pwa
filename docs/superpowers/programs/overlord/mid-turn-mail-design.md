@@ -21,6 +21,18 @@ programme ledger and mints any numbers. No D-number is defined here.
   (`now < until <= now + 360`); the marker carries each delivery's sender role; every acking form of `mail inbox` is
   refused in a joined subagent; the gated-act matcher is written out on the merge deny's method, with its red cases
   (spec §6); and F8 to F23 are fixed as the report directs.
+- **Fix round 3 (review 2710, the last round, the coordinator's rulings of 2026-11-19):**
+  - No growth waiver. The hook keeps only the marker read and its bounds. The matcher, the ack-form check and the fixed
+    texts go in an installed jq module, `ccd/lib/mail-hold.jq`, loaded as `roster-card.jq` is.
+  - The projection lane always runs, flight `skip` at the mail lane's declared cadence, and the ack kicks it. Its
+    reasons for a row of its own are stated, with its "legitimately different" row beside the launch-profile and
+    generations lanes.
+  - The fixed texts say the line adds nothing to the mail, and to treat it as any mail from that sender, through a
+    two-case sender map.
+  - D1, D5, D6 and D12 are ruled.
+  - The minor findings are fixed as directed: the matcher's shapes, `ccd pr-admin-merge` among them; the ack forms'
+    red cases; the exact hold set; the bound at ccd's write site with the skew window; and one owner for the grammar.
+    The minor wording fixes are made too.
 - **Measured claims of the brief:** nothing on `main` marks a mail urgent, and the session hook has no mid-turn mail
   path. Both are confirmed on `ba2f67dac` (spec §1.2).
 - **Not measurable through the API:** how long a delivered mail waited. `deliveredAt`, `ingestedAt` and `ackedAt` are
@@ -43,9 +55,11 @@ programme ledger and mints any numbers. No D-number is defined here.
 1. Serve `deliveredAt`, `ingestedAt` and `ackedAt` on `MailSummary`, additive (the measurement read, spec D12).
 2. The test-box check that a `PreToolUse` `additionalContext` line reaches the model mid-turn (spec §7).
 3. The urgent flag, its echo, its sender rule and `urgent-outstanding` (spec §3.1), with one `coord.db` migration slot.
-4. The hold's derivation over `inboxFor`'s predicate, and the projection lane: its own lane row, the ack's queued pass,
-   reconciliation and the lease (spec §3.2 to §3.4), with the `route-mailhold-v1` cap and the field's rows in ccd.
-5. The hook's arms in the hook itself, behind a growth waiver, shadow first, with the red cases of spec §6.
+4. The hold's derivation over `inboxFor`'s predicate, and the projection lane: its own always-on lane row, the ack's
+   kick, reconciliation and the lease (spec §3.2 to §3.4), with the `route-mailhold-v1` cap, the field's rows in ccd and
+   one L0 owner of the value's grammar.
+5. The hook's arms: the marker read in the hook, and the matcher, ack-form check and texts in `ccd/lib/mail-hold.jq`,
+   with no growth waiver, shadow first, with the red cases of spec §6.
 6. Worker and coordinator skill clauses for urgent mail, as a wave of their own (the clauses are pinned verbatim).
 
 ## 3. Departures from the brief
