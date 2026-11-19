@@ -4356,6 +4356,28 @@ allowance table pins the regex's flags (L2-2), and the dead-session half of the 
 (L2-6). The wire comment for the activity placement is not touched here (item 13 left C47 by the coordinator's ruling).
 **Measured** (the mutants, the reds at `main` and the runs): `docs/superpowers/programs/desktop-polish/c46.md`, "C47".
 
+### Task C49: the session's helpers, designed (D-8794) — now
+
+**What.** A design task, and no product code. The operator, 2026-11-19: "inside the session in the right hand panel I still
+want to see actual information about any running workflows and subagents, for the session i'm inside of, in a useful way
+though please". The spec is `docs/superpowers/specs/2026-11-19-session-helpers-design.md`, with its mockups in
+`docs/design/2026-11-19-session-helpers-design/`. A **Helpers** section in the session panel lists each subagent and
+workflow, running ones first, with its description, kind, model, effort, measured state, elapsed time and last activity, and
+for a workflow its phase and agents done out of total. A finished helper keeps a one-line outcome for ten minutes, folded.
+The facts come from the reader of the session's workflow files, extended to the session's Agent helpers (`server/src/workflows/`),
+and travel as additive fields on the `workflows` frame. The broker's activity records leave the session panel. Unowned
+delegated worktrees get a section of the Archive screen (the coordinator's call). The broker gains ends from measured
+evidence, plus a one-time, dry-run-first pass that closes the 2,391 records it never closed (the coordinator's call, designed
+and not done here). The build is six PRs (H4, H1, H2, H3, S1 and S2), listed in the spec's §11. The measurements, including
+why the records never closed, are in the spec's §2 and in `docs/superpowers/programs/desktop-polish/c49.md`.
+
+- **D-8794** — `session-panel-carries-helpers`: Task C49, issued on 2026-11-19. The session's own panel, not the fleet list,
+  carries a session's helper information, subagents and workflows alike, by the operator's ruling of 2026-11-19. Defined in
+  full in the spec's §12.
+
+This section was added beside Task C48 with that task's consent (its worker's mail of 2026-11-19), which covered this one
+section only.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
