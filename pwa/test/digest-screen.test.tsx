@@ -150,20 +150,10 @@ describe('call lines (D-8126)', () => {
   });
 });
 
-// Fix round 1 (review 2792 F5): ONE owner of the call refusal sentences. A call line's correction says every refusal the
-// correction door can answer for a call in `callWords.ts`'s words, read from the door's own result type, so a code the server
-// adds without a sentence reds here instead of reaching the operator as a bare slug.
+// Fix round 1 (review 2792 F5): ONE owner of the call refusal sentences. A call line's correction says each refusal the
+// correction door answers for a call in `callWords.ts`'s words. That every code of the door's result type has a sentence is
+// pinned in server/test/digest-call-refusals.test.ts: a pwa test may not read server/src (ci-reach-census).
 describe('a call line\'s correction refusals (D-8126)', () => {
-  const src = readFileSync(path.resolve(__dirname, '../../server/src/coord/digest.ts'), 'utf8');
-  const union = /export type DigestCorrectResult =[\s\S]*?why: ([^}]*)\}/.exec(src)?.[1] ?? '';
-  const codes = [...union.matchAll(/'([a-z-]+)'/g)].map((m) => m[1]!);
-  /** Not a call's: the other row kinds' unknown rows, and the store's 503, which reads as the transport words. */
-  const NOT_A_CALLS = ['unknown-ask', 'unknown-approval', 'digest-unreadable'];
-
-  it('reads the door\'s codes', () => {
-    expect(codes).toEqual(expect.arrayContaining(['unknown-call', 'not-coordinator', 'duplicate', ...NOT_A_CALLS]));
-  });
-
   for (const code of ['unknown-call', 'not-coordinator', 'duplicate']) {
     it(`${code} is said in the call table's words`, async () => {
       const callRow = line({ rowKind: 'call', id: 7, kind: 'big-call', childId: '', text: 'Which store?', tool: null, class: null, answer: 'sql', reason: 'r' });
@@ -176,8 +166,4 @@ describe('a call line\'s correction refusals (D-8126)', () => {
     });
   }
 
-  it('every code the door answers for a call has a sentence in the call table', () => {
-    const forCalls = codes.filter((c) => !NOT_A_CALLS.includes(c));
-    expect(forCalls.filter((c) => !(c in CALL_REFUSAL_TEXT))).toEqual([]);
-  });
 });

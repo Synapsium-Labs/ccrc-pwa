@@ -60,7 +60,11 @@ branch) has no console hunk, so nothing of it is taken. The doors are A3's; the 
   asks, so a stale frame or the device's saved copy agrees with the server.
 - **`a4-one-owner-of-call-refusals`** (fix round 1, F5): the digest's correction of a call line reads `callRefusalText`, so
   the sheet and the digest say the same words, and `unknown-call` is a sentence in both. A case reads the correction door's
-  `DigestCorrectResult` and reds on a call code with no sentence.
+  `DigestCorrectResult` and reds on a call code with no sentence. That case lives in the server tree
+  (`server/test/digest-call-refusals.test.ts`, reading both files as text): first written in the pwa test, it read
+  `server/src`, which `ci-reach-census` refuses because a server-only change skips the pwa tests (red on the PR's fast run,
+  server shard 3). The pwa test keeps the three rendered sentences. Measured: dropping `unknown-call` from the table and
+  adding a code to the door's union each red it.
 - **`a4-call-deciders-in-l1`** (fix round 1, F7): `callsApartOf` and `clearedCallsOf` (`callWords.ts`) decide what the screen
   decided inline; `openCallsOf` replaces `callsOf`, whose cleared half nothing read.
 - **`a4-cleared-call-says-how`** (fix round 1, F8): a cleared call row says seen, overturned or aged out and when
