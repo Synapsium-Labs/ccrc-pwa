@@ -4279,7 +4279,7 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 _hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) and the shadow log; nothing without a marker
   local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log"
   [[ -f "$f" && ! -L "$f" && ! -e "$REG/mail-disabled" ]] || return 0
-  { read -r -n 512 v < "$f"; } 2>/dev/null
+  { IFS= read -r -d '' -n 512 v < "$f"; } 2>/dev/null   # the bytes as ccd wrote them: no trim, past a newline
   if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
   if [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ && "$now" =~ ^[0123456789]+$ ]]; then
     p="${v#*:}" dl="${v#*:}" dl="${dl%%,*}" dl="${dl#*.}"
