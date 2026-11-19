@@ -262,10 +262,13 @@ export function pemBlockSpans(text) {
 }
 /** The same finder over one text of a stream (review 2729 F1, the coordinator's ruling): `carry` is the block the last
  *  text ended inside (null: none), and the answer's `carry` is the block this text ends inside. A carried block runs on
- *  from this text's start on the scanner's own bounds: through its END line, or with none to the first blank line, and
- *  never past `PEM_END_WINDOW` characters after its BEGIN line, nor into the next BEGIN line. The response masks' drawer
- *  keeps it per stream (`server/src/accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays masked after its
- *  BEGIN line has left the context. */
+ *  from this text's start through its END line, or with none to the first blank line, as the scanner's do, with two
+ *  differences (review 2751 F4). It releases `PEM_END_WINDOW` characters after its BEGIN line even with no blank line,
+ *  where the scanner's walk to a blank line has no limit, so a BEGIN mention with no blank line after it masks the next
+ *  64 KB of a stream and no more. And it stops at the next BEGIN line, which starts a block of its own, where the
+ *  scanner's walk of a block with no END line runs on through a second BEGIN line to the first blank line. The response
+ *  masks' drawer keeps it per stream (`server/src/accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays
+ *  masked after its BEGIN line has left the context. */
 export function pemStreamSpans(text, carry) {
   return pemScan(text, carry);
 }

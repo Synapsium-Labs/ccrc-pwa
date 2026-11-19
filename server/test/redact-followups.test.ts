@@ -13,7 +13,7 @@
 // to a push scanner.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { credentialMaskSource, SECRET_MASK } from '../../shared/api.js';
-import { pemStreamSpans, redact, type PemStreamCarry } from '../../shared/redact.js';
+import { pemBlockSpans, pemStreamSpans, redact, type PemStreamCarry } from '../../shared/redact.js';
 import { SHAPE_MASK } from '../src/accounts/shapes.js';
 import { DRAWER_SECRET_MASK, SecretMasker } from '../src/accounts/mask.js';
 
@@ -263,6 +263,61 @@ describe('the drawer: a PEM block streamed in chunks stays masked after its BEGI
     expect(out.endsWith('after\n')).toBe(true);
   });
 
+  // Review 2751 F1: a key a highlighter colours character by character. Its BEGIN line is found in the text as drawn.
+  const perChar = (line: string, sgr: (i: number) => string): string =>
+    [...line].map((c, i) => `${sgr(i)}${c}`).join('') + '\x1b[0m';
+  const COLOURS: [string, (i: number) => string][] = [
+    ['24-bit', (i) => `\x1b[38;2;${i % 256};${(i * 7) % 256};${(i * 13) % 256}m`],
+    ['8-bit', (i) => `\x1b[38;5;${16 + (i % 200)}m`],
+  ];
+  const drawnRows = (out: string, rows: readonly string[]): string[] => shown(out.replace(/\x1b\[[0-9;]*m/g, ''), rows);
+  for (const [name, sgr] of COLOURS) {
+    for (const cut of [false, true]) {
+      it(`a key coloured per character (${name}${cut ? ', its BEGIN line cut by a chunk' : ''}) shows no key row`, () => {
+        const rows = keyRows(40);
+        const begin = perChar(BEGIN, sgr);
+        const at = Math.floor(begin.length / 2);
+        const head = cut ? [begin.slice(0, at), `${begin.slice(at)}\n`] : [`${begin}\n`];
+        const out = throughDrawer([...head, ...rows.map((r) => `${perChar(r, sgr)}\n`), `${perChar(END, sgr)}\n`, 'after\n']);
+        expect(drawnRows(out, rows)).toEqual([]);
+        expect(out.endsWith('after\n')).toBe(true);
+      });
+    }
+  }
+
+  // Review 2751 F2: a BEGIN line a chunk cuts is read from its line's start however long the part already sent is.
+  const LONG_BEGIN = cat('-----BEGIN ', 'RSA '.repeat(75), 'PRIVATE KEY-----');
+  const LINKED_BEGIN = cat('-----BEGIN RSA ', '\x1b]8;;https://example.com/', 'k'.repeat(600), '\x1b\\', 'PRIVATE KEY',
+    '\x1b]8;;\x1b\\', '-----');
+  for (const [name, begin] of [['a long label', LONG_BEGIN], ['an OSC 8 link around its label', LINKED_BEGIN]] as const) {
+    it(`a BEGIN line with ${name}, cut by a chunk, still opens the carry`, () => {
+      const rows = keyRows(40);
+      for (const at of [begin.length - 20, Math.floor(begin.length / 2)]) {
+        const out = throughDrawer([begin.slice(0, at), `${begin.slice(at)}\n`, ...rows.map((r) => `${r}\n`), `${END}\n`, 'after\n']);
+        expect(shown(out, rows), `cut at ${at}`).toEqual([]);
+        expect(out.endsWith('after\n')).toBe(true);
+      }
+    });
+  }
+
+  // The window counts each character once, however the chunks cut the rows: the line a chunk ends in is read again
+  // with the next chunk, and its characters are not spent twice.
+  it('the 64 KB window is the same when chunks cut the rows', () => {
+    const rows = keyRows(1100);
+    const out = throughDrawer(chunked(cat(BEGIN, '\n', ...rows.map((r) => `${r}\n`)), 100));
+    expect(shown(out, rows.slice(0, 950))).toEqual([]);   // to about 61.7 KB after the BEGIN line: masked
+    expect(shown(out, rows.slice(1010)).length).toBe(90);   // from about 65.7 KB: shown
+  });
+
+  // A line longer than the carry keeps (4 KB) is read from the middle: its start is unknown, so it is never taken as
+  // blank, and the block goes on.
+  it('a carried block goes on through a row longer than the carry keeps, blank so far when it was cut', () => {
+    const rows = keyRows(30);
+    const out = throughDrawer([`${BEGIN}\n`, `${rows[0]}\n`, ' '.repeat(5000), `\n${rows[1]}\n`, ...rows.slice(2).map((r) => `${r}\n`), `${END}\n`, 'after\n']);
+    expect(shown(out, rows)).toEqual([]);
+    expect(out.endsWith('after\n')).toBe(true);
+  });
+
   it('a block that ends inside one chunk carries nothing: the next chunk shows', () => {
     const out = throughDrawer([cat(BEGIN, '\n', keyRows(2).join('\n'), '\n', END, '\n'), 'next line\n']);
     expect(out.endsWith('next line\n')).toBe(true);
@@ -292,6 +347,21 @@ describe("pemStreamSpans: the finder over a stream's texts, read with nothing be
 
   it('a JSON-escaped line break ends a line too', () => {
     expect(stream([`${BEGIN}\\n`, `${BODY1}\\n`, '\\n', 'prose']).parts).toEqual([[BEGIN], [BODY1], [], []]);
+  });
+
+  // Review 2751 F4: where the carry differs from the scanner on one whole text. It stops at the next BEGIN line, which
+  // starts a block of its own, so the prose after that block's END line shows; the scanner's walk of a first block with
+  // no END line runs on through a second BEGIN line to the first blank line.
+  it('a carried block stops at the next BEGIN line, and the prose after that block shows', () => {
+    const tail = cat(`${BODY2}\n`, `${END}\n`, 'done.\n');
+    // The BEGIN line starts a row: the walk stops at that row.
+    expect(stream([`${BEGIN}\n`, cat(`${BODY1}\n`, `${BEGIN}\n`, tail)]).parts[1]).toEqual([BODY1, `${BEGIN}\n${BODY2}\n${END}`]);
+    // The BEGIN line starts mid-row: the carry is cut where it starts.
+    expect(stream([`${BEGIN}\n`, cat(`${BODY1} `, `${BEGIN}\n`, tail)]).parts[1]).toEqual([`${BODY1} `, `${BEGIN}\n${BODY2}\n${END}`]);
+    // The scanner, on the same whole text: its first block has no END line, so it walks on through the second BEGIN line
+    // to the first blank line, and masks 'done.' too.
+    const whole = cat(`${BEGIN}\n`, `${BODY1}\n`, `${BEGIN}\n`, tail);
+    expect(pemBlockSpans(whole).map(([a, b]) => whole.slice(a, b))).toEqual([whole.slice(0, -1)]);
   });
 
   it('an END line closes the carry; one past the window does not', () => {

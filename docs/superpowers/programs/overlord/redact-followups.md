@@ -33,13 +33,23 @@ Programme `overlord` (#2491), wave 168, run 2718. A small PR off `main`, after #
   - **The state is the drawer's own.** `DrawerMask` (`server/src/accounts/mask.ts`) keeps the block the text it sent
     last ended inside (`pem`, beside its other per-stream carries). It is no new store, and it only adds spans to the
     ones the masker reads (`ahead`), so it can only mask more.
-  - **The bounds are the scanner's.** `shared/redact.mjs#pemStreamSpans` is the same finder over one text of a stream
-    (the scanner's walk, shared, not copied): a carried block runs on from the text's start through its END line, or
-    with none to the first blank line, never past 64 KB after its BEGIN line, and never into the next BEGIN line. The
-    line a text ends in is never taken as blank, even when it is so far, since the next chunk may go on with it.
-  - **A cut line is read whole.** `shapes.ts#pemCarrySpans` reads the carried block from the last line start in the
-    text already sent (at most 256 characters of it), so an END or BEGIN line a chunk boundary cut is read whole, and the
-    rows are split as in a single answer.
+  - **The scanner's walk, with two differences.** `shared/redact.mjs#pemStreamSpans` is the same finder over one text
+    of a stream (the scanner's walk, shared, not copied): a carried block runs on from the text's start through its END
+    line, or with none to the first blank line. The line a text ends in is never taken as blank, even when it is so
+    far, since the next chunk may go on with it. It differs from the scanner on one whole text in two places (review
+    2751 F4, cased in `redact-followups.test.ts`):
+    - it releases 64 KB after its BEGIN line even with no blank line, where the scanner's walk to a blank line has no
+      limit, so a BEGIN mention with no blank line after it masks the next 64 KB of a stream and then stops;
+    - it stops at the next BEGIN line, which starts a block of its own, so the prose after that block's END line shows,
+      where the scanner's walk of a first block with no END line runs on through the second BEGIN line to the first
+      blank line.
+  - **A cut line is read whole** (review 2751 F2, fix round 2). The carry keeps the unfinished last line the drawer
+    sent (raw, at most its last 4 KB, a bound that only caps the work), and `shapes.ts#pemCarrySpans` reads each text
+    after it, so a BEGIN or END line a chunk boundary cut is read whole, however long its label or the escapes in it (a
+    link, a colour per character). Round 1 read only the last 256 raw characters of the masker's 1 KiB context.
+  - **Read as drawn** (review 2751 F1, fix round 2). The carry looks for a BEGIN line in the text with its escapes
+    stripped, so a key a highlighter colours character by character is found. Round 1's pre-check read the raw text,
+    and such a key's rows showed from about the eighth.
 - **A known token right after an escaped line break or an ANSI code is masked** (review 2693's F4, which predates
   #3052). Each row group of `KNOWN_TOKEN_PREFIX` used to start with a lookbehind that read the `n` of a JSON-escaped
   `\n` and the `m` of an ANSI colour code as word characters, so every row missed such a token in `linear-egress`,
@@ -68,9 +78,12 @@ here once a plan that defines it is on `main`.
 - **The first characters of a BEGIN or END line a chunk cuts.** The drawer draws a chunk's text before the line is
   whole, so the start of the label (`-----BEGIN RSA PR`) can show. It is no key material, and every row after it is
   masked.
-- **A blank line inside a streamed block ends it.** A legacy encrypted key's `Proc-Type` and `DEK-Info` headers are
-  followed by a blank line. Streamed in chunks, the base64 after that blank line shows, as it does for a truncated
-  block in a single answer (by design in the finder). In a single answer with its END line, the whole block is masked.
+- **A blank line inside a streamed block ends it** (review 2751 F3, accepted by the coordinator). A legacy encrypted key's
+  `Proc-Type` and `DEK-Info` headers are followed by a blank line. Streamed in chunks, the base64 after that blank line
+  shows, as it does for a truncated block in a single answer (by design in the finder). In a single answer with its END
+  line, the whole block is masked. The case this residual covers is that encrypted-key header: the rows it lets show
+  are the ciphertext of a passphrase-protected legacy key, and the egress scanner stops at the same blank line when no
+  END line is in view.
 - **The finder's spelling limits now reach server answers** (review 2729 F4, as egress already had them; none is
   fixed here):
   - a tab or a non-breaking space after `BEGIN`;

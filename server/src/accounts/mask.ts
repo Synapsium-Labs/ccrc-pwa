@@ -1582,8 +1582,9 @@ export class DrawerMask {
   private ahead: [number, number][] = [];
   /** A chain of key rows sent masked past what a drawer holds: the rows still to come that go on with it are masked. */
   private chain: ChainLeft | null = null;
-  /** The PEM block the text sent last ended inside (review 2729 F1): its rows go on masked in the texts after it, to its
-   *  END line, a blank line or its window, after its BEGIN line has left the context. It only adds spans to `ahead`. */
+  /** The PEM block the text sent last ended inside, and the line it ended in (review 2729 F1, review 2751 F2): its rows go
+   *  on masked in the texts after it, to its END line, a blank line or its window, after its BEGIN line has left the
+   *  context. It only adds spans to `ahead`. */
   private pem: PemCarry | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
@@ -1731,7 +1732,7 @@ export class DrawerMask {
       if (!chainRowsOn(text, 0, this.chain, spans)) this.chain = null;
       for (const span of spans) this.ahead.push(span);
     }
-    const pem = pemCarrySpans(text, this.pem, this.ctx);
+    const pem = pemCarrySpans(text, this.pem);
     this.pem = pem.carry;
     for (const span of pem.spans) this.ahead.push(span);
     const r = this.masker.maskWithCarry(text, {

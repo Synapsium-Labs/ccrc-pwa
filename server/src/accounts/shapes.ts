@@ -327,36 +327,48 @@ function pemRowSpans(t: string, blocks: readonly [number, number][], put: (x: nu
     if (p < b) row(p, b);
   }
 }
-/** The block a drawer's stream is inside, carried from one text to the next (`shared/redact.mjs#pemStreamSpans`). */
-export type PemCarry = PemStreamCarry;
-/** The most of the text already sent that a carried block is read with: an END line's length, and room for its prefix. */
-const PEM_CARRY_LEAD = 256;
+/** What a drawer's stream carries from one text to the next (review 2729 F1): the PEM block the text it sent last ended
+ *  inside (`shared/redact.mjs#pemStreamSpans`; null: none), and the unfinished last line of what it sent (raw, its last
+ *  `PEM_CARRY_LINE` characters at most; `lineWhole`: from its line's start), so a BEGIN or END line a chunk boundary cut
+ *  is read whole (review 2751 F2). */
+export interface PemCarry {
+  readonly block: PemStreamCarry | null;
+  readonly line: string;
+  readonly lineWhole: boolean;
+}
+/** The most raw characters of a line already sent that the carry keeps: it only caps the work. A line is longer than a
+ *  terminal's row only when escapes (a colour per character, a link) or a long label fill it. */
+const PEM_CARRY_LINE = 4096;
 /** One text of the drawer's stream (review 2729 F1, the coordinator's ruling): the row spans of every PEM block in it,
- *  the block the last text ended inside (`carry`) running on from its start, and the block this text ends inside. The
- *  carried block is read from the last line start of `before` (the text already sent, at most `PEM_CARRY_LEAD` of it),
- *  so an END or BEGIN line a chunk boundary cut is read whole; spans in `before` were sent already and are dropped. Read
- *  with escapes stripped, so a coloured key is read as drawn; the spans are the text's own. The drawer keeps the carry
- *  per stream (`accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays masked to its END line after its BEGIN
- *  line has left the masker's context. */
-export function pemCarrySpans(text: string, carry: PemCarry | null, before = ''): {
-  spans: [number, number][]; carry: PemCarry | null;
-} {
+ *  the block the last text ended inside running on from its start, and the carry this text ends with. The text is read
+ *  after the unfinished line the last text ended with, so a cut BEGIN or END line is read whole (spans in that line were
+ *  sent already and are dropped), and all of it in the text as drawn, its escapes stripped, so a key a highlighter
+ *  colours per character is found (review 2751 F1); the spans are the text's own. The drawer keeps the carry per stream
+ *  (`accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays masked to its END line after its BEGIN line has
+ *  left the masker's context. */
+export function pemCarrySpans(text: string, carry: PemCarry | null): { spans: [number, number][]; carry: PemCarry } {
   const spans: [number, number][] = [];
-  const tail = before.slice(-PEM_CARRY_LEAD);
-  const lf = tail.lastIndexOf('\n'); const esc = tail.lastIndexOf('\\n');
-  const lineAt = Math.max(lf === -1 ? 0 : lf + 1, esc === -1 ? 0 : esc + 2);   // after the last line break, or 0
-  const lead = tail.slice(lineAt);
-  if (carry === null && !(lead + text).includes('PRIVATE KEY')) return { spans, carry };
-  const v = viewOf(lead + text, '');
-  // The carry was measured at the end of `before`: read from the lead's start, it holds the lead too.
-  const from = carry === null ? null
-    : { left: carry.left + viewOf(lead, '').t.length, lineStart: lineAt > 0 || carry.lineStart && lead === '' };
+  const line = carry === null ? '' : carry.line;
+  const all = line + text;
+  // The unfinished last line this text ends with: after its last line feed or JSON-escaped one.
+  const lf = all.lastIndexOf('\n'); const esc = all.lastIndexOf('\\n');
+  const rest = all.slice(Math.max(lf === -1 ? 0 : lf + 1, esc === -1 ? 0 : esc + 2));
+  const next = (block: PemStreamCarry | null): PemCarry => ({
+    block, line: rest.slice(-PEM_CARRY_LINE),
+    lineWhole: rest.length <= PEM_CARRY_LINE && (rest.length < all.length || carry === null || carry.lineWhole),
+  });
+  const block = carry === null ? null : carry.block;
+  const v = viewOf(all, '');
+  if (block === null && !v.t.includes('PRIVATE KEY')) return { spans, carry: next(null) };
+  // The block was measured at the end of the last text: read from the line's start, it holds the line too.
+  const from = block === null ? null
+    : { left: block.left + viewOf(line, '').t.length, lineStart: line === '' ? block.lineStart : carry!.lineWhole };
   const r = pemStreamSpans(v.t, from);
   pemRowSpans(v.t, r.spans, (x, y) => {
     const [a, b] = spanIn(v, x, y);
-    if (b > lead.length) spans.push([Math.max(a, lead.length) - lead.length, b - lead.length]);
+    if (b > line.length) spans.push([Math.max(a, line.length) - line.length, b - line.length]);
   });
-  return { spans, carry: r.carry };
+  return { spans, carry: next(r.carry) };
 }
 /** Whether a run holds a whole shape on its own. */
 export const matchesShape = (run: string): boolean => SHAPES.some((re) => { re.lastIndex = 0; return re.test(run); });
