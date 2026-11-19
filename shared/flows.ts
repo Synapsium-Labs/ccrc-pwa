@@ -361,4 +361,6 @@ export interface FlowAnswer {
   draft: FlowParse;
   problems: FlowProblem[];
   versions: FlowVersionRow[];
+  /** Wave 2: whether new programmes pin this flow; absent from an older server reads as false. */
+  isDefault?: boolean;
 }
