@@ -133,7 +133,7 @@ Export's Save is not involved: the bytes go to the server instead of to a file. 
 
 A snapshot holds exactly what Export inlines: every image and mockup file the page already holds, in document order, while the file fits, and placeholders for the rest. Assets hidden on screen but used by a mockup are inlined too, as Export does today. Nothing is fetched after the share, and CSP `default-src 'none'` stops anything in the copy from loading later.
 
-The sheet shows, before the owner confirms: every inlined file by path and size, draft files marked, every omitted file with its reason, and every link target. That is Export's existing list (`ExportMockupFacts`, the provenance notes), shown before the upload rather than inside the saved file.
+On every share and every re-share (a re-share's new bytes reach everyone who ever held the link), the confirm shows, before the owner confirms: every inlined file by path and size, draft files marked, every omitted file with its reason, and every link target. That is Export's existing list (`ExportMockupFacts`, the provenance notes), shown before the upload rather than inside the saved file.
 
 ### 3.4 The credential check
 
@@ -204,7 +204,7 @@ stateDiagram-v2
 | Share | Snapshot taken at share time; bytes immutable; the index entry records project, section, path, branch, head, the served ref, base commit, `fp`, the committed blob at that ref, and the SHA-256 and size of the bytes | The operator's ruling. The SHA-256 proves "unchanged shared bytes after edits" |
 | One link per file | At most one live share per project, section, path and branch | A reviewer keeps one link; the newer-draft notice has one target; the count is bounded |
 | Newer draft | When the owner opens a leaf with a live share whose `fp` differs from the page's current `fp`, the page shows "Shared for review on {date}. A newer draft is available." with Re-share | The operator's ruling. Only the owner's own page compares, so no reviewer read touches the fleet |
-| Re-share | Replaces the bytes behind the same link, version plus one; the idle clock restarts, the retention clock does not | The reviewer's link keeps working and shows the newer copy on reload; retention still bounds the share |
+| Re-share | Runs exactly the first share's path: a fresh build, the same confirm list (§3.3) and the same credential check (§3.4), then replaces the bytes behind the same link, version plus one; the idle clock restarts, the retention clock does not | The reviewer's link keeps working and shows the newer copy on reload; retention still bounds the share |
 | Idle expiry | One `idleSince` time, set by a share, a re-share, an unpin and a view; removed 7 days after it unless pinned. A view is a 200 from the read door, recorded at most once a minute | #1420: "The TTL counts from last view". A robot that taps nothing is not a view (T3) |
 | Early removal | Removed when the file's committed blob at the recorded served ref differs from the one recorded at share (a new file counts once committed) | #1420: "removed early when the same file is committed on the branch". GitHub then holds it and Share sends a permalink |
 | Pin | Stops the idle clock only | Pin keeps a link alive while a reviewer is away; a commit or retention still ends it |

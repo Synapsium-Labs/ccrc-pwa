@@ -263,7 +263,7 @@ R3 is the first release that can make a link, so it follows R2: the page and its
 - Modify: the Page details host and the Docs index screen (one mount each); `design/audit.mjs` (`GROUNDS` for the new chrome)
 - Test: `pwa/test/docs-review-owner.test.tsx`
 
-- [ ] **Step 1: Write the failing tests:** a leaf with a live share whose `source.fp` differs from the page's `fp` shows "Shared for review on {date}. A newer draft is available." and Re-share, which uploads and shows version 2; an equal `fp` shows no notice; Pin turns "Stops working {date}" into "Pinned"; Revoke asks once, then the row reads "Revoked"; Re-share of a file whose share expired shows "The old link has expired and stays dead. This is a new link." and the new link; Pin on an expired share shows "Expired: no view for 7 days" and no pinned state; each removal shows its exact sentence ("Revoked", "Expired: no view for 7 days", "Removed: committed on {branch}", "Removed: 30-day limit"); the index list shows live and removed shares, and no Copy link when `link` is null.
+- [ ] **Step 1: Write the failing tests:** a leaf with a live share whose `source.fp` differs from the page's `fp` shows "Shared for review on {date}. A newer draft is available." and Re-share, which opens the same `ReviewConfirm` as a first share (the file and link list, then the credential hold) and only after its confirm uploads and shows version 2; a re-share whose new draft holds a credential-shaped string is held until "Share anyway"; an equal `fp` shows no notice; Pin turns "Stops working {date}" into "Pinned"; Revoke asks once, then the row reads "Revoked"; Re-share of a file whose share expired shows "The old link has expired and stays dead. This is a new link." and the new link; Pin on an expired share shows "Expired: no view for 7 days" and no pinned state; each removal shows its exact sentence ("Revoked", "Expired: no view for 7 days", "Removed: committed on {branch}", "Removed: 30-day limit"); the index list shows live and removed shares, and no Copy link when `link` is null.
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/docs-review-owner.test.tsx`. Expected: FAIL.
 - [ ] **Step 3: Implement** the rows, the list and the words.
 - [ ] **Step 4: Run** it, `test/contrast.test.ts` and the design audit. Expected: PASS.
@@ -347,6 +347,7 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R3-M3 | `review/shareForReview.ts` | scan the source text only | `docs-review-share` inline-script row (M-X3.14) |
 | NDR-X3-R3-M4 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
 | NDR-X3-R3-M5 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
+| NDR-X3-R3-M109 | `review/ReviewRows.tsx` | Re-share uploads without opening `ReviewConfirm` | `docs-review-owner` re-share hold row (F2) |
 | NDR-X3-R2-M1 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
 | NDR-X3-R2-M2 | `src/review/main.ts` | post the token on load | `review-page` (M-X3.10) |
 | NDR-X3-R2-M3 | `src/review/main.ts` | `sandbox="allow-scripts"` | `review-page`, browser script row (M-X3.10) |
