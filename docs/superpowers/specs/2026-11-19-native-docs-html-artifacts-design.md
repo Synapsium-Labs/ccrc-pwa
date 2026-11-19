@@ -333,7 +333,7 @@ sandbox allow-scripts allow-same-origin allow-forms allow-modals allow-downloads
 
 | Request | Allowed when | Else |
 |---|---|---|
-| A navigation (`Sec-Fetch-Mode: navigate`) of any file | `Sec-Fetch-Dest: iframe` (the wrapper's frame, or the page's own nested frame); `document` only when the capability has `windows` | 403 fixed |
+| A navigation (`Sec-Fetch-Mode: navigate`) of any file | `Sec-Fetch-Dest: iframe` (the wrapper's frame, or the page's own nested frame); `document` only when the capability has `windows`; `empty` with `Sec-Fetch-Site: same-origin`, which is how browsers send a download the page starts (`<a download>`), saved to disk and never shown | 403 fixed |
 | Any request with `Sec-Fetch-Dest` `serviceworker`, `embed` or `object`, or a `Service-Worker` header | Never | 403 fixed: no service worker can install on the content host, and no plug-in content loads |
 | Any other request (images, SVG as an image, scripts, workers, `fetch` of HTML or anything else) | `Sec-Fetch-Site: same-origin` | 403 fixed: no other site can embed or read the files |
 | Any request with no `Sec-Fetch-Dest`, `Sec-Fetch-Mode` or `Sec-Fetch-Site` | Never | 403 fixed (fails closed. Lab row ART-L7 measures that every supported browser sends all three) |
@@ -525,7 +525,7 @@ This section says how each claim is proved. The leaf plan carries the tasks, mut
 | ART-L1 | A page in the frame cannot navigate the frame or the tab off its capability path | §4.2 holds. If any supported engine lets a page leave its path, AR-A4 fails and the tier is turned off on the box (`ccrc expose artifacts --off`) until a fix lands |
 | ART-L2 | The console's session cookie never reaches either artifact name | A1 |
 | ART-L3 | A planted parent-domain cookie from the content host never reaches the console's name | A18 |
-| ART-L4 | Whether a download starts without a gesture under `allow-downloads` | A3: keep, or move to an opt-in |
+| ART-L4 | Whether a download starts without a gesture under `allow-downloads`, and the `Sec-Fetch-*` headers each engine sends for a page's `<a download>` of a sibling file | A3: keep, or move to an opt-in. The download passes the fence in every engine; if an engine sends another pair, the fence row is widened for that pair alone, same-origin only |
 | ART-L5 | WebRTC and DNS reach from a page with egress closed | §4.4's residual, recorded |
 | ART-L6 | Process isolation of the artifact tab on the phone | A5's residual, recorded |
 | ART-L7 | Every supported browser sends `Sec-Fetch-Dest`, `Sec-Fetch-Mode` and `Sec-Fetch-Site` | The fail-closed fence does not break a supported browser |
