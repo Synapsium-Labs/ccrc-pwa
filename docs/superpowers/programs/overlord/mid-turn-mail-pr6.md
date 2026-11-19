@@ -25,8 +25,8 @@ numbers. No D-number is defined here.
 |---|---|---|
 | The prefilter | `ccd/session-hook.sh#_hook_mail_hold` | builtins only: a joined subagent (`tmsub`), a `PreToolUse` Bash call, and a command holding `mail`, and `ack` or `inbox` (read from `"command":"` to the next `","`, as F7's read does) sets `k` |
 | The entry | the same function | it runs on a marker file (`m`) or on `k`; `$REG/mail-disabled` still darkens it; the marker is read only when `m` is set; the strip runs only when a marker parsed |
-| The matcher | `ccd/lib/mail-hold.jq#mh_ackacts` | on the raw text: the merge deny's head grammar (`mh_head`), then a word ending in `ccrc-api` (bare, quoted, with a path) or a variable (`$API`, `"${API}"`), then `mail ack` or `mail inbox` |
-| Whether an inbox only shows | `ccd/lib/mail-hold.jq#mh_shows` | the last redirection of standard output must name `/dev/null`; with none, the command must end at `\|` or `\|&`; anything else acks |
+| The matcher | `ccd/lib/mail-hold.jq#mh_ackacts` | on the raw text after `mh_unq`: the merge deny's head grammar (`mh_head`), then a word ending in `ccrc-api` (bare, quoted, with a path) or a parameter expansion (`$API`, `"${API}"`, `"${CCRC_API:-ccrc-api}"`), then `mail ack` (and the delivery it names) or `mail inbox` with its run of blanks and redirections, and a look at what ends that run, in one pass |
+| Whether an inbox only shows | `ccd/lib/mail-hold.jq#mh_shows` | from that run alone: the last redirection of standard output must name `/dev/null`; with none, the command must end at `\|` or `\|&`; anything else acks |
 | The text | `ccd/lib/mail-hold.jq#mh_ack_refuse` | the spec's text, byte for byte, wrapped by `_hook_deny_json` (N13) |
 | The arming | `ccd/lib/mail-hold.jq#mail_hold` | `refuse` (`$REG/mailhold-refuse-live`): `ack did`; unarmed: `ack would`, nothing refused |
 
@@ -136,8 +136,10 @@ refused.*
 
 **Residuals of an accident guard,** in the module beside PR 5's: a head the merge deny's grammar does not read
 (after `case … )`, an escaped or unlisted wrapper, `eval`, `bash -c`, a script); a `ccrc-api` reached through a
-substitution (`$(command -v ccrc-api) mail ack`) or an alias; options between `ccrc-api` and `mail`; and an `exec > f`
-earlier in the shell, which the matcher cannot see.
+substitution (`$(command -v ccrc-api) mail ack`) or an alias; an ANSI-C quoted verb (`mail $'ack'`, which `mh_unq` does
+not read); and an `exec > f` earlier in the shell, which the matcher cannot see. An option between `ccrc-api` and `mail`
+is no residual (review 2826 F5): `ccrc-api` takes the group as its first argument, so that form is an unknown verb and
+acks nothing, and the matcher rightly passes it.
 
 ## 6. The first CI run, and Horkos
 
@@ -150,6 +152,58 @@ earlier in the shell, which the matcher cannot see.
   follows from the same file. Clearing them would split the hook's two-line change into a PR of its own, away from the
   module and tests it calls. That is a structure call for the coordinator. PR 5 (#3067) carried the same red and
   landed; Horkos is not a required check.
+
+## 7. Fix round 1 (review 2826)
+
+The review read `a1cf675f3`. Nothing in it blocked landing: the arm ships shadow.
+
+| Finding | What changed | Where |
+|---|---|---|
+| F1: the ack read was superlinear | `mail inbox` takes no argument, so the match itself reads only the run of blanks and redirections after `inbox` (`r`) and looks at what ends it (`e`, a lookahead, so the next command's head is still read). Nothing past the run is read and nothing is sliced per match. 20 KB of `ccrc-api mail inbox \| cat; ` repeated: 13.1 s before, 27 ms after (jq 1.8.1, load about 11). A module case bounds it at 500 ms. | `ccd/lib/mail-hold.jq#mh_ack`, `#mh_shows`, `#mh_ackacts` |
+| F2: a comment, and `{fd}>` | The run stops at the first word that is not a redirection, so `# … \| grep` and `#  >/dev/null …` end it with no pipe; `{name}>` is a redirection of another descriptor. Cases for (a) to (c). | `ccd/lib/mail-hold.jq#mh_redir`, `#mh_shows` |
+| F3: a parameter expansion as the command word | `\$\{[^}\s]*\}` is a variable head, so `"${CCRC_API:-ccrc-api}" mail ack 5` and `${API:-ccrc-api} mail ack 5` are refused. | `ccd/lib/mail-hold.jq#mh_ack` |
+| F4: quoting inside the verb words | The matcher reads `mh_unq` of the raw text, as the gated acts' strip does, so `mail "ack"`, `a"ck"`, `"mail" inbox`, `'mail' ack` and `"inbox" > "f"` are refused. `mail $'ack'` stays a named residual with its own case. | `ccd/lib/mail-hold.jq#mh_ackacts` |
+| F5 | The "options between `ccrc-api` and `mail`" residual is dropped from the module and this note; `ccrc-api --json mail ack 1` is a pass case. | `ccd/lib/mail-hold.jq`, section 5 |
+| F6 | No change. The arming review counts these fail-closed refusals from the shadow log: a `grep` or `git log` pattern holding `ccrc-api mail ack` or `mail inbox`, a heredoc body line, a `printf` of one, `#ccrc-api mail ack`, and `mail inbox >/dev/null 2>&1 1>&2`, each of which acks nothing. | plan §7 |
+| F7 (ruled): the line names what the command named | `mail ack <n>` logs `ack would <n>` and its seen key carries `<n>`, so `ack 5` and `ack 6` under one marker are two lines; `mail ack` with no plain id logs `-`. A bare inbox that acks logs one line per delivery the marker holds (it acks them all), or `-` when no marker parses. Every refused act in one command is logged, and a repeated one once. Plan §7's exclusion now reads the delivery itself. | `ccd/lib/mail-hold.jq#mail_hold` |
+| F8 | No change. `ack would` is logged once per key within one pairs epoch (PR 5's seen design), so a week's count of `ack would` lines counts epochs, not acks. | plan §7 |
+| F9 | The module's ack branch also requires a subagent thread, so a wrongly set `ack` on the main thread refuses nothing. The hook's `tmsub` test stays a cost guard, held by a hook case: a main-thread `mail inbox` with no marker makes no call of the block. | `ccd/lib/mail-hold.jq#mail_hold`, `server/test/session-hook-mail-hold.test.ts` |
+| F10 | No change. | |
+
+*Table 6. Fix round 1.*
+
+**Red first.** With round 0's module (`a1cf675f3`), 34 of the module suite's 313 cases and 3 of the hook suite's 53 were
+red, each a shape of this round.
+
+**Mutations.** 21 mutants, each an in-place edit restored from a saved copy with its sha256 checked (N1): Table 3's 11
+re-run on the changed code, and 10 for the new guards. All 21 red. The first try at F2a (dropping `#` from the
+terminators) survived, because the run already stops at any word that is not a redirection; that alternative was
+redundant and is gone, and the guard's mutant lets the run take any word, which reds the comment cases.
+
+| New guard | Mutant | Result |
+|---|---|---|
+| F1, the linear read | the rest of the command read again after every match | red: the 20 KB case (1.4 s against its 500 ms bound) |
+| F2a, the run takes only redirections | the run also takes any word | red: both comment cases |
+| F2c, `{fd}` is another descriptor | `{name}` dropped from `mh_shows`'s descriptors | red: the `{fd}>/dev/null` case |
+| F3, the parameter expansion head | the old `\$\{?name\}?` head | red: both `:-` cases |
+| F4, unquote first | `mh_unq` dropped | red: the quoted-verb cases |
+| F7a, an ack names its delivery | every ack logs `-` | red: the two-acks case, and the hook's |
+| F7b, an inbox names every delivery | only the first | red: the three-deliveries case |
+| F7c, every refused act | only the first | red: the every-act case |
+| F7d, a repeated key once | no dedupe in one call | red: the every-act case |
+| F9, the module tests the thread | the thread test dropped | red: the F9 case |
+| The hook's `tmsub` test (Table 3, row 1, re-run) | dropped | red: the prefilter case's main-thread call |
+
+*Table 7. Fix round 1's new mutants.*
+
+**Suites** (from `server/`, one at a time, through `ccrc test`): `mail-hold-module` 313 passed (4 s),
+`session-hook-mail-hold` 53 (12 s), `mailhold-parity` 9 (2 s), the merge deny's suite 243 (20 s),
+`single-definition/mail-hold` 7 (2 s), `spawn-group-pin` 12 (11 s), `growth-check` armed 97 (8 s).
+
+**Cost,** the same bench as section 4, at a load average of about 11 (the base run was noisy, p95 up to 70 ms on calls
+the change does not reach): the `jq` calls per kind are unchanged from section 4 (6, 4, 5, 5, 6, 7, 8); a joined
+subagent's inbox that only shows took 22.3 ms at the median and a refused ack 23.6 ms. The hook is unchanged in this
+round, so its growth stays +2.
 
 ## Where things stand
 

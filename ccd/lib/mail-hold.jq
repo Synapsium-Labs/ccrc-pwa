@@ -124,30 +124,37 @@ def mh_refuse_main($a; $d; $s): "ccrc: this \($a) is held because urgent mail is
 def mh_refuse_sub($a): "ccrc: this \($a) is held because the session you work for has urgent mail waiting. Stop, and report to your parent that its urgent mail is unread.";
 def mh_overcap($b; $cap): " This command is \($b) bytes, over the hook's \($cap)-byte parse cap, so the hold reads its raw text and cannot tell prose from a command: split it into commands of at most \($cap) bytes, or write the text with the Write tool and pass it as a file (`--body-file <file>` for `gh pr create`, `ccrc-api mail send --json <file>` for a mail), which keeps the command short.";
 
-# THE SUBAGENT'S ACK REFUSAL (spec §3.5, plan Task 6.1), read on the RAW command text, never the stripped one: the strip
-# empties a double-quoted word such as `"$API"` and leaves an empty head. The head is the merge deny's head grammar
-# (`mh_head`), then a word ending in `ccrc-api` (bare, quoted or with a path) or a variable (`$API`, `"${API}"`). On the
-# raw text a form quoted inside another command, `echo "x; ccrc-api mail ack"`, counts too: stricter, fail closed.
+# THE SUBAGENT'S ACK REFUSAL (spec §3.5, plan Task 6.1), read on the RAW command text after `mh_unq`, never the stripped
+# one: the strip empties a double-quoted word such as `"$API"` and leaves an empty head, while `mh_unq` only joins a
+# quoted plain word to bash's reading of it (`mail "ack"`, `a"ck"`, `"inbox" > "f"`). The head is the merge deny's head
+# grammar (`mh_head`), then a word ending in `ccrc-api` (bare, quoted or with a path) or a parameter expansion (`$API`,
+# `"${API}"`, `"${CCRC_API:-ccrc-api}"`). On the raw text a form quoted inside another command,
+# `echo "x; ccrc-api mail ack"`, counts too: stricter, fail closed.
+# ONE PASS, LINEAR (review 2826 F1): `mail inbox` takes no argument, so only blanks and redirections can follow it
+# before its command ends. The match reads that run (`r`) and peeks at what ends it (`e`, a lookahead, so the next
+# command's head is still read), and nothing past it: no slice of the rest of the command per match. The run stops at
+# the first word that is not a redirection, so a comment (`# … | grep`) or an argument ends it with no pipe (F2).
 # RESIDUALS, beside the gated acts': a head the head grammar does not read; a `ccrc-api` reached through a substitution
-# (`$(command -v ccrc-api) mail ack`) or an alias; options between `ccrc-api` and `mail`; an earlier `exec > f`.
-def mh_ack: mh_head + "[\"']?(?:[^\\s;&|()\"']*ccrc-api|\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?)[\"']?[ \\t]+mail[ \\t]+(?<v>ack|inbox)(?=[\\s;&|()<>\"']|$)";
-# Whether an inbox only shows, read from the rest of its command: `cmd_inbox` shows only when its standard output is a
-# pipe or /dev/null. So the last redirection of standard output (`>`, `1>`, `>>`, `>|`, `&>`, `&>>`, `>&`) must name
-# /dev/null, or, with none, the command must end at a pipe (`|`, `|&`). Anything else acks: no redirection, a file, an
-# append, a duplication such as `>&2`, a redirection of another descriptor only (`2>/dev/null`), and the end of a
-# `$( )`, which the matcher does not decide (fail closed).
-def mh_shows:
-  reduce capture("(?<op>(?<fd>[0-9]+|&)?(?:>>|>\\||>&|>))[ \\t]*(?<t>\"[^\"]*\"|'[^']*'|[^\\s;&|()<>]*)|[0-9]*<[<>&]?[ \\t]*(?:\"[^\"]*\"|'[^']*'|[^\\s;&|()<>]*)|(?<e>\\|&|\\|\\||\\||&&|&|;|\\n|\\))|\"(?:[^\"\\\\]|\\\\.)*\"?|'[^']*'?|[^\\s;&|()<>\"']+"; "g") as $m
-    ({d: null, e: null};
-     if .e != null then .
-     elif $m.e != null then .e = $m.e
-     elif $m.op != null and (($m.fd // "") | . == "" or . == "1" or . == "&") then .d = ($m.t | gsub("^[\"']|[\"']$"; ""))
-     else . end)
-  | if .d != null then .d == "/dev/null" else .e == "|" or .e == "|&" end;
-# The acking forms in a raw command, each as its act word: every `mail ack`, and every `mail inbox` that does not only show.
+# (`$(command -v ccrc-api) mail ack`) or an alias; an ANSI-C quoted verb (`mail $'ack'`); an earlier `exec > f`.
+def mh_redir: "(?:(?:[0-9]+|&|\\{[A-Za-z_][A-Za-z0-9_]*\\})?(?:>>|>\\||>&|>)|[0-9]*<[<>&]?)[ \\t]*(?:\"[^\"]*\"|'[^']*'|[^\\s;&|()<>]*)";
+def mh_ack: mh_head + "[\"']?(?:[^\\s;&|()\"']*ccrc-api|\\$[A-Za-z_][A-Za-z0-9_]*|\\$\\{[^}\\s]*\\})[\"']?[ \\t]+mail[ \\t]+"
+  + "(?:(?<a>ack)(?=[\\s;&|()<>\"']|$)(?:[ \\t]+(?<n>[1-9][0-9]{0,9})(?=[\\s;&|()<>#]|$))?|(?<i>inbox)(?=[\\s;&|()<>\"']|$)(?<r>(?:[ \\t]+|" + mh_redir + ")*))"
+  + "(?=(?<e>\\|&|\\|\\||\\||&&|&|;|\\n|\\)|$)|(?<x>))";
+# Whether an inbox only shows, from its run of redirections and what ends it: `cmd_inbox` shows only when its standard
+# output is a pipe or /dev/null. So the last redirection of standard output (`>`, `1>`, `>>`, `>|`, `&>`, `&>>`, `>&`)
+# must name /dev/null, or, with none, the command must end at a pipe (`|`, `|&`). Anything else acks: no redirection,
+# a file, an append, a duplication such as `>&2`, a redirection of another descriptor only (`2>/dev/null`,
+# `{fd}>/dev/null`), a comment (`# … | grep`), an argument, and the end of a `$( )`, which the matcher does not decide.
+def mh_shows($r; $e):
+  reduce ($r | capture("(?<fd>[0-9]+|&|\\{[A-Za-z_][A-Za-z0-9_]*\\})?(?<op>>>|>\\||>&|>)[ \\t]*(?<t>\"[^\"]*\"|'[^']*'|[^\\s;&|()<>]*)"; "g")) as $m
+    (null; if ($m.fd // "") | . == "" or . == "1" or . == "&" then ($m.t | gsub("^[\"']|[\"']$"; "")) else . end)
+  | if . != null then . == "/dev/null" else $e == "|" or $e == "|&" end;
+# The acking forms in a raw command, each with what it names: every `mail ack` (its delivery, or `-` when it names no
+# plain id), and every `mail inbox` that does not only show (`*`: every delivery the hold holds, since it acks them all).
 def mh_ackacts:
-  . as $s | [match(mh_ack; "g") | (.captures | map(select(.name == "v"))[0].string) as $v
-    | select($v == "ack" or ($s[(.offset + .length):] | mh_shows | not)) | "mail " + $v];
+  [mh_unq | match(mh_ack; "g") | (.captures | map({key: .name, value: .string}) | from_entries)
+   | if .a != null then {act: "mail ack", d: (.n // "-")}
+     elif mh_shows(.r; .e) then empty else {act: "mail inbox", d: "*"} end];
 def mh_ack_refuse: "ccrc: a subagent does not ack ccrc mail. Report to your parent instead.";
 
 def mail_hold($a):
@@ -185,13 +192,16 @@ def mail_hold($a):
        (if $armed | index("notice") then {o: "notice", t: mh_notice($d; $s), l: [["notice", "did", "-"]]}
         else {o: "", t: null, l: [["notice", "would", "-"]]} end)
      else {o: "", t: null, l: []} end)
-  | (if $a.ack != "1" then . else ($raw | mh_ackacts) as $k | if ($k | length) == 0 then .
-       elif $armed | index("refuse") then (if .o == "deny" then . else .o = "deny" | .t = mh_ack_refuse end) | .l += [["ack", "did", $k[0]]]
-       else .l += [["ack", "would", $k[0]]] end end) as $v
+  | ($a.pairs | split(",") | map(split(".")[1] // empty) | if length == 0 then ["-"] else . end) as $dels
+  | (if $a.ack != "1" or ($sub | not) then . else ($raw | mh_ackacts) as $k | if ($k | length) == 0 then .
+     else (if $armed | index("refuse") then "did" else "would" end) as $ao
+       | (if $ao == "did" and .o != "deny" then .o = "deny" | .t = mh_ack_refuse else . end)
+       | .l += [$k[] | . as $x | (if $x.d == "*" then $dels else [$x.d] end)[] | ["ack", $ao, $x.act, .]] end end) as $v
   | ($a.seen | split("\n")) as $sl
   | (if $sl[0] == $a.pairs then $sl[1:] | map(select(. != "")) else [] end) as $keys
-  | [$v.l[] | {k: "\(.[0]).\($d).\(.[2] | gsub(" "; "-")).\(.[1])", line: "\($a.now)\t\($a.sid)\t\(.[0])\t\(.[1])\t\($d)\t\(.[2] | gsub(" "; "-"))\n"}
-     | select(.k as $k | $keys | index($k) | not)] as $new
+  | [$v.l[] | (.[3] // $d) as $ld | {k: "\(.[0]).\($ld).\(.[2] | gsub(" "; "-")).\(.[1])", line: "\($a.now)\t\($a.sid)\t\(.[0])\t\(.[1])\t\($ld)\t\(.[2] | gsub(" "; "-"))\n"}
+     | select(.k as $k | $keys | index($k) | not)]
+  | reduce .[] as $x ([]; if any(.[]; .k == $x.k) then . else . + [$x] end) as $new
   | (if $v.t == null then "" else $v.o end) as $o
   | [$o, ($v.t // ""), ($new | map(.line) | join("")),
      (if ($new | length) == 0 then "" else ([$a.pairs] + $keys + ($new | map(.k)) | join("\n")) + "\n" end)]

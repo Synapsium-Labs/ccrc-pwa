@@ -363,39 +363,59 @@ describe('the log decision (P8, N2)', () => {
 
 // The subagent's ack refusal (plan Task 6.1; spec §3.5, D10). The hook passes `ack` "1" only for a joined subagent's Bash
 // call whose command holds `mail` and `ack` or `inbox` (its builtin prefilter), with or without a marker; the module
-// reads the RAW command text, never the stripped one, and refuses `mail ack` and every `mail inbox` that would ack.
+// reads the raw command text after `mh_unq`, never the stripped one, and refuses `mail ack` and every `mail inbox`
+// that would ack. Each log line names what the command named (review 2826 F7, ruled): `mail ack <n>` its `<n>`, a bare
+// inbox every delivery the marker holds, or `-`.
 const ACK = 'ccrc: a subagent does not ack ccrc mail. Report to your parent instead.';
 describe('the subagent\'s ack refusal (Task 6.1)', () => {
   /** A joined subagent's call with no marker standing, unless `o` says otherwise. */
   const sub = (command: string, o: Opts = {}): Verdict => hold(command, { thread: 'sub', ack: '1', pairs: '', state: '', ...o });
-  const REFUSED: Array<[string, string]> = [
-    ['~/.local/bin/ccrc-api mail ack 7 --json -', 'mail ack'], ['ccrc-api mail inbox', 'mail inbox'],
-    ['ccrc-api mail inbox > f', 'mail inbox'], ['ccrc-api mail inbox >> f', 'mail inbox'], ['ccrc-api mail inbox &> f', 'mail inbox'],
-    ['ccrc-api mail inbox >&2', 'mail inbox'], ['ccrc-api mail inbox 2>/dev/null', 'mail inbox'], ['"$API" mail inbox', 'mail inbox'],
-    ['$API mail ack 7', 'mail ack'], ['"${API}" mail inbox', 'mail inbox'], ['/home/u/.local/bin/ccrc-api mail inbox', 'mail inbox'],
-    ['"$HOME/.local/bin/ccrc-api" mail inbox', 'mail inbox'], ['x=$(ccrc-api mail inbox)', 'mail inbox'],
-    ['echo "x; ccrc-api mail ack"', 'mail ack'], ['cd x && ~/.local/bin/ccrc-api mail inbox', 'mail inbox'],
-    ['ccrc-api mail inbox > /dev/null >&2', 'mail inbox'], ['ccrc-api mail inbox > f | cat', 'mail inbox'],
-    ['ccrc-api mail inbox; echo done', 'mail inbox'], ['ccrc-api mail list | cat; ccrc-api mail ack 7', 'mail ack'],
+  const line = (outcome: string, d: string, act: string): string => `1795000000\tlane-a-project-a\tack\t${outcome}\t${d}\t${act}\n`;
+  /** [command, act, the delivery an ack names (or '' for an inbox, which names the marker's)]. */
+  const REFUSED: Array<[string, string, string]> = [
+    ['~/.local/bin/ccrc-api mail ack 7 --json -', 'mail-ack', '7'], ['ccrc-api mail inbox', 'mail-inbox', ''],
+    ['ccrc-api mail inbox > f', 'mail-inbox', ''], ['ccrc-api mail inbox >> f', 'mail-inbox', ''], ['ccrc-api mail inbox &> f', 'mail-inbox', ''],
+    ['ccrc-api mail inbox >&2', 'mail-inbox', ''], ['ccrc-api mail inbox 2>/dev/null', 'mail-inbox', ''], ['"$API" mail inbox', 'mail-inbox', ''],
+    ['$API mail ack 7', 'mail-ack', '7'], ['"${API}" mail inbox', 'mail-inbox', ''], ['/home/u/.local/bin/ccrc-api mail inbox', 'mail-inbox', ''],
+    ['"$HOME/.local/bin/ccrc-api" mail inbox', 'mail-inbox', ''], ['x=$(ccrc-api mail inbox)', 'mail-inbox', ''],
+    ['echo "x; ccrc-api mail ack"', 'mail-ack', '-'], ['cd x && ~/.local/bin/ccrc-api mail inbox', 'mail-inbox', ''],
+    ['ccrc-api mail inbox > /dev/null >&2', 'mail-inbox', ''], ['ccrc-api mail inbox > f | cat', 'mail-inbox', ''],
+    ['ccrc-api mail inbox; echo done', 'mail-inbox', ''], ['ccrc-api mail list | cat; ccrc-api mail ack 7', 'mail-ack', '7'],
+    // F2: a comment ends the command, and `{fd}>` redirects another descriptor.
+    ['ccrc-api mail inbox # read, then | grep it', 'mail-inbox', ''], ['ccrc-api mail inbox  # >/dev/null would hide it', 'mail-inbox', ''],
+    ['ccrc-api mail inbox {fd}>/dev/null', 'mail-inbox', ''],
+    // F3: a parameter expansion as the command word.
+    ['"${CCRC_API:-ccrc-api}" mail ack 5', 'mail-ack', '5'], ['${API:-ccrc-api} mail ack 5', 'mail-ack', '5'],
+    // F4: quoting inside the verb words, which bash joins.
+    ['ccrc-api mail "ack" 5', 'mail-ack', '5'], ['ccrc-api mail a"ck" 5', 'mail-ack', '5'], ['ccrc-api "mail" inbox', 'mail-inbox', ''],
+    ["ccrc-api 'mail' ack", 'mail-ack', '-'], ['ccrc-api mail "inbox" > "f"', 'mail-inbox', ''],
+    // mail inbox takes no argument: anything after it but a redirection ends the read, fail closed.
+    ['ccrc-api mail inbox extra', 'mail-inbox', ''],
   ];
   const PASSED = [
     'ccrc-api mail inbox | cat', 'ccrc-api mail inbox > /dev/null', 'ccrc-api mail list --to lane-a', 'ccrc-api mail fetch 7',
     '"$API" mail inbox | head -5', 'ccrc-api mail inbox 2>&1 | cat', 'ccrc-api mail inbox >/dev/null 2>&1', 'ccrc-api mail inbox &>/dev/null',
     'ccrc-api mail inbox |& cat', 'ccrc-api mail inbox 1> "/dev/null"', 'echo mail inbox', 'ccrc-api mail inboxes', 'grep ack mail.txt',
+    'ccrc-api mail ackx 5', 'x=$(ccrc-api mail inbox | cat)',
+    // F5: ccrc-api takes the group as its first argument, so an option before `mail` is an unknown verb and acks nothing.
+    'ccrc-api --json mail ack 1',
   ];
-  it.each(REFUSED)('%j is refused with no marker, as %s', (c, act) => {
+  it.each(REFUSED)('%j is refused with no marker, as %s', (c, act, d) => {
     const v = sub(c);
     expect(v).toMatchObject({ outcome: 'deny', text: ACK });
-    expect(v.log).toBe(`1795000000\tlane-a-project-a\tack\tdid\t-\t${act.replace(' ', '-')}\n`);
+    expect(v.log).toBe(line('did', d === '' ? '-' : d, act));
   });
-  it.each(REFUSED)('%j is refused under a live marker, the delivery named in the log', (c, act) => {
+  it.each(REFUSED)('%j is refused under a live marker; an inbox names the marker\'s delivery, an ack its own', (c, act, d) => {
     const v = sub(c, { pairs: 'coordinator.42', state: 'live' });
     expect(v).toMatchObject({ outcome: 'deny', text: ACK });
-    expect(v.log).toBe(`1795000000\tlane-a-project-a\tack\tdid\t42\t${act.replace(' ', '-')}\n`);
+    expect(v.log).toBe(line('did', d === '' ? '42' : d, act));
   });
   it.each(PASSED)('%j passes, with and without a marker', (c) => {
     expect(sub(c)).toEqual({ outcome: '', text: '', log: '', seen: '' });
     expect(sub(c, { pairs: 'coordinator.42', state: 'live' })).toEqual({ outcome: '', text: '', log: '', seen: '' });
+  });
+  it('`mail $\'ack\'` is a named residual: ANSI-C quoting is not unquoted', () => {
+    expect(sub("ccrc-api mail $'ack' 5")).toEqual({ outcome: '', text: '', log: '', seen: '' });
   });
   it('read on the raw text: the strip empties `"$API"`, and the raw read still finds it (the strip given, as the hook would)', () => {
     const c = '"$API" mail inbox';
@@ -408,19 +428,50 @@ describe('the subagent\'s ack refusal (Task 6.1)', () => {
       expect(hold(c, { ran: '' })).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
     }
   });
+  it('F9: an `ack` word on the main thread refuses nothing, with no marker and under one', () => {
+    for (const c of ['ccrc-api mail ack 7', 'ccrc-api mail inbox']) {
+      expect(hold(c, { ack: '1', pairs: '', state: '', ran: '' }), c).toEqual({ outcome: '', text: '', log: '', seen: '' });
+      expect(hold(c, { ack: '1', ran: '' }), c).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
+    }
+  });
   it('shadow: with `refuse` not armed, nothing is refused and `ack would` is logged once a key, `-` for no marker', () => {
     const first = sub('ccrc-api mail ack 7', { armed: 'notice' });
-    expect(first).toEqual({ outcome: '', text: '', log: '1795000000\tlane-a-project-a\tack\twould\t-\tmail-ack\n', seen: '\nack.-.mail-ack.would\n' });
-    expect(sub('ccrc-api mail ack 8', { armed: 'notice', seen: first.seen })).toEqual({ outcome: '', text: '', log: '', seen: '' });
+    expect(first).toEqual({ outcome: '', text: '', log: line('would', '7', 'mail-ack'), seen: '\nack.7.mail-ack.would\n' });
+    expect(sub('ccrc-api mail ack 7', { armed: 'notice', seen: first.seen })).toEqual({ outcome: '', text: '', log: '', seen: '' });
     const inbox = sub('ccrc-api mail inbox', { armed: '', seen: first.seen });
-    expect(inbox.log).toBe('1795000000\tlane-a-project-a\tack\twould\t-\tmail-inbox\n');
-    expect(inbox.seen).toBe('\nack.-.mail-ack.would\nack.-.mail-inbox.would\n');
-    expect(sub('ccrc-api mail ack 7', { armed: 'notice', pairs: 'coordinator.42', state: 'live' }).log)
-      .toBe('1795000000\tlane-a-project-a\tack\twould\t42\tmail-ack\n');
+    expect(inbox.log).toBe(line('would', '-', 'mail-inbox'));
+    expect(inbox.seen).toBe('\nack.7.mail-ack.would\nack.-.mail-inbox.would\n');
+  });
+  it('F7: `mail ack 5` and `mail ack 6` under one marker are two lines, each naming its own delivery', () => {
+    const o: Opts = { armed: '', pairs: 'coordinator.42', state: 'live' };
+    const five = sub('ccrc-api mail ack 5', o);
+    expect(five.log).toBe(line('would', '5', 'mail-ack'));
+    const six = sub('ccrc-api mail ack 6', { ...o, seen: five.seen });
+    expect(six.log).toBe(line('would', '6', 'mail-ack'));
+    expect(six.seen).toBe('coordinator.42\nack.5.mail-ack.would\nack.6.mail-ack.would\n');
+    expect(sub('ccrc-api mail ack 5', { ...o, seen: six.seen }).log).toBe('');
+  });
+  it('F7: a bare inbox that acks logs one line per delivery the marker holds', () => {
+    const v = sub('ccrc-api mail inbox', { armed: '', pairs: 'coordinator.42,overlord.7,coordinator.50', state: 'live' });
+    expect(v.log).toBe(line('would', '42', 'mail-inbox') + line('would', '7', 'mail-inbox') + line('would', '50', 'mail-inbox'));
+  });
+  it('F7: every refused act in one command is logged, not only the first, and a repeated one once', () => {
+    const v = sub('ccrc-api mail ack 5; ccrc-api mail inbox; ccrc-api mail ack 5', { pairs: 'coordinator.42', state: 'live' });
+    expect(v).toMatchObject({ outcome: 'deny', text: ACK });
+    expect(v.log).toBe(line('did', '5', 'mail-ack') + line('did', '42', 'mail-inbox'));
   });
   it('a gated act\'s subagent refusal wins over the ack refusal, and both are logged', () => {
     const v = sub('git push && ccrc-api mail ack 7', { pairs: 'coordinator.42', state: 'live', ran: '1' });
     expect(v).toMatchObject({ outcome: 'deny', text: ASUB('git push') });
-    expect(v.log).toBe('1795000000\tlane-a-project-a\trefuse\tdid\t42\tgit-push\n1795000000\tlane-a-project-a\tack\tdid\t42\tmail-ack\n');
+    expect(v.log).toBe('1795000000\tlane-a-project-a\trefuse\tdid\t42\tgit-push\n' + line('did', '7', 'mail-ack'));
+  });
+  it('F1: the ack read is linear, so a 20 KB command of repeated `ccrc-api mail inbox | cat;` finishes within 500 ms', () => {
+    const unit = 'ccrc-api mail inbox | cat; ';
+    const c = unit.repeat(Math.ceil(20_480 / unit.length)).slice(0, 20_480);
+    const t0 = performance.now();
+    const v = sub(c, { strip: null, ran: '' });
+    const ms = performance.now() - t0;
+    expect(v).toEqual({ outcome: '', text: '', log: '', seen: '' });
+    expect(ms, `the module took ${Math.round(ms)} ms`).toBeLessThan(500);
   });
 });

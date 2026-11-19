@@ -404,13 +404,14 @@ describe('the subagent\'s ack refusal (Task 6.1)', () => {
     joined();
     expect(subBash(c).stdout).toBe(denyEnvelope(ACK));
     expect(subBash(c).stdout).toBe(denyEnvelope(ACK));
-    expect(logged()).toEqual([`${ID} ack did - ${act}`]);
+    expect(logged()).toEqual([`${ID} ack did ${act === 'mail-ack' ? '7' : '-'} ${act}`]);
   });
   it('under a live marker a joined subagent\'s ack is refused too, and the log names the delivery', () => {
     joined();
     live();
     expect(subBash('ccrc-api mail ack 7').stdout).toBe(denyEnvelope(ACK));
-    expect(logged()).toEqual([`${ID} ack did 42 mail-ack`]);
+    expect(subBash('ccrc-api mail inbox').stdout).toBe(denyEnvelope(ACK));
+    expect(logged(), 'an ack names its own delivery, an inbox the marker\'s (F7)').toEqual([`${ID} ack did 7 mail-ack`, `${ID} ack did 42 mail-inbox`]);
   });
   it.each(PASSED)('a joined subagent\'s %j passes, with and without a marker', (c) => {
     joined();
@@ -435,7 +436,8 @@ describe('the subagent\'s ack refusal (Task 6.1)', () => {
     expect(subBash('ccrc-api mail ack 7').stdout).toBe('');
     expect(subBash('ccrc-api mail ack 8').stdout).toBe('');
     expect(subBash('ccrc-api mail inbox').stdout).toBe('');
-    expect(logged()).toEqual([`${ID} ack would - mail-ack`, `${ID} ack would - mail-inbox`]);
+    expect(subBash('ccrc-api mail ack 7').stdout).toBe('');
+    expect(logged()).toEqual([`${ID} ack would 7 mail-ack`, `${ID} ack would 8 mail-ack`, `${ID} ack would - mail-inbox`]);
   });
   it('the prefilter: a joined subagent\'s call with no `mail` word, or none of `ack` and `inbox`, makes no call of the block', () => {
     const realJq = spawnSyncGroup('sh', ['-c', 'command -v jq'], { encoding: 'utf8', timeout: 10_000 }).stdout.trim();
@@ -451,6 +453,10 @@ describe('the subagent\'s ack refusal (Task 6.1)', () => {
     expect(blockCalls('ccrc-api mail list --to lane-a'), 'mail, but neither ack nor inbox').toEqual([]);
     expect(blockCalls('grep -r inbox notes'), 'inbox, but no mail').toEqual([]);
     expect(blockCalls('ccrc-api mail inbox | cat'), 'CONTROL: the prefilter passes, so the module decides').toHaveLength(1);
+    fs.writeFileSync(calls, '');
+    expect(bash('ccrc-api mail inbox').stdout, 'the main thread, with no marker').toBe('');
+    expect(fs.readFileSync(calls, 'utf8').split('\u001f\n').filter((a) => a.includes('mail-hold') || a.includes('--arg pairs')),
+      'the prefilter tests tmsub: a main-thread inbox makes no call of the block').toEqual([]);
   });
   it('with $REG/mail-disabled present, nothing is refused', () => {
     joined();
