@@ -883,25 +883,31 @@ export function inboundOf(db: DatabaseSync, linearId: string): InboundRow | null
   return r === undefined ? null : inboundRow(r);
 }
 const INBOUND_PATCH_COLUMNS = ['state', 'mailedTo', 'mailedAt', 'handedTo', 'reason', 'actedAt', 'itemId', 'retiredWhy'] as const;
-/** Set the named columns of one row; a column not named stays. The column names come from the list above, never the caller. */
+/** Set the named columns of one row; a column not named stays. The column names come from the list above, never the caller.
+ *  THE RULE OF THE ROW'S NOTE (round 4 F2): a stored note (`InboundNote`) lives only while its row is `waiting`, so a patch that moves
+ *  `state` to anything else (a triage, a take, a placement, a mail, a retire) deletes the row's note in the same transaction: inside
+ *  the caller's when it holds one, else in one opened here. A patch that names no `state`, or names `waiting`, never touches it. */
 export function setInboundState(
   db: DatabaseSync, linearId: string,
   patch: Partial<{ state: InboundState; mailedTo: string | null; mailedAt: number | null; handedTo: string | null; reason: string | null; actedAt: number | null; itemId: number | null; retiredWhy: RetireWhy | null }>,
 ): void {
   const cols = INBOUND_PATCH_COLUMNS.filter((c) => patch[c] !== undefined);
   if (cols.length === 0) return;
-  db.prepare(`UPDATE linear_inbound SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE linearId = ?`)
-    .run(...cols.map((c) => patch[c] as string | number | null), linearId);
+  const write = (): void => {
+    db.prepare(`UPDATE linear_inbound SET ${cols.map((c) => `${c} = ?`).join(', ')} WHERE linearId = ?`)
+      .run(...cols.map((c) => patch[c] as string | number | null), linearId);
+    if (patch.state !== undefined && patch.state !== 'waiting') clearInboundNote(db, linearId);
+  };
+  if (db.isTransaction) write(); else tx(db, write);
 }
 /** THE ONE RETIRE of a stored inbound row (review 2457 F4, A6; D-8735): the state, its cause and the deletion of the row's stored note
- *  are ONE act, so no retire leaves an orphan note behind and none leaves a row retired with no cause. A row that is not retirable now
+ *  (`setInboundState` deletes it with any move out of `waiting`) are ONE act, so no retire leaves an orphan note behind and none leaves a row retired with no cause. A row that is not retirable now
  *  (`inboundRetirable`: taken, placed, an acted close, already retired, or gone) is left as it is and the answer is false: a door's
  *  re-read ran outside the transaction, so the row is judged again here. The caller holds the transaction (`retireInbound` opens one). */
 export function retireInboundInTx(db: DatabaseSync, linearId: string, why: RetireWhy): boolean {
   const row = inboundOf(db, linearId);
   if (row === null || !inboundRetirable(row)) return false;
   setInboundState(db, linearId, { state: 'retired', retiredWhy: why });
-  clearInboundNote(db, linearId);
   return true;
 }
 /** `retireInboundInTx` in a transaction of its own. */
@@ -1023,8 +1029,9 @@ export function moveTicketToProgrammeInTx(
 }
 /** What the owner's next mail about a `waiting` inbound issue must carry beyond the first mail (D-8734, D-8735): a coordinator's
  *  return made while the team had no live owner (`returned`, its programme and masked note), or Linear's reopen of a retired
- *  issue (`reopened`). One per issue: a later note replaces an earlier one. The inbound lane mails it and deletes it in one
- *  transaction (`clearInboundNote`). */
+ *  issue (`reopened`). One per issue: a later note replaces an earlier one. A note lives only while its row is `waiting`: the lane
+ *  mails it and deletes it in one transaction, and `setInboundState` deletes it with any other move of the row out of `waiting`
+ *  (a triage, a take, a placement, a retire), in that move's own transaction. */
 export type InboundNote = { kind: 'returned'; program: string; note: string; at: number } | { kind: 'reopened'; at: number; was: RetireWhy | null };
 export function setInboundNote(db: DatabaseSync, linearId: string, n: InboundNote): void {
   db.prepare('INSERT INTO linear_inbound_notes (linearId, kind, program, note, at) VALUES (?, ?, ?, ?, ?) '
@@ -1038,7 +1045,8 @@ export function inboundNoteOf(db: DatabaseSync, linearId: string): InboundNote |
     ? { kind: 'returned', program: r.program as string, note: r.note as string, at: r.at as number }
     : { kind: 'reopened', at: r.at as number, was: retireWhyOf(r.note) };
 }
-/** Deletes an issue's note; the caller holds the transaction that mailed it. */
+/** Deletes an issue's note. `setInboundState` calls it with every move out of `waiting`; the lane calls it in the transaction that
+ *  mails the note; the caller holds the transaction. */
 export function clearInboundNote(db: DatabaseSync, linearId: string): void {
   db.prepare('DELETE FROM linear_inbound_notes WHERE linearId = ?').run(linearId);
 }

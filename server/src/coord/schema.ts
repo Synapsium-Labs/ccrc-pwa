@@ -3971,8 +3971,9 @@ export const MIGRATIONS: readonly string[] = [
   // cursor to go on from, `newest` the newest `updatedAt` the sweep has read so far, and `startedAt` when it began (ccrc's clock:
   // a finished sweep never moves the watermark past its start less a margin, so a change made while it walked is read again). A
   // row is the sweep in progress; a finished sweep deletes it. `linear_inbound_notes`: what the owner's next mail about a `waiting`
-  // inbound issue must say beyond the first mail, one row per issue, kept until the inbound lane mails it to a live owner, in the
-  // same transaction that deletes it: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
+  // inbound issue must say beyond the first mail, one row per issue, kept while its row is `waiting`: the inbound lane deletes it in
+  // the transaction that mails it to a live owner, and any other move of the row out of `waiting` (a triage, a take, a retire)
+  // deletes it in that move's own transaction: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
   // Linear owner (review 2443 A3; `program` the returning programme, `note` its note, masked as the return mail carries it), and
   // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
   // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this

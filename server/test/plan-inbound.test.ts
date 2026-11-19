@@ -1924,3 +1924,54 @@ describe('the reopen mail names the row\'s own retire cause (review 2524 A4)', (
     expect(reopenBody(r)).toContain(`The issue AAA-12 was retired earlier and is open again in Linear, ${SO}`);
   });
 });
+
+// ── Wave 4 follow-ups, second set (round 4 F2, D-8183): a note never outlives its waiting row ──
+
+describe('a returned or reopened note never outlives its waiting row (round 4 F2)', () => {
+  const returnedWhileGone = async (r: Rig): Promise<void> => {
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: 'coord-gone', ownsTeam: false }, 'test', T);
+    r.presence['coord-gone'] = 'dead';
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', return: { note: 'not ours' } }, OTHER)).statusCode).toBe(200);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'waiting' });
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'returned' });
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: OWNER, ownsTeam: false }, 'test', T);   // the owner is back, before the lane's next beat
+  };
+  const reopenedNote = async (r: Rig): Promise<void> => {
+    await detect(r, [node(12)]);
+    r.plan.setInboundNote(U(12), { kind: 'reopened', at: T, was: 'completed' });
+  };
+  const triages: Array<[string, Record<string, unknown>, string]> = [
+    ['upkeep', { decision: 'upkeep' }, 'placed'],
+    ['close', { decision: 'close', reason: 'noise' }, 'closed'],
+    ['raise', { decision: 'raise', note: 'This changes scope' }, 'raised'],
+    ['hand', { decision: 'hand', programme: 'prog-b' }, 'handed'],
+  ];
+  for (const [name, body, state] of triages) {
+    for (const [noteName, make] of [['returned', returnedWhileGone], ['reopened', reopenedNote]] as const) {
+      it(`a ${noteName} note is deleted when the owner triages the row ${name}, and a later beat mails nothing about it`, async () => {
+        const r = await rig();
+        await make(r);
+        const res = await triage(r, { issue: 'AAA-12', ...body });
+        expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+        expect(rowOf(r, 12)).toMatchObject({ state });
+        expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+        r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: OWNER, ownsTeam: false }, 'test', T);
+        await passAt(r, r.t.now + 1);
+        expect(mails(r, 'Linear inbound: AAA-12 returned%')).toEqual([]);
+        expect(mails(r, 'Linear inbound: AAA-12 reopened%')).toEqual([]);
+      });
+    }
+  }
+
+  it('a hand to the owner\'s own programme takes the row at once and deletes its note', async () => {
+    const r = await rig();
+    await reopenedNote(r);
+    const res = await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1', checkpoint: 'c1' });
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'taken' });
+    expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound_notes').get()).toEqual({ n: 0 });
+  });
+});

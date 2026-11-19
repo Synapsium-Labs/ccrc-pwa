@@ -213,7 +213,7 @@ export class InboundLane {
   private mailOwner(row: InboundRow, ownerId: string, now: number): void {
     const { coord, plan } = this.deps;
     // the mail is picked by the row's note (D-8734, D-8735): a reopen or a stored return is mailed under a subject carrying its
-    // time, so the first mail's dedupe never eats it; the note is deleted in the transaction that mails it
+    // time, so the first mail's dedupe never eats it; the note is deleted in the transaction that mails it (`setInboundState` deletes it with the move to `mailed`)
     const note = plan.inboundNoteOf(row.linearId);
     const m = inboundNoteMail(row, note);
     tx(coord.db, () => {
@@ -221,7 +221,6 @@ export class InboundLane {
         insertSystemMailTx(coord, null, { fromId: 'operator', toId: ownerId, runId: null, kind: 'question', subject: m.subject, body: m.body });
       }
       plan.setInboundState(row.linearId, { state: 'mailed', mailedTo: ownerId, mailedAt: now });
-      if (note !== null) plan.clearInboundNote(row.linearId);
     });
   }
 
