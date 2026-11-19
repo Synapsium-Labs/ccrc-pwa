@@ -245,12 +245,20 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the designation row's pending session against the session whose role or identity is asked (Overlord §3.3.9): the designation fact's own read, no run is read" },
   { file: 'server/src/roleOf.ts', text: 'd.live === sessionId', count: 2,
     why: "the designation row's bound session against the session whose role or identity is asked (Overlord §3.3.9): the designation fact's own read, no run is read" },
+  { file: 'server/src/operatorModel/messages.ts', text: 'designation.sessionId === sessionId',
+    why: "the designation's bound session against the session a console prompt names (promptTargetVerdict, private store B): the designation read, no run is read" },
+  { file: 'server/src/operatorModel/messages.ts', text: 'designation.sessionId === row.sessionId',
+    why: "the designation's bound session against the session an operator message was recorded for (nudgeRecovery, the boot pass): the designation read and the message row, no run is read" },
   { file: 'server/src/continuity/generationsLane.ts', text: 'g.sessionId === id',
     why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
   { file: 'server/src/continuity/generationStart.ts', text: 'n.sessionId !== s.sessionId',
     why: 'two reported starts of the same identity, for which is its newest (review 2006 R6): no run is read' },
   { file: 'server/src/continuity/continuityStore.ts', text: 'g.sessionId === sessionId',
     why: 'a session\'s newest live generation row among those the store read (the renewal hand-offs\' sessionLiveGeneration): a generation row\'s own session, no run is read' },
+  { file: 'server/src/turnverdict.ts', text: "live.state.sessionId !== ''",
+    why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
+  { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',
+    why: "the live process file's conversation id against the one before the /clear, until it rotates (Overlord W2 forecasts B, F3): Claude Code's conversation, no run is read" },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */

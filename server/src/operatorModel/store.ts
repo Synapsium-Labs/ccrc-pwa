@@ -12,7 +12,8 @@
 import type { DatabaseSync } from 'node:sqlite';
 import os from 'node:os';
 import path from 'node:path';
-import { isMintedActor, type AccountActor } from '../accounts/audit.js';
+import { isRecordedActor } from '../auth/attributionIdentity.js';
+import type { RecordedActor } from '../auth/callerIdentity.js';
 import { tx } from '../coord/tx.js';
 import {
   MESSAGE_STATES, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
@@ -58,7 +59,9 @@ export interface MessageRecordInput {
   readonly at: number;
   readonly sessionId: string;
   readonly term: number;
-  readonly actor: AccountActor;
+  /** The account gate's pass through the identity port (`identity.operator`); the row stores its `subject` (slug
+   *  `message-actor-stores-the-subject`, the table's one `actor TEXT` column). */
+  readonly actor: RecordedActor;
   /** Masked by the route's act; capped here. */
   readonly text: string;
   /** The settlement mark (`settlementMarkOf`): the row is recorded `settled` by `mark`. */
@@ -121,7 +124,7 @@ export class OperatorModelStore {
    *  row. A send key this session already recorded answers that record (`replay`), and writes nothing; the same key with
    *  other text refuses `send-key-reused`. */
   recordMessage(m: MessageRecordInput): StoreWrite<MessageRecorded> {
-    if (!isMintedActor(m.actor)) return { ok: false, error: 'refused', detail: 'actor: not one the account gate minted' };
+    if (!isRecordedActor(m.actor)) return { ok: false, error: 'refused', detail: 'actor: not one the identity port minted' };
     if (typeof m.sessionId !== 'string' || !m.sessionId) return { ok: false, error: 'refused', detail: 'sessionId: empty' };
     if (!isCount(m.term)) return { ok: false, error: 'refused', detail: 'term: not a non-negative safe integer' };
     if (!isCount(m.at)) return { ok: false, error: 'refused', detail: 'at: not a non-negative safe integer' };
@@ -148,7 +151,7 @@ export class OperatorModelStore {
         this.db.prepare(
           'INSERT INTO operator_messages (id, at, sessionId, term, actor, sha256, sendKey, text, cut, state, settledAt, settledBy) '
           + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
-        ).run(issued.id, m.at, m.sessionId, m.term, String(m.actor), capped.sha256, m.composedKey, capped.text, capped.cut ? 1 : 0,
+        ).run(issued.id, m.at, m.sessionId, m.term, m.actor.subject, capped.sha256, m.composedKey, capped.text, capped.cut ? 1 : 0,
           state, m.mark ? m.at : null, m.mark ? 'mark' : null);
         return { ok: true, value: { id: issued.id, cut: capped.cut, state, replay: false } };
       });
@@ -270,6 +273,19 @@ export class OperatorModelStore {
       const r = this.db.prepare('SELECT sessionId FROM operator_messages WHERE id = ?').get(id) as { sessionId: string } | undefined;
       return r === undefined ? 'absent' : { sessionId: r.sessionId };
     });
+  }
+
+  /** The row's state, never its text: the mail lane's ack reads it to move `deliver` while the row is still before `delivered`. */
+  messageStateOf(id: number): StoreRead<MessageState | 'absent'> {
+    return this.read(() => {
+      const r = this.db.prepare('SELECT state FROM operator_messages WHERE id = ?').get(id) as { state: MessageState } | undefined;
+      return r === undefined ? 'absent' : r.state;
+    });
+  }
+
+  /** The ids of the rows still `queued`, in id order, no text: the boot pass checks each against an acked nudge (F3). */
+  queuedIds(): StoreRead<readonly number[]> {
+    return this.read(() => (this.db.prepare("SELECT id FROM operator_messages WHERE state = 'queued' ORDER BY id").all() as { id: number }[]).map((r) => r.id));
   }
 
   /** Every row before `settled`, in id order, never trimmed: the card's and the inbox's unsettled list (I8). */

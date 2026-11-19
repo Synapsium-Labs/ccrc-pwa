@@ -124,6 +124,11 @@ const ARCHIVE = '/api/sessions/:id/archive';
  *  reason; named here beside it. */
 const DIGEST_CORRECT = '/api/digest/correct';
 
+/** The console's prompt route (Overlord W1 private store B, Task 5). For the designated session it records the operator's message and
+ *  queues the nudge as system mail, so it is a coordination WRITE — session-gated, no box token (the operator's door). Registered in
+ *  `server.ts`, so `SESSION_ONLY` cannot see it, for the kickoff route's reason; named here beside it. */
+const PROMPT = '/api/sessions/:id/prompt';
+
 /** Every coordination write the bullet must describe as carrying no box token. */
 /** The update control plane's session-only routes (design 2026-09-20 §12 census
  *  step (b): all six of §12's session routes — W2's four and wave 5's two moves). Registered from `server/src/update/routes.ts`,
@@ -205,7 +210,7 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
   '/api/decision-model/rows/:id/ceiling', '/api/decision-model/key', '/api/decision-model/key'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
   ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
   ...DECISION_MODEL_DOORS, ...MODELS_DOORS];
 
@@ -515,6 +520,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(ALL_LANES).not.toContain('POST /api/sessions/:id/kickoff');
     expect(ALL_LANES).not.toContain(`POST ${ARCHIVE}`);
     expect(ALL_LANES).not.toContain(`POST ${DIGEST_CORRECT}`);
+    expect(ALL_LANES).not.toContain(`POST ${PROMPT}`);
     for (const door of UNGATED_DOORS) expect(ALL_LANES).not.toContain(`POST ${door}`);
   });
 
@@ -1425,8 +1431,13 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(LAB_SRC)).toEqual([]);
   });
 
-  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. */
-  const labCode = (s: string): string => s.replace(/\/\*[\s\S]*?\*\//g, '').replace(/(^|[^:'"`\\])\/\/[^\n]*/g, '$1');
+  /** Code with comments blanked, so a sentence ABOUT fs or a log line is never counted. One pass, left to right: whichever
+   *  opens first wins, a comment or a string, so a `/*` inside a line comment or inside a string opens nothing, and a string
+   *  is kept whole. Blanking block comments first read a `/*` written in a line comment as a comment running to the next
+   *  `*\/`, which once hid eight lines of routes.ts from this scan (rows RLB-T4-M3 and RLB-T4-M4, review 2480). A `//` right
+   *  after a colon, a quote, a backtick or a backslash is not a comment, as before (a URL, a regex). */
+  const LAB_LEXEMES = /'(?:\\.|[^'\\\n])*'|"(?:\\.|[^"\\\n])*"|`(?:\\[\s\S]|[^`\\])*`|\/\*[\s\S]*?\*\/|(?<![:'"`\\])\/\/[^\n]*/g;
+  const labCode = (s: string): string => s.replace(LAB_LEXEMES, (m) => (m.startsWith('/') ? '' : m));
   /** `fs` loaded by import, dynamic import, re-export or require, with or without `node:` and a `/promises` tail. */
   const FS_LOAD = /(?:\bfrom\s*|\bimport\s*\(?\s*|\brequire\s*\(\s*)(['"])(?:node:)?fs(?:\/[^'"\n]*)?\1/;
   const LOGS = /\bconsole\s*\.|\bprocess\s*\.\s*std(?:out|err)\b/;
@@ -1446,6 +1457,18 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     for (const src of ['// import fs from "node:fs"; console.warn(1)', "/* require('fs') */ const a = 1;"]) {
       expect(labKeeps('x', src), src).toEqual([]);
     }
+  });
+
+  // CONTROL: each planted file holds a `/*`, then a guarded call, then a later `*/`, so a scan that blanked block comments
+  // first, or that did not keep that kind of string whole, would read from the `/*` to the `*/` as one comment and miss
+  // the call between. One case per shape, so each reports on its own: the line comment and the three kinds of string.
+  it.each([
+    ['a line comment', "// the route GET /* is named here\nconsole.warn('x');\n/* c */ const a = 1;", 'x writes a log line'],
+    ['a double-quoted string', 'const key = "GET /*";\nimport fs from \'node:fs\';\n/* c */ const a = 1;', 'x loads fs'],
+    ['a single-quoted string', "const key = 'GET /*';\nconst f = require('node:fs');\n/* c */ const a = 1;", 'x loads fs'],
+    ['a template literal', "const key = `GET /*`;\nprocess.stdout.write('x');\n/* c */ const a = 1;", 'x writes a log line'],
+  ])('a `/*` inside %s opens no comment: the code after it is still read', (_where, src, seen) => {
+    expect(labKeeps('x', src), src).toEqual([seen]);
   });
 
   it('the probe pair is EXEMPT with reason 8, the run routes are not, and none claims a token or the cookie-or-token class', () => {

@@ -19,6 +19,8 @@ import {
   readProjectPools, type ProjectPoolsRead,
 } from './pools.js';
 import type { CcdResult, LiveAskAnswer, WatcherCoordPort } from './coord/ports.js';
+import type { LiveSpendReading } from '../../shared/portfolio.js';
+import type { HealthVerdict, SpendTurnRead } from '../../shared/programmeFacts.js';
 import { parseDialog } from './pane/dialog.js';
 import { parseStatusline, type Statusline } from './pane/statusline.js';
 import { defaultCachePath, inventoryBuildAgreement, persistFleetSnapshot, SnapshotWriter, snapshotNotice } from './fleetstate.js';
@@ -35,7 +37,7 @@ import { finishedAfter } from './coord/finished.js';
 import { redactCommand } from './coord/redact.js';
 import { withCleanupHeldBy } from './cleanupHeldBy.js';
 import { foldHookStateRead, readHookState, readHookStateRawMeasured, type HookState, type HookStateRawRead } from './hookstate.js';
-import { readUsageMeasured, USAGE_FRESH_S } from './usage.js';
+import { readSpendTurns, readUsageMeasured, USAGE_FRESH_S } from './usage.js';
 import { readBoxText, sendPrompt } from './inject/send.js';
 import {
   decideIdleCompactNudge, idleNudgeDisabled, idleNudgeFeedBody, idleNudgeRefusedBody, idleNudgeRowHold, readCompactionTail,
@@ -179,7 +181,7 @@ import { renewalActsOf } from './continuity/renewalWiring.js';
 import { renewalReadingsOf } from './continuity/renewalReadingsWiring.js';
 import { runTimersLane, timerListingOf } from './continuity/timerLane.js';
 import { runQuizLane } from './continuity/quizLane.js';
-import { runForecastLane } from './coord/forecastLane.js';
+import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
@@ -210,7 +212,10 @@ import {
   toRunSummary, type MarkReleaseNotifiedResult,
   type OpenSibling, type RunRow,
 } from './coord/store.js';
-import { renderMailNudge } from './coord/envelope.js';
+import { mailNudgeOf } from './coord/envelope.js';
+import { operatorNudgeFor } from './operatorModel/operatorNudge.js';
+import { settleOperatorNudge } from './operatorModel/nudgeLane.js';
+import { isOperatorMessageMail } from '../../shared/operatorMessages.js';
 import { mailPaceOf } from './coord/mailPace.js';
 import { roleFactsOf, roleOf } from './roleOf.js';
 import { DesignationEpisode } from './continuity/designationEpisode.js';
@@ -2208,6 +2213,17 @@ export class FleetWatcher {
     return hs === undefined ? { kind: 'unmeasured' } : { kind: 'read', key: hs.state === 'waiting' ? askKey(hs.ask) : null };
   }
 
+  /** `portfolioStore.ts#SpendUsageRead`'s adapter (Overlord W2 forecasts B): a session's reading for the spend reads,
+   *  `not-ready` before the usage sweep's first pass in this process. A read-only accessor that stores nothing. The turn
+   *  read beside it is the forecast lane's last pass's (at most one lane interval old); a session it has not read yet
+   *  reads `unread`, so its reading is never measured on a guess. */
+  liveSpendReading(sessionId: string): LiveSpendReading {
+    if (!this.usageSwept) return { kind: 'not-ready' };
+    if (this.usageUnreadable.has(sessionId)) return { kind: 'unreadable' };
+    const r = spendReadingOf(this.usage.get(sessionId), this.usageConversation.get(sessionId), this.spendTurns.get(sessionId));
+    return r === null ? { kind: 'none' } : { kind: 'reading', ...r };
+  }
+
   /** The last measured marker state, for `/ws/fleet`'s cold start. `null` means
    *  THIS PROCESS HAS NEVER MEASURED — a socket that connects before the first
    *  tick is sent no `coord` frame at all, because inventing `clear` there
@@ -3356,7 +3372,7 @@ export class FleetWatcher {
         tag: `mail-${m.toId}-${m.mailId}`,
         recordAlways: true,
         // A fired timer is the session's own reminder, never news for the operator (review 2053 F2): recorded, never pushed.
-        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
+        ...(isAskNudgeMail(m) || isApprovalNudgeMail(m) || isOperatorMessageMail(m) || stall === 'check' || stall === 'reply' || stall === 'self-wake' || isUntoldNotice(m.subject) || isRunCloseWarning(m.subject) || m.fromId === TIMER_MAIL_SENDER ? { recordOnly: true } : {}),
       }, projects);
       this.lastMailNotifyId = m.deliveryId;
     }
@@ -3762,30 +3778,56 @@ export class FleetWatcher {
     const nowS = Math.floor(now / 1000);
     const next = new Map<string, SessionUsage>();
     const readAt = new Map<string, number>();   // the lane's own wall clock; rebuilt, so a purged row ages out
+    const conv = new Map<string, { sidecar: string | null; registry: string }>();
+    const unreadable = new Set<string>();   // F6: a failed read with no earlier reading to carry
     // A cold row (console speed S1) carries its entry, but only while that was read within the re-read bound.
     const readIds = hotIds === undefined ? undefined : usageReadIds(records, hotIds, this.usageReadAt, now);
     await Promise.all(records.map(async (r) => {
       if (readIds?.has(r.id) === false) {
         const kept = this.usage.get(r.id);
         if (kept) next.set(r.id, carriedUsage(kept, nowS));
+        const keptConv = this.usageConversation.get(r.id);
+        if (keptConv) conv.set(r.id, keptConv);
+        if (this.usageUnreadable.has(r.id)) unreadable.add(r.id);
         const at = this.usageReadAt.get(r.id);
         if (at !== undefined) readAt.set(r.id, at);
         return;
       }
       const read = await readUsageMeasured(this.deps.io, this.deps.cfg.registryDir, r.id, nowS);
-      if (read.kind === 'reading') next.set(r.id, read.usage);
+      if (read.kind === 'reading') { next.set(r.id, read.usage); conv.set(r.id, { sidecar: read.uuid, registry: r.uuid }); }
       else if (read.kind === 'unreadable') {
         const prev = this.usage.get(r.id);
-        if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S });
+        if (prev) next.set(r.id, { ...prev, stale: nowS - prev.ts > USAGE_FRESH_S }); else unreadable.add(r.id);
+        const prevConv = this.usageConversation.get(r.id);
+        if (prevConv) conv.set(r.id, prevConv);
         const at = this.usageReadAt.get(r.id);   // a failed read is no read: the row stays due
         if (at !== undefined) readAt.set(r.id, at);
         return;
       }
+      if (read.kind === 'malformed') unreadable.add(r.id);   // dropped, so never `none`: no reading stands for it
       readAt.set(r.id, now);
     }));
     this.usage = next;
     this.usageReadAt = readAt;
+    this.usageConversation = conv;
+    this.usageUnreadable = unreadable;
+    this.usageSwept = true;   // the forecast lane's spend arm waits for this (its boot guard)
   }
+
+  /** Whether `usagePass` has completed once in this process; `forecastSpendSince` is when the forecast lane's spend arm
+   *  first ran with it true (Overlord W2 forecasts B, `coord/forecastLane.ts#UsageRead`). */
+  private usageSwept = false;
+  private forecastSpendSince: number | null = null;
+  /** Per row, the reading's conversation (the sidecar's `session_id`) and the registry's current one, for the spend arm's
+   *  identity test (`programmeMeasures.ts#runSpendVerdict`). Rebuilt each pass, like `usage`. */
+  private usageConversation = new Map<string, { sidecar: string | null; registry: string }>();
+  /** Rows whose sidecar read failed this pass, unreadable with no earlier reading to carry or malformed (dropped): the
+   *  spend reads answer `unreadable` for them, never `none`, so a transient failure never records a permanent `absent`
+   *  (fix round 1, F6). Rebuilt each pass. */
+  private usageUnreadable = new Set<string>();
+  /** Per row with a reading, the turn marker's answer read by the forecast lane's last pass (fix round 1, F2):
+   *  `coord/forecastLane.ts#spendReadingOf`'s `turn`. Rebuilt each lane pass. */
+  private spendTurns = new Map<string, SpendTurnRead>();
 
   /** When each row's usage sidecar was last read (ms, `Date.now`), by `usagePass` alone. */
   private usageReadAt = new Map<string, number>();
@@ -6236,12 +6278,27 @@ export class FleetWatcher {
     await this.runLane('quiz', () => { runQuizLane(port, this.deps.time.clock.wall(), (line) => console.warn(line)); });
   }
 
-  /** The forecast lane (Overlord W2 forecasts A, `coord/forecastLane.ts`): one seal-and-score pass; a failure logs one line. */
+  /** The forecast lane (Overlord W2 forecasts A, `coord/forecastLane.ts`): one seal-and-score pass; a failure logs one line.
+   *  Before the pass it reads the turn marker of every row with a usage reading (fix round 1, F2), so the spend reads judge
+   *  freshness against the session's own turns. */
   async sweepForecasts(): Promise<void> {
     const port = this.deps.forecasts;
     if (!port) return;
-    await this.runLane('forecasts', () => {
-      const pass = runForecastLane(port, this.deps.time.clock.wall(), this.deps.time.entropy);
+    await this.runLane('forecasts', async () => {
+      if (this.usageSwept) this.spendTurns = await readSpendTurns((id, reg) =>
+        readTurnMarkMeasured(this.deps.io, this.deps.cfg.registryDir, id, reg, null), this.usageConversation);
+      const now = this.deps.time.clock.wall();
+      if (this.usageSwept) this.forecastSpendSince ??= now;
+      const usage = { ready: () => this.usageSwept, reading: (id: string) => {
+        const r = this.liveSpendReading(id);
+        return r.kind === 'not-ready' ? { kind: 'none' as const } : r;
+      } };
+      const notice = (program: string, v: HealthVerdict): void => {
+        noticeSink(this.deps)({ kind: 'coord', sessionId: '', runId: null, title: `Health · ${program}`, body: `${v.word} (${v.evidence.matched ?? 'steady'})` },
+          'record-only', { degraded: `programme ${program} health notice, feed archive degraded` });
+      };
+      const pass = runForecastLane(port, now, this.deps.time.entropy, { usage, spendSince: this.forecastSpendSince ?? now,
+        liveAsk: (c) => this.liveAskKey(c), liveSpend: (sid) => this.liveSpendReading(sid), notice });
       if (pass.failed.length > 0) console.warn(`ccrc-server: the forecast lane recorded nothing for: ${pass.failed.join('; ')}`);
       if (pass.missed > 0) console.warn(`ccrc-server: the forecast lane missed ${pass.missed} close(s) in a gap it was down for; they are never sealed`);
     });
@@ -8644,6 +8701,10 @@ export class FleetWatcher {
         // text (send.ts's own docstring) — this is belt AND suspenders, not
         // either alone.
         const prior = d.attempts > 0 || d.deliveredAt !== null;
+        // An operator message's nudge types its own fixed line and resumes only that line (`mailNudgeOf`, the private store's
+        // mail branch); every other mail is the id-agnostic line above, as before.
+        const origin = store.mailOrigin(d.mailId);
+        const nudge = await operatorNudgeFor((id) => readBoxText({ tmux: this.deps.tmux, queue: this.deps.queue }, id), d.toId, origin);
         // `ownStrandedClear` (Task 407, operator ruling): the ONE dirty-box
         // case this lane may clear on PROOF rather than on shape.
         // `dispatch.ts` types a literal `/clear` into a resumed worker before
@@ -8678,7 +8739,7 @@ export class FleetWatcher {
           this.parkProbeAt.set(d.id, now);
           const seen = parkBoxSeen(box, d.parkBox);
           if (seen === 'baseline') this.landed(store.baselineParkBox(d.id, box!), 'baselineParkBox', d.id);
-          if (seen !== 'changed' && box !== renderMailNudge(d.toId)) {
+          if (seen !== 'changed' && box !== nudge.line) {
             gated(d, 'parked');   // D-5840
             this.landed(store.holdParked(d.id, now + MAIL_PARK_RETRY_MS), 'holdParked', d.id);
             continue;
@@ -8690,12 +8751,13 @@ export class FleetWatcher {
         // `esc to interrupt`. It is best-effort: blind below `READER_MIN_COLS`,
         // where the line wraps, and on a `--remote-control` pane, which never
         // renders it.
-        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, renderMailNudge(d.toId),
-          { onDraft: 'stash', resumeIfOwn: true, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
+        const res = await sendPrompt({ tmux: this.deps.tmux, queue: this.deps.queue }, d.toId, mailNudgeOf(d.toId, origin).line,
+          { onDraft: 'stash', ...nudge.rule, clearMailResidue: prior, ownStrandedClear, holdIfAutoContinueArmed: true,
             refuseIfTurnRunning: turn.via !== 'idle' });
         if (res.ok) {
           this.mailCooldown.set(d.toId, now);
           if (!this.landed(store.markDelivered(d.id, now), 'markDelivered', d.id)) continue;
+          if (nudge.operatorMessageId !== null) settleOperatorNudge({ coord: store, operatorModel: this.deps.operatorModel, now, warn: (l) => { console.warn(l); } }, d, nudge.operatorMessageId);
           // A REPLAY — this row was already `delivered` before this send —
           // counts against its own ceiling, independent of `attempts` (fix,
           // review finding 20: see `MAIL_REPLAY_MAX_ATTEMPTS`'s own

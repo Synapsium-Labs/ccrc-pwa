@@ -19,6 +19,7 @@ import {
 import { OPEN_ITEM_STATES, type ItemState } from '../../../shared/ledgers.js';
 import { NOTE_REFUSALS, type NoteRefusal } from '../../../shared/refusal.js';
 import { utf8Bytes } from '../../../shared/utf8.js';
+import type { RoleFacts } from '../roleOf.js';
 
 /** What a session asks to write. `revises` names the note it supersedes; `closes` ends that note with no successor. */
 export interface NoteInput {
@@ -65,6 +66,8 @@ function worst(facts: readonly KeyFact[]): NoteVerdictRefusal | null {
 export function noteVerdict(n: NoteInput, key: KeyFact, liveCount: number | 'unmeasured', revised: RevisedFact): NoteVerdict {
   if (n.closes && n.revises === null) return { ok: false, refusal: 'bad-request' };
   if (!n.closes && n.kind === 'thread' && isBlankText(n.next)) return { ok: false, refusal: 'bad-request' };
+  // A miss is keyed to the message it missed, and only a miss is (slug miss-is-keyed-to-a-message).
+  if (!n.closes && (n.kind === 'miss') !== (n.key.kind === 'message')) return { ok: false, refusal: 'bad-request' };
   if (overCap(n.waitsOn, NOTES_CAP.chars) || overCap(n.next, NOTES_CAP.chars)) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   // A revision with no fact for the note it revises, or a new note with one, is a caller that measured the wrong thing.
   if ((n.revises === null) !== (revised === 'not-revising')) return { ok: false, refusal: 'unmeasured' };
@@ -148,6 +151,8 @@ function handoverOverCap(h: HandoverNote): boolean {
 export function handoverVerdict(h: HandoverNote, refs: readonly KeyFact[]): HandoverVerdict {
   if (handoverOverCap(h)) return { ok: false, refusal: NOTE_REFUSALS.tooLong };
   if (refs.length !== h.threads.length) return { ok: false, refusal: 'unmeasured' };
+  // The handover reads programmes, items and runs only: a message is no reference (a miss note carries it instead).
+  if (h.threads.some((t) => t.ref.kind === 'message')) return { ok: false, refusal: NOTE_REFUSALS.referenceUnknown };
   const refused = worst(refs);
   if (refused !== null) return { ok: false, refusal: refused === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.referenceUnknown };
   let dropped = 0;
@@ -211,13 +216,21 @@ export type KeyReading =
     /** The run's row, with whether it is among the caller's open claimed runs, as the binding's own reader answers
      *  (`bindingsOf(caller).claimant()`, ARCH-62: no run/session equality is decided here), or `absent`, or `unmeasured`. */
     readonly run: { readonly state: RunState; readonly claimedByCaller: boolean | 'unmeasured' } | 'absent' | 'unmeasured';
+  }
+  | {
+    readonly kind: 'message';
+    /** The message's row, as its session only (never its text), or `absent`, or `unmeasured`; and whether the caller is the
+     *  designation fact of the caller as `roleOf.ts#designationFactOf` reads it (`unmeasured` when the designation could not
+     *  be read); only `live` is the designated session, a `pending` body is not yet. */
+    readonly message: { readonly sessionId: string } | 'absent' | 'unmeasured';
+    readonly callerDesignation: RoleFacts['designation'] | 'unmeasured';
   };
 
 const OPEN_ITEMS: ReadonlySet<ItemState> = new Set(OPEN_ITEM_STATES);
 const TERMINAL_RUNS: ReadonlySet<RunState> = new Set(TERMINAL_RUN_STATES);
 
 /** A key's fact for `caller`: a programme it coordinates (claims an open run of); an open item it raised or whose
- *  programme it coordinates; a run it claims that is not terminal. */
+ *  programme it coordinates; a run it claims that is not terminal; a message that exists, for the designated session. */
 export function noteKeyFact(r: KeyReading, caller: string): KeyFact {
   switch (r.kind) {
     case 'programme':
@@ -232,6 +245,10 @@ export function noteKeyFact(r: KeyReading, caller: string): KeyFact {
       if (r.run === 'unmeasured') return 'unmeasured';
       if (r.run === 'absent' || TERMINAL_RUNS.has(r.run.state)) return 'gone';
       return r.run.claimedByCaller === 'unmeasured' ? 'unmeasured' : r.run.claimedByCaller ? 'live' : 'not-yours';
+    case 'message':
+      if (r.message === 'unmeasured' || r.callerDesignation === 'unmeasured') return 'unmeasured';
+      if (r.message === 'absent') return 'gone';
+      return r.callerDesignation === 'live' ? 'live' : 'not-yours';
   }
 }
 

@@ -282,8 +282,8 @@ This section is layer 3: the frame's shape, its CSP, how bytes reach it, the bri
 | Attributes not set | `src`, `name`, `allow`, `allowfullscreen` |
 | Scripts | On from the first render. The code is the library's, and the input is rendered HTML, not a script (A4). |
 | Size | Sized to the Docs pane, and the frame scrolls itself |
-| Focus | The parent focuses the frame on mount, so the layout's keys work at once |
-| Remount | Every new document, ref or `at=` commit is a remount: a new React key, a new `MessageChannel` and a new nonce. ccrc never updates a srcdoc in place. |
+| Focus | The parent focuses the frame on mount, so the layout's keys work at once, unless an element of the console outside the frame already holds focus as it mounts (the reader of the page moved to a head control while the reader was loading): that element keeps focus; the reader's own commands still focus the frame, and the reader lab's frames always take focus (amended 2026-11-18; D2, D-8729) |
+| Remount | Every new document, ref or `at=` commit is a remount: a new React key, a new `MessageChannel` and a new nonce. ccrc never updates a srcdoc in place. A link to this very page spelled with its file name (`this.md#sec`) remounts the library's frame within the same React mount: a new `MessageChannel` and nonce, the same rendered document opened at that anchor (`initialHash`), and no body read, because library 1.1.0 has no host scroll op. The stored read marks, prefs and last visit carry over; the frame's view of the visit does not: the "Changed since your last visit" notice and its menu item, open folds and shown change marks reset (amended 2026-11-18; D2, ask 553) |
 | Chrome | ccrc's header, truth line, banners and sheets stay outside the frame |
 
 ### 4.2 `READER_CSP` (Agreed)
@@ -510,7 +510,7 @@ These close the gaps found against the standalone docs server (research B). Each
 | Read marks, last visit, reader settings | Agreed, G7 | W8 |
 | Rich layout (G8) | Agreed, the library plus W8 | |
 | Figures: Play, Animate edges, Full screen, Copy Mermaid | Agreed, W8 | |
-| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount (§4.1) |
+| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount, unless an element outside it already holds focus (§4.1); the reader's own commands still focus the frame (amended 2026-11-18; D2, D-8729) |
 | Front matter strip | Agreed, §3.4 | |
 | Footnotes | Agreed, L2 adds styles | They have no styles today |
 | Fonts | Yes, same as today | Latin subsets only; other scripts fall back to system fonts |
@@ -562,7 +562,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 
 | # | Guard | Test | Mutation that goes red |
 |---|---|---|---|
-| M8.1 | Frame attributes | Tokens exactly `['allow-scripts']`. `srcdoc` set. No `src`, `name`, `allow` or `allowfullscreen`. `referrerpolicy=no-referrer`. The `csp` attribute equals the meta. The frame takes focus on mount. | Add `allow-same-origin`, `allow-popups` or `allow-top-navigation`; add `allow=`; set `src`; drop `sandbox` |
+| M8.1 | Frame attributes | Tokens exactly `['allow-scripts']`. `srcdoc` set. No `src`, `name`, `allow` or `allowfullscreen`. `referrerpolicy=no-referrer`. The `csp` attribute equals the meta. The frame takes focus on mount when no element outside it holds focus, and an element outside it that holds focus keeps it; the reader's own commands still focus the frame (amended 2026-11-18; D2, D-8729). The commands clause is the library's behaviour in released 1.1.0, whose commands focus the frame themselves; no row here reds it. | Add `allow-same-origin`, `allow-popups` or `allow-top-navigation`; add `allow=`; set `src`; drop `sandbox`; focus the frame on every mount, or on none (amended 2026-11-18; D2, D-8729) |
 | M8.2 | `READER_CSP` | Re-tokenised: only the listed directives; `script-src` holds `sha256-` sources only; no host, `'self'`, `connect-src` or `frame-src`; `base-uri` and `form-action` are `'none'`; `mockupCsp(origins)` never changes it | Add a CDN host, `'self'`, `connect-src` or `'unsafe-eval'`; derive it from `MOCKUP_CSP` |
 | M8.3 | Srcdoc prefix | Starts with the CSP meta, then the click guard, the seed and the bridge bootstrap, in that order, each once, before any content. The seed is the element immediately before the bootstrap's script. | Append the meta; omit the guard; put the seed after the content; put any element between the seed and the bootstrap |
 | M8.4 | No URL in the srcdoc | Outside the inlined script and seed bodies, no `src`, `href`, `srcset`, `@import` or `url()` holds an `http(s)` or `//` value. No `modulepreload` or `preconnect` link. Script bodies are covered by M8.B1. | Keep the library's CDN default in a `src`; emit preloads |

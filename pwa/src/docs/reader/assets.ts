@@ -4,8 +4,9 @@
 // bundles each one as a string through Vite's `?raw`, and the mount verifies every text against the library's own
 // manifest before it inlines anything.
 //
-// Each specifier is written once, as the literal argument of its own `import()` (the docs-parity guard admits the
-// `/assets/…?raw` form only there), so each asset is its own chunk: the stylesheet and the four scripts load together,
+// Each specifier is written once, as the literal argument of its own `import()` (the docs-parity guard, M7.9, admits the
+// `/assets/…?raw` form at an import position, after `from` or `import(`, in any file under `pwa/src`), so each asset is
+// its own chunk: the stylesheet and the four scripts load together,
 // and the Mermaid text, by far the largest, only when a document's gate asks for it. The stylesheet is the frame's
 // built copy (`frame/reader.css`, the fonts inlined as `data:`), never the source `reader.css`, whose hash differs and
 // which the frame's asset check refuses.

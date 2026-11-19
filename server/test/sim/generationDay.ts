@@ -574,7 +574,7 @@ export function generationDay(mods: GenDayModules): Scenario<GenDayEdge> {
 
       // ---- The server's beat: the generations lane's pass (it mints, ends, walks and plans), the Overlord's stand-in mints,
       // the mail the gate lets through, then the acts the pass planned.
-      const wasUsage = (f: Facts, stale: boolean): UsageRead => ({ kind: 'reading', usage: {
+      const wasUsage = (f: Facts, stale: boolean): UsageRead => ({ kind: 'reading', uuid: null, usage: {
         ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens: f.ctx, ctxWindow: 1_000_000, cost: null,
         cacheExpiresAt: null, stale } });
       const readingsNow = (): Map<number, GenReadings> => {

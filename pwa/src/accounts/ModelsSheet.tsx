@@ -24,13 +24,13 @@
 import { useEffect, useRef, useState, type ReactNode } from 'react';
 import { Button, QuickConfirm, Skeleton } from '@ccrc/ui';
 import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/models';
-import { put, laneModelsKey } from '../lib/screenCache';
+import { forget, put, laneModelsKey } from '../lib/screenCache';
 import { api } from '../lib/api';
-import { useLaneModels, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
-import type { LaneReadFailure } from '../lib/models';
+import { useLaneModelsView, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
+import { laneReadWords, type LaneReadFailure } from '../lib/models';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
-  MODELS_READ_ABSENT, MODELS_READ_FAILED, MODELS_READ_UNREADABLE, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords,
+  MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
   actUnreadableWords, advanceStateWords, asLaneModelsActAnswer, classActs, classLabel, familyWords, holdAriaLabel, holdWords, lastMoveWords,
   modelLine, modelsActFailure, pendingWords, previousWords, revertAriaLabel, revertConsequence, revertStillOffered, revertTitle,
   revertWithdrawnWords, type ModelsAction,
@@ -82,13 +82,23 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
     setSaid({ kind: 'alert', text: MODELS_READ_FAILED[outcome.failure] });
   };
   const reads = useRef<LaneModelsControl | null>(null);
-  const read = useLaneModels(lane, load, open, refreshKey, onRead, reads);
+  // F2: a transient newest answer keeps the read the sheet shows, and its word is said beside it.
+  const view = useLaneModelsView(lane, load, open, refreshKey, onRead, reads);
+  const read = view.read;
   // The act's own fresh read, shown while the hook's read is still the one it replaced.
   const [fresh, setFresh] = useState<{ over: LaneModelsRead | null; read: LaneModelsRead } | null>(null);
   const readNow = useRef(read);
   readNow.current = read;
   const shown: LaneModelsRead | null = fresh !== null && fresh.over === read ? fresh.read : read;
   const shownNow = useRef(shown);
+  // The read's one state sentence: a non-read answer's own words, or the transient word beside a kept good read (F2).
+  // The two never show together, so they are one element.
+  const stateNote: { testid: string; kind: string; text: string | null } | null =
+    shown === null ? null
+      : shown.kind !== 'read' ? { testid: 'models-read-state', kind: shown.kind, text: modelsReadStateWords(shown) }
+        : view.transient !== null && shown === read
+          ? { testid: 'models-read-transient', kind: view.transient, text: laneReadWords({ kind: view.transient }) }
+          : null;
   shownNow.current = shown;
 
   const [busy, setBusy] = useState<ModelClass | null>(null);
@@ -132,8 +142,14 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
     reads.current?.supersede();
     const answer = asLaneModelsActAnswer(raw);
     const mine = answer !== null && answer.lane === lane && answer.action === action && answer.class === cls ? answer : null;
-    // Even when the sheet is gone by now, the answer is the newest state of the lane: the screen cache keeps it (F6).
-    if (mine !== null) put(laneModelsKey(lane), raw, Date.now());
+    // Even when the sheet is gone by now, the answer is the newest state of the lane: the screen cache keeps it (F6), unless
+    // its read is transient (R3b fix round 1, F2: nothing ran). Then the lane's cache entry goes (fix round 2, N4): it
+    // predates the act, so another surface reads the lane fresh rather than seed from it. The sheet still shows that
+    // transient read in place, for the same reason, and then reads the lane again.
+    if (mine !== null) {
+      if (mine.models.kind === 'busy' || mine.models.kind === 'not-started') forget(laneModelsKey(lane));
+      else put(laneModelsKey(lane), raw, Date.now());
+    }
     if (!live.current) return;
     setBusy(null);
     if (mine === null) {
@@ -181,17 +197,13 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
         </div>
       )}
       {shown === null && readFailure === null && <Skeleton lines={4} />}
-      {shown !== null && shown.kind !== 'read' && (
-        <>
-          <p className="acct-models-note" data-testid="models-read-state">
-            {shown.kind === 'absent' ? MODELS_READ_ABSENT : MODELS_READ_UNREADABLE}
-          </p>
-          {shown.kind === 'unreadable' && (
-            <ul className="acct-models-names">
-              {CLASSES.map((cls) => <li key={cls} data-testid={`models-name-${cls}`}>{classLabel(cls)}</li>)}
-            </ul>
-          )}
-        </>
+      {stateNote !== null && (
+        <p className="acct-models-note" data-testid={stateNote.testid} data-kind={stateNote.kind}>{stateNote.text}</p>
+      )}
+      {shown !== null && shown.kind !== 'read' && shown.kind !== 'absent' && (
+        <ul className="acct-models-names">
+          {CLASSES.map((cls) => <li key={cls} data-testid={`models-name-${cls}`}>{classLabel(cls)}</li>)}
+        </ul>
       )}
       {shown !== null && shown.kind === 'read' && (
         <>
