@@ -637,29 +637,45 @@ describe('heldKindOf: the row\'s hold, classified (D-6091)', () => {
 
   it('no hold, an operator text, the unreadable and empty placeholders, a programme hold', () => {
     const c = coord({});
-    expect(heldKindOf(null, c)).toBe('none');
-    expect(heldKindOf('keep: debugging', c)).toBe('operator');
-    expect(heldKindOf('<hold file unreadable — treated as held>', c)).toBe('operator');
-    expect(heldKindOf('', c)).toBe('operator');
-    expect(heldKindOf('program:programme-a wave:3', c)).toBe('programme');
+    expect(heldKindOf(null, c, null)).toBe('none');
+    expect(heldKindOf('keep: debugging', c, null)).toBe('operator');
+    expect(heldKindOf('<hold file unreadable — treated as held>', c, null)).toBe('operator');
+    expect(heldKindOf('', c, null)).toBe('operator');
+    expect(heldKindOf('program:programme-a wave:3', c, null)).toBe('programme');
   });
 
   it('a run: suffix reads the run: done and failed are terminal, every other state open', () => {
     const c = coord({ 7: 'done', 8: 'failed', 9: 'working', 10: 'planned', 11: 'awaiting-review' });
-    expect(heldKindOf('program:programme-a wave:2 run:7', c)).toBe('run-terminal');
-    expect(heldKindOf('program:programme-a wave:2 run:8', c)).toBe('run-terminal');
-    for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('run-live');
+    expect(heldKindOf('program:programme-a wave:2 run:7', c, null)).toBe('run-terminal');
+    expect(heldKindOf('program:programme-a wave:2 run:8', c, null)).toBe('run-terminal');
+    for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c, null)).toBe('run-live');
   });
 
-  it('today: a run: suffix naming the asking worker\'s OWN open run reads run-live (D-8789)', () => {
+  it('now: a run: suffix naming the asking worker\'s OWN open run reads run-own; no asker, or another, reads run-live (was: run-live) (D-8789)', () => {
     const own = { run: (id: number) => ({ ok: true as const, run: { id, state: 'awaiting-review', sessionId: 'project-a-quiet-basin' } }) } as unknown as
       Pick<StopDoneSweepDeps['coord'], 'run'>;
-    expect(heldKindOf('program:programme-a wave:2 run:7', own)).toBe('run-live');
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, 'project-a-quiet-basin')).toBe('run-own');
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, null)).toBe('run-live');
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, 'project-a-other-basin')).toBe('run-live');
+    // The comparison is on the run's sessionId, never on the hold's text: a hold whose text happens to carry the
+    // asker's id still reads the run it names.
+    expect(heldKindOf('program:project-a-quiet-basin wave:2 run:7', { run: (id: number) => ({ ok: true as const,
+      run: { id, state: 'working', sessionId: 'project-a-other-basin' } }) } as never, 'project-a-quiet-basin')).toBe('run-live');
+  });
+
+  it('an own run that cannot be read — refused, absent or throwing — is unreadable, never run-own (D-8789)', () => {
+    const c = coord({ 7: 'unreadable', 8: 'absent', 9: 'throws' });
+    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c, 'project-a-quiet-basin')).toBe('unreadable');
+  });
+
+  it('a terminal own run reads run-terminal, as before (D-8789)', () => {
+    const c = { run: (id: number) => ({ ok: true as const, run: { id, state: 'done', sessionId: 'project-a-quiet-basin' } }) } as never;
+    expect(heldKindOf('program:programme-a wave:2 run:7', c, 'project-a-quiet-basin')).toBe('run-terminal');
   });
 
   it('a run: suffix whose run cannot be read — refused, absent or throwing — is unreadable', () => {
     const c = coord({ 7: 'unreadable', 8: 'absent', 9: 'throws' });
-    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c)).toBe('unreadable');
+    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c, null)).toBe('unreadable');
   });
 });
 
@@ -865,13 +881,13 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     return h;
   };
 
-  it('today: a child parked at awaiting-review whose hold names its OWN run is held, with hibernate-hold-ok (D-8789)', async () => {
+  it('now: a child parked at awaiting-review whose hold names its OWN run sleeps, the hold handed to --hold-ok (was: held) (D-8789)', async () => {
     const h = await parkedOwnHeld({ holdOk: true });
     try {
       const t = await h.tick();
       expect(t.rows[0]!.held).toBe(ownHold(h));
       await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
-      expect(h.stops()).toEqual([]);
+      expect(h.stops()).toEqual([['hibernate', '--hold-ok', ownHold(h), WID]]);
     } finally {
       h.coord.db.close();
     }

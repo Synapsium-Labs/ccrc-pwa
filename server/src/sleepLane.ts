@@ -27,6 +27,7 @@ import {
 import type { SleepPolicy } from './sleep.js';
 import { designationFactFrom, designationFactOf, type DesignationFact } from './roleOf.js';
 import type { LaneName } from './laneSchedule.js';
+import { runNamesSession } from './coord/runBinding.js';
 
 /**
  * PUT A SESSION TO SLEEP, THE ONE EXECUTOR (D-7042; ARCH-43, consolidation spec K1): L4, it reads, logs and acts; it
@@ -628,8 +629,17 @@ export type StopDoneOutcome =
 
 /** The row's `.hold`, classified (D-6091): the grammar through `programmeHoldOf`, the one reader of
  *  `HOLD_REASON_PATTERN`, and a run suffix's state through the store's `run` read. Any read that cannot be made, or
- *  a run the store does not have, answers `unreadable`, which holds. */
-export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>): StopDoneHeldKind {
+ *  a run the store does not have, answers `unreadable`, which holds.
+ *
+ *  `run-own` (D-8789): the hold names an open run whose worker IS this session (`runNamesSession`, on the run's
+ *  `sessionId`, never on the hold's text). Every dispatch writes that hold on its own worker, so reading it `run-live`
+ *  held every parked worker awake (D-6092 never acted on a dispatched child). It guards the workspace, as a programme
+ *  hold does, so run-done passes it; whether the run's state lets the worker sleep is the verdict's `not-done`, not
+ *  this word's. A hold naming ANOTHER session's open run stays `run-live`. `sessionId` is required: a caller passes
+ *  `null` to say no session is asking, and then `run-own` is never answered (the deps-shed arm, `depsShedPass.ts`). */
+export function heldKindOf(
+  held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>, sessionId: string | null,
+): StopDoneHeldKind {
   if (held === null) return 'none';
   const hold = programmeHoldOf(held);
   if (hold === null) return 'operator';
@@ -637,7 +647,8 @@ export function heldKindOf(held: string | null, coord: Pick<StopDoneSweepDeps['c
   try {
     const r = coord.run(hold.runId);
     if (!r.ok || r.run === null) return 'unreadable';
-    return (TERMINAL_RUN_STATES as readonly string[]).includes(r.run.state) ? 'run-terminal' : 'run-live';
+    if ((TERMINAL_RUN_STATES as readonly string[]).includes(r.run.state)) return 'run-terminal';
+    return sessionId !== null && runNamesSession(r.run, sessionId) ? 'run-own' : 'run-live';
   } catch {
     return 'unreadable';
   }
@@ -717,7 +728,7 @@ function runDoneInput(
   live: StopDoneLive, at: number,
 ): StopDoneInput {
   return {
-    row, heldKind: heldKindOf(row.held, deps.coord), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
+    row, heldKind: heldKindOf(row.held, deps.coord, row.id), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
     verb: f.verb, overlord: overlordOf(f.designation, row.id), optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
     live, now: at, graceMs: f.quietMs,
   };
