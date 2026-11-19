@@ -108,6 +108,7 @@ describe('POST /api/coord/caps ignores the retired field (wire rule: an unknown 
     const { app } = await withCoord();
     const body = (await app.inject({ method: 'GET', url: '/api/coord/caps' })).json();
     expect(body.caps).toEqual({ maxConcurrentWorkers: 3 });
-    expect(body.usage).toEqual({ running: 0 });
+    // `waiting` is D-TBD-cap-counts-working's additive count of runs the cap leaves out, not the retired daily count.
+    expect(body.usage).toEqual({ running: 0, waiting: 0 });
   });
 });

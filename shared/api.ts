@@ -8218,7 +8218,14 @@ export interface CoordCaps { maxConcurrentWorkers: number }
  *
  *  `running` counts ACTIVE runs only since design 2026-09-14 §7.1 — see
  *  `ACTIVE_RUN_STATES`. */
-export interface CoordCapsUsage { running: number }
+export interface CoordCapsUsage {
+  running: number;
+  /** D-TBD-cap-counts-working (spec 2026-11-19 Part 3): how many of `running`'s runs the cap leaves out, because their
+   *  worker was measured waiting (awake, idle and quiet 30 minutes with nothing running) or gone (asleep, stopped, dead,
+   *  archived). ADDITIVE: the caps view always sends it; an older server omits it, and the console reads it through one
+   *  reader (`capsUsageWords`). Absent from the store's own `capsUsage()`, which reads no worker. */
+  waiting?: number;
+}
 
 /** What `GET`/`POST /api/coord/caps` answer. The limits and the counts travel
  *  TOGETHER, in one shape and one round trip: a cap without its usage is a

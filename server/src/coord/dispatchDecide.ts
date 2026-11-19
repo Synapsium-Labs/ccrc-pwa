@@ -10,6 +10,8 @@ import type { HookStateRead } from '../hookstate.js';
 import type { cutShort } from '../lifecycle.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReasonVerdict, type HoldReasonVerdict } from './rundefs.js';
 import type { TurnVerdict } from './archiveDoor.js';
+import type { TurnMarkRead } from './stall.js';
+import { STOP_DONE_PARKED_IDLE_MS } from '../stopDone.js';
 import type { RunReadResult, RunRow } from './store.js';
 import type { DispatchOutcome, SpawnPollTarget } from './dispatch.js';
 import { trackerIdsIn } from '../linking/policy.js';
@@ -68,6 +70,63 @@ const refused = (outcome: DispatchHalt, event?: string): DispatchDecision<never>
 export interface CapsReading {
   caps: CoordCaps; usage: CoordCapsUsage;
   overConcurrency: { limit: number; running: number } | null;
+  /** D-6094: the raw count is at or above the limit but the count of runs whose worker still holds a slot is below it,
+   *  so a slot the reading freed is there. Carries the RAW numbers a refusal says. Absent or null: no slot was freed. */
+  freedSlot?: { limit: number; running: number } | null;
+  /** D-TBD-cap-counts-working: how many of `usage.running`'s runs were left out because their worker read `waiting` or
+   *  `gone`. Absent: no worker was read, and every run counted. */
+  waiting?: number;
+}
+
+/**
+ * The refusal numbers of a cap reading, or null when the dispatch (or the send-back) may go on. ONE spelling for both
+ * doors (D-6094): an ordinary refusal is `overConcurrency`; a slot the worker readings freed is handed out only when
+ * `admitFreedSlot` admits it (the freed-slot window, `WAKE_BURST` per `WAKE_WINDOW_MS`), and a missing port refuses it.
+ * The port is asked only for a freed slot.
+ */
+export function capRefusalOf(
+  c: CapsReading, admitFreedSlot: (() => boolean) | undefined,
+): { limit: number; running: number } | null {
+  if (c.overConcurrency !== null) return c.overConcurrency;
+  const freed = c.freedSlot ?? null;
+  if (freed === null) return null;
+  return admitFreedSlot !== undefined && admitFreedSlot() === true ? null : freed;
+}
+
+/**
+ * What a run's worker is doing, for the concurrency count (D-6094, changed by D-TBD-cap-counts-working, spec 2026-11-19
+ * Part 3). `busy`: working, or between turns. `waiting`: awake, idle, nothing running, and its turn marker quiet for
+ * `STOP_DONE_PARKED_IDLE_MS`. `gone`: dead, stopped, archived, asleep or with no registry row. `unmeasured`: a reading
+ * could not be made. `capsMeasured` leaves out `waiting` and `gone` and counts the other two: the cap fails closed.
+ */
+export type WorkerReading = 'busy' | 'waiting' | 'gone' | 'unmeasured';
+
+/** The measured facts `workerReadingOf` decides on, gathered by `workerFactsFor` (`turnverdict.ts`, L3). `gone` and
+ *  `unmeasured` are the registry row's and the pane's answers; `awake` carries the fail-closed turn verdict, whether the
+ *  frame's row lists background work or subagents (null: no row), and the turn marker read. */
+export type WorkerFacts =
+  | { readonly kind: 'gone' | 'unmeasured' }
+  | { readonly kind: 'awake'; readonly turn: TurnVerdict; readonly rowBusy: boolean | null; readonly mark: TurnMarkRead };
+
+/**
+ * D-TBD-cap-counts-working: the one rule for a worker's reading. Waiting is MEASURED, never declared: the turn verdict is
+ * idle, nothing runs (the row lists no background work or subagents, and the marker's `bg` and `crons` are exactly 0),
+ * and the marker's newest stamp (`turnAt`, `stopAt`, `restartAt`) is at least `STOP_DONE_PARKED_IDLE_MS` old, the same
+ * 30 minutes the sleep lane waits for a parked worker. D-6094 read "idle" at the instant of asking and bounded it by the
+ * run's age; the quiet time replaces both, so a worker between turns keeps its slot. Every read that could not be made
+ * is `unmeasured`.
+ */
+export function workerReadingOf(f: WorkerFacts, now: number): WorkerReading {
+  if (f.kind !== 'awake') return f.kind;
+  if (f.turn === 'busy') return 'busy';
+  if (f.turn !== 'idle' || f.rowBusy === null || !f.mark.ok) return 'unmeasured';
+  if (f.rowBusy) return 'busy';
+  const m = f.mark;
+  // `bg` −1 and `crons` −1 or null are unmeasured background work: counted, never read as nothing running.
+  if (m.bg !== 0 || m.crons !== 0) return 'busy';
+  const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
+  if (stamps.length === 0) return 'unmeasured';
+  return now - Math.max(...stamps) >= STOP_DONE_PARKED_IDLE_MS ? 'waiting' : 'busy';
 }
 
 /** The run row a dispatch decides on, once it is known to exist. */
@@ -233,6 +292,8 @@ export interface AdmitFacts {
   liveResume: boolean;
   /** Called only when neither marker refused, and not at all for a live resume. */
   caps: () => CapsReading;
+  /** D-6094: admits one slot the worker readings freed (`capRefusalOf`); asked only for a freed slot. Absent: refused. */
+  admitFreedSlot?: () => boolean;
 }
 
 /** Step 1 of the admit step, alone: the operator's pause and the mail-disabled marker, in that order (null: neither).
@@ -257,7 +318,7 @@ function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
   // bug. It is the ONLY cap: the daily dispatch brake that followed it is retired (D-7068, operator
   // ruling 2026-10-26). It counted reviews and warm resumes as if they were fresh workspaces, refused a coordinator
   // with nothing that would wake it, and measured neither memory nor processes.
-  const { overConcurrency } = f.caps();
+  const overConcurrency = capRefusalOf(f.caps(), f.admitFreedSlot);
   if (overConcurrency !== null) {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',

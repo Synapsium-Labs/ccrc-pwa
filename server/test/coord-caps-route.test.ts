@@ -79,7 +79,7 @@ describe('GET /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 4 },
-      usage: { running: 0 },
+      usage: { running: 0, waiting: 0 },
       updatedAt: 1_700_000_000_000 });
   });
 
@@ -109,7 +109,23 @@ describe('GET /api/coord/caps', () => {
       wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
     coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
     expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
-    expect((await getCaps(app)).json().usage).toEqual({ running: 1 });
+    // D-TBD-cap-counts-working: `the-worker` has no registry row, so its run is counted in `running` and left out of the
+    // cap (`waiting`), additively.
+    expect((await getCaps(app)).json().usage).toEqual({ running: 1, waiting: 1 });
+  });
+
+  it('a run whose worker cannot be read is not left out: waiting stays 0 (the cap fails closed, D-TBD-cap-counts-working)', async () => {
+    const { app, coord, home } = await withCoord();
+    // A listed registry row whose live file does not exist: the worker's reading is unmeasured, so its run keeps counting.
+    for (const [k, v] of Object.entries({ wrapper: 'claude-a', project: 'demo', workdir: '/w/demo-worker', uuid: 'u-demo-worker',
+      started: '1', workspace: 'demo-worker', branch: 'ws/demo-worker', base: 'origin/main' })) {
+      writeFileSync(path.join(home, '.cc-sessions', `demo-worker.${k}`), v);
+    }
+    const r = coord.openRun({ program: 'p', title: 'P', project: 'demo',
+      wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
+    coord.markDispatched(r.id, 'demo-worker', 'ws', 'ws/ws', false);
+    expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
+    expect((await getCaps(app)).json().usage).toEqual({ running: 1, waiting: 0 });
   });
 });
 
@@ -120,7 +136,7 @@ describe('POST /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 5 },
-      usage: { running: 0 },
+      usage: { running: 0, waiting: 0 },
       // A write stamps it; the route reads the STORED value back, so this is the
       // server's own clock and not the caller's assertion about it.
       updatedAt: expect.any(Number) });

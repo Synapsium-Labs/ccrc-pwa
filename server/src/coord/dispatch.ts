@@ -27,7 +27,8 @@ import {
 import { readSkillState, skillDirFor } from '../skillstate.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
-  admitMarkerRefusal, decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
+  admitMarkerRefusal, decideDispatch, workerReadingOf, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
+  type WorkerFacts, type WorkerReading,
 } from './dispatchDecide.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
@@ -134,6 +135,13 @@ export interface DispatchRunDeps {
    * live and the concurrency check is made as before.
    */
   paneLive?: (rec: SessionRecord) => Promise<boolean>;
+  /** D-6094 (D-TBD-cap-counts-working): a run's worker's measured facts (`workerFactsFor`, `turnverdict.ts`), which
+   *  `workerReadingOf` turns into the reading the count leaves out or keeps. OPTIONAL in the safe direction: absent,
+   *  every dispatched run counts as before. */
+  workerFacts?: (sessionId: string) => Promise<WorkerFacts>;
+  /** D-6094: admits one slot the readings freed, in a window of its own (`FleetWatcher.admitFreedSlot`). Absent: a freed
+   *  slot is refused. */
+  admitFreedSlot?: () => boolean;
 }
 
 /** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
@@ -284,14 +292,63 @@ export type DispatchOutcome =
  * needs the numbers for a refusal asks here and never reads them itself.
  * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
  * a cap that refuses without saying what it is is indistinguishable from a bug).
+ *
+ * With no `readings` it is today's raw count. With them (`workerReadings`, taken by the doors only past the markers and
+ * only when the raw count is at the limit, and by the caps view) it leaves out the runs whose worker was measured
+ * waiting or gone (D-6094, D-TBD-cap-counts-working), and says how many in `waiting`.
  */
-export function capsMeasured(coord: CoordStore): CapsReading {
+export function capsMeasured(coord: CoordStore, readings?: ReadonlyMap<number, WorkerReading>): CapsReading {
   const caps = coord.caps();
   const usage = coord.capsUsage();
-  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
-    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
-    : null;
-  return { caps, usage, overConcurrency };
+  const limit = caps.maxConcurrentWorkers;
+  if (readings === undefined) {
+    return { caps, usage, overConcurrency: usage.running >= limit ? { limit, running: usage.running } : null };
+  }
+  // D-TBD-cap-counts-working, THE PREDICATE: a run in an active state holds a slot unless its worker was measured
+  // `waiting` or `gone`. A row with no reading (no session, a run dispatched after the readings were taken) counts, and
+  // so do `busy` and `unmeasured`: the cap fails closed. The rows are `capsUsage`'s own (`activeRunWorkers`), read in
+  // this same synchronous step, so the count is a subset of `usage.running`.
+  const holding = coord.activeRunWorkers().filter((r) => {
+    const w = readings.get(r.runId);
+    return w === undefined || (w !== 'waiting' && w !== 'gone');
+  }).length;
+  const counted = Math.min(holding, usage.running);
+  // A refusal says the count that holds the slots; a freed slot says the raw one, as the frame has always meant.
+  return {
+    caps, usage, waiting: usage.running - counted,
+    overConcurrency: counted >= limit ? { limit, running: counted } : null,
+    freedSlot: counted < limit && usage.running >= limit ? { limit, running: usage.running } : null,
+  };
+}
+
+/**
+ * D-6094 (D-TBD-cap-counts-working): one reading per counted run, for `capsMeasured`. Each worker is read once however
+ * many runs name it, the workers in parallel; a port that throws reads `unmeasured`, a row with no session gets no
+ * reading (so it counts), and an absent port reads nothing (so every run counts). Reads; consumes nothing, so a room
+ * check and the caps view never spend a freed-slot admit.
+ *
+ * D-TBD-cap-governs-starts: the cap governs STARTS, not wakes. A waiting worker that wakes on mail is never refused here
+ * or anywhere (an asked or a mail wake reads no cap); it counts again from the moment it reads busy, so busy workers can
+ * pass the cap for a while, and new starts are refused until the count is back under it.
+ */
+export async function workerReadings(
+  coord: CoordStore, workerFacts: DispatchRunDeps['workerFacts'], now: number = Date.now(),
+): Promise<Map<number, WorkerReading>> {
+  const out = new Map<number, WorkerReading>();
+  if (workerFacts === undefined) return out;
+  const rows = coord.activeRunWorkers();
+  const bySession = new Map<string, Promise<WorkerReading>>();
+  for (const r of rows) {
+    if (r.sessionId === null || bySession.has(r.sessionId)) continue;
+    const sid = r.sessionId;
+    bySession.set(sid, Promise.resolve().then(() => workerFacts(sid))
+      .then((f) => workerReadingOf(f, now), (): WorkerReading => 'unmeasured'));
+  }
+  for (const r of rows) {
+    const w = r.sessionId === null ? undefined : bySession.get(r.sessionId);
+    if (w !== undefined) out.set(r.runId, await w);
+  }
+  return out;
 }
 
 /**
@@ -605,9 +662,16 @@ export async function dispatchRun(
   // reads live starts no process and is not charged a slot; its liveness is read only past the markers, and only if the
   // cap would refuse.
   const names = await deps.io.readdir(deps.cfg.registryDir);
-  const liveResume = run.sessionId !== null && admitMarkerRefusal(names) === null
-    && capsMeasured(coord).overConcurrency !== null && await sessionReadsLive(deps, run.sessionId);
-  const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => capsMeasured(coord) });
+  let caps = capsMeasured(coord);
+  let liveResume = false;
+  if (admitMarkerRefusal(names) === null && caps.overConcurrency !== null) {
+    liveResume = run.sessionId !== null && await sessionReadsLive(deps, run.sessionId);
+    // D-6094 (D-TBD-cap-counts-working): a full cap that charges this dispatch is re-counted over the runs whose worker
+    // still holds a slot.
+    if (!liveResume) caps = capsMeasured(coord, await workerReadings(coord, deps.workerFacts));
+  }
+  const admit = decideDispatch({ step: 'admit', names, liveResume, caps: () => caps,
+    ...(deps.admitFreedSlot === undefined ? {} : { admitFreedSlot: deps.admitFreedSlot }) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
   // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
   // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.
