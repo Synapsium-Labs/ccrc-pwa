@@ -1775,6 +1775,9 @@ describe('POST /api/runs/:id/dispatch', () => {
       // skill, so `absent` is the honest answer here.
       { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
         causedBy: 'coordinator', detail: 'skill-preflight:absent' },
+      // Flows wave 2: the brief the programme's pinned flow would compose, beside the one sent; this programme pinned none.
+      { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
+        causedBy: 'coordinator', detail: 'flow-brief:no-flow' },
     ]);
     // D-47: NOTHING was queued — the delivery lane must never be handed a
     // brief to inject into a context `/clear` never actually verified as
@@ -1888,6 +1891,9 @@ describe('POST /api/runs/:id/dispatch', () => {
       // skill, so `absent` is the honest answer here.
       { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
         causedBy: 'coordinator', detail: 'skill-preflight:absent' },
+      // Flows wave 2: the brief the programme's pinned flow would compose, beside the one sent; this programme pinned none.
+      { at: expect.any(Number), fromState: 'dispatched', toState: 'dispatched',
+        causedBy: 'coordinator', detail: 'flow-brief:no-flow' },
     ]);
   });
 
@@ -1910,10 +1916,10 @@ describe('POST /api/runs/:id/dispatch', () => {
     // Nothing ran on the retry — no second `ws-add`/`ensure`/`ws-hold`, and
     // no second `run_events` row (still exactly the first dispatch's).
     expect(calls.length).toBe(callsAfterFirst);
-    // Five rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
+    // Six rows from the FIRST dispatch (its `route-defaulted` row, D-6794, and the `route-omitted` row this
     // fixture's missing `route-argv-v1` earns it; its `child-omitted` row — no `child-argv-v1` either — its
-    // transition, and its skill preflight, wave 2 F2), and none from the refused second.
-    expect(w.coord.runEvents(opened.id).length).toBe(5);
+    // transition, its skill preflight, wave 2 F2, and its flow brief shadow, Flows wave 2), and none from the refused second.
+    expect(w.coord.runEvents(opened.id).length).toBe(6);
   });
 
   it('refuses to dispatch a run whose kind this build cannot name — before any fleet act (D-2795)', async () => {
