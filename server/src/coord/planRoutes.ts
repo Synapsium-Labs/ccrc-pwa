@@ -453,7 +453,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   app.post('/api/programmes/:slug/plan/tickets/done', {
     config: WRITE_LIMIT,
     onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/programmes/:slug/plan/tickets/done')),
-  }, door(async ({ coord, plan, slug, caller, body, stored, owner }) => {
+  }, door('planTicketsDone', async ({ coord, plan, slug, caller, body, stored, owner }) => {
     const parsed = parsePlanTicketDone(body);
     if (!parsed.ok) return { refuse: parsed.word, detail: parsed.detail };
     const verdict = ownerVerdict(caller, owner);

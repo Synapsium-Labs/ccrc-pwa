@@ -15,8 +15,11 @@ import type { CoordStore } from '../src/coord/store.js';
 import type { LandingOutcome } from '../src/coord/landingEntry.js';
 import type { PlanView } from '../../shared/plan.js';
 import { DONE_CASES } from './planTicketDoneCases.js';
-import { charWorld, CHAR_TOKEN, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
+import { charWorld, CHAR_COORD, CHAR_TOKEN, openRun, planVerb, SIX, type CharWorld } from './helpers/planPhasesFixture.js';
 import { mkTmp } from './tmpHelpers.js';
+import { actorOf } from '../src/accounts/audit.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { bindPendingGeneration, designatePending, type AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
 
 let w: CharWorld | undefined;
 afterEach(async () => { if (w) await w.app.close(); w = undefined; });
@@ -347,6 +350,21 @@ describe('plan ticket-done (POST /api/programmes/:slug/plan/tickets/done)', () =
     await planVerb(x, 'prog-a', '', SIX);
     const run = await doneBareRun(x);
     expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: run } }, 'stranger'))).toEqual([403, 'not-plan-owner']);
+  });
+
+  it('refuses the Overlord\'s body with overlord-uses-its-doors, even as the programme\'s coordinator (#2996\'s rule)', async () => {
+    // Since #2996 every plan write door is a row of OTHER_LANES (`planTicketsDone` here), checked before the plan is read.
+    const x = await world();
+    await planVerb(x, 'prog-a', '', SIX);
+    const run = await doneBareRun(x);
+    const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
+    const operator = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+      .operator(actorOf('operator-a', '0123456789abcdef'));
+    expect(designatePending(x.coord.db, journal, { sessionId: CHAR_COORD, deadlineAt: Date.now() + 60_000, model: 'opus',
+      accountPools: { pools: ['pool-a'], untagged: false }, actor: operator, at: Date.now(), opKey: 'op-wm1' }).ok).toBe(true);
+    expect(bindPendingGeneration(x.coord.db, CHAR_COORD, '11111111-2222-3333-4444-555555555555', Date.now())).toEqual({ ok: true, changed: true });
+    expect(refusal(await done(x, { ticket: 'w0-t2', evidence: { runId: run } }))).toEqual([403, 'overlord-uses-its-doors']);
+    expect(factsOf(x, 'w0-t2')!.evidence).toBeNull();
   });
 
   it('refuses two evidence keys', async () => {

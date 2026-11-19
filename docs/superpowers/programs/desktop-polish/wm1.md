@@ -20,12 +20,28 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 | `ticket-required` named in the coordinator's corpus: added for CI's first run, then moved to WM1r, the rules half, in fix round 1 (the review judge's rules-mixed reason). This branch leaves `ccd/coordinator-skill/references/plan.md` as main has it, so `coordinator-skill.test.ts`'s RunRefuseCode census is red here until WM1r lands (expected) | none on this branch | Measured: `git diff origin/main -- ccd/coordinator-skill/references/plan.md` is empty |
 | The gate's EXEMPT row and the census rows | `server/src/auth/gate.ts`, `auth-gate.test.ts`, `box-token-census.test.ts`, `README.md`, `census-w3/claimant*.ts`, `ccrc-api-closed.test.ts` | Measured: those suites |
 
-## 2. The migration slot
+## 2. The migration slot, and the merge of main
 
 - **Measured** on `origin/main` at `9e79fb3c1` (WM0 merged): `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`
-  printed 93, so this entry is 94.
-- **Inferred, and to re-measure at the push:** the Linear hierarchy's wave 4 (#2982) said it takes 94 when it merges WM0.
-  If it lands first, this entry takes the next slot by one merge of `origin/main` (the coordinator's terms).
+  printed 93, so this entry was 94. Forecasts A (#2987) then took 94.
+- **Step B, after WM1r (#3001) landed:** one merge of `origin/main` at `8781ef20a`, on the coordinator's word. The same
+  count printed 102 there, so this entry is **103**. Re-measured just before the push; a later slot is said in the wave-done.
+- **The fifteen conflicted files**, each resolved keeping both sides (the coordinator's terms), its counts re-measured on
+  the merged tree: `README.md`, `ccd/ccrc-api`, `server/src/auth/gate.ts`, `server/src/coord/planPolicy.ts`,
+  `planRoutes.ts`, `planStore.ts`, `schema.ts`, and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
+  `ccrc-api`, `coord-db`, `open-run-preconditions`, `run-close-switch` and `sim/mutation-floors.json`. The plan files met
+  only at import lines and header comments: main's new `plan_tickets` writers (the inbound path, #2982) insert an open
+  ticket and move one, and neither writes `done`, so the done arm is still the one writer of `doneAt` and `doneEvidence`.
+- **The one change the merge forced (its own commit):** since #2996 every plan write door names a row of `OTHER_LANES`
+  (`server/src/coord/otherLanes.ts`) that refuses the Overlord's body with `overlord-uses-its-doors`, and the census pins
+  the plan-door rows to exactly the write doors `planRoutes.ts` registers. So the `plan ticket-done` door is the row
+  `planTicketsDone` (route `POST /api/programmes/:slug/plan/tickets/done`, `plan-door`), shaped as its neighbours; the
+  other-lanes pin counts ten plan-door rows; `plan-ticket-done` has the refusal case, and a mutant of the row's word
+  turns it red (§4.2, M-17). Claim 5404 holds the two other-lanes files.
+- **The counts, measured on the merged tree:** 103 migrations; 90 `ccrc-api` rows, 11 of them `plan` rows; 242 mutation
+  floors (main's 238 and WM1's 4); 282 routes scanned, 279 at the gate's HTTP half, 100 exempt HTTP, 179 gated; 91 machine
+  lanes (88 box-token lanes, plus notify, pools/epoch and updates/intent). `run-close-switch`'s rollback undoes migrations 54
+  to 103, fifty in all; main's line said forty-three, short already against its own 102, so it reads the measured fifty.
 
 ## 3. Rows, and what reds each
 
@@ -96,6 +112,7 @@ first), every one killed:
 | M-14 | `planRunFacts.ts` | `evidenceLinksOf` reads no line for a `{ pr }` | `a run and the pull request it carried close one ticket` |
 | M-15 | `planRunFacts.ts` | `evidenceLinksOf` reads no line for a `{ runId }` | the same, and the fenced-landing case |
 | M-16 | `planRoutes.ts` | the route hands the verdict no links | the same two |
+| M-17 | `otherLanes.ts` | the `planTicketsDone` row's word `overlord-uses-its-doors` changed to `overlord-not-a-coordinator` (step B) | `plan-ticket-done` (the Overlord's body case) |
 
 ## 5. Claims and consent
 
@@ -143,5 +160,13 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 20 | `tsc --noEmit` of `tsconfig.json`, then of `test/tsconfig.tests.json` | 11.58, 13.26 | both clean |
 | 21 | `auth-gate` (the F13 comment) | 10.85 | 347 passed |
 | 22 | `mail-routes`, `coord-policy-rings`, `rings/`, `single-definition/`, `deviation-refs` (after `git fetch origin main`), `coordinator-skill`, `anchors`, `citations` | 11.98 | 2011 passed, 1 failed: `coordinator-skill`'s RunRefuseCode census, expected until WM1r lands |
+| 23 | Step B, after the merge of `origin/main` 8781ef20a: `tsc --noEmit -p tsconfig.json` | 10.40 | red at `planRoutes.ts` (the door with no other-lanes row, #2996's rule); clean after the fix |
+| 24 | `plan-ticket-done` with the Overlord's body case | 9.89 | 58 passed |
+| 25 | M-17 (the row's word changed), restored from its saved copy (`cmp` checked) | 11.13 | killed: the Overlord's body case red, 57 others passed |
+| 26 | Each file alone, one process each: `run-close-switch`, `open-run-preconditions`, `auth-gate`, `box-token-census`, `ccrc-api`, `ccrc-api-closed`, the four `overlord-other-lanes` files, `plan-ticket-done`, `plan-ticket-required`, `plan-phases`, `plan-routes`, `plan-store`, `plan-policy`, `plan-vocabulary`, `plan-inbound`, `deviation-refs` (after `git fetch origin`), `dtbd`, `topology-clean`, `ci-ledger-guard`, `coordinator-skill` and the 40 `single-definition/` files | 7.45 to 22.11 | every file green, 63 files: 3439 passed (`coordinator-skill` green with WM1r's line on main) |
+| 27 | `mutation-floors` for the four keys and the floors-and-sets, no-floor-falls and CONTROL checks | 11.31 | 7 passed |
+| 28 | `tsc --noEmit` of `test/tsconfig.tests.json` (a first try was killed by the slice's 6 GB cap), then of `tsconfig.json` | 11.31, 11.57 | both clean |
+| 29 | `coord-db` | 13.69 | 1 failed, 148 passed: the delegation tables' any-statement failure case timed out at 120 s, with two OOM kills in the slice during the run |
+| 30 | `coord-db` again, alone | 11.48 | 149 passed (657 s) |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.
