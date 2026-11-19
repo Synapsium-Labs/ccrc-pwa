@@ -18,14 +18,14 @@ import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccr
 import type { FetchLike } from '../src/linear/client.js';
 import { DriftPass } from '../src/linear/driftPass.js';
 import { DRIFT_PASS_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
-import { givenUpWord, INBOUND_RECHECK_MS } from '../src/linear/inboundPolicy.js';
+import { closeCommentSeedOf, givenUpWord, INBOUND_RECHECK_MS } from '../src/linear/inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from '../src/linear/journal.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { coordinatorPresenceIn, type CoordinatorPresence } from '../../shared/ledgers.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
-import { requestIdOf } from '../src/linear/planSyncPolicy.js';
+import { requestIdOf, uuidOf } from '../src/linear/planSyncPolicy.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -1329,8 +1329,11 @@ describe('the close path of a take with no project judges the text as a public p
 describe('a team no project claims is judged as unknown, public, at the door as in the lane (review 2834 F1)', () => {
   it('a coordinator\'s close of a handed row on an unowned team under a PRIVATE home is refused as public text', async () => {
     const r = await rig({ mode: 'private', progs: true });
+    // a MANAGED team no project claims: a migration row, the row in it, and a by-id node in that team, so the re-read answers managed
+    r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'CCC', 'applied', T - 1000);
     r.plan.upsertInbound({ linearId: U(40), workspaceId: WS.a.id, teamKey: 'CCC', identifier: 'CCC-40', title: 't', body: null, seenAt: T });
     r.plan.setInboundState(U(40), { state: 'handed', handedTo: 'prog-b' });
+    r.lin.byId[U(40)] = node(40, { teamKey: 'CCC', identifier: 'CCC-40' });
     const res = await take(r, 'prog-b', { issue: 'CCC-40', close: { why: 'dup of CCC-77' } }, OTHER);
     expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
     expect(rowOf(r, 40)!.state).toBe('handed');
@@ -2120,49 +2123,85 @@ describe('a close re-runs the public-text check before it posts (D-8183, round 4
 
 describe('the refused-text close has its own identity (review 2834 A1, A2, A6)', () => {
   const MAIL = 'Linear inbound: AAA-12 closed without its reason%';
-  it('a re-close with another reason posts its own comment; the reason and fallback attempts carry different requestIds', async () => {
+  const REFUSED = 'see AAA-99 for the dupe';
+  const comments = (r: Rig) => r.asks.filter((a) => a.op === 'issueComment');
+  /** A real retire (the issue completes) and reopen (it is open again, the lane mails the row anew, so `mailedAt` moves on). */
+  const retireAndReopen = async (r: Rig): Promise<void> => {
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('mailed');
+  };
+  const closeRefused = async (r: Rig, reason: string): Promise<void> => {
+    r.plan.setInboundState(U(12), { state: 'closed', reason });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);                                  // the comment lands, the cancel is refused retryably: the row stays unacted
+    r.lin.fail.clear();
+  };
+
+  it('a re-close with another reason posts its own comment after a real retire and reopen', async () => {
     const r = await rig({ mode: 'public' });
     await detect(r, [node(12)]);
     r.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
     r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
     await passAt(r, r.t.now + 1);                                  // the reason comment lands, the cancel fails retryably
-    expect(r.lin.comments.map((c) => c.body)).toHaveLength(1);
+    expect(r.lin.comments).toHaveLength(1);
     r.lin.fail.clear();
-    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a second, different reason', actedAt: null });   // retired, reopened, closed again
-    await passAt(r, r.t.now + 3600_000);
+    await retireAndReopen(r);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a second, different reason' });
+    await passAt(r, r.t.now + 1);
     expect(r.lin.comments.map((c) => c.body).some((b) => b.includes('a second, different reason'))).toBe(true);
     expect(rowOf(r, 12)!.actedAt).not.toBeNull();
-    // a reason attempt and a fallback attempt of one close never share a key
-    const r2 = await rig({ mode: 'public' });
-    await detect(r2, [node(12)]);
-    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe' });
-    await passAt(r2, r2.t.now + 1);
-    const idsAsked = r2.asks.filter((a) => a.op === 'issueComment').map((a) => String(a.input['requestId']));
-    expect(idsAsked).toHaveLength(1);
-    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe', actedAt: null });
-    r2.db.prepare('DELETE FROM project_linking').run();
-    r2.db.prepare("INSERT INTO project_linking (project, teamKey, override) VALUES ('project-a', 'AAA', 'private')").run();
-    await passAt(r2, r2.t.now + 3600_000);
-    const all = r2.asks.filter((a) => a.op === 'issueComment').map((a) => String(a.input['requestId']));
-    expect(new Set(all).size).toBe(all.length);
   });
 
-  it('two refused closes of one issue are mailed twice; a retried pass of one close once', async () => {
+  it('the fallback key does not depend on the reason; the reason key does', async () => {
     const r = await rig({ mode: 'public' });
     await detect(r, [node(12)]);
-    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe' });
-    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
-    await passAt(r, r.t.now + 1);                                  // comment made, mail sent, cancel refused retryably
+    await closeRefused(r, REFUSED);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-98 for another dupe' });   // same close round, another refused reason
+    await passAt(r, r.t.now + 3600_000);
+    const ids = comments(r).map((a) => String(a.input['requestId']));
+    expect(ids).toHaveLength(2);
+    expect(ids[1]).toBe(ids[0]);
+    // a reason attempt of that round is keyed otherwise
+    const r2 = await rig({ mode: 'public' });
+    await detect(r2, [node(12)]);
+    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
+    await passAt(r2, r2.t.now + 1);
+    expect(String(comments(r2)[0]!.input['requestId'])).not.toBe(ids[0]);
+  });
+
+  it('two refused closes of one issue (a real retire and reopen between) are mailed twice, even with the SAME reason', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    await closeRefused(r, REFUSED);
     expect(mails(r, MAIL)).toHaveLength(1);
-    r.lin.fail.clear();
-    await passAt(r, r.t.now + 3600_000);                           // the retry: the comment is a conflict, no second mail
+    await passAt(r, r.t.now + 3600_000);                           // the retry of the same close: the comment conflicts, no second mail
     expect(mails(r, MAIL)).toHaveLength(1);
     expect(rowOf(r, 12)!.actedAt).not.toBeNull();
-    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-98 for another dupe', actedAt: null });
-    await passAt(r, r.t.now + 3600_000);
-    const m = mails(r, MAIL);
+    const r2 = await rig({ mode: 'public' });
+    await detect(r2, [node(12)]);
+    await closeRefused(r2, REFUSED);
+    await retireAndReopen(r2);
+    await closeRefused(r2, REFUSED);                                // the SAME reason: only mailedAt tells the closes apart
+    const m = mails(r2, MAIL);
     expect(m).toHaveLength(2);
     expect(m[0]!.subject).not.toBe(m[1]!.subject);
-    for (const x of m) { expect(x.body).not.toContain('AAA-99'); expect(x.body).toContain('posted a comment there without the reason'); }
+    expect(r2.lin.comments).toHaveLength(2);                        // each close posted its own fallback
+    for (const x of m) { expect(x.body).not.toContain('AAA-99'); expect(x.body).toContain('a comment without the reason is on the issue'); }
+  });
+
+  it('a fallback answered conflict (an earlier attempt landed it) still mails once; a later pass of the same close mails nothing more', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: REFUSED });
+    r.lin.comments.push({ requestId: uuidOf(closeCommentSeedOf(U(12), 'fallback', rowOf(r, 12)!)), body: 'an earlier attempt' });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, MAIL)).toHaveLength(1);
+    r.lin.fail.clear();
+    await passAt(r, r.t.now + 3600_000);
+    expect(mails(r, MAIL)).toHaveLength(1);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
   });
 });

@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import {
   INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict, upkeepLookupOf,
-  closeRefusedCommentBody, closeTextRefusedMail,
+  closeRefusedCommentBody, closeTextRefusedMail, closeIdOf, closeTimeOf, reasonDigestOf, closeCommentSeedOf,
 } from '../src/linear/inboundPolicy.js';
 import { handedRowOf } from '../src/coord/planPolicy.js';
 import { RETIRE_WHYS, inboundRetirable, retireWhyOf } from '../src/linear/inboundRetire.js';
@@ -159,5 +159,26 @@ describe('the close builders for a reason that failed the public-text check (fin
     expect(m.body).toContain('some-class');
     expect(m.body).not.toContain('You closed');
     for (const text of [m.subject, m.body]) { expect(text).not.toContain('distinctive-title-zq'); expect(text).not.toContain('distinctive-body-zq'); }
+  });
+});
+
+describe('the close identity (review 2834 A1, A2)', () => {
+  const row = (reason: string | null, mailedAt: number | null, seenAt = 5) => ({ reason, mailedAt, seenAt });
+  it('the time is mailedAt, else seenAt; the digest is 12 hex of the reason; the id joins them', () => {
+    expect(closeTimeOf(row('r', 9))).toBe(9);
+    expect(closeTimeOf(row('r', null))).toBe(5);
+    expect(reasonDigestOf('r')).toMatch(/^[0-9a-f]{12}$/);
+    expect(reasonDigestOf('r')).not.toBe(reasonDigestOf('s'));
+    expect(reasonDigestOf(null)).toBe(reasonDigestOf(''));
+    expect(closeIdOf(row('r', 9))).toBe(`${reasonDigestOf('r')}-9`);
+    expect(closeIdOf(row('r', 9))).not.toBe(closeIdOf(row('r', 10)));   // the same reason, a mail between: tells apart
+    expect(closeIdOf(row('r', 9))).not.toBe(closeIdOf(row('s', 9)));    // another reason: tells apart
+  });
+  it('the fallback seed carries nothing of the reason; the reason seed does', () => {
+    expect(closeCommentSeedOf('L', 'fallback', row('one', 9))).toBe(closeCommentSeedOf('L', 'fallback', row('two', 9)));
+    expect(closeCommentSeedOf('L', 'fallback', row('one', 9))).not.toBe(closeCommentSeedOf('L', 'fallback', row('one', 10)));
+    expect(closeCommentSeedOf('L', 'fallback', row('one', 9))).not.toContain(reasonDigestOf('one'));
+    expect(closeCommentSeedOf('L', 'reason', row('one', 9))).not.toBe(closeCommentSeedOf('L', 'reason', row('two', 9)));
+    expect(closeCommentSeedOf('L', 'reason', row('one', 9))).not.toBe(closeCommentSeedOf('L', 'fallback', row('one', 9)));
   });
 });
