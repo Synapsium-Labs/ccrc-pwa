@@ -15,6 +15,7 @@ import {
 } from '../src/coord/overlordDesignationStore.js';
 import { actorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import type { ChildMark } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -79,8 +80,9 @@ const designateOverlord = (r: Rig): void => {
   expect(bindPendingGeneration(r.coord.db, OVERLORD, gen, NOW + 1)).toEqual({ ok: true, changed: true });
   expect(goLive(r.coord.db, journal, OVERLORD, gen, NOW + 2)).toMatchObject({ ok: true, changed: true });
 };
-const answer = (c: CoordStore, fromId: string, toId: string): string => {
-  const v = c.urgentVerdict(fromId, toId);
+const NO_MARK: ChildMark = { kind: 'none' };
+const answer = (c: CoordStore, fromId: string, toId: string, runId: number | null, mark: ChildMark = NO_MARK): string => {
+  const v = c.urgentVerdict(fromId, toId, runId, mark);
   return v.kind === 'allowed' ? `allowed:${v.role}` : v.code;
 };
 const counts = (c: CoordStore) => ({
@@ -94,57 +96,107 @@ describe('CoordStore.urgentVerdict: the sender rule over the store facts (spec ย
   let app: FastifyInstance | undefined;
   afterEach(async () => { vi.restoreAllMocks(); if (app) await app.close(); app = undefined; });
 
-  it('a run coordinator to the worker of a work run, or the reviewer of a review run, it claims: allowed, as coordinator', async () => {
+  it('a run coordinator to the worker of its work run, or the reviewer of its review run, naming that run: allowed, as coordinator', async () => {
     const r = await rig(); app = r.app;
-    expect(answer(r.coord, COORD, WORKER)).toBe('allowed:coordinator');
-    expect(answer(r.coord, COORD, REVIEWER)).toBe('allowed:coordinator');
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('allowed:coordinator');
+    expect(answer(r.coord, COORD, REVIEWER, r.review)).toBe('allowed:coordinator');
+  });
+
+  it('the mail names no run, or a run that is not the one between them: urgent-wrong-run (F2)', async () => {
+    const r = await rig(); app = r.app;
+    expect(answer(r.coord, COORD, WORKER, null)).toBe('urgent-wrong-run');
+    // The review run is COORD's but REVIEWER's, not WORKER's; the outer run is OTHER_COORD's.
+    expect(answer(r.coord, COORD, WORKER, r.review)).toBe('urgent-wrong-run');
+    expect(answer(r.coord, COORD, WORKER, r.outer)).toBe('urgent-wrong-run');
   });
 
   it('a peer, another coordinator, or a worker to its own coordinator: urgent-not-allowed', async () => {
     const r = await rig(); app = r.app;
-    for (const [from, to] of [[PEER, WORKER], [OTHER_COORD, WORKER], [WORKER, COORD]] as const) {
-      expect(answer(r.coord, from, to), `${from} -> ${to}`).toBe('urgent-not-allowed');
-    }
+    expect(answer(r.coord, PEER, WORKER, r.work)).toBe('urgent-not-allowed');
+    expect(answer(r.coord, OTHER_COORD, WORKER, r.outer)).toBe('urgent-not-allowed');
+    expect(answer(r.coord, WORKER, COORD, r.work)).toBe('urgent-not-allowed');
   });
 
   it('a coordinator to its worker on a terminal run: urgent-not-allowed', async () => {
     const r = await rig(); app = r.app;
     expect(r.coord.advance(r.work, 'failed', 'coordinator')).toMatchObject({ ok: true });
-    expect(answer(r.coord, COORD, WORKER)).toBe('urgent-not-allowed');
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('urgent-not-allowed');
   });
 
-  it('the designated Overlord to a session that claims a non-terminal run: allowed, as overlord; undesignated: not allowed', async () => {
+  it("a reused worker name: an earlier occupant's open run never lets its coordinator through for the new occupant (F1)", async () => {
     const r = await rig(); app = r.app;
-    expect(answer(r.coord, OVERLORD, OTHER_COORD)).toBe('urgent-not-allowed');
+    const OLD = 1_700_000_000_000;
+    const BORN = OLD + 5_000_000;
+    const at = (id: number, openedAt: number, dispatchStartedAt: number | null) =>
+      r.coord.db.prepare('UPDATE runs SET openedAt = ?, dispatchStartedAt = ? WHERE id = ?').run(openedAt, dispatchStartedAt, id);
+    // OTHER_COORD's run, still open, bound the name when an earlier occupant was born; PEER's run minted the occupant now.
+    const ghost = r.coord.openRun({ program: 'program-old', title: 'old', project: 'project-a', wave: 1, waveOf: 3, claimedBy: OTHER_COORD });
+    const live = r.coord.openRun({ program: 'program-new', title: 'new', project: 'project-a', wave: 1, waveOf: 3, claimedBy: PEER });
+    if (!('id' in ghost) || !('id' in live)) throw new Error('openRun refused');
+    at(ghost.id, OLD, OLD);
+    r.coord.setSession(ghost.id, 'lane-a-reused', OLD);
+    at(live.id, BORN, BORN);
+    r.coord.setSession(live.id, 'lane-a-reused', BORN);
+    const mark: ChildMark = { kind: 'child', runId: live.id };
+    expect(answer(r.coord, OTHER_COORD, 'lane-a-reused', ghost.id, mark)).toBe('urgent-not-allowed');
+    expect(answer(r.coord, PEER, 'lane-a-reused', live.id, mark)).toBe('allowed:coordinator');
+    // CONTROL: by the bare id string (no mark), the earlier occupant's coordinator would pass.
+    expect(answer(r.coord, OTHER_COORD, 'lane-a-reused', ghost.id, NO_MARK)).toBe('allowed:coordinator');
+  });
+
+  it('the designated Overlord to a coordinator, naming a run it claims: allowed, as overlord; no run: wrong-run; undesignated: not allowed', async () => {
+    const r = await rig(); app = r.app;
+    expect(answer(r.coord, OVERLORD, OTHER_COORD, r.outer)).toBe('urgent-not-allowed');
     designateOverlord(r);
-    expect(answer(r.coord, OVERLORD, OTHER_COORD)).toBe('allowed:overlord');
-    expect(answer(r.coord, OVERLORD, PEER)).toBe('urgent-not-allowed');
+    expect(answer(r.coord, OVERLORD, OTHER_COORD, r.outer)).toBe('allowed:overlord');
+    expect(answer(r.coord, OVERLORD, OTHER_COORD, null)).toBe('urgent-wrong-run');
+    expect(answer(r.coord, OVERLORD, PEER, r.outer)).toBe('urgent-not-allowed');
   });
 
-  it('an unreadable binding is urgent-unmeasured, never urgent-not-allowed', async () => {
+  it('a mark that cannot be read, or a binding series the store cannot represent, is urgent-unmeasured (F1)', async () => {
     const r = await rig(); app = r.app;
+    expect(answer(r.coord, COORD, WORKER, r.work, { kind: 'unreadable' })).toBe('urgent-unmeasured');
     const real = r.coord.bindingsOf.bind(r.coord);
     vi.spyOn(r.coord, 'bindingsOf').mockImplementation((id: string) => ({
-      ...real(id), claimants: () => { throw new Error('claimantsOfSession: run-unreadable'); },
+      ...real(id), worker: () => ({ ok: false, kind: 'run-unreadable', detail: 'a row this build cannot represent' }),
     }));
-    expect(answer(r.coord, PEER, WORKER)).toBe('urgent-unmeasured');
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('urgent-unmeasured');
+  });
+
+  it('a fact read that throws is urgent-unmeasured, whichever read it is (F3)', async () => {
+    const r = await rig(); app = r.app;
+    const real = r.coord.bindingsOf.bind(r.coord);
+    const boom = (): never => { throw new Error('SQLITE_IOERR: disk I/O error'); };
+    vi.spyOn(r.coord, 'bindingsOf').mockImplementation((id: string) => ({ ...real(id), claimant: boom }));
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('urgent-unmeasured');
+    vi.restoreAllMocks();
+    vi.spyOn(r.coord, 'urgentOutstanding').mockImplementation(boom);
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('urgent-unmeasured');
+    vi.restoreAllMocks();
+    vi.spyOn(r.coord, 'bindingsOf').mockImplementation(boom);
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('urgent-unmeasured');
+    vi.restoreAllMocks();
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('allowed:coordinator');
   });
 
   it('an urgent mail from the same sender to the same recipient still outstanding: urgent-outstanding until it is acked', async () => {
     const r = await rig(); app = r.app;
     const first = writeUrgent(r.coord, COORD, WORKER, r.work);
-    expect(answer(r.coord, COORD, WORKER)).toBe('urgent-outstanding');
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('urgent-outstanding');
     expect(r.coord.markAcked(first, Date.now())).toMatchObject({ ok: true });
-    expect(answer(r.coord, COORD, WORKER)).toBe('allowed:coordinator');
+    expect(answer(r.coord, COORD, WORKER, r.work)).toBe('allowed:coordinator');
   });
 
-  it("and is allowed again once the first is rejected by its run's close (its writer)", async () => {
+  it("and is allowed again once its named run closes, which releases it (spec ยง3.2)", async () => {
     const r = await rig(); app = r.app;
-    // The first rides the review run, so its close releases it while the work run, and the right to mark, stand.
-    writeUrgent(r.coord, COORD, WORKER, r.review);
-    expect(answer(r.coord, COORD, WORKER)).toBe('urgent-outstanding');
-    r.coord.cancelOutstandingDeliveries(r.review);
-    expect(answer(r.coord, COORD, WORKER)).toBe('allowed:coordinator');
+    // Wave 2 opened before wave 1 closes: the first urgent mail names wave 1, whose close releases it.
+    const wave2 = r.coord.openRun({ program: 'program-a', title: 'program-a', project: 'project-a', wave: 2, waveOf: 3, claimedBy: COORD });
+    if (!('id' in wave2)) throw new Error('openRun refused');
+    r.coord.setSession(wave2.id, WORKER);
+    writeUrgent(r.coord, COORD, WORKER, r.work);
+    expect(answer(r.coord, COORD, WORKER, wave2.id)).toBe('urgent-outstanding');
+    r.coord.cancelOutstandingDeliveries(r.work);
+    expect(answer(r.coord, COORD, WORKER, wave2.id)).toBe('allowed:coordinator');
   });
 
   it('keyed on the pair: a different allowed sender to the same recipient is allowed while the first stands', async () => {
@@ -154,8 +206,8 @@ describe('CoordStore.urgentVerdict: the sender rule over the store facts (spec ย
     if (!('id' in third)) throw new Error('openRun refused');
     r.coord.setSession(third.id, COORD);
     writeUrgent(r.coord, OTHER_COORD, COORD, r.outer);
-    expect(answer(r.coord, PEER, COORD)).toBe('allowed:coordinator');
-    expect(answer(r.coord, OTHER_COORD, COORD)).toBe('urgent-outstanding');
+    expect(answer(r.coord, PEER, COORD, third.id)).toBe('allowed:coordinator');
+    expect(answer(r.coord, OTHER_COORD, COORD, r.outer)).toBe('urgent-outstanding');
   });
 });
 

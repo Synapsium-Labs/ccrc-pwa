@@ -443,7 +443,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'template-failed': 502,
   // 400
   'bad-request': 400, 'bad-tag': 400, 'bad-kind': 400, 'bad-account-id': 400, 'bad-attachment': 400,
-  'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400,
+  'bad-path': 400, 'bad-pool-name': 400, 'bad-session-id': 400, 'urgent-wrong-run': 400,
   // 401, 403
   'unauthenticated': 401,
   'wrong-node': 403, 'unknown-sender': 403, 'stale-uuid': 403, 'foreign-origin': 403, 'not-owner': 403,

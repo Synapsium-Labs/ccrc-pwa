@@ -6347,8 +6347,8 @@ export const MAIL_REJECT_CODES = [
   'duplicate', 'peer-quota',
   // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
   'key-conflict',
-  // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's two answers and one outstanding per pair.
-  'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured',
+  // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's answers, its named run and one outstanding per pair.
+  'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured', 'urgent-wrong-run',
   // delivery
   'undeliverable',
   // done-authority

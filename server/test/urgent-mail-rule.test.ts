@@ -6,13 +6,15 @@ import { MAILHOLD_ROLES } from '../../shared/mailHold.js';
 import { runMutants } from './sim/mutate.js';
 import { URGENT_MAIL_MUTANT_SETS, urgentSenderVerdictCases } from './sim/urgentMailSets.js';
 
-describe('urgentSenderVerdict (spec §3.1, plan P2 and P3)', () => {
+describe('urgentSenderVerdict (spec §3.1, plan P2 to P4)', () => {
   for (const [name, fn] of Object.entries(urgentSenderVerdictCases(urgentMail))) it(name, fn);
 
   it('answers only the hold\'s role words (shared/mailHold.ts#MAILHOLD_ROLES)', () => {
-    const base = { senderId: 'sess-a', recipientId: 'sess-b', recipientClaimsOpenRun: true, outstanding: false } as const;
-    const asCoord = urgentMail.urgentSenderVerdict({ ...base, recipientClaimants: ['sess-a'], designation: { kind: 'not-designated' } });
-    const asOverlord = urgentMail.urgentSenderVerdict({ ...base, recipientClaimants: [], designation: { kind: 'designated', sessionId: 'sess-a' } });
+    const base = { senderId: 'sess-a', recipientId: 'sess-b', runId: 1, outstanding: false } as const;
+    const asCoord = urgentMail.urgentSenderVerdict({ ...base, recipientWorksOn: [1], senderClaims: [1], recipientClaims: [],
+      designation: { kind: 'not-designated' } });
+    const asOverlord = urgentMail.urgentSenderVerdict({ ...base, recipientWorksOn: [], senderClaims: [], recipientClaims: [1],
+      designation: { kind: 'designated', sessionId: 'sess-a' } });
     const roles = [asCoord, asOverlord].map((v) => (v.kind === 'allowed' ? v.role : v.kind));
     expect(roles).toEqual([...MAILHOLD_ROLES]);
   });

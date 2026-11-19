@@ -56,7 +56,8 @@ import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import type { KeyedMail } from './mailKey.js';
-import { urgentSenderVerdict, type UrgentRole, type UrgentVerdict } from './urgentMail.js';
+import { urgentSenderVerdict, type UrgentFacts, type UrgentRole, type UrgentRunIds, type UrgentVerdict } from './urgentMail.js';
+import type { ChildMark } from '../../../shared/api.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -158,7 +159,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 // `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
-import type { RunLastMovesRead } from './runWire.js';
+import { incarnationOfMark, type RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -6892,21 +6893,32 @@ export class CoordStore {
     return this.urgentRows('AND m.fromId = ? AND d.toId = ? ', [fromId, toId]).length > 0;
   }
 
-  /** Whether `fromId` may mark its mail to `toId` (the resolved recipient) urgent now (spec §3.1, plan P2 to P4): this
-   *  store reads the facts once, from the binding's one view, the designation and the pair's outstanding urgent mail,
-   *  and `urgentSenderVerdict` (L1) decides. An unreadable claimant series is `unmeasured`, never an empty one. The
-   *  ingress (which waits for its own PR, `ingress-waits-for-routes`) asks with no `await` between this read and its
+  /** Whether `fromId` may mark its mail to `toId` (the resolved recipient) about run `runId` urgent now (spec §3.1, plan
+   *  P2 to P4). This store reads the facts once, as run ids from the binding's one view, and `urgentSenderVerdict` (L1)
+   *  decides. The recipient's runs are those that bind its INCARNATION, built from its registry mark (`mark`, which the
+   *  caller reads) as `heldFor` and the drift lane build it (`incarnationOfMark`), so a reused worker name never lets an
+   *  earlier occupant's coordinator through; a mark that cannot be read is `urgent-unmeasured`. Every fact read sits in
+   *  one try: a read that throws, or a series that cannot be represented, is `urgent-unmeasured`, never an empty answer.
+   *  The ingress (which waits for its own PR, `ingress-waits-for-routes`) asks with no `await` between this read and its
    *  insert, so two sends cannot both pass. */
-  urgentVerdict(fromId: string, toId: string): UrgentVerdict {
-    const recipient = this.bindingsOf(toId);
-    let recipientClaimants: readonly string[] | 'unmeasured';
-    try { recipientClaimants = recipient.claimants(); } catch { recipientClaimants = 'unmeasured'; }
-    const claims = recipient.claimant();
-    const d = this.designationRead();
-    return urgentSenderVerdict({ senderId: fromId, recipientId: toId, recipientClaimants,
-      recipientClaimsOpenRun: claims.ok ? claims.siblings.length > 0 : 'unmeasured',
-      designation: d.kind === 'designated' ? { kind: d.kind, sessionId: d.sessionId } : { kind: d.kind },
-      outstanding: this.urgentOutstanding(fromId, toId) });
+  urgentVerdict(fromId: string, toId: string, runId: number | null, mark: ChildMark): UrgentVerdict {
+    const ids = (r: OpenSiblingsResult): UrgentRunIds => (r.ok ? r.siblings.map((s) => s.id) : 'unmeasured');
+    let facts: UrgentFacts;
+    try {
+      const recipient = this.bindingsOf(toId);
+      const d = this.designationRead();
+      facts = { senderId: fromId, recipientId: toId, runId,
+        recipientWorksOn: mark.kind === 'unreadable' ? 'unmeasured'
+          : ids(recipient.worker({ incarnation: incarnationOfMark(this, toId, mark) })),
+        senderClaims: ids(this.bindingsOf(fromId).claimant()),
+        recipientClaims: ids(recipient.claimant()),
+        designation: d.kind === 'designated' ? { kind: d.kind, sessionId: d.sessionId } : { kind: d.kind },
+        outstanding: this.urgentOutstanding(fromId, toId) };
+    } catch (e) {
+      return { kind: 'refused', code: 'urgent-unmeasured',
+        detail: `the facts for an urgent mail to ${toId} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    return urgentSenderVerdict(facts);
   }
 
   private urgentRows(and: string, args: readonly string[]): unknown[] {
