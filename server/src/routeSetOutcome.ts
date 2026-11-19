@@ -20,9 +20,14 @@ export type RouteSetOutcome =
 /** The fields of a `runCcd` answer this reads. */
 export interface RouteSetAnswer { readonly ran: boolean; readonly ok: boolean; readonly stderr: string }
 
+/** The answer for a call that never ran. Each caller narrows `ran === false` itself, in its own scope, and answers this,
+ *  so the not-ran census (`consolidationCensus.ts`, which reads each `runCcd(` site's text) sees the narrowing at the site;
+ *  `routeSetOutcome` answers it too, for a caller that hands it the whole answer. */
+export const ROUTE_SET_UNREACHABLE: RouteSetOutcome = { kind: 'unreachable', detail: 'ccd did not run' };
+
 /** Map one `routeSet` answer. `ran` is read first, so a not-ran answer is never read by its `ok`. */
 export function routeSetOutcome(res: RouteSetAnswer): RouteSetOutcome {
-  if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };
+  if (res.ran === false) return ROUTE_SET_UNREACHABLE;
   if (res.ok) return { kind: 'written' };
   return { kind: 'refused', reason: res.stderr.split('\n')[0]?.trim() || 'no stderr' };
 }

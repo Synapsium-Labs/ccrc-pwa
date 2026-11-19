@@ -29,7 +29,7 @@ import { ROUTE_WRITABLE_FIELDS, isRegistryId, type BuildAgreement, type ChildMar
 import { HISTORY_STEER_ON_DIR, type ReadFailure } from '../../../shared/agent-protocol.js';
 import { FLEET_ROLES } from '../../../shared/fleetRoles.js';
 import { CCD_ARGV, ccdCan, sweepDec } from '../ccdargv.js';
-import { routeSetOutcome } from '../routeSetOutcome.js';
+import { ROUTE_SET_UNREACHABLE, routeSetOutcome } from '../routeSetOutcome.js';
 import type { CoordStore } from '../coord/store.js';
 import type { RunCcd } from '../coord/ports.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
@@ -201,7 +201,8 @@ export async function profilePass(deps: ProfileLaneDeps, rows: readonly ProfileR
     if (!live) continue;
     if (deps.act === null || !ccdCan(deps.act.fleetState, 'routeSet')) { unsupported += 1; continue; }
     if (written >= PROFILE_WRITES_PER_PASS) { deferred += 1; continue; }   // a failing row never starves the rest (review 2024 F12)
-    const out = routeSetOutcome(await deps.act.runCcd(CCD_ARGV.routeSet(r.id, diff, sweepDec(deps.act.fleetState, PROFILE_LANE_ACTOR))));
+    const res = await deps.act.runCcd(CCD_ARGV.routeSet(r.id, diff, sweepDec(deps.act.fleetState, PROFILE_LANE_ACTOR)));
+    const out = res.ran === false ? ROUTE_SET_UNREACHABLE : routeSetOutcome(res);
     // A call that never ran (the agent link dropped) is unmeasured, never ccd's refusal: it is retried next pass all the same.
     if (out.kind === 'written') written += 1;
     else { failed += 1; failures.push(`${r.id}: ${out.kind === 'unreachable' ? `${out.detail}, so the write is unmeasured` : out.reason}`); }

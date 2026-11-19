@@ -25,7 +25,7 @@ import type { MailHoldPair } from '../../../shared/mailHold.js';
 import { CCD_ARGV, MAILHOLD_ROUTE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
-import { routeSetOutcome, type RouteSetOutcome } from '../routeSetOutcome.js';
+import { ROUTE_SET_UNREACHABLE, routeSetOutcome, type RouteSetOutcome } from '../routeSetOutcome.js';
 import { decideMailHold, type MailHoldDecision } from './mailHoldPolicy.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
 
@@ -104,7 +104,8 @@ export async function mailHoldPass(deps: MailHoldLaneDeps, rows: readonly MailHo
     if (d.act === 'none') continue;
     if (d.act === 'skip') { c[d.why] += 1; continue; }
     const value = d.act === 'write' ? d.value : '';
-    settle(deps, r.id, d, routeSetOutcome(await deps.runCcd(CCD_ARGV.routeSet(r.id, { mailhold: value }, sweepDec(deps.fleetState, MAIL_HOLD_LANE_ACTOR)))), c);
+    const res = await deps.runCcd(CCD_ARGV.routeSet(r.id, { mailhold: value }, sweepDec(deps.fleetState, MAIL_HOLD_LANE_ACTOR)));
+    settle(deps, r.id, d, res.ran === false ? ROUTE_SET_UNREACHABLE : routeSetOutcome(res), c);
   }
   for (const id of holds.keys()) if (!listed.has(id)) c.unlisted += 1;
   const result: MailHoldLaneResult = { mailDisabled, storeUnread: false, ...c };
