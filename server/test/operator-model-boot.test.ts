@@ -4,7 +4,7 @@ import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from 'vitest
 import { DatabaseSync } from 'node:sqlite';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import path from 'node:path';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -20,7 +20,7 @@ import type { DesignationRead, DesignationView } from '../../shared/overlord-des
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 const ACTOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('Fixture browser', 'abcdef0123456789'));
+  .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 const NOW = 5_000;
 const S = 'lane-a-project-a';
 const VIEW = {} as DesignationView;

@@ -1,5 +1,5 @@
 import type { ActorWire } from '../../../shared/overlord-identity.js';
-import { isMintedActor, type AccountActor } from '../accounts/audit.js';
+import { isGateActor, type AccountActor } from '../accounts/audit.js';
 import type { AttributionRead } from '../coord/openRun.js';
 import type { IncarnationRead } from '../continuity/timerLane.js';
 import { deviceActor } from '../ccdargv.js';
@@ -22,6 +22,8 @@ export interface AttributionIdentityDeps {
 }
 
 const MINTED = new WeakSet<object>();
+/** Every console answer this module made (slug console-results-are-minted): a hand-built `{ kind: 'dark' }` is not one. */
+const CONSOLE_MINTED = new WeakSet<object>();
 
 /** True only for an actor this module minted: a structurally equal literal is not one. */
 export const isRecordedActor = (a: unknown): a is RecordedActor =>
@@ -37,6 +39,27 @@ const mint = (actor: ActorWire): RecordedActor => {
   return frozen;
 };
 
+const consoleOf = (c: ConsoleCaller): ConsoleCaller => {
+  const frozen = Object.freeze({ ...c });
+  CONSOLE_MINTED.add(frozen);
+  return frozen;
+};
+
+/** THE ONE MAPPING of a console answer to the text a row records (ladder review F4, F5; ask 563): `flag-off` for sign-in
+ *  dark, `unmeasured` for a session with no device label, the device actor's subject when signed in. Anything this module
+ *  did not mint, or a kind it does not know, is `null`, and every caller refuses it: it fails closed, never to `flag-off`. */
+export function consoleSubject(c: unknown): string | null {
+  if (typeof c !== 'object' || c === null || !CONSOLE_MINTED.has(c)) return null;
+  const k = (c as { kind?: unknown }).kind;
+  if (k === 'dark') return 'flag-off';
+  if (k === 'device-unmeasured') return 'unmeasured';
+  if (k === 'signed-in') {
+    const actor = (c as { actor?: unknown }).actor;
+    return isRecordedActor(actor) ? actor.subject : null;
+  }
+  return null;
+}
+
 export function attributionIdentity(deps: AttributionIdentityDeps): CallerIdentity {
   return {
     async session(sessionId, uuid, uuidField): Promise<SessionCaller | SessionRefusal> {
@@ -49,16 +72,16 @@ export function attributionIdentity(deps: AttributionIdentityDeps): CallerIdenti
     },
     incarnation: (sessionId) => deps.incarnation(sessionId),
     operator(actor: AccountActor): RecordedActor {
-      if (!isMintedActor(actor)) throw new Error('callerIdentity.operator: not an actor the account gate minted');
+      if (!isGateActor(actor)) throw new Error('callerIdentity.operator: not an actor the account gate minted');
       return mint({ kind: 'operator', subject: String(actor), issuer: 'account-gate', strength: 'operator' });
     },
     console(armed, device): ConsoleCaller {
-      if (!armed) return { kind: 'dark' };
-      if (device === null) return { kind: 'device-unmeasured' };
-      return {
+      if (!armed) return consoleOf({ kind: 'dark' });
+      if (device === null) return consoleOf({ kind: 'device-unmeasured' });
+      return consoleOf({
         kind: 'signed-in',
         actor: mint({ kind: 'operator', subject: deviceActor(device), issuer: 'session-cookie', strength: 'operator' }),
-      };
+      });
     },
   };
 }

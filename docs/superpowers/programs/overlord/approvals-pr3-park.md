@@ -36,7 +36,7 @@ The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 2671
   `parkedApprovalViewOf`. `questionPolicy.ts#decideApprovalLapse` gains `park` and `shadow-park` beside `lapse` and `stale`, in the
   same function, reading the row's stored `parkWord` and `fetchedAt`, the grace, and the park's horizon and void;
   `decideDeferredApprovalPush` drops an entry covering a `parked` row.
-- **L3, `server/src/coord/approvalParkStore.ts`, and the store.** `approval_parks` (migration 109 by position: see "Migration"), written only through `CoordStore` from the questions owner. The mint's park step
+- **L3, `server/src/coord/approvalParkStore.ts`, and the store.** `approval_parks` (migration 110: see "Migration"), written only through `CoordStore` from the questions owner. The mint's park step
   runs inside the mint's transaction (`insertApprovalAt`, the cap race). `parkApprovalRow` is the one statement that writes
   `parked`; a ruling inside the window releases its slot and records a coordinator's deny on the key in the same transaction,
   as the decline does; `meetApprovalParkRuling` is the spend (re-read, sign, use 0 to 1, the retry row's ruling) in one
@@ -107,8 +107,8 @@ The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 2671
 ## Migration
 
 `approval_parks` and four nullable `approvals` columns (`parkWord`, `parkKey`, `fetchedAt`, `wouldPark`), one index each, and
-the lane's seed row. Migrations are positional: urgent mail (#3073) landed 108 first, so this is 109 after this branch's first
-merge of main. The coordinator's slot for it is 110 if Overlord gates B (#3076) lands first; whoever lands second renumbers.
+the lane's seed row, at slot 110, the coordinator's: urgent mail (#3073) took 108 and Overlord gates B (#3076) 109, both
+absorbed before the push; door process B1 builds on 111.
 
 ## Mutation measurements
 

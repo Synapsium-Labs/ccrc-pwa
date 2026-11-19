@@ -4325,19 +4325,36 @@ and `delegation-words`, and the real-Chrome `delegation-rows`. The two delegatio
 Instrument, dark and light, at 360, 390, 1280 and 1920) and its Departures.
 
 **Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, or counts its background work, in its
-text, titles or accessible names; the header still draws both disclosures and its background count; the delegated rows
-stay reachable through their fold line.
+text (a working row reads `working · in background`), and none counts its subagents or delegated entries in its titles or
+accessible names; the working row's status title is the one place the background count stays (`2 in background:
+workflow, agent`, ruled in fix round 1); the header still draws both disclosures and its background count; the delegated
+rows stay reachable through their fold line.
 
 - **D-8771** — `fleet-list-drops-subagent-counts`: Task C46, issued on 2026-11-19. The fleet list draws no count of a
-  session's subagents, delegated entries or delegated background work (the operator's ruling of 2026-11-19). D-7781's card
+  session's subagents, delegated entries or delegated background work in its text, and none of the first two in its titles;
+  a working row's status title keeps the background count (the operator's ruling of 2026-11-19, and the coordinator's
+  ruling of fix round 1). D-7781's card
   chip is superseded on the card, and D-7782, which had only a card side, is retired whole: the card no longer has a
   `delegated` fact, so D-5545's prefix rule holds for every key again, with one allowance for the status word, whose header
   form keeps the count the card dropped (`working · N in background`): one data row (`HEADER_COUNT_ALLOWANCES`, key `status`)
-  read by the rule's own comparison, so no second comparison and no other key or words are allowed. The header keeps D-7781's count of every entry, its
+  read by the rule's own comparison (which holds a card status equal to the header word for word, too), so no second comparison and no other key or words are allowed. The header keeps D-7781's count of every entry, its
   disclosure and its background count. A coordinator's fold line and a programme box's footer keep their delegated rows and
   say `delegated` and `worktrees` with no number.
 
 **Rollback.** A plain revert.
+
+**C47: C46's records made true and its count pins made able to fail (follow-up, under D-8771).** No new deviation number and no behaviour a person sees changes. What changed, from the C46 review (run 2708): the Acceptance
+line and D-8771's first sentence above say where the one count stays (the working row's status title), as `c46.md` does (R1);
+the status allowance holds a card status equal to the header word for word as well as the card's uncounted form, in the one
+comparison (L1-1); the header's status fact takes its title from the header's own background words and the card keeps its own
+(L1-2); the card's uncounted words are taken from `backgroundWords`' own output, so they are spelt once, and the allowance row
+is built from them, with no edit to `shared/api.ts` (L1-3, by the coordinator's ruling); the both-skins rendered case reads the
+allowance row and applies it to the header's own status element only (L1-4); the comments in `sessionHeaderView.ts` and the rule
+header in `sessionFacts.ts`, and both spec amendments, say what is true (L1-5, L1-6, R4, R5, which also moves the broker spec's
+amendment beside the R table's and adds the subagent count to both); the no-count pins also fail for a bare number (L2-1), the
+allowance table pins the regex's flags (L2-2), and the dead-session half of the guard loop says it cannot fail for subagents
+(L2-6). The wire comment for the activity placement is not touched here (item 13 left C47 by the coordinator's ruling).
+**Measured** (the mutants, the reds at `main` and the runs): `docs/superpowers/programs/desktop-polish/c46.md`, "C47".
 
 ## Acceptance (the matrix, per PR)
 

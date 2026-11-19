@@ -1,6 +1,6 @@
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { actorOf } from '../src/accounts/audit.js';
-const ladderActor = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }).operator(actorOf('actor', ''));
+import { gateActorOf } from '../src/accounts/audit.js';
+const ladderActor = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }).operator(gateActorOf('actor', ''));
 import { describe, expect, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
 import { MIGRATIONS } from '../src/coord/schema.js';

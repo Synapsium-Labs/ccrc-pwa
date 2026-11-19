@@ -18,7 +18,7 @@ import type { AuthorityAppend, AuthorityAppendError } from '../src/coord/overlor
 import type { AuthorityState } from '../src/coord/overlordAuthorityCoherence.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { refuseRoute } from '../src/refuse.js';
 import type { DeliverResult } from '../src/continuity/sessionHost.js';
@@ -31,7 +31,7 @@ import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
 /** A retire's actor as the door mints it: the gate's actor through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('device-a', 'abcdef0123456789'));
+  .operator(gateActorOf('device-a', 'abcdef0123456789'));
 
 // Opening a coord db replays every migration, which is slow under load: migrate ONE template, and copy it for each test.
 let template = '';
@@ -61,7 +61,7 @@ function fakeGate(): FakeGate {
   const g = ((_req, reply, ask) => {
     g.asks.push(ask);
     if (g.mode !== 'pass') { void refuseRoute(reply, g.mode); return { pass: false }; }
-    return { pass: true, actor: actorOf('device-a', 'abcdef0123456789'), sessionIdHash: 'abcdef0123456789' };
+    return { pass: true, actor: gateActorOf('device-a', 'abcdef0123456789'), sessionIdHash: 'abcdef0123456789' };
   }) as FakeGate;
   g.asks = [];
   g.mode = 'pass';

@@ -4018,6 +4018,27 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 109: user_version 108 -> 109 ──────────────────────────────────────────
+  // The gate's fence refusals (Overlord W1 gates B, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 5,
+  // slug witness-after-the-fence): a refused `stale-generation` write at an Overlord door, recorded as a counted fact for a
+  // later cause row, since a forger without the act key never reaches the witness. `why` is the fence's reason word
+  // (no-live-generation, generation-mismatch, key-unissued, key-mismatch, no-key, fork, ended); `generationId` is NULL when
+  // no live generation was read. One writer, `overlordGateStore.ts#recordFenceRefusal`, which prunes rows older than 30
+  // days in the same transaction. The act key is never a column. ONE NEW TABLE AND ITS INDEX, nothing else: an older build
+  // opening a file at this `user_version` takes rule 3 and never names the table. The slot is the next free one by
+  // position: WM1 (#2997) took 106 the Linear wave 4 follow-ups (#3021) 107 and the mid-turn mail PR 2 (#3073) 108, so this is 109; whoever lands second renumbers (the coordinator's standing license).
+  `
+  CREATE TABLE overlord_fence_refusals (
+    id           INTEGER PRIMARY KEY,
+    sessionId    TEXT    NOT NULL,
+    generationId INTEGER,
+    door         TEXT    NOT NULL,
+    why          TEXT    NOT NULL,
+    at           INTEGER NOT NULL
+  );
+  CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
+  `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
   // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
   // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
   // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
@@ -4029,9 +4050,9 @@ export const MIGRATIONS: readonly string[] = [
   // seeded `shadow`, gated in this build until PR 3b (`lane-arm.ts`).
   // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
   // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
-  // The slot is POSITIONAL: urgent mail (#3073) landed 108 first, so this is 109 at this branch's first merge of main; the
-  // coordinator's slot for it is 110 if Overlord gates B (#3076) lands first, and whoever lands second renumbers. RE-MEASURE
-  // the slot before the PR and before merge (it must print 108 before this entry is counted):
+  // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108 and Overlord gates B (#3076) 109 first, so
+  // this is 110; door process B1 builds on 111. RE-MEASURE the slot before merge (it must print 109 before this entry is
+  // counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

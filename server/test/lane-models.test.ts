@@ -108,8 +108,9 @@ describe('readLaneModels (D-8406, R3b)', () => {
 
   it('a lane with no registry is absent: an Anthropic lane, or one init never ran on', async () => {
     const base = testDeps(mkTmp('ccrc-lanemodels-'));
-    const io: FleetIO = { ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null }) };
-    expect(await readLaneModels(io, base.cfg.ccrcDir, 'claude')).toEqual({ kind: 'absent' });
+    const io = (anthropic: boolean): FleetIO => ({ ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null, anthropic }) });
+    expect(await readLaneModels(io(true), base.cfg.ccrcDir, 'claude')).toEqual({ kind: 'absent', laneKind: 'anthropic' });
+    expect(await readLaneModels(io(false), base.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'absent', laneKind: 'never-made' });
   });
 
   it('local mode with no ccrc launcher in the configured home is not-started, even with the lane\'s files in place', async () => {
@@ -146,10 +147,10 @@ describe('GET /api/models/:lane (D-8406)', () => {
 
   it('a rostered lane with no registry answers absent', async () => {
     const base = testDeps(mkTmp('ccrc-lanemodels-'));
-    const io: FleetIO = { ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null }) };
+    const io: FleetIO = { ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null, anthropic: true }) };
     const res = await (await serve({ ...base, io })).inject({ method: 'GET', url: '/api/models/claude' });
     expect(res.statusCode).toBe(200);
-    expect(res.json<LaneModelsAnswer>().models).toEqual({ kind: 'absent' });
+    expect(res.json<LaneModelsAnswer>().models).toEqual({ kind: 'absent', laneKind: 'anthropic' });
   });
 
   // R3b: each outcome reaches the wire as its own answer, never folded.

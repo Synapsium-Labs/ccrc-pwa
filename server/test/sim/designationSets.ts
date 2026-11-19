@@ -18,12 +18,12 @@ import { openCoordDb } from '../../src/coord/db.js';
 import { insertStart, mintGeneration } from '../../src/continuity/continuityStore.js';
 import type { AuthorityAppend } from '../../src/coord/overlordAuthorityJournal.js';
 import { mkTmp } from '../tmpHelpers.js';
-import { actorOf } from '../../src/accounts/audit.js';
+import { gateActorOf } from '../../src/accounts/audit.js';
 import { attributionIdentity } from '../../src/auth/attributionIdentity.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('operator-a', '0123456789abcdef'));
+  .operator(gateActorOf('operator-a', '0123456789abcdef'));
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
