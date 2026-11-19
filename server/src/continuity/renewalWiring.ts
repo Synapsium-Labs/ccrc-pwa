@@ -6,6 +6,7 @@
 import type { SessionRecord } from '../registry.js';
 import { isRegistryId, type FleetSession } from '../../../shared/api.js';
 import { CCD_ARGV, HIBERNATE_FRESH_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
+import { routeSetOutcome } from '../routeSetOutcome.js';
 import type { WatcherDeps } from '../deps.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import { queueSystemMail } from '../coord/rundefsTx.js';
@@ -69,9 +70,7 @@ export function renewalActsOf(
   const routePrecompact = async (id: string, value: 'refuse' | 'allow'): Promise<PrecompactWrite> => {
     if (!isRegistryId(id)) return { kind: 'refused', reason: 'not a registry id' };
     if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
-    const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
-    if (res.ran === false) return { kind: 'unreachable', detail: 'ccd did not run' };
-    return res.ok ? { kind: 'written' } : { kind: 'refused', reason: res.stderr.split('\n')[0]?.trim() || 'no stderr' };
+    return routeSetOutcome(await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR))));
   };
   return {
     canRenew: capSupported(deps.fleetState, HIBERNATE_FRESH_CAP),
