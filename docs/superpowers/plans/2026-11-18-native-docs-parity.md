@@ -485,7 +485,7 @@ Library 1.1.0 was read from an installed copy in another ccrc worktree, read-onl
 | Fix round 1: F1, one landing per design | Spec §6, the same block's first paragraph (X1 spec §10 test 8) |
 | Fix round 1: M7, `frameCsp`'s signature | Spec §6's layout row (R19) |
 | Fix round 2 (review 2714): F2, the ceiling as a record a spending landing cannot write | Spec §6, the ceiling bullet: the landing that introduces test 8's tables records X2's shares in its shares table, and test 8 reads them at each landing's first parent (X1 spec §10 test 8) |
-| Fix round 2: F1 and F3, the landing form and the `Size-Design:` line | Spec §6's first paragraph: X2's one row under its `Size-Design:` line, which its landing commit's message carries, a squash or a merge commit alike (X1 spec §10 test 8) |
+| Fix round 2: F1 and F3, the landing form and the `Size-Design:` line | Spec §6's first paragraph: X2's one row under its `Size-Design:` line, which its landing commit's message carries; the landing form, squash or merge, is X1 spec §10 test 8's |
 | Fix round 2: M3, the genesis rows | Spec §6's first paragraph names the baseline row and X1's row, which the genesis landing appends |
 | Fix round 2: M9, units | Spec §6: both shares in characters, with no byte-unit gloss; the table's unit sentence; the stylesheet row's class-token clause |
 | How test 8 and the per-layout srcdoc cap count the layouts | Spec §6, the same block; §6's layout row ("none larger than the default bundle"); X1 spec §10 test 8's `total`, `frame` and layout rows |
