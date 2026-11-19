@@ -56,7 +56,8 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | `pwa/test/reader-appearance.test.ts` (new) | — | 2 | Pure rule rows |
 | `pwa/test/reader-appearance-source.test.ts` (new) | — | 2 | Slot coverage, every palette resolves, contrast pairs, second-copy scan |
 | `pwa/test/helpers/paletteTokens.ts` (new) | — | 2 | `resolvePaletteTokens(themeId, skinId, pointer)`: both default blocks merged, `phosphor` as the default, the skin block and its `(pointer: fine)` arm, `var()` chains, `color-scheme` |
-| `pwa/src/lib/appearance.ts` (new) | L4 | 3 | `useHostAppearance()` stamp |
+| `pwa/src/lib/appearanceStamp.ts` (new) | L1 | 3 | `appearanceStamp(root)`, a pure read of two attributes, the one stamp function. Imported by `appearance.ts` and `hostAppearance.ts`, both inward edges |
+| `pwa/src/lib/appearance.ts` (new) | L4 | 3 | `useHostAppearance()`, the stamp hook, over `appearanceStamp` |
 | `pwa/test/host-appearance.test.tsx` (new) | — | 3 | Stamp rows |
 | `pwa/src/docs/reader/hostAppearance.ts` (new) | L3 | 4 | `readHostAppearance(root)` over `getComputedStyle`, imported by `bridge.ts` only |
 | `pwa/src/docs/reader/assets.ts` | L3 | 4 | `loadReaderFonts()` |
@@ -151,7 +152,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 - [ ] **Step 2: Write the failing source rows** in `reader-appearance-source.test.ts`, in five describes. Parts 1 to 4 are spec §3's scan, in its order, and part 5 is spec §5's contrast gate:
   1. **Coverage:** the slot keys of `READER_APPEARANCE_MAP` equal `APPEARANCE_SLOTS`, in both directions.
   2. **Every palette resolves:** for each id in `THEMES`, each skin in `SKINS`, and each pointer, `resolvePaletteTokens` answers every mapped token, and the verdict `readerAppearanceOf` returns has `dropped: null` and an empty `refused` list: every colour, every skin slot and the label are accepted. Each palette's `color-scheme` is `light` or `dark`, equal to its `THEMES` row's `mode`. The case title names the palette, skin, pointer and token. (`audit.mjs` is not reused: it keys the default palette `DARK`, reads only the first `:root` block, and never reads `skins.css` or `color-scheme`.)
-  3. **No second list**, over `pwa/src/docs/`, `pwa/src/readerLab/` and `pwa/src/lib/appearance.ts`:
+  3. **No second list**, over `pwa/src/docs/`, `pwa/src/readerLab/`, `pwa/src/lib/appearance.ts` and `pwa/src/lib/appearanceStamp.ts`:
      - no file holds two or more `THEMES` ids, or two or more `SKINS` ids, as string literals or as object keys, quoted or not;
      - no file under `pwa/src/docs/reader/` holds a hex colour literal;
      - only `pwa/src/docs/ReaderFrame.tsx` imports `THEMES`, and no file imports `SKINS`.
@@ -167,10 +168,10 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 ### Task 3: The host appearance stamp
 
 **Files:**
-- Create: `pwa/src/lib/appearance.ts`, `pwa/test/host-appearance.test.tsx`
+- Create: `pwa/src/lib/appearanceStamp.ts`, `pwa/src/lib/appearance.ts`, `pwa/test/host-appearance.test.tsx`
 
 **Interfaces:**
-- Produces: `export function appearanceStamp(root: HTMLElement): string`, the one stamp function: `` `${data-skin ?? ''}|${data-theme ?? ''}` `` of `root`. And `export function useHostAppearance(): string`, which answers `appearanceStamp(document.documentElement)`, kept by one `MutationObserver` with `attributeFilter: ['data-skin', 'data-theme']`, through `useSyncExternalStore`. Both live in this main-bundle module, and Task 4's `readHostAppearance` imports `appearanceStamp` from it (review 2676 A9 (1), carried at X4), so the stamp has one writer.
+- Produces: `export function appearanceStamp(root: HTMLElement): string` in `pwa/src/lib/appearanceStamp.ts` (L1), the one stamp function: `` `${data-skin ?? ''}|${data-theme ?? ''}` `` of `root`, a pure read of two attributes that imports nothing. And `export function useHostAppearance(): string` in `pwa/src/lib/appearance.ts` (L4, it is a hook), which answers `appearanceStamp(document.documentElement)`, kept by one `MutationObserver` with `attributeFilter: ['data-skin', 'data-theme']`, through `useSyncExternalStore`. Both are main-bundle modules. The hook and Task 4's `readHostAppearance` (L3) each import `appearanceStamp` from the L1 module, so the stamp has one writer and both edges point inward (review 2676 A9 (1), carried at X4; placed in its own L1 module at review 2694 F6, because an L3 adapter importing the L4 hook module would point outward).
 
 - [ ] **Step 1: Write the failing rows:**
   - renders the current stamp;
@@ -181,7 +182,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
   - unmounting the last subscriber disconnects the observer;
   - **one stamp:** for roots carrying each of `''`, `'instrument'` and `'refined'` as `data-skin` and `''` and `'nord'` as `data-theme`, `useHostAppearance()` answers exactly `appearanceStamp(root)`.
 - [ ] **Step 2: Run to red** (`test/host-appearance.test.tsx`). Expected: FAIL, the module is missing.
-- [ ] **Step 3: Implement** `useHostAppearance` in `pwa/src/lib/appearance.ts`. It has one observer shared by all subscribers, created on first subscribe.
+- [ ] **Step 3: Implement** `appearanceStamp` in `pwa/src/lib/appearanceStamp.ts`, and `useHostAppearance` in `pwa/src/lib/appearance.ts` over it. The hook has one observer shared by all subscribers, created on first subscribe.
 - [ ] **Step 4: Run to green.** Expected: PASS.
 - [ ] **Step 5: Commit**: `feat(pwa): one stamp for the applied appearance`.
 
@@ -213,7 +214,7 @@ function isHostedMount(plan: ReaderMountPlan, contract: number | 'none', input: 
 ```
 
 - **Hosted, explicitly, decided once.** A mount is hosted when all three hold: `readerAppearanceSupported(contract answer)` is true, `readerMountPlan(...).appearance` is true (it is false for `lab-draw`), and the mount was given an `appearanceRoot`. One function in `bridge.ts`, `isHostedMount(plan, contract, input)`, decides it before any read, and nothing else in ccrc combines the three (review 2676 F6, carried at X4). So `readHostAppearance` runs on hosted mounts only, a `{hosted: true}` seed always carries an appearance, and a mount that is not hosted never reads the root. `seed` says which case holds, with no overloaded null.
-- `readHostAppearance` calls `getComputedStyle(root)` once, and reads `color-scheme` and the mapped tokens through `getPropertyValue`. Its stamp is Task 3's `appearanceStamp(root)`, imported from `pwa/src/lib/appearance.ts`: it builds no stamp of its own. It runs `readerAppearanceOf`, so it imports `appearance.ts`, which imports the library's `./frame` entry. Only `bridge.ts` imports it, and the main bundle reaches `bridge.ts` only through `lazyMountReader`'s dynamic import. `ReaderFrame.tsx` imports neither file by value.
+- `readHostAppearance` calls `getComputedStyle(root)` once, and reads `color-scheme` and the mapped tokens through `getPropertyValue`. Its stamp is Task 3's `appearanceStamp(root)`, imported from the L1 module `pwa/src/lib/appearanceStamp.ts`, an inward edge from this L3 adapter: it builds no stamp of its own, and it imports nothing from the L4 hook module. It runs `readerAppearanceOf`, so it imports `appearance.ts`, which imports the library's `./frame` entry. Only `bridge.ts` imports it, and the main bundle reaches `bridge.ts` only through `lazyMountReader`'s dynamic import. `ReaderFrame.tsx` imports neither file by value.
 - `loadReaderFonts` reads the design system's own `Geist-Variable.woff2` and `GeistMono-Variable.woff2` through an inline asset import: `@/fonts/Geist-Variable.woff2?inline` and `@/fonts/GeistMono-Variable.woff2?inline`, through pwa's `@` alias to `ui/src` (`pwa/vite.config.ts`). It strips the `data:` prefix to the base64. No font file is copied into `pwa/`. The fonts load on their own path, beside the assets. If they fail, the bridge mounts without `fonts`, and never calls `onFallback('assets')` for them.
 - On a hosted mount, `follow` re-reads the root and sends `DocFrame.setAppearance` with the verdict, a verdict with no colour group included. It never calls `setPrefs` with a theme. On a mount that is not hosted, it sends `setPrefs({theme})`.
 
@@ -237,7 +238,7 @@ function isHostedMount(plan: ReaderMountPlan, contract: number | 'none', input: 
   - **the font route's one importer:** `assets.ts` is the first file to import through the `@/` alias, which `shadcn-alias.test.ts` pins as unused ("nothing in the tree imports `@/` yet"). That case becomes: the files under `ui/src` and `pwa/src` that import `@/` are exactly `['pwa/src/docs/reader/assets.ts']`. Its pattern gains the dynamic form, `import\s*\(\s*'@\/`, beside `(?:from|import)\s+'@\/`. Planted in a tree copy, a second static importer and a dynamic `import('@/fonts/x.woff2?inline')` each red it;
   - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly;
   - **only the verdict is passed:** the row first asserts that `parseAppearance` refuses `radius: '99px'`. Then, with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
-- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts test/shadcn-alias.test.ts`). Expected: FAIL on the new rows, the four changed `readerMountPlan` rows (two in each file), `shadcn-alias`'s changed case, which expects `assets.ts` to import `@/` before it does, and `docs-scans`' "Library imports" case on its new count: the uses of `hostAppearance` and of the reader's `appearance` are exactly three, and before Step 3 there are none. Its planted case passes on a tree copy once `READER_ADAPTERS` names them. Two modules are called `appearance`, `pwa/src/lib/appearance.ts` (Task 3) and `pwa/src/docs/reader/appearance.ts` (Task 2), and the count tells them apart by import specifier, as the case already counts: only a specifier that resolves to `src/docs/reader/appearance` counts, so `hostAppearance.ts`'s import of `../../lib/appearance` (A9 (1)) is not one of the three (review 2676 A3, carried at X4).
+- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts test/shadcn-alias.test.ts`). Expected: FAIL on the new rows, the four changed `readerMountPlan` rows (two in each file), `shadcn-alias`'s changed case, which expects `assets.ts` to import `@/` before it does, and `docs-scans`' "Library imports" case on its new count: the uses of `hostAppearance` and of the reader's `appearance` are exactly three, and before Step 3 there are none. Its planted case passes on a tree copy once `READER_ADAPTERS` names them. Two modules are called `appearance`, `pwa/src/lib/appearance.ts` (Task 3) and `pwa/src/docs/reader/appearance.ts` (Task 2), and the count tells them apart by import specifier, as the case already counts: only a specifier that resolves to `src/docs/reader/appearance` counts, so `hostAppearance.ts`'s import of `../../lib/appearanceStamp` (A9 (1), review 2694 F6) is not one of the three (review 2676 A3, carried at X4).
 - [ ] **Step 3: Implement.**
   - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer goes to `readerAppearanceSupported`, the one place that decides support.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
