@@ -11,6 +11,8 @@ confirmation in the review of this document. No implementation plan exists yet.
 
 > **Wave 5 amendment (plan approved 2026-11-04).** "No implementation plan exists yet" no longer holds. Wave 5's plan is `docs/superpowers/plans/2026-11-03-delegation-broker-wave5-adopt.md`. The operator approved it on 2026-11-04 and ruled O5-1 to O5-8 (D-7840..D-7847). Waves 6 and 7 are dropped (D-7002), so this design builds no lease cleaner. The orphan-tree lane (#1252) owns removal of these trees and skips a held one (D-7840, D-7828).
 
+> **C46 amendment (operator's ruling, 2026-11-19; D-8771).** R9's chip no longer holds as written: a programme worker's attached delegation activity (placement `chip`, or an activity whose parent sits at depth 1) is still no row of its own, and it is no longer drawn as a chip on the worker's row either, so the fleet list shows no count of a session's delegated entries. The operator called the number noise on the left panel and useful only inside the session. The fold line and the programme box's footer keep their delegation rows and say `delegated` and `worktrees` with no number. The session header keeps both facts: its `N delegated` disclosure and the list of every entry the session started. Detail: the desktop-polish plan's Task C46 and D-8771 (`docs/superpowers/plans/2026-10-22-desktop-polish.md`). Older text in this design is left as written.
+
 **Anchors** are `origin/main` at `698f679da`; they are snapshots — trust the shipped source's own comments
 over a line number here. **Deviation numbers:** this spec defines none. Each wave's plan mints its own
 block at run-open; a contingency named here is named by slug and minted when it fires.

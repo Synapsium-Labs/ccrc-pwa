@@ -52,7 +52,8 @@ const RUNS = [{
 
 const SESSIONS = [
   session('port-coord', 'project-a', { role: 'coordinator' }),
-  session('port-w1', 'project-a', { role: 'child' }),
+  // Real subagents on a card session (D-8771): the no-count pin below can fail for them. At `main` the card already drew none (D-5545).
+  session('port-w1', 'project-a', { role: 'child', subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] }),
   session('lone-tidy-pass', 'project-a'),
 ];
 
@@ -422,14 +423,20 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           expect(chips.some((t) => t.includes('project-b')), 'the works-on chip').toBe(true);
           // D-8771 (superseding R9): the worker's attached activity is never a row and no session row counts it or any
           // subagent, in its text or its accessible name; the fold lines keep the words and no number.
-          const counted = await page.evaluate(() => [...document.querySelectorAll('.sess-line')].flatMap((line) =>
-            [line.textContent ?? '', ...[...line.querySelectorAll('[aria-label],[title]')]
-              .map((e) => `${e.getAttribute('aria-label') ?? ''} ${e.getAttribute('title') ?? ''}`)]
-              .filter((s) => /delegated|subagent|⑂/i.test(s))));
-          expect(counted, 'no session row counts its delegated entries or subagents').toEqual([]);
+          const scanned = await page.evaluate(() => {
+            const lines = [...document.querySelectorAll('.sess-line')];
+            const texts = lines.flatMap((line) => [line.textContent ?? '', ...[...line.querySelectorAll('*')]
+              .flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')]).filter((x): x is string => x !== null)]);
+            return { rows: lines.length, withSubagents: lines.some((l) => l.textContent?.includes('port-w1')), texts };
+          });
+          expect(scanned.rows, 'positive control: the session rows were drawn').toBeGreaterThanOrEqual(3);
+          expect(scanned.withSubagents, 'positive control: the row with subagents was drawn').toBe(true);
+          expect(scanned.texts.filter((s) => /delegated|subagent|⑂/i.test(s)), 'no session row counts its delegated entries or subagents').toEqual([]);
           expect(await page.locator('.sess-meta-chip').count(), 'the R9 chip is gone').toBe(0);
           const folds = await page.evaluate(() => [...document.querySelectorAll('.proj-children-part')].map((e) => e.textContent ?? ''));
-          expect(folds.filter((s) => /delegated|worktrees/.test(s)).every((s) => !/\d/.test(s)), 'a fold names delegated work with no number').toBe(true);
+          const delegatedFolds = folds.filter((s) => /delegated|worktrees/.test(s));
+          expect(delegatedFolds.length, 'positive control: a fold names delegated work').toBeGreaterThan(0);
+          expect(delegatedFolds.every((s) => !/\d/.test(s)), 'a fold names delegated work with no number').toBe(true);
           // PR10: the six controls of the three newer-server rows, each inside its row and card on all four sides, reached by
           // a tap at its centre (never under the floating button), named uniquely, and on a phone at the tap floor.
           const shown = await page.evaluate(measureControls);

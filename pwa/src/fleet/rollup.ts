@@ -45,9 +45,11 @@ export type RolledRow =
     text: string;
   };
 
-/** One part of a fold line: a count of workers (`5 workers`, `1 needs you`), or, with no `n`, a bare word for rows the
- *  line does not count (`delegated`, `worktrees`, D-8771). */
-export interface SummaryPart { readonly n?: number; readonly word: string }
+/** One count of a coordinator's worker line: `5 workers`, `1 needs you`. */
+export interface CountedPart { readonly n: number; readonly word: string }
+/** One part of a fold line: a count of workers, or, with no `n`, a bare word for rows the line does not count
+ *  (`delegated`, `worktrees`, D-8771). */
+export type SummaryPart = CountedPart | { readonly n?: undefined; readonly word: string };
 
 /** A part as the line draws it: the one spelling, shared by the fold line, the programme box's footer and the row's text. */
 export const partWords = (p: SummaryPart): string => (p.n === undefined ? p.word : `${p.n} ${p.word}`);
@@ -115,8 +117,8 @@ const WORD_ORDER = ['needs you', 'working', 'waiting', 'done', 'idle', 'merged',
 
 /** A coordinator's worker line, as counts in drawing order: the total, then each state word. A programme box's
  *  footer counts its hidden workers with it (Task G2), so the two never word a worker differently. Asked of W only
- *  (delegation broker wave 4): delegation rows are counted by `delegationParts`. */
-export function summaryParts(children: readonly WorkerRow[]): SummaryPart[] {
+ *  (delegation broker wave 4): delegation rows are named, not counted, by `delegationParts` (D-8771). */
+export function summaryParts(children: readonly WorkerRow[]): CountedPart[] {
   const counts = new Map<string, number>();
   for (const c of children) counts.set(childWord(c), (counts.get(childWord(c)) ?? 0) + 1);
   const parts = [...counts].sort(([a], [b]) => WORD_ORDER.indexOf(a) - WORD_ORDER.indexOf(b)).map(([word, n]) => ({ n, word }));

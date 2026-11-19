@@ -136,7 +136,7 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(cardOf('project-a').getAttribute('data-collapsed')).toBeNull();
   });
 
-  it('W4-U31: a folded coordinator counts two live activities in its line and hides them; expanded, both nest', () => {
+  it('W4-U31: a folded coordinator names two live activities in its line, with no number (D-8771), and hides them; expanded, both nest', () => {
     const store = mount(skin);
     act(() => {
       store.setState({ delegation: frame({ activities: [

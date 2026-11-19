@@ -360,8 +360,22 @@ describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4
     // D-8771: the fleet list keeps no count of a session's attached entries, so no row carries them.
     expect(sessionRow(rows, 'worker-a')).not.toHaveProperty('delegated');
     expect(sessionRow(rows, 'coord-a')).not.toHaveProperty('delegated');
+    // Both entries are still no row and not in the offline group: neither an activity row nor a group header is drawn.
+    expect(rows.filter((r) => r.kind === 'activity' || r.kind === 'delegation-group')).toEqual([]);
     expect(leaseRow(rows, 'l-via').via).toBe('worker-a');
     expect(leaseRow(rows, 'l-skew').via).toBe('worker-a');
+  });
+
+  it('W4-U13b (D-8771): a coordinator\'s own chip-placed activity is no row either, and no offline group', () => {
+    const own = activity({ activityId: 'a-coord-chip', parentId: 'coord-a', placement: 'chip' });
+    const rows = nestD([coord, worker], programme, slice({ activities: [own] }));
+    // Positive control: the sessions were drawn, so an empty activity filter is not an empty tree.
+    expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1]]);
+    expect(rows.filter((r) => r.kind === 'activity' || r.kind === 'delegation-group')).toEqual([]);
+    expect(sessionRow(rows, 'coord-a')).not.toHaveProperty('delegated');
+    // The same activity placed as a row IS a row, so the chip placement is what hides it.
+    const placed = nestD([coord, worker], programme, slice({ activities: [{ ...own, placement: 'row' }] }));
+    expect(dshape(placed)).toEqual([['coord-a', 0], ['worker-a', 1], ['activity:a-coord-chip', 1]]);
   });
 
   it('W4-U14 (rule 7, programme wins): a worktree whose path is a listed session\'s workdir is not drawn', () => {

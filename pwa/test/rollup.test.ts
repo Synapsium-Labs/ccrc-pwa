@@ -256,7 +256,7 @@ describe('rollup — delegation rows under a coordinator (delegation broker wave
     expect(kinds(c.rows)).toEqual([['coord', 0], ['w1', 1], ['lease:l1', 1]]);
   });
 
-  it('W4-U25: one worker and two live activities: the line counts both, and folded the worker stays while the activities hide', () => {
+  it('W4-U25: one worker and two live activities: the line names them with no number (D-8771), and folded the worker stays while the activities hide', () => {
     const { sessions, runs } = coordFleet(1);
     const w = frame({ activities: [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })] });
     const folded = rolled(sessions, runs, w);

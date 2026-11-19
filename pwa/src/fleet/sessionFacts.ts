@@ -248,6 +248,12 @@ const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATO
  *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
 export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
 
+/** D-8771: the card's words for a working row's delegated background work (D-5231): `in background`, uncounted; the
+ *  title carries the count and the kinds. The header's own words are `backgroundWords` (`N in background`). */
+function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: string; title: string } {
+  return { text: 'in background', title: `${b.count} in background${b.kinds.length > 0 ? `: ${b.kinds.join(', ')}` : ''}` };
+}
+
 /** Decide every fact of one session. Pure: the clock comes in as `now`. */
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
@@ -279,6 +285,9 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     && turnStall(session, now);
   const turnAge = wedged && session.statusUpdatedAt !== null ? elapsedWords(now - session.statusUpdatedAt) : null;
   const bgWords = state === 'working' && bg !== null ? backgroundWords(bg) : null;
+  // D-8771: the card says `in background` and not how many (the operator ruled a count of a session's delegated work noise
+  // in the fleet list); the count and the kinds stay in the word's title, and the header keeps its count (`bgWords`).
+  const cardBgWords = state === 'working' && bg !== null ? cardBackgroundWords(bg) : null;
 
   const fault = substrateFault(session);
   const substrate = fault === null ? null : {
@@ -312,8 +321,8 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     // background work (D-5231). They are WHAT the lamp means, not extra facts.
     statusText: asleepAt !== null ? hibernatedWords(asleepAt, now)
       : wcWords !== null ? wcWords.text
-      : bgWords !== null ? `${state} · ${bgWords.text}` : state,
-    statusTitle: wcWords?.title ?? bgWords?.title,
+      : cardBgWords !== null ? `${state} · ${cardBgWords.text}` : state,
+    statusTitle: wcWords?.title ?? cardBgWords?.title,
     stateTone: wcWords !== null ? 'coordinator' : state,
     coordinatorRole: coordinatorRole(session),
     workingOn,
@@ -356,7 +365,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     offPool,
     orphan: coordinator === 'dead' ? 'gone' : coordinator === 'hibernated' ? 'hibernated' : null,
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
-    // D-7781: no dead shortcut. A dead worker's entries stay one tap from its row.
+    // D-7781: no dead shortcut. A dead worker's entries stay in its header's disclosure (the fleet list's row has none, D-8771).
     delegated: delegatedChip(delegated ?? []),
     build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
@@ -490,7 +499,10 @@ export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
   // D-8771: the card carries no `delegated` fact, so D-7782's comparison of it by count is gone; every key is a prefix test.
-  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && h.text.startsWith(c.text);
+  // The one allowance (D-8771): the header's `working · N in background` holds the card's `working · in background`, the
+  // card having dropped the count the header keeps, so the header's count digits are not part of the prefix test.
+  const headerForm = (h: Fact): string => (h.key === 'status' ? h.text.replace(/ \d+ in background/, ' in background') : h.text);
+  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && headerForm(h).startsWith(c.text);
   return shown.filter((c) => !header.some((h) => holds(c, h)));
 }
 

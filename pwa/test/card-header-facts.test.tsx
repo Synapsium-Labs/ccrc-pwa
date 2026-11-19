@@ -285,9 +285,14 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         const text = visible(head);
         // The card's status word as the CARD renders it, in the header's visible text.
         const cardWord = visible(card.querySelector('.sess-state')!);
-        expect(text, 'the card\'s status word is missing from the header').toContain(cardWord);
+        // D-8771's one allowance, as `cardWithinHeader` has it: the card says `in background` and the header keeps its
+        // count (`2 in background`), so the header's count digits are set aside for the card's own words, and the header
+        // is asserted to still carry them.
+        const headerWords = text.replace(/ \d+ in background/, ' in background');
+        if (cardWord.includes('in background')) expect(text, 'the header keeps the background count').toMatch(/ \d+ in background/);
+        expect(headerWords, 'the card\'s status word is missing from the header').toContain(cardWord);
         for (const fact of [c.name, c.status, c.context, c.marker, c.workingOn, c.role]) {
-          if (fact !== null) expect(text, `${fact.key} missing from the header`).toContain(fact.text);
+          if (fact !== null) expect(headerWords, `${fact.key} missing from the header`).toContain(fact.text);
         }
         // D-8142: a coordinator's context line begins with the one role cell; a child has none.
         const roles = card.querySelectorAll('.sess-role');
@@ -426,17 +431,38 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
     expect(cardWithinHeader(card, headerFacts(f).filter((h) => h.key !== 'status'))).toEqual([card.status]);
   });
 
-  it('C46: a session\'s row draws no count of its subagents or delegated entries, in its text or its accessible name', () => {
+  // A GUARD, not a pin that was red at `main`: the card already drew no subagent count there (they moved to the header in
+  // D-5545), and the row is handed no delegated entries any more. The chip's absence is pinned by project-card's C46 case.
+  it('C46 guard: a session row with subagents draws no count of subagents or delegated entries, in its text, titles or accessible names', () => {
     const busy = s({ ...worker, subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] });
+    expect(busy.subagents).toHaveLength(2);
     for (const session of [busy, s({ ...busy, status: 'dead', bucket: 'dead' })]) {
       const { container } = render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} now={NOW} />);
-      const drawn = `${container.textContent} ${[...container.querySelectorAll('[aria-label],[title]')]
-        .map((el) => `${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('title') ?? ''}`).join(' ')}`;
-      expect(drawn).not.toMatch(/subagent|delegated|⑂/i);
+      // Positive control: the row was drawn, with its name and some titled or named element to scan.
+      expect(container.textContent).toContain(session.workspace!);
+      const named = [...container.querySelectorAll('*')].flatMap((el) => [el.getAttribute('aria-label'), el.getAttribute('title')])
+        .filter((x): x is string => x !== null);
+      expect(named.length).toBeGreaterThan(0);
+      expect(`${container.textContent} ${named.join(' ')}`).not.toMatch(/subagent|delegated|⑂/i);
       expect(container.querySelector('.sess-meta-chip')).toBeNull();
       expect(container.querySelector('.sess-subagents')).toBeNull();
       cleanup();
     }
+  });
+
+  it('C46 (D-8771): a working row with background work reads `working · in background`, and the header still holds it with its count', () => {
+    const bg = s({ ...worker, background: { count: 2, kinds: ['workflow', 'agent'] } });
+    const f = sessionFacts({ session: bg, now: NOW, childRun: child(RUN) });
+    const card = cardFacts(f);
+    expect(card.status).toMatchObject({ text: 'working · in background', title: '2 in background: workflow, agent' });
+    const head = headerFacts(f);
+    expect(head.find((h) => h.key === 'status')?.text).toBe('working · 2 in background');
+    // D-5545's prefix rule holds for the status key with the one documented allowance: the header's count digits.
+    expect(cardWithinHeader(card, head)).toEqual([]);
+    expect(cardWithinHeader(card, head.filter((h) => h.key !== 'status'))).toEqual([card.status]);
+    expect(cardWithinHeader(card, head.map((h) => (h.key === 'status' ? { ...h, text: 'idle · 2 in background' } : h)))).toEqual([card.status]);
+    // Without background work the card says plain `working` and nothing about a count.
+    expect(cardFacts(sessionFacts({ session: s({ ...worker, background: null }), now: NOW })).status.text).toBe('working');
   });
 
   it('C46: the same session\'s header still draws both disclosures with their counts', () => {

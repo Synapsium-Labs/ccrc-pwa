@@ -102,6 +102,7 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     ];
     const chip = delegatedChip(three)!;
     expect(chip.text).toBe('3 delegated');
+    expect(chip, 'D-8771: no count field survives').not.toHaveProperty('count');
     expect(chip.title).toBe('3 recorded delegation entries, not a current agent count; execution not confirmed');
     expect(chip.note).toBe(ENTRIES_NOTE);
     expect(chip.rows.map((r) => r.key)).toEqual(['a1', 'a2', 'a3']);

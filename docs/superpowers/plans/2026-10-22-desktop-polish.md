@@ -4252,28 +4252,33 @@ the session list on a phone) no longer draws a count of its subagents or delegat
 details keep every one of those facts, unchanged: the subagent disclosure, the delegated-entries disclosure and their lists.
 
 **Files.** `pwa/src/fleet/SessionMeta.tsx` (the card's `N delegated` chip, R9, D-7781, is gone), `sessionFacts.ts`
-(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix), `SessionLine.tsx` (the
-`delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
+(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix, with one allowance for
+the status word's count digits; a working row's `N in background` reads `in background` on the card), `SessionLine.tsx`
+(the `delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
 `delegationWords.ts` (`delegationParts` answers the bare words `delegated` and `worktrees`; `DelegatedSummary.count`
-removed) and `rollup.ts` (`SummaryPart.n` optional, `partWords` the one spelling). A coordinator's fold line and a
-programme box's footer are a separate grouping the operator taps to open the delegated rows, so they stay and drop only
-the numbers (the coordinator's ruling of 2026-11-19). Tests: `card-header-facts`, `project-card`, `rollup`,
-`fleet-rollup-render`, `fleet-screen`, `nestFleet` and `delegation-words`, and the real-Chrome `delegation-rows`.
+removed), `rollup.ts` (`SummaryPart.n` optional, a worker part still counted, `partWords` the one spelling) and
+`programmeBoxes.ts` (a comment). A coordinator's fold line and a programme box's footer are a separate grouping the
+operator taps to open the delegated rows, so they stay and drop only the numbers (the coordinator's ruling of 2026-11-19).
+Tests: `card-header-facts`, `project-card`, `session-line`, `rollup`, `fleet-rollup-render`, `fleet-screen`, `nestFleet`
+and `delegation-words`, and the real-Chrome `delegation-rows`. The two delegation specs carry a dated amendment each.
 
-**Measured.** Each changed pin is red at `main` and green here; the affected `pwa` test files, the compile check, the
-build and the browser file pass; `topology-clean` and every `single-definition` file pass; the fleet list was looked at in a
-real Chrome at 1280 and 360 px. The figures and what was not measured are in `docs/superpowers/programs/desktop-polish/c46.md`.
+**Measured.** Which pins were red at `main` and which only guard, and every figure and what was not measured, are in
+`docs/superpowers/programs/desktop-polish/c46.md`. The PR body carries the plan's matrix (before and after, Refined and
+Instrument, dark and light, at 360, 390, 1280 and 1920) and its Departures.
 
-**Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, in its text or accessible name; the
-header still draws both disclosures with their counts; the delegated rows stay reachable through their fold line.
-
-**Rollback.** A plain revert.
+**Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, or counts its background work, in its
+text, titles or accessible names; the header still draws both disclosures and its background count; the delegated rows
+stay reachable through their fold line.
 
 - **D-8771** — `fleet-list-drops-subagent-counts`: Task C46, issued on 2026-11-19. The fleet list draws no count of a
-  session's subagents or delegated entries (the operator's ruling of 2026-11-19). D-7781's card chip and D-7782's card-side
-  comparison of the `delegated` fact by count are superseded on the card; the header keeps D-7781's count of every entry and
-  its disclosure. The card no longer has a `delegated` fact, so the subset rule is a prefix test for every key. A coordinator's
-  fold line and a programme box's footer keep their delegated rows and say `delegated` and `worktrees` with no number.
+  session's subagents, delegated entries or delegated background work (the operator's ruling of 2026-11-19). D-7781's card
+  chip is superseded on the card, and D-7782, which had only a card side, is retired whole: the card no longer has a
+  `delegated` fact, so D-5545's prefix rule holds for every key again, with one allowance for the status word, whose header
+  form keeps the count the card dropped (`working · N in background`). The header keeps D-7781's count of every entry, its
+  disclosure and its background count. A coordinator's fold line and a programme box's footer keep their delegated rows and
+  say `delegated` and `worktrees` with no number.
+
+**Rollback.** A plain revert.
 
 ## Acceptance (the matrix, per PR)
 

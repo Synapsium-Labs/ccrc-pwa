@@ -242,9 +242,9 @@ export interface DelegatedSummary extends Chip {
   readonly rows: readonly EntryRow[];
 }
 
-/** D-7781: the chip counts EVERY entry it is handed, of every liveness. The header hands it every entry the session
- *  started, so the count is of recorded entries, never of running helpers. The fleet list draws no such count (D-8771).
- *  `null` when handed none. */
+/** D-7781: the header's `N delegated` disclosure counts EVERY entry it is handed, of every liveness: the session header
+ *  hands it every entry the session started, so the count is of recorded entries, never of running helpers. The fleet
+ *  list's row draws no such count and no chip (D-8771). `null` when handed none. */
 export function delegatedChip(activities: readonly DelegationActivityWire[]): DelegatedSummary | null {
   if (activities.length === 0) return null;
   const n = activities.length;

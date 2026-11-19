@@ -3392,7 +3392,8 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     };
     // coord-a's two children fold into its one summary line (D-6088's W/D rule, W4-U31); open it and both groups.
     const line = card().querySelector('.proj-children-toggle');
-    expect(line?.textContent).toContain('delegated · worktrees');
+    expect([...line!.querySelectorAll('.proj-children-part')].map((p) => p.textContent), 'the exact parts, no count before either word')
+      .toEqual(['delegated', 'worktrees']);
     fireEvent.click(line!);
     fireEvent.click(within(card()).getByRole('button', { name: /Offline coordinator \(2\)/ }));
     fireEvent.click(within(card()).getByRole('button', { name: /Unowned work \(1\)/ }));
