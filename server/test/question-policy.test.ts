@@ -5,7 +5,7 @@ import { describe, it, expect } from 'vitest';
 import {
   APPROVAL_LAPSE_ANSWERS, ASK_LAPSE_ANSWERS, DEFERRED_APPROVAL_PUSH_ANSWERS,
   decideApprovalLapse, decideAskLapse, decideDeferredApprovalPush,
-  type AskLapse, type AskLapseRead, type ApprovalLapse, type DeferredApprovalPush, type DeferredApprovalRows,
+  type AskLapse, type AskLapseRead, type ApprovalLapse, type ApprovalLapseRow, type DeferredApprovalPush, type DeferredApprovalRows,
 } from '../src/coord/questionPolicy.js';
 import { ASK_ANSWERING_MAX_MS } from '../src/askwindow.js';
 import { APPROVAL_HOOK_WAIT_S } from '../../shared/api.js';
@@ -47,7 +47,7 @@ describe('decideAskLapse: every arm of the ask half (askPass)', () => {
 describe('decideApprovalLapse: the approval half\'s row clock (sweepApprovals)', () => {
   const ceiling = APPROVAL_HOOK_WAIT_S * 1000;
   const r = (state: string, askAt: number, notifyAt: number) => ({ state: state as never, askAt, notifyAt });
-  const rows: ReadonlyArray<readonly [string, ReturnType<typeof r>, ApprovalLapse]> = [
+  const rows: ReadonlyArray<readonly [string, ApprovalLapseRow, ApprovalLapse]> = [
     ['held inside its window: none', r('held', NOW - 1_000, NOW + 1), 'none'],
     ['held at notifyAt: lapse', r('held', NOW - 1_000, NOW), 'lapse'],
     ['held past notifyAt: lapse', r('held', NOW - 1_000, NOW - 1), 'lapse'],

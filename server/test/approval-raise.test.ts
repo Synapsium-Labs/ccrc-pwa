@@ -87,7 +87,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     const v = await q.raiseApproval(req(), raiseDeps(f, { denyStanding: async () => 'history' }), NOW);
-    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60 });
+    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60, park: 'shadow' });
     const r = f.coord.approvalById(1);
     expect(r.ok && r.row !== null && { state: r.row.state, cls: r.row.class, denyCurrent: r.row.denyCurrent })
       .toEqual({ state: 'held', cls: 'ordinary', denyCurrent: false });
@@ -187,7 +187,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     const v = await q.raiseApproval(req(), raiseDeps(f), NOW);
-    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60 });
+    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60, park: 'shadow' });
     expect(mailCount(f)).toBe(1);
     expect(q.approvalInput(1, NOW)).toMatchObject({ tool: 'Bash', input: { command: 'rm -rf build' }, until: NOW + 60_000 });
     expect(createQuestions({ coord: f.coord }).approvalInput(1, NOW), 'another instance holds nothing').toBeUndefined();

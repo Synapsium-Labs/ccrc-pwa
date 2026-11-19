@@ -18,7 +18,7 @@ import {
 import { approvalOperatorArm } from '../src/coord/approvalParkDoor.js';
 import { approvalDecision } from '../src/coord/digest.js';
 import {
-  APPROVAL_INPUT_RETENTION_DAYS, APPROVAL_PARK_HORIZON_MS, approvalRulingBytes, isApprovalState, type ApprovalRulingRecord,
+  APPROVAL_INPUT_RETENTION_DAYS, APPROVAL_PARK_HORIZON_MS, approvalRulingBytes, isApprovalState, type ApprovalRulingRecordAny,
 } from '../../shared/api.js';
 import { APPROVAL_PARK_LANE } from '../../shared/lane-arm.js';
 import { CHILD, CHILD2, hookInput, PARENT, requestBody, standardFixture, type Approvals } from './approvalsHarness.js';
@@ -66,7 +66,7 @@ async function rig(o: { live?: boolean; gateOpen?: boolean; signedIn?: boolean }
   });
   const claimant = (over: Partial<ClaimantDoorDeps> = {}): ClaimantDoorDeps => ({
     coord: fx.coord, io: fx.deps.io, cfg, tmux: fx.deps.tmux, signerFor: () => signer, rulingsAllowedHere, heldFor,
-    notice: () => {}, approvalsKilled: async () => false, pressAsk: async () => { throw new Error('no press here'); }, ...over,
+    notice: (() => undefined) as unknown as ClaimantDoorDeps['notice'], approvalsKilled: async () => false, pressAsk: async () => { throw new Error('no press here'); }, ...over,
   });
   return {
     f: fx, q, signer, pushes,
@@ -87,8 +87,8 @@ const parkOf = (r: Rig, id: number) => { const k = r.row(id).parkKey; return k =
 /** Past a row's window, inside the hook's ceiling. */
 const pastWindow = (r: Rig, id: number): number => r.row(id).notifyAt + 1;
 /** The signed record a row carries, checked against the fixture's own public key. */
-const signedRecord = (r: Rig, id: number): ApprovalRulingRecord => {
-  const ruling = JSON.parse(r.row(id).ruling ?? 'null') as { record: ApprovalRulingRecord; sig: string };
+const signedRecord = (r: Rig, id: number): ApprovalRulingRecordAny => {
+  const ruling = JSON.parse(r.row(id).ruling ?? 'null') as { record: ApprovalRulingRecordAny; sig: string };
   const ok = verify(null, Buffer.from(approvalRulingBytes(ruling.record) ?? '', 'utf8'), createPublicKey(r.signer.publicKeyPem()), Buffer.from(ruling.sig, 'base64'));
   expect(ok, 'the signature verifies over the record').toBe(true);
   return ruling.record;

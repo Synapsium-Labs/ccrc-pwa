@@ -16,7 +16,7 @@ import { createPrivateKey, createPublicKey, generateKeyPairSync, sign, type KeyO
 import { chmodSync, existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import {
-  APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, isApprovalRefusal, isApprovalReleaseReason, type ApprovalRulingRecord,
+  APPROVAL_SIGNING_KEY_FILE, approvalRulingBytes, isApprovalRefusal, isApprovalReleaseReason, type ApprovalRulingRecordAny,
 } from '../../../shared/api.js';
 import type { NodeRole } from '../../../shared/node-role.js';
 import type { ApprovalsTopologyWire } from '../../../shared/overrides.js';
@@ -32,7 +32,7 @@ export const APPROVALS_DISABLED_FILE = 'approvals-disabled';
 /** The key pair this process signs with, loaded or created once. */
 export interface ApprovalSigner {
   /** The base64 Ed25519 signature over the record's canonical bytes, or `null` for a record with no canonical form. */
-  signRuling(record: ApprovalRulingRecord): string | null;
+  signRuling(record: ApprovalRulingRecordAny): string | null;
   /** The public key, PEM SPKI, as `GET /api/approvals/key` serves it. */
   publicKeyPem(): string;
 }
