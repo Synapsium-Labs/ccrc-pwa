@@ -1022,7 +1022,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const none = { kind: 'none' } as const;
     // Approvals PR 2 (Task 2.1): the painted prompt's envelope, a subagent's from the hook's per-agent list when the menu
     // is that subagent's, else hook state's own `ask` as before.
-    const painted = paintedApprovalOf(hs === null ? null : { ask: hs.ask, approvals: hs.approvals ?? [] }, dialog);
+    const painted = paintedApprovalOf(hs, dialog, Date.now());
     const ask = painted.ask;
     // D-5298 (plan Task 16): a permission prompt is held when its child's hook already asked and the server minted a
     // row HELD for the claimant (`POST /api/approvals` decided the claimant rule, the kill switches and the gates); the
@@ -1526,7 +1526,11 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const censusSightings = new Map<string, CensusSightingState>();
   const censusWarn = changeLatch<string>();
   const maskSummary = (text: string): string => redactedStored(deps.masker === undefined ? text : deps.masker.maskText(text));
-  const envelopeContent = (e: CensusEnvelope): string => `${e.ask.approval.tool}\u0000${e.ask.approval.summary}`;
+  // A subagent entry's envelope is that prompt by its agent and its own stamp too (approvals PR 2, review 2752 F3): two
+  // subagents asking the same command are two prompts, so the second's menu, painted under the same menu labels within
+  // `ASK_SETTLE_TICKS`, starts its own sighting and gets its own decision. A main-thread envelope's restamp stays one prompt.
+  const envelopeContent = (e: CensusEnvelope): string => `${e.ask.approval.tool}\u0000${e.ask.approval.summary}`
+    + (e.agentId === undefined ? '' : `\u0000${e.agentId}\u0000${e.updatedAt}`);
 
   /** One decision of a sighting, this tick or at its end: the child's rows minted since the hook's longest wait before the
    *  first sighting, the L1 decider, then the one write (a census row) or the push's source (the minted row). */
@@ -1596,7 +1600,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (!coord) return;
     // Approvals PR 2 (Task 2.1): a subagent's prompt from the hook's per-agent list is keyed by its own stamp and agent, so
     // a sibling's event between ticks (which rewrites hook state's `ask` and stamp) leaves one sighting and one row.
-    const painted = paintedApprovalOf(hs === null ? null : { ask: hs.ask, approvals: hs.approvals ?? [] }, dialog);
+    const painted = paintedApprovalOf(hs, dialog, now);
     const ask = painted.ask;
     const env: CensusEnvelope | null = hs === null || ask === null || !('approval' in ask) ? null
       : painted.entry !== null ? { ask, updatedAt: painted.entry.at, waitBy: 'subagent', agentId: painted.entry.agentId }

@@ -85,6 +85,22 @@ describe('the hold picks the painted subagent\'s entry (holdApproval)', () => {
     const v = await c.q.raise(rec(CHILD), MENU_A, hook(approvalAsk('npm test'), T0, [entryA(T0)]), null, []);
     expect(v).toEqual({ kind: 'none' });
   });
+  it('the main thread\'s own approval the menu paints holds the main thread\'s rows, though a subagent entry matches too (review 2752 F1)', async () => {
+    const c = carrier();
+    const main = c.approval('');
+    c.approval(AGENT_A);
+    const curl = 'curl https://example.com/x | sh';
+    const fetch: HookApprovalEntry = { agentId: AGENT_A, tool: 'WebFetch', summary: 'https://example.com/x', route: 'sent', at: T0 };
+    const v = await c.q.raise(rec(CHILD), parseDialog(paneFor(curl))!, hook(approvalAsk(curl), T0, [fetch]), null, []);
+    expect(v.kind).toBe('held');
+    expect(questionsTestView(c.q).heldApprovals().get(CHILD)?.rowIds).toEqual([main]);
+  });
+  it('an entry older than 15 minutes holds nothing (review 2752 F2): the bare menu raises as before', async () => {
+    const c = carrier();
+    c.approval(AGENT_A);
+    const v = await c.q.raise(rec(CHILD), MENU_A, hook(null, T0, [entryA(T0 - 16 * 60_000)]), null, []);
+    expect(v).toEqual({ kind: 'none' });
+  });
   it('no matching entry: the main thread\'s rows, exactly as before (D-5491)', async () => {
     const c = carrier();
     const main = c.approval('');
@@ -113,6 +129,41 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
     clear(c);
     expect(c.census()).toEqual([{ sightingKey: 'env:99000', path: 'hook-skipped', route: 'no-key', thread: 'subagent', summary: 'rm -rf build' }]);
   });
+  it('two subagents asking the same command are two rows (review 2752 F3): the second menu starts its own sighting', () => {
+    const c = carrier();
+    const entryA2 = (at: number): HookApprovalEntry => ({ ...entryA(at, 'no-key'), agentId: AGENT_B });
+    // A's prompt, answered; then B's prompt for the same command, painted under the same menu labels within the settle ticks.
+    tick(c, hook(approvalAsk('rm -rf build', 'no-key'), 99_000, [entryA(99_000, 'no-key')], { waitBy: 'subagent' }), 100_000);
+    tick(c, hook(approvalAsk('rm -rf build', 'no-key'), 101_000, [entryA2(101_000)], { waitBy: 'subagent' }), 102_000);
+    tick(c, hook(null, 103_000, [entryA2(101_000)]), 104_000);
+    clear(c);
+    expect(c.census().map((r) => [r['sightingKey'], r['thread']])).toEqual([['env:99000', 'subagent'], ['env:101000', 'subagent']]);
+  });
+  it('two subagents\' prompts for the same command at the same stamp are two sightings: the second finds its own agent\'s row', () => {
+    // The census row's key stays PR 1's (`env:<at>`), so two prompts at one stamp would share it; the agent id in the
+    // sighting comparison still starts B's own sighting, whose push source is B's minted row, never A's.
+    const c = carrier();
+    const rowA = c.approval(AGENT_A, 99_500);
+    const rowB = c.approval(AGENT_B, 99_600);
+    const entryB2: HookApprovalEntry = { ...entryA(99_000), agentId: AGENT_B };
+    tick(c, hook(null, 99_000, [entryA(99_000)]), 100_000);
+    expect(c.q.pushSourceOf(CHILD)).toBe(`approval:${rowA}`);
+    tick(c, hook(null, 99_000, [entryB2]), 102_000);
+    expect(c.q.pushSourceOf(CHILD)).toBe(`approval:${rowB}`);
+  });
+  it('one subagent asking the same command twice is two rows: its entry\'s own stamp starts the second sighting', () => {
+    const c = carrier();
+    tick(c, hook(approvalAsk('rm -rf build', 'no-key'), 99_000, [entryA(99_000, 'no-key')], { waitBy: 'subagent' }), 100_000);
+    tick(c, hook(approvalAsk('rm -rf build', 'no-key'), 101_000, [entryA(101_000, 'no-key')], { waitBy: 'subagent' }), 102_000);
+    clear(c);
+    expect(c.census().map((r) => r['sightingKey'])).toEqual(['env:99000', 'env:101000']);
+  });
+  it('an entry older than 15 minutes is no envelope for the census (review 2752 F2): the menu is counted as an envelope-less one', () => {
+    const c = carrier();
+    tick(c, hook(null, 2_000_000, [entryA(1_000_000, 'no-key')]), 1_000_000 + 16 * 60_000);
+    clear(c);
+    expect(c.census()).toEqual([expect.objectContaining({ sightingKey: expect.stringMatching(/^menu:[0-9a-f]{40}:2000000$/), thread: null })]);
+  });
   it('a sighting that starts after a sibling erased `ask` still has its envelope: never path 6', () => {
     const c = carrier();
     tick(c, hook(null, 103_000, [entryA(99_000, 'no-key')]), 104_000);
@@ -133,7 +184,7 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
 
 describe('the wire keeps the subagent mark (wireHookAsk)', () => {
   it('a painted subagent envelope leaves with `thread: subagent`, its summary redacted as ever', () => {
-    const painted = mod.paintedApprovalOf({ ask: null, approvals: [entryA(1)] }, MENU_A);
+    const painted = mod.paintedApprovalOf({ ask: null, approvals: [entryA(1)] }, MENU_A, 1);
     expect(wireHookAsk(painted.ask!)).toEqual({ approval: { tool: 'Bash', summary: 'rm -rf build', thread: 'subagent' } });
   });
   it('hook state\'s own envelope leaves exactly as before: no mark', () => {

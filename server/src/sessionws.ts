@@ -626,11 +626,12 @@ export class SessionStream implements FeedSubscriber {
    *  stream last sent is that prompt's (`paintedApprovalOf`), whatever `ask` says now, so the console shows the approval
    *  surface for it rather than a bare menu. */
   private applyHook(raw: HookStateRawRead): void {
-    const read = foldHookStateRead(raw, Date.now());
+    const now = Date.now();
+    const read = foldHookStateRead(raw, now);
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
     this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, !this.captureHeld);
-    const painted = paintedApprovalOf(hs === null ? null : { ask: hs.ask, approvals: hs.approvals ?? [] }, this.sentDialog);
+    const painted = paintedApprovalOf(hs, this.sentDialog, now);
     const ask = painted.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;

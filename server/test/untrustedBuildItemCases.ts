@@ -37,6 +37,12 @@ export const UNTRUSTED_BUILD_ITEM_CASES: readonly UntrustedBuildCase[] = [
     expect(input!.title).toBe('Children on Claude Code 2.1.330 cannot route permission prompts until it is captured');
     expect(input!.why).toContain('2.1.330 has no capture yet');
   } },
+  { name: 'its control (review 2752 F4): the first step links the Settings section holding the build\'s row and its Capture again, and the text says plainly that a waiting build waits for a test box', run: (m) => {
+    const how = m.untrustedBuildItemOf(NONE, '2.1.330', 'capture-queued')!.how;
+    expect(how[0]).toBe('Open /settings/automation and find Claude Code 2.1.330 in the Test box\'s build list.');
+    expect(how.join(' ')).toContain('A build waiting for its capture stays waiting while no test box can capture it');
+    expect(how.join(' ')).toContain('Capture again');
+  } },
   { name: 'every reason that is a fact about the build raises: not captured, queued, failed', run: (m) => {
     for (const r of ['not-captured', 'capture-queued', 'capture-failed'] as const) expect(m.untrustedBuildItemOf(NONE, '2.1.330', r)).not.toBeNull();
   } },

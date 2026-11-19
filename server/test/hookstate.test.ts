@@ -850,4 +850,9 @@ describe('the per-agent approval envelopes, `approvals` (approvals plan 2026-11-
     const empty = entry({ summary: '' });
     expect((await read([edge, empty]))?.approvals).toEqual([edge, empty]);
   });
+  it('the summary is bounded in code points, as the hook\'s jq cuts it (review 2752 F7): 200 wide characters read whole', async () => {
+    const wide = entry({ summary: `${'\u{1F600}'.repeat(150)}${'y'.repeat(50)}` });
+    expect((await read([wide]))?.approvals).toEqual([wide]);
+    expect((await read([entry({ summary: `${'\u{1F600}'.repeat(150)}${'y'.repeat(51)}` })]))?.approvals, '201 code points').toBeUndefined();
+  });
 });

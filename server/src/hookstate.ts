@@ -92,7 +92,8 @@ export interface HookState {
 
 /** The hook's id rule for an `agent_id` it keeps (`[A-Za-z0-9_-]{1,64}`). */
 const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-/** The longest summary the hook writes (`.[0:200]`) and the longest route word this reader keeps (the `ask` reader's). */
+/** The longest summary the hook writes (`.[0:200]`, in code points, so it is counted in code points here: review 2752 F7)
+ *  and the longest route word this reader keeps (the `ask` reader's). */
 const ENTRY_SUMMARY_MAX = 200;
 const ENTRY_ROUTE_MAX = 64;
 const ENTRY_TOOL_MAX = 128;
@@ -108,7 +109,7 @@ const reviveApprovalEntries = (raw: unknown): HookApprovalEntry[] => {
     const { agentId, tool, summary, route, at } = e;
     if (typeof agentId !== 'string' || !AGENT_ID_RE.test(agentId)) continue;
     if (typeof tool !== 'string' || tool === '' || tool.length > ENTRY_TOOL_MAX) continue;
-    if (typeof summary !== 'string' || summary.length > ENTRY_SUMMARY_MAX) continue;
+    if (typeof summary !== 'string' || Array.from(summary).length > ENTRY_SUMMARY_MAX) continue;
     if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) continue;
     if (route !== undefined && (typeof route !== 'string' || route === '' || route.length > ENTRY_ROUTE_MAX)) continue;
     out.push({ agentId, tool, summary, at, ...(route === undefined ? {} : { route }) });

@@ -1,8 +1,9 @@
 /**
  * The per-agent approval envelope (approvals plan 2026-11-18, §3.2.2 and Task 2.1; Table 2a, path 6). A subagent's
- * permission prompt is kept in hook state's `approvals` list, one entry per agent: added by its PermissionRequest,
- * removed by that agent's own next tool event, its SubagentStop or the transcript tie's tool_result, and carried
- * unchanged by every other event, the main thread's and a sibling's alike, with or without a `waitPrev` standing. So a
+ * permission prompt is kept in hook state's `approvals` list, one entry per call: added by its PermissionRequest,
+ * removed by that agent's own tool event for the same call, its SubagentStop or the transcript tie's tool_result, and
+ * carried unchanged by every other event (a parallel call's, the main thread's and a sibling's alike, with or without a
+ * `waitPrev` standing). So a
  * subagent's menu painted after its hook returned still has its envelope, and the server's one reader of the painted
  * prompt (`paintedApprovalOf`, over `hookstate.ts`'s read) gives the console the approval surface, not a bare menu.
  *
@@ -118,7 +119,7 @@ const menuFor = (command: string): Dialog => ({
 const painted = async (command = SUB_COMMAND) => {
   const raw = await readHookStateRawMeasured(localIO, path.join(home, '.cc-sessions'), ID, UUID);
   if (!raw.ok) throw new Error(`hookstate unread: ${raw.reason}`);
-  return paintedApprovalOf({ ask: raw.state.ask, approvals: raw.state.approvals ?? [] }, menuFor(command));
+  return paintedApprovalOf(raw.state, menuFor(command), Date.now());
 };
 
 describe('a subagent\'s PermissionRequest adds its entry', () => {
@@ -132,11 +133,18 @@ describe('a subagent\'s PermissionRequest adds its entry', () => {
     fire(request(null));
     expect(stateOf()['approvals']).toBeUndefined();
   });
-  it('a second prompt of the same agent replaces its entry; another agent\'s is a second entry', () => {
+  it('a second prompt of the same agent for the same call replaces its entry; another call or agent is another entry', () => {
     fire(request(A, 'rm -rf one'));
     fire(request(A, 'rm -rf two'));
+    fire(request(A, 'rm -rf one'));
     fire(request(B, 'rm -rf three'));
-    expect(entries().map((e) => [e['agentId'], e['summary']])).toEqual([[A, 'rm -rf two'], [B, 'rm -rf three']]);
+    expect(entries().map((e) => [e['agentId'], e['summary']])).toEqual([[A, 'rm -rf two'], [A, 'rm -rf one'], [B, 'rm -rf three']]);
+  });
+  it('a wide command is cut to 200 code points, as the reader bounds it, so the entry is read (review 2752 F7)', async () => {
+    const wide = `echo ${'\u{1F600}'.repeat(250)}`;
+    fire(request(A, wide));
+    expect(Array.from(String(entries()[0]?.['summary'])).length).toBe(200);
+    expect((await painted(wide)).entry?.agentId).toBe(A);
   });
   it('the list keeps the newest 16', () => {
     for (let i = 0; i < 18; i++) fire(request(`a${String(i).padStart(16, '0')}`, `rm -rf d${i}`));
@@ -168,10 +176,10 @@ describe('a subagent\'s prompt survives the main thread\'s events', () => {
   });
 });
 
-describe('it is removed by its own agent\'s next tool event, or its SubagentStop', () => {
+describe('it is removed by its own agent\'s tool event for the same call, or its SubagentStop', () => {
   it.each([
-    ['its PreToolUse', () => toolEvent('PreToolUse', A)],
-    ['its PostToolUse', () => toolEvent('PostToolUse', A)],
+    ['its PreToolUse', () => toolEvent('PreToolUse', A, SUB_COMMAND)],
+    ['its PostToolUse', () => toolEvent('PostToolUse', A, SUB_COMMAND)],
     ['its SubagentStop', () => plain('SubagentStop', { agent_id: A, agent_type: 'general-purpose', stop_hook_active: false })],
   ])('%s', async (_n, ev) => {
     fire(plain('SubagentStart', { agent_id: A, agent_type: 'general-purpose' }));
@@ -180,6 +188,20 @@ describe('it is removed by its own agent\'s next tool event, or its SubagentStop
     fire(ev());
     expect(agents()).toEqual([B]);
     expect((await painted()).entry).toBeNull();
+  });
+  it('a parallel call\'s events of the same agent leave it (review 2752 F6): only its own call removes it', async () => {
+    fire(request(A));
+    fire(toolEvent('PreToolUse', A, 'ls -la'));
+    fire(toolEvent('PostToolUse', A, 'ls -la'));
+    expect(agents()).toEqual([A]);
+    expect((await painted()).entry?.agentId).toBe(A);
+  });
+  it('a SubagentStop removes every entry of its agent, whatever the call', () => {
+    fire(request(A, 'rm -rf one'));
+    fire(request(A, 'rm -rf two'));
+    fire(request(B, 'rm -rf three'));
+    fire(plain('SubagentStop', { agent_id: A, agent_type: 'general-purpose', stop_hook_active: false }));
+    expect(agents()).toEqual([B]);
   });
   it('a SessionStart empties it: the agents died with the old process', () => {
     fire(request(A));

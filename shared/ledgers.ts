@@ -105,6 +105,9 @@ export type ItemAction =
 export const UNTRUSTED_BUILD_VERB = 'untrusted-build' as const;
 export type UntrustedBuildAction = Extract<ItemAction, { verb: 'untrusted-build' }>;
 export const isUntrustedBuildAction = (a: ItemAction | null): a is UntrustedBuildAction => a !== null && a.verb === UNTRUSTED_BUILD_VERB;
+/** The console page the untrusted-build item's step links to (review 2752 F4): Settings' Automation section, whose Test box
+ *  build list holds the build's row and its Capture again. The item's text names it, and the console links a routed path. */
+export const UNTRUSTED_BUILD_SETTINGS_PATH = '/settings/automation';
 /** The five hierarchy verbs, and the acts the operator takes on each (the item's own controls, wave 5). */
 export type LinearActionVerb = 'linear-map' | 'linear-report' | 'linear-drift' | 'linear-initiatives' | 'linear-owner';
 export type LinearItemAct = 'approve' | 'return' | 'put-back' | 'done' | 'hand' | 'keep' | 'check-again' | 'name';

@@ -10,7 +10,7 @@
 // The questions owner raises (`raiseApproval`'s refusal arm) and the capture lane settles; both act on these answers only.
 import { buildTrustOf, buildUntrustedSentence, type BuildUntrustedReason, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import { isClaudeVersion } from '../../../shared/claudeVersion.js';
-import { isUntrustedBuildAction, UNTRUSTED_BUILD_VERB, type ItemAction } from '../../../shared/ledgers.js';
+import { isUntrustedBuildAction, UNTRUSTED_BUILD_SETTINGS_PATH, UNTRUSTED_BUILD_VERB, type ItemAction } from '../../../shared/ledgers.js';
 import { OVERLORD_PROJECT } from '../../../shared/overlord-designation.js';
 import type { RaiseItemInput } from './ledgersStore.js';
 
@@ -41,8 +41,10 @@ export function untrustedBuildItemOf(
     why: `A child's permission prompt was refused because ${buildUntrustedSentence(reason, version)}. Until the build passes its `
       + 'capture, every prompt of a child on it comes straight to you, with no coordinator to rule on it first.',
     how: [
-      `Open Settings › Automation › Test box and find Claude Code ${version} in the build list.`,
-      'If its capture failed, read the output and choose Capture again. A build still waiting is captured on its own.',
+      `Open ${UNTRUSTED_BUILD_SETTINGS_PATH} and find Claude Code ${version} in the Test box's build list.`,
+      'If its capture failed, read the output and choose Capture again.',
+      'A build waiting for its capture stays waiting while no test box can capture it: none is reachable, or the box has no '
+        + 'capture runner. It is captured on its own once one can.',
       'ccrc closes this item once the build passes its capture.',
     ],
     options: null,

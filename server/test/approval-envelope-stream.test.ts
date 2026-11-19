@@ -30,7 +30,8 @@ const pane = (name: string): string => readFileSync(path.join(__dirname, 'fixtur
 /** The recorded Bash prompt (its command `touch rigfile.txt`), and the busy pane with no menu. */
 const PERMISSION = pane('cc280-permission-wrapped-100');
 const BUSY = pane('busy');
-const ENTRY = { agentId: 'a0000000000000001', tool: 'Bash', summary: 'touch rigfile.txt', route: 'sent', at: 1_786_000_000_000 };
+/** Stamped now: the server ignores an entry older than 15 minutes (`APPROVAL_ENTRY_MAX_AGE_MS`). */
+const ENTRY = { agentId: 'a0000000000000001', tool: 'Bash', summary: 'touch rigfile.txt', route: 'sent', at: Date.now() };
 
 type Step = { pane: string; hook: Record<string, unknown> | null };
 async function run(steps: Step[]): Promise<Array<{ step: number; frame: SessionStreamMsg }>> {
@@ -94,6 +95,11 @@ describe('the session stream sends a subagent\'s painted prompt as the approval 
     const frames = await run([{ pane: PERMISSION, hook: erased }, { pane: PERMISSION, hook: erased }, { pane: BUSY, hook: erased }]);
     const sub = { approval: { tool: 'Bash', summary: 'touch rigfile.txt', thread: 'subagent' } };
     expect(asks(frames)).toEqual([[0, 'ask', sub], [3, 'ask_cleared', null]]);
+  });
+  it('an entry older than 15 minutes leaves the bare menu, path 6 (review 2752 F2): the safe direction', async () => {
+    const stale = { state: 'working', event: 'PostToolUse', ask: null, approvals: [{ ...ENTRY, at: Date.now() - 16 * 60_000 }] };
+    const frames = await run([{ pane: PERMISSION, hook: stale }]);
+    expect(asks(frames)).toEqual([[0, 'ask_cleared', null]]);
   });
   it('an entry for another command leaves the bare menu, exactly as before', async () => {
     const other = { state: 'working', event: 'PostToolUse', ask: null, approvals: [{ ...ENTRY, summary: 'git push origin main' }] };
