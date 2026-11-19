@@ -447,7 +447,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // 401, 403
   'unauthenticated': 401,
   'wrong-node': 403, 'unknown-sender': 403, 'stale-uuid': 403, 'foreign-origin': 403, 'not-owner': 403,
-  'not-parent': 403, 'sign-in-unarmed': 403,
+  'not-parent': 403, 'sign-in-unarmed': 403, 'urgent-not-allowed': 403,
   // 404, 410
   'no-claim': 404, 'unknown-recipient': 404, 'unknown-run': 404, 'unknown-scope': 404, 'unknown-node': 404,
   'gone': 404, 'no-such-passkey': 404, 'not-found': 404, 'unknown-ask': 404, 'unknown-claim': 404,
@@ -457,7 +457,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'duplicate': 409, 'superseded': 409, 'busy': 409, 'auto-needs-rollback-gate': 409, 'no-channel': 409,
   'unknown-tag': 409, 'not-newer': 409, 'refused-by-node': 409, 'stamp-unread': 409, 'floor-unread': 409,
   'no-detach-cap': 409, 'no-rollback-cap': 409, 'agent-predates-update-op': 409, 'halted': 409,
-  'no-bundle': 409, 'no-previous': 409, 'no-desired': 409,
+  'no-bundle': 409, 'no-previous': 409, 'no-desired': 409, 'urgent-outstanding': 409,
   'ask-mismatch': 409, 'bad-session': 409, 'bad-transition': 409, 'ceiling': 409, 'child-unmeasurable': 409,
   'claim-conflict': 409, 'claim-terminal': 409, 'claimant-changed': 409, 'no-record': 409, 'no-session': 409,
   'not-held': 409, 'not-waiting': 409, 'not-remote': 409, 'not-seeded': 409, 'pool-mismatch': 409, 'run-closed': 409,
@@ -475,7 +475,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'unmeasured': 502,
   'unavailable': 503, 'journal-unreadable': 503, 'journal-unwritable': 503, 'ask-unreadable': 503,
   'pool-unreadable': 503, 'registry-unreadable': 503, 'run-unreadable': 503, 'runs-unreadable': 503,
-  'state-unmeasurable': 503, 'write-failed': 503, 'application-failed': 503, 'not-ready': 503,
+  'state-unmeasurable': 503, 'write-failed': 503, 'application-failed': 503, 'not-ready': 503, 'urgent-unmeasured': 503,
   // The approval routes (plan Task 16, D-5298): CHOSEN, not measured — new words. 404 for a row the caller cannot
   // name (another nonce reads as no row), 503 for a row that could not be read back, 409 for every other refusal,
   // the conflict status spec §6.3 names them with.

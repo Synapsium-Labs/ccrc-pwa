@@ -6337,6 +6337,8 @@ export const MAIL_REJECT_CODES = [
   // docstring already makes for 'paused'); the both-directions membership
   // scan still covers it.
   'duplicate', 'peer-quota',
+  // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's two answers and one outstanding per pair.
+  'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured',
   // delivery
   'undeliverable',
   // done-authority
