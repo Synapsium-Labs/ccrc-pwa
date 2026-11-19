@@ -4242,6 +4242,19 @@ export class CoordStore {
     ).all(n) as unknown as RunRowDb[]);
   }
 
+  /** Every work run of one programme, each with its ticket's key (`runs.ticketId` joined to `plan_tickets.key`, null for
+   *  none), in id order, ALL-OR-FAILURE as `runs()`: the work map's one run read (programme work map WM2, D-8779; spec §5.1,
+   *  "Bound": every work run, not the closed-runs read's clamp). A failed run keeps its `ticketId`, so it names its ticket. */
+  programmeWorkRuns(program: string): { ok: true; runs: (RunRow & { ticketKey: string | null })[] } | Extract<RunsReadResult, { ok: false }> {
+    const rows = this.db.prepare(
+      `SELECT ${RUN_ROW_COLUMNS}, t.key AS ticketKey FROM runs r JOIN programs p ON p.slug = r.program ` +
+      "LEFT JOIN plan_tickets t ON t.id = r.ticketId WHERE r.program = ? AND r.kind = 'work' ORDER BY r.id",
+    ).all(program) as unknown as (RunRowDb & { ticketKey: string | null })[];
+    const read = this.hydrateRuns(rows);
+    if (!read.ok) return read;
+    return { ok: true, runs: read.runs.map((run, i) => ({ ...run, ticketKey: rows[i]!.ticketKey ?? null })) };
+  }
+
   /** `GET /api/runs/find` (D-8071, spec §11.4): the lookup and the close-order list, over stored columns. The query is
    *  `runFind.ts`'s; this delegate hands it the terminal-state list. */
   /** The runs that review run `id`, as hits (D-8071; spec §11.5 `reviewedBy`). */

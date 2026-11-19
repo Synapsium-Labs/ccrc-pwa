@@ -40,6 +40,10 @@ import {
 } from './planPolicy.js';
 import { inboundRetirable } from '../linear/inboundRetire.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
+import type { RunVerdicts } from './runVerdicts.js';
+import { withLastMoves } from './runWire.js';
+import { doneEvidenceVerdict, verdictsReadOf, workMapOf, type DoneEvidenceFacts, type EvidenceVerdict } from './workMap.js';
+import { WORK_READ_FAILED, type WorkAnswer } from '../../../shared/plan.js';
 
 export interface PlanRouteOpts {
   /** The coordination store, for the programme rows and the project's team key; undefined (a test, a script): `unavailable`. */
@@ -66,6 +70,9 @@ export interface PlanRouteOpts {
   privateTrackerKeys?: readonly string[];
   /** The session standing the console shows; the triage route needs only the owner's id, so absent reads `unmeasured`. */
   presenceOf?: (id: string) => CoordinatorPresence;
+  /** The run verdicts reader (`RunVerdicts`, the watcher's), for the work map's stuck and blocked rows (programme work map WM2,
+   *  D-8779). Absent (a test, a server with no watcher) or empty (before its first pass) reads `not-read`. */
+  runVerdicts?: Pick<RunVerdicts, 'all'>;
   /** The by-id re-read of a stored inbound row's issue (review 2457 F4, D-8733): the lane's, through the one rate service. `plan take`
    *  and `plan triage` ask it BEFORE they act (outside the run writers' mutex), so an issue that left the managed teams is never
    *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable`. */
@@ -226,6 +233,59 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   const viewOf = (plan: PlanStorePort, coord: CoordStore, slug: string): PlanView =>
     planViewOf(plan.planOf(slug), coord.goalsFor(slug).doneWhen ?? [], plan.bindingsOf(slug), (p) => coord.linkingOf(p).teamKey,
       plan.phasesOf(slug));
+
+  /** The plan read's `work` (programme work map WM2, D-8779; spec §7, D2 and D19): every read behind the map, gathered here and
+   *  handed to `workMapOf`, which decides. The plan itself is `view`, read already. A read that fails answers its word, and
+   *  the plan is still served (F15). */
+  const workOf = (plan: PlanStorePort, coord: CoordStore, slug: string, view: PlanView): WorkAnswer => {
+    try {
+      const stored = plan.planOf(slug);
+      const read = coord.programmeWorkRuns(slug);
+      if (!read.ok) return { unreadable: read.kind };
+      const runs = withLastMoves(coord, read.runs, (d) => console.warn(`ccrc-server: the work map of ${slug} could not read the runs' last moves (${d})`));
+      const verdicts = verdictsReadOf(opts.runVerdicts?.all());
+      const open = coord.itemsFor(slug, opts.now()).open;
+      const openIds = new Set(open.map((i) => i.id));
+      const checkpointItems = new Map<string, number>();
+      for (const e of stored.epics) {
+        for (const c of e.checkpoints) if (c.itemId !== null && openIds.has(c.itemId)) checkpointItems.set(`${e.key}/${c.key}`, c.itemId);
+      }
+      const facts = plan.doneFactsOf(slug);
+      const storedEvidence = facts.flatMap((d) => (d.evidence === null ? [] : [{ project: d.project, evidence: d.evidence }]));
+      const evidence = new Map<string, EvidenceVerdict>();
+      const prLinks = new Map<string, TicketDoneFacts['links']>();
+      for (const d of facts) {
+        if (d.evidence === null) continue;
+        let run: DoneEvidenceFacts['run'] = null;
+        let landed: DoneEvidenceFacts['landed'] = null;
+        if (d.evidence !== 'malformed' && 'runId' in d.evidence) {
+          const r = coord.run(d.evidence.runId);
+          if (!r.ok) return { unreadable: r.kind };
+          run = r.run === null ? null
+            : { program: r.run.program, kind: r.run.kind, state: r.run.state, ticketKey: plan.ticketOfRun(r.run.id)?.key ?? null };
+        } else if (d.evidence !== 'malformed') {
+          const l = coord.readLanding(d.project);
+          landed = l.ok ? landedFactOf(l.facts.entries, d.evidence.pr) : { kind: 'unreadable', detail: l.error };
+          // The runs that carried this pull request, each with the ticket it holds, for the fold (review 2795 F2).
+          prLinks.set(d.key, evidenceLinksOf(coord, plan, d.evidence, d.project, storedEvidence));
+        }
+        evidence.set(d.key, doneEvidenceVerdict({ program: slug, ticketKey: d.key, evidence: d.evidence, run, landed }));
+      }
+      return workMapOf({
+        plan: {
+          ...view, declared: stored.planBy !== null, end: plan.planEndOf(slug),
+          done: new Map(facts.map((d) => [d.key, { at: d.doneAt, evidence: d.evidence }])),
+        },
+        runs, verdicts, openItems: open.map((i) => ({ id: i.id, runId: i.runId })), checkpointItems, evidence, prLinks,
+        // The hierarchy's close with a reason (its Task 4.3, F10) stores no programme ticket apart from a drop yet
+        // (`plan take`'s close drops an Upkeep ticket), so no ticket reads closed until it does (D-8779).
+        closed: new Map(),
+      });
+    } catch (e) {
+      console.warn(`ccrc-server: the work map of ${slug} could not be read (${e instanceof Error ? e.message : String(e)})`);
+      return { unreadable: WORK_READ_FAILED };
+    }
+  };
 
   const refuse = (reply: FastifyReply, word: Refused['refuse'], detail: string): FastifyReply => refuseRoute(reply, word, { detail });
 
@@ -807,7 +867,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (slug === null) return refuseRoute(reply, 'bad-request', { detail: 'slug' });
     const { coord, plan } = opts;
     if (coord === undefined || plan === undefined) return refuseRoute(reply, 'unavailable');
-    return reply.code(200).send({ ok: true, plan: viewOf(plan, coord, slug) });
+    const view = viewOf(plan, coord, slug);
+    return reply.code(200).send({ ok: true, plan: view, work: workOf(plan, coord, slug, view) });
   });
 
 }

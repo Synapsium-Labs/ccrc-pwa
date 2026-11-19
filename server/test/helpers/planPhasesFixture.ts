@@ -93,7 +93,11 @@ export async function buildCharacterizationPlans(w: CharWorld): Promise<void> {
 
 /** Both plans as `plan show` answers them, as JSON values. */
 export async function readCharacterizationPlans(w: CharWorld): Promise<unknown> {
-  const read = async (slug: string) =>
-    (await w.app.inject({ method: 'GET', url: `/api/programmes/${slug}/plan`, headers })).json() as unknown;
+  // The plan read's answer less `work`, the field programme work map WM2 (D-8779) adds beside `plan`: the characterization
+  // pins that `plan` reads as before WM0, and `work` is pinned by `work-map.test.ts` and `plan-routes.test.ts`.
+  const read = async (slug: string) => {
+    const { work: _work, ...rest } = (await w.app.inject({ method: 'GET', url: `/api/programmes/${slug}/plan`, headers })).json() as Record<string, unknown>;
+    return rest;
+  };
   return { 'prog-a': await read('prog-a'), 'prog-b': await read('prog-b') };
 }
