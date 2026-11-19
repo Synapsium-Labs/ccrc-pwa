@@ -6,7 +6,7 @@
 //
 // An item's state is its `state` column only (plan PL5b R2): `Came back` is an OPEN item whose latest coordinator move was
 // a return, read from its history, never from a field that keeps the last round's value.
-import { shapeProgramSlug, type FleetSession, type RunSummary } from '../../../shared/api';
+import { shapeProgramSlug, type CallView, type FleetSession, type RunSummary } from '../../../shared/api';
 import { CLEARED_WINDOW_MS, orderItems, waitingCount, type ItemKind, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { operatorAsk } from '../fleet/rollup';
 import { sessionLabel } from '../fleet/sessionLabel';
@@ -61,12 +61,24 @@ export const CLEARED_SHOWN = 5;
 export const showAllWord = (n: number): string => `Show all ${n}`;
 export const SHOW_FEWER_WORD = 'Show fewer';
 
-/** One row of the Recently cleared trail: an item the coordinator confirmed, or (answer marks B) an ask the operator has that is
- *  not live. `at` is when it cleared (an item's `closedAt`, an ask's last change of state); an ask's `program` is null when its
- *  child is in no programme. */
+/** One row of the Recently cleared trail: an item the coordinator confirmed, (answer marks B) an ask the operator has that is
+ *  not live, or (D-8126) a big call that left "Calls made for you". `at` is when it cleared (an item's `closedAt`, an ask's last
+ *  change of state, a call's `callClearedOn`); an ask's `program` is null when its child is in no programme. */
 export type ClearedEntry =
   | { readonly kind: 'item'; readonly item: ItemView; readonly at: number; readonly program: string }
-  | { readonly kind: 'ask'; readonly ask: AskMarkRow; readonly at: number; readonly program: string | null };
+  | { readonly kind: 'ask'; readonly ask: AskMarkRow; readonly at: number; readonly program: string | null }
+  | { readonly kind: 'call'; readonly call: CallView; readonly at: number; readonly program: string };
+
+/** When a cleared call left the operator's group, as the wire tells it (D-8126): the operator's own Seen or Overturn, the earlier
+ *  of the two; a call that aged out of the group carries neither, and reads at when it was made. The server decides which calls
+ *  are cleared and windows the list, so the trail keeps every call it is sent. */
+export function callClearedOn(c: CallView): number {
+  const acts = [c.seenAt, c.overturnedAt].filter((t): t is number => t !== null);
+  return acts.length === 0 ? c.at : Math.min(...acts);
+}
+
+/** The order of kinds at the same instant on the trail: an item, then an ask, then a call. */
+const CLEARED_KIND_RANK: Readonly<Record<ClearedEntry['kind'], number>> = { item: 0, ask: 1, call: 2 };
 
 /** The Recently cleared trail opened whole, by programme (D-8194): one group per programme in the order of its newest clear (the
  *  trail is newest first), each holding its rows in the trail's order. The asks in no programme are one group, `null`. */
@@ -84,18 +96,19 @@ export const itemRefWord = (id: number): string => `item ${id}`;
 export const clearedCountWord = (n: number): string => `${n} cleared`;
 
 /** What the Recently cleared trail draws (D-8194): the items cleared inside `CLEARED_WINDOW_MS` of the page clock, the edge
- *  included as the server's list includes it, and (answer marks B) the asks the operator has that are not live and changed
- *  state inside the same window, together, newest first (an item before an ask at the same instant, then the id breaks a
- *  tie). The server sends the same window; this read keeps a list heard a while ago from showing what has since aged out. A
- *  copy: the inputs are not touched. */
-export function clearedTrail(items: readonly ItemView[], now: number, asks: readonly AskMarkRow[] = []): ClearedEntry[] {
+ *  included as the server's list includes it, (answer marks B) the asks the operator has that are not live and changed state
+ *  inside the same window, and (D-8126) the cleared big calls the server sent, together, newest first (an item, then an ask,
+ *  then a call at the same instant, then the id breaks a tie). The server sends the same window; this read keeps a list heard a
+ *  while ago from showing an item or an ask that has since aged out. A copy: the inputs are not touched. */
+export function clearedTrail(items: readonly ItemView[], now: number, asks: readonly AskMarkRow[] = [], calls: readonly CallView[] = []): ClearedEntry[] {
   const entries: ClearedEntry[] = [
     ...items.filter((i) => i.closedAt !== null && i.closedAt >= now - CLEARED_WINDOW_MS)
       .map((item) => ({ kind: 'item' as const, item, at: item.closedAt ?? 0, program: item.program })),
     ...asks.filter((a) => a.live !== true && a.at >= now - CLEARED_WINDOW_MS).map((ask) => ({ kind: 'ask' as const, ask, at: ask.at, program: ask.program })),
+    ...calls.map((call) => ({ kind: 'call' as const, call, at: callClearedOn(call), program: call.program })),
   ];
-  const idOf = (e: ClearedEntry): number => (e.kind === 'item' ? e.item.id : e.ask.id);
-  return entries.sort((a, b) => b.at - a.at || (a.kind === b.kind ? 0 : a.kind === 'item' ? -1 : 1) || idOf(b) - idOf(a));
+  const idOf = (e: ClearedEntry): number => (e.kind === 'item' ? e.item.id : e.kind === 'ask' ? e.ask.id : e.call.id);
+  return entries.sort((a, b) => b.at - a.at || CLEARED_KIND_RANK[a.kind] - CLEARED_KIND_RANK[b.kind] || idOf(b) - idOf(a));
 }
 
 /** What a pill's colour means; a pill always says it in words too, so no state is read out of colour alone. */

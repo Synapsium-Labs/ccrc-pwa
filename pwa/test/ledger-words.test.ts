@@ -10,6 +10,7 @@ import { RATIFICATION_UNREADABLE_WORDS, RATIFY_UNAVAILABLE_TEXT, doneWhenPlaceme
 import type { GoalsView, Ratification, RatificationWhy } from '../../shared/ledgers';
 import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import type { AskMarkRow } from '../../shared/answerMarks';
+import type { CallView } from '../../shared/api';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -368,7 +369,7 @@ describe('review caps in the grouping (Task 24, F21)', () => {
 
 // D-8194: the Recently cleared trail is the last 48 hours (CLEARED_WINDOW_MS, the server's window too), newest first.
 describe('clearedTrail and itemNumber (D-8194)', () => {
-  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : `a${e.ask.id}`);
+  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : e.kind === 'ask' ? `a${e.ask.id}` : `c${e.call.id}`);
   const HOUR = 60 * MIN;
   const done = (id: number, closedAt: number | null) => itemView({ id, state: 'done', closedAt });
 
@@ -398,6 +399,20 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
   it('groups the trail by programme in the order of its newest clear, the asks in no programme as one group', () => {
     const trail = clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [ask(2, NOW - HOUR, { program: null }), ask(3, NOW - 3 * HOUR), ask(4, NOW - 4 * HOUR, { program: null })]);
     expect(clearedGroups(trail).map((g) => [g.program, g.entries.map(idOf)])).toEqual([[null, ['a2', 'a4']], ['prog-a', ['i1', 'a3']]]);
+  });
+
+  // D-8126 A4: a big call that left "Calls made for you" joins the trail. Its time there is the operator's own clear (Seen or
+  // Overturn, the earlier), or when it was made for one that aged out (the wire carries no other); the server's list is its window.
+  const call = (id: number, o: Partial<CallView> = {}): CallView => ({
+    id, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big', question: 'q?', options: ['a', 'b'], chosen: 'a', why: 'w',
+    reversible: true, wakeOn: null, at: NOW - 3 * 86_400_000, seenAt: null, overturnedAt: null, overturnNote: null, ...o,
+  });
+
+  it('joins the calls that left the group, at the operator\'s clear, an aged one at when it was made, an item first at the same instant', () => {
+    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 3 * HOUR }), call(3, { at: NOW - 8 * 86_400_000 }),
+      call(4, { overturnedAt: NOW - 2 * HOUR })];
+    expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], calls).map(idOf)).toEqual(['c1', 'i1', 'c4', 'c2', 'c3']);
+    expect(clearedGroups(clearedTrail([], NOW, [], [call(5, { seenAt: NOW, program: 'prog-b' })])).map((g) => g.program)).toEqual(['prog-b']);
   });
 
   it('the shown count is five', () => {

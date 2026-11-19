@@ -7,7 +7,7 @@
 // grouping, count and label is `ledgerWords.ts`'s).
 import { useState, type ReactNode } from 'react';
 import { BareRow, Button, TextLink } from '@ccrc/ui';
-import type { FleetSession, RunSummary } from '../../../shared/api';
+import type { CallView, FleetSession, RunSummary } from '../../../shared/api';
 import { WAITS_ON_WORDS, type ItemView, type WaitingView } from '../../../shared/ledgers';
 import { capWaiting, reviewCapOf } from '../fleet/reviewCapWords';
 import { fleetHues } from '../fleet/programmeBoxes';
@@ -27,6 +27,8 @@ import { inAppClick } from '../fleet/settingsText';
 import { AnswerMarkBoxes } from './AnswerMarkBox';
 import { ASK_HOW_WORD, ASK_NO_TEXT_WORD, askMarksFor, askRowsOf } from './answerMarkWords';
 import type { AskMarkRow } from '../../../shared/answerMarks';
+import { apiErrorText } from '../lib/refusalWords';
+import { CALLS_GROUP_WORDS, SEEN_WORD, callLine, callRefusalText, callsOf } from './callWords';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -61,7 +63,13 @@ export interface WaitingScreenProps {
   /** The page of an item a card's text names ("item 12"), or null for a number that is no item (D-8194). Absent, a card links
    *  nothing. The route decides; this file names no route. */
   readonly itemHref?: ItemHref;
+  /** The operator's Seen on a big call (D-8126, `POST /api/calls/:id/seen`). Absent, or on the device's saved copy, the calls
+   *  are drawn with no Seen. A rejection frees the button and is said on the call's row. */
+  readonly onSeen?: CallSeen;
 }
+
+/** The Seen door, as the route hands it in (D-8126). */
+export type CallSeen = (id: number) => Promise<unknown>;
 
 /** An item reference's page, or null (D-8194). */
 type ItemHref = (id: number) => string | null;
@@ -90,6 +98,8 @@ function Mentions({ item, note, itemHref }: { item: ItemView; note: string | nul
 
 /** The rail's key for the group of sessions that are in no programme (a programme slug can never be this). */
 const NO_RUNS: readonly RunSummary[] = [];
+/** No calls: one frozen empty list, so a default never makes a new array per render (D-8126). */
+const NO_CALLS: readonly CallView[] = [];
 const NO_PROGRAMME_KEY = ' none';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
@@ -185,13 +195,66 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
   );
 }
 
+/** "Calls made for you (N)": the big calls coordinators made in the operator's name, collapsed, below a programme's rows
+ *  (D-8126). Never part of the blocking count, the rail's counts or the summary: a call needs nothing from the operator but a
+ *  glance. Each carries Seen while one is offered, asked once while in flight; the row leaves for the cleared trail on the next
+ *  frame, and a rejection (offline, `not-big`, `unknown-call`) frees the button and says why on the row, because the server
+ *  sends no frame on a refusal. Nothing is drawn for none. */
+export function CallsGroup({ calls, now, onSeen }: { calls: readonly CallView[]; now: number; onSeen?: CallSeen | undefined }): ReactNode {
+  const [asked, setAsked] = useState<ReadonlySet<number>>(() => new Set());
+  const [refused, setRefused] = useState<ReadonlyMap<number, string>>(() => new Map());
+  if (calls.length === 0) return null;
+  const askSeen = (id: number, send: CallSeen): void => {
+    setAsked((was) => new Set(was).add(id));
+    setRefused((was) => { if (!was.has(id)) return was; const next = new Map(was); next.delete(id); return next; });
+    send(id).catch((err: unknown) => {
+      setAsked((was) => { const next = new Set(was); next.delete(id); return next; });
+      setRefused((was) => new Map(was).set(id, callRefusalText(err) ?? apiErrorText(err)));
+    });
+  };
+  return (
+    <details className="wl-calls" data-calls={calls.length}>
+      <summary className="wl-calls-sum">{CALLS_GROUP_WORDS(calls.length)}</summary>
+      <ul className="wl-calls-list">
+        {calls.map((c) => (
+          <li key={c.id} className="wl-call" data-call={c.id}>
+            <span className="wl-call-line">{callLine(c, now)}</span>
+            {onSeen !== undefined && (
+              <BareRow className="wl-call-act" disabled={asked.has(c.id)} onClick={() => askSeen(c.id, onSeen)}>{SEEN_WORD}</BareRow>
+            )}
+            {refused.has(c.id) && <span className="wl-call-error" role="alert">{refused.get(c.id)}</span>}
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
+}
+
+/** A programme with calls made for the operator and no row of its own (D-8126): its heading and its calls, drawn among the
+ *  groups so a call is seen where the programme's rows would be, and never counted. */
+function CallsApart({ program, title, hue, calls, now, onSeen }: {
+  program: string; title: string; hue: string | null; calls: readonly CallView[]; now: number; onSeen: CallSeen | undefined;
+}): ReactNode {
+  return (
+    <section className="wl-group" data-program={program} data-hue={hue ?? 'none'} data-calls-only="true" aria-label={title}>
+      <div className="wl-ghead">
+        <span className="wl-swatch" aria-hidden="true" />
+        <h2 className="wl-gtitle">{title}</h2>
+      </div>
+      <CallsGroup calls={calls} now={now} onSeen={onSeen} />
+    </section>
+  );
+}
+
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks, calls = NO_CALLS, onSeen }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
   rowActs?: RowActs | null; itemHref?: ItemHref | null; asks?: readonly AskMarkRow[];
+  /** The programme's calls made for the operator (D-8126), drawn collapsed below its rows; none draws nothing. */
+  calls?: readonly CallView[]; onSeen?: CallSeen | undefined;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -210,6 +273,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} itemHref={itemHref}
                 {...(asks === undefined ? {} : { asks })} />
+      <CallsGroup calls={calls} now={now} onSeen={onSeen} />
     </section>
   );
 }
@@ -218,11 +282,23 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
  *  programme's own heading. `null` is the asks in no programme. */
 type Where = (program: string | null) => string;
 
-/** One row of the Recently cleared trail: an item, or (answer marks B) an ask the operator has that is not live. */
+/** One row of the Recently cleared trail: an item, (answer marks B) an ask the operator has that is not live, or (D-8126) a
+ *  big call that left "Calls made for you". */
 function ClearedRow({ entry, where, now, current }: { entry: ClearedEntry; where?: Where | undefined; now: number; current: boolean }): ReactNode {
+  if (entry.kind === 'call') return <ClearedCallRow call={entry.call} where={where} now={now} />;
   return entry.kind === 'item'
     ? <ClearedItemRow item={entry.item} where={where} now={now} current={current} />
     : <ClearedAskRow ask={entry.ask} where={where} now={now} current={current} />;
+}
+
+/** A cleared call (D-8126): its line as the group drew it, and where. Read only: Seen and Overturn… live in the group. */
+function ClearedCallRow({ call, where, now }: { call: CallView; where?: Where | undefined; now: number }): ReactNode {
+  const place = where?.(call.program);
+  return (
+    <li className="wl-cleared-row" data-call={call.id}>
+      <span aria-hidden="true">✓ </span>{callLine(call, now)}{place === undefined ? null : ` · ${place}`}
+    </li>
+  );
 }
 
 /** A cleared ask: the question (not struck through, for a lapsed or handed-over ask may still wait in its session), how it
@@ -255,7 +331,7 @@ function ClearedItemRow({ item, where, now, current }: {
 }
 
 /** A cleared row's React key: an item and an ask may share an id. */
-const entryKey = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : `a${e.ask.id}`);
+const entryKey = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : e.kind === 'ask' ? `a${e.ask.id}` : `c${e.call.id}`);
 
 /** How the whole trail is grouped by programme (D-8194): each programme's name and hue, as the list's groups draw them. */
 interface ClearedGrouping { readonly title: (program: string | null) => string; readonly hue: (program: string | null) => string | null }
@@ -269,17 +345,19 @@ interface ClearedGrouping { readonly title: (program: string | null) => string; 
  *  order of its newest clear, its name beside its hue's swatch and its count, each COLLAPSED until its heading is pressed. Which
  *  groups are open lives in this component's state alone: Show fewer forgets it, and so does leaving the page (nothing is kept
  *  in storage). The list filtered to one programme has one group, so it draws its share as one plain list. */
-export function ClearedTrail({ items, asks = [], where, now, grouping, current = false }: {
+export function ClearedTrail({ items, asks = [], calls = NO_CALLS, where, now, grouping, current = false }: {
   items: readonly ItemView[]; where?: Where; now: number; grouping?: ClearedGrouping;
   /** The asks the operator has that are not live (answer marks B), joined to the trail by their time. */
   asks?: readonly AskMarkRow[];
+  /** The big calls that left "Calls made for you" (D-8126), joined to the trail by when they cleared. */
+  calls?: readonly CallView[];
   /** True only on a current page; false on the device's saved copy, and unset fails closed: the rows' answer marks are off, as
    *  every act on a saved copy is. */
   current?: boolean;
 }): ReactNode {
   const [all, setAll] = useState(false);
   const [open, setOpen] = useState<ReadonlySet<string | null>>(() => new Set());
-  const trail = clearedTrail(items, now, asks);
+  const trail = clearedTrail(items, now, asks, calls);
   if (trail.length === 0) return null;
   const more = trail.length > CLEARED_SHOWN;
   const whole = all || !more;
@@ -367,6 +445,16 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   // The pills count what is drawn (`shownSummary`, review 1537 F4): under a filter, that filter's share alone.
   const words = summaryWords(shownSummary(shown));
   const empty = groups.length === 0;
+  // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
+  // rows draws them apart, among the groups, under the filter that shows it. Seen is offered only on a current page.
+  const onSeen = rowActs.enabled ? props.onSeen : undefined;
+  const callsFor = (p: string | null): readonly CallView[] => (p === null ? NO_CALLS : callsOf(view, p).open);
+  const apart = noProgramme ? [] : [...new Set((view.calls ?? []).map((c) => c.program))]
+    .filter((p) => !groups.some((g) => g.program === p) && (list.programme === null || list.programme === p));
+  const apartBlock = apart.map((p) => (
+    <CallsApart key={`calls:${p}`} program={p} title={titleOf(p)} hue={hues.get(p) ?? null} calls={callsFor(p)} now={now} onSeen={onSeen} />
+  ));
+  const clearedCalls = noProgramme ? NO_CALLS : (view.callsCleared ?? NO_CALLS).filter((c) => list.programme === null || c.program === list.programme);
   return (
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
@@ -374,7 +462,12 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
       {/* A saved source never says "Nothing needs you." (review 1561 F4): an empty list from the device's copy, or a
           list drawn with the device's rows, is not a fact, so it says it is waiting, under the not-current line. */}
       {empty
-        ? <p className="wl-note">{props.notCurrent === undefined ? EMPTY_WORD : NO_FRAME_WORD}</p>
+        ? (
+          <>
+            <p className="wl-note">{props.notCurrent === undefined ? EMPTY_WORD : NO_FRAME_WORD}</p>
+            {apartBlock.length > 0 && <div className="wl-groups">{apartBlock}</div>}
+          </>
+        )
         : (
           <>
             {words.length > 0 && (
@@ -403,8 +496,10 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
                              hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs} itemHref={props.itemHref ?? null} asks={liveAsks}
+                             calls={callsFor(g.program)} onSeen={onSeen}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
+                {apartBlock}
               </div>
             </div>
           </>
@@ -414,9 +509,9 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
           cleared asks (answer marks B). */}
       {list.programme !== null
         ? <ClearedTrail items={view.cleared.filter((c) => c.program === list.programme)} asks={clearedAsks.filter((a) => a.program === list.programme)}
-                        now={now} current={rowActs.enabled} />
+                        calls={clearedCalls} now={now} current={rowActs.enabled} />
         : <ClearedTrail items={noProgramme ? [] : view.cleared} asks={noProgramme ? clearedAsks.filter((a) => a.program === null) : clearedAsks}
-                        now={now} where={titleOf} current={rowActs.enabled}
+                        calls={clearedCalls} now={now} where={titleOf} current={rowActs.enabled}
                         grouping={{ title: titleOf, hue: (p) => (p === null ? null : hues.get(p) ?? null) }} />}
       {sheets}
     </div>

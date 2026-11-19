@@ -201,6 +201,23 @@ describe('WaitingRoute', () => {
   });
 });
 
+describe('calls made for you on the route (D-8126)', () => {
+  const call = { id: 7, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big' as const, question: 'Which store?', options: ['sql', 'files'],
+    chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null, overturnedAt: null, overturnNote: null };
+
+  it('Seen posts the operator\'s Seen door for that call, with no body', async () => {
+    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, call: { ...call, seenAt: NOW } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    vi.stubGlobal('fetch', fetchMock);
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [call] }) }));
+    render(<WaitingRoute store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Seen' }));
+    await waitFor(() => expect(fetchMock.mock.calls.some(([url]) => String(url).endsWith('/api/calls/7/seen'))).toBe(true));
+    const [, init] = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/calls/7/seen')) as unknown as [string, RequestInit];
+    expect(init.method).toBe('POST');
+  });
+});
+
 describe('the routes\' own paths', () => {
   it('itemPath and the list\'s path are the route table\'s, and each is on its own route', () => {
     expect(matchRoute(itemPath(12))?.route.id).toBe('item');
