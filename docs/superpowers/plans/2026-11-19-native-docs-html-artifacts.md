@@ -203,7 +203,7 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 **Interfaces:**
 - Produces: `wrapperDocument(c: Capability, token: string, contentOrigin: string): {html: string; headers: Record<string,string>}`; `ARTIFACT_ENDED_BODY` = a fixed page whose text is "This artifact link has ended. Open it again from ccrc."
 
-- [ ] **Step 1: Write the failing tests:** the iframe's `sandbox` is exactly `ARTIFACT_SANDBOX_BASE` joined by spaces, plus `allow-popups` only when `windows`; `allow` is exactly `fullscreen; clipboard-write`; the iframe has a `name`, and the "Clear this host's data" link's `target` is that name and its `href` is `<contentOrigin>/clear`; `src` is `<contentOrigin>/c/<token>/<page>` with each path segment percent-encoded; the document contains no `<script`; a project or path holding `<`, `"` or `&` is escaped; the headers are exactly spec §4.2's (CSP with `frame-src <contentOrigin>/c/<token>/ <contentOrigin>/clear`, COOP `same-origin-allow-popups`, Referrer-Policy, nosniff, `no-store`, X-Robots-Tag); the bar says "This is not ccrc"; no response holds a session id, box token or the console origin; a request with `Sec-Fetch-Dest` other than `document` is 403; `wrapper: an ended link shows the fixed sentence` (unknown, revoked and idle tokens give byte-identical `ARTIFACT_ENDED_BODY` with 404).
+- [ ] **Step 1: Write the failing tests:** the iframe's `sandbox` is exactly `ARTIFACT_SANDBOX_BASE` joined by spaces, plus `allow-popups` only when `windows`; `allow` is exactly `fullscreen; clipboard-write`; the iframe has a `name`, and the "Clear this host's data" link's `target` is that name and its `href` is `<contentOrigin>/clear`; `src` is `<contentOrigin>/c/<token>/<page>` with each path segment percent-encoded; the document contains no `<script`; a project or path holding `<`, `"` or `&` is escaped; the headers are exactly spec §4.2's (CSP with `frame-src <contentOrigin>/c/<token>/ <contentOrigin>/clear`, COOP `same-origin-allow-popups`, Referrer-Policy, nosniff, `no-store`, X-Robots-Tag); the bar says "This is not ccrc"; no response holds a session id, box token or the console origin; `wrapper: a non-document request is 403` (a request with `Sec-Fetch-Dest` other than `document`, or none, is the fixed 403); `wrapper: an ended link shows the fixed sentence` (unknown, revoked and idle tokens give byte-identical `ARTIFACT_ENDED_BODY` with 404).
 - [ ] **Step 2: Run**; expect FAIL. **Step 3: Implement.** The bar's stylesheet is a constant, its `sha256` computed once into the CSP. **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(server): the artifact wrapper (X5 A3.1)`.
 
 ### Task A3.2: the page's policy and the fences
@@ -371,6 +371,17 @@ Each row deletes or weakens one guard; the named test must go red. Run through t
 | MX5.38 | A4.2 | Doctor passes partial keys | doctor: partial keys FAIL |
 | MX5.39 | A5.2 | Open by `window.open` or without `noopener` | sheet: the Open anchor's `rel` |
 | MX5.40 | A5.2 | Tick windows by default | sheet: every checkbox starts unticked |
+| MX5.41 | A3.3 | Delete the `fetchFence` call from the `/c/` route | content: the fences hold at the route |
+| MX5.42 | A3.2 | Allow `Sec-Fetch-Dest: serviceworker` | policy: the fence row |
+| MX5.43 | A1.1 | Derive the accept list from `PUBLIC_SUFFIX_TRAPS` | vocabulary: the accept list is exactly `['duckdns.org']`; config: `nip.io` refused |
+| MX5.44 | A2.3 | Admit a confirmed origin on the content host | mint: `https://<content-host>` is `bad-origin` |
+| MX5.45 | A2.3 | Drop the re-draw on a masked token | mint: answer never masked |
+| MX5.46 | A3.3 | Drop `Content-Length` on a framed response | content: `Content-Length` equals the size |
+| MX5.47 | A2.2 | Use the 12-hour expiry for a capability with drafts | store: with drafts, 7200000 is null |
+| MX5.48 | A4.1 | Write the artifact block without the stored bind | expose: the artifact block carries the bind |
+| MX5.49 | A5.1 | Offer the button only when the walls report a refusal | offer: every HTML page |
+| MX5.50 | A2.2 | The liveness adapter compares against the generation the session was minted at, not the measured one | store: a passphrase change ends it |
+| MX5.51 | A2.2 | Treat an absent or unusable secret as live | store: a missing secret ends it; store: an unusable secret ends it |
 | MX5.52 | A4.1 | Drop the `request>headers>Referer delete` line, or the whole global block | expose: the log filter is written |
 | MX5.53 | A2.3 | Skip `pinHolds` and mint from whatever the tree read answered | mint: a moved pin refuses |
 | MX5.54 | A3.3 | Answer 429 instead of waiting past the in-flight limit | content: a page with many parallel loads loads whole |
@@ -386,17 +397,6 @@ Each row deletes or weakens one guard; the named test must go red. Run through t
 | MX5.64 | A3.2 | Delete `Permissions-Policy`, CORP, `nosniff` or `X-DNS-Prefetch-Control` from `CONTENT_HEADERS` | policy: CONTENT_HEADERS equals the spec |
 | MX5.65 | A3.3 | Log the request path in the error handler with `console.error` | content: logs no path |
 | MX5.66 | A2.3 | Keep Markdown in a section-root page's manifest | mint: a section-root page leaves out Markdown |
-| MX5.50 | A2.2 | The liveness adapter compares against the generation the session was minted at, not the measured one | store: a passphrase change ends it |
-| MX5.51 | A2.2 | Treat an absent or unusable secret as live | store: a missing secret ends it; store: an unusable secret ends it |
-| MX5.49 | A5.1 | Offer the button only when the walls report a refusal | offer: every HTML page |
-| MX5.41 | A3.3 | Delete the `fetchFence` call from the `/c/` route | content: the fences hold at the route |
-| MX5.42 | A3.2 | Allow `Sec-Fetch-Dest: serviceworker` | policy: the fence row |
-| MX5.43 | A1.1 | Derive the accept list from `PUBLIC_SUFFIX_TRAPS` | vocabulary: the accept list is exactly `['duckdns.org']`; config: `nip.io` refused |
-| MX5.44 | A2.3 | Admit a confirmed origin on the content host | mint: `https://<content-host>` is `bad-origin` |
-| MX5.45 | A2.3 | Drop the re-draw on a masked token | mint: answer never masked |
-| MX5.46 | A3.3 | Drop `Content-Length` on a framed response | content: `Content-Length` equals the size |
-| MX5.47 | A2.2 | Use the 12-hour expiry for a capability with drafts | store: with drafts, 7200000 is null |
-| MX5.48 | A4.1 | Write the artifact block without the stored bind | expose: the artifact block carries the bind |
 
 ## Deviations found
 
@@ -430,6 +430,16 @@ The block's third number, 8788, is unused. The adversarial pass proposed it for 
 ### Choices this wave made, and why
 
 Every decision table in the spec is a technical choice made by this wave under the operator's ruling. None was put as an ask: the one product decision, whether to support these pages at all, is the ruling itself. The choices most worth a reviewer's eye are the second listener instead of Host routing (spec §2.2), the wrapper with a separate content name instead of a bare tab (§4.1), the path capability instead of X3's fragment (§3.1), memory-only capabilities bound to the session (§3.3), egress closed by default with opt-in hosts and windows (§4.4), and outside folders left in the walls tier (§3.2).
+
+### Review round 1 (review run 2850, at `d1bb9ffee`)
+
+Thirteen confirmed findings and thirteen advisories, fixed one commit each (F2 and F3 together, because the grammar move is the ordering), except advisory A2, which is the pull request body's Parity line and was corrected there. What each fix rests on, measured 2026-11-19:
+
+- **Caddy (F6).** Caddy 2.11.9's source, the newest release (`modules/caddyhttp/server.go`, `logging.go`, `marshalers.go`, `reverseproxy/reverseproxy.go`, `modules/logging/filterencoder.go`): `http.log.error` entries and the proxy's "aborting with incomplete response" carry the request object, `request>uri` and every request header; the default logger's `filter` encoder deletes nested fields such as `request>headers>Referer`; `log_skip` affects access logs only. The official package repository lists 2.11.9; this box's distribution package is 2.6.2, so ART-L10 confirms the form on the installed Caddy. No Caddy was run.
+- **DuckDNS (F10).** The update spec (`https://www.duckdns.org/spec.jsp`): a comma separated list of domains, and a domain "does not need to include the .duckdns.org part". `ccd/ccrc`: the duckdns arm stores the full host in `CCRC_DDNS_DOMAIN`; `_exp_env_write` rewrites the whole file from its arguments; `_exp_landing` prints `enable --now` and the passkey line (F12); `_check_name` resolves with `getent hosts`; Caddy is a system unit (`_check_caddy`).
+- **Server seams (F5, F8, F11, A6).** `buildServer(deps, bus, watcher)` returns one instance; `authStore` is a local kept off `Deps` by its own comment; `composeDocs(...)` is a local; `index.ts` builds `deps` and calls `buildServer` once. `secretNow` measures the secret on every gated request (`SecretState`: `unread`, `absent`, `unusable`, `ok`), and `verifyMeasured` compares the session's generation with the measured one. `auth-gate.test.ts` pins `ROUTES.length`; `secret-mask.test.ts`'s `routeFiles()` walks all of `server/src`; `webauthn.ts` imports `node:crypto`; `OUTWARD_EDGE_EXEMPTIONS` is empty; `ccrc-settings-census.test.ts` check C8(a) and `FLEET_BOX_CLASSES` are as F11 says; the account gate's words are `ACCOUNT_GATE_REFUSALS`; `DocsEntry` sizes are `number | null`; `docsTree` takes a ref name.
+- **Plans (F1 to F3, A5, F9).** X2's and X3's plans and the programme ledger on `origin/main` at `39af0ba5b`: the Owns lists of P1 to P6 and R1 to R4, "X3's R1 waits for P1", ask 596's ruling ("a fresh start"), P1's `DocsRangePin`, `statPin`, snapshot ids (an hour, least recently used) and `prepare-busy`, and R1.1's `isReviewToken` in `shared/docsReview.ts`.
+- **Who measured.** Four read-only fact checks (Sonnet, medium), one each for Caddy, DuckDNS and the expose code, the server seams, and the X2 and X3 plans; then the main loop read each cited passage it changed text against.
 
 ### Commands
 

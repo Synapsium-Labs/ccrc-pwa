@@ -38,6 +38,28 @@ One Opus (high) read of the spec and plan, before wave-done. It raised 22 findin
 | 21 | Minor | D-8786 kept sentences contradicting "one choice"; the X3 token-storage claim was wrong | The whole In short bullet is quoted and replaced. Spec §3.5 corrected: X3 keeps its token in its index |
 | 22 | Minor | Wrapper COOP could sever popups, dialogs are unmeasured in cross-origin frames, and the DDNS unit line was unworkable | COOP is `same-origin-allow-popups`. Lab rows ART-L8 and ART-L9 added. `CCRC_DDNS_DOMAIN` becomes a comma list, so the unit is unchanged (spec §2.4, §4.2) |
 
+## Review round 1 (run 2850)
+
+Review run 2850 read the branch at `d1bb9ffee` and confirmed 13 findings (F1 to F13) and 13 advisories (A1 to A13). Each was fixed in its own commit, except F2 and F3, which share one, and A2, which was a line of the pull request body.
+
+| Finding | Fix |
+|---|---|
+| F1 | D-8786 also records C1 as ruled (ask 596, a fresh start), so X2's spec no longer lists C1 as waiting |
+| F2, F3 | A1 waits for X3 R1, as R1 waits for X2 P1. A1 moves R1's `isReviewToken` body to `shared/capabilityToken.ts` and re-exports the name, so R1's plan and tests are unchanged. Every shared file is listed with its order |
+| F4 | "Open as artifact" is offered on every HTML page beside its walls view, so no refusal detector is built |
+| F5 | The liveness port measures the current secret generation on each call. An absent or unusable secret ends every capability. Real-store test |
+| F6 | A4 writes a stock-Caddy global block that filters `request>uri` and the `Referer` header out of every log entry. A test pins it. ART-L10 confirms it, and a token found turns the tier off and asks |
+| F7 | The scope read and the mint refuse `pin-moved` when the tree read is not the pinned version |
+| F8 | `buildServerWithArtifacts` builds the shared session store, docs composition and capability store once. `Deps` gains nothing |
+| F9 | Loads wait in a bounded queue (64, 60 s) instead of a 429. One snapshot per large entry. The busy and timeout answers are stated. Many-loads test |
+| F10 | Full hostnames in `CCRC_DDNS_DOMAIN`. A re-run of any arm carries the artifact keys |
+| F11 | The settings census, the install fixture, the secret-mask scans and the gate's route count are named in the Files lists |
+| F12 | The artifacts arm prints copy, reload and restart, with no passkey line, and a test pins it |
+| F13 | `CONTENT_HEADERS` is pinned to literals. The bad-frame bytes never reach the client. Rows for every named limit and fence. Spies on every `console` method |
+| A1 to A13 | COOP wording; the PR body's Parity line; the message rule; `/clear`'s CSP and the gate's words; P1's real names; no outward import and a null size rule; sources quoted only for what they say; real Task 17 rows; doctor's Host; golden answers for the browser harness; a section path and no port default; grants argued and section roots narrowed; token crossing named |
+
+Mutation rows now run MX5.1 to MX5.66. The adversarial pass was run again over the changed sections before this round's wave-done.
+
 ## Measured, and how
 
 - Shipped source on `main` at `0b96bd0dc`, read by this wave and three read-only fact-check subagents (Sonnet, medium). The plan's Results lists every file.
