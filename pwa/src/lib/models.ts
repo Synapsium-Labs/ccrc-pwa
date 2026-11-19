@@ -410,16 +410,33 @@ export function laneReadWords(read: LaneModelsRead): string | null {
   }
 }
 
+/** Whether a transient word (`busy`, `not-started`) is said beside the answer the hook kept (follow-up
+ *  transient-beside-kept-answer), for both surfaces that say it, the model picker and the Models sheet: the word itself,
+ *  or `null` when there is none, or when the kept answer is an Anthropic lane's `absent`, which is by design (its rows are
+ *  the client's own aliases, F1) and over which neither surface says anything of a read that did not run. Every other
+ *  kept answer keeps its own words, and the word is said after them, so neither hides the other. Pure. */
+export function laneTransientBeside(
+  read: LaneModelsRead | null, transient: 'busy' | 'not-started' | null,
+): 'busy' | 'not-started' | null {
+  if (transient === null) return null;
+  if (read !== null && read.kind === 'absent' && read.laneKind === 'anthropic') return null;
+  return transient;
+}
+
 /** The model picker's note (R3b; fix rounds 1 and 2, F1, F2 and N1): `laneReadWords`, only where a model is actually
  *  missing. An Anthropic lane's `absent` is by design (its rows are the client's own aliases, named as always), so the
  *  picker says nothing over it, even beside a transient word; nor over a `read`, nor before the first read lands.
  *  `transient` is the hook's word for a newest answer kept beside an older non-transient one (`busy`, `not-started`): it
- *  is said, and the kept answer's rows stay. Pure. */
+ *  is said after the kept answer's own words (`laneTransientBeside`), so a kept `unreadable`, `unsupported`, `refused` or
+ *  missing-model `absent` still says why no model is shown, and a kept `read` keeps its rows with the word alone.
+ *  The Models sheet says the same two things, as two lines. Pure. */
 export function lanePickerNote(read: LaneModelsRead | null, transient: 'busy' | 'not-started' | null = null): string | null {
   if (read !== null && read.kind === 'absent' && read.laneKind === 'anthropic') return null;
-  if (transient !== null) return laneReadWords({ kind: transient });
-  if (read === null) return null;
-  return laneReadWords(read);
+  const kept = read === null ? null : laneReadWords(read);
+  const beside = laneTransientBeside(read, transient);
+  const word = beside === null ? null : laneReadWords({ kind: beside });
+  if (kept === null) return word;
+  return word === null ? kept : `${kept} ${word}`;
 }
 
 /** Why a read of the lane failed (F12), for a surface that says so: `signed-out` (the gate's 401), `foreign-origin` (the
