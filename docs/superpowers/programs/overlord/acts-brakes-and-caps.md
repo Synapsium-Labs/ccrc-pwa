@@ -98,7 +98,8 @@ because no plan on this tree defines them yet, and a mention above the defined h
 - **Ruling applied, F2b.** Under the `autonomous` rung and under coordinator autonomy, a modification whose change is
   carried only in free text is derived `change-goal`, so it goes to the operator. Only a structured field that leaves
   the goal and the definition of done untouched may be `widen-scope`. A modification has no such field in version 1,
-  so a structured scope field is a Later item, and a rung-covered or decided-alone `widen-scope` waits for it.
+  so a structured scope field is a Later item, and a rung-covered or decided-alone `widen-scope` waits for it
+  (round 3 extends this to an item's `widen-scope` effect).
 - **The rung's cover.** It holds only when the item's effect and its whole effective class are off the critical list
   (N1), never for an ask's answer (N2), and for `answer-approval` a deny only (N5). `goals modify`, C19, clause 22 and
   the act read take `autonomy:<id>` beside a grant (N4). The pin test gains the class-member case.
@@ -107,6 +108,22 @@ because no plan on this tree defines them yet, and a mention above the defined h
   dead coordinator is the stall watch's live verdict measured again at the revoke (F4). The Overlord's raise creates
   the marker exclusively, one `flock` lock orders every arm of `coord-pause`, and the stamp has a grammar (F11). The
   stale lines S1 to S10 and the F8 nits are fixed.
+
+## Fix round 3 (review 2707)
+
+- **B1.** In version 1, under the `autonomous` rung and under coordinator autonomy, an item or ask whose effect is
+  `widen-scope` reads `change-goal` too, at the decider and at the commit, as a free-text modification does, so
+  neither cover reaches `widen-scope` (Table 6.7b, §7.5.1, C81's derivation, C82's dormant bullet, and the pin case).
+- **B2.** `autonomy:<rung record id>` is the act row's authority, never a citation key. `goals modify` cites the
+  Overlord's answer by its act id and checks the programme, the off-list effect naming the change, no overturn, and
+  the rung record live at the act's commit; the arm is dormant in version 1, given B1. The act read now returns the
+  effect, its subject and the outcome.
+- **B3.** The decided-alone route checks H17's full effective class: the statement, the floors, the model's raise
+  when armed, and the lineage.
+- **N6 to N11 and the stale text.** The class-member wording, the rung-3 `coordinator-dead` verdict acted on in the
+  stall lane's live pass, the lock renamed `$REG/.coordinator-paused.lock` with the plain arms unlocked where `flock`
+  is absent, a bounded wait and regular, non-link markers only, the older-`ccd` residual, the `ordinary` allow never
+  armed by the rung, and the rung's cover restated in the ladder list, Figure 13 and Table B11.
 
 ## Choices made beyond the brief
 
