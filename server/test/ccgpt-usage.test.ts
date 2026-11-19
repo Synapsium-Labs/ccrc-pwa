@@ -1766,8 +1766,8 @@ describe.skipIf(!PY)('ccgpt-usage.py: the user-agent carries the Codex client ve
   const cacheOf = (version: unknown): string => JSON.stringify({ version, readAt: nowS(), triedAt: nowS() });
 
   /** One poll of a fresh lane (`litellm`, or `direct` with headers past the bridge's freshness) after `plant`, and the
-   *  one request it sent. */
-  async function poll(mode: 'litellm' | 'direct', plant: (home: string) => void, name: string): Promise<CapturedRequest> {
+   *  one request it sent. `plant` may answer a PATH for the poll (F8b's poisoned `curl` and `npm`). */
+  async function poll(mode: 'litellm' | 'direct', plant: (home: string) => string | void, name: string): Promise<CapturedRequest> {
     const home = mkTmp(`ccgpt-usage-ua-${name}-`);
     const id = mintId();
     if (mode === 'direct') {
@@ -1776,10 +1776,11 @@ describe.skipIf(!PY)('ccgpt-usage.py: the user-agent carries the Codex client ve
     } else {
       plantLane(home, id);
     }
-    plant(home);
+    const searchPath = plant(home);
     const { url, close, requests } = await startEndpoint(fullHeaders());
     try {
-      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url), timeoutMs: 15_000 });
+      const extra: Record<string, string> = searchPath ? { PATH: searchPath } : {};
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url, extra), timeoutMs: 15_000 });
       expect(r.timedOut, `${name}: the poll hung`).toBe(false);
       expect(r.status, `${name}: ${r.stderr}`).toBe(0);
       expect(r.stderr.includes('Traceback'), `${name}: a traceback`).toBe(false);
@@ -1820,7 +1821,7 @@ describe.skipIf(!PY)('ccgpt-usage.py: the user-agent carries the Codex client ve
     ['a deeply nested cache', (h) => plantCache(h, `{"version": ${'['.repeat(100_000)}${']'.repeat(100_000)}}`)],
     ['a cache over its size cap', (h) => plantCache(h, cacheOf(NEWER) + ' '.repeat(300_000))],
     ['undecodable bytes', (h) => { mkdirSync(dirname(cachePath(h)), { recursive: true }); writeFileSync(cachePath(h), Buffer.from([0xff, 0xfe])); }],
-    ['a directory where the cache goes', (h) => mkdirSync(cachePath(h), { recursive: true })],
+    ['a directory where the cache goes', (h) => { mkdirSync(cachePath(h), { recursive: true }); }],
     // A FIFO with no writer: an ordinary open would wait for ever, and the poll would never publish.
     ['a FIFO where the cache goes', (h) => {
       mkdirSync(dirname(cachePath(h)), { recursive: true });
@@ -1831,6 +1832,23 @@ describe.skipIf(!PY)('ccgpt-usage.py: the user-agent carries the Codex client ve
     const req = await poll('litellm', plant, name.replace(/[^a-z]+/g, '-'));
     expect(req.headers['user-agent']).toBe(userAgent(FLOOR));
   }, 30_000);
+
+  // Review 2825 F8b: the poll reads one file for the version and asks no network for it. `curl` and `npm` first on PATH
+  // record any call; the poll's one request is its usage request, to the loopback endpoint.
+  it('the poll asks neither curl nor npm for the version', async () => {
+    let calls = '';
+    const req = await poll('litellm', (h) => {
+      plantCache(h, cacheOf(NEWER));
+      const bin = join(h, 'poison-bin');
+      mkdirSync(bin, { recursive: true });
+      calls = join(h, 'network-calls');
+      for (const name of ['curl', 'npm'])
+        writeFileSync(join(bin, name), `#!/bin/sh\necho ${name} >> ${JSON.stringify(calls)}\nexit 7\n`, { mode: 0o755 });
+      return `${bin}:${process.env['PATH'] ?? '/usr/bin:/bin'}`;
+    }, 'poisoned-path');
+    expect(req.headers['user-agent']).toBe(userAgent(NEWER));
+    expect(existsSync(calls), 'the poll ran curl or npm').toBe(false);
+  });
 
   it.skipIf(IS_ROOT)('an unreadable cache: the poll says the floor', async () => {
     const req = await poll('litellm', (h) => { plantCache(h, cacheOf(NEWER)); chmodSync(cachePath(h), 0o000); }, 'unreadable');

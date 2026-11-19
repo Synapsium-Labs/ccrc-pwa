@@ -1285,6 +1285,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     const fromUrl = /[?&]client_version=([^&]*)$/.exec(req.url)?.[1] ?? '';
     const fromUa = /^codex_cli_rs\/(\S+) /.exec(req.headers['user-agent'] ?? '')?.[1] ?? '';
     expect(fromUa, `the user-agent (${req.headers['user-agent']}) and client_version disagree`).toBe(fromUrl);
+    // The whole form, the auth library's `client_user_agent`, which the usage poll sends too (review 2825 F8a).
+    expect(req.headers['user-agent']).toBe(`codex_cli_rs/${fromUrl} (Unknown 0; unknown) unknown`);
     return fromUrl;
   };
 
@@ -1303,6 +1305,24 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
   it('reads its floor off the auth library, and the cases sit around it', () => {
     expect(FLOOR).toMatch(/^\d+\.\d+\.\d+$/);
     expect(new Set([FLOOR, NEWER, NEWER2, OLDER]).size).toBe(4);
+  });
+
+  // Review 2825 F1: an auth library from before usage-user-agent has the four readers the credential gate uses and none
+  // of the client version's names. The probe refuses it by name, before the credential is read or anything is sent, as
+  // it refuses any library without a reader it calls: never a traceback from the version's first use.
+  it('an auth library from before the client version section: the named library refusal, nothing sent', () => {
+    const older = path.join(home, 'older-lib.py');
+    fs.writeFileSync(older, `${fs.readFileSync(AUTH_LIB, 'utf8')}\n`
+      + 'del CLIENT_VERSION_FLOOR, CLIENT_VERSION_RE, CLIENT_RELEASE_NAME, CLIENT_RELEASE_MAX_BYTES\n'
+      + 'del client_release_path, read_client_release, client_version, cached_client_version, client_user_agent\n');
+    const r = codex({ CCRC_MODELS_AUTH_LIB: older, CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer', npm(NEWER)) });
+    expect(r.code, r.stderr).toBe(1);
+    expect(r.stderr.startsWith('ccrc-models-probe: the codex catalogue fetch for "codex-a" failed: '
+      + 'ccrc-models-probe: auth-library-absent:'), r.stderr).toBe(true);
+    expect(r.stderr.includes('(AttributeError)'), 'the class is named').toBe(true);
+    expect(r.stderr.includes('Traceback'), 'a traceback reached stderr').toBe(false);
+    expect(probeRuntimeCalls(pr.rec).flatMap((c) => c.requests), 'a request was made').toEqual([]);
+    expect(fs.existsSync(cachePath()), 'a lookup ran').toBe(false);
   });
 
   it('a newer published release is asked as, in client_version and the user-agent, and cached with when it was read', () => {
@@ -1571,13 +1591,13 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     // `seam` is its second argument, npm's answer as a file.
     const FIXED_CLOCK = 'import runpy, sys, time\nT = float(sys.argv[1])\ntime.time = lambda: T\nsys.argv = sys.argv[2:]\n'
       + 'runpy.run_path(sys.argv[0], run_name="__main__")\n';
-    const lookup = (curl: string | null, o: { at?: number; seam?: string } = {}): { out: string; ms: number; cache: Record<string, unknown> } => {
+    const lookup = (curl: string | null, o: { at?: number; seam?: string; lib?: string } = {}):{ out: string; ms: number; cache: Record<string, unknown> } => {
       const bin = path.join(home, 'lookup-bin');
       fs.mkdirSync(bin, { recursive: true });
       if (curl !== null) fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n${curl}\n`, { mode: 0o755 });
       const PATH = curl === null ? bin : `${bin}:${process.env['PATH'] ?? ''}`;
       // The third argument is the auth library, the cache's one reader (usage-user-agent).
-      const args = [lookupProgram(), cachePath(), o.seam ?? '', lib];
+      const args = [lookupProgram(), cachePath(), o.seam ?? '', o.lib ?? lib];
       const t0 = Date.now();
       const r = spawnSync(pythonOrSkip()!, o.at === undefined ? ['-I', ...args] : ['-I', '-c', FIXED_CLOCK, String(o.at), ...args], {
         env: { HOME: home, PATH }, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n', timeout: 45_000,
@@ -1586,6 +1606,22 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       expect(r.status, `${r.stderr} (signal ${r.signal})`).toBe(0);
       return { out: r.stdout.trim(), ms, cache: cache() };
     };
+
+    // Review 2825 F2: the library is loaded inside the catch-all, so one that does not load, or lacks a name the lookup
+    // reads, is a failed try: recorded, nothing printed (the request asks as the floor), npm never asked.
+    it.each<[string, string, string]>([
+      ['a library that raises on import', 'raise RuntimeError("arg-text-not-recorded")\n', 'RuntimeError'],
+      ['a library without the cache reader', 'def read(auth_dir):\n    return None\n', 'AttributeError'],
+    ])('%s is a failed try: recorded, nothing printed, npm not asked', (_name, src, cls) => {
+      const broken = path.join(home, 'broken-lib.py');
+      fs.writeFileSync(broken, src);
+      plantCache({ version: NEWER, readAt: now() - 7200, triedAt: now() - 7200 });
+      const r = lookup(`echo asked >> "$HOME/curl-calls"\nprintf '%s' '${npm(NEWER2)}'`, { lib: broken });
+      expect(r.out).toBe('');
+      expect(r.cache['lastError']).toBe(`the auth library could not be loaded (${cls})`);
+      expect(r.cache['triedAt'] as number, 'the try was not recorded').toBeGreaterThanOrEqual(now() - 60);
+      expect(fs.existsSync(path.join(home, 'curl-calls')), 'npm was asked').toBe(false);
+    });
 
     it('a curl that answers well: the release, and curl read nothing of the program\'s stdin', () => {
       const r = lookup(`cat > "$HOME/curl-stdin"\nprintf '%s' '${npm(NEWER)}'`);

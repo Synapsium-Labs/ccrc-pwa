@@ -308,29 +308,53 @@ describe('codex bridge Stage 1 Task 5: the auth library owns its side-file names
 });
 
 
-// usage-user-agent (model-class-advance, D-8743's follow-up): the floor of the Codex client version every ccrc request
-// to the Codex backend says it is, and the reading of the box's release cache, live in ccd/ccgpt-auth.py, which the
-// catalogue probe and the usage poll both load. A second copy of the floor's value in shipped code is a second floor.
-// Tests, docs and README.md are prose about it and are left out.
-describe('usage-user-agent: the Codex client version floor is spelled once, in the auth library', () => {
+// usage-user-agent (model-class-advance, D-8781): ccd/ccgpt-auth.py, which the catalogue probe and the usage poll both
+// load, owns the Codex client version they say. This guard reds three second copies in shipped code (tests, docs and
+// README.md are prose and left out): the floor's VALUE, the release cache's file NAME, and the user-agent's FORM, each
+// matched as fixed text. One argued exception: the poll's `_UNVERSIONED_USER_AGENT`, the form with version 0.0.0, which
+// it sends only when the library lacks the version reader, so a mismatched install still publishes; it may stand on
+// that one line of ccd/ccgpt-usage.py. It does not red a floor under another value or spelling, nor the version's
+// grammar, which has two argued copies (the library's comment names them).
+describe('usage-user-agent: the floor, the cache name and the user-agent form are spelled once, in the auth library', () => {
+  const LIB = 'ccd/ccgpt-auth.py';
   const floorOf = (src: string): string | undefined => /^CLIENT_VERSION_FLOOR = "(\d+\.\d+\.\d+)"$/m.exec(src)?.[1];
-  const shippedHolders = (needle: string): string[] => {
-    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-F', '-e', needle, '--', ':!server/test', ':!docs', ':!README.md'],
+  const libText = (): string => readFileSync(path.join(ccrcRoot, LIB), 'utf8');
+  /** Every `file:line` of shipped code holding `needle` as fixed text. */
+  const shippedLines = (needle: string): string[] => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-n', '-F', '-e', needle, '--', ':!server/test', ':!docs', ':!README.md'],
       { encoding: 'utf8' });
     if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
-    return r.stdout.split('\n').filter(Boolean).sort();
+    return r.stdout.split('\n').filter(Boolean);
   };
+  const files = (lines: string[]): string[] => [...new Set(lines.map((l) => l.split(':')[0]!))].sort();
 
-  it('CONTROL: the pattern reads a floor line and passes over a use of the name', () => {
+  it('CONTROL: the patterns read the library\'s lines and pass over a use of the name', () => {
     expect(floorOf('x = 1\nCLIENT_VERSION_FLOOR = "1.2.3"\n')).toBe('1.2.3');
     expect(floorOf('    floor = CLIENT_VERSION_FLOOR\n')).toBeUndefined();
+    expect(/^CLIENT_RELEASE_NAME = "([^"]+)"/m.exec(libText())?.[1], 'the library names its cache file').toMatch(/\.json$/);
+    expect(/^ {4}return "(codex_cli_rs\/%s [^"]+)" % version$/m.exec(libText())?.[1], 'the library builds the user-agent')
+      .toMatch(/^codex_cli_rs\/%s \(/);
   });
 
-  it('the floor\'s value appears in ccd/ccgpt-auth.py alone, and the probe no longer carries a constant of its own', () => {
-    const floor = floorOf(readFileSync(path.join(ccrcRoot, 'ccd', 'ccgpt-auth.py'), 'utf8'));
+  it('the floor\'s value appears in ccd/ccgpt-auth.py alone, and the probe carries no constant of its own', () => {
+    const floor = floorOf(libText());
     expect(floor, 'ccd/ccgpt-auth.py declares no CLIENT_VERSION_FLOOR').toMatch(/^\d+\.\d+\.\d+$/);
-    expect(shippedHolders(floor!)).toEqual(['ccd/ccgpt-auth.py']);
-    expect(shippedHolders('CODEX_CLIENT_VERSION=')).toEqual([]);
+    expect(files(shippedLines(floor!))).toEqual([LIB]);
+    expect(shippedLines('CODEX_CLIENT_VERSION=')).toEqual([]);
+  });
+
+  it('the release cache\'s file name appears in ccd/ccgpt-auth.py alone', () => {
+    const name = /^CLIENT_RELEASE_NAME = "([^"]+)"/m.exec(libText())![1]!;
+    expect(files(shippedLines(name))).toEqual([LIB]);
+  });
+
+  it('the user-agent\'s form appears in ccd/ccgpt-auth.py, and beyond it only on the poll\'s fallback line', () => {
+    const form = /^ {4}return "codex_cli_rs\/%s ([^"]+)" % version$/m.exec(libText())![1]!;
+    const lines = shippedLines(form);
+    expect(files(lines)).toEqual([LIB, 'ccd/ccgpt-usage.py']);
+    const poll = lines.filter((l) => l.startsWith('ccd/ccgpt-usage.py:'));
+    expect(poll, 'the poll spells the form only on its fallback line').toHaveLength(1);
+    expect(poll[0]!.replace(/^ccd\/ccgpt-usage\.py:\d+:/, '')).toMatch(/^_UNVERSIONED_USER_AGENT = "codex_cli_rs\/0\.0\.0 /);
   });
 });
 

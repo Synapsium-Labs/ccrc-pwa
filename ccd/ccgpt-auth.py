@@ -1980,15 +1980,19 @@ def status_report(auth_dir: str) -> dict:
 # (`ccd/ccrc-models-probe`'s Codex arm) in its `client_version` and its user-agent, the usage poll (`ccgpt-usage.py`) in
 # its user-agent. That version is the greater of the published Codex CLI release and CLIENT_VERSION_FLOOR, never below
 # the floor. Its one owner is this library because both programs already load it by path, on every box where either
-# runs: the floor, the version's grammar and the reading of the release cache are spelled nowhere else. The cache,
-# `~/.ccrc/codex-client-release.json`, is written by the probe's release lookup alone (its `version` is the last good
-# release, as npm said it); the poll only reads it, and never looks a release up. A cache that cannot be opened or read,
+# runs: the floor, the cache's name and reading, the floor's application and the user-agent's form have no other copy
+# in shipped code (`server/test/single-definition/late-census.test.ts` holds it; the poll's `_UNVERSIONED_USER_AGENT`,
+# its fallback for a library without this section, is the one argued exception). The version's grammar has two other
+# copies, each for a reason: the probe's normaliser loads no library and checks the value it is handed, and
+# shared/models.mjs is the server's reader, in another language. The cache, in `~/.ccrc`, is written by the probe's
+# release lookup alone (its `version` is the last good release, as npm said it); the poll only reads it, and never
+# looks a release up. A cache that cannot be opened or read,
 # is not a regular file, is over its cap, is not UTF-8 JSON (a deeply nested file included) or is not an object is
 # ABSENT, and an absent cache, a missing `version` or one that is not a plain X.Y.Z above the floor gives the floor. The
 # read opens without blocking (a FIFO no one writes is not waited on) and never raises.
 CLIENT_VERSION_FLOOR = "0.170.0"
 CLIENT_VERSION_RE = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
-CLIENT_RELEASE_NAME = "codex-client-release.json"  # in ~/.ccrc
+CLIENT_RELEASE_NAME = "codex-client-release.json"  # in ~/.ccrc; HOME unset: the account's home, as expanduser reads it
 CLIENT_RELEASE_MAX_BYTES = 262144
 
 
@@ -1999,10 +2003,13 @@ def client_release_path(home: Optional[str] = None) -> str:
 def read_client_release(path: Optional[str] = None) -> dict:
     try:
         fd = os.open(client_release_path() if path is None else path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
-        with os.fdopen(fd, "rb") as f:
+        try:  # the descriptor is closed here, whatever fstat or the read does (review 2825 F7)
             if not stat.S_ISREG(os.fstat(fd).st_mode):
                 return {}
-            data = f.read(CLIENT_RELEASE_MAX_BYTES + 1)
+            with os.fdopen(fd, "rb", closefd=False) as f:
+                data = f.read(CLIENT_RELEASE_MAX_BYTES + 1)
+        finally:
+            os.close(fd)
         if len(data) > CLIENT_RELEASE_MAX_BYTES:
             return {}
         c = json.loads(data.decode("utf-8"))

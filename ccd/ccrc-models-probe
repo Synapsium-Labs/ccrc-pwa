@@ -193,8 +193,8 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # owner of that rule), so the version asked as is never below it whatever the
 # child answers, and the floor is asked as when the child fails or is late.
 #
-# ONE FILE FOR THE BOX, `~/.ccrc/codex-client-release.json` (0600, temp and
-# rename in its own directory): `version` and `readAt`, the last good release and
+# ONE FILE FOR THE BOX, in `~/.ccrc`, named by the auth library's
+# `CLIENT_RELEASE_NAME` (0600, temp and rename in its own directory): `version` and `readAt`, the last good release and
 # when it was read; `triedAt`, the last try, good or not; `lastError`, the last
 # failure's reason, gone after a success. This program is its one WRITER; its
 # READING, here and in the usage poll, is the auth library's
@@ -253,21 +253,24 @@ LOCK_S = 15          # how long a probe waits for another's lookup
 
 
 def load_auth_library():
-    """The auth library, by the path the request program checked and loaded itself; no bytecode is written beside it.
-    One that does not load stops this program before it prints, so the request program asks as the floor."""
+    """The auth library, by the path the request program checked and loaded itself, with the two names this program
+    reads; no bytecode is written beside it. Called inside the catch-all below, so one that does not load, or lacks a
+    name, is a failed try like any other (review 2825 F2)."""
     sys.dont_write_bytecode = True
     spec = importlib.util.spec_from_file_location("ccgpt_auth", AUTH_LIB)
     lib = importlib.util.module_from_spec(spec)
     sys.modules["ccgpt_auth"] = lib
     spec.loader.exec_module(lib)
+    for name in ("read_client_release", "CLIENT_VERSION_RE"):
+        getattr(lib, name)
     return lib
 
 
-LIB = load_auth_library()
+LIB = None  # the auth library, once the catch-all below has loaded it
 
 
 def plain(v):
-    return isinstance(v, str) and LIB.CLIENT_VERSION_RE.fullmatch(v) is not None
+    return LIB is not None and isinstance(v, str) and LIB.CLIENT_VERSION_RE.fullmatch(v) is not None
 
 
 def stamp(v):
@@ -414,10 +417,18 @@ def refresh(c):
         os.close(lock)
 
 
+c = {}
 try:
-    c = read_cache()
-    if due(c, int(time.time())):
-        c = refresh(c)
+    try:
+        LIB = load_auth_library()
+    except (Exception, SystemExit) as e:
+        # Nothing reads the cache without its reader, so the try is recorded over it, without the cached release (a
+        # library swapped between the request program's load and this one's); the request asks as the floor.
+        c = failed({}, f"the auth library could not be loaded ({type(e).__name__})")
+    else:
+        c = read_cache()
+        if due(c, int(time.time())):
+            c = refresh(c)
 except Exception as e:
     # Anything nothing above foresaw is a failed try too: recorded, and never a crash that would leave every lane
     # asking again and the box on the floor.
@@ -535,7 +546,9 @@ def load_auth_library():
         lib = importlib.util.module_from_spec(spec)
         sys.modules["ccgpt_auth"] = lib
         spec.loader.exec_module(lib)
-        for name in ("read", "read_status", "expired", "bars"):
+        # The last four since usage-user-agent (review 2825 F1): an older library is this refusal, never a traceback.
+        for name in ("read", "read_status", "expired", "bars", "client_release_path", "client_version",
+                     "client_user_agent", "CLIENT_VERSION_RE"):
             getattr(lib, name)
         return lib
     except (Exception, SystemExit) as e:
@@ -901,7 +914,9 @@ catalogue = {
     "stale": False,
 }
 # D-8743: the client version a Codex catalogue was fetched as, a plain X.Y.Z, when the arm asked as one; absent
-# otherwise, never null. The same bound as the release lookup's and shared/models.mjs's `isPlainVersion`.
+# otherwise, never null. The same bound as the auth library's `CLIENT_VERSION_RE` and shared/models.mjs's
+# `isPlainVersion`, spelled here because this normaliser runs on the box's python3 and loads no library: it checks
+# the value it is handed (review 2825 F4).
 if probe == "codex" and re.fullmatch(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})", client_version):
     catalogue["clientVersion"] = client_version
 catalogue["models"] = ARMS[probe](raw)
