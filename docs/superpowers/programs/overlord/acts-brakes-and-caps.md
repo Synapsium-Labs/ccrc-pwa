@@ -35,8 +35,8 @@ Appendix B's Table B11.
   `full` with a standing armed set. The ladder is the one dial, so every step-down it already has reaches the mode,
   its record is the rung's authority record, and a restore reads it as the stricter value; an armed set beside
   `full` would be a second carrier of the same authority. The mode's own step-offs (an overturn, any latch, a missed
-  drill, a degraded generation) raise one latch, `autonomy-off`, cap `full`, which only the operator clears, so it
-  never comes back by itself.
+  drill, a generation entering `degraded`), keyed on the operator's rung, raise one latch, `autonomy-off`, cap
+  `full`, which only the operator clears; other latches and conditions lower it as they always do.
 - **The critical list** is one L0 list, `OVERLORD_CRITICAL`, as the coordinator ruled it, pinned against D-8126. It
   bounds the mode's standing cover and a coordinator's autonomy. The operator's own per-effect grants and commands are
   left as §7.2 has them, so `approve-dod` stays grantable by the operator while the mode never reaches it.
@@ -59,22 +59,39 @@ because no plan on this tree defines them yet, and a mention above the defined h
   operator's by decision (its rows 34 and 58), under no class, and its O1 "touching units or tmux" is a session's
   direct act, which the server's interrupt path is not.
 - `pause-has-no-raiser`: the coordination pause is a marker file that records nothing about who raised it, so "lift
-  only a pause it raised itself" cannot be measured from the tree today. The delta adds one append-only record per
-  call of the pause door's function (`coord_pause_events`), and a pause with no record of the Overlord's reads as the
-  operator's. The same departure covers `pause-programme-starts`: no programme-scoped pause exists (the pause is
-  fleet-wide, and `ProgramState`'s `paused` word has no writer but a seed row). The pause door gains an optional
-  `programme` field, and where its scope lives is left to the plan.
+  only a pause it raised itself" cannot be measured from the tree today, and a record kept beside the marker cannot
+  see a raise by hand or by `ccd` directly. Since fix round 1 the Overlord's raise stamps the marker with its act id
+  through a new `--stamp` argument of `ccd coord-pause` (capability word `coord-pause-stamp-v1`), the operator's raise
+  empties the stamp, and the Overlord's lift removes the marker only when the stamp matches. Every reader of the
+  marker tests existence only. `coord_pause_events` stays as the record the Log reads. The same departure covers
+  `pause-programme-starts`: no programme-scoped pause exists (the pause is fleet-wide, and `ProgramState`'s `paused`
+  word has no writer but a seed row). The pause door gains an optional `programme` field, and where its scope lives
+  is left to the plan.
 - `review-round-not-three`: D-8125's coordinator lift grants three rounds at a time. The brief asks for one more round,
-  so the Overlord's act adds one through D-8125's one writer, with its own `review_cap_lifts` row. Where the operator
-  has switched coordinator lifts off, the Overlord's lift is refused `coord-lift-off` too, the author's reading of
-  that switch.
-
+  so the Overlord's act adds one through D-8125's one writer, with its own `review_cap_lifts` row. (The first draft
+  also refused it on a coordinator-lift switch; D-8165 retired that switch, so fix round 1 dropped the refusal and
+  corrected Table 6.1a's stale row.)
 - `ask-me-mark`: the critical list names "any item the operator marked 'ask me'", and no such mark exists. R21's two
   marks are facts that grant nothing. The delta adds "Ask me" as a third value of the same `answer_marks` table and
-  door, the one mark that narrows authority.
-- `rung-word-rollback`: an older build reading the rung row would meet a word it does not know. The delta asks the
-  plan to pin that an unknown rung word reads as `chat`, never `full`, before `overlord-autonomy-v1` ships (Table
-  11.5). Whether today's reader does so was not measured in this docs-only wave.
+  door, the one mark that narrows authority. Since fix round 1 its untick takes the step-up and every change is an
+  authority-journal record.
+- `rung-word-rollback`: an older build reading the rung row or the authority journal meets a word it does not know.
+  The first draft asked the plan to pin a reading; the review measured that shipped code already fails closed (an
+  unknown rung word reads `unreadable`, only a brake to `off` is allowed, an unknown latch cause reads `unmeasured`,
+  and the journal parser refuses the record, so the doors refuse `authority-rolled-back` until a Confirm). Table 11.5
+  now cites that.
+
+## Fix round 1 (review 2686)
+
+- **Rulings applied.** F1: at `autonomous` every check a grant-backed answer meets still runs, so an O3 answer is
+  staged while identity is `attributed`, and class-none answers act at once. F9: a granted coordinator never approves
+  its own spec, `state-a-fact` is wholly critical under coordinator autonomy, the decided-alone route runs the
+  Overlord's own checks through `overlordMayAct`, a grant made at `full` reaches class none only, and a record beyond
+  the grant's cover is refused `beyond-autonomy-cover`. F12: R22 is the ruling that classes `pause-coordination`,
+  `lift-own-pause`, `abandon-run` and `interrupt-session` none against O1, and the table test names the four.
+- **For the ledger.** The W2 act catalogue plan's oracle row that maps "changing a spec's goals or scope" to
+  `widen-scope` splits: the goal to `change-goal` (now derived from a goals version's subject), scope within the goal
+  to `widen-scope`. That plan row is the coordinator's to reconcile on the ledger pull request.
 
 ## Choices made beyond the brief
 
@@ -84,8 +101,6 @@ because no plan on this tree defines them yet, and a mention above the defined h
 - The refusal words §7.1.1 names are not added to Table 11.6 in this delta. `refusal-table.test.ts` requires each row
   to be a route refusal already, or a W3-or-later word on its wave map, and no W2 word may wait there. So each word
   joins the table in the pull request that ships its code.
-- At `autonomous`, an O3 answer outside the critical list (`approve-spec`, `widen-scope`) acts at once, with no veto
-  window, because the addendum says the mode "acts at once". Staging stays for a grant-backed O3 answer below it.
 - `change-goal` is a new effect with Grant "no", because a goal is direction, which R16 keeps the operator's.
 - Coordinator autonomy has no expiry of its own; "Later" names the trigger for one.
 - The operator's R22 ruling is quoted as the brief gave it: the four options as asked, and that the operator chose all
