@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry, CALL_CLEARED_WORD, callClearedHow,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry, CALL_CLEARED_WORD, callClearedHow, callClearedOn,
 } from '../src/ledgers/ledgerWords';
 import { RATIFICATION_UNREADABLE_WORDS, RATIFY_UNAVAILABLE_TEXT, doneWhenPlacement, ratificationWords, ratifyFailureOf, ratifyOffered } from '../src/ledgers/ledgerWords';
 import type { GoalsView, Ratification, RatificationWhy } from '../../shared/ledgers';
@@ -419,6 +419,21 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
   it('windows cleared calls by the same 48 hours, edge included', () => {
     const calls = [call(1, { seenAt: NOW - CLEARED_WINDOW_MS }), call(2, { seenAt: NOW - CLEARED_WINDOW_MS - 1 }), call(3, { overturnedAt: NOW - HOUR })];
     expect(clearedTrail([], NOW, [], calls).map(idOf)).toEqual(['c3', 'c1']);
+  });
+
+  // Fix round 1 (review 2792 F3, the coordinator's ruling): the server sends when a cleared call left the group (`clearedAt`,
+  // from `callClearedAt`), and the trail sorts, windows and dates a call by it; an older server omits it and the console's own
+  // reading stands.
+  it('a call the server dates by clearedAt sorts and windows by it; without it, the console\'s reading stands', () => {
+    const aged = call(1, { at: NOW - 8 * 86_400_000, clearedAt: NOW - 86_400_000 });
+    const lateOverturn = call(2, { at: NOW - 8 * 86_400_000, overturnedAt: NOW - HOUR, clearedAt: NOW - 86_400_000 });
+    expect(callClearedOn(aged)).toBe(NOW - 86_400_000);
+    expect(callClearedOn(lateOverturn)).toBe(NOW - 86_400_000);
+    expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], [aged]).map(idOf)).toEqual(['i1', 'c1']);
+    expect(callClearedOn(call(3, { seenAt: NOW - HOUR }))).toBe(NOW - HOUR);
+    expect(callClearedHow(aged)).toBe('aged');
+    expect(callClearedHow(lateOverturn)).toBe('aged');
+    expect(callClearedHow(call(4, { seenAt: NOW - HOUR, clearedAt: NOW - HOUR }))).toBe('seen');
   });
 
   // Fix round 1 (review 2792 F8): a cleared call says how it cleared, never a bare tick.

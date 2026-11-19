@@ -69,18 +69,22 @@ export type ClearedEntry =
   | { readonly kind: 'ask'; readonly ask: AskMarkRow; readonly at: number; readonly program: string | null }
   | { readonly kind: 'call'; readonly call: CallView; readonly at: number; readonly program: string };
 
-/** When a cleared call left the operator's group, as the wire tells it (D-8126): the operator's own Seen or Overturn, the earlier
- *  of the two; a call that aged out of the group carries neither, and reads at when it was made. */
+/** When a cleared call left the operator's group (D-8126): `clearedAt` as the server decided it (`callClearedAt`, review 2792 F3),
+ *  or, from an older server that omits it, the console's own reading: the operator's Seen or Overturn, the earlier of the two,
+ *  and for a call that aged out with neither, when it was made. */
 export function callClearedOn(c: CallView): number {
+  if (c.clearedAt !== undefined) return c.clearedAt;
   const acts = [c.seenAt, c.overturnedAt].filter((t): t is number => t !== null);
   return acts.length === 0 ? c.at : Math.min(...acts);
 }
 
-/** How a cleared call left the operator's group (review 2792 F8), by the same reading as `callClearedOn`: the operator's own
- *  act, the earlier of Overturn and Seen (Overturn at the same instant), or neither, when it aged out. */
+/** How a cleared call left the operator's group (review 2792 F8), by the same reading as `callClearedOn`: the act whose time is
+ *  the server's `clearedAt` (Overturn first at the same instant), else aged out; from an older server, the earlier of Overturn
+ *  and Seen, or neither, when it aged out. */
 export type CallClearedHow = 'seen' | 'overturned' | 'aged';
 export const CALL_CLEARED_WORD: Readonly<Record<CallClearedHow, string>> = { seen: 'seen', overturned: 'overturned', aged: 'aged out' };
 export function callClearedHow(c: CallView): CallClearedHow {
+  if (c.clearedAt !== undefined) return c.overturnedAt === c.clearedAt ? 'overturned' : c.seenAt === c.clearedAt ? 'seen' : 'aged';
   if (c.overturnedAt !== null && (c.seenAt === null || c.overturnedAt <= c.seenAt)) return 'overturned';
   return c.seenAt !== null ? 'seen' : 'aged';
 }
