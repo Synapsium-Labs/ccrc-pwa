@@ -64,6 +64,7 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | `pwa/src/docs/reader/policy.ts` | L1 | 4 | `readerMountPlan` gains `appearance: boolean` |
 | `pwa/test/reader-policy.test.ts` | — | 4 | The two `readerMountPlan` `.toEqual` rows gain the field |
 | `pwa/test/reader-bridge.test.ts` | — | 4 | Bridge rows, and the two `readerMountPlan` rows of "readerMountPlan is the one decision" |
+| `pwa/test/shadcn-alias.test.ts` | — | 4 | "nothing imports `@/`" becomes "exactly `assets.ts` imports `@/`", and its pattern catches a dynamic `import('@/…')` |
 | `pwa/test/docs-scans.test.ts` | — | 4 | `hostAppearance.ts` and `appearance.ts` join `READER_ADAPTERS`, and `adapterUseAllowed` gains the three lazy edges between the bridge and them |
 | `pwa/src/docs/ReaderFrame.tsx` | L4 | 5 | Seed, post-mount resend, follow, coalesce |
 | `pwa/test/reader-frame.test.tsx` | — | 5 | Frame rows |
@@ -187,7 +188,7 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 
 **Files:**
 - Create: `pwa/src/docs/reader/hostAppearance.ts`
-- Modify: `pwa/src/docs/reader/bridge.ts`, `pwa/src/docs/reader/assets.ts`, `pwa/src/docs/reader/policy.ts`, `pwa/test/reader-bridge.test.ts`, `pwa/test/reader-policy.test.ts`, `pwa/test/docs-scans.test.ts`
+- Modify: `pwa/src/docs/reader/bridge.ts`, `pwa/src/docs/reader/assets.ts`, `pwa/src/docs/reader/policy.ts`, `pwa/test/reader-bridge.test.ts`, `pwa/test/reader-policy.test.ts`, `pwa/test/docs-scans.test.ts`, `pwa/test/shadcn-alias.test.ts`
 
 **Interfaces:**
 - Consumes: Task 2's `readerAppearanceSupported`, `readerAppearanceOf`, `ReaderAppearanceOutcome`; Task 1's `APPEARANCE_CONTRACT`, `HostAdapters.appearance`, `FrameAssets.fonts`, `DocFrame.setAppearance`.
@@ -230,14 +231,15 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
     - `READER_ADAPTERS` becomes `['src/docs/reader/bridge', 'src/docs/reader/assets', 'src/docs/reader/hostAppearance', 'src/docs/reader/appearance']`;
     - `adapterUseAllowed(file, target, dynamic)` keeps its two arms and gains exactly three, each a static value import made inside the lazily loaded chunk: `bridge.ts` → `src/docs/reader/hostAppearance` (the read), `bridge.ts` → `src/docs/reader/appearance` (`READER_APPEARANCE_CONTRACTS`, for the support check), and `hostAppearance.ts` → `src/docs/reader/appearance` (`readerAppearanceOf`). Without them, the existing "M8.10" case reds `main-bundle:value-import` on the plan's own imports;
     - a new case in clause W8a plants, in a tree copy, a value import of `hostAppearance` and one of `appearance` in `src/docs/ReaderFrame.tsx`, and one of `appearance` in `src/docs/DocsHead.tsx`. Each answers `main-bundle:value-import`, and the unplanted tree answers none;
+  - **the font route's one importer:** `assets.ts` is the first file to import through the `@/` alias, which `shadcn-alias.test.ts` pins as unused ("nothing in the tree imports `@/` yet"). That case becomes: the files under `ui/src` and `pwa/src` that import `@/` are exactly `['pwa/src/docs/reader/assets.ts']`. Its pattern gains the dynamic form, `import\s*\(\s*'@\/`, beside `(?:from|import)\s+'@\/`. Planted in a tree copy, a second static importer and a dynamic `import('@/fonts/x.woff2?inline')` each red it;
   - **the key set:** the adapters' key set is the existing set plus `appearance`, exactly;
   - **only the verdict is passed:** the row first asserts that `parseAppearance` refuses `radius: '99px'`. Then, with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
-- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts`). Expected: FAIL on the new rows and the four changed `readerMountPlan` rows (two in each file) only. `docs-scans` stays green here: no source imports the new modules yet, and its planted case passes on a tree copy once `READER_ADAPTERS` names them.
+- [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts test/shadcn-alias.test.ts`). Expected: FAIL on the new rows and the four changed `readerMountPlan` rows (two in each file) only. `docs-scans` stays green here: no source imports the new modules yet, and its planted case passes on a tree copy once `READER_ADAPTERS` names them.
 - [ ] **Step 3: Implement.**
   - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer goes to `readerAppearanceSupported`, the one place that decides support.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
   - The lab path is decided by `readerMountPlan`, which gains `appearance: boolean`: `false` for `lab-draw`.
-- [ ] **Step 4: Run to green:** `test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts`. Expected: PASS, with `docs-scans`' "M8.10" case green over the three new edges.
+- [ ] **Step 4: Run to green:** `test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts test/shadcn-alias.test.ts`. Expected: PASS, with `docs-scans`' "M8.10" case green over the three new edges.
 - [ ] **Step 5: Commit**: `feat(docs): the reader bridge carries ccrc's appearance`.
 
 ### Task 5: The frame follows the host
