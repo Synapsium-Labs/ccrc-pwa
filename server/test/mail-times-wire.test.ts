@@ -1,9 +1,9 @@
-// Mid-turn mail PR 1 (Overlord wave 171, plan 2026-11-19-mid-turn-mail.md Task 1.1): the three delivery times
-// `mail_deliveries` has always stored, served on `MailSummary` so a reader can measure how long a mail waited and how
-// long it stayed unread. `deliveredAt` is when the lane last put the nudge into the recipient's pane (a replay re-dates
-// it), `ingestedAt` is the first `UserPromptSubmit` edge the mail sweep saw in the recipient's hook state after that
-// delivery, and `ackedAt` is when the recipient's ack committed. Each is optional and absent until written; a stored value that is not a positive whole number is answered
-// absent, never zero, because a time of zero would read as a real instant (`persistedInt`).
+// Mid-turn mail PR 1 (Overlord wave 171, plan 2026-11-19-mid-turn-mail.md Task 1.1): the three delivery times and the
+// replay count `mail_deliveries` has always stored, served on `MailSummary` so a reader can measure how long a mail
+// waited and how long it stayed unread, and tell a replayed mail apart. `MailSummary`'s docstring says what each time
+// means. Each is optional and absent until written; a stored value that is not the canonical spelling of a positive
+// whole number is answered absent, never zero, because a time of zero would read as a real instant. `replayCount` alone
+// may be zero, its column's default.
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -22,16 +22,18 @@ const TOKEN = 'f'.repeat(64);
 const DELIVERED = 1_800_000_000_111;
 const INGESTED = 1_800_000_000_222;
 const ACKED = 1_800_000_000_333;
+const REDELIVERED = 1_800_000_600_111;
 const TIMES = ['deliveredAt', 'ingestedAt', 'ackedAt'] as const;
 
-// `1.5` is stored REAL, `'soon'` TEXT, `-5` and `0` are not positive, and 2^60 is an INTEGER past
-// `Number.MAX_SAFE_INTEGER`, which node:sqlite would throw on if the column were read as a number.
+// `1.5` is stored REAL, `'soon'` TEXT, `-5` and `0` are not positive, 2^60 is an INTEGER past
+// `Number.MAX_SAFE_INTEGER`, which node:sqlite would throw on if the column were read as a number, and `'0x10'` stays
+// TEXT under INTEGER affinity, which `Number()` alone would read as 16.
 const BAD = [['a fraction', '1.5'], ['text', "'soon'"], ['a negative', '-5'], ['zero', '0'],
-             ['an unsafe integer', '1152921504606846976']] as const;
+             ['an unsafe integer', '1152921504606846976'], ['hexadecimal text', "'0x10'"]] as const;
 
 interface Fixture {
   s: CoordStore; home: string; runId: number;
-  queued: number; delivered: number; ingested: number; acked: number; ackedQueued: number;
+  queued: number; delivered: number; ingested: number; acked: number; ackedQueued: number; replayed: number;
   bad: Record<string, number>;
 }
 
@@ -63,14 +65,23 @@ const build = (): Fixture => {
   // Acked straight from the queue, never delivered: it has an ack time and nothing else.
   const ackedQueued = one();
   expect(s.markAcked(ackedQueued, ACKED)).toEqual({ ok: true, state: 'acked' });
+  // Delivered, ingested, then replayed once: the replay re-dates `deliveredAt` past `ingestedAt` and counts itself.
+  const replayed = one();
+  expect(s.markDelivered(replayed, DELIVERED).changed).toBe(true);
+  expect(s.markIngested(replayed, INGESTED).changed).toBe(true);
+  expect(s.markDelivered(replayed, REDELIVERED).changed).toBe(true);
+  expect(s.bumpReplayCount(replayed)).toEqual({ state: 'counted', replayCount: 1 });
   const bad: Record<string, number> = {};
   for (const [label, sql] of BAD) {
     const id = one();
     expect(s.markAcked(id, ACKED)).toEqual({ ok: true, state: 'acked' });
-    s.db.prepare(`UPDATE mail_deliveries SET deliveredAt = ${sql}, ingestedAt = ${sql}, ackedAt = ${sql} WHERE id = ?`).run(id);
+    // Zero is a valid replay count, so that row keeps its default and only its times are spoiled.
+    const replay = sql === '0' ? '' : `, replayCount = ${sql}`;
+    s.db.prepare(`UPDATE mail_deliveries SET deliveredAt = ${sql}, ingestedAt = ${sql}, ackedAt = ${sql}${replay} WHERE id = ?`)
+      .run(id);
     bad[label] = id;
   }
-  return { s, home, runId: r.id, queued, delivered, ingested, acked, ackedQueued, bad };
+  return { s, home, runId: r.id, queued, delivered, ingested, acked, ackedQueued, replayed, bad };
 };
 
 const byDelivery = (rows: readonly MailSummary[], id: number): MailSummary => {
@@ -126,7 +137,30 @@ describe('MailSummary carries the three delivery times (mid-turn mail PR 1)', ()
   }
 });
 
-describe('GET /api/mail serves the three times (the wire `ccrc-api mail list` reads)', () => {
+describe('MailSummary carries the replay count (mid-turn mail PR 1, fix round 1)', () => {
+  it('a row never replayed answers zero, queued, delivered or acked', () => {
+    const f = fixture();
+    const rows = f.s.mailForRecipient(TO);
+    for (const id of [f.queued, f.delivered, f.acked, f.ackedQueued]) expect(byDelivery(rows, id).replayCount).toBe(0);
+  });
+
+  it('a replayed row answers its count, and its deliveredAt is the replay, after its ingestedAt', () => {
+    const f = fixture();
+    const row = byDelivery(f.s.outstandingMailFor(TO), f.replayed);
+    expect(row.replayCount).toBe(1);
+    expect(timesOf(row)).toEqual({ deliveredAt: REDELIVERED, ingestedAt: INGESTED });
+    expect(byDelivery(f.s.mailForProgram('program-a', { all: true }), f.replayed).replayCount).toBe(1);
+  });
+
+  for (const [label] of BAD.filter(([l]) => l !== 'zero')) {
+    it(`a stored count that is ${label} is answered absent`, () => {
+      const f = fixture();
+      expect(byDelivery(f.s.mailForRecipient(TO), f.bad[label]!)).not.toHaveProperty('replayCount');
+    });
+  }
+});
+
+describe('GET /api/mail serves the three times and the replay count (the wire `ccrc-api mail list` reads)', () => {
   let app: FastifyInstance | undefined;
   afterEach(async () => { await app?.close(); app = undefined; });
 
@@ -152,5 +186,7 @@ describe('GET /api/mail serves the three times (the wire `ccrc-api mail list` re
     expect(timesOf(byDelivery(all, f.acked))).toEqual({ deliveredAt: DELIVERED, ingestedAt: INGESTED, ackedAt: ACKED });
     const prog = await list(app, 'program=program-a&all=1');
     expect(timesOf(byDelivery(prog, f.ackedQueued))).toEqual({ ackedAt: ACKED });
+    expect(byDelivery(prog, f.replayed).replayCount).toBe(1);
+    expect(byDelivery(prog, f.queued).replayCount).toBe(0);
   });
 });
