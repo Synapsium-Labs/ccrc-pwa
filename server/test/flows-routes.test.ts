@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import { skeletonFlowDoc, type FlowAnswer, type FlowDoc, type FlowsListAnswer } from '../../shared/flows.js';
+import { skeletonFlowDoc, type FlowAnswer, type FlowDoc, type FlowProgrammeRow, type FlowsListAnswer } from '../../shared/flows.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -180,9 +180,27 @@ describe('the Flows doors', () => {
     await app.close();
   });
 
+  it('lists the programmes on a flow, each where the run machine places it (wave 3a)', async () => {
+    const { app, coord } = await open();
+    const id = await create(app, { template: 'ccrc' });
+    await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
+    await app.inject({ method: 'PUT', url: '/api/flows/default', payload: { flowId: id } });
+    const r = coord.openRun({ program: 'programme-a', title: 'wave 1', project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'lane-a-project-a' });
+    const runId = (r as { id: number }).id;
+    coord.db.prepare("UPDATE runs SET state = 'dispatched' WHERE id = ?").run(runId);
+    coord.db.prepare("INSERT INTO programs (slug, title, createdAt, state, flowId, flowVersion) VALUES ('programme-b', 'Programme B', 1, 'active', ?, 1)").run(id);
+    const res = await app.inject({ method: 'GET', url: `/api/flows/${id}/programmes` });
+    expect(res.statusCode).toBe(200);
+    const rows = (res.json() as { programmes: FlowProgrammeRow[] }).programmes;
+    expect(rows.find((p) => p.slug === 'programme-a')).toMatchObject({ version: 1, position: { blockId: 'build', why: `run ${runId} is dispatched (wave 1 of 2)` } });
+    expect(rows.find((p) => p.slug === 'programme-b')?.position).toEqual({ blockId: null, why: 'before the first wave' });
+    expect((await app.inject({ method: 'GET', url: '/api/flows/99/programmes' })).statusCode).toBe(404);
+    await app.close();
+  });
+
   it('is session-gated when the gate is armed', async () => {
     const { app } = await open(true);
-    for (const [method, url] of [['GET', '/api/flows'], ['POST', '/api/flows'], ['PUT', '/api/flows/1/draft'], ['PUT', '/api/flows/default']] as const) {
+    for (const [method, url] of [['GET', '/api/flows'], ['POST', '/api/flows'], ['PUT', '/api/flows/1/draft'], ['PUT', '/api/flows/default'], ['GET', '/api/flows/1/programmes']] as const) {
       expect((await app.inject({ method, url, payload: method === 'GET' ? undefined : {} })).statusCode).toBe(401);
     }
     await app.close();

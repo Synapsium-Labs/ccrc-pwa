@@ -8,6 +8,7 @@
 // THE READ checks shape only (`parseFlowDoc`): a stored document it cannot read is `unreadable` with its
 // reason, never folded into absent or into an empty flow. A throw is `{ ok: false, detail }`.
 import type { DatabaseSync } from 'node:sqlite';
+import type { RunState } from '../../../shared/api.js';
 import { canonicalFlowJson, parseFlowDoc, type FlowDoc, type FlowParse, type FlowSource, type FlowSummary, type FlowVersionRow } from '../../../shared/flows.js';
 import { tx } from '../coord/tx.js';
 
@@ -131,4 +132,29 @@ export function readProgrammeFlowPin(db: DatabaseSync, slug: string): FlowPin | 
   const row = db.prepare('SELECT flowId, flowVersion FROM programs WHERE slug = ?').get(slug) as
     { flowId: number | null; flowVersion: number | null } | undefined;
   return row && row.flowId !== null && row.flowVersion !== null ? { flowId: row.flowId, version: row.flowVersion } : null;
+}
+
+// ── Wave 3a: the programmes on a flow, with the run facts a position is derived from ─────────────────────────────
+
+/** One programme that pins the flow, and the facts `position.ts#flowPositionOf` reads. */
+export interface FlowProgrammeFacts {
+  slug: string; title: string; version: number;
+  facts: { programmeState: string; work: { id: number; state: RunState; wave: number; waveOf: number } | null; reviewOpen: boolean };
+}
+
+/** Every programme pinning the flow, newest first. `terminalSql` is the store's one spelling of the terminal run states
+ *  (`store.ts#TERMINAL_RUN_STATES_SQL`), passed in as `portfolio.ts` takes it. Reads only. */
+export function flowProgrammes(db: DatabaseSync, flowId: number, terminalSql: string): FlowsRead<FlowProgrammeFacts[]> {
+  return guard(() => {
+    const rows = db.prepare('SELECT slug, title, state, flowVersion FROM programs WHERE flowId = ? ORDER BY createdAt DESC, slug')
+      .all(flowId) as unknown as { slug: string; title: string; state: string; flowVersion: number }[];
+    const newest = db.prepare(
+      "SELECT id, state, wave, waveOf FROM runs WHERE program = ? AND kind = 'work' ORDER BY wave DESC, id DESC LIMIT 1");
+    const review = db.prepare(`SELECT 1 FROM runs WHERE program = ? AND kind = 'review' AND state NOT IN ${terminalSql} LIMIT 1`);
+    return rows.map((r) => {
+      const w = newest.get(r.slug) as { id: number; state: RunState; wave: number; waveOf: number } | undefined;
+      return { slug: r.slug, title: r.title, version: r.flowVersion,
+        facts: { programmeState: r.state, work: w ?? null, reviewOpen: review.get(r.slug) !== undefined } };
+    });
+  });
 }
