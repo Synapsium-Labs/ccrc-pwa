@@ -205,6 +205,13 @@ the change does not reach): the `jq` calls per kind are unchanged from section 4
 subagent's inbox that only shows took 22.3 ms at the median and a refused ack 23.6 ms. The hook is unchanged in this
 round, so its growth stays +2.
 
+**The round's first fast run was red** on `78c96d821`, in four server shards, from one cause: CI's jq (1.7.1) rejects
+`reduce … as $x (…) as $new`, which this box's jq 1.8.1 accepts, so the module did not compile there and every case
+that runs it failed. The `reduce` is now in parentheses. Measured in a throwaway `jq:1.7.1` container: `HEAD`'s module
+gives that exact error, the fixed one compiles, and the matcher's answers on 44 commands are byte-identical under
+1.7.1 and 1.8.1. Slug `jq17-reduce-as`: the merge deny suite's jq `as` guard flags an `as` after a binary operator,
+not one after a `reduce` term, so nothing local caught it; extending that guard is for its owner.
+
 ## Where things stand
 
 ### Agreed

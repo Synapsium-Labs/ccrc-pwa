@@ -201,7 +201,7 @@ def mail_hold($a):
   | (if $sl[0] == $a.pairs then $sl[1:] | map(select(. != "")) else [] end) as $keys
   | [$v.l[] | (.[3] // $d) as $ld | {k: "\(.[0]).\($ld).\(.[2] | gsub(" "; "-")).\(.[1])", line: "\($a.now)\t\($a.sid)\t\(.[0])\t\(.[1])\t\($ld)\t\(.[2] | gsub(" "; "-"))\n"}
      | select(.k as $k | $keys | index($k) | not)]
-  | reduce .[] as $x ([]; if any(.[]; .k == $x.k) then . else . + [$x] end) as $new
+  | (reduce .[] as $x ([]; if any(.[]; .k == $x.k) then . else . + [$x] end)) as $new
   | (if $v.t == null then "" else $v.o end) as $o
   | [$o, ($v.t // ""), ($new | map(.line) | join("")),
      (if ($new | length) == 0 then "" else ([$a.pairs] + $keys + ($new | map(.k)) | join("\n")) + "\n" end)]
