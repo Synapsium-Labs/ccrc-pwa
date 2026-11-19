@@ -20,3 +20,78 @@ export type CacheReading =
 export declare function bareModelId(raw: string): string;
 export declare function parseCatalogueCache(json: unknown): CacheReading;
 export declare function newestCache(readings: readonly CacheReading[]): Extract<CacheReading, { format: 'current' }> | null;
+
+// ── the resolver and the aliases file (Task A2.2) ──
+export declare const ALIASES_VERSION: 1;
+export declare const CACHE_STALE_AFTER_MS: 604_800_000;
+
+/** A filled launch marker of this lane (Task A3.2): `id` already through `bareModelId`, `bornAt` the process start. */
+export interface Launch { class: ModelClass; id: string; bornAt: string }
+export interface Hold { at: string; model: string }
+
+export interface ResolveInput {
+  /** The lane's own cache files' readings (every file of the home, any format). */
+  own: readonly CacheReading[];
+  /** The newest-cache readings of every other home on the box: read for a row by id, never for a target. */
+  box: readonly CacheReading[];
+  launches: readonly Launch[];
+  /** The lane's aliases file as last written; null only when that file is absent. */
+  prior: Aliases | null;
+  /** The advance file's standing holds, with each `hold.model`. */
+  holds: Partial<Record<ModelClass, Hold>>;
+  /** The lane's Claude Code build, `X.Y.Z`; null when it cannot be read. */
+  laneVersion: string | null;
+  /** The home's saved effort levels, model id to level. */
+  saved: Readonly<Record<string, string>>;
+  nowMs: number;
+  /** True when the caller could not read the home's cache files at all: with no usable reading and nothing read, the
+   *  file's `cache` is `{none: 'unreadable'}`. Without it, no reading at all is `absent`, and only invalid readings
+   *  are `invalid`. */
+  ownUnreadable?: boolean;
+}
+
+export type AliasesCache =
+  | { fetchedAt: string | null; format: 'current' | 'older' }
+  | { none: 'absent' | 'unreadable' | 'invalid' };
+
+export interface AliasClass {
+  id: string | null;
+  source: 'cache' | 'use' | null;
+  evidenceAt: string | null;
+  idSince: string | null;
+  /** The newest own cache's target for the class, even when the lane's build cannot launch it: what the cache says.
+   *  A reader labels from `id`, never from this. */
+  cacheTarget: string | null;
+  seenId: string | null;
+  seenAt: string | null;
+  unobserved: boolean;
+  unlaunchable: { needs: string; laneVersion: string | null } | null;
+  row: AliasRow | null;
+  rowFrom: 'own' | 'box' | null;
+  heldRow: AliasRow | null;
+  orphaned: { id: string; level: string } | null;
+  [key: string]: unknown;
+}
+
+/** `cache.fetchedAt` is null only for an older-format cache whose fetch time could not be read (a departure from the
+ *  plan's `string`, which that case needs). */
+export interface Aliases {
+  v: 1;
+  at: string;
+  cache: AliasesCache;
+  stale: boolean;
+  classes: Record<ModelClass, AliasClass>;
+  [key: string]: unknown;
+}
+
+export type AliasSourceCause = 'alias-source-absent' | 'alias-cache-stale';
+
+export declare class AliasesInvalid extends Error {
+  readonly field: string;
+  constructor(field: string, message: string);
+}
+
+export declare function resolveAliases(input: ResolveInput): Aliases;
+export declare function parseAliases(json: unknown): Aliases;
+export declare function serializeAliases(a: Aliases): string;
+export declare function aliasesSourceCause(a: Aliases): AliasSourceCause | null;
