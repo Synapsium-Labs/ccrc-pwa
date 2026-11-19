@@ -13688,9 +13688,11 @@ export const APPROVAL_REFUSALS_LOG = 'approval-refusals.log';
  *  `lapse`      the window passed with no ruling, so the operator was pushed (an ask or approval held for a
  *               coordinator that the coordinator never answered, whoever acted after);
  *  `big-call`   a big call the coordinator recorded and carried on from (D-8126): routine and block calls are never lines.
+ *  `parked`     (approvals PR 3) an approval whose window ended unruled and was parked, with its coordinator: on Waiting on
+ *               you, ruled later by its coordinator or the operator. A ruling moved onto the park keeps its allow or deny.
  * A row the operator answered while it was still held is not a line, and neither is a row minted released.
  */
-export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call'] as const;
+export const DIGEST_LINE_KINDS = ['answer', 'allow', 'deny', 'hand-over', 'lapse', 'big-call', 'parked'] as const;
 export type DigestLineKind = (typeof DIGEST_LINE_KINDS)[number];
 
 /** Which table a digest line came from, and so which id space `id` is in. */

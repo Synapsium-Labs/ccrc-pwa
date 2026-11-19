@@ -174,7 +174,7 @@ const OPERATOR = (path: ApprovalCensusPath): MintedPath => ({ path, authority: '
 /** Where a minted approvals row went (Table 2a, and the coordinator's ruling on review 2638 F3): ruled by the claimant
  *  (path 0); still held; minted released (path 3); handed over by the claimant (`declined`); past the hook's ceiling
  *  with no principal (`stale`, which reached the operator: the menu stood and only they could answer); answered by the
- *  operator inside the claimant's window (`operator-first`); or a lapse: released at `notifyAt`, or answered by the
+ *  operator inside the claimant's window (`operator-first`); parked past its window (`parked`, approvals PR 3); or a lapse: released at `notifyAt`, or answered by the
  *  operator after it, `escalate` (path 5) when the claimant could never allow it and `lapsed` (path 4) otherwise. A
  *  state this build does not know is `unmeasured` (`unknown-state`): it reached nobody the census can name, and is
  *  never in M38's numerator. */
@@ -183,6 +183,8 @@ export function censusPathOfApproval(r: CensusApprovalFacts): MintedPath {
   switch (r.state) {
     case 'allowed': case 'denied': return { path: 'ruled', authority: 'coordinator', reachedOperator: false };
     case 'held': return { path: 'held', authority: 'none', reachedOperator: false };
+    // Approvals PR 3: parked past its window, on Waiting on you; whoever rules it later, it reached the operator.
+    case 'parked': return OPERATOR('parked');
     case 'declined': case 'released': case 'operator': case 'stale':
       if (r.releaseReason !== null) return OPERATOR('released-at-mint');
       if (r.state === 'declined') return OPERATOR('declined');
@@ -210,6 +212,8 @@ export interface CensusApprovalRow extends CensusApprovalFacts {
   readonly id: number; readonly childId: string; readonly agentId: string; readonly tool: string;
   readonly inputRedacted: string | null; readonly askAt: number; readonly programme: string | null;
   readonly denyCurrent: boolean | null; readonly commandWords: readonly string[] | null; readonly literalInRoot: boolean | null;
+  /** Approvals PR 3: the park's word stored at mint, or null (absent on a source that predates it). */
+  readonly parkWord?: string | null;
 }
 export interface CensusOwnRow {
   readonly id: number; readonly sessionId: string; readonly path: ApprovalCensusRowPath; readonly why: ApprovalCensusUnmeasured | null;
@@ -283,7 +287,8 @@ export function approvalCensusOf(x: CensusReadInput): ApprovalCensusWire {
   const byPath: Record<string, number> = {}; const byState: Record<string, number> = {}; const byReleaseReason: Record<string, number> = {};
   const byClass: Record<string, number> = {}; const byThread: Record<string, number> = {}; const byDenyCurrent: Record<string, number> = {};
   const byProgramme: Record<string, number> = {}; const byAuthority: Record<string, number> = {}; const byRoute: Record<string, number> = {};
-  const byUnmeasured: Record<string, number> = {};
+  const byUnmeasured: Record<string, number> = {}; const byPark: Record<string, number> = {};
+  for (const a of x.approvals) if (typeof a.parkWord === 'string') bump(byPark, a.parkWord);
   const days = new Map<string, { reached: number; byPath: Record<string, number> }>();
   let reached = 0; let reads = 0; let unmeasured = 0; let programmeReached = 0; let rootReached = 0;
   for (const r of rows) {
@@ -314,7 +319,7 @@ export function approvalCensusOf(x: CensusReadInput): ApprovalCensusWire {
   return {
     ok: true, days: x.days, fromMs: x.fromMs, toMs: x.toMs, total: rows.length, reachedOperator: reached,
     unmeasured, byUnmeasured,
-    byPath, byState, byReleaseReason, byClass, byThread, byDenyCurrent, byProgramme, byAuthority, byRoute, readPrompts: reads,
+    byPath, byState, byReleaseReason, byClass, byThread, byDenyCurrent, byProgramme, byAuthority, byRoute, byPark, readPrompts: reads,
     m38: {
       programmeDays, programmeReached, rootReached,
       perProgrammeDay: programmeDays === 0 ? null : programmeReached / programmeDays,
