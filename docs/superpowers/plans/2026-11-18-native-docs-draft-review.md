@@ -92,7 +92,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
   - `admitCreate({ size, live, storeBytes, replacing }): { ok: true } | { ok: false; why: 'too-large' | 'store-full' }` — order `too-large`, `store-full` (live count without the replaced share, bytes net of it). `auth-off` is never decided here: the account gate is its one writer;
   - `projectList(entries, tombstones, { armed, signedIn, origin }): ReviewShareWire[]` — `link` is `${origin}/review#${token}` only when both flags hold, else `null`.
 
-- [ ] **Step 1: Write the failing tests**, one `it` per row: `expired` at exactly `REVIEW_IDLE_MS` after `idleSince`, live 1 ms before; a pinned share with `idleSince` 60 days ago and `firstSharedAt` 10 days ago is live; pinned at 30 days old is `retention`; `commitVerdict` is `committed` for a changed blob and for `null` to a blob, `keep` for an equal blob, `unmeasured` for a null tree, for a tree served at another ref, and for a missing entry, and for a same-path entry in another section; `viewDue` false at 59 999 ms and true at 60 000 ms; `admitCreate` gives `too-large` before `store-full`, refuses the 65th live share, admits a re-share when the store is exactly full; `projectList` gives `link: null` dark and signed out, and `https://h.example/review#<43 chars>` when both hold.
+- [ ] **Step 1: Write the failing tests**, one `it` per row: `expired` at exactly `REVIEW_IDLE_MS` after `idleSince`, live 1 ms before; a pinned share with `idleSince` 60 days ago and `firstSharedAt` 10 days ago is live; pinned at 30 days old is `retention`; `commitVerdict` is `committed` for a changed blob and for `null` to a blob, `keep` for an equal blob, `unmeasured` for a null tree, for a tree served at another ref, and for a missing entry, and for a same-path entry in another section; `viewDue` false at 59 999 ms and true at 60 000 ms; `admitCreate` gives `too-large` before `store-full`, refuses the 65th live share, refuses a new share whose size would take `storeBytes` one byte past `REVIEW_MAX_STORE_BYTES` and admits one that lands exactly on it, admits a re-share when the store is exactly full; `projectList` gives `link: null` dark and signed out, and `https://h.example/review#<43 chars>` when both hold.
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/review-policy.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** both files.
 - [ ] **Step 4: Run** it and `test/rings`. Expected: `rings/totality.test.ts` FAILS first, naming `server/src/review/policy.ts` and `ports.ts` as reached by no row of the ring-context table (the new files are its planted control); add `review/**` to the C9 Docs row's server column of `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` and any rows the other rings suites ask for, then PASS (F10).
@@ -114,7 +114,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
   - `ReviewFs` is the small set of file operations the store uses (`open`, `write`, `fsync`, `rename`, `unlink`, `readdir`, `readFile`, `stat`), so a test can record their order or fail one of them; `nodeReviewFs` is the real one.
 - At open: create the directory 0700 if absent; remove temporary files older than 60 s and every bytes file no index entry names; read every index file once; finish any removal whose tombstone exists beside its index entry, keeping the tombstone's reason; remove with `lost` any index entry whose bytes file is missing.
 
-- [ ] **Step 1: Write the failing tests:** `put` then `byToken` returns the entry and `readBytes` gives identical bytes (SHA-256 compared); files 0600, directory 0700; no file name contains the token; a second `put` keeps the token, sets version 2 and `idleSince`; **`concurrent re-share`**: two `put` calls started together end at version 3, the index naming `v3` and `v3`'s bytes matching the second call; **`revoke during an open read`**: `markViewed(h, rev, now)` queued after `remove(h, rev, …)` answers `stale`, and a store re-opened from the same directory holds no entry for `h`; **`crash before the index rename`**: with `v2` bytes on disk and the index still naming `v1`, `open` serves `v1` and deletes `v2`; **`expiry is terminal`**: on a share whose `idleSince` is 7 days old and not yet swept, `setPinned` answers `expired` and removes it, and `put` for its source answers `replacedExpired: true` with a new token and version 1 while the old token finds nothing; **`concurrent create at the cap`**: with 63 live shares, two `put` calls for new sources started together admit exactly one and refuse the other `store-full`; a temporary file 61 s old is gone after `open`, one 10 s old stays; a directory at mode 000 gives `store-unreadable`; **Purge and durability (F6)**: after a re-share only `v2`'s bytes file exists; a recording `ReviewFs` sees `remove` write and `fsync` the tombstone, then unlink the index, then `fsync` the directory, then unlink the bytes, then `fsync` the directory, in that order; a `ReviewFs` failing the index unlink after the tombstone is written leaves a state that the next `open` finishes, with the tombstone's reason kept; an index entry whose bytes file is missing is removed `lost` at `open`, and its link finds nothing; the tombstone holds no 43-character token.
+- [ ] **Step 1: Write the failing tests:** `put` then `byToken` returns the entry and `readBytes` gives identical bytes (SHA-256 compared); files 0600, directory 0700; no file name contains the token; a second `put` keeps the token, sets version 2 and `idleSince`; **`concurrent re-share`**: two `put` calls started together end at version 3, the index naming `v3` and `v3`'s bytes matching the second call; **`revoke during an open read`**: `markViewed(h, rev, now)` queued after `remove(h, rev, …)` answers `stale`, and a store re-opened from the same directory holds no entry for `h`; **`crash before the index rename`**: a re-share through a `ReviewFs` that fails the index rename leaves `v2`'s bytes on disk and the index naming `v1`, so a fresh `open` serves `v1` and deletes `v2`; a recording `ReviewFs` sees `put` rename the bytes before it writes the index; **`open while a removal is held`**: with `remove` paused inside a recording `ReviewFs` at its tombstone write, `byToken` already answers null; **tombstone purge**: `purgeTombstones` deletes a tombstone 7 days old and keeps one 6 days old; **`expiry is terminal`**: on a share whose `idleSince` is 7 days old and not yet swept, `setPinned` answers `expired` and removes it, and `put` for its source answers `replacedExpired: true` with a new token and version 1 while the old token finds nothing; **`concurrent create at the cap`**: with 63 live shares, two `put` calls for new sources started together admit exactly one and refuse the other `store-full`; a temporary file 61 s old is gone after `open`, one 10 s old stays; a directory at mode 000 gives `store-unreadable`; **Purge and durability (F6)**: after a re-share only `v2`'s bytes file exists; a recording `ReviewFs` sees `remove` write and `fsync` the tombstone, then unlink the index, then `fsync` the directory, then unlink the bytes, then `fsync` the directory, in that order; a `ReviewFs` failing the index unlink after the tombstone is written leaves a state that the next `open` finishes, with the tombstone's reason kept; an index entry whose bytes file is missing is removed `lost` at `open`, and its link finds nothing; the tombstone holds no 43-character token.
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/review-store.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** `store.ts`.
 - [ ] **Step 4: Run** it, `test/single-definition` and `test/rings`. Expected: PASS.
@@ -150,7 +150,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
   - `REVIEW_MARKER_HEADER = 'x-ccrc-review'` with value `'1'` (L0, `shared/docsReview.ts`, which R2's page imports), checked before any token lookup;
   - `POST /api/review/open` body `{ token }`, `bodyLimit` `REVIEW_OPEN_BODY_BYTES` — 200 `application/octet-stream`, `Content-Disposition: attachment`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and `x-ccrc-review-shared-at`, `x-ccrc-review-version`, `x-ccrc-review-idle-days`; otherwise 404 `{"ok":false,"error":"not-found"}` with the same four headers; 429 `busy` past `REVIEW_OPEN_STREAMS_PER_SHARE` sends of one share or `REVIEW_OPEN_STREAMS` in all; the bytes are piped from `openBytes`, the slot is released on the reply's `close` event (finish or abort), and a send still running `REVIEW_SEND_DEADLINE_MS` after it started is destroyed; no rate-limit config.
 
-- [ ] **Step 1: Write the failing route tests** (`buildServer` on a fixture HOME, armed and dark, the store seeded through `put`): open with the token is 200, byte-identical to the seeded bytes, with each header; **M-X3.1**: unknown, 42-character, revoked and expired tokens, a request without the marker header, a 257-byte body, malformed JSON and a `text/plain` body all give byte-identical 404s (status, headers less `date`, body), and the marker-less, oversize and malformed ones make zero store lookups (a store whose `byToken` counts calls); these cases run on the real `buildServer`, armed with no cookie and dark; open sets `lastViewedAt` and a second open 30 s later does not rewrite it; `remove` through the store then open is 404 with no tick between; open behaves the same with a cookie and with the box token; open makes zero `runCcd` calls (a `runCcd` that throws). **Busy rows**: with two sends of share A held open, a third open of A is 429 `busy` while an open of share B is 200; aborting one held send lets the next open of A through (the slot is released on close); a reader that stops reading is destroyed at `REVIEW_SEND_DEADLINE_MS` (fake timers) and its slot released; with 16 sends held across eight shares, a ninth share's open is 429. **Revoke during a send**: a send of version 1 started before `remove` completes with version 1's bytes exactly, and the next open is the one 404.
+- [ ] **Step 1: Write the failing route tests** (`buildServer` on a fixture HOME, armed and dark, the store seeded through `put`): open with the token is 200, byte-identical to the seeded bytes, with each header; **M-X3.1**: unknown, 42-character, revoked and expired tokens, a request without the marker header, a 257-byte body, malformed JSON and a `text/plain` body all give byte-identical 404s (status, headers less `date`, body), and the marker-less, oversize and malformed ones make zero store lookups (a store whose `byToken` counts calls); these cases run on the real `buildServer`, armed with no cookie and dark; open sets `lastViewedAt` and a second open 30 s later does not rewrite it; `remove` through the store then open is 404 with no tick between; open behaves the same with a cookie and with the box token; open makes zero `runCcd` calls (a `runCcd` that throws). **Grammar first (T5)**: a 257-byte body and a 44-character token each answer the one 404 with zero `ReviewFs` calls and zero `byToken` calls. **Busy rows**: with two sends of share A held open, a third open of A is 429 `busy` while an open of share B is 200; aborting one held send lets the next open of A through (the slot is released on close); a reader that stops reading is destroyed at `REVIEW_SEND_DEADLINE_MS` (fake timers) and its slot released; with 16 sends held across eight shares, a ninth share's open is 429. **Revoke during a send**: a send of version 1 started before `remove` completes with version 1's bytes exactly, and the next open is the one 404.
 - [ ] **Step 2: Write the census and gate tests**: `REVIEW_DOORS` equals the one registration; none consults the box token; only the open door is `EXEMPT`, with "reason 9"; the never-read scan finds none of `req.cookies`, `checkMailToken`, `requireMailToken`, `runCcd`, `ReviewTreeReader` or `docs.readers` in the open door's handler, with a planted control for each; `auth-gate.test.ts`'s class list has nine entries and `gate.ts`'s number words read nine.
 - [ ] **Step 3: Write M-X3.7**, `review-backup.test.ts`: it reads every site that copies into a backup, `ccd/ccrc#_upd_backup` (whose own body copies `coord.db` and the Overlord's store), `#_upd_backup_set`, `#cmd_backup`, `deploy/deploy.sh`'s backup lines and the member list of `deploy/coordination-snapshot.mjs`, and fails if any copied path is `~/.ccrc/review-shares`, `~/.ccrc` itself, `$HOME`, or a glob that covers any of them, with a planted control in each of the five sites (F11).
 - [ ] **Step 4: Run** `ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/review-backup.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL on each new case.
@@ -182,7 +182,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
 - Modify: `server/src/review/routes.ts` (`GET /review` sends the built `review.html` with the spec §3.5 policy header, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`; `GET /review.html` always 404), `server/src/auth/gate.ts` (`GET /review` joins class 9), `server/test/auth-gate.test.ts`, `box-token-census.test.ts` (`REVIEW_DOORS` three: R1.5's door, the page and `/review.html`); `pwa/src/lib/sw-denylist.ts` (own list gains `/^\/review(\/|$)/`), `pwa/test/sw-denylist.test.ts`
 - Test: `server/test/review-routes.test.ts`
 
-- [ ] **Step 1: Write the failing tests:** the `GET /review` CSP header equals the spec string exactly, with no `'unsafe-inline'` in `script-src` and no `allow-` token; the route answers the same bytes with and without a cookie, armed and dark; `GET /review.html` is 404 dark and never 200 armed; **M-X3.12**: `swDenylist(undefined)` matches `/review` and `/review/` and not `/reviews`.
+- [ ] **Step 1: Write the failing tests:** the `GET /review` CSP header equals the spec string exactly, with no `'unsafe-inline'` in `script-src` and no `allow-` token; it also carries `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff` and `X-Frame-Options: DENY`, one case each; the route answers the same bytes with and without a cookie, armed and dark; `GET /review.html` is 404 dark and never 200 armed; **M-X3.12**: `swDenylist(undefined)` matches `/review` and `/review/` and not `/reviews`.
 - [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/auth-gate.test.ts test/box-token-census.test.ts` and `cd ../pwa && ccrc test -- ./node_modules/.bin/vitest run test/sw-denylist.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the two routes and the denylist entry.
 - [ ] **Step 4: Run** them. Expected: PASS.
@@ -220,7 +220,7 @@ R3 is the first release that can make a link, so it follows R2: the page and its
   - `GET /api/review/shares?project=&section=&path=` (each optional; all absent lists every share) — `{ ok: true; shares }`, 400 `bad-query`;
   - `POST /api/review/shares/:id/pin` body `{ pinned: boolean }`; `POST /api/review/shares/:id/revoke` — `{ ok: true; share }` or 404 `unknown-share`.
 
-- [ ] **Step 1: Write the failing tests** (real `buildServer`): create dark answers exactly what the account gate answers for `auth-off` (its status and body, measured, not restated); create armed without a session is 401; create armed and signed in gives a share whose `link` is `https://<origin>/review#<43 chars>`, and opening it through R1's door gives the uploaded bytes; the list on a dark gate, over shares made armed, gives every `link` as `null`; a snapshot of `DOCS_EXPORT_MAX_BYTES + 1` bytes is 413; the 65th live share is 409; `REVIEW_DOORS` equals the seven registrations and none of the four is `EXEMPT`.
+- [ ] **Step 1: Write the failing tests** (real `buildServer`): create dark answers exactly what the account gate answers for `auth-off` (its status and body, measured, not restated); create armed without a session is 401; create armed and signed in gives a share whose `link` is `https://<origin>/review#<43 chars>`, and opening it through R1's door gives the uploaded bytes; the list on a dark gate, over shares made armed, gives every `link` as `null`; a snapshot of `DOCS_EXPORT_MAX_BYTES + 1` bytes is 413; the 65th live share is 409; `REVIEW_DOORS` equals the seven registrations and none of the four is `EXEMPT`; the list with `section=programs` or a path holding `..` is 400 `bad-query`; pin and revoke of an unknown id are 404 `unknown-share`.
 - [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the four doors.
 - [ ] **Step 4: Run** them. Expected: PASS.
@@ -312,68 +312,75 @@ The operator adopted comments from signed-in readers only; spec §3.6 and its th
 
 ## Mutation rows
 
-Each row is measured red and then restored from a saved copy, with the failing count recorded in the run's Results. M-X3.1 to M-X3.15 are the spec's §7 rows; the rest guard this plan's interfaces.
+Each row is measured red and then restored from a saved copy, with the failing count recorded in the run's Results. M-X3.1 to M-X3.16 are the spec's §7 rows; the rest guard this plan's interfaces. Rows are numbered contiguously within each wave, in task order, so no number is skipped: fix round 1 of review 2669 renumbered them after comments moved to R4 and the owner doors to R3 left gaps (F15).
 
 | Id | File | Mutation | Must red |
 |---|---|---|---|
 | NDR-X3-R1-M1 | `shared/docsReview.ts` | `REVIEW_MAX_LIVE = 65` | `review-shared` (M-X3.9) |
-| NDR-X3-R1-M126 | `shared/docsReview.ts` | `isReviewSource` checks `head` with its own 40-hex pattern | `review-shared` SHA-256 row (F16) |
-| NDR-X3-R1-M2 | `review/policy.ts` | `expiryOf` reads `sharedAt`, not `idleSince` | `review-policy` (M-X3.4) |
-| NDR-X3-R1-M3 | `review/policy.ts` | pinned skips retention | `review-policy` pinned 30-day row (M-X3.4) |
-| NDR-X3-R1-M4 | `review/policy.ts` | `commitVerdict` compares `fp` | `review-policy` blob rows (M-X3.5) |
-| NDR-X3-R1-M5 | `review/policy.ts` | another served ref is not `unmeasured` | `review-policy`, `review-sweep` served-ref row (M-X3.5) |
-| NDR-X3-R1-M6 | `review/policy.ts` | `unmeasured` answers `committed` | `review-policy`, `review-sweep` (M-X3.5) |
-| NDR-X3-R3-M101 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
-| NDR-X3-R3-M102 | `review/routes.ts` | the create handler skips the account gate | `review-routes` dark create (M-X3.8) |
-| NDR-X3-R1-M103 | `review/routes.ts` | the marker check moved after the token lookup | `review-routes` marker-less lookup count (M-X3.1) |
-| NDR-X3-R1-M104 | `review/routes.ts` | the plugin's error handler removed, so the server's default answers a bad body | `review-routes` oversize and malformed rows (M-X3.1) |
-| NDR-X3-R1-M11 | `review/store.ts` | `markViewed` skips the version re-read | `review-store` revoke-during-read (M-X3.2) |
-| NDR-X3-R1-M12 | `review/store.ts` | `remove` deletes from memory last | `review-routes` revoke-then-open (M-X3.2) |
-| NDR-X3-R1-M13 | `review/store.ts` | the index written before the bytes | `review-store` crash row |
-| NDR-X3-R1-M14 | `review/store.ts` | boot keeps unreferenced bytes | `review-store` crash row |
-| NDR-X3-R1-M15 | `review/store.ts` | the token written into the tombstone | `review-store` |
-| NDR-X3-R1-M114 | `review/store.ts` | `put` leaves the superseded version on disk | `review-store` purge row (F6) |
-| NDR-X3-R1-M115 | `review/store.ts` | `remove` unlinks the bytes before the index | `review-store` order row (F6) |
-| NDR-X3-R1-M116 | `review/store.ts` | no directory `fsync` after the index unlink | `review-store` order row (F6) |
-| NDR-X3-R1-M117 | `review/store.ts` | the tombstone written after the index unlink | `review-store` order and interrupted-removal rows (F6) |
-| NDR-X3-R1-M118 | `review/store.ts` | boot keeps an index entry whose bytes file is missing | `review-store` lost row (F6) |
-| NDR-X3-R1-M105 | `review/store.ts` | `put` keeps the token of an expired, unswept share | `review-store` expiry-is-terminal row (F3) |
-| NDR-X3-R1-M106 | `review/store.ts` | `setPinned` skips `expiryOf` | `review-store` expiry-is-terminal row (F3) |
-| NDR-X3-R1-M107 | `review/store.ts` | `admitCreate` run before the queue | `review-store` concurrent-create row (F3) |
-| NDR-X3-R1-M108 | `review/store.ts` | `setPinned` does not bump `rev` | `review-sweep` pin-race row (F3) |
-| NDR-X3-R1-M16 | `review/sweep.ts` | one `tree` call per share, not per ref | `review-sweep` |
-| NDR-X3-R1-M17 | `review/sweep.ts` | reads `refs/heads/<branch>` | `review-sweep` served-ref row (M-X3.5) |
-| NDR-X3-R1-M18 | `review/routes.ts` | open skips `expiryOf` | `review-routes` expired 404 (M-X3.3) |
-| NDR-X3-R1-M19 | `review/routes.ts` | revoked answers 410 | `review-routes` identical 404 (M-X3.1) |
-| NDR-X3-R1-M20 | `review/routes.ts` | drop each of the four headers, one row each | `review-routes` (M-X3.11) |
-| NDR-X3-R1-M21 | `review/routes.ts` | the open handler calls the tree reader | `box-token-census` never-read scan (M-X3.6) |
-| NDR-X3-R1-M22 | `review/routes.ts` | the per-share limit removed | `review-routes` busy rows (F5) |
-| NDR-X3-R1-M111 | `review/routes.ts` | the slot released on `finish` only, not on `close` | `review-routes` abort row (F5) |
-| NDR-X3-R1-M112 | `review/routes.ts` | the send deadline removed | `review-routes` stalled-reader row (F5) |
-| NDR-X3-R1-M113 | `review/routes.ts` | the bytes sent as one buffer from `readBytes` | `review-routes` revoke-during-send row: the in-flight send's bytes stay the old version (F5) |
-| NDR-X3-R1-M23 | `auth/gate.ts` | the create door added to `EXEMPT` | `auth-gate`, `box-token-census` |
-| NDR-X3-R1-M24 | `ccd/ccrc` | `_upd_backup`'s body copies `~/.ccrc` whole | `review-backup` (M-X3.7, F11) |
-| NDR-X3-R1-M125 | `deploy/coordination-snapshot.mjs` | its member list gains `review-shares` | `review-backup` (M-X3.7, F11) |
-| NDR-X3-R3-M1 | `review/shareForReview.ts` | offered on a committed leaf | `docs-review-share` |
-| NDR-X3-R3-M2 | `review/ReviewConfirm.tsx` | upload before the credential check | `docs-review-share` (M-X3.14) |
-| NDR-X3-R3-M3 | `review/shareForReview.ts` | scan the document's source text, not the built export | `docs-review-share` stylesheet and SVG rows (M-X3.14, F7) |
-| NDR-X3-R3-M119 | `review/shareForReview.ts` | cut every `data:` payload instead of decoding the non-raster ones | `docs-review-share` stylesheet, SVG and font rows (F7) |
-| NDR-X3-R3-M120 | `review/shareForReview.ts` | decode raster payloads as text too | `docs-review-share` PNG row (F7) |
-| NDR-X3-R3-M4 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
-| NDR-X3-R3-M121 | `export/buildExport.tsx` | `links` filled from the Markdown source, not the built bytes | `docs-export` links row (F8) |
-| NDR-X3-R3-M122 | `export/buildExport.tsx` | a Markdown export's `inlined` left empty | `docs-export` new-fields row (F8) |
-| NDR-X3-R3-M5 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
-| NDR-X3-R3-M109 | `review/ReviewRows.tsx` | Re-share uploads without opening `ReviewConfirm` | `docs-review-owner` re-share hold row (F2) |
-| NDR-X3-R2-M1 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
-| NDR-X3-R2-M2 | `src/review/main.ts` | post the token on load | `review-page` (M-X3.10) |
-| NDR-X3-R2-M110 | `src/review/main.ts` | keep the token in `sessionStorage` for a reload | `review-page` storage row (F4) |
-| NDR-X3-R2-M3 | `src/review/main.ts` | `sandbox="allow-scripts"` | `review-page`, browser script row (M-X3.10) |
-| NDR-X3-R2-M4 | `review/routes.ts` | `script-src 'self' 'unsafe-inline'` | `review-routes` page CSP row (M-X3.10) |
-| NDR-X3-R2-M5 | `vite.config.ts` | drop `review.html` from `globIgnores` | `browser-dist` precache row, browser installed-PWA row (M-X3.12) |
-| NDR-X3-R2-M6 | `sw-denylist.ts` | drop the `/review` entry | `sw-denylist` (M-X3.12) |
-| NDR-X3-R2-M7 | `review/routes.ts` | `GET /review.html` serves the file | `review-routes` (M-X3.12) |
-| NDR-X3-R2-M123 | `reader-lab-scans.test.ts` | the review page's allowance widened to `pwa/src/review/` | the planted iframe in `pwa/src/review/other.ts` stays green, so the planted control reds the widening (F10) |
-| NDR-X3-R1-M124 | architecture spec | `review/**` dropped from the C9 row | `rings/totality.test.ts` (F10) |
+| NDR-X3-R1-M2 | `review/policy.ts` | the store-bytes check dropped from `admitCreate` | `review-policy` 256 MiB row (M-X3.9, F15) |
+| NDR-X3-R1-M3 | `review/routes.ts` | the token grammar checked after the store lookup | `review-routes` grammar-first row (T5, F15) |
+| NDR-X3-R1-M4 | `review/routes.ts` | the read door's `bodyLimit` raised to 1 MiB | `review-routes` 257-byte row (T5, F15) |
+| NDR-X3-R1-M5 | `review/store.ts` | `purgeTombstones` keeps tombstones forever | `review-store` purge row (F15) |
+| NDR-X3-R1-M6 | `shared/docsReview.ts` | `isReviewSource` checks `head` with its own 40-hex pattern | `review-shared` SHA-256 row (F16) |
+| NDR-X3-R1-M7 | `review/policy.ts` | `expiryOf` reads `sharedAt`, not `idleSince` | `review-policy` (M-X3.4) |
+| NDR-X3-R1-M8 | `review/policy.ts` | pinned skips retention | `review-policy` pinned 30-day row (M-X3.4) |
+| NDR-X3-R1-M9 | `review/policy.ts` | `commitVerdict` compares `fp` | `review-policy` blob rows (M-X3.5) |
+| NDR-X3-R1-M10 | `review/policy.ts` | another served ref is not `unmeasured` | `review-policy`, `review-sweep` served-ref row (M-X3.5) |
+| NDR-X3-R1-M11 | `review/policy.ts` | `unmeasured` answers `committed` | `review-policy`, `review-sweep` (M-X3.5) |
+| NDR-X3-R1-M12 | `review/routes.ts` | the marker check moved after the token lookup | `review-routes` marker-less lookup count (M-X3.1) |
+| NDR-X3-R1-M13 | `review/routes.ts` | the plugin's error handler removed, so the server's default answers a bad body | `review-routes` oversize and malformed rows (M-X3.1) |
+| NDR-X3-R1-M14 | `review/store.ts` | `markViewed` skips the revision re-read | `review-store` revoke-during-read (M-X3.2) |
+| NDR-X3-R1-M15 | `review/store.ts` | `remove` takes the entry out of memory last | `review-store` open-while-a-removal-is-held row (M-X3.2, F15) |
+| NDR-X3-R1-M16 | `review/store.ts` | `put` writes the index before it renames the bytes | `review-store` crash row, driven by the failing and recording `ReviewFs` (F15) |
+| NDR-X3-R1-M17 | `review/store.ts` | boot keeps unreferenced bytes | `review-store` crash row |
+| NDR-X3-R1-M18 | `review/store.ts` | the token written into the tombstone | `review-store` |
+| NDR-X3-R1-M19 | `review/store.ts` | `put` leaves the superseded version on disk | `review-store` purge row (F6) |
+| NDR-X3-R1-M20 | `review/store.ts` | `remove` unlinks the bytes before the index | `review-store` order row (F6) |
+| NDR-X3-R1-M21 | `review/store.ts` | no directory `fsync` after the index unlink | `review-store` order row (F6) |
+| NDR-X3-R1-M22 | `review/store.ts` | the tombstone written after the index unlink | `review-store` order and interrupted-removal rows (F6) |
+| NDR-X3-R1-M23 | `review/store.ts` | boot keeps an index entry whose bytes file is missing | `review-store` lost row (F6) |
+| NDR-X3-R1-M24 | `review/store.ts` | `put` keeps the token of an expired, unswept share | `review-store` expiry-is-terminal row (F3) |
+| NDR-X3-R1-M25 | `review/store.ts` | `setPinned` skips `expiryOf` | `review-store` expiry-is-terminal row (F3) |
+| NDR-X3-R1-M26 | `review/store.ts` | `admitCreate` run before the queue | `review-store` concurrent-create row (F3) |
+| NDR-X3-R1-M27 | `review/store.ts` | `setPinned` does not bump `rev` | `review-sweep` pin-race row (F3) |
+| NDR-X3-R1-M28 | `review/sweep.ts` | one `tree` call per share, not per ref | `review-sweep` |
+| NDR-X3-R1-M29 | `review/sweep.ts` | reads `refs/heads/<branch>` | `review-sweep` served-ref row (M-X3.5) |
+| NDR-X3-R1-M30 | `review/routes.ts` | open skips `expiryOf` | `review-routes` expired 404 (M-X3.3) |
+| NDR-X3-R1-M31 | `review/routes.ts` | revoked answers 410 | `review-routes` identical 404 (M-X3.1) |
+| NDR-X3-R1-M32 | `review/routes.ts` | drop each of the four headers, one row each | `review-routes` (M-X3.11) |
+| NDR-X3-R1-M33 | `review/routes.ts` | the open handler calls the tree reader | `box-token-census` never-read scan (M-X3.6) |
+| NDR-X3-R1-M34 | `review/routes.ts` | the per-share limit removed | `review-routes` busy rows (F5) |
+| NDR-X3-R1-M35 | `review/routes.ts` | the slot released on `finish` only, not on `close` | `review-routes` abort row (F5) |
+| NDR-X3-R1-M36 | `review/routes.ts` | the send deadline removed | `review-routes` stalled-reader row (F5) |
+| NDR-X3-R1-M37 | `review/routes.ts` | the bytes sent as one buffer from `readBytes` | `review-routes` revoke-during-send row: the in-flight send's bytes stay the old version (F5) |
+| NDR-X3-R1-M38 | `auth/gate.ts` | the create door added to `EXEMPT` | `auth-gate`, `box-token-census` |
+| NDR-X3-R1-M39 | `ccd/ccrc` | `_upd_backup`'s body copies `~/.ccrc` whole | `review-backup` (M-X3.7, F11) |
+| NDR-X3-R1-M40 | `deploy/coordination-snapshot.mjs` | its member list gains `review-shares` | `review-backup` (M-X3.7, F11) |
+| NDR-X3-R1-M41 | architecture spec | `review/**` dropped from the C9 row | `rings/totality.test.ts` (F10) |
+| NDR-X3-R2-M1 | `review/routes.ts` | drop `X-Frame-Options` or `no-store` from `GET /review`, one row each | `review-routes` page-header rows (F15) |
+| NDR-X3-R2-M2 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
+| NDR-X3-R2-M3 | `src/review/main.ts` | post the token on load | `review-page` (M-X3.10) |
+| NDR-X3-R2-M4 | `src/review/main.ts` | keep the token in `sessionStorage` for a reload | `review-page` storage row (F4) |
+| NDR-X3-R2-M5 | `src/review/main.ts` | `sandbox="allow-scripts"` | `review-page`, browser script row (M-X3.10) |
+| NDR-X3-R2-M6 | `review/routes.ts` | `script-src 'self' 'unsafe-inline'` | `review-routes` page CSP row (M-X3.10) |
+| NDR-X3-R2-M7 | `vite.config.ts` | drop `review.html` from `globIgnores` | `browser-dist` precache row, browser installed-PWA row (M-X3.12) |
+| NDR-X3-R2-M8 | `sw-denylist.ts` | drop the `/review` entry | `sw-denylist` (M-X3.12) |
+| NDR-X3-R2-M9 | `review/routes.ts` | `GET /review.html` serves the file | `review-routes` (M-X3.12) |
+| NDR-X3-R2-M10 | `reader-lab-scans.test.ts` | the review page's allowance widened from `main.ts` to the directory `pwa/src/review/` | `reader-lab-scans` planted control: the iframe in `pwa/src/review/other.ts` must red (F10) |
+| NDR-X3-R3-M1 | `review/routes.ts` | the list accepts any section | `review-routes` bad-query row (F15) |
+| NDR-X3-R3-M2 | `review/routes.ts` | pin of an unknown id answers 200 | `review-routes` unknown-share row (F15) |
+| NDR-X3-R3-M3 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
+| NDR-X3-R3-M4 | `review/routes.ts` | the create handler skips the account gate | `review-routes` dark create (M-X3.8) |
+| NDR-X3-R3-M5 | `review/shareForReview.ts` | offered on a committed leaf | `docs-review-share` |
+| NDR-X3-R3-M6 | `review/ReviewConfirm.tsx` | upload before the credential check | `docs-review-share` (M-X3.14) |
+| NDR-X3-R3-M7 | `review/shareForReview.ts` | scan the document's source text, not the built export | `docs-review-share` stylesheet and SVG rows (M-X3.14, F7) |
+| NDR-X3-R3-M8 | `review/shareForReview.ts` | cut every `data:` payload instead of decoding the non-raster ones | `docs-review-share` stylesheet, SVG and font rows (F7) |
+| NDR-X3-R3-M9 | `review/shareForReview.ts` | decode raster payloads as text too | `docs-review-share` PNG row (F7) |
+| NDR-X3-R3-M10 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
+| NDR-X3-R3-M11 | `export/buildExport.tsx` | `links` filled from the Markdown source, not the built bytes | `docs-export` links row (F8) |
+| NDR-X3-R3-M12 | `export/buildExport.tsx` | a Markdown export's `inlined` left empty | `docs-export` new-fields row (F8) |
+| NDR-X3-R3-M13 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
+| NDR-X3-R3-M14 | `review/ReviewRows.tsx` | Re-share uploads without opening `ReviewConfirm` | `docs-review-owner` re-share hold row (F2) |
 | NDR-X3-R4-M1 | `review/routes.ts` | the comment handler skips the account gate | `review-comments` dark rows (M-X3.8, C1) |
 | NDR-X3-R4-M2 | `review/policy.ts` | caps raised to 200 notes or 4000 characters | `review-comments` (M-X3.9, C3) |
 | NDR-X3-R4-M3 | `review/policy.ts` | control characters kept | `review-comments` |
