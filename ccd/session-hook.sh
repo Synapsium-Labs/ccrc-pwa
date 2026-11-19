@@ -6208,13 +6208,11 @@ _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest
   [[ -n "$id" && -e "$REG/$id.child" ]] || { apr_route=not-a-child; return 0; }
   [[ ! -e "$REG/approvals-disabled" ]] || { apr_route=kill-switch; return 0; }
   # The deny stamp: absent, unreadable or not a digest, or a managed file that cannot be read, is `deny-unreadable`; a
-  # stamp that reads, is not the current digest and is in no digest history is `deny-unknown` (spec §6.6).
+  # stamp in no digest history and not current is `deny-unknown`; one in the history goes on with `denyDigest` (PR 0).
   _ct_read "$REG/$id.deny-settings" || { apr_route=deny-unreadable; return 0; }
   sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { apr_route=deny-unreadable; return 0; }
   [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || { apr_route=deny-unreadable; return 0; }
   managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || { apr_route=deny-unreadable; return 0; }
-  # A stamp that is not current but is in the installer's digest history goes on, its digest sent as `denyDigest` (approvals
-  # PR 0: the server records the row not deny-current and caps its allow); one in no history is `deny-unknown`.
   if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || { apr_route=deny-unknown; return 0; }; apr_dd="$sum"; fi
   command -v node >/dev/null 2>&1 || { apr_route=no-node; return 0; }
   [[ -f "$REG/approval-verify.mjs" ]] || { apr_route=no-verifier; return 0; }
