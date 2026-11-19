@@ -43,7 +43,7 @@ import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal.js';
 import { buildTrustOf, buildUntrustedSentence, type BuildUntrustedReason, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import { answeredByBody, approvalRuledBody, askPushBody } from '../askbody.js';
 import { askActions, askKey } from '../askkey.js';
-import { approvalWindowMs, askNotifyAt } from '../askwindow.js';
+import { ASK_SETTLE_TICKS, approvalWindowMs, askNotifyAt } from '../askwindow.js';
 import type { HookState } from '../hookstate.js';
 import type { AskResult } from '../inject/ask.js';
 import type { DialogMultiResult, DialogResult, DialogTextResult } from '../inject/send.js';
@@ -516,6 +516,9 @@ export interface Questions {
   /** The approval census's one write site (approvals plan 2026-11-18, Task 1.3): called on every tick `dialog` is
    *  painted for `r`, it writes one census row for a prompt that leaves no approvals row, once per sighting. */
   observeCensus(r: SessionRecord, dialog: Dialog, hs: HookState | null, now: number): void;
+  /** After each tick's dialog loop (review 2695 F1(b), F2(2)): a sighting not painted for more than `ASK_SETTLE_TICKS`
+   *  consecutive ticks, or whose child is no longer in the registry (`present`), ends: it is decided and dropped. */
+  sweepCensus(present: ReadonlySet<string>): void;
   /** The source the push for the prompt `childId`'s pane paints now carries (`approval:<n>` or `census:<n>`). */
   pushSourceOf(childId: string): string | undefined;
   /** The census read's three sources over `[fromMs, toMs)` (Task 1.4), read here because this owner holds the approvals
@@ -1236,8 +1239,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * it, so its notification is final.
    */
   const settleCleared = (childId: string, dialogId: string): void => {
-    const sighting = censusSightings.get(childId);
-    if (sighting?.dialog.id === dialogId) { flushCensus(childId, sighting); censusSightings.delete(childId); }
+    // The census's sighting is NOT ended here (review 2695 F1(b)): one empty tick is often a capture miss, so
+    // `sweepCensus` ends it after more than `ASK_SETTLE_TICKS` consecutive empty ticks, or a different dialog does.
     dropAsk(childId, 'lapsed');
     settleClearedApproval(childId, dialogId);
     const held = askEntry(childId, 'held');
@@ -1492,6 +1495,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   interface CensusSightingState {
     readonly dialog: Dialog; readonly firstSeenAt: number; lastSeenAt: number; ticks: number; readonly runId: number | null;
     decided: boolean; source: string | null; envelope: CensusEnvelope | null; hsSeen: boolean; menuStamp: number | null;
+    /** Painted since the last sweep, and the consecutive sweeps it was not (the debounce, review 2695 F1(b)). */
+    seen: boolean; emptySweeps: number;
   }
   const censusSightings = new Map<string, CensusSightingState>();
   const censusWarn = changeLatch<string>();
@@ -1500,7 +1505,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
 
   /** One decision of a sighting, this tick or at its end: the child's rows minted since the hook's longest wait before the
    *  first sighting, the L1 decider, then the one write (a census row) or the push's source (the minted row). */
-  const decideCensus = (coord: WatcherCoordPort, childId: string, s: CensusSightingState, ask: HookAsk | null, now: number, ending: boolean): void => {
+  const decideCensus = (coord: WatcherCoordPort, childId: string, s: CensusSightingState, ask: HookAsk | null, now: number, ending: boolean): boolean => {
     try {
       const read = coord.approvalsForChild(childId, APPROVAL_STATES);
       if (!read.ok) throw new Error(read.detail);
@@ -1510,7 +1515,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         now, ticks: s.ticks, ending,
         minted: read.rows.filter((x) => x.askAt >= since).map((x) => ({ id: x.id, askAt: x.askAt, agentId: x.agentId, state: x.state })),
       });
-      if (decision.kind === 'wait') return;
+      if (decision.kind === 'wait') return false;
       s.decided = true;
       if (decision.kind === 'write') {
         const row = coord.insertCensusRow({
@@ -1523,19 +1528,33 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
         s.source = `approval:${decision.mintedId}`;
       }
       censusWarn.clear();
+      return true;
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       if (censusWarn.changed(why)) console.warn(`ccrc-server: approval census: ${childId} not counted (${why})`);
+      return false;
     }
   };
 
   /** A sighting that ends (its menu cleared or was replaced) is decided now if it was not yet (F-A): a menu with no
    *  envelope is decided only here, with the rows minted since its first sighting. */
-  const flushCensus = (childId: string, s: CensusSightingState): void => {
+  const flushCensus = (childId: string, s: CensusSightingState): boolean => {
     const coord = deps.coord;
-    if (!coord || s.decided) return;
-    decideCensus(coord, childId, s, null, s.lastSeenAt, true);
-    s.decided = true;
+    if (!coord || s.decided) return true;
+    // Decided only when the decision was made and written (review 2695 F2(3)): a failed read or write keeps the sighting,
+    // and the next sweep tries again.
+    return decideCensus(coord, childId, s, null, s.lastSeenAt, true);
+  };
+
+  const sweepCensus = (present: ReadonlySet<string>): void => {
+    for (const [childId, s] of censusSightings) {
+      if (present.has(childId)) {
+        if (s.seen) { s.seen = false; s.emptySweeps = 0; continue; }
+        s.emptySweeps += 1;
+        if (s.emptySweeps <= ASK_SETTLE_TICKS) continue;
+      }
+      if (flushCensus(childId, s)) censusSightings.delete(childId);
+    }
   };
 
   /**
@@ -1559,11 +1578,13 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (s === undefined || s.dialog.id !== dialog.id || (env !== null && s.envelope !== null && envelopeContent(env) !== envelopeContent(s.envelope))) {
       if (s !== undefined) flushCensus(r.id, s);
       s = { dialog, firstSeenAt: now, lastSeenAt: now, ticks: 0, runId: r.child.kind === 'child' ? r.child.runId : null,
-        decided: false, source: null, envelope: null, hsSeen: false, menuStamp: null };
+        decided: false, source: null, envelope: null, hsSeen: false, menuStamp: null, seen: true, emptySweeps: 0 };
       censusSightings.set(r.id, s);
     }
     s.ticks += 1;
     s.lastSeenAt = now;
+    s.seen = true;
+    s.emptySweeps = 0;
     if (hs !== null) { s.hsSeen = true; if (s.menuStamp === null) s.menuStamp = hs.updatedAt; }
     if (env !== null) s.envelope = env;
     if (s.decided) return;
@@ -2002,7 +2023,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     raise, loadReseed, reseed, reseedGone, settleReplaced, settleCleared, restamp,
     noteAsksSwitch: (disabled) => { asksDisabled = disabled; },
     lapseAsks, lapseApprovals, prune, released, askSettled, answeredLate, approvalReleased, approvalRuled, currentAskOf,
-    observeCensus, pushSourceOf, censusSources,
+    observeCensus, sweepCensus, pushSourceOf, censusSources,
     answer, rule, release,
     [TEST_VIEW]: testView,
   };

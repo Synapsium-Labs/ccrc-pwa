@@ -138,7 +138,8 @@ describe('approvalCensusOf: the counts, M38 and the rows', () => {
     expect(w.byPath).toEqual({ escalate: 1, ruled: 1, 'released-at-mint': 1, held: 1, 'envelope-erased': 1, unmeasured: 2 });
     expect(w.byAuthority).toEqual({ operator: 3, coordinator: 1, none: 3 });
     expect(w.byThread).toEqual({ main: 4, subagent: 1, unknown: 2 });
-    expect(w.byDenyCurrent).toEqual({ unmeasured: 7 });
+    // Over the five minted rows only (review 2695 F5): a census row has no deny-current fact.
+    expect(w.byDenyCurrent).toEqual({ unmeasured: 5 });
     expect(w.byProgramme).toEqual({ overlord: 6, '(none)': 1 });
     expect(w.byReleaseReason).toEqual({ 'run-unclaimed': 1 });
     expect(w.readPrompts).toBe(1);
@@ -166,6 +167,8 @@ describe('approvalCensusOf: the counts, M38 and the rows', () => {
   it('F-H: a run closed exactly at 00:00 UTC does not count the day it closed into', () => {
     const D = 86_400_000;
     expect(programmeDaysOf([{ programme: 'p', openedAt: FROM + 3_600_000, closedAt: FROM + D }], FROM, TO)).toBe(1);
+    // F9 (review 2695): an empty span inside the window (a run closed at the window's first midnight) counts no day.
+    expect(programmeDaysOf([{ programme: 'p', openedAt: FROM - D, closedAt: FROM }], FROM, TO)).toBe(0);
   });
   it('F-D: the window is the last N whole UTC days, today\'s included, so N days are N programme-days', () => {
     const D = 86_400_000;
@@ -219,6 +222,8 @@ describe('GET of the census: session-gated, counts only', () => {
     expect(body.total).toBe(2);
     expect(body.byPath).toEqual({ 'released-at-mint': 1, 'hook-skipped': 1 });
     expect(body.byRoute).toEqual({ 'no-key': 1 });
+    // F5 (review 2695): the census row adds nothing to deny currency, so the card's "not measured" note stays off.
+    expect(body.byDenyCurrent).toEqual({ current: 1 });
     expect((await a.inject({ method: 'GET', url: '/api/approvals/census' })).json()).toMatchObject({ days: 14 });
     for (const bad of ['0', '91', 'x', '1.5', '-1']) {
       expect((await a.inject({ method: 'GET', url: `/api/approvals/census?days=${bad}` })).statusCode, bad).toBe(400);

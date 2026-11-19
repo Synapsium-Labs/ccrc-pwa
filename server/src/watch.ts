@@ -9880,6 +9880,9 @@ export class FleetWatcher {
     // D-5925, spec §5.2 step 3: a child measured ABSENT from the listing (its `.uuid` gone, not a refused or
     // unreadable row, and never on an unlistable tick, which returns before this) holds no question any more.
     if (listing !== undefined) this.questions.reseedGone(listing, recs);
+    // The approval census's sightings (review 2695 F1(b), F2(2)): one not painted for more than ASK_SETTLE_TICKS ticks, or
+    // whose child left the registry, ends here, after every row of this tick was seen.
+    this.questions.sweepCensus(new Set(recs.map((r) => r.id)));
     return pending;
   }
 

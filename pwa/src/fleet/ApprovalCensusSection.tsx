@@ -61,7 +61,7 @@ function CensusBody({ census, stale }: { census: ApprovalCensusWire; stale: bool
       ) : census.m38.rootReached > 0 ? (
         <p className={SETTINGS_NOW_CLASS.note}>{m38OnlyRootSentence(census.days)}</p>
       ) : (
-        <p className={SETTINGS_NOW_CLASS.note}>{m38NoneSentence(census.days)}</p>
+        <p className={SETTINGS_NOW_CLASS.note}>{m38NoneSentence(census.days, census.unmeasured)}</p>
       )}
       <p className={SETTINGS_NOW_CLASS.note}>{APPROVAL_CENSUS_TEXT.programmeDay}</p>
       {lines.length > 0 && (

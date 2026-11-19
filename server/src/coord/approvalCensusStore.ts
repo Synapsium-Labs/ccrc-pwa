@@ -35,10 +35,14 @@ export interface CensusRowInsert {
 }
 
 /** THE ONE WRITER of `approval_census`. Inserts the row unless this sighting already has one; either way answers the
- *  sighting's row id (the push's source) and whether this call wrote it. */
+ *  sighting's row id (the push's source) and whether this call wrote it. A row this sighting's key already holds is kept,
+ *  except one that says `cleared-early` (review 2695 F1(a)): a menu that cleared inside the settle window and then
+ *  stood again is decided again, and the later decision replaces the provisional one. */
 export function insertCensusRow(db: DatabaseSync, r: CensusRowInsert): { readonly id: number; readonly inserted: boolean } {
-  const res = stmt(db, 'INSERT OR IGNORE INTO approval_census (sessionId, sightingKey, path, why, route, thread, tool, summary, runId, seenAt) '
-    + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)')
+  const res = stmt(db, 'INSERT INTO approval_census (sessionId, sightingKey, path, why, route, thread, tool, summary, runId, seenAt) '
+    + 'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT (sessionId, sightingKey) DO UPDATE SET path = excluded.path, '
+    + 'why = excluded.why, route = excluded.route, thread = excluded.thread, tool = excluded.tool, summary = excluded.summary, '
+    + "runId = excluded.runId, seenAt = excluded.seenAt WHERE approval_census.why = 'cleared-early'")
     .run(r.sessionId, r.sightingKey, r.path, r.why, r.route, r.thread, r.tool, r.summary, r.runId, r.seenAt);
   const row = stmt(db, 'SELECT id FROM approval_census WHERE sessionId = ? AND sightingKey = ?').get(r.sessionId, r.sightingKey) as
     { id: number } | undefined;

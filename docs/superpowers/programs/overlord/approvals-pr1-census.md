@@ -64,8 +64,8 @@ Departures are listed by slug. The coordinator mints the numbers.
   (`updatedAt`). A sighting is decided ONCE (review 2638 F1, F2): a restamp of the same envelope (same tool and summary)
   under the same menu is the same prompt, and new envelope content under the same menu labels starts a new sighting. A
   menu with no envelope is keyed by its dialog id and the FIRST hook-state stamp its sighting saw (`none` with no hook
-  state), never by the sighting's time, so a restart, a repaint with the same labels and a one-tick flicker of one
-  prompt land on one row, and a new prompt (a new hook state) on a second. A `sent` or failed request finds its own row
+  state), never by the sighting's time, so a restart, a repaint with the same labels and a flicker of one prompt land
+  on one row (and a one-tick flicker no longer ends the sighting, `sighting-debounce`), and a new prompt (a new hook state) on a second. A `sent` or failed request finds its own row
   across the hook's whole wait while that row is open (held or released), so a sighting that starts late finds it too.
 - `census-thread-not-agent-id`: the envelope carries no agent id (PR 2's per-agent list will), so a census row keeps
   its thread (`main`, `subagent`, or none for a menu with no envelope) in place of the agent id.
@@ -110,7 +110,9 @@ Departures are listed by slug. The coordinator mints the numbers.
   count treats every row as current.
 - `push-source-column`: the binding is a `pushSource` column on the outbox row, written by the unbound insert, since
   approval pushes are unbound. A held prompt's deferred push names its newest covered row, and the "with coordinator"
-  replacement push for a held prompt carries the sighting's source too (review 2638 F9a).
+  replacement push for a held prompt carries the sighting's source too (review 2638 F9a). **Accepted residual (review
+  2695 F6):** a push for a menu with no envelope carries no source, because that prompt's census row is written only
+  when its sighting ends, after the push; `pushesBySource` undercounts `census:` pushes by those. The count is unaffected.
 - `deny-current-from-pr0` (replaces `deny-current-unmeasured-until-pr0`): the read takes PR 0's `approvals.denyCurrent`
   column (`current` or `not-current`; a row minted before PR 0 reads current, the column's default), and a
   `deny-not-current` row is never a read prompt. The card's deny-currency note shows only while a counted row says
@@ -143,6 +145,27 @@ Departures are listed by slug. The coordinator mints the numbers.
   (`wc --files0-from=/etc/list`, `ls -I/etc`) stands as an option, and a command with no path operand is true even with
   no trusted cwd. PR 6 must not take it alone as the read rule; its closed option tables and the mutation "admit an
   attached option argument" are the plan's. The read-prompt count here is inflated by these shapes, by a small amount.
+- `sighting-debounce` (review 2695 F1(b), F2(2), F2(3)): a sighting ends only after more than `ASK_SETTLE_TICKS`
+  consecutive ticks with no dialog painted (one empty tick is often a capture miss on a loaded box), when a different
+  dialog appears, or when its child leaves the registry (`sweepCensus`, after each tick's dialog loop). A sighting whose
+  end could not be decided (a failed store read or write) is kept and decided on the next sweep.
+- `cleared-early-replaced` (review 2695 F1(a)): the one writer replaces a row whose `why` is `cleared-early` when the
+  same key is decided again (a menu that cleared inside the settle window and then stood); every other row is kept.
+- `tight-match-any-state` (review 2695 F7): the no-envelope tight match takes a row of any state inside the window,
+  because a sighting now ends a few ticks after its clear, which has already marked its row `operator`.
+- `deny-currency-minted-only` (review 2695 F5): `byDenyCurrent` counts minted rows only; a census row has no
+  deny-current fact.
+- `path-6-is-a-floor`: path 6 (and every menu-only outcome) is a floor. The census can only undercount it in these
+  accepted residuals, filed by the coordinator as a follow-up (direction in brackets):
+  - review 2695 F2(1): a server restart while an erased menu stands, answered during the downtime, leaves no sighting
+    and no row (undercount);
+  - F3: a hook without `hook-main-state-v1` restamps a subagent-raised wait, so after a flicker or a restart a skipped or
+    refused prompt can be keyed by a second `env:` stamp (overcount, needs all four conditions);
+  - F4: two erased prompts of one dialog id first seen at the same hook stamp (a subagent fan-out), or with no hook state
+    at all, share a key and count once (undercount);
+  - F6: no push source for an envelope-less menu (see `push-source-column`);
+  - F8: a menu-only row's `seenAt` is its sighting's end, so a menu that outlives its run or a UTC midnight can land on a
+    day with no programme-day (ratio slightly high, rare).
 - `characterization-runtime`: Task 1.1's file takes about 150 s, almost all of it the shared approvals fixture
   (about 6 s a case).
 - `baseline-dates`: the card states the baseline rule; the Live dates of PR 0, PR P and PR 1 are owed to this note

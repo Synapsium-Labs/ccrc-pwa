@@ -56,15 +56,15 @@ const dayWord = (n: number): string => (n === 1 ? 'day' : 'days');
  *  operator (each said in a sentence of its own, never a bare 0). */
 export function m38Figure(w: ApprovalCensusWire): string | null {
   const v = w.m38.perProgrammeDay;
-  return v === null || w.m38.programmeReached === 0 ? null : v.toFixed(1);
+  return v === null || w.m38.programmeReached === 0 ? null : v < 0.05 ? '<0.1' : v.toFixed(1);
 }
 
 export function m38Sentence(days: number): string {
   return `Permission prompts you had to answer, per programme-day, over the last ${days} ${dayWord(days)}`;
 }
 
-export function m38NoneSentence(days: number): string {
-  return `None reached you in the last ${days} ${dayWord(days)}`;
+export function m38NoneSentence(days: number, unmeasured = 0): string {
+  return `None ${unmeasured > 0 ? 'that the census could place ' : ''}reached you in the last ${days} ${dayWord(days)}`;
 }
 
 /** No programme's prompt reached the operator, but prompts with no programme did (review 2667 F-D): never "None". */

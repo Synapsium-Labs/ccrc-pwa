@@ -108,8 +108,8 @@ function ownRow(x: CensusSightingInput, thread: 'main' | 'subagent'): CensusMint
  *  word is path 1 (path 7 for `not-a-child`); `request-failed` counts as its own row when the client gave up after the
  *  mint, else path 2; any other refusal is path 2 (path 7 for the route's own `not-a-child`), with no row match (F-F);
  *  an envelope with no route word or one this build does not know is `unmeasured`. A menu with no envelope waits until
- *  its sighting ENDS (F-A), then: no hook state on any tick is `hookstate-gone`; a tight match (a row held or released,
- *  `askAt` within `CENSUS_MATCH_MS` of the first sighting, any thread, F-E) counts as that row; a menu that stood no
+ *  its sighting ENDS (F-A), then: no hook state on any tick is `hookstate-gone`; a tight match (a row with `askAt`
+ *  within `CENSUS_MATCH_MS` of the first sighting, any thread and any state, F-E and F7) counts as that row; a menu that stood no
  *  longer than the watcher's settle window is `cleared-early`; any other row of the child near it is `near-miss`; none
  *  is path 6. Its key is the dialog and the first hook-state stamp, so a restart, a repaint or a flicker of one prompt
  *  lands on one row (F-C). An AskUserQuestion, and a menu that is not approval-shaped, is none. */
@@ -142,7 +142,8 @@ export function censusSightingOf(x: CensusSightingInput): CensusSighting {
     sightingKey: `menu:${x.dialog.id}:${x.menuStamp ?? 'none'}`,
   });
   if (!x.hsPresent) return menu('unmeasured', 'hookstate-gone');
-  const tight = [...x.minted].reverse().find((m) => OPEN_STATES.has(m.state) && Math.abs(m.askAt - x.firstSeenAt) <= CENSUS_MATCH_MS);
+  // Any state (review 2695 F7): the sighting ends a few ticks after its clear, which marks the row `operator` first.
+  const tight = [...x.minted].reverse().find((m) => Math.abs(m.askAt - x.firstSeenAt) <= CENSUS_MATCH_MS);
   if (tight !== undefined) return { kind: 'none', mintedId: tight.id };
   if (x.ticks <= ASK_SETTLE_TICKS) return menu('unmeasured', 'cleared-early');
   return x.minted.length > 0 ? menu('unmeasured', 'near-miss') : menu('envelope-erased', null);
@@ -242,9 +243,9 @@ export function programmeDaysOf(runs: readonly CensusRunSpan[], fromMs: number, 
   for (const r of runs) {
     const start = Math.max(r.openedAt, fromMs);
     const end = Math.min(r.closedAt ?? toMs, toMs);
-    if (end < start) continue;
-    // The end is exclusive (review 2667 F-H): a run closed at 00:00 UTC does not count the day it closed into.
-    const last = end > start ? end - 1 : start;
+    // The end is exclusive (review 2667 F-H, 2695 F9): a run closed at 00:00 UTC does not count the day it closed into.
+    if (end <= start) continue;
+    const last = end - 1;
     for (let d = Math.floor(start / DAY_MS) * DAY_MS; d <= last && d < toMs; d += DAY_MS) pairs.add(`${r.programme}\u0000${censusDay(d)}`);
   }
   return pairs.size;
@@ -289,8 +290,11 @@ export function approvalCensusOf(x: CensusReadInput): ApprovalCensusWire {
     if (r.releaseReason !== null) bump(byReleaseReason, r.releaseReason);
     if (r.class !== null) bump(byClass, r.class);
     bump(byThread, r.thread ?? 'unknown');
-    const deny: ApprovalCensusDenyCurrency = r.denyCurrent === null ? 'unmeasured' : r.denyCurrent ? 'current' : 'not-current';
-    bump(byDenyCurrent, deny);
+    // Over minted rows only (review 2695 F5): a census row has no deny-current fact to count.
+    if (r.source === 'approval') {
+      const deny: ApprovalCensusDenyCurrency = r.denyCurrent === null ? 'unmeasured' : r.denyCurrent ? 'current' : 'not-current';
+      bump(byDenyCurrent, deny);
+    }
     bump(byProgramme, r.programme ?? '(none)');
     bump(byAuthority, r.authority);
     if (r.route !== null) bump(byRoute, r.route);

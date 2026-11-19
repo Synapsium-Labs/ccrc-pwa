@@ -48,10 +48,16 @@ const mint = (c: CoordStore, askAt: number, agentId = ''): number => c.insertApp
   childId: CHILD, parentId: 'lane-a-coord', runId: null, digest: 'a'.repeat(64), nonce: 'b'.repeat(32),
   agentId, tool: 'Bash', inputRedacted: 'rm -rf build', truncated: false, class: 'escalate', askAt, notifyAt: askAt + 60_000,
 });
-/** One tick per `at`, each 2 s apart from `t0`. */
+/** One watcher tick per `at`, each 2 s apart from `t0`: the dialog painted, then the tick's sweep. */
 const ticks = (q: ReturnType<typeof createQuestions>, r: SessionRecord, d: Dialog, states: ReadonlyArray<HookState | null>, t0 = 100_000): void => {
-  states.forEach((h, i) => { q.observeCensus(r, d, h, t0 + i * 2_000); });
+  states.forEach((h, i) => { q.observeCensus(r, d, h, t0 + i * 2_000); q.sweepCensus(new Set([r.id])); });
 };
+/** `n` ticks with no dialog painted for `id` (its child still in the registry). */
+const empty = (q: ReturnType<typeof createQuestions>, id: string, n: number): void => {
+  for (let i = 0; i < n; i++) q.sweepCensus(new Set([id]));
+};
+/** A real clear: more than the settle window of empty ticks (review 2695 F1(b)). */
+const clear = (q: ReturnType<typeof createQuestions>, id: string): void => { empty(q, id, ASK_SETTLE_TICKS + 1); };
 
 describe('censusSightingOf: which prompts owe a census row (L1)', () => {
   const row = (over: Partial<CensusMintedRow> = {}): CensusMintedRow => ({ id: 4, askAt: 2_000, agentId: '', state: 'held', ...over });
@@ -123,7 +129,8 @@ describe('censusSightingOf: which prompts owe a census row (L1)', () => {
     // F-E: the tight match takes any thread (the hook state's thread describes the event that erased the envelope).
     expect(censusSightingOf(at({ ...end, minted: [row({ agentId: 'agent-1' })] }))).toEqual({ kind: 'none', mintedId: 4 });
     expect(censusSightingOf(at({ ...end, minted: [row({ askAt: 2_000 - CENSUS_MATCH_MS - 1 })] }))).toMatchObject({ path: 'unmeasured', why: 'near-miss' });
-    expect(censusSightingOf(at({ ...end, minted: [row({ state: 'allowed' })] }))).toMatchObject({ path: 'unmeasured', why: 'near-miss' });
+    // F7 (review 2695): any state inside the window is a tight match (the clear marks the row `operator` before the end).
+    expect(censusSightingOf(at({ ...end, minted: [row({ state: 'allowed' })] }))).toEqual({ kind: 'none', mintedId: 4 });
   });
   it('at the end: a menu that stood no longer than the settle window is `cleared-early`; one with no hook state on any tick is `hookstate-gone`', () => {
     expect(censusSightingOf(at({ envelope: null, ticks: ASK_SETTLE_TICKS, ending: true }))).toMatchObject({ path: 'unmeasured', why: 'cleared-early' });
@@ -175,14 +182,14 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const id = mint(c, 101_000);
     for (let t = 1; t < 6; t++) q.observeCensus(child(CHILD), PERMISSION, hs(approval('sent'), 100_500), 100_000 + t * 2_000);
     expect(q.pushSourceOf(CHILD)).toBe(`approval:${id}`);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([]);
   });
   it('F-A: an envelope that arrives after the settle window still decides the one prompt: one row, path 1', () => {
     const c = store();
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [working, working, working, working, hs(approval('no-key'), 107_000)]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'hook-skipped', route: 'no-key' })]);
   });
   it('F-A: a mint that lands after the settle window, its envelope erased, is that row\'s prompt: no census row', () => {
@@ -191,7 +198,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     ticks(q, child(CHILD), PERMISSION, [working, working, working]);
     const id = mint(c, 106_000);
     ticks(q, child(CHILD), PERMISSION, [working, working], 106_000);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([]);
     expect(q.pushSourceOf(CHILD)).toBeUndefined();   // the sighting is gone once cleared
     expect(id).toBeGreaterThan(0);
@@ -200,7 +207,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const c = store();
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [hs(approval('sent'), 99_000, true), working, working, working, working]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'unmeasured', why: 'sent-no-row', sightingKey: 'env:99000', thread: 'subagent' })]);
   });
   it('F-C: a restart mid-prompt finds the sent prompt\'s own row: no `sent-no-row` beside it', () => {
@@ -208,8 +215,8 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const id = mint(c, 100_500);
     createQuestions({ coord: c }).observeCensus(child(CHILD), PERMISSION, hs(approval('sent'), 100_000), 101_000);
     const after = createQuestions({ coord: c });
-    after.observeCensus(child(CHILD), PERMISSION, hs(approval('sent'), 100_000), 101_000 + 200_000);
-    after.settleCleared(CHILD, PERMISSION.id);
+    ticks(after, child(CHILD), PERMISSION, [hs(approval('sent'), 100_000)], 301_000);
+    clear(after, CHILD);
     expect(censusRows(c)).toEqual([]);
     expect(after.pushSourceOf(CHILD)).toBeUndefined();
     expect(id).toBeGreaterThan(0);
@@ -221,9 +228,9 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     ticks(a, child(CHILD), PERMISSION, [done, done]);              // a restart: this instance never ends the sighting
     const b = createQuestions({ coord: c });
     ticks(b, child(CHILD), PERMISSION, [done, done, done], 110_000);
-    b.settleCleared(CHILD, PERMISSION.id);                         // a one-tick flicker
+    empty(b, CHILD, 1);                                            // a one-tick flicker (a capture miss)
     ticks(b, child(CHILD), PERMISSION, [done, done, done], 120_000);  // the repaint
-    b.settleCleared(CHILD, PERMISSION.id);
+    clear(b, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased', sightingKey: 'menu:dlg-perm:90000' })]);
   });
   it('F-C: a genuinely new prompt after a real clear (a new hook state) is a second row', () => {
@@ -232,15 +239,70 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     for (const stamp of [90_000, 150_000]) {
       const done: HookState = { ...hs(null, stamp), state: 'done', event: 'Stop' };
       ticks(q, child(CHILD), PERMISSION, [done, done, done], stamp);
-      q.settleCleared(CHILD, PERMISSION.id);
+      clear(q, CHILD);
     }
     expect(censusRows(c).map((r) => r['sightingKey'])).toEqual(['menu:dlg-perm:90000', 'menu:dlg-perm:150000']);
+  });
+  it('F1(b): one empty tick mid-menu (a capture miss) keeps the sighting: one row, decided at the real end', () => {
+    const c = store();
+    const q = createQuestions({ coord: c });
+    const done: HookState = { ...hs(null, 90_000), state: 'done', event: 'Stop' };
+    ticks(q, child(CHILD), PERMISSION, [done]);
+    empty(q, CHILD, 1);
+    ticks(q, child(CHILD), PERMISSION, [done, done, done], 104_000);
+    expect(censusRows(c)).toEqual([]);
+    clear(q, CHILD);
+    expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased', why: null })]);
+  });
+  it('F1(b): a real clear (more than the settle window of empty ticks) ends the sighting', () => {
+    const c = store();
+    const q = createQuestions({ coord: c });
+    const done: HookState = { ...hs(null, 90_000), state: 'done', event: 'Stop' };
+    ticks(q, child(CHILD), PERMISSION, [done, done, done]);
+    empty(q, CHILD, ASK_SETTLE_TICKS);
+    expect(censusRows(c)).toEqual([]);
+    empty(q, CHILD, 1);
+    expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased' })]);
+  });
+  it('F1(a): a menu cleared inside the settle window, then standing again under the same key, replaces its cleared-early row', () => {
+    const c = store();
+    const q = createQuestions({ coord: c });
+    const done: HookState = { ...hs(null, 90_000), state: 'done', event: 'Stop' };
+    ticks(q, child(CHILD), PERMISSION, [done]);
+    clear(q, CHILD);
+    expect(censusRows(c)).toEqual([expect.objectContaining({ why: 'cleared-early', sightingKey: 'menu:dlg-perm:90000' })]);
+    ticks(q, child(CHILD), PERMISSION, [done, done, done], 120_000);
+    clear(q, CHILD);
+    expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased', why: null, sightingKey: 'menu:dlg-perm:90000' })]);
+  });
+  it('F2(3): a store read that fails when the sighting ends keeps the sighting, and the next sweep decides it', () => {
+    const c = store();
+    let failing = true;
+    const flaky = new Proxy(c, { get: (t, k) => (k === 'approvalsForChild' && failing ? () => ({ ok: false, detail: 'disk I/O error' }) : Reflect.get(t, k, t)) });
+    const q = createQuestions({ coord: flaky as CoordStore });
+    const done: HookState = { ...hs(null, 90_000), state: 'done', event: 'Stop' };
+    failing = false;
+    ticks(q, child(CHILD), PERMISSION, [done, done, done]);
+    failing = true;
+    clear(q, CHILD);
+    expect(censusRows(c)).toEqual([]);
+    failing = false;
+    empty(q, CHILD, 1);
+    expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased' })]);
+  });
+  it('F2(2): a child no longer in the registry ends its sighting on the next sweep', () => {
+    const c = store();
+    const q = createQuestions({ coord: c });
+    const done: HookState = { ...hs(null, 90_000), state: 'done', event: 'Stop' };
+    ticks(q, child(CHILD), PERMISSION, [done, done, done]);
+    q.sweepCensus(new Set());
+    expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased' })]);
   });
   it('F2: a decided prompt whose hook state ages out (null) while it stands writes no second row', () => {
     const c = store();
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [hs(approval('not-a-child')), null, null, null, null]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'not-a-child' })]);
   });
   it('F2: a menu with no hook state on any tick is one unmeasured row when it ends, never path 6', () => {
@@ -248,7 +310,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const q = createQuestions({ coord: c });
     ticks(q, root('lane-a-project-b'), PERMISSION, [null, null, null, null]);
     expect(censusRows(c)).toEqual([]);
-    q.settleCleared('lane-a-project-b', PERMISSION.id);
+    clear(q, 'lane-a-project-b');
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'unmeasured', why: 'hookstate-gone', sightingKey: 'menu:dlg-perm:none' })]);
   });
   it('a restamp of the same envelope (a subagent event moves its stamp) is the same prompt: one row', () => {
@@ -275,7 +337,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const doneHs: HookState = { ...hs(null), state: 'done', event: 'Stop' };
     ticks(q, child(CHILD), PERMISSION, [doneHs, doneHs, doneHs, doneHs]);
     expect(censusRows(c)).toEqual([]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'envelope-erased', sightingKey: 'menu:dlg-perm:1000', thread: null, summary: null })]);
   });
   it('a replacing dialog ends the sighting it replaces', () => {
@@ -290,7 +352,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const c = store();
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [working]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'unmeasured', why: 'cleared-early' })]);
   });
   it('F5: a tightly matching row (held, minted beside the sighting) is this prompt\'s: no row', () => {
@@ -298,7 +360,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     mint(c, 99_000);
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [working, working, working]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([]);
   });
   it('F5: an earlier row of the child that is not a tight match makes the erased menu unmeasured, not dropped', () => {
@@ -306,7 +368,7 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     mint(c, 100_000 - 5 * 60_000, 'agent-1');
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [working, working, working]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'unmeasured', why: 'near-miss' })]);
   });
   it('F6: `sent` whose row never arrives is one unmeasured row when the menu clears', () => {
@@ -314,14 +376,14 @@ describe('observeCensus: the one writer, one decision per sighting', () => {
     const q = createQuestions({ coord: c });
     ticks(q, child(CHILD), PERMISSION, [hs(approval('sent'), 99_000)]);
     expect(censusRows(c)).toEqual([]);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([expect.objectContaining({ path: 'unmeasured', why: 'sent-no-row', sightingKey: 'env:99000' })]);
   });
   it('an AskUserQuestion menu writes nothing', () => {
     const c = store();
     const q = createQuestions({ coord: c });
     q.observeCensus(child(CHILD), PERMISSION, hs({ questions: [] }), 5_000);
-    q.settleCleared(CHILD, PERMISSION.id);
+    clear(q, CHILD);
     expect(censusRows(c)).toEqual([]);
   });
   it('the daily prune clears a summary past the approvals\' retention and keeps the row', () => {

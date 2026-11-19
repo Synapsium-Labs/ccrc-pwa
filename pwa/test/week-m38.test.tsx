@@ -64,6 +64,16 @@ describe('Settings › Automation › Permission prompts (M38)', () => {
     expect(within(card()).getByText('Prompts with no programme (not in the figure): 2')).toBeInTheDocument();
   });
 
+  it('a small ratio never prints 0.0, and "None" names the prompts the census could not place (review 2695 nits)', async () => {
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ perProgrammeDay: 1 / 30, programmeReached: 1 }));
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText('<0.1')).toBeInTheDocument();
+    cleanup();
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue({ ...wire({ perProgrammeDay: 0, programmeReached: 0, byDay: [] }), unmeasured: 3 });
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText('None that the census could place reached you in the last 14 days')).toBeInTheDocument();
+  });
+
   it('no programme-days says so in its own sentence, never a figure (ruling F4)', async () => {
     vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ programmeDays: 0, programmeReached: 0, perProgrammeDay: null, byDay: [] }));
     render(<ApprovalCensusSection />);
