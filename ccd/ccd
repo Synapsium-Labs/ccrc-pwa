@@ -26376,6 +26376,7 @@ _profile_launch_ok() {   # id [make] -> 0 iff the digest holds and, under a stan
 _profile_refused() {   # id why -> journal one launch-profile-refused line; the caller returns 1
   echo "$(date '+%F %T') launch-profile-refused $1: $2 — no pane started" >> "$REG/swap.log"; echo "ccd: error: $1: launch profile refused: $2" >&2
 }
+# @ccd-lib:doorspawn — the door process's spawn step, `_door_spawn` (the Overlord's W1, spec §3.6 H1), which writes its tool-server config, lives in ccd/lib/door.sh
 _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFILE_SPAWN_ENV; never half-applies; rc 1 only under a standing profiledigest
   local id="$1" p="" am cw out="" pset="" penv="" pflags="" prc="" unread="" sf="" d="" src="$LAUNCH_PROFILES_JSON"
   PROFILE_SPAWN_FLAGS="$2"; PROFILE_SPAWN_ENV=""
@@ -26409,6 +26410,7 @@ _profile_spawn_compose() {   # id launchflags -> sets PROFILE_SPAWN_FLAGS, PROFI
   PROFILE_SPAWN_FLAGS="${PROFILE_SPAWN_FLAGS:+$PROFILE_SPAWN_FLAGS }$pflags"
   [[ "$PROFILE_SPAWN_FLAGS" == *"--remote-control "* ]] && prc=on || prc=off
   PROFILE_SPAWN_ENV="${penv:+$penv }CCRC_LAUNCH_PROFILE=$p:$d CCRC_LAUNCH_RC=$prc"
+  _door_spawn "$id" || { _profile_refused "$id" "door process: $DOOR_SPAWN_WHY"; return 1; }
 }
 # THE ROLE'S COMPACTION TEXT (Overlord W1a compaction, spec §3.3.9 C51): the row's `compactText`, which
 # `_auto_compact_check` types after `/compact`. Only when the route carries `compactwindow` too, which the lane writes

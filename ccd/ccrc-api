@@ -72,6 +72,13 @@
 # `_api_server_cap` (D-7321), never a `source`; regenerate it with
 # `ccrc restamp ccd/ccrc-api`.
 set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
+# THE FENCE LEAVES THE ENVIRONMENT NEXT (Overlord W1 door process A2, review 2735 F5): the act key, its generation and the
+# counter the door process hands this run are copied into shell variables and unset before any child runs, so no curl, jq or
+# tmux inherits them. `send_request` reads the copies. The copies' own names are unset first: a caller that exported one would
+# otherwise carry the key to every child under it (review 2756 F2).
+unset FENCE_KEY FENCE_GENERATION FENCE_COUNTER
+FENCE_KEY="${CCRC_ACT_KEY-}" FENCE_GENERATION="${CCRC_ACT_GENERATION-}" FENCE_COUNTER="${CCRC_ACT_COUNTER-}"
+unset CCRC_ACT_KEY CCRC_ACT_GENERATION CCRC_ACT_COUNTER
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
 # so the corpora invoke this by explicit path. That is a caller's problem, not
@@ -421,8 +428,8 @@ usage() {
     done
     printf '  %-18s %s\n' '' 'coordinators intent takes set|clear --session <this session'"'"'s id> and nothing else'
     printf '  %-18s %s\n' 'whoami' 'this session'"'"'s {id,uuid}, from tmux + the registry'
-    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H), as plain text'
-    printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork): an anchor answer as it came, else exit 3'
+    printf '  %-18s %s\n' 'card' 'this session'"'"'s card, one page per call (--page N --hash H; --door phrases the next step as a door call), as plain text'
+    printf '  %-18s %s\n' 'card --anchor' 'its short part for the session hook (--form start|prompt|fork|delta): an anchor answer as it came, else exit 3'
     printf '  %-18s %s\n' '' 'timer set takes <90m|2h|3d> <note> [--run <id> | --programme <slug>]; timer cancel takes <id>;'
     printf '  %-18s %s\n' '' 'every timer verb fills this pane'"'"'s identity and takes no --json'
     printf '  %-18s %s\n' 'probe' 'this session'"'"'s open probe round, one page per call (--page N), as plain text;'
@@ -673,6 +680,11 @@ parse_timer() {   # verb, then the verb's arguments
 REQ_OUT=''
 REQ_CODE=''
 REQ_RC=0
+# The fence's three header names (shared/continuity-door.ts, `ACT_KEY_HEADER`, `ACT_GENERATION_HEADER`, `ACT_COUNTER_HEADER`;
+# held equal by door-tools-argv.test.ts).
+ACT_KEY_HEADER='x-ccrc-act-key'
+ACT_GENERATION_HEADER='x-ccrc-act-generation'
+ACT_COUNTER_HEADER='x-ccrc-act-counter'
 send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an answer, 3 = no response
   local method="$1" url="$2" body="$3" code
   : > "$REQ_OUT"
@@ -692,6 +704,15 @@ send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an a
   # it is one `data-raw` line of the same config, never `--data-binary "$body"` on the argv. Inside a quoted config value curl
   # reads `\\` as `\`, `\"` as `"` and `\n`/`\r` as a newline and a carriage return, so those four are escaped, `\` first, and
   # the bytes the server receives are the body's own. `data-raw`, not `data-binary`: a body is never a `@file` read.
+  # THE FENCE RIDES THE SAME CONFIG (Overlord W1 door process A2, Task 5): the door process hands a fenced call's child the act
+  # key, its generation and the counter in the child's environment (copied and unset at the top, F5), and they go on stdin as
+  # three header lines, never on the argv. All three are checked against their shapes first (the key 64 lowercase hex, the
+  # others positive integers); any one malformed adds none of them, and the server refuses the fenced call. The names are
+  # shared/continuity-door.ts's.
+  if [[ "$FENCE_KEY" =~ ^[0-9a-f]{64}$ && "$FENCE_GENERATION" =~ ^[1-9][0-9]{0,15}$ && "$FENCE_COUNTER" =~ ^[1-9][0-9]{0,15}$ ]]; then
+    cfg+=$'\n'"header = \"$ACT_KEY_HEADER: $FENCE_KEY\""$'\n'"header = \"$ACT_GENERATION_HEADER: $FENCE_GENERATION\""
+    cfg+=$'\n'"header = \"$ACT_COUNTER_HEADER: $FENCE_COUNTER\""
+  fi
   if [[ -n "$body" ]]; then
     esc=${body//\\/\\\\}; esc=${esc//\"/\\\"}; esc=${esc//$'\n'/\\n}; esc=${esc//$'\r'/\\r}
     args+=(-H 'content-type: application/json')
@@ -857,18 +878,22 @@ arm_req_out() {
 # restart forgets a half-read card) says so, with the command that reads the card again. A `card-changed` (409) means the
 # card was rendered anew since page 1: nothing is printed but that line and the command to start again. Any other answer is
 # printed as it came, with its status on stderr. Exit 0 for an answer, 3 for none. A session reads its own card, the pane's.
-# `card --anchor [--form start|prompt|fork]` (Overlord W1a, the anchor piece): the card door's `part=anchor`, the card's
+# `card --anchor [--form start|prompt|fork|delta]` (Overlord W1a, the anchor piece): the card door's `part=anchor`, the card's
 # short part, which the session hook asks for at a start and on the prompt after an automatic compaction. It asks for
 # page 0, which an older server refuses before it reads anything. An answer that names `part: "anchor"` and the form asked
 # (`{dark}`, `{live}` or `{hash, text}`, each beside `ok`, `part` and `form`) is printed as it came, exit 0; any other
 # answer, an older server's card page or a refusal, prints nothing on stdout and exits 3, as no answer does (fix round 1,
 # F1). Its status goes to stderr either way: the hook reads the answer with jq. It takes no page or hash.
 # NEVER call it inside $( ): it prints, refuses and exits.
+# `card --door` (Overlord W1 door process A2): the door process's read. The same page, with `door=1` on the query, and every
+# next-step line phrased as a call of the card door (`with page N and hash H`, `with no page`), never a shell command: the
+# Overlord has no shell. `--anchor --form delta` is the door process's per-prompt delta (C38): one line, cached for the hook.
 cmd_card() {
-  local page=1 hash='' flag anchor='' form=''
+  local page=1 hash='' flag anchor='' form='' door='' again='ccrc-api card'
   while (( $# > 0 )); do
     flag="$1"
     if [[ "$flag" == '--anchor' ]]; then anchor=1; shift; continue; fi
+    if [[ "$flag" == '--door' ]]; then door=1 again='call the card door with no page'; shift; continue; fi
     (( $# >= 2 )) || refuse 'bad-args' "card: $flag needs a value"
     # Neither is an identity flag (`ccrc-api-closed.test.ts` reads the client's case labels for those): the page and its card.
     if [[ "$flag" == '--page' ]]; then
@@ -878,7 +903,7 @@ cmd_card() {
       [[ "$2" =~ ^[0-9a-f]{64}$ ]] || refuse 'bad-args' "card: --hash is a card hash (64 hex characters): $2"
       hash="$2"
     elif [[ "$flag" == '--form' ]]; then
-      [[ "$2" =~ ^(start|prompt|fork)$ ]] || refuse 'bad-args' "card: --form is start, prompt or fork: $2"
+      [[ "$2" =~ ^(start|prompt|fork|delta)$ ]] || refuse 'bad-args' "card: --form is start, prompt, fork or delta: $2"
       form="$2"
     else
       refuse 'bad-args' "card takes --page N and --hash H, or --anchor and --form F, only: $flag"
@@ -886,6 +911,7 @@ cmd_card() {
     shift 2
   done
   [[ -z "$form" || -n "$anchor" ]] || refuse 'bad-args' 'card: --form is --anchor'"'"'s'
+  [[ -z "$door" || -z "$anchor" ]] || refuse 'bad-args' 'card: --door reads a page, never the anchor'
   [[ -z "$anchor" ]] || { (( page == 1 )) && [[ -z "$hash" ]]; } || refuse 'bad-args' 'card: --anchor takes no --page or --hash'
   (( page == 1 )) || [[ -n "$hash" ]] || refuse 'bad-args' 'card: a page after the first names its card hash (--hash), from page 1'"'"'s last line'
   command -v jq >/dev/null 2>&1 || refuse 'no-jq' 'card reads the page with jq, and jq is not on PATH; nothing was read'
@@ -895,7 +921,7 @@ cmd_card() {
   server_url
   read_token
   arm_req_out
-  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${hash:+&hash=$hash}"
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${hash:+&hash=$hash}${door:+&door=1}"
   [[ -z "$anchor" ]] || url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&part=anchor&form=${form:-start}&page=0"
   if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
   TOKEN=""
@@ -905,7 +931,7 @@ cmd_card() {
     print_body; exit 0
   fi
   if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'card-changed' ]]; then
-    printf 'card: the card changed since page 1 was read; read it again from page 1: ccrc-api card\n'
+    printf 'card: the card changed since page 1 was read; read it again from page 1: %s\n' "$again"
     exit 0
   fi
   local shape got
@@ -925,10 +951,12 @@ cmd_card() {
   printf '%s\n' "${got%.}"
   if [[ "$recorded" == 'true' ]]; then
     printf 'card: page %s of %s, hash %s; every page of this card is read, and the read is recorded\n' "$p" "$n" "$h"
+  elif (( p < n )) && [[ -n "$door" ]]; then
+    printf 'card: page %s of %s, hash %s; next: call the card door with page %s and hash %s\n' "$p" "$n" "$h" "$(( p + 1 ))" "$h"
   elif (( p < n )); then
     printf 'card: page %s of %s, hash %s; next: ccrc-api card --page %s --hash %s\n' "$p" "$n" "$h" "$(( p + 1 ))" "$h"
   else
-    printf 'card: page %s of %s, hash %s; the read is NOT recorded: the server did not see every page of this card served to this conversation (a restart forgets a half-read card); read it again from page 1: ccrc-api card\n' "$p" "$n" "$h"
+    printf 'card: page %s of %s, hash %s; the read is NOT recorded: the server did not see every page of this card served to this conversation (a restart forgets a half-read card); read it again from page 1: %s\n' "$p" "$n" "$h" "$again"
   fi
   exit 0
 }
@@ -939,15 +967,18 @@ cmd_card() {
 # (409) prints one line and exits 0. Any other answer is printed as it came, with its status on stderr; exit 0 for an answer, 3
 # for none. The pair is the pane's (`derive_identity`), never typed. `probe answer` is a generic row (`probe.answer`), not this.
 # NEVER call it inside $( ): it prints, refuses and exits.
+# `probe --door` (Overlord W1 door process A2): the door process's read, `door=1` on the query (the page's own tail then names
+# the `probe_answer` door), and the next-step line phrased as a door call.
 cmd_probe() {
-  local page=1
+  local page=1 door=''
   while (( $# > 0 )); do
+    if [[ "$1" == '--door' ]]; then door=1; shift; continue; fi
     (( $# >= 2 )) || refuse 'bad-args' "probe: $1 needs a value"
     if [[ "$1" == '--page' ]]; then
       [[ "$2" =~ ^[1-9][0-9]{0,5}$ ]] || refuse 'bad-args' "probe: --page is a positive integer: $2"
       page="$2"
     else
-      refuse 'bad-args' "probe takes --page N only (or the verb answer): $1"
+      refuse 'bad-args' "probe takes --page N and --door only (or the verb answer): $1"
     fi
     shift 2
   done
@@ -958,7 +989,7 @@ cmd_probe() {
   server_url
   read_token
   arm_req_out
-  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page"
+  local url="$SERVER_URL${tmpl/\{id\}/$DERIVED_ID}?byId=$DERIVED_ID&byUuid=$DERIVED_UUID&page=$page${door:+&door=1}"
   if ! send_request "$method" "$url" ''; then TOKEN=""; transport_exit; fi
   TOKEN=""
   if [[ "$REQ_CODE" == '409' ]] && [[ "$(jq -r '.error // empty' "$REQ_OUT" 2>/dev/null)" == 'probe-none-open' ]]; then
@@ -980,7 +1011,11 @@ cmd_probe() {
   # A page's text may end in a newline, which `$( )` would strip: a sentinel byte keeps it, and is cut after.
   got=$(jq -j '.text, "."' "$REQ_OUT" 2>/dev/null) || got='.'
   printf '%s\n' "${got%.}"
-  if (( p < n )); then
+  if (( p < n )) && [[ -n "$door" ]]; then
+    printf 'probe: page %s of %s, round %s; next: call the probe door with page %s\n' "$p" "$n" "$r" "$(( p + 1 ))"
+  elif [[ -n "$door" ]]; then
+    printf 'probe: page %s of %s, round %s; answer every question in one call: call the probe_answer door\n' "$p" "$n" "$r"
+  elif (( p < n )); then
     printf 'probe: page %s of %s, round %s; next: ccrc-api probe --page %s\n' "$p" "$n" "$r" "$(( p + 1 ))"
   else
     printf 'probe: page %s of %s, round %s; answer every question in one call: ccrc-api probe answer --json -\n' "$p" "$n" "$r"

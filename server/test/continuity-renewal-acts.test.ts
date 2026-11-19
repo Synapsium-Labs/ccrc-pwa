@@ -554,3 +554,23 @@ describe('the renewal act, shadow (Task 4; Review Focus 3)', () => {
     expect(f.gen().state).toBe('active');
   });
 });
+
+describe('the first line by role (Overlord W1 door process A2, Task 5: FIRST_PROMPT_OF_ROLE)', () => {
+  it('an overlord generation\'s first prompt and re-nudge deliver overlord-first-prompt; a coordinator\'s, renewal-first-prompt', async () => {
+    const delivered: string[] = [];
+    const host = { deliver: async (id: string, p: RenewalPrompt): Promise<DeliverResult> => { delivered.push(`${id}: ${p}`); return { kind: 'sent' }; } } as unknown as SessionHost;
+    const target = (sessionId: string, role: 'overlord' | 'coordinator') =>
+      ({ genId: 1, identity: sessionId, sessionId, role, n: 2, startId: 3, cls: null, episode: 0 }) as never;
+    const logs: string[] = [];
+    const r = await runRenewalActs({ coord: {} as never, host, mail: () => true, now: () => 0, log: (l) => logs.push(l) }, [
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'first-prompt' } },
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'renudge-card' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'first-prompt' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'renudge-card' } },
+    ]);
+    expect(logs).toEqual([]);
+    expect(r.delivered).toBe(4);
+    expect(delivered).toEqual(['lane-a-overlord: overlord-first-prompt', 'lane-a-overlord: overlord-first-prompt',
+      `${COORD}: renewal-first-prompt`, `${COORD}: renewal-first-prompt`]);
+  });
+});

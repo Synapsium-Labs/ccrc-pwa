@@ -73,6 +73,7 @@
   "server/src/continuity/renewalFeed.ts#renewalPermit": 1,
   "server/src/continuity/renewalFeed.ts#renewalFeed": 1,
   "server/src/continuity/renewalFeed.ts#renewAnswerEvent": 1,
+  "server/src/continuity/renewalFeed.ts#FIRST_PROMPT_OF_ROLE": 1,
   "server/src/continuity/renewalFeed.ts#renewalHoldsMail": 1,
   "server/src/continuity/renewalOrder.ts#overlordFirst": 1,
   "server/src/continuity/renewalDrain.ts#drainVerdict": 1,

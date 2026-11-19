@@ -6301,6 +6301,31 @@ fi   # hs_skip
 # will see it (D-1689). The nudge counts nothing, but it shares this site so
 # that neither branch can ever print from inside the arm.
 [ -z "$pre_json" ] || printf '%s\n' "$pre_json"
+# ── THE DOOR PROCESS'S DELTA (Overlord W1 door process A2, Task 6; spec §3.3.3 C38 "A delta on every prompt") ─────────
+# A session with a door (its spawn put `CCRC_DOOR_NONCE_SHA256` in the environment: a fact, never a role's name) gets one
+# short line on every prompt, which the door process keeps fresh in `$REG/.door/<id>/delta` (first line `v=1 at=<ms>
+# until=<ms>`, then the text). This read makes NO network call: a regular file, never a link or a FIFO, read under a bound,
+# its first line parsed with `LC_ALL=C`. While `until` is ahead of now it yields the text (an empty text, the anchor slot
+# still shadow, yields nothing); anything else yields the unknown line. The line joins the one envelope this event prints:
+# the roster wake's or the owed anchor's, through DOOR_DELTA, or an envelope of its own when neither prints (ruled, F14).
+DOOR_DELTA_UNKNOWN="ccrc-delta: unknown (the door process's cache is stale)"
+DOOR_DELTA_MAX_BYTES=300
+DOOR_DELTA=""
+_hook_door_delta() {   # -> DOOR_DELTA: the cache's line while its lease holds, empty for an empty one, else the unknown line
+  local LC_ALL=C IFS=' ' f="$REG/.door/$id/delta" raw="" head1="" until="" now=""
+  DOOR_DELTA="$DOOR_DELTA_UNKNOWN"
+  [[ ! -L "$REG/.door" && ! -L "$REG/.door/$id" && ! -L "$f" && -f "$f" ]] || return 0
+  raw=$(_hook_timeout 2 head -c 1024 -- "$f" 2>/dev/null) || return 0
+  head1="${raw%%$'\n'*}"
+  [[ "$head1" =~ ^v=1\ at=[0-9]{1,16}\ until=([0-9]{1,16})$ ]] || return 0
+  until="${BASH_REMATCH[1]}"; now=$(_hook_epoch_ms 2>/dev/null)
+  [[ "$now" =~ ^[0-9]{1,16}$ ]] && (( 10#$until > 10#$now )) || return 0
+  raw="${raw#"$head1"}"; raw="${raw#$'\n'}"; raw="${raw%%$'\n'*}"; head1="$raw"   # the body line, kept before the strips below
+  # No control byte reaches the model, nor U+0085, U+2028 to U+202E or U+2066 to U+2069 (line and bidi marks; review 2756 F5).
+  raw="${raw//[[:cntrl:]]/}"; raw="${raw//$'\xc2\x85'/}"; raw="${raw//$'\xe2\x80'[$'\xa8'-$'\xae']/}"; raw="${raw//$'\xe2\x81'[$'\xa6'-$'\xa9']/}"
+  [[ -z "$head1" || "$raw" == 'ccrc-delta: '* ]] && DOOR_DELTA="${raw:0:$DOOR_DELTA_MAX_BYTES}"   # dark, the server's prefix, or unknown
+}
+[[ "$event" == UserPromptSubmit && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && { _hook_door_delta || true; }
 # ── THE ROSTER CARD'S WAKE ARM (R-5a, D-8201; the worktree-economy spec's "wake arm for D4") ─────────────────────────
 # Claude Code's idle compaction (about 55 minutes after a turn ends, D-5373) starts no turn and fires none of the card's
 # three SessionStart events, so a coordinator next wakes on the server's mail nudge, or on its idle-compaction nudge,
@@ -6330,7 +6355,7 @@ _hook_roster_wake() {   # UserPromptSubmit: prints at most one envelope carrying
   [[ "$open" == true ]] || return 0
   _hook_roster_card wake || return 0
   [ -n "$CARD_ROSTER" ] || return 0
-  j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}" \
+  j=$(jq -cn --arg c "${CARD_ROSTER:0:$ROSTER_CARD_MAX_CHARS}${DOOR_DELTA:+$'\n'$DOOR_DELTA}" \
     '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) || return 0
   printf '%s\n' "$j" && ROSTER_WOKE=1
 }
@@ -6351,14 +6376,19 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
   { IFS= read -r t < "$m"; } 2>/dev/null; [[ "$t" =~ ^[0-9]$ ]] || t=0
   _hook_anchor_fetch prompt || return 0
   case "$ANCHOR_WORD" in
-    text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
-      && printf '%s\n' "$j" && rm -f -- "$m" ;;
+    text) j=$(jq -cn --arg c "${ANCHOR_TEXT:0:$ANCHOR_PROMPT_MAX_CHARS}${DOOR_DELTA:+$'\n'$DOOR_DELTA}" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null) \
+      && printf '%s\n' "$j" && rm -f -- "$m" && ANCHOR_PRINTED=1 ;;
     dark) rm -f -- "$m" ;;
     *) if (( t + 1 >= ANCHOR_OWED_TRIES )); then rm -f -- "$m"; else printf '%s\n' "$(( t + 1 ))" > "$m"; [[ -e "$REG/$id.generation" ]] || rm -f -- "$m"; fi ;;
   esac 2>/dev/null
   return 0
 }
+ANCHOR_PRINTED=""
 [[ "$event" == UserPromptSubmit && -z "$ROSTER_WOKE" && -f "$REG/$id.anchor-owed" && ! -L "$REG/$id.anchor-owed" ]] && { _hook_anchor_owed || true; }
+# The delta's own envelope, only when neither the roster wake nor the owed anchor printed one (one envelope an event).
+if [[ -n "$DOOR_DELTA" && -z "$ROSTER_WOKE" && -z "$ANCHOR_PRINTED" ]]; then
+  jq -cn --arg c "$DOOR_DELTA" '{hookSpecificOutput:{hookEventName:"UserPromptSubmit", additionalContext:$c}}' 2>/dev/null || true
+fi
 # ── THE APPROVAL WAIT (plan Task 14, spec §6.3 hook steps 1 to 7; D-5297, D-5439, D-5440, D-5441) ────────
 # A dispatched child's PermissionRequest (any tool but AskUserQuestion: the arm above set `apr`) may be ruled by its
 # coordinator, and this hook prints that ruling ONLY when the server signed it for this exact request. Here, after

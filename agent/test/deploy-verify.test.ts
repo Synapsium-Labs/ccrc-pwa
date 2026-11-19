@@ -208,6 +208,7 @@ const stampedCcd = (dir: string): Buffer => {
   const lines = readFileSync(path.join(dir, 'ccd'), 'utf8')
     .replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact.mjs'))}`)
     .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact-cli.mjs'))}`)
+    .replace(/^__CCD_DOOR_SHA256=stamp-at-install$/m, `__CCD_DOOR_SHA256=${digestOf(path.join(dir, 'door-process.mjs'))}`)
     .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`)
     .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${digestOf(path.join(dir, 'lib', 'train-proof.sh'))}`)
     .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${digestOf(path.join(dir, 'lib', 'delegation-lease.sh'))}`)
@@ -1826,7 +1827,9 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'cp -a ~/.local/libexec/ccrc/lib/door.sh ~/ccrc-backups/$TS/ccd-lib-door.sh;',
       // The docs redactor's two files (D-7077), in the library's guarded form.
       'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
-      'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;']) {
+      'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;',
+      // The door program (the Overlord door process A2), beside the body, pinned by it.
+      'cp -a ~/.local/libexec/ccrc/door-process.mjs ~/ccrc-backups/$TS/ccd-door-process.mjs;']) {
       expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
       expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
     }
@@ -1850,6 +1853,7 @@ describe('the verification is actually wired into the deploy, and can observe a 
       // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
+      cpSync(path.join(repoCcd, 'door-process.mjs'), path.join(home, 'ccrc', 'ccd', 'door-process.mjs'));   // the door program (A2)
       return home;
     };
 
