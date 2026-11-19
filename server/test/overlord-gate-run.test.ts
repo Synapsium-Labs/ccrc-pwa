@@ -92,7 +92,7 @@ async function rig(over: Partial<OverlordGateDeps> = {}): Promise<Rig> {
     actKey: (g, k) => actKeyFact(s.db, g, k),
     counter: (g, c) => advanceCounterGuarded(s.db, g, c),
     witness: () => WITNESSED,
-    recordWitness: (c) => { witnessChecks.push(c); },
+    recordWitness: (c) => { witnessChecks.push(c); return true; },
     recordFenceRefusal: (r) => { recordFenceRefusal(s.db, r); },
     serverWords: () => ['continuity-v1'],
     now: () => NOW,
@@ -307,7 +307,7 @@ describe('a passing write: the counter first, then the witness spend (review 280
     const order: string[] = [];
     const r = await rig({
       counter: (g, c) => { order.push('counter'); return advanceCounterGuarded(s.db, g, c); },
-      recordWitness: (c) => { order.push(`witness:${c.outcome}`); },
+      recordWitness: (c) => { order.push(`witness:${c.outcome}`); return true; },
     });
     const res = await call(r, 'notes-write', act(gen, key, 1));
     expect(res.statusCode).toBe(200);
@@ -316,13 +316,13 @@ describe('a passing write: the counter first, then the witness spend (review 280
   it('a counter that answers unmeasured refuses 503 with the witness unspent, and a retry with the same witness passes', async () => {
     const { gen, key } = fresh();
     const spent: string[] = [];
-    const r1 = await rig({ counter: () => 'unmeasured', recordWitness: (c) => { spent.push(c.outcome); } });
+    const r1 = await rig({ counter: () => 'unmeasured', recordWitness: (c) => { spent.push(c.outcome); return true; } });
     const res1 = await call(r1, 'notes-write', act(gen, key, 1, 'w-same'));
     expect(res1.statusCode).toBe(503);
     expect(json(res1)).toMatchObject({ ok: false, error: 'unavailable', step: '7' });
     expect(spent).toEqual([]);
     expect(storedCounter(gen)).toBe(0);
-    const r2 = await rig({ recordWitness: (c) => { spent.push(c.outcome); } });
+    const r2 = await rig({ recordWitness: (c) => { spent.push(c.outcome); return true; } });
     const res2 = await call(r2, 'notes-write', act(gen, key, 1, 'w-same'));
     expect(res2.statusCode).toBe(200);
     expect(spent).toEqual(['used']);
@@ -334,6 +334,16 @@ describe('a passing write: the counter first, then the witness spend (review 280
     const res = await call(r, 'notes-write', act(gen, key, 1));
     expect(res.statusCode).toBe(503);
     expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', step: '7a' });
+  });
+  it('a recordWitness that answers false (not spent) refuses 503 unavailable at step 7a, the counter having advanced (F2-a)', async () => {
+    const { gen, key } = fresh();
+    const calls: string[] = [];
+    const r = await rig({ recordWitness: (c) => { calls.push(c.outcome); return false; } });
+    const res = await call(r, 'notes-write', act(gen, key, 1));
+    expect(res.statusCode).toBe(503);
+    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', step: '7a' });
+    expect(calls).toEqual(['used']);
+    expect(storedCounter(gen)).toBe(1);
   });
   it('a witness port that throws puts no part of its message in the reply (N3)', async () => {
     const { gen, key } = fresh();

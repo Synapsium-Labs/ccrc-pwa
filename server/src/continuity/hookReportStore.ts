@@ -118,3 +118,75 @@ export function modelSwitchesSince(db: DatabaseSync, sessionId: string, since: n
     return readFailed(e);
   }
 }
+
+// THE WITNESS CHECKS (Overlord W1 door process B1, plan Task 9; gates B's runner calls these through `witnessPorts.ts`).
+// `continuity_witness_checks` has ONE WRITER, `recordWitnessCheck`, which also deletes this table's rows older than
+// `REPORT_KEEP_MS` in the same transaction. A `used` row carries its witness id, and the column is UNIQUE, so a witness is
+// spent once: a second use is REFUSED (never a throw, and apart from a write that failed). An `unwitnessed` row carries a null
+// witness id and its reason. The door a check came from and the witness key are not stored: the key is a call digest, and the
+// table has no door column. Reads keep unmeasured apart from none, as every read in this file does.
+
+/** One witness check, as the table keeps it. */
+export interface WitnessCheckInput {
+  readonly sessionId: string; readonly generationId: number; readonly outcome: 'used' | 'unwitnessed';
+  readonly witnessId: number | null; readonly why: string | null; readonly at: number;
+}
+/** `refused`: the witness was already used (the UNIQUE column). `write-failed`: anything else. */
+export type WitnessCheckWrite =
+  | { readonly ok: true; readonly value: { readonly id: number } }
+  | { readonly ok: false; readonly error: 'refused' | 'write-failed'; readonly detail: string };
+
+/** THE TABLE'S ONE WRITER. */
+export function recordWitnessCheck(db: DatabaseSync, c: WitnessCheckInput): WitnessCheckWrite {
+  try {
+    db.exec('BEGIN IMMEDIATE');
+    try {
+      db.prepare('DELETE FROM continuity_witness_checks WHERE at < ?').run(c.at - REPORT_KEEP_MS);
+      const res = db.prepare('INSERT INTO continuity_witness_checks (sessionId, generationId, witnessKey, witnessId, outcome, why, at) VALUES (?, ?, NULL, ?, ?, ?, ?)')
+        .run(c.sessionId, c.generationId, c.witnessId, c.outcome, c.why, c.at);
+      db.exec('COMMIT');
+      return { ok: true, value: { id: Number(res.lastInsertRowid) } };
+    } catch (e) {
+      try { db.exec('ROLLBACK'); } catch { /* the original failure is the answer */ }
+      throw e;
+    }
+  } catch (e) {
+    const detail = `continuity_witness_checks write failed: ${msg(e)}`;
+    return { ok: false, error: /UNIQUE constraint failed: continuity_witness_checks\.witnessId/.test(msg(e)) ? 'refused' : 'write-failed', detail };
+  }
+}
+
+const checksFailed = (e: unknown): { ok: false; detail: string } => ({ ok: false, detail: `continuity_witness_checks read failed: ${msg(e)}` });
+
+/** Which of these witness ids already have a `used` check. An empty list is a measured empty set. */
+export function usedWitnesses(db: DatabaseSync, ids: readonly number[]): HookStoreRead<ReadonlySet<number>> {
+  if (ids.length === 0) return { ok: true, value: new Set() };
+  try {
+    const rows = db.prepare(`SELECT witnessId FROM continuity_witness_checks WHERE witnessId IN (${ids.map(() => '?').join(', ')})`)
+      .all(...ids) as unknown as { witnessId: number }[];
+    return { ok: true, value: new Set(rows.map((r) => r.witnessId)) };
+  } catch (e) {
+    return checksFailed(e);
+  }
+}
+
+/** The session's `unwitnessed` checks at or after `since`. Zero is a measured count. */
+export function unwitnessedSince(db: DatabaseSync, sessionId: string, since: number): HookStoreRead<number> {
+  try {
+    const row = db.prepare("SELECT COUNT(*) AS n FROM continuity_witness_checks WHERE sessionId = ? AND outcome = 'unwitnessed' AND at >= ?")
+      .get(sessionId, since) as unknown as { n: number };
+    return { ok: true, value: Number(row.n) };
+  } catch (e) {
+    return checksFailed(e);
+  }
+}
+
+/** A generation's start, by the server's clock: the start row's `receivedAt`, the one every witness window reads. An absent row is unmeasured. */
+export function startReceivedAtOf(db: DatabaseSync, startId: number): HookStoreRead<number> {
+  try {
+    const row = db.prepare('SELECT receivedAt FROM continuity_starts WHERE id = ?').get(startId) as unknown as { receivedAt: number } | undefined;
+    return row === undefined ? { ok: false, detail: `no start row ${startId}` } : { ok: true, value: row.receivedAt };
+  } catch (e) {
+    return { ok: false, detail: `continuity_starts read failed: ${msg(e)}` };
+  }
+}

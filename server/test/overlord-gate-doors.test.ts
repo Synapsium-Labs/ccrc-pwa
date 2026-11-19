@@ -85,6 +85,10 @@ const close = async (r: Rig | undefined): Promise<void> => { if (r) { await r.ap
 
 const counts = (c: CoordStore): Record<string, number> =>
   Object.fromEntries(TABLES.map((t) => [t, (c.db.prepare(`SELECT COUNT(*) AS n FROM ${t}`).get() as { n: number }).n]));
+/** Every row of every table the doors write, in full (F3-a): a count would miss a row REWRITTEN in place, as the card's
+ *  snapshot is when a page is served again (`insertSnapshot` bumps `served` on a held id). */
+const rowsOf = (c: CoordStore): Record<string, unknown[]> =>
+  Object.fromEntries(TABLES.map((t) => [t, c.db.prepare(`SELECT * FROM ${t} ORDER BY rowid`).all()]));
 const GOOD_POOLS = JSON.stringify({ pools: ['pool-a'], untagged: false });
 const corruptDesignation = (c: CoordStore): void => { c.db.prepare("UPDATE overlord_designation SET accountPools = 'not json' WHERE id = 1").run(); };
 const repairDesignation = (c: CoordStore): void => { c.db.prepare('UPDATE overlord_designation SET accountPools = ? WHERE id = 1').run(GOOD_POOLS); };
@@ -349,12 +353,13 @@ describe('a multi-page card read behind a gate whose card-record fence refuses (
         expect([mid.statusCode, mid.json().recorded], `page ${p}`).toEqual([200, false]);
       }
       expect(asked.every((k) => k === 'card')).toBe(true);   // no page before the last asked the recording row
-      const before = counts(coord);
+      const before = rowsOf(coord);
+      expect(before['continuity_snapshots']).toHaveLength(1);   // page 1 stored the snapshot; the last page must not rewrite it
       const last = await getOf(app, 'card', { ...by(ID, UUID), page: String(first.pages), hash: first.hash }, ID);
       expect([last.statusCode, last.json().error, last.json().step]).toEqual([REFUSAL_STATUS['stale-generation'], 'stale-generation', '7']);
       expect(last.json().text).toBeUndefined();
       expect(asked.at(-1)).toBe('card-record');
-      expect(counts(coord)).toEqual(before);
+      expect(rowsOf(coord)).toEqual(before);   // content, not counts: a snapshot rewritten before the fence reds this
       expect(counts(coord).continuity_card_reads).toBe(0);
     } finally { await app.close(); coord.db.close(); removeTmpFixtures(); }
   });

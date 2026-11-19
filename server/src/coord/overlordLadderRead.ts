@@ -2,7 +2,10 @@
 import { LADDER_CAUSE_MAP, LADDER_CAUSES, RUNGS, rungNeeds, type ConditionReading, type LadderConditionCause, type LadderWire, type NarrowingState } from '../../../shared/overlord-ladder.js';
 import type { CONTINUITY_LANE } from '../../../shared/lane-arm.js';
 import { liveGenerationOf } from '../continuity/liveGeneration.js';
-import { degradedReading, effectiveRung, latchKnown, narrowingState, rungAvailable, rungWordReading, type EffectiveRung } from './overlordLadder.js';
+import { degradedReading, effectiveRung, latchKnown, narrowingState, offModelReading, rungAvailable, rungWordReading, type EffectiveRung } from './overlordLadder.js';
+import { offModelOf, type SidecarClass } from '../continuity/hookReports.js';
+import { familyClassOf } from '../../../shared/models.js';
+import type { SessionUsage } from '../../../shared/api.js';
 import type { LadderRowsRead } from './overlordLadderStore.js';
 import type { CoordStore } from './store.js';
 import type { LadderCauseRow, LadderLatchCause, Rung } from '../../../shared/overlord-ladder.js';
@@ -39,13 +42,35 @@ type RowStore = Pick<CoordStore, 'ladderRows'>;
 export interface NarrowingWitness { heldFor(recordSequence: number): 'held' | 'not-yet' | 'unmeasured' }
 export const NO_WITNESS_YET: NarrowingWitness = { heldFor: () => 'not-yet' };
 
-export function ladderConditionInputs(deps: { coord: InputStore; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null }): LadderConditionInputs {
+/** A session's latest status line reading, as the watcher keeps it (`FleetWatcher#currentUsage`), for the off-model input. */
+export type SidecarOf = (sessionId: string) => Pick<SessionUsage, 'class' | 'stale'> | null | undefined;
+const sidecarClassOf = (u: ReturnType<SidecarOf>): SidecarClass => (u === null || u === undefined ? { kind: 'absent' } : u.stale ? { kind: 'stale' } : { kind: 'fresh', class: u.class });
+
+export function ladderConditionInputs(deps: { coord: InputStore & Partial<Pick<CoordStore, 'modelSwitchesOf'>>; serverCaps: readonly string[]; continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null; sidecar?: SidecarOf }): LadderConditionInputs {
   return {
     'generation-degraded': () => {
       try {
         const designation = deps.coord.designationRead();
         const live = designation.kind === 'designated' ? liveGenerationOf(deps.coord, designation.sessionId, deps.continuityGate) : 'no-generation';
         return degradedReading(designation, live);
+      } catch { return 'unmeasured'; }
+    },
+    // The designated live generation's model class against the designation's, from the generation's start model, the model
+    // switches the hook reported since it began and the watcher's fresh sidecar (`offModelOf`); an absent `sidecar` dep reads
+    // as no sidecar. "Its replay not passed" reads as not passed in W1 (slug `off-model-replay-reads-not-passed-in-w1`).
+    'off-model': () => {
+      try {
+        const designation = deps.coord.designationRead();
+        if (designation.kind !== 'designated') return offModelReading(designation, 'no-generation', { ok: false, detail: 'no designation' });
+        const live = liveGenerationOf(deps.coord, designation.sessionId, deps.continuityGate);
+        if (live === 'unmeasured' || live === 'no-generation') return offModelReading(designation, live, { ok: false, detail: 'no live generation' });
+        const sw = deps.coord.modelSwitchesOf === undefined ? { ok: false as const, detail: 'no model switch read' } : deps.coord.modelSwitchesOf(designation.sessionId, live.row.startReportedAt);
+        const switches = sw.ok ? { ok: true as const, value: sw.value.map((r) => ({ how: r.how, toClass: r.to === null ? null : familyClassOf(r.to) })) } : sw;
+        const answer = offModelOf({
+          designatedClass: designation.row.model, startClass: live.row.model === null ? null : familyClassOf(live.row.model), switches,
+          sidecarClass: sidecarClassOf(deps.sidecar?.(designation.sessionId)),
+        });
+        return offModelReading(designation, 'present', answer);
       } catch { return 'unmeasured'; }
     },
     'rung-word-missing': () => {

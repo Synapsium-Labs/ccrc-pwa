@@ -36,7 +36,7 @@ import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
 import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
-import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
+import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
 import {
@@ -88,7 +88,7 @@ export interface ContinuityRouteDeps {
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
   /** The private store's text-free message read, for a `miss` note's key (`NoteKeysMessages`), resolved per request. Absent, or
    *  null while the store is not open: a `message` key then reads `unmeasured` and the door refuses `unmeasured`. */
-  operatorModel?: () => NoteKeysMessages | null | undefined;
+  operatorModel?: () => (NoteKeysMessages & Partial<ReadLedgerCount>) | null | undefined;
   /** The setter's stamp: `incarnationOf`'s two agreeing reads of `$REG/<id>.generation`. NOT `cardRegistry.incarnation`, its
    *  single read (slug setter-stamp-is-a-double-read): the stamp keys a timer whose mismatch later cancels it, irreversibly,
    *  so a file that changes between the reads answers `unmeasured` and the set refuses `timer-unmeasured`, where the card's
@@ -1046,8 +1046,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   /**
    * `POST /api/sessions/:id/probe { byId, byUuid, roundId, answers: [{ id, answer }] }`: answer every question of one open
    * round of the caller's live generation, in one call. Each answer is graded closed-form (`gradeAnswers`: against the
-   * masked question when it carries a placeholder, the stored one otherwise; a question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
-   * otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
+   * masked question when it carries a placeholder, the stored one otherwise; a question left out fails), the book state is `open` after a card or notes read since the round was asked, or a ledger line of the designated session
+   * in that span, `closed` for it with neither, and `unmeasured` otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
    * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's live generation
    * carries the id (another session's round, and one left open by an earlier generation, are invisible, as on the GET), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
    * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is stored masked.
@@ -1090,9 +1090,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const graded = gradeAnswers(round.rows, answers, mask);
     const last = coord.lastContinuityRead(id);
     const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
-    const book = bookOf(lastRead, first.askedAt);
+    const answeredAt = deps.wall();
+    const ledger = ledgerFactsOf({ designation: designationReadOf(coord), callerId: id, reads: deps.operatorModel?.()?.readsBetween?.(LEDGER_SESSION_CALLERS, first.askedAt, answeredAt) ?? null });
+    const book = bookOf(lastRead, first.askedAt, ledger);
     // `answerRound` compares and sets on every question being unanswered: a round answered already is refused there.
-    const w = coord.answerRound(roundId, id, graded, book, deps.wall());
+    const w = coord.answerRound(roundId, id, graded, book, answeredAt);
     if (!w.ok) {
       return w.kind === 'closed' ? refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered or closed already` })
         : refuseRoute(reply, 'write-failed', { detail: 'continuity_probes could not be written' });

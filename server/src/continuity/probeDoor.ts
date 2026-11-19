@@ -23,6 +23,9 @@
 // so each question and its choices are rendered as one untrusted block, the choices as JSON strings so that a newline in
 // one can never read as another choice.
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
+import type { ReadCaller } from '../../../shared/operatorMessages.js';
+import { identityOf, type DesignationFact } from '../roleOf.js';
+import type { Read } from './hookReports.js';
 import { BOOK_STATES, PROBE_NONE, type BookState, type ProbeGrade, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_TEXT_PREFACE, untrustedBlock } from '../coord/untrusted.js';
 import { cardPages } from './card.js';
@@ -101,16 +104,47 @@ export function gradeAnswers(rows: readonly StoredQuestion[], answers: ReadonlyM
 /** The session's newest card or notes read, or that it could not be read. */
 export type LastRead = { readonly kind: 'read'; readonly at: number | null } | { readonly kind: 'unmeasured' };
 
-/** Closed-book, recorded honestly (Review Focus 3): `open` when the session read its card or notes at or after the round
- *  was asked, and `unmeasured` otherwise, since reads through other doors carry no attribution in W1a and a read that could
- *  not be measured proves nothing either way. Never `closed` in W1a: that needs W1's witness (slug
- *  closed-book-is-unmeasured-in-w1a). */
-export function bookOf(last: LastRead, askedAt: number): BookState {
+/** The server's read ledger as closed-book reads it for one session (plan `w1-door-process.md` Task 9, ruled F10): whether
+ *  the ledger covers the session, and how many of its lines fall between the ask and the answer. `covered` is true for the
+ *  designated session only, since every read it makes goes through an Overlord read door and each such door writes a ledger
+ *  line; a coordinator, a worker and a plain session are not covered (slug `closed-book-reads-the-ledger`). */
+export type LedgerFacts = Read<{ readonly covered: boolean; readonly reads: number }>;
+
+/** The port this door declares for the count (L2, declared by its consumer, built from the private store at composition; no
+ *  C3 file imports the store). `callers` are the ledger's caller words for the designated session and its readers. A read
+ *  that failed answers `unmeasured`, never zero. */
+export interface ReadLedgerCount {
+  readsBetween(callers: readonly ReadCaller[], from: number, to: number):
+    { readonly kind: 'measured'; readonly value: number } | { readonly kind: 'unmeasured'; readonly why: string };
+}
+/** The ledger's caller words that are the designated session's own reads: itself and the readers it starts. */
+export const LEDGER_SESSION_CALLERS: readonly ReadCaller[] = ['overlord', 'reader'];
+
+/** Who the ledger covers, and what its count was (`ReadLedgerCount`'s answer, or `null` when it was not asked). Covered only
+ *  for the designated session (`identityOf` names it `overlord`); an unreadable designation or count is unmeasured. For a
+ *  session the ledger does not cover, the ledger attributes nothing to it, so `reads` is 0 by construction and `covered: false`
+ *  is what keeps `bookOf` from answering `closed`. */
+export function ledgerFactsOf(i: { designation: DesignationFact | 'unmeasured'; callerId: string; reads: ReturnType<ReadLedgerCount['readsBetween']> | null }): LedgerFacts {
+  if (i.designation === 'unmeasured') return { ok: false, detail: 'the designation could not be read' };
+  if (identityOf(i.callerId, i.designation) !== 'overlord') return { ok: true, value: { covered: false, reads: 0 } };
+  if (i.reads === null) return { ok: false, detail: 'the read ledger was not asked' };
+  return i.reads.kind === 'measured' ? { ok: true, value: { covered: true, reads: i.reads.value } } : { ok: false, detail: i.reads.why };
+}
+
+/** Closed-book, recorded honestly (Review Focus 3; C41). `open` when the session read its card or notes at or after the round
+ *  was asked, or when the ledger holds a read of its between ask and answer. `closed` only when the ledger covers the session,
+ *  was measured, holds no such read, and the card and notes were measured with no read at or after the ask. `unmeasured`
+ *  otherwise: a session the ledger does not cover, an unreadable ledger, and a card or notes read that could not be measured
+ *  prove nothing either way. */
+export function bookOf(last: LastRead, askedAt: number, ledger: LedgerFacts): BookState {
   if (last.kind === 'read' && last.at !== null && last.at >= askedAt) return 'open';
+  if (!ledger.ok) return 'unmeasured';
+  if (ledger.value.reads > 0) return 'open';
+  if (ledger.value.covered && last.kind === 'read') return 'closed';
   return 'unmeasured';
 }
-/** The states this build can record (`bookOf`'s answers): `closed` is not among them in W1a. */
-export const BOOK_STATES_RECORDED: readonly BookState[] = BOOK_STATES.filter((b) => b !== 'closed');
+/** The states this build can record (`bookOf`'s answers): all three. */
+export const BOOK_STATES_RECORDED: readonly BookState[] = BOOK_STATES;
 
 /** The page text of one round: what to do, each question as one untrusted block with its choices, and the command that
  *  answers. Split into pages by the card's own pager (`cardPages`), so a page stays under the tool result cut. `door` (the

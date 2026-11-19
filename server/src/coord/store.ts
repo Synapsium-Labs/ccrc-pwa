@@ -44,6 +44,7 @@ import {
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import { modelSwitchesSince, type HookStoreRead, type ModelSwitchRow } from '../continuity/hookReportStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
@@ -5507,6 +5508,8 @@ export class CoordStore {
   /** Overlord §3.3.11: every reported start after an id, the generations lane's read (`continuityStore.ts`). */
   startsSince(sinceId: number, limit?: number): StartsRead { return startsSince(this.db, sinceId, limit); }
   startsOf(sessionId: string, limit: number): StartsRead { return startsOf(this.db, sessionId, limit); }
+  /** Overlord W1 door process B1: the session's reported model switches received at or after `since` (the off-model input's read). */
+  modelSwitchesOf(sessionId: string, since: number): HookStoreRead<ModelSwitchRow[]> { return modelSwitchesSince(this.db, sessionId, since); }
   /** Overlord §3.3.11, H12: the generations, written only by the generations lane through `continuityStore.ts`. */
   liveGenerations(): GenerationsRead { return liveGenerations(this.db); }
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }

@@ -427,3 +427,29 @@ describe('recordRead: the one writer of the read ledger', () => {
     expect((f.db.prepare('SELECT count(*) AS c FROM read_ledger').get() as { c: number }).c).toBe(0);
   });
 });
+
+describe('readsBetween: the count closed-book reads (Overlord W1 door process B1)', () => {
+  it('counts the named callers\' lines in the closed span, never the operator\'s or an outside line', () => {
+    const f = fixture();
+    const reader = { ...LINE, caller: 'reader' as const, generation: null, generationRead: 'unmeasured' as const, turnState: 'stale' as const };
+    const operator = { ...LINE, caller: 'operator' as const, generation: null, generationRead: 'not-a-session' as const, turnState: null };
+    f.store.recordRead({ ...LINE, at: 99 });
+    f.store.recordRead({ ...LINE, at: 100 });
+    f.store.recordRead({ ...reader, at: 150 });
+    f.store.recordRead({ ...operator, at: 150 });
+    f.store.recordRead({ ...LINE, at: 200 });
+    f.store.recordRead({ ...LINE, at: 201 });
+    expect(f.store.readsBetween(['overlord', 'reader'], 100, 200)).toEqual({ kind: 'measured', value: 3 });
+    expect(f.store.readsBetween(['overlord'], 100, 200)).toEqual({ kind: 'measured', value: 2 });
+    expect(f.store.readsBetween(['overlord', 'reader'], 202, 300)).toEqual({ kind: 'measured', value: 0 });
+  });
+  it('is unmeasured, never zero, for a closed store, an empty or unknown caller list and a bad bound', () => {
+    const f = fixture();
+    expect(f.store.readsBetween([], 0, 1).kind).toBe('unmeasured');
+    expect(f.store.readsBetween(['nobody' as never], 0, 1).kind).toBe('unmeasured');
+    expect(f.store.readsBetween(['overlord'], -1, 1).kind).toBe('unmeasured');
+    expect(f.store.readsBetween(['overlord'], 0, 1.5).kind).toBe('unmeasured');
+    f.db.close();
+    expect(f.store.readsBetween(['overlord'], 0, 1).kind).toBe('unmeasured');
+  });
+});

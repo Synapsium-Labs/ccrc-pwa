@@ -333,3 +333,18 @@ export function applyRestoreInTx(db: DatabaseSync, stricter: StricterLadder, con
   }
   db.prepare('UPDATE overlord_latches SET raiseSequence = ? WHERE clearedAt IS NULL AND raiseSequence IS NULL').run(confirmSequence);
 }
+
+// ── latchLastClearedAt ────────────────────────────────────────────────────────────────────────────────────────────────
+
+/** The operator's newest clear of one cause (the newest `clearedAt` among its cleared rows): `at: null` is a measured "never
+ *  cleared"; a database that cannot be read is `unmeasured`, never `null`. Door process B's unwitnessed latch counts from it. */
+export type LatchClearedRead = { readonly kind: 'measured'; readonly at: number | null } | { readonly kind: 'unmeasured'; readonly why: string };
+export function latchLastClearedAt(db: DatabaseSync, cause: string): LatchClearedRead {
+  try {
+    const row = db.prepare('SELECT MAX(clearedAt) AS at FROM overlord_latches WHERE cause = ? AND clearedAt IS NOT NULL').get(cause) as { at: number | bigint | null };
+    if (row.at !== null && (typeof row.at !== 'number' || !Number.isSafeInteger(row.at))) return { kind: 'unmeasured', why: 'a clear time that is not a safe integer' };
+    return { kind: 'measured', at: row.at };
+  } catch (err) {
+    return { kind: 'unmeasured', why: whyOf(err) };
+  }
+}
