@@ -47,7 +47,7 @@ export const APPROVAL_ENVELOPE_CASES: readonly EnvelopeCase[] = [
   { name: 'a menu that is not a permission prompt matches nothing (an AskUserQuestion, a /model confirm, an unparsed pane)', run: (m) => {
     expect(m.approvalEntryFor([A], menu('rm -rf scratch/out', { options: [{ index: 1, label: 'Left' }, { index: 2, label: 'Right' }] }))).toBeNull();
     expect(m.approvalEntryFor([A], menu('rm -rf scratch/out', { parsed: false }))).toBeNull();
-    expect(m.approvalEntryFor([A], menu('rm -rf scratch/out', { ask: { question: 'q', options: [] } }))).toBeNull();
+    expect(m.approvalEntryFor([A], menu('rm -rf scratch/out', { ask: { question: 'q', multiSelect: false, options: [] } }))).toBeNull();
   } },
   { name: 'the pane\'s wrap, mid-word too, still matches: whitespace is removed on both sides', run: (m) => {
     const long = entry('agent-c', 'cp -r /work/project-a/some/deeply/nested/directory/with/files /work/project-a/elsewhere/copy', 300);
