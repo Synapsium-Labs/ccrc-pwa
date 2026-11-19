@@ -40,7 +40,9 @@
 // run that is now terminal. The run stays `failed` (a dispatch that already returned never binds it, and no path
 // moves a terminal run back), and the child reclaim lane takes that workspace under its existing rule for a child of
 // a closed run, which `reclaim-paused` and `child-reclaim-disabled` still stop. The coordinator, already mailed,
-// dispatches a new run. The bound is what makes this residual: the stamp is past the `ws-add` ceiling by then.
+// dispatches a new run. The bound is what makes this residual: the stamp is past the `ws-add` ceiling by then. An
+// orphaned run (D-8126) skips the bound, but its orphan row is written only after a measured `ws-add` ending: ccd
+// returned, so that `ws-add` is not still running either.
 import type { FleetIO } from '../io.js';
 import type { SessionVerdict } from '../exec.js';
 import type { CcrcConfig } from '../config.js';

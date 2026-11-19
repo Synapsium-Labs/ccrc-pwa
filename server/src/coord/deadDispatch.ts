@@ -10,7 +10,11 @@
 //   2. the run itself: still `planned`, no session bound, a dispatch stamp, and a coordinator to tell (`claimedBy`);
 //   3. NOTHING IN FLIGHT: the stamp is at least `boundMs` old. The bound's floor is `SPAWN_STALL_MS` (config), and that
 //      is at or above the `ws-add` ceiling the runner and the agent enforce, so the `ws-add` started at that stamp has
-//      returned or been killed. A retry restamps the run, so a dispatch started since reads young again. The executor
+//      returned or been killed. A retry restamps the run, so a dispatch started since reads young again. The one run
+//      that skips the bound is an ORPHAN (D-8126): its newest journal row since the stamp is `dispatch-orphaned:`,
+//      which `decideBind` writes only after a MEASURED `ws-add` ending (ok, or a failure ccd exited with). ccd
+//      returned, so no `ws-add` started at that stamp still runs. A cut-short or unmeasured ending (a deadline, a
+//      signal, a dropped agent link) writes no orphan row, and that run waits out the bound as before. The executor
 //      runs this verdict a second time INSIDE the coordination serialiser, which every dispatch holds for its whole
 //      length, so no dispatch of this server is between its `ws-add` and its bind at that read;
 //   4. a box that marks its workspaces: a dispatch journaled `child-omitted:` minted a workspace no marker names, so the

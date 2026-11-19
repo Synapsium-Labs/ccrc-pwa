@@ -34,6 +34,9 @@ import { mkTmp } from './tmpHelpers.js';
 import { okRun } from './coordReadHelpers.js';
 import { DISPATCH_ABANDON_PER_PASS } from '../src/coord/abandonDeadDispatch.js';
 import { bindReturnedChild } from '../src/coord/dispatch.js';
+import { decideDispatch } from '../src/coord/dispatchDecide.js';
+import type { RegistryRead } from '../src/registry.js';
+import { UNMEASURED } from '../src/unmeasured.js';
 
 afterEach(() => { vi.restoreAllMocks(); });
 
@@ -606,6 +609,27 @@ describe('an orphaned spawn goes to the pass at once (D-8126)', () => {
     expect(f.sessionOf(id)).toBe('demo-w9');
     expect(f.stateOf(id)).toBe('planned');
     expect(f.binds(id)).toHaveLength(1);
+    expect(f.mail()).toEqual([]);
+  });
+
+  it('F1, the review\'s chain: a cut-short ws-add, then an unlistable AFTER read, then an empty registry next pass, is NOT abandoned before the bound', async () => {
+    const f = await fixture();
+    const id = f.stalled(60_000);
+    // The decider meets the dropped link: ccd's ending is cut short (or unmeasured), the AFTER read does not list.
+    for (const cutShort of [true, UNMEASURED] as const) {
+      const d = decideDispatch({ step: 'bind', project: 'demo', childSlug: null, beforeIds: new Set(),
+        after: { listed: false } as unknown as RegistryRead, res: { ok: false, stderr: '', cutShort } });
+      expect(d.kind).toBe('refused');
+      // What `stopped()` journals: the refusal's event, then the orphan event last when there is one.
+      if (d.kind === 'refused') {
+        if (d.event !== undefined) f.coord.recordRunEvent(id, 'coordinator', d.event);
+        if (d.orphanEvent !== undefined) f.coord.recordRunEvent(id, 'coordinator', d.orphanEvent);
+      }
+    }
+    // The next pass reads an empty registry: the run is not a candidate, and nothing closes it inside the bound.
+    expect(f.coord.stalledDispatchRunIds(f.now() - BOUND)).not.toContain(id);
+    await f.pass();
+    expect(f.stateOf(id)).toBe('planned');
     expect(f.mail()).toEqual([]);
   });
 

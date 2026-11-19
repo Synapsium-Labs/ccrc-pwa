@@ -16,7 +16,9 @@ export function isDispatchAbandonChoice(v: unknown): v is DispatchAbandonChoice 
 /** How long a `planned` run may carry a `dispatchStartedAt`, with no session bound, before the server abandons it:
  *  the default of `CCRC_DISPATCH_ABANDON_MS`. Fifteen minutes. The console calls such a dispatch stalled at
  *  `SPAWN_STALL_MS` (6 min); this waits two and a half times that, and three times the `ws-add` verb ceiling the runner
- *  and the agent enforce (300 s), so no `ws-add` started at that stamp can still be running when the act reads it. */
+ *  and the agent enforce (300 s), so no `ws-add` started at that stamp can still be running when the act reads it.
+ *  An orphaned run (D-8126, `DISPATCH_ORPHANED_EVENT`) skips this bound only when ccd's `ws-add` ended measured (it
+ *  returned), so the same holds for it: a cut-short or unmeasured ending journals no orphan and waits here. */
 export const DISPATCH_ABANDON_DEFAULT_MS = 900_000;
 
 /** What the server read of the switch, on the wire (`GET /api/coord/dispatch-abandon`).
@@ -53,9 +55,10 @@ export const DISPATCH_ABANDON_EVENT = 'dispatch-abandoned:never-came-back';
  *  from a dispatch's own. Followed by `session=<id> started=<ms>`. */
 export const DISPATCH_BIND_EVENT = 'dispatch-bound:returned-child';
 
-/** D-8126: the `run_events.detail` prefix a dispatch journals when its `ws-add` ran and the AFTER read could not name
- *  the one new workspace (`registry-unmeasurable`, `ambiguous-dispatch`): a spawn may exist that no run owns. Followed by
- *  the refusal's name. The dead-dispatch pass reads it as "do not wait out the bound". */
+/** D-8126: the `run_events.detail` prefix a dispatch journals when its `ws-add` ENDED MEASURED (ok, or a failure ccd
+ *  exited with) and the AFTER read could not name the one new workspace (`registry-unmeasurable`, `ambiguous-dispatch`):
+ *  a spawn may exist that no run owns, and no `ws-add` of that dispatch still runs. Followed by the refusal's name. The
+ *  dead-dispatch pass reads it as "do not wait out the bound". */
 export const DISPATCH_ORPHANED_EVENT = 'dispatch-orphaned:';
 
 /** D-8126: the orphaned refusal's name (what follows `DISPATCH_ORPHANED_EVENT`) when a run's NEWEST journal row at or after

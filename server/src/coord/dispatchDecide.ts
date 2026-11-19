@@ -70,8 +70,11 @@ const refused = (outcome: DispatchHalt, event?: string, orphanEvent?: string): D
 
 /** D-8126: the `run_events.detail` a refusal journals when the `ws-add` ran and may have left a spawn the dispatch
  *  could not bind (`DISPATCH_ORPHANED_EVENT` + the refusal's name). Only `decideBind` makes one: `decideBefore` refuses
- *  before any spawn. */
-const orphaned = (kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string => `${DISPATCH_ORPHANED_EVENT}${kind}`;
+ *  before any spawn. ONLY A MEASURED ENDING journals it (the coordinator's ruling F1, run 2785): `ok`, or a failure
+ *  ccd exited with (`cutShort === false`). A cut-short or unmeasured ending (a deadline, a signal, a dropped agent link)
+ *  may leave `ws-add` still running on the box, so that run keeps the dead-dispatch pass's in-flight bound. */
+const orphaned = (res: SpawnEnding, kind: 'registry-unmeasurable' | 'ambiguous-dispatch'): string | undefined =>
+  (res.ok || res.cutShort === false ? `${DISPATCH_ORPHANED_EVENT}${kind}` : undefined);
 
 /** What `capsMeasured` reads: the caps, the usage and, when the concurrency cap is reached, its numbers. */
 export interface CapsReading {
@@ -306,7 +309,7 @@ function decideBind(f: BindFacts): DispatchDecision<BindPlan> {
       [...afterRead.refused].some((x) => !beforeIds.has(x))) {
     // ccd's own words ride along when ccd ALSO failed. Present-or-absent, never `''`.
     return refused({ ok: false, kind: 'registry-unmeasurable', ...(res.ok ? {} : { stderr: res.stderr }) }, undefined,
-      orphaned('registry-unmeasurable'));
+      orphaned(res, 'registry-unmeasurable'));
   }
   // A NAMED spawn has one acceptable identity, `<project>-<slug>` (ccd's id grammar): any other new row is a
   // stranger (an operator's racing `ws-add`) and is never bound in its place.
@@ -322,10 +325,10 @@ function decideBind(f: BindFacts): DispatchDecision<BindPlan> {
       // ws-add worked and we cannot read the diff", which is a different sentence.
       if (candidates.length === 0) return refused({ ok: false, kind: 'fleetFailed', stderr: res.stderr }, event);
       return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, event,
-        orphaned('ambiguous-dispatch'));
+        orphaned(res, 'ambiguous-dispatch'));
     }
     return refused({ ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: candidates.length }, undefined,
-      orphaned('ambiguous-dispatch'));
+      orphaned(res, 'ambiguous-dispatch'));
   }
   const winner = candidates[0]!;
   // §1.5: `!res.ok` no longer short-circuits before the diff. ADOPTION NEEDS POSITIVE EVIDENCE THAT THIS CANDIDATE
