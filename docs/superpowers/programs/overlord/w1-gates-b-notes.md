@@ -157,10 +157,11 @@ cases above.
 
 ## For the coordinator
 
-- **Migration 108**: main reached 106 with programme work map WM1 (#2997) and 107 with the Linear wave 4 follow-ups (#3021), so this PR's table is 108, renumbered at the
-  two absorptions of `main` (each on the conflict probe, the second during fix round 1 so the PR had a merge ref for its fast
-  run; both under the brief's standing license, every conflict an additive migration or pin line). The mid-turn mail PR 2 also holds a migration in its own merge; whichever lands second renumbers (its holder
-  agreed the four additive co-edits: schema, the two version pins, the rollback fixture, the floors).
+- **Migration 109**: main took 106 (programme work map WM1, #2997), 107 (the Linear wave 4 follow-ups, #3021) and 108 (the
+  mid-turn mail PR 2, #3073), so this PR's table is 109. It was renumbered at three absorptions of `main`, each on the conflict
+  probe and under the brief's standing license, with every conflict an additive migration, pin or census line. The second
+  gave the fix round's PR a merge ref for its fast run; the third followed the coordinator's mail naming 109. The mid-turn mail
+  PR 2's holder agreed the four additive co-edits (schema, the two version pins, the rollback fixture, the floors).
 - **Local measurements the box could not make**: the floors suite's two `pwa/src/face/mood.ts` sets fail to load here
   (`@ccrc/ui` is not installed in this worktree's `pwa/`), and `secret-mask`'s "typed slowly" case is the known local timing
   red (door process A1's notes measured it red on a clean `main`). The whole tests-inclusive type check is OOM-killed in the

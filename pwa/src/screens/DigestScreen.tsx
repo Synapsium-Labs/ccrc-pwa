@@ -28,6 +28,7 @@ import { DigestDrift } from './DigestDrift';
 import { HandledElsewhere } from '../responses/HandledElsewhere';
 import { useOpenedReceipt } from '../responses/useOpenedReceipt';
 import { digestLineKey } from '../../../shared/responses';
+import { callRefusalText } from '../ledgers/callWords';
 import './digest.css';
 
 const DAY_MS = 86_400_000;
@@ -62,7 +63,7 @@ export function asDigestAnswer(raw: unknown): DigestAnswer | null {
   if (d.v !== 1 || typeof d.day !== 'string' || !Array.isArray(d.lines) || d.totals === undefined
     || typeof d.fromMs !== 'number' || typeof d.toMs !== 'number') return null;
   const lines = d.lines.filter((l): l is DigestLine => l !== null && typeof l === 'object'
-    && (l.rowKind === 'ask' || l.rowKind === 'approval') && typeof l.id === 'number'
+    && (l.rowKind === 'ask' || l.rowKind === 'approval' || l.rowKind === 'call') && typeof l.id === 'number'
     && typeof l.kind === 'string' && l.kind in DIGEST_KIND_WORD && typeof l.at === 'number'
     && typeof l.coordinator === 'string' && typeof l.childId === 'string' && typeof l.text === 'string');
   const { drift: _drift, ...rest } = d as DigestAnswer;
@@ -87,7 +88,9 @@ export function digestTotalsText(d: DigestAnswer): string {
 }
 
 /** A correction refused, in words. */
-function correctionError(err: unknown): string {
+function correctionError(err: unknown, rowKind: DigestLine['rowKind']): string {
+  // A call's refusals have ONE owner, the call table (review 2792 F5): the Overturn sheet and this line say the same words.
+  if (rowKind === 'call') return callRefusalText(err) ?? apiErrorText(err);
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const word = (err.body as { error?: unknown }).error;
     if (word === 'not-coordinator') return 'No coordinator decided this line, so there is no one to correct.';
@@ -116,25 +119,34 @@ function DigestRow({ line, day, correct, onCorrected }: {
     setError(null);
     correct({ rowKind: line.rowKind, id: line.id, text })
       .then(() => { setOpen(false); setText(''); onCorrected(); })
-      .catch((err: unknown) => setError(correctionError(err)))
+      .catch((err: unknown) => setError(correctionError(err, line.rowKind)))
       .finally(() => setBusy(false));
   };
-  const detail = line.rowKind === 'ask'
-    ? (line.answer !== null ? `answer: ${line.answer}` : null)
-    : [line.tool, line.class, line.reason !== null ? `reason: ${line.reason}` : null].filter(Boolean).join(' · ');
+  // A big call (D-8126) names the option the coordinator chose and why; it has no child and no command.
+  const detail = line.rowKind === 'call'
+    ? [line.answer !== null && line.answer !== '' ? `chose: ${line.answer}` : null,
+      line.reason !== null && line.reason !== '' ? `reason: ${line.reason}` : null].filter(Boolean).join(' · ')
+    : line.rowKind === 'ask'
+      ? (line.answer !== null ? `answer: ${line.answer}` : null)
+      : [line.tool, line.class, line.reason !== null ? `reason: ${line.reason}` : null].filter(Boolean).join(' · ');
   return (
     <li className="digest-row" data-kind={line.kind} data-corrected={line.corrected ? 'true' : 'false'}>
       <span className="digest-kind">{DIGEST_KIND_WORD[line.kind]}</span>
       <span className="digest-who">
         <span className="digest-coordinator">{line.coordinator}</span>
-        <span className="digest-arrow" aria-hidden="true">{' → '}</span>
-        <span className="sr-only">{' for '}</span>
-        <span className="digest-child">{line.childId}</span>
+        {line.childId !== '' && (
+          <>
+            <span className="digest-arrow" aria-hidden="true">{' → '}</span>
+            <span className="sr-only">{' for '}</span>
+            <span className="digest-child">{line.childId}</span>
+          </>
+        )}
       </span>
       <span className="digest-when">{utcClock(line.at)}</span>
       <p className="digest-text">
-        <span className="digest-what">{line.rowKind === 'ask' ? 'question' : 'command'}</span>
-        {line.text === '' ? <span className="digest-cleared">(text cleared after the retention period)</span> : line.text}
+        <span className="digest-what">{line.rowKind === 'ask' ? 'question' : line.rowKind === 'call' ? 'call' : 'command'}</span>
+        {/* A call that asked no question has no text of its own: its chosen option and reason are the detail line. */}
+        {line.text === '' ? (line.rowKind === 'call' ? null : <span className="digest-cleared">(text cleared after the retention period)</span>) : line.text}
       </p>
       {detail !== null && detail !== '' && <p className="digest-detail">{detail}</p>}
       <div className="digest-actions">

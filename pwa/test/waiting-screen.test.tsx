@@ -4,7 +4,9 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
-import { WAITS_ON_WORDS } from '../../shared/ledgers';
+import type { CallView } from '../../shared/api';
+import { WAITS_ON_WORDS, type WaitingView } from '../../shared/ledgers';
+import { CALL_REFUSAL_TEXT } from '../src/ledgers/callWords';
 import type { AskMarkRow } from '../../shared/answerMarks';
 import { fleetHues } from '../src/fleet/programmeBoxes';
 import { ClearedTrail, ItemRows, WaitingScreen } from '../src/ledgers/WaitingScreen';
@@ -1014,5 +1016,103 @@ describe('the answer marks on asks (Overlord W1, answer marks B)', () => {
     const boxes = screen.getAllByRole('checkbox') as HTMLInputElement[];
     expect(boxes).toHaveLength(4);
     for (const b of boxes) expect(b.disabled).toBe(true);
+  });
+});
+
+describe('calls made for you (D-8126)', () => {
+  const call = (over: Partial<CallView> = {}): CallView => ({
+    id: 1, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big', question: 'Which store?', options: ['sql', 'files'],
+    chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null,
+    overturnedAt: null, overturnNote: null, ...over,
+  });
+  const withItem = (extra: Partial<WaitingView>): WaitingView => waitingView({
+    items: [itemView({ id: 1, program: 'prog-a', title: 'A blocking thing', neededBy: 'blocking' })], ...extra,
+  });
+
+  it('two unseen big calls draw one collapsed group, (2), below the programme rows', () => {
+    open({ view: withItem({ calls: [call({ id: 1 }), call({ id: 2, chosen: 'files' })] }) });
+    const group = screen.getByRole('region', { name: /prog-a/ });
+    const details = group.querySelector('details.wl-calls')!;
+    expect(details.hasAttribute('open')).toBe(false);
+    expect(within(group).getByText('Calls made for you (2)')).toBeTruthy();
+    const list = group.querySelector('.wl-items')!;
+    expect(list.compareDocumentPosition(details) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('calls never count as blocking and never end the "nothing needs you" line', () => {
+    open({ view: waitingView({ calls: [call({ id: 1 })] }) });
+    expect(screen.getByText('Nothing needs you.')).toBeTruthy();
+    expect(screen.getByText('Calls made for you (1)')).toBeTruthy();
+    cleanup();
+    open({ view: withItem({ calls: [call({ id: 1 }), call({ id: 2 })] }) });
+    expect(screen.getByRole('button', { name: /All programmes/ }).textContent).toMatch(/1$/);
+    expect(document.querySelector('.wl-summary')!.textContent).not.toMatch(/call/i);
+  });
+
+  it('a programme with calls and no rows draws its calls apart, inside the list, and only under its own filter', () => {
+    const view = withItem({ calls: [call({ id: 4, program: 'prog-b' })] });
+    open({ view });
+    const apart = screen.getByRole('region', { name: /prog-b/ });
+    expect(apart.closest('.wl-groups')).not.toBeNull();
+    expect(within(apart).getByText('Calls made for you (1)')).toBeTruthy();
+    cleanup();
+    open({ view, programme: 'prog-a' });
+    expect(screen.queryByRole('region', { name: /prog-b/ })).toBeNull();
+  });
+
+  it('Seen posts once per call', () => {
+    const onSeen = vi.fn().mockResolvedValue(undefined);
+    open({ view: withItem({ calls: [call({ id: 7 })] }), onSeen });
+    const seen = screen.getByRole('button', { name: 'Seen' });
+    fireEvent.click(seen);
+    fireEvent.click(seen);
+    expect(onSeen).toHaveBeenCalledTimes(1);
+    expect(onSeen).toHaveBeenCalledWith(7);
+  });
+
+  it('a rejected Seen re-enables the button and says why on the row', async () => {
+    const onSeen = vi.fn().mockRejectedValueOnce(new ApiError(409, { error: 'not-big' })).mockResolvedValue(undefined);
+    open({ view: withItem({ calls: [call({ id: 7 })] }), onSeen });
+    const seen = screen.getByRole('button', { name: 'Seen' }) as HTMLButtonElement;
+    fireEvent.click(seen);
+    expect((await screen.findByRole('alert')).textContent).toBe(CALL_REFUSAL_TEXT['not-big']);
+    expect(seen.disabled).toBe(false);
+    fireEvent.click(seen);
+    expect(onSeen).toHaveBeenCalledTimes(2);
+  });
+
+  it('the device\'s saved copy draws the calls with no Seen', () => {
+    open({ view: withItem({ calls: [call({ id: 7 })] }), onSeen: vi.fn(), notCurrent: 'Saved on this device.' });
+    expect(screen.getByText('Calls made for you (1)')).toBeTruthy();
+    expect(screen.queryByRole('button', { name: 'Seen' })).toBeNull();
+  });
+
+  it('a cleared call joins the Recently cleared trail, not the group', () => {
+    open({ view: withItem({ calls: [], callsCleared: [call({ id: 3, chosen: 'files', seenAt: NOW - MIN })] }) });
+    expect(screen.queryByText(/Calls made for you/)).toBeNull();
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(within(trail).getByText(/Chose: files/)).toBeTruthy();
+  });
+
+  // Fix round 1 (review 2792 F8): an overturned call is never a bare tick that reads as accepted.
+  it('a cleared call says how it cleared, and when', () => {
+    open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - 3 * MIN }), call({ id: 4, overturnedAt: NOW - 4 * MIN, overturnNote: 'no' })] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(trail.querySelector('[data-call="3"]')!.textContent).toMatch(/· seen 3m ago$/);
+    expect(trail.querySelector('[data-call="4"]')!.textContent).toMatch(/· overturned 4m ago$/);
+    expect(trail.querySelector('[data-call="4"]')!.textContent).not.toMatch(/✓/);
+  });
+
+  // Fix round 1 (review 2792 F7, the mutant it saw survive): a filtered list's trail holds only that programme's cleared calls.
+  it('the trail filtered to one programme holds only its cleared calls', () => {
+    open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - MIN }), call({ id: 4, program: 'prog-b', seenAt: NOW - MIN })] }), programme: 'prog-a' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(trail.querySelector('[data-call="3"]')).not.toBeNull();
+    expect(trail.querySelector('[data-call="4"]')).toBeNull();
+  });
+
+  it('draws no group with none, on an older view with no calls fields', () => {
+    open({ view: withItem({}) });
+    expect(screen.queryByText(/Calls made for you/)).toBeNull();
   });
 });

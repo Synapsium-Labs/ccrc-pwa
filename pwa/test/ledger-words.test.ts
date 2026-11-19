@@ -4,12 +4,13 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry, CALL_CLEARED_WORD, callClearedHow, callClearedOn,
 } from '../src/ledgers/ledgerWords';
 import { RATIFICATION_UNREADABLE_WORDS, RATIFY_UNAVAILABLE_TEXT, doneWhenPlacement, ratificationWords, ratifyFailureOf, ratifyOffered } from '../src/ledgers/ledgerWords';
 import type { GoalsView, Ratification, RatificationWhy } from '../../shared/ledgers';
 import { CLEARED_WINDOW_MS } from '../../shared/ledgers';
 import type { AskMarkRow } from '../../shared/answerMarks';
+import type { CallView } from '../../shared/api';
 import { isWaitingView } from '../src/ledgers/waitingView';
 import { fleetSession } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
@@ -368,7 +369,7 @@ describe('review caps in the grouping (Task 24, F21)', () => {
 
 // D-8194: the Recently cleared trail is the last 48 hours (CLEARED_WINDOW_MS, the server's window too), newest first.
 describe('clearedTrail and itemNumber (D-8194)', () => {
-  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : `a${e.ask.id}`);
+  const idOf = (e: ClearedEntry): string => (e.kind === 'item' ? `i${e.item.id}` : e.kind === 'ask' ? `a${e.ask.id}` : `c${e.call.id}`);
   const HOUR = 60 * MIN;
   const done = (id: number, closedAt: number | null) => itemView({ id, state: 'done', closedAt });
 
@@ -398,6 +399,51 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
   it('groups the trail by programme in the order of its newest clear, the asks in no programme as one group', () => {
     const trail = clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [ask(2, NOW - HOUR, { program: null }), ask(3, NOW - 3 * HOUR), ask(4, NOW - 4 * HOUR, { program: null })]);
     expect(clearedGroups(trail).map((g) => [g.program, g.entries.map(idOf)])).toEqual([[null, ['a2', 'a4']], ['prog-a', ['i1', 'a3']]]);
+  });
+
+  // D-8126 A4: a big call that left "Calls made for you" joins the trail. Its time there is the operator's own clear (Seen or
+  // Overturn, the earlier), or when it was made for one that aged out (the wire carries no other); the server's list is its window.
+  const call = (id: number, o: Partial<CallView> = {}): CallView => ({
+    id, program: 'prog-a', runId: null, madeBy: 'coord', class: 'big', question: 'q?', options: ['a', 'b'], chosen: 'a', why: 'w',
+    reversible: true, wakeOn: null, at: NOW - 3 * 86_400_000, seenAt: null, overturnedAt: null, overturnNote: null, ...o,
+  });
+
+  it('joins the calls that left the group, at the operator\'s clear, an aged one at when it was made, an item first at the same instant', () => {
+    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 90 * MIN }), call(3, { at: NOW - 30 * HOUR }),
+      call(4, { overturnedAt: NOW - 2 * HOUR })];
+    expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], calls).map(idOf)).toEqual(['c1', 'i1', 'c4', 'c2', 'c3']);
+    expect(clearedGroups(clearedTrail([], NOW, [], [call(5, { seenAt: NOW, program: 'prog-b' })])).map((g) => g.program)).toEqual(['prog-b']);
+  });
+
+  // Fix round 1 (review 2792 F4): a stale frame or the device's saved copy keeps calls to the trail's window, as items and asks.
+  it('windows cleared calls by the same 48 hours, edge included', () => {
+    const calls = [call(1, { seenAt: NOW - CLEARED_WINDOW_MS }), call(2, { seenAt: NOW - CLEARED_WINDOW_MS - 1 }), call(3, { overturnedAt: NOW - HOUR })];
+    expect(clearedTrail([], NOW, [], calls).map(idOf)).toEqual(['c3', 'c1']);
+  });
+
+  // Fix round 1 (review 2792 F3, the coordinator's ruling): the server sends when a cleared call left the group (`clearedAt`,
+  // from `callClearedAt`), and the trail sorts, windows and dates a call by it; an older server omits it and the console's own
+  // reading stands.
+  it('a call the server dates by clearedAt sorts and windows by it; without it, the console\'s reading stands', () => {
+    const aged = call(1, { at: NOW - 8 * 86_400_000, clearedAt: NOW - 86_400_000 });
+    const lateOverturn = call(2, { at: NOW - 8 * 86_400_000, overturnedAt: NOW - HOUR, clearedAt: NOW - 86_400_000 });
+    expect(callClearedOn(aged)).toBe(NOW - 86_400_000);
+    expect(callClearedOn(lateOverturn)).toBe(NOW - 86_400_000);
+    expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], [aged]).map(idOf)).toEqual(['i1', 'c1']);
+    expect(callClearedOn(call(3, { seenAt: NOW - HOUR }))).toBe(NOW - HOUR);
+    expect(callClearedHow(aged)).toBe('aged');
+    expect(callClearedHow(lateOverturn)).toBe('aged');
+    expect(callClearedHow(call(4, { seenAt: NOW - HOUR, clearedAt: NOW - HOUR }))).toBe('seen');
+  });
+
+  // Fix round 1 (review 2792 F8): a cleared call says how it cleared, never a bare tick.
+  it('says how a call cleared: seen, overturned, or aged out', () => {
+    expect(callClearedHow(call(1, { seenAt: NOW - HOUR }))).toBe('seen');
+    expect(callClearedHow(call(2, { overturnedAt: NOW - HOUR }))).toBe('overturned');
+    expect(callClearedHow(call(3, { seenAt: NOW - HOUR, overturnedAt: NOW - 2 * HOUR }))).toBe('overturned');
+    expect(callClearedHow(call(4, { seenAt: NOW - 2 * HOUR, overturnedAt: NOW - HOUR }))).toBe('seen');
+    expect(callClearedHow(call(5))).toBe('aged');
+    expect(Object.values(CALL_CLEARED_WORD)).toEqual(['seen', 'overturned', 'aged out']);
   });
 
   it('the shown count is five', () => {

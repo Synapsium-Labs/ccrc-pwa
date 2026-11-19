@@ -4925,8 +4925,10 @@ export interface HookAskQuestion {
 export type HookAsk =
   | { questions: HookAskQuestion[] }
   /** `route` (approvals plan 2026-11-18, Task 1.2): where the hook sent the prompt, or the first gate that stopped it,
-   *  as `shared/approval-census.ts#parseApprovalRoute` reads it. ADDITIVE: an older hook writes none. */
-  | { approval: { tool: string; summary: string; route?: string } };
+   *  as `shared/approval-census.ts#parseApprovalRoute` reads it. ADDITIVE: an older hook writes none.
+   *  `thread` (Task 2.1): `subagent` when the server took the envelope from the hook's per-agent list for the menu the
+   *  pane paints (`server/src/coord/approvalEnvelope.ts#paintedApprovalOf`). ADDITIVE: absent on the hook's own `ask`. */
+  | { approval: { tool: string; summary: string; route?: string; thread?: 'subagent' } };
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
@@ -6347,6 +6349,8 @@ export const MAIL_REJECT_CODES = [
   'duplicate', 'peer-quota',
   // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
   'key-conflict',
+  // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's answers, its named run and one outstanding per pair.
+  'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured', 'urgent-wrong-run',
   // delivery
   'undeliverable',
   // done-authority
@@ -14575,6 +14579,9 @@ export interface CallView {
   seenAt: number | null;
   overturnedAt: number | null;
   overturnNote: string | null;
+  /** D-8126 A4: when a cleared big call left the operator's group (`callClearedAt`), on `WaitingView.callsCleared` rows only.
+   *  OPTIONAL on the wire: an older server omits it, and the console falls back to its own reading. ADDITIVE. */
+  clearedAt?: number;
 }
 
 /** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own

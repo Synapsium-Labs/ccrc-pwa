@@ -28,6 +28,7 @@ import {
   type Picks, type Words,
 } from './AskParts';
 import { keyTabs, multiKeys, questionKeys, rowKey, type KeyScreen } from './askKeys';
+import { subagentAsksLine } from './askWords';
 import { answeringOption, busy as busyOf, inFlight, isDenying, type AnswerState } from './answerLifecycle';
 import { useAskKeys, type AskEngagement } from './useAskKeys';
 import './chat.css';
@@ -92,7 +93,7 @@ export function EnvelopeSheet({
   engagement,
 }: {
   /** What `askSource` says to show: a permission request, or Claude's own questions (D-6325). */
-  ask: { approval: { tool: string; summary: string } } | AskQuestions;
+  ask: { approval: { tool: string; summary: string; thread?: 'subagent' } } | AskQuestions;
   /** Which of the questions is showing: the wire's pairing as the controller read it (D-7184, `askLive.ts#pairingFor`),
    *  or its constant unplaced view with no dialog (D-7213), worked out by the controller because the container's header
    *  reads it too; null for an approval. The controller never hands an unpaired question here: that is the terminal
@@ -264,10 +265,11 @@ export function EnvelopeSheet({
   );
 
   if ('approval' in ask) {
-    const { summary } = ask.approval;
+    const { summary, tool, thread } = ask.approval;
     const allowing = answering === 1;
     return (
       <div data-source="hook" className="ask-envelope">
+        {thread === 'subagent' && <p className="dlg-copy" data-asker="subagent">{subagentAsksLine(tool)}</p>}
         <p className="dlg-copy">{summary}</p>
         {!canAnswer && (
           <p className="dlg-copy">
