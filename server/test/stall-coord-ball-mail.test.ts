@@ -34,7 +34,7 @@ const MARK: TurnMark = {
 };
 function run(over: Partial<StallRunRow> = {}): StallRunRow {
   return {
-    id: 67, kind: 'work', state: 'reviewing', sessionId: 'demo-worker', claimedBy: COORD, dispatchedAt: NOW - 30 * H,
+    id: 67, kind: 'work', state: 'awaiting-review', sessionId: 'demo-worker', claimedBy: COORD, dispatchedAt: NOW - 30 * H,
     program: 'demo-program', wave: 2, waveOf: 3, project: 'demo', workspace: 'demo-ws', ...over,
   };
 }
@@ -47,12 +47,12 @@ function sent(rung: 2 | 3, key: number, at: number): StallMailRow {
 interface Over {
   word?: string; since?: number; mail?: readonly StallMailRow[]; deliveries?: readonly StallDeliveryRow[]; arming?: StallArming;
   paused?: boolean; runs?: readonly StallRunRow[]; blockingItem?: boolean; liveBlock?: boolean; waitSentAt?: number | null;
-  ballSince?: number | null;
+  ballSince?: number | null; worker?: StallWorker; mark?: StallSessionInput['mark'];
 }
 function input(over: Over = {}): StallCoordBallInput {
   const session: StallSessionInput = {
-    sessionId: COORD, role: 'coordinator', run: null, worker: live(over.word ?? 'idle', over.since ?? BALL),
-    mark: { ok: true, ...MARK }, liveStartedAt: NOW - 30 * H, markUnreadableSince: null, mail: over.mail ?? [],
+    sessionId: COORD, role: 'coordinator', run: null, worker: over.worker ?? live(over.word ?? 'idle', over.since ?? BALL),
+    mark: over.mark ?? { ok: true, ...MARK }, liveStartedAt: NOW - 30 * H, markUnreadableSince: null, mail: over.mail ?? [],
     deliveries: over.deliveries ?? [], notices: [], arming: over.arming ?? W2, coordinationPaused: over.paused ?? false,
   };
   return {
@@ -74,7 +74,7 @@ describe('stallCoordBallMailStep: rung 2', () => {
   it.each([
     ['a dispatched run', { runs: [run({ state: 'dispatched' })] }],
     ['a working run', { runs: [run({ state: 'working' })] }],
-    ['an open review run', { runs: [run({ state: 'reviewing' }), run({ id: 68, kind: 'review', state: 'reviewing' })] }],
+    ['an open review run', { runs: [run({ state: 'awaiting-review' }), run({ id: 68, kind: 'review', state: 'awaiting-review' })] }],
     ['a run at merging', { runs: [run({ state: 'merging' })] }],
     ['an open blocking item', { blockingItem: true }],
     ['a live block row', { liveBlock: true }],
@@ -88,6 +88,17 @@ describe('stallCoordBallMailStep: rung 2', () => {
     ['a waiting word', { word: 'waiting' }],
   ] as [string, Over][])('%s alone makes it none', (_n, over) => {
     expect(stallCoordBallMailStep(input(over), NOW)).toEqual(NONE);
+  });
+  it.each([
+    ['a pending dialog', { worker: { ...live('idle', BALL), dialogPending: true } }, 'dialog'],
+    ['an account limit', { worker: { ...live('idle', BALL), limits: { five: 100, seven: 34 } } }, 'limit'],
+    ['an absent session', { worker: { present: false } as StallWorker }, 'absent'],
+    ['an unmeasured marker', { mark: { ok: false, reason: 'unmeasured' } }, 'unmeasured'],
+    ['a run whose state reads unknown', { runs: [run({ state: 'unknown' })] }, 'run-unnamed'],
+    ['a run whose state this build cannot name', { runs: [run({ state: 'drifting' })] }, 'run-unnamed'],
+    ['a run of a kind this build cannot name', { runs: [run({ kind: 'survey' })] }, 'run-unnamed'],
+  ] as [string, Over, string][])('%s holds it, as every session arm holds (review 2817 R5)', (_n, over, why) => {
+    expect(stallCoordBallMailStep(input(over), NOW)).toEqual({ act: 'hold', why });
   });
   it('a wait: mail from before the ball does not hold it', () => {
     expect(stallCoordBallMailStep(input({ waitSentAt: BALL - MIN }), NOW)).toEqual(rung(2));
@@ -108,8 +119,13 @@ describe('stallCoordBallMailStep: rung 3 and never a third', () => {
     expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS - MIN), since }), NOW)).toEqual(NONE);
     expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS), since }), NOW)).toEqual(rung(3));
   });
-  it('a turn since rung 2 (the idle stamp is newer) is none', () => {
-    expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS), since: NOW - 5 * MIN }), NOW)).toEqual(NONE);
+  it('a turn since rung 2 does not stop rung 3: idle again and the ball not moved is "still idle" (review 2817 R4)', () => {
+    // Delivering rung 2 starts a turn, which moves the idle stamp past it; the ball time (the key) has not moved.
+    expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS), since: NOW - 5 * MIN }), NOW)).toEqual(rung(3));
+  });
+  it('a ball that moved after rung 2 is a new key: rung 2 again, never rung 3 on the old key', () => {
+    const moved = BALL + 5 * MIN;
+    expect(stallCoordBallMailStep(input({ mail: done2(COORD_BALL_MAIL_AGAIN_MS), ballSince: moved }), NOW + 5 * MIN)).toEqual(rung(2, moved));
   });
   it('rung 3 done is none', () => {
     const mail = [...done2(COORD_BALL_MAIL_AGAIN_MS + 20 * MIN), sent(3, BALL, NOW - 20 * MIN)];

@@ -55,6 +55,6 @@ describe('idleNudgeOpenRunOf', () => {
 describe('r7BreachNotice', () => {
   it('reads nothing without an open episode', () => {
     const untouchable = new Proxy({}, { get: () => { throw new Error('the store was read'); } }) as WatcherCoordPort;
-    expect(r7BreachNotice(untouchable, {} as StallCoordBlockedInput, null)).toBeNull();
+    expect(r7BreachNotice(untouchable, {} as StallCoordBlockedInput, null, NOW)).toBeNull();
   });
 });

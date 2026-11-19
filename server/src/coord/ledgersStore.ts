@@ -548,10 +548,11 @@ export function isPinned(db: DatabaseSync, program: string): boolean {
   return db.prepare('SELECT 1 AS x FROM programs WHERE slug = ? AND specPath IS NOT NULL LIMIT 1').get(program) !== undefined;
 }
 
-/** Whether the programme holds an item that is still waiting (`open`, `checking`) at the `blocking` level. */
+/** Whether the programme holds a `blocking` item that waits on the OPERATOR: state `open` only. A `checking` item has been
+ *  ticked, so the ball is the coordinator's (`waitingCount` reads the same way; review 2817 R1). The coord-ball rung's and
+ *  the idle nudge's `run-blocked-on-operator` hold read it. */
 export function programmeHasBlockingItem(db: DatabaseSync, program: string): boolean {
-  const openStates = OPEN_ITEM_STATES.map((st) => `'${st}'`).join(', ');
   return db.prepare(
-    `SELECT 1 AS x FROM operator_items WHERE program = ? AND neededBy = 'blocking' AND state IN (${openStates}) LIMIT 1`,
+    "SELECT 1 AS x FROM operator_items WHERE program = ? AND neededBy = 'blocking' AND state = 'open' LIMIT 1",
   ).get(program) !== undefined;
 }

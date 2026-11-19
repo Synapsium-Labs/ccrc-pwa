@@ -1906,7 +1906,7 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(operatorMail(coord).filter((m) => m.subject.startsWith(STALL_CHECK_PREFIX))).toHaveLength(1);   // the control: the sweep judged
   });
 
-  it('every mail read starts BACKLOG_HORIZON_MS back, at every call site (worker, coordinator, the coord-ball per-run read, registry row)', async () => {
+  it('every mail read starts BACKLOG_HORIZON_MS back, at all three call sites (worker, coordinator, registry row)', async () => {
     // A registry row's read can show no effect of its lower bound (its self-mail always follows the restart the
     // verdict bounds), so this row reads the argument each site hands the store.
     const { h, coord, w } = await rig();
@@ -1921,7 +1921,6 @@ describe('sweepStalls: wave 2, the session arms on every subject kind and the la
     expect(spy.mock.calls).toEqual([
       [WORKER, [runId], D_AT - BACKLOG_HORIZON_MS],
       [COORD, [], D_AT - BACKLOG_HORIZON_MS],
-      [WORKER, [runId], D_AT - BACKLOG_HORIZON_MS],       // the coord-ball rung's per-run read (judgeCoordBall)
       [ORPHAN, [], D_AT - BACKLOG_HORIZON_MS],
     ]);
   });
@@ -2698,7 +2697,7 @@ describe('sweepStalls: the R7 count on a coord-blocked episode (D-8126)', () => 
 
 describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
   // An idle coordinator whose one run sits at awaiting-review since the worker's done mail: nothing is active, so
-  // `stallCandidates` names no run of it, and the pass reads its claimed runs from `openRunsClaimedBy`.
+  // `stallCandidates` names no run of it, and the pass reads its claimed runs from the binding series (`claimedOpenRuns`).
   const COORD_PID = 4343;
   const T0 = Date.parse('2026-11-09T10:00:00Z');             // the worker's done mail: the ball is the coordinator's
   const RUNG_AT = T0 + 20 * 60_000;                           // COORD_BALL_MAIL_MS
@@ -2751,7 +2750,8 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
     const d = coord.queueDelivery(m.id, COORD, 'envelope');
     coord.noteGate(d.id, 'registry-unmeasurable', T0, false, null);   // the gate mail-stuck reads without a marker
-    await sweepThrough(w, sessions, W2_LIVE, tickWith(), T0 + MAIL_STUCK_MS + 60_000, T0 + MAIL_STUCK_MS + 3 * STALL_SWEEP_MS);
+    // Escalate armed, so mail-stuck WOULD push the operator if the session arms ran for this subject (review 2817 R3).
+    await sweepThrough(w, sessions, [...W2_LIVE, 'stall-watch-escalate'], tickWith(), T0 + MAIL_STUCK_MS + 60_000, T0 + MAIL_STUCK_MS + 3 * STALL_SWEEP_MS);
     expect(sent.filter((p) => p.tag?.includes('-mail-stuck-'))).toEqual([]);
   });
 
@@ -2799,7 +2799,7 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
     const sweepWakes = async (w: FleetWatcher, sess: readonly FleetSession[], tick: StallTick, from: number, to: number): Promise<void> => {
       for (let t = from; t <= to; t += STALL_SWEEP_MS) {
         at(t);
-        await w.sweepBlockWakes(sess, tick);
+        await w.sweepBlockWakes(sess, LIVE, tick);
       }
     };
 
@@ -2917,13 +2917,16 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
       expect(wakeMail(coord)).toEqual([]);
     });
 
-    it('the stall watch switched off does not stop a wake', async () => {
+    it('no arming marker is needed, but the stall watch\'s kill switch holds the wake until it is lifted (R7)', async () => {
       const { coord, w } = await setup();
       const when = SWEEP_T + STALL_SWEEP_MS;
-      park(coord, `time:${when}`, T0 + 1000);
+      const id = park(coord, `time:${when}`, T0 + 1000);
       at(when);
-      await w.sweepStalls(sessions, ['stall-watch-disabled', ...LIVE], tickWith());
-      await w.sweepBlockWakes(sessions, tickWith());
+      await w.sweepBlockWakes(sessions, ['stall-watch-disabled', ...LIVE], tickWith());
+      expect(wakeMail(coord)).toEqual([]);
+      expect(wokenAt(coord, id)).toBeNull();
+      at(when + STALL_SWEEP_MS);
+      await w.sweepBlockWakes(sessions, [], tickWith());
       expect(wakeMail(coord)).toHaveLength(1);
     });
 

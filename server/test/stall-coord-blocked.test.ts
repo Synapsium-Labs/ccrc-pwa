@@ -356,19 +356,27 @@ describe('coord-blocked: the push text names the gate reason in operator words',
 describe('coord-blocked: the R7 count (stallR7Breach)', () => {
   const dialog = (word = 'busy'): StallWorker => liveAt(word, STRETCH_AT, { dialogPending: true });
   it('a pending dialog holding mail on a pinned programme is a breach', () => {
-    expect(stallR7Breach(input({ worker: dialog() }), true)).toBe(true);
+    expect(stallR7Breach(input({ worker: dialog() }), true, NOW)).toBe(true);
   });
   it('an unpinned programme is none', () => {
-    expect(stallR7Breach(input({ worker: dialog() }), false)).toBe(false);
+    expect(stallR7Breach(input({ worker: dialog() }), false, NOW)).toBe(false);
   });
   it('a live waiting word with no pending dialog is none: the gate must come through dialogPending', () => {
-    expect(stallR7Breach(input({ worker: liveAt('waiting', STRETCH_AT) }), true)).toBe(false);
+    expect(stallR7Breach(input({ worker: liveAt('waiting', STRETCH_AT) }), true, NOW)).toBe(false);
   });
   it('no held mail is none: the episode is the count\'s unit', () => {
-    expect(stallR7Breach(input({ worker: dialog(), deliveries: [] }), true)).toBe(false);
+    expect(stallR7Breach(input({ worker: dialog(), deliveries: [] }), true, NOW)).toBe(false);
   });
   it('a coordinator that claims no run is none: R7 counts a coordinator working a programme', () => {
-    expect(stallR7Breach(input({ worker: dialog(), runs: [] }), true)).toBe(false);
+    expect(stallR7Breach(input({ worker: dialog(), runs: [] }), true, NOW)).toBe(false);
+  });
+  it('a young episode is none: the count starts at the held threshold, as the push does (review 2817 R9)', () => {
+    expect(stallR7Breach(input({ worker: dialog() }), true, MAIL_AT + COORD_BLOCKED_HELD_MS - 1)).toBe(false);
+    expect(stallR7Breach(input({ worker: dialog() }), true, MAIL_AT + COORD_BLOCKED_HELD_MS)).toBe(true);
+  });
+  it('held mail from someone other than a child is none: the count is a child kept waiting (review 2817 R9)', () => {
+    const peer = { worker: dialog(), mail: [mailRow(501, MAIL_AT, PEER, 'question', 67)], deliveries: [delivery(901, 501)] };
+    expect(stallR7Breach(input(peer), true, NOW)).toBe(false);
   });
   it('the push itself is unchanged by the count', () => {
     expect(verdict(input({ worker: dialog() }))).toEqual(fire(MAIL_AT));

@@ -1,7 +1,10 @@
+// Ring: L4 delivery, context Coordination (C5).
+//
 // D-8126 wave A6 (coordinator-autonomy-default plan, Tasks A6-2, A6-3 and A6-4): the store reads behind the coord-ball mail
 // rung, the R7 count and the idle nudge's open-run fact. Each reads only, and answers a fact that could not be read as its
 // own value, never as absence: `coordBallInputOf` answers null (the rung holds this sweep), `idleNudgeOpenRunOf` answers
-// `{ ok: false }` (the nudge holds `unmeasured`). The deciders are `coordBall.ts` and `idlenudge.ts` (L1); `watch.ts` applies their verdicts.
+// `{ ok: false }` (the nudge holds `unmeasured`). The deciders are `coordBall.ts` and `idlenudge.ts` (L1); `watch.ts`
+// applies their verdicts.
 import {
   BACKLOG_HORIZON_MS, stallReactivation, stallRunMail,
   type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallRunRow, type StallSessionInput,
@@ -12,9 +15,6 @@ import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import type { IdleNudgeOpenRun } from '../idlenudge.js';
 import type { WatcherCoordPort } from './ports.js';
 
-/** The coord-ball rung's input for one coordinator: every non-terminal run it claims, whether any of their programmes holds
- *  a `blocking` open item, its live blocks, its newest `wait:` mail, and the newest time the ball sat with it on a claimed
- *  run (each run judged on its own mail and re-activation). Null when a read failed (warned) or it claims no open run. */
 /** Every non-terminal run `id` claims, in id order, whatever its state and with or without a worker (a planned run has none:
  *  its `sessionId` reads ''). The series is the binding's own (`bindingRunsOf`, read for the runs it claims, as
  *  `newestClaimedWorkRuns` does), and each run's columns are `run(id)`'s. `stallCandidates` is the wrong question here: it
@@ -37,6 +37,9 @@ export function claimedOpenRuns(store: Pick<WatcherCoordPort, 'bindingRunsOf' | 
   return { ok: true, runs: runs.sort((a, b) => a.id - b.id) };
 }
 
+/** The coord-ball rung's input for one coordinator: every non-terminal run it claims, whether any of their programmes holds
+ *  a `blocking` open item, its live blocks, its newest `wait:` mail, and the newest time the ball sat with it on a claimed
+ *  run (each run judged on its own mail and re-activation). Null when a read failed (warned) or it claims no open run. */
 export function coordBallInputOf(
   store: WatcherCoordPort, si: StallSessionInput, now: number, warn: (line: string) => void,
 ): StallCoordBallInput | null {
@@ -104,13 +107,14 @@ export function ballOnlySubjects(store: WatcherCoordPort, judged: ReadonlySet<st
   return ids.filter((id) => id !== '' && !judged.has(id)).map((sessionId) => ({ sessionId, runs: [], ballOnly: true }));
 }
 
-/** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode held by a pending dialog on a pinned programme is
- *  ONE `r7-breach` feed row, keyed on the episode's start through `hasNotice`'s once-only key. The row to record (always,
- *  and record-only: the coord-blocked push is unchanged), or null when the episode is no breach or already counted. */
-export function r7BreachNotice(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null):
+/** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode whose child mail has been held past
+ *  `COORD_BLOCKED_HELD_MS` by a pending dialog on a pinned programme (`stallR7Breach`) is ONE `r7-breach` feed row, keyed
+ *  on the episode's start through `hasNotice`'s once-only key. The row to record (always, and record-only: the
+ *  coord-blocked push is unchanged), or null when the episode is no breach or already counted. */
+export function r7BreachNotice(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null, now: number):
   { readonly kind: 'coord'; readonly sessionId: string; readonly title: string; readonly body: string; readonly dedupeKey: string } | null {
   if (episode === null) return null;
-  if (!stallR7Breach(blocked, blocked.runs.some((r) => store.isPinned(r.program)))) return null;
+  if (!stallR7Breach(blocked, blocked.runs.some((r) => store.isPinned(r.program)), now)) return null;
   const sessionId = blocked.session.sessionId;
   const dedupeKey = `r7-breach:${Math.trunc(episode.since)}`;
   if (store.hasNotice('coord', sessionId, dedupeKey)) return null;

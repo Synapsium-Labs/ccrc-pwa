@@ -205,6 +205,19 @@ describe('sweepIdleCompactNudge: a coordinator\'s open run counts as open work (
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     expect(anySends(h.calls)).toEqual([]);
   });
+  it('a session with an open run is decided on the run: its task list is never read (review 2817 R13)', async () => {
+    const tasksReads = (deps: Deps, spy: ReturnType<typeof vi.spyOn>): number =>
+      spy.mock.calls.filter((c) => String(c[0]).includes(`${path.sep}tasks`)).length;
+    const control = await rig();
+    const controlSpy = vi.spyOn(control.deps.io, 'readdir');
+    await control.w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(tasksReads(control.deps, controlSpy), 'the control: no open run, the list is read').toBeGreaterThan(0);
+    const { coord, w, deps } = await rig();
+    seedOpenRun(coord, 3_600_000);
+    const spy = vi.spyOn(deps.io, 'readdir');
+    await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
+    expect(tasksReads(deps, spy)).toBe(0);
+  });
   it('no task list and an open run whose newest event is an hour old: nudged', async () => {
     const { h, coord, w } = await rig();
     seedNoTasks(h.home);

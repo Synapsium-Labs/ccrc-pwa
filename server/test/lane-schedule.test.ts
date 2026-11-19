@@ -382,7 +382,7 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
   });
 });
 
-describe('the eight coordination lanes (D-5862, PR 2)', () => {
+describe('the nine coordination lanes (D-5862, PR 2; the block-wake lane, D-8126)', () => {
   const ROWS: Array<[string, string, string]> = [
     ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['blockWakes', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
     ['mail', 'mono', 'none'], ['asks', 'mono', 'none'], ['approvalPrune', 'mono', 'none'], ['digestBeat', 'mono', 'none'],

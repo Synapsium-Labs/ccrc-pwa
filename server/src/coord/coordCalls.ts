@@ -1,5 +1,8 @@
 import { CALL_CLASSES, CALL_WAKES, type CallView, type CallWake, type CallWakeCondition, type CoordCallClass } from '../../../shared/api.js';
+import type { DiskLevel } from '../../../shared/disk.js';
+import { MAIL_DISABLED_MARKER, STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';
 import { redactCommand } from './redact.js';
+import { CARD_TEXT_PREFACE, UNTRUSTED_CAP_BYTES, untrustedBlock } from './untrusted.js';
 import { cutWhole } from './reviewcap.js';
 
 /**
@@ -113,7 +116,7 @@ export function blockWakeDue(row: CallRow, f: BlockWakeFacts): BlockWakeVerdict 
 
 /** The two lane readings as wake facts: the disk alarm's block level reads `ok` when clear and the memory gate's level
  *  reads `ok` when clear; `unmeasured` is doubt (`unknown`), and any other word is a condition that has not cleared. */
-export function blockWakeReadings(diskLevel: string, memoryLevel: string): Pick<BlockWakeFacts, 'disk' | 'memory'> {
+export function blockWakeReadings(diskLevel: DiskLevel, memoryLevel: 'ok' | 'warn' | 'critical' | 'unmeasured'): Pick<BlockWakeFacts, 'disk' | 'memory'> {
   return {
     disk: diskLevel === 'unmeasured' ? 'unknown' : diskLevel === 'ok' ? 'ok' : 'not-ok',
     memory: memoryLevel === 'unmeasured' ? 'unknown' : memoryLevel === 'ok' ? 'clear' : 'not-clear',
@@ -124,12 +127,23 @@ export function blockWakeReadings(diskLevel: string, memoryLevel: string): Pick<
 export const blockConditionNotOk = (row: CallRow, r: Pick<BlockWakeFacts, 'disk' | 'memory'>): boolean =>
   (row.wakeOn === 'disk' && r.disk === 'not-ok') || (row.wakeOn === 'memory' && r.memory === 'not-clear');
 
-/** The wake mail a parked thread's coordinator gets: from the operator, naming the call and what the thread chose. */
+/** Whether the block-wake lane holds this pass (the coordinator's ruling on review 2817 R7): under `mail-disabled` it neither
+ *  marks a row woken nor queues mail, so the wake comes after the window (`lane-honours-mail-disabled`, D-3636), and under
+ *  `stall-watch-disabled` it holds too. Nothing else holds it: it needs no arming marker of its own, because it mails a
+ *  coordinator only its own parked words, at most once per call, and the coordination pause is a dispatch stop. */
+export const blockWakesHeld = (names: readonly string[]): boolean =>
+  names.includes(MAIL_DISABLED_MARKER) || names.includes(STALL_WATCH_DISABLED_MARKER);
+
+/** The wake mail a parked thread's coordinator gets: from the operator (the plan's A6-5 sender), naming the call, its
+ *  programme and the condition it waited on. `chosen` is the coordinator's own earlier words, returned to it fenced as
+ *  data (`untrustedBlock` under `CARD_TEXT_PREFACE`), as the timer lane returns a note (C63; review 2817 R6). */
 export function blockWakeMail(row: CallRow): { readonly subject: string; readonly body: string } {
   const what = row.wakeOn?.startsWith('time:') === true ? 'the time you set' : `the ${row.wakeOn ?? 'condition'} you named`;
+  const where = row.program === '' ? '' : ` on programme ${row.program}`;
   return {
     subject: `wake: call ${row.id} (${row.wakeOn ?? ''})`,
-    body: `The thread you parked is ready to pick up: ${row.chosen}\n\nIt waited on ${what}, and that has come. Continue it now.`,
+    body: `The thread you parked${where} (call ${row.id}) is ready to pick up. It waited on ${what}, and that has come. `
+      + `Continue it now. What you chose when you parked it:\n\n${untrustedBlock(row.chosen, UNTRUSTED_CAP_BYTES, 'on the call row', CARD_TEXT_PREFACE)}`,
   };
 }
 

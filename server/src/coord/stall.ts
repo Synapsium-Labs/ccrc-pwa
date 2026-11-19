@@ -669,7 +669,7 @@ export interface StallFacts { readonly ball: 'worker' | 'coordinator'; readonly 
 
 export const VERDICT_NONE: StallVerdict = { act: 'none' };
 
-function holdVerdict(why: StallHold): StallVerdict {
+export function holdVerdict(why: StallHold): StallVerdict {
   return { act: 'hold', why };
 }
 
@@ -1699,7 +1699,7 @@ export function stallSessionHold(input: StallSessionInput, now: number): StallVe
 
 /** The holds' one body. `holdDialog` is hold 2b: true for D, E and failed (`stallSessionHold`), false for mail-stuck,
  *  which fires whatever its delivery's gate (spec §5.2), so a mail held behind a harness dialog is still reported. */
-function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: boolean): StallVerdict | null {
+export function stallSessionHolds(input: StallSessionInput, now: number, holdDialog: boolean): StallVerdict | null {
   const r = input.run;
   if (input.role === 'worker' && r !== null
     && (!isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) return holdVerdict('run-unnamed');

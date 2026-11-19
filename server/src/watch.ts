@@ -3074,7 +3074,7 @@ export class FleetWatcher {
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
-      void this.sweepBlockWakes(sessions, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.
@@ -7177,11 +7177,10 @@ export class FleetWatcher {
     } else {
       const ident = this.stallUuid(tick, id);
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
-      // A `ballOnly` coordinator keeps no marker clock: the clock belongs to the arms it does not run.
-      if (c.ballOnly !== true) {
-        mark = await this.stallMarkRead(id, ident, lr);
-        this.stallMarkClock(id, ident, mark, now);
-      }
+      mark = await this.stallMarkRead(id, ident, lr);
+      // A `ballOnly` coordinator keeps no marker clock: the clock belongs to the arms it does not run. Its marker is still
+      // read, so the rung takes the session holds every arm takes (review 2817 R5).
+      if (c.ballOnly !== true) this.stallMarkClock(id, ident, mark, now);
     }
     const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
@@ -7218,13 +7217,12 @@ export class FleetWatcher {
     const step = stallCoordBlockedStep(blocked, now);
     if (step.episode === null) this.stallCoordEpisodes.delete(id); else this.stallCoordEpisodes.set(id, step.episode);
     this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
-    this.countR7Breach(store, blocked, step.episode, project);
-    this.judgeCoordBall(store, si, project, now);
+    this.countR7Breach(store, blocked, step.episode, project, now);
   }
 
   /** The `blockWakes` lane (design 2026-11-09 §8.2, P7; `coord/blockWakeLane.ts`): every coordinator with an unwoken block,
    *  whether or not it claims an open run and whatever the stall watch's arming is. PUBLIC for `stall-sweep.test.ts`. */
-  async sweepBlockWakes(sessions: readonly FleetSession[], tick: StallTick): Promise<void> {
+  async sweepBlockWakes(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
     const coord = this.deps.coord;
     if (!this.primed || !coord) return;
     // The turn marker is read only for an `account-room` block; a refused id reads as unread.
@@ -7236,7 +7234,7 @@ export class FleetWatcher {
     await this.runLane('blockWakes', () => blockWakesPass({
       coord, now: Date.now(), diskLevel: () => this.diskAlarm.block()?.level ?? 'unmeasured',
       memoryLevel: () => this.pressureLane.memoryReading().level, build: this.deps.build?.version ?? null,
-      readMark, notOkSeen: this.blockNotOkSeen, warn: (line) => console.warn(line),
+      readMark, notOkSeen: this.blockNotOkSeen, names, warn: (line) => console.warn(line),
     }));
   }
 
@@ -7246,8 +7244,8 @@ export class FleetWatcher {
   /** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode held by a pending dialog on a pinned programme
    *  writes ONE `r7-breach` feed row, keyed on the episode's start through `hasNotice`'s once-only key. Record-only, never a
    *  push: the coord-blocked push is unchanged and keeps reporting. */
-  private countR7Breach(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null, project: string): void {
-    const n = r7BreachNotice(store, blocked, episode);
+  private countR7Breach(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null, project: string, now: number): void {
+    const n = r7BreachNotice(store, blocked, episode, now);
     if (n !== null) this.pushOne({ ...n, project, recordAlways: true, recordOnly: true }, this.activeProjects);
   }
 

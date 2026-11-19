@@ -2,28 +2,33 @@
 // the coord-ball mail rung's decider and the R7 count's predicate. L1: pure decisions, no I/O. They sit beside
 // `stall.ts`, whose session and coord-blocked readers they reuse, because that file is at its growth cap (D-8635).
 // The lane that measures their facts is `coordBallLane.ts`; `watch.ts`'s coordinator pass applies their verdicts.
+import { isRunState } from '../../../shared/api.js';
 import {
-  STALL_WAIT_PREFIX, VERDICT_NONE, stallCoordBallFrom, stallCoordBallMail, stallCoordGate, stallCoordHeld, stallFacts,
-  stallMailDisabledHold, stallSelfMail, stallSessionLive,
+  COORD_BLOCKED_HELD_MS, STALL_WAIT_PREFIX, VERDICT_NONE, holdVerdict, stallCoordBallFrom, stallCoordBallMail, stallCoordGate,
+  stallCoordHeld, stallFacts, stallMailDisabledHold, stallSelfMail, stallSessionHolds, stallSessionLive,
   type StallCoordBlockedInput, type StallInput, type StallRunRow, type StallSessionInput, type StallVerdict,
 } from './stall.js';
 import { turnSays, turnWordOf } from '../sessionReading.js';
 
-/** Whether the episode counts as an R7 breach (design 2026-11-09 R7, measure M2): a coordinator with mail held behind a
- *  PENDING DIALOG (the gate reads `waiting` through `dialogPending`, never through the live word alone) whose claimed
- *  programme is pinned. The push of `stallCoordBlockedStep` is unchanged; this only says the lane counts it. */
-export function stallR7Breach(input: StallCoordBlockedInput, pinned: boolean): boolean {
+/** Whether the episode counts as an R7 breach (design 2026-11-09 R7, measure M2): a coordinator with a CHILD's mail held
+ *  behind a PENDING DIALOG (the gate reads `waiting` through `dialogPending`, never through the live word alone) for at
+ *  least `COORD_BLOCKED_HELD_MS`, the threshold the coord-blocked push itself starts at, on a pinned programme. A child is
+ *  the worker of a run the coordinator claims (the push text's own reading). The push of `stallCoordBlockedStep` is
+ *  unchanged; this only says the lane counts it (review 2817 R9). */
+export function stallR7Breach(input: StallCoordBlockedInput, pinned: boolean, now: number): boolean {
   const si = input.session;
   if (!pinned || si.role !== 'coordinator' || input.runs.length === 0) return false;
   if (si.worker.present !== true || !si.worker.dialogPending) return false;
-  return stallCoordHeld(si).length > 0 && stallCoordGate(si) === 'waiting';
+  const children = new Set(input.runs.map((r) => r.sessionId));
+  const old = stallCoordHeld(si).some((h) => children.has(h.mail.fromId) && now - h.since >= COORD_BLOCKED_HELD_MS);
+  return old && stallCoordGate(si) === 'waiting';
 }
 
 // ── coord-ball's mail rungs (design 2026-11-09 §8.3 items 1 and 2) ────────────────────────────────────────────
 
 /** An idle coordinator that claims open runs and holds the ball is mailed after this long (rung 2). */
 export const COORD_BALL_MAIL_MS = 20 * 60_000;
-/** Rung 3, the one repeat, falls due this long after rung 2 when the session is still idle with no turn since. */
+/** Rung 3, the one repeat, falls due this long after rung 2 when the session is idle again and the ball has not moved. */
 export const COORD_BALL_MAIL_AGAIN_MS = 30 * 60_000;
 
 /** The arm's input: the coordinator's session facts, every non-terminal run it claims (review runs included), the
@@ -36,6 +41,9 @@ export interface StallCoordBallInput {
 
 function stallCoordBallMailInner(input: StallCoordBallInput, now: number): StallVerdict {
   const si = input.session;
+  // The holds every session arm takes (review 2817 R5): absent, unmeasured, a pending dialog and an account limit.
+  const held = stallSessionHolds(si, now, true);
+  if (held !== null) return held;
   const live = stallSessionLive(si);
   // Only `idle` is at rest here: the strictest reading (`keystroke`'s), so a coordinator idling over a background shell
   // holds, as the plan's "the session reads idle" says. Doubt mails nothing.
@@ -44,6 +52,10 @@ function stallCoordBallMailInner(input: StallCoordBallInput, now: number): Stall
   if (input.runs.length === 0 || input.ballSince === null) return VERDICT_NONE;
   const ballSince = input.ballSince;
   if (now - ballSince < COORD_BALL_MAIL_MS) return VERDICT_NONE;
+  // A run whose state or kind this build cannot name is doubt, as `run-unnamed` is everywhere else (review 2817 R5).
+  if (input.runs.some((r) => !isRunState(r.state) || r.state === 'unknown' || (r.kind !== 'work' && r.kind !== 'review'))) {
+    return holdVerdict('run-unnamed');
+  }
   if (input.runs.some((r) => r.state === 'dispatched' || r.state === 'working' || r.state === 'merging' || r.kind === 'review')) return VERDICT_NONE;
   if (input.blockingItem || input.liveBlock || si.coordinationPaused) return VERDICT_NONE;
   // The coordinator's own `wait:` mail is itself the newest exchange on its run (`ballToCoordinator` gives the ball to the
@@ -55,8 +67,10 @@ function stallCoordBallMailInner(input: StallCoordBallInput, now: number): Stall
   const sent2 = stallSelfMail(si, stallCoordBallMail({ key: ballSince, rung: 2 }).subject);
   if (sent2 === null) return { act: 'notify', arm: 'coord-ball', rung: 2, key: ballSince, to: 'worker' };
   if (stallSelfMail(si, stallCoordBallMail({ key: ballSince, rung: 3 }).subject) !== null) return VERDICT_NONE;
-  const done2 = sent2.at;
-  if (now - done2 >= COORD_BALL_MAIL_AGAIN_MS && live.since <= done2) return { act: 'notify', arm: 'coord-ball', rung: 3, key: ballSince, to: 'worker' };
+  // "Still idle" means the ball has not moved (the coordinator's ruling on review 2817 R4): rung 3 shares rung 2's key,
+  // the ball time, so a ball that moved is a new key and starts at rung 2 again. A turn the delivery of rung 2 started
+  // does not reset it: the coordinator is idle now (above) and its runs' exchange clock has not moved.
+  if (now - sent2.at >= COORD_BALL_MAIL_AGAIN_MS) return { act: 'notify', arm: 'coord-ball', rung: 3, key: ballSince, to: 'worker' };
   return VERDICT_NONE;
 }
 
