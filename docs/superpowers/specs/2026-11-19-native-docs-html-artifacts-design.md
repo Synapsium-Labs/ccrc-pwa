@@ -227,7 +227,7 @@ Every failure of the capability check gets one identical 404: an unknown, malfor
 
 | Part of X3 (draft review) | Reused | Why |
 |---|---|---|
-| Token grammar: 32 random bytes, base64url, 43 characters | Yes, as a shared L0 helper both consume | One definition of a capability token. Storage differs: X3 names its files by the token's SHA-256 and keeps the token in its index so the owner can copy the link later. This store keeps only the hash, because no link is handed twice |
+| Token grammar: 32 random bytes, base64url, 43 characters | Yes, as a shared L0 helper both consume. R1 lands first with `isReviewToken` in `shared/docsReview.ts`. A1 moves its body to `shared/capabilityToken.ts` and keeps `isReviewToken` as a re-export, so R1's plan and tests are unchanged | One definition of a capability token. Storage differs: X3 names its files by the token's SHA-256 and keeps the token in its index so the owner can copy the link later. This store keeps only the hash, because no link is handed twice |
 | One identical 404 for every miss | Yes | Same enumeration threat |
 | Fragment plus tap | No | Relative loads cannot carry a fragment (§3.1) |
 | Durable, never-backed-up store with tombstones | No | X3's store must outlive restarts, because a share lives 30 days. An artifact lives at most 12 hours, so memory is the right failure direction: a restart revokes everything |

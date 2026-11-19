@@ -40,24 +40,45 @@
 
 | Wave | Tasks | Depends on | Owns (creates or modifies) |
 |---|---|---|---|
-| A1 | A1.1 to A1.4 | `main` | `shared/artifacts.ts`, `shared/httpsOrigin.ts`, `shared/capabilityToken.ts`, `pwa/src/docs/mockup/policy.ts` (the grammar move only), `server/src/artifacts/{policy,routes}.ts`, `server/src/config.ts`, `server/src/index.ts`, `server/src/server.ts` (console host fence), the architecture spec's ring and context map (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`, one row), census and ring test files, X2's spec text (D-8786) |
-| A2 | A2.1 to A2.3 | A1, X2 P1 merged (`statPin`, `mtimeNs`) | `server/src/auth/sessions.ts` (one additive method), `server/src/artifacts/{store,ports}.ts`, `server/src/docs/routes.ts`, `server/src/docs/ccdsource.ts`, `server/src/server.ts` (`MASKED_GET_ROUTES` rows), `shared/docs.ts` (`docsApi` additions) |
+| A1 | A1.1 to A1.4 | X2 P1 and X3 R1 merged (R1 itself waits for P1) | `shared/artifacts.ts`, `shared/httpsOrigin.ts`, `shared/capabilityToken.ts`, `shared/docsReview.ts` (the token grammar move only), `pwa/src/docs/mockup/policy.ts` (the grammar move only), `server/src/artifacts/{policy,routes}.ts`, `server/src/config.ts`, `server/src/index.ts`, `server/src/server.ts` (console host fence), the architecture spec's ring and context map (`docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md`, one row), census and ring test files, X2's spec text (D-8786) |
+| A2 | A2.1 to A2.3 | A1 (so X2 P1's `DocsRangePin` and `statPin` are on `main`) | `server/src/auth/sessions.ts` (one additive method), `server/src/artifacts/{store,ports}.ts`, `server/src/docs/routes.ts`, `server/src/docs/ccdsource.ts`, `server/src/server.ts` (`MASKED_GET_ROUTES` rows), `shared/docs.ts` (`docsApi` additions) |
 | A3 | A3.1 to A3.3 | A2 | `server/src/artifacts/{wrapper,policy,routes}.ts`, `server/src/docs/lane.ts` and `server/src/docs/policy.ts` (the artifact source rules), `server/src/docs/ccdsource.ts` (range port use) |
 | A4 | A4.1 to A4.2 | A1 (key names) | `ccd/ccrc` (`cmd_expose`, `_exp_env_write`, `_exp_caddyfile`, `_exp_status`), `ccd/ccrc-doctor-checks` |
 | A5 | A5.1 to A5.3 | A3, X2 P6 merged | `pwa/src/docs/artifact/*`, `pwa/src/docs/MockupView.tsx`, `pwa/src/lib/api.ts`, Page details and the Docs index list |
 
 ```mermaid
 flowchart LR
-  A1["A1 names, site rule,<br/>second listener, fences"] --> A2["A2 capability store,<br/>scope read, mint doors"]
+  P1["X2 P1 range reads"] --> R1["X3 R1 review store,<br/>token grammar"]
+  R1 --> A1["A1 names, site rule,<br/>second listener, fences"]
+  A1 --> A2["A2 capability store,<br/>scope read, mint doors"]
   A1 --> A4["A4 ccrc expose artifacts<br/>and doctor"]
-  P1["X2 P1 range reads"] --> A2
   A2 --> A3["A3 wrapper, content,<br/>policies, ranges, budgets"]
   A3 --> A5["A5 console: sheet,<br/>Open link, list"]
   P6["X2 P6 in-walls loader"] --> A5
 ```
-*Figure 1. Wave order. A4 runs beside A2 and A3. A2 waits for X2 P1, whose stat pin its manifest records; A5 waits for X2 P6, because both edit the HTML leaf.*
+*Figure 1. Wave order. A1 waits for X3 R1, as R1 waits for X2 P1: A1 shares P1's and R1's server files and moves R1's token grammar. A4 runs beside A2 and A3. A5 waits for X2 P6, because both edit the HTML leaf.*
 
-**Against X2 and X3.** X2's P2 and P4 and X3's R1 and R3 also add doors to `server/test/box-token-census.test.ts` and `server/test/auth-gate.test.ts`, and X2's P2 to P4 also edit `server/src/docs/routes.ts`: serialise by claim, and the later wave re-counts. X3's R1.1 defines a capability token grammar too. Whichever of A1.1 and R1.1 lands first puts the grammar in `shared/capabilityToken.ts`, and the later one imports it (a move with a characterization test, if R1.1 landed first in `shared/docsReview.ts`). X3 adds exempt class 9; X5 adds no exempt class, so the gate's class count is X3's alone. Outside-folder pages stay in the walls tier (spec §3.2).
+**Against X2 and X3.** Docs workers stay serial (the programme ledger), and clause 10 never dispatches two workers onto overlapping claims, so A1 waits for X3 R1 exactly as R1 waits for X2 P1. R1 lands first and defines the capability token grammar as `isReviewToken` in `shared/docsReview.ts`. A1.1 then moves that body into `shared/capabilityToken.ts` as `isCapabilityToken`, and `shared/docsReview.ts` keeps `isReviewToken` as a re-export under its own name: a move with R1's own tests as the characterization, run before and after unchanged. So R1's approved plan and its tests change nothing, and the move is recorded here and in the wave's task note for the ledger. X3 adds exempt class 9; X5 adds no exempt class, so the gate's class count is X3's alone. Outside-folder pages stay in the walls tier (spec §3.2).
+
+Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 share none; "claim order" means whichever wave is dispatched later re-counts or rebases on the earlier one's merge):
+
+| File | X5 wave | Also owned by | Order |
+|---|---|---|---|
+| `server/src/server.ts` | A1 (console fence), A2 (`MASKED_GET_ROUTES`) | P1, P2, P4, R1 | After P1 and R1; claim order against P2 and P4 |
+| `server/test/box-token-census.test.ts` | A1 (`ARTIFACT_DOORS`), A2 (`DOCS_DOORS`) | P1, P2, P4, R1, R4 | After P1 and R1; claim order, the later re-counts |
+| `server/test/auth-gate.test.ts`, `server/src/auth/gate.ts` (header count) | A1, A2 | P1, P2, P4, R1 (class 9), R4 | After R1; claim order, the later re-counts |
+| `server/test/rings/fastify-l4.data.ts` and the other `rings/*.data.ts` | A1 | P1, P4, R1 | After P1 and R1 |
+| `server/src/config.ts` | A1 | R1 (one path) | After R1 |
+| `shared/docsReview.ts` | A1 (grammar move) | R1, R4 | After R1; claim order against R4 |
+| the architecture spec's ring and context map | A1 (C9 row) | R1 (C9 Docs row), R2 (PWA column) | After R1; claim order against R2 |
+| `pwa/src/docs/mockup/policy.ts` | A1 (grammar move) | P6 | Claim order: P6 pins `MOCKUP_*` unchanged and A1 moves only the origin grammar, so either may land first, and the later runs `mockup-policy.test.ts` before and after |
+| `shared/docs.ts` | A2 (`docsApi` calls) | P1, P2, P3, P4, R1 | After P1 and R1; claim order against P2 to P4 |
+| `server/src/docs/routes.ts`, `server/src/docs/ccdsource.ts`, `server/src/docs/policy.ts` | A2, A3 | P1, P2 (`server/src/docs/*`), P4 (`routes.ts`) | After P1; claim order against P2 and P4 |
+| `server/src/docs/lane.ts`, `server/test/docs-lane.test.ts` | A3 | P2 (`server/src/docs/*`) | Claim order |
+| `server/test/single-definition/docs-ring.test.ts` | A2 | P2, P5 | Claim order |
+| `pwa/src/lib/api.ts` | A5 | P1, P2, P4, R3, R4 | After P1; claim order against the rest |
+| `pwa/src/docs/DocsHead.tsx` (Page details), `pwa/src/docs/DocsIndexView.tsx` | A5 | P2, P4, P5, P6 (`DocsHead`), R3 | After P6; claim order against R3 |
+| `pwa/src/docs/MockupView.tsx` | A5 | none named; P6 edits `mockup/{load,plan}.ts` beside it | After P6 |
 
 ## Acceptance rows
 
@@ -77,16 +98,17 @@ flowchart LR
 
 **Files:**
 - Create: `shared/artifacts.ts`, `shared/httpsOrigin.ts`, `shared/capabilityToken.ts`
-- Modify: `pwa/src/docs/mockup/policy.ts` (`isMockupHost`, `isMockupOrigin` become re-exports of the shared grammar, names kept)
-- Test: `server/test/artifacts-vocabulary.test.ts`, `pwa/test/mockup-policy.test.ts` (unchanged assertions, run before and after the move), `server/test/single-definition/` docs area file (the no-shared-policy scan)
+- Modify: `pwa/src/docs/mockup/policy.ts` (`isMockupHost`, `isMockupOrigin` become re-exports of the shared grammar, names kept), `shared/docsReview.ts` (`isReviewToken` becomes a re-export of `isCapabilityToken`, name kept; nothing else in the file changes)
+- Test: `server/test/artifacts-vocabulary.test.ts`, `pwa/test/mockup-policy.test.ts` and R1's `isReviewToken` tests (unchanged assertions, run before and after the moves), `server/test/single-definition/` docs area file (the no-shared-policy scan)
 
 **Interfaces:**
+- Consumes: `isReviewToken(s: string): boolean` from `shared/docsReview.ts` (X3 R1.1), whose body moves.
 - Produces: `isExactHttpsHost(host: string): boolean`, `isExactHttpsOrigin(raw: string): boolean` (`shared/httpsOrigin.ts`); `CAPABILITY_TOKEN_CHARS = 43`, `isCapabilityToken(s: string): boolean` (base64url, exactly 43) (`shared/capabilityToken.ts`); in `shared/artifacts.ts` the constants of Global Constraints, `ARTIFACT_PUBLIC_SUFFIXES: readonly string[]` = `['duckdns.org']`, `ARTIFACT_SANDBOX_BASE: readonly string[]` = `['allow-scripts','allow-same-origin','allow-forms','allow-modals','allow-downloads','allow-pointer-lock']`, `ARTIFACT_SANDBOX_WINDOWS = 'allow-popups'`, `ARTIFACT_MIME: Readonly<Record<string,string>>` (spec §5's table, rasters derived from `DOCS_RASTER_TYPES`), `artifactMime(path: string): {mime: string; attachment: boolean}`, and the wire types `ArtifactMintAsk {pin: DocPin; project: string; origins: string[]; windows: boolean}`, `ArtifactScopeOk {ok: true; files: number; uncommitted: number; bytes: number}`, `ArtifactMintOk {ok: true; id: string; url: string; expiresAt: number; files: number; uncommitted: number}`, `ArtifactRow {id; project; section; path; pinLabel; mintedAt; lastAt; expiresAt; windows; origins}`, `ArtifactRefusal = 'auth-off' | 'artifact-host-unset' | 'not-html' | 'too-many' | 'bad-origin' | 'unmeasured'`.
 
-- [ ] **Step 1: Characterize.** Run `pwa/test/mockup-policy.test.ts` green on `main` before any change.
+- [ ] **Step 1: Characterize.** Run `pwa/test/mockup-policy.test.ts` and R1's `isReviewToken` tests green on `main` before any change.
 - [ ] **Step 2: Write the failing tests** in `artifacts-vocabulary.test.ts`: `isCapabilityToken` accepts a 43-character base64url string and refuses 42, 44, `+`, `/`, `=`; `artifactMime('m.glb')` is `model/gltf-binary` not attachment, `artifactMime('x.exe')` is `application/octet-stream` with attachment, `artifactMime('A.WASM')` is `application/wasm`; every raster row equals `DOCS_RASTER_TYPES`'s mime; `ARTIFACT_SANDBOX_BASE` never contains `allow-top-navigation`, `allow-popups-to-escape-sandbox` or `allow-popups`; `ARTIFACT_PUBLIC_SUFFIXES` equals exactly `['duckdns.org']`. In the single-definition docs area file: no file under `server/src/artifacts` and not `shared/artifacts.ts` names a `MOCKUP_` identifier, and `pwa/src/docs/mockup/policy.ts` imports nothing from `shared/artifacts.ts`.
 - [ ] **Step 3: Run** `ccrc test -- ./node_modules/.bin/vitest run test/artifacts-vocabulary.test.ts` (from `server/`); expect FAIL (module missing).
-- [ ] **Step 4: Implement** the three files; move the grammar bodies from `mockup/policy.ts` into `shared/httpsOrigin.ts` with the mockup names re-exported, so `mockup-policy.test.ts` changes nothing. `shared/*.ts` imports nothing.
+- [ ] **Step 4: Implement** the three files; move the grammar bodies from `mockup/policy.ts` into `shared/httpsOrigin.ts` with the mockup names re-exported, and `isReviewToken`'s body from `shared/docsReview.ts` into `shared/capabilityToken.ts` with `isReviewToken` re-exported, so neither file's tests change. `shared/*.ts` imports nothing.
 - [ ] **Step 5: Run** both tests, the scan and `pwa`'s typecheck; expect PASS. **Step 6: Commit** `feat(docs): artifact vocabulary and the shared origin grammar (X5 A1.1)`.
 
 ### Task A1.2: the config decision and the site rule
