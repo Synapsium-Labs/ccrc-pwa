@@ -221,7 +221,7 @@ stateDiagram-v2
 
 All owner controls live in the Docs screen and need a session when the gate is armed.
 
-- **In Page details** of a leaf with a share: "Shared for review", the share date, the version, the last view, "Stops working {date}" (or "Pinned"), the comment count, and Copy link (`copyText`, the one clipboard writer under `pwa/src/docs`), Pin or Unpin, Revoke. A removed share shows its reason for 7 days: "Revoked", "Expired: no view for 7 days", "Removed: committed on {branch}", "Removed: 30-day limit".
+- **In Page details** of a leaf with a share: "Shared for review", the share date, the version, the last view, "Stops working {date}" (or "Pinned"), the comment count, and Copy link (`copyText`, the one clipboard writer under `pwa/src/docs`), Pin or Unpin, Revoke. A removed share shows its reason for 7 days: "Revoked", "Expired: no view for 7 days", "Removed: committed on {branch}", "Removed: 30-day limit", "Removed: its copy could not be read".
 - **In the Docs index**, a "Shared for review" list of every live and recently removed share, with the same controls and each share's notes. It is the one place to find every link at once.
 
 ## 4. The review store
@@ -233,13 +233,13 @@ The store is a new storage owner. This section names its one writer, its durabil
 | Location | `~/.ccrc/review-shares/`, mode 0700, on the server box only. The path is defined once, in the server's config |
 | Layout | Per share: `<tokenHash>.v<N>.html` (the bytes of version N, 0600) and `<tokenHash>.json` (the index entry, 0600). Tombstones: `<id>.removed.json`, with no token |
 | One writer | The review store adapter. The routes and the sweep reach it only through its interface |
-| Commit point | Bytes are written to a temporary name, `fsync`ed and renamed; then the index entry, naming that version, is written the same way and the directory `fsync`ed. The index rename is the commit: a crash before it leaves the old version live |
+| Commit point | Bytes are written to a temporary name, `fsync`ed and renamed; then the index entry, naming that version, is written the same way and the directory `fsync`ed. The index rename is the commit: a crash before it leaves the old version live. After it, the superseded version's bytes are unlinked and the directory `fsync`ed, so a re-share made to drop a mistaken credential leaves no copy behind |
 | Concurrency | One in-process queue. Every mutation names the share's `tokenHash` and the revision it expects (a counter every write bumps, pin and view included), re-reads the live entry inside the queue, re-applies the expiry decision and, for a create, admission, and only then acts, so a late view, pin or sweep never writes back a revoked, replaced or expired entry, and two concurrent creates cannot pass the 64-share cap together |
-| Boot | One directory read rebuilds the index (at most 64 live entries, so no database). Temporary files older than a minute and bytes files no index entry names are removed |
+| Boot | One directory read rebuilds the index (at most 64 live entries, so no database). Temporary files older than a minute and bytes files no index entry names are removed. An index entry with a tombstone of the same id is a removal a crash interrupted: boot finishes it, keeping the tombstone's reason. An index entry whose bytes file is missing is removed with the reason `lost` ("Removed: its copy could not be read") |
 | The token | Kept in the index entry so the owner can copy the link later; never in a file name, a tombstone, or a list to a dark console |
 | Backup | Never. `ccrc backup` and the update snapshot copy neither the directory nor any parent that contains it, and a restore never writes it |
 | Lost or unreadable store | Every link answers 404, and create refuses `store-unreadable`. Nothing else in the console depends on it |
-| Purge | Revoke, idle expiry, early removal, retention and the read-time expiry decision each delete the bytes and the index entry; tombstones are deleted after 7 days |
+| Purge | Revoke, idle expiry, early removal, retention and the read-time expiry decision each remove a share in one order: out of memory first; then the tombstone, holding the reason, written and `fsync`ed; then the index unlinked and the directory `fsync`ed, so no power loss can bring the token back; then the bytes unlinked and the directory `fsync`ed. Tombstones are deleted after 7 days |
 | Rollback to a build without the feature | The files stay on disk, unread: no route serves them. The next build with the feature applies expiry at its first sweep |
 
 **Why not `coord.db`.** `coord.db` refuses to start rather than open empty, because losing it loses authority. This store is the opposite case: losing it must fail closed, and an empty store means every link is revoked, which is safe. A restore of `coord.db` from a backup would also bring back revoked links if they lived there. A separate, never-backed-up directory gives the right failure direction and a revocation no restore can undo. That is the opposite safety direction, one of the recorded "legitimately different" reasons for a second store beside `coord.db`.
