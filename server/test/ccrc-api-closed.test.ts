@@ -300,8 +300,9 @@ describe('the client stays closed', () => {
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
     // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
     // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
-    // (the next test holds that), the shape `asks list --parent` already has.
-    expect(cases.sort()).toEqual(['--by', '--json', '--session']);
+    // (the next test holds that), the shape `asks list --parent` already has. `--key` (Overlord wave 164) carries no identity
+    // either: it is `mail send`'s idempotency key, refused on every other row, and `ccrc-api-mail-key.test.ts` holds it.
+    expect(cases.sort()).toEqual(['--by', '--json', '--key', '--session']);
   });
 
   it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
