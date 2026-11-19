@@ -361,6 +361,20 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     }
   });
 
+  it('the storage probe walks up from the ROOT itself, as the installer does, so a filesystem mounted exactly at the root is the one read', () => {
+    const src = readFileSync(path.join(REPO, 'ccd', 'ccrc-testbox-admin'), 'utf8');
+    const probe = src.split('\n').find((l) => l.includes('xfs_info "$m"'))!;
+    expect(probe, 'the walk starts at the root').toContain('d=$p; while [ ! -d "$d" ]; do d=$(dirname "$d"); done;');
+    expect(probe, 'never at the root\'s parent').not.toContain('d=$(dirname "$p");');
+    // the walk itself, run for real: a root that exists is its own answer; a missing one answers its nearest ancestor
+    const walk = 'p=$1; d=$p; while [ ! -d "$d" ]; do d=$(dirname "$d"); done; printf %s "$d"';
+    const dir = mkTmp('ccrc-tb-probe-');
+    {
+      expect(spawnSync('sh', ['-c', walk, 'sh', dir], { encoding: 'utf8' }).stdout).toBe(dir);
+      expect(spawnSync('sh', ['-c', walk, 'sh', path.join(dir, 'missing', 'deeper')], { encoding: 'utf8' }).stdout).toBe(dir);
+    }
+  });
+
   it('before the first connect the storage check measures the card\'s starting root (an absolute path), never the login user\'s home; once connected, the box\'s own', () => {
     const { h } = ready();
     verb(h, 'preflight');
