@@ -40,12 +40,20 @@ Run 2822. It closes four gaps that wave 5's landing check found, after wave 5 ru
 
 ## Decisions to record
 
+The coordinator ruled (fix round 1) that neither departs from a plan's written decision: both refine the ticket, and
+they stay named by slug here with no deviation number.
+
 - `sheet-anthropic-no-transient-line`: on the sheet, an Anthropic lane's kept `absent` shows its own words and no
-  transient line, as the picker shows no note there (F1). Both surfaces say the same two things, or the same one.
+  transient line, as the picker shows no note there (F1). Both surfaces say the same two things, or the same one. The
+  rule has one home, `laneAbsentByDesign` (`pwa/src/lib/models.ts`), which the picker's note and the transient decider
+  both ask (review 2824, F1).
+- A kept `unsupported` beside `busy` reads as a contradiction (the build does not offer the read, yet the box was busy
+  with one), but it is reachable only when the fleet box's agent is updated while a sheet stays open, and it is as
+  designed: each line is true of the answer it words (review 2824, F2).
 - `absent-anthropic-key-unreadable`: item 4 changes what the server answers, not only its text. A null registry whose
   `show` body lacks the `anthropic` boolean (missing, a string, or null) is now `unreadable`. That replaces the F1
-  test case that pinned it as an `absent` with no `laneKind`. Two fixtures in the GET tests sent that body and now send
-  `show`'s real one.
+  test case that pinned it as an `absent` with no `laneKind`. Two fixtures sent that body and now send `show`'s real
+  one: one in the `readLaneModels` cases and one in the `GET /api/models/:lane` cases.
 - The wave 5 note (`r3b-retire-grant.md`) says an `absent` with no `laneKind` means `no-such-account`. That is now the
   only cause from this server, so the note stays true; it is not edited here.
 
