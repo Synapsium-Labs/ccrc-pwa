@@ -168,7 +168,7 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
 - Modify: `pwa/vite.config.ts` (`build.rollupOptions.input` gains `review`; workbox `globIgnores` gains `review.html`); the base spec's M5.16 and the rich-docs spec's A2b and M8.10 (D-8767's sentences), claimed at R2's run-open; `pwa/test/docs-scans.test.ts` (`new DOMParser(` allowed in `pwa/src/review/main.ts` beside `parse.ts`, with a planted control)
 - Test: `pwa/test/review-page.test.ts` (jsdom)
 
-- [ ] **Step 1: Write the failing tests** (**M-X3.10**): after load, `location.hash` is empty and no request has been made; the only control is "Open draft", and the POST to `/api/review/open` happens only on its click, with the token in the JSON body and the header `REVIEW_MARKER_HEADER: 1` imported from `shared/docsReview.ts`; on 200 the frame's `sandbox` attribute is the empty string and its `srcdoc` equals the response text; the banner reads "Draft, not committed. Shared for review on {date}. Read-only."; "Links in this copy" lists each `https:` href of the bytes once, as `<a rel="noreferrer noopener" target="_blank">`, and no `javascript:` or `data:` href; a 404 shows exactly "This link has expired, was revoked, or never existed." and no frame.
+- [ ] **Step 1: Write the failing tests** (**M-X3.10**): after load, `location.hash` is empty and no request has been made; the only control is "Open draft", and the POST to `/api/review/open` happens only on its click, with the token in the JSON body and the header `REVIEW_MARKER_HEADER: 1` imported from `shared/docsReview.ts`; on 200 the frame's `sandbox` attribute is the empty string and its `srcdoc` equals the response text; the banner reads "Draft, not committed. Shared for review on {date}. Read-only."; "Links in this copy" lists each `https:` href of the bytes once, as `<a rel="noreferrer noopener" target="_blank">`, and no `javascript:` or `data:` href; a 404 shows exactly "This link has expired, was revoked, or never existed." and no frame; a load with no hash shows exactly "To open this draft again, use the link you were sent." and makes no request; after an open, `sessionStorage`, `localStorage` and `document.cookie` hold nothing the page wrote, and `history.state` holds no token.
 - [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/review-page.test.ts test/docs-scans.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the page and its entry.
 - [ ] **Step 4: Run** them, then `ccrc test -- npm run build` and a check that the built service worker's precache list has no `review.html` (a case in `test/browser-dist.test.ts`). Expected: PASS.
@@ -350,6 +350,7 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R3-M109 | `review/ReviewRows.tsx` | Re-share uploads without opening `ReviewConfirm` | `docs-review-owner` re-share hold row (F2) |
 | NDR-X3-R2-M1 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
 | NDR-X3-R2-M2 | `src/review/main.ts` | post the token on load | `review-page` (M-X3.10) |
+| NDR-X3-R2-M110 | `src/review/main.ts` | keep the token in `sessionStorage` for a reload | `review-page` storage row (F4) |
 | NDR-X3-R2-M3 | `src/review/main.ts` | `sandbox="allow-scripts"` | `review-page`, browser script row (M-X3.10) |
 | NDR-X3-R2-M4 | `review/routes.ts` | `script-src 'self' 'unsafe-inline'` | `review-routes` page CSP row (M-X3.10) |
 | NDR-X3-R2-M5 | `vite.config.ts` | drop `review.html` from `globIgnores` | `browser-dist` precache row, browser installed-PWA row (M-X3.12) |
@@ -370,13 +371,13 @@ The completion plan's Task 17 runs one row for this capability. Its clauses map 
 |---|---|---|---|
 | DR-1 | Share a frozen read-only snapshot | On a draft spec, Page details, Share a draft for review, confirm; then open Share | A link `https://<origin>/review#<43 chars>` from the action, while Share still offers only the committed permalink; the owner's list shows the share live 
 | DR-2 | the draft banner | Open the link with no ccrc session; tap Open draft | "Draft, not committed. Shared for review on <date>. Read-only." above the copy, and the copy's own banner |
-| DR-3 | unchanged shared bytes after edits | Edit and save the draft; reload the link | The served bytes' SHA-256 equals the one recorded at share |
-| DR-4 | newer-draft notice/re-share | Open the edited leaf as the owner; Re-share; reload the link | The notice shows; after Re-share the same link shows the edit at version 2 |
+| DR-3 | unchanged shared bytes after edits | Edit and save the draft; open the link again from the original message | The served bytes' SHA-256 equals the one recorded at share |
+| DR-4 | newer-draft notice/re-share | Open the edited leaf as the owner; Re-share; open the link again from the original message | The notice shows; after Re-share the same link shows the edit at version 2 |
 | DR-5 | last-view TTL | Test box: stop the server, set a share's `idleSince` 7 days back in its index file, start the server | The boot sweep removes it "Expired: no view for 7 days"; the link 404s |
 | DR-6 | early removal on same-file branch commit | Commit and push the shared file on its branch; wait one sweep (at most 10 minutes) | "Removed: committed on <branch>"; the link 404s |
 | DR-7 | UI Pin/Revoke | Pin, unpin, then revoke from Page details and from the index list | Each state shows in both places |
 | DR-8 | retention | Test box: as DR-5, a pinned share with `firstSharedAt` 30 days back | Removed "Removed: 30-day limit" though pinned |
-| DR-9 | immediate revoked 404 | Revoke, then reload the link at once | The 404 sentence on the first reload |
+| DR-9 | immediate revoked 404 | Revoke, then at once open the link again from the original message; separately, reload an open review tab | The 404 sentence on the first open after Revoke; the reload shows "To open this draft again, use the link you were sent." |
 | DR-10 | unreadability after expiry | After DR-5, DR-6 and DR-8, list the store directory (names only) | No bytes and no index file for those shares; tombstones only, with no token |
 | DR-11 | access model vs no-session criterion | Open the link signed out, in a private window, on a phone and on a desktop | It opens with no sign-in (the ruled capability model); a guessed or malformed token gives the same 404 |
 | DR-12 | never a live working-tree read | Test box: with the agent link down, open a live link | It opens: the read needs nothing from the fleet box. The release's never-read scan (M-X3.6) passes at the release commit |
