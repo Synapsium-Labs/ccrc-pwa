@@ -310,6 +310,36 @@ number from `POST /api/ledger/deviations`.
   file's measured size with clause 21 (23872); wave 6's PR shrinks that file below `main`'s cap first, so the cap moves
   by less than the clause's bytes (amended in review round 2, run 2590 A2). Record: the wave 6 note, which carries the
   follow-up's exact content.
+- **D-8733 (2026-11-18)** — drift-reads-every-team: `changedIssues` is asked with every team key the workspace's key
+  lists, not only the managed ones, so a bound issue moved out of a managed team is still read and put back (§6.2 owns the
+  team; round 6 P2). `ops.ts` stays frozen: no new document. An issue of a team ccrc does not manage that no binding names
+  is dropped at the read: nothing of it is stored, journalled, logged, mailed or counted. Scope follows the binding: an
+  issue or a project is compared when its binding's team is managed, a milestone when its planned project's binding is;
+  inbound still counts only issues now in a managed team. The cost is the issues changed in unmanaged teams, read and
+  dropped. Record: the wave 4 follow-ups note (run 2446, the coordinator's issue, mail 23943).
+- **D-8734 (2026-11-18)** — drift-cursor-and-return-tables: one migration, two new tables. `linear_drift_cursors` keeps a
+  page-capped changed* sweep across passes (review run 2408 F3); a finished sweep moves the watermark to the newest
+  `updatedAt` it read, but never past its own start less `DRIFT_SWEEP_MARGIN_MS` (five minutes, ccrc's clock against
+  Linear's), so a change made while a multi-pass sweep walked is read again, whatever Linear's order. `linear_inbound_notes`
+  keeps what the owner's next mail about a waiting issue must carry: a coordinator's return made while the team had no live
+  Linear owner (review run 2443 A3), or Linear's reopen of a retired issue (D-8735). Record: the wave 4 follow-ups note.
+- **D-8735 (2026-11-18)** — inbound-retired: `INBOUND_STATES` gains `retired`. A stored row whose issue Linear reads
+  completed or canceled, or that turns out ccrc's own (a binding holds it, or a pending ticket's create was sent with its
+  id), is retired from `waiting`, `mailed`, `handed`, `raised` or `closed` not yet acted; take, triage and the close refuse
+  it `issue-not-inbound`, and a raised row's open item settles (review run 2427 F1, round 5 F2). A stored row whose issue
+  moved out of a managed team is retired too, with its own cause, `moved-out` (review run 2457 F4, D-8733's "inbound counts
+  only issues now in a managed team"): take, triage and the close re-read the issue by id before acting and refuse it
+  `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. The retire
+  writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
+  existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
+  `waiting` and its owner is mailed once more, under a subject carrying the reopen's time. Record: the wave 4 follow-ups note.
+- **D-8736 (2026-11-18)** — w4fu-words: the server cap `plan-inbound-v1` (the client refuses `plan.take` and `plan.triage`
+  `capability-missing` without it, review run 2427 A1) and the refusal `no-linear-owner` (409: Hand on a persistent-drift
+  item whose project has no usable Linear owner; the item stays open, A-7). A dismiss of a `linear-drift` item answers the
+  existing `not-open`, as an action item's tick does (A-1). This changes spec §7.4's Hand (review run 2457 A4): Hand for an
+  Upkeep binding, or for a programme with no coordinator, now mails the home project's Linear owner, with no programme, in
+  the same transaction as the settle; with no usable owner (none named, or gone) it is refused `no-linear-owner`. Record: the
+  wave 4 follow-ups note.
 
 ## Global Constraints
 

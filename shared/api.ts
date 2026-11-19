@@ -12388,7 +12388,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-ticket-done-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-inbound-v1' | 'plan-ticket-done-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12459,7 +12459,7 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  this server answers `POST /api/programmes/:slug/plan/phases/refs` (`plan phase-ref`: add, remove, carry; `unknown-ref`,
    *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
    *  Added by the change that builds the route and the client row, cut after them. */
-  'plan-phases-v1': true,
+  'plan-phases-v1': true, 'plan-inbound-v1': true,   // plan-inbound-v1 (D-8736): `plan take` and `plan triage` answer; `ccrc-api` refuses both `capability-missing` without it
   /** Programme work map WM1 (D-8727): this server stores a ticket's done time and evidence (`plan_tickets.doneAt` and
    *  `doneEvidence`), answers `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`; `evidence-unverified`),
    *  and refuses `ticket-required` at `runs open` in a phased plan. `ccrc-api plan ticket-done` refuses
