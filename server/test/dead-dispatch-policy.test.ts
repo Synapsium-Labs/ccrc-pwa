@@ -7,6 +7,7 @@ import {
   DEAD_DISPATCH_KEEPS, deadDispatchVerdict, dispatchAbandonViewOf, type DeadDispatchFacts, type DeadDispatchRecord,
 } from '../src/coord/deadDispatch.js';
 import { HOLD_UNREADABLE } from '../src/registry.js';
+import { orphanedRefusalOf } from '../../shared/dispatch-abandon.js';
 
 const NOW = 1_790_000_000_000;
 const BOUND = 900_000;
@@ -47,6 +48,17 @@ describe('deadDispatchVerdict', () => {
   it('in flight: a stamp one millisecond younger than the bound keeps it (a retry restamps, so it reads young again)', () => {
     expect(why({ ...base, run: { ...run, dispatchStartedAt: NOW - BOUND + 1 } })).toBe('in-flight');
     expect(why({ ...base, run: { ...run, dispatchStartedAt: NOW } })).toBe('in-flight');
+  });
+
+  it('an orphaned spawn (D-8126) is past the bound whatever its stamp, and every other guard still applies', () => {
+    const young = { ...run, dispatchStartedAt: NOW };
+    expect(why({ ...base, run: young })).toBe('in-flight');
+    expect(deadDispatchVerdict({ ...base, run: young, orphaned: true })).toEqual({ kind: 'dead', claimedBy: 'project-a-coord', startedAt: NOW });
+    expect(why({ ...base, run: young, orphaned: true, armed: false })).toBe('switch-off');
+    expect(why({ ...base, run: young, orphaned: true, registry: { listed: false } })).toBe('registry-unmeasured');
+    expect(why({ ...base, run: { ...young, sessionId: 'project-a-w1' }, orphaned: true })).toBe('bound');
+    expect(why({ ...base, run: { ...young, claimedBy: null }, orphaned: true })).toBe('unclaimed');
+    expect(why({ ...withRecords([ws({ child: { kind: 'child', runId: 7 } })]), run: young, orphaned: true })).toBe('child-workspace');
   });
 
   it('a box that minted without the child marker (`child-omitted:` journaled) cannot prove there is no workspace', () => {
@@ -172,5 +184,19 @@ describe('dispatchAbandonViewOf', () => {
     expect(dispatchAbandonViewOf({ kind: 'absent' }, BOUND)).toMatchObject({ stored: 'absent', armed: false, updatedAt: null });
     expect(dispatchAbandonViewOf({ kind: 'unreadable', detail: 'no such table' }, BOUND))
       .toMatchObject({ stored: 'unreadable', detail: 'no such table', armed: false });
+  });
+});
+
+describe('orphanedRefusalOf (D-8126): the newest journal row since the stamp names the orphaned refusal', () => {
+  const ev = (at: number, detail: string | null) => ({ at, detail });
+  it('names the refusal when the newest row at or after the stamp is an orphan row', () => {
+    expect(orphanedRefusalOf([ev(5, 'route-defaulted'), ev(10, 'dispatch-orphaned:ambiguous-dispatch')], 10)).toBe('ambiguous-dispatch');
+  });
+  it('null with no stamp, with no row since the stamp, or when a newer row of another kind follows', () => {
+    expect(orphanedRefusalOf([ev(10, 'dispatch-orphaned:registry-unmeasurable')], null)).toBeNull();
+    expect(orphanedRefusalOf([ev(9, 'dispatch-orphaned:registry-unmeasurable')], 10)).toBeNull();
+    expect(orphanedRefusalOf([ev(10, 'dispatch-orphaned:registry-unmeasurable'), ev(11, null)], 10)).toBeNull();
+    expect(orphanedRefusalOf([ev(10, 'dispatch-orphaned:registry-unmeasurable'), ev(11, 'skill-preflight:absent')], 10)).toBeNull();
+    expect(orphanedRefusalOf([], 10)).toBeNull();
   });
 });
