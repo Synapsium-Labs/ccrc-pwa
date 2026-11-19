@@ -471,6 +471,8 @@ Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on 
 | Mermaid (X4): `text-muted` on `surface2`, a vertical marker's text over a gantt row | 5.54 | Catppuccin Mocha | 4.5 |
 | Mermaid (X4): `text` on `surface2` at Mermaid's 0.5 commit-label opacity over `surface` | 7.69 | One Dark | 4.5 |
 | Mermaid (X4): a mark inside a commit (`surface2` or `bg`) on its commit's series colour | 4.52 | Solarized Dark | 3 |
+| Mermaid (X4 fix round 1): a sequence stick half arrowhead, `text-muted` by the stylesheet, on `surface` | 6.74 | Solarized Light | 3 |
+| Mermaid (X4 fix round 1): the same on `surface2` | 5.54 | Catppuccin Mocha | 3 |
 
 What the review measured at the old rules, and what changed:
 
