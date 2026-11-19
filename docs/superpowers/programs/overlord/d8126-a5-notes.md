@@ -68,3 +68,13 @@ sits on top of clause 21 without changing any class's meaning. Nothing in this w
 - Contract end: 13,668 bytes now; 15,178 with this wave; budget 16,750; 1,572 left; the recall, Linear and Overlord
   clauses need 1,481 by the ratchet header's arithmetic, so 91 spare.
 - SKILL.md file: 23,230 bytes on main; with this wave about 24,480 (clause 21's line allows 1,332 of growth).
+
+## Red first, measured
+
+Each guard was mutated in place in a scratch tree (the contract and the held-file hunks applied), restored from a saved
+copy and checked by sha, one vitest run of `coordinator-skill.test.ts` and `coordinator-skill-autonomy.test.ts` per
+mutant. All fifteen went red: the installer without `decision-procedure.md`; "stalls honestly" put back; `review-cap`,
+the goals route or a SAFETY verb named in the procedure; "stop and report" back in a dispatch row; `skillInstall`
+dropped; "ignore" given to the coordinator; the paused entry without its cause; the cap-concurrency entry rewritten
+early; the split rule stated twice; the ledger template without its goals section; clause 21 softened; clause 4
+relaxing the pause for dispatch; the debugging ceiling dropped.
