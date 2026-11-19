@@ -10097,79 +10097,20 @@ export class CoordStore {
     return Number(res.changes) > 0;
   }
 
-  /** THE ONE WRITE of `parked` (approvals PR 3, F8-a), reached only through the questions owner's `parkApproval`: a `held`
-   *  row whose stored word is `live` (its window ended unruled), or an `allowed`/`denied` row the hook never fetched (the
-   *  last-poll move, F2), moves to `parked`, and its park records its first park. A moved ruling is recorded on the park as
-   *  the coordinator's, unless the park already holds an unspent ruling (the first wins). Answers whether the row moved. */
-  parkApprovalRow(id: number, now: number): boolean {
-    return tx(this.db, () => {
-      const read = this.approvalById(id);
-      if (!read.ok) throw new Error(`parkApprovalRow: ${read.detail}`);
-      const row = read.row;
-      if (row === null || row.parkWord !== 'live' || row.parkKey === null) return false;
-      const res = this.db.prepare(
-        "UPDATE approvals SET state = 'parked' WHERE id = ? AND parkWord = 'live' AND (state = 'held' OR (state IN ('allowed','denied') AND fetchedAt IS NULL))",
-      ).run(id);
-      if (Number(res.changes) === 0) return false;
-      parks.markFirstPark(this.db, row.parkKey, id, now);
-      if ((row.state === 'allowed' || row.state === 'denied') && row.verdict !== null) {
-        parks.recordParkRuling(this.db, row.parkKey, {
-          verdict: row.verdict, authority: 'coordinator', by: row.answeredBy ?? row.parentId, reason: row.reason ?? '',
-          class: row.class, rowId: id, now,
-        });
-      }
-      return true;
-    });
-  }
-
-  /** The last-poll move's read (approvals PR 3, F2): `allowed` or `denied` rows minted `live` at or after `sinceAskAt` (the
-   *  hook's ceiling bounds the move, so older rows are never read) whose ruling the hook never fetched, oldest first. */
+  // The park (approvals PR 3): its SQL is `approvalParkStore.ts`'s, every write in this store's transaction. `parkApprovalRow`
+  // is the one write of `parked`; `meetApprovalParkRuling` is the spend (F6); see each function there.
+  parkApprovalRow(id: number, now: number): boolean { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now)); }
+  /** The last-poll move's read (F2): ruled rows minted `live` at or after `sinceAskAt` whose ruling the hook never fetched. */
   approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
     return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);
   }
-
-  /** The ruling read's first serve of a ruling (approvals PR 3, F8-c): `fetchedAt`, written once. */
-  markApprovalFetched(id: number, now: number): boolean {
-    const res = this.db.prepare('UPDATE approvals SET fetchedAt = ? WHERE id = ? AND fetchedAt IS NULL').run(now, id);
-    return Number(res.changes) > 0;
-  }
-
-  /** One park by key (approvals PR 3), or null. */
+  markApprovalFetched(id: number, now: number): boolean { return parks.markApprovalFetched(this.db, id, now); }
   approvalPark(key: string): parks.ParkRow | null { return parks.parkByKey(this.db, key); }
-
-  /** A principal's ruling recorded on a park (approvals PR 3, the rule door and the operator's door): written only when the
-   *  park holds no unspent ruling. Answers whether it was written. */
   recordApprovalParkRuling(key: string, r: Parameters<typeof parks.recordParkRuling>[2]): boolean {
     return tx(this.db, () => parks.recordParkRuling(this.db, key, r));
   }
-
-  /** THE SPEND (approvals PR 3, F6), one synchronous transaction: the park is read again, its ruling given at `rulingAt`
-   *  must still be unspent; `sign` (synchronous) answers the signed ruling for the retry row, or null for a refusal at
-   *  signing; the ruling's use goes 0 -> 1 and, signed, the retry row takes it. A refusal at signing spends it too (F5).
-   *  Answers `met` (the row is ruled), `refused` (spent, the row held fresh) or `lost` (nothing changed: another retry spent
-   *  it, or the park moved). */
-  meetApprovalParkRuling(
-    key: string, rulingAt: number, rowId: number,
-    sign: (p: parks.ParkRow) => { by: string; verdict: 'allow' | 'deny'; reason: string; ruling: string } | null, now: number,
-  ): 'met' | 'refused' | 'lost' {
-    return tx(this.db, () => {
-      const p = parks.parkByKey(this.db, key);
-      if (p === null || p.voided || p.ruling === null || p.ruling.spent || p.ruling.at !== rulingAt) return 'lost';
-      if (p.horizon !== null && now >= p.horizon) return 'lost';
-      const signed = sign(p);
-      if (!parks.spendParkRuling(this.db, key, rulingAt)) return 'lost';
-      if (signed === null) return 'refused';
-      const res = this.db.prepare(
-        'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
-        "WHERE id = ? AND state = 'held' AND releaseReason IS NULL",
-      ).run(signed.verdict === 'allow' ? 'allowed' : 'denied', signed.verdict, signed.reason, signed.ruling, now, signed.by, rowId);
-      if (Number(res.changes) === 0) throw new Error('meetApprovalParkRuling: the retry row is no longer held');
-      parks.releaseParkSlotOfRow(this.db, rowId);
-      // The key's parked rows are settled by the met ruling (slug met-ruling-settles-the-key): they leave Waiting on you,
-      // and a later identical prompt is held fresh and may park again on the same key.
-      this.db.prepare("UPDATE approvals SET state = 'stale' WHERE parkKey = ? AND state = 'parked'").run(key);
-      return 'met';
-    });
+  meetApprovalParkRuling(...a: Parameters<typeof parks.meetParkRuling> extends [unknown, ...infer R] ? R : never): ReturnType<typeof parks.meetParkRuling> {
+    return tx(this.db, () => parks.meetParkRuling(this.db, ...a));
   }
 
   /** The park's retention (approvals PR 3, T8-4): parks whose horizon passed before `before`. */

@@ -166,3 +166,54 @@ export function pruneParks(db: DatabaseSync, before: number): number {
   return Number(stmt(db, 'DELETE FROM approval_parks WHERE (horizon IS NOT NULL AND horizon < ?) OR (horizon IS NULL AND createdAt < ?)')
     .run(before, before).changes);
 }
+
+/** THE ONE WRITE of `parked` (approvals PR 3, F8-a), inside the caller's transaction, reached only through the questions
+ *  owner's `parkApproval`: a `held` row whose stored word is `live` (its window ended unruled), or an `allowed`/`denied` row
+ *  the hook never fetched (the last-poll move, F2), moves to `parked`, and its park records its first park. A moved ruling is
+ *  recorded on the park as the coordinator's, unless the park already holds an unspent ruling (the first wins). Answers
+ *  whether the row moved. */
+export function parkApprovalRow(db: DatabaseSync, id: number, now: number): boolean {
+  const row = stmt(db, 'SELECT state, parkKey, verdict, reason, answeredBy, parentId, class FROM approvals WHERE id = ? AND parkWord = \'live\'')
+    .get(id) as { state: string; parkKey: string | null; verdict: string | null; reason: string | null; answeredBy: string | null; parentId: string; class: string } | undefined;
+  if (row === undefined || row.parkKey === null) return false;
+  const res = stmt(db, "UPDATE approvals SET state = 'parked' WHERE id = ? AND parkWord = 'live' AND (state = 'held' OR (state IN ('allowed','denied') AND fetchedAt IS NULL))")
+    .run(id);
+  if (Number(res.changes) === 0) return false;
+  markFirstPark(db, row.parkKey, id, now);
+  if ((row.state === 'allowed' || row.state === 'denied') && (row.verdict === 'allow' || row.verdict === 'deny')) {
+    recordParkRuling(db, row.parkKey, {
+      verdict: row.verdict, authority: 'coordinator', by: row.answeredBy ?? row.parentId, reason: row.reason ?? '', class: row.class, rowId: id, now,
+    });
+  }
+  return true;
+}
+
+/** The ruling read's first serve of a ruling (F8-c): `fetchedAt`, written once. */
+export function markApprovalFetched(db: DatabaseSync, id: number, now: number): boolean {
+  return Number(stmt(db, 'UPDATE approvals SET fetchedAt = ? WHERE id = ? AND fetchedAt IS NULL').run(now, id).changes) > 0;
+}
+
+/** THE SPEND (F6), inside the caller's one synchronous transaction: the park is read again, and its ruling given at
+ *  `rulingAt` must still be unspent and inside its horizon; `sign` (synchronous) answers the signed ruling for the retry row,
+ *  or null for a refusal at signing; the ruling's use goes 0 -> 1 and, signed, the retry row takes it, releases its slot, and
+ *  the key's parked rows are settled (slug met-ruling-settles-the-key: they leave Waiting on you, and a later identical prompt
+ *  is held fresh and may park again on the key). A refusal at signing spends it too (F5). Answers `met`, `refused` (spent,
+ *  the row held fresh) or `lost` (nothing changed: another retry spent it, or the park moved). */
+export function meetParkRuling(
+  db: DatabaseSync, key: string, rulingAt: number, rowId: number,
+  sign: (p: ParkRow) => { by: string; verdict: 'allow' | 'deny'; reason: string; ruling: string } | null, now: number,
+): 'met' | 'refused' | 'lost' {
+  const p = parkByKey(db, key);
+  if (p === null || p.voided || p.ruling === null || p.ruling.spent || p.ruling.at !== rulingAt) return 'lost';
+  if (p.horizon !== null && now >= p.horizon) return 'lost';
+  const signed = sign(p);
+  if (!spendParkRuling(db, key, rulingAt)) return 'lost';
+  if (signed === null) return 'refused';
+  const res = stmt(db, 'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? '
+    + "WHERE id = ? AND state = 'held' AND releaseReason IS NULL")
+    .run(signed.verdict === 'allow' ? 'allowed' : 'denied', signed.verdict, signed.reason, signed.ruling, now, signed.by, rowId);
+  if (Number(res.changes) === 0) throw new Error('meetParkRuling: the retry row is no longer held');
+  releaseParkSlotOfRow(db, rowId);
+  stmt(db, "UPDATE approvals SET state = 'stale' WHERE parkKey = ? AND state = 'parked'").run(key);
+  return 'met';
+}
