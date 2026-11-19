@@ -29,7 +29,8 @@
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
 #     the eleven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
 #     `capability-missing` for `plan-phases-v1` (programme work map WM0), `plan ticket-done` the same for
-#     `plan-ticket-done-v1` (WM1), all three from one table gate, `plan take` and `plan triage` the same for `plan-inbound-v1` (D-8736), and the three
+#     `plan-ticket-done-v1` (WM1), and `plan take` and `plan triage` the same for `plan-inbound-v1` (D-8736), these four rows
+#     from one table gate (D-8183), and the three
 #     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
