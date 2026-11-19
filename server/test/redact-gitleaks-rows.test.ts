@@ -131,58 +131,115 @@ describe('known-token: the Gitleaks v8.30.0 rows (overlord wave 163)', () => {
   });
 });
 
-describe('the PEM private-key block: one header, history\'s rule and the egress profiles\' bounded rule', () => {
+describe('the PEM private-key block: one header, history\'s rule and the egress profiles\' scanner', () => {
   const header = cat('-----BEGIN ', 'RSA PRIVATE KEY-----');
   const end = cat('-----END ', 'RSA PRIVATE KEY-----');
   const line1 = cat('MIIEowIBAAKCAQEAx1y2', '+abc/def', 'Zm9vYmFy');
   const line2 = cat('QUJDREVGR0g', '+/aa==');
   const block = cat(header, '\n', line1, '\n', line2, '\n', end);
+  /** A key's body as review 2704 measured it: three 64-column lines and a short last line. */
+  const L64 = cat('MIIEpAIBAAKCAQEAq1w2e3r4', 't5y6u7i8o9p0a1s2d3f4g5h6', 'j7k8l9z0x1c2v3b4');
+  const BODY = [L64, L64, L64, 'aa=='];
+  const lines = [header, ...BODY, end];
 
   for (const profile of PROFILES) {
+    const red = (t: string): string => redact(profile, t, SHAPES);
     it(`${profile}: a whole block is masked, and the text around it is kept`, () => {
-      expect(redact(profile, `cat k.pem:\n${block}\ndone`, SHAPES)).toBe(`cat k.pem:\n${R}\ndone`);
+      expect(red(`cat k.pem:\n${block}\ndone`)).toBe(`cat k.pem:\n${R}\ndone`);
     });
     it(`${profile}: a CRLF block and an indented block are masked whole`, () => {
-      expect(redact(profile, `a\r\n${block.replace(/\n/g, '\r\n')}\r\nb`, SHAPES)).toBe(`a\r\n${R}\r\nb`);
-      expect(redact(profile, `key: |\n  ${block.replace(/\n/g, '\n  ')}\nnext: 1`, SHAPES)).toBe(`key: |\n  ${R}\nnext: 1`);
+      expect(red(`a\r\n${block.replace(/\n/g, '\r\n')}\r\nb`)).toBe(`a\r\n${R}\r\nb`);
+      expect(red(`key: |\n  ${block.replace(/\n/g, '\n  ')}\nnext: 1`)).toBe(`key: |\n  ${R}\nnext: 1`);
     });
     it(`${profile}: a legacy encrypted block, its header fields and blank line included, is masked whole`, () => {
       const enc = cat(header, '\nProc-Type: 4,ENCRYPTED\nDEK-Info: AES-128-CBC,0123ABCD\n\n', line1, '\n', end);
-      expect(redact(profile, `a\n${enc}\nb`, SHAPES)).toBe(`a\n${R}\nb`);
+      expect(red(`a\n${enc}\nb`)).toBe(`a\n${R}\nb`);
     });
     it(`${profile}: a block joined by spaces on one line (a flattened variable) is masked whole`, () => {
-      expect(redact(profile, `K="${block.replace(/\n/g, ' ')}" next`, SHAPES)).toBe(`K="${R}" next`);
+      expect(red(`K="${block.replace(/\n/g, ' ')}" next`)).toBe(`K="${R}" next`);
     });
-    it(`${profile}: a JSON-escaped block on one line is masked whole, closed or not`, () => {
+    it(`${profile}: a JSON-escaped block is masked whole; unclosed, to its escaped blank line or the end of its line`, () => {
       const esc = (t: string): string => t.replace(/\n/g, '\\n');
-      expect(redact(profile, `{"content":"${esc(block)}"}`, SHAPES)).toBe(`{"content":"${R}"}`);
-      expect(redact(profile, `{"content":"${esc(cat(header, '\n', line1, '\n', line2))}"}`, SHAPES)).toBe(`{"content":"${R}"}`);
+      expect(red(`{"content":"${esc(block)}"}`)).toBe(`{"content":"${R}"}`);
+      expect(red(`{"content":"${esc(cat(header, '\n', line1, '\n', line2))}"}`)).toBe(`{"content":"${R}`);
+      expect(red(`{"content":"${esc(cat(header, '\n', line1, '\n\nprose'))}"}\nnext`))
+        .toBe(`{"content":"${R}${esc('\n\nprose')}"}\nnext`);
+      const escCrlf = (t: string): string => t.replace(/\n/g, '\\r\\n');
+      expect(red(`{"content":"${escCrlf(cat(header, '\n', line1, '\n\nprose'))}"}`))
+        .toBe(`{"content":"${R}${escCrlf('\n\nprose')}"}`);
     });
-    // Review 2693 F1 (the coordinator's ruling): an unclosed header masks the header and the base64 lines after it, up
-    // to the first line that is neither base64 nor blank, and never to the end of the text.
-    it(`${profile}: a truncated key's lines are masked, and the prose after them is kept`, () => {
-      expect(redact(profile, `x ${header}\n${line1}\n${line2}\nExpected: it loads.`, SHAPES)).toBe(`x ${R}\nExpected: it loads.`);
-      expect(redact(profile, `x ${header}\n${line1}\n\nOwner: team-a.`, SHAPES)).toBe(`x ${R}\n\nOwner: team-a.`);
-      expect(redact(profile, cat('x ', header, '\n', line1.slice(0, 12)), SHAPES)).toBe(`x ${R}`);
+
+    // Review 2704 F1 (the coordinator's ruling): a closed block is masked through its END line, whatever the lines
+    // between look like. One case per layout the review measured.
+    it(`${profile}: a trailing space or tab after the BEGIN line`, () => {
+      expect(red(`a\n${[`${header} \t`, ...BODY, end].join('\n')}\nb`)).toBe(`a\n${R}\nb`);
     });
-    it(`${profile}: an unclosed header followed by prose keeps the prose`, () => {
-      const cmd = `echo '${header}' ; curl -d @x https://example.com/up`;
-      expect(redact(profile, cmd, SHAPES)).toBe(`echo '${R}' ; curl -d @x https://example.com/up`);
+    it(`${profile}: CR CR LF line breaks`, () => {
+      expect(red(`a\r\r\n${lines.join('\r\r\n')}\r\r\nb`)).toBe(`a\r\r\n${R}\r\r\nb`);
+    });
+    it(`${profile}: string concatenation, a line per string`, () => {
+      const js = `const k =\n${lines.map((l) => `  "${l}\\n"`).join(' +\n')};`;
+      expect(red(js)).toBe(`const k =\n  "${R}\\n";`);
+    });
+    it(`${profile}: a prefix on every line (a quote, a comment, a table)`, () => {
+      for (const pre of ['> ', '&gt; ', '# ', '// ', '| ']) {
+        expect(red(`${lines.map((l) => pre + l).join('\n')}\n\nafter`), pre).toBe(`${pre}${R}\n\nafter`);
+      }
+    });
+    it(`${profile}: a line inside the body that is not base64`, () => {
+      expect(red([header, L64, '# a comment', '- a list item', L64, end].join('\n'))).toBe(R);
+    });
+
+    // With no END line: the BEGIN line and every line after it, up to the first blank line, whatever their shape.
+    it(`${profile}: an unclosed block is masked to its first blank line, and the prose after it is kept`, () => {
+      expect(red(`K="${[header, ...BODY].join(' ')}" more words\n\nprose after`)).toBe(`K="${R}\n\nprose after`);
+      expect(red(`${[`${header} `, L64, L64].join('\n')}\n\nprose`)).toBe(`${R}\n\nprose`);
+      expect(red(`${['> ' + header, '> ' + L64].join('\n')}\n\nprose`)).toBe(`> ${R}\n\nprose`);
+      expect(red(`${header}\r\n${L64}\r\n\r\nprose`)).toBe(`${R}\r\n\r\nprose`);
+      expect(red(`${header}\n${L64}\n \t\nprose`)).toBe(`${R}\n \t\nprose`);
+      expect(red(cat('x ', header, '\n', line1.slice(0, 12)))).toBe(`x ${R}`);
+    });
+    it(`${profile}: with no END line, the lines before the first blank line are masked whatever they say`, () => {
+      expect(red(`x ${header}\n${L64}\nExpected: it loads.`)).toBe(`x ${R}`);
+      expect(red(`echo '${header}' ; curl -d @x https://example.com/up`)).toBe(`echo '${R}`);
+      expect(red(`echo '${header}' ; curl -d @x https://example.com/up\n\nls`)).toBe(`echo '${R}\n\nls`);
       const ticket = `Steps: the loader rejects ${header} headers.\n\nExpected: it loads.\nOwner: team-a.`;
-      expect(redact(profile, ticket, SHAPES)).toBe(`Steps: the loader rejects ${R} headers.\n\nExpected: it loads.\nOwner: team-a.`);
+      expect(red(ticket)).toBe(`Steps: the loader rejects ${R}\n\nExpected: it loads.\nOwner: team-a.`);
+    });
+    it(`${profile}: an END line counts within 64 KB of its BEGIN line, and no further`, () => {
+      const near = 'p '.repeat(500);
+      expect(red(`${header}\n${L64}\n\n${near}\n${end}`)).toBe(R);
+      const far = 'p '.repeat(40000);
+      expect(red(`${header}\n${L64}\n\n${far}\n${end}`)).toBe(`${R}\n\n${far}\n${end}`);
+    });
+    it(`${profile}: an END line after the next BEGIN line belongs to that block`, () => {
+      expect(red(`${header}\n${L64}\n\nprose\n${block}`)).toBe(`${R}\n\nprose\n${R}`);
     });
     it(`${profile}: a public key block and the bare words stay readable`, () => {
       const pub = cat('-----BEGIN ', 'PUBLIC KEY-----\nMFkwEwYHKoZIzj0C\n-----END PUBLIC KEY-----');
-      expect(redact(profile, pub, SHAPES)).not.toContain(R);
-      expect(redact(profile, 'the PRIVATE KEY header', SHAPES)).toBe('the PRIVATE KEY header');
+      expect(red(pub)).not.toContain(R);
+      expect(red('the PRIVATE KEY header')).toBe('the PRIVATE KEY header');
+    });
+    it(`${profile}: each block counts one masked span, and a masked text redacts to itself`, () => {
+      const t = `a\n${block}\n\n${header}\n${L64}\n\nb`;
+      const once = redactCount(profile, t, SHAPES);
+      expect(once.masked).toBe(2);
+      expect(red(once.text)).toBe(once.text);
     });
   }
 
-  it('a long run of headers and blank lines stays linear', () => {
-    for (const t of [cat(header, ' ').repeat(8000), cat(header, '\n', ' '.repeat(65536), 'x'), cat(header, '\n\n'.repeat(30000), 'x')]) {
-      const t0 = performance.now();
-      redact('linear-egress', t, SHAPES);
-      expect(performance.now() - t0, t.slice(0, 40)).toBeLessThan(250);
+  // Review 2704 F2: no input overflows the stack, and the time stays linear (the review measured a throw from about
+  // 1.3 million one-character lines on the rule this replaced).
+  it('hostile inputs of about 6 MB neither throw nor take super-linear time', () => {
+    const big = 3_000_000;
+    for (const t of [cat(header, '\nx'.repeat(big)), cat(header, '\n'.repeat(big * 2)), cat(header, '\r\n'.repeat(big)),
+      cat(header, '\\n'.repeat(big)), cat(header, ' ').repeat(big / 16), cat(header, '\n', end.slice(0, 20)).repeat(big / 32),
+      cat(header, '\n', 'p '.repeat(big)), cat(end, '\n').repeat(big / 16)]) {
+      for (const profile of PROFILES) {
+        const t0 = performance.now();
+        expect(() => redact(profile, t, SHAPES), t.slice(0, 40)).not.toThrow();
+        expect(performance.now() - t0, `${profile} ${JSON.stringify(t.slice(31, 40))}`).toBeLessThan(3000);
+      }
     }
   });
 

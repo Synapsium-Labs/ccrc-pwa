@@ -49,8 +49,9 @@
 // THE EGRESS SHAPES. A child's tool input is untrusted text, and it can carry a secret the child pasted into a command.
 // Before any input is stored on an approval row, mailed to a coordinator, put in a digest or shown on a surface, the
 // egress profile masks the token-shaped strings in it:
-//   - a PEM private-key block, from its BEGIN line to its END line; with no END line, its BEGIN line and the base64 lines
-//     after it, never the text past them (overlord wave 163, review 2693 F1);
+//   - a PEM private-key block, from its BEGIN line through its END line within 64 KB; with no END line, its BEGIN line
+//     and every line after it up to the first blank line, never the text past that (overlord wave 163; reviews 2693
+//     and 2704, `maskPemBlocks`);
 //   - `Authorization:` and `Cookie:` header values (and `Proxy-Authorization:`, `Set-Cookie:`), and the value of any
 //     header named `...-Key`, `...-Token`, `...-Secret` or `...-Signature` (`X-Api-Key:`, `Private-Token:`), to the end
 //     of the value (D-5360);
@@ -224,20 +225,80 @@ const PEM_END = String.raw`-----END [A-Z ]*PRIVATE KEY-----`;
  *  to it is a history `BELT_VERSION` bump and a reindex (the history programme's), never a change made here alone: that
  *  is why it is not Gitleaks's `private-key` rule, which also reads a PGP private key block (a residual). */
 export const PEM_PRIVATE_KEY_SOURCE = PEM_HEADER + String.raw`[\s\S]*?(?:` + PEM_END + '|$)';
-/** A line break: CR LF, LF, or the escaped `\r\n` or `\n` of a JSON string. */
-const PEM_BREAK = String.raw`(?:\r?\n|\\r\\n|\\n)`;
-/** The egress profiles' PEM rule (review 2693 F1, the coordinator's ruling): legitimately different from history's, the
- *  opposite cost. History stores text and masks to the end when a block has no END line; egress text is SHOWN, to
- *  whoever rules on an approval row or reads a Linear ticket, and masking to the end hid the rest of a command or a
- *  ticket for good. So: the BEGIN line and its END line on the same line (a JSON-escaped block; never across another
- *  BEGIN line), or the BEGIN line, then every line that is base64 (or an encrypted block's `Proc-Type:` and `DEK-Info:`
- *  fields), blank lines between them, then its END line if one follows. A line of anything else ends it, so an unclosed
- *  header masks itself and the key lines after it, never the prose. A base64 line ends at a line break, the end of the
- *  text or a closing quote. Linear: each part starts with a different character. */
-const EGRESS_PEM_SOURCE = PEM_HEADER + String.raw`(?:(?:(?!-----BEGIN )[^\r\n])*?` + PEM_END + '|'
-  + String.raw`(?:(?:${PEM_BREAK}[ \t]*(?=${PEM_BREAK}))*${PEM_BREAK}[ \t]*(?:[A-Za-z0-9+/=]+|(?:Proc-Type|DEK-Info):[^\r\n\\]*)[ \t]*(?=${PEM_BREAK}|$|["'` + '`' + String.raw`]))*`
-  + String.raw`(?:(?:${PEM_BREAK}[ \t]*(?=${PEM_BREAK}))*${PEM_BREAK}[ \t]*${PEM_END})?)`;
-const PEM_BLOCK = new RegExp(EGRESS_PEM_SOURCE, 'g');
+/** How far after its BEGIN line an END line still closes a block (review 2704 F1, the coordinator's ruling). */
+const PEM_END_WINDOW = 64 * 1024;
+const PEM_HEADER_RE = new RegExp(PEM_HEADER, 'g');
+const PEM_END_RE = new RegExp(PEM_END, 'g');
+/** A blank line: nothing but spaces, tabs and carriage returns, raw or JSON-escaped. */
+const PEM_BLANK_LINE = /^(?:[ \t\r]|\\r)*$/;
+
+/** The egress profiles' PEM rule, `pem-block` (review 2693 F1 and review 2704 F1 and F2, the coordinator's rulings):
+ *  legitimately different from history's `PEM_PRIVATE_KEY_SOURCE`, for the opposite cost. History stores text and masks
+ *  a block with no END line to the end of the text; egress text is SHOWN, to whoever rules on an approval row or reads a
+ *  Linear ticket, and masking to the end hid the rest of a command or a ticket for good. It is a scanner, not a second
+ *  redactor: one step of this table, run over the same text in the same place, written as a function because no single
+ *  regular expression walks lines without recursing once per line (review 2704 F2 overflowed the stack at about 1.3
+ *  million short lines). From each BEGIN line it masks:
+ *  - through the first END line within `PEM_END_WINDOW` characters, unless another BEGIN line comes first, whatever the
+ *    lines between look like (a prefix, a quote, a trailing space, CR CR LF, string concatenation, a JSON-escaped or
+ *    space-joined block);
+ *  - with no such END line, the rest of the BEGIN line and every line after it up to the first blank line, whatever its
+ *    shape; the blank line and what follows it are kept. A line ends at a line feed or at JSON's escaped `\n`, and a
+ *    carriage return before the line end is left in place.
+ *  Linear: the BEGIN, END and line-end searches only move forward, each kept once found, and every character is read a
+ *  bounded number of times. */
+function maskPemBlocks(text, tally) {
+  if (!text.includes('PRIVATE KEY')) return text;
+  let out = ''; let from = 0;
+  // The first END line at or after `endFrom` (null: none), and the next line feed and escaped `\n` at or after `seen`
+  // (Infinity: none). Each is searched again only when a query passes it, so each search moves forward only.
+  let end = null; let endFrom = Infinity;
+  let lf = -1; let esc = -1; let seen = -1;
+  const nextEnd = (at) => {
+    if (at < endFrom || (end !== null && end.index < at)) {
+      PEM_END_RE.lastIndex = at; end = PEM_END_RE.exec(text); endFrom = at;
+    }
+    return end;
+  };
+  /** Where the line holding `at` ends, and the length of its line break (0 at the end of the text). */
+  const lineEnd = (at) => {
+    if (seen < 0 || lf < at) { const i = text.indexOf('\n', at); lf = i === -1 ? Infinity : i; }
+    if (seen < 0 || esc < at) { const i = text.indexOf('\\n', at); esc = i === -1 ? Infinity : i; }
+    seen = at;
+    if (lf === Infinity && esc === Infinity) return [text.length, 0];
+    return lf <= esc ? [lf, 1] : [esc, 2];
+  };
+  PEM_HEADER_RE.lastIndex = 0;
+  for (let m = PEM_HEADER_RE.exec(text); m !== null; m = PEM_HEADER_RE.exec(text)) {
+    const after = m.index + m[0].length;
+    const following = PEM_HEADER_RE.exec(text);   // the next BEGIN line, if any
+    const nextBegin = following === null ? Infinity : following.index;
+    const e = nextEnd(after);
+    let stop;
+    if (e !== null && e.index < nextBegin && e.index + e[0].length - after <= PEM_END_WINDOW) {
+      stop = e.index + e[0].length;
+    } else {
+      // No END line: the rest of the BEGIN line, then every line up to the first blank one.
+      let [le, brk] = lineEnd(after);
+      stop = le;
+      while (brk > 0) {
+        const [ne, nbrk] = lineEnd(le + brk);
+        if (PEM_BLANK_LINE.test(text.slice(le + brk, ne))) break;
+        stop = ne; le = ne; brk = nbrk;
+      }
+      // Leave a carriage return (raw, or JSON-escaped before an escaped `\n`) with the line break it belongs to.
+      if (text[stop - 1] === '\r') stop -= 1;
+      else if (stop - after >= 2 && text[stop - 2] === '\\' && text[stop - 1] === 'r' && text.startsWith('\\n', stop)) stop -= 2;
+      if (stop < after) stop = after;
+    }
+    out += `${text.slice(from, m.index)}${R}`;
+    tally.masked += 1;
+    from = stop;
+    // The next BEGIN line is found again from here, unless this block's lines took it in.
+    PEM_HEADER_RE.lastIndex = nextBegin !== Infinity && nextBegin >= stop ? nextBegin : stop;
+  }
+  return out + text.slice(from);
+}
 const SLACK_HOOK = /(hooks\.slack\.com\/(?:services|workflows|triggers)\/)[^\s'"]+/gi;
 const TELEGRAM_BOT = /\bbot[0-9]{5,}:[A-Za-z0-9_-]{20,}/g;
 /** A base64 (standard or URL-safe) or hex run; hex is a subset of the class. Linear: one class, no nesting. */
@@ -420,7 +481,7 @@ const needShape = (shapes, id) => {
 };
 
 const RULES = Object.freeze([
-  sub('pem-block', PEM_BLOCK, R),
+  { id: 'pem-block', make: () => maskPemBlocks },
   sub('json-pair', JSON_PAIR, (m, key, sep) => (JSON_SECRET_KEY.test(key) ? `"${key}"${sep}"${R}"` : m)),
   sub('yaml-secret', YAML_SECRET, (_m, name, sep) => `${name}${sep}${R}`),
   {
