@@ -3,8 +3,9 @@
 // behind the Shadow lanes row `working-idle-sleep` (seeded `shadow`), and a live sleep mails the run's coordinator once
 // (D-8791). The file began as the characterization of the code before the change; its rows
 // marked "now:" are the ones the behaviour commit flipped (each says what it was), and its "kept:" rows did not move.
-import { describe, expect, it, vi, afterEach } from 'vitest';
+import { describe, expect, it, vi, afterEach, beforeAll } from 'vitest';
 import path from 'node:path';
+import { copyFileSync, mkdirSync } from 'node:fs';
 import {
   STOP_DONE_GRACE_MS, STOP_DONE_PARKED_IDLE_MS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES, mailOnly, stopDoneVerdict,
   type StopDoneInput, type StopDoneRow,
@@ -131,7 +132,23 @@ describe('the run-done verdict on a worker whose newest placed run is active', (
 
 // ── The pass, over a real coordination store ─────────────────────────────────────────────────────────────────────────
 
-const store = (): CoordStore => new CoordStore(openCoordDb(path.join(mkTmp('ccrc-wis-'), '.ccrc', 'coord.db')));
+/** One migrated database, copied per store: a fresh open replays every migration, which under a loaded box costs seconds
+ *  a store, and a case here opens up to three. The copies are closed after each case. */
+let template = '';
+const opened: CoordStore[] = [];
+beforeAll(() => {
+  template = path.join(mkTmp('ccrc-wis-template-'), 'coord.db');
+  openCoordDb(template).close();
+});
+afterEach(() => { for (const o of opened.splice(0)) { try { o.db.close(); } catch { /* already closed */ } } });
+const store = (): CoordStore => {
+  const dir = path.join(mkTmp('ccrc-wis-'), '.ccrc');
+  mkdirSync(dir, { recursive: true });
+  copyFileSync(template, path.join(dir, 'coord.db'));
+  const s = new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
+  opened.push(s);
+  return s;
+};
 
 /** A run of programme `programme-a` claimed by the coordinator, bound to the worker, moved to `state`. */
 function runAt(s: CoordStore, state: string, wave = 1, worker = WORKER): number {
