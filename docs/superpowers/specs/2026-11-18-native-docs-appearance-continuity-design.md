@@ -194,7 +194,7 @@ This section says how the reader uses ccrc's catalogue without copying it, and w
    - no file under `pwa/src/docs/reader/` holds a hex colour literal;
    - only `ReaderFrame.tsx` imports `THEMES`, for the mode-only fallback (§7), and no file imports `SKINS`.
 4. **No stylesheet crosses.** Two checks:
-   - at run time, over every value `readerAppearanceOf` builds in part 2, no string contains `;`, `{`, `}`, `url(` or `var(`, and no key falls outside `APPEARANCE_SLOTS`, `mode` and `label`;
+   - at run time, over every value `readerAppearanceOf` builds in part 2, no string contains `;`, `{`, `}`, `url(` or `var(`. Every top-level key is `mode`, `label`, `colour` or `skin`, and every key inside `colour` or `skin` is a slot of that group in `APPEARANCE_SLOTS`;
    - in source, `appearance.ts` holds no such literal.
 
 A test helper, `pwa/test/helpers/paletteTokens.ts`, resolves a palette's tokens for parts 2 and 3. The contrast gate's `audit.mjs` cannot, as it stands: it keys the default palette as `DARK`, reads only the first `:root` block, and never reads `skins.css` or `color-scheme`. The helper merges both default blocks, maps `phosphor` to them, applies a skin's `:root[data-skin=…]` block and its `(pointer: fine)` arm, and follows `var()` chains.
