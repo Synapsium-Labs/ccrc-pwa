@@ -2413,6 +2413,8 @@ export class FleetWatcher {
         listing: async () => {
           try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
         },
+        // D-TBD-coordinator-told-of-sleep: the waiting case's one mail to the run's coordinator.
+        systemMail: (run, m) => queueSystemMail(coord, run, m),
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {

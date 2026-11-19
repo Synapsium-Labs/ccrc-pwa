@@ -1015,6 +1015,10 @@ export type LastRunsResult =
      *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
      *  policy's parked clock is not cut short by a newer done run beside it. */
     lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
+    /** D-TBD-working-idle-sleeps, additive: the asked sessions an ACTIVE run names that is NOT their newest placed run
+     *  (the same negative predicate as `openPlacedWorkers`). A worker whose newest placed run is itself active is held
+     *  by a second active run only; for every other worker this answers what `openPlacedWorkers` does. */
+    otherOpenPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -5098,6 +5102,7 @@ export class CoordStore {
     if (sessionIds.length === 0) {
       return {
         ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+        otherOpenPlacedWorkers: [],
       };
     }
     const ph = placeholders(sessionIds.length);
@@ -5140,9 +5145,15 @@ export class CoordStore {
     const parked = (this.db.prepare(
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
     ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-TBD-working-idle-sleeps: an active run beside the newest placed one (`planned` is never active, so the newest
+    // placed run is the newest whose state is not `planned`, as `newest(true)` reads it).
+    const other = (this.db.prepare(
+      `SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      'AND r.id <> (SELECT MAX(n.id) FROM runs n WHERE n.sessionId = r.sessionId AND n.state <> ?)',
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked, otherOpenPlacedWorkers: other,
     };
   }
 

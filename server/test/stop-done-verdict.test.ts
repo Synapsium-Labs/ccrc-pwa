@@ -29,7 +29,7 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
   row: row(), heldKind: 'none', holdOkVerb: true,
   store: {
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
-    openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false,
+    openWorker: false, parkedWorker: false, otherOpenWorker: false, openClaimant: false, claim: false, mail: false,
   },
   viewer: false, sinceStartMs: VIEWER_TTL_MS + 1, viewerOpenTtlMs: VIEWER_TTL_MS, verb: true, overlord: false, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
@@ -60,7 +60,7 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['substrate', { row: row({ substrate: { at: NOW, text: 't' } }) }],
     ['runs-unreadable', { store: { ok: false, detail: 'locked' } }],
     ['no-run', { store: okStore({ last: null }) }],
-    ['not-done', { store: okStore({ last: { runId: 7, state: 'working', closedAt: null } }) }],
+    ['not-done', { store: okStore({ last: { runId: 7, state: 'dispatched', closedAt: null } }) }],
     ['close-unplaced', { store: okStore({ last: { runId: 7, state: 'done', closedAt: null } }) }],
     ['grace', { store: okStore({ last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS + 1 } }) }],
     ['run-worker', { store: okStore({ openWorker: true }) }],
@@ -130,10 +130,13 @@ describe('stopDoneVerdict (D-5370)', () => {
 
   it('an empty roster does not hold; a run outside done, failed and the parked states is not a finished one (D-6092)', () => {
     expect(stopDoneVerdict(base({ row: row({ subagents: [] }) }))).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
-    for (const state of ['abandoned', 'dispatched', 'working', 'unknown', 'planned', 'some-future-state']) {
+    for (const state of ['abandoned', 'dispatched', 'unknown', 'planned', 'some-future-state']) {
       expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state, closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) })))
         .toEqual({ act: 'hold', reason: 'not-done' });
     }
+    // D-TBD-working-idle-sleeps: `working` is the waiting case, which sleeps (stop-done-working-idle.test.ts).
+    expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state: 'working', closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) })).act)
+      .toBe('hibernate');
   });
 
   it('the grace is measured from the run\'s close: exactly the grace past it stops', () => {
@@ -348,12 +351,17 @@ describe('stopDoneVerdict: "finished" per F5 (b), before and after (D-6092)', ()
     expect(stopDoneVerdict(base({ store: runAt('awaiting-review', null), live: quiet(29 * MIN) })).act).toBe('hold');
   });
 
-  for (const state of ['working', 'dispatched', 'unknown']) {
+  for (const state of ['dispatched', 'unknown']) {
     it(`kept: an ${state === 'unknown' ? 'unknown' : 'active'} run (${state}) holds not-done, however quiet`, () => {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * 60 * MIN) })))
         .toEqual({ act: 'hold', reason: 'not-done' });
     });
   }
+
+  it('now: a `working` run, its marker quiet 7 hours, sleeps as the waiting case (was: not-done; D-TBD-working-idle-sleeps)', () => {
+    expect(stopDoneVerdict(base({ store: runAt('working', null), live: quiet(7 * 60 * MIN) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * 60 * MIN, waiting: { since: NOW - 7 * 60 * MIN } });
+  });
 });
 
 // D-6092 (fleet capacity W1-1b; F5 (b), 2026-10-20), the new rows: a run is finished for the run-done policy when it is
@@ -408,8 +416,8 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
       .toEqual({ act: 'hold', reason: 'recent' });
   });
 
-  it('an active run holds', () => {
-    for (const state of ['dispatched', 'working', 'unknown']) {
+  it('an active run holds, but `working`, the waiting case (D-TBD-working-idle-sleeps)', () => {
+    for (const state of ['dispatched', 'unknown']) {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * HOUR) })), state).toEqual({ act: 'hold', reason: 'not-done' });
     }
   });

@@ -3963,6 +3963,22 @@ export const MIGRATIONS: readonly string[] = [
     doneAt = (SELECT r.closedAt FROM runs r WHERE r.id = plan_tickets.runId)
     WHERE state = 'done' AND runId IS NOT NULL;
   `,
+
+  // ── 107: user_version 106 -> 107 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-TBD-working-idle-sleeps): the seed row
+  // `working-idle-sleep` = `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a
+  // dispatched worker on a `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator
+  // at `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at `user_version 107` takes rule 3 (it warns, reads as-is and
+  // migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry is
+  // frozen. WM1 (#2997) took 106, so this is 107 by position; whoever lands second renumbers. RE-MEASURE the slot before
+  // the PR and before merge (it must print 106 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
