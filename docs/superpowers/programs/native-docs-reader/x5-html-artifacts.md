@@ -6,7 +6,7 @@ The task note for native Docs reader wave 29 (X5, run 2837): what the ledger sho
 
 - **The ruling carried out.** The operator ruled on 2026-11-19, on X2's conflict C3 (ask 598), that HTML pages are supported at artifact level, with the safety in the hosting. This wave designed that hosting. It changed no code and touched no live service.
 - **The design.** Pages run on two names of their own, outside the console's site: a script-free wrapper on the artifact host, and the page in the wrapper's frame on the content host. A second server listener serves them, with four routes and no console route. Access is by a 256-bit capability in the URL path, minted under a signed-in session, held in memory and bound to that session. It expires after an idle hour, at 12 hours, or at 2 hours when the page reads drafts. Egress is closed by default; outside hosts and windows are opt-in at launch. X2's walls tier stays the default view.
-- **For the ledger.** Two departures defined, D-8786 (X2's C3 text, wave A1) and D-8787 (the completion plan's walls sentences, wave A3). Number 8788 of the block is unused. Five implementation waves, A1 to A5. A2 depends on X2 P1 and A5 on X2 P6. No exempt class is added, so X3's class 9 does not collide. C3 moves from Conflict to Gap; the Task 17 rows are AR-A1 to AR-A5, with lab rows ART-L1 to ART-L12.
+- **For the ledger.** Two departures defined, D-8786 (X2's C3 text, wave A1) and D-8787 (the completion plan's walls sentences, wave A3). Number 8788 of the block is unused. Five implementation waves, A1 to A5. A1 waits for X3 R1, which waits for X2 P1, and A5 waits for X2 P6. No exempt class is added, so X3's class 9 does not collide. C3 moves from Conflict to Gap; the Task 17 rows are AR-A1 to AR-A5, with lab rows ART-L1 to ART-L12.
 - **Open product choices.** None. Every choice was technical and is argued in the spec. One parity difference is recorded, not waived: an HTML page in an outside folder runs within the walls only, because X2 §4.1 reads outside folders only under a signed-in session; running it in full is Later (spec §3.2, §8, Later).
 
 ## The adversarial pass
@@ -58,7 +58,7 @@ Review run 2850 read the branch at `d1bb9ffee` and confirmed 13 findings (F1 to 
 | F13 | `CONTENT_HEADERS` is pinned to literals. The bad-frame bytes never reach the client. Rows for every named limit and fence. Spies on every `console` method |
 | A1 to A13 | COOP wording; the PR body's Parity line; the message rule; `/clear`'s CSP and the gate's words; P1's real names; no outward import and a null size rule; sources quoted only for what they say; real Task 17 rows; doctor's Host; golden answers for the browser harness; a section path and no port default; grants argued and section roots narrowed; token crossing named |
 
-Mutation rows now run MX5.1 to MX5.66. The adversarial pass was run again over the changed sections before this round's wave-done.
+Mutation rows now run MX5.1 to MX5.69. The adversarial pass was run again over the changed sections before this round's wave-done.
 
 ## Measured, and how
 
