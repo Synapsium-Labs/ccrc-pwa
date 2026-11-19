@@ -7,6 +7,9 @@ import { flowPhases, type FlowBlock, type FlowDoc } from '../../../shared/flows'
 import { KIND_WORD } from './flowEdits';
 
 const W = 176;
+/** How far apart the two arrows of a pair (a → b and b → a) run, and how far each label sits off its own arrow. */
+const LANE = 10;
+const LABEL_OFF = 14;
 const H = 64;
 const PAD = 24;
 
@@ -32,7 +35,7 @@ export function FlowDiagram(p: { readonly doc: FlowDoc; readonly selected: strin
   const width = Math.max(320, ...p.doc.blocks.map((b) => b.at.x + W)) + PAD;
   const height = Math.max(160, ...p.doc.blocks.map((b) => b.at.y + H)) + PAD * 2;
   return (
-    <div className="overflow-auto rounded-md border border-edge-subtle bg-well">
+    <div className="overflow-auto rounded-md border border-edge-subtle bg-page">
       <svg width={width} height={height} role="img" aria-label="The flow's diagram" className="block font-mono">
         <defs>
           <marker id="flow-ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
@@ -47,19 +50,26 @@ export function FlowDiagram(p: { readonly doc: FlowDoc; readonly selected: strin
           const b = byId.get(e.to);
           if (a === undefined || b === undefined) return null;
           const back = (phase.get(e.to) ?? 0) < (phase.get(e.from) ?? 0) && b.kind !== 'protocol';
-          const [sa, sb] = a === b ? (['b', 'b'] as [Side, Side]) : sides(a, b);
-          const A = port(a, sa);
-          const B = port(b, sb);
+          // A fix round between blocks in one row loops under them, never across the blocks between.
+          const under = a === b || (back && Math.abs(a.at.y - b.at.y) < H);
+          const [sa, sb] = under ? (['b', 'b'] as [Side, Side]) : sides(a, b);
+          // A pair of opposite arrows would draw one line twice: each runs in its own lane, to the left of its direction.
+          const paired = a !== b && p.doc.edges.some((x) => x.from === e.to && x.to === e.from);
+          const perp: [number, number] = [DIR[sa][1], -DIR[sa][0]];
+          const lane = (q: [number, number], d: number): [number, number] => (paired ? [q[0] + perp[0] * d, q[1] + perp[1] * d] : q);
+          const A = lane(port(a, sa), LANE);
+          const B = lane(port(b, sb), LANE);
           const k = back || a === b ? 60 : Math.max(30, Math.hypot(B[0] - A[0], B[1] - A[1]) / 2.5);
           const c1: [number, number] = [A[0] + DIR[sa][0] * k, A[1] + DIR[sa][1] * k];
           const c2: [number, number] = [B[0] + DIR[sb][0] * k, B[1] + DIR[sb][1] * k];
-          const mid: [number, number] = [(A[0] + B[0] + c1[0] + c2[0]) / 4, (A[1] + B[1] + c1[1] + c2[1]) / 4];
+          const curve: [number, number] = [(A[0] + B[0] + c1[0] + c2[0]) / 4, (A[1] + B[1] + c1[1] + c2[1]) / 4];
+          const mid: [number, number] = paired ? lane(curve, LABEL_OFF) : [curve[0], curve[1] - 4];
           return (
             <g key={`${e.from}/${e.outcome}`}>
               <path d={`M${A} C${c1} ${c2} ${B}`} fill="none" strokeWidth={1.5} markerEnd={back ? 'url(#flow-ah-back)' : 'url(#flow-ah)'}
                     strokeDasharray={back ? '5 4' : undefined}
                     style={{ stroke: back ? 'var(--status-attention)' : 'var(--edge-strong)' }} />
-              <text x={mid[0]} y={mid[1] - 4} textAnchor="middle" fontSize={11}
+              <text x={mid[0]} y={mid[1]} textAnchor="middle" dominantBaseline={paired ? 'middle' : undefined} fontSize={11}
                     style={{ fill: back ? 'var(--status-attention-text)' : 'var(--ink-tertiary)' }}>{e.outcome}</text>
             </g>
           );
