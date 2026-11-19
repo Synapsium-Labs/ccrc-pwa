@@ -1,8 +1,8 @@
 # Approvals PR 2, the per-agent envelope and the untrusted-build item: task note
 
 Plan: `docs/superpowers/plans/2026-11-18-overlord-approvals.md` (on `main`), §2's path 6, §3.2.2 and Tasks 2.1 and 2.2.
-Departures are listed by slug. The coordinator mints the numbers. Fix round 1 answers review 2752's F1 to F7, and fix
-round 2 review 2774's F1 to F6, as the coordinator ruled them; each change below names its review and finding.
+Departures are listed by slug. The coordinator mints the numbers. Fix round 1 answers review 2752's F1 to F7, fix
+round 2 review 2774's F1 to F6, and fix round 3 review 2800's F1 to F6, as the coordinator ruled them; each change below names its review and finding.
 
 ## What shipped
 
@@ -28,9 +28,15 @@ round 2 review 2774's F1 to F6, as the coordinator ruled them; each change below
   over a menu the operator is about to answer, so the decider takes an entry only when it is the best and an honest match:
   - a summary under 60 non-space characters must appear whole, and one under 12 (`APPROVAL_MATCH_MIN_CHARS`) only as the
     menu's command block;
-  - "exact" means the command block: a paragraph of the menu's body (a real capture paints a blank line around it,
-    `cc280-permission.txt`), or that paragraph less its last line, the tool's description, the pane's wraps joined. One
-    line inside a paragraph is never it (2774 F2);
+  - "exact" means the command block, every command row between the menu's own boundaries, blank rows included (2774 F2,
+    2800 F2 to F4), read in both shapes Claude Code paints (`commandBlocksOf`). In the 2.1.299 shape
+    (`pwa/test/fixtures/drawer/recorded/2.1.299/permission.json`) the description is painted first and the command's
+    rows sit between two dashed rules (`╌`), each behind a gutter (`│`): the block is those rows, the gutter removed. In
+    the cc280 shape (`fixtures/panes/cc280-permission.txt`) the command's rows and then its description are indented: the
+    block is that indented run, blank rows included, or the run less its last row (the description); the parser trims
+    the body's first row, so a first row followed at once by an indented one belongs to it. One row, or one part of a
+    script split by a blank row, is never the block. The gutter is removed from the text a long command is matched in,
+    so a command wrapped across gutter rows reads whole;
   - candidates rank by a full 60-character match, then an exact one, then the longest, then the tool the menu names, and
     only then the newest, so an exact match shorter than the 60-character head never outranks a 60-character match
     (2774 F2);
@@ -38,6 +44,14 @@ round 2 review 2774's F1 to F6, as the coordinator ruled them; each change below
     ask never beats an entry that is the command block (2774 F1). When a subagent raised it (`waitBy: 'subagent'`), its
     entry is the one the same write added (the same tool and summary, stamped `at` = hook state's `updatedAt`), and that
     entry is taken under the same age rule; with none, there is no entry, never another agent's identical one (2774 F5);
+  - an ambiguous tie shows no one (2800 F1): when the best candidates tie at the full 60-character tier, none exact, and
+    belong to different agents (two entries, or an entry and the own ask), there is no envelope at all, so the console
+    shows the bare menu and the hold and the census treat it as an envelope-less menu. Ties within one agent, and ties
+    at any other tier, keep the ranking above;
+  - hook state's own approval that the painted permission prompt does not match is no envelope when another agent's live
+    entry exists (2800 F5, as the coordinator narrowed it, mail 26556). With none, the own ask stands as before this PR
+    (`kept`), so a main thread's Write or Edit prompt, whose preview paints a relative path the hook's absolute
+    `file_path` never matches (the 2.1.299 Write preview), keeps its surface and its hold;
   - an entry is ignored once the hook's longest wait and 15 minutes have passed since its request's stamp
     (`APPROVAL_ENTRY_MAX_AGE_MS` = `APPROVAL_HOOK_WAIT_S` + `APPROVAL_MENU_ANSWER_MS`, 2774 F3), or when its stamp is more
     than a minute ahead of the reader's clock (`APPROVAL_ENTRY_MAX_AHEAD_MS`, 2774 F4); its menu then falls back to path
@@ -73,6 +87,8 @@ round 2 review 2774's F1 to F6, as the coordinator ruled them; each change below
   matched with whitespace removed on both sides, because the pane wraps commands, mid-word too. The tool name ranks
   after exactness and length, because Claude Code's header words differ by tool ("Bash command", "Edit file") and do not
   always contain the tool's name.
+- `ambiguous-tie-shows-no-one` (review 2800 F1, the coordinator's ruling): the slug above. The bare menu is the design's
+  safe direction, so a tie the text cannot settle names no one rather than the newest.
 - `own-ask-competes` (replaces `own-ask-first`, review 2774 F1; that replaced `entry-wins-over-ask`, review 2752 F1):
   hook state's own approval is the painted prompt when the menu matches it at least as strongly as the best entry. Only
   the same-call case keeps `own-ask-first`'s exception: when a subagent raised it (`waitBy: 'subagent'`), the own ask and
@@ -145,19 +161,31 @@ round 2 review 2774's F1 to F6, as the coordinator ruled them; each change below
 
 ## Accepted residuals
 
-- `long-command-unmatched`: a command whose first 60 characters are painted above the dialog's 20-line preamble window
-  (`pane/dialog.ts`'s `header`), or that Claude Code paints differently from its input, matches no entry: the console
-  shows the bare menu, as before, and the census counts it as before. The same holds for a short command (under 12
-  non-space characters) that is not the menu's whole command block.
-- `identical-commands`: two subagents prompting for the same command at once both match; the newest entry is taken, so
-  the surface, the hold and the census name the newer agent's prompt while the older one's menu is painted. The surface
-  reads the same either way. Each prompt is still its own census row (F3).
+- `long-command-unmatched` (reworded, review 2800 F5): a command whose first 60 characters are painted above the
+  dialog's 20-line preamble window (`pane/dialog.ts`'s `header`), or that Claude Code paints differently from its input
+  (a Write or Edit preview's relative path), matches no entry, and neither does a short command (under 12 non-space
+  characters) that is not the menu's whole command block. What the console shows then is `paintedApprovalOf`'s answer:
+  another entry that does match, if one does; else, with another agent's live entry standing, no envelope (the bare
+  menu); else hook state's own ask through the `kept` fallback, as before this PR, even when that ask is not the
+  painted prompt (the hold and the census follow it).
+- `identical-commands`: two subagents prompting for the same command at once both match. When the command is the menu's
+  block, or shorter than 60 non-space characters, the newest entry is taken, so the surface, the hold and the census
+  name the newer agent's prompt while the older one's menu is painted; the surface reads the same either way, and each
+  prompt is still its own census row (F3). When both match only by their first 60 characters, the tie is ambiguous and
+  no one is shown (2800 F1).
 - `same-stamp-shares-a-key`: the census row's key stays PR 1's (`env:<at>`). Two subagents' prompts stamped in the same
   millisecond start two sightings (the agent id is in the comparison), and each finds its own minted row as its push
   source, but an envelope-less decision of both would share the key, and the store keeps the first row.
 - `undescribed-script-head`: a menu painted with no description line has its command block's last line set aside as if it
   were one, so a short entry equal to every line but the last of a multi-line script is exact there. It still loses to
   an entry matching the script's first 60 characters (the ranking above).
+- `first-row-before-a-blank`: in the cc280 shape the parser trims the body's first row, and a command whose first row is
+  followed by a blank row, painted with no Tip line above it, cannot be told from a header: its block loses that row, so
+  it is not exact there. It is matched by its first 60 characters when it has them, and otherwise shows the bare menu.
+- `missing-server-word` (review 2800 F6): without the server's `hook-main-state-v1` word, a SubagentStart or SubagentStop
+  over a subagent's wait keeps `ask` and `waitBy` but writes a fresh `updatedAt`, so the same-call lookup by stamp
+  misses, and the own ask is shown with no entry: the right text, with the hold and the census key on the main thread.
+  The server always advertises the word, so this is reachable only when its capability file is unreadable.
 - `parallel-identical-calls`: one agent running two identical calls in parallel (the same tool and summary) shares one
   call key, so the first call's event removes the other's standing entry. Its menu then falls back to path 6.
 
@@ -166,22 +194,28 @@ round 2 review 2774's F1 to F6, as the coordinator ruled them; each change below
 Every guard was measured red by a mutant, each file restored from a copy saved before the first mutant and checked byte
 for byte.
 
-- **L1 deciders, in `MUTANT_SETS` and `mutation-floors.json` (floor 1 each), all killed.** Fix round 2 rewrote the
-  envelope's two sets against the reworked decider and ran each mutant through the suite that runs the same cases
-  module (`approval-envelope.test.ts`), and then the floors suite itself, filtered to this PR's four sets (`-t`), which
-  fits the test slice's memory cap where the whole file does not:
-  - `approvalEntryFor`, 33: no shape check; the title or the body unread; whitespace kept; a long summary required whole;
-    a 50-character match; a short summary matched as a substring; a short bound of 10; no command-block test; any one
-    line taken as the command (2774 F2); the description never set aside; two lines set aside; an empty summary a command
-    block; a blank line ending no paragraph; a full 60-character match not ranked first (2774 F2); exactness, length or
-    the tool not ranked; a full match needing more than 60; the oldest winning; recency ranked first; the first match
-    winning; an empty tool naming every menu; no null-menu check; no age bound; the age bound excluding its edge; the
-    hook's wait left out of it (2774 F3); a 10-minute answer window; no bound ahead, the bound ahead excluding its edge,
-    or a two-minute one (2774 F4); lengths, and the head's cut, in UTF-16 units.
-  - `paintedApprovalOf`, 17: no null check; hook state's own approval never competing, taken for any menu, taken with no
-    menu check, always matching, or winning whatever the entry (2774 F1); a tie going to the entry; no same-call entry; a
-    same-call entry for the main thread too; the same call by any stamp or of any age (2774 F5), by summary only or by
-    tool only; no subagent mark; the route dropped; the entry unreported; a bound of 17.
+- **L1 deciders, in `MUTANT_SETS` and `mutation-floors.json` (floor 1 each), all killed.** Fix round 3 rewrote the
+  envelope's two sets against the reworked decider, checked that every mutant compiles, ran each through the suite that
+  runs the same cases module (`approval-envelope.test.ts`), and then ran the floors suite itself, filtered to this PR's
+  four sets (`-t`), which fits the test slice's memory cap where the whole file does not:
+  - `approvalEntryFor`, 46: no shape check; the title or the body unread; whitespace kept; a long summary required whole;
+    a 50-character match; a short summary matched as a substring; a short bound of 10; no command-block test; an empty
+    summary a command block; no 2.1.299 shape, its gutter kept in the block, its description inside the block, the
+    gutter kept in the text, another rule character (2800 F2); one space deep; a blank row ending the block (2800 F4);
+    the parser's trimmed first row never taken, or always; the description never set aside; the whole run never the
+    block; a full 60-character match not ranked first; exactness, length or the tool not ranked; a full match needing
+    more than 60; the oldest winning; recency ranked first; the first match winning; an empty tool naming every menu;
+    no null-menu check; no ambiguous tie, one at every tier, one within one agent, a weaker match tying, the head tier
+    counting an exact match, or reaching under 60 (2800 F1); no age bound; the age bound excluding its edge; the hook's
+    wait left out of it; a 10-minute answer window; no bound ahead, the bound ahead excluding its edge, or a two-minute
+    one; lengths, and the head's cut, in UTF-16 units.
+  - `paintedApprovalOf`, 27: no null check; hook state's own approval never competing, taken for any menu, taken with no
+    menu check, always matching, or winning whatever the entry; a tie going to the entry; no same-call entry; a
+    same-call entry for the main thread too; the same call by any stamp or of any age, by summary only or by tool only;
+    no subagent mark; the route dropped; the entry unreported; a bound of 17; an own ask's tie never ambiguous,
+    ambiguous at every tier, ambiguous with its own agent, or a stronger own ask ambiguous; an ambiguous tie of entries
+    shown (2800 F1); an unmatched own approval always standing, never standing, standing against a stale entry, counting
+    its own entry as another agent's, or hiding a matching entry (2800 F5).
   - `untrustedBuildItemOf`, 10: the eight of the first round (THE KEY dropped, a read failure raising, no build to key by
     raising, a failed capture no fact, no action, another programme, a blocking item, any action read as the key), and
     fix round 1's two: the step linking nothing, and a waiting build said to be captured on its own.
@@ -205,7 +239,11 @@ for byte.
   (the three green ones assert an absence), and each reader suite's mutants above stand in for its red run. Fix round
   1's cases were each red against the round's mutant of the guard they pin. Fix round 2's ran red against fix round 1's
   decider (ten cases: the bounds, the command block, the 60-character rank, both age bounds, C1 and C2 on the decider,
-  the same-call entry, and C1's hold and C2's census on the readers) and its hook (the non-object `tool_input`).
+  the same-call entry, and C1's hold and C2's census on the readers) and its hook (the non-object `tool_input`). Fix
+  round 3's ran red against fix round 2's decider: six decider cases (the ambiguous tie, alone and with the own ask; both
+  measured shapes; a blank row in a script; the narrowed own-approval rule) and thirteen reader cases (the hold and the
+  census in the no-blank-line and 2.1.299 shapes, both on the ambiguous tie, and the 2.1.299 capture through
+  `parseDialog`).
 
 ## For the ledger
 
@@ -229,3 +267,7 @@ for byte.
   extra closing parenthesis, which the floors suite refuses as invalid. The hand driver had counted the transform failure
   as a kill. Every mutant of the four sets is now checked to compile before it runs, `PA-13` is killed by a case, and the
   floors suite, filtered to these four sets, passes here.
+- Fix round 3 (review 2800 F2, F3): the round-2 decider read only the cc280 shape, and the reader suite's pane had been
+  moved to that shape, which hid that Claude Code 2.1.299 paints the command between dashed rules behind a gutter. The
+  reader suite now runs its hold and census cases in all three shapes (cc280, no blank lines, 2.1.299), and pins the
+  cases module's two shape builders against the real captures through `parseDialog`.

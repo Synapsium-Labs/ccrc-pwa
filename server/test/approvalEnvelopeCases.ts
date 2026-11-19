@@ -1,5 +1,5 @@
 // The per-agent approval envelope's two deciders, case by case (approvals plan 2026-11-18, §3.2.2 and Task 2.1; review 2752
-// F1, F2 and F7; review 2774 F1 to F5): `approvalEntryFor` (which subagent entry, if any, is the prompt the pane paints, honestly and recently) and
+// F1, F2 and F7; review 2774 F1 to F5; review 2800 F1 to F5): `approvalEntryFor` (which subagent entry, if any, is the prompt the pane paints, honestly and recently) and
 // `paintedApprovalOf` (the envelope every converted reader of the painted prompt takes: hook state's own matching `ask`
 // first, then that entry, else hook state's own `ask`). One list of named cases, run by `approval-envelope.test.ts` and by
 // the mutation floors' `approvalEnvelopeSets.ts` over a mutated copy of the module. Neutral fixtures only.
@@ -26,6 +26,20 @@ const menu = (command: string, over: Partial<Menu> = {}, description = 'Run it')
   title: 'Bash command', body: `Tip: auto mode handles these prompts for you\n\n  ${command}\n  ${description}\n\nDo you want to proceed?`,
   parsed: true, options: YES_NO, ...over,
 });
+/** The two shapes Claude Code paints a Bash prompt in, as `parseDialog` reads them (`approval-envelope.test.ts` pins both
+ *  against the real captures). cc280 (`fixtures/panes/cc280-permission.txt`): the command's rows and then its description,
+ *  indented, the body's first row trimmed by the parser. 2.1.299 (`pwa/test/fixtures/drawer/recorded/2.1.299/
+ *  permission.json`): the description first, then the command's rows between dashed rules, each behind a gutter. */
+export const cc280Body = (rows: readonly string[], description: string): string => [rows[0] ?? '',
+  ...rows.slice(1).map((r) => (r === '' ? '' : `   ${r}`)), `   ${description}`, '',
+  ' Permission rule Bash requires confirmation for this command.', ' /permissions to update rules', '', ' Do you want to proceed?'].join('\n');
+const DASHED = '╌'.repeat(220);
+export const r299Body = (rows: readonly string[], description: string): string => [
+  'Tip: auto mode handles these prompts for you — choose "switch to auto mode" below', ` ${description}`, DASHED,
+  ...rows.map((r) => ` │ ${r}`), DASHED, ' Do you want to proceed?'].join('\n');
+const shaped = (body: string): Menu => ({ title: 'Bash command', body, parsed: true, options: YES_NO });
+/** A shared head of 70 non-space characters: siblings that `cd` into one long worktree path before every command. */
+const WT = 'cd /work/project-a/worktrees/feature-a-rather-long-branch-name/server && ';
 /** The clock every case reads at: entries stamped 100 to 300 are seconds old, never near the age bound. */
 const NOW = 10_000;
 const entry = (agentId: string, summary: string, at: number, over: Partial<HookApprovalEntry> = {}): HookApprovalEntry =>
@@ -71,6 +85,8 @@ export const APPROVAL_ENVELOPE_CASES: readonly EnvelopeCase[] = [
   { name: 'the command is read from the title or the body', run: (m) => {
     expect(m.approvalEntryFor([A], menu('', { title: 'rm -rf scratch/out' }), NOW)).toBe(A);
     expect(m.approvalEntryFor([A], { ...menu(''), title: 'Bash command', body: '  rm -rf scratch/out' }, NOW)).toBe(A);
+    const ls = entry('agent-a', 'ls', 100);
+    expect(m.approvalEntryFor([ls], { ...menu(''), title: 'Bash command', body: '  ls' }, NOW), 'a block with no description').toBe(ls);
   } },
   { name: 'the pane\'s wrap, mid-word too, still matches: whitespace is removed on both sides', run: (m) => {
     const long = entry('agent-c', 'cp -r /work/project-a/some/deeply/nested/directory/with/files /work/project-a/elsewhere/copy', 300);
@@ -103,6 +119,7 @@ export const APPROVAL_ENVELOPE_CASES: readonly EnvelopeCase[] = [
   { name: 'an entry with an empty summary matches nothing: there is no text to tie it to the pane', run: (m) => {
     expect(m.approvalEntryFor([entry('agent-e', '', 1)], menu('anything'), NOW)).toBeNull();
     expect(m.approvalEntryFor([entry('agent-e', '  \n ', 1)], menu('anything'), NOW)).toBeNull();
+    expect(m.approvalEntryFor([entry('agent-e', '', 1)], { ...menu(''), body: '  rm -rf scratch/out' }, NOW), 'a one-row block less its row').toBeNull();
   } },
   { name: 'a prefix pair: the exact one wins, not the newer shorter one (npm run build against npm run)', run: (m) => {
     const build = entry('agent-a', 'npm run build', 100);
@@ -231,12 +248,95 @@ export const APPROVAL_ENVELOPE_CASES: readonly EnvelopeCase[] = [
     expect(m.paintedApprovalOf(hs(null, [bare]), menu('rm -rf scratch/out'), NOW).ask)
       .toEqual({ approval: { tool: 'Bash', summary: 'rm -rf scratch/out', thread: 'subagent' } });
   } },
-  { name: 'painted: no matching entry leaves hook state\'s own ask exactly as it was', run: (m) => {
-    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL, [A]), menu('ls -la'), NOW)).toEqual({ ask: MAIN_APPROVAL, entry: null });
+  { name: 'painted: an own approval the permission prompt does not match is no envelope when another agent\'s live entry exists (review 2800 F5)', run: (m) => {
+    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL, [A]), menu('ls -la'), NOW)).toEqual({ ask: null, entry: null });
+    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL), menu('rm -rf scratch/out'), NOW), 'no list: as before').toEqual({ ask: MAIN_APPROVAL, entry: null });
+    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL, [entry('agent-a', 'rm -rf scratch/out', NOW - MAX_AGE - 1)]), menu('ls -la'), NOW),
+      'a stale entry competes with nothing').toEqual({ ask: MAIN_APPROVAL, entry: null });
+    const ask: HookAsk = { approval: { tool: 'Bash', summary: 'rm -rf scratch/out', route: 'sent' } };
+    expect(m.paintedApprovalOf(hs(ask, [A], { waitBy: 'subagent', updatedAt: A.at }), menu('ls -la'), NOW), 'its own entry is no other agent\'s')
+      .toEqual({ ask, entry: null });
+    expect(m.paintedApprovalOf(hs(ask, [A, B], { waitBy: 'subagent', updatedAt: A.at }), menu('ls -la'), NOW), 'a sibling\'s is')
+      .toEqual({ ask: null, entry: null });
+    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL), menu('npm test'), NOW), 'control: its own menu').toEqual({ ask: MAIN_APPROVAL, entry: null });
+    expect(m.paintedApprovalOf(hs(MAIN_Q, [A]), menu('ls -la'), NOW), 'a question envelope stands').toEqual({ ask: MAIN_Q, entry: null });
     expect(m.paintedApprovalOf(hs(MAIN_Q, []), null, NOW)).toEqual({ ask: MAIN_Q, entry: null });
-    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL, [A], { waitBy: 'subagent' }), null, NOW)).toEqual({ ask: MAIN_APPROVAL, entry: null });
+    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL, [A], { waitBy: 'subagent' }), null, NOW), 'no menu: as before').toEqual({ ask: MAIN_APPROVAL, entry: null });
     expect(m.paintedApprovalOf(hs(null, [A]), null, NOW)).toEqual({ ask: null, entry: null });
-    expect(m.paintedApprovalOf(hs(MAIN_APPROVAL), menu('rm -rf scratch/out'), NOW), 'no list at all').toEqual({ ask: MAIN_APPROVAL, entry: null });
+  } },
+  { name: 'an ambiguous tie shows no one: two agents\' commands share their first 60 characters, neither exact (review 2800 F1)', run: (m) => {
+    const longA = `${WT}git push --force origin main ${'x'.repeat(200)}`;
+    const a = entry('agent-a', Array.from(longA).slice(0, 200).join(''), 100);
+    const b = entry('agent-b', `${WT}npm test`, 200);
+    const painted = menu(longA);
+    expect(m.approvalEntryFor([a, b], painted, NOW)).toBeNull();
+    expect(m.paintedApprovalOf(hs(null, [a, b]), painted, NOW)).toEqual({ ask: null, entry: null });
+    expect(m.approvalEntryFor([a], painted, NOW), 'control: alone, it is the prompt').toBe(a);
+    const a2 = entry('agent-a', `${WT}npm test`, 200);
+    expect(m.approvalEntryFor([a, a2], painted, NOW), 'within one agent: the newest, as before').toBe(a2);
+    const weak = entry('agent-b', 'git push --force origin main', 300);
+    expect(m.approvalEntryFor([a, weak], painted, NOW), 'a weaker match of another agent ties nothing').toBe(a);
+    const exactLong = `${WT}npm run build`;
+    const e1 = entry('agent-a', exactLong, 100);
+    const e2 = entry('agent-b', exactLong, 200);
+    expect(m.approvalEntryFor([e1, e2], menu(exactLong), NOW), 'an exact tie is not this tier: the newest, as before').toBe(e2);
+    const s1 = entry('agent-a', 'npm run build:all-packages', 100);
+    const s2 = entry('agent-b', 'npm run build:all-packages', 200);
+    expect(m.approvalEntryFor([s1, s2], menu('cd /work && npm run build:all-packages --watch'), NOW), 'nor is a tie under 60').toBe(s2);
+  } },
+  { name: 'an ambiguous tie with the own ask shows no one either: the main thread\'s, or a sibling\'s with its own entry (review 2800 F1)', run: (m) => {
+    const longA = `${WT}git push --force origin main ${'x'.repeat(200)}`;
+    const a = entry('agent-a', Array.from(longA).slice(0, 200).join(''), 100);
+    const painted = menu(longA);
+    const status: HookAsk = { approval: { tool: 'Bash', summary: `${WT}git status`, route: 'sent' } };
+    expect(m.paintedApprovalOf(hs(status, [a]), painted, NOW)).toEqual({ ask: null, entry: null });
+    const b = entry('agent-b', `${WT}npm test`, 200);
+    const bAsk: HookAsk = { approval: { tool: 'Bash', summary: b.summary, route: 'sent' } };
+    expect(m.paintedApprovalOf(hs(bAsk, [a, b], { waitBy: 'subagent', updatedAt: b.at }), painted, NOW)).toEqual({ ask: null, entry: null });
+    const aAsk: HookAsk = { approval: { tool: 'Bash', summary: a.summary, route: 'sent' } };
+    expect(m.paintedApprovalOf(hs(aAsk, [a], { waitBy: 'subagent', updatedAt: a.at }), painted, NOW), 'control: one agent, its own ask and entry')
+      .toEqual(asSubagent(a));
+    expect(m.paintedApprovalOf(hs(status, []), painted, NOW), 'control: no entry to tie with').toEqual({ ask: status, entry: null });
+    expect(m.paintedApprovalOf(hs(status, [entry('agent-b', 'git push --force origin main', 300)]), painted, NOW), 'control: a weaker entry')
+      .toEqual({ ask: status, entry: null });
+  } },
+  { name: 'the cc280 shape (measured): the command rows and the description are the block; the parser\'s trimmed first row belongs to it', run: (m) => {
+    const echo = entry('agent-a', 'echo rigok', 100);
+    expect(m.approvalEntryFor([echo], shaped(cc280Body(['echo rigok'], 'Print rigok')), NOW)).toBe(echo);
+    expect(m.approvalEntryFor([entry('agent-a', 'echo', 100)], shaped(cc280Body(['echo rigok'], 'Print rigok')), NOW)).toBeNull();
+    const old: Menu = shaped('rm -rf build\n   Remove the build directory\n Do you want to proceed?');
+    expect(m.approvalEntryFor([entry('agent-a', 'rm -rf build', 100)], old, NOW), 'the no-blank-line pane').toEqual(entry('agent-a', 'rm -rf build', 100));
+  } },
+  { name: 'the 2.1.299 shape (measured): the rows between the dashed rules are the block, the gutter removed; the description is not', run: (m) => {
+    const echo = entry('agent-a', 'echo rigok', 100);
+    expect(m.approvalEntryFor([echo], shaped(r299Body(['echo rigok'], 'Print rigok')), NOW)).toBe(echo);
+    expect(m.approvalEntryFor([entry('agent-a', 'Print rigok', 100)], shaped(r299Body(['echo rigok'], 'Print rigok')), NOW), 'the description').toBeNull();
+    const wrapped = ['mkdir -p /rig/shared/project-a/build/cache/some/very/long/directory/path/that/keeps/going/and/going/until/it/wraps && echo',
+      'the-build-cache-directory-for-project-a-is-ready-and-this-marker-is-long-enough-to-wrap-the-code-row-twice'];
+    const long = entry('agent-a', wrapped.join(' '), 100);
+    expect(m.approvalEntryFor([long], shaped(r299Body(wrapped, 'Create the build cache directory')), NOW)).toBe(long);
+    const tail = entry('agent-b', `&& echo ${wrapped[1]!.slice(0, 50)}`, 200);
+    expect(m.approvalEntryFor([long, tail], shaped(r299Body(wrapped, 'Create the build cache directory')), NOW)).toBe(long);
+    expect(m.approvalEntryFor([tail], shaped(r299Body(wrapped, 'Create the build cache directory')), NOW), 'a wrap reads whole across the gutter')
+      .toBe(tail);
+    const clean = entry('agent-a', 'rm -rf dist', 100);
+    const named = entry('agent-b', 'npm run build:prod', 200);
+    expect(m.approvalEntryFor([clean, named], shaped(r299Body(['rm -rf dist'], 'Clean before npm run build:prod')), NOW), 'review 2800 G2')
+      .toBe(clean);
+  } },
+  { name: 'a blank row inside a script ends no block: one part of a longer script is never exact (review 2800 F4)', run: (m) => {
+    const script = entry('agent-a', 'npm test\n\nnpm run lint', 100);
+    const part = entry('agent-b', 'npm test', 200);
+    for (const body of [cc280Body(['npm test', '', 'npm run lint'], 'Test and lint'), r299Body(['npm test', '', 'npm run lint'], 'Test and lint'),
+      `Tip: auto mode handles these prompts for you\n\n  npm test\n\n  npm run lint\n  Test and lint\n\nDo you want to proceed?`]) {
+      expect(m.approvalEntryFor([script, part], shaped(body), NOW)).toBe(script);
+      expect(m.approvalEntryFor([part, script], shaped(body), NOW)).toBe(script);
+      expect(m.approvalEntryFor([part], shaped(body), NOW), 'alone').toBeNull();
+    }
+    const lsPwd = entry('agent-a', 'ls\n\npwd', 100);
+    expect(m.approvalEntryFor([lsPwd], menu('ls\n\n  pwd', {}, 'List'), NOW), 'a short script across a blank row is its block').toBe(lsPwd);
+    const cd = entry('agent-b', 'cd /tmp/x', 200);
+    expect(m.approvalEntryFor([cd], shaped(cc280Body(['cd /tmp/x', '', 'git clean -fdx'], 'Clean')), NOW), 'P4d').toBeNull();
   } },
   { name: 'painted: hook state\'s own approval is not the prompt of a menu that is no permission prompt', run: (m) => {
     const ask: HookAsk = { approval: { tool: 'Bash', summary: 'rm -rf scratch/out', route: 'sent' } };

@@ -9,9 +9,10 @@
  * the reader's (`hookstate.ts`) is `hookstate.test.ts`.
  */
 import { describe, it, expect, afterEach, vi } from 'vitest';
+import fs from 'node:fs';
 import path from 'node:path';
 import * as mod from '../src/coord/approvalEnvelope.js';
-import { APPROVAL_ENVELOPE_CASES } from './approvalEnvelopeCases.js';
+import { APPROVAL_ENVELOPE_CASES, cc280Body, r299Body } from './approvalEnvelopeCases.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { createQuestions, questionsTestView, type QuestionRules } from '../src/coord/questions.js';
@@ -43,6 +44,22 @@ const paneFor = (command: string): string => ['  ⎿  $ ' + command, RULE, ' Bas
   '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and always allow access to this project', '   3. No',
   ' Esc to cancel · Tab to amend'].join('\n');
 const MENU_A = parseDialog(paneFor('rm -rf build'))!;
+/** The same prompt with no blank lines (the characterization suite's pane, and this suite's before review 2800 F3). */
+const paneNoBlank = (command: string): string => ['  ⎿  $ ' + command, RULE, ' Bash command', `   ${command}`, '   Remove the build directory',
+  ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and always allow access to this project', '   3. No',
+  ' Esc to cancel · Tab to amend'].join('\n');
+/** The same prompt in the shape Claude Code 2.1.299 paints (`pwa/test/fixtures/drawer/recorded/2.1.299/permission.json`):
+ *  the description first, then the command's rows between dashed rules, each behind a gutter. */
+const pane299 = (command: string): string => ['  ⎿  $ ' + command, '', '─'.repeat(220), ' Bash command',
+  ' Tip: auto mode handles these prompts for you — choose "switch to auto mode" below', ' Remove the build directory', '╌'.repeat(220),
+  ` │ ${command}`, '╌'.repeat(220), ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and always allow access to this project', '   3. No',
+  '', ' Esc to cancel · Tab to amend'].join('\n');
+const SHAPES = [['cc280', paneFor], ['no blank lines', paneNoBlank], ['2.1.299', pane299]] as const;
+/** Two siblings' commands that share their first 60 characters (a `cd` into one long worktree path), neither exact. */
+const WT = 'cd /work/project-a/worktrees/feature-a-rather-long-branch-name/server && ';
+const LONG_A = `${WT}git push --force origin main ${'x'.repeat(200)}`;
+const tieA = (at: number): HookApprovalEntry => ({ agentId: AGENT_A, tool: 'Bash', summary: Array.from(LONG_A).slice(0, 200).join(''), route: 'no-key', at });
+const tieB = (at: number): HookApprovalEntry => ({ agentId: AGENT_B, tool: 'Bash', summary: `${WT}npm test`, route: 'no-key', at });
 const entryA = (at: number, route = 'sent'): HookApprovalEntry => ({ agentId: AGENT_A, tool: 'Bash', summary: 'rm -rf build', route, at });
 const entryB = (at: number, route = 'sent'): HookApprovalEntry => ({ agentId: AGENT_B, tool: 'Bash', summary: 'git clean -fdx dist', route, at });
 const approvalAsk = (summary: string, route = 'sent'): HookAsk => ({ approval: { tool: 'Bash', summary, route } });
@@ -70,6 +87,24 @@ function carrier() {
 }
 
 describe('the hold picks the painted subagent\'s entry (holdApproval)', () => {
+  it.each(SHAPES)('in the %s shape, a subagent\'s painted menu holds that agent\'s row (review 2800 F2, F3)', async (_shape, pane) => {
+    const c = carrier();
+    c.approval(AGENT_B);
+    const own = c.approval(AGENT_A);
+    const v = await c.q.raise(rec(CHILD), parseDialog(pane('rm -rf build'))!, hook(null, T0, [entryA(T0)]), null, []);
+    expect(v.kind).toBe('held');
+    expect(questionsTestView(c.q).heldApprovals().get(CHILD)?.rowIds).toEqual([own]);
+  });
+  it('an ambiguous tie across agents holds nothing (review 2800 F1): the bare menu raises as before', async () => {
+    const c = carrier();
+    const own = c.approval(AGENT_A, Date.now(), LONG_A.slice(0, 200));
+    c.approval(AGENT_B, Date.now(), `${WT}npm test`);
+    const menu = parseDialog(paneFor(LONG_A))!;
+    expect(await c.q.raise(rec(CHILD), menu, hook(null, T0, [tieA(T0), tieB(T0)]), null, [])).toEqual({ kind: 'none' });
+    const v = await c.q.raise(rec(CHILD), menu, hook(null, T0, [tieA(T0)]), null, []);
+    expect(v.kind, 'control: alone, A is held').toBe('held');
+    expect(questionsTestView(c.q).heldApprovals().get(CHILD)?.rowIds).toEqual([own]);
+  });
   it('a subagent\'s painted menu, its own row held inside the window: held, covering that agent\'s row only', async () => {
     const c = carrier();
     c.approval(AGENT_B);
@@ -149,6 +184,18 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
     clear(c);
     expect(c.census()).toEqual([{ sightingKey: 'env:99000', path: 'hook-skipped', route: 'no-key', thread: 'subagent', summary: publish }]);
   });
+  it.each(SHAPES)('in the %s shape, a subagent\'s menu is keyed by its own entry (review 2800 F2, F3)', (_shape, pane) => {
+    const c = carrier();
+    tick(c, hook(null, 103_000, [entryA(99_000, 'no-key')]), 104_000, parseDialog(pane('rm -rf build'))!);
+    clear(c);
+    expect(c.census()).toEqual([{ sightingKey: 'env:99000', path: 'hook-skipped', route: 'no-key', thread: 'subagent', summary: 'rm -rf build' }]);
+  });
+  it('an ambiguous tie across agents is no envelope for the census (review 2800 F1): an envelope-less menu', () => {
+    const c = carrier();
+    tick(c, hook(null, 103_000, [tieA(99_000), tieB(101_000)]), 104_000, parseDialog(paneFor(LONG_A))!);
+    clear(c);
+    expect(c.census()).toEqual([expect.objectContaining({ sightingKey: expect.stringMatching(/^menu:[0-9a-f]{40}:103000$/), thread: null })]);
+  });
   it('two subagents asking the same command are two rows (review 2752 F3): the second menu starts its own sighting', () => {
     const c = carrier();
     const entryA2 = (at: number): HookApprovalEntry => ({ ...entryA(at, 'no-key'), agentId: AGENT_B });
@@ -199,6 +246,56 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
     expect(c.q.pushSourceOf(CHILD)).toBe(`approval:${own}`);
     clear(c);
     expect(c.census()).toEqual([]);
+  });
+});
+
+describe('the real captures, through parseDialog and paintedApprovalOf (review 2800 F2, F3)', () => {
+  const CC280 = fs.readFileSync(path.resolve(__dirname, 'fixtures/panes/cc280-permission.txt'), 'utf8');
+  const R299 = (JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../pwa/test/fixtures/drawer/recorded/2.1.299/permission.json'), 'utf8')) as
+    { capture: string[] }).capture;
+  const R299_ROWS = [R299[17]!.replace(/^ │ /, ''), R299[18]!.replace(/^ │ /, '')];
+  const R299_DESCRIPTION = R299[15]!.trim();
+  const at = (summary: string): HookApprovalEntry => ({ agentId: AGENT_A, tool: 'Bash', summary, route: 'sent', at: T0 });
+  const shownFor = (pane: string, summary: string) => mod.paintedApprovalOf({ ask: null, updatedAt: T0, approvals: [at(summary)] }, parseDialog(pane)!, T0);
+  it('the cases\' two shapes are what parseDialog reads from the captures', () => {
+    expect(parseDialog(CC280)).toMatchObject({ title: 'Bash command', body: cc280Body(['echo rigok'], 'Print rigok') });
+    expect(parseDialog(R299.join('\n'))).toMatchObject({ title: 'Bash command', body: r299Body(R299_ROWS, R299_DESCRIPTION) });
+  });
+  it('cc280: a short command and a long one are their prompt', () => {
+    expect(shownFor(CC280, 'echo rigok').entry?.summary).toBe('echo rigok');
+    const long = `echo ${'rigok-'.repeat(20)}done`;
+    expect(shownFor(CC280.split('echo rigok').join(long), long).entry?.summary).toBe(long);
+    expect(shownFor(CC280, 'echo').entry, 'a part of it is not').toBeNull();
+  });
+  it('2.1.299: a short command and the recorded long one are their prompt', () => {
+    const recorded = R299_ROWS.join(' ');
+    expect(shownFor(R299.join('\n'), recorded).entry?.summary).toBe(recorded);
+    const short = [...R299.slice(0, 15), ' Print rigok', R299[16]!, ' │ echo rigok', ...R299.slice(19)].join('\n');
+    expect(shownFor(short, 'echo rigok').entry?.summary).toBe('echo rigok');
+    expect(shownFor(short, 'Print rigok').entry, 'its description is not').toBeNull();
+  });
+});
+
+describe('an own approval the menu does not match (review 2800 F5, as the coordinator narrowed it)', () => {
+  const WRITE = (JSON.parse(fs.readFileSync(path.resolve(__dirname, '../../pwa/test/fixtures/drawer/recorded/2.1.299/write-preview.json'), 'utf8')) as
+    { capture: string[] }).capture.join('\n');
+  const write: HookAsk = { approval: { tool: 'Write', summary: '/rig/project-a/src/notes.md', route: 'sent' } };
+  const sibling: HookApprovalEntry = { agentId: AGENT_B, tool: 'Bash', summary: 'git clean -fdx dist', route: 'sent', at: T0 };
+  it('the 2.1.299 Write preview paints a relative path: with no live entry the main thread\'s own ask stands, its surface and its hold', async () => {
+    const menu = parseDialog(WRITE)!;
+    expect(mod.paintedApprovalOf({ ask: write, updatedAt: T0 }, menu, T0)).toEqual({ ask: write, entry: null });
+    const c = carrier();
+    const main = c.approval('', Date.now(), '/rig/project-a/src/notes.md');
+    const v = await c.q.raise(rec(CHILD), menu, hook(write, T0, []), null, []);
+    expect(v.kind).toBe('held');
+    expect(questionsTestView(c.q).heldApprovals().get(CHILD)?.rowIds).toEqual([main]);
+  });
+  it('the same menu with a sibling\'s live entry answers none: no surface, no hold', async () => {
+    const menu = parseDialog(WRITE)!;
+    expect(mod.paintedApprovalOf({ ask: write, updatedAt: T0, approvals: [sibling] }, menu, T0)).toEqual({ ask: null, entry: null });
+    const c = carrier();
+    c.approval('', Date.now(), '/rig/project-a/src/notes.md');
+    expect(await c.q.raise(rec(CHILD), menu, hook(write, T0, [sibling]), null, [])).toEqual({ kind: 'none' });
   });
 });
 

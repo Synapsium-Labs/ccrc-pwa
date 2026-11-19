@@ -8,21 +8,28 @@
 // the three converted readers of the painted prompt ask `paintedApprovalOf` here: the session stream's ask frame (the
 // console's approval surface), the approval hold and the census.
 //
-// HONEST ATTRIBUTION (reviews 2752 F1, F2 and 2774 F1 to F5). The console shows the envelope's text over a menu the
-// operator is about to answer, so an entry is the painted prompt only when it is the best and an honest match, and never
-// when it is old:
+// HONEST ATTRIBUTION (reviews 2752 F1, F2, 2774 F1 to F5 and 2800 F1 to F5). The console shows the envelope's text over
+// a menu the operator is about to answer, so an entry is the painted prompt only when it is the best and an honest match,
+// and never when it is old:
 //   - a summary under `APPROVAL_MATCH_CHARS` non-space characters must appear whole, and one under
-//     `APPROVAL_MATCH_MIN_CHARS` only as the menu's command block (a paragraph of the menu, less at most its last line,
-//     the tool's description), never one line inside it;
+//     `APPROVAL_MATCH_MIN_CHARS` only as the menu's command block (`commandBlocksOf`: every command row between the menu's
+//     own boundaries, blank rows included, in the shape Claude Code 2.1.299 paints and in the cc280 shape), never one row
+//     or one paragraph inside it;
 //   - candidates rank by a full 60-character match, then an exact one (the command block), then the longest, then the
 //     tool the menu names, and only then the newest, so a short exact match never outranks a 60-character one;
 //   - hook state's own `ask` competes on the same match ranking and wins its ties: it is the prompt the hook saw last.
 //     When a subagent raised it (`waitBy`), its entry is the one the same write added (the same call, the same stamp),
 //     and that entry is taken, under the same age rule; with none, there is no entry;
+//   - an AMBIGUOUS TIE shows no one (2800 F1): when the best candidates tie at the full 60-character tier, none exact,
+//     and belong to different agents (two entries, or an entry and the own ask), there is no envelope at all;
+//   - hook state's own approval that the approval-shaped menu does not match is no envelope either when another agent's
+//     live entry exists (2800 F5, as the coordinator narrowed it): with none, it stands as before this PR, so a main
+//     thread's prompt this matcher cannot read (a Write or Edit preview paints a relative path) keeps its surface;
 //   - an entry is ignored when the menu has had `APPROVAL_MENU_ANSWER_MS` after the hook's longest wait
 //     (`APPROVAL_ENTRY_MAX_AGE_MS`, counted from the request's stamp), or when its stamp is more than
-//     `APPROVAL_ENTRY_MAX_AHEAD_MS` ahead of `now`; its menu then falls back to path 6, the bare menu.
-// Lengths count code points, as the hook's jq cuts the summary (`.[0:200]`).
+//     `APPROVAL_ENTRY_MAX_AHEAD_MS` ahead of `now`.
+// No envelope is path 6, the bare menu: the safe direction. Lengths count code points, as the hook's jq cuts the summary
+// (`.[0:200]`).
 import { APPROVAL_HOOK_WAIT_S, type Dialog, type HookAsk } from '../../../shared/api.js';
 import { approvalShapedMenu } from './approvalCensus.js';
 
@@ -70,25 +77,39 @@ type Menu = Pick<Dialog, 'title' | 'body' | 'parsed' | 'options' | 'ask' | 'mult
 const squeeze = (s: string): string => s.replace(/\s+/g, '');
 const codePoints = (s: string): string[] => Array.from(s);
 
-/** The painted menu's text, once: all of it squeezed (the title too), and the body's blocks, each a paragraph's squeezed
- *  lines (a blank line ends a paragraph; a real capture paints one around the command block, `cc280-permission.txt`). */
-interface MenuText { readonly all: string; readonly blocks: readonly (readonly string[])[] }
-const menuTextOf = (d: Menu): MenuText => {
-  const blocks: string[][] = [];
-  let cur: string[] = [];
-  for (const line of (d.body ?? '').split('\n').map(squeeze)) {
-    if (line !== '') { cur.push(line); continue; }
-    if (cur.length > 0) blocks.push(cur);
-    cur = [];
-  }
-  if (cur.length > 0) blocks.push(cur);
-  return { all: squeeze(`${d.title}\n${d.body ?? ''}`), blocks };
+/** The dashed rule Claude Code 2.1.299 paints above and below a command's rows (`pwa/test/fixtures/drawer/recorded/2.1.299/
+ *  permission.json`), and the gutter it paints before each row. */
+const isDashedRule = (line: string): boolean => /^\s*╌+\s*$/.test(line);
+const GUTTER = /^\s*│ ?/;
+/** A row indented as the cc280 shape indents a command and its description (`fixtures/panes/cc280-permission.txt`). */
+const isDeep = (line: string): boolean => /^\s{2,}\S/.test(line);
+
+/**
+ * The menu's command block, as the squeezed texts that count as exact. In the 2.1.299 shape it is every row between the
+ * first two dashed rules, its gutter removed (the description is painted above the rules). In the cc280 shape it is the
+ * last run of indented rows, blank rows included, which ends with the description: the run, or the run less its last row.
+ * `parseDialog` trims the body's first row, so a first row followed at once by an indented one belongs to the run.
+ */
+const commandBlocksOf = (lines: readonly string[]): readonly string[] => {
+  const rules = lines.flatMap((l, i) => (isDashedRule(l) ? [i] : []));
+  if (rules.length >= 2) return [squeeze(lines.slice(rules[0]! + 1, rules[1]).map((l) => l.replace(GUTTER, '')).join(''))];
+  let end = lines.length - 1;
+  while (end >= 0 && !isDeep(lines[end]!)) end--;
+  let start = end;
+  while (start > 0 && (isDeep(lines[start - 1]!) || lines[start - 1]!.trim() === '')) start--;
+  if (start === 1 && isDeep(lines[1]!)) start = 0;
+  const rows = lines.slice(start, end + 1);
+  return [squeeze(rows.join('')), squeeze(rows.slice(0, -1).join(''))];
 };
 
-/** Whether `want` is the menu's command block: a whole paragraph, or a paragraph less its last line (the tool's
- *  description), the pane's wraps joined. Never one line inside a paragraph, and never an empty `want`. */
-const isCommandBlock = (blocks: readonly (readonly string[])[], want: string): boolean =>
-  want !== '' && blocks.some((b) => b.join('') === want || b.slice(0, -1).join('') === want);
+/** The painted menu's text, once: all of it squeezed (the title too; gutters removed, so a wrapped command reads whole),
+ *  and its command block (`commandBlocksOf`). */
+interface MenuText { readonly all: string; readonly blocks: readonly string[] }
+const menuTextOf = (d: Menu): MenuText => {
+  const lines = (d.body ?? '').split('\n');
+  const text = lines.map((l) => l.replace(GUTTER, '')).join('\n');
+  return { all: squeeze(`${d.title}\n${text}`), blocks: commandBlocksOf(lines) };
+};
 
 /** How a summary matches the menu, or null when it does not honestly match. `exact`: it is the command block. `chars`:
  *  how many of its characters matched (the rank's "longest match"). An empty summary matches nothing. */
@@ -96,7 +117,7 @@ interface MenuMatch { readonly exact: boolean; readonly chars: number }
 const matchOf = (summary: string, menu: MenuText): MenuMatch | null => {
   const want = squeeze(summary);
   const n = codePoints(want).length;
-  if (isCommandBlock(menu.blocks, want)) return { exact: true, chars: n };
+  if (want !== '' && menu.blocks.includes(want)) return { exact: true, chars: n };
   if (n < APPROVAL_MATCH_MIN_CHARS) return null;
   const head = n <= APPROVAL_MATCH_CHARS ? want : codePoints(want).slice(0, APPROVAL_MATCH_CHARS).join('');
   return menu.all.includes(head) ? { exact: false, chars: Math.min(n, APPROVAL_MATCH_CHARS) } : null;
@@ -104,34 +125,46 @@ const matchOf = (summary: string, menu: MenuText): MenuMatch | null => {
 
 /** A match's strength, compared left to right: a full 60-character match, exact, longest. */
 const strengthOf = (m: MenuMatch): readonly number[] => [m.chars >= APPROVAL_MATCH_CHARS ? 1 : 0, m.exact ? 1 : 0, m.chars];
-const atLeast = (a: readonly number[], b: readonly number[]): boolean => {
-  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! > b[i]!;
-  return true;
+/** Left to right: negative when `a` ranks below `b`, zero on a tie, positive above. */
+const compare = (a: readonly number[], b: readonly number[]): number => {
+  for (let i = 0; i < a.length; i++) if (a[i] !== b[i]) return a[i]! - b[i]!;
+  return 0;
 };
+/** The tier where two different commands can tie: a full 60-character match that is not exact (2800 F1). */
+const isHeadTier = (m: MenuMatch): boolean => m.chars >= APPROVAL_MATCH_CHARS && !m.exact;
 
-interface Best { readonly entry: HookApprovalEntry; readonly match: MenuMatch }
+/** The best live, honestly matching entry, and every agent whose entry ties its strength. */
+interface Best { readonly entry: HookApprovalEntry; readonly match: MenuMatch; readonly agents: ReadonlySet<string> }
 /** The best live, honestly matching entry: by strength, then the tool the menu names, then the newest; a full tie goes to
  *  the later entry. */
 const bestEntry = (entries: readonly HookApprovalEntry[], menu: MenuText, now: number): Best | null => {
-  let best: Best | null = null;
-  let bestRank: readonly number[] = [];
+  let best: { entry: HookApprovalEntry; match: MenuMatch; rank: readonly number[] } | null = null;
+  const live: Array<{ entry: HookApprovalEntry; match: MenuMatch }> = [];
   for (const e of entries) {
     if (!isLive(e, now)) continue;
     const m = matchOf(e.summary, menu);
     if (m === null) continue;
+    live.push({ entry: e, match: m });
     const rank = [...strengthOf(m), e.tool !== '' && menu.all.includes(squeeze(e.tool)) ? 1 : 0, e.at];
-    if (best === null || atLeast(rank, bestRank)) { best = { entry: e, match: m }; bestRank = rank; }
+    if (best === null || compare(rank, best.rank) >= 0) best = { entry: e, match: m, rank };
   }
-  return best;
+  if (best === null) return null;
+  const top = strengthOf(best.match);
+  const agents = new Set(live.filter((c) => compare(strengthOf(c.match), top) === 0).map((c) => c.entry.agentId));
+  return { entry: best.entry, match: best.match, agents };
 };
+/** Whether the best entries tie at the head tier across agents: no one is shown (2800 F1). */
+const isAmbiguous = (b: Best): boolean => isHeadTier(b.match) && b.agents.size > 1;
 
 /**
  * The entry whose prompt the pane is painting, or null. The menu must be approval-shaped (`approvalShapedMenu`: Yes ...
- * No), the entry live at `now` (`isLive`), and its summary an honest match (see the head of this file).
+ * No), the entry live at `now` (`isLive`), its summary an honest match, and the best not an ambiguous tie (see the head
+ * of this file).
  */
 export function approvalEntryFor(entries: readonly HookApprovalEntry[], dialog: Menu | null, now: number): HookApprovalEntry | null {
   if (dialog === null || !approvalShapedMenu(dialog)) return null;
-  return bestEntry(entries, menuTextOf(dialog), now)?.entry ?? null;
+  const best = bestEntry(entries, menuTextOf(dialog), now);
+  return best === null || isAmbiguous(best) ? null : best.entry;
 }
 
 /** What the painted prompt is, for every reader of it: the ask to treat as the envelope, and the subagent entry it came
@@ -154,28 +187,38 @@ const entryAsk = (entry: HookApprovalEntry): PaintedApproval => ({
   ask: { approval: { tool: entry.tool, summary: entry.summary, ...(entry.route === undefined ? {} : { route: entry.route }), thread: 'subagent' as const } },
   entry,
 });
+const NO_ENVELOPE: PaintedApproval = { ask: null, entry: null };
 
 /**
- * The envelope of the prompt the pane paints, at `now`.
- *  - Hook state's own `ask`, when it is an approval whose text the approval-shaped menu honestly matches at least as
- *    strongly as the best live entry, is that prompt; but when a subagent raised it (`waitBy`), its own entry (the same
- *    tool and summary, stamped by the same write) is taken when it is live, and otherwise there is no entry.
- *  - Otherwise the best live matching entry is the prompt, marked `thread: 'subagent'`.
- *  - Otherwise hook state's own `ask` stands, exactly as before. With no hook state there is no envelope.
+ * The envelope of the prompt the pane paints, at `now`. With no hook state, no menu, or a menu that is no permission
+ * prompt, hook state's own `ask` stands, exactly as before. Over a permission prompt:
+ *  - hook state's own approval, when the menu matches it at least as strongly as the best live entry, is that prompt;
+ *    when a subagent raised it (`waitBy`), its own entry (the same tool and summary, stamped by the same write) is taken
+ *    when it is live, and otherwise there is no entry. A tie at the head tier with another agent's entry is no envelope;
+ *  - otherwise the best live matching entry is the prompt, marked `thread: 'subagent'`, unless the best are an ambiguous
+ *    tie across agents (no envelope);
+ *  - otherwise an own approval the menu does not match is no envelope when another agent's live entry exists, and any
+ *    other own `ask` stands.
  */
 export function paintedApprovalOf(hs: PaintedHookState | null, dialog: Menu | null, now: number): PaintedApproval {
-  if (hs === null) return { ask: null, entry: null };
+  if (hs === null) return NO_ENVELOPE;
   const kept: PaintedApproval = { ask: hs.ask, entry: null };
   if (dialog === null || !approvalShapedMenu(dialog)) return kept;
   const entries = hs.approvals ?? [];
   const menu = menuTextOf(dialog);
   const best = bestEntry(entries, menu, now);
+  const fromEntries = (): PaintedApproval => (best === null ? kept : isAmbiguous(best) ? NO_ENVELOPE : entryAsk(best.entry));
   const own = hs.ask !== null && 'approval' in hs.ask ? hs.ask.approval : null;
-  const ownMatch = own === null ? null : matchOf(own.summary, menu);
-  if (own !== null && ownMatch !== null && (best === null || atLeast(strengthOf(ownMatch), strengthOf(best.match)))) {
-    const same = hs.waitBy !== 'subagent' ? undefined
-      : entries.find((e) => e.at === hs.updatedAt && e.tool === own.tool && e.summary === own.summary && isLive(e, now));
-    return same === undefined ? kept : entryAsk(same);
+  if (own === null) return fromEntries();
+  const same = hs.waitBy !== 'subagent' ? undefined
+    : entries.find((e) => e.at === hs.updatedAt && e.tool === own.tool && e.summary === own.summary && isLive(e, now));
+  const ownMatch = matchOf(own.summary, menu);
+  if (ownMatch === null) {
+    if (best !== null) return fromEntries();
+    return entries.some((e) => isLive(e, now) && e.agentId !== (same?.agentId ?? '')) ? NO_ENVELOPE : kept;
   }
-  return best === null ? kept : entryAsk(best.entry);
+  const order = best === null ? 1 : compare(strengthOf(ownMatch), strengthOf(best.match));
+  if (order < 0) return fromEntries();
+  if (best !== null && order === 0 && isHeadTier(ownMatch) && [...best.agents].some((a) => a !== (same?.agentId ?? ''))) return NO_ENVELOPE;
+  return same === undefined ? kept : entryAsk(same);
 }
