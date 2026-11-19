@@ -113,12 +113,12 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P1.5: Markdown in parts, and the overlay cap
 
-**Files:** Create `pwa/src/docs/range/mdParts.ts`; Modify `ccd/ccd` (the docs-tree draft entry's `mtimeNs`, from the leaf check's `lstat` `st_mtime_ns`), `pwa/src/docs/DocsLeaf.tsx`, `shared/docs.ts#entryView`, `shared/docs.ts#statPin`; Test `pwa/test/docs-md-parts.test.ts` (new), `server/test/docs-shared.test.ts`, `server/test/ccd-docs-tree.test.ts`.
+**Files:** Create `pwa/src/docs/range/mdParts.ts`; Modify `ccd/ccd` (the docs-tree draft entry's `mtimeNs`: `draft_facts` keeps `st_mtime_ns` from `walk_leaf`'s `fstat` of the opened leaf, the stat its size already comes from, instead of dropping it), `pwa/src/docs/DocsLeaf.tsx`, `shared/docs.ts#entryView`, `shared/docs.ts#statPin`; Test `pwa/test/docs-md-parts.test.ts` (new), `server/test/docs-shared.test.ts`, `server/test/ccd-docs-tree.test.ts`.
 
 **Interfaces:**
 - Produces: `splitMarkdownParts(text: string, maxBytes: number): { parts: { start: number; end: number; continued: boolean }[] }` (cuts at top-level headings outside fences; a section above `maxBytes` cut at a blank line outside fences); part ids map `Map<string, number>` from the worker pre-pass; `entryView`: a regular draft file with `fp: null`, size at most `DOCS_RANGE_MAX_BYTES` and a readable `mtimeNs` now `opens: 'draft'` with `pin: { kind: 'stat', size, mtimeNs }`; without `mtimeNs` it stays withheld `too-large`.
 
-- [ ] **Step 1: Failing tests:** `md parts: never cuts inside a fence`; `md parts: every part at most 2 MiB`; `md parts: a link into part 3 opens part 3`; `md parts: a part the budget refuses keeps its ids unknown and opens part 1 with a note`; `entryView: a 5 MiB draft opens through its snapshot`; `entryView: a 65 MiB draft stays withheld too-large`; `entryView: a draft without mtimeNs stays withheld (an older ccd)`; `docs-tree: a draft entry carries mtimeNs as a decimal string`.
+- [ ] **Step 1: Failing tests:** `md parts: never cuts inside a fence`; `md parts: every part at most 2 MiB`; `md parts: a link into part 3 opens part 3`; `md parts: a part the budget refuses keeps its ids unknown and opens part 1 with a note`; `entryView: a 5 MiB draft opens through its snapshot`; `entryView: a 65 MiB draft stays withheld too-large`; `entryView: a draft without mtimeNs stays withheld (an older ccd)`; `docs-tree: a draft entry carries mtimeNs as a decimal string` (equal to `os.fstat` of the file's `st_mtime_ns`, and present for a file above the hash ceiling, whose `fp` is null).
 - [ ] **Step 2 to 4:** run (FAIL), implement, run (PASS). **Step 5: Commit** `feat(docs): Markdown in parts and the overlay cap (X2 P1)`.
 
 ## Wave P2: outside folders
