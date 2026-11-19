@@ -48,6 +48,7 @@
  */
 import { createHash, createHmac, type Hash } from 'node:crypto';
 import type { DatabaseSync } from 'node:sqlite';
+import { pemCarrySpans, type PemCarry } from './shapes.js';
 import { SECRET_MASK, SECRET_MASK_TOO_LARGE } from '../../../shared/api.js';
 import { isOperatorSecretLane, type SecretUnmasked } from '../../../shared/ledgers.js';
 import {
@@ -1581,6 +1582,9 @@ export class DrawerMask {
   private ahead: [number, number][] = [];
   /** A chain of key rows sent masked past what a drawer holds: the rows still to come that go on with it are masked. */
   private chain: ChainLeft | null = null;
+  /** The PEM block the text sent last ended inside (review 2729 F1): its rows go on masked in the texts after it, to its
+   *  END line, a blank line or its window, after its BEGIN line has left the context. It only adds spans to `ahead`. */
+  private pem: PemCarry | null = null;
   private timer: ReturnType<typeof setTimeout> | null = null;
 
   constructor(private readonly masker: SecretMasker, private readonly emit: (text: string) => void,
@@ -1673,6 +1677,7 @@ export class DrawerMask {
     this.pending = null;
     this.ahead = [];
     this.chain = null;
+    this.pem = null;
   }
 
   /** The withheld run has ended (or can no longer be a secret): draw the text as one
@@ -1726,6 +1731,9 @@ export class DrawerMask {
       if (!chainRowsOn(text, 0, this.chain, spans)) this.chain = null;
       for (const span of spans) this.ahead.push(span);
     }
+    const pem = pemCarrySpans(text, this.pem, this.ctx);
+    this.pem = pem.carry;
+    for (const span of pem.spans) this.ahead.push(span);
     const r = this.masker.maskWithCarry(text, {
       rows: true, leadingWrap: this.carry, context: this.ctx, failClosedTail, leadingTaint: this.taint, lookahead,
       carryAtText: true, mark: DRAWER_SECRET_MASK, ahead: this.ahead,

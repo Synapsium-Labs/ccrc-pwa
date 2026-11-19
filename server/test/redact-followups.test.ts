@@ -11,9 +11,9 @@
 //
 // Every synthetic token and PEM line is built by concatenation, so no literal in this file reads as a live credential
 // to a push scanner.
-import { describe, it, expect } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { credentialMaskSource, SECRET_MASK } from '../../shared/api.js';
-import { redact } from '../../shared/redact.js';
+import { pemStreamSpans, redact, type PemStreamCarry } from '../../shared/redact.js';
 import { SHAPE_MASK } from '../src/accounts/shapes.js';
 import { DRAWER_SECRET_MASK, SecretMasker } from '../src/accounts/mask.js';
 
@@ -98,8 +98,10 @@ const END = cat('-----END ', 'RSA PRIVATE', ' KEY-----');
 const BODY1 = cat('MIIEowIBAAKCAQEA', 'q1W2e3R4t5Y6u7I8o9P0');
 const BODY2 = cat('a1S2d3F4g5H6j7K8', 'l9Z0x1C2v3B4n5M6');
 
+const answerOf = (text: string): string => SHAPE_MASK.maskDeep({ text }).text;
+
 describe('the response masks: a PEM private-key block', () => {
-  const answer = (text: string): string => SHAPE_MASK.maskDeep({ text }).text;
+  const answer = answerOf;
 
   it('a closed block is masked line by line, and the prose around it is kept', () => {
     expect(answer(`before\n${BEGIN}\n${BODY1}\n${BODY2}\n${END}\nprose after`))
@@ -170,5 +172,160 @@ describe("the drawer: a PEM block's rows are masked one by one and never joined"
     expect(out).not.toContain(BODY1);
     expect(out.split('\n')).toHaveLength(4);
     expect(out.endsWith('\nafter')).toBe(true);
+  });
+});
+
+// ── review 2729: a PEM block streamed through the drawer in chunks (F1), and the row cursor's cost (F2) ─────────────
+
+/** `n` rows of 64 base64 characters, each its own (no shape the masker knows, no `eyJ`, no `sk-`). */
+const keyRows = (n: number): string[] => Array.from({ length: n }, (_, i) =>
+  cat('MIIB', String(1000 + i), 'qW2e3R4t5Y6u7I8o9P0aS1d2F3g4H5j6K7l8Z9x0C1v2B3n4M5q6W7e8R9t'));
+/** What the drawer draws for `chunks`, each followed by a quiet time past every hold, on fake timers. */
+const throughDrawer = (chunks: readonly string[]): string => {
+  vi.useFakeTimers();
+  try {
+    const out: string[] = [];
+    const d = new SecretMasker().drawer((t) => out.push(t), 2);
+    for (const c of chunks) { d.push(c); vi.advanceTimersByTime(50); }
+    d.dispose();
+    return out.join('');
+  } finally {
+    vi.useRealTimers();
+  }
+};
+/** `text` cut into chunks of `size` characters. */
+const chunked = (text: string, size: number): string[] =>
+  Array.from({ length: Math.ceil(text.length / size) }, (_, i) => text.slice(i * size, (i + 1) * size));
+/** The rows of `rows` the drawer's output still shows. */
+const shown = (out: string, rows: readonly string[]): string[] => rows.filter((r) => out.includes(r));
+
+describe('the drawer: a PEM block streamed in chunks stays masked after its BEGIN line leaves the context', () => {
+  afterEach(() => { vi.useRealTimers(); });
+  const D = DRAWER_SECRET_MASK;
+  const rows50 = keyRows(50);
+  const closed = cat('$ cat key.pem\n', BEGIN, '\n', ...rows50.map((r) => `${r}\n`), END, '\n', 'after the key\n');
+
+  it("the review's 50-row key at one line per chunk shows no key row, and every row keeps its own mark", () => {
+    const out = throughDrawer(closed.split(/(?<=\n)/));
+    expect(shown(out, rows50)).toEqual([]);
+    expect(out).not.toContain('PRIVATE');
+    expect(out).toContain('$ cat key.pem\n');
+    expect(out.endsWith('after the key\n')).toBe(true);
+    expect(out.split('\n')).toHaveLength(closed.split('\n').length);
+    expect(out.split('\n').slice(1, 53).every((r) => r === D)).toBe(true);
+  });
+
+  for (const size of [7, 256, 1000, 1024, 2048]) {
+    it(`the same key in ${size}-character chunks shows no key row, and the prose after it shows`, () => {
+      const out = throughDrawer(chunked(closed, size));
+      expect(shown(out, rows50)).toEqual([]);
+      // A BEGIN or END line cut into chunks may show its first characters before the line is whole: no key material.
+      expect(out).toContain('after the key');
+    });
+  }
+
+  it('an unclosed key at one line per chunk is masked to the blank line, and the prose after it shows', () => {
+    const rows = keyRows(30);
+    const out = throughDrawer([BEGIN + '\n', ...rows.map((r) => `${r}\n`), '\n', 'prose after the blank line\n']);
+    expect(shown(out, rows)).toEqual([]);
+    expect(out.endsWith('\nprose after the blank line\n')).toBe(true);
+  });
+
+  it('an END line split across two chunks closes the block: the text after it shows', () => {
+    const rows = keyRows(30);
+    const text = cat(BEGIN, '\n', ...rows.map((r) => `${r}\n`), END, '\nafter the split end\n');
+    const at = text.indexOf(END) + 12;
+    const out = throughDrawer([...chunked(text.slice(0, at), 512), text.slice(at)]);
+    expect(shown(out, rows)).toEqual([]);
+    expect(out).toContain('after the split end');
+  });
+
+  it('CR LF rows streamed one by one stay masked, and the CR LF blank line ends the block', () => {
+    const rows = keyRows(30);
+    const out = throughDrawer([BEGIN + '\r\n', ...rows.map((r) => `${r}\r\n`), '\r\n', 'shown\r\n']);
+    expect(shown(out, rows)).toEqual([]);
+    expect(out.endsWith('\r\nshown\r\n')).toBe(true);
+  });
+
+  it('the 64 KB window releases: a block with no END line and no blank line is masked through 64 KB only', () => {
+    const rows = keyRows(1100);   // about 72 KB of rows after the BEGIN line
+    const out = throughDrawer(chunked(cat(BEGIN, '\n', ...rows.map((r) => `${r}\n`), 'visible after the window\n'), 4096));
+    expect(shown(out, rows.slice(0, 900))).toEqual([]);   // within the window: masked
+    expect(out).toContain('visible after the window');
+    expect(shown(out, rows.slice(1050)).length).toBeGreaterThan(0);   // past it: shown
+  });
+
+  it("a BEGIN line the stream's first chunk cuts still opens the carry", () => {
+    const rows = keyRows(50);
+    const at = BEGIN.indexOf('PRIV') + 4;
+    const out = throughDrawer([BEGIN.slice(0, at), BEGIN.slice(at) + '\n', ...rows.map((r) => `${r}\n`), END + '\n', 'after\n']);
+    expect(shown(out, rows)).toEqual([]);
+    expect(out.endsWith('after\n')).toBe(true);
+  });
+
+  it('a block that ends inside one chunk carries nothing: the next chunk shows', () => {
+    const out = throughDrawer([cat(BEGIN, '\n', keyRows(2).join('\n'), '\n', END, '\n'), 'next line\n']);
+    expect(out.endsWith('next line\n')).toBe(true);
+  });
+});
+
+describe("pemStreamSpans: the finder over a stream's texts, read with nothing before them", () => {
+  /** Each text's masked parts, and the carry after the last. */
+  const stream = (texts: readonly string[]): { parts: string[][]; carry: unknown } => {
+    let carry: PemStreamCarry | null = null;
+    const parts: string[][] = [];
+    for (const t of texts) {
+      const r = pemStreamSpans(t, carry);
+      parts.push(r.spans.map(([a, b]) => t.slice(a, b)));
+      carry = r.carry;
+    }
+    return { parts, carry };
+  };
+
+  it('a text that ended with a line break starts a line: a blank first line ends the block', () => {
+    expect(stream([`${BEGIN}\n`, `${BODY1}\n`, '\n', 'prose\n'])).toEqual({ parts: [[BEGIN], [BODY1], [], []], carry: null });
+  });
+
+  it('a text that ended mid-row goes on with that row: its first segment is the row, never a blank line', () => {
+    expect(stream([`${BEGIN}\n${BODY1.slice(0, 5)}`, '\n', `${BODY2}\n`]).parts).toEqual([[`${BEGIN}\n${BODY1.slice(0, 5)}`], [], [BODY2]]);
+  });
+
+  it('a JSON-escaped line break ends a line too', () => {
+    expect(stream([`${BEGIN}\\n`, `${BODY1}\\n`, '\\n', 'prose']).parts).toEqual([[BEGIN], [BODY1], [], []]);
+  });
+
+  it('an END line closes the carry; one past the window does not', () => {
+    expect(stream([`${BEGIN}\n`, `${BODY1}\n${END}\nafter`])).toEqual({ parts: [[BEGIN], [`${BODY1}\n${END}`]], carry: null });
+    const far = stream([`${BEGIN}\n`, `${'A'.repeat(70 * 1024)}\n${END}\nafter`]);
+    expect(far.parts[1]).toEqual(['A'.repeat(70 * 1024)]);
+    expect(far.carry).toBeNull();
+  });
+});
+
+describe('the response masks: many blocks in one JSON answer cost linear time (review 2729 F2)', () => {
+  const blocks = (k: number): string => cat(BEGIN, '\\n\\n').repeat(k);
+  const best = (text: string): number => {
+    let min = Infinity;
+    for (let i = 0; i < 3; i++) {
+      const t0 = performance.now();
+      SHAPE_MASK.maskDeep({ text });
+      min = Math.min(min, performance.now() - t0);
+    }
+    return min;
+  };
+
+  it('each block of a JSON-escaped answer is masked on its own', () => {
+    const one = cat(BEGIN, '\\n', BODY1, '\\n', END, '\\n');
+    expect(answerOf(`"${one}${one}${one}"`)).toBe(`"${M}\\n${M}\\n${M}\\n"`);
+    expect(answerOf(blocks(3))).toBe(`${M}\\n\\n${M}\\n\\n${M}\\n\\n`);
+  });
+
+  it('2 MB of JSON-escaped blocks costs about 4 times 512 KB, never the square', () => {
+    const k = Math.ceil((512 * 1024) / blocks(1).length);
+    best(blocks(k));   // warm
+    const small = best(blocks(k));
+    const large = best(blocks(4 * k));
+    // Linear is about 4 times; the per-block search this replaced was about 16 (measured 125 ms and 1621 ms).
+    expect(large / Math.max(small, 1)).toBeLessThan(9);
   });
 });

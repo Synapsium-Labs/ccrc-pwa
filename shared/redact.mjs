@@ -258,9 +258,24 @@ const PEM_BLANK_LINE = /^(?:[ \t\r]|\\r)*$/;
  *  Linear: the BEGIN, END and line-end searches only move forward, each kept once found, and every character is read a
  *  bounded number of times. */
 export function pemBlockSpans(text) {
+  return pemScan(text, null).spans;
+}
+/** The same finder over one text of a stream (review 2729 F1, the coordinator's ruling): `carry` is the block the last
+ *  text ended inside (null: none), and the answer's `carry` is the block this text ends inside. A carried block runs on
+ *  from this text's start on the scanner's own bounds: through its END line, or with none to the first blank line, and
+ *  never past `PEM_END_WINDOW` characters after its BEGIN line, nor into the next BEGIN line. The response masks' drawer
+ *  keeps it per stream (`server/src/accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays masked after its
+ *  BEGIN line has left the context. */
+export function pemStreamSpans(text, carry) {
+  return pemScan(text, carry);
+}
+/** `pemBlockSpans` and `pemStreamSpans`: the blocks of `text`, and the block it ends inside. */
+function pemScan(text, carry) {
   /** @type {[number, number][]} */
   const spans = [];
-  if (!text.includes('PRIVATE KEY')) return spans;
+  /** @type {{ left: number, lineStart: boolean } | null} */
+  let open = null;
+  if (carry === null && !text.includes('PRIVATE KEY')) return { spans, carry: open };
   // The first END line at or after `endFrom` (null: none), and the next line feed and escaped `\n` at or after `seen`
   // (Infinity: none). Each is searched again only when a query passes it, so each search moves forward only.
   let end = null; let endFrom = Infinity;
@@ -279,34 +294,71 @@ export function pemBlockSpans(text) {
     if (lf === Infinity && esc === Infinity) return [text.length, 0];
     return lf <= esc ? [lf, 1] : [esc, 2];
   };
+  /** A block with no END line, from `from`: the rest of its first line (unless `test` and that whole line is blank),
+   *  then every line up to the first blank one, or up to the first line that starts at or past `limit`. Answers where
+   *  it stops, and whether it reached the end of the text: the line the text ends in is not known to be blank even
+   *  when it is so far (empty after a last line break, or blanks), since a stream may go on with it. */
+  const walk = (from, test, limit) => {
+    let [le, brk] = lineEnd(from);
+    if (test && brk > 0 && PEM_BLANK_LINE.test(text.slice(from, le))) return [from, false];
+    let stop = le;
+    let reached = brk === 0;
+    while (brk > 0) {
+      if (le + brk >= limit) break;
+      const [ne, nbrk] = lineEnd(le + brk);
+      if (PEM_BLANK_LINE.test(text.slice(le + brk, ne))) {
+        if (nbrk === 0) reached = true;   // the line the text ends in: blank so far
+        break;
+      }
+      stop = ne; le = ne; brk = nbrk;
+      if (brk === 0) reached = true;
+    }
+    // Leave a carriage return (raw, or JSON-escaped before an escaped `\n`) with the line break it belongs to.
+    if (text[stop - 1] === '\r') stop -= 1;
+    else if (stop - from >= 2 && text[stop - 2] === '\\' && text[stop - 1] === 'r' && text.startsWith('\\n', stop)) stop -= 2;
+    return [Math.max(stop, from), reached];
+  };
+  const endsInBreak = text.endsWith('\n') || text.endsWith('\\n');   // a line feed, or JSON's escaped one
   PEM_HEADER_RE.lastIndex = 0;
-  for (let m = PEM_HEADER_RE.exec(text); m !== null; m = PEM_HEADER_RE.exec(text)) {
+  let first = PEM_HEADER_RE.exec(text);
+  if (carry !== null) {
+    // The block the last text ended inside runs on from this text's start.
+    const nextBegin = first === null ? Infinity : first.index;
+    const e = nextEnd(0);
+    let stop;
+    if (e !== null && e.index < nextBegin && e.index + e[0].length <= carry.left) {
+      stop = e.index + e[0].length;
+    } else {
+      const limit = Math.min(carry.left, nextBegin);
+      let reached;
+      [stop, reached] = walk(0, carry.lineStart, limit);
+      if (stop > nextBegin) stop = nextBegin;
+      if (reached && text.length < limit) open = { left: carry.left - text.length, lineStart: endsInBreak };
+    }
+    if (stop > 0) spans.push([0, stop]);
+    if (first !== null && first.index < stop) { PEM_HEADER_RE.lastIndex = stop; first = PEM_HEADER_RE.exec(text); }
+  }
+  for (let m = first; m !== null; m = PEM_HEADER_RE.exec(text)) {
     const after = m.index + m[0].length;
     const following = PEM_HEADER_RE.exec(text);   // the next BEGIN line, if any
     const nextBegin = following === null ? Infinity : following.index;
     const e = nextEnd(after);
     let stop;
+    open = null;
     if (e !== null && e.index < nextBegin && e.index + e[0].length - after <= PEM_END_WINDOW) {
       stop = e.index + e[0].length;
     } else {
       // No END line: the rest of the BEGIN line, then every line up to the first blank one.
-      let [le, brk] = lineEnd(after);
-      stop = le;
-      while (brk > 0) {
-        const [ne, nbrk] = lineEnd(le + brk);
-        if (PEM_BLANK_LINE.test(text.slice(le + brk, ne))) break;
-        stop = ne; le = ne; brk = nbrk;
-      }
-      // Leave a carriage return (raw, or JSON-escaped before an escaped `\n`) with the line break it belongs to.
-      if (text[stop - 1] === '\r') stop -= 1;
-      else if (stop - after >= 2 && text[stop - 2] === '\\' && text[stop - 1] === 'r' && text.startsWith('\\n', stop)) stop -= 2;
-      if (stop < after) stop = after;
+      let reached;
+      [stop, reached] = walk(after, false, Infinity);
+      const left = PEM_END_WINDOW - (text.length - after);
+      if (reached && left > 0) open = { left, lineStart: endsInBreak };
     }
     spans.push([m.index, stop]);
     // The next BEGIN line is found again from here, unless this block's lines took it in.
     PEM_HEADER_RE.lastIndex = nextBegin !== Infinity && nextBegin >= stop ? nextBegin : stop;
   }
-  return spans;
+  return { spans, carry: open };
 }
 /** The egress profiles' `pem-block` step: each of `pemBlockSpans`' blocks as one mark. */
 function maskPemBlocks(text, tally) {

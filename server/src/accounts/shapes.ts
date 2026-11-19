@@ -16,7 +16,7 @@
  * Ring L1: this module holds no timer, no clock, no database and no route.
  */
 import { CREDENTIAL_MASKS, SECRET_MASK, type CredentialMask } from '../../../shared/api.js';
-import { pemBlockSpans } from '../../../shared/redact.js';
+import { pemBlockSpans, pemStreamSpans, type PemStreamCarry } from '../../../shared/redact.js';
 
 /** A candidate run's byte bounds (a fingerprint row's `len` lies within them). */
 export const RUN_MIN_BYTES = 20;
@@ -294,11 +294,14 @@ function joinWraps(t: string): Joined | null {
 }
 const LINE_BREAK_ANY = new RegExp(ROW_BREAK, 'g');
 const PEM_ROW_BREAK = new RegExp(ROW_BREAK, 'g');
-/** A PEM block's span [a, b) of `t` as one span per row (overlord wave 168): split at each row break, which is kept, and
- *  each row less its indent, a box's rules and its trailing blanks, so a block in the drawer is masked row by row, a
- *  mark per row, and no row is joined to the next (`spliceMasked` joins only spans that touch). A block's rows are its
- *  own: nothing runs on past `b`, so the row after its END line is never taken as a wrap. */
-function pemRowSpans(t: string, a: number, b: number, put: (x: number, y: number) => void): void {
+/** PEM blocks' spans of `t` (in order, never overlapping) as one span per row (overlord wave 168): split at each row
+ *  break, which is kept, and each row less its indent, a box's rules and its trailing blanks, so a block in the drawer is
+ *  masked row by row, a mark per row, and no row is joined to the next (`spliceMasked` joins only spans that touch). A
+ *  block's rows are its own: nothing runs on past its end, so the row after its END line is never taken as a wrap. The
+ *  row breaks are read with one forward-only cursor over the whole text (review 2729 F2): a block with no row break in
+ *  it searched on to the next one, which in a JSON answer (every line break escaped) was the end of the text, so many
+ *  blocks cost the square of its length. */
+function pemRowSpans(t: string, blocks: readonly [number, number][], put: (x: number, y: number) => void): void {
   const row = (x: number, y: number): void => {
     ROW_INDENT.lastIndex = x;
     const indent = ROW_INDENT.exec(t);
@@ -306,13 +309,54 @@ function pemRowSpans(t: string, a: number, b: number, put: (x: number, y: number
     y = rowTextEnd(t, y);
     if (y > x) put(x, y);
   };
-  let p = a;
-  PEM_ROW_BREAK.lastIndex = a;
-  for (let m = PEM_ROW_BREAK.exec(t); m !== null && m.index < b; m = PEM_ROW_BREAK.exec(t)) {
-    row(p, m.index);
-    p = m.index + m[0].length;
+  // The first row break at or after the last search's start (undefined: none searched yet; null: none left).
+  let next: RegExpExecArray | null | undefined;
+  const breakFrom = (at: number): RegExpExecArray | null => {
+    if (next === undefined || (next !== null && next.index < at)) {
+      PEM_ROW_BREAK.lastIndex = at;
+      next = PEM_ROW_BREAK.exec(t);
+    }
+    return next;
+  };
+  for (const [a, b] of blocks) {
+    let p = a;
+    for (let m = breakFrom(p); m !== null && m.index < b; m = breakFrom(p)) {
+      row(p, m.index);
+      p = m.index + m[0].length;
+    }
+    if (p < b) row(p, b);
   }
-  if (p < b) row(p, b);
+}
+/** The block a drawer's stream is inside, carried from one text to the next (`shared/redact.mjs#pemStreamSpans`). */
+export type PemCarry = PemStreamCarry;
+/** The most of the text already sent that a carried block is read with: an END line's length, and room for its prefix. */
+const PEM_CARRY_LEAD = 256;
+/** One text of the drawer's stream (review 2729 F1, the coordinator's ruling): the row spans of every PEM block in it,
+ *  the block the last text ended inside (`carry`) running on from its start, and the block this text ends inside. The
+ *  carried block is read from the last line start of `before` (the text already sent, at most `PEM_CARRY_LEAD` of it),
+ *  so an END or BEGIN line a chunk boundary cut is read whole; spans in `before` were sent already and are dropped. Read
+ *  with escapes stripped, so a coloured key is read as drawn; the spans are the text's own. The drawer keeps the carry
+ *  per stream (`accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays masked to its END line after its BEGIN
+ *  line has left the masker's context. */
+export function pemCarrySpans(text: string, carry: PemCarry | null, before = ''): {
+  spans: [number, number][]; carry: PemCarry | null;
+} {
+  const spans: [number, number][] = [];
+  const tail = before.slice(-PEM_CARRY_LEAD);
+  const lf = tail.lastIndexOf('\n'); const esc = tail.lastIndexOf('\\n');
+  const lineAt = Math.max(lf === -1 ? 0 : lf + 1, esc === -1 ? 0 : esc + 2);   // after the last line break, or 0
+  const lead = tail.slice(lineAt);
+  if (carry === null && !(lead + text).includes('PRIVATE KEY')) return { spans, carry };
+  const v = viewOf(lead + text, '');
+  // The carry was measured at the end of `before`: read from the lead's start, it holds the lead too.
+  const from = carry === null ? null
+    : { left: carry.left + viewOf(lead, '').t.length, lineStart: lineAt > 0 || carry.lineStart && lead === '' };
+  const r = pemStreamSpans(v.t, from);
+  pemRowSpans(v.t, r.spans, (x, y) => {
+    const [a, b] = spanIn(v, x, y);
+    if (b > lead.length) spans.push([Math.max(a, lead.length) - lead.length, b - lead.length]);
+  });
+  return { spans, carry: r.carry };
 }
 /** Whether a run holds a whole shape on its own. */
 export const matchesShape = (run: string): boolean => SHAPES.some((re) => { re.lastIndex = 0; return re.test(run); });
@@ -355,7 +399,7 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
         spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
       };
       // A PEM private-key block, in the text as drawn: one span per row, and no run-on.
-      if (j === null) for (const [a, b] of pemBlockSpans(t)) pemRowSpans(t, a, b, (x, y) => spans.push(spanIn(v, x, y)));
+      if (j === null) pemRowSpans(t, pemBlockSpans(t), (x, y) => spans.push(spanIn(v, x, y)));
       const r = rows ? new Rows(t) : null;
       for (const re of masks) {
         re.lastIndex = 0;
