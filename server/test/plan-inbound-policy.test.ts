@@ -137,6 +137,10 @@ describe('upkeepLookupOf (review 2571 F10)', () => {
   it('a home with a team key whose workspace could not be resolved is unreachable', () => {
     expect(upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'unreachable' });
   });
+  it('its detail names both causes: a failed read a retry helps, and a team no slot routes, which it does not (review 2834 A4)', () => {
+    const v = upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: null });
+    expect(v.kind === 'refuse' ? v.detail : '').toMatch(/could not be read \(a retry helps\).*no slot routes.*retry does not help/);
+  });
 });
 
 describe('the close builders for a reason that failed the public-text check (final review minor 4)', () => {
@@ -148,7 +152,7 @@ describe('the close builders for a reason that failed the public-text check (fin
     expect(body).not.toContain('Closed: ');
   });
   it('the mail names the identifier, team key and class, and echoes neither title nor body', () => {
-    const m = closeTextRefusedMail(sample, 'some-class');
+    const m = closeTextRefusedMail(sample, 'some-class', 'abc-1');
     expect(m.subject).toContain('AAA-12');
     expect(m.body).toContain('AAA-12');
     expect(m.body).toContain('team AAA');
