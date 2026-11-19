@@ -94,6 +94,8 @@ export interface ApprovalCensusSourceRow {
   readonly inputRedacted: string | null; readonly class: string; readonly state: string; readonly releaseReason: string | null;
   readonly verdict: string | null; readonly answeredBy: string | null; readonly askAt: number; readonly programme: string | null;
   readonly notifyAt: number | null; readonly ruledAt: number | null;
+  /** Approvals PR 0's fact: the child's deny file was the current one when the row was minted. */
+  readonly denyCurrent: boolean;
   readonly commandWords: readonly string[] | null; readonly literalInRoot: boolean | null;
 }
 export type ApprovalCensusSourceResult =
@@ -110,7 +112,7 @@ const wordsOf = (v: unknown): readonly string[] | null | 'bad' => {
 
 export function approvalRowsForCensus(db: DatabaseSync, fromMs: number, toMs: number): ApprovalCensusSourceResult {
   const raw = stmt(db, 'SELECT a.id, a.childId, a.agentId, a.tool, a.inputRedacted, a.class, a.state, a.releaseReason, a.verdict, '
-    + 'a.answeredBy, a.askAt, a.notifyAt, a.ruledAt, a.commandWords, a.literalInRoot, r.program AS programme '
+    + 'a.answeredBy, a.askAt, a.notifyAt, a.ruledAt, a.denyCurrent, a.commandWords, a.literalInRoot, r.program AS programme '
     + 'FROM approvals a LEFT JOIN runs r ON r.id = a.runId WHERE a.askAt >= ? AND a.askAt < ? ORDER BY a.id').all(fromMs, toMs) as
     Record<string, unknown>[];
   const rows: ApprovalCensusSourceRow[] = [];
@@ -119,6 +121,8 @@ export function approvalRowsForCensus(db: DatabaseSync, fromMs: number, toMs: nu
     const lit = x['literalInRoot'];
     if (words === 'bad') return { ok: false, detail: `approvals row ${String(x['id'])}: commandWords` };
     if (lit !== null && lit !== 0 && lit !== 1) return { ok: false, detail: `approvals row ${String(x['id'])}: literalInRoot` };
+    const deny = x['denyCurrent'];
+    if (deny !== 0 && deny !== 1) return { ok: false, detail: `approvals row ${String(x['id'])}: denyCurrent` };
     if (typeof x['childId'] !== 'string' || typeof x['state'] !== 'string' || typeof x['askAt'] !== 'number') {
       return { ok: false, detail: `approvals row ${String(x['id'])}: unreadable` };
     }
@@ -126,7 +130,7 @@ export function approvalRowsForCensus(db: DatabaseSync, fromMs: number, toMs: nu
       id: Number(x['id']), childId: x['childId'], agentId: str(x['agentId']) ?? '', tool: str(x['tool']) ?? '',
       inputRedacted: str(x['inputRedacted']), class: str(x['class']) ?? '', state: x['state'], releaseReason: str(x['releaseReason']),
       verdict: str(x['verdict']), answeredBy: str(x['answeredBy']), askAt: x['askAt'], programme: str(x['programme']),
-      notifyAt: num(x['notifyAt']), ruledAt: num(x['ruledAt']),
+      notifyAt: num(x['notifyAt']), ruledAt: num(x['ruledAt']), denyCurrent: deny === 1,
       commandWords: words, literalInRoot: lit === null ? null : lit === 1,
     });
   }

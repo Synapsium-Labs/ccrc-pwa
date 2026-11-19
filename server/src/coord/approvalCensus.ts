@@ -14,6 +14,7 @@ import {
   type ApprovalCensusAuthority, type ApprovalCensusPath, type ApprovalCensusRowPath, type ApprovalCensusRowWire,
   type ApprovalCensusDenyCurrency, type ApprovalCensusUnmeasured, type ApprovalCensusWire,
 } from '../../../shared/approval-census.js';
+import { APPROVAL_HOOK_WAIT_S } from '../../../shared/api.js';
 import { ASK_SETTLE_TICKS } from '../askwindow.js';
 
 /** The summary's cut, the hook's own (`ask.approval.summary` is `.[0:200]`). */
@@ -38,19 +39,29 @@ export interface CensusMintedRow {
   readonly id: number; readonly askAt: number; readonly agentId: string; readonly state: string;
 }
 
-/** What one tick shows of a painted prompt. */
+/** The last approval envelope a sighting saw: its ask, the hook state's stamp and its thread. */
+export interface CensusEnvelope {
+  readonly ask: Extract<HookAsk, { approval: unknown }>; readonly updatedAt: number; readonly waitBy: 'subagent' | null;
+}
+
+/** What the owner knows of a painted prompt when it decides: this tick's hook state, and the sighting's memory. */
 export interface CensusSightingInput {
-  /** A hook state was read for the child this tick (an absent or aged-out one is `false`). */
+  /** Some tick of this sighting read a hook state for the child (one never present, or aged out before, is `false`). */
   readonly hsPresent: boolean;
+  /** This tick's ask (null at the sighting's end). */
   readonly ask: HookAsk | null;
-  readonly updatedAt: number | null;
-  readonly waitBy: 'subagent' | null;
+  /** The last approval envelope this sighting saw, on any tick (review 2667 F-B): once one was seen, it decides. */
+  readonly envelope: CensusEnvelope | null;
+  /** The first hook-state stamp this sighting saw: with the dialog id, the key of a menu's row (F-C). */
+  readonly menuStamp: number | null;
   readonly dialog: Pick<Dialog, 'id' | 'parsed' | 'options' | 'ask' | 'multi'>;
   /** When the owner first saw `dialog` on this pane, and this tick's time (the server's clock, both). */
   readonly firstSeenAt: number;
   readonly now: number;
-  /** The ticks this sighting has been painted, this one included. */
+  /** The ticks this sighting has been painted. */
   readonly ticks: number;
+  /** The sighting is ending (its menu cleared or was replaced): a menu with no envelope is decided only then (F-A). */
+  readonly ending: boolean;
   readonly minted: readonly CensusMintedRow[];
 }
 
@@ -61,15 +72,18 @@ export interface CensusWrite {
   readonly summary: string | null; readonly sightingKey: string;
 }
 
-/** A sighting's decision. `wait`: not decidable yet, and `ifCleared` is the decision if the menu clears first (a row, or
- *  nothing when a minted row already counts). `none`: decided, no census row (a minted row counts, `mintedId`; or no
- *  permission prompt). `write`: decided, one census row. The owner decides each sighting ONCE. */
+/** A sighting's decision. `wait`: not decidable yet (a menu with no envelope until its sighting ends, or a sent request
+ *  until its row arrives). `none`: decided, no census row (a minted row counts, `mintedId`; or no permission prompt).
+ *  `write`: decided, one census row. The owner decides each sighting ONCE. */
 export type CensusSighting =
-  | { readonly kind: 'wait'; readonly ifCleared: CensusWrite | null }
+  | { readonly kind: 'wait' }
   | { readonly kind: 'none'; readonly mintedId: number | null }
   | CensusWrite;
 
 const NONE: CensusSighting = { kind: 'none', mintedId: null };
+const WAIT: CensusSighting = { kind: 'wait' };
+const OPEN_STATES: ReadonlySet<string> = new Set(['held', 'released']);
+const HOOK_WAIT_MS = APPROVAL_HOOK_WAIT_S * 1000;
 
 /** The summary as the census keeps it (F8): the hook cuts at 200 characters BEFORE the server can mask, so a cut summary
  *  loses its trailing word, which may be the front of a secret the masker could no longer match. */
@@ -80,55 +94,57 @@ export function censusSummaryOf(summary: string): string {
 
 const threadOf = (agentId: string): 'main' | 'subagent' => (agentId === '' ? 'main' : 'subagent');
 
-/** Whether a painted prompt owes a census row (F1 to F7 of review 2638 decided here). An approval envelope decides at
- *  once by its route word: `sent` (or a request answered `approval-released`) names a minted row, which counts, so
- *  nothing is written once it is found, and `sent-no-row` is written if none arrives within `CENSUS_ROW_WAIT_MS`; a
- *  skip word is path 1 (path 7 for `not-a-child`); a refusal or a lost answer is path 2 (path 7 for the route's own
- *  `not-a-child`), unless a minted row of the same thread arrived for it (the client gave up after the mint), which
- *  counts instead; an envelope with no route word or one this build does not know is `unmeasured`. With no envelope,
- *  an approval-shaped menu waits out the watcher's settle window (`ASK_SETTLE_TICKS`, D-5290), then: a tight match (the
- *  same thread, a row held or released, `askAt` within `CENSUS_MATCH_MS` of the first sighting) counts as that row;
- *  any other row near it is `unmeasured` (`near-miss`); none is path 6. A missing hook state is `unmeasured`
- *  (`hookstate-gone`), never path 6. An AskUserQuestion's envelope, and a menu that is not approval-shaped, is none. */
+/** A request's own minted row (review 2667 F-C): the newest row of the thread that is still open (held or released, so
+ *  its menu still stands) within the hook's whole wait before the first sighting, or any row of the thread minted
+ *  beside the sighting. A sighting that starts late (a restart, a repaint, a flicker) still finds its row. */
+function ownRow(x: CensusSightingInput, thread: 'main' | 'subagent'): CensusMintedRow | undefined {
+  return [...x.minted].reverse().find((m) => threadOf(m.agentId) === thread
+    && ((OPEN_STATES.has(m.state) && m.askAt >= x.firstSeenAt - HOOK_WAIT_MS) || m.askAt >= x.firstSeenAt - CENSUS_MATCH_MS));
+}
+
+/** Whether a painted prompt owes a census row (reviews 2638 and 2667). An approval envelope (this tick's, or the last the
+ *  sighting saw, F-B) decides: `sent` (or a request answered `approval-released`) counts as its own minted row
+ *  (`ownRow`), and is `sent-no-row` when none arrives within `CENSUS_ROW_WAIT_MS` or before the sighting ends; a skip
+ *  word is path 1 (path 7 for `not-a-child`); `request-failed` counts as its own row when the client gave up after the
+ *  mint, else path 2; any other refusal is path 2 (path 7 for the route's own `not-a-child`), with no row match (F-F);
+ *  an envelope with no route word or one this build does not know is `unmeasured`. A menu with no envelope waits until
+ *  its sighting ENDS (F-A), then: no hook state on any tick is `hookstate-gone`; a tight match (a row held or released,
+ *  `askAt` within `CENSUS_MATCH_MS` of the first sighting, any thread, F-E) counts as that row; a menu that stood no
+ *  longer than the watcher's settle window is `cleared-early`; any other row of the child near it is `near-miss`; none
+ *  is path 6. Its key is the dialog and the first hook-state stamp, so a restart, a repaint or a flicker of one prompt
+ *  lands on one row (F-C). An AskUserQuestion, and a menu that is not approval-shaped, is none. */
 export function censusSightingOf(x: CensusSightingInput): CensusSighting {
-  const ask = x.ask;
-  const thread = x.waitBy === 'subagent' ? 'subagent' : 'main';
-  const menuKey = `menu:${x.dialog.id}:${x.firstSeenAt}`;
-  const settled = x.ticks > ASK_SETTLE_TICKS;
-  if (ask !== null && 'approval' in ask) {
-    if (x.updatedAt === null) return NONE;
-    const env = (path: ApprovalCensusRowPath, why: ApprovalCensusUnmeasured | null): CensusWrite => ({
+  // The owner records this tick's approval envelope on the sighting before it asks, so `envelope` covers this tick too.
+  const env = x.envelope;
+  if (env !== null) {
+    const ask = env.ask;
+    const thread = env.waitBy === 'subagent' ? 'subagent' : 'main';
+    const write = (path: ApprovalCensusRowPath, why: ApprovalCensusUnmeasured | null): CensusWrite => ({
       kind: 'write', path, why, route: ask.approval.route ?? null, thread, tool: ask.approval.tool,
-      summary: censusSummaryOf(ask.approval.summary), sightingKey: `env:${x.updatedAt}`,
+      summary: censusSummaryOf(ask.approval.summary), sightingKey: `env:${env.updatedAt}`,
     });
-    if (ask.approval.route === undefined) return env('unmeasured', 'no-route');
+    if (ask.approval.route === undefined) return write('unmeasured', 'no-route');
     const route = parseApprovalRoute(ask.approval.route);
-    if (route === null) return env('unmeasured', 'unknown-route');
-    // The minted row a sent (or failed after the mint) request leaves: the same thread, minted since just before the
-    // first sighting, matched on the server's clock (never the fleet box's `updatedAt`, F9).
-    const row = [...x.minted].reverse().find((m) => threadOf(m.agentId) === thread && m.askAt >= x.firstSeenAt - CENSUS_MATCH_MS);
-    if (route.kind === 'sent' || (route.kind === 'refused' && route.word === 'approval-released')) {
-      if (row !== undefined) return { kind: 'none', mintedId: row.id };
-      const noRow = env('unmeasured', 'sent-no-row');
-      return x.now - x.firstSeenAt < CENSUS_ROW_WAIT_MS ? { kind: 'wait', ifCleared: noRow } : noRow;
+    if (route === null) return write('unmeasured', 'unknown-route');
+    if (route.kind === 'skip') return write(route.word === 'not-a-child' ? 'not-a-child' : 'hook-skipped', null);
+    if (route.kind === 'refused' && route.word !== 'approval-released') {
+      return write(route.word === 'not-a-child' ? 'not-a-child' : 'refused-at-mint', null);
     }
-    if (route.kind === 'skip') return env(route.word === 'not-a-child' ? 'not-a-child' : 'hook-skipped', null);
+    const row = ownRow(x, thread);
     if (row !== undefined) return { kind: 'none', mintedId: row.id };
-    return env(route.kind === 'refused' && route.word === 'not-a-child' ? 'not-a-child' : 'refused-at-mint', null);
+    if (route.kind === 'failed') return write('refused-at-mint', null);
+    return x.ending || x.now - x.firstSeenAt >= CENSUS_ROW_WAIT_MS ? write('unmeasured', 'sent-no-row') : WAIT;
   }
-  if (ask !== null || !approvalShapedMenu(x.dialog)) return NONE;
+  if (x.ask !== null || !approvalShapedMenu(x.dialog)) return NONE;
+  if (!x.ending) return WAIT;
   const menu = (path: ApprovalCensusRowPath, why: ApprovalCensusUnmeasured | null): CensusWrite => ({
-    kind: 'write', path, why, route: null, thread: null, tool: null, summary: null, sightingKey: menuKey,
+    kind: 'write', path, why, route: null, thread: null, tool: null, summary: null,
+    sightingKey: `menu:${x.dialog.id}:${x.menuStamp ?? 'none'}`,
   });
-  if (!x.hsPresent) {
-    const gone = menu('unmeasured', 'hookstate-gone');
-    return settled ? gone : { kind: 'wait', ifCleared: gone };
-  }
-  const tight = [...x.minted].reverse().find((m) => threadOf(m.agentId) === thread && (m.state === 'held' || m.state === 'released')
-    && Math.abs(m.askAt - x.firstSeenAt) <= CENSUS_MATCH_MS);
+  if (!x.hsPresent) return menu('unmeasured', 'hookstate-gone');
+  const tight = [...x.minted].reverse().find((m) => OPEN_STATES.has(m.state) && Math.abs(m.askAt - x.firstSeenAt) <= CENSUS_MATCH_MS);
   if (tight !== undefined) return { kind: 'none', mintedId: tight.id };
-  // Inside the settle window a late envelope cannot be told from an erased one: cleared there, it is unmeasured.
-  if (!settled) return { kind: 'wait', ifCleared: menu('unmeasured', 'cleared-early') };
+  if (x.ticks <= ASK_SETTLE_TICKS) return menu('unmeasured', 'cleared-early');
   return x.minted.length > 0 ? menu('unmeasured', 'near-miss') : menu('envelope-erased', null);
 }
 
@@ -210,6 +226,12 @@ export interface CensusReadInput {
 export const censusDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10);
 const DAY_MS = 86_400_000;
 
+/** The read's window (review 2667 F-D): the last `days` whole UTC days, today's included, so N days span N
+ *  programme-days for a programme open throughout. `toMs` is now; `fromMs` is a UTC midnight. */
+export function censusWindow(nowMs: number, days: number): { readonly fromMs: number; readonly toMs: number } {
+  return { fromMs: Math.floor(nowMs / DAY_MS) * DAY_MS - (days - 1) * DAY_MS, toMs: nowMs };
+}
+
 const bump = (m: Record<string, number>, k: string): void => { m[k] = (m[k] ?? 0) + 1; };
 
 /** M38's denominator (the coordinator's ruling on review 2638 F4): the distinct (programme, UTC day) pairs in
@@ -221,7 +243,9 @@ export function programmeDaysOf(runs: readonly CensusRunSpan[], fromMs: number, 
     const start = Math.max(r.openedAt, fromMs);
     const end = Math.min(r.closedAt ?? toMs, toMs);
     if (end < start) continue;
-    for (let d = Math.floor(start / DAY_MS) * DAY_MS; d <= end && d < toMs; d += DAY_MS) pairs.add(`${r.programme}\u0000${censusDay(d)}`);
+    // The end is exclusive (review 2667 F-H): a run closed at 00:00 UTC does not count the day it closed into.
+    const last = end > start ? end - 1 : start;
+    for (let d = Math.floor(start / DAY_MS) * DAY_MS; d <= last && d < toMs; d += DAY_MS) pairs.add(`${r.programme}\u0000${censusDay(d)}`);
   }
   return pairs.size;
 }

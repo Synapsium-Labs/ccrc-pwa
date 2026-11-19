@@ -9,7 +9,7 @@ import type { ApprovalCensusWire } from '../../../shared/approval-census';
 import { api } from '../lib/api';
 import { usePoll } from '../lib/usePoll';
 import {
-  APPROVAL_CENSUS_TEXT, asApprovalCensus, denyCurrencyUnmeasured, m38Figure, m38NoneSentence, m38Sentence, operatorPathLines,
+  APPROVAL_CENSUS_TEXT, asApprovalCensus, denyCurrencyUnmeasured, m38Figure, m38NoneSentence, m38OnlyRootSentence, m38Sentence, operatorPathLines,
   readPromptsLine, rootPromptsLine, unmeasuredLine,
 } from '../lib/approvalCensusWords';
 import { SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS } from './settingsText';
@@ -58,6 +58,8 @@ function CensusBody({ census, stale }: { census: ApprovalCensusWire; stale: bool
         </>
       ) : census.m38.programmeDays === 0 ? (
         <p className={SETTINGS_NOW_CLASS.note}>{APPROVAL_CENSUS_TEXT.noProgrammeDays}</p>
+      ) : census.m38.rootReached > 0 ? (
+        <p className={SETTINGS_NOW_CLASS.note}>{m38OnlyRootSentence(census.days)}</p>
       ) : (
         <p className={SETTINGS_NOW_CLASS.note}>{m38NoneSentence(census.days)}</p>
       )}

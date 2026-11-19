@@ -56,6 +56,14 @@ describe('Settings › Automation › Permission prompts (M38)', () => {
     expect(card().textContent).not.toContain('0.0');
   });
 
+  it('no programme prompt but prompts with no programme reached you: never "None" (review 2667 F-D)', async () => {
+    vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ perProgrammeDay: 0, programmeReached: 0, rootReached: 2, byDay: [] }));
+    render(<ApprovalCensusSection />);
+    expect(await within(card()).findByText('Every prompt that reached you in the last 14 days came from outside a programme')).toBeInTheDocument();
+    expect(card().textContent).not.toMatch(/None/);
+    expect(within(card()).getByText('Prompts with no programme (not in the figure): 2')).toBeInTheDocument();
+  });
+
   it('no programme-days says so in its own sentence, never a figure (ruling F4)', async () => {
     vi.spyOn(api, 'getApprovalCensus').mockResolvedValue(wire({ programmeDays: 0, programmeReached: 0, perProgrammeDay: null, byDay: [] }));
     render(<ApprovalCensusSection />);
@@ -68,7 +76,7 @@ describe('Settings › Automation › Permission prompts (M38)', () => {
     render(<ApprovalCensusSection />);
     expect(await within(card()).findByText('1.5')).toBeInTheDocument();
     expect(within(card()).getByText(APPROVAL_CENSUS_TEXT.programmeDay)).toBeInTheDocument();
-    expect(within(card()).getByText("Root sessions' prompts you answered (not in the figure): 3")).toBeInTheDocument();
+    expect(within(card()).getByText('Prompts with no programme (not in the figure): 3')).toBeInTheDocument();
     expect(within(card()).getByText('Prompts the census could not place: 2')).toBeInTheDocument();
   });
 

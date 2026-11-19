@@ -11,7 +11,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { approvalCommandWords, literalInRoot, type ApprovalCtx } from '../src/coord/approvalguard.js';
 import {
-  approvalCensusOf, censusPathOfApproval, isReadPrompt, programmeDaysOf, CENSUS_SUMMARY_MAX, type CensusApprovalRow, type CensusOwnRow,
+  approvalCensusOf, censusPathOfApproval, censusWindow, isReadPrompt, programmeDaysOf, CENSUS_SUMMARY_MAX, type CensusApprovalRow, type CensusOwnRow,
 } from '../src/coord/approvalCensus.js';
 import { registerApprovalCensusRoutes } from '../src/coord/approvalCensusRoutes.js';
 import { heldFor } from '../src/coord/heldFor.js';
@@ -163,6 +163,20 @@ describe('approvalCensusOf: the counts, M38 and the rows', () => {
     expect(programmeDaysOf([{ programme: 'p', openedAt: FROM, closedAt: null }, { programme: 'p', openedAt: FROM, closedAt: FROM + 1 }], FROM, TO)).toBe(2);
     expect(programmeDaysOf([{ programme: 'p', openedAt: TO + 1, closedAt: null }], FROM, TO)).toBe(0);
   });
+  it('F-H: a run closed exactly at 00:00 UTC does not count the day it closed into', () => {
+    const D = 86_400_000;
+    expect(programmeDaysOf([{ programme: 'p', openedAt: FROM + 3_600_000, closedAt: FROM + D }], FROM, TO)).toBe(1);
+  });
+  it('F-D: the window is the last N whole UTC days, today\'s included, so N days are N programme-days', () => {
+    const D = 86_400_000;
+    const now = Date.UTC(2026, 10, 18, 0, 30);             // half an hour after midnight
+    const win = censusWindow(now, 14);
+    expect(win).toEqual({ fromMs: Date.UTC(2026, 10, 5), toMs: now });
+    expect(programmeDaysOf([{ programme: 'p', openedAt: now - 60 * D, closedAt: null }], win.fromMs, win.toMs)).toBe(14);
+    // A run across midnight inside the window is two programme-days.
+    expect(programmeDaysOf([{ programme: 'p', openedAt: now - 3_600_000, closedAt: null }], win.fromMs, win.toMs)).toBe(2);
+    expect(censusWindow(Date.UTC(2026, 10, 18, 23, 59), 1).fromMs).toBe(Date.UTC(2026, 10, 18));
+  });
   it('never an input: each row carries exactly the wire\'s fields, and a summary is the redacted one, cut to 200 characters', () => {
     const keys: Array<keyof ApprovalCensusRowWire> = ['source', 'id', 'at', 'day', 'sessionId', 'programme', 'thread', 'tool', 'summary', 'path',
       'why', 'route', 'state', 'releaseReason', 'class', 'denyCurrent', 'authority', 'reachedOperator', 'readPrompt'];
@@ -211,6 +225,21 @@ describe('GET of the census: session-gated, counts only', () => {
     }
     expect((await (await app(undefined)).inject({ method: 'GET', url: '/api/approvals/census' })).statusCode).toBe(501);
   });
+  it('approvals PR 0\'s deny-current fact reaches the read from the row: a not-current row is counted so, and is never a read prompt', async () => {
+    const c = store();
+    c.insertApproval({ childId: 'lane-a-child', parentId: 'lane-a-coord', runId: null, digest: 'a'.repeat(64), nonce: 'd'.repeat(32), agentId: '',
+      tool: 'Bash', inputRedacted: 'cat src/a.ts', truncated: false, class: 'escalate', askAt: NOW - 3_600_000, notifyAt: NOW - 3_540_000,
+      denyCurrent: false, commandWords: ['cat'], literalInRoot: true });
+    c.insertApproval({ childId: 'lane-a-child', parentId: 'lane-a-coord', runId: null, digest: 'a'.repeat(64), nonce: 'e'.repeat(32), agentId: '',
+      tool: 'Bash', inputRedacted: 'cat src/b.ts', truncated: false, class: 'escalate', askAt: NOW - 3_000_000, notifyAt: NOW - 2_940_000,
+      commandWords: ['cat'], literalInRoot: true });
+    // Both held, then lapsed (released at notifyAt): each reached the operator.
+    c.db.prepare("UPDATE approvals SET state = 'released'").run();
+    const a = await app(c);
+    const body = (await a.inject({ method: 'GET', url: '/api/approvals/census?days=1' })).json() as ApprovalCensusWire;
+    expect(body.byDenyCurrent).toEqual({ 'not-current': 1, current: 1 });
+    expect(body.readPrompts).toBe(1);
+  });
   it('a store that cannot be read is unavailable, never an empty census', async () => {
     const broken = { censusRowsIn: () => { throw new Error('disk I/O error'); }, approvalRowsForCensus: () => ({ ok: true, rows: [] }), approvalPushSources: () => ({}) };
     const a = Fastify({ logger: false });
@@ -256,7 +285,7 @@ describe('the two facts are kept at mint (raiseApproval)', () => {
     const q = createQuestions({ coord: f.coord });
     const deps = {
       coord: f.coord, io: f.deps.io, cfg: f.deps.cfg, tmux: f.deps.tmux, masker: SHAPE_ONLY_MASKER, signerFor: () => ({}) as never,
-      rulingsAllowedHere, heldFor, denyEngaged: async () => true, liveVersionOf: async () => '2.1.302', journalDigestMismatch: () => {},
+      rulingsAllowedHere, heldFor, denyStanding: async () => 'current' as const, liveVersionOf: async () => '2.1.302', journalDigestMismatch: () => {},
     };
     const mint = async (command: string): Promise<{ commandWords: string | null; literalInRoot: number | null }> => {
       const b = requestBody(hookInput({ command, cwd: workdirOf(CHILD) }));

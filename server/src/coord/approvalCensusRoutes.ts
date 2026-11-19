@@ -2,7 +2,7 @@ import type { FastifyInstance } from 'fastify';
 import { noStoreRoute } from '../accounts/gate.js';
 import { refuseRoute } from '../refuse.js';
 import { APPROVAL_CENSUS_DEFAULT_DAYS, APPROVAL_CENSUS_MAX_DAYS } from '../../../shared/approval-census.js';
-import { approvalCensusOf } from './approvalCensus.js';
+import { approvalCensusOf, censusWindow } from './approvalCensus.js';
 import type { ApprovalCensusSources } from './questions.js';
 
 /**
@@ -28,8 +28,6 @@ export interface ApprovalCensusRouteDeps {
   readonly wall: () => number;
 }
 
-const DAY_MS = 86_400_000;
-
 export function registerApprovalCensusRoutes(app: FastifyInstance, deps: ApprovalCensusRouteDeps): void {
   app.get('/api/approvals/census', { onRequest: noStoreRoute.onRequest }, (req, reply) => {
     const raw = (req.query as Record<string, unknown> | undefined)?.['days'];
@@ -39,8 +37,8 @@ export function registerApprovalCensusRoutes(app: FastifyInstance, deps: Approva
       if (!(n >= 1 && n <= APPROVAL_CENSUS_MAX_DAYS)) return refuseRoute(reply, 'bad-request', { why: `days is 1 to ${APPROVAL_CENSUS_MAX_DAYS}` });
       days = n;
     }
-    const toMs = deps.wall();
-    const fromMs = toMs - days * DAY_MS;
+    // The last `days` whole UTC days, today's included (`censusWindow`).
+    const { fromMs, toMs } = censusWindow(deps.wall(), days);
     let read: ApprovalCensusSources | undefined;
     try {
       read = deps.sources(fromMs, toMs + 1);
@@ -55,8 +53,8 @@ export function registerApprovalCensusRoutes(app: FastifyInstance, deps: Approva
     if (!runs.ok) return refuseRoute(reply, 'unavailable', { detail: `the runs cannot be read (${runs.detail})` });
     return approvalCensusOf({
       days, fromMs, toMs,
-      // The deny-currency fact is read once approvals PR 0's column is on the row; until then a row does not say.
-      approvals: approvals.rows.map((a) => ({ ...a, denyCurrent: null })),
+      // Approvals PR 0's deny-currency fact, from the row (a row minted before PR 0 reads current, the column's default).
+      approvals: approvals.rows,
       census: census.rows,
       runs: runs.rows,
       pushesBySource: pushes,

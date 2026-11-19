@@ -54,7 +54,7 @@ import { changeLatch } from '../changeLatch.js';
 import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
 import { approvalClass, approvalCommandWords, literalInRoot, rootsForChild } from './approvalguard.js';
 import { approvalAllowRefusal, type DenyStanding } from './approvalDenyFloor.js';
-import { censusSightingOf, type CensusWrite } from './approvalCensus.js';
+import { censusSightingOf, type CensusEnvelope } from './approvalCensus.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
@@ -1237,7 +1237,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    */
   const settleCleared = (childId: string, dialogId: string): void => {
     const sighting = censusSightings.get(childId);
-    if (sighting?.dialogId === dialogId) { flushCensus(childId, sighting); censusSightings.delete(childId); }
+    if (sighting?.dialog.id === dialogId) { flushCensus(childId, sighting); censusSightings.delete(childId); }
     dropAsk(childId, 'lapsed');
     settleClearedApproval(childId, dialogId);
     const held = askEntry(childId, 'held');
@@ -1484,93 +1484,90 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
 
   // ── the approval census (approvals plan 2026-11-18, §3.1 and Task 1.3) ─────────────────────────────────────────
 
-  /** Per child, the permission prompt its pane paints now: the dialog, when this instance first saw it and last saw it,
-   *  how many ticks it has stood, the run its child's mark names, whether it is DECIDED (review 2638 F1, F2: a sighting
-   *  is decided once, and nothing it sees later writes a second row), the decision it would take if it cleared undecided,
-   *  and the push's source once known. IN MEMORY: a restart starts a new sighting. An envelope's census row is keyed by
-   *  the envelope's own stamp, so the store's unique key keeps it single across a restart; a menu's row (no envelope) is
-   *  keyed by the sighting, so a restart while that menu stands can count it again (the accepted cost, rare). */
+  /** Per child, the permission prompt its pane paints now (reviews 2638 and 2667): the dialog, when this instance first and
+   *  last saw it, how many ticks it has stood, the run its child's mark names, whether it is DECIDED (a sighting is
+   *  decided once, and nothing it sees later writes a second row), the last approval envelope it saw (which decides once
+   *  seen, F-B), whether any tick read a hook state, the first hook-state stamp (a menu row's key with the dialog, F-C),
+   *  and the push's source once known. IN MEMORY: a restart starts a new sighting, which finds the same keys and rows. */
   interface CensusSightingState {
-    readonly dialogId: string; readonly firstSeenAt: number; lastSeenAt: number; ticks: number; readonly runId: number | null;
-    decided: boolean; ifCleared: CensusWrite | null; source: string | null;
-    /** The approval envelope's content (tool and summary) once one was seen: a restamp of the same prompt keeps the
-     *  sighting, a new prompt under a menu with the same labels starts a new one. */
-    envelope: string | null;
+    readonly dialog: Dialog; readonly firstSeenAt: number; lastSeenAt: number; ticks: number; readonly runId: number | null;
+    decided: boolean; source: string | null; envelope: CensusEnvelope | null; hsSeen: boolean; menuStamp: number | null;
   }
   const censusSightings = new Map<string, CensusSightingState>();
   const censusWarn = changeLatch<string>();
   const maskSummary = (text: string): string => redactedStored(deps.masker === undefined ? text : deps.masker.maskText(text));
+  const envelopeContent = (e: CensusEnvelope): string => `${e.ask.approval.tool}\u0000${e.ask.approval.summary}`;
 
-  /** The one write of a decided sighting: its census row, and the push's source. */
-  const writeCensus = (coord: WatcherCoordPort, childId: string, s: CensusSightingState, w: CensusWrite, now: number): void => {
-    const row = coord.insertCensusRow({
-      sessionId: childId, sightingKey: w.sightingKey, path: w.path, why: w.why, route: w.route, thread: w.thread,
-      tool: w.tool, summary: w.summary === null ? null : maskSummary(w.summary), runId: s.runId, seenAt: now,
-    });
-    s.source = `census:${row.id}`;
-  };
-
-  /** A sighting that ends undecided (its menu cleared or was replaced) takes the decision it was waiting on
-   *  (`ifCleared`): a row, never silence. */
-  const flushCensus = (childId: string, s: CensusSightingState): void => {
-    const coord = deps.coord;
-    if (!coord || s.decided) return;
-    s.decided = true;
-    if (s.ifCleared === null) return;
+  /** One decision of a sighting, this tick or at its end: the child's rows minted since the hook's longest wait before the
+   *  first sighting, the L1 decider, then the one write (a census row) or the push's source (the minted row). */
+  const decideCensus = (coord: WatcherCoordPort, childId: string, s: CensusSightingState, ask: HookAsk | null, now: number, ending: boolean): void => {
     try {
-      writeCensus(coord, childId, s, s.ifCleared, s.lastSeenAt);
+      const read = coord.approvalsForChild(childId, APPROVAL_STATES);
+      if (!read.ok) throw new Error(read.detail);
+      const since = s.firstSeenAt - APPROVAL_HOOK_WAIT_S * 1000;
+      const decision = censusSightingOf({
+        hsPresent: s.hsSeen, ask, envelope: s.envelope, menuStamp: s.menuStamp, dialog: s.dialog, firstSeenAt: s.firstSeenAt,
+        now, ticks: s.ticks, ending,
+        minted: read.rows.filter((x) => x.askAt >= since).map((x) => ({ id: x.id, askAt: x.askAt, agentId: x.agentId, state: x.state })),
+      });
+      if (decision.kind === 'wait') return;
+      s.decided = true;
+      if (decision.kind === 'write') {
+        const row = coord.insertCensusRow({
+          sessionId: childId, sightingKey: decision.sightingKey, path: decision.path, why: decision.why, route: decision.route,
+          thread: decision.thread, tool: decision.tool, summary: decision.summary === null ? null : maskSummary(decision.summary),
+          runId: s.runId, seenAt: now,
+        });
+        s.source = `census:${row.id}`;
+      } else if (decision.mintedId !== null) {
+        s.source = `approval:${decision.mintedId}`;
+      }
+      censusWarn.clear();
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err);
       if (censusWarn.changed(why)) console.warn(`ccrc-server: approval census: ${childId} not counted (${why})`);
     }
   };
 
+  /** A sighting that ends (its menu cleared or was replaced) is decided now if it was not yet (F-A): a menu with no
+   *  envelope is decided only here, with the rows minted since its first sighting. */
+  const flushCensus = (childId: string, s: CensusSightingState): void => {
+    const coord = deps.coord;
+    if (!coord || s.decided) return;
+    decideCensus(coord, childId, s, null, s.lastSeenAt, true);
+    s.decided = true;
+  };
+
   /**
    * THE CENSUS'S ONE WRITE SITE (Task 1.3): the watcher calls this on every tick a dialog is painted for `r`, before it
-   * raises. `censusSightingOf` (L1) decides from this tick's hook state and the child's rows minted near the sighting;
-   * a prompt that leaves no approvals row gets ONE `approval_census` row per sighting (the store's `insertCensusRow`,
-   * its one writer), and the sighting remembers the push's source for `pushSourceOf`: `census:<row>`, or for a prompt
-   * the request route minted, `approval:<row>`. A sighting is decided ONCE; until then it waits (the settle window, or a
-   * sent request's row), and a sighting replaced or cleared while it waits takes its `ifCleared` decision. Never throws:
-   * a failed store read or write is logged once per cause and counts nothing.
+   * raises. `censusSightingOf` (L1) decides; a prompt that leaves no approvals row gets ONE `approval_census` row (the
+   * store's `insertCensusRow`, its one writer), and the sighting remembers the push's source for `pushSourceOf`:
+   * `census:<row>`, or for a prompt the request route minted, `approval:<row>`. A sighting is decided ONCE: an envelope
+   * decides on the tick it is seen (a sent request once its row is there); a menu with no envelope when the sighting ends
+   * (`flushCensus`, from a clear or a replacing dialog). Never throws: a failed store read or write is logged once per
+   * cause and counts nothing.
    */
   const observeCensus = (r: SessionRecord, dialog: Dialog, hs: HookState | null, now: number): void => {
     const coord = deps.coord;
     if (!coord) return;
-    let s = censusSightings.get(r.id);
     const ask = hs?.ask ?? null;
-    const envelope = ask !== null && 'approval' in ask ? `${ask.approval.tool}\u0000${ask.approval.summary}` : null;
-    if (s === undefined || s.dialogId !== dialog.id || (envelope !== null && s.envelope !== null && s.envelope !== envelope)) {
+    const env: CensusEnvelope | null = hs !== null && ask !== null && 'approval' in ask
+      ? { ask, updatedAt: hs.updatedAt, waitBy: hs.waitBy === 'subagent' ? 'subagent' : null } : null;
+    let s = censusSightings.get(r.id);
+    // A new sighting: another dialog, or new envelope content under the same menu labels (a new prompt); a restamp of the
+    // same envelope is the same prompt.
+    if (s === undefined || s.dialog.id !== dialog.id || (env !== null && s.envelope !== null && envelopeContent(env) !== envelopeContent(s.envelope))) {
       if (s !== undefined) flushCensus(r.id, s);
-      s = { dialogId: dialog.id, firstSeenAt: now, lastSeenAt: now, ticks: 0, runId: r.child.kind === 'child' ? r.child.runId : null,
-        decided: false, ifCleared: null, source: null, envelope: null };
+      s = { dialog, firstSeenAt: now, lastSeenAt: now, ticks: 0, runId: r.child.kind === 'child' ? r.child.runId : null,
+        decided: false, source: null, envelope: null, hsSeen: false, menuStamp: null };
       censusSightings.set(r.id, s);
     }
     s.ticks += 1;
     s.lastSeenAt = now;
-    if (envelope !== null && s.envelope === null) s.envelope = envelope;
+    if (hs !== null) { s.hsSeen = true; if (s.menuStamp === null) s.menuStamp = hs.updatedAt; }
+    if (env !== null) s.envelope = env;
     if (s.decided) return;
-    try {
-      const read = coord.approvalsForChild(r.id, APPROVAL_STATES);
-      if (!read.ok) throw new Error(read.detail);
-      const since = s.firstSeenAt - APPROVAL_HOOK_WAIT_S * 1000;
-      const decision = censusSightingOf({
-        hsPresent: hs !== null, ask, updatedAt: hs?.updatedAt ?? null,
-        waitBy: hs?.waitBy === 'subagent' ? 'subagent' : null, dialog, firstSeenAt: s.firstSeenAt, now, ticks: s.ticks,
-        minted: read.rows.filter((x) => x.askAt >= since).map((x) => ({ id: x.id, askAt: x.askAt, agentId: x.agentId, state: x.state })),
-      });
-      if (decision.kind === 'wait') {
-        s.ifCleared = decision.ifCleared;
-      } else {
-        s.decided = true;
-        if (decision.kind === 'write') writeCensus(coord, r.id, s, decision, now);
-        else if (decision.mintedId !== null) s.source = `approval:${decision.mintedId}`;
-      }
-      censusWarn.clear();
-    } catch (err) {
-      const why = err instanceof Error ? err.message : String(err);
-      if (censusWarn.changed(why)) console.warn(`ccrc-server: approval census: ${r.id} not counted (${why})`);
-    }
+    decideCensus(coord, r.id, s, ask, now, false);
   };
 
   /** The push's source for the prompt `childId`'s pane paints now (`approval:<row>` or `census:<row>`), or undefined. */

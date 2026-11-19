@@ -13,7 +13,8 @@ Departures are listed by slug. The coordinator mints the numbers.
   is patched to `request-refused:<word>` (`http-<code>` when the answer has no kebab word) and a lost answer to
   `request-failed`. The vocabulary is `shared/approval-census.ts`, and `session-hook-approval-route.test.ts` holds the
   hook's words equal to it. `hookstate.ts` carries the word and the hook's `waitBy`.
-- **Task 1.3.** Migration 102 by position (quiz PR 2 took 100 and forecasts B 101; renumbered again at the landing merge if needed): the `approval_census` table, two
+- **Task 1.3.** Migration 103 by position (quiz PR 2 took 100, forecasts B 101, approvals PR 0 102; door A1 and the Linear
+  follow-up take 103 and 104 before this lands, so it renumbers once more at its landing merge): the `approval_census` table, two
   approvals columns kept from mint (`commandWords`, `literalInRoot`) and `push_outbox.pushSource`. The one writer is
   `approvalCensusStore.ts#insertCensusRow`, reached only through the questions owner's `observeCensus`, which the
   watcher calls on every tick a dialog is painted. Its retention is the approvals' (the summary is cleared, the row
@@ -52,42 +53,56 @@ Departures are listed by slug. The coordinator mints the numbers.
 - `released-at-mint-not-path-2`: the request route answers a row minted released with a refusal
   (`approval-released`), so the envelope reads `request-refused:approval-released`. The census reads that as a minted
   row (path 3, counted from the row), never path 2.
-- `deny-words`: an absent, unreadable or malformed stamp, or an unreadable managed deny file, is `deny-unreadable`;
-  a well-formed stamp that is not the current digest is `deny-unknown`. PR 0's history arm changes this gate; its
-  words and mine are reconciled at my landing merge.
+- `deny-words` (reconciled with approvals PR 0, #3045): an absent, unreadable or malformed stamp, or an unreadable
+  managed deny file, is `deny-unreadable`; a well-formed stamp that is not the current digest goes on when the
+  installer's digest history names it (PR 0's arm, now in the gate: the request carries `denyDigest`, the server mints
+  the row `denyCurrent: false`, and the hook and the rule door refuse its allow, `deny-not-current`), and is
+  `deny-unknown` when no history names it. PR 0's `_apr_deny_history` moved above the gate with it.
 - `forbidden-match-unrun`: a forbidden match that could not run reads as `forbidden` (fail closed); nothing is sent
   either way.
-- `census-key`: an envelope's census row is keyed by the session and the envelope's own stamp (`updatedAt`). A sighting
-  is decided ONCE (review 2638 F1, F2): a restamp of the same envelope (same tool and summary) under the same menu is
-  the same prompt, and new envelope content under the same menu labels starts a new sighting. A menu with no envelope is
-  keyed by its dialog and first sighting, so a server restart while that menu stands can count it again.
+- `census-key` (review 2667 F-C): an envelope's census row is keyed by the session and the envelope's own stamp
+  (`updatedAt`). A sighting is decided ONCE (review 2638 F1, F2): a restamp of the same envelope (same tool and summary)
+  under the same menu is the same prompt, and new envelope content under the same menu labels starts a new sighting. A
+  menu with no envelope is keyed by its dialog id and the FIRST hook-state stamp its sighting saw (`none` with no hook
+  state), never by the sighting's time, so a restart, a repaint with the same labels and a one-tick flicker of one
+  prompt land on one row, and a new prompt (a new hook state) on a second. A `sent` or failed request finds its own row
+  across the hook's whole wait while that row is open (held or released), so a sighting that starts late finds it too.
 - `census-thread-not-agent-id`: the envelope carries no agent id (PR 2's per-agent list will), so a census row keeps
   its thread (`main`, `subagent`, or none for a menu with no envelope) in place of the agent id.
-- `envelope-erased-rule` (revised by the rulings on review 2638 F1, F2 and F5): path 6 is a parsed menu whose first
-  option is `Yes` and one of whose options begins `No`, with a hook state but no envelope, decided only once the
-  watcher's settle window has passed (`ASK_SETTLE_TICKS`, D-5290, the same bound the deferred first raise uses), and
-  with no minted row near it. A TIGHT match (the same thread, a row held or released, `askAt` within
-  `CENSUS_MATCH_MS` of the first sighting) is that row's prompt; any other row of the child within the hook's longest
-  wait is `unmeasured` (`near-miss`). A menu that clears inside the window is `unmeasured` (`cleared-early`), and one
-  with no hook state at all is `unmeasured` (`hookstate-gone`), never path 6.
+- `envelope-erased-rule` (revised by the rulings on reviews 2638 F1, F2, F5 and 2667 F-A, F-B, F-E): path 6 is a
+  parsed menu whose first option is `Yes` and one of whose options begins `No`, with a hook state but no envelope on
+  ANY tick of its sighting, decided only when the sighting ENDS (its menu clears or is replaced), from the rows minted
+  since its first sighting, so a late envelope or a late mint lands on the one decision. Once the sighting saw an
+  envelope, the envelope decides, whatever later ticks hold. A TIGHT match (a row held or released, `askAt` within
+  `CENSUS_MATCH_MS` of the first sighting, any thread: the hook state's thread describes the event that erased the
+  envelope) is that row's prompt; any other row of the child within the hook's longest wait is `unmeasured`
+  (`near-miss`). A menu that stood no longer than the watcher's settle window (`ASK_SETTLE_TICKS`) is `unmeasured`
+  (`cleared-early`), and one with no hook state on any tick is `unmeasured` (`hookstate-gone`), never path 6.
 - `unmeasured-counted` (replaces `older-hook-not-counted`; rulings on F3, F5 and F6): every prompt the census cannot
   place is one `unmeasured` row with its `why` (a census row's new `why` column; `unknown-state` for a minted row), and
   the read counts them on their own (`unmeasured`, `byUnmeasured`), never in `reachedOperator` or M38: an envelope with
   no route word (`no-route`, an older hook), a route word this build does not know (`unknown-route`), a `sent` request
   with no minted row within `CENSUS_ROW_WAIT_MS` (`sent-no-row`), a minted row's unknown state (`unknown-state`), and
   the three above.
-- `minted-row-matched-not-timed` (F7, F9b): a `sent` or failed request's minted row is found by the same thread and
-  `askAt` since just before the first sighting, on the server's clock, never against the fleet box's `updatedAt`. A
-  `request-failed` with such a row counts as that row, never path 2 as well.
+- `minted-row-matched-not-timed` (F7, F9b; review 2667 F-F): a `sent` or failed request's own minted row is found by
+  its thread on the server's clock, never against the fleet box's `updatedAt` (see `census-key`). A `request-failed`
+  with such a row counts as that row, never path 2 as well; any other refusal returns before the insert, so it is
+  path 2 with no row match.
+- `operator-first-label` (review 2667 F-G): an `operator` row is written on any close of the painted dialog, so the card
+  labels `operator-first` "Answered or cleared at the pane before the coordinator". **Carry:** a separate
+  `pane-cleared` principal, folded into the ledger PR.
 - `table-2a-state-mapping` (ruling on F3): `allowed`/`denied` are ruled (0); `held` is held; a row minted released is
   path 3; `declined` (the claimant handed it over) and `stale` (the hook's ceiling passed with no principal) are their
   own words and reach the operator; `operator` answered inside the claimant's window (`ruledAt < notifyAt`) is
   `operator-first`; a lapse (released at `notifyAt`, or answered by the operator after it) is `escalate` (5) or
   `lapsed` (4) by class; any other state is `unmeasured`.
-- `m38-programme-days-from-runs` (ruling on F4): M38's denominator is the distinct (programme, UTC day) pairs on which
-  the programme had a run open, read from the runs, prompt or none, so a day prevention emptied still counts. Its
-  numerator is a programme's prompts that reached the operator. Root sessions' prompts (and any with no programme) are
-  reported beside it (`rootReached`), never inside it. The card states the rule in its caption.
+- `m38-programme-days-from-runs` (ruling on F4; review 2667 F-D, F-H): M38's denominator is the distinct (programme,
+  UTC day) pairs on which the programme had a run open, read from the runs, prompt or none, so a day prevention emptied
+  still counts; a run's end is exclusive, so one closed at 00:00 UTC does not count the next day. The read's window is
+  the last N whole UTC days, today's included (`censusWindow`), so N days are N programme-days for a programme open
+  throughout. Its numerator is a programme's prompts that reached the operator. Prompts with no programme (root
+  sessions, and children no run names) are reported beside it (`rootReached`, "Prompts with no programme"), never
+  inside it, and the headline never says "None" while any of them reached the operator. The card states the rule.
 - `summary-cut-before-mask` (F8): the hook cuts the summary at 200 characters before the server can mask it, so a cut
   summary drops its trailing word (which may be the front of a secret) before it is masked and stored.
 - `command-words-retention` (F11b): the approvals' daily retention clears a row's `commandWords` with its input.
@@ -96,8 +111,10 @@ Departures are listed by slug. The coordinator mints the numbers.
 - `push-source-column`: the binding is a `pushSource` column on the outbox row, written by the unbound insert, since
   approval pushes are unbound. A held prompt's deferred push names its newest covered row, and the "with coordinator"
   replacement push for a held prompt carries the sighting's source too (review 2638 F9a).
-- `deny-current-unmeasured-until-pr0`: PR 0's `denyCurrent` column is not on `main` yet, so the read counts deny
-  currency as `unmeasured` until my landing merge reads the column (owed in that merge).
+- `deny-current-from-pr0` (replaces `deny-current-unmeasured-until-pr0`): the read takes PR 0's `approvals.denyCurrent`
+  column (`current` or `not-current`; a row minted before PR 0 reads current, the column's default), and a
+  `deny-not-current` row is never a read prompt. The card's deny-currency note shows only while a counted row says
+  `unmeasured`.
 - `no-capability-word`: `approval-census-v1` is not added. Nothing would read it: the route word is additive, and an
   older server's missing route makes the card say "unmeasured". PR 0 dropped its word for the same reason.
 - `command-words-as-written`: a path-qualified command name is kept as written (`/bin/cat`), which the gate does not

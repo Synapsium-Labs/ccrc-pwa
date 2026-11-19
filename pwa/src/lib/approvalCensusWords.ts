@@ -15,7 +15,7 @@ export const APPROVAL_PATH_LABELS: Readonly<Record<ApprovalCensusPath, string>> 
   'not-a-child': 'Not a child session',
   declined: 'Handed over by the coordinator',
   stale: 'Stood past the hook\'s wait',
-  'operator-first': 'Answered by you before the coordinator',
+  'operator-first': 'Answered or cleared at the pane before the coordinator',
   held: 'Still held',
   unmeasured: 'Could not be placed',
 };
@@ -67,13 +67,19 @@ export function m38NoneSentence(days: number): string {
   return `None reached you in the last ${days} ${dayWord(days)}`;
 }
 
+/** No programme's prompt reached the operator, but prompts with no programme did (review 2667 F-D): never "None". */
+export function m38OnlyRootSentence(days: number): string {
+  return `Every prompt that reached you in the last ${days} ${dayWord(days)} came from outside a programme`;
+}
+
 export function readPromptsLine(n: number): string {
   return `Read prompts (the read-only family's gate): ${n}`;
 }
 
-/** Root sessions' prompts that reached the operator: beside the ratio, never inside it. */
+/** Prompts with no programme (root sessions, and children no run names) that reached the operator: beside the ratio,
+ *  never inside it. */
 export function rootPromptsLine(n: number): string {
-  return `Root sessions' prompts you answered (not in the figure): ${n}`;
+  return `Prompts with no programme (not in the figure): ${n}`;
 }
 
 export function unmeasuredLine(n: number): string {
