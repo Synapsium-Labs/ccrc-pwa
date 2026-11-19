@@ -25,7 +25,7 @@
 - Fixture HOMEs only for ccd; poisoned `gh` where a fixture spawns tools; `ccrc test -- <command>` for every test and typecheck, foreground, timeout at least 600000 ms; mutation runs through the coordinator's mutation runner, scratch outside the worktree.
 - Public repository: neutral names (`project-a`, `lane-a`, `the fleet box`); no host, path, label or tracker host in code, tests, docs or commit text. The no-tracker scan of M11.23 enforces the last.
 - Each wave opens with its own run and issued deviation block; a departure found mid-wave is `D-TBD-<slug>` and reported.
-- Ownership against the sibling waves: X1 (appearance) owns the reader host's prefs and the Aa ownership; X3 (draft review) owns Share and the draft store. P1 to P4 touch no reader host file (`ReaderFrame.tsx`, `reader/bridge.ts`, `reader/policy.ts`, `DocsHead.tsx`, `docs.css`), with one exception: P2.4 edits `DocsHead.tsx`'s truth line and the five actions' off reasons only, serialised with X1 by claim (P2.4 claims the file only while no X1 wave holds it, and otherwise waits for the holder to release it). P6 and P5 edit the host files freely, and are dispatched only after X1's host wave has merged. ccd and `server/src/docs/**` edits serialise with X3's by claim, one wave at a time.
+- Ownership against the sibling waves: X1 (appearance) owns the reader host's prefs and the Aa ownership; X3 (draft review, `docs/superpowers/specs/2026-11-18-native-docs-draft-review-design.md`) owns the draft-review action, "Share a draft for review", its own action in Page details, and that action's snapshot store; Share stays as shipped, sending only the committed permalink, and no X3 wave edits `share.ts` or `ShareSheet.tsx` (the coordinator's ruling at X3's fix round 1, carried at X4). P1 to P4 touch no reader host file (`ReaderFrame.tsx`, `reader/bridge.ts`, `reader/policy.ts`, `DocsHead.tsx`, `docs.css`), with one exception: P2.4 edits `DocsHead.tsx`'s truth line and the five actions' off reasons only, serialised with X1 by claim (P2.4 claims the file only while no X1 wave holds it, and otherwise waits for the holder to release it). P6 and P5 edit the host files freely, and are dispatched only after X1's host wave has merged. ccd and `server/src/docs/**` edits serialise with X3's by claim, one wave at a time.
 
 ## Review Focus
 
@@ -242,7 +242,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 
 ### Task P5.1: Adopt the release; layouts
 
-**Files:** Modify `pwa/package.json` and lock, `pwa/src/docs/reader/{bridge,policy}.ts`, `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/DocsHead.tsx` (Layout row), `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` §3.3; Test `pwa/test/reader-layouts.test.ts` (new), browser `pwa/browser/reader-layouts.browser.test.ts` (new).
+**Files:** Modify `pwa/package.json` and lock, `pwa/src/docs/reader/{bridge,policy}.ts`, `pwa/src/docs/ReaderFrame.tsx`, `pwa/src/docs/DocsHead.tsx` (Layout row), `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` §3.3; Test `pwa/browser/frame-cost.browser.test.ts` (a row per layout: X1's srcdoc-growth and open-to-`ready` budgets, each over that layout's own BASE taken at the new pin, X1 spec §10 test 8 and this spec's §6, carried at X4), `pwa/test/reader-layouts.test.ts` (new), browser `pwa/browser/reader-layouts.browser.test.ts` (new).
 
 **Interfaces:** Produces `type ReaderLayout = 'default' | 'classic' | 'editorial' | 'review' | 'guided'`; `layoutFromVariant(v: string | null): ReaderLayout` (`AB`→default, `A`→editorial, `B`→review, `C`→guided, `classic`→classic, else default); pref key `ccrc:reader:v1:pref:prefs` gains `layout`.
 
@@ -287,7 +287,7 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
 **Interfaces:** Produces `checkFigurePng(b64: string): Promise<{ ok: true; blob: Blob } | { ok: false; why: 'not-png' | 'too-large' | 'too-wide' | 'decode' }>` (in this order: signature; at most 1 MiB; width and height from IHDR through P1.4's `imageHeaderDims`, each at most `PRINT_FIGURE_SIDE_MAX_PX`; only then `createImageBitmap`; the decoded size checked against the header's; re-encode on a console canvas), its size check against `PRINT_FIGURE_PNG_MAX_BYTES`; the parser's caps `PRINT_FIGURES_MAX` and `PRINT_FIGURES_TOTAL_MAX_BYTES`, sizes from the base64 length before any decode.
 
 - [ ] **Step 0: Lab PRINT-L1:** a 30-figure document's print-mode draw on desktop and phone; record; if out of line, stop and report the numbers to the coordinator.
-- [ ] **Step 1: Failing tests:** `print mode: facts, byline and reading time, the eyebrow, In short and Where things stand boxes, section numbers, status labels, the review strip's counts, rule paragraphs with their heads and pills and the rules index print` (one assertion per spec §4.6 row PR3 to PR8 and PR13 to PR15, from the library's print mode with `rules` on, through the same allow-list); `print mode: the review strip prints its waiting list ("Waiting on you · 3", each item's whole text, the one longer than the screen's clip whole, and no link), its decisions' counts each with its word, and the plan's facts ("3 tasks · S steps", "N yours")` (PR8); `print mode: each task heading prints its "Task N" chip with its step count and owner, and each step its "Step N" label with its owner, every task whole` (PR6) (spec §6, print mode's strip and plan marks; X2 review F10, carried at X4); `print mode: the library's scoped print stylesheet is loaded under the print root only`; `print figures: non-PNG refused`; `print figures: 1048575 and 1048576 bytes pass the size check, 1048577 refused before decode`; `print figures: 2047 and 2048 px a side pass, 2049 refused before createImageBitmap`; `print figures: a PNG declaring 4096 px is refused before createImageBitmap` (a spy on `createImageBitmap`, a PNG under 1 MiB whose IHDR declares 4096 by 4096: the spy is never called); `print figures: a decoded size that differs from the header refuses`; `print figures: the 63rd and 64th accepted, the 65th refused`; `print figures: 16777215 and 16777216 bytes in all accepted, one byte more refused before decode` (below: sixteen figures of 1048576 bytes, the last one byte shorter; at: sixteen of 1048576; above: those sixteen and a seventeenth of one byte, refused by the total cap while each figure is within its own); `print figures: 64 figures sent at 16 a second all arrive within PRINT_WAIT_MS under BRIDGE_LIMITS` (a fake clock: about 4 s, none refused by the bucket); `print figures: missing after 10 s prints source with the note`; `print figures: images are blob: URLs of re-encoded bytes`.
+- [ ] **Step 1: Failing tests:** `print mode: facts, byline and reading time, the eyebrow, In short and Where things stand boxes, section numbers, status labels, the review strip's counts, rule paragraphs with their heads and pills and the rules index print` (one assertion per spec §4.6 row PR3 to PR8 and PR13 to PR15, from the library's print mode with `rules` on, through the same allow-list); `print mode: the review strip prints its waiting list ("Waiting on you · 3" and three `div.rs-wait > ol > li`, each item's whole text, the one longer than the screen's clip whole, and no `a`), its decisions' counts in `span.cnt`, each with its word, and the plan's facts ("3 tasks · 9 steps", "2 yours")` (PR8); `print mode: each task heading prints its "Task N" chip, its step count in `span.task-id span.tmeta`, and each step its "Step N" label in `span.step-no` with its owner in `span.who`, with no owner's bracket or colon printed, every task whole` (PR6) (spec §6, print mode's strip and plan marks; X2 review F10, carried at X4); `print mode: the library's scoped print stylesheet is loaded under the print root only`; `print figures: non-PNG refused`; `print figures: 1048575 and 1048576 bytes pass the size check, 1048577 refused before decode`; `print figures: 2047 and 2048 px a side pass, 2049 refused before createImageBitmap`; `print figures: a PNG declaring 4096 px is refused before createImageBitmap` (a spy on `createImageBitmap`, a PNG under 1 MiB whose IHDR declares 4096 by 4096: the spy is never called); `print figures: a decoded size that differs from the header refuses`; `print figures: the 63rd and 64th accepted, the 65th refused`; `print figures: 16777215 and 16777216 bytes in all accepted, one byte more refused before decode` (below: sixteen figures of 1048576 bytes, the last one byte shorter; at: sixteen of 1048576; above: those sixteen and a seventeenth of one byte, refused by the total cap while each figure is within its own); `print figures: 64 figures sent at 16 a second all arrive within PRINT_WAIT_MS under BRIDGE_LIMITS` (a fake clock: about 4 s, none refused by the bucket); `print figures: missing after 10 s prints source with the note`; `print figures: images are blob: URLs of re-encoded bytes`.
 - [ ] **Step 2 to 5:** run, implement, run, commit `feat(docs): drawn figures in print (X2 P5)`.
 
 ## Mutation rows
@@ -369,7 +369,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.71 | P5.2 | Wait for the acknowledgement without a deadline | tracker: no acknowledgement within 2000 ms of posting seeds no links and mounts the rendered doc |
 | M11.72 | P2.2 | Serve a folder frame without re-running admission | folder range: a frame after remove refuses |
 | M11.73 | P5.3 | Keep the visit when its reader unmounts for a screen that is not a doc | places: from a doc with places, navigate to a screen that is not a doc, then one Back shows the doc and nothing closes or jumps |
-| M11.74 | P5.5 | Drop the review strip's and the plan marks' classes (`rs-wait`, `rs-label`, `rs-facts`, `fact`, `cnt`, `sep`, `task-id`, `step-no`, `who`) from `printAllow`'s class list | print mode: the review strip prints its waiting list; print mode: each task heading prints its chip |
+| M11.74 | P5.5 | Drop the review strip's and the plan marks' classes (`rs-wait`, `cnt`, `tmeta`, `step-no`, `who`) from `printAllow`'s class list | print mode: the review strip prints its waiting list (its `div.rs-wait > ol > li` selector finds none); print mode: each task heading prints its chip (`span.task-id span.tmeta` finds none) |
 
 ## Deviations found
 
@@ -458,3 +458,53 @@ The held-out review confirmed seven important findings and four advisories; none
 | A4 | Section 2.4 no longer calls the fact checks a kept record; `mtimeNs` comes from `walk_leaf`'s `fstat` |
 
 **The adversarial pass, again.** One Opus · high pass over the changed sections found 3 important and 7 minor problems, none critical, and confirmed every hard wall unchanged and `navigate`'s synchronous contract kept. All 10 were fixed in this round: a visit now ends when its reader unmounts for another doc or a screen that is not a doc, and continues across a remount or a reload; every routed entry gains a `docsIdx`, so Back and Forward compare strictly; a new visit's base entry drops an ended visit's place; P5.3 names the two shipped tests that pin one `popstate` listener per hook and per release gate, changed in a commit of their own; a stat-pinned draft's page pin carries its snapshot digest as `fp`, so the drafts banner prints for it; and the minors (P5.5 owns the print allow-list's widening, a leaf's own image URL admitted by name, the tracker deadline from the console's request, the total print cap's above case, the threat of opening a downloaded page, the stage-1 rows, and stale text). The mutation table now runs M11.1 to M11.73, each row naming a test its task defines (checked by a script).
+
+### Library input (X4)
+
+**X4, run 2680, 2026-11-19.** This is a text wave, docs only. It carries this design's library-side items into the one library wave and release that also takes X1's contract. It was cut from `main` at `8781ef20a`, where this design (#3049) and X1 (#3048) are merged. X1's plan Results, "Library input (X4)", has the Mermaid measurements and the full carry table. This section records X2's part.
+
+#### What was measured, and how
+
+Library 1.1.0 was read from an installed copy in another ccrc worktree, read-only (version 1.1.0 confirmed). The standalone reader's layout scripts were read on the box that serves it, read-only. Nothing was installed or copied.
+- **The frame manifest** (`dist/frame/manifest.generated.js`) has five entries: guard 3 643, bootstrap 30 153, enhance 198 215, stylesheet 549 069 and Mermaid 3 746 940 characters, which is 4 528 020 (4 530 427 bytes). X1's test 8 now sums all five, and X1's share of 32 768 stands against that sum.
+- **The default enhance bundle** (`assets/frame/enhance.js`) is 198 215 characters, minified. Each of its 47 modules in `dist/enhance/` was minified alone with the terser already installed beside the library, in memory: they sum to 208 219, so bundling saves a factor of 0.952.
+- **The comparators** (each module minified alone): `nav` 5 997, `overlays` 855, `commands` 594, `xrefs` 916, `mentions` 1 063, `diagram-tools` 18 181, `since` 13 373, `editorial` 9 162, `strip` 3 695, `status` 2 411, `rules` 3 716 and `plans` 5 008; and `dist/frame/protocol.js` 2 329.
+- **The standalone reader's layout scripts:** default 158 456 bytes, `classic` 18 700, A (editorial) 39 502, B (review) 61 577 and C (guided) 55 490. **Its layout stylesheets:** default 83 988, `classic` 9 875, A 37 538, B 28 134 and C 26 491.
+- **The strip and plan marks print mode emits** were read from 1.1.0's `dist/enhance/strip.js` and `plans.js` headers: `section.review-strip`, `div.rs-wait`, `p.rs-label`, `p.rs-facts`, `span.fact`, `span.cnt`, `span.sep`, `span.task-id`, `span.step-no` and `span.who`, and `WAIT_CLIP`.
+
+#### Every carry of this design closed here
+
+| Carry | Closed by |
+|---|---|
+| F10, the library half: the print design for the review strip's waiting list, and the plan task chips, step labels and plan facts | Spec §4.6 rows PR6 and PR8; §6's print-mode row; §6, "Print mode's strip and plan marks" |
+| F10: what P5.5 then does on ccrc's side | Spec §6, "What ccrc's P5.5 then does"; this plan's P5.5 Step 1 (two assertions) and mutation row M11.74; spec §4.6's test strategy names M11.74 |
+| The figure-image op | Already designed (spec §6, `print-figures` and `print-figure`); its size is counted in the proposed share |
+| X2's share (X1 F4: set by the coordinator at this wave's acceptance) | Spec §6, "Size, and X2's share": 1 148 928 characters in total and 45 056 in the largest frame, proposed; Task P5.1's per-layout `frame-cost` row |
+| How test 8 and the per-layout srcdoc cap count the layouts | Spec §6, the same block; §6's layout row ("none larger than the default bundle"); X1 spec §10 test 8's `total`, `frame` and layout rows |
+| The coordinator's extra item (mail 25622): X3 no longer owns Share | This plan's Global Constraints, the ownership line: X3 owns the draft-review action and its store, and Share stays as shipped |
+
+The other review 2670 carries (F1 to F9, A1 to A4) go to their owning waves, P1 to P6, as the coordinator's rulings on review 2670 say. This wave does not touch them.
+
+#### Choices this wave made, and why
+
+- **The chips and step labels fold into row PR6,** so the count stays PR1 to PR15. The rich-docs spec's Print row counts "PR1 to PR15" (amended by this design), and a 16th row would need an edit outside this wave's four files. The coordinator ruled that such a sentence goes to them as a separate question; folding the labels into PR6, whose blocks are the same kind of heading and step badges, needs none.
+- **Waiting items print whole and unlinked,** because paper cannot open a clip and print has no chrome anchors.
+- **Each count prints with its word,** so a monochrome page keeps its meaning.
+- **The share is two numbers.** The ruled sum over every manifest entry counts every layout bundle, although a frame inlines one. The largest-frame figure keeps the srcdoc budget tight.
+- **A layout never exceeds the default bundle,** because the standalone's layouts are 0.12 to 0.39 of its default. A layout that would need more is the coordinator's to share.
+- **Print mode's cost is outside test 8,** because it is not a frame asset: it is in `render` and a print stylesheet that ccrc's print view loads.
+
+#### Unmeasured
+
+X2's own code sizes, the bootstrap's parser rows, and print mode's size in `render`: each is an estimate from a measured comparator, or has none. X2's library commits measure their own rows in test 8.
+
+#### Commands
+
+```text
+python3 over dist/frame/manifest.generated.js and assets/frame/enhance.js (read only) -> 4 528 020; 198 215
+node <scratch>/minsize.mjs   terser, 47 modules, in memory                            -> 208 219; comparators above
+wc -c over the standalone reader's five layout scripts and stylesheets (read only)    -> scripts 158 456 / 18 700 / 39 502 / 61 577 / 55 490; stylesheets 83 988 / 9 875 / 37 538 / 28 134 / 26 491
+node <scratch>/minfr.mjs     terser, dist/frame/protocol.js, in memory                -> 2 329
+```
+
+No test, build or install ran.

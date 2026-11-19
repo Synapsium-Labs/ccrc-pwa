@@ -520,40 +520,44 @@ This section is the parity request to the shared renderer library, the public li
 
 Every addition rides the existing port, the existing host parser and `BRIDGE_LIMITS` (with the per-op caps above), and the bridge's version stays 1, as when `mermaid`, `command` and `progress` were added. None adds a channel, a window listener, parent-DOM access or a CSP source. ccrc adopts the release with the existing exact-pin, provenance and import-list checks (rich-docs §4.7), in wave P5.
 
-**Size, and X2's share (proposed here; the coordinator sets it at the library-input wave's acceptance).** X1's library test 8 counts this design (X1 spec §10, as the library-input wave X4 amended it). It keeps one row per design in commit order, append-only, with two totals: `total`, every `FRAME_MANIFEST` entry and every layout bundle, Mermaid's included, and `frame`, the largest set one frame inlines. X1's contract lands first, and X2's commits append their own rows. Its layouts are per-layout enhance bundles, of which a frame inlines one:
-- **In `total`,** every layout bundle counts, because any one may be inlined.
-- **In `frame`,** only the largest bundle counts, beside the entries every frame inlines.
-- **A layout is never larger than the default bundle** at the same commit (test 8's layout row). So a layout cannot raise the largest frame, and a layout bundle counts only against the design whose commit adds it.
-- **The srcdoc cap is derived per layout,** from the entries that layout's frame inlines, every seed field at its cap and X1's faces' cap. ccrc's `frame-cost` row takes its BASE per layout at the new pin (wave P5).
+**Size, and X2's share (proposed here; the coordinator sets it at the library-input wave's acceptance).** X1's library test 8 counts this design (X1 spec §10, as the library-input wave X4 amended it). It keeps one row per design in commit order, append-only, with two totals: `total`, every `FRAME_MANIFEST` entry and every layout's assets, Mermaid's included, and `frame`, the largest set one frame inlines. X1's contract lands first, and X2's changes append their own rows, one squash-merged pull request per change, each commit trailer naming X2. `default` is one of the layouts, and its asset is the default enhance bundle. A frame inlines exactly one layout's assets:
+- **In `total`,** every layout's assets count, because any one may be inlined.
+- **In `frame`,** only the largest layout's assets count, beside the entries every frame inlines.
+- **A layout's assets are never larger than the default enhance bundle** at the same commit (test 8's layout row), its own stylesheet included if it has one. So a new layout cannot raise the largest frame above the default's, and a layout counts only against the design whose change adds it.
+- **The srcdoc cap is derived per layout,** from the entries that layout's frame inlines, every seed field at its cap and X1's faces' cap. ccrc's `frame-cost` row takes its BASE per layout at the new pin (wave P5, Task P5.1).
+- **This design's seed fields** (resolved item links, at most 50 of a value of at most 100 characters and its href, and the comparison base) are not frame assets, so test 8 does not count them. Each has its own cap, which the derived srcdoc cap counts as it counts every seed field, and ccrc's per-layout `frame-cost` row measures what they add.
 
-The proposal, from comparators measured in 1.1.0. These are estimates of X2's code, not measurements of it: X2's commits measure their own rows.
+The proposal, from comparators measured in 1.1.0. These are estimates of X2's code, not measurements of it: X2's changes measure their own rows.
 
 | Part | Comparator, measured in 1.1.0 | Estimate |
 |---|---|---|
 | 1.1.0's default enhance bundle | `frame/enhance.js`, 198 215 characters, minified. Its 47 modules, each minified alone with terser, sum to 208 219, so bundling saves a factor of 0.952 | the baseline |
-| `place`, `push` and `from` on `hash`, `close-overlay` and `goto` | the modules they extend, minified alone: `nav` 5 997, `overlays` 855 and `commands` 594, 7 446 in all | at most 7 446 |
-| Item links drawn from the seed | `xrefs` 916 and `mentions` 1 063, 1 979 in all | at most 1 979 |
-| `print-figures`: draw each figure for print, rasterise it and send it at pace | `diagram-tools` 18 181, the figure tools and full-screen view | at most 18 181 |
-| The default bundle's growth | the three rows above, 27 606, times 0.952 | 26 281 |
+| `place`, `push` and `from` on `hash`, `close-overlay` and `goto` | the modules they extend, minified alone: `nav` 5 997, `overlays` 855 and `commands` 594, 7 446 in all | 7 446 |
+| Item links drawn from the seed | `xrefs` 916 and `mentions` 1 063, 1 979 in all | 1 979 |
+| `print-figures`: draw each figure for print, rasterise it and send it at pace | `diagram-tools` 18 181, the figure tools and full-screen view | 18 181 |
+| The In short "Headlines / Full" option and the comparison-base seed field (R7, R9) | `since` 13 373, the module the comparison base feeds, and `strip` 3 695, a small control of the same kind | 17 068 |
+| The default bundle's growth | the four rows above, 44 674, times 0.952 | 42 530 |
+| The bootstrap's parser rows for the new ops and seed fields | `dist/frame/protocol.js`, the whole op table and its parsers, 2 329 minified | 2 329 |
+| The default layout's frame growth | the two rows above | 44 859 |
 | Print mode | the enhance modules that build those blocks today: `editorial` 9 162, `strip` 3 695, `status` 2 411, `rules` 3 716 and `plans` 5 008, 23 992 in all | 0 in test 8. Print mode is in `render`, which ccrc's parse worker runs, and its stylesheet loads in ccrc's print view. Neither is a frame asset, so its growth is reported beside test 8 and not counted in it |
-| Four layout bundles (`classic`, `editorial`, `review`, `guided`) | the standalone reader's layout scripts, against its default's 158 456 bytes: `classic` 18 700, editorial 39 502, guided 55 490 and review 61 577 (0.12 to 0.39 of the default). A library layout also carries the shared modules, so each is bounded by test 8's layout row, not by these ratios | each at most the default bundle at X2's commit: at most 198 215 plus X1's growth (at most 32 768) plus 26 281, which is 257 264. Four: at most 1 029 056 |
+| Four layouts (`classic`, `editorial`, `review`, `guided`) | the standalone reader's layout scripts, against its default's 158 456 bytes: `classic` 18 700, editorial 39 502, guided 55 490 and review 61 577 (0.12 to 0.39 of the default); its layout stylesheets, against its default's 83 988: 9 875, 37 538, 26 491 and 28 134. A library layout also carries the shared modules, so each is bounded by test 8's layout row, not by these ratios | each bounded by the default bundle at X2's commit: 198 215 plus X1's growth (its share, 32 768) plus 44 859, which is 275 842. Four: 1 103 368 |
 
 Proposed shares for X2:
-- **Total share: 1 056 768 characters,** which is 1 032 KiB. It covers 26 281 plus 1 029 056, which is 1 055 337, rounded up.
-- **Frame share: 26 624 characters,** which is 26 KiB. It covers the default bundle's 26 281, rounded up, because no layout may exceed the default.
+- **Total share: 1 148 928 characters,** which is 1 122 KiB. It covers 44 859 plus 1 103 368, which is 1 148 227, rounded up.
+- **Frame share: 45 056 characters,** which is 44 KiB. It covers the default layout's 44 859, rounded up, because no layout may exceed the default.
 
-So the largest hosted frame grows over 1.1.0 by at most 224 504 (X1's three parts) plus 26 624, which is 251 128 characters. The bootstrap's parser rows for the new ops have no comparator and are left unmeasured, inside the rounding. A layout that cannot keep test 8's layout row, or a measured row above either share, stops that library commit, and it goes to the coordinator with its numbers.
+So the largest hosted frame grows over 1.1.0 by at most 224 504 (X1's three parts) plus 45 056, which is 269 560 characters, plus this design's seed fields at their caps. A layout that cannot keep test 8's layout row, or a measured row above either share, stops that library change, and it goes to the coordinator with its numbers.
 
 **Print mode's strip and plan marks (X2 review F10, designed here for the library wave).** Print mode emits these blocks in `render`, statically, inside the render's own allowlist and the library's class vocabulary. It computes them from the inputs the enhance step reads on screen: editorial's waiting items, the decision tables, and the plan's tasks and steps. So print and screen agree, and the conformance corpus pins both.
 - **The waiting list.** `section.review-strip` prints after the byline, where the screen puts it. Its `div.rs-wait` holds `p.rs-label`, "Waiting on you · N", and an `ol` with one `li` per waiting item. Each `li` holds the item's whole text with white space as one space. It is not clipped to the screen's `WAIT_CLIP`, because paper cannot open a clip, and it is not a link, because print has no chrome anchors (the item's own box prints in "Where things stand" below). The screen's coloured dot is not printed: the label's words carry it.
 - **The decisions' counts.** `p.rs-facts` prints the decisions fact, "N <group>", and one `span.cnt` per status word, each printed as its number and its word, so the count reads on a monochrome page.
 - **A plan's facts.** The same `p.rs-facts` prints "T tasks · S steps", and "N yours" when steps name the reader, with the screen's own words and rule. Its `span.sep` separators print in the print stylesheet's muted text colour, never an edge colour.
-- **Task chips and step labels.** Each task heading prints its `span.task-id` badge, "Task 3", with the step count and owner the screen's badge shows. Each step prints its `span.step-no` badge, "Step 2", with its `span.who` owner, and the brackets and colon stay hidden as on screen. Outline mode never applies in print, so every task prints whole.
-- **Library tests.** The conformance corpus gains a print-mode fixture: a plan with three tasks, an owner line naming the reader, steps with and without owners, a "Waiting" box of three items, one longer than `WAIT_CLIP`, and a decisions table with three status words. Its print-mode output is pinned, and each block above is one assertion.
+- **Task chips and step labels.** Each task heading prints its `span.task-id` badge, "Task 3", with the step count and owner the screen's badge shows. Each step prints its `span.step-no` badge, "Step 2", with its `span.who` owner. Print mode emits neither the owner's brackets nor the colon, which the screen keeps in hidden chrome spans, because the print allow-list keeps no `hidden` attribute. Outline mode never applies in print, so every task prints whole.
+- **Library tests.** The conformance corpus gains a print-mode fixture: a plan with three tasks of two, three and four steps, an owner line naming the reader, two steps whose owner names the reader and the rest with other owners or none, a "Waiting" box of three items, one longer than `WAIT_CLIP`, and a decisions table with three status words. Its print-mode output is pinned, and each block above is one assertion, on elements and classes as well as text.
 
 What ccrc's P5.5 then does:
-- `printAllow`'s element list and class vocabulary are re-taken from this print mode's conformance output, as they already are, and so admit `rs-wait`, `rs-label`, `rs-facts`, `fact`, `cnt`, `sep`, `task-id`, `step-no` and `who` and no other new class.
-- Its failing test list gains one assertion for each block above, through the same allow-list.
+- `printAllow`'s element list and class vocabulary are re-taken from this print mode's conformance output, as they already are, so they admit the classes that output uses, derived and never hand-listed: among them `review-strip`, `rs-wait`, `rs-label`, `rs-facts`, `fact`, `cnt` with its status-word class, `sep`, `task-id` with `tmeta`, `step-no`, `who`, `attn` and `yours`.
+- Its failing test list gains one assertion for each block above, through the same allow-list, on structure and classes, not text alone: the waiting list is `div.rs-wait > ol > li`, three of them; a chip's step count is in `span.task-id span.tmeta`; and no bracket or colon of a step's owner prints.
 - Rows PR6 and PR8 move from Gap to Same when those assertions pass.
 - One new mutation row: drop the strip's and the plan marks' classes from `printAllow`'s list.
 

@@ -292,7 +292,7 @@ Each row reads the frame's computed values through the existing harness's frame 
   - **AP-3:** with a stale reader theme stored under the reader prefix (`{"theme":"dark"}` under a light palette, and the reverse), the values at first `ready` equal the host's, never the stored theme's.
   - **AP-4:** hold the chunk, change palette and skin, release; at most one `appearance` op.
   - **AP-5:** while open, under both emulated device modes (light and dark), run every transition of the palette set, Follow the system included as a start and as an end: each palette to the next, each palette to Follow the system and back, and, while on Follow the system, the device mode flipping light to dark and dark to light. Then switch skin both ways. After each transition: same iframe element and nonce, scroll within 1 px, values within 100 ms, a drawn figure redrawn. The number of transitions is printed from the discovered catalogue.
-  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab, and a drawn figure's edge `stroke` at 3:1 on its plate. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row. **Meaning without colour** (spec §10, X1-12), on a fixture that carries a glossary term, an id link and an ordinary link in running text, and opens the contents index and quick jump: in GitHub Light, Solarized Light and Catppuccin Latte, where `term` has no hue, `a.term`'s computed `text-decoration-style` is `dotted`, `a.xref`'s `dashed` and the link's `solid`; in Phosphor, where `ok` equals `info`, the index's `ok` and `info` dots have different computed `border-radius` or size; and quick jump's selected row has an inset `accent` box-shadow. The changed-mark geometry is the library's test 10, sampled from pixels; F reads it on the installed frame. **Mermaid, live:** one figure of each kind in the library's `MERMAID_HOSTED_KINDS` (read from the installed package, never typed), drawn in every palette: every label meets 4.5:1 on the shape painted behind it and every line that is not `border` or `rule` meets 3:1 on `surface` and `surface2`, on computed values; and a figure with a fill-only `classDef`, and a `journey`, each draw on 1.1.0's plate and filter.
+  - **AP-6:** pairs on computed values, the focus ring at 3:1 after a Tab, and a drawn figure's edge `stroke` at 3:1 on its plate. Width, font and one fold changed in Aa are back after a reopen, and the stored `pref:prefs` holds no `theme` key. Aa shows the line "Appearance follows ccrc Settings", the label ccrc sent, and no theme row. Tab never lands on the line. A lab-profile mount, which carries no appearance, keeps its theme row. **Meaning without colour** (spec §10, X1-12), on a fixture that carries a glossary term, an id link and an ordinary link in running text, and opens the contents index and quick jump: in GitHub Light, Solarized Light and Catppuccin Latte, where `term` has no hue, `a.term`'s computed `text-decoration-style` is `dotted`, `a.xref`'s `dashed` and the link's `solid`; in Phosphor and Phosphor Daylight, where `ok` equals `info`, the index's `ok` and `info` dots have different computed `border-radius` or size; in Solarized Dark and Solarized Light, where `id` equals `accent`, `a.xref`'s and the ordinary link's computed `text-decoration-style` differ; in Tokyo Night, Nord, Gruvbox Dark and One Dark, where `chg` collides, a changed block's mark is the double bar; and quick jump's selected row has an inset `accent` box-shadow. The changed-mark geometry is the library's test 10, sampled from pixels; F reads it on the installed frame. **Mermaid, live:** one figure of each kind in the library's `MERMAID_HOSTED_KINDS` (read from the installed package, never typed), drawn in every palette: every label meets 4.5:1 on the shape painted behind it and every line that is not `border` or `rule` meets 3:1 on `surface` and `surface2`, on computed values; and a figure with a fill-only `classDef`, and a `journey`, each draw on 1.1.0's plate and filter.
   - **AP-8:** the bridge sent `appearance`; a forced mode-only mount fails this row's own assertion.
   - Extend the geometry files to run their existing assertions once per skin (**AP-7**), the one-bar assertion included.
   - Extend `frame-cost` with the srcdoc-growth budget, for the default layout (X2's wave P5 adds a row per layout, each over its own BASE): at most 191 736 characters over BASE, the two faces (187 640) and the seed (4 096). BASE is taken at Task 1's pin, so it already holds every design's library growth, which Task 1 Step 2a checks share by share. Together they keep spec §9's total over the same document at the 1.1.0 pin: 224 504 plus the other designs' shares. Also extend it with the open-to-`ready` budget (median of 9 opens at most 1.10 x BASE's median of 9).
@@ -467,6 +467,10 @@ Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on 
 | Mermaid (X4): series colours as lines on `surface2` | 4.52 | Solarized Dark | 3 |
 | Mermaid (X4): `accent` (the today line, an active task's outline) on `surface2` | 4.57 | Phosphor Daylight | 3 |
 | Mermaid (X4): `no` (a critical task's outline) on `surface2` | 4.77 | Solarized Dark | 3 |
+| Mermaid (X4): `accent` on `surface2`, a gantt task label Mermaid marks clickable (not drawn under `strict`) | 4.57 | Phosphor Daylight | 4.5 |
+| Mermaid (X4): `text-muted` on `surface2`, a vertical marker's text over a gantt row | 5.54 | Catppuccin Mocha | 4.5 |
+| Mermaid (X4): `text` on `surface2` at Mermaid's 0.5 commit-label opacity over `surface` | 7.69 | One Dark | 4.5 |
+| Mermaid (X4): a mark inside a commit (`surface2` or `bg`) on its commit's series colour | 4.52 | Solarized Dark | 3 |
 
 What the review measured at the old rules, and what changed:
 
@@ -618,3 +622,142 @@ One commit per finding, then this Results commit. The coordinator ruled F2 and F
 
 - The library programme plans wave L from spec §10. Its release and ccrc's re-pin are the operator's.
 - Wave C waits for wave R. #3026 has merged.
+
+### Library input (X4)
+
+**X4, run 2680, 2026-11-19.** This is a text wave, docs only, and writes no source. The base is `main` at `8781ef20a`, where X1 merged (#3048). It carries the coordinator's rulings on review 2676 (X1, accepted at the review cap) into spec §10 before the library programme plans wave L, and folds wave C's first items into this plan. X2's library-side items land in the same wave, in X2's own spec and plan.
+
+#### What was measured, and how
+
+Library 1.1.0 was read from an installed copy in another ccrc worktree, read-only (version 1.1.0 confirmed in its `package.json`). Nothing was installed, copied into a repository or checked out. The Mermaid measurements drove that copy's `assets/mermaid/mermaid.mjs`, the module build of the same Mermaid core the frame inlines as `mermaid.frame.js`, in headless Chromium (Playwright's, already on the box), from scripts in this session's temp directory. Each run gave Mermaid the library's own configuration: `theme: 'base'`, `securityLevel: 'strict'` and `layout: 'dagre'`.
+
+- **The bundled Mermaid** is 12.1.0. It registers 37 diagram kinds: `c4`, `flowchart-v2`, `agentflow`, `swimlane`, `er`, `gitGraph`, `gantt`, `info`, `pie`, `quadrantChart`, `xychart`, `requirement`, `sequence`, `classDiagram`, `stateDiagram`, `journey`, `flowchart-elk`, `timeline`, `mindmap`, `kanban`, `sankey`, `packet`, `radar`, `block`, `treeView`, `architecture`, `eventmodeling`, `ishikawa`, `venn`, `treemap`, `usecase`, `wardley`, `cynefin`, `railroad`, `railroadEbnf`, `railroadAbnf` and `railroadPeg`. Its `parse` answers `flowchart-v2`, `sequence`, `classDiagram`, `stateDiagram`, `gantt`, `pie`, `er` and `gitGraph` for the eight fixtures.
+- **The base theme.** After Mermaid computes the theme from 1.1.0's `THEME_VARIABLES`, it holds 245 colour keys. Its `applyOverride` puts back the host's value for every key the host sets, after its own derivations, so a value `mermaidThemeOf` sets is drawn as set. Measured: with every one of the 245 keys set to a sentinel colour, 0 changed.
+- **What each kind reads.** One fixture per kind, the features spec §10 test 5 lists, was drawn with every colour key set to its own sentinel colour. A key counts as read when its sentinel appears in the drawing's stylesheet, or as a computed colour of a drawn element (markers included). Keys read: flowchart 14, sequence 21, class 14, state 21, gantt 25, pie 22, ER 14 and gitGraph 35, which is 110 distinct keys. 1.1.0's `THEME_VARIABLES` sets 15 keys and leaves 99 of the 110 to Mermaid. Nine of those fall back to a literal (spec §10). The derivation table assigns all 110 (checked by script against the measured set: 0 missing).
+- **Colours no key reaches.** In the same drawings, the only colour outside the sentinel set was gitGraph's cherry-pick mark, `#ffffff`. d3's axis ticks and some label wrappers draw in `currentColor`, the container's colour.
+- **The derivation, drawn.** Each fixture was drawn under the candidate `mermaidThemeOf` in all twelve palettes. A text's ground was read from the shapes painted behind three points of its box, composited with their opacity over the plate (`elementsFromPoint`, then `isPointInFill`), and the sequence number from its marker's circle, which hit-testing skips. Every text in all 96 drawings met 4.5:1, and every line (a stroke in `text-muted`, `accent`, `no` or a series colour) met 3:1 on `surface` and `surface2`. The strokes the drawings hold that are not lines were judged against what they sit on: the plate-coloured gaps between pie slices have no floor by design, and the marks inside a commit (`surface2`, and `bg` for the cherry-pick) meet 4.52:1 or better on their commit's series colour. The adversarial pass caught a first draft of this sentence that read the data as every stroke meeting 3:1 on the plate, which the pie gaps and commit marks do not. The worst pairs are in the Cross pairs table (the rows marked X4) and in spec §10.
+- **Author colour.** Eleven statement forms (a `:::` class among them), each in a one-node fixture, were drawn under the derivation. Each put the author's colour into the drawing: `classDef`, `style`, `linkStyle` and a `:::` class in a flowchart; `style` and `classDef` in a class diagram; `classDef` in a state diagram; `style` and `classDef` in an ER diagram; and `rect` and a coloured `box` in a sequence diagram.
+- **F2, from pixels.** A flowchart whose one style is `classDef c fill:#D4EDDA` on one node was drawn three ways, and its label box was screenshot. The label's contrast was read as the ratio between the box's commonest pixel (the fill) and the pixel farthest from it. Hosted with no plate it is 1.07 to 1.30:1 in all eight dark palettes. On 1.1.0's dark plate and filter it is 7.95:1, and on its light plate 13.49:1.
+- **The label route F2 allows.** For every fill on a 52-step grid of the RGB cube, the better of `text` and `bg` was taken. The worst falls between 2.77 (Catppuccin Latte) and 4.12 (Phosphor), so no route reaches 4.5:1 for every author fill in any palette, and it is not taken.
+- **The budget.** 1.1.0's `dist/frame/manifest.generated.js` has five entries: `chars` 3 643, 30 153, 198 215, 549 069 and 3 746 940, which is 4 528 020 characters (4 530 427 bytes). X2's comparators are in X2's plan Results.
+- **The library's code facts the advisory items cite.** `csp-rules.js` exports `HASH_SOURCE` (`^'sha256-[A-Za-z0-9+/]{43}='$`) and tests `script-src` tokens with it. `protocol.js` has `FRAME_OPS` and `PARENT_OPS`. `nav.js` has `FLASH_MS` 1 900. `reader.css` marks the Aa checked option, the pressed view button and the filter's focus as review 2676 F3 says. It turns `a.term` and `a.xref` solid on hover and when expanded, and draws `.rs-facts .sep` in `--rule`. ccrc's `ui/src/components/prose.css` paints `.well .hljs-title.function_` (invocations included) in `syn-function` and `.hljs-meta` in `syn-comment`.
+
+#### The twelve fixture appearances (spec §10 test 5)
+
+The 33 slot values ccrc's map (spec §3) reads in each palette, read in Chromium from `ui/src/styles/tokens.css` at `8781ef20a` (each palette applied to the root as `applyTheme` applies it, and every value read with `getPropertyValue`). All 396 values are `#RRGGBB`. The palette names are public, and the values are what a reader of ccrc's public stylesheet sees:
+
+- **Phosphor & Ink** (`dark`): bg=#0B0D0C surface=#141715 surface2=#1C201D text=#ECF0EC text-muted=#ADB6AE text-faint=#8B948C border=#39403A rule=#262B27 accent=#45D67E accent-ink=#082312 focus=#45D67E ok=#ADB6AE wait=#F2B84B no=#E8836F info=#ADB6AE chg=#F0A3C8 term=#6FD6EA id=#96B4F4 violet=#C7A7F4 path=#ADB6AE code-block-bg=#070808 code-ink=#DEE4DE syn-comment=#8B948C syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#F08A78 syn-inserted=#57E08B
+- **Phosphor Daylight** (`light`): bg=#F4F6F3 surface=#FFFFFF surface2=#EAEEEA text=#1A201B text-muted=#4E5850 text-faint=#5F6962 border=#C3CAC2 rule=#DDE2DC accent=#0E7B3F accent-ink=#FFFFFF focus=#0E7B3F ok=#4E5850 wait=#8A5A0A no=#B2402C info=#4E5850 chg=#A62667 term=#0A6377 id=#2F55B8 violet=#6D3FB4 path=#4E5850 code-block-bg=#141715 code-ink=#DEE4DE syn-comment=#8B948C syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#F08A78 syn-inserted=#57E08B
+- **Nord** (`dark`): bg=#2E3440 surface=#3B4252 surface2=#434C5E text=#ECEFF4 text-muted=#D7DADE text-faint=#C2C5C9 border=#5F697C rule=#505A6C accent=#92CADA accent-ink=#07140C focus=#92CADA ok=#9DCAC9 wait=#F6D595 no=#FFB8BC info=#D7DADE chg=#E7BFDF term=#A4DDED id=#AFD0F2 violet=#E7BFDF path=#D7DADE code-block-bg=#242933 code-ink=#ECEFF4 syn-comment=#9AA39B syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#ED8A92 syn-inserted=#A3BE8C
+- **Tokyo Night** (`dark`): bg=#1A1B26 surface=#24283B surface2=#292E42 text=#C0CAF5 text-muted=#AAB4DE text-faint=#959FC8 border=#484D63 rule=#353B50 accent=#7AA2F7 accent-ink=#07140C focus=#7AA2F7 ok=#73DACA wait=#E0AF68 no=#F88196 info=#AAB4DE chg=#FF9E64 term=#7DCFFF id=#8AAFFE violet=#C3A2FF path=#AAB4DE code-block-bg=#16161E code-ink=#C0CAF5 syn-comment=#8B948C syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#F7768E syn-inserted=#9ECE6A
+- **Dracula** (`dark`): bg=#282A36 surface=#343746 surface2=#44475A text=#F8F8F2 text-muted=#DBDBD5 text-faint=#BFBFB9 border=#65687D rule=#515568 accent=#CDAEFD accent-ink=#07140C focus=#CDAEFD ok=#8BE9FD wait=#F1FA8C no=#FFA59F info=#DBDBD5 chg=#FDA5D4 term=#8BE9FD id=#A9BCF2 violet=#D1B4FF path=#DBDBD5 code-block-bg=#1E1F29 code-ink=#F8F8F2 syn-comment=#909991 syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#FE716C syn-inserted=#50FA7B
+- **Catppuccin Mocha** (`dark`): bg=#1E1E2E surface=#313244 surface2=#45475A text=#D4DDFB text-muted=#C0C9E7 text-faint=#ADB6D3 border=#5C5E72 rule=#525568 accent=#96BEFF accent-ink=#07140C focus=#96BEFF ok=#94E2D5 wait=#F9E2AF no=#FFA2BA info=#C0C9E7 chg=#F5C2E7 term=#89DCEB id=#9BC1FF violet=#D4B2FD path=#C0C9E7 code-block-bg=#181825 code-ink=#CDD6F4 syn-comment=#8B948C syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#F38BA8 syn-inserted=#A6E3A1
+- **Gruvbox Dark** (`dark`): bg=#282828 surface=#3C3836 surface2=#504945 text=#F1E1B7 text-muted=#DDCDA4 text-faint=#C9BA91 border=#68605C rule=#5E5753 accent=#C3C737 accent-ink=#07140C focus=#C3C737 ok=#9CCE8A wait=#FEC135 no=#FCAD9F info=#DDCDA4 chg=#FCABC1 term=#A1D38E id=#A5C8BB violet=#FCABC1 path=#DDCDA4 code-block-bg=#1D2021 code-ink=#EBDBB2 syn-comment=#8D968E syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#FD725E syn-inserted=#B8BB26
+- **One Dark** (`dark`): bg=#282C34 surface=#31353F surface2=#3E4451 text=#D1D8E6 text-muted=#BDC4D2 text-faint=#AAB1BE border=#555B69 rule=#4B515F accent=#6FBDFE accent-ink=#07140C focus=#6FBDFE ok=#65C4D0 wait=#E6C17C no=#FF9A9F info=#BDC4D2 chg=#E79EFC term=#6DCCD8 id=#81C4FE violet=#E79EFC path=#BDC4D2 code-block-bg=#21252B code-ink=#ABB2BF syn-comment=#919A92 syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#F57F87 syn-inserted=#98C379
+- **Solarized Dark** (`dark`): bg=#002B36 surface=#073642 surface2=#0E4653 text=#C5D5D5 text-muted=#B1C1C1 text-faint=#9EAEAE border=#2A5F6C rule=#1F5461 accent=#63B7FB accent-ink=#07140C focus=#63B7FB ok=#53C2B8 wait=#D7A93B no=#FD9286 info=#B1C1C1 chg=#FD8BB8 term=#56C5BB id=#63B7FB violet=#A2AAFB path=#B1C1C1 code-block-bg=#001F27 code-ink=#94A2A2 syn-comment=#8B948C syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#FD6A5F syn-inserted=#8EA31B
+- **GitHub Light** (`light`): bg=#FFFFFF surface=#FFFFFF surface2=#F6F8FA text=#1F2328 text-muted=#3F4348 text-faint=#61656B border=#CFD0D2 rule=#E5E7E9 accent=#0969DA accent-ink=#FFFFFF focus=#0969DA ok=#136F2E wait=#7F560B no=#C61427 info=#3F4348 chg=#B0297C term=#000003 id=#0B5FC5 violet=#7743D1 path=#3F4348 code-block-bg=#24292F code-ink=#A8ADB4 syn-comment=#959E96 syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#FF807A syn-inserted=#5DBA6E
+- **Solarized Light** (`light`): bg=#FDF6E3 surface=#FFFBF0 surface2=#EEE8D5 text=#3A4F55 text-muted=#475D63 text-faint=#556B72 border=#C7C1AF rule=#DED8C5 accent=#0768A3 accent-ink=#FFFFFF focus=#0768A3 ok=#000001 wait=#755804 no=#C6131A info=#475D63 chg=#B8136C term=#000001 id=#0768A3 violet=#575AAB path=#475D63 code-block-bg=#002B36 code-ink=#98AFB7 syn-comment=#929B93 syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#FE7F73 syn-inserted=#99AE2D
+- **Catppuccin Latte** (`light`): bg=#EFF1F5 surface=#FFFFFF surface2=#E6E9EF text=#474A63 text-muted=#555872 text-faint=#646782 border=#BFC2C8 rule=#D6D9DE accent=#0F59E7 accent-ink=#FFFFFF focus=#0F59E7 ok=#000003 wait=#895402 no=#C31A38 info=#555872 chg=#A7388D term=#000003 id=#0C56E4 violet=#802DE5 path=#555872 code-block-bg=#1E1E2E code-ink=#9EA2C0 syn-comment=#8B948C syn-keyword=#C7A7F4 syn-string=#57E08B syn-number=#F2B84B syn-function=#6FD6EA syn-type=#96B4F4 syn-tag=#F0A3C8 syn-attr=#6FD6EA syn-punct=#ADB6AE syn-deleted=#FD7077 syn-inserted=#53B23F
+
+#### Every carry, and the line that closes it
+
+| Carry | Closed by |
+|---|---|
+| F1, ruled (a): the covered kinds' derivation | Spec §10: the `MERMAID_HOSTED_KINDS` and `mermaidThemeOf` export rows, "Mermaid while hosted" and its derivation table; §5's Mermaid row and floors; §9's contrast row; In short; X1-9, now Ruled. Plan: Cross pairs, the rows marked X4; Task 6 AP-6's Mermaid row |
+| F1: test 5 in every palette | Spec §10 test 5: the fixtures, the twelve fixture appearances, and its rows "the constant", "every key assigned", "drawn pairs, in every fixture palette", "closed colours" and "outside the constant" |
+| F2: author-styled figures, and the measured label route | Spec §10, "Mermaid while hosted": "Author-styled", "Everything else" and "No label route"; test 5's "author-styled (the coordinator's F2 row)" |
+| F3: three state cues, and the flash | Spec §10, "Meaning without colour": its lead sentence (the old line 415), and the bullets "The Aa menu's checked option", "The summary box's pressed view button" and "The table filter's focus"; test 10's last four rows and its note on the flash |
+| F4: the sum, append-only rows, X1's 32 768 | Spec §9's srcdoc row, part (2); §10 test 8; "Which of these constrain later additive work", Test 8; "One release for more than one design". Plan: Global Constraints' budgets; Task 1 Step 2a; Task 6's `frame-cost` |
+| F4: X2's share | X2 spec §6, "Size, and X2's share", proposed for the coordinator to set at this wave's acceptance |
+| A1 | Spec §10, "Meaning without colour" (the lead sentence's `id` and `accent`, and the glossary bullet's hover and expanded rule); test 10's fixture groups and its hover row |
+| A4 | Spec §10 test 9: the frame-to-parent row reads `FRAME_OPS`, the parent-to-frame row drives the frame's own parser, and the CSP row's mask is `HASH_SOURCE` on `script-src` tokens only |
+| A5 | Spec §2, "Size"; test 1's "same-realm values" row |
+| A6 | Spec §2.2, "Size"; §10's srcdoc-cap bullet; test 7's old-cap row |
+| A8 | Spec §10, the code-on-the-well table (`invoke__` moved to `syn-function`) and the paragraph after it (the context rules and `.rs-facts .sep`) |
+| A9 (2) | Spec §2, the `colour` bullet; test 1's "a missing slot" row |
+| A9 (3) | Spec §5's measured paragraph; this plan's Cross pairs row: 4.565 |
+| A10 | Spec §5's 3:1 floor and §9's contrast row: the ring's grounds are `bg`, `surface`, `surface2` and the tints |
+| F5 | Plan Task 5: Files (the five fakes), the "a fake with no seed" row, Step 4 |
+| F6 | Plan Task 4: "Hosted, explicitly, decided once" (`isHostedMount`), its interface line, "the lab" row; AP-M12 |
+| F7 | Plan Task 4, "reads after the last await" (three holds); AP-M22 |
+| A2 | Plan, acceptance row AP-6's F action |
+| A3 | Plan Task 4 Step 2's expected reds; Task 5's Interfaces sentence (`./reader/assets`) |
+| A7 | Plan, acceptance row AP-2's F action (a phone engine); "Unmeasured" below |
+| A9 (1) | Plan Task 3's Interfaces (`appearanceStamp`) and its "one stamp" row; Task 4's `readHostAppearance` bullet |
+| A11 | Done at acceptance (the coordinator patched PR #3048's body on 2026-11-19); nothing in this wave |
+| X2 F10, the library half | X2 spec §4.6 rows PR6 and PR8, §6's print-mode row and "Print mode's strip and plan marks"; X2 plan P5.5 Step 1 and M11.74 |
+| X2's figure-image op | Already designed in X2 spec §6 (`print-figures` and `print-figure`) and counted in X2's proposed share |
+
+#### Choices this wave made, and why
+
+- **The constant holds the eight kinds the ruling names, and no more.** Each covered kind costs a fixture, a derivation row set and test 5 in twelve palettes, and the fallback keeps every other kind safe. A kind can join later with its own measured rows.
+- **The kind comes from Mermaid's own `parse`,** not from a scan of the first word, so it matches how Mermaid will draw the figure.
+- **The author-styled scan errs toward 1.1.0's drawing:** any `box` line counts, coloured or not, and `class` and `:::` are covered through the `classDef` they apply.
+- **No label route** (measured above).
+- **Gantt task states** are told apart by their outline (`text-muted`, `accent`, `no`) and a 4% tint over `surface`, a ground the drawn-pairs row measures. A done task sits on the plate with a `text-muted` outline.
+- **Labels on a series colour or a line mark are `bg`.** Every series colour is one of the gate's text colours, and the gate already holds each at 4.5:1 on `bg`, so the pair is in the gate by construction.
+- **The series skips an exact repeat,** so two slices or branches are never the same colour unless a palette has fewer distinct text colours than the figure has parts. A palette has 10 to 12.
+- **The measuring commit is read from the table's history,** never typed: the commit that lands a row cannot know its own sha, and a squash merge would change it. This reshapes the ruling's "each row names the library commit that measured it", so it went to the coordinator as a structured ask, who ruled it (history names it, append-only against the merge base, full history required, one design per squash-merged pull request, a trailer naming the design).
+- **A layout is never larger than the default bundle,** so the largest frame is bounded by the default, and X2's frame share covers only the default's growth.
+- **X2 F10's chips and step labels fold into row PR6.** The rich-docs spec's Print row counts "PR1 to PR15", and a 16th row would need an edit outside this wave's four files. The coordinator ruled that such a sentence goes to them as a separate question; folding the labels into PR6 needs none.
+
+#### The adversarial pass (Opus · high, one pass over the changed sections)
+
+It found no critical issue, 9 important and 14 minor. It reproduced every X4 contrast figure, the 110-key coverage, the series, the 4 528 020 baseline and every terser comparator. Dispositions:
+
+| Finding | Disposition |
+|---|---|
+| 1: test 5's stroke row, and AP-6's, could never pass: pie gaps and in-commit marks are near 1:1 on the plate, and the Results line misread its own data | Fixed. Spec test 5 and §10 judge lines (`text-muted`, `accent`, `no`, series) on both grounds, in-commit marks on their commit's series colour (4.52 at worst), and pie gaps as plate by design; the Results sentence is corrected; a Cross pairs row is added |
+| 2: the sequence fixture's colourless `box` made it author-styled, so test 5 never drew sequence hosted | Fixed. The fixture has no `box`; a separate row asserts that a colourless `box` alone takes the fallback |
+| 3: the scan could be bypassed by case, by `;` and by tabs, and missed state `style` | Fixed. Statements split at line breaks and `;`, any leading white space, heads compared without case, every head applied to every covered kind; test 5 gains `STYLE`, a `;`-joined line, `RECT`, a tab-indented line and state `style`; the form count is eleven, `:::` among them |
+| 4: append-only against `HEAD~1` let an earlier commit of a multi-commit change rewrite a row, and a shallow checkout broke it | Fixed. Append-only against the merge base with the target branch, one row and one design per squash-merged pull request, and the test fails closed without full history |
+| 5: a row's design was self-declared, and upkeep such as a Mermaid bump had no row kind | Fixed. A `Size-Design:` trailer is checked against the row, a `rebaseline` row counts against no design and is approved by the coordinator, and shrinking frees room in the same design only |
+| 6: naming the measuring commit by history reshaped the ruling | Asked; the coordinator ruled for history (above) |
+| 7: X2's frame share left out R7 and R9, layout stylesheets and the bootstrap, and wrote estimates as bounds | Fixed in X2 §6: rows for R7 and R9 and the bootstrap, layout stylesheets inside each layout's bound, "at most" dropped. The shares rise to 1 148 928 and 45 056 |
+| 8: whether the default bundle is a layout bundle was undefined | Fixed. `default` is a layout; a frame inlines exactly one layout's assets |
+| 9: M11.74 could not fail, and the class list missed `tmeta`, the count's status class, `attn`, `yours` and the hidden brackets | Fixed. P5.5's assertions read structure and classes; the class list is derived from the conformance output; print mode emits no bracket or colon |
+| 10: test 9's parent-to-frame row could not catch an added op | Fixed. The bootstrap's list is exported as `FRAME_ACCEPTS`, compared with the parent's, and the parser is driven over every name in both op lists and a planted one |
+| 11: the series worst palette differed between spec and plan, and `accent` and `no` read as 4.52 | Fixed. Solarized Dark, 4.515; `accent` 4.57 and `no` 4.77 stated apart |
+| 12: §5's Mermaid row missed the `text-muted` and `accent` labels and the `text` filled arrowhead | Fixed |
+| 13: `excludeBkgColor` missing from the literals; cScale unmentioned | Fixed: ten literals; none of the 66 cScale, fillType and surface keys reaches a covered drawing, stated |
+| 14: drawn pairs with no row, and a fixture claiming every shape | Fixed. Cross pairs rows for a clickable label, marker text over a row, commit labels and in-commit marks; the fixture names the classic shapes. The clickable label is not drawn under `strict` and is said so |
+| 15: "old srcdoc cap" per layout was unclear | Fixed: 1.1.0's default cap, in every layout |
+| 16: X2's P5.1 lacked the per-layout `frame-cost` row | Fixed in X2's plan, Task P5.1 |
+| 17: X2's new seed fields were outside every share | Fixed in X2 §6: they are seed fields, counted by the derived srcdoc cap and the per-layout `frame-cost` row, not by test 8 |
+| 18: an expanded `a.term` or `a.xref` showed its state by colour alone | Fixed: the open card is the cue, stated |
+| 19: a fallback figure's full-screen stage was unspecified | Fixed: the same 1.1.0 drawing on its plate and filter, with a test 5 assertion |
+| 20: stale plan lines (the focus floor, `appearanceRoot`'s comment, Step 3's waits, Task 6 AP-6's palettes) | Fixed |
+| 21: the `parseAppearance` row did not allow whole-group refusals | Fixed |
+| 22: no verdict for a top-level `too-many-keys` | Fixed: `{mode: 'auto'}`, with a test 1 row |
+| 23: X2's P5.5 assertion used placeholders | Fixed: the fixture is three tasks of two, three and four steps, two of them the reader's, so "3 tasks · 9 steps" and "2 yours" |
+
+#### Deviations
+
+None. The reserve block, 8774 and 8775, is unused: every change here carries out a coordinator ruling or a reviewer's fix direction within the completion design, the rich-docs spec and the operator's rulings.
+
+#### Unmeasured
+
+- The grammars' fit to `getPropertyValue` text in WebKit and Gecko (review 2676 A7). AP-2's F action now measures it on a phone engine; until F runs, it is unmeasured beyond Chromium.
+- X2's code sizes. X2's shares are estimates from measured comparators (X2 plan Results), not measurements of X2's code.
+- The derivation's drawings on a phone engine. Every drawing above is Chromium's. Test 5 runs on each engine the library's browser suite runs.
+
+#### A hook refusal, reported and ruled
+
+A PreToolUse hook, the knowledge-graph gate, refused one read-only `grep` over three doc files. The wave stopped that search and mailed the coordinator the exact refusal, as the standing ruling requires. The coordinator ruled (mail 25602) that the gate's own graph query is the way through it, and the search went ahead after one query.
+
+#### Commands
+
+```text
+git log -1 --format=%h HEAD (at start)                              -> 8781ef20a
+grep / sed / python3 over the installed library 1.1.0               (read only)
+node <scratch>/keys.mjs     sentinel drawing, 8 kinds               -> 245 colour keys, 110 read, 0 changed
+node <scratch>/tokens.mjs   12 palettes x 33 slots in Chromium      -> 396 values, 0 not #RRGGBB
+node <scratch>/pass2.mjs    derivation drawn, 12 palettes x 8 kinds -> min text 4.88, min line 4.52
+node <scratch>/markers.mjs  marker colours, 2 palettes              -> every marker text-muted or text
+node <scratch>/author.mjs   parse ids, 11 author statement forms    -> 8 ids; 11 of 11 put author colour in
+node <scratch>/f2.mjs       label box pixels, 3 drawings x palettes -> hosted 1.07 to 1.30; plate 7.95, 13.49
+python3 <scratch> grid      label route, 12 palettes                -> worst 2.77 to 4.12
+node <scratch>/minsize.mjs  terser over 47 enhance modules          -> comparators (X2 plan Results)
+```
+
+No test, build or install ran: nothing in this wave changes code. Every commit was scanned for private names before it was made, and again before the push.
