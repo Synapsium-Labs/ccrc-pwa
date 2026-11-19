@@ -135,6 +135,8 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
       lane: 'launch-profile', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }, {
       lane: 'anchor-slot', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
+    }, {
+      lane: 'approval-park', stored: 'shadow', detail: null, live: false, updatedAt: 0, imported: null, marker: null,
     }], quizBaseline: { baseline: { state: 'not-yet' }, pending: { ok: true, runs: [] } } });
   });
 
@@ -201,10 +203,19 @@ describe('GET/POST /api/coord/lane-arm (D-8274)', () => {
     expect(confirmed.statusCode).toBe(200);
     expect(coord.laneArmSetting('continuity')).toMatchObject({ choice: 'live' });
     expect((await post(app, { lane: 'continuity', choice: 'shadow' })).statusCode).toBe(200);
-    // The gate mechanism stays for a row that needs one; today no row has one.
+    // The gate mechanism stays for a row that needs one; approvals PR 3's park row has one until PR 3b and PR 3v.
     for (const lane of ['roster-card', 'continuity', 'launch-profile', 'anchor-slot'] as const) expect(laneArmGate(lane)).toBeNull();
+    expect(laneArmGate('approval-park')).not.toBeNull();
     expect(LANE_ARM_REFUSALS).toContain('lane-gated');
     expect(REFUSAL_STATUS['lane-gated']).toBe(409);
+  });
+
+  it('approvals PR 3: Live on the park row is refused lane-gated while its gate stands, and nothing is written', async () => {
+    const { app, coord } = await setup();
+    const res = await post(app, { lane: 'approval-park', choice: 'live' });
+    expect(res.statusCode).toBe(409);
+    expect(res.json()).toMatchObject({ ok: false, error: 'lane-gated' });
+    expect(coord.laneArmSetting('approval-park')).toMatchObject({ choice: 'shadow', updatedAt: 0 });
   });
 
   it('a Live stored on the continuity row reads live in the view, as the roster card\'s does; a gate, where one stands, keeps a stored Live shadow (review 2006 N1)', async () => {

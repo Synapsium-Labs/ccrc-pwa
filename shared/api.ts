@@ -13471,7 +13471,12 @@ export type ApprovalRulingRecordAny = ApprovalRulingRecord | ApprovalRulingRecor
 export function approvalRulingBytes(r: ApprovalRulingRecordAny): string | null {
   const v1 = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
     nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt };
-  return canonicalJson(r.v === 2 ? { ...v1, authority: r.authority, denyCurrent: r.denyCurrent, family: r.family } : v1);
+  if (r.v !== 2) return canonicalJson(v1);
+  // A v2 record's three fields, each only when present: a record that says `v: 2` without them (an older or a forged one)
+  // keeps v1's bytes, which no verifier accepts as v2.
+  const v2: Record<string, unknown> = { ...v1 };
+  for (const k of ['authority', 'denyCurrent', 'family'] as const) if (r[k] !== undefined) v2[k] = r[k];
+  return canonicalJson(v2);
 }
 
 /** The park's word, decided once at mint and stored on the row as `parkWord` (approvals plan 2026-11-18, §3.3.1 F1):
