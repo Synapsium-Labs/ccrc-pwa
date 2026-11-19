@@ -91,6 +91,9 @@ The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 2671
   the route and the watcher read one constant.
 - `no-capability-word`: `approval-park-v1` is not added. Nothing would read it: an older server omits `park`, which the hook
   reads as shadow (PR 0 to PR 2 dropped theirs for the same reason).
+- `park-ruling-is-not-a-pane-answer`: the console's client for the operator's ruling is `ruleParkedApproval`, beside the
+  answer lifecycle, never through it: the lifecycle owns pressing a painted dialog (`rings/pwa-one-owner.test.ts`'s one
+  answer path), and a park ruling presses nothing. It posts to the same operator door, whose `approval-<n>` arm PR 3b wires.
 - `parked-group-above-the-list`: the console draws the group above the programme list, so it shows when nothing else waits.
 
 ## Residuals

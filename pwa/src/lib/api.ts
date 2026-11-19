@@ -1117,7 +1117,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `{kind: 'approval', verdict}`. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`,
      *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, and `kind-mismatch` until that arm is wired) rejects with an
      *  `ApiError` like every non-2xx. */
-    answerParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
+    ruleParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
       (await request(`/api/questions/approval-${id}/answer`, {
         method: 'POST',
         headers: { 'content-type': 'application/json', accept: 'application/json' },

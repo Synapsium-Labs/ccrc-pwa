@@ -14,7 +14,7 @@ import {
 const NO_STEP_UP_DEPS: StepUpDeps = {};
 const ASSUME_FRESH = Infinity;
 export type RuleParked = (id: number, verdict: 'allow' | 'deny') => Promise<unknown>;
-const defaultRule: RuleParked = (id, verdict) => api.answerParkedApproval(id, verdict);
+const defaultRule: RuleParked = (id, verdict) => api.ruleParkedApproval(id, verdict);
 
 export function ParkedApprovals({ approvals, rule = defaultRule, stepUpDeps = NO_STEP_UP_DEPS }: {
   readonly approvals: readonly ParkedApprovalView[] | undefined; readonly rule?: RuleParked; readonly stepUpDeps?: StepUpDeps;

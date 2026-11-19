@@ -47,7 +47,7 @@ describe('the parked approvals group', () => {
   });
 
   it('Allow calls the client with the id and the verdict, then says Recorded', async () => {
-    const rule = vi.spyOn(api, 'answerParkedApproval').mockResolvedValue({});
+    const rule = vi.spyOn(api, 'ruleParkedApproval').mockResolvedValue({});
     open([parked({ id: 7 })]);
     fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
     await waitFor(() => expect(screen.getByText('Recorded')).toBeTruthy());
@@ -55,14 +55,14 @@ describe('the parked approvals group', () => {
   });
 
   it('a park-ruled refusal shows its sentence', async () => {
-    vi.spyOn(api, 'answerParkedApproval').mockRejectedValue(new ApiError(409, { ok: false, error: 'park-ruled' }));
+    vi.spyOn(api, 'ruleParkedApproval').mockRejectedValue(new ApiError(409, { ok: false, error: 'park-ruled' }));
     open([parked()]);
     fireEvent.click(screen.getByRole('button', { name: 'Deny' }));
     await waitFor(() => expect(screen.getByText(PARKED_REFUSAL_TEXT['park-ruled']!)).toBeTruthy());
   });
 
   it('an unlisted refusal says the default sentence, never a crash', async () => {
-    vi.spyOn(api, 'answerParkedApproval').mockRejectedValue(new ApiError(400, { ok: false, error: 'kind-mismatch' }));
+    vi.spyOn(api, 'ruleParkedApproval').mockRejectedValue(new ApiError(400, { ok: false, error: 'kind-mismatch' }));
     open([parked()]);
     fireEvent.click(screen.getByRole('button', { name: 'Allow' }));
     await waitFor(() => expect(screen.getByText(PARKED_DEFAULT_REFUSAL)).toBeTruthy());
