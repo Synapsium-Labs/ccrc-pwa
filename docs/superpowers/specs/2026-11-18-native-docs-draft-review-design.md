@@ -127,7 +127,7 @@ The action is offered under the same readiness rule as Export (base §4.17 "When
 
 The owner's browser calls `exportInputOf` and `buildExport` exactly as Export does, with one new input, `purpose: 'review'`. It changes two things only: the generator meta gains `ccrc:purpose` = `review`, and the banner leads with "Shared for review. Read-only." There is no second builder and no server-side rendering. Why: the bytes are then what the owner saw (base Goal 4), every existing Export guard applies unchanged (the strip, the CSP, the size cap, the draft confirm), and the fleet box is never asked again.
 
-Export's Save is not involved: the bytes go to the server instead of to a file. Base M4.EX16 confines `buildExport` to Export's sheet (imported by `import()` there only, its output reaching only `downloadExport`); the review confirm becomes its second named importer and the upload its second named consumer, each with a planted control.
+Export's Save is not involved: the bytes go to the server instead of to a file. Base M4.EX16 confines `buildExport` to Export's sheet (imported by `import()` there only, its output reaching only `downloadExport`), and base §5.4, §5.6.9's Wrapper step and M5.16 say the same of its output; the review confirm becomes its second named importer and the upload its second named consumer, each with a planted control, and D-8766 quotes each of those sentences.
 
 ### 3.3 Hidden referenced assets
 
@@ -290,8 +290,8 @@ Three departures carry it, each defined in the leaf plan's `## Deviations found`
 
 | Number | What it changes | Lands with |
 |---|---|---|
-| D-8765 | Base Goals 1 and 3, decision `product`, the Non-goal "Share links that ccrc hosts" and §4.13's expiring-links bullet: one exempt read door and one owner-made store now exist beside the session-gated reader | R1 |
-| D-8766 | The Share and Export confinement sentences the new action and store change: §4.13's one-more-arm sentence and M4.EX16's single-importer clause. §4.16's no-route sentence and §4.13's "Share and Export spend no page key, route or census entry" stay true, because Share and Export themselves are unchanged; the coordinator confirms that reading | R3 |
+| D-8765 | Base Goals 1 and 3, decision `product`, the Non-goal "Share links that ccrc hosts", §4.13's expiring-links bullet and §7.5's README-contents auth bullet: one exempt read door and one owner-made store now exist beside the session-gated reader | R1 |
+| D-8766 | The Share and Export confinement sentences the new action and store change: §4.13's one-more-arm sentence, M4.EX16's single-importer clause, and every sentence that confines the builder's output to `downloadExport` (§5.4, §5.6.9's Wrapper step and M5.16's parenthetical, review finding N12). §4.16's no-route sentence and §4.13's "Share and Export spend no page key, route or census entry" stay true, because Share and Export themselves are unchanged (the coordinator confirmed this reading) | R3 |
 | D-8767 | Base M5.16's `new DOMParser(` and `<iframe`/`srcDoc` allowances, and rich-docs A2b and M8.10, for the review page | R2 |
 
 Rich-docs §6 rows G11 and "Draft review by link" only gain a pointer to this spec, and stay Kept until Task 17's row passes; they need no number.
