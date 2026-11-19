@@ -29,7 +29,7 @@ import { RUN_ID_RE } from '../../shared/workflow-ids.mjs';
 // The redaction rule table's one home (D-5867, C1l PR 2): an L0, browser-safe file that imports nothing and names no host
 // global. Layer 2's two rule sets, BASE_RULES and CONTEXT_RULES, are its history profiles. `_inst_tree` places `shared/`
 // whole beside `ccd/`, so the relative specifier resolves in the installed tree as in the repository.
-import { historyRules } from '../../shared/redact.mjs';
+import { PEM_PRIVATE_KEY_SOURCE, historyRules } from '../../shared/redact.mjs';
 
 // ── exit codes and the reason words (§8.3) ────────────────────────────────
 // D-4169: 4 (writer busy) and 9 (no store on this box)
@@ -2134,9 +2134,11 @@ const ENV_SECRET_NAME_RE = /(?:^|[^A-Za-z0-9])PRIVATE(?=$|[^A-Za-z0-9])/i;
  *  (audited, D-4306). The JWT shape `eyJ….….…` (not upstream) is NOT in it:
  *  as a regex it backtracks quadratically on a long run of dotless `eyJ`
  *  starts, so the linear `jwtSpans` finds the same matches by a scan
- *  and `redactLayers` unions its spans with this list's. D-4306 (history-redaction-shapes-linear) */
+ *  and `redactLayers` unions its spans with this list's. D-4306 (history-redaction-shapes-linear)
+ *  The PEM arm's source lives in the shared rule table (`shared/redact.mjs#PEM_PRIVATE_KEY_SOURCE`, overlord wave 163), so
+ *  the egress profiles read the same bytes; it is built here as it was written before, flags `g`. */
 export const SECRET_SHAPE_RES = Object.freeze([
-  /-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)/g,
+  new RegExp(PEM_PRIVATE_KEY_SOURCE, 'g'),
   /\bAKIA[0-9A-Z]{16}\b/gi,
   /\b(?:ghp|gho|ghu|ghs|ghr)_[A-Za-z0-9_]{10,}\b/gi,
   /\bgithub_pat_[A-Za-z0-9_]{20,}\b/gi,
