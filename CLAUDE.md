@@ -720,7 +720,7 @@ hand-kept `QUIZ_SESSION_DOORS` in both directions. The box-token lifecycle's `PO
   (`resolveCoordinator(runId)` reads that run's `claimedBy`, no program-state predicate) — which is the
   documented recovery for an already-retired program.
 - The coordinator is an ordinary fleet session running the `ccrc-coordinator` skill
-  (`ccd/coordinator-skill/SKILL.md`); its twenty clauses are pinned VERBATIM by
+  (`ccd/coordinator-skill/SKILL.md`); its twenty-one clauses are pinned VERBATIM by
   `server/test/coordinator-skill.test.ts` — a softened clause is a red suite. Pause kill-switches are FILES
   (`$REG/coordinator-paused`, `$REG/mail-disabled`). `mail-disabled` has **no writer in the tree** — touch/rm by
   hand only. `coordinator-paused` does: Build 4's whitelisted `ccd coord-pause --state on|off`, driven by
