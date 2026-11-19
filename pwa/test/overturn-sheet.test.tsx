@@ -126,6 +126,14 @@ describe('the acts on a call survive their frame', () => {
     await waitFor(() => expect(send).toHaveBeenCalledWith({ rowKind: 'call', id: 9, text: 'use files' }));
   });
 
+  it('an open sheet and its note survive a frame with no list yet', () => {
+    const view = render(<WaitingScreen view={withRows()} {...props} onOverturn={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Overturn…' }));
+    typeNote('use files');
+    view.rerender(<WaitingScreen view={null} {...props} onOverturn={vi.fn()} />);
+    expect(note()).toBe('use files');
+  });
+
   it('a Seen in flight stays asked when the programme loses its rows', () => {
     const onSeen = vi.fn(() => new Promise<unknown>(() => undefined));
     const view = render(<WaitingScreen view={withRows()} {...props} onSeen={onSeen} />);
