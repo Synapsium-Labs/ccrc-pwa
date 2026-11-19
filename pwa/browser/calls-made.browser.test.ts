@@ -34,11 +34,14 @@ const RUN = {
 const SESSIONS = [session('prog-a-coord', 'coordinator'), session('prog-a-w1', 'child')];
 
 const LONG_CHOSEN = 'Ship the smaller change now and follow up with the rest of the work in a later wave, once the review queue has drained';
+/** An unbroken token (review 2792 F6): a commit hash with no break opportunity, longer than a phone is wide, so a rule that
+ *  loses `overflow-wrap: anywhere` or `min-width: 0` lets it run past its box. */
+const TOKEN = `sha256:${'0123456789abcdef'.repeat(8)}`;
 const call = (id: number, over: object = {}): object => ({
   id, program: 'prog-a', runId: null, madeBy: 'prog-a-coord', class: 'big',
-  question: 'Which store should the ledger use, given that the table is read far more often than it is written?',
-  options: ['Keep the current relational table', LONG_CHOSEN, 'Move it to flat files'],
-  chosen: LONG_CHOSEN, why: 'It is already there, and the smaller change lands today without touching the readers.',
+  question: `Which store should the ledger use, given that the table at ${TOKEN} is read far more often than it is written?`,
+  options: [`Keep the current relational table at ${TOKEN}`, LONG_CHOSEN, 'Move it to flat files'],
+  chosen: LONG_CHOSEN, why: `It is already there (${TOKEN}), and the smaller change lands today without touching the readers.`,
   reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null, overturnedAt: null, overturnNote: null, ...over,
 });
 const waiting = {
@@ -136,6 +139,13 @@ describe.each(SKINS)('calls made for you in %s', (skin) => {
         await page.waitForTimeout(300); // the sheet's transition settles
         expect(await inside(page, '.sheet-panel'), 'the sheet').toBe(true);
         expect(await sideways(page), 'sideways scroll with the sheet open').toBe(0);
+        expect(await inside(page, '.sheet-panel .wl-overturn-q'), 'the question').toBe(true);
+        expect(await truncated(page, '.sheet-panel .wl-overturn-q'), 'the question is whole').toBe(false);
+        for (const n of [1, 2, 3]) {
+          const sel = `.sheet-panel .wl-overturn-option:nth-child(${n})`;
+          expect(await inside(page, sel), `option ${n} inside the width`).toBe(true);
+          expect(await truncated(page, sel), `option ${n} is whole`).toBe(false);
+        }
         const chosen = page.locator('.sheet-panel [data-chosen="true"]');
         expect(await chosen.textContent()).toContain(LONG_CHOSEN);
         expect(await chosen.evaluate((el) => el.scrollWidth <= el.clientWidth + 1 && getComputedStyle(el).textOverflow !== 'ellipsis'),
