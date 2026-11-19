@@ -105,7 +105,7 @@ The names are stated, never derived, as `CCRC_RP_ID` is: deriving a site from a 
 
 | Key (exposure file) | Value | Check at boot and in doctor |
 |---|---|---|
-| `CCRC_ARTIFACT_ORIGIN` | `https://<artifact-host>` | A bare https origin (the `originProblem` grammar, `server/src/auth/webauthn.ts`). Not equal to `CCRC_ORIGIN` |
+| `CCRC_ARTIFACT_ORIGIN` | `https://<artifact-host>` | A bare https origin (`isExactHttpsOrigin`, `shared/httpsOrigin.ts`). Not equal to `CCRC_ORIGIN` |
 | `CCRC_ARTIFACT_CONTENT_ORIGIN` | `https://<content-host>` | The same, and not equal to either other origin |
 | `CCRC_ARTIFACT_PORT` | Loopback port, default 7790 | Not `CCRC_PORT` |
 
@@ -191,7 +191,7 @@ This section decides how a page is reached on the artifact hosts. The question i
 | Field | Value |
 |---|---|
 | Asked for | The page's project, its `DocPin` (committed at a commit, or a draft at a ref view with its `fp`), the confirmed external origins (at most 8), and `windows` (a boolean) |
-| Server builds | The **manifest**: one tree read at that pin (the existing docs tree read and its caps, 5000 entries and 16 levels), keeping every file in the page's own directory and below. The tree read takes a ref name, not a commit (`server/src/ccdargv.ts#docsTree`), and answers whatever that ref holds now. So the door first checks that it read the pinned version: for a committed pin, the tree's `ref.commit` equals the pin's `commit`; for a draft pin, the tree's `ref.commit` equals the pin's `head`, and the page's own entry carries the pin's `fp`. Otherwise it refuses `pin-moved` and mints nothing. Each file gets its pin: the blob for a committed file, and for a draft the `fp`, or X2's stat pin above the hash ceiling (X2 P1's `DocsRangePin` `stat` arm, built by `statPin(size, mtimeNs)`) |
+| Server builds | The **manifest**: one tree read at that pin (the existing docs tree read and its caps, 5000 entries and 16 levels), keeping every file in the page's own directory and below. The tree read takes a ref name, not a commit (`server/src/ccdargv.ts#docsTree`), and answers whatever that ref holds now. So the door first checks that it read the pinned version: for a committed pin, the tree's `ref.commit` equals the pin's `commit`; for a draft pin, the tree's `ref.commit` equals the pin's `head`, and the page's own entry carries the pin's `fp`. Otherwise it refuses `pin-moved` and mints nothing. A tree entry's size can be null (`DocsEntry`, `shared/docs.ts`), and every response's `Content-Length` comes from the manifest's size, so an entry with no size is left out: its load is the identical 404, and the answer counts it as `unsized`. Each file gets its pin: the blob for a committed file, and for a draft the `fp`, or X2's stat pin above the hash ceiling (X2 P1's `DocsRangePin` `stat` arm, built by `statPin(size, mtimeNs)`) |
 | Token | 32 bytes from `crypto.randomBytes`, base64url, 43 characters (256 bits). Only its SHA-256 is kept. The mint answer is a POST, so the server's credential mask runs over it (`server/src/server.ts#answerMasked`). A token that the mask would alter is drawn again before the answer is built, as X3 does, so the URL the operator receives is never masked |
 | Id | 16 random bytes, base64url. A public handle for the list and Revoke, never a credential |
 | Answer | The wrapper URL, once: `https://<artifact-host>/a/<token>`, with the manifest's file count and its uncommitted count. The URL is never answered again |
@@ -418,6 +418,7 @@ flowchart TD
 | What runs | "This page's own code runs in a new tab on `<artifact-host>`, a separate site with no ccrc session. It can read the N files beside it at this version (M uncommitted). It cannot reach ccrc." N and M come from the scope read, before anything is minted |
 | Outside hosts | One unticked checkbox per origin the pre-scan found (the census `origins.ts` already makes), each saying "loads from this host can carry what the page shows to it, and may see this link". At most 8. An origin on the console's, artifact or content host is never offered |
 | Above the folder | "N references point above this page's folder and will not load", from the pre-scan |
+| Unmeasured files | "N files beside it could not be measured and will not load", when the scope read's `unsized` is above 0 |
 | Others open | "Another artifact is open. Pages run as artifacts can share data with each other while open", when the box has another live capability |
 | Windows | Unticked: "Let it open windows. A window it opens can send what the page shows anywhere." |
 | Buttons | Prepare (mints with the boxes as ticked; a tick changed after Prepare revokes that capability and needs Prepare again), then Open (the real link), and Cancel |
