@@ -11,6 +11,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { CapsControl } from '../src/fleet/CapsControl';
+import { capsUsageWords } from '../src/fleet/capsWords';
 import { ApiError } from '../src/lib/api';
 import type { CoordCapsView } from '../../shared/api';
 
@@ -32,6 +33,17 @@ describe('CapsControl', () => {
   it('shows usage against the cap once the read lands', async () => {
     render(<CapsControl coordCaps={READ} />);
     expect(await screen.findByText('1 / 3')).toBeInTheDocument();
+  });
+
+  it('says how many runs hold a slot and how many wait, when the server counts them (D-TBD-cap-counts-working)', async () => {
+    render(<CapsControl coordCaps={() => Promise.resolve(VIEW({ usage: { running: 5, waiting: 2 } }))} />);
+    expect(await screen.findByText('3 / 3 working, 2 waiting')).toBeInTheDocument();
+  });
+
+  it('an older server that sends no waiting count keeps today\'s reading', async () => {
+    render(<CapsControl coordCaps={READ} />);
+    expect(await screen.findByText('1 / 3')).toBeInTheDocument();
+    expect(screen.queryByText(/waiting/)).toBeNull();
   });
 
   it('has no per-day dial: the daily brake is retired (D-7068)', async () => {
@@ -243,5 +255,19 @@ describe('CapsControl', () => {
     const { container } = render(<CapsControl
       coordCaps={() => Promise.reject(new ApiError(500, { ok: false }))} />);
     await waitFor(() => expect(container.querySelector('.caps-control')).toBeNull());
+  });
+});
+
+describe('capsUsageWords, the one reader of the waiting count (D-TBD-cap-counts-working)', () => {
+  it('says both numbers in plain words', () => {
+    expect(capsUsageWords({ running: 4, waiting: 1 }, 3)).toBe('3 / 3 working, 1 waiting');
+    expect(capsUsageWords({ running: 1, waiting: 0 }, 3)).toBe('1 / 3 working, 0 waiting');
+  });
+
+  it('an absent or malformed count reads as today, never as a guessed zero', () => {
+    expect(capsUsageWords({ running: 2 }, 3)).toBe('2 / 3');
+    for (const waiting of [-1, 1.5, Number.NaN, '2' as unknown as number]) {
+      expect(capsUsageWords({ running: 2, waiting }, 3), String(waiting)).toBe('2 / 3');
+    }
   });
 });
