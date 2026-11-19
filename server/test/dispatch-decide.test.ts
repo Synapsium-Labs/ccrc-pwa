@@ -19,6 +19,7 @@ import {
 } from '../src/coord/dispatchDecide.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
 import type { SessionRecord, RegistryRead } from '../src/registry.js';
+import { UNMEASURED } from '../src/unmeasured.js';
 import { MAIL_BODY_MAX_BYTES } from '../../shared/api.js';
 import { codeLines } from './growthCheck.js';
 import { REPO_ROOT, sourceOfSymbol } from './scan/symbols.js';
@@ -316,13 +317,58 @@ describe('decideDispatch, the bind step', () => {
     expect(outcomeOf(decideDispatch(bind({ after: { listed: false } as unknown as RegistryRead, res: { ok: false, stderr: 'boom', cutShort: true } }))))
       .toEqual({ ok: false, kind: 'registry-unmeasurable', stderr: 'boom' });
   });
-  it('two candidates after a clean ws-add are ambiguous, with no event; none after a failed one is fleetFailed WITH one', () => {
+  it('two candidates after a clean ws-add are ambiguous, with no dispatch-refused event; none after a failed one is fleetFailed WITH one', () => {
     const two = decideDispatch(bind({ after: listed([rec('n1'), rec('n2')]) }));
-    expect(two).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 } });
+    expect(two).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 },
+      orphanEvent: 'dispatch-orphaned:ambiguous-dispatch' });
     const none = decideDispatch(bind({ after: listed([rec('old')]), res: { ok: false, stderr: 'no', cutShort: false } }));
     expect(none).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'fleetFailed', stderr: 'no' }, event: 'dispatch-refused:fleetFailed candidates=' });
     const failedTwo = decideDispatch(bind({ after: listed([rec('n1'), rec('n2')]), res: { ok: false, stderr: 'no', cutShort: true } }));
     expect(failedTwo).toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2' });
+  });
+  // F1 (the coordinator's ruling, run 2785): only a MEASURED ending journals an orphan, `ok` or a failure ccd exited
+  // with (`cutShort === false`). A cut-short ending (a deadline, a signal) or an unmeasured one (the agent link dropped
+  // mid-call) may leave `ws-add` running on the box, so the run keeps the in-flight bound.
+  const measured: BindFacts['res'][] = [{ ok: true }, { ok: false, stderr: 'boom', cutShort: false }];
+  const unmeasuredEndings: BindFacts['res'][] = [{ ok: false, stderr: 'boom', cutShort: true }, { ok: false, stderr: '', cutShort: UNMEASURED }];
+  it('an unlistable AFTER read after a MEASURED ending names the orphan, with and without ccd\'s stderr (D-8126)', () => {
+    const unlisted = { listed: false } as unknown as RegistryRead;
+    for (const res of measured) {
+      expect(decideDispatch(bind({ after: unlisted, res })), JSON.stringify(res))
+        .toMatchObject({ kind: 'refused', orphanEvent: 'dispatch-orphaned:registry-unmeasurable' });
+    }
+  });
+  it('an unlistable AFTER read after a cut-short or unmeasured ending is refused with NO orphan event (D-8126, F1)', () => {
+    const unlisted = { listed: false } as unknown as RegistryRead;
+    for (const res of unmeasuredEndings) {
+      const d = decideDispatch(bind({ after: unlisted, res }));
+      expect(d, String(res.ok === false && res.cutShort)).toMatchObject({ kind: 'refused', outcome: { kind: 'registry-unmeasurable' } });
+      expect(d).not.toHaveProperty('orphanEvent');
+    }
+  });
+  it('two candidates after a measured ending carry the orphan event; the dispatch-refused event is kept beside it on a failure (D-8126)', () => {
+    const after = listed([rec('n1'), rec('n2')]);
+    expect(decideDispatch(bind({ after }))).toMatchObject({ orphanEvent: 'dispatch-orphaned:ambiguous-dispatch' });
+    expect(decideDispatch(bind({ after }))).not.toHaveProperty('event');
+    expect(decideDispatch(bind({ after, res: { ok: false, stderr: 'no', cutShort: false } })))
+      .toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2', orphanEvent: 'dispatch-orphaned:ambiguous-dispatch' });
+  });
+  it('two candidates after a cut-short or unmeasured ending keep the dispatch-refused event and carry NO orphan event (D-8126, F1)', () => {
+    const after = listed([rec('n1'), rec('n2')]);
+    for (const res of unmeasuredEndings) {
+      const d = decideDispatch(bind({ after, res }));
+      expect(d).toMatchObject({ event: 'dispatch-refused:ambiguous-dispatch candidates=n1,n2' });
+      expect(d).not.toHaveProperty('orphanEvent');
+    }
+  });
+  it('zero candidates with ccd failed is fleetFailed with no orphan event (D-8126)', () => {
+    const d = decideDispatch(bind({ after: listed([rec('old')]), res: { ok: false, stderr: 'no', cutShort: false } }));
+    expect(d).toMatchObject({ outcome: { kind: 'fleetFailed' } });
+    expect(d).not.toHaveProperty('orphanEvent');
+  });
+  it('decideBefore\'s registry-unmeasurable is before any spawn and carries no orphan event (D-8126)', () => {
+    const d = decideDispatch({ step: 'before', read: { listed: false } });
+    expect(d).toEqual({ kind: 'refused', outcome: { ok: false, kind: 'registry-unmeasurable' } });
   });
   it('a named spawn binds only <project>-<slug>; a stranger is never bound in its place', () => {
     const stranger = bind({ childSlug: 'mine', after: listed([rec('demo-other')]) });

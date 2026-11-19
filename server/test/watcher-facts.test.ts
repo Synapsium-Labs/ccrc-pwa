@@ -57,6 +57,17 @@ describe('the watcher publishes what it measured (console speed S1, Step 7)', ()
     expect(h.watcher.currentProjectPoolsRead()!.listedAt).toBe(h.watcher.currentLimits()!.listedAt);
   });
 
+  it('the tick hands its registry rows to the limits read: a fresh rc 2 spawn demotes its lane, a later rc 0 clears it (D-8126 A7-3, review 2807 F2)', async () => {
+    const h = makeHarness();
+    const nowS = Math.floor(Date.now() / 1000);
+    writeFileSync(path.join(h.reg, `${LIVE[0]}.spawn`), `${nowS - 60} 2`);
+    await h.watcher.tick();
+    expect(h.watcher.currentLimits()!.limits['claude']?.spawnBlocked).toBe(true);
+    writeFileSync(path.join(h.reg, `${LIVE[1]}.spawn`), `${nowS - 30} 0`);
+    await h.watcher.tick();
+    expect(h.watcher.currentLimits()!.limits['claude']?.spawnBlocked).toBeUndefined();
+  });
+
   it('currentRowFacts answers a copy with verdict and pid', async () => {
     const h = makeHarness();
     expect(h.watcher.currentRowFacts(LIVE[0]!)).toBeNull();

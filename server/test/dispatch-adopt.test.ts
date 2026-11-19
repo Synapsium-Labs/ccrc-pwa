@@ -336,6 +336,19 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
                                       { id: 'demo-still-cove', held: null }] });
     expect(await h.dispatch()).toEqual(
       { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 });
+    // D-8126, F1: a cut-short `ws-add` may still be running, so no orphan row: the run keeps the in-flight bound.
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail).filter((d) => d?.startsWith('dispatch-')))
+      .toEqual(['dispatch-refused:ambiguous-dispatch candidates=demo-quiet-basin,demo-still-cove']);
+  });
+
+  it('TWO candidates after a ws-add that EXITED failing: the dispatch-refused row, then the orphan row LAST (D-8126)', async () => {
+    const h = await harness({ ccd: { ok: false, killed: false, signal: null, stderr: 'no' },
+                              after: [{ id: 'demo-quiet-basin', held: null },
+                                      { id: 'demo-still-cove', held: null }] });
+    expect(await h.dispatch()).toEqual(
+      { ok: false, kind: 'refused', code: 'ambiguous-dispatch', candidates: 2 });
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail).filter((d) => d?.startsWith('dispatch-')))
+      .toEqual(['dispatch-refused:ambiguous-dispatch candidates=demo-quiet-basin,demo-still-cove', 'dispatch-orphaned:ambiguous-dispatch']);
   });
 
   it('ONE candidate that ALREADY CARRIES A HOLD refuses — that is a live worker', async () => {
@@ -360,6 +373,8 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     const h = await harness({ ccd: { ok: false, killed: true, stderr: '' }, afterListed: false });
     expect(await h.dispatch()).toEqual(
       { ok: false, kind: 'registry-unmeasurable', stderr: '' });
+    // D-8126, F1: the cut-short ending is not measured, so no orphan row is journalled.
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).not.toContain('dispatch-orphaned:registry-unmeasurable');
   });
 
   it('and it CARRIES ccd\'s own words — the AFTER read is not the only thing that failed', async () => {
@@ -385,6 +400,7 @@ describe('§1.5 — adoption, and everything that must NOT adopt', () => {
     // two read alike.
     const h = await harness({ ccd: { ok: true, stderr: '' }, afterListed: false });
     expect(await h.dispatch()).toEqual({ ok: false, kind: 'registry-unmeasurable' });
+    expect(h.coord.runEvents(h.runId).map((e) => e.detail)).toContain('dispatch-orphaned:registry-unmeasurable');
   });
 });
 

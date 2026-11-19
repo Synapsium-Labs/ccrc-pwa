@@ -208,7 +208,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'mailHold' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors';
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors' | 'skillInstall';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -414,6 +414,11 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // is a handful of reads and one restore flight per programme met, bounded by `staleAfterMs`; a tick the runner restarts as
   // stuck finds the first still running (`DriftPass` returns at once) and never starts a second pass.
   { name: 'linearDrift', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear drift pass failed' },
+  // The worker skill's self-install (D-8126, wave A7-5; `coord/skillInstallLane.ts`): one pass at a time, every 15 s, so an
+  // install follows its dispatch's `skill-preflight:absent` within one beat. A pass runs at most `SKILL_INSTALL_PER_PASS`
+  // verbs, each under `SKILL_ENSURE_DEADLINE_MS` (60 s), which `staleAfterMs` stays above, and never two on one home at once
+  // (an overdue call holds its account until it settles); a thrown pass is caught here.
+  { name: 'skillInstall', cadenceMs: 15_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 300_000, warnKey: 'ccrc-server: the skill self-install lane failed' },
   // The forecast lane (Overlord W2 forecasts A; spec Table 11.1d; plan `w2-forecasts-health.md` Task 4): one pass at a time,
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
