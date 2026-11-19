@@ -48,6 +48,14 @@ claim says whether it was **measured** (read on the tree, the live server or a t
   gated; 92 machine lanes (89 box-token lanes, plus notify, pools/epoch and updates/intent). `run-close-switch`'s rollback
   undoes migrations 54 to 104, fifty-one in all. At the first merge it read fifty (54 to 103); main's line had said
   forty-three, short already against its own 102.
+- **Two pins main gained, which met WM1 in CI's fast run at `74f096c81`** (neither was in the run list; both fixed on the
+  coordinator's word, each in its own commit, under claim 5437):
+  - The plan-reference test from #3040 asks `plan.md` to name every `PLAN_REFUSALS` word, unless its `NOT_MET` table says
+    where the word is answered. It already exempts WM1's verb `ticket-done` until WM5 documents it, but not WM1's word
+    `evidence-unverified`, which now has a `NOT_MET` row with the same reasoning. Naming it in `plan.md` is a skill-file
+    change, which the rules-mixed rule keeps out of this pull request.
+  - The act-key store test from #3035 pinned its migration as the last entry, so WM1's 104 turned it red. It now finds the
+    entry that creates `continuity_act_keys` and pins slot 102 exactly, since a landed migration never moves.
 
 ## 3. Rows, and what reds each
 
@@ -179,5 +187,9 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 33 | `mutation-floors` for the four keys and the three checks; `tsc --noEmit -p test/tsconfig.tests.json` | 9.23 | 7 passed; clean |
 | 34 | `coord-db` | 9.58 | 1 failed, 148 passed: the delegation tables' any-statement case timed out at 120 s again, with four OOM kills in the slice |
 | 35 | `coord-db` again, alone | 10.83 | 2 failed, 147 passed: two other cases (goals versions, WM0's phases) timed out at 20 s, with two OOM kills in the slice. Every failure in runs 29, 34 and 35 is a timeout, never an assertion, a different case each time; run 30 was green, and CI's fast run (which runs `coord-db`) is the arbiter |
+| 36 | CI's fast run at `74f096c81` (run 44451428962) | — | red on two shards, one real failure each, from pins main gained: the plan-reference test (`evidence-unverified` not in `plan.md`) and the act-key store test (its migration no longer last); every other shard green, `coord-db` included (149 passed in 17 s on shard 10: the local reds of runs 29, 34 and 35 were load) |
+| 37 | `continuity-act-key-store` after its slot pin | 7.00 | 15 passed |
+| 38 | `coordinator-plan-reference` after the `NOT_MET` row | 7.06 | 15 passed |
+| 39 | `mutation-floors` for the four keys and the three checks; `deviation-refs` (after `git fetch origin`) | 5.66 | 7 passed; 34 passed |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.
