@@ -208,7 +208,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors';
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors' | 'skillInstall';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -409,6 +409,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // The forecast lane (Overlord W2 forecasts A; spec Table 11.1d; plan `w2-forecasts-health.md` Task 4): one pass at a time,
   // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
   // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
+  // The worker skill's self-install (D-8126, wave A7-5; `coord/skillInstallLane.ts`): one pass at a time, every 15 s, so an
+  // install follows its dispatch's `skill-preflight:absent` within one beat. A pass runs at most `SKILL_INSTALL_PER_PASS`
+  // verbs, each under `SKILL_ENSURE_DEADLINE_MS` (60 s), which `staleAfterMs` stays above; a thrown pass is caught here.
+  { name: 'skillInstall', cadenceMs: 15_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 300_000, warnKey: 'ccrc-server: the skill self-install lane failed' },
   { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
   // The decision model's anchor-set lane (Overlord W2, plan `w2-decision-model.md` Task 9, Table 11.1c): one pass at a time, once a
   // day on the quiz lane's period by reference. It re-asks the anchors, admits lines and runs the canary through `gatherDecisions`

@@ -39,7 +39,10 @@ async function ensureWithin(deps: SkillInstallLaneDeps, wrapper: string): Promis
   let timer: ReturnType<typeof setTimeout> | undefined;
   const overdue = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deps.deadlineMs ?? SKILL_ENSURE_DEADLINE_MS); });
   try {
-    const verb = deps.runCcd(CCD_ARGV.skillEnsure(wrapper)).then((r) => (r.ran === false ? null : r));
+    const verb = (async () => {
+      const res = await deps.runCcd(CCD_ARGV.skillEnsure(wrapper));
+      return res.ran === false ? null : res;
+    })();
     return await Promise.race([verb, overdue]);
   } catch {
     return null;   // a refused argv or a throwing runner: the verb did not run

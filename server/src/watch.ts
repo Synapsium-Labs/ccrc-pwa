@@ -194,6 +194,7 @@ import { abandonRefusal } from './coord/close.js';
 import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
+import { skillInstallPass } from './coord/skillInstallLane.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -2869,6 +2870,9 @@ export class FleetWatcher {
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
       void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
+      const skillCoord = this.deps.coord;
+      if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall() }))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
