@@ -192,7 +192,7 @@ export const closeRefusedCommentBody = (): string => withCcrcProvenance(egress('
 export function closeTextRefusedMail(row: InboundText, refusalClass: string): { subject: string; body: string } {
   return {
     subject: `Linear inbound: ${row.identifier} closed without its reason`,
-    body: `You closed the issue ${row.identifier} of team ${row.teamKey}. ccrc canceled it in Linear, but the reason you gave did not pass the public-text check (${refusalClass}), so the comment says only that. The reason stays in ccrc.`,
+    body: `You closed the issue ${row.identifier} of team ${row.teamKey}. ccrc is canceling it in Linear, but the reason you gave did not pass the public-text check (${refusalClass}), so its comment there says only that the reason is not shown. The reason stays in ccrc; if Linear refuses the cancel, a separate mail says so.`,
   };
 }
 
