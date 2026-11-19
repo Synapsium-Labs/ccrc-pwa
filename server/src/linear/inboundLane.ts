@@ -22,7 +22,7 @@ import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam, teamOwnerProject
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
-  answeredMail, closeCommentBody, closeRefusedCommentBody, closeRefusedMail, closeTextRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
+  answeredMail, closeCommentBody, closeRefusedCommentBody, closeRefusedMail, closeTextRefusedMail, closeIdOf, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
   keyWaitMail, noCancelMail, ownerItemInput, type InboundHold, type InboundRecheck, type RetireWhy,
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
@@ -286,13 +286,17 @@ export class InboundLane {
         if (seen.kind === 'retire') { this.retire(fresh, seen.why, this.deps.now()); return; }
         if (seen.kind === 'unmeasured') { if (seen.word !== null) this.refused(fresh, { word: seen.word }, slot); return; }
         const refusal = this.textRefusal(fresh);
-        if (refusal !== null) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal));
+        const closeId = closeIdOf(fresh);
+        const kind = refusal === null ? 'reason' : 'fallback';
         const base = { pass: 'inbound', lane: 'sync', slot: slot.ref, workspaceId: row.workspaceId, teamKey: row.teamKey, target: row.identifier } as const;
         const comment = await this.deps.call({
           ...base, op: 'issueComment', fields: ['body'],
-          input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: refusal === null ? closeCommentBody(fresh.reason ?? '') : closeRefusedCommentBody() },
+          input: { requestId: uuidOf(`inbound:${row.linearId}:comment:${kind}:${closeId}`), issueId: row.linearId, body: refusal === null ? closeCommentBody(fresh.reason ?? '') : closeRefusedCommentBody() },
         });
-        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment, slot); return; }
+        const conflict = !comment.ok && comment.word === 'linear-invalid' && comment.detail === 'conflict';
+        if (!comment.ok && !conflict) { this.refused(fresh, comment, slot); return; }
+        // the owner is told only of a fallback comment this attempt made (a conflict is an earlier attempt's), before the cancel
+        if (refusal !== null && comment.ok) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal, closeId));
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
         if (!update.ok) { this.refused(fresh, update, slot); return; }
         plan.setInboundState(row.linearId, { actedAt: this.deps.now() });

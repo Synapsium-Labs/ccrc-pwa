@@ -59,7 +59,9 @@ interface Rig {
     /** A by-id read of one stored row's issue refused with this word (review 2524 F2): an answer about that one row. */
     byIdWord: Record<string, string>;
     /** What the drift pass's and the doors' read of the Linear store answers (review 2524 A2): the store, a rejection or an unreadable one. */
-    store: 'ok' | 'reject' | 'unreadable' };
+    store: 'ok' | 'reject' | 'unreadable';
+    /** The comments Linear accepted (review 2834 A2): a repeated requestId answers `conflict`, as Linear does, and posts nothing. */
+    comments: { requestId: string; body: string }[] };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
   /** When the plan sync's one owner of slot rejection was asked (`markSlotRejected`, review 2394 A-3). */
   rejected: number[];
@@ -109,7 +111,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'], byIdWord: {} as Rig['lin']['byIdWord'], store: 'ok' as Rig['lin']['store'] }, rejected: [] as number[],
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'], byIdWord: {} as Rig['lin']['byIdWord'], store: 'ok' as Rig['lin']['store'], comments: [] as Rig['lin']['comments'] }, rejected: [] as number[],
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
@@ -128,7 +130,12 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
       return ok({ issue: o ?? { id, identifier: r.plan.inboundOf(id)!.identifier, teamKey: 'AAA', stateType: 'unstarted' } });
     }
     if (ask.op.endsWith('Create')) { const id = U(counter++); return ok(ask.op === 'issueCreate' ? { id, identifier: `AAA-${counter}` } : { id }, id); }
-    if (ask.op === 'issueComment') return ok({ id: U(counter++) }, U(counter++));
+    if (ask.op === 'issueComment') {
+      const requestId = String(ask.input['requestId']);
+      if (r.lin.comments.some((c) => c.requestId === requestId)) return { ok: false, word: 'linear-invalid', detail: 'conflict', maybeSent: false } as CcrcOpOutcome;
+      r.lin.comments.push({ requestId, body: String(ask.input['body']) });
+      return ok({ id: U(counter++) }, U(counter++));
+    }
     if (ask.op.endsWith('Update')) return ok({ id: ask.target });
     return { ok: false, word: 'not-found', maybeSent: false };
   };
@@ -2091,5 +2098,54 @@ describe('a close re-runs the public-text check before it posts (D-8183, round 4
     await passAt(r, r.t.now + 1);
     expect(String(writes(r)[0]!.input['body'])).toContain('Closed: a duplicate of other work');
     expect(mails(r, 'Linear inbound: AAA-12 closed without%')).toEqual([]);
+  });
+});
+
+describe('the refused-text close has its own identity (review 2834 A1, A2, A6)', () => {
+  const MAIL = 'Linear inbound: AAA-12 closed without its reason%';
+  it('a re-close with another reason posts its own comment; the reason and fallback attempts carry different requestIds', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);                                  // the reason comment lands, the cancel fails retryably
+    expect(r.lin.comments.map((c) => c.body)).toHaveLength(1);
+    r.lin.fail.clear();
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a second, different reason', actedAt: null });   // retired, reopened, closed again
+    await passAt(r, r.t.now + 3600_000);
+    expect(r.lin.comments.map((c) => c.body).some((b) => b.includes('a second, different reason'))).toBe(true);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+    // a reason attempt and a fallback attempt of one close never share a key
+    const r2 = await rig({ mode: 'public' });
+    await detect(r2, [node(12)]);
+    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe' });
+    await passAt(r2, r2.t.now + 1);
+    const idsAsked = r2.asks.filter((a) => a.op === 'issueComment').map((a) => String(a.input['requestId']));
+    expect(idsAsked).toHaveLength(1);
+    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe', actedAt: null });
+    r2.db.prepare('DELETE FROM project_linking').run();
+    r2.db.prepare("INSERT INTO project_linking (project, teamKey, override) VALUES ('project-a', 'AAA', 'private')").run();
+    await passAt(r2, r2.t.now + 3600_000);
+    const all = r2.asks.filter((a) => a.op === 'issueComment').map((a) => String(a.input['requestId']));
+    expect(new Set(all).size).toBe(all.length);
+  });
+
+  it('two refused closes of one issue are mailed twice; a retried pass of one close once', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe' });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);                                  // comment made, mail sent, cancel refused retryably
+    expect(mails(r, MAIL)).toHaveLength(1);
+    r.lin.fail.clear();
+    await passAt(r, r.t.now + 3600_000);                           // the retry: the comment is a conflict, no second mail
+    expect(mails(r, MAIL)).toHaveLength(1);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-98 for another dupe', actedAt: null });
+    await passAt(r, r.t.now + 3600_000);
+    const m = mails(r, MAIL);
+    expect(m).toHaveLength(2);
+    expect(m[0]!.subject).not.toBe(m[1]!.subject);
+    for (const x of m) { expect(x.body).not.toContain('AAA-99'); expect(x.body).toContain('posted a comment there without the reason'); }
   });
 });

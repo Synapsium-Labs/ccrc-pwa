@@ -16,7 +16,7 @@ import { LINEAR_TEXT_PREFACE } from './driftPolicy.js';
 import type { InboundNote, InboundRow } from '../coord/planStore.js';
 import { inboundRetirable, type RetireWhy } from './inboundRetire.js';
 import type { LinearAnswerRefusalWord } from './ops.js';
-import { deferralOf, deferralUntil, deferralUsesBackoff, egress, type DeferCause } from './planSyncPolicy.js';
+import { deferralOf, deferralUntil, deferralUsesBackoff, egress, uuidOf, type DeferCause } from './planSyncPolicy.js';
 
 /** What the texts need of an inbound row. */
 export interface InboundText { identifier: string; teamKey: string; title: string; body: string | null }
@@ -188,11 +188,20 @@ export const closeCommentBody = (reason: string): string => withCcrcProvenance(e
 /** The comment a close leaves when its stored reason no longer passes the public-text check (spec §6.1): it carries no stored text. */
 export const closeRefusedCommentBody = (): string => withCcrcProvenance(egress('Closed by ccrc. The reason is not shown here: it did not pass the public-text check.'));
 
-/** The owner's one mail for a close whose reason failed the public-text check at act time: the issue and the class, never the text. */
-export function closeTextRefusedMail(row: InboundText, refusalClass: string): { subject: string; body: string } {
+/** Review 2834 A1/A2: what tells one close of an issue apart from a later close of the same issue (after a retire and a reopen):
+ *  the first 12 hex of a digest of the stored reason, then the row's `mailedAt` (else `seenAt`). The digest is `uuidOf`'s (L1
+ *  stays free of `node:` imports); its first 12 hex digits are the sha256's own. RESIDUAL: two closes of one issue with the same
+ *  reason and no mail between them share one identity, so the second posts no new comment and sends no new mail. */
+export const closeIdOf = (row: { reason: string | null; mailedAt: number | null; seenAt: number }): string =>
+  `${uuidOf(row.reason ?? '').replace(/-/g, '').slice(0, 12)}-${row.mailedAt ?? row.seenAt}`;
+
+/** The owner's mail for a close whose reason failed the public-text check at act time: the issue and the class, never the text.
+ *  The subject carries the close's identity (`closeIdOf`), so a second refused close of one issue is mailed again and a retried
+ *  pass of the same close is not. Sent only when the fallback comment was freshly made. */
+export function closeTextRefusedMail(row: InboundText, refusalClass: string, closeId: string): { subject: string; body: string } {
   return {
-    subject: `Linear inbound: ${row.identifier} closed without its reason`,
-    body: `The issue ${row.identifier} of team ${row.teamKey} was closed in ccrc. ccrc is canceling it in Linear. The reason given did not pass the public-text check (${refusalClass}), so ccrc does not post it there; the reason stays in ccrc. If Linear refuses the cancel, a separate mail says so.`,
+    subject: `Linear inbound: ${row.identifier} closed without its reason (close ${closeId})`,
+    body: `The issue ${row.identifier} of team ${row.teamKey} was closed in ccrc. ccrc posted a comment there without the reason, because the reason failed the public-text check (${refusalClass}); the reason stays in ccrc. If an earlier attempt of this close already posted the reason, that comment stays. ccrc is canceling the issue; if it gives the cancel up, a separate mail says so (a cancel Linear asks to retry is retried).`,
   };
 }
 
