@@ -128,6 +128,8 @@ def mh_overcap($b; $cap): " This command is \($b) bytes, over the hook's \($cap)
 # empties a double-quoted word such as `"$API"` and leaves an empty head. The head is the merge deny's head grammar
 # (`mh_head`), then a word ending in `ccrc-api` (bare, quoted or with a path) or a variable (`$API`, `"${API}"`). On the
 # raw text a form quoted inside another command, `echo "x; ccrc-api mail ack"`, counts too: stricter, fail closed.
+# RESIDUALS, beside the gated acts': a head the head grammar does not read; a `ccrc-api` reached through a substitution
+# (`$(command -v ccrc-api) mail ack`) or an alias; options between `ccrc-api` and `mail`; an earlier `exec > f`.
 def mh_ack: mh_head + "[\"']?(?:[^\\s;&|()\"']*ccrc-api|\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?)[\"']?[ \\t]+mail[ \\t]+(?<v>ack|inbox)(?=[\\s;&|()<>\"']|$)";
 # Whether an inbox only shows, read from the rest of its command: `cmd_inbox` shows only when its standard output is a
 # pipe or /dev/null. So the last redirection of standard output (`>`, `1>`, `>>`, `>|`, `&>`, `&>>`, `>&`) must name
