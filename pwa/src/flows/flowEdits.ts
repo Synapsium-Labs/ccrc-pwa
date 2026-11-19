@@ -118,3 +118,9 @@ export function removeStep(doc: FlowDoc, id: string): FlowDoc {
 /** A protocol block's description, for the inspector's locked note. */
 export const protocolNote = (b: FlowBlock): string =>
   b.step === undefined ? '' : `ccrc's own step: ${PROTOCOL[b.step].title.toLowerCase()}. It can be moved, never edited or removed.`;
+
+/** A shared flow file's name (§14.1): the title as a slug, the version, `.flow.json`. */
+export function flowFileName(title: string, version: number): string {
+  const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'flow';
+  return `${slug}-v${version}.flow.json`;
+}

@@ -6,7 +6,7 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
-import type { FlowAnswer, FlowDoc, FlowsListAnswer } from '../../shared/flows.js';
+import { skeletonFlowDoc, type FlowAnswer, type FlowDoc, type FlowsListAnswer } from '../../shared/flows.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -126,6 +126,25 @@ describe('the Flows doors', () => {
     await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
     expect((await app.inject({ method: 'DELETE', url: `/api/flows/${id}` })).json()).toEqual({ ok: true });
     expect((await app.inject({ method: 'GET', url: `/api/flows/${id}/versions/1` })).statusCode).toBe(404);
+    await app.close();
+  });
+
+  it('imports a file into a new flow\'s draft, never a version, and refuses one that breaks the rules', async () => {
+    const { app } = await open();
+    const doc = skeletonFlowDoc('Shared');
+    const id = await create(app, { import: { ...doc, exportedFrom: { title: 'Shared', version: 2 } } });
+    const got = await read(app, id);
+    expect(got.draft).toEqual({ ok: true, doc });
+    expect(got.versions).toEqual([]);
+    expect(got.flow.source).toBeNull();
+    const broken = { ...doc, edges: doc.edges.filter((e) => e.from !== 'verify') };
+    const res = await app.inject({ method: 'POST', url: '/api/flows', payload: { import: broken } });
+    expect(res.statusCode).toBe(409);
+    expect((res.json() as { problems: unknown[] }).problems.length).toBeGreaterThan(0);
+    const bad = await app.inject({ method: 'POST', url: '/api/flows', payload: { import: { ...doc, schema: 9 } } });
+    expect(bad.statusCode).toBe(400);
+    const both = await app.inject({ method: 'POST', url: '/api/flows', payload: { import: doc, template: 'ccrc' } });
+    expect(both.statusCode).toBe(400);
     await app.close();
   });
 

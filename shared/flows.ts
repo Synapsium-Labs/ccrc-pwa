@@ -56,7 +56,9 @@ const FLOW_VAR_MAP: Record<FlowVar, true> = {
 export const FLOW_VARS = Object.keys(FLOW_VAR_MAP) as readonly FlowVar[];
 
 export const FLOW_SCHEMA = 1;
-export const FLOW_LIMITS = { blocks: 60, prompt: 4000, title: 80, outcome: 40 } as const;
+/** `fileBytes`: a shared flow file's cap, checked on its UTF-8 bytes before it is parsed (§14.1); 60 prompts at their cap fit,
+ *  and it stays under the server's 1 MiB request body. */
+export const FLOW_LIMITS = { blocks: 60, prompt: 4000, title: 80, outcome: 40, fileBytes: 786432 } as const;
 const ID_RE = /^[a-z0-9-]{1,40}$/;
 const OUTCOME_RE = /^[a-z0-9-]{1,40}$/;
 const VAR_RE = /\{\{\s*([^}]*?)\s*\}\}/g;
@@ -139,6 +141,21 @@ export function parseFlowDoc(v: unknown): FlowParse {
 export function canonicalFlowJson(doc: FlowDoc): string {
   const p = parseFlowDoc(JSON.parse(JSON.stringify(doc)));
   return JSON.stringify(p.ok ? p.doc : doc);
+}
+
+/** A shared flow file (§14.1): one published version, canonical, with where it came from. Only a published version is
+ *  exported, so only a document that passed the validator leaves. `exportedFrom` is set aside on import. */
+export function flowExportJson(doc: FlowDoc, version: number): string {
+  return JSON.stringify({ ...JSON.parse(canonicalFlowJson(doc)), exportedFrom: { title: doc.title, version } }, null, 2);
+}
+
+/** A shared flow file's text, read as untrusted input (§14.1): the byte cap first, then JSON, then the shape check every
+ *  read runs. Its rules are the caller's to check, with `validateFlow`, as for any draft. */
+export function readFlowFile(text: string): FlowParse {
+  if (new TextEncoder().encode(text).length > FLOW_LIMITS.fileBytes) return { ok: false, reason: `the file is over ${FLOW_LIMITS.fileBytes} bytes` };
+  let v: unknown;
+  try { v = JSON.parse(text); } catch { return { ok: false, reason: 'the file is not JSON' }; }
+  return parseFlowDoc(v);
 }
 
 /** One broken rule, with what it names so the editor can point at it. */

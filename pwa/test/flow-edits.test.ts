@@ -2,7 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { skeletonFlowDoc, validateFlow, type FlowDoc } from '../../shared/flows';
 import {
-  addOutcome, addStepAfter, freshId, outlineOrder, removeOutcome, removeStep, setBlock, setTarget, targetOf,
+  addOutcome, addStepAfter, flowFileName, freshId, outlineOrder, removeOutcome, removeStep, setBlock, setTarget, targetOf,
 } from '../src/flows/flowEdits';
 
 const sk = (): FlowDoc => skeletonFlowDoc('x');
@@ -59,5 +59,10 @@ describe('flow edits', () => {
     const r = addStepAfter(sk(), 'dispatch')!;
     expect(freshId(r.doc, 'New step')).toBe('new-step-2');
     expect(freshId(sk(), '!!!')).toBe('step');
+  });
+
+  it('a shared file is named from its title and version', () => {
+    expect(flowFileName('My Flow: v2!', 3)).toBe('my-flow-v2-v3.flow.json');
+    expect(flowFileName('!!!', 1)).toBe('flow-v1.flow.json');
   });
 });
