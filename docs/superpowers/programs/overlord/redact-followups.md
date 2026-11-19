@@ -110,3 +110,40 @@ here once a plan that defines it is on `main`.
   - `secret-mask`'s "typed slowly" case timed out once, at load 9. It times out on the original sources too, alone at
     the same load: 24.1 s there against 21.8 s with this change. So it is load, not this change, and it was green on
     the re-run.
+
+### Fix round 1 (review 2729)
+
+- Red first: 10 new drawer cases red before the drawer carry, every one because key rows were drawn (7 to 840 rows of
+  a key). They cover the review's 50-row key at one line per chunk and at 7, 256, 1000, 1024 and 2048-character chunks,
+  an unclosed key with the prose after its blank line, an END line a chunk cuts, CR LF rows, and the 64 KB window
+  releasing. Two more drawer cases and four direct `pemStreamSpans` cases came from two mutants that first survived
+  (below). `redact-followups` is 201 of 201 green.
+- F2: `SHAPE_MASK.maskDeep`, best of 5, at load about 11:
+
+  | Input | Round 1's tip | After |
+  |---|---|---|
+  | JSON-escaped empty blocks, 1 MB | 409.2 ms | 14.4 ms |
+  | JSON-escaped empty blocks, 2 MB | 1573.7 ms | 28.2 ms |
+  | JSON-escaped closed blocks, 1 MB | 136.1 ms | 5.4 ms |
+  | JSON-escaped closed blocks, 2 MB | 556.8 ms | 11.4 ms |
+
+  A case pins 2 MB at less than 9 times 512 KB (linear is about 4; the old search was about 16).
+- Mutation, from saved copies, each file restored byte for byte. All 22 mutants were killed:
+  - 12 in the carry and the cursor. Two of them first survived: the old line-start offset (a stream whose first chunk
+    cuts the BEGIN line, which is now a case) and a line start always false (only a caller with no text before reads
+    it, so it now has direct `pemStreamSpans` cases).
+  - 7 more of round 1's row mutants, against the new cursor. One of them, the row break dropped from the walk, now
+    loops for ever on the same break: the suite never passes, and the run was stopped after 180 s.
+- Suites, one file at a time through `ccrc test`, all green:
+  - `redact`, `redact-profiles` (its export-list pin gains `pemStreamSpans`), `redact-gitleaks-rows`,
+    `history-redact-profiles`, `docs-parity`, `docs-shared`, `redact-cli` and `redact-followups`;
+  - `secret-mask`, `drawer-mask-rows`, `drawer-mask-screen`, `push-masker-pin` and `unprintable-characterization`;
+  - `linear-ops`, `linear-proxy-routes`, every `single-definition/*` file, `anchors`, `citations`, `growth-check`,
+    `ownership`, `consolidation-census`, `deviation-refs` and `topology-clean`;
+  - the server typecheck.
+  - The slice's memory cap killed `drawer-mask-rows` and `deviation-refs` once each, and both were green on a re-run.
+  - `secret-mask`'s "typed slowly" case timed out once at its 20 s default at load 11. At load 6 it takes 21.0 s on
+    `main`'s sources and 21.4 s on these, and the whole file is green with a 120 s timeout.
+- The masker round that holds `mask.ts` (#3031) asked for its suites to be run: `mask-break-grammar` (4), `drawer-mask-rows`
+  (51), `drawer-mask-screen` (13), `secret-mask` (96) and `redact-followups` (201), all green on a merge of the two
+  branches (clean, no conflict), with `secret-mask`, `drawer-mask-rows` and `drawer-mask-screen` green on this branch too.
