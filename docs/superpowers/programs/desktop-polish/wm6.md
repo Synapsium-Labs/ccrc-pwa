@@ -79,7 +79,21 @@ nothing, so the two checks give the same answer with or without the condition. T
 the plan words the rule that way; what actually guards "an epic with no waves passes both checks" is the reader
 (`listedWaves`), and M2c, which breaks it, reds 12 cases. D-8780 names this as `wm6-contiguity-needs-no-condition`.
 
-(The remaining runs and guards are recorded below once they have run.)
+**The rest of the runs**, all measured, `--maxWorkers=2`, one at a time, load average 11 to 15:
+
+| Run | Result |
+|---|---|
+| `test/single-definition` (41 files) | first run: 1 failed, 1529 passed: `advance-switches.test.ts`'s `the pin scan parses only the test files that spell a W1a basename` **timed out at 20000 ms under load** (a file this change does not touch). Rerun alone once: 53 passed |
+| `test/rings` (12 files) | 133 passed |
+| `test/coord-policy-rings.test.ts` | 20 passed |
+| `test/sim/mutation-floors.test.ts` | **not run**: `planPolicy.ts`'s sets did not change (no word, state or list was added to or removed from one), so the brief's condition did not arise |
+| server compile check (`tsc --noEmit -p tsconfig.json`) | clean (after one fix: `listedWaves` first returned a `readonly` array and `diffPlan`'s insert wants a mutable one; it now returns a copy) |
+| server test-project compile check (`tsc --noEmit -p test/tsconfig.tests.json`) | **UNMEASURED locally.** Four runs, each alone and each killed by the test slice's memory cap (`MemoryMax=6G`, exit 137; the last with a bounded heap, `--max-old-space-size=3500`, and one other job in the slice). `typecheck-tests.test.ts` (the same compile inside the suite) was killed the same way at its first run. The compile of `src` passes and every test file ran under vitest, which does not typecheck, so a type error in the new tests is not excluded; CI's `typecheck-tests` guard on this pull request is the arbiter |
+| `deviation-refs` (after `git fetch origin main`) | 34 passed |
+| `dtbd` | 1 passed |
+| `topology-clean` | 61 passed |
+| `ledger-guard.mjs --base origin/main` | exit 0: passed by the `Ledger-Edit` trailer on the head, layout ok. `ci-ledger-guard.test.ts`: 32 passed |
+| `git merge-tree` against `origin/HEAD` | exit 0: clean (main moved by one commit, the mail times change of #3065, which this branch does not touch), so no absorption (clause 16) |
 
 ## 5. Co-edit consent
 
