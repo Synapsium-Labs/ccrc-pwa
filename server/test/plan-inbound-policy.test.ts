@@ -1,7 +1,7 @@
 // Review 2457 F2, F4 (D-8733, D-8735): the pure deciders of the inbound re-read and the take door's choice. L1, no I/O.
 import { describe, expect, it } from 'vitest';
 import {
-  INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict,
+  INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict, upkeepLookupOf,
 } from '../src/linear/inboundPolicy.js';
 import { handedRowOf } from '../src/coord/planPolicy.js';
 import { RETIRE_WHYS, inboundRetirable, retireWhyOf } from '../src/linear/inboundRetire.js';
@@ -122,5 +122,18 @@ describe('inboundReopenedMail names the retire cause (review 2524 A4)', () => {
     expect(sentence('moved-out')).toBe('The issue AAA-12 left the managed Linear teams and is back in one, so it waits for your triage once more.');
     expect(sentence('ccrc-own')).toBe('The issue AAA-12 was ccrc\'s own issue and now reads as inbound in Linear, so it waits for your triage once more.');
     expect(sentence(null)).toBe('The issue AAA-12 was retired earlier and is open again in Linear, so it waits for your triage once more.');
+  });
+});
+
+describe('upkeepLookupOf (review 2571 F10)', () => {
+  it('a measured home workspace is the only place the lookup is made', () => {
+    expect(upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: 'ws-a' })).toEqual({ kind: 'lookup', workspace: 'ws-a' });
+  });
+  it('no home, or a home with no team key, is issue-not-inbound', () => {
+    expect(upkeepLookupOf({ home: null, homeTeamKey: null, homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'issue-not-inbound' });
+    expect(upkeepLookupOf({ home: 'project-x', homeTeamKey: null, homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'issue-not-inbound' });
+  });
+  it('a home with a team key whose workspace could not be resolved is unreachable', () => {
+    expect(upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'unreachable' });
   });
 });

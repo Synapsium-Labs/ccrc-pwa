@@ -12,7 +12,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GateDecision } from '../auth/gate.js';
 import { linearEgressText } from '../linear/ops.js';
-import { handedMail, inboundDoorVerdict, raisedItemInput, returnedMail, type InboundRecheck } from '../linear/inboundPolicy.js';
+import { handedMail, inboundDoorVerdict, raisedItemInput, returnedMail, upkeepLookupOf, type InboundRecheck } from '../linear/inboundPolicy.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { isLinearTeamKey } from '../../../shared/linear.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
@@ -742,7 +742,15 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       const left = recheckRefusal(plan, handed, rechecks, 'epic' in t);
       if (left !== null) return left;
     }
-    const parked = handed === null ? plan.upkeepTicketByIdentifier(homeWorkspace, t.issue) : null;
+    // no handed row, a take into an epic or a close: the Upkeep ticket is looked up in the measured home workspace only (review 2571 F10)
+    let lookupIn: string | null = homeWorkspace;   // a return keeps its current path
+    if (handed === null && ('epic' in t || 'close' in t)) {
+      const home = coord.programHome(slug);
+      const where = upkeepLookupOf({ home, homeTeamKey: home === null ? null : coord.linkingOf(home).teamKey, homeWorkspace });
+      if (where.kind === 'refuse') return { refuse: where.word, detail: where.detail };
+      lookupIn = where.workspace;
+    }
+    const parked = handed === null ? plan.upkeepTicketByIdentifier(lookupIn, t.issue) : null;
     const upkeep = parked !== null && parked.state === 'open' ? parked : null;
     if (handed === null && upkeep === null) return { refuse: 'issue-not-inbound', detail: `${t.issue} was not handed to ${slug} and is not an Upkeep ticket` };
     const ok = (): { ok: true; plan: PlanView } => ({ ok: true, plan: viewOf(plan, coord, slug) });

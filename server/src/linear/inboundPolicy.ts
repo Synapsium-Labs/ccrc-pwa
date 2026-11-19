@@ -328,3 +328,16 @@ export function inboundDoorVerdict(answer: InboundRecheck | undefined, binds: bo
   if (answer === undefined || answer.kind === 'unmeasured') return binds ? { kind: 'refuse', word: 'unreachable' } : { kind: 'go' };
   return answer.kind === 'managed' ? { kind: 'go' } : { kind: 'retire', why: answer.why, word: 'issue-not-inbound' };
 }
+
+/** Where `plan take` may look an Upkeep ticket up by identifier when no inbound row was handed to the programme (review 2571 F10).
+ *  A ticket is looked up ONLY in the programme home's measured workspace; an identifier that one ticket in ANY workspace holds must
+ *  never be acted on from here. Three cases: no programme home, or a home whose project has no team key, is `issue-not-inbound` (the
+ *  programme has no workspace to look in); a home with a team key whose workspace could not be resolved (the Linear store read failed,
+ *  was not listed, or no slot routes the team) is `unreachable`, the Linear read's existing word: a retry helps; otherwise `lookup`. */
+export type UpkeepLookup = { kind: 'lookup'; workspace: string } | { kind: 'refuse'; word: 'issue-not-inbound' | 'unreachable'; detail: string };
+export function upkeepLookupOf(c: { home: string | null; homeTeamKey: string | null; homeWorkspace: string | null }): UpkeepLookup {
+  if (c.home === null) return { kind: 'refuse', word: 'issue-not-inbound', detail: 'the programme has no home project, so there is no workspace to look an Upkeep ticket up in' };
+  if (c.homeTeamKey === null) return { kind: 'refuse', word: 'issue-not-inbound', detail: 'the programme\'s home project has no Linear team, so there is no workspace to look an Upkeep ticket up in' };
+  if (c.homeWorkspace === null) return { kind: 'refuse', word: 'unreachable', detail: 'the workspace of the programme\'s home could not be measured, so an Upkeep ticket cannot be looked up' };
+  return { kind: 'lookup', workspace: c.homeWorkspace };
+}

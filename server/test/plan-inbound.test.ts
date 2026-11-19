@@ -152,7 +152,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   apps.push(r.app);
   registerPlanRoutes(r.app, {
     coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS, sessionAuth: () => ({ allow: false, verdict: 'no-session', reason: 'refused', device: null }),
-    authEnabled: false, readLinearStore: () => readLinearStore(ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf, privateTrackerKeys: [],
+    authEnabled: false, readLinearStore: () => r.lin.store === 'reject' ? Promise.reject(new Error('store')) : r.lin.store === 'unreadable' ? Promise.resolve({ kind: 'unreadable' as const, code: 'EIO' }) : readLinearStore(ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf, privateTrackerKeys: [],
     ...(o.noRecheck === true ? {} : { inboundRecheck: (row: InboundRow) => r.drift.recheckInbound(row) }),
   });
   registerHierarchyRoutes(r.app, { plan, serial, presenceOf, by: () => 'device-a', itemOf: (id) => coord.itemById(id), now: () => r.t.now });
@@ -1829,6 +1829,42 @@ describe('plan take never reaches another workspace\'s Upkeep ticket (review 252
     }
     untouched(r, id);
     expect([r.plan.inboundOf(U(50))!.state, r.plan.inboundOf(U(51))!.state]).toEqual(['handed', 'handed']);
+  });
+});
+
+describe('plan take with no handed row and an unmeasured home fails closed (review 2571 F10)', () => {
+  const otherTicket = (r: Rig): number => {
+    r.plan.upsertInbound({ linearId: U(60), workspaceId: WS.b.id, teamKey: 'BBB', identifier: 'AAA-12', title: 'Other ticket', body: null, seenAt: T - 4000 });
+    const done = r.plan.placeInboundInUpkeep({ linearId: U(60), project: 'project-b', now: T - 3500 });
+    if (!done.ok) throw new Error('fixture: the Upkeep ticket was not placed');
+    return done.ticketId;
+  };
+  const untouched = (r: Rig, id: number): void => {
+    const t = r.plan.upkeepEpicOf('project-b')!.tickets.find((x) => x.id === id)!;
+    expect([t.program, t.state]).toEqual([null, 'open']);
+  };
+  const epicOf = (slug: string, home: string | null) => (r: Rig): void => {
+    applyPlanChanges(r.db, slug, changes({
+      epics: { insert: [{ key: 'e-z', project: 'project-a', waves: [1], ordinal: 0, title: 'Epic z', summary: 'Summary' }], update: [], drop: [] },
+      checkpoints: { insert: [], update: [], drop: [] },
+    }), OTHER, T - 500, home === null ? null : { home, title: slug });
+  };
+  const cases: Array<[string, string, string | null, 'ok' | 'unreadable', number, string]> = [
+    ['no programme home', 'prog-nh', null, 'ok', 409, 'issue-not-inbound'],
+    ['a home with no team key', 'prog-nk', 'project-x', 'ok', 409, 'issue-not-inbound'],
+    ['a home whose workspace cannot be resolved', 'prog-c', 'project-b', 'unreadable', 503, 'unreachable'],
+  ];
+  it.each(cases)('%s: a take into an epic and a close refuse and the ticket is unchanged', async (_n, slug, home, store, status, word) => {
+    const r = await rig({ twoWs: true });
+    if (slug !== 'prog-c') epicOf(slug, home)(r);
+    const id = otherTicket(r);
+    r.lin.store = store;
+    const epic = slug === 'prog-c' ? 'e-c' : 'e-z';
+    for (const body of [{ issue: 'AAA-12', epic }, { issue: 'AAA-12', close: { why: 'noise' } }]) {
+      const res = await take(r, slug, body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([status, word]);
+    }
+    untouched(r, id);
   });
 });
 
