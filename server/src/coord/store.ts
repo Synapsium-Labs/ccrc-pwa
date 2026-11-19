@@ -55,6 +55,7 @@ import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { UrgentRole } from './urgentMail.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -6813,16 +6814,43 @@ export class CoordStore {
 
   /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
    *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
-   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. */
+   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `urgentAs` (mid-turn
+   *  mail, plan Task 2.2): the sender's role for an urgent mail, which only the mail ingress passes, on
+   *  `urgentSenderVerdict`'s `allowed`; absent or null for every other mail. This is that column's one writer too. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[]; answersMail?: number | null }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, urgentAs) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.urgentAs ?? null);
     return { id: Number(res.lastInsertRowid) };
+  }
+
+  /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would
+   *  print and the ack door would accept (`ACKABLE_OUTSTANDING_SQL`), in delivery-id order, each with the role its mail
+   *  stored. Derived, never stored: an ack, a run's close and a child's reclaim release a delivery by leaving that set.
+   *  `mail.urgentAs` is CHECKed to the two role words, so the read casts it. A recipient with nothing held is absent. */
+  urgentHolds(): ReadonlyMap<string, readonly { readonly deliveryId: number; readonly role: UrgentRole }[]> {
+    const rows = this.urgentRows('', []) as { toId: string; deliveryId: number; role: UrgentRole }[];
+    const holds = new Map<string, { deliveryId: number; role: UrgentRole }[]>();
+    for (const r of rows) holds.set(r.toId, [...(holds.get(r.toId) ?? []), { deliveryId: r.deliveryId, role: r.role }]);
+    return holds;
+  }
+
+  /** Whether `fromId` has an urgent mail to `toId` (the resolved recipient) still on the hold's set: the ingress's
+   *  `urgent-outstanding` test (spec §3.1, plan P4), asked inside the insert's transaction so two sends cannot both pass. */
+  urgentOutstanding(fromId: string, toId: string): boolean {
+    return this.urgentRows('AND m.fromId = ? AND d.toId = ? ', [fromId, toId]).length > 0;
+  }
+
+  private urgentRows(and: string, args: readonly string[]): unknown[] {
+    return this.db.prepare(
+      'SELECT d.toId AS toId, d.id AS deliveryId, m.urgentAs AS role FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `LEFT JOIN runs rr ON rr.id = m.runId WHERE m.urgentAs IS NOT NULL ${and}AND ${ACKABLE_OUTSTANDING_SQL.sql} ` +
+      'ORDER BY d.toId, d.id',
+    ).all(...args, ...ACKABLE_OUTSTANDING_SQL.args);
   }
 
   /**

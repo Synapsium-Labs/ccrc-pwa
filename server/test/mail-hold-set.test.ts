@@ -29,7 +29,7 @@ type Urgent = 'coordinator' | 'overlord' | undefined;
 const queued = (s: CoordStore, runId: number | null, urgentAs: Urgent): number => {
   const fields = { fromId: COORD, fromUuid: 'u-coordinator', toId: TO, runId, kind: 'status' as const,
     subject: 'fixture', body: 'x', artifacts: [] as string[] };
-  const m = s.insertMail(urgentAs === undefined ? fields : { ...fields, urgentAs } as typeof fields);
+  const m = s.insertMail(urgentAs === undefined ? fields : { ...fields, urgentAs });
   return s.queueDelivery(m.id, TO, `<mail>${m.id}</mail>`).id;
 };
 
@@ -80,5 +80,75 @@ describe("inboxFor's set, pinned before the move (plan Task 2.1)", () => {
     }
     expect(MAIL_RUN_CLOSED_ERROR).toBe('run closed');
     expect(MAIL_CHILD_RECLAIMED_ERROR).toBe('child workspace reclaimed');
+  });
+});
+
+const urgentIds = (s: CoordStore, to = TO): number[] =>
+  (s.urgentHolds().get(to) ?? []).map((h) => h.deliveryId);
+const isUrgent = (s: CoordStore, deliveryId: number): boolean =>
+  (s.db.prepare('SELECT m.urgentAs AS u FROM mail_deliveries d JOIN mail m ON m.id = d.mailId WHERE d.id = ?')
+    .get(deliveryId) as { u: string | null }).u !== null;
+
+describe('the urgent hold (plan Task 2.5; spec §3.2)', () => {
+  it('answers, per recipient, the urgent deliveries in delivery-id order, each with its role', () => {
+    const f = fixture('coordinator');
+    const over = queued(f.s, null, 'overlord');
+    queued(f.s, null, undefined);
+    const other = f.s.insertMail({ fromId: COORD, fromUuid: 'u', toId: 'lane-b-worker', runId: null, kind: 'status',
+      subject: 's', body: 'b', artifacts: [], urgentAs: 'coordinator' });
+    const otherDelivery = f.s.queueDelivery(other.id, 'lane-b-worker', 'e').id;
+    const holds = f.s.urgentHolds();
+    expect(holds.get(TO)).toEqual([
+      { deliveryId: f.queuedRow, role: 'coordinator' }, { deliveryId: f.delivered, role: 'coordinator' },
+      { deliveryId: f.ceilingOpen, role: 'coordinator' }, { deliveryId: over, role: 'overlord' },
+    ]);
+    expect(holds.get('lane-b-worker')).toEqual([{ deliveryId: otherDelivery, role: 'coordinator' }]);
+  });
+
+  it("set equality: the hold is exactly the urgent members of inboxFor's set, in both directions, over every state", () => {
+    for (const urgent of ['coordinator', undefined] as const) {
+      const f = fixture(urgent);
+      // A mix: the fixture's rows carry `urgent`, and one row of the other kind joins each state's neighbours.
+      queued(f.s, f.live, urgent === undefined ? 'coordinator' : undefined);
+      const all = (f.s.db.prepare('SELECT id FROM mail_deliveries WHERE toId = ? ORDER BY id').all(TO) as { id: number }[])
+        .map((r) => r.id);
+      const set = new Set(inbox(f.s));
+      const hold = urgentIds(f.s);
+      expect(hold).toEqual([...hold].sort((a, b) => a - b));
+      for (const id of all) expect(hold.includes(id), `delivery ${id}`).toBe(set.has(id) && isUrgent(f.s, id));
+    }
+  });
+
+  it("closing the run with an urgent mail unread empties the hold, and so does reclaiming the child", () => {
+    const f = fixture(undefined);
+    const onRun = queued(f.s, f.live, 'coordinator');
+    expect(urgentIds(f.s)).toEqual([onRun]);
+    f.s.cancelOutstandingDeliveries(f.live);
+    expect(urgentIds(f.s)).toEqual([]);
+    const g = fixture(undefined);
+    const peer = queued(g.s, null, 'coordinator');
+    expect(urgentIds(g.s)).toEqual([peer]);
+    g.s.cancelDeliveriesTo(TO);
+    expect(urgentIds(g.s)).toEqual([]);
+  });
+
+  it('acking empties it', () => {
+    const f = fixture(undefined);
+    const id = queued(f.s, f.live, 'coordinator');
+    f.s.markDelivered(id, NOW);
+    expect(urgentIds(f.s)).toEqual([id]);
+    expect(f.s.markAcked(id, NOW)).toMatchObject({ ok: true });
+    expect(f.s.urgentHolds().has(TO)).toBe(false);
+  });
+
+  it('urgentOutstanding is keyed on the sender and recipient pair, over the same set', () => {
+    const f = fixture(undefined);
+    expect(f.s.urgentOutstanding(COORD, TO)).toBe(false);
+    const id = queued(f.s, f.live, 'coordinator');
+    expect(f.s.urgentOutstanding(COORD, TO)).toBe(true);
+    expect(f.s.urgentOutstanding('lane-b-coordinator', TO)).toBe(false);
+    expect(f.s.urgentOutstanding(COORD, 'lane-b-worker')).toBe(false);
+    f.s.markAcked(id, NOW);
+    expect(f.s.urgentOutstanding(COORD, TO)).toBe(false);
   });
 });

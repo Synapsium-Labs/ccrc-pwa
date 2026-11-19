@@ -3920,6 +3920,26 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE approvals ADD COLUMN literalInRoot INTEGER CHECK (literalInRoot IS NULL OR literalInRoot IN (0, 1));
   ALTER TABLE push_outbox ADD COLUMN pushSource TEXT;
   `,
+
+  // ── 105: user_version 104 -> 105 ──────────────────────────────────────────
+  // Urgent mail (mid-turn mail PR 2, plan `docs/superpowers/plans/2026-11-19-mid-turn-mail.md` Task 2.2, P1).
+  // `mail.urgentAs`: the sender's role for an urgent mail, `coordinator` or `overlord`, decided by
+  // `coord/urgentMail.ts#urgentSenderVerdict` and written once by `insertMail`, its one writer, from the mail ingress only.
+  // NULL = not urgent, which is every row written before this entry and every send that does not ask. Stored as the role
+  // rather than a boolean, so a later designation or a closed run never changes what an old mail says. `mail_urgent` is
+  // a partial index over the urgent rows only, so the hold's read (`urgentHolds`) and the one-outstanding test scan them
+  // and not the whole table.
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX: an older build opening a file at this `user_version` takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its INSERT names its columns and never this one, so a row it writes is not urgent.
+  // The slot is POSITIONAL: the mail idempotency key (#3056) and the Linear follow-up (#3021) want 105 too, and whoever
+  // lands second renumbers (the coordinator's standing license). RE-MEASURE the slot before merge (it must print 104
+  // before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN urgentAs TEXT CHECK (urgentAs IS NULL OR urgentAs IN ('coordinator', 'overlord'));
+  CREATE INDEX mail_urgent ON mail(urgentAs) WHERE urgentAs IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
