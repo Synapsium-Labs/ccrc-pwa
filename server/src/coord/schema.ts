@@ -3896,7 +3896,7 @@ export const MIGRATIONS: readonly string[] = [
   // NEW TABLE AND THREE NULLABLE COLUMNS: an older build opening a file at `user_version 104` takes rule 3 and boots, its
   // inserts naming none of them. The slot is POSITIONAL, renumbered at this PR's landing merge on the coordinator's word
   // (quiz PR 2, #2991, landed 100; forecasts B, #3003, landed 101; approvals PR 0, #3045, landed 102; door A1, #3035, landed 103; the Linear follow-up
-  // (#3021) also takes 104, and whoever lands second renumbers). RE-MEASURE the slot before the PR and before merge (it
+  // (#3021) takes 105 by the coordinators' agreement). RE-MEASURE the slot before the PR and before merge (it
   // must print 103 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'

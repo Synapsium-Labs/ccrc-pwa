@@ -14,7 +14,7 @@ Departures are listed by slug. The coordinator mints the numbers.
   `request-failed`. The vocabulary is `shared/approval-census.ts`, and `session-hook-approval-route.test.ts` holds the
   hook's words equal to it. `hookstate.ts` carries the word and the hook's `waitBy`.
 - **Task 1.3.** Migration 104 by position (quiz PR 2 took 100, forecasts B 101, approvals PR 0 102, door A1 103; the Linear
-  follow-up also takes 104, and whoever lands second renumbers): the `approval_census` table, two
+  follow-up takes 105 by the coordinators' agreement): the `approval_census` table, two
   approvals columns kept from mint (`commandWords`, `literalInRoot`) and `push_outbox.pushSource`. The one writer is
   `approvalCensusStore.ts#insertCensusRow`, reached only through the questions owner's `observeCensus`, which the
   watcher calls on every tick a dialog is painted. Its retention is the approvals' (the summary is cleared, the row
