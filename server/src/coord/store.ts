@@ -1683,6 +1683,16 @@ const ABANDONED_PARK_SQL =
 const OUTSTANDING_OR_ABANDONED_SQL =
   `(d.state IN ${OUTSTANDING_STATES_SQL} OR ${ABANDONED_PARK_SQL})`;
 
+/** THE INBOX SET'S PREDICATE, named once (mid-turn mail, plan Task 2.1; spec §3.2): the ack door's guard
+ *  (`ackableDeliverySql`) AND the mailbox's read predicate (`OUTSTANDING_OR_ABANDONED_SQL`), over `d` (mail_deliveries)
+ *  and `rr` (the mail's run, LEFT JOINed), so it has no prefix: the read predicate is spelled over those two aliases.
+ *  `inboxFor`, `abandonedCount` and the urgent hold (`urgentHolds`, `urgentOutstanding`) read it, so the hold is the
+ *  urgent part of the set `mail inbox` prints, never a second copy of the rule. */
+const ACKABLE_OUTSTANDING_SQL: { readonly sql: string; readonly args: readonly string[] } = (() => {
+  const ack = ackableDeliverySql('d.');
+  return { sql: `${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`, args: ack.args };
+})();
+
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns.
  *
@@ -7045,19 +7055,17 @@ export class CoordStore {
    * refuses, forever. Pure read: no row changes.
    */
   inboxFor(toId: string): { deliveryId: number; envelope: string }[] {
-    const ack = ackableDeliverySql('d.');
     return this.db.prepare(
       'SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`,
-    ).all(toId, ...ack.args) as unknown as { deliveryId: number; envelope: string }[];
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql} ORDER BY d.id ASC`,
+    ).all(toId, ...ACKABLE_OUTSTANDING_SQL.args) as unknown as { deliveryId: number; envelope: string }[];
   }
 
   /** D-6777: how many deliveries `outstandingMailFor`'s predicate admits that
    *  `inboxFor` does not (the park-ceiling rejection and its kin). `inboxFor` is
    *  a subset of that predicate by construction, so this is a plain difference. */
   abandonedCount(toId: string): number {
-    const ack = ackableDeliverySql('d.');
     const base = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       `LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
@@ -7065,8 +7073,8 @@ export class CoordStore {
     const inbox = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
-    ).get(toId, ...ack.args) as { n: number };
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql}`,
+    ).get(toId, ...ACKABLE_OUTSTANDING_SQL.args) as { n: number };
     return base.n - inbox.n;
   }
 
