@@ -67,9 +67,9 @@ Each wave's spec files are claimed at its run-open; the appearance and parity wa
   - `type ReviewCreateRefusal = 'too-large' | 'store-full' | 'store-unreadable' | 'bad-source'` (`auth-off` is the account gate's word, never this type's);
   - `interface ReviewSource { project: string; section: DocSectionSlug; path: string; branch: string; head: string; servedRef: string; baseCommit: string; fp: string; committedBlob: string | null }`;
   - `interface ReviewShareWire { id: string; source: ReviewSource; version: number; sharedAt: number; firstSharedAt: number; idleSince: number; lastViewedAt: number | null; pinned: boolean; sha256: string; size: number; credentialShapes: number; link: string | null; removed: { why: ReviewRemoval; at: number } | null }`;
-  - `isReviewToken(s: string): boolean`, `isReviewSource(x: unknown): x is ReviewSource` (project and path by the docs grammars `isDocsRelPath` and the project predicate, section in `DOC_SECTION_SLUGS`, `branch` and `servedRef` by the docs ref grammar, `head`, `baseCommit` and `committedBlob` 40-hex, `fp` 64-hex).
+  - `isReviewToken(s: string): boolean`, `isReviewSource(x: unknown): x is ReviewSource`, built only from the docs grammars in `shared/docs.ts`, never a second one: `isDocsProject` for `project`, `DOC_SECTION_SLUGS` for `section`, `isDocsRelPath` for `path`, `parseDocsRef` for `branch` and `servedRef`, `isDocsCommit` for `head`, `baseCommit` and a non-null `committedBlob` (40 or 64 hex, so SHA-256 repositories are served), and `isDocsFingerprint` for `fp`.
 
-- [ ] **Step 1: Write the failing test** `review-shared.test.ts`: each constant equals its Global Constraints value; `isReviewToken` accepts a 43-character base64url string and refuses 42, 44, `+`, `/`, `=` and `''`; `REVIEW_REMOVALS` equals `['revoked','expired','committed','retention','lost']`; `isReviewSource` refuses a section `programs`, a path with `..`, a 39-hex head and a 63-hex `fp`.
+- [ ] **Step 1: Write the failing test** `review-shared.test.ts`: each constant equals its Global Constraints value; `isReviewToken` accepts a 43-character base64url string and refuses 42, 44, `+`, `/`, `=` and `''`; `REVIEW_REMOVALS` equals `['revoked','expired','committed','retention','lost']`; `isReviewSource` refuses a section `programs`, a path with `..`, a 39-hex head and a 63-hex `fp`, and accepts both a 40-hex and a 64-hex `head`, `baseCommit` and `committedBlob` (a SHA-256 repository, F16).
 - [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-shared.test.ts`. Expected: FAIL, module not found.
 - [ ] **Step 3: Implement** `shared/docsReview.ts` and the cap move.
 - [ ] **Step 4: Run** it, `test/single-definition`, `test/rings`, then `cd ../pwa && ccrc test -- ./node_modules/.bin/vitest run test/docs-export.test.tsx`. Expected: PASS.
@@ -317,6 +317,7 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | Id | File | Mutation | Must red |
 |---|---|---|---|
 | NDR-X3-R1-M1 | `shared/docsReview.ts` | `REVIEW_MAX_LIVE = 65` | `review-shared` (M-X3.9) |
+| NDR-X3-R1-M126 | `shared/docsReview.ts` | `isReviewSource` checks `head` with its own 40-hex pattern | `review-shared` SHA-256 row (F16) |
 | NDR-X3-R1-M2 | `review/policy.ts` | `expiryOf` reads `sharedAt`, not `idleSince` | `review-policy` (M-X3.4) |
 | NDR-X3-R1-M3 | `review/policy.ts` | pinned skips retention | `review-policy` pinned 30-day row (M-X3.4) |
 | NDR-X3-R1-M4 | `review/policy.ts` | `commitVerdict` compares `fp` | `review-policy` blob rows (M-X3.5) |
