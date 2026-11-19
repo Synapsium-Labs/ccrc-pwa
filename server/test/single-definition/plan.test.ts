@@ -29,4 +29,18 @@ describe('the plan vocabulary has one home (D-8181)', () => {
     expect(holders(decl('ADOPTED_FINGERPRINT'))).toEqual(['server/src/coord/planStore.ts']);
     expect(holders(/\bconst\s+ADOPTED\b/)).toEqual([]);
   });
+
+  // Review 2753 F5 (plan Global Constraints: a row for each new list). Each stays where it is, for a recorded reason:
+  // RETIRE_WHYS is a server-only stored word (`linear_inbound.retiredWhy`) that no wire or PWA file reads, in an L1 file of its
+  // own so the plan store and the inbound policy both reach it without importing each other (`shared/plan.ts` is the vocabulary
+  // the PWA bundles); DRIFT_KEEP_NOTE is a server-only note the drift pass writes and reads back; HIERARCHY_ITEM_REFUSALS is a
+  // refusal word, whose home is the refusal table (`shared/refusal.ts`, with its status and the PWA's sentence).
+  it('the inbound retire causes, the drift Keep note and the hierarchy item refusal are declared once, each at its home (review 2753 F5)', () => {
+    for (const [c, home] of [['RETIRE_WHYS', 'server/src/linear/inboundRetire.ts'], ['RetireWhy', 'server/src/linear/inboundRetire.ts'],
+      ['DRIFT_KEEP_NOTE', 'server/src/linear/driftPolicy.ts'], ['HIERARCHY_ITEM_REFUSALS', 'shared/refusal.ts'],
+      ['HierarchyItemRefusal', 'shared/refusal.ts']] as const) {
+      expect(holders(decl(c)), c).toEqual([home]);
+    }
+    expect(holders(/Keeping the plan; ccrc goes on restoring/)).toEqual(['server/src/linear/driftPolicy.ts']);
+  });
 });
