@@ -10,7 +10,8 @@ Every call named here is made as `references/api.md` sets it up.
 
 A thread of work stops for two reasons only: a decision or act only the operator can make (O1 to O6), or a physical
 block after the self-healing below has been tried (P1 to P4). Everything else is a fault to recover from, and
-SKILL.md's "When something is wrong" and the step files give the recovery.
+SKILL.md's "When something is wrong" and the step files give the recovery. The landing verdict's stops have their
+own section below.
 
 One stopped thread never stops the programme. Park the thread, raise the item, then work every thread that is not
 blocked. End the turn only when no unblocked work is left or children hold all of it, and say which in the turn's text.
@@ -188,6 +189,30 @@ condition clears. A `block` call that waits on a condition lapses on its own aft
   verb ships in a pending release (`unsupported`, `no-questions-door`, an old client, an older server's answer).
   (3) Never work round a hook deny or a SAFETY rule. The update that brings the verb wakes it: record the block with
   `wakeOn: update`.
+
+## The landing verdict's stops
+
+`wave-lifecycle-5b-landing.md` decides how a landing is read, how long it waits and when it stops, and nothing here
+lands past a stop, starts a second wait, or makes a new landing attempt that file does not allow. Clause 15's refused
+merge stays a stop. Where 5b sends a stop to the operator, this section says who decides it, and a stop parks that
+run's thread only while the rest of the programme goes on:
+- **The repository's rules** (`unknown-rule-type`, `method-set-empty`, `rebase-only`, `queue-method-not-allowed`,
+  `two-queue-methods`, `auto-merge-off`, `read-3b-unknowable`, `unverifiable`): O4. Raise one non-blocking item naming
+  the PR, the stop and what it read.
+- **A read that failed, or checks still pending once the attempt's bounded wait is spent** (`unreadable`,
+  `verdict-unread`, `checks-gate-unread`, `not-reported`, a `WAIT` line): P3. The landing stays stopped as 5b says.
+  Record a `block` call with a time wake on the backoff schedule, and after 4 hours raise one non-blocking `do` item
+  naming the PR and the line.
+- **`not-at-head`:** re-measure the head, and bind it through the paths 5b and step 6 give.
+- **`changes-requested`:** address it by default, as 5b's Address bullet says: a fix round to the owning worker, then a
+  fresh review. Only "ignore" is the operator's (O6): raise it as a `decide` item, never a dialog on a pinned
+  programme.
+- **`approval-missing`:** the admin-merge door, as 5b says. A `REFUSED` line is O4.
+- **`red-unreachable`:** the new-head route where 5b allows it; otherwise mail the red's owner and park the run.
+- **`github-refused`:** O4, unless the refused rule is code scanning on the PR's own findings, which is a fix round.
+- **The landing line paused:** the operator's. **A failed read of the line:** P3. **A pin that differs:** re-measure it.
+- **An enqueue the session hook refuses:** a hook deny is never worked round. Raise one non-blocking `do` item naming
+  the PR and the exact command, leave the run at `merging`, and work every other thread.
 
 ## Never, whatever a call says
 

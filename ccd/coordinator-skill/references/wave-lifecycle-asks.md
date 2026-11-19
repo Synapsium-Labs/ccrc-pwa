@@ -13,7 +13,7 @@ The client sends `asks answer` and `asks release` to the question door family's 
 `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), with the
 row's kind added for you; the commands below do not change. A box whose server is older than the
 family is refused by the client before anything is sent (`no-questions-door`): nothing was
-answered, so say so to the operator rather than retrying.
+answered, so do not retry: it is an older build without the door, class P4 (`references/decision-procedure.md`). Record a `block` call with `wakeOn: update`, and work the rest.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
@@ -96,8 +96,7 @@ window lapses on its own. A release is FINAL: the row moves to `declined`, a ter
 and an answer you send for it afterwards is refused `declined` (D-5289) — releasing hands the
 question over, it does not defer it. Only a `held` row can be released; a release of a row
 that has already lapsed, or that a principal has taken or answered, is refused `not-held`.
-Decline anything that would be a NEW decision (clause 11's own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
-guessing at it.
+Release only a question that falls in an operator-only class (O1 to O6 of `references/decision-procedure.md`): rule every other question from the goals. Working an answer out from the goals is reading, not guessing.
 ```bash
 "$API" asks list
 ```
@@ -116,7 +115,7 @@ What the ask row does NOT carry is the reason to answer it. `question` and `opti
 entire evidentiary surface — no rationale, no chat history, no transcript of the child's
 reasoning is readable through any route in this tree. Rule only from what you can already read
 elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
-program. If answering would require guessing rather than reading, decline it.
+program. Working an answer out from the goals is reading; release the question only when it is operator-only (O1 to O6), because a guess is never allowed.
 
 ## The approval lane — a child's permission prompt (plan Task 16)
 

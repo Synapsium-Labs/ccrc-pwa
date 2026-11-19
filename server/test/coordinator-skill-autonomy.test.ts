@@ -96,6 +96,17 @@ describe('the decision procedure reference (D-8126 A5-3)', () => {
     expect(step7).toContain('Never wait on the cap.');
   });
 
+  it('says who decides each landing stop, and never lands past one (rows 42, 43, 56, 57)', () => {
+    const landing = flat(procedure.split('## The landing verdict\'s stops')[1]!.split('\n## ')[0]!);
+    expect(landing).toContain('nothing here lands past a stop, starts a second wait, or makes a new landing attempt that file does not allow');
+    expect(landing).toContain('Clause 15\'s refused merge stays a stop.');
+    expect(landing).toContain('Only "ignore" is the operator\'s (O6)');
+    expect(landing).toContain('never a dialog on a pinned programme');
+    expect(landing).toContain('a hook deny is never worked round');
+    for (const stop of ['unknown-rule-type', 'unreadable', 'not-at-head', 'changes-requested', 'approval-missing',
+      'red-unreachable', 'github-refused']) expect(landing).toContain(`\`${stop}\``);
+  });
+
   it('records a time wake in epoch milliseconds, within the server\'s bound', () => {
     expect(flat(procedure)).toContain('`wakeOn: time:<epoch ms>` (epoch milliseconds, not seconds;');
   });

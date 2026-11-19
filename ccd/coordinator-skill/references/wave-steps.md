@@ -82,7 +82,7 @@ not after.
    (`ccrc-api runs items-list <run>`) is the only thing that publishes them:
    `GET /api/runs` carries the TALLY (`{done,total}`) and no ids, and the
    dispatch response never carried them either. A coordinator that guessed `1`
-   was refused `unknown-item` and was right to stop rather than guess twice.
+   was refused `unknown-item`: re-read the ids once, and if the id is still unknown record the call with `ccrc-api calls record` and go on, since the tally is display only. An `item-terminal` answer is a no-op to record.
    That ordering IS the authorisation: the server's own re-measurement is what
    makes the claim a fact (clause 6), and settling straight off the mail would
    put `5/5` on the console for a wave nothing verified.
@@ -97,14 +97,16 @@ not after.
    work run has had its three review rounds, decide BEFORE opening the next:
    by the rules in `references/wave-lifecycle.md` (Extending a reached review
    cap), extend with `"$API" runs review-rounds <work run id> --json -` and a
-   one-line reason, or rule on the findings you hold, or wait. Extending first
-   means the open is never refused, so the operator is never asked or pushed.
+   one-line reason, or rule on the findings you hold and land with known limits
+   (`references/decision-procedure.md` step 7); the cap never makes a thread wait.
+   Extending first means the open is never refused, so the operator is never asked or pushed.
    `cap-review-rounds` on an open means you opened without deciding: do not retry
    the open. The server has told the operator (one ask, with the last review's
    open findings); a late extension still closes that ask, but the operator has
    already been pushed once, so decide at the cap, not at the refusal. A bare `400 bad-request` with no `detail` on
    this open means the SERVER lane has not landed yet (this branch deploys
-   server first; the plan's Task 14 says why) — wait for the next wake and
+   server first; the plan's Task 14 says why) — an older server, class P4: record a
+   `block` call with `wakeOn: update`, park the thread and
    do NOT add `project`/`wave` to satisfy it: an older server would open a
    second WORK run for the wave. Then `"$API" runs dispatch <review run id> --json -` with a
    brief cut from `references/review-brief.md` — the work run id, its branch
@@ -237,7 +239,8 @@ not after.
      interface PR merged at the exact `producerSha` carried in the conditional
      producer contract (it reads MERGED there, or CLOSED there with
      `landedInTrain: true` on its row of `ccd pr-state --session <id>`). A missing or non-`done` row, failed release, or required
-     exact-SHA merge proof that is absent means report and do not dispatch. The
+     exact-SHA merge proof that is absent is not a report: re-read with backoff
+     (class P3), and where the merge proof is absent, land the producer first (step 7), and do not dispatch until it is proven. The
      closed row proves the fingerprint and terminal run state; it does not prove
      a required interface merged. Only then dispatch wave N+1 (step 2).
 7. **Final merge:** on a native-queue project the last wave's producer LANDS
