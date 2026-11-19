@@ -1,0 +1,173 @@
+// X2 P1 Task P1.5: Markdown in parts (X2 spec section 4.3, "Markdown in parts", amended by the coordinator's
+// render-gate carry of 2026-11-19). `splitMarkdownParts` cuts a Markdown text above the render gate into parts no
+// larger than the gate, counted in UTF-8 bytes as the gate counts them: at top-level headings outside fences first,
+// then at a blank line outside fences, then at a line end; a fence longer than the gate is closed at the end of its
+// part and reopened at the start of the next; a line longer than the gate is cut at a code point boundary.
+import { describe, expect, it } from 'vitest';
+import { utf8Bytes } from '../../shared/utf8';
+import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
+import { partText, splitMarkdownParts, type MdPart } from '../src/docs/range/mdParts';
+
+const GATE = DOCS_RENDER_GATE_BYTES;
+
+/** Every invariant a split must hold: the parts cover the text in order with no gap or overlap, each part's text
+ *  (its reopen and close counted) is at most `max` bytes, and a part that is not the first starts where the last ended. */
+function checkCover(text: string, parts: readonly MdPart[], max: number): void {
+  expect(parts.length).toBeGreaterThan(0);
+  expect(parts[0]!.start).toBe(0);
+  expect(parts.at(-1)!.end).toBe(text.length);
+  for (let i = 0; i < parts.length; i += 1) {
+    const p = parts[i]!;
+    expect(p.end, `part ${i} is not empty`).toBeGreaterThan(p.start);
+    if (i > 0) expect(p.start, `part ${i} starts where part ${i - 1} ended`).toBe(parts[i - 1]!.end);
+    expect(utf8Bytes(partText(text, p)), `part ${i} is at most ${max} bytes`).toBeLessThanOrEqual(max);
+  }
+}
+
+/** A section: a level-2 heading and paragraphs of plain ASCII, about `bytes` long. */
+function section(n: number, bytes: number): string {
+  const head = `## Section ${n}\n\n`;
+  const para = 'Lorem ipsum dolor sit amet, consectetur adipiscing elit. '.repeat(16) + '\n\n';
+  let body = '';
+  while (head.length + body.length + para.length <= bytes) body += para;
+  return head + body;
+}
+
+/** A text of exactly `bytes` ASCII bytes made of sections. */
+function sized(bytes: number): string {
+  let t = '';
+  let n = 1;
+  while (t.length < bytes) t += section(n++, 40000);
+  return t.slice(0, bytes - 1) + '\n';
+}
+
+describe('splitMarkdownParts', () => {
+  it('md parts: 524 287 and 524 288 bytes stay one part, 524 289 bytes make two', () => {
+    expect(GATE).toBe(524288);
+    for (const n of [GATE - 1, GATE]) {
+      const t = sized(n);
+      expect(utf8Bytes(t)).toBe(n);
+      const { parts } = splitMarkdownParts(t, GATE);
+      expect(parts, `${n} bytes`).toEqual([{ start: 0, end: n, continued: false, reopen: null, close: null }]);
+    }
+    const over = sized(GATE + 1);
+    const { parts } = splitMarkdownParts(over, GATE);
+    expect(parts.length).toBe(2);
+    checkCover(over, parts, GATE);
+  });
+
+  it('md parts: every part at most the render gate, 524 288 bytes', () => {
+    const t = sized(3565158);
+    const { parts } = splitMarkdownParts(t, GATE);
+    expect(parts.length).toBeGreaterThanOrEqual(7);
+    checkCover(t, parts, GATE);
+    // A heading cut: each part after the first begins at a top-level heading, and is not continued.
+    for (const p of parts.slice(1)) {
+      expect(t.slice(p.start, p.start + 3)).toBe('## ');
+      expect(p.continued).toBe(false);
+    }
+  });
+
+  it('md parts: never cuts inside a fence', () => {
+    // One section far above the gate, so every cut is a blank-line or line cut, holding fences of 60 000 bytes whose
+    // bodies carry `#` headings and blank lines: a cut there would be preferred if the fences were not tracked.
+    const body = ('# not a heading\n\n' + 'x'.repeat(80) + '\n').repeat(600);
+    const fence = '```text\n' + body + '```\n';
+    let t = '## One long section\n\n';
+    while (utf8Bytes(t) < 1500000) t += `lead\n\n${fence}\ntail paragraph\n\n`;
+    const { parts } = splitMarkdownParts(t, GATE);
+    checkCover(t, parts, GATE);
+    for (const p of parts) {
+      expect(p.reopen).toBeNull();
+      expect(p.close).toBeNull();
+      const fences = partText(t, p).split('\n').filter((l) => l.startsWith('```')).length;
+      expect(fences % 2, 'every fence a part opens, it closes').toBe(0);
+    }
+  });
+
+  it('md parts: a fence longer than the gate is closed and reopened across parts, each part at most the gate', () => {
+    const body = 'y'.repeat(99).concat('\n').repeat(12000); // 1 200 000 bytes inside one fence
+    const t = '# Big\n\n~~~~ json\n' + body + '~~~~\n\nafter\n';
+    const { parts } = splitMarkdownParts(t, GATE);
+    checkCover(t, parts, GATE);
+    // A blank line outside the fence is a better cut than a line inside it, so part 0 ends before the fence opens;
+    // part 1 opens it, and every later part reopens it.
+    expect(partText(t, parts[0]!)).toBe('# Big\n\n');
+    expect(parts.length).toBeGreaterThanOrEqual(4);
+    expect(t.slice(parts[1]!.start).startsWith('~~~~ json\n')).toBe(true);
+    for (let i = 1; i < parts.length - 1; i += 1) {
+      expect(parts[i]!.close, `part ${i} closes the fence`).toBe('~~~~\n');
+      expect(parts[i + 1]!.reopen, `part ${i + 1} reopens it with the same line`).toBe('~~~~ json\n');
+      expect(parts[i + 1]!.continued).toBe(true);
+    }
+    expect(parts[0]!.reopen).toBeNull();
+    expect(parts[1]!.reopen).toBeNull();
+    expect(parts.at(-1)!.close).toBeNull();
+  });
+
+  it('md parts: a section with no blank line is cut at a line end, and a line longer than the gate at a code point boundary', () => {
+    const lines = '| a | b |\n'.repeat(80000); // a table of 800 000 bytes: no blank line, no heading
+    const t1 = '## Table\n\n' + lines;
+    const r1 = splitMarkdownParts(t1, GATE).parts;
+    checkCover(t1, r1, GATE);
+    for (const p of r1.slice(1)) {
+      expect(t1[p.start - 1], 'cut after a newline').toBe('\n');
+      expect(p.continued).toBe(true);
+    }
+    const t2 = 'z'.repeat(1200000);
+    const r2 = splitMarkdownParts(t2, GATE).parts;
+    checkCover(t2, r2, GATE);
+    expect(r2.length).toBe(3);
+    expect(r2.slice(1).every((p) => p.continued)).toBe(true);
+  });
+
+  it('md parts: a CRLF file cuts as an LF one does: its fences, blank lines and headings are seen', () => {
+    const crlf = 'para one\r\n\r\n```sh\r\n# comment\r\necho a\r\n# two\r\n```\r\n\r\n# Next\r\n\r\ntail para\r\n';
+    for (const max of [24, 30, 40]) {
+      const parts = splitMarkdownParts(crlf, max).parts;
+      checkCover(crlf, parts, max);
+      for (const p of parts) {
+        const fences = partText(crlf, p).split(/\r?\n/).filter((l) => l.startsWith('```')).length;
+        expect(fences % 2, `max ${max}: every fence a part opens, it closes: ${JSON.stringify(partText(crlf, p))}`).toBe(0);
+        expect(partText(crlf, p).startsWith('# comment') || partText(crlf, p).startsWith('# two'),
+          `max ${max}: no heading cut inside the fence`).toBe(false);
+      }
+    }
+  });
+
+  it('md parts: a long fence opening line ends, and every part fits; a part after the fence line keeps the fence', () => {
+    const t1 = '```' + 'i'.repeat(30) + '\n' + 'c\n'.repeat(20) + '```\n';
+    const r1 = splitMarkdownParts(t1, 32).parts;
+    checkCover(t1, r1, 32);
+    const t2 = '```aaaaaaaaaaaaaa\ncode line one\ncode two\n```\n';
+    const r2 = splitMarkdownParts(t2, 20).parts;
+    checkCover(t2, r2, 20);
+    expect(r2[1]!.reopen, 'the part after the opening line reopens the fence').not.toBeNull();
+  });
+
+  it('md parts: on many small random texts every part fits and the parts cover the text', () => {
+    const pieces = ['# H\n', '## H2\n', '### h3\n', '\n', 'text line\n', '```js\n', '```\n', '~~~~\n', '    ```\n', '\r\n',
+      'x'.repeat(40) + '\n', '\u{1F600}\u{1F600}\n', '> quote\n', 'y'.repeat(90)];
+    let seed = 7;
+    const rnd = (n: number): number => { seed = (seed * 1103515245 + 12345) & 0x7fffffff; return seed % n; };
+    for (let k = 0; k < 400; k += 1) {
+      let t = '';
+      const n = 1 + rnd(40);
+      for (let i = 0; i < n; i += 1) t += pieces[rnd(pieces.length)]!;
+      const max = 24 + rnd(120);
+      checkCover(t, splitMarkdownParts(t, max).parts, max);
+    }
+  });
+
+  it('md parts: sizes are UTF-8 bytes, so a part of four-byte characters is cut at the gate\'s bytes', () => {
+    const t = '\u{1F600}'.repeat(300000); // 1 200 000 bytes, 600 000 UTF-16 units
+    const { parts } = splitMarkdownParts(t, GATE);
+    checkCover(t, parts, GATE);
+    for (const p of parts) {
+      // Never between the two halves of a surrogate pair.
+      const code = t.charCodeAt(p.start);
+      expect(code >= 0xdc00 && code <= 0xdfff, 'a part never starts on a low surrogate').toBe(false);
+    }
+    expect(utf8Bytes(partText(t, parts[0]!))).toBe(GATE);
+  });
+});
