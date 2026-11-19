@@ -2,7 +2,8 @@
 // goes red when its check is deleted (mutation-table discipline).
 import { describe, expect, it } from 'vitest';
 import {
-  FLOW_SCHEMA, PROTOCOL, PROTOCOL_STEPS, flowPhases, parseFlowDoc, skeletonFlowDoc, validateFlow,
+  FLOW_LIMITS, FLOW_SCHEMA, PROTOCOL, PROTOCOL_STEPS, flowExportJson, flowPhases, parseFlowDoc, readFlowFile, skeletonFlowDoc,
+  validateFlow,
   type FlowBlock, type FlowDoc,
 } from '../../shared/flows.js';
 import { FLOW_TEMPLATES, findTemplate } from '../src/flows/templates.js';
@@ -151,5 +152,27 @@ describe('templates', () => {
   });
   it('the schema is the one the parser reads', () => {
     for (const t of FLOW_TEMPLATES) expect(t.doc.schema).toBe(FLOW_SCHEMA);
+  });
+});
+
+describe('a shared flow file (spec §14.1, wave 1b)', () => {
+  it('an export reads back as the same document, its exportedFrom set aside', () => {
+    const text = flowExportJson(ccrc(), 3);
+    expect(JSON.parse(text).exportedFrom).toEqual({ title: 'ccrc', version: 3 });
+    const back = readFlowFile(text);
+    expect(back).toEqual({ ok: true, doc: parseFlowDoc(ccrc()).ok ? (parseFlowDoc(ccrc()) as { doc: FlowDoc }).doc : null });
+  });
+  it('refuses a file over the byte cap before parsing it', () => {
+    const big = `{"pad":"${'x'.repeat(FLOW_LIMITS.fileBytes)}"}`;
+    expect(readFlowFile(big)).toEqual({ ok: false, reason: `the file is over ${FLOW_LIMITS.fileBytes} bytes` });
+  });
+  it('counts bytes, not characters', () => {
+    const wide = '\u{1F600}'.repeat(Math.ceil(FLOW_LIMITS.fileBytes / 4) + 1);
+    expect(wide.length).toBeLessThan(FLOW_LIMITS.fileBytes);
+    expect(readFlowFile(wide)).toMatchObject({ ok: false, reason: expect.stringMatching(/over/) });
+  });
+  it('refuses text that is not JSON, and an unknown schema', () => {
+    expect(readFlowFile('{nope')).toEqual({ ok: false, reason: 'the file is not JSON' });
+    expect(readFlowFile(JSON.stringify({ ...ccrc(), schema: 9 }))).toEqual({ ok: false, reason: 'unknown schema 9' });
   });
 });

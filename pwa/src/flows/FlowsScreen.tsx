@@ -1,20 +1,21 @@
 // The Flows screen (flows design 2026-11-19 §9, wave 1): `/flows` lists the operator's flows and the templates;
 // `/flows/:id` edits one. Ring L4: a screen. It keeps the draft, runs `validateFlow` on every edit so its problems are
 // always on screen, and saves and publishes through the doors (`lib/api.ts`). Nothing here runs a flow.
-import { useEffect, useMemo, useState, type ReactNode } from 'react';
+import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, Chip, EmptyState, ListRow, PageScaffold, QuickConfirm, SECTION_PURPOSE, Section, Select, TextInput } from '@ccrc/ui';
 import {
-  FLOW_ROLES, FLOW_VARS, GATE_KINDS, GATE_PR_STATES, canonicalFlowJson, validateFlow,
+  FLOW_LIMITS, FLOW_ROLES, FLOW_VARS, GATE_KINDS, GATE_PR_STATES, canonicalFlowJson, flowExportJson, readFlowFile, validateFlow,
   type BlockKind, type FlowAnswer, type FlowBlock, type FlowDoc, type FlowProblem, type FlowRole, type FlowsListAnswer,
   type GateKind, type GatePrState,
 } from '../../../shared/flows';
+import { saveBytes } from '../docs/objectUrls';
 import { api } from '../lib/api';
 import { ApiError } from '../lib/apiError';
 import { navigate } from '../lib/router';
 import { FlowDiagram } from './FlowDiagram';
 import './flows.css';
 import {
-  EDITABLE_KINDS, KIND_WORD, addOutcome, addStepAfter, outlineOrder, protocolNote, removeOutcome, removeStep, setBlock,
+  EDITABLE_KINDS, KIND_WORD, addOutcome, addStepAfter, flowFileName, outlineOrder, protocolNote, removeOutcome, removeStep, setBlock,
   setTarget, targetOf,
 } from './flowEdits';
 
@@ -24,6 +25,10 @@ const MONO_META = 'font-mono text-meta text-ink-tertiary';
 /** A field: its label word above its control. */
 const FIELD = 'grid gap-1 text-meta text-ink-secondary';
 const STACK = 'grid gap-2';
+/** A row of buttons. */
+const ACTIONS = 'flex flex-wrap gap-2';
+/** A line of text with its button at the end. */
+const LINE = 'flex flex-wrap items-center justify-between gap-3';
 const failWord = (e: unknown): string => (e instanceof Error ? e.message : String(e));
 
 export function FlowsScreen(p: { readonly openId?: number }): ReactNode {
@@ -33,22 +38,67 @@ export function FlowsScreen(p: { readonly openId?: number }): ReactNode {
 function FlowsList(): ReactNode {
   const [list, setList] = useState<FlowsListAnswer | 'loading' | { failed: string }>('loading');
   const [busy, setBusy] = useState(false);
+  const [review, setReview] = useState<{ doc: FlowDoc; name: string } | null>(null);
+  const [importNote, setImportNote] = useState('');
+  const file = useRef<HTMLInputElement>(null);
   useEffect(() => {
     let live = true;
     api.listFlows().then((l) => { if (live) setList(l); }, (e: unknown) => { if (live) setList({ failed: failWord(e) }); });
     return () => { live = false; };
   }, []);
-  const create = (body: { template?: string }): void => {
+  const create = (body: { template?: string; import?: FlowDoc }): void => {
     setBusy(true);
     api.createFlow(body).then((r) => navigate(flowPath(r.id)), (e: unknown) => { setBusy(false); setList({ failed: failWord(e) }); });
   };
+  // A shared file is untrusted (§14.1): the byte cap, the shape and the rules are checked here, and the operator reads every
+  // prompt before the draft is made; the door checks all three again.
+  const pick = (f: File | undefined): void => {
+    if (f === undefined) return;
+    setReview(null);
+    if (f.size > FLOW_LIMITS.fileBytes) { setImportNote(`${f.name} can't be imported: it is over ${FLOW_LIMITS.fileBytes} bytes.`); return; }
+    f.text().then((text) => {
+      const r = readFlowFile(text);
+      if (!r.ok) { setImportNote(`${f.name} can't be imported: ${r.reason}.`); return; }
+      const problems = validateFlow(r.doc);
+      if (problems.length > 0) { setImportNote(`${f.name} breaks the flow rules: ${problems.map((x) => x.message).join(' ')}`); return; }
+      setImportNote('');
+      setReview({ doc: r.doc, name: f.name });
+    }, (e: unknown) => setImportNote(`${f.name} could not be read: ${failWord(e)}`));
+  };
   return (
-    <PageScaffold title="Flows" actions={<Button variant="ghost" size="fit" disabled={busy} onClick={() => create({})}>New flow</Button>}>
+    <PageScaffold title="Flows" actions={(
+      <>
+        <Button variant="ghost" size="fit" disabled={busy} onClick={() => file.current?.click()}>Import a file</Button>
+        <Button variant="ghost" size="fit" disabled={busy} onClick={() => create({})}>New flow</Button>
+      </>
+    )}>
+      <input ref={file} type="file" accept=".json,application/json" hidden aria-label="Flow file"
+             onChange={(e) => { pick(e.currentTarget.files?.[0]); e.currentTarget.value = ''; }} />
       <p className={SECTION_PURPOSE}>
         A flow is the method a programme follows: steps, the gates between them, and the prompt each step gives a session.
         ccrc&apos;s own steps are locked. Flows are definitions for now; programmes start following them in a later release.
       </p>
-      {list === 'loading' ? <p role="status">Loading…</p>
+      {importNote !== '' && <p role="alert">{importNote}</p>}
+      {review !== null ? (
+        <Section title="Read before you import" scope={review.name}
+                 purpose="A shared prompt becomes what a session is told. The import makes a draft; publishing it stays yours.">
+          <ol className="m-0 grid gap-3 p-0">
+            {outlineOrder(review.doc).map((b) => (
+              <li key={b.id} className="grid list-none gap-1 border-t border-edge-subtle pt-2 first:border-t-0 first:pt-0">
+                <span className="text-ink-primary">{b.title}</span>
+                <span className={MONO_META}>{`${KIND_WORD[b.kind].toLowerCase()} · ${b.role}`}</span>
+                {b.kind === 'protocol' ? <span className={SECTION_PURPOSE}>ccrc&apos;s own step, locked.</span>
+                  : <p className="m-0 whitespace-pre-wrap text-ink-secondary">{b.prompt === undefined || b.prompt === '' ? '(no prompt)' : b.prompt}</p>}
+              </li>
+            ))}
+          </ol>
+          <div className={ACTIONS}>
+            <Button size="fit" disabled={busy} onClick={() => create({ import: review.doc })}>Import as a draft</Button>
+            <Button variant="ghost" size="fit" disabled={busy} onClick={() => setReview(null)}>Cancel</Button>
+          </div>
+        </Section>
+      )
+        : list === 'loading' ? <p role="status">Loading…</p>
         : 'failed' in list ? <p role="alert">The flows could not be read: {list.failed}</p>
         : (
           <>
@@ -65,7 +115,7 @@ function FlowsList(): ReactNode {
             </Section>
             <Section title="Templates" purpose="Shipped with ccrc. Use one to make your own copy; a template itself never changes here.">
               {list.templates.map((t) => (
-                <div key={`${t.id}@${t.version}`} className="flex flex-wrap items-center justify-between gap-3">
+                <div key={`${t.id}@${t.version}`} className={LINE}>
                   <span className="grid min-w-0 gap-1">
                     <span className="text-ink-primary">{t.title} <span className={MONO_META}>v{t.version}</span></span>
                     <span className={SECTION_PURPOSE}>{t.note}</span>
@@ -129,6 +179,12 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
       setNote(`Not published: ${failWord(e)}`);
     }
     setBusy(false);
+  };
+  const exportVersion = (v: number): void => {
+    api.getFlowVersion(p.id, v).then((r) => {
+      if (!r.doc.ok) { setNote(`v${v} can't be read: ${r.doc.reason}`); return; }
+      saveBytes(flowFileName(r.doc.doc.title, v), new TextEncoder().encode(flowExportJson(r.doc.doc, v)));
+    }, (e: unknown) => setNote(`Not saved: ${failWord(e)}`));
   };
   const remove = (): void => {
     api.deleteFlow(p.id).then(() => navigate('/flows'), (e: unknown) => setNote(`Not deleted: ${failWord(e)}`));
@@ -199,10 +255,15 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
               ? <Section title="Step"><p className={SECTION_PURPOSE}>Select a step in the outline.</p></Section>
               : <Inspector doc={doc} block={block} onEdit={edit} onSelect={setSelected} />}
           </div>
-          <Section title="Versions" scope={`${answer.versions.length}`} purpose="A published version never changes. Programmes will pin one.">
+          <Section title="Versions" scope={`${answer.versions.length}`} purpose="A published version never changes. Programmes will pin one. Save one as a file to share it.">
             {answer.versions.length === 0
               ? <p className={SECTION_PURPOSE}>Nothing published yet.</p>
-              : <p className={MONO_META}>{answer.versions.map((v) => `v${v.version} · ${new Date(v.publishedAt).toLocaleString()}`).join('\n')}</p>}
+              : answer.versions.map((v) => (
+                <div key={v.version} className={LINE}>
+                  <span className={MONO_META}>{`v${v.version} · ${new Date(v.publishedAt).toLocaleString()}`}</span>
+                  <Button variant="ghost" size="fit" aria-label={`Save v${v.version} as a file`} onClick={() => exportVersion(v.version)}>Save as file</Button>
+                </div>
+              ))}
             <Button variant="danger-ghost" size="fit" onClick={() => setConfirmDelete(true)}>Delete this flow</Button>
           </Section>
         </>
@@ -269,7 +330,7 @@ function Inspector(p: { readonly doc: FlowDoc; readonly block: FlowBlock; readon
           </form>
         )}
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className={ACTIONS}>
         {b.outcomes.length > 0 && (
           <Button variant="ghost" size="fit" onClick={() => { const r = addStepAfter(doc, b.id); if (r !== null) { p.onEdit(r.doc); p.onSelect(r.id); } }}>Add a step after</Button>
         )}

@@ -1,7 +1,7 @@
 // The Flows screen (flows design 2026-11-19 §9): the list, a copy from a template, and the editor's save and publish.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { skeletonFlowDoc, type FlowAnswer, type FlowDoc, type FlowsListAnswer } from '../../shared/flows';
+import { flowExportJson, skeletonFlowDoc, type FlowAnswer, type FlowDoc, type FlowsListAnswer } from '../../shared/flows';
 import { FlowsScreen } from '../src/flows/FlowsScreen';
 
 type Call = { url: string; method: string; body: unknown };
@@ -78,5 +78,57 @@ describe('the Flows editor', () => {
     render(<FlowsScreen openId={4} />);
     expect(await screen.findByRole('heading', { name: 'This draft can\'t be read' })).toBeInTheDocument();
     expect(screen.getByText(/unknown schema 9/)).toBeInTheDocument();
+  });
+});
+
+describe('sharing a flow as a file (flows design §14.1)', () => {
+  const empty: FlowsListAnswer = { flows: [], templates: [] };
+  const upload = (text: string, name = 'shared.flow.json'): void => {
+    fireEvent.change(screen.getByLabelText('Flow file'), { target: { files: [new File([text], name, { type: 'application/json' })] } });
+  };
+
+  it('shows every prompt before importing, and imports only on the operator\'s word', async () => {
+    const doc = skeletonFlowDoc('Shared');
+    doc.blocks.push({ id: 'build', kind: 'instruction', title: 'Build', role: 'worker', prompt: 'Run the tests first.', outcomes: ['done'], at: { x: 0, y: 0 } });
+    doc.edges = doc.edges.map((e) => (e.from === 'dispatch' ? { ...e, to: 'build' } : e));
+    doc.edges.push({ from: 'build', outcome: 'done', to: 'verify' });
+    const calls = stubServer((c) => (c.method === 'POST' ? { body: { ok: true, id: 9 } } : { body: empty }));
+    render(<FlowsScreen />);
+    await screen.findByText(/No flow yet/);
+    upload(flowExportJson(doc, 2));
+    expect(await screen.findByRole('heading', { name: 'Read before you import' })).toBeInTheDocument();
+    expect(screen.getByText('Run the tests first.')).toBeInTheDocument();
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Import as a draft' }));
+    await waitFor(() => expect(calls.find((c) => c.method === 'POST')?.body).toEqual({ import: doc }));
+    await waitFor(() => expect(location.pathname).toBe('/flows/9'));
+  });
+
+  it('refuses a file that is not a flow, or breaks the rules, and sends nothing', async () => {
+    const calls = stubServer(() => ({ body: empty }));
+    render(<FlowsScreen />);
+    await screen.findByText(/No flow yet/);
+    upload('{nope');
+    expect(await screen.findByText('shared.flow.json can\'t be imported: the file is not JSON.')).toBeInTheDocument();
+    const broken = skeletonFlowDoc('x');
+    broken.edges = broken.edges.filter((e) => e.from !== 'verify');
+    upload(JSON.stringify(broken));
+    expect(await screen.findByText(/breaks the flow rules/)).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { name: 'Read before you import' })).toBeNull();
+    expect(calls.some((c) => c.method === 'POST')).toBe(false);
+  });
+
+  it('saves a published version as a file', async () => {
+    const doc = skeletonFlowDoc('My flow');
+    const urls = vi.fn(() => 'blob:x');
+    vi.stubGlobal('URL', Object.assign(URL, { createObjectURL: urls, revokeObjectURL: vi.fn() }));
+    const click = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(() => {});
+    const calls = stubServer((c) => (c.url.includes('/versions/') ? { body: { doc: { ok: true, doc }, publishedAt: 1 } } : { body: answerFor(doc, [1]) }));
+    render(<FlowsScreen openId={4} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Save v1 as a file' }));
+    await waitFor(() => expect(click).toHaveBeenCalled());
+    expect(calls.some((c) => c.url === '/api/flows/4/versions/1')).toBe(true);
+    expect((click.mock.instances[0] as unknown as HTMLAnchorElement).download).toBe('my-flow-v1.flow.json');
+    click.mockRestore();
   });
 });
