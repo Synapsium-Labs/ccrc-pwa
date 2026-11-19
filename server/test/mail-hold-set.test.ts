@@ -117,7 +117,7 @@ describe('the urgent hold (plan Task 2.5; spec §3.2)', () => {
       expect(hold).toEqual([...hold].sort((a, b) => a - b));
       for (const id of all) expect(hold.includes(id), `delivery ${id}`).toBe(set.has(id) && isUrgent(f.s, id));
     }
-  });
+  }, 60_000); // two fresh stores, each running every migration: about 8 s apiece on a loaded box
 
   it("closing the run with an urgent mail unread empties the hold, and so does reclaiming the child", () => {
     const f = fixture(undefined);
@@ -125,11 +125,10 @@ describe('the urgent hold (plan Task 2.5; spec §3.2)', () => {
     expect(urgentIds(f.s)).toEqual([onRun]);
     f.s.cancelOutstandingDeliveries(f.live);
     expect(urgentIds(f.s)).toEqual([]);
-    const g = fixture(undefined);
-    const peer = queued(g.s, null, 'coordinator');
-    expect(urgentIds(g.s)).toEqual([peer]);
-    g.s.cancelDeliveriesTo(TO);
-    expect(urgentIds(g.s)).toEqual([]);
+    const peer = queued(f.s, null, 'coordinator');
+    expect(urgentIds(f.s)).toEqual([peer]);
+    f.s.cancelDeliveriesTo(TO);
+    expect(urgentIds(f.s)).toEqual([]);
   });
 
   it('acking empties it', () => {
