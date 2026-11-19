@@ -409,7 +409,7 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
   });
 
   it('joins the calls that left the group, at the operator\'s clear, an aged one at when it was made, an item first at the same instant', () => {
-    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 3 * HOUR }), call(3, { at: NOW - 8 * 86_400_000 }),
+    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 90 * MIN }), call(3, { at: NOW - 8 * 86_400_000 }),
       call(4, { overturnedAt: NOW - 2 * HOUR })];
     expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], calls).map(idOf)).toEqual(['c1', 'i1', 'c4', 'c2', 'c3']);
     expect(clearedGroups(clearedTrail([], NOW, [], [call(5, { seenAt: NOW, program: 'prog-b' })])).map((g) => g.program)).toEqual(['prog-b']);
