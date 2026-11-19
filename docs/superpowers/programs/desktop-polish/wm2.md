@@ -305,6 +305,18 @@ hunks, each resolved by keeping both sides, with no kept line changed:
 
 Rerun after the merge, one file per process: §8.8.
 
+**The second absorb, a land-sync.** Review 2815 ruled the PR safe to land at `9efa99026`, and it entered the merge queue
+(delivery 26818). While it waited, #3076 (Overlord W1 gates B) landed, and the PR left the queue without landing, DIRTY
+against main `0b96bd0dc`. The coordinator measured one conflict and ruled one more absorb (delivery 26863). The probe
+here answered the same: exit 1, `server/test/sim/mutation-floors.json` alone. One `git merge` of `origin/HEAD` at
+`0b96bd0dc` (merge commit `0bb18344e`). Every other file auto-merged.
+
+| File | Hunk | Kept |
+|---|---|---|
+| `server/test/sim/mutation-floors.json` | the end of the object: both sides appended rows after the `actKey` row. This task added the work map's three rows; main added the four `overlordGate` rows, and with them a comma on the `actKey` row | both, with no row of either side changed: this task's three rows, then main's side whole (its `actKey` row with its comma, then its four rows). Valid JSON with 257 keys. The floors test compares the key sets sorted, so the order is free. Measured against `origin/HEAD`, the file differs by exactly the three work-map rows |
+
+Rerun after this merge, one file per process: §8.9.
+
 ### 8.7 A co-edit this task granted
 
 The linear-hierarchy wave 4 follow-ups (run 2810) asked this task, which holds `planRoutes.ts` and
@@ -327,6 +339,23 @@ that reach the plan routes, and `plan-vocabulary` is #3021's changed pin of the 
 | `deviation-refs`, `dtbd`, `topology-clean` | 34, 1 and 61, all green | 11.9, 11.4 |
 | server compile, tests compile | both clean | 11.0, 10.6 |
 | the ledger guard (`--base origin/main`) | passed by the `Ledger-Edit: D-8779` trailer | |
+
+### 8.9 The rerun after the second merge
+
+Through `ccrc test`, cd'd into `server/`, one file (or the directory named) per process, after a fresh
+`git fetch origin main`, on the merge commit `0bb18344e`. The fleet's test slice was saturated through these runs (load
+13 to 21, its 6G memory cap killing processes in most of them), so some runs took two or three tries.
+
+| Run | Result | Load (1 min) |
+|---|---|---|
+| `sim/mutation-floors` | whole: killed by the memory cap at 175 of 266 (the 2 reds were the face module's sets, which cannot import `@ccrc/ui` here). Then filtered to the work map's three keys, #3076's four `overlordGate` keys and the file's structural checks, `--maxWorkers=1`: 16 of 16 | 12.9, 13.9 |
+| `test/single-definition` (43 files), `test/rings` (12 files) | 1549 and 133, all green | 16.2, 11.6 |
+| `work-map`, `plan-store`, `overlord-other-lanes-pin` | 93, 63 and 13, all green | 7.5 to 17.1 |
+| `plan-routes` | first run: 1 setup-hook timeout (20 s); second: 3 setup-hook timeouts, under 49 memory-cap kills in the slice; third: 45 of 45 | 8.2, 13.9, 21.7 |
+| `dtbd` | 1 of 1 | 14.7 |
+| server compile | clean | 13.8 |
+| the ledger guard (`--base origin/main`) | passed by the `Ledger-Edit: D-8779` trailer | |
+| `deviation-refs`, `topology-clean`, tests compile | **not measured**: killed by the slice's memory cap on each of two tries (`deviation-refs` at 6 of 34 and 5 of 34, `topology-clean` at 9 of 61 and before its first case, the compile with exit 137). All three were green after the first merge (§8.8), this merge brings only main's files and the floors rows, and CI's fast run is their arbiter at the pushed tip | 15.2 to 19.2 |
 
 ## 9. For later
 
