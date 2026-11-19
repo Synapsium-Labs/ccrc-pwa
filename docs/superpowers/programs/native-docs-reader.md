@@ -32,10 +32,72 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a), #2989 (D1), #3026 (D2) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) W8b (completion D, Tasks 11-14) runs as two serial runs (coordinator, 2026-11-17): D1 (Tasks 11-12 and C2's carried findings) is run 2380, **merged** 2026-11-18 (`8a6f62309`, #2989; three review rounds; reserve 8716-8718 unspent); D2 (Task 13, Task 14, lab 10 and D1's carried findings) is run 2436, **merged** 2026-11-18 (`839c05e46`, #3026; three review rounds; D-8729 and D-8730 defined, 8731-8732 unspent). D is closed (Decisions, 2026-11-18) |
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan), #2806 | run 1532, dispatched 2026-11-10; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Tasks 1-9 committed (worker-reported). Task 10 was held at Step 2 from 2026-11-11 and resumed on 2026-11-14 with CI standing in for the local server suite (Decisions, 2026-11-14). The wave-done was verified at `d56b10667`. Review runs 2104, 2116 and 2122 found 3, 2 and 1 important findings, each sent back as a fix round; on 2026-11-15 the review cap was extended from 3 to 6. Review run 2132 (round 4) found no product defect, the wave was accepted at `b7b60ed93`, and #2806 **merged** 2026-11-15 (`f6bdbf153`), its merge-queue run green with `browser (pwa)`. Run 1532 closed done (Decisions, 2026-11-15) |
-| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **Design wave X1 is run 2631 (wave 24), dispatched 2026-11-18, reserve 8759-8761** |
-| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **Design waves X2 (#1418 parity, run 2632, wave 25, reserve 8762-8764) and X3 (#1420 draft review, run 2633, wave 26, reserve 8765-8767), dispatched 2026-11-18** |
+| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries are folded in by X4, the library-input text wave (run 2680, wave 27). The library programme plans its one wave after X4 lands; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)** |
+| Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)** |
 
 ## Decisions & deviations
+- **2026-11-19: the three required-extension designs accepted at the review cap and landed. X1 appearance (#3048, `8781ef20a`), X2 #1418 parity (#3049, `6095bf43d`) and X3 #1420 draft review (#3050, `1bbb6730b`) are on `main`. X4, the library-input text wave, opened as run 2680 (coordinator; in-plan rulings).**
+  - Each design wave ran three review rounds, the held-out panel each time (three Opus · high lenses, Sonnet · high refuters). Each was accepted at the cap with binding carries, recorded below under "Binding carries from the extension designs". Implementation of all three waits for the operator's approval of the designs.
+  - **X1 (run 2631, wave 24)** defines D-8759 (the bridge's appearance op), D-8760 (the hosted theme is ccrc's) and D-8761 (the frame handle's `setAppearance`).
+    - Its reviews were runs 2645, 2657 and 2676.
+    - Rulings, round 1:
+      - Popover elevation and the section-label type are carried as skin slots, unless a value moves the reading layout or a budget; each token is carried or rejected by name.
+      - The hosted label is validated text, refused by Unicode category, with a 64-unit cap; ccrc sends "Appearance follows ccrc Settings".
+    - Rulings, round 2:
+      - `chg` and `term` take each palette's own colours (the operator asked for ccrc's colours), on the condition that their meaning never rides on colour alone.
+      - The library budget is attributed by contract, in commit order: X1's contract first, at 32 768 characters.
+      - The worker's masked-hash reading of test 9 is accepted.
+    - Round 3 reproduced 0 of 2 184 contrast rows below the floor, found no grammar leak, and found the CSP reading sound. Its one blocking item was a §10 claim that the reader's Mermaid colouring covered every kind. The coordinator ruled option (a) and ordered the correction to land in a reviewed text wave (X4) before the library programme plans its wave.
+    - PR #3048's stale body was patched to the spec's slot counts.
+  - **X2 (run 2632, wave 25)** defines D-8762 (layout variants live in the library, reconciling the operator's #1418 ruling), D-8763 (history places on the port) and D-8764. It also amends the rich-docs spec's §6 parity table.
+    - Its reviews were runs 2647, 2659 and 2670.
+    - Rulings:
+      - The parity table stays in the PR (completion Task 16 step 1), and the review judge's `pr1-files-invalid` is accepted as its price. Every library layout uses X1's appearance slots and passes the pairs gate while hosted, as one library wave with X1's contract first. One census model, under `DOCS_DOORS`.
+      - Print of a non-Markdown leaf is a parity row. Image and text leaves print from the console's print view through the same allow-list. A PDF or HTML page prints from its download, as a recorded difference (no `allow-modals`), not a waiver.
+      - PL3: a file read in parts may print only its visible part only if no such file exists today. One Markdown file above 2 MiB does (about 3.4 MB), so every part prints, each parsed under its budget.
+      - Round 3 then ruled that a Markdown document above the 512 KiB render gate is read in parts no larger than the gate, each mounting rich and printing through the same render job (the first item of P1).
+  - **X3 (run 2633, wave 26)** defines D-8765 (base Goals 1 and 3, the decision `product`, the Non-goal "Share links that ccrc hosts", §4.13's expiring-links bullet and the README bullet), D-8766 (the Export-confinement sentences and M4.EX16) and D-8767 (M5.16's and rich-docs A2b's parser, frame and srcdoc clauses, and the reader lab design's Before row). Each quotes its sentences exactly and names #1420 (2026-10-25) and asks 595 and 603.
+    - Its reviews were runs 2669, 2685 and 2700.
+    - Rulings, round 1:
+      - The read door is its own plugin, with its own body limit and error handler (one identical 404 for every refused state, plus 413 and 429), and a marker header checked before any token lookup.
+      - Expiry is terminal: Pin refuses an expired share, and a re-share after expiry mints a new token, so an old link is never revived.
+      - Each amendment lands with the wave that ships its behaviour, and no release hands out a review link before its page exists. The worker ordered R1 (the server read side), R2 (the page), R3 (the owner doors and UI) and R4 (signed-in comments).
+      - The draft-review link is a distinct action in Page details, not an arm of Share. Share keeps sending only the committed permalink, so the operator's 2026-10-07 `share-drafts` ruling, M4.SH1 and M4.SH3 stay true.
+      - Base §4.13's and §4.16's no-route, no-state sentences are about Share and Export and stay true: not departures.
+    - Rulings, round 2:
+      - **The device gate:** R2 ships a fixed measurement page in lab mode, opened from one reader-lab anchor and seeded from a committed fixture. Its WebKit phone leg and its desktop Firefox leg are one operator device item, raised when R2 is installed. R3 dispatches only after both legs are recorded. An engine that cannot be measured is the operator's decision.
+      - **Revoke under disk failure:** a revoke is dead in memory before any disk act, either unlink keeps it dead at boot, and when every act fails the answer is 503 `not-durable`, with retries. The residual case (every act fails, then a restart after the disk heals) is accepted with a plain owner warning. A fail-closed clean-close record was declined, because every crash would drop every live link.
+  - **Asks**, in-plan unless marked:
+    - **Ask 594** (X1), option 0: while hosted, Aa shows a static line where its theme row was.
+    - **Ask 595** (X3 access model) and **ask 603** (reviewer comments): released to the operator. The worker reports the operator's answers: a capability link, and signed-in comments only (R4, a follow-on). The coordinator is still confirming both with the operator. R1 does not dispatch until they are confirmed.
+    - **Ask 596** (X2 old-origin reading state) and **ask 598** (HTML pages beyond the mockup frame's walls): the operator's, in X2's Waiting on you. The recommendations are a fresh start and keeping the walls.
+    - **Ask 597** (X2), option 1: figure images staged. Stage 1 is a print view with figures as source; stage 2 draws figures through a capped, PNG-only library op over the existing bridge.
+    - **Ask 599** (X2), option 0: large-file ceilings of 64 MiB, and 4 MiB for a PDF, by default.
+    - **Ask 600** (X1), option 1: deferred, with no main absorb. **Correction to the 2026-11-18 entry**, which carried review run 2610's two minors to "X1's first item": X1's base predated #3026, so they carry instead to the first wave cut from a base that has #3026. They are row `W4-T10-M10`'s recorded count, and D-8730's two clauses that neither F4 list names.
+    - **Ask 601** (X2), option 0: the rich-docs §3.3 and §4.4 amendments for D-8762 and D-8763 land with their implementing waves.
+    - **Ask 608** (X4), option 0: a size row's measuring commit is read from history, never typed. See X4 below.
+  - **X4, the library input (run 2680, wave 27)**, opened 2026-11-19 with a reserve of two numbers. It edits X1's and X2's specs and plans in place, so that the library programme plans its one wave from corrected text. Its contents:
+    - X1's Mermaid covered-kinds constant and full derivation;
+    - the colour-only states;
+    - test 8's every-entry sum and append-only rows;
+    - X2's F10 print design (library half);
+    - X1's wave C items, folded in;
+    - X2's plan line 28 (X3 owns the draft-review action, not Share);
+    - a proposed X2 share.
+
+    Its round-1 review ran as run 2694. The ruling on test 8:
+    - the table's first commit is exempt from the parent check (its baseline row equals the parent's manifest total);
+    - each landing on the library's main line carries frame-asset changes from one design and appends one row;
+    - CI fetches depth 2.
+
+    X2's share is a ceiling enforced by test 8: if X2's real code exceeds it, the library wave stops and asks. The coordinator sets it at X4's acceptance. The review judge's `editorial-diff-over-bound` is accepted as the price of one PR.
+  - **Routing**, all four design waves: an Opus · high main loop, at xhigh for each design decision, with Sonnet · medium fact checks and one Opus · high adversarial pass before each wave-done. Workflow off.
+  - **Next:**
+    - X4 lands.
+    - The operator approves the three designs and confirms asks 595 and 603.
+    - The library programme plans its one wave (X1's contract first, then X2's), and the operator releases it with a signed tag.
+    - ccrc's implementing waves run: X1 wave C; X2's P1 to P6; X3's R1 to R4, with R3 after the device item. Each carries its first item from the list below.
+    - Then E, and F.
 - **2026-11-18: D2 accepted and landed (#3026, `839c05e46`); D closes; the three required-extension design waves X1, X2 and X3 opened as runs 2631, 2632 and 2633 (coordinator; in-plan rulings).**
   - D2 ran as run 2436. Its first item closed review run 2432's carries. Task 13 delivered the D-8729 focus contract, lab 10, the same-page link, the phone-head shell and the reader residue. Task 14 closed D. D-8730, phone-head-swap-keeps-back-only, was defined from the reserve at ask 555. 8731 and 8732 are unspent.
   - Coordinator rulings on D2's asks, none needing a further number:
@@ -877,7 +939,145 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
   - N1's docstring nits.
 - **U5:** the private vulnerability report is not filed yet. The spec's one-line mention is public since #301.
 
-## Current next-wave briefs — X1, X2 and X3, runs 2631, 2632 and 2633
+## Binding carries from the extension designs (coordinator, 2026-11-19)
+
+Each carry lands as a design-text commit: the first item of the named wave, before that wave's code, and reviewed in that wave's review. The wave's brief quotes it.
+
+### To the first wave cut from a base that has #3026 (ask 600)
+
+- Row `W4-T10-M10`: its recorded count is 3 failed, but it measures 2 failed. Re-measure it once and drop the third red name.
+- D-8730's clauses "the next Tab follows the one bar's order" and "the one bar's layout and order are unchanged": name each as pinned (say by which row) or as descriptive only. Do not change D-8730's text.
+
+### X1 (appearance): carried by X4, run 2680
+
+X4 folds every X1 carry into X1's own spec and plan before the library programme plans its wave:
+- the Mermaid covered-kinds constant and its derivation;
+- author-styled figures keeping the plate;
+- the colour-only states;
+- test 8;
+- the CSP and op text;
+- wave C's F5, F6, F7, A2, A3, A7 and A9 (1).
+
+Wave L is not planned from X1's text as it was at `89a9ce02a`.
+
+### X2 (parity)
+
+- **First item of P1, the render gate.** A Markdown document above the 512 KiB render gate (`DOCS_RENDER_GATE_BYTES`) is read in parts no larger than the gate. Each part mounts rich and prints through the same render job.
+  - Inventory row F2 becomes a Gap closed by P1.5, and the counts and In short move.
+  - §4.3's "a part of up to 2 MiB renders as its own mount" is corrected.
+  - PL3 becomes "every part prints, each parsed under its budget".
+  - P1.5's part-id pre-pass uses parts of at most gate size.
+  - P6.1 tests 524 287, 524 288 and 524 289 bytes, and the 2 MiB and 3.4 MB fixtures.
+  - If a part at the gate cannot render within budget on a phone (measure it), stop and ask.
+- **P5.3.**
+  - The forward-skip trap at the top of history: `lastIdx` updates on a skip, with a stale-places test.
+  - `reader-history-adapter.test.tsx`'s case 8b joins P5.3's characterization commit.
+  - M11.73's test is extended to what only the visit's end decides.
+  - A1's skip-loop bound and counter seeding.
+- **P1.5.** The page pin of a stat-pinned draft between the listing and the prepare: `pinFor` must not throw. P1.5's Files name `useDocsVisit.ts`, `docsLinks.ts` and Share's `samePin`.
+- **P1.2, P2.1 and P2.2.** `ccdCapTokens.ts`, `ccd-archive.test.ts` and the `docs-parity` `H.VERBS` case go in the Files of the waves that add cap tokens or helper verbs. P2.2 also takes:
+  - M11.72, pinned to a case only admission catches;
+  - a `docs-folder` parser that refuses a second mode.
+- **The library wave and P5.5.** The print design for the review strip's waiting list and the plan chips. X4 writes the library half.
+- **Each owning wave.**
+  - `markdown-purity`'s `ROOTS` gain `printAllow.ts` and `trackerLinkJob.ts`.
+  - `TRACKER_ACK_DEADLINE_MS` is worded consistently, with a queued-arm test.
+
+### X3 (draft review): one design-text commit, the first item of R1
+
+- **The owner warning.** The revoking state and the 503 `not-durable` answer say plainly that the revoke is not yet permanent, and that the owner must revoke again if ccrc restarts before its disk recovers. An R3.4 row pins the sentence. An R1.3 row pins the residual itself: every act fails, then close, heal and re-open, and the share is live.
+- **The residual's bound** is any stop while the disk still refuses. Qualify spec :10, :43, :183, :211 and :238 accordingly.
+  - "Tombstone landed, both unlinks failed" answers `ok`.
+  - A 200 may precede the bytes unlink, which is safe.
+- **The service-worker denylist** is spelled `/^\/review(?:\/|\?|$)/`.
+  - `fonts-built.test.ts` joins R2.2 Step 4.
+  - Check that the Vite input key builds `index`.
+- **M-X3.16's font** is measured in the mockup copy's nested frame. The PNG, font and stylesheet assets are committed beside the fixture pages.
+- **R2.3** gains red-first, implement and run steps for:
+  - lab mode;
+  - `labFixture.ts` and its test;
+  - the lab rows;
+  - the reader-lab anchor and its census entry;
+  - the scan allowance.
+- **Rasters' decoded bytes** are scanned as Latin-1. The tEXt row must count 1, and R3-M9 becomes "cut rasters unread".
+- **D-8767's quotes.** It gains the `default-src 'none'` clause (base M5.16, rich-docs A2b). The Export-confinement quotes land with R2: base §5.4 :2836, §5.6.9 :3106 and M5.16's parenthetical :3179.
+- **Deps seams.** A deps seam for the store, `ReviewFs` and the PWA root. `server/src/deps.ts` goes in R1's Files, and `server/src/server.ts` in R2's.
+- **Mutation rows.**
+  - R1-M47 is deleted, or the full pass is made observable.
+  - The view is recorded after the bytes start.
+  - R3-M20's fixture is a version-1 first create.
+- **Smaller items.**
+  - One `{date}` formatter, in L0.
+  - A re-share keeps `pinned`.
+  - Figure 2 gains its missing edges.
+  - `lost`'s doc covers both causes, and a revoked share never reads as unreadable.
+- **Run-open conditions.**
+  - R1 waits for the operator's confirmation of asks 595 and 603.
+  - R3 waits for the M-X3.16 device item, and names `DocsHead.tsx`, `DocsIndexView.tsx`, the control census, the tap-target floors and the residue A23 to A27.
+
+## Current next-wave brief — X4, run 2680
+
+Dispatched 2026-11-19 as written below (Decisions, 2026-11-19). The coordinator's rulings it names (the X1 and X2 carries, ask 608) are recorded in Decisions and in Binding carries above; its review and fix rounds are recorded in Decisions.
+
+Programme `native-docs-reader`, wave 27 = X4, library input: the X1 and X2 carries, run 2680. Deviation block Issued: 8774 and 8775 (a reserve; define one only for a departure from the completion design, the rich-docs spec or an operator ruling).
+
+Why this wave exists. The library programme plans its one library wave (X1's wave L) from X1's spec §10 and X2's spec §6. Review run 2676 found a §10 sentence that does not hold for the bundled Mermaid. The coordinator accepted X1 at the review cap on the condition that a reviewed text wave corrects §10 before wave L is planned. This is that wave. It also folds X2's library-side carries in, so one library wave and one release take both designs. It is docs only.
+
+Read first:
+- the coordinator's rulings, `/tmp/native-docs-d/x1-carries.md` and `/tmp/native-docs-d/x2-carries.md`;
+- review reports `/tmp/native-docs-d/review-2676-89a9ce02.md` (X1, round 3) and `/tmp/native-docs-d/review-2670-baef59a2.md` (X2, round 3).
+
+Every ruling in x1-carries.md is binding: carry it out as written. A choice it leaves open is yours: decide it and record why.
+
+Files (claim them first):
+- X1: `docs/superpowers/specs/2026-11-18-native-docs-appearance-continuity-design.md` and `docs/superpowers/plans/2026-11-18-native-docs-appearance-continuity.md`;
+- X2: `docs/superpowers/specs/2026-11-18-native-docs-parity-design.md` and `docs/superpowers/plans/2026-11-18-native-docs-parity.md`.
+
+Nothing else. Both designs are merged (X1 at `8781ef20a`, X2 at `6095bf43d`). Edit them in place.
+
+Items, one commit each where they separate:
+1. **X1 §10 Mermaid (F1 ruled (a), F2).**
+   - Measure, from library 1.1.0's bundled Mermaid, every colour key its `base` theme reads per diagram kind, including the literal fallbacks (`doneTaskBkgColor||"lightgrey"`, `critBkgColor||"red"` and the rest the report names), and the kinds it draws.
+   - Write the named constant of covered kinds. It holds at least flowchart, sequence, class, state, gantt, pie, ER and gitGraph.
+   - Give `mermaidThemeOf`'s assignment or derivation for every key of every covered kind, with the contrast floor each pair meets in all 12 palettes. Add a row to the Cross pairs table per drawn pair.
+   - Kinds outside the constant, and author-styled figures (`classDef`, `style` or `linkStyle` setting a fill, stroke or colour), keep 1.1.0's plate and filter while hosted. The exception is F2's measured label route, if you take it.
+   - Test 5 draws each covered kind in every palette, plus F2's fill-only `classDef` row. Narrow §5 and §9's claims to the constant.
+2. **X1 §10 states (F3), and the advisory text items.**
+   - F3: a non-colour cue each for the checked option, the pressed view button and the filter focus, each with a test 10 row. The flash is named as exempt, and line 415 is reworded.
+   - Text: A1, A4 (`HASH_SOURCE` mask on `script-src` tokens, `FRAME_OPS`, the frame's own parser), A5, A6, A8, A9 (2) and (3), and A10.
+3. **The budget (F4) and X2's share.**
+   - Test 8 sums every `FRAME_MANIFEST` entry, Mermaid's included. Re-measure the 1.1.0 baseline that way.
+   - Its rows are append-only against the parent commit's table, and each row names the library commit that measured it.
+   - X2's layouts are per-layout enhance bundles, of which a frame inlines one. Say how test 8 and the per-layout srcdoc cap count them, so that no layout spends another design's share.
+   - Propose X2's share with numbers. Measure 1.1.0's default enhance bundle as the comparator, and add the item-link, place, print-figures and print-mode additions. Edit X2 §6 to state it. The coordinator sets the share at this wave's acceptance.
+4. **X2 F10, its library half.** The print design for the review strip's waiting list, and for the plan task chips, step labels and plan facts, inside §6's print-mode row. Name what P5.5 then does on ccrc's side.
+5. **X1 wave C's first items, folded in now.** F5, F6, F7, A2, A3, A7 and A9 (1) as x1-carries.md rules them, in X1's plan: Task 5's Files and Step 4, the one hosted decider with its lab row and AP-M12, the await row and its mutation row, AP-6's palette list, Step 2's expected reds, the Chromium-only Results line, and the one stamp function.
+6. **Results.** Append a "Library input (X4)" section to each plan: what you measured and how, a table of every carry with the line that closes it, and the commands you ran.
+
+Measure, don't recall. Read library 1.1.0 from an existing installed copy, read-only. Do not run a new `npm install`, make a repository copy or open a new worktree: the box is low on disk. Figures you cannot measure are written as unmeasured, never as estimates presented as measurements.
+
+Standing boundaries (not re-opened here):
+- Reader sandbox exactly `allow-scripts`; shell CSP `frame-src 'none'`; no parent-DOM access and no new channel.
+- Both 2026-11-06 phone blocks are byte for byte. `@synapsium-labs/docserver` stays exactly 1.1.0.
+- A library change is designed, not made. Its release and signed tag are the operator's.
+- Name the library by role, and propose no new name.
+- A design change that would need any widening is a stop-and-ask.
+
+Public repository. Nothing private, ever:
+- The standalone reader is named by role only.
+- Private-name scan every file before each commit, and again before your push.
+
+Routing (clause 13): main loop Opus · high, xhigh at the F1 derivation and the budget decision. Sonnet · medium Agent subagents for fact checks against the library and ccrc source. Every Agent call names its model and effort literally, never Fable. Workflow off. Before your wave-done, run one Opus · high Agent pass over the changed sections as an adversarial reader (contrast, budget holes, testability), and fix or record what it finds.
+
+Asks: a genuine product choice goes to me as a structured ask, with options and your recommendation. A technical choice is yours. Never re-ask a recorded ruling.
+
+Deviations: as above. If the block is spent, write `D-TBD-<slug>` and ask.
+
+Stop and ask: any source edit, any file outside the four, a widening, a library repository edit, a refusal from any tool, hook or route, or a covered-kind derivation that cannot meet the floor in some palette. In that last case, say which kind and palette, and propose the plate fallback for it.
+
+Commit on `ws/<your slug>` only, never a separate feature branch. Every commit message ends with one trailer paragraph. One PR. List mail before your push, and push once. Get the exact-tip `ci` and `CodeQL` checks green and 0 open alerts, then send wave-done with the fingerprint JSON. Never enqueue or arm auto-merge.
+
+## Earlier briefs — X1, X2 and X3, runs 2631, 2632 and 2633 (landed in #3048, #3049 and #3050)
 
 Dispatched 2026-11-18 as written below, each as its wave's section followed by the common section (Decisions, 2026-11-18). The coordinator's rulings on their asks are in Decisions.
 
