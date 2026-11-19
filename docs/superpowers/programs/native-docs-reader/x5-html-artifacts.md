@@ -51,7 +51,7 @@ Review run 2850 read the branch at `d1bb9ffee` and confirmed 13 findings (F1 to 
 | F6 | A4 writes a stock-Caddy global block that filters `request>uri` and the `Referer` header out of every log entry. A test pins it. ART-L10 confirms it, and a token found turns the tier off and asks |
 | F7 | The scope read and the mint refuse `pin-moved` when the tree read is not the pinned version |
 | F8 | `buildServer`'s body builds the shared session store, docs composition and capability store once and hands the artifact instance out as `app.artifactServer`. `Deps` gains nothing (the adversarial pass moved this off a wrapper, which would have reddened four tests that read `buildServer`'s body) |
-| F9 | Loads wait in a bounded queue (64, 60 s) instead of a 429. One snapshot per large entry. The busy and timeout answers are stated. Many-loads test |
+| F9 | Loads wait in a bounded queue (64, 90 s) instead of a 429. One snapshot per large entry. The busy and timeout answers are stated. Many-loads test |
 | F10 | Full hostnames in `CCRC_DDNS_DOMAIN`. A re-run of any arm carries the artifact keys |
 | F11 | The settings census, the install fixture, the secret-mask scans and the gate's route count are named in the Files lists |
 | F12 | The artifacts arm prints copy, reload and restart, with no passkey line, and a test pins it |
