@@ -2,6 +2,8 @@
 
 **Spec** · 2026-11-02 · Status: Approved by the operator on 2026-11-04, with its plan; staged scope agreed 2026-11-02 · Owner: Delegation broker · Related: `docs/superpowers/specs/2026-10-04-delegation-broker-design.md`
 
+> **C46 amendment (operator's ruling, 2026-11-19; D-8771).** The row chip no longer exists: a session's row in the fleet list draws no count of its attached delegation entries (D-7781's card side), and the "header superset, by count" comparison (D-7782) is retired with it, so the header holds every card fact by the ordinary prefix rule again (D-5545). The fold line and the programme box's footer keep their delegation rows and say `delegated` and `worktrees` with no number. The session header keeps what this design gave it: the `N delegated` disclosure counting every entry the session started, and its list. A working row's `N in background` is uncounted on the card too (`working · in background`, the count and kinds in its title), and the header keeps that count. Detail: the desktop-polish plan's Task C46 and D-8771 (`docs/superpowers/plans/2026-10-22-desktop-polish.md`). Older text in this design is left as written.
+
 ## In short
 
 The fleet console calls a delegated helper "running" whenever its parent session is live in the run that started it. Nothing measures the helper itself. Some recorded entries are also drawn nowhere. If the parent session has left the fleet list, the entry is only a hidden count in the page. If the parent is a dead programme worker, its chip is dropped. The operator agreed on 2026-11-02 that honest visibility may ship before automatic repair. This first release is a change to the PWA only:

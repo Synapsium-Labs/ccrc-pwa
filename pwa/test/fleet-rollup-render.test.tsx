@@ -136,7 +136,7 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     expect(cardOf('project-a').getAttribute('data-collapsed')).toBeNull();
   });
 
-  it('W4-U31: a folded coordinator counts two live activities in its line and hides them; expanded, both nest', () => {
+  it('W4-U31: a folded coordinator names two live activities in its line, with no number (D-8771), and hides them; expanded, both nest', () => {
     const store = mount(skin);
     act(() => {
       store.setState({ delegation: frame({ activities: [
@@ -149,12 +149,12 @@ describe.each([REFINED, INSTRUMENT] as const)('the fleet rollup in the %s fleet 
     // the two activities, never as workers.
     const line = within(c.querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /more workers/ });
     expect([...line.querySelectorAll('.proj-children-part')].map((el) => el.textContent))
-      .toEqual(['4 more workers', '2 working', '2 delegated']);
+      .toEqual(['4 more workers', '2 working', 'delegated']);
     expect(c.querySelectorAll('.proj-work')).toHaveLength(0);
     fireEvent.click(line);
     // Open, the footer hides the five workers and names the two activities apart from them.
     const open = within(cardOf('project-c').querySelector<HTMLElement>('section.pg-box')!).getByRole('button', { name: /^hide/ });
-    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', '2 delegated']);
+    expect([...open.querySelectorAll('.proj-children-part')].map((el) => el.textContent)).toEqual(['hide 5 workers', 'delegated']);
     const rows = [...cardOf('project-c').querySelectorAll('.proj-work')];
     expect(rows).toHaveLength(2);
     for (const r of rows) expect(r.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);

@@ -236,16 +236,15 @@ export const byOpened = (a: DelegationActivityWire, b: DelegationActivityWire): 
 /** One line of the session header's entry list, in an activity row's words. */
 export interface EntryRow extends WorkWords { readonly key: string }
 
-/** A session's recorded entries: the chip (`N delegated`), their count, the header's description and its list. */
+/** A session's recorded entries: the header's disclosure (`N delegated`), its description and its list. */
 export interface DelegatedSummary extends Chip {
-  readonly count: number;
   readonly note: string;
   readonly rows: readonly EntryRow[];
 }
 
-/** D-7781: the chip counts EVERY entry it is handed, of every liveness. The card hands it a row's attached entries,
- *  and the header every entry the session started, so the count is of recorded entries, never of running helpers.
- *  `null` when handed none. */
+/** D-7781: the header's `N delegated` disclosure counts EVERY entry it is handed, of every liveness: the session header
+ *  hands it every entry the session started, so the count is of recorded entries, never of running helpers. The fleet
+ *  list's row draws no such count and no chip (D-8771). `null` when handed none. */
 export function delegatedChip(activities: readonly DelegationActivityWire[]): DelegatedSummary | null {
   if (activities.length === 0) return null;
   const n = activities.length;
@@ -253,7 +252,7 @@ export function delegatedChip(activities: readonly DelegationActivityWire[]): De
   return {
     text: `${n} delegated`,
     title: `${n} recorded delegation ${n === 1 ? 'entry' : 'entries'}, not a current agent count; execution not confirmed`,
-    count: n, note: ENTRIES_NOTE, rows,
+    note: ENTRIES_NOTE, rows,
   };
 }
 
@@ -262,13 +261,13 @@ export function activitiesStartedBy(id: string, w: DelegationProjectionWire): re
   return w.activities.filter((a) => a.parentId === id);
 }
 
-/** A coordinator's summary counts for its delegation children: `n delegated`, `n worktree(s)`; zero counts say nothing. */
-export function delegationParts(rows: readonly { kind: 'activity' | 'lease' }[]): { readonly n: number; readonly word: string }[] {
-  const acts = rows.filter((r) => r.kind === 'activity').length;
-  const trees = rows.filter((r) => r.kind === 'lease').length;
+/** The words a fold line uses for a coordinator's delegation children: `delegated`, `worktrees`. Neither is counted: the
+ *  operator ruled the number of a session's delegated entries noise in the fleet list (D-8771), and the fold keeps the
+ *  word so a line holding only these rows still says what it holds. A kind with no row says nothing. */
+export function delegationParts(rows: readonly { kind: 'activity' | 'lease' }[]): { readonly word: string }[] {
   return [
-    ...(acts > 0 ? [{ n: acts, word: 'delegated' }] : []),
-    ...(trees > 0 ? [{ n: trees, word: trees === 1 ? 'worktree' : 'worktrees' }] : []),
+    ...(rows.some((r) => r.kind === 'activity') ? [{ word: 'delegated' }] : []),
+    ...(rows.some((r) => r.kind === 'lease') ? [{ word: 'worktrees' }] : []),
   ];
 }
 
