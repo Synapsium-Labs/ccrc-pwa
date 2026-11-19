@@ -240,5 +240,6 @@
   "server/src/coord/planPolicy.ts#runMustNameTicket": 1,
   "server/src/coord/planPolicy.ts#parsePlanTicketDone": 1,
   "server/src/coord/planPolicy.ts#ticketDoneVerdict": 1,
-  "server/src/coord/planPolicy.ts#landedFactOf": 1
+  "server/src/coord/planPolicy.ts#landedFactOf": 1,
+  "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1
 }

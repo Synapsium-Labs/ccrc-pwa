@@ -152,7 +152,8 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
   `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714), or the Overlord's private store and every copy of it (`~/.ccrc/operator-model.db*`, `~/.ccrc/privacy-journal.log`, `~/.ccrc/privacy-journal.torn/`, `~/ccrc-backups/*/operator-model.db*`, `~/.ccrc/coordination-restore.stage/*/operator-model.db*`, `~/.ccrc/coordination-restore.foreign/*/operator-model.db*`); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
   whole environment (bare `env`, `printenv`). They are the operator's, from
-  the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
+  the PWA's Accounts screen or their own shell. `~/.cc-sessions/.door/` is the Overlord's door process directory (its
+  tool-server config holds the launch nonce): no session reads or writes it. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
   accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three

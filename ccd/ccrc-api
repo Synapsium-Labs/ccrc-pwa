@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, ninety rows, and nothing else; the
+#   * The route comes from ROUTES below, ninety-one rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -95,7 +95,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Ninety rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Ninety-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -277,6 +277,10 @@ declare -A ROUTES=(
   # pending: only the operator's confirmation on the Shadow lanes card, behind a session and a step-up, makes it count, so a
   # session calling this row records nothing that counts (coordinator ruling, slug quiz-record-posts-through-the-client).
   [quiz.record]='POST|/api/continuity/quiz-runs|no|-'
+  # The act-key claim (Overlord W1 door process A1, spec §3.3.11 H12): the door process presents its launch nonce once and is
+  # answered the act key once. THIS ROW'S BODY CARRIES A SECRET (`{"fromId","fromUuid","nonce"}`), which is why every body
+  # rides curl's stdin (`send_request`); its answer carries the key, which only the door process reads.
+  [sessions.act-key]='POST|/api/sessions/{id}/act-key|yes|-'
   # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
   # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
   # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
@@ -679,15 +683,24 @@ send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an a
   # it prints nothing on a 4xx and exits 22, and the body is the whole protocol —
   # every refusal these routes send arrives as a 4xx JSON body.
   local -a args=(-sS -K - -m 30 -o "$REQ_OUT" -w '%{http_code}' -X "$method")
-  [[ -n "$body" ]] && args+=(-H 'content-type: application/json' --data-binary "$body")
+  local cfg esc
+  cfg=$(printf 'header = "x-ccrc-mail-token: %s"' "$TOKEN")
 
   # THE TOKEN RIDES CURL'S STDIN, NEVER ITS ARGV (R16): a `-H` value is readable
   # in every process listing on the box (`ps`, /proc/<pid>/cmdline) for the life
   # of the call. `-K -` reads the header from a config line on stdin, the
   # spelling ccd-pool-sync and ccd-update-sync ship. stdin is free here because
   # `--json -` was read into $body in `main`, before the first request.
-  code=$(printf 'header = "x-ccrc-mail-token: %s"\n' "$TOKEN" \
-    | curl "${args[@]}" "$url" 2>/dev/null)
+  # SO DOES THE BODY (Overlord W1 door process A1, ruled F1): a body can carry a secret (the act-key claim's launch nonce), so
+  # it is one `data-raw` line of the same config, never `--data-binary "$body"` on the argv. Inside a quoted config value curl
+  # reads `\\` as `\`, `\"` as `"` and `\n`/`\r` as a newline and a carriage return, so those four are escaped, `\` first, and
+  # the bytes the server receives are the body's own. `data-raw`, not `data-binary`: a body is never a `@file` read.
+  if [[ -n "$body" ]]; then
+    esc=${body//\\/\\\\}; esc=${esc//\"/\\\"}; esc=${esc//$'\n'/\\n}; esc=${esc//$'\r'/\\r}
+    args+=(-H 'content-type: application/json')
+    cfg+=$'\n'"data-raw = \"$esc\""
+  fi
+  code=$(printf '%s\n' "$cfg" | curl "${args[@]}" "$url" 2>/dev/null)
   REQ_RC=$?
   REQ_CODE="$code"
   (( REQ_RC == 0 )) && [[ -n "$code" && "$code" != '000' ]] && return 0

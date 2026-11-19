@@ -4085,7 +4085,7 @@ _hook_start_keep() {   # <tries> <report JSON> <send rc, 6 unsent, 7 stale under
   (( t >= START_RESEND_TRIES )) && drop=$(( drop + 1 )) || stay+=("$t"$'\t'"$2")
 }
 _hook_start_report() {
-  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=() rid
+  local f="$REG/$id.startpending" now dl after=0 drop=0 t j r rc=6 pass=1 why=0 body="" inc="" e kept=() stay=() rid dns=""
   case "$event" in UserPromptSubmit|SessionStart) ;; *) return 0 ;; esac
   [[ -z "$paid" && "$id" =~ ^[A-Za-z0-9_-]+$ && -f "$REG/$id.generation" && ! -L "$f" ]] || return 0
   { [ -e "$REG/$id.child" ] || [ -L "$REG/$id.child" ]; } && return 0
@@ -4097,12 +4097,15 @@ _hook_start_report() {
   if [[ "$event" == SessionStart && "$src" != fork ]]; then
     # `_reg_generation_valid`'s grammar (ccd/ccd), which `REG_GENERATION_SHAPE` (shared/api.ts) holds for the server.
     [[ "${CCRC_SESSION_GENERATION:-}" =~ ^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$ ]] && inc="$CCRC_SESSION_GENERATION"
+    # The launch nonce's sha256 the spawn put in this environment (the door process, Overlord W1 A1), sent only in its shape.
+    [[ "${CCRC_DOOR_NONCE_SHA256:-}" =~ ^[0-9a-f]{64}$ ]] && dns="$CCRC_DOOR_NONCE_SHA256"
     rid="$now-$$-$RANDOM"; [[ -n "${CCRC_LAUNCH_PROFILE:-}" && ( "$src" == startup || "$src" == resume ) ]] && _hook_loads_pend "$rid"
-    body=$(jq -c --arg id "$id" --arg rid "$rid" --arg inc "$inc" --argjson at "$now" \
+    body=$(jq -c --arg id "$id" --arg rid "$rid" --arg inc "$inc" --arg dns "$dns" --argjson at "$now" \
       '(.session_id // "" | tostring) as $u | {fromId: $id, fromUuid: $u, startedUuid: $u, reportId: $rid,
         source: (.source // "" | tostring | if . == "" then "other" else .[0:32] end),
         model: (.model | if type == "string" then .[0:128] elif type == "object" and (.id | type) == "string" then .id[0:128] else null end),
-        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at}' <<<"$payload" 2>/dev/null) || body=""
+        rowIncarnation: (if $inc == "" then null else $inc end), reportedAt: $at} + (if $dns == "" then {} else {doorNonceSha256: $dns} end)' \
+      <<<"$payload" 2>/dev/null) || body=""
     [[ -n "$body" ]] && { _hook_start_send "$body" "$dl"; rc=$?; }
     [[ "$rc" == [1245] ]] && pass=0
   fi
@@ -5635,8 +5638,8 @@ def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
-def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|operator-model\\.db|privacy-journal\\.log(?![A-Za-z0-9_.-])|privacy-journal\\.torn(?![A-Za-z0-9_.-])|coordination-restore\\.(?:stage|foreign)" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-]))|" + DANC + "ccrc-backups" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db)";
-def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.cc-sessions" + SEPP + "\\.door(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|operator-model\\.db|privacy-journal\\.log(?![A-Za-z0-9_.-])|privacy-journal\\.torn(?![A-Za-z0-9_.-])|coordination-restore\\.(?:stage|foreign)" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-]))|" + DANC + "ccrc-backups" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db)";
+def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts|door)(?![A-Za-z0-9_.-])";
 def ENVP: "(?:[(`{]|\\$\\()";
 def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
 def ENVS: "(?:\\$\\(|`)" + SP + "*(?:[^" + WS + "/)`]*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`]";
@@ -5663,8 +5666,8 @@ def apmatch:
   (select(test(ARF) and (hbt(SEG; BWR; ARF) or findw(ARF) or xargsw(ARF))) | "account\ta write of the roster or its mirror"),
   (select(test("account-op") and any(split(SEG; null)[]; test(AOPRUN))) | "account\ta direct run of the account script"),
   (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
-def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)|/\\.ccrc/operator-model\\.db|/\\.ccrc/privacy-journal\\.log$|/\\.ccrc/privacy-journal\\.torn(?:/|$)|/ccrc-backups/[^/]+/operator-model\\.db|/\\.ccrc/coordination-restore\\.(?:stage|foreign)/[^/]+/operator-model\\.db";
-def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.cc-sessions/\\.door(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)|/\\.ccrc/operator-model\\.db|/\\.ccrc/privacy-journal\\.log$|/\\.ccrc/privacy-journal\\.torn(?:/|$)|/ccrc-backups/[^/]+/operator-model\\.db|/\\.ccrc/coordination-restore\\.(?:stage|foreign)/[^/]+/operator-model\\.db";
+def APWD: "/\\.cc-sessions/\\.(?:auth|accounts|door)(?:/|$)";
 def APRF: "/\\.ccrc/accounts\\.(?:json|sh)$";
 def acctpath($t; $i):
   if ($t | edittool) then first(($i.file_path, $i.notebook_path) | select(type == "string") | pnorm | select(test(APSEC) or test(APWD) or test(APRF)) | "account\ta write to an account path")
@@ -5718,7 +5721,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
-       || "$apf" == *operator-model.db* || "$apf" == *privacy-journal* || "$apf" == *.ccrc* \
+       || "$apf" == *operator-model.db* || "$apf" == *privacy-journal* || "$apf" == *.ccrc* || "$apf" == *.door* \
        || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi

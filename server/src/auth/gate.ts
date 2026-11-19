@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 279 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 280 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,16 +72,16 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The eighty-eight box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *  2. The eighty-nine box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
  *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the hook's start report and its
- *     loads report, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
+ *     loads report, the door process's act-key claim, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
  *     door) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
  *     (account-pool-membership wave 1, T7, D-3084), from update-management W4,
  *     `ccd-update-sync.timer`, and the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`);
- *     none of them has a cookie jar and never will. All ninety-one CHECK the box token (`checkMailToken`), and the mail pair
+ *     none of them has a cookie jar and never will. All ninety-two CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -593,6 +593,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "the hook's loads report: box token and attribution — a session's hook reports what its own startup or resume start " +
     "loaded (names, types and digests, never contents), box-token gated in its own onRequest whatever the flag, no cookie " +
     "accepted, the path's session the sender, attribution checked against the registry, joined to that session's own start"],
+  // The act-key claim (Overlord §3.3.11 H12, W1 door process A1): the door process presents its launch nonce once.
+  ['POST /api/sessions/:id/act-key',
+    "the door process's one claim: box token, attribution and a launch nonce bound to the start the generations lane minted " +
+    "from; it issues the act key once — box-token gated in its own onRequest whatever the flag, no cookie accepted, the path's session the " +
+    'sender, attribution checked against the registry, the key stored only as its sha256'],
   // The card door (Overlord §3.3.3, W1a): a session reads its own card, page by page.
   ['GET /api/sessions/:id/card',
     "a session reads its own card: box token and attribution — box-token gated in its own onRequest whatever the flag, no " +
@@ -1071,8 +1076,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighty-eight box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety-one in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighty-nine box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety-two in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same
