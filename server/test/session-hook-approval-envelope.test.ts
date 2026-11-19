@@ -196,6 +196,13 @@ describe('it is removed by its own agent\'s tool event for the same call, or its
     expect(agents()).toEqual([A]);
     expect((await painted()).entry?.agentId).toBe(A);
   });
+  it('a subagent event whose `tool_input` is no object still writes (review 2774 F6): the list is carried', () => {
+    fire(request(A));
+    expect(stateOf()['event']).toBe('PermissionRequest');
+    fire({ ...toolEvent('PreToolUse', B), tool_input: 'not an object' });
+    expect(stateOf()['event']).toBe('PreToolUse');
+    expect(agents()).toEqual([A]);
+  });
   it('a SubagentStop removes every entry of its agent, whatever the call', () => {
     fire(request(A, 'rm -rf one'));
     fire(request(A, 'rm -rf two'));

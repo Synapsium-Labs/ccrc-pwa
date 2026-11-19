@@ -37,9 +37,10 @@ const PARENT = 'project-a-coordinator';
 const AGENT_A = 'a0000000000000001';
 const AGENT_B = 'b0000000000000002';
 const RULE = '─'.repeat(60);
-/** The menu Claude Code paints for subagent A's prompt (the characterization suite's pane, its command A's). */
-const paneFor = (command: string): string => ['  ⎿  $ ' + command, RULE, ' Bash command', `   ${command}`, '   Remove the build directory',
-  ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and always allow access to this project', '   3. No',
+/** The menu Claude Code paints for subagent A's prompt (the characterization suite's pane, its command A's), with the blank
+ *  lines a real capture paints around the command block (`fixtures/panes/cc280-permission.txt`). */
+const paneFor = (command: string): string => ['  ⎿  $ ' + command, RULE, ' Bash command', '', `   ${command}`, '   Remove the build directory',
+  '', ' Do you want to proceed?', ' ❯ 1. Yes', '   2. Yes, and always allow access to this project', '   3. No',
   ' Esc to cancel · Tab to amend'].join('\n');
 const MENU_A = parseDialog(paneFor('rm -rf build'))!;
 const entryA = (at: number, route = 'sent'): HookApprovalEntry => ({ agentId: AGENT_A, tool: 'Bash', summary: 'rm -rf build', route, at });
@@ -95,11 +96,20 @@ describe('the hold picks the painted subagent\'s entry (holdApproval)', () => {
     expect(v.kind).toBe('held');
     expect(questionsTestView(c.q).heldApprovals().get(CHILD)?.rowIds).toEqual([main]);
   });
-  it('an entry older than 15 minutes holds nothing (review 2752 F2): the bare menu raises as before', async () => {
+  it('an entry older than the hook\'s wait and 15 minutes holds nothing (reviews 2752 F2, 2774 F3): the bare menu raises as before', async () => {
     const c = carrier();
     c.approval(AGENT_A);
-    const v = await c.q.raise(rec(CHILD), MENU_A, hook(null, T0, [entryA(T0 - 16 * 60_000)]), null, []);
+    const v = await c.q.raise(rec(CHILD), MENU_A, hook(null, T0, [entryA(T0 - 540_000 - 15 * 60_000 - 1)]), null, []);
     expect(v).toEqual({ kind: 'none' });
+  });
+  it('the main thread\'s own approval that is only a substring loses to the entry that is the command block (review 2774 C1)', async () => {
+    const c = carrier();
+    c.approval('', Date.now(), 'git push origin main');
+    const own = c.approval(AGENT_A, Date.now(), 'git push origin main --force');
+    const force: HookApprovalEntry = { agentId: AGENT_A, tool: 'Bash', summary: 'git push origin main --force', route: 'sent', at: T0 };
+    const v = await c.q.raise(rec(CHILD), parseDialog(paneFor('git push origin main --force'))!, hook(approvalAsk('git push origin main'), T0, [force]), null, []);
+    expect(v.kind).toBe('held');
+    expect(questionsTestView(c.q).heldApprovals().get(CHILD)?.rowIds).toEqual([own]);
   });
   it('no matching entry: the main thread\'s rows, exactly as before (D-5491)', async () => {
     const c = carrier();
@@ -112,8 +122,8 @@ describe('the hold picks the painted subagent\'s entry (holdApproval)', () => {
 });
 
 describe('the census picks the painted subagent\'s entry (observeCensus)', () => {
-  const tick = (c: ReturnType<typeof carrier>, h: HookState, at: number): void => {
-    c.q.observeCensus(rec(CHILD), MENU_A, h, at);
+  const tick = (c: ReturnType<typeof carrier>, h: HookState, at: number, menu = MENU_A): void => {
+    c.q.observeCensus(rec(CHILD), menu, h, at);
     c.q.sweepCensus(new Set([CHILD]));
   };
   const clear = (c: ReturnType<typeof carrier>): void => { for (let i = 0; i <= ASK_SETTLE_TICKS; i++) c.q.sweepCensus(new Set([CHILD])); };
@@ -128,6 +138,16 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
     tick(c, hook(null, 105_000, [entryA(99_000, 'no-key')]), 106_000);
     clear(c);
     expect(c.census()).toEqual([{ sightingKey: 'env:99000', path: 'hook-skipped', route: 'no-key', thread: 'subagent', summary: 'rm -rf build' }]);
+  });
+  it('a sibling\'s own ask that is only a substring of the painted command keeps the sighting on the painted agent (review 2774 C2)', () => {
+    const c = carrier();
+    const publish = 'npm run build -- --prod && npm publish';
+    const a: HookApprovalEntry = { agentId: AGENT_A, tool: 'Bash', summary: publish, route: 'no-key', at: 99_000 };
+    const b: HookApprovalEntry = { agentId: AGENT_B, tool: 'Bash', summary: 'npm run build -- --prod', route: 'no-key', at: 101_000 };
+    const menu = parseDialog(paneFor(publish))!;
+    tick(c, hook(approvalAsk('npm run build -- --prod', 'no-key'), 101_000, [a, b], { waitBy: 'subagent' }), 102_000, menu);
+    clear(c);
+    expect(c.census()).toEqual([{ sightingKey: 'env:99000', path: 'hook-skipped', route: 'no-key', thread: 'subagent', summary: publish }]);
   });
   it('two subagents asking the same command are two rows (review 2752 F3): the second menu starts its own sighting', () => {
     const c = carrier();
@@ -158,9 +178,9 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
     clear(c);
     expect(c.census().map((r) => r['sightingKey'])).toEqual(['env:99000', 'env:101000']);
   });
-  it('an entry older than 15 minutes is no envelope for the census (review 2752 F2): the menu is counted as an envelope-less one', () => {
+  it('an entry older than the hook\'s wait and 15 minutes is no envelope for the census (reviews 2752 F2, 2774 F3): an envelope-less menu', () => {
     const c = carrier();
-    tick(c, hook(null, 2_000_000, [entryA(1_000_000, 'no-key')]), 1_000_000 + 16 * 60_000);
+    tick(c, hook(null, 2_000_000, [entryA(1_000_000, 'no-key')]), 1_000_000 + 540_000 + 15 * 60_000 + 1);
     clear(c);
     expect(c.census()).toEqual([expect.objectContaining({ sightingKey: expect.stringMatching(/^menu:[0-9a-f]{40}:2000000$/), thread: null })]);
   });
@@ -184,7 +204,7 @@ describe('the census picks the painted subagent\'s entry (observeCensus)', () =>
 
 describe('the wire keeps the subagent mark (wireHookAsk)', () => {
   it('a painted subagent envelope leaves with `thread: subagent`, its summary redacted as ever', () => {
-    const painted = mod.paintedApprovalOf({ ask: null, approvals: [entryA(1)] }, MENU_A, 1);
+    const painted = mod.paintedApprovalOf({ ask: null, updatedAt: 1, approvals: [entryA(1)] }, MENU_A, 1);
     expect(wireHookAsk(painted.ask!)).toEqual({ approval: { tool: 'Bash', summary: 'rm -rf build', thread: 'subagent' } });
   });
   it('hook state\'s own envelope leaves exactly as before: no mark', () => {

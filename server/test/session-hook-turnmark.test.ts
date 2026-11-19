@@ -755,7 +755,7 @@ describe('the payload parse needs no regex engine', () => {
     // and close on the program's own text.
     expect(parse.startsWith('def keep(f):'), 'the payload parse program opens on its first definition').toBe(true);
     expect(parse).toContain('.agent_id');
-    expect(parse.endsWith('else "" end)\'"$dsp_out$lrc_out'), 'and closes on its last term, the raw id or nothing, then the spool\'s output and the launch record\'s').toBe(true);
+    expect(parse.endsWith('else "" end) catch "")\'"$dsp_out$lrc_out'), 'and closes on its last term, the call key in its `try` or nothing, then the spool\'s output and the launch record\'s').toBe(true);
     expect(parse, 'the id alphabet and its length bound are spelled once, by name').toContain('def idch:');
     expect(parse).toContain('def idmax: 64;');
     expect(spoolDefs.startsWith('def maxline:'), 'the spool\'s definitions open on their first').toBe(true);
