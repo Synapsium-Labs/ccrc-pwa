@@ -132,3 +132,57 @@ describe('sharing a flow as a file (flows design §14.1)', () => {
     click.mockRestore();
   });
 });
+
+describe('the flow new programmes pin (flows wave 2)', () => {
+  const published = (over: Partial<FlowAnswer> = {}): FlowAnswer => ({ ...answerFor(skeletonFlowDoc('Mine'), [1]), ...over });
+
+  it('names a published flow the one new programmes pin, and can stop', async () => {
+    let isDefault = false;
+    const calls = stubServer((c) => {
+      if (c.method === 'PUT' && c.url === '/api/flows/default') {
+        isDefault = (c.body as { flowId: number | null }).flowId === 4;
+        return { body: { ok: true, defaultFlowId: isDefault ? 4 : null } };
+      }
+      return { body: published({ isDefault }) };
+    });
+    render(<FlowsScreen openId={4} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Use for new programmes' }));
+    expect(await screen.findByRole('button', { name: 'Stop using for new programmes' })).toBeInTheDocument();
+    expect(calls.find((c) => c.url === '/api/flows/default')?.body).toEqual({ flowId: 4 });
+    expect(screen.getByText('New programmes pin this flow\'s newest version.')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Stop using for new programmes' }));
+    expect(await screen.findByRole('button', { name: 'Use for new programmes' })).toBeInTheDocument();
+    expect(calls.filter((c) => c.url === '/api/flows/default').at(-1)?.body).toEqual({ flowId: null });
+  });
+
+  it('offers nothing for a flow never published, and shows how many programmes pin one', async () => {
+    stubServer(() => ({ body: answerFor(skeletonFlowDoc('Mine')) }));
+    render(<FlowsScreen openId={4} />);
+    expect(await screen.findByText('Nothing published yet.')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Use for new programmes' })).toBeNull();
+    cleanup();
+    stubServer(() => ({ body: published({ flow: { ...published().flow, pinnedBy: 2 } }) }));
+    render(<FlowsScreen openId={4} />);
+    expect(await screen.findByText('pinned by 2 programmes')).toBeInTheDocument();
+  });
+
+  it('shows the server\'s reason when a pinned flow is not deleted', async () => {
+    stubServer((c) => (c.method === 'DELETE'
+      ? { status: 409, body: { ok: false, error: 'conflict', detail: 'pinned by 1 programme' } }
+      : { body: published() }));
+    render(<FlowsScreen openId={4} />);
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete this flow' }));
+    fireEvent.click(await screen.findByRole('button', { name: 'Delete' }));
+    expect(await screen.findByText(/Not deleted: .*pinned by 1 programme/)).toBeInTheDocument();
+  });
+
+  it('marks the default and the pinned flows in the list', async () => {
+    const flow = { id: 4, title: 'Mine', source: null, updatedAt: 1, latestVersion: 1, pinnedBy: 3 };
+    const list: FlowsListAnswer = { flows: [flow, { ...flow, id: 5, title: 'Other', pinnedBy: 0 }], templates: [], defaultFlowId: 4 };
+    stubServer(() => ({ body: list }));
+    render(<FlowsScreen />);
+    expect(await screen.findByText('new programmes')).toBeInTheDocument();
+    expect(screen.getByText('pinned by 3 programmes')).toBeInTheDocument();
+    expect(screen.getAllByText(/^pinned by/)).toHaveLength(1);
+  });
+});

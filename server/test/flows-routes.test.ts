@@ -161,6 +161,8 @@ describe('the Flows doors', () => {
     const list = (await app.inject({ method: 'GET', url: '/api/flows' })).json() as FlowsListAnswer;
     expect(list.defaultFlowId).toBe(id);
     expect(list.flows.find((f) => f.id === id)?.pinnedBy).toBe(0);
+    expect((await read(app, id)).isDefault).toBe(true);
+    expect((await read(app, draftOnly)).isDefault).toBe(false);
     expect((await put(null)).json()).toEqual({ ok: true, defaultFlowId: null });
     await app.close();
   });
