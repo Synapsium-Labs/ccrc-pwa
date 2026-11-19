@@ -19,6 +19,7 @@ import {
 import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
 import { tx } from './tx.js';
+import { PROGRAM_FLOW_PIN_COLUMNS, PROGRAM_FLOW_PIN_VALUES } from '../flows/flowPinSql.js';
 
 // ── Rows ───────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -352,7 +353,8 @@ function applyPlanChangesInTx(
   {
     if (newRow !== null) {
       db.prepare(
-        "INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(slug) DO NOTHING",
+        `INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired, ${PROGRAM_FLOW_PIN_COLUMNS}) ` +
+        `VALUES (?, ?, ?, ?, ?, 1, ${PROGRAM_FLOW_PIN_VALUES}) ON CONFLICT(slug) DO NOTHING`,
       ).run(program, newRow.title, now, newRow.state ?? 'active', newRow.home);
     }
     const touched = new Set<number>();

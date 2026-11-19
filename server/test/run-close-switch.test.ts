@@ -121,6 +121,7 @@ describe('the store: three states per group, default shadow', () => {
     fresh.exec('ALTER TABLE runs DROP COLUMN admissionWaitSince; ALTER TABLE runs DROP COLUMN lastRefusedAt; ALTER TABLE runs DROP COLUMN admissionWokenAt;');
     fresh.exec('DROP TABLE continuity_witness_checks; DROP TABLE continuity_hook_reports;');
     fresh.exec('DROP TABLE overlord_fence_refusals;');
+    fresh.exec('DROP TABLE flow_settings; ALTER TABLE programs DROP COLUMN flowId; ALTER TABLE programs DROP COLUMN flowVersion;');
     fresh.exec('DROP TABLE flow_versions; DROP TABLE flows;');
     fresh.exec('DROP INDEX mail_client_key_once; ALTER TABLE mail DROP COLUMN clientKey; ALTER TABLE mail DROP COLUMN inReplyTo;');
     fresh.exec('DROP TABLE continuity_act_keys;');
