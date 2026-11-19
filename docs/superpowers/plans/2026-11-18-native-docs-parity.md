@@ -367,6 +367,7 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.69 | P5.5 | Move `PRINT_FIGURES_MAX` down by one | print figures: the 63rd and 64th accepted, the 65th refused |
 | M11.70 | P5.5 | Move `PRINT_FIGURES_TOTAL_MAX_BYTES` down by one | print figures: 16777215 and 16777216 bytes in all accepted, one byte more refused before decode |
 | M11.71 | P5.2 | Wait for the acknowledgement without a deadline | tracker: no acknowledgement within 2000 ms of posting seeds no links and mounts the rendered doc |
+| M11.72 | P2.2 | Serve a folder frame without re-running admission | folder range: a frame after remove refuses |
 
 ## Deviations found
 
