@@ -19,18 +19,20 @@ let home: string;
 let tmp: string;
 let server: Server;
 let seen: { method: string; url: URL; body: string }[];
+let answer: Record<string, unknown>;
 
 beforeEach(async () => {
   home = mkTmp('ccrc-api-mailkey-home-');
   tmp = mkTmp('ccrc-api-mailkey-tmp-');
   seen = [];
+  answer = { ok: true, id: 1 };
   server = createServer((req: IncomingMessage, res: ServerResponse) => {
     let body = '';
     req.on('data', (c: Buffer) => { body += c.toString('utf8'); });
     req.on('end', () => {
       seen.push({ method: req.method ?? '', url: new URL(req.url ?? '/', 'http://x'), body });
       res.writeHead(202, { 'content-type': 'application/json' });
-      res.end(JSON.stringify({ ok: true, id: 1 }));
+      res.end(JSON.stringify(answer));
     });
   });
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
@@ -60,6 +62,31 @@ describe('ccrc-api mail send --key', () => {
     const r = await run(['mail', 'send', '--key', 'k1', '--json', '-'], BODY);
     expect(r.status, r.stderr).toBe(0);
     expect(JSON.parse(seen[0]!.body).clientKey).toBe('k1');
+  });
+
+  // Review 2725 F3: a server that knows the key echoes it; an accepted answer without the echo came from one that ignored it.
+  it('an accepted answer that echoes the key is quiet; one without the echo says on stderr that a retry may duplicate', async () => {
+    const WARN = 'does not echo clientKey k1, so this server ignored the key; a retry of this send may send it twice';
+    answer = { ok: true, id: 1, clientKey: 'k1' };
+    const echoed = await run(['mail', 'send', '--json', '-', '--key', 'k1'], BODY);
+    expect([echoed.status, echoed.stdout.trim()], echoed.stderr).toEqual([0, '{"ok":true,"id":1,"clientKey":"k1"}']);
+    expect(echoed.stderr).not.toContain('clientKey');
+    answer = { ok: true, id: 1, already: true, clientKey: 'k1' };
+    expect((await run(['mail', 'send', '--json', '-', '--key', 'k1'], BODY)).stderr).not.toContain('clientKey');
+    answer = { ok: true, id: 1, clientKey: 'k2' };
+    expect((await run(['mail', 'send', '--json', '-', '--key', 'k1'], BODY)).stderr).toContain(WARN);
+    answer = { ok: true, id: 1 };
+    const bare = await run(['mail', 'send', '--json', '-', '--key', 'k1'], BODY);
+    expect([bare.status, bare.stdout.trim()]).toEqual([0, '{"ok":true,"id":1}']);
+    expect(bare.stderr).toContain(WARN);
+    // No key, no line: a keyless send never claimed deduplication.
+    expect((await run(['mail', 'send', '--json', '-'], BODY)).stderr).not.toContain('clientKey');
+  });
+
+  it('the help names the key, and that a deliberate resend needs a new one', async () => {
+    const r = await run(['--help']);
+    expect(r.stderr).toContain('mail send --key <k> sends an idempotency key');
+    expect(r.stderr).toContain('a key never expires, so a deliberate resend needs a new key');
   });
 
   it('without --key the body goes out byte for byte, with no key invented', async () => {

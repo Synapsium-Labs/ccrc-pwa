@@ -120,8 +120,12 @@ covers the ones you can actually cause by acking or sending mail wrong
 128; `ccrc-api mail send --key <k>` adds it). The server keeps one mail per sender and key: re-running the same send under
 the same key answers `202` with the ORIGINAL `id` and `"already":true`, and queues nothing, so a landing turn, an ACCEPTED
 or a MERGED mail resent after an unclear timeout or an exit 3 is not sent twice. The same key on a DIFFERENT mail (another
-`toId`, `runId`, `kind`, `subject`, `body` or `artifacts`) refuses 409 `key-conflict`, and its `detail` names the original
-mail and the fields that differ: a new mail needs a new key. A send without a key behaves as it always has.
+`toId`, `runId`, `kind`, `subject`, `body`, `artifacts` or `inReplyTo`) refuses 409 `key-conflict`, and its `detail` names
+the original mail and the fields that differ: a new mail needs a new key. The `already` answer returns the original mail
+whatever became of its delivery, and a key never expires, so a DELIBERATE resend of the same mail (say, one parked past
+revival) needs a new key too. Every answer to a keyed send echoes `clientKey`; an accepted answer without it came from a
+server that ignored the key (one older than it, as after a rollback), so a retry there may send twice, and the client
+says so on stderr. A send without a key behaves as it always has.
 
 **`oversize` is not mail-exclusive.** `POST /api/runs/:id/dispatch` sends the
 identical `error:'oversize'` (413) when the mail it would queue is too long —

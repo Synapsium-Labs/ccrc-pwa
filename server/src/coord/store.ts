@@ -1495,6 +1495,12 @@ export const MAIL_RUN_CLOSED_ERROR = 'run closed';
  */
 export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
 
+/** The insert met `mail_client_key_once` (Overlord wave 164, review 2725 F5): another send stored this sender's key between
+ *  the ingress's read and its insert. The route then reads the stored mail and asks `mailKeyVerdict` again, so the loser of
+ *  that race answers `same` or `key-conflict`, never a 500. Any other error is not this one. */
+export const isMailClientKeyClash = (e: unknown): boolean =>
+  e instanceof Error && /UNIQUE constraint failed: mail\.fromId, mail\.clientKey/.test(e.message);
+
 /**
  * The occupant-change park (design 2026-09-08 §4), and it is its OWN sentence
  * rather than a reuse of the two above. `MAIL_RECLAIM_CANCELLED_ERROR` reads
@@ -6806,15 +6812,17 @@ export class CoordStore {
    *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `clientKey` (Overlord
    *  wave 164): the sender's idempotency key, which only the mail ingress passes, on `mailKeyVerdict`'s `new`; absent or
    *  null for every other mail. This is that column's one writer too, and `mail_client_key_once` refuses a second row
-   *  with the same sender and key. */
+   *  with the same sender and key (`isMailClientKeyClash` names that refusal). `inReplyTo`: the delivery id the send
+   *  named, as sent, which the key compares (review 2725 F1); absent or null when it named none. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null;
+                  inReplyTo?: number | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -6825,9 +6833,9 @@ export class CoordStore {
    *  `same`, on a row it cannot read. */
   mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
     const row = this.db.prepare(
-      'SELECT id, toId, runId, kind, subject, body, artifacts FROM mail WHERE fromId = ? AND clientKey = ?',
+      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo FROM mail WHERE fromId = ? AND clientKey = ?',
     ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
-      body: string; artifacts: string } | undefined;
+      body: string; artifacts: string; inReplyTo: number | null } | undefined;
     if (row === undefined) return null;
     const UNREADABLE: readonly string[] = [''];
     let artifacts: readonly string[] = UNREADABLE;
@@ -6836,7 +6844,7 @@ export class CoordStore {
       if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
     } catch { /* UNREADABLE stands */ }
     return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
-      body: row.body, artifacts };
+      body: row.body, artifacts, inReplyTo: row.inReplyTo };
   }
 
   /**

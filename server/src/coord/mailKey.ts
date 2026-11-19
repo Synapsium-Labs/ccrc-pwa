@@ -10,9 +10,12 @@
  * against the stored mail, never against a second copy of the request.
  */
 import type { MailKind } from '../../../shared/api.js';
+import { LONE_SURROGATE } from '../canonical.js';
 
 /** The fields of a send that make it the same mail. The route passes the request's, the store the stored row's; `toId` is
- *  the address as SENT (a role word stays a role word), which is what `mail.toId` records. */
+ *  the address as SENT (a role word stays a role word), which is what `mail.toId` records, and `inReplyTo` is the delivery
+ *  id the send named, as sent (review 2725 F1: a different reply target under one key is a different mail, never a silent
+ *  merge), which is what `mail.inReplyTo` records. */
 export interface KeyedSend {
   readonly toId: string;
   readonly runId: number | null;
@@ -20,6 +23,7 @@ export interface KeyedSend {
   readonly subject: string;
   readonly body: string;
   readonly artifacts: readonly string[];
+  readonly inReplyTo: number | null;
 }
 
 /** A stored mail under a key: its id and the fields above. */
@@ -28,7 +32,7 @@ export interface KeyedMail extends KeyedSend {
 }
 
 /** The fields compared, in the order a conflict names them. */
-export const KEYED_FIELDS = ['toId', 'runId', 'kind', 'subject', 'body', 'artifacts'] as const;
+export const KEYED_FIELDS = ['toId', 'runId', 'kind', 'subject', 'body', 'artifacts', 'inReplyTo'] as const;
 export type KeyedField = (typeof KEYED_FIELDS)[number];
 
 export type MailKeyVerdict =
@@ -36,15 +40,24 @@ export type MailKeyVerdict =
   | { readonly verdict: 'same'; readonly id: number }
   | { readonly verdict: 'conflict'; readonly id: number; readonly fields: readonly KeyedField[]; readonly detail: string };
 
+/** Text as the store keeps it (review 2725 F4): SQLite stores TEXT as UTF-8, which cannot carry a lone surrogate, so one
+ *  is read back as U+FFFD. Both sides are compared in that form, so a genuine retry of such text is `same`, never a false
+ *  `conflict`. Text with no lone surrogate is returned unchanged. */
+const LONE_SURROGATES = new RegExp(LONE_SURROGATE.source, 'g');
+export const storedText = (s: string): string => s.replace(LONE_SURROGATES, '\ufffd');
+
+const sameText = (a: string, b: string): boolean => storedText(a) === storedText(b);
 const sameArtifacts = (a: readonly string[], b: readonly string[]): boolean =>
-  a.length === b.length && a.every((p, i) => p === b[i]);
+  a.length === b.length && a.every((p, i) => sameText(p, b[i]!));
 
 /** `prior` is the mail this sender stored under the key, or null when it stored none. */
 export function mailKeyVerdict(request: KeyedSend, prior: KeyedMail | null): MailKeyVerdict {
   if (prior === null) return { verdict: 'new' };
-  const fields = KEYED_FIELDS.filter((f) => f === 'artifacts'
-    ? !sameArtifacts(request.artifacts, prior.artifacts)
-    : request[f] !== prior[f]);
+  const fields = KEYED_FIELDS.filter((f) => {
+    if (f === 'artifacts') return !sameArtifacts(request.artifacts, prior.artifacts);
+    const a = request[f], b = prior[f];
+    return typeof a === 'string' && typeof b === 'string' ? !sameText(a, b) : a !== b;
+  });
   if (fields.length === 0) return { verdict: 'same', id: prior.id };
   return {
     verdict: 'conflict', id: prior.id, fields,
