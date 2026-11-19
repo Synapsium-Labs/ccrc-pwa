@@ -438,7 +438,7 @@ Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on 
 
 | Pair | Worst | Palette | Floor |
 |---|---|---|---|
-| `text-faint` on any 4% tint | 4.57 | Catppuccin Latte | 4.5 |
+| `text-faint` on any 4% tint | 4.565 (4.58 unrounded; corrected at X4, review 2676 A9) | Catppuccin Latte | 4.5 |
 | `accent` (links, and inline code inside a link) on `surface2`, inline code's ground | 4.57 | Phosphor Daylight | 4.5 |
 | `accent` on any 4% tint (a link in a changed block) | 4.64 | Phosphor Daylight | 4.5 |
 | `chg` on any 4% tint | 4.83 | Catppuccin Latte | 4.5 |
