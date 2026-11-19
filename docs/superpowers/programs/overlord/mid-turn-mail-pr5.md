@@ -23,6 +23,10 @@ programme ledger and mints any numbers. No D-number is defined here.
 - **Fix round 1 (review 2788)** ties a sync's target to its verb's own command, reads quoted targets through
   `mh_prep`, keeps over-cap segments whole across `"…"` and `$(…)`, narrows option arguments to closed lists, adds the
   ruled forms that name main, and moves the strip's pre-filter onto the command (section 6).
+- **Fix round 2 (review 2794, the last)** reads a target after a heredoc message, treats a substitution in the target
+  read as one opaque word, keeps two more over-cap spans whole, corrects git's argument options, and adds every
+  ruled spelling of main with its suffixes. 110 mutants: 109 red and 1 equivalent. Section 7 also holds the checklist
+  for arming A, which stays a later, separate decision.
 
 ## 1. What runs where
 
@@ -136,7 +140,7 @@ server/test/delegation-rig/scenarios-overlord/ov-pretool-notice.json <out-dir> &
 | `marker-read-bytes-verbatim` | A default `read` trims blanks and stops at a newline, so the hook accepted corpus rows the owner refuses (a leading or trailing blank, a tab, a newline). The read is `IFS= read -r -d '' -n 256`. Its bound is 256, past the longest valid value (195), because `single-definition/ask-digest.test.ts` refuses a hand-kept 512 in the hook. | `ccd/session-hook.sh#_hook_mail_hold` |
 | `dollar-paren-subsumed` | Table 6's `$(` row cannot red: the `(` in the head's separator class already reads the `(` of `$(`. `GH_MERGE_RE` has the same alternative, and the module copies its grammar, so the alternative stays. An equivalent mutant. | `ccd/lib/mail-hold.jq#mh_head`, `ccd/session-hook.sh#GH_MERGE_RE` |
 | `origin-main-subsumed` | The `origin main` target cannot red: `main` after an `origin` argument already matches. `LANDING_SYNC_RE` has the same alternative. An equivalent mutant at the first tip. Since fix round 1 the same alternative carries `+main` and `main:<dst>` (F13), so its mutant reds. | `ccd/lib/mail-hold.jq#mh_target` |
-| `overcap-kinds-gh-merge` | P6 names four over-cap kinds (push, commit, sync, admin-merge). The module's raw read finds `gh pr merge` too, because A covers a coordinator, whom the merge deny's own over-cap read does not refuse. A superset in kinds. Fix round 1 made it a superset in matches too, except for the shapes section 6 lists (review 2788, F2). | `ccd/lib/mail-hold.jq#mh_rawacts` |
+| `overcap-kinds-gh-merge` | P6 names four over-cap kinds (push, commit, sync, admin-merge). The module's raw read finds `gh pr merge` too, because A covers a coordinator, whom the merge deny's own over-cap read does not refuse. A superset in kinds. Since fix rounds 1 and 2 it refuses more than the stripped read, but it is not a strict superset in matches: section 7 lists the exceptions (reviews 2788 F2, 2794 F2 and F5). | `ccd/lib/mail-hold.jq#mh_rawacts` |
 | `unfinished-strip-raw-read` | "Fail closed on an unterminated quote" is built as: a strip answer that still holds a quote (the strip keeps an unterminated span raw) is read twice, on the stripped text and word by word on the raw text, and the acts are the union (fix round 1, F2: the raw read alone lost denies the stripped read makes). No answer at all is read word by word on the raw text, as over the cap. | `ccd/lib/mail-hold.jq#mail_hold` |
 | `notice-on-gated-when-a-shadow` | With E armed and A shadow, a gated main-thread call gets E's line and logs `refuse would`. The spec says E is said on "every other" call; while A is shadow nothing refuses the call, so E still tells the session about the mail. | `ccd/lib/mail-hold.jq#mail_hold` |
 | `module-missing-arm-dash` | The `module-missing` line's arm field is `-`: the module decides the arm, so the hook cannot name one when the module is absent. | `ccd/session-hook.sh#_hook_mail_hold` |
@@ -188,7 +192,7 @@ The review read the first tip, `9108405b5`. Everything still ships shadow, so th
 
 *Table 7. Fix round 1's new mutants. Table 2's rows re-run on the changed module, each still red, are not repeated.*
 
-**Over the cap, a superset, with these exceptions.** A gated act whose words a separator inside a '…' span splits stays unread over the cap (`git -c 'a;b' push` padded past the cap). It is left that way on purpose: kept whole, an apostrophe in a long body's prose would join the rest of it into one segment and refuse far more. A separator in a nested `$(…)`, an escaped separator and a `\"` inside a `"…"` span can also split. Under the cap, a `$(…)` that holds a separator between an act's words (`git -C $(cd x; pwd) push`) is missed, as `GH_MERGE_RE` misses it. The raw read refuses it over the cap.
+**Over the cap, not a strict superset (as measured at fix round 1; section 7 has the current list).** A gated act whose words a separator inside a '…' span splits stays unread over the cap (`git -c 'a;b' push` padded past the cap). It is left that way on purpose: kept whole, an apostrophe in a long body's prose would join the rest of it into one segment and refuse far more. A separator in a nested `$(…)`, an escaped separator and a `\"` inside a `"…"` span can also split. Under the cap, a `$(…)` that holds a separator between an act's words (`git -C $(cd x; pwd) push`) is missed, as `GH_MERGE_RE` misses it. The raw read refuses it over the cap.
 
 **Residuals of an accident guard** (F6 and F13's ruling, in the module header):
 - a head after `case … )`;
@@ -202,6 +206,54 @@ The review read the first tip, `9108405b5`. Everything still ships shadow, so th
 - `FETCH_HEAD`, `@{u}`, `upstream/main` and a bare `git pull`.
 
 **Recorded as the report states (F11, F12).** F11: the marker read stops at the first NUL, so a value followed by a NUL and junk reads `live` where `parseMailHold` refuses it. ccd's writer (`printf '%s'` from argv) cannot produce it, and a file over 256 bytes cannot validate. F12: a joined subagent's over-cap refusal gets no over-cap advice, and over the cap, prose such as `echo "use git then push later"` is refused, which is the documented over-cap cost. F8, the cost table's labelled scope, is accepted as written.
+
+## 7. Fix round 2 (review 2794, the last)
+
+The review read `0e100c4a1`. Nothing in it blocks landing as shadow.
+
+| Finding | What changed | Where |
+|---|---|---|
+| F1: a target after a heredoc `-m` message was missed | `mh_tok`'s `$(…)` form crosses newlines (the reviewer's confirmed fix), so `git merge -m "$(cat <<'EOF' … EOF)" origin/main` is held. The four shapes in the report are denied under and over the cap, the odd-`"` body included. Its controls, `… feat && git checkout main` and `… feat` then `echo main` on the next line, still hold nothing. | `ccd/lib/mail-hold.jq#mh_tok` |
+| F2: over the cap, inner quotes in a `$(…)` inside `"…"`, and `$'…'` | Fixed, not recorded: the over-cap segment reader's `"…"` alternative consumes a `$(…)` with its own inner `"…"` whole, and `$'…'` is one span. It is the same one regular expression with two more alternatives, not a second parser. `git merge -m "$(echo "a;b")" main`, `git -C "$(dirname "a;b")" push` and `git -C $'a;b' push` are denied in all three padded layouts. | `ccd/lib/mail-hold.jq#mh_rawacts` |
+| F3 (ruled: the opaque substitution) | Each `$(…)` in the target read is one opaque word, so `git rebase $(git merge-base HEAD origin/main)` and the `-m "$(git log … main)"` forms pass. A target outside the substitution is still read (`git pull $(echo origin) main`, `git merge $(git rev-parse HEAD) origin/main`). The new miss, `git merge $(git rev-parse main)`, is a recorded residual with its own case. | `ccd/lib/mail-hold.jq#mh_acts` |
+| F4 | Git's argument options gain `--attr-source` and `--shallow-file`. `--exec-path` leaves the list (it takes no separate word), and `--super-prefix` stays for older gits. Cases both ways: `git --attr-source HEAD push` is held, and `git --exec-path x push` is no push. | `ccd/lib/mail-hold.jq#mh_git` |
+| F6, F7 (ruled: in scope) | A bare `origin` names main for a merge or a rebase (it resolves through origin/HEAD), but not for a pull, where it is the remote (`git pull origin feature-x` stays ungated, and `git pull origin` is a residual like a bare `git pull`). The suffixes `~N`, `^N`, `^{…}` and `@{…}` apply to `main`, `origin/main`, `origin/HEAD`, `refs/heads/main` and `refs/remotes/origin/main`, and to the new `remotes/origin/main`, `refs/remotes/origin/HEAD` and `heads/main`. Each form and each suffix kind has a red case and a mutant, and the look-alikes (`main~x`, `origin/mainline`, `main2`, `refs/heads/main-x`, `feature/main`, `origins`, `heads/main2`) pass. | `ccd/lib/mail-hold.jq#mh_target` |
+| F5 | The module header lists the full residual set, and calls the over-cap read what it is: it refuses more than the stripped read but is not a strict superset. | `ccd/lib/mail-hold.jq` |
+
+*Table 8. Fix round 2.*
+
+**Red first.** With round 1's module (`0e100c4a1`), 44 of the module suite's 227 cases are red, each a shape of this round.
+
+**Mutations.** 110 mutants, each an in-place edit restored from a saved copy and sha256-checked after the restore (N1). Every earlier row whose text still resolves was run again, the rows this round moved were re-anchored, and each new guard has its own row: the newline crossing, the opaque substitution, `--attr-source`, `--shallow-file`, `--exec-path` put back, each suffix kind, each new spelling, the bare `origin` (and the same for a pull), and the two new over-cap spans. 109 went red. The one survivor is `dollar-paren-subsumed`.
+
+**The two checks the review could not run.**
+- The strip's sha256 pin: `session-hook-mail-hold.test.ts`'s "MERGE_STRIP_JQ is untouched" case passes (1 passed) at this round's tree. The strip's text is unchanged.
+- The merge deny's answers with and without `mh_prep`, over its own corpus (the 53 rows of SPELLINGS and MENTIONS in `session-hook-merge-deny.test.ts`). With `mh_prep` the strip's answer text differs on 2 rows, where a plain `'done'` and `'ok'` lose their quotes. On all 53 rows the verdicts of `GH_MERGE_RE`, `GH_API_RE` and `CCD_DOOR_RE` are the same (26 find `gh pr merge`). The merge deny's own call site runs the strip alone, unchanged, so `mh_prep` cannot change its decision.
+
+**Residuals now** (the module header has them in full):
+- Missed at every length:
+  - a head after `case … )`;
+  - backtick substitution;
+  - a backslash-newline;
+  - an escaped command word or verb, or one quoted with a blank in it (`\git push`, `git pu\sh`, `"git push"` as one word). A plain-word quote such as `"git" push`, `g"it" push` or `git 'pu'sh` IS read;
+  - unlisted wrappers, wrapper flags and path-spelled wrappers;
+  - leading redirections;
+  - function bodies, `eval`, `bash -c`, a heredoc fed to a shell, and `xargs`;
+  - a git alias;
+  - a target inside a `$(…)`;
+  - FETCH_HEAD, `@{u}`, upstream/main, a bare `git pull` and `git pull origin`.
+- Missed under the cap and refused over it: a `$(…)` holding a separator or a nested `(` between an act's words (`git -C $(cd x && pwd) push`).
+- Missed over the cap and read under it: a separator inside a '…' span (kept splittable on purpose), an escaped separator, a `\"` inside a `"…"` span, and a separator in a nested `$(…)`.
+- Accepted false positive: a bare `main` as an option's argument or a redirection target after a merge, pull or rebase (`git merge -m main feat`, `git merge feature > main`).
+
+### Before the refuse arm (A) is armed: a checklist
+
+Arming stays a later, separate decision, by the operator's hand (plan §7). From review 2794:
+1. F1, the heredoc-message target, is fixed with cases. F2 is fixed (this round).
+2. The module header lists the full residual set, and "superset" is qualified (this round).
+3. F4's option list is corrected (this round).
+4. The shadow log has shown, over real use, how often `refuse would` lines fire on the accepted false positive (a `main` as an option's argument or redirection target) and on whatever else a session meets. Read `~/.ccrc/mail-hold-shadow.log` for `refuse would` lines and check each act against the command that was run. This needs PR 4's projection to write real markers first.
+5. The strip's sha256 pin, and the merge deny's answers with and without `mh_prep`, are measured (this round, above).
 
 ## Where things stand
 
@@ -217,5 +269,5 @@ The review read the first tip, `9108405b5`. Everything still ships shadow, so th
 ### Later
 
 - PR 4's projection writes the marker; PR 6 adds the subagent ack refusal to the same module and function.
-- Arming E, then A, by the operator's hand (plan §7).
+- Arming E, then A, by the operator's hand (plan §7), A after section 7's checklist.
 - The growth counter's false heredoc (`growth-counter-false-heredoc`), a fix for the growth check's owner.
