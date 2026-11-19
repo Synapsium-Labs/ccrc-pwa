@@ -14,12 +14,12 @@ import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
 import { authorityEntry, type OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import { insertStart, mintGeneration } from '../src/continuity/continuityStore.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 
 /** The operator's actor as a designation writer takes it: the account gate's actor minted through the identity port (gates A). */
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('operator-a', '0123456789abcdef'));
+  .operator(gateActorOf('operator-a', '0123456789abcdef'));
 
 // Opening a coord db replays every migration, which is slow under load: migrate ONE template, and copy it for each test.
 let template = '';

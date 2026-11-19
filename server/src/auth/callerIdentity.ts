@@ -51,8 +51,11 @@ export interface CallerIdentity {
   session(sessionId: string, uuid: string, uuidField: 'byUuid' | 'fromUuid'): Promise<SessionCaller | SessionRefusal>;
   /** The session's incarnation (`$REG/<id>.generation` read twice and agreeing); `absent` stays apart from `unreadable`. */
   incarnation(sessionId: string): Promise<IncarnationRead>;
-  /** An operator door the account gate passed: its minted actor at `operator` strength, issuer `account-gate`. */
+  /** An operator door the account gate passed: its minted actor at `operator` strength, issuer `account-gate`. Only an
+   *  actor the account gate itself minted (`accounts/audit.ts#gateActorOf`) is taken; any other `actorOf` actor, the
+   *  server's own among them, throws. */
   operator(actor: AccountActor): RecordedActor;
-  /** A console door that may run dark: the device's actor, `device-unmeasured`, or `dark`. */
+  /** A console door that may run dark: the device's actor, `device-unmeasured`, or `dark`, each a frozen answer only the
+   *  adapter makes (slug console-results-are-minted); `consoleSubject` is the one mapping of it to a row's text. */
   console(armed: boolean, device: string | null): ConsoleCaller;
 }

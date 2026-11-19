@@ -1,7 +1,7 @@
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
-const accountActor = actorOf('device:lane-a', '');
+const accountActor = gateActorOf('device:lane-a', '');
 import { describe, expect, it } from 'vitest';
 import Fastify from 'fastify';
 import { DatabaseSync } from 'node:sqlite';
