@@ -449,8 +449,12 @@ The builder may rename fields; the shape is the spec's.
   `no plan: runs filled, no total, failed runs counted apart`, `runs with no ticket on a planned programme count in
   beforePlan`, `a title equal to the programme's reads null`. `plan-routes.test.ts`: `the plan read carries work beside
   plan`, `a failing read answers work unreadable and still serves plan`. `plan.test.ts`: both lists spelled once.
-- [x] **Step 2: Run to fail** —
+- [ ] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/work-map.test.ts`.
+  Not run before Step 3 (D-8779 `tests-beside-the-decider`): the cases and the decider were written in one sitting.
+  Measured after the fact by review 2795's tests lens, at `main` with the task's tests: the work-map suite cannot import
+  a `workMap.ts` that does not exist, and the five new `plan-routes.test.ts` cases red while its 34 older cases stay
+  green. Each row's red is measured by its mutant instead (the task note, §4).
 - [x] **Step 3: Implement** the vocabulary, `workMapOf`, the store read, the wiring and the route's field.
 - [x] **Step 4: Run to pass**, then
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-routes.test.ts test/single-definition/plan.test.ts test/sim/mutation-floors.test.ts`.
@@ -732,13 +736,21 @@ Task WM2 departs under its own number:
   the strip while it holds a ticket not dropped, so the strip adds up to the headline (F3); `not-in-phase-only-when-phased`,
   `notInPhase` is empty for a plan with no phase; `three-floor-keys`, three `MUTANT_SETS` keys and floors, one per decider
   in `workMap.ts`; and `tests-beside-the-decider`, the cases and the decider were written together, so each row's red is
-  measured by its mutant rather than by a run before the decider existed. Three edits under other claims, each with the
-  holder's consent by mail: one read in `server/src/coord/store.ts` (`programmeWorkRuns`) and the three floor rows (claim
-  5529), the `runVerdicts` wiring property in `server/src/server.ts` (claim 5558), and, after CI's first fast run, the
-  plan doors' inline snapshot in `server/test/overlord-other-lanes-pin.test.ts` (claim 5572), which records the whole plan
-  read. That run also asked `isPlanKebab` to admit the map's words (`map-words-are-plan-words`: the map's sources and verdict
+  measured by its mutant rather than by a run before the decider existed (Step 2 is left unticked for it). Four edits under
+  other claims, each with the holder's consent by mail before the edit: one read in `server/src/coord/store.ts`
+  (`programmeWorkRuns`, claim 5529, consent 2026-11-19); the import, the spread line and the three floor rows in
+  `server/test/sim/mutation-floors.test.ts` and `.json` (claim 5529, the same consent); the `runVerdicts` wiring property in
+  `server/src/server.ts` (claim 5558, consent 2026-11-19); and, after CI's first fast run, the plan doors' inline snapshot in
+  `server/test/overlord-other-lanes-pin.test.ts` (claim 5572, consent 2026-11-19), which records the whole plan read. That
+  run also asked `isPlanKebab` to admit the map's words (`map-words-are-plan-words`: the map's sources and verdict
   reads are lists in `shared/plan.ts` too, with `read-failed`, never the store's `run-unreadable`) and the WM0 characterization to set `work` aside
-  (`characterization-reads-plan-only`). The task note
+  (`characterization-reads-plan-only`). Review 2795's fix round adds three: `fold-by-the-held-ticket`, a `{ runId }` folds
+  in the auto ticket its run holds (`runs.ticketId`, as `ticketDoneVerdict` compares it), so an auto ticket the orphan arm
+  handed to a wave's next run under its first key folds too (review 2795 F1); `pr-evidence-folds-its-carrier`, a declared
+  ticket done by `{ pr }` evidence folds in the auto ticket of each run the landing line ties to that pull request, read
+  through `evidenceLinksOf` (planRunFacts.ts) and handed in by the route, so the work counts once (review 2795 F2); and
+  `last-move-unmeasured-is-absent`, an item whose run's last move could not be read carries no `lastMoveAt`, as
+  `withLastMoves` leaves it, while null means no move (review 2795 F3). The task note
   (`docs/superpowers/programs/desktop-polish/wm2.md`) gives each row and what reds it, the mutants and the test runs.
 
 ## Where things stand

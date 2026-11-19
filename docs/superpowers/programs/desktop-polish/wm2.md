@@ -7,7 +7,7 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 
 | Piece | Where | Basis |
 |---|---|---|
-| `WORK_STATUSES` (Table 6's fourteen rows in order, then `failed`), `WORK_GROUPS` (nine), `WorkItemView`, `PhaseFinish`, `WorkPhaseView`, `WorkEpicView`, `WorkMapView`, `WorkAnswer` | `shared/plan.ts`, beside `PlanView` | Measured: `single-definition/plan.test.ts` (both lists declared once) and `work-map.test.ts`'s vocabulary cases |
+| `WORK_STATUSES` (Table 6's fourteen rows in order, then `failed`), `WORK_GROUPS` (nine), `WORK_SOURCES`, `WORK_VERDICT_READS`, `WORK_READ_FAILED`, `WorkItemView`, `PhaseFinish`, `WorkPhaseView`, `WorkEpicView`, `WorkMapView`, `WorkAnswer` | `shared/plan.ts`, beside `PlanView` | Measured: `single-definition/plan.test.ts` (all five lists declared once) and `work-map.test.ts`'s vocabulary cases |
 | `workMapOf`, the one decider (D2): each ticket's status (Table 6), each phase's reading, counts, carries and finish (Table 6a), the strip, the four plan states (§5.1) and the no-plan fallback | `server/src/coord/workMap.ts` (L1, C5) | Measured: `work-map.test.ts` |
 | `WORK_STATUS_GROUP`, the status-to-group table (D3), declared once beside its decider | `workMap.ts` | Measured: `single-definition/plan.test.ts` |
 | `doneEvidenceVerdict`, the read side of WM1's evidence rule (§4.1: verified when recorded and on every read) | `workMap.ts` | Measured: the `evidence:` cases |
@@ -22,6 +22,9 @@ No migration: the map reads WM0's and WM1's tables and the existing run, item an
 
 ## 2. Departures, named by slug (the plan's D-8779 entry carries the same list)
 
+The first twelve are the build's, the next two came from CI's first fast run (§7), and the last three from review 2795's
+fix round (§8).
+
 - `closed-reads-nothing-yet`: the hierarchy's close with a reason (its Task 4.3) stores a close only as a drop of an
   Upkeep ticket (`plan take`'s close arm sets `state: 'dropped'` with `droppedWhy`, measured in `planRoutes.ts`), so no
   programme ticket can be told apart as closed. `workMapOf` takes the close as an input map (`closed`, ticket key to
@@ -29,7 +32,7 @@ No migration: the map reads WM0's and WM1's tables and the existing run, item an
 - `evidence-and-verdicts-decided-in-l1`: the route gathers and never decides, so the per-evidence verdict is a second pure
   decider, `doneEvidenceVerdict`, and "the reader is empty" is `verdictsReadOf`, both in `workMap.ts`.
 - `last-move-from-the-run`: `lastMoveAt` comes from the run, stamped by `withLastMoves` (its existing owner), not from the
-  verdicts map, so a `not-read` reader keeps every row's last move.
+  verdicts map, so a `not-read` reader keeps every row's last move (and see `last-move-unmeasured-is-absent` below).
 - `dropped-tickets-are-items`: the top-level `items` list every ticket once, a dropped one with status `dropped`, and
   `counts.dropped` counts it; no phase list, epic list, `notInPhase` or "N of M" holds it ("not shown, never counted").
 - `declared-reads-planBy`: "declared" reads `planBy`, which the plan store's one statement writes together with `planAt`
@@ -46,6 +49,26 @@ No migration: the map reads WM0's and WM1's tables and the existing run, item an
 - `three-floor-keys`: `workMap.ts` holds three deciders, so three `MUTANT_SETS` keys and three floors, not one.
 - `tests-beside-the-decider`: the cases and the decider were written in one sitting, so no run saw the new cases red
   before `workMap.ts` existed; each row's red is measured by its mutant instead (§4), which is the acceptance's measure.
+  The plan's Step 2 is left unticked with a note (review 2795 F6, ruled by the coordinator). Measured after the fact by
+  review 2795's tests lens, at `main` with this task's tests: the work-map suite cannot import, and the five first
+  `plan-routes.test.ts` cases red while its 34 older ones stay green. This round's new cases were measured red before the
+  fix where a fix came with them (§8.2), and under their mutants (§4).
+- `map-words-are-plan-words`: the map's sources and verdict reads are lists in `shared/plan.ts` too (`WORK_SOURCES`,
+  `WORK_VERDICT_READS`) with `WORK_READ_FAILED`, and `isPlanKebab` admits them with the statuses and groups, never the
+  store's `run-unreadable` (§7).
+- `characterization-reads-plan-only`: the WM0 characterization (`planPhasesFixture.ts#readCharacterizationPlans`) sets
+  `work` aside, so it still pins that `plan` reads as before WM0 (§7).
+- `fold-by-the-held-ticket`: a `{ runId }` folds in the auto ticket its run HOLDS (`runs.ticketId`, joined to its key by
+  `programmeWorkRuns`; `ticketDoneVerdict` compares the same ticket by id), never the key minted from the run's id, so an
+  auto ticket the orphan arm handed to the wave's next run under its first key folds too (review 2795 F1). A run outside
+  the programme's work runs folds nothing: no auto ticket of this programme can be its own.
+- `pr-evidence-folds-its-carrier`: a declared ticket done by `{ pr }` evidence folds in the auto ticket of each run the
+  landing line ties to that pull request. The route reads the ties through their existing owner, `evidenceLinksOf`
+  (`planRunFacts.ts`, which `plan ticket-done` reads too), and hands them in as `prLinks`; a tie that cannot be read folds
+  nothing, and that ticket's `{ pr }` then reads unverified by its own landing read (review 2795 F2).
+- `last-move-unmeasured-is-absent`: an item whose run's last move could not be read (the read failed, or the run is not
+  among the work runs) carries no `lastMoveAt`, as `withLastMoves` leaves a run, while null means no run or no move. The
+  shared type marks the field optional and says so (review 2795 F3).
 
 ## 3. Rows, and what reds each
 
@@ -72,14 +95,22 @@ mutant sets against each mutant.
 | 14 not-started | `row 14: …`; `a failed run's ticket reads not-started with lastFailedRunId …` | T6-14, V-4, V-5 | Measured |
 | Rows 7 and 8 need the reader | `verdicts not read skips stuck and blocked and says so`; the `verdicts:` cases | V-1, VR-1 to VR-3 | Measured |
 | Review runs make no row | `a review run makes no row` | V-2 | Measured |
-| A run's own ticket folds into the declared one | `a run's own ticket folds into the declared ticket it is evidence of` | V-3 | Measured |
+| A run's own ticket folds into the declared one | `a run's own ticket folds into the declared ticket it is evidence of` | V-3, V-3e | Measured |
+| The fold reads the auto ticket the run holds (review 2795 F1) | `a reused auto ticket folds into the declared ticket its retry's run is evidence of` | V-3b | Measured |
+| A `{ pr }` folds in its carrier's auto ticket (review 2795 F2) | `a pull request's carrier folds in: …` | V-3c, V-3d | Measured |
+| Row 7 before row 8 (review 2795 F4 item 1) | `row 7 before row 8: …` | T6-7b | Measured |
+| Rows 1 and 2 before row 5 in an ended plan (F4 item 2) | `row 1 before row 5: …`; `row 2 before row 5: …` | T6-1b, T6-2b | Measured |
+| Table 6's Group column, rows 11 to 13 (F4 item 5) | `Table 6's Group column: rows 11, 12 and 13 …` | T6-G11, T6-G12, T6-G13 | Measured |
+| `lastFailedRunId` only at not-started (F4 item 7) | `lastFailedRunId is set only on a ticket back at not-started` | V-4b | Measured |
+| A last move not read is no field (F3) | `a run whose last move was not read gives its item no lastMoveAt; …` | V-6 | Measured |
+| A verdict not handed reads "the evidence was not read" (F7) | `a done ticket whose stored evidence was not read …` | T6-4c | Measured |
 
 ### 3.2 Table 6a (a phase's reading)
 
 | Row | Case(s) | Reds when | Basis |
 |---|---|---|---|
 | 1 dropped: not shown, not counted | `6a row 1: …`; `a dropped ticket is in no total` | T6a-1, R-2 | Measured |
-| 2 closed: counted apart | `6a row 2: …`; `6a row 2 before row 3: …`; `a closed ticket alone does not finish its phase` | T6a-2 | Measured |
+| 2 closed: counted apart | `6a row 2: …`; `6a row 2 before row 3: …`; `a closed ticket alone does not finish its phase`; `6a row 2: a closed ticket is no part of its phase's own work …` (review 2795 F4 item 3) | T6a-2, T6a-2b | Measured |
 | 3 carried out (to a phase not dropped) | `6a row 3: …`; `6a row 3 before row 4: …`; `a carry to a dropped phase is void`; `a phase's count excludes its carried tickets` | T6a-3, T6a-3b, C-3 | Measured |
 | 4 done | `6a row 4: …`; `6a row 4 before row 5: …`; `a phase finishes at its latest own done or carry time` | T6a-4, F-4 | Measured |
 | 5 left open (not finished) | `6a row 5: …` | T6a-5 | Measured |
@@ -87,12 +118,14 @@ mutant sets against each mutant.
 | Finish: empty, carry-only, unknown | `an empty phase is not finished`; `a phase whose every reference reads as nothing is empty`; `a phase that records only a carry out is finished at the carry`; `a finish with a missing time reads unknown` | F-1, F-2, F-3 | Measured |
 | Carries read both ways, twice, from two, from a dropped source | `a ticket carried twice …`; `… from two names both`; `a carry from a dropped source stands …` | C-1, C-2 | Measured |
 | Whole-epic references (D15), notInPhase | `a whole-epic reference takes a ticket added later …`; `two whole-epic references …`; `a ticket in no phase goes to notInPhase`; `a plan with no phases still fills epics and items` | R-1, R-3, R-4 | Measured |
+| A phase's ticket references read through the fold (review 2795 F4 item 6) | `a phase that references only the folded auto ticket holds the declared ticket` | R-1b | Measured |
 
 ### 3.3 The view
 
 | Rule | Case(s) | Reds when | Basis |
 |---|---|---|---|
 | The strip counts each epic over every phase and adds up to the headline (D16, F3) | `the epic strip …`; `the strip's counts add up to the headline's` | S-3 | Measured |
+| An ended plan's strip leaves left-open out of its total (review 2795 F4 item 4) | `an ended plan's strip leaves a left-open ticket out of its total, …` | S-3b | Measured |
 | A dropped epic's done ticket stays on its chip; an empty dropped epic is not listed | `a dropped epic's done ticket …` | S-1, S-2 | Measured |
 | Checkpoints leave out dropped ones (F23) | `checkpoints met and total leave out dropped checkpoints` | S-4 | Measured |
 | Four plan states (§5.1): ended, plan, declared-empty, runs | `6a row 5: an ended plan reads ended …`; `declared with nothing to count reads declared-empty`; `no plan: …` | S-5, S-6, S-7 | Measured |
@@ -111,7 +144,7 @@ checks (6 of 6 green, load 8.9).
 
 | Decider | Mutants |
 |---|---|
-| `workMapOf` | T6-1 to T6-14 with T6-4b, T6-5b, T6-6b to T6-6d, T6-8b, T6-9b, T6-12b, T6-14b and T6-G; V-1 to V-5; T6a-1 to T6a-6 with T6a-3b; F-1 to F-4; C-1 to C-3; R-1 to R-4; S-1 to S-7; N-1 to N-6 |
+| `workMapOf` (76) | T6-1 to T6-14 with T6-1b, T6-2b, T6-4b, T6-4c, T6-5b, T6-6b to T6-6d, T6-7b, T6-8b, T6-9b, T6-12b, T6-14b, T6-G and T6-G11 to T6-G13; V-1 to V-6 with V-3b to V-3e and V-4b; T6a-1 to T6a-6 with T6a-2b and T6a-3b; F-1 to F-4; C-1 to C-3; R-1 to R-4 with R-1b; S-1 to S-7 with S-3b; N-1 to N-6 |
 | `doneEvidenceVerdict` | EV-1 to EV-11: malformed, no run, programme, kind, state, the own-ticket rule whole and each half, no entry, unreadable, not landed |
 | `verdictsReadOf` | VR-1 to VR-3: an empty reader read as read; the stuck flag; `blockedBy` |
 
@@ -124,16 +157,26 @@ from the saved copy (never `git checkout`); a clean run after (39 of 39).
 |---|---|---|---|
 | RM-1 | `planRoutes.ts` | the `run-unreadable` arm removed | `a failing read answers work unreadable and still serves plan` |
 | RM-2 | `planRoutes.ts` | the catch rethrows instead of answering `read-failed` | the same |
-| RM-3 | `planRoutes.ts` | the plan read answers no `work` | four of the block's cases |
+| RM-3 | `planRoutes.ts` | the plan read answers no `work` | every case of the block then (five; this note said four, review 2795 F6 measured five) |
 | RM-4 | `store.ts` | `programmeWorkRuns` answers no ticket key | `the plan read carries work beside plan` (its `beforePlan`) |
 
 ## 5. Co-edits under other claims (each consent by mail, before the edit)
 
 | File | Holder (claim, run) | What was edited | Consent |
 |---|---|---|---|
-| `server/src/coord/store.ts` | mtm-pr2 (5529, run 2747) | one read method after `runs()` | mail delivery 26369, "yes" |
-| `server/test/sim/mutation-floors.test.ts`, `.json` | mtm-pr2 (5529) | one import, one spread line, three floor rows | the same mail (it answered the three-row addendum) |
-| `server/src/server.ts` | gates-b (5558, run 2770) | one property in `registerPlanRoutes`' options | mail delivery 26421, "yes" |
+| `server/src/coord/store.ts` | mtm-pr2 (5529, run 2747) | one read method after `runs()` | mail delivery 26369, "yes", 2026-11-19 |
+| `server/test/sim/mutation-floors.test.ts`, `.json` | mtm-pr2 (5529) | one import, one spread line, three floor rows | the same mail (it answered the three-row addendum), 2026-11-19 |
+| `server/src/server.ts` | gates-b (5558, run 2770) | one property in `registerPlanRoutes`' options | mail delivery 26421, "yes", 2026-11-19 |
+| `server/test/overlord-other-lanes-pin.test.ts` | gates-b (5572, run 2770) | the plan doors' one inline snapshot, regenerated (§7) | mail delivery 26459, "yes", 2026-11-19 |
+
+Each consent is dated by its delivery id, which falls between this task's brief (delivery 26341) and its first wave-done
+(mail 26502), both of 2026-11-19.
+
+`server/test/helpers/planPhasesFixture.ts` (§7) was under this task's own claim when it was edited, measured from the
+claims list and this session's record: the claims list was read at 13:33:47Z, claim 5617 (this task's, the fixture
+alone) was granted at 13:33:57Z, the edit was made at 13:34:02Z, and the commit that carries it is stamped 13:47:06Z. A
+claim is all-or-nothing, so no other live claim held the path when 5617 was granted. Review 2795 F6 could not read the
+claims list, so it left this unmeasured.
 
 WM6 (run 2780) asked this task, which holds the plan file and `shared/plan.ts`, for a co-edit of the `PlanEpicBody`
 `waves` line and of the plan's Task WM6 section with a deviation bullet of its own; this task said yes (mail 26350),
@@ -174,7 +217,86 @@ After the fix (load 13.2 to 15.3): `plan-phases`, `mail-routes`, `single-definit
 `plan-ticket-done` 309 of 309; `overlord-other-lanes-pin` with `plan-phases` 72 of 72; `ccrc-api`'s plan cases 23 of 23;
 a narrowed compile of every changed test file and `server.ts` (its config in the session's temp root) clean.
 
-## 8. For later
+## 8. Review 2795's fix round
+
+Review 2795 read `002912bfe` and found F1 to F7; the coordinator ruled them all fixed here, each with its case (fix round
+1, delivery 26583).
+
+### 8.1 What changed
+
+| Finding | Change | Case(s) and mutant(s) |
+|---|---|---|
+| F1 (a) | the fold finds the auto ticket the run holds (`fold-by-the-held-ticket`) | `a reused auto ticket folds …` (V-3b) |
+| F2 | a `{ pr }` folds in its carrier's auto ticket (`pr-evidence-folds-its-carrier`); the route hands `prLinks` | `a pull request's carrier folds in: …` (V-3c, V-3d); route: `a pull request the landing line holds landed verifies, and the run that carried it folds in` (RM-6, RM-12) |
+| F3 | a last move not read is no field (`last-move-unmeasured-is-absent`) | `a run whose last move was not read …` (V-6); route: `an item carries its run's last move …` (RM-9) |
+| F4 | one case per item 1 to 7 | §3, review 2795 F4 rows (T6-7b, T6-1b, T6-2b, T6a-2b, S-3b, T6-G11 to T6-G13, R-1b, V-4b) |
+| F5 | route cases for the gathering | §8.3 (RM-5 to RM-12) |
+| F6 | records: §2's list, RM-3's count, §5's co-edits and dates, the fixture's claim, Step 2 unticked with its note, the PR body | this note, the plan's D-8779 entry |
+| F7 | the fallback "the evidence was not read" | `a done ticket whose stored evidence was not read …` (T6-4c); the carry interaction is §8.4 |
+
+### 8.2 Red before the fix
+
+The new cases that come with a fix (F1, F2, F3) were run against `002912bfe`'s `workMap.ts`; the rest pin behaviour the
+tip already had and are measured by their mutants (§4). Measured: `002912bfe`'s `workMap.ts` put in place from `git show`,
+the work-map suite run (load 13.1), and the file restored from a saved copy of this round's (compared byte for byte):
+exactly the three fix cases red (`a run whose last move was not read …`, `a reused auto ticket folds …`, `a pull
+request's carrier folds in: …`), the other 90 green.
+
+### 8.3 Route mutants (review 2795 F5)
+
+Each made from a saved copy of `planRoutes.ts`, the route block run (`plan-routes.test.ts` filtered to `plan show carries
+the work map`), and the file restored from the saved copy, never `git checkout`.
+
+| Id | Mutant | Case that reds |
+|---|---|---|
+| RM-5 | the plan's end read as null | `an ended plan reads ended, its open tickets left open` |
+| RM-6 | the landing fact always null (a `{ pr }` never verifies) | `a pull request the landing line holds landed verifies, …` |
+| RM-7 | open items passed empty | `an open item on a ticket's run, and one on its operator-act checkpoint, …` |
+| RM-8 | checkpoint items never filled | the same |
+| RM-9 | run last moves not stamped | `an item carries its run's last move …` |
+| RM-10 | the evidence run's own ticket key read as null | `evidence naming a run that did another declared ticket does not hold: …` |
+| RM-11 | the `run-unreadable` arm of the evidence run read removed | `an evidence run that cannot be read answers work run-unreadable …` |
+| RM-12 | the `{ pr }` ties not handed to the decider | `a pull request the landing line holds landed verifies, …` (its count) |
+
+### 8.4 Known narrow case: one carry can hide another (review 2795 F7, not changed)
+
+`carryOut` takes the first ticket reference in a phase whose key folds to the ticket and that records a carry. When a
+phase references both the run's auto ticket (folded into a declared one) and the declared ticket, and the auto ticket's
+reference carries to a phase that is dropped (a void carry), that void carry hides the declared ticket's valid one. It
+needs a fold plus two carries in the same phase. Measured on the tip of this round with this input: tickets `d1` (done,
+`{ runId: 5 }`) and `run-5` (done, run 5's auto ticket, so it folds into `d1`); phases `p1` referencing `run-5` carried
+to `p3` at 50 and `d1` carried to `p2` at 100, `p2` referencing `d1`, `p3` dropped. The answer: `p1` reads `carried` 0
+and `done` 1 (finish 500), where 1 carried is expected, and `d1`'s `p1` entry has `carriedTo` null while its `p2` entry
+still names `p1` in `carriedFrom`. Ruled a known case by the coordinator; the carry logic is unchanged.
+
+### 8.5 This round's runs
+
+Every run through `ccrc test`, cd'd into `server/`, one file (or one directory, where named) per process, `--maxWorkers=2`.
+
+| Run | Result | Load (1 min) |
+|---|---|---|
+| `work-map` | first 92 of 93, my own wrong expectation (the order of `nz`'s groups), fixed; then 93 of 93 | 11.6 |
+| `plan-routes` | 45 of 45 | about 11 |
+| the eight route mutants (§8.3), the work-map block alone each | each 1 red, 10 green | 6.0 to 13.1 |
+| `work-map` against `002912bfe`'s `workMap.ts` (§8.2) | 3 red (the fix cases), 90 green | 13.1 |
+| `sim/mutation-floors` whole | 255 of 257: every set green, the three work-map keys included; the 2 reds are the face module's two sets, whose baseline cannot import `@ccrc/ui`, which this worktree has not installed (`ui/` and `pwa/` carry no `node_modules`), as review 2795 measured | 12.3 |
+| `plan-store`, `plan-policy`, `plan-phases`, `plan-ticket-done`, `plan-ticket-required`, `single-definition/plan` | 57, 41, 59, 64, 15 and 5, all green | 8.8 to 11.6 |
+| `mail-routes` (the coordination word scan) | 61 of 61 | 9.8 |
+| `overlord-other-lanes-census`, `-pin`, `-routes`, `overlord-other-lanes` | 54, 13, 35 and 153, all green | 9.9 to 12.7 |
+| `coord-db`, `coord-policy-rings` | 149 and 20, all green | 10.8, 14.3 |
+| `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean` | 34, 1 and 61, all green | 13.1, 12.8 |
+| `test/single-definition` (41 files), `test/rings` (12 files) | 1531 and 133, all green | 13.1, 9.6 |
+| server compile (`tsconfig.json`) | clean | 8.6 |
+| tests compile (`test/tsconfig.tests.json`) | first run: 8 errors, all in `agent/src` (`ws` not found: `agent/` had no `node_modules` in this worktree, and this branch changes nothing there); after installing the agent package's dependencies (`npm ci`), clean. No memory-cap kill this time | 8.6, 8.3 |
+
+### 8.6 A co-edit this task granted
+
+The linear-hierarchy wave 4 follow-ups (run 2810) asked this task, which holds `planRoutes.ts` and
+`single-definition/plan.test.ts`, for a co-edit of two doc comments and plan take's Upkeep lookup in the first, and one
+appended case in the second; this task said yes (mail 26622, 2026-11-19), noting that the work gatherer ends just above
+one of those comments and that the describe's last case is WM2's, so whoever lands second keeps both.
+
+## 9. For later
 
 - When the hierarchy's Task 4.3 stores a programme ticket's close apart from a drop, the route fills `closed` from it.
 - WM3 draws the view; `epicPath(slug, key)` (`pwa/src/lib/routes.ts`) is the epic row's link.
