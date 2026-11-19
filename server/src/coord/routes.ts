@@ -17,6 +17,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { peerMailVerdict } from './peerBound.js';
+import { mailKeyVerdict } from './mailKey.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
@@ -103,6 +104,7 @@ import {
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal, type RouteRefusal } from '../../../shared/refusal.js';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../shared/api.js';
+import { isMailClientKey, MAIL_CLIENT_KEY_MAX } from '../../../shared/api.js';
 import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
 import { knownFleetIdentity } from '../accounts/audit.js';
 import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
@@ -889,6 +891,19 @@ export function registerCoordRoutes(
         'inReplyTo must be a positive integer (a delivery id) when given');
     }
 
+    // `clientKey` (Overlord wave 164): the sender's optional idempotency key. Absent or null is none, and a send without one
+    // behaves exactly as before; a present one must have `isMailClientKey`'s shape. What it does is check 6.5's.
+    const clientKeyRaw = body['clientKey'];
+    let clientKey: string | null;
+    if (clientKeyRaw === undefined || clientKeyRaw === null) {
+      clientKey = null;
+    } else if (isMailClientKey(clientKeyRaw)) {
+      clientKey = clientKeyRaw;
+    } else {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
+        `clientKey must be 1 to ${MAIL_CLIENT_KEY_MAX} letters, digits, '_' or '-' when given`);
+    }
+
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
@@ -992,6 +1007,21 @@ export function registerCoordRoutes(
     }
     // Overlord W1 other lanes (H10): the Overlord's body sends no mail by this door, run mail included. Unrecorded.
     if (!(await refuseOtherLane(reply, 'peerMail', fromId, otherLaneReads))) return;
+
+    // 6.5: the idempotency key (Overlord wave 164). After attribution, so a key is read only for a sender proven current, and
+    // BEFORE checks 7 to 9, so a retry of a mail already accepted answers that mail even where a fresh send would now be
+    // refused (a retried peer mail is otherwise check 9's `duplicate`). The verdict is `mailKeyVerdict`'s (L1): `same`
+    // answers the original id with `already: true` and queues nothing, `conflict` is refused `key-conflict`, recorded. No
+    // `await` follows this read before the insert below, so no other send can store this key in between, and
+    // `mail_client_key_once` is the database's half of the same rule.
+    if (clientKey !== null) {
+      const keyed = mailKeyVerdict({ toId, runId, kind, subject, body: msgBody, artifacts: artifacts as string[] },
+        coord.mailByClientKey(fromId, clientKey));
+      if (keyed.verdict === 'same') return reply.code(202).send({ ok: true, id: keyed.id, already: true });
+      if (keyed.verdict === 'conflict') {
+        return refuse(reply, 'key-conflict', { fromId, fromUuid, toId, kind, subject, runId }, keyed.detail);
+      }
+    }
 
     // 7: recipient shape — a literal ROLE ('coordinator' or 'worker'), or an
     // existing registry row. Resolving a role to a concrete session id happens
@@ -1112,7 +1142,7 @@ export function registerCoordRoutes(
     const artifactPaths = artifacts as string[];
     const { id } = tx(coord.db, () => {
       const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-        artifacts: artifactPaths, answersMail });
+        artifacts: artifactPaths, answersMail, clientKey });
       const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
       const envelope = renderEnvelope({
         id: delivery.id, fromId, toId: resolvedToId, runId,
