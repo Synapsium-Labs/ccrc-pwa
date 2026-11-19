@@ -1716,7 +1716,10 @@ const MAIL_ROW_COLUMNS =
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
   'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
   // D-5838: when the park began, for the strip's `parked` line.
-  'd.parkedAt AS parkedAt';
+  'd.parkedAt AS parkedAt, ' +
+  // Mid-turn mail PR 1: the three stored times and the replay count, as TEXT (D-2545's reason: a wider integer throws).
+  'CAST(d.deliveredAt AS TEXT) AS deliveredAtText, CAST(d.ingestedAt AS TEXT) AS ingestedAtText, ' +
+  'CAST(d.ackedAt AS TEXT) AS ackedAtText, CAST(d.replayCount AS TEXT) AS replayCountText';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
@@ -1724,7 +1727,17 @@ interface MailRowDb {
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
   parkedAt: number | null;
+  deliveredAtText: string | null; ingestedAtText: string | null; ackedAtText: string | null; replayCountText: string | null;
 }
+
+/** One stored delivery number onto the wire (mid-turn mail PR 1): present only when its text is the one canonical
+ *  spelling of a positive safe integer (`parseCanonicalPositiveSafeInteger`), so a missing, fractional, textual,
+ *  hexadecimal, zero or unsafe value is absent, never zero. `replayCount` alone may also be zero, its column's default:
+ *  a first delivery not yet replayed. */
+const mailNumber = (key: 'deliveredAt' | 'ingestedAt' | 'ackedAt' | 'replayCount', text: string | null): Partial<MailSummary> => {
+  const v = key === 'replayCount' && text === '0' ? 0 : parseCanonicalPositiveSafeInteger(text);
+  return v === null ? {} : { [key]: v };
+};
 
 /** A route argument can never ask either mail read to walk more history (or
  *  more outstanding rows) than is reasonable to JSON-stringify into one
@@ -7180,6 +7193,8 @@ export class CoordStore {
       // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
       // keeps its park columns as history, and the wire must not call it parked.
       parkedAt: r.state === 'queued' ? r.parkedAt : null,
+      ...mailNumber('deliveredAt', r.deliveredAtText), ...mailNumber('ingestedAt', r.ingestedAtText),
+      ...mailNumber('ackedAt', r.ackedAtText), ...mailNumber('replayCount', r.replayCountText),
     }));
   }
 

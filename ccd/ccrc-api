@@ -29,7 +29,7 @@
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
 #     the eleven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
 #     `capability-missing` for `plan-phases-v1` (programme work map WM0), `plan ticket-done` the same for
-#     `plan-ticket-done-v1` (WM1), and the three
+#     `plan-ticket-done-v1` (WM1), `plan take` and `plan triage` the same for `plan-inbound-v1` (D-8736), and the three
 #     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
@@ -1476,11 +1476,17 @@ main() {
     refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
   fi
 
-  # THE PHASES' GATE (programme work map WM0, D-8715), the plan door's fail direction: a CURRENT, well-formed cap file that
-  # omits `plan-phases-v1` says the server is older than the phases, so `capability-missing` is answered, naming the word,
-  # and nothing is sent; an absent, stale, torn or future file sends.
-  if [[ "$key" == 'plan.phase-ref' ]] && ! _api_server_cap plan-phases-v1 && _api_server_cap ''; then
-    refuse 'capability-missing' 'the server this box talks to does not keep phases yet (it does not advertise plan-phases-v1); no reference was changed'
+  # THE PHASES' AND THE INBOUND PATH'S GATE (programme work map WM0, D-8715; D-8736, round 4 A1), the plan door's fail
+  # direction: a CURRENT, well-formed cap file that omits the row's word (`plan-phases-v1` for `plan.phase-ref`,
+  # `plan-inbound-v1` for `plan.take` and `plan.triage`) says the server is older than that door, so `capability-missing` is
+  # answered, naming the word, and nothing is sent; an absent, stale, torn or future file sends. One call, one table.
+  local gate=''
+  case "$key" in
+    plan.phase-ref) gate='plan-phases-v1' ;;
+    plan.take|plan.triage) gate='plan-inbound-v1' ;;
+  esac
+  if [[ "$key" == plan.* && -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap ''; then
+    refuse 'capability-missing' "the server this box talks to does not answer this verb yet (it does not advertise $gate); nothing was changed"
   fi
 
   # THE TICKET-DONE GATE (programme work map WM1, D-8727), the same fail direction: a CURRENT, well-formed cap file that omits

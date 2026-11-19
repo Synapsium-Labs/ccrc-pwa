@@ -54,6 +54,7 @@ import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
+import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { simulate } from './run.js';
 import {
@@ -228,6 +229,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
+  ...APPROVAL_ENVELOPE_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
 };
 

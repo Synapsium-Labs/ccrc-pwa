@@ -8,7 +8,7 @@ import {
   orderItems, waitingCount, programmeWaitsOn, WAITS_ON_WORDS, isSlotSlug, isSpecPath,
   CLEARED_WINDOW_MS, SOON_LABEL_MAX, ITEM_TITLE_MAX, ITEM_TEXT_MAX, ITEM_STEPS_MAX,
   ITEM_OPTIONS_MAX, ANSWER_MAX, recommendationOf, earlierTickBlocks, doneWhenOf, DONE_WHEN_MAX_ITEMS, DONE_WHEN_ITEM_MAX,
-  type ItemAct, type ItemActor, type ItemState, type ItemView, type NeededBy, type WaitsOn,
+  actionAdmits, type ItemAction, type ItemAct, type ItemActor, type ItemState, type ItemView, type NeededBy, type WaitsOn,
 } from '../../shared/ledgers.js';
 import { OUTSTANDING_DELIVERY_STATES, TERMINAL_DELIVERY_STATES, type RunKind, type RunState } from '../../shared/api.js';
 
@@ -289,5 +289,26 @@ describe('doneWhenOf (D-8126)', () => {
     const r = doneWhenOf(raw);
     expect(r.ok).toBe(true);
     if (r.ok) expect(r.doneWhen).toEqual(raw);
+  });
+});
+
+// A-1 (review 2394, against D-8720): the rule an item's action puts on the moves a plain item takes, written once. An action item
+// ends by `act`, `decline`, `withdraw` or `settle`; a tick, confirm or return would strand it; and a persistent-drift item is closed
+// by Hand or Keep alone, so the generic dismiss door must not quiet it.
+describe('actionAdmits (A-1)', () => {
+  const DRIFT: ItemAction = { verb: 'linear-drift', bindingId: 1 };
+  const END: ItemAction = { verb: 'end-run', runId: 7, stuckReason: null };
+  it('an item with no action takes every move', () => {
+    for (const act of ACTS) expect(actionAdmits(null, act), act).toBe(true);
+  });
+  it('an item with an action refuses tick, confirm and return', () => {
+    for (const action of [DRIFT, END]) for (const act of ['tick', 'confirm', 'return'] as const) expect(actionAdmits(action, act), `${action.verb} ${act}`).toBe(false);
+  });
+  it('a persistent-drift item refuses dismiss, which no other action item does', () => {
+    expect(actionAdmits(DRIFT, 'dismiss')).toBe(false);
+    expect(actionAdmits(END, 'dismiss')).toBe(true);
+  });
+  it('the closing moves of an action item stay open', () => {
+    for (const act of ['act', 'decline', 'withdraw', 'settle'] as const) expect(actionAdmits(DRIFT, act), act).toBe(true);
   });
 });

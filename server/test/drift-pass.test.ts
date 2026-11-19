@@ -10,13 +10,13 @@ import path from 'node:path';
 import type { DatabaseSync } from 'node:sqlite';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  NO_PLAN_CHANGES, applyPlanChanges, driftEventsOf, planStorePort, type PlanChanges, type PlanStorePort,
+  NO_PLAN_CHANGES, applyPlanChanges, driftCursorsOf, driftEventsOf, planStorePort, type PlanChanges, type PlanStorePort,
 } from '../src/coord/planStore.js';
 import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { FetchLike } from '../src/linear/client.js';
 import { DriftPass, DRIFT_MAX_PAGES, prMergedOfFrom } from '../src/linear/driftPass.js';
 import type { FleetSession } from '../../shared/api.js';
-import { DRIFT_PASS_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
+import { DRIFT_PASS_MS, DRIFT_SWEEP_MARGIN_MS, LINEAR_TEXT_PREFACE, bindingByLinearIdOf } from '../src/linear/driftPolicy.js';
 import { LINEAR_DOCUMENTS, LINEAR_HIERARCHY_DOCUMENTS, type LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
@@ -56,7 +56,8 @@ interface Rig {
   merged: { runs: Set<number> }; hold: { when: ((a: CcrcOpAsk) => boolean) | null; gate: Promise<void> | null; held: number };
   /** The plan's owned fields as the sync computes them, taken before any test spies on `sync.plannedOwned`. */
   plannedNow: PlanSync['plannedOwned'];
-  sync: PlanSync; drift: DriftPass; build: (o?: { prMergedOf?: (runId: number) => boolean; call?: (a: CcrcOpAsk) => Promise<CcrcOpOutcome> }) => DriftPass;
+  sync: PlanSync; drift: DriftPass;
+  build: (o?: { prMergedOf?: (runId: number) => boolean; call?: (a: CcrcOpAsk) => Promise<CcrcOpOutcome>; plan?: PlanStorePort; presenceOf?: (id: string) => 'alive' | 'dead' | 'absent' }) => DriftPass;
 }
 
 let counter = 2000;
@@ -93,8 +94,8 @@ async function rig(): Promise<Rig> {
   });
   r.plannedNow = r.sync.plannedOwned.bind(r.sync);
   r.build = (o = {}) => new DriftPass({
-    coord, plan, planSync: r.sync, readLinearStore: () => readLinearStore(ccrcDir), call: o.call ?? call, now: () => r.t.now,
-    presenceOf: () => 'alive', viaFleet: () => new Set<string>(), prMergedOf: o.prMergedOf ?? ((runId) => r.merged.runs.has(runId)),
+    coord, plan: o.plan ?? plan, planSync: r.sync, readLinearStore: () => readLinearStore(ccrcDir), call: o.call ?? call, now: () => r.t.now,
+    presenceOf: o.presenceOf ?? (() => 'alive'), viaFleet: () => new Set<string>(), prMergedOf: o.prMergedOf ?? ((runId) => r.merged.runs.has(runId)),
   });
   r.drift = r.build();
   r.respond.current = async (ask) => {
@@ -347,16 +348,64 @@ describe('the drift pass (D-8183)', () => {
     expect(items(r)).toHaveLength(2);                                         // past it, three more restores ask again
   });
 
-  it('hand on a programme with no coordinator says so in the item note and settles', async () => {
+  // A-7 (review 2394, D-8736): a programme with no coordinator, and an Upkeep plan, hand to the project's Linear owner.
+  it('hand on a programme with no coordinator mails the project\'s Linear owner and settles (A-7)', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();
+    const [it] = items(r);
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    const m = mails(r).filter((x) => x.subject.includes('drift on'));
+    expect(m).toHaveLength(1);
+    expect(m[0]).toMatchObject({ toId: 'owner-b' });
+    expect(m[0]!.body).toContain(LINEAR_TEXT_PREFACE);
+    expect(items(r)[0]!.state).toBe('done');
+    const ev = r.db.prepare('SELECT note FROM operator_item_events WHERE itemId = ? ORDER BY id DESC LIMIT 1').get(it!.id) as { note: string } | undefined;
+    expect(ev?.note).toContain('Linear owner');
+    expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
+  });
+
+  it('hand on an Upkeep binding mails the project\'s Linear owner and settles (A-7)', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();
+    const [it] = items(r);
+    const ticket = bindingOf(r, 'ticket');
+    // The binding's due key reads as the project's Upkeep plan's (the Upkeep epic's own rows are another suite's); the act asks the
+    // port for the key and the bindings of it, so the port answers as it would for an Upkeep binding.
+    const upkeep: PlanStorePort = {
+      ...r.plan,
+      dueKeyOfBinding: (id) => (id === ticket.id ? 'upkeep:project-a' : r.plan.dueKeyOfBinding(id)),
+      bindingsOf: (key) => r.plan.bindingsOf(key === 'upkeep:project-a' ? SLUG : key),
+    };
+    expect(r.build({ plan: upkeep }).act(it!.id, 'hand', ticket.id)).toEqual({ ok: true });
+    const m = mails(r).filter((x) => x.subject.includes('drift on'));
+    expect(m).toHaveLength(1);
+    expect(m[0]).toMatchObject({ toId: 'owner-b' });
+    expect(items(r)[0]!.state).toBe('done');
+    expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
+  });
+
+  it('hand with no usable Linear owner is refused no-linear-owner, the item stays open and nothing is mailed (A-7, D-8736)', async () => {
     const r = await synced(await rig());
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
     r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
     const [it] = items(r);
-    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
+    const id = bindingOf(r, 'ticket').id;
+    // none named and no coordinator to default to
+    expect(r.drift.act(it!.id, 'hand', id)).toEqual({ ok: false, word: 'no-linear-owner' });
+    // one named, but gone
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();
+    expect(r.build({ presenceOf: () => 'dead' }).act(it!.id, 'hand', id)).toEqual({ ok: false, word: 'no-linear-owner' });
+    expect(items(r)[0]!.state).toBe('open');
+    expect(bindingOf(r, 'ticket').heldItemId).toBe(it!.id);
     expect(mails(r).filter((x) => x.subject.includes('drift on'))).toEqual([]);
-    const ev = r.db.prepare('SELECT note FROM operator_item_events WHERE itemId = ? ORDER BY id DESC LIMIT 1').get(it!.id) as { note: string } | undefined;
-    expect(ev?.note).toContain('no coordinator');
+    // and Keep still closes it
+    expect(r.drift.act(it!.id, 'keep', id)).toEqual({ ok: true });
   });
 
   it('a restore waits for the sync pass in flight and, when that pass wrote the newer planned value, writes nothing and raises no drift', async () => {
@@ -432,7 +481,7 @@ describe('the drift pass (D-8183)', () => {
     expect(sent(r, 'issueUpdate')).toHaveLength(1);
     expect(sent(r, 'issueUpdate')[0]!.input).toMatchObject({ stateId: U(21) });
     expect(sent(r, 'issueOwned').length).toBeGreaterThan(0);                  // the second look read it by id
-    expect(r.asks.filter((a) => a.op === 'changedIssues').at(-1)!.input['since']).toBe(iso(r.lin.at.issue));
+    expect(r.asks.filter((a) => a.op === 'changedIssues').at(-1)!.input['since']).toBe(iso(T - 1000));   // D-8734: a pass at most five minutes after the mark leaves it (the margin)
     expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0).map((e) => [e.field, e.restored])).toEqual([['stateType', true]]);
     r.lin.over.issue = {};                                                    // put back: the next re-read ends the grace
     await passAt(r, r.t.now + DRIFT_PASS_MS);
@@ -506,7 +555,7 @@ describe('the drift pass (D-8183)', () => {
     expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.project).not.toBe(iso(T - 1000));   // a clean pass moves each to the newest updatedAt read
   });
 
-  it('a page cap keeps the old watermark and warns once', async () => {
+  it('a page cap keeps the old watermark and a cursor, and warns once', async () => {
     const r = await synced(await rig());
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     const base = r.respond.current;
@@ -518,7 +567,7 @@ describe('the drift pass (D-8183)', () => {
     expect(r.asks.filter((a) => a.op === 'changedIssues')).toHaveLength(DRIFT_MAX_PAGES);
     expect(warn).toHaveBeenCalledTimes(1);
     expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.issue).toBe(iso(T - 1000));          // the capped kind keeps its own
-    expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.project).not.toBe(iso(T - 1000));    // the others move (A3)
+    expect(Object.keys(driftCursorsOf(r.db, WS.a.id))).toEqual(['issue']);              // and a cursor (D-8734); the others' sweeps ended (A3)
   });
 
   // A2: the drift pass's read of what the plan says is read-only: it advances no D-8701 episode streak and asks for no fill.
@@ -623,6 +672,7 @@ describe('the drift pass (D-8183)', () => {
     r.lin.over.issue = { title: 'Edited in Linear' };
     for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
     r.db.prepare('UPDATE programs SET planBy = NULL WHERE slug = ?').run(SLUG);
+    r.db.prepare("UPDATE project_linking SET linearOwner = 'owner-b' WHERE project = 'project-a'").run();       // A-7: Hand needs an owner to go to
     const [it] = items(r);
     expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'ticket').id)).toEqual({ ok: true });
     expect(bindingOf(r, 'ticket').heldItemId).toBeNull();
@@ -661,6 +711,34 @@ describe('the drift pass (D-8183)', () => {
     expect(sent(r, 'issueComment')).toHaveLength(1);
   });
 
+  // A-1 (review 2394, against D-8720): only Keep quiets persistence. The generic dismiss door cannot close a drift item, and an
+  // item closed any other way is no kept plan.
+  it('the generic dismiss refuses a drift item: not-open, the item stays open (A-1)', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    const [it] = items(r);
+    expect(r.coord.moveItem(it!.id, 'dismiss', 'operator', {}, r.t.now + 1, { programmeHasOpenRun: false })).toEqual({ ok: false, why: 'not-open' });
+    expect(items(r)[0]!.state).toBe('open');
+    expect(bindingOf(r, 'ticket').heldItemId).toBe(it!.id);
+  });
+
+  it('an item closed any way but Keep (a withdraw, a settle with another note) does not quiet the next persistence (A-1)', async () => {
+    for (const close of [
+      (r: Rig, id: number) => r.coord.moveItem(id, 'withdraw', 'coordinator', {}, r.t.now + 1, { programmeHasOpenRun: false }),
+      (r: Rig, id: number) => r.coord.moveItem(id, 'settle', 'ccrc', { note: 'Something else settled it.' }, r.t.now + 1, { programmeHasOpenRun: false }),
+    ]) {
+      const r = await synced(await rig());
+      r.lin.over.issue = { title: 'Edited in Linear' };
+      for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+      const [it] = items(r);
+      expect(close(r, it!.id)).toMatchObject({ ok: true });
+      await passAt(r, r.t.now + DRIFT_PASS_MS);                              // still persistent: asked again at once
+      expect(items(r)).toHaveLength(2);
+      expect(items(r)[1]).toMatchObject({ state: 'open' });
+    }
+  });
+
   it('a lane restarted while a tick runs does nothing and the oldest workspace goes first', async () => {
     const r = await synced(await rig());
     let release: () => void = () => undefined;
@@ -674,6 +752,112 @@ describe('the drift pass (D-8183)', () => {
     expect(r.asks).toHaveLength(n);
     release();
     await first;
+  });
+});
+
+// F3 (review 2408, round 6 P4; departure D-8734): a read that reaches the page cap goes on at the next pass from a cursor kept in the
+// store, and the watermark moves only when the sweep ends, never past the sweep's start less a margin.
+describe('a sweep that spans passes (D-8734)', () => {
+  const MIN = 60_000;
+  const start = T + 20 * MIN;                                                // the first pass of the sweep
+  const fill = (n: number, at: number): Record<string, unknown> => ({ id: U(5000 + n), identifier: `ZZZ-${n}`, teamKey: 'ZZZ', title: 'Elsewhere', updatedAt: iso(at) });
+  /** changedIssues as Linear pages it, one node a page, over `list()` (a re-orderable list), filtered by the ask's `since`. */
+  function paged(r: Rig, list: () => Promise<Record<string, unknown>[]>): void {
+    const base = r.respond.current;
+    r.respond.current = async (ask) => {
+      if (ask.op !== 'changedIssues') return base(ask);
+      const since = String(ask.input['since']);
+      const all = (await list()).filter((n) => String(n['updatedAt']) > since);
+      const after = ask.input['after'];
+      const i = after === null || after === undefined ? 0 : Number(String(after).slice(1));
+      return ok({ nodes: all.slice(i, i + 1), next: i + 1 < all.length ? `p${i + 1}` : null });
+    };
+  }
+  /** Eleven nodes of an unmanaged team, the bound ticket at index `at`, then one node changed at the second pass: 13 pages, ten a pass. */
+  const listWith = (r: Rig, at: number) => async (): Promise<Record<string, unknown>[]> => {
+    const rest = Array.from({ length: 11 }, (_, n) => fill(n, start - 10 * MIN));
+    const g = fill(99, start + DRIFT_PASS_MS);
+    return [...rest.slice(0, at), ...(await nodesOf(r, 'issue')), ...rest.slice(at), g];
+  };
+  const afters = (r: Rig): unknown[] => r.asks.filter((a) => a.op === 'changedIssues').map((a) => a.input['after']);
+
+  it('is read across two passes with no node skipped, and the watermark moves only after the last page', async () => {
+    const r = await synced(await rig());
+    const first = iso(T - 1000);
+    r.lin.at.issue = start - 10 * MIN;
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    paged(r, listWith(r, 11));                                               // the ticket is on page 12, past the cap
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await passAt(r, start);
+    expect(afters(r)).toEqual([null, ...Array.from({ length: DRIFT_MAX_PAGES - 1 }, (_, n) => `p${n + 1}`)]);
+    expect(sent(r, 'issueUpdate')).toHaveLength(0);                          // not yet read
+    expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.issue).toBe(first);       // held while the sweep goes on
+    expect(driftCursorsOf(r.db, WS.a.id)).toEqual({ issue: { since: first, after: `p${DRIFT_MAX_PAGES}`, newest: iso(start - 10 * MIN), startedAt: start } });
+    r.asks.length = 0;
+    await passAt(r, start + DRIFT_PASS_MS);
+    expect(afters(r)).toEqual([`p${DRIFT_MAX_PAGES}`, `p${DRIFT_MAX_PAGES + 1}`, `p${DRIFT_MAX_PAGES + 2}`]);   // resumed where it stopped, same `since`
+    expect(r.asks.filter((a) => a.op === 'changedIssues').every((a) => a.input['since'] === first)).toBe(true);
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);                          // the node past the cap was read, and restored
+    expect(driftCursorsOf(r.db, WS.a.id)).toEqual({});
+    // the newest read is the last page's (the second pass), but the mark stops at the first pass's start less the margin
+    expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.issue).toBe(iso(start - DRIFT_SWEEP_MARGIN_MS));
+  });
+
+  // The coordinator requires this one: a change made between the two passes to a node behind the cursor is read by the NEXT sweep.
+  it('a change made between the passes to a node behind the cursor is read by the next sweep, since the mark stops at the start less the margin', async () => {
+    const r = await synced(await rig());
+    r.lin.at.issue = start - 10 * MIN;
+    paged(r, listWith(r, 3));                                                // the ticket is on page 4, read in the first pass, unedited
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await passAt(r, start);
+    expect(sent(r, 'issueUpdate')).toHaveLength(0);
+    r.lin.over.issue = { title: 'Edited in Linear' };                        // edited after the cursor passed it
+    r.lin.at.issue = start + 10 * MIN;
+    await passAt(r, start + DRIFT_PASS_MS);                                  // the sweep ends: page 13 was read, newer than the edit
+    expect(sent(r, 'issueUpdate')).toHaveLength(0);                          // behind the cursor: not read in this sweep
+    expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.issue).toBe(iso(start - DRIFT_SWEEP_MARGIN_MS));
+    await passAt(r, start + 2 * DRIFT_PASS_MS);                              // the next sweep reads from the mark
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);
+    expect(sent(r, 'issueUpdate')[0]!.input).toMatchObject({ title: 'Ticket t1' });
+  });
+
+  it('the cursor is in the store, not in memory: a new pass over a reopened port resumes it', async () => {
+    const r = await synced(await rig());
+    const first = iso(T - 1000);
+    r.lin.at.issue = start - 10 * MIN;
+    paged(r, listWith(r, 11));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await passAt(r, start);
+    r.asks.length = 0;
+    r.drift = r.build({ plan: planStorePort(r.db) });                         // a restart: nothing of the first pass but the store
+    await passAt(r, start + DRIFT_PASS_MS);
+    expect(afters(r)[0]).toBe(`p${DRIFT_MAX_PAGES}`);
+    expect(r.asks.find((a) => a.op === 'changedIssues')!.input['since']).toBe(first);
+    expect(driftCursorsOf(r.db, WS.a.id)).toEqual({});
+  });
+
+  it('a cursor Linear refuses (linear-invalid) is dropped and the sweep restarts from the mark; a retry word keeps it', async () => {
+    const r = await synced(await rig());
+    const first = iso(T - 1000);
+    r.lin.at.issue = start - 10 * MIN;
+    paged(r, listWith(r, 11));
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await passAt(r, start);
+    expect(driftCursorsOf(r.db, WS.a.id).issue).toBeDefined();
+    const ok0 = r.respond.current;
+    let word: 'unreachable' | 'linear-invalid' | 'fine' = 'unreachable';
+    r.respond.current = (ask) => (ask.op === 'changedIssues' && ask.input['after'] !== null && word !== 'fine' ? fail(word) : ok0(ask));
+    await passAt(r, start + DRIFT_PASS_MS);                                  // a retry word: the cursor stays
+    expect(driftCursorsOf(r.db, WS.a.id).issue).toMatchObject({ after: `p${DRIFT_MAX_PAGES}` });
+    word = 'linear-invalid';
+    await passAt(r, start + 2 * DRIFT_PASS_MS);                              // the stale cursor is refused: dropped
+    expect(driftCursorsOf(r.db, WS.a.id)).toEqual({});
+    expect(r.plan.driftMarkOf(WS.a.id)!.watermarks.issue).toBe(first);
+    r.asks.length = 0;
+    word = 'fine';
+    await passAt(r, start + 3 * DRIFT_PASS_MS);                              // the sweep begins again from the mark, from the first page
+    expect(afters(r)[0]).toBeNull();
+    expect(r.asks.find((a) => a.op === 'changedIssues')!.input['since']).toBe(first);
   });
 });
 
@@ -754,5 +938,556 @@ describe('prMergedOfFrom (D-8183)', () => {
     expect(prMergedOfFrom(coordOf(run({ sessionId: 's1', branch: 'ws/a' })), () => null)(1)).toBe(false);
     expect(prMergedOfFrom(coordOf(run({ sessionId: 's1', branch: null })), () => [session(null, 'merged')])(1)).toBe(false);
     expect(prMergedOfFrom(coordOf({ ok: false }), () => null)(1)).toBe(false);
+  });
+});
+
+// Round 6 P3 (follow-up item 1): a restore honours every hold the sync keeps, and the drift pass's own reads honour the key hold.
+describe('restores and drift reads honour every hold (round 6 P3)', () => {
+  const targetOf = (r: Rig): { bindingId: number; seen: string | null; tag: string } => {
+    const b = bindingOf(r, 'ticket');
+    return { bindingId: b.id, seen: b.fingerprint, tag: 'x' };
+  };
+  const slotOf = async (r: Rig) => (await import('../src/linear/planSync.js')).slotsOf(await readLinearStore(r.ccrcDir)).get(WS.a.id)!;
+
+  it('a restore while the programme row is failure-held sends nothing and answers deferred', async () => {
+    const r = await synced(await rig());
+    const until = r.t.now + 600_000;
+    r.plan.markSyncDue(SLUG, until);
+    r.plan.deferSync(SLUG, until, 'failure');
+    const out = await r.sync.restore(SLUG, [targetOf(r)], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('a restore while its workspace is held by a deferring answer sends nothing', async () => {
+    const r = await synced(await rig());
+    const ticket = r.plan.planOf(SLUG).epics[0]!.tickets[0]!;
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticket.id, title: 'A newer planned title' }], drop: [] } }), OWNER, r.t.now, null);
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.pass === 'plan-sync' && a.op === 'issueOwned' ? fail('unreachable') : real(a));
+    r.t.now += PLAN_SYNC_DEBOUNCE_MS;
+    await r.sync.tick(r.t.now);
+    r.respond.current = real;
+    r.db.prepare('DELETE FROM plan_sync_due').run();           // only the workspace's own hold is measured, not the programme row's
+    r.asks.length = 0;
+    const b = bindingOf(r, 'ticket');
+    const out = await r.sync.restore(SLUG, [{ bindingId: b.id, seen: b.fingerprint, tag: 'x' }], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('a restore while the workspace key is refused sends nothing', async () => {
+    const r = await synced(await rig());
+    r.sync.keyRefused(WS.a.id, await slotOf(r), r.t.now + 600_000);
+    const out = await r.sync.restore(SLUG, [targetOf(r)], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('a drift read answered 401 blocks the workspace for the plan sync, and the next drift tick reads again only after the hold', async () => {
+    const r = await synced(await rig());
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.op === 'changedInitiatives' ? fail('linear-unauthorised') : real(a));
+    await passAt(r, r.t.now + 1);
+    const at = r.t.now;
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBeGreaterThan(at);
+    r.respond.current = real;
+    r.asks.length = 0;
+    // The period has passed but the hold, on the plan sync's schedule, has not: lift the period by hand so only the hold is measured.
+    r.sync.keyRefused(WS.a.id, await slotOf(r), at + 2 * DRIFT_PASS_MS);
+    await passAt(r, at + DRIFT_PASS_MS + 1);
+    expect(r.asks).toEqual([]);
+    await passAt(r, at + 2 * DRIFT_PASS_MS + 1);
+    expect(opsOf(r)).toContain('changedInitiatives');
+  });
+
+  it('a drift read answered 401 holds on the plan sync\'s own schedule, not a schedule of the pass\'s', async () => {
+    const r = await synced(await rig());
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.op === 'changedProjects' ? fail('linear-unauthorised') : real(a));
+    await passAt(r, r.t.now + 1);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBe(r.t.now + 30_000);      // the first step of PLAN_SYNC_BACKOFF_MS
+  });
+
+  it('another workspace still gets its pass while one is blocked', async () => {
+    const r = await synced(await rig());
+    await seedSlot(r.ccrcDir, 'b');
+    r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)')
+      .run(WS.b.id, 'BBB', 'applied', T - 1000);
+    r.sync.keyRefused(WS.a.id, await slotOf(r), r.t.now + 5 * DRIFT_PASS_MS);
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(r.asks.length).toBeGreaterThan(0);
+    expect([...new Set(r.asks.map((a) => a.workspaceId))]).toEqual([WS.b.id]);
+  });
+});
+
+// Round 5 F1 (follow-up item 4): the pass reads ccrc's own record BEFORE Linear, so a sync write landing between the two is never
+// read as drift.
+describe('the pass reads ccrc\'s record before Linear (round 5 F1)', () => {
+  /** A pass whose changed-issues read is followed by a sync write: the plan changes and the real sync pass writes it. */
+  const withSyncWriteAfterRead = (r: Rig, title: string): DriftPass => {
+    const ticket = r.plan.planOf(SLUG).epics[0]!.tickets[0]!;
+    return r.build({
+      call: async (ask) => {
+        r.asks.push(ask);
+        const out = await r.respond.current(ask);
+        if (ask.op === 'changedIssues') {
+          applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticket.id, title }], drop: [] } }), OWNER, r.t.now, null);
+          await r.sync.passFor(SLUG, r.t.now + 60_000);
+        }
+        return out;
+      },
+    });
+  };
+
+  it('a sync write landing after the Linear read is skipped: no comment, no restore, no event, no item', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    r.drift = withSyncWriteAfterRead(r, 'The newer planned title');
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'issueUpdate')).toHaveLength(1);    // the sync did write
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+
+  it('a stale project node missing a milestone the sync just made does not raise the item', async () => {
+    const r = await synced(await rig());
+    const milestone = bindingOf(r, 'checkpoint');
+    // The milestone was bound only after the pass read ccrc's record: the pre-read list lacks it, and Linear's project node too.
+    const real = r.plan.bindingsInWorkspace.bind(r.plan);
+    vi.spyOn(r.plan, 'bindingsInWorkspace').mockImplementation((ws) => real(ws).filter((b) => b.id !== milestone.id));
+    r.lin.over.project = { milestones: [] };
+    await passAt(r, r.t.now + 1);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+});
+
+// Round 6 P2 (follow-up item 5) and D-8733: the scope follows the binding, and what no binding or managed team names is dropped.
+describe('drift scope follows the binding (round 6 P2, D-8733)', () => {
+  it('an issue moved from a managed team to an unmanaged one is read and restored, the update carrying the planned team', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { teamKey: 'ZZZ' };
+    await passAt(r, r.t.now + 1);
+    const up = sent(r, 'issueUpdate');
+    expect(up).toHaveLength(1);
+    expect(up[0]!.destinationTeamKey).toBe('AAA');
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0).map((e) => [e.field, e.restored])).toEqual([['teamKey', true]]);
+  });
+
+  it('changedIssues is asked with every team key the slot lists, not only the managed ones', async () => {
+    const r = await synced(await rig());
+    await seedSlot(r.ccrcDir, 'a', { teams: [...WS.a.teams, { id: U(60), key: 'CCC', name: 'Team C' }] });
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.find((a) => a.op === 'changedIssues')!.input['teams']).toEqual(['AAA', 'CCC']);
+  });
+
+  it('a milestone moved into a project ccrc does not bind raises the unrestorable item at once', async () => {
+    const r = await synced(await rig());
+    r.lin.over.milestone = { projectId: OTHER };
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'projectMilestoneUpdate')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'checkpoint').id, 0).map((e) => [e.field, e.restored])).toEqual([['projectId', false]]);
+    expect(items(r)).toHaveLength(1);
+  });
+
+  it('a graced issue moved out of a managed team is compared, so its grace is decided and the by-id re-read stops', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { stateType: 'completed', teamKey: 'ZZZ' };
+    r.lin.at.issue = r.t.now;
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);                           // the move is put back at once, the state held
+    expect(sent(r, 'issueUpdate')[0]!.input).not.toHaveProperty('stateId');
+    expect(bindingOf(r, 'ticket').driftSince).toBe(r.t.now);
+    r.lin.over.issue = { stateType: 'completed' };                            // back in its team, still completed, untouched since
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(sent(r, 'issueOwned').length).toBeGreaterThan(0);
+    expect(sent(r, 'issueUpdate')).toHaveLength(2);                           // the grace's second look restores the state
+    r.lin.over.issue = {};
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(bindingOf(r, 'ticket').driftSince).toBeNull();
+    r.asks.length = 0;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(sent(r, 'issueOwned')).toEqual([]);
+  });
+
+  it('an issue of an unmanaged team that no binding names is dropped at the read: no row, no event, no mail, no look by the lanes (D-8733)', async () => {
+    const r = await synced(await rig());
+    const seen: string[] = [];
+    r.drift = new DriftPass({
+      coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir), call: (a) => { r.asks.push(a); return Promise.resolve(r.respond.current(a)); },
+      now: () => r.t.now, presenceOf: () => 'alive', viaFleet: (ids) => { seen.push(...ids); return new Set<string>(); }, prMergedOf: () => false,
+    });
+    await seedSlot(r.ccrcDir, 'a', { teams: [...WS.a.teams, { id: U(60), key: 'ZZZ', name: 'Team Z' }] });
+    r.lin.extra.issue = [{ id: U(555), identifier: 'ZZZ-1', title: 'Foreign', description: '', teamKey: 'ZZZ', stateType: 'started', projectId: null, milestoneId: null, parentId: null, updatedAt: iso(r.t.now + 1) }];
+    await passAt(r, r.t.now + 1);
+    expect(seen).not.toContain('ZZZ-1');
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound').get()).toEqual({ n: 0 });
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_drift_events').get()).toEqual({ n: 0 });
+    expect(mails(r)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+});
+
+// A-4 and round 5 A1, A2 (follow-up item 9): the comment names ccrc's own values and, of Linear's, only what ccrc's directory holds;
+// a restore is recorded only when something was written.
+describe('restore comments name values, and a restore is recorded only when written (A-4)', () => {
+  const withDirectory = (r: Rig, projects: { id: string; name: string }[]): DriftPass => new DriftPass({
+    coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir),
+    call: (a) => { r.asks.push(a); return Promise.resolve(r.respond.current(a)); }, now: () => r.t.now, presenceOf: () => 'alive',
+    viaFleet: () => new Set<string>(), prMergedOf: () => false,
+    directory: { get: () => ({ ...DIRECTORY, projects }), filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
+  });
+
+  it('a moved issue names the plan\'s project, and Linear\'s only when the directory holds it', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { projectId: OTHER };
+    await passAt(r, r.t.now + 1);
+    const body = String(sent(r, 'issueComment')[0]!.input['body']);
+    expect(body).toContain("ccrc restored this issue's project to *Epic one*. It had been moved elsewhere on ");
+    expect(body).not.toContain(OTHER);
+    const q = await synced(await rig());
+    q.lin.over.issue = { projectId: OTHER };
+    q.drift = withDirectory(q, [{ id: OTHER, name: 'Backlog' }]);
+    await passAt(q, q.t.now + 1);
+    expect(String(sent(q, 'issueComment')[0]!.input['body'])).toContain("ccrc restored this issue's project to *Epic one*. It had been moved to *Backlog* on ");
+  });
+
+  it('a renamed project names the plan\'s name and never Linear\'s free text', async () => {
+    const r = await synced(await rig());
+    r.lin.over.project = { name: 'Renamed in Linear' };
+    await passAt(r, r.t.now + 1);
+    const body = String(sent(r, 'projectComment')[0]!.input['body']);
+    expect(body).toContain("ccrc restored this project's name to *Epic one*. It had been changed on ");
+    expect(body).not.toContain('Renamed in Linear');
+  });
+
+  it('a milestone restore\'s Restored line names every field put back', async () => {
+    const r = await synced(await rig());
+    r.lin.over.milestone = { name: 'Renamed in Linear', description: 'Edited in Linear' };
+    await passAt(r, r.t.now + 1);
+    const line = String(sent(r, 'projectMilestoneUpdate')[0]!.input['description']).split('\n').find((l) => l.startsWith('Restored on '));
+    expect(line).toBe(`Restored on ${new Date(r.t.now).toISOString().slice(0, 10)}: ccrc put back this milestone's name and description.`);
+  });
+
+  it('nothing sent because the key is not configured is deferred: no comment, no record, the read comes again', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    const base = r.respond.current;
+    r.respond.current = (ask) => (ask.op === 'issueOwned' && ask.pass === 'drift-restore' ? fail('not-configured') : base(ask));
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([]);
+    expect(r.asks.filter((a) => a.op === 'changedIssues').length).toBe(1);
+    r.respond.current = base;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(r.asks.filter((a) => a.op === 'changedIssues').at(-1)!.input['since']).toBe(iso(T - 1000));   // the watermark was kept
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);
+  });
+
+  it('nothing sent because Linear already holds the plan is moot: no comment, no record', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    const base = r.respond.current;
+    // The changed read showed the edit; by the restore's own read of the issue it is back.
+    r.respond.current = async (ask) => {
+      if (ask.op !== 'issueOwned' || ask.pass !== 'drift-restore') return base(ask);
+      const saved = r.lin.over.issue;
+      r.lin.over.issue = {};
+      try { return await base(ask); } finally { r.lin.over.issue = saved; }
+    };
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([]);
+  });
+});
+
+// Round 5 A3 (follow-up item 11): a milestone a person adds does not raise a kept item again.
+describe('a person\'s own milestone is not a new difference (round 5 A3)', () => {
+  it('after Keep, a milestone a person adds records nothing, and a further planned milestone going missing is a new event', async () => {
+    const r = await synced(await rig());
+    r.lin.over.project = { milestones: [] };
+    await passAt(r, r.t.now + 1);
+    expect(items(r)).toHaveLength(1);
+    expect(r.drift.act(items(r)[0]!.id, 'keep', bindingOf(r, 'epic').id)).toEqual({ ok: true });
+    r.lin.over.project = { milestones: [{ id: U(888) }] };                   // a person added their own milestone; the plan's is still missing
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0).filter((e) => e.field === 'milestoneIds')).toHaveLength(1);
+    expect(items(r)).toHaveLength(1);
+    // The plan gains a second checkpoint; its milestone is made and is missing from Linear's project too.
+    const epic = r.plan.planOf(SLUG).epics[0]!;
+    applyPlanChanges(r.db, SLUG, changes({ checkpoints: { insert: [{ epicKey: epic.key, key: 'c2', ordinal: 1, title: 'Checkpoint two', kind: 'acceptance', proves: [], itemId: null }], update: [], drop: [] } }), OWNER, r.t.now, null);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS);
+    r.t.now += PLAN_SYNC_DEBOUNCE_MS;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0).filter((e) => e.field === 'milestoneIds')).toHaveLength(2);
+    expect(items(r)).toHaveLength(2);
+  });
+});
+
+// Review 2457 F1: the call site of round 5 F1's skip (`syncWroteSince` in the compare loop) is what keeps a sync write that landed
+// after the Linear read out of `compare`. The test above ("a sync write landing after the Linear read is skipped") cannot go red
+// without it: the restore's own moot check (`seen` is the pre-read fingerprint) and `eventVerdict` hide the difference. What only the
+// skip prevents is what `compare` itself writes before any restore: the grace stamp, the due mark and an unrestorable event.
+describe('the skip of a node a sync write moved has a test that goes red without it (review 2457 F1)', () => {
+  /** A pass whose read of `op` is followed by a sync write (the plan changes and the real sync pass writes it), run with Linear's
+   *  own overrides hidden from that sync pass, then `after` (a second plan change, say). */
+  const withWriteAfter = (r: Rig, op: string, change: PlanChanges, after: () => void = () => undefined, during: Rig['lin']['over'] = {}): DriftPass => r.build({
+    call: async (ask) => {
+      r.asks.push(ask);
+      const out = await r.respond.current(ask);
+      if (ask.op === op) {
+        applyPlanChanges(r.db, SLUG, changes(change), OWNER, r.t.now, null);
+        const saved = r.lin.over;
+        r.lin.over = during;                // what Linear holds for the sync's own read: what the sync wrote last, so its update is sent
+        try { await r.sync.passFor(SLUG, r.t.now + 60_000); } finally { r.lin.over = saved; }
+        after();
+      }
+      return out;
+    },
+  });
+  const ticketId = (r: Rig): number => r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id;
+
+  it('a sync write after the read leaves no grace stamp on an issue Linear reads completed', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { stateType: 'completed' };
+    r.drift = withWriteAfter(r, 'changedIssues', changes({ tickets: { insert: [], update: [{ id: ticketId(r), title: 'The newer planned title' }], drop: [] } }), undefined, { issue: { title: 'Ticket t1' } });
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'issueUpdate')).toHaveLength(1);       // the sync did write
+    expect(bindingOf(r, 'ticket').driftSince).toBeNull();                                                   // compare's grace stamp, never reached
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+  });
+
+  it('a sync write after the read leaves no unrestorable event and no item on a project the read shows short of a milestone', async () => {
+    const r = await synced(await rig());
+    r.lin.over.project = { milestones: [] };
+    const epic = r.plan.planOf(SLUG).epics[0]!;
+    r.drift = withWriteAfter(r, 'changedProjects', changes({ epics: { insert: [], update: [{ id: epic.id, title: 'A newer epic title' }], drop: [] } }));
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'projectUpdate')).toHaveLength(1);
+    expect(driftEventsOf(r.db, bindingOf(r, 'epic').id, 0)).toEqual([]);
+    expect(items(r)).toEqual([]);
+  });
+
+  it('a sync write after the read makes no due mark of the drift pass, even for a plan the sync has yet to write again', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    const mark = vi.spyOn(r.plan, 'markSyncDue');
+    let watching = false;
+    r.drift = withWriteAfter(r, 'changedIssues',
+      changes({ tickets: { insert: [], update: [{ id: ticketId(r), title: 'The newer planned title' }], drop: [] } }),
+      () => {
+        // a second edit after the sync's write: the binding is no longer current, so a compare of this node would read a catch-up
+        applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticketId(r), title: 'A third planned title' }], drop: [] } }), OWNER, r.t.now, null);
+        mark.mockClear();
+        watching = true;
+      }, { issue: { title: 'Ticket t1' } });
+    await passAt(r, r.t.now + 1);
+    expect(r.asks.filter((a) => a.pass === 'plan-sync' && a.op === 'issueUpdate')).toHaveLength(1);       // the sync did write
+    expect(watching).toBe(true);
+    expect(mark).not.toHaveBeenCalled();
+  });
+});
+
+// Review 2457 A1 and A2: the read hold's ladder starts again when a read is answered, and a graced re-read answered 401 holds both lanes.
+describe('two bindings of one workspace holding one linearId: the lowest id is the binding (review 2524 F3)', () => {
+  // No uniqueness rules out two bindings of one workspace holding one Linear id, so the pass must be correct under it (the
+  // coordinator's ruling): ONE rule picks the binding of a linearId, the lowest id, which `bindingByLinearId` reads and the pass's
+  // pre-read follows. With two rules (the pre-read's highest id against the store's lowest) the node was skipped at every pass.
+  it('the node\'s drift is compared and restored once, against the lowest-id binding', async () => {
+    const r = await synced(await rig());
+    const b = bindingOf(r, 'ticket');
+    r.db.prepare(`INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, fingerprint, syncedAt, state)
+      SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate').map((a) => a.input['title'])).toEqual(['Ticket t1']);
+    expect(driftEventsOf(r.db, b.id, 0).map((e) => [e.field, e.restored])).toEqual([['title', true]]);
+  });
+
+  it('the store\'s reader and the pass\'s pre-read pick the same binding', async () => {
+    const r = await synced(await rig());
+    const b = bindingOf(r, 'ticket');
+    r.db.prepare(`INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, fingerprint, syncedAt, state)
+      SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
+    expect(r.plan.bindingByLinearId(b.workspaceId, b.linearId!)!.id).toBe(b.id);
+    expect(bindingByLinearIdOf(r.plan.bindingsInWorkspace(b.workspaceId)).get(b.linearId!)!.id).toBe(b.id);
+  });
+});
+
+describe('the read hold of a refused key (review 2457 A1, A2)', () => {
+  const unauthorisedOn = (r: Rig, op: string): void => {
+    const real = r.respond.current;
+    r.respond.current = (a) => (a.op === op ? fail('linear-unauthorised') : real(a));
+  };
+
+  it('a key that recovers starts the read ladder from its first step again (A1)', async () => {
+    const r = await synced(await rig());
+    const real = r.respond.current;
+    unauthorisedOn(r, 'changedInitiatives');
+    await passAt(r, r.t.now + 1);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBe(r.t.now + 30_000);              // the first step
+    r.respond.current = real;
+    await passAt(r, r.t.now + DRIFT_PASS_MS);                                     // the key reads again: the ladder starts over
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBeLessThan(r.t.now);
+    unauthorisedOn(r, 'changedInitiatives');
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBe(r.t.now + 30_000);              // the first step again, not the second (120 s)
+  });
+
+  it('keyReadAnswered resets the step of the read ladder and of no other key (A1; review 2524 A5)', async () => {
+    const r = await synced(await rig());
+    await seedSlot(r.ccrcDir, 'b');
+    const slots = (await import('../src/linear/planSync.js')).slotsOf(await readLinearStore(r.ccrcDir));
+    const slot = slots.get(WS.a.id)!;
+    const slotB = slots.get(WS.b.id)!;
+    expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 30_000);
+    expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 120_000);
+    // a second workspace's key holds its own ladder at its second step too (review 2524 A5)
+    expect(r.sync.keyRefusedByRead(WS.b.id, slotB)).toBe(r.t.now + 30_000);
+    expect(r.sync.keyRefusedByRead(WS.b.id, slotB)).toBe(r.t.now + 120_000);
+    r.sync.keyReadAnswered(WS.a.id);
+    expect(r.sync.keyRefusedByRead(WS.a.id, slot)).toBe(r.t.now + 30_000);           // this key starts over
+    expect(r.sync.keyRefusedByRead(WS.b.id, slotB)).toBe(r.t.now + 600_000);         // the other key's step is untouched: its third
+  });
+
+  it('a graced re-read answered 401 holds the key for both lanes and restores nothing (A2)', async () => {
+    const r = await synced(await rig());
+    r.plan.setDriftSince(bindingOf(r, 'ticket').id, r.t.now - 1000);             // a grace stands
+    r.lin.at.issue = T - 5000;                                                    // and the changed read does not return the issue again
+    unauthorisedOn(r, 'issueOwned');
+    await passAt(r, r.t.now + 1);
+    expect(opsOf(r).filter((o) => o === 'issueOwned')).toHaveLength(1);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBe(r.t.now + 30_000);              // the sync's own schedule, as every read's 401
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    expect(sent(r, 'issueComment')).toEqual([]);
+    r.respond.current = async () => ok();
+    r.asks.length = 0;
+    const b = bindingOf(r, 'ticket');
+    const out = await r.sync.restore(SLUG, [{ bindingId: b.id, seen: b.fingerprint, tag: 'x' }], 'drift-restore');
+    expect(out).toEqual([expect.objectContaining({ outcome: 'deferred' })]);     // the write lane holds too
+    expect(r.asks).toEqual([]);
+  });
+});
+
+// Review 2457 A3: the note's decision. A held target that is also moot answers moot; only a target that would otherwise be sent is deferred.
+describe('a held target that is also moot answers moot (review 2457 A3)', () => {
+  const stale = (r: Rig): { bindingId: number; seen: string | null; tag: string } => ({ bindingId: bindingOf(r, 'ticket').id, seen: 'a-fingerprint-the-sync-has-since-moved', tag: 'x' });
+  const fresh = (r: Rig): { bindingId: number; seen: string | null; tag: string } => { const b = bindingOf(r, 'ticket'); return { bindingId: b.id, seen: b.fingerprint, tag: 'x' }; };
+  const holdProgramme = (r: Rig): void => { const until = r.t.now + 600_000; r.plan.markSyncDue(SLUG, until); r.plan.deferSync(SLUG, until, 'failure'); };
+  const slotOf = async (r: Rig) => (await import('../src/linear/planSync.js')).slotsOf(await readLinearStore(r.ccrcDir)).get(WS.a.id)!;
+
+  it('while the programme row is failure-held, a moot target is moot and a target to send is deferred; nothing is sent', async () => {
+    const r = await synced(await rig());
+    holdProgramme(r);
+    expect(await r.sync.restore(SLUG, [stale(r)], 'drift-restore')).toEqual([expect.objectContaining({ outcome: 'moot' })]);
+    expect(await r.sync.restore(SLUG, [fresh(r)], 'drift-restore')).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  it('while the workspace key is refused, a moot target is moot and a target to send is deferred; nothing is sent', async () => {
+    const r = await synced(await rig());
+    r.sync.keyRefused(WS.a.id, await slotOf(r), r.t.now + 600_000);
+    expect(await r.sync.restore(SLUG, [stale(r)], 'drift-restore')).toEqual([expect.objectContaining({ outcome: 'moot' })]);
+    expect(await r.sync.restore(SLUG, [fresh(r)], 'drift-restore')).toEqual([expect.objectContaining({ outcome: 'deferred' })]);
+    expect(r.asks).toEqual([]);
+  });
+
+  // The pass: a held, moot restore does not hold its kind's watermark (the sweep moves on); a held one to send still does.
+  const watermarkAfterHeldRestore = async (moot: boolean): Promise<string> => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    r.lin.at.issue = T;                                                           // changed after the mark, and old enough for the margin
+    const real = r.sync.restore.bind(r.sync);
+    r.sync.restore = async (key, targets, pass) => {
+      if (moot) {
+        // a sync write lands after the compare and before the restore's flight: the target's `seen` is stale by then
+        const ticket = r.plan.planOf(SLUG).epics[0]!.tickets[0]!;
+        applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [], update: [{ id: ticket.id, title: 'The newer planned title' }], drop: [] } }), OWNER, r.t.now, null);
+        const saved = r.lin.over; r.lin.over = { issue: { title: 'Ticket t1' } };
+        try { await r.sync.passFor(SLUG, r.t.now + 60_000); } finally { r.lin.over = saved; }
+      }
+      holdProgramme(r);
+      return real(key, targets, pass);
+    };
+    await passAt(r, r.t.now + DRIFT_PASS_MS);
+    expect(sent(r, 'issueUpdate')).toEqual([]);
+    return r.plan.driftMarkOf(WS.a.id)!.watermarks.issue;
+  };
+
+  it('a held, moot target does not hold its kind\'s watermark', async () => {
+    expect(await watermarkAfterHeldRestore(true)).toBe(iso(T));
+  });
+
+  it('a held target to send still defers and holds its kind\'s watermark', async () => {
+    expect(await watermarkAfterHeldRestore(false)).toBe(iso(T - 1000));
+  });
+});
+
+// Review 2457 F3 (the coordinator's ruling): a restore comment is public text. It passes `publicTextVerdict` with the binding's project
+// mode and team key before it is sent; refused, the fields are still restored and the comment is ccrc's fixed sentence naming the
+// fields only, and the refusal is told once to the owner as a sync step's text refusal is.
+describe('the restore comment is public text (review 2457 F3)', () => {
+  const publicRig = async (): Promise<Rig> => {
+    const r = await rig();
+    r.db.prepare("UPDATE project_linking SET override = 'public' WHERE project = 'project-a'").run();
+    return synced(r);
+  };
+  const withNames = (r: Rig, projects: { id: string; name: string }[]): DriftPass => new DriftPass({
+    coord: r.coord, plan: r.plan, planSync: r.sync, readLinearStore: () => readLinearStore(r.ccrcDir),
+    call: (a) => { r.asks.push(a); return Promise.resolve(r.respond.current(a)); }, now: () => r.t.now, presenceOf: () => 'alive',
+    viaFleet: () => new Set<string>(), prMergedOf: () => false,
+    directory: { get: () => ({ ...DIRECTORY, projects }), filledAt: () => T - 1000, projectStatusesRead: () => 'read' },
+  });
+  const refusals = (r: Rig) => mails(r).filter((m) => m.subject.includes('restore-comment text-public'));
+
+  it('a Linear project name the check refuses gives the fallback comment, the fields are still restored and the refusal is told once', async () => {
+    const r = await publicRig();
+    r.lin.over.issue = { projectId: OTHER };
+    r.drift = withNames(r, [{ id: OTHER, name: 'AAA-123 launch' }]);
+    await passAt(r, r.t.now + 1);
+    expect(sent(r, 'issueUpdate')).toHaveLength(1);                                                   // the field writes still go
+    expect(sent(r, 'issueUpdate')[0]!.input).toMatchObject({ projectId: bindingOf(r, 'epic').linearId });
+    const comments = sent(r, 'issueComment');
+    expect(comments).toHaveLength(1);
+    const body = String(comments[0]!.input['body']);
+    expect(body).toContain("ccrc restored this issue's project. It had been changed on ");           // fields only: no value from either side
+    expect(body).not.toContain('AAA-123');
+    expect(body).not.toContain('Epic one');
+    expect(driftEventsOf(r.db, bindingOf(r, 'ticket').id, 0)).toEqual([expect.objectContaining({ field: 'projectId', restored: true, commentedAt: r.t.now })]);
+    expect(refusals(r)).toHaveLength(1);
+    expect(refusals(r)[0]!.toId).toBe(OWNER);
+    expect(refusals(r)[0]!.body).not.toContain('AAA-123');
+  });
+
+  it('a clean name gives the valued comment and no refusal is told', async () => {
+    const r = await publicRig();
+    r.lin.over.issue = { projectId: OTHER };
+    r.drift = withNames(r, [{ id: OTHER, name: 'Backlog' }]);
+    await passAt(r, r.t.now + 1);
+    expect(String(sent(r, 'issueComment')[0]!.input['body'])).toContain("ccrc restored this issue's project to *Epic one*. It had been moved to *Backlog* on ");
+    expect(refusals(r)).toEqual([]);
+  });
+
+  it('a private project is not checked: the name is named as before', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { projectId: OTHER };
+    r.drift = withNames(r, [{ id: OTHER, name: 'AAA-123 launch' }]);
+    await passAt(r, r.t.now + 1);
+    expect(String(sent(r, 'issueComment')[0]!.input['body'])).toContain('*AAA-123 launch*');
+    expect(refusals(r)).toEqual([]);
+  });
+
+  it('a milestone\'s Restored line names the fields put back and no value, whatever either side holds', async () => {
+    const r = await publicRig();
+    r.lin.over.milestone = { name: 'AAA-123 renamed in Linear' };
+    await passAt(r, r.t.now + 1);
+    const line = String(sent(r, 'projectMilestoneUpdate')[0]!.input['description']).split('\n').find((l) => l.startsWith('Restored on '));
+    expect(line).toBe(`Restored on ${new Date(r.t.now).toISOString().slice(0, 10)}: ccrc put back this milestone's name.`);
+    expect(refusals(r)).toEqual([]);
   });
 });

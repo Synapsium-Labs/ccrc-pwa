@@ -566,3 +566,26 @@ describe('the stored definition of done (D-8126)', () => {
     }
   });
 });
+
+// A-1 (review 2394): the generic dismiss refuses a persistent-drift item, so only Hand or Keep closes it.
+describe('a persistent-drift item is not dismissed from the generic door (A-1)', () => {
+  const DRIFT = { verb: 'linear-drift', bindingId: 1 } as const;
+  const drift = (s: CoordStore): number => s.raiseItem({
+    program: 'prog-a', runId: null, raisedBy: 'ccrc', kind: 'decide', title: 'Linear keeps changing ticket t1', why: 'It keeps changing.',
+    how: [], options: ['Hand to the coordinator', 'Keep the plan'], recommended: 0, recommendedWhy: 'Because.', neededBy: 'later', soonLabel: null,
+    secretSlot: null, action: DRIFT,
+  }, NOW, 'ccrc');
+  it('dismiss answers not-open, the item stays open and no event is written; settle still closes it', () => {
+    const s = mk();
+    const id = drift(s);
+    expect(s.moveItem(id, 'dismiss', 'operator', {}, NOW + 1, live)).toEqual({ ok: false, why: 'not-open' });
+    expect(s.itemById(id)).toMatchObject({ state: 'open', closedAt: null });
+    expect(eventsOf(s, id)).toEqual(['raise:ccrc']);
+    expect(s.moveItem(id, 'settle', 'ccrc', {}, NOW + 2, live)).toMatchObject({ ok: true, item: { state: 'done' } });
+  });
+  it('an end-run item is still dismissed as before', () => {
+    const s = mk();
+    const id = raiseHeld(s, null);
+    expect(s.moveItem(id, 'dismiss', 'operator', {}, NOW + 1, live)).toMatchObject({ ok: true, item: { state: 'dismissed' } });
+  });
+});

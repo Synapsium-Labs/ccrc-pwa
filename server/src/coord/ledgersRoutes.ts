@@ -43,7 +43,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { CloseOutcome } from './close.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
-import { callViewOf } from './coordCalls.js';
+import { callViewOf, clearedCallViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
@@ -179,7 +179,7 @@ export function waitingViewOf(
     cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf, marks)),
     goals: programmes.map((p) => coord.goalsFor(p)),
     calls: groups.open.map(callViewOf),
-    callsCleared: groups.cleared.map(callViewOf),
+    callsCleared: groups.cleared.map((r) => clearedCallViewOf(r, now)),
     ...asksViewOf(coord, now, liveAsk),
   };
 }

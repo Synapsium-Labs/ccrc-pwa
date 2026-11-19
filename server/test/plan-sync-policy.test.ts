@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
-  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
+  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, textFactsOf, textRefusalOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld, keyWaitMail } from '../src/linear/inboundPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
@@ -695,5 +695,35 @@ describe('the inbound close\'s refusals (F8, A7/A8; L1)', () => {
     expect(givenUpWord('noise [not closed in Linear: linear-forbidden]')).toBe('linear-forbidden');
     expect(givenUpWord('noise')).toBeNull();
     expect(givenUpWord(null)).toBeNull();
+  });
+});
+
+// Review 2457 F3: the public-text check of one write's texts has one owner, which the drift restore's comment asks too.
+describe('textRefusalOf and textFactsOf (review 2457 F3)', () => {
+  it('a public or unknown project refuses a text naming its own tracker id or a private key, a private one never', () => {
+    expect(textRefusalOf(['Fix KEY-123 now'], [{ teamKey: 'KEY', mode: 'public' }], [])).toBe('tracker id');
+    expect(textRefusalOf(['Fix KEY-123 now'], [{ teamKey: 'KEY', mode: 'unknown' }], [])).toBe('tracker id');
+    expect(textRefusalOf(['Fix KEY-123 now'], [{ teamKey: 'KEY', mode: 'private' }], [])).toBeNull();
+    expect(textRefusalOf(['Fix ZZZ-7 now'], [{ teamKey: 'KEY', mode: 'public' }], ['ZZZ'])).toBe('private tracker id');
+    expect(textRefusalOf(['Backlog', 'Fine'], [{ teamKey: 'KEY', mode: 'public' }], [])).toBeNull();
+  });
+
+  it('every fact that speaks is asked: one public project among private ones refuses', () => {
+    const facts = [{ teamKey: 'KEY', mode: 'private' as const }, { teamKey: 'KEY', mode: 'public' as const }];
+    expect(textRefusalOf(['Fix KEY-123 now'], facts, [])).toBe('tracker id');
+  });
+
+  it("a ticket's, an epic's, a checkpoint's and an initiative's facts are those of their own projects", () => {
+    const s = snap({ mode: 'public', teamKey: 'KEY', cps: [cp()], tickets: [tk()] });
+    const fact = { teamKey: 'KEY', mode: 'public' };
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1 }))).toEqual([expect.objectContaining(fact)]);
+    expect(textFactsOf(s, bind({ localKind: 'epic', localId: 1 }))).toEqual([expect.objectContaining(fact)]);
+    expect(textFactsOf(s, bind({ localKind: 'checkpoint', localId: 1 }))).toEqual([expect.objectContaining(fact)]);
+    expect(textFactsOf(s, bind({ localKind: 'programme', localId: 1 }))).toEqual([expect.objectContaining(fact)]);
+  });
+
+  it('an object the plan does not hold is judged unknown, public, with the binding\'s own team', () => {
+    const s = snap({ mode: 'private', tickets: [tk()] });
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 999, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
   });
 });
