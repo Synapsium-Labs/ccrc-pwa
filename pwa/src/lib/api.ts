@@ -2,7 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
-import type { FlowAnswer, FlowDoc, FlowParse, FlowProblem, FlowsListAnswer } from '../../../shared/flows';
+import type { FlowAnswer, FlowDoc, FlowParse, FlowProblem, FlowProgrammeRow, FlowsListAnswer } from '../../../shared/flows';
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { CoordCapsWrite } from '../../../shared/runCap';
@@ -988,6 +988,8 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  rejects with `ApiError`; a publish refused `conflict` carries the draft's `problems` in its body. */
     listFlows: () => getJson<FlowsListAnswer>('/api/flows'),
     getFlow: (id: number) => getJson<FlowAnswer>(`/api/flows/${id}`),
+    /** Wave 3a: the programmes that pin a flow, each with where it is. */
+    flowProgrammes: (id: number) => getJson<{ programmes: FlowProgrammeRow[] }>(`/api/flows/${id}/programmes`),
     createFlow: (body: { title?: string; template?: string; import?: FlowDoc }) => postJson<{ ok: true; id: number }>('/api/flows', body),
     getFlowVersion: (id: number, version: number) => getJson<{ doc: FlowParse; publishedAt: number }>(`/api/flows/${id}/versions/${version}`),
     saveFlowDraft: async (id: number, doc: FlowDoc): Promise<{ ok: true; problems: FlowProblem[] }> => (await request(`/api/flows/${id}/draft`, {
