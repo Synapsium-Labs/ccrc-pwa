@@ -11,8 +11,8 @@ numbers. No D-number is defined here.
 - **Measured claims of the brief:** nothing on `main` marks a mail urgent, and the session hook has no mid-turn mail
   path. Both are confirmed on `ba2f67dac` (spec §1.2).
 - **Not measurable through the API:** how long a delivered mail waited. `deliveredAt`, `ingestedAt` and `ackedAt` are
-  stored but `MailSummary` serves none of them. The spec gives sampled lower bounds instead (§1.3) and names the read
-  that would answer it.
+  stored but `MailSummary` serves none of them. The spec gives sampled lower bounds instead (§1.3, one hour, 18
+  deliveries: six refused `not-idle`, four of those waiting more than 9 minutes) and names the read that would answer it.
 - **Read, not run:** opencrawl-core at `ccb0b20d93bb9af2fccadebbf1bf08169b87e330`, through `gh` only (spec §2.2).
 
 ## 1. Findings for the ledger

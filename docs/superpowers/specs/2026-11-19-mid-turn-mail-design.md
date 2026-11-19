@@ -19,9 +19,9 @@ with it.
 - **What the hold is, and is not.** The hold makes the worker *read* the mail before it acts. It never makes the worker
   *obey* it: the mail stays content, never instruction (Overlord spec §3.8). Only the worker's coordinator, the operator
   and the server's own system mail may mark mail urgent, so no peer can freeze another session.
-- **Measured.** The wire cannot say how long a delivered mail waited: `deliveredAt` is stored but never served. A
-  sample of the fleet's outstanding mail through the API (§1.3) gives lower bounds only. The first build step adds the
-  read that answers it.
+- **Measured.** The wire cannot say how long a delivered mail waited: `deliveredAt` is stored but never served. An
+  hour's sample of outstanding mail through the API (§1.3) found six deliveries refused while the recipient was busy.
+  Four of them waited more than 9 minutes. The first build step adds the read that measures this properly.
 - **For you to check:** §4, Waiting on you. Is urgent mail limited to the three senders above? Should the hold fail
   open when the server cannot be read? Should D be probed and built before any pull client is considered?
 
@@ -96,7 +96,23 @@ A delivered row's gate fields are cleared. `GET /api/feed` records mail at queue
 What the API does allow is sampling: list every live peer's outstanding mail once a minute and watch rows move from
 `queued` to `delivered`. That gives a **lower bound** per delivery (first seen queued, to first seen delivered).
 
-[MEASUREMENT]
+**Measured 2026-11-19, 00:56 to 01:48 UTC,** through `ccrc-api peers list` and `ccrc-api mail list --to <id>` for every
+running peer of this project: 47 samples, one a minute, 18 deliveries seen outstanding. A row's wait is at least its
+age at the last sample that still showed it queued, and at most about a minute more. No row was still queued at the
+end.
+
+| Mail | Deliveries | Gate seen refusing | Wait, lower bound |
+|---|---|---|---|
+| Wave briefs from dispatch, to a fresh worker | 4 | `not-quiet` only | 0.5 to 1.0 min |
+| Mail sent by a session, refused at least once while the recipient was busy | 6 | `not-idle` | 0.2, 0.7, 9.0, 9.4, 11.0 and 11.0 min |
+| Other session-sent mail | 8 | `not-quiet`, `cooldown` or none | 0.9 min or less |
+
+*Table 1. Sampled waits. The six `not-idle` rows are the busy-recipient case. Four of them waited more than 9 minutes,
+and they include a coordinator's addendum to a running worker's brief and an answer about migration slots, the kind of
+mail this design is for.*
+
+Footing: measured, lower bounds only, one project, one hour. A single client read (`mail list`) took 74 to 110 ms in
+seven of eight timed calls at load average 11, and 439 ms in the eighth.
 
 **The read that would answer it:** add `deliveredAt`, `ingestedAt` and `ackedAt` to `MailSummary` as additive fields
 (absent from an older server, which a reader treats as unmeasured). Then `mail list --program <slug> --all 1` gives,
