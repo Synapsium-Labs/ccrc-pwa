@@ -484,6 +484,10 @@ Library 1.1.0 was read from an installed copy in another ccrc worktree, read-onl
 | Fix round 1 (review 2694): F5, the stylesheet term, `protocol.js` as a proxy, the layout bound as an assumption, the shares as a ceiling | Spec §6, "Size, and X2's share": the stylesheet row, the bootstrap row, the layout row and the two bullets after the shares |
 | Fix round 1: F1, one landing per design | Spec §6, the same block's first paragraph (X1 spec §10 test 8) |
 | Fix round 1: M7, `frameCsp`'s signature | Spec §6's layout row (R19) |
+| Fix round 2 (review 2714): F2, the ceiling as a record a spending landing cannot write | Spec §6, the ceiling bullet: the landing that introduces test 8's tables records X2's shares in its shares table, and test 8 reads them at each landing's first parent (X1 spec §10 test 8) |
+| Fix round 2: F1 and F3, the landing form and the `Size-Design:` line | Spec §6's first paragraph: X2's one row under its `Size-Design:` line, which its landing commit's message carries, a squash or a merge commit alike (X1 spec §10 test 8) |
+| Fix round 2: M3, the genesis rows | Spec §6's first paragraph names the baseline row and X1's row, which the genesis landing appends |
+| Fix round 2: M9, units | Spec §6: both shares in characters, with no byte-unit gloss; the table's unit sentence; the stylesheet row's class-token clause |
 | How test 8 and the per-layout srcdoc cap count the layouts | Spec §6, the same block; §6's layout row ("none larger than the default bundle"); X1 spec §10 test 8's `total`, `frame` and layout rows |
 | The coordinator's extra item (mail 25622): X3 no longer owns Share | This plan's Global Constraints, the ownership line: X3 owns the draft-review action and its store, and Share stays as shipped |
 
@@ -495,7 +499,7 @@ The other review 2670 carries (F1 to F9, A1 to A4) go to their owning waves, P1 
 - **Waiting items print whole and unlinked,** because paper cannot open a clip and print has no chrome anchors.
 - **Each count prints with its word,** so a monochrome page keeps its meaning.
 - **The share is two numbers.** The ruled sum over every manifest entry counts every layout bundle, although a frame inlines one. The largest-frame figure keeps the srcdoc budget tight.
-- **A layout never exceeds the default bundle is an assumption,** not a measurement. Test 8's layout row enforces it at X2's landing; the standalone's ratios (0.12 to 0.39 of its default) do not carry over, because a library layout also carries the shared modules. A layout that would need more is the coordinator's to share, and X2's shares are a ceiling the library wave never raises itself.
+- **A layout never exceeds the default bundle is an assumption,** not a measurement. Test 8's layout row enforces it at X2's landing; the standalone's ratios (0.12 to 0.39 of its default) do not carry over, because a library layout also carries the shared modules. A layout that would need more is the coordinator's to share, and X2's shares are a ceiling the library wave never raises itself: test 8 reads them from the shares table at each landing's first parent (fix round 2, review 2714 F2).
 - **Print mode's cost is outside test 8,** because it is not a frame asset: it is in `render` and a print stylesheet that ccrc's print view loads.
 
 #### Unmeasured

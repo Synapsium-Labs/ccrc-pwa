@@ -796,6 +796,43 @@ Choices fix round 1 made:
 - **`isHostedMount` takes booleans,** so it can sit in L1 `policy.ts` in the main bundle without importing the library; the one support decision stays in `appearance.ts`.
 - **Fourteen literals, not thirteen:** the review counted `updateColors` only, and `background` is a constructor literal. All 14 were already assigned.
 
+#### Fix round 2 (review 2714, round 2 of 3, at `783cef4e7`)
+
+The review closed round 1's F2 to F6 and M1 to M8, re-added every figure and reproduced the worst cases, the 14 literals, the eight stick spellings, the 0 filters and the rings. It found 7 important and 10 minor issues. The coordinator ruled F1 to F3 and directed the rest. Each finding is one commit, closed at the line below.
+
+| Finding | Closed by |
+|---|---|
+| F1: the spec required a squash landing | Spec §10 test 8, "where the design is named": a squash or a merge commit, the message carrying exactly one `Size-Design:` line, the setting the library programme's choice with GitHub's as examples. This plan's adversarial row I4 no longer gives the squash rationale |
+| F2: a share a landing writes was no ceiling | Spec §10 test 8: two append-only tables, its lead and "the rule"; "the landing that introduces the tables" (X1's and X2's share rows, and the genesis ceiling held by review and by Task 1 Step 2a); the new "the shares table" bullet; "within the share"; "Which of these constrain", Test 8. Task 1 Step 2a reads both tables and checks both share rows against the brief. X2 spec §6's ceiling bullet |
+| F3: the two-design refusal as a test | Spec §10 test 8: "where the design is named" (one parse for both runs, the description edit, the main line authoritative), "one landing, one design, one row" (what the test enforces and what review checks; reserved words), the new "correcting a row" bullet, and the closing paragraph. X2 spec §6's first paragraph says line, not trailer |
+| F4: `FRAME_ACCEPTS` at genesis, `hello`, the parent's values | Spec §10's `FRAME_ACCEPTS` export row and test 9's parent-to-frame row (1.1.0's four port ops plus `appearance`; `hello` out); the new paragraph "How tests 8 and 9 read the first parent" |
+| F5: the parent read named an ignored file | Task 1 Step 2a: `src/frame/manifest.generated.ts`; the budget note names the committed source |
+| F6: the definition cues and Mermaid's tooltip | Spec §10's new bullet "The library's own cues on a figure, and Mermaid's tooltip"; test 4's recorded difference; test 5's fixture, closed-colours row (with `body`-level overlays) and the new cues-and-tooltip pair row; "Everything else"'s restated claim. Cross pairs: three fix-round-2 rows |
+| F7: gitGraph commit labels over the branch lines | Spec §10's new bullet "Commit labels"; the measured paragraph; test 5's drawn-pairs row (pixels, with a mutation row). Cross pairs: the commit-label row corrected; the derivation note's method sentence |
+| M1: a queue entry's first parent | Spec §10 test 8, "the rule" |
+| M2: a revert | Spec §10 test 8, "correcting a row": a revert is a forward row with negative growth |
+| M3: stale lines | X2 spec §6's first paragraph (the baseline row); this plan's carry table (the bullet's current name); adversarial row 4 and the measuring-commit choice |
+| M4: PR #3055's body | Patched over REST at this round's push: both fix rounds, and the shares in characters |
+| M5: the `/frame` home | Task 4's docs-scans bullet: an allow-list, with planted rows in `policy.ts` and `images.ts`; the Wave order paragraph |
+| M6: Task 4's red commit | Task 4's Files, Step 1 ("the one checked fake") and Step 4; Task 5's Files. Made with the editor after a guard refusal, with the coordinator's leave (mail 25889) |
+| M7: rich-docs §4.7 | Task 7 Step 1's new §4.7 item, which lands in wave C's Task 7 |
+| M8: which heads are `text` | Spec §5's Mermaid row; §10's stick-arrowhead bullet |
+| M9: the KiB gloss | X2 spec §6: the shares without it, the table's unit sentence, the stylesheet row's class-token clause |
+| M10: transparent paint | Spec §10 test 5's closed-colours row |
+
+What fix round 2 measured, in the same read-only way as above:
+- **Commit labels, from pixels.** A new probe drew test 5's gitGraph fixture in all twelve palettes, took a screenshot of the drawing with the commit labels shown and again with their text hidden, and read each glyph pixel's ground from the second: worst 2.19:1 without the hosted rule (Catppuccin Mocha, under 4.5:1 in eleven palettes; the review's 2.62 to 2.90 are One Dark-like samples), and 6.57:1 with `.commit-label-bkg { opacity: 1 }` (Catppuccin Mocha; the analytic `text` on `surface2` is 6.75, and the box's antialiased edges take the rest).
+- **The definition cues and the tooltip.** 1.1.0's cue colour `#0b6b66` is 1.36 to 2.85:1 on `surface` and `surface2` in the eight dark palettes and 6.35 on white. `focus`, the hosted ring, is at worst 5.19 on `surface` (GitHub Light) and 4.57 on `surface2` (Phosphor Daylight). The tooltip's `text` on `#ffffde` is 1.05 to 1.58 in the dark palettes; hosted, `text` on `surface` at its 0.9 opacity over any slot colour is at worst 6.30 (Solarized Light). `focus` equals `accent` in all twelve palettes.
+- **The port parser's list.** The built `frame/bootstrap.js` in 1.1.0 accepts `prefs`, `changes.result`, `mermaid` and `command` on the port, and takes `hello` only in its window listener; its frame-to-parent list is `ready`, `error`, `store.set`, `navigate`, `copy`, `changes`, `hash`, `version` and `progress`.
+- **The sequence heads,** from the fix-round-1 probe's marker paints: the full arrowhead and the cross head are `text-muted` and the filled head is `text`, in every palette.
+
+Choices fix round 2 made:
+- **The genesis landing stays X1's contract landing,** as round 1's ruling shaped it, and records both share rows. With no shares table at its parent, its own ceiling is held by review and by ccrc's Task 1 Step 2a, which reads the released tables and stops ccrc's wave unless both share rows match the brief. A shares-only first landing would close that by test, but it would change the ruled genesis shape, so it was not taken.
+- **Test 9's parent values are a committed record,** not a build of `HEAD^1`: one entry by hand per landing that changes an op list or the CSP's shape, against a second install and build on every run.
+- **The cues keep 1.1.0's values inline,** losing only `!important`, so with no appearance the computed styles equal 1.1.0's and test 4 records one difference in the style text.
+- **The tooltip's opacity stays Mermaid's,** because Mermaid fades it to 0 to hide it; a forced opacity would show it always. Its contrast is measured at 0.9.
+- **`labPolicy.ts` is on the `/frame` allow-list,** because it imports `./frame` today, for the reader lab.
+
 #### Deviations
 
 None. The reserve block, 8774 and 8775, is unused: every change here carries out a coordinator ruling or a reviewer's fix direction within the completion design, the rich-docs spec and the operator's rulings.
@@ -830,6 +867,9 @@ node <scratch>/tags.mjs     84 HTML elements in a label, 2 palettes  -> mark, hr
 node <scratch>/htmlrule.mjs the HTML-element rule over the fixtures  -> 8 fixtures covered; 4 HTML fixtures author-styled
 node <scratch>/types2.mjs   8 participant types, the attribute rule -> 0 filters
 node <scratch>/probe4.mjs   12 palettes x 10 fixtures, every element -> 0 filters, 0 colours outside the set
+node <scratch>/gitlabel.mjs gitGraph commit labels, 12 palettes, pixels -> worst 2.19 without the rule, 6.57 with it
+python3 <scratch> cues      12 palettes, the cue, ring and tooltip pairs -> #0b6b66 1.36 to 2.85 dark; focus 5.19 / 4.57; tooltip 6.30
+grep over the built frame/bootstrap.js (read only)                  -> port ops prefs, changes.result, mermaid, command; hello in the window listener
 ```
 
 No test, build or install ran: nothing in this wave changes code. Every commit was scanned for private names before it was made, and again before the push.
