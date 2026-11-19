@@ -131,7 +131,7 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 **Files:**
 - Create: `server/src/artifacts/routes.ts`
 - Modify: `server/src/server.ts` (`buildServerWithArtifacts`, below, and the console host fence, an `onRequest` hook registered before the gate), `server/src/index.ts` (calls `buildServerWithArtifacts` instead of `buildServer`, listens the second instance on `127.0.0.1:<port>` when it is not null, and closes it in the first instance's `onClose`), `docs/superpowers/specs/2026-08-10-architecture-ddd-clean-solid.md` (the ring and context map gains `server/src/artifacts/**` in C9)
-- Test: `server/test/artifacts-listener.test.ts`, `server/test/box-token-census.test.ts` (`ARTIFACT_DOORS`), `server/test/rings/fastify-l4.data.ts`, `server/test/rings/totality.test.ts` (green with the new map row)
+- Test: `server/test/artifacts-listener.test.ts`, `server/test/box-token-census.test.ts` (`ARTIFACT_DOORS`), `server/test/rings/fastify-l4.data.ts`, `server/test/rings/totality.test.ts` (green with the new map row), `server/test/secret-mask.test.ts` (its `routeFiles()` walk finds `server/src/artifacts/routes.ts`: the `setErrorHandler(` scan gains that one file as allowed, beside `server.ts` and `docs/`, because its handler answers the fixed 500 body with no request detail, which a new case pins; the every-GET-masked scan lists the four artifact GETs as exempt, because they serve page bytes and fixed pages on another instance, where masking would corrupt file bytes and no ccrc secret is written), `server/test/auth-gate.test.ts` (unchanged: the artifact routes are not on the gated instance, so `artifacts/routes.ts` is not one of its scanned route files and `ROUTES.length` does not move in A1)
 
 **Interfaces:**
 - Consumes: `ArtifactConfig`.
@@ -181,8 +181,8 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 ### Task A2.3: the scope read and the mint-side doors
 
 **Files:**
-- Modify: `server/src/docs/routes.ts`, `server/src/docs/ccdsource.ts` (`ArtifactTree` over the existing tree read), `server/src/artifacts/policy.ts` (`mintAdmission`, `manifestScope`, `originAdmission`), `server/src/server.ts` (`MASKED_GET_ROUTES` decides the two new GETs), `shared/docs.ts` (`docsApi.artifacts()`, `docsApi.artifactScope(project, pin)`, `docsApi.artifactMint()`, `docsApi.artifactRevoke(id)`, `docsApi.artifactRevokeAll()`)
-- Test: `server/test/artifacts-mint.test.ts`, `server/test/box-token-census.test.ts` (`DOCS_DOORS` gains five), `server/test/auth-gate.test.ts` (the docs count gains five), `server/test/secret-mask.test.ts` (the two GETs in its inventory), `server/test/single-definition/docs-ring.test.ts` (`ccdsource.ts`'s import list gains `../artifacts/ports.js` and `shared/artifacts.ts`)
+- Modify: `server/src/docs/routes.ts`, `server/src/docs/ccdsource.ts` (`ArtifactTree` over the existing tree read), `server/src/artifacts/policy.ts` (`mintAdmission`, `manifestScope`, `originAdmission`, `pinHolds`), `server/src/auth/gate.ts` (the header comment's route count gains five), `server/src/server.ts` (`MASKED_GET_ROUTES` decides the two new GETs), `shared/docs.ts` (`docsApi.artifacts()`, `docsApi.artifactScope(project, pin)`, `docsApi.artifactMint()`, `docsApi.artifactRevoke(id)`, `docsApi.artifactRevokeAll()`)
+- Test: `server/test/artifacts-mint.test.ts`, `server/test/box-token-census.test.ts` (`DOCS_DOORS` gains five), `server/test/auth-gate.test.ts` (the docs count gains five, and its pinned `ROUTES.length` gains five, from whatever it reads when A2 is dispatched), `server/test/secret-mask.test.ts` (the two GETs in its inventory), `server/test/single-definition/docs-ring.test.ts` (`ccdsource.ts`'s import list gains `../artifacts/ports.js` and `shared/artifacts.ts`)
 
 **Interfaces:**
 - Consumes: the store, `ArtifactTree`, the account gate (`server/src/accounts/gate.ts`, `cap: null`), `answerMasked` and the mask (`server/src/server.ts`).
@@ -237,8 +237,8 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 ### Task A4.1: the expose arm
 
 **Files:**
-- Modify: `ccd/ccrc` (`cmd_expose`'s `artifacts` arm, `_exp_env_write`, `_exp_caddyfile`, `_exp_status`)
-- Test: `server/test/ccrc-expose-artifacts.test.ts` (fixture HOME, the existing expose harness)
+- Modify: `ccd/ccrc` (`cmd_expose`'s `artifacts` arm, `_exp_env_write`, `_exp_artifact_carry`, `_exp_caddyfile`, `_exp_status`, `_exp_landing`)
+- Test: `server/test/ccrc-expose-artifacts.test.ts` (fixture HOME, the existing expose harness), `server/test/ccrc-expose.test.ts` (its pinned bytes and landing text stay green: a console-only run is unchanged), `server/test/ccrc-settings-census.test.ts` (`SERVER_SETTINGS` gains `CCRC_ARTIFACT_ORIGIN`, `CCRC_ARTIFACT_CONTENT_ORIGIN` and `CCRC_ARTIFACT_PORT`, because `ccd/ccrc` reads them through `_box_env_value`; check C8(a) reds otherwise)
 
 **Interfaces:**
 - Produces: `ccrc expose artifacts` (duckdns: prompts two labels on a TTY; byo: `--artifact-origin <o> --content-origin <o>`; `--off` removes); the exposure file's three keys, and on duckdns `CCRC_DDNS_DOMAIN` as the comma list of full hosts; `_exp_artifact_carry` (one helper, reading the current exposure file through `_box_env_value`) answering the three artifact keys and the extra hosts, which every arm's call of `_exp_env_write` passes through, so `_exp_env_write` stays the file's one writer and a re-run of another arm keeps them (the ip arm drops them and prints "artifacts turned off: an address has no second site"); `_exp_caddyfile` generating both blocks from the exposure file on every run of any arm, the second `<artifact-host>, <content-host> {` / optional `bind <stored bind>` / `reverse_proxy 127.0.0.1:<port>` / `}`; and, only when the artifact keys are set, the global options block of spec §2.4 as the file's first lines, exactly:
@@ -266,6 +266,7 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 ### Task A4.2: doctor
 
 **Files:**
+- Test also: `server/test/ccrc-installFixture.ts` (`FLEET_BOX_CLASSES` gains one row, `"artifacts"`, at the class the fresh-install fixture measures, expected `SKIP` because a fresh install has no exposure file; re-measured, never hand-set)
 - Modify: `ccd/ccrc-doctor-checks` (`_check_name` splits `CCRC_DDNS_DOMAIN` on commas and resolves each full host with `getent hosts`; new `_check_artifacts`)
 - Test: `server/test/ccrc-doctor-artifacts.test.ts`
 
