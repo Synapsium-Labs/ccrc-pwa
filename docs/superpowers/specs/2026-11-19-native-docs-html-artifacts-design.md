@@ -107,7 +107,7 @@ The names are stated, never derived, as `CCRC_RP_ID` is: deriving a site from a 
 |---|---|---|
 | `CCRC_ARTIFACT_ORIGIN` | `https://<artifact-host>` | A bare https origin (`isExactHttpsOrigin`, `shared/httpsOrigin.ts`). Not equal to `CCRC_ORIGIN` |
 | `CCRC_ARTIFACT_CONTENT_ORIGIN` | `https://<content-host>` | The same, and not equal to either other origin |
-| `CCRC_ARTIFACT_PORT` | Loopback port, default 7790 | Not `CCRC_PORT` |
+| `CCRC_ARTIFACT_PORT` | Loopback port. `ccrc expose artifacts` writes 7790 unless told otherwise; the server has no default, so a missing port is a missing key and the tier is off | Not `CCRC_PORT` |
 
 **The site rule, without the Public Suffix List.** For each artifact host H and the console host K, take their longest common run of trailing labels, S. H is accepted only if S is empty, S is a single label (a top-level domain), or S is an entry of `ARTIFACT_PUBLIC_SUFFIXES`, the tier's own accept list. Neither host may equal the other or end with `.` plus the other. The accept list holds only suffixes measured on the Public Suffix List: today exactly `duckdns.org` (read 2026-11-19, §1.4). It is deliberately not derived from `PUBLIC_SUFFIX_TRAPS` (`server/src/auth/webauthn.ts`). That list refuses bad passkey scopes, and reading it as an accept list would reverse its safety direction for any entry nobody measured. A test pins the accept list to its measured contents.
 
@@ -271,7 +271,7 @@ The console opens the tab from a real link the operator taps, `<a href="https://
 
 The wrapper is one fixed HTML document built by the server from the capability's provenance, every value escaped. It has no script.
 
-- **Its bar.** "Artifact · `project-a` · `docs/design/x/page.html` · at `abc1234` (or "draft") · Runs its own code · This is not ccrc: never type your ccrc passphrase here", then "Clear this host's data" (a link to `/clear` on the content host whose `target` is the frame's name, so the page is replaced by the clearing page) and a "Close" hint.
+- **Its bar.** "Artifact · `project-a` · `specs/x/page.html` · at `abc1234` (or "draft") · Runs its own code · This is not ccrc: never type your ccrc passphrase here", then "Clear this host's data" (a link to `/clear` on the content host whose `target` is the frame's name, so the page is replaced by the clearing page) and a "Close" hint.
 - **Its frame:** `<iframe src="https://<content-host>/c/<token>/<page>" sandbox="allow-scripts allow-same-origin allow-forms allow-modals allow-downloads allow-pointer-lock" allow="fullscreen; clipboard-write" referrerpolicy="no-referrer">`, plus `allow-popups` only when the capability says `windows`. Never `allow-top-navigation`, `allow-popups-to-escape-sandbox` or `allow-storage-access-by-user-activation`. `allow-scripts` with `allow-same-origin` is safe here only because the page's origin (the content host) differs from the wrapper's. The site rule keeps them different (§2.3), and a test pins it.
 - **Its headers.** `Content-Security-Policy: default-src 'none'; style-src 'sha256-<bar stylesheet>'; img-src data:; frame-src https://<content-host>/c/<token>/ https://<content-host>/clear; base-uri 'none'; form-action 'none'; frame-ancestors 'none'`. Also `Cross-Origin-Opener-Policy: same-origin-allow-popups` (the console's link is `noopener`, so isolation from the console does not rest on it, and `same-origin` could sever a window the page opens. ART-L8 measures the window handle), `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `Cache-Control: no-store` and `X-Robots-Tag: noindex, nofollow`.
 
