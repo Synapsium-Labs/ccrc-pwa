@@ -13,12 +13,13 @@ Overlord spec's R22 (the dispatch cap stays the operator's dial).
 
 - A coordinator at the dispatch cap asked the operator to stop idle sessions so that approved builds could start. The
   operator's direction: the fleet frees its own capacity, and such an item is never raised again.
-- **The cause.** The cap counts run rows in `dispatched` or `working`, whatever their worker is doing. A worker that
-  waits (on the operator, on its coordinator, on an outside event) keeps its run `working`, so it keeps a slot and
-  stays awake. Nothing in the fleet says "waiting".
-- **The design.** The fleet measures waiting; no coordinator declares it. A worker that has been idle for 30 minutes is
-  put to sleep whatever its run's state, and a run holds a slot only while its worker is working. A coordinator that
-  is still refused takes the wave itself or is mailed when a slot frees.
+- **The cause.** The cap counts placed runs outside the idle and terminal states, including `dispatched`, `working`
+  and `unknown`, whatever their worker is doing. A worker that waits (on the operator, its coordinator or an outside
+  event) can keep its run `working`, so it keeps a slot and stays awake.
+- **The design.** The fleet measures waiting; no coordinator declares it. Eligible parked workers can sleep after
+  30 minutes quiet. The operator can then arm sleep for idle workers on `working` runs, and separately arm the cap
+  to stop charging measured waiting runs. A coordinator still refused takes the wave itself or is mailed when a slot
+  frees.
 - **One defect found on the way.** The sleep of workers parked at review, merge or close (D-6092) has never acted on
   the fleet, because every dispatched worker carries a hold that names its own open run. Part 1 fixes it.
 
@@ -40,7 +41,9 @@ Stopping the sessions the item named would have freed no slot: a stop does not c
 ## 2. Goals, non-goals, anti-goals
 
 **Goals**
-- A waiting worker holds no slot and no process within about 30 minutes, with no act by anybody.
+- Once armed, a waiting worker gives up its dispatch slot after about 30 minutes without anyone acting per worker.
+  An eligible worker also gives up its process. A worker holding a live claim keeps its process by design, even if
+  its run no longer holds a slot.
 - A coordinator refused at the cap never needs the operator: it works the wave itself or waits for the server's mail.
 - The operator sees how many workers are working and how many are waiting.
 
@@ -78,9 +81,10 @@ programme). Approach 2 and the 30 minutes were this design's calls, shown to the
 holds sleep. The hold a dispatch writes names the worker's own run, so a worker parked at `awaiting-review`, `merging`
 or `closing` never passes. The fix: a hold that names **the worker's own newest placed run** guards the workspace, not
 the process, so it passes for the run-done policy exactly as a programme hold does (through `ccd hibernate --hold-ok`,
-on a box that has `hibernate-hold-ok`). A hold naming any other open run, an operator's own text and an unreadable
-hold keep holding. This restores ruling F5 (b); it is a behaviour change in a commit of its own, live at once
-(`D-8789`).
+on a box that has `hibernate-hold-ok`). The hold must name the newest placed non-terminal run and that run's
+`sessionId` must match the worker. A hold naming any other open run, an operator's own text and an unreadable read
+keep holding. D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as
+ruling F5 (b) requires. It is a behaviour change in a commit of its own, live at once.
 
 ### Part 2. An idle worker on a `working` run sleeps after 30 minutes
 
@@ -90,28 +94,34 @@ The run-done policy (`server/src/stopDone.ts`, `server/src/sleep.ts`) gains one 
 - `not-done` no longer holds that case, and the worker's own `working` run no longer holds `run-worker`. A second
   active run naming the worker still does.
 - A `dispatched` run is not included: its worker has not started, and its brief is unread mail.
-- Every hold that marks a use stays as it is: `mail`, `marker-background`, `scheduled`, `claim`, `viewer`, `menu`,
-  `roster`, `bucket`, `turn`, the act-time re-measure and `ccd`'s `attached`.
-- It ships in shadow, as one row on the Shadow lanes card, and the operator arms it (`D-8790`).
+- Every hold that marks a use stays as it is: `mail`, `marker-background`, `background` from the row, `scheduled`,
+  `claim`, `viewer`, `menu`, `roster`, `bucket`, `turn`, the act-time re-measure and `ccd`'s `attached`.
+- The `working-idle-sleep` row ships in shadow; the operator arms it on the Shadow lanes card (D-8790). The lane
+  applies the row's gate to a sleep verdict only when the run it read has `runStateOf(store) === 'working'`.
+  While shadowed it journals that decision without acting or mailing; it does not gate the existing parked cases.
 - The asleep row and the journal line say "waiting on a working run" where they say "parked at …" today.
 
 ### Part 3. A run holds a slot only while its worker works
 
-`capsMeasured` (`server/src/coord/dispatch.ts`) counts a run in an active state unless its worker is measured
-**waiting**: asleep, stopped, dead or archived, or awake with its turn marker quiet for 30 minutes and nothing running
-(no background work, no session cron). A worker between turns keeps its slot. This builds on D-6094 from the stranded
-stack (`handoff/d8126-autonomy-stack`, commit `48ef4ad0e`), with one real change: that commit reads "idle" at the
-instant of asking and guards only by the run's age, so its reading gains the marker's quiet time, and its two-hour
-bound goes (`D-8792`). It ships live, in a commit of its own.
+`store.capsUsage` (`server/src/coord/store.ts`) owns the predicate for which placed runs count today. The new cap
+reader, used by `capsMeasured` and the caps view, measures those same rows; it does not repeat that predicate.
+It reports how many counted rows have a worker measured waiting, including rows whose worker is known asleep,
+stopped, dead or archived (`gone`). An awake worker qualifies only with an idle turn verdict, no marker or row
+background work, no subagents, no session cron and at least one readable timestamp among `turnAt`, `stopAt` and
+`restartAt`, with 30 minutes since the newest one. A marker with no stamps is unmeasured and counts. So does any
+reading that cannot be made. A worker between turns keeps its slot. This amends D-6094 (`48ef4ad0e`): read the
+marker's quiet time, not just idle at the instant of asking, and drop the two-hour run-age bound (D-8792).
 
-- **The cap governs starts, not wakes** (`D-8793`, the operator's to confirm). A waiting worker that
-  wakes on mail is never refused, as an asked wake never is; it counts again from that moment. So busy workers can
-  pass the cap for a while when waiting workers wake after their slots were given away, and new starts are refused
-  until the count is back under it. The wake budget still paces the wakes.
-- Slots that this frees are handed out no faster than the wake budget's rate, as that commit builds it.
-- Every reading that cannot be made keeps counting: the cap fails closed.
-- The caps view answers the count and how many runs were left out, and the console's caps control says both.
-- A live resume and a send-back of a live worker skip the check (D-6093, commit `81fc8422b`).
+- **Shadow first.** The `cap-counts-working` Shadow lanes row ships in shadow. From merge the caps view reports
+  waiting separately, but the effective cap count stays exactly as it is today. Only while the operator has armed
+  that row do measured waiting runs stop using slots. Freed slots are handed out at the stack's wake-budget rate.
+- **Mail wake.** The cap does not refuse a mail wake or an operator-requested wake; the wake budget still paces
+  them. Under the proposed starts-not-wakes rule (D-8793, the operator's to confirm), a worker counts again when
+  it wakes. Busy workers may briefly exceed the cap; new starts wait until the count is back under it.
+- **Send-back.** This is a separate door: `advance -> working` from `awaiting-review`, `merging` or `closing`.
+  Unarmed, today's cap check stands. Armed, a send-back to a sleeping worker is a resume, not a start, and cannot
+  be refused at the cap (D-8792). This exemption does not bypass any other gate. D-6093 (`81fc8422b`) supplies the
+  live-resume and live send-back exemptions for the armed path.
 
 ### Part 4. The coordinator is told once; the stall watch is unchanged
 
@@ -119,11 +129,12 @@ The stall verdict holds every rung for a worker whose lifecycle reads `stopped`,
 worker put to sleep on a `working` run leaves the quiet ladder, and nothing wakes it to ask. That hold stays: waking a
 waiting worker every few hours to ask whether it still waits is the loop the anti-goals forbid.
 
-Instead, when the lane puts a worker to sleep on a `working` run, it queues one system mail to that run's coordinator
-(`queueSystemMail`, keyed on the run and the sleep so a restart never sends it twice): the run, when the worker's last
-turn ended, and that mail or a send-back wakes it (`D-8791`). The coordinator then knows
-whether its worker waits for something or stopped short, and acts by its own skill. A worker parked at review, merge
-or close sends no such mail: there the wait is the coordinator's own.
+Instead, a live sleep on a `working` run can queue system mail to that run's coordinator (D-8791). Use the
+stall-notice pattern: record the observation in the same transaction as the mail, or use `hasMailWithSubject` with
+both the run and the worker's `stopAt` in the subject. Send at most once per `(run, stopAt)` and at most once per run
+per `STOP_DONE_PARKED_IDLE_MS`, even across acknowledgement and restart. The mail names the run and the worker's last
+turn, and explains the two routes back: mail can request a wake, or a send-back can resume the run. A worker parked
+at review, merge or close sends no such mail: there the wait is the coordinator's own.
 
 The other lanes were read against a sleeper on an active run and need no change: `runStuck` already answers `asleep`,
 the claimant ladder reads a sleeper as alive, drift's `run-quiet` reads run events only, and the dead-dispatch pass
@@ -141,25 +152,30 @@ From the stack, re-grounded on `main` and reviewed again, under the fleet-capaci
 
 ### Order
 
-| PR | What | Depends on |
-|---|---|---|
-| 1 | Part 1, the fix | nothing |
-| 2 | Part 2 with Part 4's mail, in shadow | 1 |
-| 3 | Part 3, with D-6093 | 1 |
-| 4 | W1-4 | 3 |
-| 5 | W1-4b | 4 |
-| 6 | W1-5 | 5, and A5 on `main` |
+| Task | Adopts | Draft base | Landing and arming order |
+|---|---|---|---|
+| 1 | #3069: Part 1, the fix | `main` | After this design and plan land |
+| 2 | #3070: Part 2 with Part 4's mail | #3069 | After Task 1; ships in shadow; operator arms Part 2 first |
+| 3 | #3074: Part 3, with D-6093 | `main` | Lands after Task 2; no code dependency on Task 1. Ships in shadow; operator arms Part 3 only after Part 2 and the arming evidence |
+| 4 | #3077: W1-4 | #3074 | After Task 3 |
+| 5 | Stack: W1-4b | — | After Task 4 and its own Step 0 gate |
+| 6 | Stack: W1-5 | — | After Task 5 and D-8126 A5 on `main` |
 
 Each PR pins today's behaviour first, ships its guard with a test that goes red when the guard is removed, and rolls
-back by revert. Part 2 goes live by the operator's switch.
+back by revert. Parts 2 and 3 have separate operator switches; merging either does not arm it.
 
 ## 5. Constraints
 
-- The repository's architecture rules: the verdicts stay pure (L1), the lanes act (L4), one owner per fact. The cap's
-  predicate lives in `capsMeasured` alone; the sleep rule in `decideSleep` alone.
+- The repository's architecture rules: the verdicts stay pure (L1), the lanes act (L4), one owner per fact.
+  `store.capsUsage` owns the SQL counted-row predicate; the caps view and admission go through the new cap reader.
+  The sleep rule lives in `decideSleep` alone.
 - Additive wire only. No new run state, so `run-states.test.ts` and `FLEET_PROTO` are untouched.
 - No new `ccd` verb. `ccd hibernate --hold-ok` exists.
-- The sleep lane's switches (`stop-done-disabled`, `hibernate-disabled`, `reclaim-paused`) stop every part of this.
+- The sleep lane's switches (`stop-done-disabled`, `hibernate-disabled`, `reclaim-paused`) stop Parts 1 and 2 and
+  therefore Part 4's mail. They do not control Part 3. Part 3's own operator switch restores the current cap count
+  and send-back check without a deploy, while keeping the waiting readings visible. Each new row is defined only in
+  the existing shared lane-arm catalogue, with a shadow seed and the catalogue's census coverage; no parallel marker.
+  Part 5 keeps the fleet-capacity plan's controls.
 - Account switching and the auto-swap are never touched.
 
 ## 6. Left to the builder
@@ -167,15 +183,20 @@ back by revert. Part 2 goes live by the operator's switch.
 - The shape of the own-run comparison in `heldKindOf` and how `stopDoneSleepInput` carries it.
 - How much of each stack commit survives the re-ground: `main` has moved more than 440 commits since its base.
 - The console's exact words for the caps control and the asleep row, judged at every width, skin and theme.
-- The gates the fleet-capacity plan names (OA-F2, OA-F3, the self-claimed-dispatch count): §1 answers the first two;
-  the plan records them in each PR body.
+- OA-F2 and OA-F3 are evidence for arming Part 3, not merge gates. Re-measure from shadow for the 30-minute rule:
+  OA-F2 gives the dated sample size and share of eligible finished children asleep by the 30-minute mark, with
+  mail-held exclusions; OA-F3 lists the currently counted runs the rule would exclude and their measured worker
+  readings. The item asking the operator to arm Part 3 shows both. §1 is the baseline, not that evidence. W1-4b's
+  separate Step 0 self-claimed-dispatch count still gates its behaviour commit.
 
 ## 7. Risks
 
 - **A wake costs time.** Mail to a sleeper wakes it at most once per 10 minutes per recipient, under the wake budget.
-  A send-back reaches a sleeping worker by mail, so a fix round can start up to that much later.
-- **More workers at once.** Part 3 frees slots that waiting workers held, and those workers can wake later, so busy
-  workers can pass the cap for a while. The operator lowers the dial if spend says so.
+  A send-back has its own cap check as described in Part 3; accepting the send-back does not make mail delivery or
+  waking instantaneous.
+- **More workers at once.** Arm Part 2 first to let eligible workers release their processes, then Part 3 after the
+  shadow evidence has been shown. A live claim still keeps the process. Once Part 3 frees slots, workers can wake
+  later and briefly take the busy count above the cap. The operator can turn Part 3 off or lower the dial.
 - **A stalled worker is not asked.** A worker that stopped short and then sleeps gets no `stall-check:`; its
   coordinator gets Part 4's mail instead and has to act on it.
 - **Part 1 acts on deploy.** About eleven parked workers will go to sleep within the hour. Each wakes on mail, a

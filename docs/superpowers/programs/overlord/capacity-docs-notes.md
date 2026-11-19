@@ -36,3 +36,16 @@ in the draft's one commit unchanged, then edits it against today's `main`. It is
 - The stack commits the plan cites (`81fc8422b`, `48ef4ad0e`, `45509bb6d` to `4c709ee94`, `d2d92cff8` to
   `31f37745e`, `70c53d9eb`, `c121218b4`) are all reachable from this repository's `handoff/d8126-autonomy-stack`.
 - §1's measurements are the draft's. This piece did not measure them again.
+
+## Review round 1
+
+- **cap-shadow-and-arm-order (F1–F3, F6).** Part 3 measures and reports in shadow; the operator arms Part 2 first,
+  then Part 3 on the OA-F2/OA-F3 evidence for the 30-minute rule. Live claims keep their process. The separate cap
+  switch also governs the exemption for a send-back to a sleeping worker; mail wake is a different door. D-8793
+  remains for the operator to confirm.
+- **waiting-and-mail-readings (F4–F5, F9, F15–F16).** Waiting excludes active subagents and row background and fails
+  closed on missing stamps. Counted rows still come from `store.capsUsage`. Mail uses durable stall-notice dedupe
+  with a per-run bound; only the `working` sleep case takes the shared lane-arm gate.
+- **task-contracts-and-order (F7–F8, F10–F14).** Named every refusal-path pick and the migration slot check; matched
+  the draft bases and landing order. Named the D-6091 amendment, aligned the own-newest-placed-run wording and added
+  the missing holds and guard suites. All changes are documentary.
