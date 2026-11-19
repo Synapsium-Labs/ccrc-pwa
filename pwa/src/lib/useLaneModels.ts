@@ -31,8 +31,11 @@ export type LaneTransientKind = 'busy' | 'not-started';
 const isTransient = (r: LaneModelsRead): r is Extract<LaneModelsRead, { kind: LaneTransientKind }> =>
   r.kind === 'busy' || r.kind === 'not-started';
 
-/** The hook's whole answer: the read a surface shows, and the transient word of the newest answer when it was kept
- *  beside an older good read instead of replacing it (`null` otherwise). */
+/** The hook's whole answer: the read a surface shows, and the transient word of the newest answer (`busy`,
+ *  `not-started`) when it did not replace the lane's last answer that was not transient, `null` otherwise. That kept
+ *  answer is any non-transient arm, not only a good read: a `read`, an `absent` (of every lane kind), an `unreadable`, an
+ *  `unsupported` or a `refused`. Each surface says the kept answer's words and the word after them
+ *  (`laneTransientBeside`, `lib/models.ts`), except over an Anthropic lane's `absent`, which neither says anything over. */
 export interface LaneModelsView { readonly read: LaneModelsRead | null; readonly transient: LaneTransientKind | null }
 
 export type LaneModelsReadOutcome = { readonly ok: true } | { readonly ok: false; readonly failure: LaneReadFailure };
