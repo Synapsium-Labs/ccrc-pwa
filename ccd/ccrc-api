@@ -430,6 +430,8 @@ usage() {
     printf '  %-18s %s\n' '' 'mail inbox takes nothing: it prints this pane'"'"'s unacked mail as plain text, not JSON,'
     printf '  %-18s %s\n' '' 'and acks each entry it printed. Run it bare: no pipe, no redirect, no head or tail.'
     printf '  %-18s %s\n' '' '(ledger allocate fills "byId" from this pane; --by <id> for a caller with none)'
+    printf '  %-18s %s\n' '' 'mail send --key <k> sends an idempotency key: a retry under the same key answers the first mail,'
+    printf '  %-18s %s\n' '' 'whatever became of its delivery, and a key never expires, so a deliberate resend needs a new key'
   } >&2
 }
 
@@ -1041,12 +1043,19 @@ main() {
     [[ -z "$id" ]] || refuse 'unexpected-id' "$group $verb takes no id"
   fi
 
-  local body_src='' query='' by='' ask_parent=''
+  local body_src='' query='' by='' ask_parent='' mail_key=''
   while (( $# )); do
     case "$1" in
       --json)
         [[ $# -ge 2 ]] || refuse 'bad-args' '--json needs a file or -'
         body_src="$2"; shift 2 ;;
+      --key)
+        # `mail send --key <k>` (Overlord wave 164): the send's idempotency key, spliced into the body as `clientKey` below.
+        # This row's only; the client never invents a key, so a send without `--key` goes out exactly as before.
+        [[ $# -ge 2 ]] || refuse 'bad-args' '--key needs a value'
+        [[ "$key" == 'mail.send' ]] || refuse 'bad-args' "$group $verb takes no --key"
+        [[ "$2" =~ $SAFE_RE ]] || refuse 'bad-key' '--key value is not a plain value (letters, digits, _ and -)'
+        mail_key="$2"; shift 2 ;;
       --by)
         [[ $# -ge 2 ]] || refuse 'bad-args' '--by needs a value'
         [[ "$key" == 'ledger.allocate' ]] || refuse 'bad-args' "$group $verb takes no --by"
@@ -1088,6 +1097,19 @@ main() {
   # The intent row's body is the body `parse_intent` synthesized, and a timer row's the one `parse_timer` built: never read
   # from a file or stdin.
   [[ -z "$intent_body" ]] || body="$intent_body"
+
+  # THE SEND'S IDEMPOTENCY KEY (Overlord wave 164): `--key` goes on the wire as `clientKey`, LAST, the note door's rule, so a
+  # retry of the same command sends the same mail under the same key and the server answers the first one (`already: true`).
+  # A body that already names `clientKey` is refused unsent rather than overridden: two keys for one send is a caller defect.
+  # SAFE_RE admits no quote or backslash, so the value cannot leave its JSON string. The server bounds its length.
+  if [[ -n "$mail_key" ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'mail send needs a body on --json'
+    local keybody="${body//[[:space:]]/}"
+    case "$keybody" in
+      *'"clientKey":'*) refuse 'bad-body' 'the body names clientKey and --key was given; name the key once' ;;
+    esac
+    append_body_field 'clientKey' "$mail_key" 'the mail body is not a JSON object; clientKey cannot be added'
+  fi
 
   # THE FIRST BODY THIS CLIENT REWRITES. It now rewrites three more: the intent
   # row's (above, replaced whole), `runs.open`'s (below) and the claimant rows'
@@ -1445,6 +1467,13 @@ main() {
   (( rc == 0 )) || transport_exit
 
   print_body
+  # THE KEY'S ECHO (Overlord wave 164, review 2725 F3): a server that knows `clientKey` echoes it in every answer to a keyed
+  # send. An accepted answer without it came from a server that ignored the key (one older than the key, as after a
+  # rollback), so it deduplicated nothing: say so once, on stderr, and leave stdout and the exit status as they are.
+  if [[ -n "$mail_key" && "$REQ_CODE" == 2* ]] && ! grep -qF "\"clientKey\":\"$mail_key\"" "$REQ_OUT"; then
+    printf '%s: the answer does not echo clientKey %s, so this server ignored the key; a retry of this send may send it twice\n' \
+      "$SELF" "$mail_key" >&2
+  fi
   # `CCRC_API_STATUS=line` is the caller's spelling for "keep this line". It is
   # an environment variable, not a flag, because an older client refuses an
   # unknown flag and ignores an unknown variable. Today the line is written

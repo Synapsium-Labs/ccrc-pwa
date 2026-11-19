@@ -3920,6 +3920,27 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE approvals ADD COLUMN literalInRoot INTEGER CHECK (literalInRoot IS NULL OR literalInRoot IN (0, 1));
   ALTER TABLE push_outbox ADD COLUMN pushSource TEXT;
   `,
+
+  // ── 105: user_version 104 -> 105 ──────────────────────────────────────────
+  // The mail idempotency key (Overlord wave 164, note `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+  // `mail.clientKey`: the optional key a sender named on `POST /api/mail`, so a retried send answers the mail it already
+  // made (`coord/mailKey.ts#mailKeyVerdict`). `mail_client_key_once` makes "one mail per (`fromId`, `clientKey`)" a fact of the
+  // database as well as of the route. `mail.inReplyTo`: the delivery id the send named, as sent, which the key compares
+  // (review 2725 F1); NULL when it named none. One writer for both, `insertMail`, from the mail ingress only. NULL = no key,
+  // which is every row written before this entry and every send that names none.
+  // TWO NULLABLE COLUMNS ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never these,
+  // so a row it writes carries no key, and the index admits any number of those. The slot is the next free one by
+  // position: door A1 (#3035) landed 103 and approvals PR 1 (#3043) 104, so this is 105, which the Linear follow-up (#3021)
+  // was promised too; whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the slot before merge
+  // (it must print 104 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN clientKey TEXT;
+  ALTER TABLE mail ADD COLUMN inReplyTo INTEGER;
+  CREATE UNIQUE INDEX mail_client_key_once ON mail(fromId, clientKey) WHERE clientKey IS NOT NULL;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

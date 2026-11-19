@@ -5535,6 +5535,14 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** The optional idempotency key on `POST /api/mail` (Overlord wave 164, `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+ *  A sender that may retry a send names one; the ingress keeps one mail per (`fromId`, `clientKey`) and answers a retry of the same
+ *  mail with the original id and `already: true`. The shape is `ccd/ccrc-api`'s `SAFE_RE` (letters, digits, `_`, `-`) with a length
+ *  bound, so the client's `--key` and the route accept the same words; absent or null is no key. */
+export const MAIL_CLIENT_KEY_MAX = 128;
+export const isMailClientKey = (value: unknown): value is string =>
+  typeof value === 'string' && value.length >= 1 && value.length <= MAIL_CLIENT_KEY_MAX && /^[A-Za-z0-9_-]+$/.test(value);
+
 /** Numeric fields rendered into a run hold use this one exact domain at every
  *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
  *  integers can lose identity or switch to exponent punctuation the session hook
@@ -6337,6 +6345,8 @@ export const MAIL_REJECT_CODES = [
   // docstring already makes for 'paused'); the both-directions membership
   // scan still covers it.
   'duplicate', 'peer-quota',
+  // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
+  'key-conflict',
   // delivery
   'undeliverable',
   // done-authority
