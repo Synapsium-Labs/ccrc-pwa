@@ -169,7 +169,9 @@ describe('shared/redact.mjs is browser-safe: the PWA bundles shared/docs.ts, whi
   });
   it('the redactor is browser-safe: importing it runs nothing but the table', async () => {
     const mod = await import('../../shared/redact.mjs');
-    expect(Object.keys(mod).sort()).toEqual(['EGRESS_MASK', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'historyRules', 'redact', 'redactCount']);
+    expect(Object.keys(mod).sort()).toEqual([
+      'EGRESS_MASK', 'PEM_PRIVATE_KEY_SOURCE', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'historyRules', 'redact', 'redactCount',
+    ]);
   });
 });
 
