@@ -373,6 +373,30 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     expect(fakeCalls(g.h).filter((c) => c[0] === 'ssh').map((c) => c[c.length - 1]!).find((c) => c.includes('xfs_info'))!.endsWith(' /srv/box')).toBe(true);
   });
 
+  it('the storage probe reads the file system mounted at the root itself, and the nearest existing directory\'s when the root is not made yet', () => {
+    // The probe is one `sh -c` program the box runs. It is cut out of the verb and run here against a real directory
+    // tree, with a findmnt that answers the directory it was asked about and an xfs_info that prints its operand.
+    const src = readFileSync(VERB, 'utf8');
+    const m = /_tba_pfx sh -c '([^']*xfs_info[^']*)' sh "\$root"/.exec(src);
+    expect(m, 'the storage probe in ccd/ccrc-testbox-admin').not.toBeNull();
+    const dir = mkTmp('ccrc-tba-storage-');
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFileSync(join(bin, 'findmnt'), '#!/bin/sh\nfor a in "$@"; do last=$a; done\nprintf \'%s\\n\' "$last"\n', { mode: 0o755 });
+    writeFileSync(join(bin, 'xfs_info'), '#!/bin/sh\nprintf \'asked %s\\n\' "$1"\n', { mode: 0o755 });
+    const ask = (root: string): string => {
+      const r = spawnSync('sh', ['-c', m![1]!, 'sh', root], { encoding: 'utf8', env: { PATH: `${bin}:/usr/bin:/bin`, HOME: dir } });
+      expect(r.status, r.stderr).toBe(0);
+      return r.stdout.trim();
+    };
+    const made = join(dir, 'var', 'lib', 'box');
+    mkdirSync(made, { recursive: true });
+    expect(ask(made)).toBe(`asked ${made}`);                                   // a root that exists: its own mount, never its parent's
+    expect(ask(join(made, 'not', 'made'))).toBe(`asked ${made}`);              // a root not made yet: the nearest existing directory
+    mkdirSync(join(dir, 'box'));
+    expect(ask('~/box')).toBe(`asked ${join(dir, 'box')}`);                    // a home-relative root, expanded on the box
+  });
+
   it('each egress probe is bounded to 8 s whatever the reconnect deadline says, so a box that drops outbound connections still gets its no-egress row inside the agent\'s 60 s', () => {
     const { h } = ready();
     writeFileSync(join(h.home, '.ccrc', 'ccrc.env'), 'CCRC_TESTBOX_RECONNECT_DEADLINE=5m\n');
