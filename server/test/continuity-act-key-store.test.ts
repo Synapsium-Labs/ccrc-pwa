@@ -45,7 +45,9 @@ const mint = (s: CoordStore, startId: number): number => {
 describe('continuity_act_keys: the migration', () => {
   it('is the entry that creates the table and adds the start\'s nonce column', () => {
     const slot = MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_act_keys'));
-    expect(slot).toBe(MIGRATIONS.length - 1);
+    // Its own slot, exactly: entry 102, user_version 103 (#3035). A landed migration never moves, while "the last entry"
+    // reds as soon as any later migration lands (programme work map WM1's took 104).
+    expect(slot, 'no MIGRATIONS entry creates continuity_act_keys').toBe(102);
     expect(MIGRATIONS[slot]).toContain('ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT');
   });
 });
