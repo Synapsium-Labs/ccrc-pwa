@@ -389,6 +389,44 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
     });
   }
 
+  // D-8789 (capacity Task 1): the hold every dispatch writes on its own worker names the worker's own run (`run-own`).
+  // It guards the workspace, so a parked producer carrying it sleeps at 30 minutes, the hold handed to `--hold-ok`.
+  const OWN = 'program:programme-a wave:2 run:7';
+  it('a producer parked at awaiting-review, its hold naming its own run, sleeps after 30 minutes quiet carrying the hold (D-8789)', () => {
+    expect(stopDoneVerdict(base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS),
+    }))).toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS, holdOk: OWN });
+  });
+
+  it('an own-run hold still waits the parked clock: 29 minutes quiet holds recent (D-8789)', () => {
+    expect(stopDoneVerdict(base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS - 1),
+    }))).toEqual({ act: 'hold', reason: 'recent' });
+  });
+
+  it('an own-run hold on a box without hibernate-hold-ok holds, as a programme hold does (D-8789)', () => {
+    for (const heldKind of ['run-own', 'programme'] as const) {
+      expect(stopDoneVerdict(base({
+        row: row({ held: OWN }), heldKind, holdOkVerb: false, store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS),
+      })), heldKind).toEqual({ act: 'hold', reason: 'held' });
+    }
+  });
+
+  it('a hold naming another session\'s open run, or an unreadable run, holds even parked and quiet (D-8789)', () => {
+    for (const heldKind of ['run-live', 'unreadable'] as const) {
+      expect(stopDoneVerdict(base({
+        row: row({ held: OWN }), heldKind, store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS),
+      })), heldKind).toEqual({ act: 'hold', reason: 'held' });
+    }
+  });
+
+  it('an own-run hold on a working run is still held by the run, never put to sleep by the hold passing (D-8789)', () => {
+    const v = stopDoneVerdict(base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('working', null), live: quiet(7 * HOUR),
+    }));
+    expect(v.act).toBe('hold');
+  });
+
   it('a parked producer quiet 29 minutes holds', () => {
     for (const state of ['awaiting-review', 'merging', 'closing']) {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(29 * MIN) })), state).toEqual({ act: 'hold', reason: 'recent' });
