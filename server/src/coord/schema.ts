@@ -3922,6 +3922,27 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 105: user_version 104 -> 105 ──────────────────────────────────────────
+  // The mail idempotency key (Overlord wave 164, note `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+  // `mail.clientKey`: the optional key a sender named on `POST /api/mail`, so a retried send answers the mail it already
+  // made (`coord/mailKey.ts#mailKeyVerdict`). `mail_client_key_once` makes "one mail per (`fromId`, `clientKey`)" a fact of the
+  // database as well as of the route. `mail.inReplyTo`: the delivery id the send named, as sent, which the key compares
+  // (review 2725 F1); NULL when it named none. One writer for both, `insertMail`, from the mail ingress only. NULL = no key,
+  // which is every row written before this entry and every send that names none.
+  // TWO NULLABLE COLUMNS ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never these,
+  // so a row it writes carries no key, and the index admits any number of those. The slot is the next free one by
+  // position: door A1 (#3035) landed 103 and approvals PR 1 (#3043) 104, so this is 105, which the Linear follow-up (#3021)
+  // was promised too; whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the slot before merge
+  // (it must print 104 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN clientKey TEXT;
+  ALTER TABLE mail ADD COLUMN inReplyTo INTEGER;
+  CREATE UNIQUE INDEX mail_client_key_once ON mail(fromId, clientKey) WHERE clientKey IS NOT NULL;
+  `,
+
+  // ── 106: user_version 105 -> 106 ──────────────────────────────────────────
   // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
   // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
   // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
@@ -3937,13 +3958,13 @@ export const MIGRATIONS: readonly string[] = [
   // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
   // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
   //
-  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 105` warns, reads as-is, names none of these and boots
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 106` warns, reads as-is, names none of these and boots
   // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
   // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
   // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98, the Overlord's ladder (#2994) took 99, the quiz
   // record (#2991) took 100, the health changes (#3003) took 101, approvals PR 0 (#3045) took 102, door A1 (#3035)
-  // took 103 and approvals PR 1 (#3043) took 104, so this, the tenth lander, takes 105. RE-MEASURE the slot before the PR
-  // and before merge (it must print 104 before this entry is counted):
+  // took 103, approvals PR 1 (#3043) took 104 and the mail idempotency key (#3056) took 105, so this, the eleventh lander,
+  // takes 106. RE-MEASURE the slot before the PR and before merge (it must print 105 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
