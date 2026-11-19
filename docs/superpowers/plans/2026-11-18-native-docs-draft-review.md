@@ -494,4 +494,27 @@ Three departures, defined by fix round 1 of run 2633 from this wave's issued blo
 
 **Adversarial re-pass of fix round 1** (one Opus·high read of the changed sections): F2, F4 (two stale lines aside), F5 to F7, F9 to F12, F14, F16, A1 and A2 confirmed fixed; it found ten new defects, all fixed: the read door's 413 restored as F1 ruled and the built page kept in the release tree behind a static-plugin filter `f35c916dc`; the door contracts carry the store's `expired` and `stale` answers, list, pin and revoke stay off the account gate, and the comment doors state its measured dark answer `83b9993f2`; a mockup's omitted rows carry `not-inlined` `58ddf94e3`; unmeasurable mutation rows moved or reworked and the send deadline made a no-progress timeout `106a8b18c`; stale text, deviation wording and plan hygiene `98adc1245`. It verified every D-8765 to D-8767 quote as an exact substring of its spec, and that DR-1 to DR-12 still map one to one onto Task 17's Draft review row. Still open for the coordinator: whether §4.16 and §4.13's no-route sentence stay out of D-8766 (both remain true of Share and Export themselves).
 
+**Fix round 2 (review run 2685 at `dca19ce94`, coordinator mail 25620).** One commit per finding, on the coordinator's two rulings:
+- N1 `370fc77d6`: one ordering for the device gate. R2.3 builds the measurement page, the review page itself in a lab mode opened from the reader lab, on a committed fixture that holds the nested mockup frame. Chromium is measured by the browser leg; the phone's WebKit and desktop Firefox are one device item before R3 dispatches; an engine that cannot be measured is the operator's decision, recorded as unmeasured; DR-11 re-runs the page as acceptance.
+- N2 `8ada8d8ec`: revoke is dead in memory first and durable by either unlink; a failed tombstone write records `lost`; an all-fail removal answers `not-durable`, stays revoke-pending and is retried; a tombstone is never purged while its index or bytes exist; boot proves the directory writable; every store write states its failure answer.
+- N3 `ecd40da92`: each write's effect on `idleSince` and `firstSharedAt` is stated and guarded; the policy fixture's three times differ; DR-7 sets the clock back before the unpin; one `{date}` formatter.
+- N4 `27996ac50`: the credential check decodes nested payloads to the exporter's own depth bound, and holds one past it.
+- N5 `e7ae8a404`: the worker denylist covers `/review?…`; `/review/` is a fixed 404.
+- N6 and own-2 `3ce6eb678`: a unit test pins the static filter, case-folded; the page route never uses `sendFile`; the stale A0 line is corrected.
+- N7 `3f72fdb41`: the Page details fit is checked by the control census and the compact-head tap floors; R3 names `DocsHead.tsx` and `DocsIndexView.tsx`, with the ledger's carries A23 to A27.
+- N8 `50384ce61`: the precache row lives in `review-built.test.ts`.
+- N9 `a4692d4cc`: the create answer carries `replacedExpired`, with its single reader.
+- N10 `bca2414b3`: R3-M9's `tEXt` fixture, R1-M30's stopped sweep, and R1-M7 on N3's fixture.
+- N11 `6285416ee`: the backup copiers' reason and the mockup lists' citation.
+- N12 `94be1332c`: D-8766 quotes base §5.4, §5.6.9's Wrapper step and M5.16's parenthetical, and D-8765 the §7.5 README-contents bullet; no new numbers.
+- a0, a1 (a) to (g) and own-1 `765715669` ((c) with N6).
+
+**Adversarial re-pass of fix round 2** (one Opus·high read of the changed sections): every round-2 item closed or closed with a new defect, all 17 departure quotes exact (one hit each), and DR-1 to DR-12 still one to one onto Task 17. It found four important defects and thirteen minor ones, all fixed:
+- `371707084`: the lab group moved onto the measurement page itself, so the reader lab gains only an anchor and keeps its pinned vocabulary; the page makes no request, and a line holds only after a positive signal; the fixture is `buildExport`'s own bytes, held to the builder by a test; the reader lab runs E17 and E18, not E14; DR-11 re-runs desktop Chromium; rule 3's empty-sandbox allowance; D-8767 quotes M4.EX16's nowhere clause and the reader lab design's Before row.
+- `3ae2c918c`: the shell's build input key stays `index`.
+- `008f0324a`: a pending revoke is retried every 10 s and on close, a re-share waits for it, and the restart residual is stated.
+- `5c38bf185`: the 404 routes' armed 401, the route count, row order, R3-M21's file and the confirm's census entries.
+
+For the coordinator to confirm: the reader lab's one anchor joins D-8767 (the reader lab design's Before row) rather than a new number, as N12's sentences joined theirs; and the restart residual of a revoke whose every disk act failed (spec §4, write failures), which the N2 ruling did not cover, is stated and bounded by the 10 s retry and the close retry, not closed.
+
 **Asks:** two, ask 595 (access model) and ask 603 (comments). The coordinator released both to the operator (mails 25240 and 25405), and both came back answered on the structured ask on 2026-11-18. Access model: capability link (the recommendation). Reviewer comments: signed-in comments only (not the recommendation, which was none). Following the coordinator's direction for an adopted comment feature, comments are the follow-on wave R4 with their own threats (spec §3.6, C1-C5), and nothing in R1-R3 depends on them. The finished ask records are no longer listed, so who answered is read from the release mails, not measured.
