@@ -199,7 +199,9 @@ export function driftScoped(kind: DriftKind, managed: ReadonlySet<string>, f: { 
 
 /** D-8733 (drift-reads-every-team): `changedIssues` is asked with every team key the slot lists, so a bound issue moved out of a
  *  managed team is still read. An issue read from a team ccrc does not manage that no pre-read binding holds is dropped right at
- *  the read, before the compare, the grace re-read, the inbound detect or the watermark's nodes see it. */
+ *  the read, before the compare, the grace re-read or the inbound detect see it. The watermark still reads its `updatedAt`
+ *  (`DriftPass#passOf` leaves `read.changed` whole, review 2753 F3): that stores nothing of the issue, and holding the watermark
+ *  back for nodes never kept would re-read them at every pass. */
 export function keepIssueNode(o: { teamKey: unknown; linearId: unknown; managed: ReadonlySet<string>; boundIds: ReadonlySet<string> }): boolean {
   return managedKey(o.managed, typeof o.teamKey === 'string' ? o.teamKey : null) || (typeof o.linearId === 'string' && o.boundIds.has(o.linearId));
 }

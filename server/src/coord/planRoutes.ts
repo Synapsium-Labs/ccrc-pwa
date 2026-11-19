@@ -68,7 +68,8 @@ export interface PlanRouteOpts {
   presenceOf?: (id: string) => CoordinatorPresence;
   /** The by-id re-read of a stored inbound row's issue (review 2457 F4, D-8733): the lane's, through the one rate service. `plan take`
    *  and `plan triage` ask it BEFORE they act (outside the run writers' mutex), so an issue that left the managed teams is never
-   *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable`. */
+   *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable` for a decision that binds the
+   *  issue only (a take into an epic, an Upkeep placement, a hand; `inboundDoorVerdict`): a close, a raise or a return goes on. */
   inboundRecheck?: (row: InboundRow) => Promise<InboundRecheck>;
 }
 
@@ -266,7 +267,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   };
 
   /** The by-id re-read of each row a door may act on (`inboundRetirable` rows only), keyed by the row's issue id. A reader that is absent
-   *  or throws answers `unmeasured`: the door then refuses (`inboundDoorVerdict`), so no row is acted on unseen. */
+   *  or throws answers `unmeasured`: the door then refuses a decision that binds the issue (`inboundDoorVerdict`), so no row is bound
+   *  unseen; a close, a raise or a return goes on, and the lane's close re-reads before it writes in Linear. */
   const recheckRows = async (rows: readonly InboundRow[]): Promise<Map<string, InboundRecheck>> => {
     const out = new Map<string, InboundRecheck>();
     for (const row of rows) {

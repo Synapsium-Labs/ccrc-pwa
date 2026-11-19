@@ -104,8 +104,11 @@ describe('inboundRecheckStops (review 2524 F2)', () => {
       expect(inboundRecheckStops(w), String(w)).toBe(true);
     }
   });
-  it('an answer about one row does not: malformed, linear-forbidden, linear-invalid, not-found', () => {
-    for (const w of ['malformed', 'linear-forbidden', 'linear-invalid', 'not-found']) expect(inboundRecheckStops(w), w).toBe(false);
+  it('an answer about one row does not: malformed, linear-forbidden, linear-invalid', () => {
+    for (const w of ['malformed', 'linear-forbidden', 'linear-invalid']) expect(inboundRecheckStops(w), w).toBe(false);
+  });
+  it('not-found is not a walk word (review 2571 F9): the by-id read retires it moved-out, and asked anyway it stops, the safe side', () => {
+    expect(inboundRecheckStops('not-found')).toBe(true);
   });
   it('a word nobody classified stops the walk (the safe side)', () => expect(inboundRecheckStops('some-new-word')).toBe(true));
 });

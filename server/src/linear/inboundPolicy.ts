@@ -299,8 +299,10 @@ export function inboundRecheckOf(issue: { teamKey?: unknown; stateType?: unknown
 
 /** The refusal words that are an answer about ONE issue: the walk goes on past them (review 2524 F2). Every other word (the key's
  *  refusal, a transport or rate failure, a policy or journal outage, no key) is about the whole workspace. Typed from Linear's answer
- *  vocabulary, so a word that leaves it is a compile error here. */
-const ROW_WORDS = ['malformed', 'linear-forbidden', 'linear-invalid', 'not-found'] as const satisfies readonly LinearAnswerRefusalWord[];
+ *  vocabulary, so a word that leaves it is a compile error here. `not-found` is not among them (review 2571 F9): the by-id read
+ *  (`InboundLane#readById`) never answers it as unmeasured, it retires the row `moved-out` (an issue Linear no longer answers is no
+ *  issue in a managed team), so the walk rule is never asked about it, and if it ever were, it would stop the walk, the safe side. */
+const ROW_WORDS = ['malformed', 'linear-forbidden', 'linear-invalid'] as const satisfies readonly LinearAnswerRefusalWord[];
 /** Whether an unmeasured by-id answer ends the lane's walk of the workspace: only a workspace-wide one does (the key's refusal, a
  *  transport or rate failure, an unreadable store, no managed team: the null word). A word nobody classified stops it too, the safe
  *  side. An answer about one row marks that row checked and the walk goes on. */
