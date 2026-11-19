@@ -73,6 +73,8 @@ export const APPROVAL_ENVELOPE_CASES: readonly EnvelopeCase[] = [
     const other = entry('agent-b', 'scratch/out', 200, { tool: 'Write' });
     expect(m.approvalEntryFor([bash, other], menu('scratch/out'))).toBe(bash);
     expect(m.approvalEntryFor([other, bash], menu('scratch/out'))).toBe(bash);
+    const blank = entry('agent-c', 'scratch/out', 300, { tool: '' });
+    expect(m.approvalEntryFor([bash, blank], menu('scratch/out')), 'an empty tool names nothing').toBe(bash);
   } },
   { name: 'painted: a matching entry is the envelope, marked a subagent\'s, whatever hook state\'s ask says', run: (m) => {
     const want = { ask: { approval: { tool: 'Bash', summary: 'rm -rf scratch/out', route: 'sent', thread: 'subagent' } }, entry: A };

@@ -6302,9 +6302,9 @@ if [[ -z "$hs_skip" ]]; then
         | .[-16:]) as $ap | if $ap == [] then {} else {approvals: $ap} end)') || exit 0
 
   # 64KB cap: drop the questions envelope before anything else — a truncated
-  # envelope is worse than none. (The approvals list goes with it: each entry's summary is an envelope too.)
+  # envelope is worse than none. (The approvals list stays: at most 16 entries of 200-character summaries.)
   if (( ${#out} > 65536 )); then
-    out=$(jq -c '.ask = null | del(.approvals) | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
+    out=$(jq -c '.ask = null | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
     (( ${#out} <= 65536 )) || exit 0
   fi
 

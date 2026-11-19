@@ -224,13 +224,24 @@ describe('the transcript tie\'s tool_result removes it (the wait saw the pane an
   const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
   const TOOLU = 'toolu_000000000000000000000077';
   const row = (r: unknown): string => `${JSON.stringify(r)}\n`;
-  it('the entry of the agent whose prompt was answered goes; a sibling\'s stays', () => {
+  const asChild = (): void => {
     put(`.cc-sessions/${ID}.child`, '7');
     put('.cc-sessions/child-deny.settings.json', DENY_FILE);
     put(`.cc-sessions/${ID}.deny-settings`, sha(DENY_FILE));
     fs.copyFileSync(VERIFIER, reg('approval-verify.mjs'));
     put('.ccrc/approval-signing.pub', keys.publicKey.export({ type: 'spki', format: 'pem' }).toString());
     put('.local/bin/ccrc-api', STUB_API, 0o755);
+  };
+  it('a refused request patches the entry\'s route word with the envelope\'s (PR 1\'s patch, over the hook\'s own bytes)', () => {
+    asChild();
+    put('stub/request.out', '{"ok":false,"error":"version-unverified"}');
+    put('.local/bin/ccrc-api', STUB_API.replace('http 201', 'http 409'), 0o755);
+    fire(request(A));
+    expect((stateOf()['ask'] as { approval: { route: string } }).approval.route).toBe('request-refused:version-unverified');
+    expect(entries().map((e) => e['route'])).toEqual(['request-refused:version-unverified']);
+  });
+  it('the entry of the agent whose prompt was answered goes; a sibling\'s stays', () => {
+    asChild();
     put('stub/request.out', '{"id":41,"waitS":3}');
     fire(request(B, 'rm -rf other'));
     const sub = path.join(path.dirname(transcript()), String(SUB['session_id']), 'subagents', `agent-${A}.jsonl`);
