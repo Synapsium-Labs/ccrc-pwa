@@ -35,7 +35,7 @@ import {
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
-import { noteKeyReader } from './noteKeys.js';
+import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
@@ -66,6 +66,9 @@ export interface ContinuityRouteDeps {
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The card's registry reads (`gatherCardFacts`' ports other than the store); the timer set door's role read reuses them. */
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
+  /** The private store's text-free message read, for a `miss` note's key (`NoteKeysMessages`), resolved per request. Absent, or
+   *  null while the store is not open: a `message` key then reads `unmeasured` and the door refuses `unmeasured`. */
+  operatorModel?: () => NoteKeysMessages | null | undefined;
   /** The setter's stamp: `incarnationOf`'s two agreeing reads of `$REG/<id>.generation`. NOT `cardRegistry.incarnation`, its
    *  single read (slug setter-stamp-is-a-double-read): the stamp keys a timer whose mismatch later cancels it, irreversibly,
    *  so a file that changes between the reads answers `unmeasured` and the set refuses `timer-unmeasured`, where the card's
@@ -127,7 +130,7 @@ const NOTE_DETAIL: Readonly<Record<NoteVerdictRefusal, string>> = {
   [NOTE_REFUSALS.referenceUnknown]: 'a thread names no live programme, open item or non-terminal run of yours',
   [NOTE_REFUSALS.notAsked]: 'no handover was asked: your generation is not checkpointed',
   unmeasured: 'could not check: a row it needs could not be read; try again',
-  'bad-request': 'a thread names its next act (next is not blank), and a close names the note it closes in revises',
+  'bad-request': 'a thread names its next act (next is not blank), a miss is keyed to a message and only a miss is, and a close names the note it closes in revises',
 };
 /** A round's id, as the lane mints it, and a question's id inside its round. */
 const ROUND_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -435,7 +438,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, { form }));
     const at = deps.wall();
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
-    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry }, id, at);
+    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry, messages: deps.operatorModel }, id, at);
     const text = masker.maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
     if (part === 'anchor') {
@@ -543,7 +546,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       ? { key: closed?.key ?? { kind: 'run', id: revises! }, kind: closed?.kind ?? 'thread', waitsOn: '', next: '', revises, closes }
       : { key: key!, kind: kind as NoteInput['kind'], waitsOn, next, revises, closes };
     // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
-    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id)(input.key), id);
+    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined)(input.key), id);
     const live = coord.liveNotes(id);
     const gen = liveGenerationOf(coord, id, deps.continuityGate);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
@@ -589,7 +592,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     const live = coord.liveNotes(c.id);
     if (!live.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_notes could not be read' });
-    const read = noteKeyReader(coord, c.id);
+    const read = noteKeyReader(coord, c.id, deps.operatorModel?.() ?? undefined);
     const wire = live.notes.map((n) => ({
       id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
     }));
@@ -641,7 +644,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (asked !== 'asked' || typeof gen === 'string') {
       return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');
     }
-    const read = noteKeyReader(coord, id);
+    const read = noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined);
     const note: HandoverNote = { threads, cautions: cautions as string[], tone };
     const verdict = handoverVerdict(note, threads.map((t) => noteKeyFact(read(t.ref), id)));
     if (!verdict.ok) return refuseNote(reply, verdict.refusal);

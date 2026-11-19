@@ -62,8 +62,8 @@ is taken here.
      check);
   4. one restore-list line for the backup's `ccd-lib-door.sh`, beside the other libraries' lines;
   5. the loader paragraph names `ccd/lib/door.sh` the sixth library and `__CCD_LIB_DOOR_SHA256`, and reads "all six".
-- **`migration-102-by-position`**: the ladder (#2994) landed migration 99, the quiz record (#2991) 100 and forecasts B
-  (#3003) 101 first, so this PR's migration is 102, renumbered at the absorptions of `main` (positional, the brief's rule). The same absorption
+- **`migration-103-by-position`**: the ladder (#2994) landed migration 99, the quiz record (#2991) 100, forecasts B
+  (#3003) 101 and approvals PR 0 (#3045) 102 first, so this PR's migration is 103, renumbered at the absorptions of `main` (positional, the brief's rule). The same absorption
   recounted the lanes this PR and the quiz record each added: ninety rows in `ccrc-api`, eighty-eight box-token machine
   lanes and ninety-one with the three fleet-host lanes, 282 routes (279 HTTP, 100 exempt).
 - **`door-prog-ok-names-no-tool`**: `_door_prog_ok` reads the program with a bounded `cat` and pipes the bytes into the

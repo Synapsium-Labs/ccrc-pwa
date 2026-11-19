@@ -757,9 +757,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
     // and MIGRATIONS[99] (the replay quiz run's state, counts and ruling on continuity_quiz_runs, Overlord W1a quiz record),
     // and MIGRATIONS[100] (programme_health, run_spend and runs.dispatchConversation, Overlord W2 forecasts B),
-    // and MIGRATIONS[101] (continuity_act_keys and continuity_starts.doorNonceSha256, the door process's act key, Overlord W1).
-    expect(COORD_SCHEMA_VERSION).toBe(102);
-    expect(MIGRATIONS.length).toBe(102);
+    // and MIGRATIONS[101] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0),
+    // and MIGRATIONS[102] (continuity_act_keys and continuity_starts.doorNonceSha256, the door process's act key, Overlord W1).
+    expect(COORD_SCHEMA_VERSION).toBe(103);
+    expect(MIGRATIONS.length).toBe(103);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -886,9 +887,10 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
     // and MIGRATIONS[99] (the replay quiz run's state and counts, Overlord W1a quiz record),
     // and MIGRATIONS[100] (programme_health, run_spend and runs.dispatchConversation, Overlord W2 forecasts B),
-    // and MIGRATIONS[101] (continuity_act_keys and the start's nonce hash, Overlord W1 door process); the migration above is
+    // and MIGRATIONS[101] (approvals.denyCurrent, Overlord approvals PR 0),
+    // and MIGRATIONS[102] (continuity_act_keys and the start's nonce hash, Overlord W1 door process); the migration above is
     // still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(102);
+    expect(COORD_SCHEMA_VERSION).toBe(103);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2424,7 +2426,7 @@ describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-fi
     const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
     expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
       'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
-      'answeredBy', 'toolUseId', 'corrected']);
+      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent']);
     db.close();
   });
 });

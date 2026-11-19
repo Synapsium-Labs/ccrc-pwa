@@ -3847,6 +3847,24 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 102: user_version 101 -> 102 ──────────────────────────────────────────
+  // The stale deny digest (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's
+  // plan-review ruling F5, 2026-11-18). `approvals.denyCurrent`: 1 when the child's deny digest was the managed deny
+  // file's current one at mint, 0 when the installer's digest history named it instead (a child spawned under an older
+  // deny file, which a running Claude Code never re-reads). The row's `class` stays the classifier's; the rule door
+  // refuses an allow on a 0 row (`approvalAllowRefusal`), while a deny or a hand-over stays open. ONE writer, the store's
+  // `insertApproval`, called by the raise.
+  // ONE ADDITIVE COLUMN with a constant default and a CHECK, and nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its inserts
+  // store 1. Its rule door does not read the column, but a rollback is a restart, which empties the held inputs, so it
+  // refuses a 0 row's allow `guard-escalate` (the PR's note says so). The slot is the next free one by position: the quiz record (#2991) took
+  // 100 and forecasts B (#3003) 101, so this is 102, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN denyCurrent INTEGER NOT NULL DEFAULT 1 CHECK (denyCurrent IN (0, 1));
+  `,
+
+  // ── 103: user_version 102 -> 103 ──────────────────────────────────────────
   // The door process's act key (Overlord spec §3.3.11 H12 "The fence", Table 11.1a's row `continuity_generations`; W1, plan
   // `w1-door-process.md` Task 1). `continuity_act_keys`, one row per generation, ever: the launch nonce's sha256 (UNIQUE, so a
   // nonce binds at most one generation) and the key's sha256, never the key. THREE WRITERS, ONE ROW, in
@@ -3854,9 +3872,10 @@ export const MIGRATIONS: readonly string[] = [
   // `advanceActCounter` (`counter`, only upward). `continuity_starts.doorNonceSha256`: the hash the spawn bound to a start,
   // written by `insertStart` alone; null for an older hook's start, which binds no nonce. A NEW TABLE and a NULLABLE COLUMN: an
   // older build at this `user_version` takes rule 3, never names the table, and its `insertStart` names its columns, so the
-  // column reads null. The ladder (#2994) landed 99, the quiz record (#2991) 100 and
-  // forecasts B (#3003) 101 first, so this is 102 by position (the coordinator's brief, 2026-11-18).
-  // RE-MEASURE the slot before the PR and before merge (it must print 101 before this entry is counted):
+  // column reads null. The ladder (#2994) landed 99, the quiz record (#2991) 100,
+  // forecasts B (#3003) 101 and approvals PR 0 (#3045) 102 first, so this is 103 by position (the coordinator's brief,
+  // 2026-11-18).
+  // RE-MEASURE the slot before the PR and before merge (it must print 102 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

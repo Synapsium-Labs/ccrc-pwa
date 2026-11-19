@@ -77,7 +77,7 @@ export type WatcherCoordMember =
   | 'itemHistory' | 'itemsFor' | 'journalGenerations' | 'landingReadProjects' | 'laneArmSetting' | 'lapseApproval' | 'lapseClaimRow' | 'lastRunBySession' | 'laterReviewClosedFor' | 'laterReviewMovedAt'
   | 'ledgerFloor' | 'ledgerIssued' | 'ledgerProjects' | 'lifecycleBirthEventsFor' | 'lifecycleCreatesFor'
   | 'lifecycleFor' | 'lifecycleGapGens' | 'lifecycleLeafEndsFor' | 'lifecycleReclaimRowsSince' | 'lifecycleStats' | 'linkTeamAuto' | 'linkingAll' | 'liveGenerations' | 'liveNotes'
-  | 'mailForRecipient' | 'mailOrigin' | 'mailQueuedSince' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markClaudeBuildAttempt'
+  | 'mailForRecipient' | 'mailOrigin' | 'mailQueuedSince' | 'markAcked' | 'markApprovalOperator' | 'markApprovalOperatorRows' | 'markClaudeBuildAttempt'
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markTimersFired' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'mergingRuns' | 'mintGeneration' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
