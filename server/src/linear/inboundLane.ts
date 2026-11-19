@@ -18,15 +18,16 @@ import type { CoordStore } from '../coord/store.js';
 import type { InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
+import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
-  answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
+  answeredMail, closeCommentBody, closeRefusedCommentBody, closeRefusedMail, closeTextRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
   keyWaitMail, noCancelMail, ownerItemInput, type InboundHold, type InboundRecheck, type RetireWhy,
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
+import { textRefusalOf } from './planSyncPolicy.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
 import { uuidOf } from './planSyncPolicy.js';
 import type { DriftPassDeps } from './driftPass.js';
@@ -284,10 +285,12 @@ export class InboundLane {
         const seen = await this.readById(fresh, slot);
         if (seen.kind === 'retire') { this.retire(fresh, seen.why, this.deps.now()); return; }
         if (seen.kind === 'unmeasured') { if (seen.word !== null) this.refused(fresh, { word: seen.word }, slot); return; }
+        const refusal = this.textRefusal(fresh);
+        if (refusal !== null) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal));
         const base = { pass: 'inbound', lane: 'sync', slot: slot.ref, workspaceId: row.workspaceId, teamKey: row.teamKey, target: row.identifier } as const;
         const comment = await this.deps.call({
           ...base, op: 'issueComment', fields: ['body'],
-          input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: closeCommentBody(fresh.reason ?? '') },
+          input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: refusal === null ? closeCommentBody(fresh.reason ?? '') : closeRefusedCommentBody() },
         });
         if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment, slot); return; }
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
@@ -297,6 +300,16 @@ export class InboundLane {
         this.malformed.delete(row.linearId);
       });
     }
+  }
+
+  /** Spec §6.1, re-run before the close comment is sent: the facts (the project that owns the team, its linking mode, the installer's
+   *  private tracker keys) may have changed since the close was decided. `textRefusalOf` is the one check; a team no project claims is
+   *  judged as `unknown`, public, with the row's team key. The class that refused it, or null. */
+  private textRefusal(row: InboundRow): string | null {
+    const { coord, plan, planSync } = this.deps;
+    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf());
+    const fact = project === null ? { teamKey: row.teamKey, mode: 'unknown' as const } : coord.linkingOf(project);
+    return textRefusalOf([row.reason ?? ''], [fact], planSync.privateKeys());
   }
 
   /** A refused close write, as `inboundActVerdict` rules. A retry word holds the workspace on the plan sync's failure-hold

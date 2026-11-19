@@ -185,6 +185,17 @@ export function givenUpWord(reason: string | null): string | null { return reaso
 /** The comment a close leaves on the issue before it is canceled: the reason, egress-redacted, with the ccrc provenance line. */
 export const closeCommentBody = (reason: string): string => withCcrcProvenance(egress(`Closed: ${reason}`));
 
+/** The comment a close leaves when its stored reason no longer passes the public-text check (spec §6.1): it carries no stored text. */
+export const closeRefusedCommentBody = (): string => withCcrcProvenance(egress('Closed by ccrc. The reason is not shown here: it did not pass the public-text check.'));
+
+/** The owner's one mail for a close whose reason failed the public-text check at act time: the issue and the class, never the text. */
+export function closeTextRefusedMail(row: InboundText, refusalClass: string): { subject: string; body: string } {
+  return {
+    subject: `Linear inbound: ${row.identifier} closed without its reason`,
+    body: `You closed the issue ${row.identifier} of team ${row.teamKey}. ccrc canceled it in Linear, but the reason you gave did not pass the public-text check (${refusalClass}), so the comment says only that. The reason stays in ccrc.`,
+  };
+}
+
 /** The operator's *Name a Linear owner* item for a project whose owner is gone. `live` are the coordinators live now. */
 export function ownerItemInput(project: string, live: readonly string[]): RaiseItemInput {
   return {

@@ -2031,3 +2031,33 @@ describe('a returned or reopened note never outlives its waiting row (round 4 F2
     expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound_notes').get()).toEqual({ n: 0 });
   });
 });
+
+describe('a close re-runs the public-text check before it posts (D-8183, round 4 F6)', () => {
+  it('a reason the check refuses now is not posted: a fallback comment, the cancel, one mail to the owner', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    const w = writes(r);
+    expect(w.map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(String(w[0]!.input['body'])).not.toContain('AAA-99');
+    expect(String(w[0]!.input['body'])).toContain('did not pass the public-text check');
+    expect(rowOf(r, 12)!.actedAt).toBe(r.t.now);
+    const m = mails(r, 'Linear inbound: AAA-12 closed without its reason%');
+    expect(m.map((x) => x.toId)).toEqual([OWNER]);
+    expect(m[0]!.body).not.toContain('AAA-99');
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, 'Linear inbound: AAA-12 closed without%')).toHaveLength(1);
+  });
+
+  it('a clean reason still posts Closed: <reason>', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    expect(String(writes(r)[0]!.input['body'])).toContain('Closed: a duplicate of other work');
+    expect(mails(r, 'Linear inbound: AAA-12 closed without%')).toEqual([]);
+  });
+});
