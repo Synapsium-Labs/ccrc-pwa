@@ -56,3 +56,29 @@ with the source change reverted, the new tests fail (measured, below).
   the ball time past it.
 - `a6-idle-word-strict`: the rung mails only a coordinator whose live word reads `idle`, as the plan says. A `shell`
   word holds, even though the mail gate delivers on `shell`. Doubt types nothing.
+
+## Measured: red first, by mutation
+
+Each mutant edited one source file in place (its `old` text occurring exactly once) in a scratch copy of the tree. It
+ran the committed test file that pins it through `ccrc test`, and the file was restored from a saved copy, its sha256
+checked before the next mutant.
+
+- **L1, 44 of 44 killed:** `coordBall.ts` (every hold of the rung, its 20-minute and 30-minute boundaries, rung 3's
+  once-only, the mail-disabled hold, the R7 predicate's five conditions, the two derived facts), `stall.ts`
+  (`stallRungWave`, the rung recipients, the coord-ball mail arm), `coordCalls.ts` (`blockWakeDue`'s every branch, the
+  readings, the clearing half) and `idlenudge.ts` (the open-run holds). Three survivors of the first round, R7 with no
+  claimed run and a disk or memory clearing never seen failing, got tests and were then killed.
+- **Lanes and store, 27 of 29 killed:** `blockWakeLane.ts`, `coordBallLane.ts`, the stall pass's wiring in `watch.ts`
+  (the R7 call, the ball-only subjects, the tick's wake lane, the nudge's staging), `ledgersStore.ts`'s blocking-level
+  read and `coordCallsStore.ts`'s time-block read. Two survive, both measured:
+  - `w-nudge-taskskip`: the nudge reads the task list even for a session with an open run. Its verdict ignores the list
+    then, so the only effect is one skipped file read.
+  - `w-ballonly-return`: a ball-only coordinator also runs the session arms. Its marker is never read (no marker clock),
+    and in the fixtures built (held mail behind the stuck gate included) those arms found nothing to act on. A
+    reviewer may want to weigh whether a case exists where they would.
+
+## Readings that are not this wave's
+
+- Two `stall-sweep` cases from the stall-watch settings wave (M8a's "one resolution for both sweeps", and "the answer
+  carries where the level came from") time out at 20 s on this box under load: 35 s and 28 s on unmodified `main` too.
+

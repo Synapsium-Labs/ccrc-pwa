@@ -42,7 +42,7 @@ describe('claimedOpenRuns', () => {
 describe('idleNudgeOpenRunOf', () => {
   it('the newest event across every claimed run, whichever order they come in', () => {
     const p = port([{ id: 1, sessionId: 'lane-a', claimedBy: COORD, state: 'working' }, { id: 2, sessionId: 'lane-b', claimedBy: COORD, state: 'awaiting-review' }],
-      { 1: [NOW - 60_000, NOW - 3_600_000], 2: [NOW - 7_200_000] });
+      { 1: [NOW - 3_600_000, NOW - 60_000], 2: [NOW - 7_200_000] });
     expect(idleNudgeOpenRunOf(p, COORD)).toEqual({ ok: true, lastEventAt: NOW - 60_000, blocked: false });
   });
   it('blocked when any claimed run\'s programme holds a blocking item; null when it claims none', () => {

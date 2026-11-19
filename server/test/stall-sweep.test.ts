@@ -2749,7 +2749,8 @@ describe('sweepStalls: the coord-ball mail rung (D-8126)', () => {
   it('a coordinator whose only run is inactive gets the rung alone: held mail raises no mail-stuck push, as before the rung', async () => {
     const { coord, w, sent } = await setup();
     const m = coord.insertMail({ fromId: WORKER, fromUuid: UUID, toId: 'coordinator', runId: null, kind: 'question', subject: 'q', body: 'b', artifacts: [] });
-    coord.queueDelivery(m.id, COORD, 'envelope');
+    const d = coord.queueDelivery(m.id, COORD, 'envelope');
+    coord.noteGate(d.id, 'registry-unmeasurable', T0, false, null);   // the gate mail-stuck reads without a marker
     await sweepThrough(w, sessions, W2_LIVE, tickWith(), T0 + MAIL_STUCK_MS + 60_000, T0 + MAIL_STUCK_MS + 3 * STALL_SWEEP_MS);
     expect(sent.filter((p) => p.tag?.includes('-mail-stuck-'))).toEqual([]);
   });
