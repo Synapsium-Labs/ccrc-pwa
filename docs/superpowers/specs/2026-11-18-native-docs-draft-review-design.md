@@ -7,7 +7,7 @@
 - **What this is.** The design for "Share for review" (#1420). The owner of an uncommitted spec or plan sends a reviewer a private link. The link opens a frozen, read-only copy of the page as the owner saw it, under a "Draft, not committed" banner. Retirement of the standalone reader waits on this feature (the operator's ruling of 2026-10-25: retirement drops no feature).
 - **What is already fixed.** The operator ruled on 2026-10-25 (#1420): the copy is a frozen snapshot taken at share time; the owner sees "newer draft available" and can re-share; nothing reads the live draft through the link. This spec does not re-open that ruling.
 - **What was decided on 2026-11-18.** The coordinator released both product asks to the operator, and both were answered. Readers need no ccrc session: the link is a capability (the recommended option). Comments are allowed, but only from someone signed in to the console, and they never count as merge approval. Comments ship as their own follow-on wave with their own threat model (§3.6), so the core feature does not depend on them.
-- **What this spec decides.** The snapshot is Export's own file (`buildExport`, `ccrc-docs-export/1`), built in the owner's browser and uploaded once. The server keeps it in a new store of its own, outside `coord.db`, never backed up. The link carries its secret in the URL fragment, which browsers never send to a server, a proxy or a link-preview robot, and the secret is posted only when the reader taps "Open draft". A small ccrc page shows the copy in a frame with an empty sandbox. Revoke, expiry, retention and early removal on commit each delete the bytes before they answer.
+- **What this spec decides.** "Share a draft for review" is its own action in Page details; Share itself is unchanged and still sends only the committed permalink. The snapshot is Export's own file (`buildExport`, `ccrc-docs-export/1`), built in the owner's browser and uploaded once. The server keeps it in a new store of its own, outside `coord.db`, never backed up. The link carries its secret in the URL fragment, which browsers never send to a server, a proxy or a link-preview robot, and the secret is posted only when the reader taps "Open draft". A small ccrc page shows the copy in a frame with an empty sandbox. Revoke, expiry, retention and early removal on commit each delete the bytes before they answer.
 - **What changes for the console.** New routes in a new server module: four session-gated owner doors, two session-gated comment doors (the follow-on wave), and two routes open to a link holder, a fixed page and one read door that never touches the fleet box. The auth gate gains a ninth exempt class. Nothing is built in this wave, and nothing is waiting on you.
 
 ## 1. Threat model
@@ -100,7 +100,7 @@ sequenceDiagram
   participant S as Server review doors
   participant F as Review store files
   participant R as Reviewer's browser
-  O->>O: Share, then Share for review
+  O->>O: Page details, Share a draft for review
   O->>O: buildExport of the open draft, credential check, file and link list
   O->>S: POST /api/review/shares with bytes and source, session
   S->>F: write versioned bytes, then the index entry, each by rename
@@ -117,9 +117,11 @@ sequenceDiagram
 
 ### 3.1 Where Share for review lives
 
-Share for review is a new arm of Share's result, as base §4.16 reserved: "a later kind of link (§4.13's expiring links) adds an arm without changing callers". It appears in the existing Share sheet as one more button, only on a leaf whose page opens a draft (`entryView(...).opens === 'draft'`). That includes a new file, which today gets the refusal `new-draft`; its sentence gains "Share for review sends a private copy." No new control joins the phone head, the one bar or the desktop head, so the tap, one-bar and desktop-fit budgets and both 2026-11-06 phone blocks are untouched.
+Share for review is a distinct, clearly labelled action of its own, "Share a draft for review", not a new arm of Share (coordinator's ruling on review finding F14). Share keeps sending only the committed GitHub permalink, so the operator's 2026-10-07 `share-drafts` ruling ("Share always sends the committed permalink"), base M4.SH1 (only GitHub URLs leave Share) and M4.SH3 (a new draft gets no link) stay true unchanged, and so does the ledger's "Share does not publish drafts". `share.ts`, `ShareSheet.tsx` and every Share sentence are untouched; base §4.16's reserved union arm stays unused.
 
-The arm is offered under the same readiness rule as Export (base §4.17 "When it is offered"), because it builds the same file. When Export would be disabled, Share for review is disabled with Export's sentence.
+The action is one row in Page details, the panel that already holds a leaf's details and its disabled-action lines on the phone and the desktop. It appears only on a leaf whose page opens a draft (`entryView(...).opens === 'draft'`), a new file included. It is a row inside the panel's body, outside both 2026-11-06 phone blocks, so no control joins the phone head, the one bar or the desktop head, and the tap, one-bar and desktop-fit budgets and both phone blocks are untouched; the implementing wave runs their existing pins unchanged.
+
+The action is offered under the same readiness rule as Export (base §4.17 "When it is offered"), because it builds the same file. When Export would be disabled, the action is disabled with Export's sentence.
 
 ### 3.2 Building the snapshot: Export's builder, once
 
@@ -277,16 +279,20 @@ Technical choices are decided here with their reason. The two product choices we
 | X3-11 | Credential-shaped text | Ignore; refuse; confirm | Confirm, recorded on the share (§3.4) | Proposed |
 | X3-12 | Dark console | Allow everything; refuse create only; refuse reads too | Refuse create and comments, hide links in the list, keep existing links and revoke working (§1.3) | Proposed |
 | X3-13 | Flooding the read door | A shared rate limit; cheap misses plus a streaming cap | Cheap misses plus a cap of 4 streaming reads: a shared budget would let one caller lock every reviewer out | Proposed |
+| X3-15 | Where the action lives | A new arm of Share; its own action | Its own action in Page details: Share keeps `share-drafts`, M4.SH1 and M4.SH3 true (coordinator's ruling on F14) | Ruled |
 | X3-14 | Server module | Inside `server/src/docs/`; its own `server/src/review/` | Its own module, consuming the docs tree read through a port it declares: the docs module's guards stay unchanged | Proposed |
 
 **Amendments this feature carries.** Each lands with the wave that ships its behaviour, never here and never all at the end (coordinator's ruling on review finding F13), so no release runs behaviour its specs still forbid. The release order makes a link impossible to hand out before the page that opens it: the leaf plan's R1 ships the read door and the store and can make no link, R2 ships the review page, and R3 ships the owner's create last.
 
-- Base Goal 3 gains: "Share for review stores a snapshot the owner explicitly shares, on the owner's own server, for a bounded time (§4.18)." Base Goal 1 and the `product` decision gain the review page and read door as the one documented exception to "behind that install's own session gate".
-- Base Non-goal "Share links that ccrc hosts" narrows to general hosted publishing; the expiring-links bullet of base §4.13 points here.
-- Base M4.EX16 names the review confirm and upload beside Export's sheet (§3.2).
-- Rich-docs §6 row G11 and the "Draft review by link" row point at this spec, and stay Kept until Task 17's row passes.
+Three departures carry it, each defined in the leaf plan's `## Deviations found` with the exact sentences it changes, and each naming the operator's 2026-10-25 ruling on #1420 and this wave's asks 595 and 603 as the rulings it carries out:
 
-These are amendments the scope of #1420 names ("It needs a threat model and amends Goal 3 and the Non-goal 'Share links that ccrc hosts'"), not departures from the completion design, the rich-docs spec or an operator ruling, so no deviation number is defined. The leaf plan records that reading for the coordinator to confirm.
+| Number | What it changes | Lands with |
+|---|---|---|
+| D-8765 | Base Goals 1 and 3, decision `product`, the Non-goal "Share links that ccrc hosts" and §4.13's expiring-links bullet: one exempt read door and one owner-made store now exist beside the session-gated reader | R1 |
+| D-8766 | The Share and Export confinement sentences the new action and store change: §4.13's "What keeps the option open" bullet and M4.EX16's single-importer clause. §4.16's no-route sentence stays true, because Share itself is unchanged | R3 |
+| D-8767 | Base M5.16's `new DOMParser(` and `<iframe`/`srcDoc` allowances, and rich-docs A2b and M8.10, for the review page | R2 |
+
+Rich-docs §6 rows G11 and "Draft review by link" only gain a pointer to this spec, and stay Kept until Task 17's row passes; they need no number.
 
 ## 7. Testing and proof
 

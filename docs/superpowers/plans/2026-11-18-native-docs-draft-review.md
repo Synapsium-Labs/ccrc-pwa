@@ -15,7 +15,7 @@
 - Design wave X3 builds nothing. Every task below belongs to a later implementation run; this file is that run's plan.
 - The two product choices are the operator's, answered on 2026-11-18 after the coordinator released this wave's asks: a capability link with no session to read; comments from signed-in sessions only, never merge approval. Comments are wave R4, a follow-on (the coordinator's direction): nothing in R1-R3 names, needs or anticipates them, and R4 adds its fields additively.
 - Reader sandbox exactly `allow-scripts`, shell CSP exactly `frame-src 'none'`, no parent-DOM access, no extra message channel: none changes. The review page is a separate document with its own header policy.
-- Both 2026-11-06 phone blocks stay byte for byte; the tap, one-bar and desktop-fit budgets stand. Share for review adds no head or bar control: one button in the existing Share sheet, rows in Page details and a list in the Docs index.
+- Both 2026-11-06 phone blocks stay byte for byte; the tap, one-bar and desktop-fit budgets stand. Share for review adds no head or bar control: one action row and the share rows in Page details, outside both phone blocks, and a list in the Docs index. Share itself is unchanged (coordinator's ruling on F14).
 - `@synapsium-labs/docserver` stays exactly 1.1.0. No library change is needed.
 - Limits, defined once in L0 `shared/docsReview.ts` (the export cap moves to `shared/docs.ts` and `pwa/src/docs/export/policy.ts` re-exports it): `DOCS_EXPORT_MAX_BYTES = 10485760`; `REVIEW_MAX_LIVE = 64`; `REVIEW_MAX_STORE_BYTES = 268435456`; `REVIEW_IDLE_MS = 604800000`; `REVIEW_RETENTION_MS = 2592000000`; `REVIEW_TOMBSTONE_MS = 604800000`; `REVIEW_VIEW_COARSEN_MS = 60000`; `REVIEW_SWEEP_MS = 600000`; `REVIEW_OPEN_STREAMS = 4`; `REVIEW_OPEN_BODY_BYTES = 256`; token 32 random bytes, base64url, 43 characters (`REVIEW_TOKEN_RE = /^[A-Za-z0-9_-]{43}$/`).
 - The store is `~/.ccrc/review-shares/` (0700, files 0600), one writer (`server/src/review/store.ts`), never in `ccrc backup` or the update snapshot, never restored.
@@ -44,7 +44,7 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 |---|---|---|---|
 | R1 server, read side | R1.1-R1.5 | `shared/docsReview.ts`; `shared/docs.ts` (the export cap); `pwa/src/docs/export/policy.ts` (re-export, one line); `server/src/review/**`; `server/src/server.ts` (composition only); `server/src/config.ts` (one path); `server/src/auth/gate.ts` (class 9); `server/test/auth-gate.test.ts`, `box-token-census.test.ts`, the rings data files the rings suites ask for (`server/test/rings/*.data.ts`); new `server/test/review-*.test.ts`; `README.md` (auth paragraph); the base spec (D-8765) | none |
 | R2 review page | R2.1-R2.3 | new `pwa/review.html`, `pwa/src/review/**`; `pwa/vite.config.ts` (second entry, `globIgnores`); `pwa/src/lib/sw-denylist.ts`; `server/src/review/routes.ts` (the page routes); `pwa/browser/app.ts` (a server mode and a service-worker context); new `pwa/browser/docs-review.browser.test.ts`; `pwa/test/docs-scans.test.ts` (the `DOMParser` allowance); the base and rich-docs specs (D-8767) | R1 merged |
-| R3 owner side | R3.1-R3.4 | `server/src/review/routes.ts` (owner doors); `pwa/src/docs/export/buildExport.tsx`, `provenance.ts` (`purpose`); new `pwa/src/docs/review/**`; `pwa/src/docs/share.ts`, `ShareSheet.tsx`, `docsText.ts`; `pwa/src/lib/api.ts` (four calls); the Page details host and the Docs index screen (one mount each); `pwa/test/docs-scans.test.ts` (M4.EX16); `design/audit.mjs` (new chrome); new `pwa/test/docs-review-*.test.ts(x)`; the base spec (D-8766), rich-docs §6 pointers, README Docs section | R2 merged |
+| R3 owner side | R3.1-R3.4 | `server/src/review/routes.ts` (owner doors); `pwa/src/docs/export/buildExport.tsx`, `provenance.ts` (`purpose`); new `pwa/src/docs/review/**`; `pwa/src/lib/api.ts` (four calls); the Page details host and the Docs index screen (one mount each); `pwa/test/docs-scans.test.ts` (M4.EX16); `design/audit.mjs` (new chrome); new `pwa/test/docs-review-*.test.ts(x)`; the base spec (D-8766), rich-docs §6 pointers, README Docs section | R2 merged |
 | R4 comments (follow-on) | R4.1-R4.2 | `shared/docsReview.ts` (additive fields and limits); `server/src/review/policy.ts`, `store.ts`, `routes.ts`; the census and gate tests; `pwa/src/lib/api.ts` (two calls); `pwa/src/docs/review/ReviewList.tsx`, `ReviewRows.tsx`; `pwa/src/review/main.ts`; new `server/test/review-comments.test.ts`, `pwa/test/docs-review-comments.test.tsx` | R3 merged |
 
 Each wave's spec files are claimed at its run-open; the appearance and parity waves (X1, X2) edit the same specs, so a claim that answers 409 waits for its holder.
@@ -237,23 +237,23 @@ R3 is the first release that can make a link, so it follows R2: the page and its
 - [ ] **Step 4: Run** every `test/docs-export*` file and `test/mockup-export.test.ts`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(docs): Export's builder takes a review purpose (X3 R3.2)`.
 
-### Task R3.3: Share for review in the Share sheet
+### Task R3.3: The review action in Page details
 
 **Files:**
 - Create: `pwa/src/docs/review/shareForReview.ts` (L1, pure), `pwa/src/docs/review/upload.ts`, `pwa/src/docs/review/ReviewConfirm.tsx`
-- Modify: `pwa/src/docs/share.ts` (`ShareTarget` gains `{ ok: true; kind: 'review'; … }`, base §4.16's reserved arm), `ShareSheet.tsx`, `docsText.ts`, `pwa/src/lib/api.ts` (`reviewCreate`, `reviewList`, `reviewPin`, `reviewRevoke`), `pwa/test/docs-scans.test.ts` (M4.EX16: `ReviewConfirm.tsx` may `import()` `./export/buildExport`, and `upload.ts` may receive its bytes, each with a planted control; `new Blob(` stays in `objectUrls.ts` only)
-- Test: `pwa/test/docs-review-share.test.tsx`, `pwa/test/docs-share.test.ts`
+- Modify: the Page details host (one mount of the action row), `pwa/src/lib/api.ts` (`reviewCreate`, `reviewList`, `reviewPin`, `reviewRevoke`), `pwa/test/docs-scans.test.ts` (M4.EX16: `ReviewConfirm.tsx` may `import()` `./export/buildExport`, and `upload.ts` may receive its bytes, each with a planted control; `new Blob(` stays in `objectUrls.ts` only)
+- Test: `pwa/test/docs-review-share.test.tsx`
 
 **Interfaces:**
 - Consumes: R3.1's wire, R3.2, `shared/redact.mjs#redactCount`, `shared/api.ts#CREDENTIAL_MASKS`.
 - Produces: `reviewOfferFor(tree, page, entry, opened, exportReady): { offered: true } | { offered: false; sentence: string }`; `credentialCount(exportText: string): number` (cuts every `data:image/…;base64,…` payload, then sums `redactCount('linear-egress', text, shapesOf(CREDENTIAL_MASKS)).masked`).
-- Exact sentences: button "Share for review"; confirm title "Share a private copy for review"; hold "This draft holds {n} strings that look like credentials." with "Go back" and "Share anyway"; done "Anyone with this link can read this copy until {date}."; the `new-draft` refusal gains " Share for review sends a private copy."
+- Exact sentences: action "Share a draft for review"; confirm title "Share a private copy for review"; hold "This draft holds {n} strings that look like credentials." with "Go back" and "Share anyway"; done "Anyone with this link can read this copy until {date}." No Share sentence changes.
 
-- [ ] **Step 1: Write the failing tests:** the button shows only when the leaf opens a draft, a new file included; it is disabled with Export's sentence whenever Export is; the confirm lists every inlined file with size and draft mark, every omitted file and every link target from the `ExportResult`; a fake token of valid shape inside a mockup's inline script holds the share, and "Share anyway" uploads with `credentialShapes: 1`; a base64 image payload containing that shape does not count; **M-X3.14**: the upload is not called before the check settles; **M-X3.13**: the upload's bytes equal `buildExport`'s (SHA-256); after success the sheet offers Copy link through `copyText`, and M4.SH7 still finds one `clipboard.writeText(` under `pwa/src/docs`.
+- [ ] **Step 1: Write the failing tests:** the action row shows in Page details only when the leaf opens a draft, a new file included, and never in the Share sheet; Share's own suites (`docs-share.test.ts`, `docs-share-sheet.test.tsx`) run unchanged and green, so `share-drafts`, M4.SH1 and M4.SH3 still hold; it is disabled with Export's sentence whenever Export is; the confirm lists every inlined file with size and draft mark, every omitted file and every link target from the `ExportResult`; a fake token of valid shape inside a mockup's inline script holds the share, and "Share anyway" uploads with `credentialShapes: 1`; a base64 image payload containing that shape does not count; **M-X3.14**: the upload is not called before the check settles; **M-X3.13**: the upload's bytes equal `buildExport`'s (SHA-256); after success the confirm offers Copy link through `copyText`, and M4.SH7 still finds one `clipboard.writeText(` under `pwa/src/docs`.
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/docs-review-share.test.tsx test/docs-share.test.ts test/docs-share-sheet.test.tsx test/docs-scans.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the module, the upload and the sheet arm.
+- [ ] **Step 3: Implement** the module, the upload and the action row.
 - [ ] **Step 4: Run** them. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(docs): Share for review (X3 R3.3)`.
+- [ ] **Step 5: Commit** `feat(docs): Share a draft for review (X3 R3.3)`.
 
 ### Task R3.4: The owner's controls and the newer-draft notice
 
@@ -336,7 +336,7 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R1-M23 | `auth/gate.ts` | the create door added to `EXEMPT` | `auth-gate`, `box-token-census` |
 | NDR-X3-R1-M24 | `ccd/ccrc` | the backup set copies `~/.ccrc` whole | `review-backup` (M-X3.7) |
 | NDR-X3-R3-M1 | `review/shareForReview.ts` | offered on a committed leaf | `docs-review-share` |
-| NDR-X3-R3-M2 | `ShareSheet.tsx` | upload before the credential check | `docs-review-share` (M-X3.14) |
+| NDR-X3-R3-M2 | `review/ReviewConfirm.tsx` | upload before the credential check | `docs-review-share` (M-X3.14) |
 | NDR-X3-R3-M3 | `review/shareForReview.ts` | scan the source text only | `docs-review-share` inline-script row (M-X3.14) |
 | NDR-X3-R3-M4 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
 | NDR-X3-R3-M5 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
@@ -360,7 +360,7 @@ The completion plan's Task 17 runs one row for this capability. Its clauses map 
 
 | Row | Task 17 clause | Installed action | Required observation |
 |---|---|---|---|
-| DR-1 | Share a frozen read-only snapshot | On a draft spec, Share, then Share for review, confirm | A link `https://<origin>/review#<43 chars>`; the owner's list shows it live |
+| DR-1 | Share a frozen read-only snapshot | On a draft spec, Page details, Share a draft for review, confirm; then open Share | A link `https://<origin>/review#<43 chars>` from the action, while Share still offers only the committed permalink; the owner's list shows the share live 
 | DR-2 | the draft banner | Open the link with no ccrc session; tap Open draft | "Draft, not committed. Shared for review on <date>. Read-only." above the copy, and the copy's own banner |
 | DR-3 | unchanged shared bytes after edits | Edit and save the draft; reload the link | The served bytes' SHA-256 equals the one recorded at share |
 | DR-4 | newer-draft notice/re-share | Open the edited leaf as the owner; Re-share; reload the link | The notice shows; after Re-share the same link shows the edit at version 2 |
@@ -377,9 +377,22 @@ The completion plan's Task 17 runs one row for this capability. Its clauses map 
 
 ## Deviations found
 
-None defined. Issued block 8765, 8766 and 8767 is unspent.
+Three departures, defined by fix round 1 of run 2633 from this wave's issued block on the coordinator's ruling of review finding F14. Each carries out the operator's ruling of 2026-10-25 on #1420 (a frozen snapshot shared for review, required before retirement) and the operator's answers to this wave's asks 595 (a capability link, no session to read) and 603 (signed-in comments only). Each is written into its spec by the wave that ships its behaviour.
 
-The spec's §6 amendments to base Goals 1 and 3, decision `product`, the Non-goal "Share links that ccrc hosts" and M4.EX16 are read here as amendments the scope of #1420 names, not departures from the completion design, the rich-docs spec (its row G11 leaves the access model and comments to this design) or an operator ruling. The coordinator confirms that reading or rules otherwise.
+- **D-8765 (2026-11-19)** — draft-review-store-and-read-door. Departs from the base spec (`docs/superpowers/specs/2026-10-01-native-docs-reader-design.md`):
+  - Goal 1: "**Each install reads its own projects' docs.** That means whatever ccd's projects root holds on that install's fleet box, behind that install's own session gate."
+  - Goal 3: "Docs stay in the operator's repositories and reach only the operator's signed-in browser. The one way document bytes leave that browser is a file the operator explicitly saves with Export (amended 2026-10-13, §4.17). It is built in the browser from what the page already holds, ccrc stores nothing for it, and Share sends only a GitHub URL."
+  - Decision `product`: "A session-gated Docs reader for each install's own project docs. It never bundles docs."
+  - Non-goal: "**Share links that ccrc hosts** (amended 2026-10-13). Share sends a GitHub URL only. Expiring links served by ccrc, and Export of a section or directory as a bundle, are deferred (§4.13)."
+  - §4.13: "**Expiring share links** (operator, 2026-10-06: later, as their own designed wave with a threat model). Nothing is designed for them."
+
+  What changes: the owner may explicitly share a frozen snapshot, which the owner's own server keeps for a bounded time and serves to a capability holder through one exempt read door and its page, outside the session gate. Export of a section or directory as a bundle stays deferred, and Share still sends only a GitHub URL. Lands with R1.
+- **D-8766 (2026-11-19)** — draft-review-export-confinement. Departs from the base spec:
+  - §4.13: "**What keeps the option open.** Share's result is a discriminated union, so a link kind with an expiry can be added as one more arm. The export builder is pure, and its `ccrc-docs-export/1` generator meta versions the format. Share and Export spend no page key, route or census entry, and write no durable state."
+  - M4.EX16: "`buildExport.tsx` exports only `buildExport` and types, and `buildExport` is imported only by `docs/ExportSheet.tsx`, which passes its result's bytes only to `downloadExport`;"
+
+  What changes: the expiring link is its own action, not a Share arm; Export's builder gains a second importer (`docs/review/ReviewConfirm.tsx`, by `import()`) and its bytes a second consumer (`docs/review/upload.ts`), each with a planted control; the action spends routes and writes durable state, Share and Export still do neither. Not departed: §4.16's "It runs entirely in the PWA. It adds no route, wire field, page key or census entry, and writes no durable state." stays true, because Share is unchanged. Lands with R3.
+- **D-8767 (2026-11-19)** — draft-review-page-frame-and-parser. Departs from base M5.16: "`<iframe` and `srcDoc` only in `MockupFrame.tsx` and, amended 2026-10-13, `docs/export/buildExport.tsx`" and "`new DOMParser(` only in `docs/mockup/parse.ts`"; and from the rich-docs spec (`docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md`) A2b: "`<iframe` and `srcDoc` only in `MockupFrame.tsx` and `docs/export/buildExport.tsx`, the mockup export's wrapper, and, outside `pwa/src/docs`, in `pwa/src/readerLab/frames.ts` only", which M8.10 pins "As A2b". What changes: `pwa/src/review/main.ts` gains one allowance for each, an `<iframe sandbox="">` with `srcdoc` and one inert `DOMParser` parse of the copy's bytes for its links list, each with its own planted control. The reader frame's sandbox and the shell's CSP are unchanged. Lands with R2.
 
 ## Results (design wave X3, run 2633)
 
