@@ -1,4 +1,4 @@
-import { IDLE_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { IDLE_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
 import {
   SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, decideSleep, type SleepInput,
   type SleepPolicy,
@@ -45,6 +45,14 @@ import {
  * budget, or a dispatch's `ensure`. Another run still holds the worker (`run-worker`) only while it is ACTIVE
  * (`openPlacedWorkers`, which counts a state this build cannot name, as the caps do), so a producer's own parked run
  * never holds it.
+ *
+ * WAITING (D-8790; waiting workers spec 2026-11-19, Part 2). A worker whose newest placed run is
+ * `working` (`STOP_DONE_WAITING_STATES`) and whose turn marker has been quiet `STOP_DONE_PARKED_IDLE_MS` waits — on the
+ * operator, its coordinator or an outside event — and is put to sleep as a parked producer is. Its own active run holds
+ * it neither as `not-done` nor as `run-worker`; a SECOND active run naming it still holds `run-worker`, and a
+ * `dispatched` run (its brief unread) still holds `not-done`. Every use hold stands. The answer says it is this case
+ * (`waiting`), and the lane keeps it in shadow until the operator sets the `working-idle-sleep` row Live; a live act tells
+ * the run's coordinator once (`workerAsleepMail`, D-8791).
  */
 
 /** Every reason the lane leaves a session running this pass — a `Record`, so the list below is derived and a word
@@ -61,10 +69,10 @@ const STOP_DONE_HOLD_MAP = {
   substrate: 'a substrate marker stands',
   'runs-unreadable': 'the coordination store could not answer its runs',
   'no-run': 'no placed run names it as worker (a `planned` run is not placed)',
-  'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`',
+  'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`, nor `working` with its worker waiting',
   'close-unplaced': 'its newest placed run reads `done` or `failed` with no close time',
   grace: 'its run closed less than the grace ago',
-  'run-worker': 'another active run names it as worker',
+  'run-worker': 'another active run names it as worker (beside its own `working` run, a second one)',
   'run-claimant': 'it claims an open run (it coordinates)',
   claim: 'it holds a live claim',
   mail: 'mail to it is outstanding',
@@ -82,7 +90,7 @@ const STOP_DONE_HOLD_MAP = {
   marker: 'its turn marker does not read a finished turn (`done`), or could not be read, or is not this process\'s',
   'marker-background': 'its turn marker\'s last Stop listed background work, or could not say (`bg` not exactly 0; −1 holds)',
   scheduled: 'its last Stop listed a session cron or wakeup, or the marker cannot say (`crons` not exactly 0; absent holds)',
-  recent: 'its last main event is less than the grace old (`STOP_DONE_PARKED_IDLE_MS` for a parked run), or the marker carries no stamp to age',
+  recent: 'its last main event is less than the grace old (`STOP_DONE_PARKED_IDLE_MS` for a parked or `working` run), or the marker carries no stamp to age',
 } as const satisfies Record<string, string>;
 
 export type StopDoneHold = keyof typeof STOP_DONE_HOLD_MAP;
@@ -100,6 +108,10 @@ export const STOP_DONE_PARKED_IDLE_MS = 30 * 60_000;
 /** D-6092 (F5 (b)): the run states a producer is PARKED in — `IDLE_RUN_STATES` but `planned` (a wave not yet
  *  dispatched has no producer to park). Derived, never respelled. */
 export const STOP_DONE_PARKED_STATES: readonly string[] = IDLE_RUN_STATES.filter((st) => st !== 'planned');
+
+/** D-8790: the run state a worker WAITS in when its turn marker is quiet `STOP_DONE_PARKED_IDLE_MS`.
+ *  `dispatched` is not one: its worker has not started, and its brief is unread mail. */
+export const STOP_DONE_WAITING_STATES = ['working'] as const satisfies readonly RunState[];
 
 /** At most this many stops a pass, fleet-wide: a herd of stops is a herd of supervisors restarting on a re-dispatch,
  *  and a slower drain costs nothing (the 2026-08-14 usage-scan herd). */
@@ -140,6 +152,9 @@ export type StopDoneStoreRead =
     /** A run PARKED at review, merge or close names it, newest or not (`parkedPlacedWorkers`;
      *  sibling-parked-run-takes-parked-clock): the marker's quiet is then measured against `STOP_DONE_PARKED_IDLE_MS`. */
     readonly parkedWorker: boolean;
+    /** D-8790: an ACTIVE run other than `last` names it (`otherOpenPlacedWorkers`): what holds a
+     *  waiting worker as `run-worker`, whose own run is active. */
+    readonly otherOpenWorker: boolean;
     readonly openClaimant: boolean;
     readonly claim: boolean;
     readonly mail: boolean;
@@ -203,6 +218,8 @@ export type StopDoneVerdict =
     readonly act: 'hibernate'; readonly runId: number; readonly idleMs: number;
     /** D-6091: the exact `.hold` text a programme hold passed with; the act hands it to `ccd hibernate --hold-ok`. */
     readonly holdOk?: string;
+    /** D-8790: the waiting case, and when the worker's quiet began. */
+    readonly waiting?: { readonly since: number };
   }
   | { readonly act: 'measure' }
   | { readonly act: 'hold'; readonly reason: StopDoneHold };
@@ -216,7 +233,7 @@ export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
   holds: STOP_DONE_HOLDS,
   entry: { child: true, archivedBucket: false, paneDead: false, stopped: true },
   held: SLEEP_HELD_RULES.workspacePasses,
-  runClock: { kind: SLEEP_RUN_CLOCKS.runClose, parkedStates: STOP_DONE_PARKED_STATES },
+  runClock: { kind: SLEEP_RUN_CLOCKS.runClose, parkedStates: STOP_DONE_PARKED_STATES, waitingStates: STOP_DONE_WAITING_STATES },
   verbBeforeMeasure: true,
   turnVerdict: true,
   liveWord: 'sleep',
@@ -246,9 +263,10 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
   if (v.act !== 'hibernate') return v;
   // The run-close clock always names its run: a `hibernate` answer under this row carries it.
   const runId = v.runId as number;
-  return v.holdOk === undefined
-    ? { act: 'hibernate', runId, idleMs: v.idleMs }
-    : { act: 'hibernate', runId, idleMs: v.idleMs, holdOk: v.holdOk };
+  return {
+    act: 'hibernate', runId, idleMs: v.idleMs,
+    ...(v.holdOk === undefined ? {} : { holdOk: v.holdOk }), ...(v.waiting === undefined ? {} : { waiting: v.waiting }),
+  };
 }
 
 /** Is unread mail the ONE thing keeping this finished worker awake (D-6091)? The verdict asked twice — as measured,
@@ -259,9 +277,30 @@ export function stopDoneVerdict(i: StopDoneInput): StopDoneVerdict {
  *  row is asked with its live state unread: `measure` without the mail counts as "would sleep" here. */
 export function mailOnly(i: StopDoneInput): boolean {
   if (!i.store.ok || !i.store.mail) return false;
+  // D-8790: the count is of FINISHED workers (its title and body say so); a waiting worker's run is
+  // still working, so it is never counted, in shadow or live.
+  if (i.store.last !== null && (STOP_DONE_WAITING_STATES as readonly string[]).includes(i.store.last.state)) return false;
   const v = stopDoneVerdict(i);
   if (v.act !== 'hold' || v.reason !== 'mail') return false;
   const without = stopDoneVerdict({ ...i, store: { ...i.store, mail: false } });
   return without.act === 'hibernate' || without.act === 'measure';
 }
 
+
+/** D-8791: the one mail a live sleep of a waiting worker sends its run's coordinator. The subject
+ *  names the run and, to the minute in UTC, when the worker's last turn ended, so it names the sleep: the lane reads it
+ *  back over every delivery state (`hasMailWithSubject`), and a restart or a later pass never sends one sleep twice
+ *  (the stall watch's rule, `self-mail-subjects-carry-the-date`). */
+export const WORKER_ASLEEP_SUBJECT_PREFIX = 'worker-asleep:';
+
+const utcMinute = (ms: number): string => (Number.isFinite(ms) ? `${new Date(ms).toISOString().slice(0, 16)}Z` : 'an unrecorded time');
+
+export function workerAsleepMail(workerId: string, runId: number, since: number): { readonly subject: string; readonly body: string } {
+  const at = utcMinute(since);
+  return {
+    subject: `${WORKER_ASLEEP_SUBJECT_PREFIX} run ${runId}, last turn ended ${at}`,
+    body: `Your worker ${workerId} on run ${runId} was put to sleep: the run is working, and the worker's last turn ended at `
+      + `${at} with nothing running or scheduled since. Its workspace, branch and transcript are kept. Mail to it, or a `
+      + 'send-back, wakes it.',
+  };
+}

@@ -211,6 +211,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "lastRunBySession's open-worker set, part of the counted last-closed reader: its own query, not a caller's decision" },
   { file: 'server/src/coord/store.ts', text: '`SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`',
     why: "lastRunBySession's parked-worker set, part of the counted last-closed reader: its own query, not a caller's decision" },
+  { file: 'server/src/coord/store.ts', text: "`SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +'",
+    why: "lastRunBySession's other-open-worker set (D-8790), part of the counted last-closed reader: its own query, not a caller's decision" },
   { file: 'server/src/coord/store.ts', text: "`SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +'JOIN runs rr ON rr.id = m.runId ' ",
     why: "mail of a PROGRAM, joined to its runs by the mail's run id: the detector reads the templated WHERE, and no session or claimant is asked" },
   { file: 'server/src/coord/store.ts', text: 'c.heldBy === input.sessionId',

@@ -87,6 +87,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
         openWorkers: asked.filter((id) => f.openWorkers.has(id) || f.planned.has(id)),
         openPlacedWorkers: asked.filter((id) => f.openWorkers.has(id)),
         parkedPlacedWorkers: asked.filter((id) => f.parked.has(id)),
+        otherOpenPlacedWorkers: asked.filter((id) => f.openWorkers.has(id)),
         openClaimants: ['lane-a-project-a'],
       }),
       activeClaims: () => [],
@@ -97,6 +98,8 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
         if (st === 'unreadable') return { ok: false as const, kind: 'run-unreadable' as const, detail: 'locked' };
         return { ok: true as const, run: (runId === 900 ? { reviews: 901 } : { id: runId, state: st ?? 'working', reviews: null }) as never };
       },
+      laneArmSetting: () => ({ kind: 'absent' as const }),
+      hasMailWithSubject: () => false,
     },
     runCcd: async (a) => { f.argv.push([...a]); return { ran: true, ok: f.ccdOk, stdout: '', stderr: f.ccdOk ? '' : 'refused', killed: false, signal: null }; },
     fleetState: {
@@ -122,6 +125,7 @@ function fake(ids: readonly string[], o: { verb?: boolean; serial?: boolean; hol
     serial: o.serial === false ? null : async (fn) => { f.serialCalls++; return fn(); },
     queueRun: async (_id, fn) => fn(),
     listing: async () => [],
+    systemMail: () => ({ queued: false }),
     startedAt: STARTED,
     now: () => NOW,
   };
@@ -935,7 +939,7 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
     }
   });
 
-  it('kept: a working run\'s worker, quiet 7 hours, is held', async () => {
+  it('kept: a working run\'s worker, quiet 7 hours, is held while the working-idle-sleep row reads shadow, its seed (D-8790)', async () => {
     const h = await harness();
     try {
       h.coord.db.prepare("UPDATE runs SET state = 'working', closedAt = NULL").run();

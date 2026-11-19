@@ -4037,6 +4037,23 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
   `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-8790): the seed row `working-idle-sleep` =
+  // `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a dispatched worker on a
+  // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
+  // and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; approvals PR 3 and door B1 build on the slots after 109
+  // too, so whoever lands second moves up. RE-MEASURE the slot before the PR and before merge (it must print the count
+  // before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
