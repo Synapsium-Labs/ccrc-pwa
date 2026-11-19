@@ -1524,10 +1524,10 @@ describe('delegation rows read tokens only (delegation broker wave 4)', () => {
     return out;
   };
 
-  it('W4-U32: colour, spacing and size come from var(--…) tokens; currentColor is the one keyword', () => {
+  it('W4-U32: colour, spacing and size come from var(--…) tokens; currentColor is the one keyword; the chip is bordered in it', () => {
     const found = rules();
     const listed = found.flatMap((r) => r.sel.split(',').map((x) => x.trim()));
-    expect(listed).toEqual(expect.arrayContaining(['.proj-work', '.proj-group-toggle']));
+    expect(listed).toEqual(expect.arrayContaining(['.proj-work', '.proj-work-chip', '.proj-group-toggle']));
     const VALUED = /^(color|background(-color)?|border(-color)?|padding.*|margin.*|gap|font-size|min-height|height|width|max-width|border-radius|line-height)$/;
     for (const { sel, body } of found) {
       for (const decl of body.split(';')) {
@@ -1547,6 +1547,7 @@ describe('delegation rows read tokens only (delegation broker wave 4)', () => {
         expect(rest, `${sel} { ${prop}: ${value} }`).toBe('');
       }
     }
+    expect(declValue(ruleFor('.proj-work-chip'), 'border')).toMatch(/currentColor/);
   });
 
   // A supplement to the measured pins in browser/delegation-rows.browser.test.ts (review 1435 F2), never instead of them:
