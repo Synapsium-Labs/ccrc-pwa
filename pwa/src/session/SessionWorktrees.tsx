@@ -12,6 +12,9 @@ import {
   creatorChip, inferredChip, offerOf, worktreeControls, worktreeLine, worktreeStateParts,
 } from '../fleet/delegationWords';
 
+/** The note-sized heading line the details' sections share (`N delegated`'s note and this section's heading): one string, so the two cannot drift. */
+export const ENTRIES_NOTE = 'chat-fact sess-entries-note';
+
 /** The session's worktrees, one row each, under a heading the controls hand the focus back to. Nothing when it holds none. */
 export function SessionWorktrees({ worktrees, project, nowMs }: {
   worktrees: readonly SessionWorktree[];
@@ -28,7 +31,7 @@ export function SessionWorktrees({ worktrees, project, nowMs }: {
   const now = nowMs ?? Date.now();
   return (
     <div className="sess-worktrees" ref={keepHost}>
-      <span className="chat-fact sess-entries-note" ref={heading} tabIndex={-1}>Worktrees</span>
+      <span className={ENTRIES_NOTE} ref={heading} tabIndex={-1}>Worktrees</span>
       {worktrees.map(({ lease: l, viaLabel, attachLabel }) => {
         const w = worktreeLine(l, viaLabel, workingOnCard({ project: l.project }, project));
         // D-6999: the chips are words, never colour alone, and nothing acts on the row but the operator's own tap (PR10). A row
