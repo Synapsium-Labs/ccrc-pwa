@@ -80,6 +80,9 @@ export interface HookState {
    *  file whose `updatedAt` is good (`aliveAt`'s rule). `fleet.ts` is the one
    *  reader that turns it into `FleetSession.background`. */
   background?: { count: number; kinds: string[] };
+  /** The hook's `waitBy` (D-5232): `subagent` when a subagent's own prompt raised this wait. Absent otherwise, and on any
+   *  other value. Read by the approval census (approvals plan 2026-11-18, Task 1.3) for a prompt's thread. */
+  waitBy?: 'subagent';
 }
 
 /** D-5231: the kinds string the hook writes — unique cleaned kinds, comma-joined, or empty. */
@@ -156,7 +159,16 @@ function reviveAsk(raw: unknown): HookAsk {
     if (!isRecord(approvalRaw) || typeof approvalRaw['tool'] !== 'string' || typeof approvalRaw['summary'] !== 'string') {
       throw new Malformed('ask.approval');
     }
-    return { approval: { tool: approvalRaw['tool'], summary: approvalRaw['summary'] } };
+    // The hook's route word (approvals plan Task 1.2), ADDITIVE: absent on an older hook's envelope, and anything but a
+    // short string is dropped rather than failing the whole state, so a bad word never costs the prompt its envelope.
+    // `shared/approval-census.ts#parseApprovalRoute` is what reads the word; here it is only carried.
+    const route = approvalRaw['route'];
+    return {
+      approval: {
+        tool: approvalRaw['tool'], summary: approvalRaw['summary'],
+        ...(typeof route === 'string' && route.length > 0 && route.length <= 64 ? { route } : {}),
+      },
+    };
   }
   throw new Malformed('ask');
 }
@@ -357,6 +369,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
         graphGateDenials: reviveGraphCount(raw, 'graphGateDenials'),
         interrupted: interruptedRaw === true,
         ...(background === undefined ? {} : { background }),
+        ...(raw['waitBy'] === 'subagent' ? { waitBy: 'subagent' as const } : {}),
       },
       sessionId,
       identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',

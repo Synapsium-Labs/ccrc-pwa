@@ -35,7 +35,7 @@
 // import of `currentFor` stays inward and `rings/outward-edges.data.ts` gains no pair.
 import { createHash } from 'node:crypto';
 import {
-  ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState,
+  APPROVAL_HOOK_WAIT_S, APPROVAL_INPUT_RETENTION_DAYS, APPROVAL_STATES, ASK_OPERATOR_PRINCIPAL, approvalDigestBytes, canonicalJson, isAskState,
   type ApprovalMintReleaseReason, type ApprovalRulingRecord, type ApprovalState, type AskMintReleaseReason, type AskState,
   type Dialog, type HookAsk, type HookAskQuestion,
 } from '../../../shared/api.js';
@@ -43,7 +43,7 @@ import { REFUSAL_STATUS, type RouteRefusal } from '../../../shared/refusal.js';
 import { buildTrustOf, buildUntrustedSentence, type BuildUntrustedReason, type ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import { answeredByBody, approvalRuledBody, askPushBody } from '../askbody.js';
 import { askActions, askKey } from '../askkey.js';
-import { approvalWindowMs, askNotifyAt } from '../askwindow.js';
+import { ASK_SETTLE_TICKS, approvalWindowMs, askNotifyAt } from '../askwindow.js';
 import type { HookState } from '../hookstate.js';
 import type { AskResult } from '../inject/ask.js';
 import type { DialogMultiResult, DialogResult, DialogTextResult } from '../inject/send.js';
@@ -52,8 +52,9 @@ import type { PushPayload } from '../push.js';
 import type { BoundRowRef, BoundWrite } from './pushOutboxStore.js';
 import { changeLatch } from '../changeLatch.js';
 import { freshAskAt, readRegistry, UNMEASURED_ASK_AT, type SessionRecord } from '../registry.js';
-import { approvalClass, rootsForChild } from './approvalguard.js';
+import { approvalClass, approvalCommandWords, literalInRoot, rootsForChild } from './approvalguard.js';
 import { approvalAllowRefusal, type DenyStanding } from './approvalDenyFloor.js';
+import { censusSightingOf, type CensusEnvelope } from './approvalCensus.js';
 import { renderApprovalBrief } from './approvalbrief.js';
 import type { ApprovalSigner, rulingsAllowedHere } from './approvalsign.js';
 import type { heldFor } from './heldFor.js';
@@ -196,6 +197,8 @@ export interface QuestionsDeps {
   readonly io?: ReclaimDeps['io'];
   readonly cfg?: ReclaimDeps['cfg'];
   readonly tmux?: ReclaimDeps['tmux'];
+  /** The egress masker (`deps.masker`), for the census row's summary (approvals plan Task 1.3); absent, the redactor alone. */
+  readonly masker?: { maskText(text: string): string } | undefined;
 }
 
 /** The outer-ring rule the hold reads (Q3d): the claimant decision `coord/heldFor.ts#heldFor` (L3, D-5530), passed in
@@ -241,6 +244,8 @@ export interface QuestionPush {
   readonly title: string;
   readonly body: string;
   readonly actions?: PushPayload['actions'];
+  /** An approval prompt's push source, `approval:<n>` or `census:<n>` (approvals plan 2026-11-18, Task 1.4). */
+  readonly source?: string;
 }
 
 /** The record a hold sends at the mint instead of the push (D-2172): the same event, recorded, never pushed. */
@@ -472,6 +477,14 @@ export type ClaimantRule =
 /** The claimant's hand-over, once a door's front ladder has passed. */
 export interface ClaimantRelease { readonly kind: 'ask' | 'approval'; readonly id: number; readonly fromId: string }
 
+/** The approval census read's sources (Task 1.4): the minted rows, the census rows and the approval pushes by source. */
+export interface ApprovalCensusSources {
+  readonly approvals: ReturnType<WatcherCoordPort['approvalRowsForCensus']>;
+  readonly census: ReturnType<WatcherCoordPort['censusRowsIn']>;
+  readonly runs: ReturnType<WatcherCoordPort['censusRunSpans']>;
+  readonly pushes: ReturnType<WatcherCoordPort['approvalPushSources']>;
+}
+
 /** One composition's owner of question state. Q3e: the raise and the approval inputs it holds. Q3d: the hold carrier
  *  and every act on it, as closure locals of `createQuestions` too. */
 export interface Questions {
@@ -500,6 +513,18 @@ export interface Questions {
   lapseApprovals(input: ApprovalLapseInput): void;
   /** The approval half's daily retention (spec §6.7): approval inputs, then the asks' question text. */
   prune(now: number): void;
+  /** The approval census's one write site (approvals plan 2026-11-18, Task 1.3): called on every tick `dialog` is
+   *  painted for `r`, it writes one census row for a prompt that leaves no approvals row, once per sighting. */
+  observeCensus(r: SessionRecord, dialog: Dialog, hs: HookState | null, now: number): void;
+  /** After each tick's dialog loop (review 2695 F1(b), F2(2)): a sighting not painted for more than `ASK_SETTLE_TICKS`
+   *  consecutive ticks, or whose child is no longer in the registry (`present`), ends: it is decided and dropped. */
+  sweepCensus(present: ReadonlySet<string>): void;
+  /** The source the push for the prompt `childId`'s pane paints now carries (`approval:<n>` or `census:<n>`). */
+  pushSourceOf(childId: string): string | undefined;
+  /** The census read's three sources over `[fromMs, toMs)` (Task 1.4), read here because this owner holds the approvals
+   *  and census rows (plan C31; W3's census keeps question-table reads in this file). Undefined with no store; a store
+   *  read that throws throws. */
+  censusSources(fromMs: number, toMs: number): ApprovalCensusSources | undefined;
   /** `POST /api/questions/ask-<n>/release`'s door in: the held ask's snapshot to push now, or null. */
   released(childId: string): QuestionPush | null;
   /** The push outbox's re-read of an ask before each attempt (Overlord W1): settled unless it is still released or
@@ -642,6 +667,10 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const cwdTrusted = trust.cwd;
     const roots = rootsForChild(rec, d.cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: d.cfg.home };
     const cls = shaped ? approvalClass(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null }) : 'escalate';
+    // The census's two facts (approvals plan 2026-11-18, Task 1.4, F7), computed here with the class and from the same
+    // context: the statements' command words and `literalInRoot`. Kept on the row; never an operand.
+    const commandWords = shaped ? approvalCommandWords(tool, input) : null;
+    const literal = shaped && literalInRoot(tool, input, { ...roots, cwd: cwdTrusted ? cwd : null });
     const shown = shaped ? (typeof input['command'] === 'string' ? input['command'] : (canonicalJson(input) ?? '')) : '';
     const releaseReason: ApprovalMintReleaseReason | null = truncated === true ? 'truncated'
       : !shaped ? 'unparseable'
@@ -659,6 +688,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       childId: rec.id, parentId: parent, runId: verdict.runId, digest, nonce, agentId, tool,
       inputRedacted: stored, truncated: truncated === true, class: cls, askAt: now, notifyAt, denyCurrent,
       ...(releaseReason === null ? {} : { releaseReason }),
+      commandWords, literalInRoot: literal,
     });
     if (releaseReason !== null) {
       // Released at once: the hook prints nothing, the menu stays with the operator, and nobody is mailed.
@@ -766,6 +796,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   const setLapsedAsk = (childId: string, askId: number, ev: QuestionPush): void => {
     put(askHoldKey(askId), { kind: 'ask', phase: 'lapsed', childId, askId, ev }, askEntry(childId, 'lapsed')?.[0]);
   };
+  /** A held prompt's deferred push, with its source: the newest row it covers (approvals plan 2026-11-18, Task 1.4). */
+  const heldApprovalPush = (entry: HeldApproval): QuestionPush =>
+    (entry.rowIds.length === 0 ? entry.ev : { ...entry.ev, source: `approval:${Math.max(...entry.rowIds)}` });
   /** `heldApprovals.set(childId, held)`: the child's key, kept in place when it already holds a prompt. */
   const setHeldApproval = (childId: string, held: Omit<HeldApproval, 'childId'>): void => {
     const key = approvalHoldKey(childId);
@@ -1206,6 +1239,8 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    * it, so its notification is final.
    */
   const settleCleared = (childId: string, dialogId: string): void => {
+    // The census's sighting is NOT ended here (review 2695 F1(b)): one empty tick is often a capture miss, so
+    // `sweepCensus` ends it after more than `ASK_SETTLE_TICKS` consecutive empty ticks, or a different dialog does.
     dropAsk(childId, 'lapsed');
     settleClearedApproval(childId, dialogId);
     const held = askEntry(childId, 'held');
@@ -1437,7 +1472,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       const answer = decideDeferredApprovalPush(entry, read, now, paintedDialogOf(childId) === entry.dialogId, graceMs);
       if (answer === 'wait') continue;
       questionHolds.delete(key);
-      if (answer === 'push') push(entry.ev);
+      if (answer === 'push') push(heldApprovalPush(entry));
     }
   };
 
@@ -1447,6 +1482,125 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     if (!coord) return;
     coord.pruneApprovalInputs(now);
     coord.pruneAskQuestions(now);
+    coord.pruneCensusSummaries(now - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000);   // the census's summaries, the same retention
+  };
+
+  // ── the approval census (approvals plan 2026-11-18, §3.1 and Task 1.3) ─────────────────────────────────────────
+
+  /** Per child, the permission prompt its pane paints now (reviews 2638 and 2667): the dialog, when this instance first and
+   *  last saw it, how many ticks it has stood, the run its child's mark names, whether it is DECIDED (a sighting is
+   *  decided once, and nothing it sees later writes a second row), the last approval envelope it saw (which decides once
+   *  seen, F-B), whether any tick read a hook state, the first hook-state stamp (a menu row's key with the dialog, F-C),
+   *  and the push's source once known. IN MEMORY: a restart starts a new sighting, which finds the same keys and rows. */
+  interface CensusSightingState {
+    readonly dialog: Dialog; readonly firstSeenAt: number; lastSeenAt: number; ticks: number; readonly runId: number | null;
+    decided: boolean; source: string | null; envelope: CensusEnvelope | null; hsSeen: boolean; menuStamp: number | null;
+    /** Painted since the last sweep, and the consecutive sweeps it was not (the debounce, review 2695 F1(b)). */
+    seen: boolean; emptySweeps: number;
+  }
+  const censusSightings = new Map<string, CensusSightingState>();
+  const censusWarn = changeLatch<string>();
+  const maskSummary = (text: string): string => redactedStored(deps.masker === undefined ? text : deps.masker.maskText(text));
+  const envelopeContent = (e: CensusEnvelope): string => `${e.ask.approval.tool}\u0000${e.ask.approval.summary}`;
+
+  /** One decision of a sighting, this tick or at its end: the child's rows minted since the hook's longest wait before the
+   *  first sighting, the L1 decider, then the one write (a census row) or the push's source (the minted row). */
+  const decideCensus = (coord: WatcherCoordPort, childId: string, s: CensusSightingState, ask: HookAsk | null, now: number, ending: boolean): boolean => {
+    try {
+      const read = coord.approvalsForChild(childId, APPROVAL_STATES);
+      if (!read.ok) throw new Error(read.detail);
+      const since = s.firstSeenAt - APPROVAL_HOOK_WAIT_S * 1000;
+      const decision = censusSightingOf({
+        hsPresent: s.hsSeen, ask, envelope: s.envelope, menuStamp: s.menuStamp, dialog: s.dialog, firstSeenAt: s.firstSeenAt,
+        now, ticks: s.ticks, ending,
+        minted: read.rows.filter((x) => x.askAt >= since).map((x) => ({ id: x.id, askAt: x.askAt, agentId: x.agentId, state: x.state })),
+      });
+      if (decision.kind === 'wait') return false;
+      s.decided = true;
+      if (decision.kind === 'write') {
+        const row = coord.insertCensusRow({
+          sessionId: childId, sightingKey: decision.sightingKey, path: decision.path, why: decision.why, route: decision.route,
+          thread: decision.thread, tool: decision.tool, summary: decision.summary === null ? null : maskSummary(decision.summary),
+          runId: s.runId, seenAt: now,
+        });
+        s.source = `census:${row.id}`;
+      } else if (decision.mintedId !== null) {
+        s.source = `approval:${decision.mintedId}`;
+      }
+      censusWarn.clear();
+      return true;
+    } catch (err) {
+      const why = err instanceof Error ? err.message : String(err);
+      if (censusWarn.changed(why)) console.warn(`ccrc-server: approval census: ${childId} not counted (${why})`);
+      return false;
+    }
+  };
+
+  /** A sighting that ends (its menu cleared or was replaced) is decided now if it was not yet (F-A): a menu with no
+   *  envelope is decided only here, with the rows minted since its first sighting. */
+  const flushCensus = (childId: string, s: CensusSightingState): boolean => {
+    const coord = deps.coord;
+    if (!coord || s.decided) return true;
+    // Decided only when the decision was made and written (review 2695 F2(3)): a failed read or write keeps the sighting,
+    // and the next sweep tries again.
+    return decideCensus(coord, childId, s, null, s.lastSeenAt, true);
+  };
+
+  const sweepCensus = (present: ReadonlySet<string>): void => {
+    for (const [childId, s] of censusSightings) {
+      if (present.has(childId)) {
+        if (s.seen) { s.seen = false; s.emptySweeps = 0; continue; }
+        s.emptySweeps += 1;
+        if (s.emptySweeps <= ASK_SETTLE_TICKS) continue;
+      }
+      if (flushCensus(childId, s)) censusSightings.delete(childId);
+    }
+  };
+
+  /**
+   * THE CENSUS'S ONE WRITE SITE (Task 1.3): the watcher calls this on every tick a dialog is painted for `r`, before it
+   * raises. `censusSightingOf` (L1) decides; a prompt that leaves no approvals row gets ONE `approval_census` row (the
+   * store's `insertCensusRow`, its one writer), and the sighting remembers the push's source for `pushSourceOf`:
+   * `census:<row>`, or for a prompt the request route minted, `approval:<row>`. A sighting is decided ONCE: an envelope
+   * decides on the tick it is seen (a sent request once its row is there); a menu with no envelope when the sighting ends
+   * (`flushCensus`, from a clear or a replacing dialog). Never throws: a failed store read or write is logged once per
+   * cause and counts nothing.
+   */
+  const observeCensus = (r: SessionRecord, dialog: Dialog, hs: HookState | null, now: number): void => {
+    const coord = deps.coord;
+    if (!coord) return;
+    const ask = hs?.ask ?? null;
+    const env: CensusEnvelope | null = hs !== null && ask !== null && 'approval' in ask
+      ? { ask, updatedAt: hs.updatedAt, waitBy: hs.waitBy === 'subagent' ? 'subagent' : null } : null;
+    let s = censusSightings.get(r.id);
+    // A new sighting: another dialog, or new envelope content under the same menu labels (a new prompt); a restamp of the
+    // same envelope is the same prompt.
+    if (s === undefined || s.dialog.id !== dialog.id || (env !== null && s.envelope !== null && envelopeContent(env) !== envelopeContent(s.envelope))) {
+      if (s !== undefined) flushCensus(r.id, s);
+      s = { dialog, firstSeenAt: now, lastSeenAt: now, ticks: 0, runId: r.child.kind === 'child' ? r.child.runId : null,
+        decided: false, source: null, envelope: null, hsSeen: false, menuStamp: null, seen: true, emptySweeps: 0 };
+      censusSightings.set(r.id, s);
+    }
+    s.ticks += 1;
+    s.lastSeenAt = now;
+    s.seen = true;
+    s.emptySweeps = 0;
+    if (hs !== null) { s.hsSeen = true; if (s.menuStamp === null) s.menuStamp = hs.updatedAt; }
+    if (env !== null) s.envelope = env;
+    if (s.decided) return;
+    decideCensus(coord, r.id, s, ask, now, false);
+  };
+
+  /** The push's source for the prompt `childId`'s pane paints now (`approval:<row>` or `census:<row>`), or undefined. */
+  const pushSourceOf = (childId: string): string | undefined => censusSightings.get(childId)?.source ?? undefined;
+
+  const censusSources = (fromMs: number, toMs: number): ApprovalCensusSources | undefined => {
+    const coord = deps.coord;
+    if (coord === undefined) return undefined;
+    return {
+      approvals: coord.approvalRowsForCensus(fromMs, toMs), census: coord.censusRowsIn(fromMs, toMs),
+      runs: coord.censusRunSpans(fromMs, toMs), pushes: coord.approvalPushSources(fromMs, toMs),
+    };
   };
 
   // ── the door-ins: each answers what to push; the caller pushes ─────────────────────────────────────────────────
@@ -1510,7 +1664,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
       if (read?.ok && read.rows.some((x) => entry.rowIds.includes(x.id) && Date.now() < x.notifyAt)) return null;
     } catch { /* unread: push, the operator's direction */ }
     dropApproval(childId, 'held');
-    return paintedDialogId === entry.dialogId ? entry.ev : null;
+    return paintedDialogId === entry.dialogId ? heldApprovalPush(entry) : null;
   };
 
   /** `POST /api/questions/approval-<n>/rule`'s door in: a deferred push stays deferred (the hook prints the ruling and the
@@ -1522,7 +1676,9 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
   ): QuestionPush | null => {
     // A subagent's ruling is not the painted prompt's (D-5491): the operator's notification for that prompt stays.
     if (agentId !== '' || approvalEntry(childId, 'held') !== undefined || !painted) return null;
-    return { kind: 'ask', sessionId: childId, project: projectOf(), title: '❓ Question', body: approvalRuledBody(parent, verdict) };
+    const source = pushSourceOf(childId);   // the replaced prompt's own source (Task 1.4)
+    return { kind: 'ask', sessionId: childId, project: projectOf(), title: '❓ Question', body: approvalRuledBody(parent, verdict),
+      ...(source === undefined ? {} : { source }) };
   };
 
   /** The stall lane's read: the child's newest asks row (`currentAskFor`), the store's answer unchanged. */
@@ -1867,6 +2023,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     raise, loadReseed, reseed, reseedGone, settleReplaced, settleCleared, restamp,
     noteAsksSwitch: (disabled) => { asksDisabled = disabled; },
     lapseAsks, lapseApprovals, prune, released, askSettled, answeredLate, approvalReleased, approvalRuled, currentAskOf,
+    observeCensus, sweepCensus, pushSourceOf, censusSources,
     answer, rule, release,
     [TEST_VIEW]: testView,
   };

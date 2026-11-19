@@ -6169,6 +6169,76 @@ if [[ -n "$hms" && "$waitby" == subagent && -n "$prev_state" ]]; then
   if [[ -n "$fr_bgd" ]]; then hcarry=1 bgd="$fr_bgd" bgdk="$fr_bgdk"; fi
 fi
 
+# ── THE APPROVAL GATE (approvals plan 2026-11-18, §3.1 and Task 1.2: the census's route word) ─────────────────────
+# A PermissionRequest that set `apr` (any tool but AskUserQuestion) runs the approval wait's PRE-SEND gates here, BEFORE
+# the hookstate write, so the envelope the write stores says where this prompt went: `ask.approval.route`, one additive
+# field whose one writer is this hook (the census, `server/src/coord/questions.ts`, records it; `hookstate.ts` is its
+# one reader). The word is `sent` when every gate passed and the wait below will send the request, else the FIRST gate
+# that stopped it (every `apr_route=<word>` below, held equal to `APPROVAL_ROUTE_SKIP_WORDS` in `shared/approval-census.ts`
+# by `session-hook-approval-route.test.ts`). The gates are the wait's own, in its order, moved here unchanged: a gate that
+# fails still sends nothing and prints nothing. What only the request can tell (`request-refused:<word>`,
+# `request-failed`) the wait patches into the envelope afterwards (`_hook_approval_route_patch`). The cost: on a child's
+# PermissionRequest the gate's forks (the deny digest, the forbidden match, the canonical form and its digest, the
+# nonce) now run before the `waiting` write instead of after it; on any other session's, one file test.
+APPROVAL_REQUEST_MAX_BYTES=65536
+APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
+apr_route="" apr_digest="" apr_nonce="" apr_body="" apr_api="" apr_ti="" apr_dd=""
+# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
+# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
+_apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
+  local s=""
+  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
+  elif command -v node >/dev/null 2>&1; then
+    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
+  else return 1; fi
+  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
+  printf '%s' "$s"
+}
+# The installer's digest history (approvals PR 0; `ccd/install-session-hooks.sh` is its one writer): rc 0 when a line of
+# the exact shape `<digest> <epoch ms>` names this digest. Builtins only, and read only when the digest is not current, so
+# the current-digest path gains no fork and no read. A symlink at the name is never read.
+_apr_deny_history() {   # <digest>
+  local f="$REG/child-deny.digests" l
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 1
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    [[ "$l" =~ ^([0-9a-f]{64})\ [0-9]{1,16}$ && "${BASH_REMATCH[1]}" == "$1" ]] && return 0
+  done < "$f"
+  return 1
+}
+_hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest, apr_nonce, apr_body, apr_api, apr_ti
+  local sum managed uuid fb canon
+  # A session with no `.child` mark is no dispatched child: its prompt is the operator's (Table 2a, path 7).
+  [[ -n "$id" && -e "$REG/$id.child" ]] || { apr_route=not-a-child; return 0; }
+  [[ ! -e "$REG/approvals-disabled" ]] || { apr_route=kill-switch; return 0; }
+  # The deny stamp: absent, unreadable or not a digest, or a managed file that cannot be read, is `deny-unreadable`; a
+  # stamp in no digest history and not current is `deny-unknown`; one in the history goes on with `denyDigest` (PR 0).
+  _ct_read "$REG/$id.deny-settings" || { apr_route=deny-unreadable; return 0; }
+  sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { apr_route=deny-unreadable; return 0; }
+  [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || { apr_route=deny-unreadable; return 0; }
+  managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || { apr_route=deny-unreadable; return 0; }
+  if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || { apr_route=deny-unknown; return 0; }; apr_dd="$sum"; fi
+  command -v node >/dev/null 2>&1 || { apr_route=no-node; return 0; }
+  [[ -f "$REG/approval-verify.mjs" ]] || { apr_route=no-verifier; return 0; }
+  [[ -f "$HOME/.ccrc/approval-signing.pub" ]] || { apr_route=no-key; return 0; }
+  apr_api="$HOME/.local/bin/ccrc-api"; [[ -x "$apr_api" ]] || { apr_route=no-client; return 0; }
+  _ct_read "$REG/$id.uuid" || { apr_route=no-uuid; return 0; }
+  uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || { apr_route=no-uuid; return 0; }
+  # A forbidden match that could not run reads as a match (fail closed): nothing is sent either way.
+  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) && [[ -z "$fb" ]] || { apr_route=forbidden; return 0; }
+  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) && [[ "$canon" == '['* ]] || { apr_route=canonical-failed; return 0; }
+  apr_digest=$(printf '%s' "$canon" | _apr_sha256) || { apr_route=canonical-failed; return 0; }
+  apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) && apr_nonce="${apr_nonce//[^0-9a-f]/}" && [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route='nonce-failed'; return 0; }
+  # Past `APPROVAL_REQUEST_MAX_BYTES` the body carries `truncated` in place of the canonical form (`-a` keeps it ASCII,
+  # so jq's length is its byte count).
+  apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" --arg dd "$apr_dd" --argjson max "$APPROVAL_REQUEST_MAX_BYTES" \
+    '{v: 1, sessionId: $s, sessionUuid: $u} + (if length > $max then {truncated: true} else {canonical: .} end) + {digest: $d, nonce: $n}
+    + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) \
+    || { apr_route=canonical-failed; return 0; }
+  apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || { apr_route=canonical-failed; return 0; }
+  apr_route=sent
+}
+if [[ "$event" == PermissionRequest && -n "$apr" ]]; then _hook_approval_gate || true; fi
+
 # Transitions to working/done clear the ask: an answered question must not
 # stay sticky on the sheet. (A carried write keeps the ask it carried, D-5232.)
 [[ "$state" == working || "$state" == done ]] && { [[ "$event" == SubagentStart || "$event" == SubagentStop || -n "$hcarry" ]] || ask_json="null"; }
@@ -6199,9 +6269,11 @@ if [[ -z "$hs_skip" ]]; then
     --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
     --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
     --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
-    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" --arg waitPrev "$wp_out" \
+    --arg bgDelegated "$bgd" --arg bgDelegatedKinds "$bgdk" --arg waitPrev "$wp_out" --arg route "$apr_route" \
     '{v:$v, state:$state, event:$event, sessionId:$sessionId, pid:$pid,
-      updatedAt:$updatedAt, ask:$ask, subagents:$subagents, graphQueries:$graphQueries,
+      updatedAt:$updatedAt,
+      ask:(if $route != "" and ($ask | type) == "object" and ($ask | has("approval")) then ($ask | .approval.route = $route) else $ask end),
+      subagents:$subagents, graphQueries:$graphQueries,
       graphGateDenials:$graphGateDenials, ccrcPeerReads:$ccrcPeerReads,
       ccrcClaims:$ccrcClaims}
      + (if $interrupted then {interrupted:true} else {} end)
@@ -6294,6 +6366,8 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # before the wait begins, and nothing above changes for any other event. It is the one declared WAIT in this file
 # (the header's "no network, and on the hot path no waiting" contract is the hot path's; a PermissionRequest is not
 # on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
+#   Steps 1 to 3 run in `_hook_approval_gate`, ABOVE the hookstate write (approvals plan Task 1.2), so the envelope
+#   carries the first step that stopped the prompt as `ask.approval.route`; the wait below starts at the request.
 #   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
 #      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned with no
 #      deny rules the box ever installed never gets rulings) or named by the installer's digest history
@@ -6337,19 +6411,8 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # `server/test/fixtures/approvals/digest-corpus.json`.
 APPROVAL_HOOK_WAIT_S=540
 APPROVAL_HOOK_STOP_STATES="declined released operator stale"
-APPROVAL_REQUEST_MAX_BYTES=65536
-APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
-# The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
-# `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
-_apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
-  local s=""
-  if command -v shasum >/dev/null 2>&1; then s=$(shasum -a 256 2>/dev/null)
-  elif command -v node >/dev/null 2>&1; then
-    s=$(node -e 'process.stdout.write(require("crypto").createHash("sha256").update(require("fs").readFileSync(0)).digest("hex"))' 2>/dev/null)
-  else return 1; fi
-  s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
-  printf '%s' "$s"
-}
+# `APPROVAL_REQUEST_MAX_BYTES`, `APPROVAL_DIGEST_JQ` and `_apr_sha256` are defined with THE APPROVAL GATE, above the
+# hookstate write, because the gate reads them before this block runs (approvals plan Task 1.2).
 _apr_call() {   # <args...> -> APR_BODY, APR_CODE from ccrc-api (body on stdout, `http <code>` last on stderr); rc 1 no answer
   local out
   APR_BODY="" APR_CODE=""
@@ -6407,46 +6470,23 @@ _apr_scan() {   # -> rc 0 when the transcript shows this request resolved
   [[ "$ids" == *R* ]]
 }
 _apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
-# The installer's digest history (approvals PR 0; `ccd/install-session-hooks.sh` is its one writer): rc 0 when a line of
-# the exact shape `<digest> <epoch ms>` names this digest. Builtins only, and read only when the digest is not current, so
-# the current-digest path gains no fork and no read. A symlink at the name is never read.
-_apr_deny_history() {   # <digest>
-  local f="$REG/child-deny.digests" l
-  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 1
-  while IFS= read -r l || [[ -n "$l" ]]; do
-    [[ "$l" =~ ^([0-9a-f]{64})\ [0-9]{1,16}$ && "${BASH_REMATCH[1]}" == "$1" ]] && return 0
-  done < "$f"
-  return 1
+# THE ROUTE AFTER THE REQUEST (approvals plan Task 1.2). The gate wrote `sent` before the request was made; a request that
+# got no answer is patched to `request-failed`, and one answered with anything but a `201` to `request-refused:<word>`
+# (the refusal's own `error` word when it is a kebab word, else `http-<code>`). Patched ONLY over this run's own bytes:
+# the file must still hold what the write above stored (`$out`): a write before the compare wins and the word is lost; one
+# inside the compare-to-`mv` window (one jq fork) is overwritten, as hook writes race (no lock). On the failure arms only.
+_hook_approval_route_patch() {   # <word> -> rc 0 always
+  local cur="" new="" tmp
+  [[ -z "$hs_skip" && -n "${out:-}" && -f "$f" && ! -L "$f" ]] || return 0
+  { IFS= read -r -d '' cur < "$f"; } 2>/dev/null; [[ "$cur" == "$out"$'\n' ]] || return 0
+  new=$(jq -c --arg r "$1" 'if (.ask | type) == "object" and (.ask | has("approval")) then .ask.approval.route = $r else empty end' <<<"$out" 2>/dev/null) && [[ -n "$new" ]] || return 0
+  tmp="$REG/.$id.$$.hookstate.tmp"; { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
 }
 _hook_approval_wait() {
-  local sum managed dd="" uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
-  [[ -n "$id" && -e "$REG/$id.child" && ! -e "$REG/approvals-disabled" ]] || return 0
-  _ct_read "$REG/$id.deny-settings" || return 0
-  sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 0
-  [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || return 0
-  managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || return 0
-  if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || return 0; dd="$sum"; fi
-  command -v node >/dev/null 2>&1 || return 0
-  [[ -f "$REG/approval-verify.mjs" && -f "$HOME/.ccrc/approval-signing.pub" ]] || return 0
-  apr_api="$HOME/.local/bin/ccrc-api"
-  [[ -x "$apr_api" ]] || return 0
-  _ct_read "$REG/$id.uuid" || return 0
-  uuid="$CT_V"; [[ "$uuid" =~ ^[A-Za-z0-9_-]+$ ]] || return 0
-  fb=$(jq -r --arg q "'" --arg mode class "$APPROVAL_FORBIDDEN_JQ" <<<"$payload" 2>/dev/null) || return 0
-  [[ -z "$fb" ]] || return 0
-  canon=$(jq -cSa "$APPROVAL_DIGEST_JQ" <<<"$payload" 2>/dev/null) || return 0
-  [[ "$canon" == '['* ]] || return 0
-  digest=$(printf '%s' "$canon" | _apr_sha256) || return 0
-  nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || return 0
-  nonce="${nonce//[^0-9a-f]/}"; [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 0
-  if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
-    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" --arg dd "$dd" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n} + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) || return 0
-  else
-    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" --arg dd "$dd" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n} + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) || return 0
-  fi
-  apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || return 0
+  local rid waits ceil deadline now tick=0 st verdict reason state j t w
+  # Every pre-send gate ran above the hookstate write (`_hook_approval_gate`); only `sent` goes on.
+  [[ "$apr_route" == sent ]] || return 0
   # The knobs: a value that is not the shape reads as the default; none can lengthen the wait.
   apr_tick=0.5; [[ "${CCRC_APPROVAL_TICK_S:-}" =~ ^(0\.[0-9]{1,3}|[1-9])$ ]] && apr_tick="$CCRC_APPROVAL_TICK_S"
   [[ "$apr_tick" =~ ^0\.0[0-4] ]] && apr_tick=0.05
@@ -6454,10 +6494,11 @@ _hook_approval_wait() {
   ceil=$APPROVAL_HOOK_WAIT_S
   [[ "${CCRC_APPROVAL_CEILING_S:-}" =~ ^[0-9]{1,3}$ ]] && (( CCRC_APPROVAL_CEILING_S < ceil )) && ceil=$CCRC_APPROVAL_CEILING_S
   trap 'exit 0' TERM INT HUP
-  _apr_call approvals request --json - <<<"$body" || return 0
-  [[ "$APR_CODE" == 201 ]] || return 0
+  _apr_call approvals request --json - <<<"$apr_body" || { _hook_approval_route_patch request-failed; return 0; }
+  [[ "$APR_CODE" == 201 ]] || { w=$(jq -r '.error // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || w=""
+    [[ "$w" =~ ^[a-z][a-z0-9-]{0,47}$ ]] || w="http-$APR_CODE"; _hook_approval_route_patch "request-refused:$w"; return 0; }
   { read -r rid; read -r waits; } < <(jq -r '(.id | if type == "number" and . == floor and . > 0 then tostring else "" end), (.waitS | if type == "number" and . == floor and . > 0 then tostring else "" end)' <<<"$APR_BODY" 2>/dev/null)
-  [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || return 0
+  [[ "${rid:-}" =~ ^[0-9]{1,15}$ && "${waits:-}" =~ ^[0-9]{1,6}$ ]] || { _hook_approval_route_patch request-failed; return 0; }
   (( waits < ceil )) && ceil=$waits
   deadline=$(( $(_hook_epoch_ms) + ceil * 1000 ))
   # The transcript this request lives in (main thread, or the subagent's own file).
@@ -6472,20 +6513,20 @@ _hook_approval_wait() {
     (( now < deadline )) || return 0
     if _apr_scan; then return 0; fi
     if (( tick % apr_poll == 0 )); then
-      if _apr_call approvals ruling "$rid" --nonce "$nonce"; then
+      if _apr_call approvals ruling "$rid" --nonce "$apr_nonce"; then
         case "$APR_CODE" in
           200)
             state=$(jq -r '.state // "" | tostring' <<<"$APR_BODY" 2>/dev/null) || state=""
             for st in $APPROVAL_HOOK_STOP_STATES; do [[ "$state" == "$st" ]] && return 0; done
             j=$(jq -c '.ruling // empty' <<<"$APR_BODY" 2>/dev/null) || j=""
             if [[ -n "$j" ]]; then
-              verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$digest" "$nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""
+              verdict=$(node "$REG/approval-verify.mjs" "$id" "$aid" "$apr_digest" "$apr_nonce" "$rid" "$(_hook_epoch_ms)" <<<"$j" 2>/dev/null) || verdict=""
               reason="${verdict#* }"
               case "$verdict" in
                 'allow '*)
                   # Approvals PR 0, the second gate: a child whose digest only the history names never prints an allow,
                   # whatever the record says; the server's rule door refuses it `deny-not-current` too. A deny prints.
-                  [[ -z "$dd" ]] || return 0
+                  [[ -z "$apr_dd" ]] || return 0
                   t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
                   return 0 ;;
                 'deny '*)

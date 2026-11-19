@@ -32,7 +32,7 @@ const HISTORY_SETS: Record<'BASE_RULES' | 'CONTEXT_RULES', { field: RuleDump; fi
 describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', () => {
   it('the egress profile is these rule ids, in this order', () => {
     expect([...PROFILES.egress]).toEqual([
-      'json-pair', 'yaml-secret', 'jwt', 'secret-assigns', 'program-flags', 'header', 'bearer', 'secret-word',
+      'pem-block', 'json-pair', 'yaml-secret', 'jwt', 'secret-assigns', 'program-flags', 'header', 'bearer', 'secret-word',
       'url-userinfo-quoted', 'url-userinfo', 'user-quoted', 'user-flag', 'proxy-userinfo', 'cert-pass',
       'user-empty-pass', 'p-flag', 'p-quoted', 'secret-flag', 'single-dash-secret', 'camel-secret-flag', 'rdp-pass',
       'pass-arg', 'slack-hook', 'telegram-bot', 'known-token', 'token-segments',
@@ -45,7 +45,7 @@ describe('shared/redact.mjs: profiles list their rule ids explicitly (D-5867)', 
   });
   it('the linear-egress profile is these rule ids, in this order: the credential shapes only (#1444)', () => {
     expect([...PROFILES['linear-egress']]).toEqual([
-      'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
+      'pem-block', 'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
     ]);
   });
   it('there are five profiles: egress, docs, linear-egress (#1444) and the two history profiles (PR 2)', () => {
@@ -169,7 +169,9 @@ describe('shared/redact.mjs is browser-safe: the PWA bundles shared/docs.ts, whi
   });
   it('the redactor is browser-safe: importing it runs nothing but the table', async () => {
     const mod = await import('../../shared/redact.mjs');
-    expect(Object.keys(mod).sort()).toEqual(['EGRESS_MASK', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'historyRules', 'redact', 'redactCount']);
+    expect(Object.keys(mod).sort()).toEqual([
+      'EGRESS_MASK', 'PEM_PRIVATE_KEY_SOURCE', 'PROFILES', 'RULE_IDS', 'docsRuleRows', 'historyRules', 'redact', 'redactCount',
+    ]);
   });
 });
 
