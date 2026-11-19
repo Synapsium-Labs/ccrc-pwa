@@ -49,6 +49,7 @@ const DigestScreen = lazyScreen(() => import('./screens/DigestScreen').then((m) 
 const HighlightMeasure = lazyScreen(() => import('./screens/HighlightMeasure').then((m) => m.HighlightMeasure));
 const ReaderLab = lazyScreen(() => import('./screens/ReaderLab').then((m) => m.ReaderLab));
 const RunsScreen = lazyScreen(() => import('./screens/RunsScreen').then((m) => m.RunsScreen));
+const FlowsScreen = lazyScreen(() => import('./flows/FlowsScreen').then((m) => m.FlowsScreen));
 const RunsAdvancedScreen = lazyScreen(() => import('./screens/RunsAdvancedScreen').then((m) => m.RunsAdvancedScreen));
 const SessionScreen = lazyScreen(() => import('./screens/SessionScreen').then((m) => m.SessionScreen));
 const SettingsScreen = lazyScreen(() => import('./screens/settings/SettingsFrame').then((m) => m.SettingsScreen));
@@ -203,6 +204,11 @@ export function App(): ReactNode {
     <SessionScreen key={sessionId} id={sessionId} />
   ) : route === 'archive' ? (
     <ArchiveRoute />
+  ) : route === 'flows' ? loading(
+    <FlowsScreen />
+  ) : route === 'flow' ? loading(
+    // Keyed inside: one flow's draft never shows under another's number. `accepts` kept the id canonical.
+    <FlowsScreen openId={Number(at!.param)} />
   ) : route === 'accounts' ? loading(
     <AccountsScreen />
   ) : route === 'inbox' ? (

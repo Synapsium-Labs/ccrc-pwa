@@ -30,6 +30,9 @@ export interface Place {
    *  The phone bar's door is named by this word too ("Waiting, 3 waiting on you"), so the text it shows is in its name
    *  (review 1722); the desk bars name the place by its title. */
   readonly short?: string;
+  /** `false`: a desk place only. The phone bar holds a seventh of a phone per door, so a place an operator visits from a
+   *  desk (Flows, flows design 2026-11-19 §9) stays off it, and a phone reaches it through the palette's "Go to". */
+  readonly phone?: false;
 }
 
 /** Today's places, in the navigation's order, fleet first: the list every bar draws with no Overlord's door. */
@@ -38,6 +41,7 @@ const BASE_PLACES: readonly Place[] = [
   { id: 'waiting', icon: 'hand', short: 'Waiting' },
   { id: 'inbox', icon: 'mail' },
   { id: 'runs', icon: 'workflow' },
+  { id: 'flows', icon: 'list-checks', phone: false },
   { id: 'accounts', icon: 'key-round' },
   { id: 'docs', icon: 'file-text' },
 ];
@@ -48,15 +52,21 @@ export const OVERLORD_PLACE: Place = { id: 'overlord', icon: 'bot' };
 /** The place a desk's navigation leaves out while D25 stands: the sessions are in the column beside every page there. */
 export const FLEET_PLACE = 'fleet';
 
-/** The places, in the phone's order: the Overlord first while its door is drawn (`shown` is `overlordShown`), then today's. */
-export function placesFor(shown: boolean, d: DesignationState): readonly Place[] {
+/** Every place, desk-only ones included: the Overlord first while its door is drawn (`shown` is `overlordShown`), then today's. */
+function allPlacesFor(shown: boolean, d: DesignationState): readonly Place[] {
   return shown && OVERLORD_DOOR[d.kind] ? [OVERLORD_PLACE, ...BASE_PLACES] : BASE_PLACES;
+}
+
+/** The places, in the phone's order: every place but a desk-only one (`phone: false`), the Overlord first while its door is
+ *  drawn (`shown` is `overlordShown`), then today's. */
+export function placesFor(shown: boolean, d: DesignationState): readonly Place[] {
+  return allPlacesFor(shown, d).filter((p) => p.phone !== false);
 }
 
 /** The places a desk's navigation shows: every place but the fleet, in the same order, and the Fleet second, after the
  *  Overlord, only while the Overlord's door is drawn and the home is not the Fleet (ruled F5). */
 export function deskPlacesFor(shown: boolean, d: DesignationState, home: HomeAnswer): readonly Place[] {
-  const all = placesFor(shown, d);
+  const all = allPlacesFor(shown, d);
   const rest = all.filter((p) => p.id !== FLEET_PLACE);
   const fleet = all.find((p) => p.id === FLEET_PLACE);
   if (rest[0]?.id !== OVERLORD_PLACE.id || home.place === 'fleet' || fleet === undefined) return rest;

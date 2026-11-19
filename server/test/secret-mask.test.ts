@@ -1254,6 +1254,12 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/coord/lane-arm': "each shadow lane's choice word, write and import times, and its retired marker's name: no session text (D-8274)",
     '/api/coord/run-close': "the run-close groups' states, run ids with their programme slugs and reasons, and 7-day counts: no session text (D-8077)",
     '/api/face': 'the face character, one word from a closed set, and its change time: no session-derived text',
+    // Flows (spec 2026-11-19 §8): the operator's own flow documents, answered byte for byte, because the editor saves what it
+    // read and a masked prompt would be written back masked. No session writes a flow; a prompt reaches a session only from
+    // the engine wave, whose send is the egress that masks.
+    '/api/flows': 'the operator\'s flows and the shipped templates: operator-written text only, never a session\'s',
+    '/api/flows/:id': 'one operator flow and its draft: operator-written text only, answered byte for byte for the editor',
+    '/api/flows/:id/versions/:version': 'one published version of an operator flow: operator-written text only',
     '/api/responses': 'ids, kinds, states and times of the response rows about one item or digest line: no session text',
     '/api/responses/retention': 'one number of days, its default and its bounds',
     '/api/overlord/private-names': "whether a private-name list is stored, its row count, its upload time and an unreadable reason word: never a name, an entry, a hash or the key (Overlord W2, private names B)",

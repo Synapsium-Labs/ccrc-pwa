@@ -8,6 +8,8 @@ import {
 import { ROUTES } from '../src/lib/routes';
 
 const TODAY = ['fleet', 'waiting', 'inbox', 'runs', 'accounts', 'docs'];
+/** The desk's places with no Overlord's door: today's less the fleet, with Flows, a desk place only (flows design 2026-11-19 §9). */
+const DESK_TODAY = ['waiting', 'inbox', 'runs', 'flows', 'accounts', 'docs'];
 const ids = (ps: readonly Place[]): string[] => ps.map((p) => p.id);
 
 const STATES: Readonly<Record<DesignationState['kind'], DesignationState>> = {
@@ -42,23 +44,23 @@ describe('placesFor', () => {
 
 describe('deskPlacesFor (ruled F5, plan question 14)', () => {
   it('has no Fleet door while no Overlord door is drawn (D25)', () => {
-    for (const d of Object.values(STATES)) expect(ids(deskPlacesFor(false, d, HOME_NONE))).toEqual(TODAY.slice(1));
-    expect(ids(deskPlacesFor(true, STATES.none, HOME_NONE))).toEqual(TODAY.slice(1));
-    expect(ids(deskPlacesFor(true, STATES.unmeasured, { place: 'fleet', why: 'designation-unmeasured' }))).toEqual(TODAY.slice(1));
+    for (const d of Object.values(STATES)) expect(ids(deskPlacesFor(false, d, HOME_NONE))).toEqual(DESK_TODAY);
+    expect(ids(deskPlacesFor(true, STATES.none, HOME_NONE))).toEqual(DESK_TODAY);
+    expect(ids(deskPlacesFor(true, STATES.unmeasured, { place: 'fleet', why: 'designation-unmeasured' }))).toEqual(DESK_TODAY);
   });
   it('adds the Fleet door second, after the Overlord, while the home is the Overlord', () => {
     for (const k of ['bound', 'pending'] as const) {
-      expect(ids(deskPlacesFor(true, STATES[k], HOME_OVERLORD))).toEqual(['overlord', FLEET_PLACE, ...TODAY.slice(1)]);
+      expect(ids(deskPlacesFor(true, STATES[k], HOME_OVERLORD))).toEqual(['overlord', FLEET_PLACE, ...DESK_TODAY]);
       expect(ids(deskPlacesFor(true, STATES[k], { place: 'overlord', why: 'rung-unmeasured' })))
-        .toEqual(['overlord', FLEET_PLACE, ...TODAY.slice(1)]);
+        .toEqual(['overlord', FLEET_PLACE, ...DESK_TODAY]);
     }
   });
   it('has no Fleet door with no Overlord door, whatever the home answers', () => {
-    expect(ids(deskPlacesFor(false, STATES.bound, HOME_OVERLORD))).toEqual(TODAY.slice(1));
+    expect(ids(deskPlacesFor(false, STATES.bound, HOME_OVERLORD))).toEqual(DESK_TODAY);
   });
   it('has no Fleet door while the rung is off or a first start failed: the home, and the wordmark, are the Fleet then', () => {
-    expect(ids(deskPlacesFor(true, STATES.bound, HOME_RUNG_OFF))).toEqual(['overlord', ...TODAY.slice(1)]);
-    expect(ids(deskPlacesFor(true, STATES['failed-start'], HOME_FAILED))).toEqual(['overlord', ...TODAY.slice(1)]);
+    expect(ids(deskPlacesFor(true, STATES.bound, HOME_RUNG_OFF))).toEqual(['overlord', ...DESK_TODAY]);
+    expect(ids(deskPlacesFor(true, STATES['failed-start'], HOME_FAILED))).toEqual(['overlord', ...DESK_TODAY]);
   });
 });
 

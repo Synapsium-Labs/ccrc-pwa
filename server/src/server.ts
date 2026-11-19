@@ -111,6 +111,7 @@ import { registerPlanRoutes } from './coord/planRoutes.js';
 import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
+import { registerFlowsRoutes } from './flows/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, drainOwedStops, registerOverlordRoutes } from './coord/overlordRoutes.js';
 import { NO_WITNESS_YET, ladderConditionInputs, ladderRead } from './coord/overlordLadderRead.js';
@@ -2408,6 +2409,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   registerReaderLabRoutes(app, readerLab);
   // The operator's character choice (the Overlord face plan, Task 6), from its own file: two session-gated routes, no box token.
   registerFaceRoutes(app, { coord: deps.coord });
+  registerFlowsRoutes(app, { coord: deps.coord });
   // The Overlord's designation doors (Overlord W1 designation A, plan Tasks 4 and 5): the body over ccd, with the stop route's own
   // path as `stopCreated`, and the first prompt through the renewal lane's `SessionHost`.
   registerOverlordRoutes(app, {

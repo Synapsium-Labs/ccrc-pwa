@@ -9,7 +9,8 @@ import path from 'node:path';
 import postcss from 'postcss';
 import { act, cleanup, render, screen } from '@testing-library/react';
 
-/** The lazy screens (the seven of C1, and Advanced beside Runs, D-8073), by module path as `app.tsx` names them. */
+/** The lazy screens (the seven of C1, Advanced beside Runs, D-8073, and Flows, flows design 2026-11-19 §9), by module path as
+ *  `app.tsx` names them. */
 const LAZY = [
   './screens/SessionScreen',
   './screens/settings/SettingsFrame',
@@ -19,6 +20,7 @@ const LAZY = [
   './screens/DigestScreen',
   './screens/HighlightMeasure',
   './screens/ReaderLab',
+  './flows/FlowsScreen',
 ] as const;
 
 /** The screens that stay in the entry (spec §2.3): Docs, the programme, Mail, Archive and the Waiting routes. */
