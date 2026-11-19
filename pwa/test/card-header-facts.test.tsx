@@ -403,60 +403,50 @@ describe('verifier round 1 — the gaps the first suite left open', () => {
   });
 });
 
-// Delegation broker wave 4, PR2 Task 2.8, and delegation visibility: a programme worker's attached delegation entries
-// are ONE chip on its row (R9), every liveness counted (D-7781); the session header lists every entry it started.
-describe('the R9 chip: a worker\'s attached delegation entries (delegation broker wave 4; D-7781)', () => {
+// Delegation visibility: the session header lists every delegation entry the session started, every liveness counted
+// (D-7781). The row's R9 chip and its count comparison (D-7782) went with D-8771: the fleet list shows no such count.
+describe('the header\'s delegated-entries disclosure (D-7781; the card chip is gone, D-8771)', () => {
   const worker = s({ role: 'child', child: { kind: 'child', runId: 40 }, status: 'busy', bucket: 'working' });
   const two = [activity({ activityId: 'a1', parentId: worker.id, displayName: 'map the tree' }),
     activity({ activityId: 'a2', parentId: worker.id, displayName: 'read the plan' })];
 
-  it('W4-U33 (D-7781): two attached entries, of any liveness, read "2 delegated" on the card, and the header holds it', () => {
+  it('C46 (supersedes D-7781 and D-7782 on the card): the card carries no delegated fact, the header keeps it with its count', () => {
     const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
     const card = cardFacts(f);
-    expect(card.delegated?.text).toBe('2 delegated');
-    expect(card.delegated?.title).toBe('2 recorded delegation entries, not a current agent count; execution not confirmed');
-    expect(headerFacts(f).find((h) => h.key === 'delegated')?.text).toBe('2 delegated');
+    expect(card, 'no field survives on the card').not.toHaveProperty('delegated');
+    const head = headerFacts(f).find((h) => h.key === 'delegated');
+    expect(head).toMatchObject({ text: '2 delegated' });
+    expect(head?.title).toBe('2 recorded delegation entries, not a current agent count; execution not confirmed');
+    // Every entry still counts in the header, of every liveness (D-7781's header side stands).
+    const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
+    const three = [...two, activity({ activityId: 'a3', parentId: worker.id, liveness: 'stale' })];
+    expect(headerFacts(sessionFacts({ session: dead, now: NOW, delegated: three })).find((h) => h.key === 'delegated')?.text).toBe('3 delegated');
+    // The subset rule is now about the card's own facts only, and still catches a header that lacks one.
     expect(cardWithinHeader(card, headerFacts(f))).toEqual([]);
-    // The subset predicate itself counts the chip: a header without it is a header missing a card fact.
-    expect(cardWithinHeader(card, headerFacts(f).filter((h) => h.key !== 'delegated'))).toEqual([card.delegated]);
-    // Every attached entry counts, of every liveness (D-7781): a stale one is a chip too.
-    expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [activity({ liveness: 'stale' })] })).delegated?.text).toBe('1 delegated');
+    expect(cardWithinHeader(card, headerFacts(f).filter((h) => h.key !== 'status'))).toEqual([card.status]);
   });
 
-  it('W4-U34 (D-7781): a dead worker keeps its chip, every liveness counted, on the card and in the header', () => {
-    const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
-    const entries = [...two, activity({ activityId: 'a3', parentId: worker.id, liveness: 'stale' })];
-    const f = sessionFacts({ session: dead, now: NOW, delegated: entries });
-    expect(cardFacts(f).delegated?.text).toBe('3 delegated');
-    expect(headerFacts(f).find((h) => h.key === 'delegated')?.text).toBe('3 delegated');
-    const { container } = render(<SessionLine session={dead} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={entries} />);
-    expect(container.querySelector('.sess-meta .sess-meta-chip')?.textContent).toBe('3 delegated');
-    // A row handed no attached entries has no chip.
-    expect(cardFacts(sessionFacts({ session: worker, now: NOW })).delegated).toBeNull();
-    expect(cardFacts(sessionFacts({ session: worker, now: NOW, delegated: [] })).delegated).toBeNull();
+  it('C46: a session\'s row draws no count of its subagents or delegated entries, in its text or its accessible name', () => {
+    const busy = s({ ...worker, subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] });
+    for (const session of [busy, s({ ...busy, status: 'dead', bucket: 'dead' })]) {
+      const { container } = render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} now={NOW} />);
+      const drawn = `${container.textContent} ${[...container.querySelectorAll('[aria-label],[title]')]
+        .map((el) => `${el.getAttribute('aria-label') ?? ''} ${el.getAttribute('title') ?? ''}`).join(' ')}`;
+      expect(drawn).not.toMatch(/subagent|delegated|⑂/i);
+      expect(container.querySelector('.sess-meta-chip')).toBeNull();
+      expect(container.querySelector('.sess-subagents')).toBeNull();
+      cleanup();
+    }
   });
 
-  it('VIS-C1 (D-7782): the header holds the card\'s count of attached entries though its own count is larger', () => {
-    const dead = s({ ...worker, status: 'dead', bucket: 'dead' });
-    const attached = activity({ activityId: 'a1', parentId: worker.id, placement: 'chip', liveness: 'stale' });
-    const placed = [activity({ activityId: 'a2', parentId: worker.id, placement: 'row' }),
-      activity({ activityId: 'a3', parentId: worker.id, placement: 'row', liveness: 'unmeasured' })];
-    const card = cardFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached] }));
-    const header = headerFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached, ...placed] }));
-    expect(card.delegated).toMatchObject({ key: 'delegated', text: '1 delegated', count: 1 });
-    expect(header.find((h) => h.key === 'delegated')).toMatchObject({ text: '3 delegated', count: 3 });
-    expect(cardWithinHeader(card, header)).toEqual([]);
-    // It still catches a card fact the header lacks, or holds with a smaller count, and every other key keeps its prefix rule.
-    expect(cardWithinHeader(card, header.filter((h) => h.key !== 'delegated'))).toEqual([card.delegated]);
-    const wide = cardFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached, ...placed] }));
-    const narrow = headerFacts(sessionFacts({ session: dead, now: NOW, delegated: [attached] }));
-    expect(cardWithinHeader(wide, narrow)).toEqual([wide.delegated]);
-    expect(cardWithinHeader(card, header.filter((h) => h.key !== 'status'))).toEqual([card.status]);
-    // A `delegated` fact with no count holds nothing, on either side (VIS-M13): the count is the comparison.
-    const countless = { ...card, delegated: { key: card.delegated!.key, text: card.delegated!.text } };
-    expect(cardWithinHeader(countless, header)).toEqual([countless.delegated]);
-    const headerCountless = header.map((h) => (h.key === 'delegated' ? { key: h.key, text: h.text } : h));
-    expect(cardWithinHeader(card, headerCountless)).toEqual([card.delegated]);
+  it('C46: the same session\'s header still draws both disclosures with their counts', () => {
+    const busy = s({ ...worker, subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] });
+    const f = sessionFacts({ session: busy, now: NOW, childRun: child(RUN), delegated: two });
+    render(<SessionHeaderHost {...headerProps({ session: busy, status: busy.status, facts: f })} />);
+    const toggle = screen.queryByRole('button', { name: /details/i });
+    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+    expect(screen.getByRole('button', { name: '2 subagents' }).textContent).toContain('2 subagents');
+    expect(screen.getByRole('button', { name: '2 delegated' }).textContent).toContain('2 delegated');
   });
 
   it('VIS-H1: the header lists every entry the session started, once each, behind a disclosure that does not navigate', async () => {
@@ -496,20 +486,7 @@ describe('the R9 chip: a worker\'s attached delegation entries (delegation broke
     expect(location.pathname).toBe(path);
   });
 
-  it('W4-U35: the row draws the chip when handed attached entries, and is byte-identical without it', () => {
-    const { container: bare } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} />);
-    const today = bare.innerHTML;
-    cleanup();
-    const { container: empty } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={[]} />);
-    expect(empty.innerHTML).toBe(today);
-    cleanup();
-    const { container } = render(<SessionLine session={worker} onOpen={() => {}} onActions={() => {}} now={NOW} delegated={two} />);
-    const chip = container.querySelector('.sess-meta .sess-meta-chip');
-    expect(chip?.textContent).toBe('2 delegated');
-    expect(chip?.getAttribute('title')).toBe('2 recorded delegation entries, not a current agent count; execution not confirmed');
-  });
-
-  it('the rendered header draws the chip the card draws', () => {
+  it('the rendered header draws the delegated disclosure with its count', () => {
     const f = sessionFacts({ session: worker, now: NOW, childRun: child(RUN), delegated: two });
     render(<SessionHeaderHost {...headerProps({ session: worker, status: worker.status, facts: f })} />);
     const toggle = screen.queryByRole('button', { name: /details/i });

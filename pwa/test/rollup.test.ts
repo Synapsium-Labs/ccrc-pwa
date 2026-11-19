@@ -260,9 +260,9 @@ describe('rollup — delegation rows under a coordinator (delegation broker wave
     const { sessions, runs } = coordFleet(1);
     const w = frame({ activities: [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })] });
     const folded = rolled(sessions, runs, w);
-    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · 2 delegated', 1], ['w1', 1]]);
+    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · delegated', 1], ['w1', 1]]);
     const open = rolled(sessions, runs, w, toggleChildren(NO_ROLLUP_PREFS, 'coord'));
-    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · 2 delegated', 1], ['w1', 1], ['activity:a1', 1], ['activity:a2', 1]]);
+    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · delegated', 1], ['w1', 1], ['activity:a1', 1], ['activity:a2', 1]]);
   });
 
   it('W4-U26: a card whose only change is a live activity stays inactive (the class never reads a delegation row)', () => {

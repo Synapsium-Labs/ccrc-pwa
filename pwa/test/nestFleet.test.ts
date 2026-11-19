@@ -350,15 +350,16 @@ describe('nestFleet — delegation rows (rules 6 to 11, delegation broker wave 4
     expect(leaseRow(rows, 'lease-1').group).toBeNull();
   });
 
-  it('W4-U13 (rule 8, one level): a worker\'s activity is its chip, never a row; a worker\'s worktree sits under the coordinator, via the worker', () => {
+  it('W4-U13 (rule 8, one level): a worker\'s activity is never a row (D-8771: and no chip either); a worker\'s worktree sits under the coordinator, via the worker', () => {
     const chip = activity({ activityId: 'a-chip', parentId: 'worker-a', placement: 'chip' });
     const skewAct = activity({ activityId: 'a-skew', parentId: 'worker-a', placement: 'row' });
     const viaLease = lease({ leaseId: 'l-via', parentId: 'coord-a', via: 'worker-a' });
     const skewLease = lease({ leaseId: 'l-skew', parentId: 'worker-a', via: null, firstObservedAt: '2026-10-26T11:00:00.000Z' });
     const rows = nestD([coord, worker], programme, slice({ activities: [chip, skewAct], leases: [viaLease, skewLease] }));
     expect(dshape(rows)).toEqual([['coord-a', 0], ['worker-a', 1], ['lease:l-via', 1], ['lease:l-skew', 1]]);
-    expect(sessionRow(rows, 'worker-a').delegated?.map((a) => a.activityId)).toEqual(['a-chip', 'a-skew']);
-    expect(sessionRow(rows, 'coord-a').delegated).toBeUndefined();
+    // D-8771: the fleet list keeps no count of a session's attached entries, so no row carries them.
+    expect(sessionRow(rows, 'worker-a')).not.toHaveProperty('delegated');
+    expect(sessionRow(rows, 'coord-a')).not.toHaveProperty('delegated');
     expect(leaseRow(rows, 'l-via').via).toBe('worker-a');
     expect(leaseRow(rows, 'l-skew').via).toBe('worker-a');
   });

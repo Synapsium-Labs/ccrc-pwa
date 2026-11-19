@@ -1522,13 +1522,14 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     expect(container.textContent).toContain('Unowned work (1)');
   });
 
-  it('R9 on the card: a programme worker\'s live activity is a chip on its row, never a row of its own', () => {
+  it('C46 (D-8771, supersedes R9\'s chip): a programme worker\'s attached activity is never a row, and its session row draws no count of it', () => {
     const w = frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'chip' })] });
     const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
     expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
-    const chips = [...container.querySelectorAll('.sess-meta-chip')];
-    expect(chips.map((c) => c.textContent)).toEqual(['1 delegated']);
-    expect(chips[0]!.closest('.proj-nest')).not.toBeNull();
+    expect(container.querySelectorAll('.sess-meta-chip')).toHaveLength(0);
+    expect(container.textContent).not.toMatch(/delegated|subagent|⑂/i);
+    const names = [...container.querySelectorAll('button')].map((b) => b.getAttribute('aria-label') ?? b.textContent ?? '');
+    for (const n of names) expect(n, n).not.toMatch(/delegated|subagent|⑂/i);
   });
 
   it('a session in no programme folds three delegated activities into one line, as the rollup decided (main\'s boxes)', () => {
@@ -1539,13 +1540,13 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
       onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />);
     const { container, unmount } = drawn(NO_ROLLUP_PREFS);
     expect(container.querySelector('section.pg-box'), 'coord-a claims no run: it is no box').toBeNull();
-    const line = screen.getByRole('button', { name: '3 delegated' });
+    const line = screen.getByRole('button', { name: 'delegated' });
     expect(line.getAttribute('aria-expanded')).toBe('false');
     expect(line.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
     expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
     unmount();
     const open = drawn(toggleChildren(NO_ROLLUP_PREFS, 'coord-a'));
-    expect(screen.getByRole('button', { name: '3 delegated' }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: 'delegated' }).getAttribute('aria-expanded')).toBe('true');
     expect(open.container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
 

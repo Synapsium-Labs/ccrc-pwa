@@ -114,8 +114,6 @@ export interface Fact {
   readonly text: string;
   readonly short?: string;
   readonly title?: string;
-  /** The count the subset rule compares instead of the text: the `delegated` fact only (D-7782). */
-  readonly count?: number;
 }
 
 /** What the model is told. Everything a CARD knows is here; the header passes the same. */
@@ -133,7 +131,7 @@ export interface FactInput {
   readonly coordinator?: CoordinatorPresence | null;
   /** The orphan marker's guidance (`orphanGuidance`): the card and the header both put it on the marker. */
   readonly coordinatorTitle?: string | null;
-  /** The delegation entries this session started: on the card, the ones `nestFleet` attached to its row; in the header, every one (`activitiesStartedBy`). Absent or `null` = none known. */
+  /** The delegation entries this session started: every one (`activitiesStartedBy`), for the header. The card takes none (D-8771). Absent or `null` = none known. */
   readonly delegated?: readonly DelegationActivityWire[] | null;
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
    *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
@@ -186,7 +184,7 @@ export interface SessionFactSet {
   readonly offPool: string | null;
   readonly orphan: 'gone' | 'hibernated' | null;
   readonly orphanTitle: string | null;
-  /** The session's recorded delegation entries as one chip and the header's list (`delegatedChip`): every entry it is
+  /** The session's recorded delegation entries as the header's disclosure and list (`delegatedChip`): every entry it is
    *  handed, of every liveness, on a live row and a dead one alike (D-7781); `null` when handed none. */
   readonly delegated: DelegatedSummary | null;
   /** D-8276: the session's Claude Code build against the fleet's newest (`claudeBuildOf`). */
@@ -429,8 +427,6 @@ export interface CardFacts {
   readonly role: Fact | null;
   readonly marker: Fact | null;
   readonly workingOn: Fact | null;
-  /** The row's attached delegation entries, every liveness (D-7781). */
-  readonly delegated: Fact | null;
 }
 
 export function cardFacts(f: SessionFactSet): CardFacts {
@@ -447,8 +443,6 @@ export function cardFacts(f: SessionFactSet): CardFacts {
     role,
     marker: markers(f)[0] ?? null,
     workingOn: f.workingOn === null ? null : { key: 'working-on', text: f.workingOn, title: `works on ${f.workingOn}’s code` },
-    delegated: f.delegated === null ? null
-      : { key: 'delegated', text: f.delegated.text, title: f.delegated.title, count: f.delegated.count },
   };
 }
 
@@ -476,7 +470,7 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   if (f.subagents !== null && f.subagents.length > 0) {
     out.push({ key: 'subagents', text: `${f.subagents.length} subagent${f.subagents.length === 1 ? '' : 's'}` });
   }
-  if (f.delegated !== null) out.push({ key: 'delegated', text: f.delegated.text, title: f.delegated.title, count: f.delegated.count });
+  if (f.delegated !== null) out.push({ key: 'delegated', text: f.delegated.text, title: f.delegated.title });
   if (f.askState !== null) out.push({ key: 'ask-state', text: f.askState.label, title: f.askState.title });
   if (f.graph !== null) {
     out.push({ key: 'graph', text: `graph ${f.graph.reads}${f.graph.gated === null ? '' : ` · gated ${f.graph.gated}`}` });
@@ -489,17 +483,14 @@ export function headerFacts(f: SessionFactSet): Fact[] {
 }
 
 /** The subset rule, as a predicate the test and the harness both call: every card fact has a header fact under its
- *  key carrying its FULL text, or, for `delegated`, at least its count. */
+ *  key carrying its FULL text. */
 export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact[] {
-  const shown = [card.name, card.status, card.context, card.role, card.marker, card.workingOn, card.delegated]
+  const shown = [card.name, card.status, card.context, card.role, card.marker, card.workingOn]
     .filter((x): x is Fact => x !== null);
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
-  // D-7782: `delegated` is compared by COUNT. The card counts a row's attached entries and the header every entry
-  // the session started, a superset, so `3 delegated` holds the card's `1 delegated` though neither text begins the other.
-  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && (c.key === 'delegated'
-    ? c.count !== undefined && h.count !== undefined && h.count >= c.count
-    : h.text.startsWith(c.text));
+  // D-8771: the card carries no `delegated` fact, so D-7782's comparison of it by count is gone; every key is a prefix test.
+  const holds = (c: Fact, h: Fact): boolean => h.key === c.key && h.text.startsWith(c.text);
   return shown.filter((c) => !header.some((h) => holds(c, h)));
 }
 

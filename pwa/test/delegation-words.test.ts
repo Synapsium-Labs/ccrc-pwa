@@ -102,7 +102,6 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     ];
     const chip = delegatedChip(three)!;
     expect(chip.text).toBe('3 delegated');
-    expect(chip.count).toBe(3);
     expect(chip.title).toBe('3 recorded delegation entries, not a current agent count; execution not confirmed');
     expect(chip.note).toBe(ENTRIES_NOTE);
     expect(chip.rows.map((r) => r.key)).toEqual(['a1', 'a2', 'a3']);
@@ -112,6 +111,14 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(delegatedChip([activity({ liveness: 'stale' })])!.title)
       .toBe('1 recorded delegation entry, not a current agent count; execution not confirmed');
     expect(delegatedChip([])).toBeNull();
+  });
+
+  it('C46 (D-8771): a coordinator\'s delegation summary names delegated work and worktrees and counts neither', () => {
+    const rows = [{ kind: 'activity' as const }, { kind: 'activity' as const }, { kind: 'lease' as const }, { kind: 'lease' as const }];
+    expect(delegationParts(rows)).toEqual([{ word: 'delegated' }, { word: 'worktrees' }]);
+    expect(delegationParts(rows.slice(0, 1))).toEqual([{ word: 'delegated' }]);
+    expect(delegationParts(rows.slice(2, 3))).toEqual([{ word: 'worktrees' }]);
+    expect(delegationParts([])).toEqual([]);
   });
 
   it('W4-U9: the worktree line names via, hands sourceProject back, marks an unmeasured workspace, titles the path', () => {

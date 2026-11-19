@@ -420,9 +420,16 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           const chips = rows.flatMap((r) => r.cells.map((c) => c.text));
           expect(chips.filter((t) => t === 'inferred'), 'each raw worktree wears inferred').toHaveLength(2);
           expect(chips.some((t) => t.includes('project-b')), 'the works-on chip').toBe(true);
-          // R9: the worker's live activity is a chip on its row, never a row.
-          const r9 = await page.evaluate(() => [...document.querySelectorAll('.sess-meta-chip')].map((e) => e.textContent));
-          expect(r9).toContain('1 delegated');
+          // D-8771 (superseding R9): the worker's attached activity is never a row and no session row counts it or any
+          // subagent, in its text or its accessible name; the fold lines keep the words and no number.
+          const counted = await page.evaluate(() => [...document.querySelectorAll('.sess-line')].flatMap((line) =>
+            [line.textContent ?? '', ...[...line.querySelectorAll('[aria-label],[title]')]
+              .map((e) => `${e.getAttribute('aria-label') ?? ''} ${e.getAttribute('title') ?? ''}`)]
+              .filter((s) => /delegated|subagent|⑂/i.test(s))));
+          expect(counted, 'no session row counts its delegated entries or subagents').toEqual([]);
+          expect(await page.locator('.sess-meta-chip').count(), 'the R9 chip is gone').toBe(0);
+          const folds = await page.evaluate(() => [...document.querySelectorAll('.proj-children-part')].map((e) => e.textContent ?? ''));
+          expect(folds.filter((s) => /delegated|worktrees/.test(s)).every((s) => !/\d/.test(s)), 'a fold names delegated work with no number').toBe(true);
           // PR10: the six controls of the three newer-server rows, each inside its row and card on all four sides, reached by
           // a tap at its centre (never under the floating button), named uniquely, and on a phone at the tap floor.
           const shown = await page.evaluate(measureControls);
