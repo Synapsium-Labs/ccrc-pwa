@@ -94,6 +94,18 @@ export function capRefusalOf(
 }
 
 /**
+ * D-6095: how many concurrency slots are free in a cap reading, for the `admissionWake` lane's room check. The count that
+ * holds slots is `capsMeasured`'s own (`usage.running` less the `waiting` runs it left out when worker readings were
+ * passed; the raw count otherwise), so the lane and the two doors agree on one predicate, and this only subtracts. Never
+ * negative. It reads no freed-slot admit: a room check consumes nothing, and the dispatch the mail prompts still passes
+ * `capRefusalOf` at its own door.
+ */
+export function capsRoomOf(c: CapsReading): number {
+  const holding = c.usage.running - (c.waiting ?? 0);
+  return Math.max(0, c.caps.maxConcurrentWorkers - holding);
+}
+
+/**
  * What a run's worker is doing, for the concurrency count (D-6094, changed by D-TBD-cap-counts-working, spec 2026-11-19
  * Part 3). `busy`: working, or between turns. `waiting`: awake, idle, nothing running, and its turn marker quiet for
  * `STOP_DONE_PARKED_IDLE_MS`. `gone`: dead, stopped, archived, asleep or with no registry row. `unmeasured`: a reading

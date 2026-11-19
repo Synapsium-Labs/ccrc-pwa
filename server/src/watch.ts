@@ -73,6 +73,9 @@ import {
   survivorOf,
 } from './coord/rundefs.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
+import { admissionWakeChoice, type AdmissionWaiter } from './coord/admissionWake.js';
+import { capsMeasured, workerReadings } from './coord/dispatch.js';
+import { capsRoomOf } from './coord/dispatchDecide.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
   briefNotTakenSubject, briefNotTakenTag, briefStep, type UnlandedBrief,
@@ -296,7 +299,7 @@ import {
   WAKE_GATE_DEFAULT, WAKE_GATE_LINE_MS, wakeAdmit, wakeMemoryGate, wakeRefund, wakeRefusalWord, type WakeAdmission, type WakeKind, type WakeMemoryRefusal, type WakeRefused,
 } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
-import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor, workerFactsFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
@@ -1285,6 +1288,11 @@ export class FleetWatcher {
   private wakeRecent: number[] = [];
   /** D-6094: the freed-slot admit's window (`admitFreedSlot`), a list of its own. */
   private freedSlotRecent: number[] = [];
+  /** D-6095: the `admissionWake` lane's own window (`admissionWakeChoice`), a list of its own: the lane never records into
+   *  `wakeRecent`, so the one real process wake (the mail lane's) is charged once, there. In memory by design. */
+  private admissionWakeRecent: number[] = [];
+  /** D-6095: when the lane last served each programme, for its round-robin. In memory by design. */
+  private admissionServedAt = new Map<string, number>();
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
@@ -2555,6 +2563,77 @@ export class FleetWatcher {
     await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
   }
 
+  /** The `admissionWake` lane (D-6095; spec §3.5): a coordinator the concurrency cap refused is MAILED when the cap has room.
+   *  Fail shut: nothing runs while the coordinator pause or the mail-disabled marker stands or the registry listing is
+   *  unreadable (`readSwitches`), nothing is read when nobody waits, and nobody is woken until `buildServer` has handed the
+   *  coordination serialiser over (`useStopDoneSerialiser`, the one `CoordMutex`). The worker readings are gathered first,
+   *  outside it (`workerReadings` over `workerFactsFor`, the port the dispatch and advance doors and the caps view use, so a
+   *  slot a waiting or gone worker frees is room here too); then, inside it and in ONE synchronous step, the waiters are
+   *  read again, the room is `capsRoomOf(capsMeasured(…, readings))` (a read that consumes no freed-slot admit),
+   *  `admissionWakeChoice` (L1) decides over the lane's own window, and each chosen waiter is woken. */
+  async sweepAdmissionWake(names: readonly string[] | null): Promise<void> {
+    if (!this.primed) return;
+    const store = this.deps.coord;
+    if (!store) return;
+    await this.runLane('admissionWake', async () => {
+      const sw = readSwitches(names);
+      if (sw[COORDINATOR_PAUSE_MARKER] !== 'clear' || sw[MAIL_DISABLED_MARKER] !== 'clear') return;
+      const serial = this.stopDoneSerial;
+      if (serial === null) return;
+      try {
+        if (store.admissionWaiters().length === 0) return;
+        const turnReads = turnReadDeps(this.deps, this);
+        const readings = await workerReadings(store, (sid) => workerFactsFor(turnReads, sid));
+        await serial(async () => {
+          const now = Date.now();
+          const room = capsRoomOf(capsMeasured(store, readings));
+          const pick = admissionWakeChoice(store.admissionWaiters(), room, this.admissionWakeRecent, now, this.admissionServedAt);
+          this.admissionWakeRecent = pick.recent;
+          for (const [program, at] of pick.served) this.admissionServedAt.set(program, at);
+          for (const w of pick.chosen) this.wakeAdmissionWaiter(store, w, now);
+        });
+      } catch (err) {
+        console.warn(`ccrc-server: admission wake failed (${err instanceof Error ? err.message : String(err)}) — the next pass asks again`);
+      }
+    });
+  }
+
+  /** One chosen waiter (D-6095): the mail to the run's claimant (`queueSystemMail`, the kickoff path: a hibernated
+   *  coordinator is woken by the mail lane under the shared wake budget, charged once there), then `markAdmissionWoken`,
+   *  then the claimant's live `capacity` blocks marked woken (`markBlockWoken`, amendment A8-3 of D-8126: a block parked on
+   *  `capacity` is cleared by this lane), then one journal line and one record-only feed row keyed on the refusal
+   *  (`dedupeKey` `admission-wake:<run>:<lastRefusedAt>`, so a new refusal re-arms it and a replay of this one sends no
+   *  second mail). A failure of one waiter leaves it unmarked and is logged, so the next pass asks again. */
+  private wakeAdmissionWaiter(store: WatcherCoordPort, w: AdmissionWaiter, now: number): void {
+    const key = `admission-wake:${w.runId}:${w.lastRefusedAt}`;
+    try {
+      const told = store.hasNotice('coord', w.claimedBy, key);
+      if (!told) {
+        queueSystemMail(store, null, {
+          fromId: 'operator', toId: w.claimedBy, runId: null, kind: 'status',
+          subject: w.sendBack ? `capacity: room to send back run ${w.runId}` : `capacity: room for run ${w.runId}`,
+          body: w.sendBack
+            ? `The concurrency cap has room again. Send run ${w.runId} (${w.program}) back to work now: your send-back was refused while the cap was full.`
+            : `The concurrency cap has room again. Dispatch run ${w.runId} (${w.program}) now: your dispatch was refused while the cap was full.`,
+        });
+      }
+      store.markAdmissionWoken(w.runId, now);
+      for (const b of store.liveBlocksOf(w.claimedBy, now)) {
+        if (b.wakeOn === 'capacity') store.markBlockWoken(b.id, now);
+      }
+      if (told) return;
+      store.recordRunEvent(w.runId, 'sweep', `admission-woken:${w.claimedBy} refused=${w.lastRefusedAt}`, now);
+      console.warn(`ccrc-server: admission wake: run ${w.runId} (${w.program}) has room under the concurrency cap; mailed ${w.claimedBy}`);
+      this.pushOne({
+        kind: 'coord', sessionId: w.claimedBy, project: '', title: 'admission woken',
+        body: `run ${w.runId} (${w.program}): the concurrency cap has room, ${w.claimedBy} was mailed`, runId: w.runId,
+        recordAlways: true, recordOnly: true, dedupeKey: key,
+      }, this.activeProjects);
+    } catch (err) {
+      console.warn(`ccrc-server: admission wake of run ${w.runId} failed (${err instanceof Error ? err.message : String(err)}) — the next pass asks again`);
+    }
+  }
+
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
    *  assembled from it, so a `.hold`, a stop stamp, an archive or a bucket that changed since the tick is seen. */
   private async rowAtAct(rec: SessionRecord): Promise<{ ok: true; row: FleetSession } | { ok: false }> {
@@ -3084,6 +3163,8 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-6095: the admission wake, its own lane, never awaited; it reads the tick's listing for the two switches.
+      void this.sweepAdmissionWake(registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.

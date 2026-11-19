@@ -297,7 +297,9 @@ export type DispatchOutcome =
  * only when the raw count is at the limit, and by the caps view) it leaves out the runs whose worker was measured
  * waiting or gone (D-6094, D-TBD-cap-counts-working), and says how many in `waiting`.
  */
-export function capsMeasured(coord: CoordStore, readings?: ReadonlyMap<number, WorkerReading>): CapsReading {
+export function capsMeasured(
+  coord: Pick<CoordStore, 'caps' | 'capsUsage' | 'activeRunWorkers'>, readings?: ReadonlyMap<number, WorkerReading>,
+): CapsReading {
   const caps = coord.caps();
   const usage = coord.capsUsage();
   const limit = caps.maxConcurrentWorkers;
@@ -332,7 +334,7 @@ export function capsMeasured(coord: CoordStore, readings?: ReadonlyMap<number, W
  * pass the cap for a while, and new starts are refused until the count is back under it.
  */
 export async function workerReadings(
-  coord: CoordStore, workerFacts: DispatchRunDeps['workerFacts'], now: number = Date.now(),
+  coord: Pick<CoordStore, 'activeRunWorkers'>, workerFacts: DispatchRunDeps['workerFacts'], now: number = Date.now(),
 ): Promise<Map<number, WorkerReading>> {
   const out = new Map<number, WorkerReading>();
   if (workerFacts === undefined) return out;
