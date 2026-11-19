@@ -438,7 +438,7 @@ describe('the subagent\'s ack refusal (Task 6.1)', () => {
     expect(logged()).toEqual([`${ID} ack would - mail-ack`, `${ID} ack would - mail-inbox`]);
   });
   it('the prefilter: a joined subagent\'s call with no `mail` word, or none of `ack` and `inbox`, makes no call of the block', () => {
-    const realJq = spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' }).stdout.trim();
+    const realJq = spawnSyncGroup('sh', ['-c', 'command -v jq'], { encoding: 'utf8', timeout: 10_000 }).stdout.trim();
     const calls = path.join(home, 'jq-calls');
     fs.writeFileSync(path.join(harnessBin(home), 'jq'), `#!/bin/sh\nprintf '%s\\037\\n' "$*" >> '${calls}'\nexec '${realJq}' "$@"\n`, { mode: 0o755 });
     joined();

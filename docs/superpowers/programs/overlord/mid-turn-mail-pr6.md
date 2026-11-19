@@ -71,7 +71,8 @@ red, every one of them new. The new cases:
 
 **Spawns.** The module suite's two helpers, `strip` and `hold`, now carry a 30 s timeout and `SIGKILL`, because every
 new case runs through them (the coordinator's ruling on PR 5's untimed spawns). The new hook cases run through the
-suite's `run`, which already has its 60 s bound, and the one new `spawnSync` there is bounded. PR 5's other untimed
+suite's `run`, which already has its 60 s bound, and the one new shell spawn there goes through `spawnSyncGroup` with a
+10 s timeout, which kills its whole process group on expiry. PR 5's other untimed
 calls in these files stay as recorded: two in the module suite and three in the hook suite.
 
 ## 3. Mutations (Task 6.1)
@@ -138,6 +139,18 @@ refused.*
 substitution (`$(command -v ccrc-api) mail ack`) or an alias; options between `ccrc-api` and `mail`; and an `exec > f`
 earlier in the shell, which the matcher cannot see.
 
+## 6. The first CI run, and Horkos
+
+- **The first fast run was red** on `a84f22c49`, in `spawn-group-pin.test.ts` (shard 4): the one new
+  `sh -c 'command -v jq'` call in the hook suite carried a timeout through plain `spawnSync`, and a timed shell spawn in
+  `server/test` must go through `spawnSyncGroup` (#896). It now does; `spawn-group-pin` and `session-hook-mail-hold`
+  pass alone (11 s and 12 s). The module suite's `jq` spawns are not shells, so the pin does not count them.
+- **Horkos answers red with two blocking reasons this PR cannot fix itself.** `rules-mixed`: it reads
+  `ccd/session-hook.sh` as a rules file, which a PR may not change beside other files; `code-owner-approval-needed`
+  follows from the same file. Clearing them would split the hook's two-line change into a PR of its own, away from the
+  module and tests it calls. That is a structure call for the coordinator. PR 5 (#3067) carried the same red and
+  landed; Horkos is not a required check.
+
 ## Where things stand
 
 ### Agreed
@@ -147,6 +160,7 @@ earlier in the shell, which the matcher cannot see.
 ### Waiting on you
 
 - The coordinator: minting numbers for the slugs in Table 5, if any are wanted.
+- The coordinator: whether Horkos's `rules-mixed` asks for the hook's lines in a PR of their own (section 6).
 
 ### Later
 
