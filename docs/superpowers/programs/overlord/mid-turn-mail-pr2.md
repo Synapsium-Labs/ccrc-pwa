@@ -10,26 +10,27 @@ coordinator folds it into the programme ledger and mints any numbers. No D-numbe
   - the L1 sender rule (`server/src/coord/urgentMail.ts#urgentSenderVerdict`), which decides who may mark a mail
     urgent, which run the mail must name, and one outstanding urgent mail per sender and recipient;
   - the store read that feeds it (`CoordStore.urgentVerdict`), which reads the recipient's runs by its incarnation;
-  - migration 107 (`mail.urgentAs` and the partial index `mail_urgent`), with its one writer (`insertMail`);
+  - migration 108 (`mail.urgentAs` and the partial index `mail_urgent`), with its one writer (`insertMail`);
   - the inbox set's predicate, named once (`ACKABLE_OUTSTANDING_SQL`);
   - the hold's read (`CoordStore.urgentHolds`);
   - the four refusal words, named in the coordinator's mail reference.
 - **Split by the coordinator's ruling** (slug `ingress-waits-for-routes`): `server/src/coord/routes.ts` is untouched,
   so `POST /api/mail` still ignores `urgent`, no mail is marked urgent, and every reader answers none. The ingress, its
   echo and ruling N10 follow in PR 2b, once the file is free.
-- **Growth,** by the growth check's counter against `main` at `cb101e0ee`:
+- **Growth,** by the growth check's counter against `main` at `04b297898`:
 
   | File | Code lines |
   |---|---|
   | `shared/api.ts` | +1 |
-  | `server/src/coord/store.ts` | +30 |
+  | `server/src/coord/store.ts` | +39 (the limit is 40) |
   | `server/src/coord/schema.ts` | +4 |
-  | `shared/refusal.ts` | 0 (three words added to existing lines) |
+  | `shared/refusal.ts` | 0 (four words added to existing lines) |
   | `server/src/coord/routes.ts` | 0 |
 
   No waiver.
-- **Migration slot:** #3056 took 105 and #2997 took 106, so this is 107. The pins moved with it: `coord-db`'s version
-  pins and `run-close-switch`'s rollback, which drops the column and index and replays fifty-four entries.
+- **Migration slot:** #3056 took 105, #2997 took 106 and #3021 took 107, so this is 108. The pins moved with it:
+  `coord-db`'s version pins and `run-close-switch`'s rollback, which drops the column and index and replays fifty-five
+  entries.
 
 ## 1. Findings for the ledger
 
@@ -48,7 +49,7 @@ coordinator folds it into the programme ledger and mints any numbers. No D-numbe
 | `urgent-facts-in-one-try` | Fix round 1, F3. Every fact read in `urgentVerdict` sits in one try: the binding reads, the designation and the outstanding test. A read that throws is `urgent-unmeasured`, never an escape, and so is a series the store cannot represent. The rule's docstring now says a sender that qualifies both ways is stored as `coordinator` for the named run, which holds whatever else could not be read. | `server/src/coord/store.ts#urgentVerdict`, `server/src/coord/urgentMail.ts` |
 | `urgent-self-mail` | An addition the plan does not list: a session never marks its own mail urgent (`urgent-not-allowed`), whatever role it holds. | `server/src/coord/urgentMail.ts` |
 | `replay-echoes-the-flag-not-the-role` | For PR 2b. Task 2.4 says a matching keyed retry "answers the replay with `urgent` and the stored role echoed from `urgentAs`". The replay will echo `urgent: true`, read from the stored `urgentAs`, and not the role word, because a fresh urgent send echoes only `urgent: true`. The role stays a server fact, which the projection (PR 4) reads. | PR 2b |
-| `inbox-store-load-flake` | `mail-inbox-store.test.ts`'s "for every fixture row" case builds a fresh database per row and times out at 20 s under load (measured at load average about 7). It times out on `main`'s code too, so the cause is the load, not this PR. | `server/test/mail-inbox-store.test.ts` |
+| `inbox-store-load-flake` | `mail-inbox-store.test.ts`'s "for every fixture row" case builds a fresh database per row and times out at 20 s under load (measured at load average about 7). It times out on `main`'s code too, so the cause is the load, not this PR. So does `coord-store.test.ts`'s limit-clamp case, which queues 510 mails under a 20 s budget: 23 s on this branch and 26.6 s on `main` (`5da625fcb`), alone, at load average about 11. | `server/test/mail-inbox-store.test.ts`, `server/test/coord-store.test.ts` |
 
 ## 2. Mutations
 
