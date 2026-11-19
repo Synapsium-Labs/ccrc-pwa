@@ -1,13 +1,14 @@
 // D-8183 (Linear hierarchy plan, Task 4.3): the inbound path, the Upkeep epic and the Linear owner item. A real coord.db and a real
 // Linear store on a tmp dir; Linear faked at the drift pass's and the sync's `call` port; the routes on a bare Fastify with the real
 // plan store. Nothing here reaches a network, and every Linear text is a made-up one.
-import { afterEach, describe, expect, it } from 'vitest';
+import { UNTRUSTED_PREFACE } from '../src/coord/untrusted.js';
+import { afterEach, describe, expect, it, vi } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
 import type { DatabaseSync } from 'node:sqlite';
 import { CoordStore } from '../src/coord/store.js';
-import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type PlanChanges, type PlanStorePort } from '../src/coord/planStore.js';
+import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type InboundRow, type PlanChanges, type PlanStorePort } from '../src/coord/planStore.js';
 import { registerPlanRoutes } from '../src/coord/planRoutes.js';
 import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 import { registerHierarchyRoutes } from '../src/coord/hierarchyRoutes.js';
@@ -17,13 +18,14 @@ import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccr
 import type { FetchLike } from '../src/linear/client.js';
 import { DriftPass } from '../src/linear/driftPass.js';
 import { DRIFT_PASS_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
-import { givenUpWord } from '../src/linear/inboundPolicy.js';
+import { givenUpWord, INBOUND_RECHECK_MS } from '../src/linear/inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from '../src/linear/journal.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { coordinatorPresenceIn, type CoordinatorPresence } from '../../shared/ledgers.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
+import { requestIdOf } from '../src/linear/planSyncPolicy.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -51,7 +53,13 @@ interface Rig {
   db: DatabaseSync; coord: CoordStore; plan: PlanStorePort; ccrcDir: string; t: { now: number };
   asks: CcrcOpAsk[]; presence: Record<string, CoordinatorPresence>; presenceFn: { current: (id: string) => CoordinatorPresence };
   viaCalls: string[][]; fleet: { ids: Set<string> };
-  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' | 'rate-limited' | 'malformed' | 'timeout' | 'not-configured'; retryAfterS: number };
+  lin: { issues: Record<string, unknown>[]; directory: LinearDirectoryEntries | null; fail: Set<string>; failWord: 'linear-forbidden' | 'unreachable' | 'linear-unauthorised' | 'rate-limited' | 'malformed' | 'timeout' | 'not-configured'; retryAfterS: number;
+    /** What a by-id read of a STORED inbound row's issue answers (review 2457 F4): a node, or null for `not-found`; an issue with no entry reads open in AAA. */
+    byId: Record<string, Record<string, unknown> | null>;
+    /** A by-id read of one stored row's issue refused with this word (review 2524 F2): an answer about that one row. */
+    byIdWord: Record<string, string>;
+    /** What the drift pass's and the doors' read of the Linear store answers (review 2524 A2): the store, a rejection or an unreadable one. */
+    store: 'ok' | 'reject' | 'unreadable' };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
   /** When the plan sync's one owner of slot rejection was asked (`markSlotRejected`, review 2394 A-3). */
   rejected: number[];
@@ -73,7 +81,7 @@ const node = (n: number, over: Record<string, unknown> = {}): Record<string, unk
 
 /** `named`: project-a's named Linear owner (null: none named); `progs`: whether the two programmes exist (and so a default owner);
  *  `mode`: project-a's linking mode; `twoWs`: a second workspace whose team key BBB the project project-b carries. */
-async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' | 'private'; twoWs?: boolean } = {}): Promise<Rig> {
+async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' | 'private'; twoWs?: boolean; noRecheck?: boolean } = {}): Promise<Rig> {
   const dir = mkTmp('ccrc-plan-inbound-');
   dirs.push(dir);
   const ccrcDir = path.join(dir, '.ccrc');
@@ -101,7 +109,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0 }, rejected: [] as number[],
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'], byIdWord: {} as Rig['lin']['byIdWord'], store: 'ok' as Rig['lin']['store'] }, rejected: [] as number[],
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
@@ -112,6 +120,13 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
     if (ask.op === 'changedIssues') return ok({ nodes: r.lin.issues, next: null });
     if (ask.op.startsWith('changed')) return ok({ nodes: [], next: null });
     if (ask.op === 'projectsByName' || ask.op === 'initiativesByName') return ok({ nodes: [] });
+    if (ask.op === 'issueOwned' && r.plan.inboundOf(String(ask.input['id'])) !== null) {
+      const id = String(ask.input['id']);
+      const o = r.lin.byId[id];
+      if (r.lin.byIdWord[id] !== undefined) return { ok: false, word: r.lin.byIdWord[id], maybeSent: false } as CcrcOpOutcome;
+      if (o === null) return { ok: false, word: 'not-found', maybeSent: false };
+      return ok({ issue: o ?? { id, identifier: r.plan.inboundOf(id)!.identifier, teamKey: 'AAA', stateType: 'unstarted' } });
+    }
     if (ask.op.endsWith('Create')) { const id = U(counter++); return ok(ask.op === 'issueCreate' ? { id, identifier: `AAA-${counter}` } : { id }, id); }
     if (ask.op === 'issueComment') return ok({ id: U(counter++) }, U(counter++));
     if (ask.op.endsWith('Update')) return ok({ id: ask.target });
@@ -127,7 +142,8 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
     },
   });
   r.drift = new DriftPass({
-    coord, plan, planSync: r.sync, readLinearStore: () => readLinearStore(ccrcDir), call, now: () => r.t.now, directory, presenceOf,
+    coord, plan, planSync: r.sync, call, now: () => r.t.now, directory, presenceOf,
+    readLinearStore: () => r.lin.store === 'reject' ? Promise.reject(new Error('store')) : r.lin.store === 'unreadable' ? Promise.resolve({ kind: 'unreadable' as const, code: 'EIO' }) : readLinearStore(ccrcDir),
     viaFleet: (ids) => { r.viaCalls.push([...ids]); return new Set(ids.filter((i) => r.fleet.ids.has(i))); },
   });
   let lock: Promise<unknown> = Promise.resolve();
@@ -137,6 +153,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   registerPlanRoutes(r.app, {
     coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS, sessionAuth: () => ({ allow: false, verdict: 'no-session', reason: 'refused', device: null }),
     authEnabled: false, readLinearStore: () => readLinearStore(ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf, privateTrackerKeys: [],
+    ...(o.noRecheck === true ? {} : { inboundRecheck: (row: InboundRow) => r.drift.recheckInbound(row) }),
   });
   registerHierarchyRoutes(r.app, { plan, serial, presenceOf, by: () => 'device-a', itemOf: (id) => coord.itemById(id), now: () => r.t.now });
   await r.app.ready();
@@ -655,7 +672,8 @@ describe('plan triage (D-8183)', () => {
       viaFleet: () => new Set<string>(),
     });
     for (let i = 0; i < 3; i += 1) { r.t.now += 60_000; await lane.tick(r.t.now); }
-    expect(tried.filter((op) => op === 'issueComment')).toHaveLength(3);   // one try a beat: no hold
+    expect(tried.filter((op) => op === 'issueOwned')).toHaveLength(3);     // one try a beat: no hold; the close's by-id read comes first (review 2457 F4)
+    expect(tried).not.toContain('issueComment');
     expect(fetched).toEqual([]);                                            // and not one of them reached Linear
     expect(mails(r, 'Linear inbound: AAA-12 waits for a Linear key%')).toHaveLength(1);
     expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
@@ -1033,3 +1051,876 @@ function tryPlace(r: Rig): void {
   r.plan.placeInboundInUpkeep({ linearId: U(12), project: 'project-a', now: T });
   expect(r.plan.upkeepEpicOf('project-a')).not.toBeNull();
 }
+
+// ── Wave 4 follow-ups, inbound phase 1 (D-8183; D-8735 the retired state, D-8736 the capability word) ──
+
+/** A ticket of prog-a with a PENDING binding, whose Linear issue (its create reply lost) carries the id its create was sent with. */
+function pendingTicket(r: Rig): { createId: string; ticketId: number } {
+  r.db.prepare("INSERT INTO plan_tickets (program, project, epicId, key, kind, title, body, source, state) VALUES ('prog-a', 'project-a', (SELECT id FROM plan_epics WHERE key = 'e1'), 't1', 'work', 't', '', 'plan', 'open')").run();
+  const ticketId = (r.db.prepare("SELECT id FROM plan_tickets WHERE key = 't1'").get() as { id: number }).id;
+  r.plan.ensurePending('ticket', ticketId, WS.a.id, 'AAA');
+  return { createId: requestIdOf('ticket', ticketId, WS.a.id), ticketId };
+}
+const settledAt = (r: Rig, itemId: number): string => items(r).find((i) => i.id === itemId)!.state;
+
+describe('a stored inbound row whose issue completes or is canceled is retired (round 4 F1, D-8735)', () => {
+  it('a waiting row is retired, and its issue can no longer be taken or triaged', async () => {
+    const r = await rig({ named: null, progs: false });
+    await detect(r, [node(12)]);
+    expect(rowOf(r, 12)!.state).toBe('waiting');
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', actedAt: null });
+    expect(r.plan.inboundByState(null, ['waiting'])).toEqual([]);
+  });
+
+  it('a mailed row is retired by a completed issue, and a canceled one alike; a triage of it is refused', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    await detect(r, [node(12, { stateType: 'completed' }), node(13, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect([rowOf(r, 12)!.state, rowOf(r, 13)!.state]).toEqual(['retired', 'retired']);
+    for (const decision of ['upkeep', 'close', 'raise'] as const) {
+      const res = await triage(r, { issue: 'AAA-12', decision, reason: 'x' });
+      expect([res.statusCode, errorOf(res)], decision).toEqual([409, 'issue-not-inbound']);
+    }
+    expect(r.plan.upkeepEpicOf('project-a')).toBeNull();
+  });
+
+  it('a handed row is retired: the take is refused, no ticket is made and no binding is held', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    expect(errorOf(await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER))).toBe('issue-not-inbound');
+    expect(errorOf(await take(r, 'prog-b', { issue: 'AAA-12', close: { why: 'x' } }, OTHER))).toBe('issue-not-inbound');
+    expect(r.plan.planOf('prog-b').epics[0]!.tickets).toEqual([]);
+    expect(r.plan.boundLinearIdsOf(WS.a.id)).toEqual([]);
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_bindings WHERE linearId = ?').get(U(12))).toEqual({ n: 0 });
+    // the composite itself refuses a retired row (the store is where the refusal is atomic with the write)
+    expect(r.plan.takeInboundIntoEpic({ linearId: U(12), program: 'prog-b', epicId: 1, checkpointId: null, project: 'project-a', now: T })).toEqual({ ok: false, refused: 'issue-not-inbound' });
+    expect(r.plan.placeInboundInUpkeep({ linearId: U(12), project: 'project-a', now: T })).toEqual({ ok: false, refused: 'issue-not-inbound' });
+  });
+
+  it('a raised row is retired and its open item settles in the same pass', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'raise' });
+    const item = items(r).find((i) => i.kind === 'decide')!;
+    expect(item.state).toBe('open');
+    await detect(r, [node(12, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    expect(settledAt(r, item.id)).toBe('done');
+    // the answer never comes back to the owner for a retired row
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, 'Linear inbound: AAA-12 answered%')).toEqual([]);
+  });
+
+  it('a closed row not yet acted is retired and no Linear write is made', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.directory = null;                                          // the directory is not read yet: the close waits
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+    r.lin.directory = DIRECTORY;
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    expect(writes(r)).toEqual([]);
+  });
+
+  it('a closed row already acted is not retired: it was ccrc\'s own cancel', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+    await detect(r, [node(12, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('closed');
+  });
+
+  it('a taken or placed row is a bound ticket and is never touched by the retirement', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1' });
+    await triage(r, { issue: 'AAA-13', decision: 'upkeep' });
+    await detect(r, [node(12, { stateType: 'completed' }), node(13, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect([rowOf(r, 12)!.state, rowOf(r, 13)!.state]).toEqual(['taken', 'placed']);
+  });
+
+  it('the lane never writes a retired row, whatever it carries (act filters closed)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'retired', reason: 'noise', actedAt: null });
+    await passAt(r, r.t.now + 1);
+    await passAt(r, r.t.now + 1);
+    expect(writes(r)).toEqual([]);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+  });
+
+  it('a reopened issue returns to waiting and its owner is mailed again, under its own subject, every time it reopens (D-8735)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    expect(mails(r)).toHaveLength(1);
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', mailedTo: OWNER, handedTo: null });
+    expect(mails(r)).toHaveLength(2);
+    expect(mails(r)[1]!.subject).not.toBe(mails(r)[0]!.subject);
+    expect(mails(r)[1]!.body).toContain('Reporter title 12');
+    // a pass that sees it open again mails nothing more
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(mails(r)).toHaveLength(2);
+    // a SECOND retire and reopen mails the owner a third time: the subject carries the reopen's time
+    await detect(r, [node(12, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(mails(r)).toHaveLength(3);
+    expect(new Set(mails(r).map((m) => m.subject)).size).toBe(3);
+  });
+
+  it('a reopened handed row waits again for the owner (handedTo cleared)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', handedTo: null, mailedTo: OWNER });
+  });
+});
+
+describe('a lost-reply create is ccrc\'s own, never inbound (round 5 F2, round 6 P1)', () => {
+  it('an issue a pending ticket binding created is stored nowhere and mailed to nobody', async () => {
+    const r = await rig();
+    const { createId } = pendingTicket(r);
+    await detect(r, [node(12, { id: createId })]);
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound').get()).toEqual({ n: 0 });
+    expect(mails(r)).toEqual([]);
+  });
+
+  it('a stored row whose issue turns out to be a pending create is retired, and a take and a triage of it are refused with no second binding', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    r.plan.upsertInbound({ linearId: U(13), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-13', title: 't', body: null, seenAt: T });
+    r.plan.setInboundState(U(13), { state: 'mailed', mailedTo: OWNER, mailedAt: T });
+    const { createId, ticketId } = pendingTicket(r);
+    // the stored rows' ids ARE the create ids of two pending tickets: rebuild them under the real id
+    r.db.prepare('UPDATE linear_inbound SET linearId = ? WHERE linearId = ?').run(createId, U(12));
+    await detect(r, [node(12, { id: createId })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(r.plan.inboundOf(createId)!.state).toBe('retired');
+    const bindingsBefore = r.db.prepare('SELECT COUNT(*) AS n FROM linear_bindings').get();
+    expect(errorOf(await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER))).toBe('issue-not-inbound');
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_bindings').get()).toEqual(bindingsBefore);
+    expect(ticketId).toBeGreaterThan(0);
+  });
+
+  it('the store refuses a second binding for an issue a binding holds or a pending create would hold, inside the transaction', async () => {
+    const r = await rig();
+    const { createId } = pendingTicket(r);
+    // a row that slipped in `mailed` (a take raced the pending binding): the composites refuse it themselves
+    r.plan.upsertInbound({ linearId: createId, workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-12', title: 't', body: null, seenAt: T });
+    r.plan.setInboundState(createId, { state: 'mailed' });
+    expect(r.plan.placeInboundInUpkeep({ linearId: createId, project: 'project-a', now: T })).toEqual({ ok: false, refused: 'issue-not-inbound' });
+    expect(r.plan.takeInboundIntoEpic({ linearId: createId, program: 'prog-a', epicId: 1, checkpointId: null, project: 'project-a', now: T })).toEqual({ ok: false, refused: 'issue-not-inbound' });
+    expect(r.plan.upkeepEpicOf('project-a')).toBeNull();                  // nothing was made before the refusal
+    // the same once the sync adopted the create (bound, whatever its state)
+    const b = r.plan.bindingsInWorkspace(WS.a.id)[0]!;
+    r.plan.markBound(b.id, createId, 'AAA-12', 'fp', T);
+    expect(r.plan.placeInboundInUpkeep({ linearId: createId, project: 'project-a', now: T })).toEqual({ ok: false, refused: 'issue-not-inbound' });
+    expect(r.plan.boundLinearIdsOf(WS.a.id)).toEqual([createId]);
+    await detect(r, [node(12, { id: createId })]);
+    expect(r.plan.inboundOf(createId)!.state).toBe('retired');
+    expect(mails(r)).toEqual([]);
+  });
+});
+
+describe('the malformed count is per issue (round 4 F2)', () => {
+  it('four malformed answers to one close never count against another close\'s first (D-8183)', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'malformed';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    // the last backoff step is the fourth: the close's own fifth malformed answer gives it up (`inboundActVerdict`)
+    for (const wait of [30_000, 120_000, 600_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(4);
+    expect(rowOf(r, 12)!.actedAt).toBeNull();
+    await passAt(r, r.t.now + 1_800_000);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(5);
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBe('malformed');
+    await triage(r, { issue: 'AAA-13', decision: 'close', reason: 'noise' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1_800_000);
+    expect(writes(r).map((a) => a.target)).toEqual(['AAA-13']);
+    expect(rowOf(r, 13)).toMatchObject({ state: 'closed', actedAt: null });   // held, not given up
+    expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
+  });
+});
+
+describe('the close path of a take with no project judges the text as a public project (round 5 A5)', () => {
+  it('an issue whose team no project holds is refused by the public check like a public project', async () => {
+    const r = await rig({ mode: 'public', progs: true });
+    r.plan.upsertInbound({ linearId: U(40), workspaceId: WS.a.id, teamKey: 'CCC', identifier: 'CCC-40', title: 't', body: null, seenAt: T });
+    r.plan.setInboundState(U(40), { state: 'handed', handedTo: 'prog-b' });
+    r.db.prepare("UPDATE programs SET homeProject = NULL WHERE slug = 'prog-b'").run();
+    const res = await take(r, 'prog-b', { issue: 'CCC-40', close: { why: 'dup of CCC-77' } }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
+    expect(rowOf(r, 40)!.state).toBe('handed');
+    // the same text on a public project's own issue is refused with the same word
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    const pub = await take(r, 'prog-b', { issue: 'AAA-12', close: { why: 'dup of AAA-77' } }, OTHER);
+    expect(errorOf(pub)).toBe('linear-text-public');
+    // text with nothing private passes on the no-project path
+    expect((await take(r, 'prog-b', { issue: 'CCC-40', close: { why: 'noise' } }, OTHER)).statusCode).toBe(200);
+  });
+});
+
+describe('inboundByIdentifier is keyed by workspace (round 4 A2)', () => {
+  it('two workspaces each with an AAA-12 resolve each their own', async () => {
+    const r = await rig({ twoWs: true });
+    r.plan.upsertInbound({ linearId: U(50), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'a', body: null, seenAt: T });
+    r.plan.upsertInbound({ linearId: U(51), workspaceId: WS.b.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'b', body: null, seenAt: T + 1 });
+    expect(r.plan.inboundByIdentifier(WS.a.id, 'AAA-12')!.linearId).toBe(U(50));
+    expect(r.plan.inboundByIdentifier(WS.b.id, 'AAA-12')!.linearId).toBe(U(51));
+    expect(r.plan.inboundByIdentifier('ws-none', 'AAA-12')).toBeNull();
+    // with no workspace measured only an unambiguous identifier resolves
+    expect(r.plan.inboundByIdentifier(null, 'AAA-12')).toBeNull();
+  });
+
+  it('the triage door finds its own team\'s workspace\'s row, never another workspace\'s', async () => {
+    const r = await rig({ twoWs: true });
+    // an older row of the same identifier in the other workspace must not shadow the owner's
+    r.plan.upsertInbound({ linearId: U(51), workspaceId: WS.b.id, teamKey: 'AAA', identifier: 'AAA-12', title: 'other', body: null, seenAt: T - 5000 });
+    r.plan.setInboundState(U(51), { state: 'mailed', mailedTo: OWNER, mailedAt: T });
+    await detect(r, [node(12)]);
+    const res = await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    expect(res.statusCode).toBe(200);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', title: 'Reporter title 12' });
+    expect(r.plan.inboundOf(U(51))!.state).toBe('mailed');
+  });
+});
+
+// ── Wave 4 follow-ups, inbound phase 2 (review 2443 A3, D-8734: a return while the owner is gone; the reopen mark in the notes table) ──
+
+describe('a return made while the owner is gone is not lost (review 2443 A3, D-8734)', () => {
+  const goneOwner = (r: Rig): void => {
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: 'coord-gone', ownsTeam: false }, 'test', T);
+    r.presence['coord-gone'] = 'dead';
+  };
+  const backLive = (r: Rig): void => { r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: OWNER, ownsTeam: false }, 'test', T); };
+
+  it('the note is mailed once, fenced, to the owner who comes back live; two beats send it once', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    goneOwner(r);
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', return: { note: 'not ours, ask the platform team' } }, OTHER)).statusCode).toBe(200);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'waiting' });
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'returned', program: 'prog-b', note: 'not ours, ask the platform team' });
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, 'Linear inbound: AAA-12 returned%')).toEqual([]);
+    backLive(r);
+    await passAt(r, r.t.now + 1);
+    await passAt(r, r.t.now + 1);
+    const m = mails(r, 'Linear inbound: AAA-12 returned%');
+    expect(m.map((x) => [x.toId, x.kind])).toEqual([[OWNER, 'question']]);
+    expect(m[0]!.body).toContain('not ours, ask the platform team');
+    expect(m[0]!.body).toContain('prog-b');
+    expect(m[0]!.body).toContain(UNTRUSTED_PREFACE);                // the note sits in the untrusted fence
+    expect(m[0]!.body).toContain('ccrc-api plan triage AAA --json -');
+    expect(mails(r)).toHaveLength(3);                              // the first inbound mail, the hand to prog-b, the return mail; no fourth
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', mailedTo: OWNER });
+    expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+  });
+
+  it('a second return by the same programme, the owner gone again, is mailed again', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    for (const note of ['first note', 'second note']) {
+      await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+      goneOwner(r);
+      await take(r, 'prog-b', { issue: 'AAA-12', return: { note } }, OTHER);
+      r.t.now += 5000;
+      backLive(r);
+      await passAt(r, r.t.now + 1);
+    }
+    const m = mails(r, 'Linear inbound: AAA-12 returned%');
+    expect(m).toHaveLength(2);
+    expect(m[0]!.subject).not.toBe(m[1]!.subject);
+    expect(m[1]!.body).toContain('second note');
+  });
+});
+
+describe('the reopen mark lives in the notes table, never in a close reason (review of d4c372f12, D-8735)', () => {
+  it('a retired closed-not-acted row keeps its close reason', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.directory = null;
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', reason: 'noise' });
+  });
+
+  it('a reopened row keeps its reason untouched and carries a reopened note until mailed', async () => {
+    const r = await rig({ named: null, progs: false });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { reason: 'noise' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'waiting', reason: 'noise' });
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'reopened' });
+  });
+});
+
+// ── Wave 4 follow-ups, fix round 1 (review 2457 F2, F4, A6; D-8733, D-8735) ──
+
+/** A row of the given workspace, handed to a programme, with no pass behind it. */
+function handedRow(r: Rig, n: number, workspaceId: string, slug: string, seenAt: number): void {
+  r.plan.upsertInbound({ linearId: U(n), workspaceId, teamKey: 'AAA', identifier: 'AAA-12', title: `Handed ${n}`, body: null, seenAt });
+  r.plan.setInboundState(U(n), { state: 'handed', handedTo: slug, mailedTo: OWNER, mailedAt: T });
+}
+const bindingCount = (r: Rig): number => (r.db.prepare('SELECT COUNT(*) AS n FROM linear_bindings WHERE linearId IN (?, ?)').get(U(50), U(51)) as { n: number }).n;
+
+describe('the take door chooses between two handed rows of one identifier (review 2457 F2)', () => {
+  it('the programme home\'s workspace decides: its row is taken and the other stays handed', async () => {
+    const r = await rig({ twoWs: true });
+    handedRow(r, 51, WS.b.id, 'prog-b', T - 5000);     // the OLDER row sits in the other workspace, so "the first row" is the wrong one
+    handedRow(r, 50, WS.a.id, 'prog-b', T - 1000);
+    const res = await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect([r.plan.inboundOf(U(50))!.state, r.plan.inboundOf(U(51))!.state]).toEqual(['taken', 'handed']);
+    expect(bindingCount(r)).toBe(1);
+  });
+
+  it('when the home does not decide, nothing is chosen: issue-not-inbound, no binding, no row moved, no mail', async () => {
+    const r = await rig({ twoWs: true });
+    // a programme whose home project has no team linked reads no workspace, so no row is the home's
+    applyPlanChanges(r.db, 'prog-d', changes({
+      epics: { insert: [{ key: 'e-d', project: 'project-x', waves: [1], ordinal: 0, title: 'Epic d', summary: 'Summary' }], update: [], drop: [] },
+      checkpoints: { insert: [], update: [], drop: [] },
+    }), OTHER, T - 500, { home: 'project-x', title: 'prog-d' });
+    handedRow(r, 51, WS.b.id, 'prog-d', T - 5000);
+    handedRow(r, 50, WS.a.id, 'prog-d', T - 1000);
+    const before = mails(r, '%').length;
+    for (const body of [{ issue: 'AAA-12', epic: 'e-d' }, { issue: 'AAA-12', close: { why: 'noise' } }, { issue: 'AAA-12', return: { note: 'not mine' } }]) {
+      const res = await take(r, 'prog-d', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([409, 'issue-not-inbound']);
+    }
+    expect([r.plan.inboundOf(U(50))!.state, r.plan.inboundOf(U(51))!.state]).toEqual(['handed', 'handed']);
+    expect(bindingCount(r)).toBe(0);
+    expect(r.plan.planOf('prog-d').epics[0]!.tickets).toEqual([]);
+    expect(mails(r, '%')).toHaveLength(before);
+  });
+
+  it('a programme with no home at all chooses nothing either', async () => {
+    const r = await rig({ twoWs: true });
+    handedRow(r, 51, WS.b.id, 'prog-b', T - 5000);
+    handedRow(r, 50, WS.a.id, 'prog-b', T - 1000);
+    r.db.prepare("UPDATE programs SET homeProject = NULL WHERE slug = 'prog-b'").run();
+    const res = await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'issue-not-inbound']);
+    expect([r.plan.inboundOf(U(50))!.state, r.plan.inboundOf(U(51))!.state]).toEqual(['handed', 'handed']);
+  });
+});
+
+const HOUR = 3_600_000;
+/** The issue now sits in a team ccrc does not manage (the by-id read of the stored row answers so). */
+const moveOut = (r: Rig, n: number, over: Record<string, unknown> = {}): void => {
+  r.lin.byId[U(n)] = node(n, { teamKey: 'ZZZ', identifier: `ZZZ-${n}`, title: 'Moved elsewhere title', description: 'Moved elsewhere body', ...over });
+};
+const reads = (r: Rig) => r.asks.filter((a) => a.op === 'issueOwned');
+const bindingsOf12 = (r: Rig): number => (r.db.prepare('SELECT COUNT(*) AS n FROM linear_bindings WHERE linearId = ?').get(U(12)) as { n: number }).n;
+
+describe('every retire writes its cause, and a reopen clears it (review 2457 F4, D-8735)', () => {
+  it('completed, canceled and ccrc-own each leave their word; a reopen leaves none', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13), node(14)]);
+    r.fleet.ids.add('AAA-14');                                        // the journal now names AAA-14 a session's own create
+    await detect(r, [node(12, { stateType: 'completed' }), node(13, { stateType: 'canceled' }), node(14)], r.t.now + DRIFT_PASS_MS + 1);
+    expect([rowOf(r, 12)!.retiredWhy, rowOf(r, 13)!.retiredWhy, rowOf(r, 14)!.retiredWhy]).toEqual(['completed', 'canceled', 'ccrc-own']);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null });
+  });
+});
+
+describe('a retire deletes the row\'s stored inbound note (review 2457 A6)', () => {
+  it('a returned note stored while the owner was gone is gone once the row is retired', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: 'coord-gone', ownsTeam: false }, 'test', T);
+    r.presence['coord-gone'] = 'dead';
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', return: { note: 'not mine' } }, OTHER)).statusCode).toBe(200);
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'returned' });
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound_notes').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('the doors re-read the issue by id and retire a row whose issue left the managed teams (review 2457 F4, D-8733)', () => {
+  const handedRig = async (): Promise<Rig> => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    return r;
+  };
+
+  it.each([
+    ['take into an epic', { issue: 'AAA-12', epic: 'e-b' }],
+    ['close', { issue: 'AAA-12', close: { why: 'noise' } }],
+    ['return', { issue: 'AAA-12', return: { note: 'not mine' } }],
+  ] as const)('plan take (%s) refuses issue-not-inbound, retires the row moved-out and binds nothing', async (_name, body) => {
+    const r = await handedRig();
+    const sent = mails(r, '%').length;
+    moveOut(r, 12);
+    r.asks.length = 0;
+    const res = await take(r, 'prog-b', body, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'issue-not-inbound']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(bindingsOf12(r)).toBe(0);
+    expect(r.plan.planOf('prog-b').epics[0]!.tickets).toEqual([]);
+    expect(mails(r, '%')).toHaveLength(sent);
+    expect(reads(r)).toHaveLength(1);
+  });
+
+  it.each([
+    ['hand', { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' }],
+    ['upkeep', { issue: 'AAA-12', decision: 'upkeep' }],
+    ['close', { issue: 'AAA-12', decision: 'close', reason: 'noise' }],
+    ['raise', { issue: 'AAA-12', decision: 'raise' }],
+  ] as const)('plan triage (%s) refuses issue-not-inbound, retires the row moved-out and does nothing else', async (_name, body) => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    const sent = mails(r, '%').length;
+    moveOut(r, 12);
+    const res = await triage(r, body);
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'issue-not-inbound']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(bindingsOf12(r)).toBe(0);
+    expect(r.plan.upkeepEpicOf('project-a')).toBeNull();
+    expect(items(r)).toEqual([]);
+    expect(mails(r, '%')).toHaveLength(sent);
+  });
+
+  it('an issue Linear no longer answers (not-found) is retired the same way, and a completed one by its own cause', async () => {
+    const r = await handedRig();
+    r.lin.byId[U(12)] = null;
+    expect(errorOf(await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER))).toBe('issue-not-inbound');
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    const r2 = await handedRig();
+    r2.lin.byId[U(12)] = node(12, { stateType: 'completed' });
+    expect(errorOf(await take(r2, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER))).toBe('issue-not-inbound');
+    expect(rowOf(r2, 12)).toMatchObject({ state: 'retired', retiredWhy: 'completed' });
+  });
+
+  it('an issue still open in a managed team is acted on as before', async () => {
+    const r = await handedRig();
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER)).statusCode).toBe(200);
+    expect(rowOf(r, 12)!.state).toBe('taken');
+  });
+
+  it('a read that cannot be made refuses with unreachable and changes nothing, so a moved-out issue is never bound unseen', async () => {
+    for (const failWord of ['unreachable', 'timeout', 'malformed', 'rate-limited'] as const) {
+      const r = await handedRig();
+      r.lin.fail.add('issueOwned');
+      r.lin.failWord = failWord;
+      const res = await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER);
+      expect([res.statusCode, errorOf(res)], failWord).toEqual([503, 'unreachable']);
+      expect(rowOf(r, 12)).toMatchObject({ state: 'handed', retiredWhy: null });
+      expect(bindingsOf12(r)).toBe(0);
+    }
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.fail.add('issueOwned');
+    r.lin.failWord = 'unreachable';
+    const res = await triage(r, { issue: 'AAA-12', decision: 'upkeep' });
+    expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
+    expect(rowOf(r, 12)!.state).toBe('mailed');
+    expect(r.plan.upkeepEpicOf('project-a')).toBeNull();
+  });
+
+  it('a decision that binds nothing (a close, a raise, a return) goes on when the read cannot be made: the lane re-reads before it writes', async () => {
+    const r = await handedRig();
+    r.lin.fail.add('issueOwned');
+    r.lin.failWord = 'unreachable';
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', return: { note: 'not mine' } }, OTHER)).statusCode).toBe(200);
+    expect(rowOf(r, 12)!.state).toBe('mailed');
+    expect((await triage(r, { issue: 'AAA-12', decision: 'raise' })).statusCode).toBe(200);
+    expect(rowOf(r, 12)!.state).toBe('raised');
+    const r2 = await rig();
+    await detect(r2, [node(12)]);
+    r2.lin.fail.add('issueOwned');
+    r2.lin.failWord = 'unreachable';
+    expect((await triage(r2, { issue: 'AAA-12', decision: 'close', reason: 'noise' })).statusCode).toBe(200);
+    expect(rowOf(r2, 12)!.state).toBe('closed');
+    // and a read that DID answer moved-out refuses even these
+    const r3 = await rig();
+    await detect(r3, [node(12)]);
+    moveOut(r3, 12);
+    expect(errorOf(await triage(r3, { issue: 'AAA-12', decision: 'close', reason: 'noise' }))).toBe('issue-not-inbound');
+    expect(rowOf(r3, 12)!.retiredWhy).toBe('moved-out');
+  });
+
+  it('a refused key on the read goes to the sync\'s one owner, and the door still refuses', async () => {
+    const r = await handedRig();
+    r.lin.fail.add('issueOwned');
+    r.lin.failWord = 'linear-unauthorised';
+    const res = await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
+    expect(r.rejected).toHaveLength(1);
+    expect(r.sync.keyBlockedUntil(WS.a.id)).toBeGreaterThan(r.t.now);
+    expect(rowOf(r, 12)!.state).toBe('handed');
+  });
+
+  it('with no reader wired (a test or a script) the read is unmeasured: the door refuses and changes nothing', async () => {
+    const r = await rig({ noRecheck: true });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'handed', handedTo: 'prog-b' });
+    const res = await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
+    expect(rowOf(r, 12)!.state).toBe('handed');
+  });
+
+  it('the close: the lane re-reads before its comment and cancel; moved out, it retires the row and writes nothing in Linear', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.directory = null;                                          // the close waits for the directory
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+    r.lin.directory = DIRECTORY;
+    moveOut(r, 12);
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(writes(r)).toEqual([]);
+    expect(reads(r)).toHaveLength(1);
+    // still open in a managed team: the close is written, after one read
+    const r2 = await rig();
+    await detect(r2, [node(12)]);
+    await triage(r2, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r2, r2.t.now + 1);
+    expect(writes(r2).map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(rowOf(r2, 12)!.actedAt).not.toBeNull();
+  });
+
+  it('the close: a read that cannot be made writes nothing and tries again at the next beat', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.fail.add('issueOwned');
+    r.lin.failWord = 'unreachable';
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r, r.t.now + 1);
+    expect(writes(r)).toEqual([]);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'closed', actedAt: null });
+    r.lin.fail.delete('issueOwned');
+    await passAt(r, r.t.now + 30_001);                               // the refused step held the workspace on the failure schedule
+    expect(writes(r).map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+  });
+});
+
+describe('the lane retires an open stored row whose issue moved out, within a named interval (review 2457 F4, D-8733)', () => {
+  it('not before the interval, then once; an issue still in a managed team is not retired', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    moveOut(r, 12);
+    // the changed read returns the moved issue (dropped at the read: unmanaged, unbound) and not the other one
+    const at = r.t.now;
+    await detect(r, [node(12, { teamKey: 'ZZZ', identifier: 'ZZZ-12' })], at + DRIFT_PASS_MS + 1);
+    expect(reads(r)).toEqual([]);
+    expect(rowOf(r, 12)!.state).toBe('mailed');
+    await detect(r, [], at + INBOUND_RECHECK_MS - 1);
+    expect(reads(r)).toEqual([]);
+    expect(rowOf(r, 12)!.state).toBe('mailed');
+    await detect(r, [], at + INBOUND_RECHECK_MS + DRIFT_PASS_MS);
+    expect(reads(r).map((a) => a.input['id']).sort()).toEqual([U(12), U(13)]);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(rowOf(r, 13)).toMatchObject({ state: 'mailed', retiredWhy: null });
+    // each row is asked once per interval, and a retired row never again
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reads(r)).toEqual([]);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(reads(r).map((a) => a.input['id'])).toEqual([U(13)]);
+  });
+
+  it('rows of the states the owner, a coordinator or the operator still act on are all re-read; taken, placed and an acted close are not', async () => {
+    const r = await rig();
+    await detect(r, [node(11), node(12), node(13), node(14), node(15), node(16), node(17)]);
+    r.plan.setInboundState(U(11), { state: 'waiting', mailedTo: null, mailedAt: null });
+    await triage(r, { issue: 'AAA-13', decision: 'hand', programme: 'prog-b' });
+    await triage(r, { issue: 'AAA-14', decision: 'raise' });
+    r.lin.directory = null;
+    await triage(r, { issue: 'AAA-15', decision: 'close', reason: 'noise' });
+    await triage(r, { issue: 'AAA-16', decision: 'hand', programme: 'prog-a', epic: 'e1' });        // taken
+    await triage(r, { issue: 'AAA-17', decision: 'upkeep' });                                        // placed
+    for (const n of [11, 12, 13, 14, 15, 16, 17]) moveOut(r, n);
+    r.plan.setInboundState(U(11), { state: 'waiting' });
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect([11, 12, 13, 14, 15].map((n) => rowOf(r, n)!.state)).toEqual(['retired', 'retired', 'retired', 'retired', 'retired']);
+    expect([16, 17].map((n) => rowOf(r, n)!.state)).toEqual(['taken', 'placed']);
+    expect(reads(r).map((a) => a.input['id']).sort()).toEqual([11, 12, 13, 14, 15].map(U).sort());
+    expect(items(r).find((i) => i.kind === 'decide')!.state).toBe('done');          // the raised row's item settled
+  });
+
+  it('a read that cannot be made retires nothing, costs one read, and is tried again at the next pass', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    moveOut(r, 12);
+    r.lin.fail.add('issueOwned');
+    r.lin.failWord = 'unreachable';
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(reads(r)).toHaveLength(1);
+    expect([rowOf(r, 12)!.state, rowOf(r, 13)!.state]).toEqual(['mailed', 'mailed']);
+    r.lin.fail.delete('issueOwned');
+    await detect(r, [], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+  });
+
+  it('a refused key on the re-read goes to the sync\'s one owner and stops the lane\'s reads', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    r.lin.fail.add('issueOwned');
+    r.lin.failWord = 'linear-unauthorised';
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(reads(r)).toHaveLength(1);
+    expect(r.rejected).toHaveLength(1);
+  });
+
+  it('a moved-out issue that moves back in is reopened and its owner mailed once more', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    moveOut(r, 12);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(mails(r)).toHaveLength(1);
+    delete r.lin.byId[U(12)];
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null, mailedTo: OWNER });
+    expect(mails(r)).toHaveLength(2);
+    expect(mails(r)[1]!.subject).not.toBe(mails(r)[0]!.subject);
+  });
+
+  it('the re-read stores nothing of the issue: the row keeps its own fields, nothing else is written, nothing is logged', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    const before = { ...rowOf(r, 12)! };
+    const tablesBefore = r.db.prepare("SELECT name FROM sqlite_master WHERE type = 'table' ORDER BY name").all() as { name: string }[];
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const log = vi.spyOn(console, 'log').mockImplementation(() => undefined);
+    moveOut(r, 12);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    const logged = JSON.stringify([...warn.mock.calls, ...log.mock.calls]);
+    warn.mockRestore(); log.mockRestore();
+    const after = rowOf(r, 12)!;
+    expect(after).toEqual({ ...before, state: 'retired', retiredWhy: 'moved-out' });
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound').get()).toEqual({ n: 1 });
+    expect(logged).not.toMatch(/ZZZ|Moved elsewhere/);
+    // no table anywhere holds a word of what the re-read answered
+    for (const { name } of tablesBefore) {
+      const dump = JSON.stringify(r.db.prepare(`SELECT * FROM "${name}"`).all());
+      expect(dump, name).not.toMatch(/ZZZ|Moved elsewhere/);
+    }
+  });
+});
+
+// ── Review 2524, fix round 2 (inbound side) ──
+
+/** A second managed workspace (ws-b, team BBB) with one stored open row, BBB-70, that the by-id read finds still in BBB. */
+function secondWorkspace(r: Rig): void {
+  r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.b.id, 'BBB', 'applied', T - 1000);
+  r.plan.upsertInbound({ linearId: U(70), workspaceId: WS.b.id, teamKey: 'BBB', identifier: 'BBB-70', title: 'Other workspace', body: null, seenAt: T - 500 });
+  r.lin.byId[U(70)] = node(70, { teamKey: 'BBB', identifier: 'BBB-70' });
+}
+
+describe('the lane\'s re-read is bounded per row whatever the number of workspaces (review 2524 F1)', () => {
+  it('two managed workspaces whose passes alternate read each open row at most once per interval', async () => {
+    const r = await rig({ twoWs: true });
+    secondWorkspace(r);
+    await detect(r, [node(12)], T + 1);
+    r.lin.issues = [];                                                 // the changed read returns nothing more: only the by-id re-read counts
+    const span = 26 * (DRIFT_PASS_MS + 1);                            // 13 hours: more than two intervals
+    for (let k = 1; k <= 26; k++) await passAt(r, T + 1 + k * (DRIFT_PASS_MS + 1));
+    const count = (id: string): number => reads(r).filter((a) => a.input['id'] === id).length;
+    const bound = Math.floor(span / INBOUND_RECHECK_MS) + 1;
+    expect([count(U(12)) >= 1, count(U(12)) <= bound], 'AAA-12').toEqual([true, true]);
+    expect([count(U(70)) >= 1, count(U(70)) <= bound], 'BBB-70').toEqual([true, true]);
+  });
+});
+
+describe('only a workspace-wide answer stops the lane\'s walk (review 2524 F2)', () => {
+  const badThenMoved = async (bad: (r: Rig) => void): Promise<Rig> => {
+    const r = await rig();
+    await detect(r, [node(12), node(13), node(14)]);
+    bad(r);
+    moveOut(r, 13);
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    return r;
+  };
+  const cases: [string, (r: Rig) => void][] = [
+    ['an answer without its team or state (malformed)', (r) => { r.lin.byId[U(12)] = { id: U(12), identifier: 'AAA-12' }; }],
+    ['a per-issue refusal (linear-forbidden)', (r) => { r.lin.byIdWord[U(12)] = 'linear-forbidden'; }],
+  ];
+  it.each(cases)('%s marks that row checked: the moved-out row behind it is retired in the same pass', async (_n, bad) => {
+    const r = await badThenMoved(bad);
+    expect(rowOf(r, 13)).toMatchObject({ state: 'retired', retiredWhy: 'moved-out' });
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null });
+    expect(reads(r).filter((a) => a.input['id'] === U(12))).toHaveLength(1);
+    // the bad row is not read again before the interval, and nothing of it was stored
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reads(r)).toEqual([]);
+    expect(rowOf(r, 12)).toMatchObject({ title: 'Reporter title 12', teamKey: 'AAA' });
+  });
+  it('a workspace-wide answer (a transport failure) still stops the walk after one read', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    moveOut(r, 13);
+    r.lin.fail.add('issueOwned'); r.lin.failWord = 'timeout';
+    r.asks.length = 0;
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(reads(r)).toHaveLength(1);
+    expect(rowOf(r, 13)!.state).toBe('mailed');
+  });
+});
+
+describe('plan take never reaches another workspace\'s Upkeep ticket (review 2524 A1)', () => {
+  /** An Upkeep ticket of ws-b whose issue carries the identifier AAA-12 (the same identifier as ws-a's issue). */
+  const otherTicket = (r: Rig): number => {
+    r.plan.upsertInbound({ linearId: U(60), workspaceId: WS.b.id, teamKey: 'BBB', identifier: 'AAA-12', title: 'Other ticket', body: null, seenAt: T - 4000 });
+    const done = r.plan.placeInboundInUpkeep({ linearId: U(60), project: 'project-b', now: T - 3500 });
+    if (!done.ok) throw new Error('fixture: the Upkeep ticket was not placed');
+    return done.ticketId;
+  };
+  const untouched = (r: Rig, id: number): void => {
+    const t = r.plan.upkeepEpicOf('project-b')!.tickets.find((x) => x.id === id)!;
+    expect([t.program, t.state]).toEqual([null, 'open']);
+  };
+  it('with no handed row, a take or close of an identifier only another workspace\'s ticket holds is issue-not-inbound', async () => {
+    const r = await rig({ twoWs: true });
+    const id = otherTicket(r);
+    for (const body of [{ issue: 'AAA-12', epic: 'e-b' }, { issue: 'AAA-12', close: { why: 'noise' } }]) {
+      const res = await take(r, 'prog-b', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([409, 'issue-not-inbound']);
+    }
+    untouched(r, id);
+  });
+  it('with handed rows the home does not decide, the refusal is at once and the ticket is neither taken nor closed', async () => {
+    const r = await rig({ twoWs: true });
+    applyPlanChanges(r.db, 'prog-d', changes({
+      epics: { insert: [{ key: 'e-d', project: 'project-x', waves: [1], ordinal: 0, title: 'Epic d', summary: 'Summary' }], update: [], drop: [] },
+      checkpoints: { insert: [], update: [], drop: [] },
+    }), OTHER, T - 500, { home: 'project-x', title: 'prog-d' });
+    handedRow(r, 51, WS.b.id, 'prog-d', T - 5000);
+    handedRow(r, 50, WS.a.id, 'prog-d', T - 1000);
+    const id = otherTicket(r);
+    for (const body of [{ issue: 'AAA-12', epic: 'e-d' }, { issue: 'AAA-12', close: { why: 'noise' } }]) {
+      const res = await take(r, 'prog-d', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([409, 'issue-not-inbound']);
+    }
+    untouched(r, id);
+    expect([r.plan.inboundOf(U(50))!.state, r.plan.inboundOf(U(51))!.state]).toEqual(['handed', 'handed']);
+  });
+});
+
+describe('every cause is walked at pass level: canceled, and an unreadable store (review 2524 A2)', () => {
+  const canceled = (r: Rig): void => { r.lin.byId[U(12)] = node(12, { stateType: 'canceled' }); };
+  it('canceled by id: a take and a triage retire the row with cause canceled', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    canceled(r);
+    expect(errorOf(await take(r, 'prog-b', { issue: 'AAA-12', epic: 'e-b' }, OTHER))).toBe('issue-not-inbound');
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+    const r2 = await rig();
+    await detect(r2, [node(12)]);
+    canceled(r2);
+    expect(errorOf(await triage(r2, { issue: 'AAA-12', decision: 'upkeep' }))).toBe('issue-not-inbound');
+    expect(rowOf(r2, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+  });
+  it('canceled by id: the close\'s act retires the row and writes nothing in Linear', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.lin.directory = null;
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    await passAt(r, r.t.now + 1);
+    r.lin.directory = DIRECTORY;
+    canceled(r);
+    await passAt(r, r.t.now + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+    expect(writes(r)).toEqual([]);
+  });
+  it('canceled by id: the lane\'s re-read retires the row with cause canceled', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    canceled(r);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'retired', retiredWhy: 'canceled' });
+  });
+  it.each(['reject', 'unreadable'] as const)('a Linear store that is %s on the door\'s re-read answers as an unmeasured read: unreachable, nothing changed', async (store) => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    moveOut(r, 12);
+    r.lin.store = store;
+    r.asks.length = 0;
+    const res = await triage(r, { issue: 'AAA-12', decision: 'upkeep' });
+    expect([res.statusCode, errorOf(res)]).toEqual([503, 'unreachable']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'mailed', retiredWhy: null });
+    expect(r.plan.upkeepEpicOf('project-a')).toBeNull();
+    expect(reads(r)).toEqual([]);
+  });
+});
+
+describe('the reopen mail names the row\'s own retire cause (review 2524 A4)', () => {
+  const reopenBody = (r: Rig): string => mails(r).filter((m) => m.subject.includes('was reopened')).at(-1)!.body;
+  const SO = 'so it waits for your triage once more.';
+  it('completed', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was completed and is open again in Linear, ${SO}`);
+  });
+  it('canceled', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await detect(r, [node(12, { stateType: 'canceled' })], r.t.now + DRIFT_PASS_MS + 1);
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was canceled and is open again in Linear, ${SO}`);
+  });
+  it('moved out of the managed teams', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    moveOut(r, 12);
+    await detect(r, [], r.t.now + INBOUND_RECHECK_MS + 1);
+    delete r.lin.byId[U(12)];
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 left the managed Linear teams and is back in one, ${SO}`);
+  });
+  it('ccrc\'s own', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.fleet.ids.add('AAA-12');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.retiredWhy).toBe('ccrc-own');
+    r.fleet.ids.delete('AAA-12');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was ccrc's own issue and now reads as inbound in Linear, ${SO}`);
+  });
+  it('a row retired before the column existed (no cause) has a fallback sentence', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    r.db.prepare("UPDATE linear_inbound SET state = 'retired', retiredWhy = NULL WHERE linearId = ?").run(U(12));
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(reopenBody(r)).toContain(`The issue AAA-12 was retired earlier and is open again in Linear, ${SO}`);
+  });
+});

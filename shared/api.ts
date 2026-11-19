@@ -8165,6 +8165,32 @@ export interface MailSummary {
    * means "nothing to say about a park".
    */
   parkedAt?: number | null;
+  /**
+   * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times and its replay count, so a reader can
+   * measure how long a mail waited and how long it stayed unread. `at` above is when the mail row was inserted (the
+   * server's clock).
+   *
+   * `deliveredAt` is the time at the START of the sweep pass that last put the nudge into the recipient's pane
+   * (`mailPass`'s `now`, written by `markDelivered` once the send succeeds; the server's clock), so it is earlier than
+   * the moment the nudge was typed, by the pass's earlier reads and sends. A replay re-dates it: on a replayed row it is
+   * the latest delivery, not the first, and `replayCount` says how many replays there were (0 for none).
+   *
+   * `ingestedAt` is the time of the first `UserPromptSubmit` edge of ANY kind (an operator prompt, another mail's nudge,
+   * a brief, not only this mail's) that the mail sweep sampled from the recipient's hook state after a delivery, on the
+   * FLEET BOX's clock (`markIngested`, from `sampleEdge`, every `MAIL_SWEEP_MS`, 10 s). It is written once and a replay
+   * does not move it, so it can precede `deliveredAt`; a fast turn can overwrite the edge before a sample sees it, so it
+   * can be missing or a later prompt's time.
+   *
+   * `ackedAt` is when an ack committed (`markAcked`, the server's clock): the recipient's, through the ack route, or, for
+   * an operator-message nudge, the nudge lane's own ack at the delivery, so there it equals `deliveredAt`.
+   *
+   * ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent when the stored value is
+   * not the canonical spelling of a positive whole number (zero too, except `replayCount`'s), never zero.
+   */
+  deliveredAt?: number;
+  ingestedAt?: number;
+  ackedAt?: number;
+  replayCount?: number;
 }
 
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
@@ -12360,7 +12386,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-ticket-done-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-inbound-v1' | 'plan-ticket-done-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12431,7 +12457,7 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  this server answers `POST /api/programmes/:slug/plan/phases/refs` (`plan phase-ref`: add, remove, carry; `unknown-ref`,
    *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
    *  Added by the change that builds the route and the client row, cut after them. */
-  'plan-phases-v1': true,
+  'plan-phases-v1': true, 'plan-inbound-v1': true,   // plan-inbound-v1 (D-8736): `plan take` and `plan triage` answer; `ccrc-api` refuses both `capability-missing` without it
   /** Programme work map WM1 (D-8727): this server stores a ticket's done time and evidence (`plan_tickets.doneAt` and
    *  `doneEvidence`), answers `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`; `evidence-unverified`),
    *  and refuses `ticket-required` at `runs open` in a phased plan. `ccrc-api plan ticket-done` refuses
@@ -14549,6 +14575,9 @@ export interface CallView {
   seenAt: number | null;
   overturnedAt: number | null;
   overturnNote: string | null;
+  /** D-8126 A4: when a cleared big call left the operator's group (`callClearedAt`), on `WaitingView.callsCleared` rows only.
+   *  OPTIONAL on the wire: an older server omits it, and the console falls back to its own reading. ADDITIVE. */
+  clearedAt?: number;
 }
 
 /** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own
