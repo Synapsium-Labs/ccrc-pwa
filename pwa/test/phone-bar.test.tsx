@@ -48,7 +48,7 @@ function atWidth(width: number): void {
 const SESSION = fleetSession({ id: 'lane-a-quiet', bucket: 'idle' });
 /** The places as the operator steers them, written out here rather than read back from `PLACES`. */
 const PHONE_DOORS = ['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs', 'open-palette'];
-const DESK_TABS = ['go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-docs'];
+const DESK_TABS = ['go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-docs'];
 
 const phoneBar = (): HTMLElement | null => document.querySelector<HTMLElement>('nav.shell-phone-nav');
 const doorsOf = (el: Element): string[] => [...el.querySelectorAll('[data-command]')].map((d) => d.getAttribute('data-command')!);
@@ -72,7 +72,9 @@ afterEach(() => {
 
 describe('the one list of places', () => {
   it('every place is a top route, in the operator\'s order, fleet first; the desk list is the same less the fleet', () => {
-    expect(PLACES.map((p) => `go-${p.id}`)).toEqual(PHONE_DOORS.slice(0, -1));
+    // Flows is a desk place only (`phone: false`, flows design 2026-11-19 §9): the phone bar's doors are the rest.
+    expect(PLACES.filter((p) => p.phone !== false).map((p) => `go-${p.id}`)).toEqual(PHONE_DOORS.slice(0, -1));
+    expect(PLACES.filter((p) => p.phone === false).map((p) => p.id)).toEqual(['flows']);
     for (const p of PLACES) expect(ROUTES.find((r) => r.id === p.id)?.top, p.id).toBe(true);
     expect(DESK_PLACES.map((p) => `go-${p.id}`)).toEqual(DESK_TABS);
   });
@@ -287,6 +289,6 @@ describe('the fleet reserves the bar once', () => {
 describe("Instrument's desk doors read the one list", () => {
   it('they are the desk places with Archive after Accounts', () => {
     const ids = DESK_DOORS.filter((i) => !('reserved' in i)).map((i) => i.id);
-    expect(ids).toEqual(['waiting', 'inbox', 'runs', 'accounts', 'archive', 'docs']);
+    expect(ids).toEqual(['waiting', 'inbox', 'runs', 'flows', 'accounts', 'archive', 'docs']);
   });
 });

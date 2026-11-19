@@ -422,7 +422,7 @@ describe('the desk doors, characterized', () => {
     for (const at of PATHS) {
       mount(at, countedFleet());
       expect(deskDoors().map((d) => d.getAttribute('aria-label')), at).toEqual([
-        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Accounts', 'Archive', 'Docs', 'Settings',
+        'Waiting on you, 4 waiting on you', 'Inbox, 3 waiting for you', 'Runs, 2 needs you', 'Flows', 'Accounts', 'Archive', 'Docs', 'Settings',
       ]);
       cleanup();
     }
@@ -459,7 +459,7 @@ const FLEET = (): string => ROUTES.find((r) => r.id === 'fleet')!.title;
 const ROUTE_PATHS: Record<string, string> = {
   fleet: '/', session: `/s/${S.id}`, 'settings-section': '/settings/nope', digest: '/digest', item: '/waiting/1',
   programme: '/programmes/prog-a', run: '/runs/410', 'runs-advanced': '/runs/advanced',
-  epic: epicPath('prog-a', 'e1'), upkeep: upkeepPath('project-a'),
+  epic: epicPath('prog-a', 'e1'), upkeep: upkeepPath('project-a'), flow: '/flows/1',
 };
 
 describe('the desk top bar (desk-nav Task A)', () => {
@@ -467,14 +467,15 @@ describe('the desk top bar (desk-nav Task A)', () => {
     stubAt(1280);
     mount('/');
     const order = barControls().map((el) => el.getAttribute('data-command') ?? '(bell)');
-    expect(order.slice(0, 11)).toEqual([
-      'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs', 'open-palette', '(bell)', 'go-settings',
+    expect(order.slice(0, 12)).toEqual([
+      'go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-archive', 'go-docs', 'open-palette', '(bell)', 'go-settings',
       'new-session',
     ]);
-    // The eleven are the bar's line, and every control after them is the lanes row's, under the line.
-    for (const el of barControls().slice(0, 11)) expect(barLine().contains(el), el.outerHTML.slice(0, 60)).toBe(true);
+    // The twelve are the bar's line (Flows joined the desk places, flows design 2026-11-19 §9), and every control after them
+    // is the lanes row's, under the line.
+    for (const el of barControls().slice(0, 12)) expect(barLine().contains(el), el.outerHTML.slice(0, 60)).toBe(true);
     const strip = topBar().querySelector('.accounts-strip')!;
-    for (const el of barControls().slice(11)) expect(strip.contains(el), el.outerHTML.slice(0, 60)).toBe(true);
+    for (const el of barControls().slice(12)) expect(strip.contains(el), el.outerHTML.slice(0, 60)).toBe(true);
     // The bar is the frame's first chrome after the skip link, and no other landmark sits before the list column.
     const frame = document.querySelector('.app-shell')!;
     const kids = [...frame.children].map((c) => c.tagName.toLowerCase() + (c.getAttribute('aria-label') ? `:${c.getAttribute('aria-label')}` : ''));
@@ -487,7 +488,7 @@ describe('the desk top bar (desk-nav Task A)', () => {
     const nav = primary();
     expect(nav.closest('.ins-topbar')).not.toBeNull();
     expect([...nav.children].map((c) => c.getAttribute('data-command')))
-      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-accounts', 'go-archive', 'go-docs']);
+      .toEqual(['go-fleet', 'go-waiting', 'go-inbox', 'go-runs', 'go-flows', 'go-accounts', 'go-archive', 'go-docs']);
     // Activity is held in the registry, reserved, and draws nothing: no control that does nothing ships.
     expect(DESK_DOORS.find((i) => i.id === 'activity')).toEqual({ id: 'activity', reserved: 'F4, W4' });
     expect(within(nav).queryByRole('button', { name: /activity/i })).toBeNull();

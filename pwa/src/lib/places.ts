@@ -23,6 +23,9 @@ export interface Place {
    *  The phone bar's door is named by this word too ("Waiting, 3 waiting on you"), so the text it shows is in its name
    *  (review 1722); the desk bars name the place by its title. */
   readonly short?: string;
+  /** `false`: a desk place only. The phone bar holds a seventh of a phone per door, so a place an operator visits from a
+   *  desk (Flows, flows design 2026-11-19 §9) stays off it, and a phone reaches it through the palette's "Go to". */
+  readonly phone?: false;
 }
 
 /** The places, in the navigation's order, fleet first. */
@@ -31,9 +34,13 @@ export const PLACES: readonly Place[] = [
   { id: 'waiting', icon: 'hand', short: 'Waiting' },
   { id: 'inbox', icon: 'mail' },
   { id: 'runs', icon: 'workflow' },
+  { id: 'flows', icon: 'list-checks', phone: false },
   { id: 'accounts', icon: 'key-round' },
   { id: 'docs', icon: 'file-text' },
 ];
+
+/** The places the phone's bar shows: every place but a desk-only one, fleet first. */
+export const PHONE_PLACES: readonly Place[] = PLACES.filter((p) => p.phone !== false);
 
 /** The place a desk's navigation leaves out: the sessions are in the column beside every page there. */
 export const FLEET_PLACE = 'fleet';

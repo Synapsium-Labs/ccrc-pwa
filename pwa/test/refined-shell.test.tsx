@@ -65,7 +65,7 @@ function atWidth(width: number): void {
 }
 
 // The desk's places: no fleet place, since the sessions are in the column beside every page (desktop-polish PL10, D-7952; D25).
-const TAB_IDS = ['waiting', 'inbox', 'runs', 'accounts', 'docs'] as const;
+const TAB_IDS = ['waiting', 'inbox', 'runs', 'flows', 'accounts', 'docs'] as const;
 const tabTitle = (id: string): string => ROUTES.find((r) => r.id === id)!.title;
 
 beforeEach(() => {
@@ -87,7 +87,7 @@ const primary = (): HTMLElement => within(bar()).getByRole('navigation', { name:
 const tabs = (): HTMLElement[] => [...primary().querySelectorAll<HTMLElement>('[data-command^="go-"]')];
 
 describe('the app bar (W2 Task S4b)', () => {
-  it('the app bar renders the wordmark, the five tabs from ROUTES (no fleet place), the bell, search, settings and New session, in that order', () => {
+  it('the app bar renders the wordmark, the six tabs from ROUTES (no fleet place), the bell, search, settings and New session, in that order', () => {
     atWidth(1280);
     render(<App />);
     const b = bar();

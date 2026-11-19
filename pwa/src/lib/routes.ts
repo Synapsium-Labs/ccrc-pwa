@@ -49,6 +49,10 @@ export const ROUTES: readonly Route[] = [
   // The runs ledger (the runs rebuild, Task 11, D-8073; spec 2026-11-04 §8.6): every run, the switches and the lanes. A page
   // under Runs, reached from the board's foot; it sits before `run` only for reading order, `/runs/advanced` is no run number.
   { id: 'runs-advanced', pattern: /^\/runs\/advanced\/?$/, title: 'Advanced', top: false, path: null },
+  // The Flows screen (flows design 2026-11-19 §9) and one flow by its number; `accepts` is the run row's grammar, a
+  // canonical positive safe integer, because a flow's id is coord.db's integer key too.
+  { id: 'flows', pattern: /^\/flows\/?$/, title: 'Flows', top: true, path: '/flows' },
+  { id: 'flow', pattern: /^\/flows\/(\d+)\/?$/, title: 'Flow', top: false, path: null, accepts: isRunId },
   { id: 'accounts', pattern: /^\/accounts\/?$/, title: 'Accounts', top: true, path: '/accounts' },
   // `/docs` and every page under it, never `/docsearch` (design 2026-10-01 section 4.2).
   { id: 'docs', pattern: /^\/docs(?:\/|$)/, title: 'Docs', top: true, path: '/docs' },

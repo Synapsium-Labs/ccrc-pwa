@@ -4348,6 +4348,26 @@ export const MIGRATIONS: readonly string[] = [
   `
   ALTER TABLE continuity_generations ADD COLUMN designatedClass TEXT;   -- the designation's class at the mint; NULL is unknown
   `,
+
+  // ── 123: user_version 122 -> 123 ──────────────────────────────────────────
+  // Flows wave 1 (spec 2026-11-19 §7, plan `2026-11-19-flows-w1.md`): the operator's flows and their published versions.
+  // `flows.draft` and `flow_versions.doc` hold a `FlowDoc` as JSON; a read checks its shape (`shared/flows.ts#parseFlowDoc`)
+  // and answers one it cannot read `unreadable`. A `flow_versions` row is inserted once and never updated. Writers:
+  // `server/src/flows/flowsStore.ts` alone. NEW TABLES only: an older build at this `user_version` takes rule 3 and never
+  // names them. Entries 1 to 122 are on main (measured 2026-11-24: the designated class took 122), so this is
+  // 123 by position; whoever lands second renumbers. RE-MEASURE the slot (it must print 122 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE flows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, sourceTemplate TEXT, sourceVersion INTEGER,
+    draft TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
+  );
+  CREATE TABLE flow_versions (
+    flowId INTEGER NOT NULL REFERENCES flows(id), version INTEGER NOT NULL, doc TEXT NOT NULL, publishedAt INTEGER NOT NULL,
+    PRIMARY KEY (flowId, version)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
