@@ -4244,6 +4244,37 @@ the server test typecheck, single-definition, deviation-refs, dtbd and topology-
 
 **Rollback.** A plain revert.
 
+### Task C46: the fleet list drops the subagent and delegated counts (D-8771) — now
+
+**Why.** The operator, 2026-11-19: "the number of subagents in a session is noise at this point on the left panel. It's
+information useful only inside the session running them." A session's row in the fleet list (the left panel on desktop,
+the session list on a phone) no longer draws a count of its subagents or delegated entries. The session's header and
+details keep every one of those facts, unchanged: the subagent disclosure, the delegated-entries disclosure and their lists.
+
+**Files.** `pwa/src/fleet/SessionMeta.tsx` (the card's `N delegated` chip, R9, D-7781, is gone), `sessionFacts.ts`
+(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix), `SessionLine.tsx` (the
+`delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
+`delegationWords.ts` (`delegationParts` answers the bare words `delegated` and `worktrees`; `DelegatedSummary.count`
+removed) and `rollup.ts` (`SummaryPart.n` optional, `partWords` the one spelling). A coordinator's fold line and a
+programme box's footer are a separate grouping the operator taps to open the delegated rows, so they stay and drop only
+the numbers (the coordinator's ruling of 2026-11-19). Tests: `card-header-facts`, `project-card`, `rollup`,
+`fleet-rollup-render`, `fleet-screen`, `nestFleet` and `delegation-words`, and the real-Chrome `delegation-rows`.
+
+**Measured.** Each changed pin is red at `main` and green here; the affected `pwa` test files, the compile check, the
+build and the browser file pass; `topology-clean` and every `single-definition` file pass; the fleet list was looked at in a
+real Chrome at 1280 and 360 px. The figures and what was not measured are in `docs/superpowers/programs/desktop-polish/c46.md`.
+
+**Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, in its text or accessible name; the
+header still draws both disclosures with their counts; the delegated rows stay reachable through their fold line.
+
+**Rollback.** A plain revert.
+
+- **D-8771** — `fleet-list-drops-subagent-counts`: Task C46, issued on 2026-11-19. The fleet list draws no count of a
+  session's subagents or delegated entries (the operator's ruling of 2026-11-19). D-7781's card chip and D-7782's card-side
+  comparison of the `delegated` fact by count are superseded on the card; the header keeps D-7781's count of every entry and
+  its disclosure. The card no longer has a `delegated` fact, so the subset rule is a prefix test for every key. A coordinator's
+  fold line and a programme box's footer keep their delegated rows and say `delegated` and `worktrees` with no number.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
