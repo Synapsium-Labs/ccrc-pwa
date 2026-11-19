@@ -617,7 +617,7 @@ describe('an orphaned spawn goes to the pass at once (D-8126)', () => {
     const id = f.stalled(60_000);
     // The decider meets the dropped link: ccd's ending is cut short (or unmeasured), the AFTER read does not list.
     for (const cutShort of [true, UNMEASURED] as const) {
-      const d = decideDispatch({ step: 'bind', project: 'demo', childSlug: null, beforeIds: new Set(),
+      const d = decideDispatch({ step: 'bind', project: 'demo', childSlug: null, beforeIds: new Set<string>(),
         after: { listed: false } as unknown as RegistryRead, res: { ok: false, stderr: '', cutShort } });
       expect(d.kind).toBe('refused');
       // What `stopped()` journals: the refusal's event, then the orphan event last when there is one.
