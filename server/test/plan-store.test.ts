@@ -506,6 +506,13 @@ describe('inbound', () => {
     setInboundState(db, 'L1', { state: 'closed', reason: 'duplicate', actedAt: 8 });
     expect(inboundOf(db, 'L1')).toMatchObject({ state: 'closed', reason: 'duplicate', actedAt: 8, mailedTo: 'coord-a' });
   });
+  it('setInboundState called outside a transaction is one transaction of its own: a failing note delete leaves the state unchanged (review 2834 A3)', () => {
+    upsertInbound(db, inboundIn('L1'));
+    db.exec('DROP TABLE linear_inbound_notes');       // the second statement (the note's delete) now throws
+    expect(db.isTransaction).toBe(false);
+    expect(() => setInboundState(db, 'L1', { state: 'handed', handedTo: 'coord-a' })).toThrow();
+    expect(inboundOf(db, 'L1')).toMatchObject({ state: 'waiting', handedTo: null });
+  });
   it('upsertInbound truncates a long title and body visibly, on a code point (D-8705)', () => {
     const title = '😀'.repeat(300);
     const body = 'é'.repeat(40_000) + '😀';   // 80 003 bytes
