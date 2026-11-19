@@ -164,12 +164,14 @@ export function flowProgrammes(db: DatabaseSync, flowId: number, terminalSql: st
 export interface FlowOutcomeRow {
   id: number; program: string; flowId: number; version: number; blockId: string; outcome: string; nextBlock: string;
   wouldSend: string; byId: string; at: number;
+  /** Wave 4a: an attested gate's evidence; null for an instruction or skill block. */
+  evidence: string | null;
 }
 
 /** Records one reported outcome and what the engine would do next. Inserted once, never updated. */
 export function recordFlowOutcome(db: DatabaseSync, r: Omit<FlowOutcomeRow, 'id'>): number {
-  const res = db.prepare(`INSERT INTO flow_outcomes (program, flowId, version, blockId, outcome, nextBlock, wouldSend, byId, at)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(r.program, r.flowId, r.version, r.blockId, r.outcome, r.nextBlock, r.wouldSend, r.byId, r.at);
+  const res = db.prepare(`INSERT INTO flow_outcomes (program, flowId, version, blockId, outcome, nextBlock, wouldSend, byId, at, evidence)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`).run(r.program, r.flowId, r.version, r.blockId, r.outcome, r.nextBlock, r.wouldSend, r.byId, r.at, r.evidence);
   return Number(res.lastInsertRowid);
 }
 
