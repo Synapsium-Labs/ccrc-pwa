@@ -318,7 +318,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches',
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
-  'continuity_act_keys', 'approval_census', 'overlord_fence_refusals'] as const;
+  'continuity_act_keys', 'approval_census', 'overlord_fence_refusals', 'flows', 'flow_versions'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -456,6 +456,9 @@ describe(TABLES_PIN, () => {
       continuity_act_keys: ['advanceActCounter', 'issueActKey', 'noteRefusedClaim'].map((f) => `server/src/continuity/actKeyStore.ts#${f}`),
       // The gate's fence refusals (Overlord W1 gates B, plan w1-gates.md Task 5): one writer, which also prunes the table.
       overlord_fence_refusals: ['server/src/coord/overlordGateStore.ts#recordFenceRefusal'],
+      // The operator's flows (flows design 2026-11-19 §7): one file writes both tables; a published version is inserted once.
+      flows: ['createFlow', 'deleteFlow', 'publishFlow', 'saveFlowDraft'].map((f) => `server/src/flows/flowsStore.ts#${f}`),
+      flow_versions: ['deleteFlow', 'publishFlow'].map((f) => `server/src/flows/flowsStore.ts#${f}`),
     });
   });
 

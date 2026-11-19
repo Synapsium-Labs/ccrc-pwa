@@ -1,0 +1,368 @@
+<!DOCTYPE html>
+<html lang="en" data-theme="phosphor">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Flows — mockup</title>
+<link rel="stylesheet" href="../../../../ui/src/styles/tokens.css">
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg-page); color: var(--ink-primary); font-family: var(--family-ui); font-size: var(--fs-ui); line-height: var(--lh-normal); }
+  .mono { font-family: var(--family-mono); }
+  svg.i { width: 16px; height: 16px; stroke: currentColor; fill: none; stroke-width: 2; stroke-linecap: round; stroke-linejoin: round; flex: none; }
+
+  /* --- page chrome around the two frames ------------------------------- */
+  .stage { padding: var(--sp-6) var(--sp-6) var(--sp-12); display: grid; gap: var(--sp-6); }
+  .stage-head { display: flex; justify-content: space-between; align-items: baseline; gap: var(--sp-4); flex-wrap: wrap; }
+  .eyebrow { margin: 0; font-family: var(--family-mono); font-size: var(--fs-2xs); font-weight: 500; text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--ink-tertiary); }
+  .stage h1 { margin: 0; font: 500 var(--fs-xl)/1.25 var(--family-mono); }
+  .stage h1 b { color: var(--accent); font-weight: 500; }
+  .theme-pick { display: flex; gap: var(--sp-2); align-items: center; color: var(--ink-tertiary); font-size: var(--fs-xs); }
+  .frames { display: flex; gap: var(--sp-6); align-items: flex-start; flex-wrap: wrap; }
+
+  /* --- desk shell (workbench-tabs / -sidebar / -status-bar shapes) ------ */
+  .desk { flex: 1 1 1240px; min-width: 1240px; height: 720px; display: grid; grid-template-rows: auto 1fr auto; border: 1px solid var(--edge-strong); border-radius: var(--r-lg); overflow: hidden; background: var(--bg-page); box-shadow: var(--elev-pop); }
+  .wb-tabs { display: flex; align-items: stretch; background: var(--bg-page); border-bottom: 1px solid var(--edge-subtle); color: var(--ink-secondary); font-size: var(--fs-sm); }
+  .wb-tab { display: flex; align-items: center; gap: var(--sp-2); padding: 0 var(--sp-4); min-height: 38px; border-right: 1px solid var(--edge-subtle); }
+  .wb-tab[aria-selected="true"] { color: var(--ink-primary); background: var(--bg-surface); box-shadow: inset 0 -2px 0 var(--accent); }
+  .desk-body { display: grid; grid-template-columns: 220px 1fr 320px; min-height: 0; }
+  .wb-status { display: flex; gap: var(--sp-4); align-items: center; min-height: 24px; padding: 0 var(--sp-3); font: var(--fs-xs)/1 var(--family-mono); color: var(--ink-tertiary); background: var(--bg-surface); border-top: 1px solid var(--edge-subtle); }
+  .wb-status .ok { color: var(--status-busy-text); }
+
+  /* left column: flow list + palette, styled as the workbench sidebar */
+  .side { background: var(--bg-surface); border-right: 1px solid var(--edge-subtle); display: flex; flex-direction: column; min-height: 0; overflow: auto; }
+  .side-group { padding: var(--sp-3) var(--sp-2) var(--sp-2); display: grid; gap: 2px; }
+  .side-group > .eyebrow { padding: 0 var(--sp-2) var(--sp-1); }
+  .side-row { display: flex; align-items: center; gap: var(--sp-2); min-height: 32px; padding: 0 var(--sp-2); border-radius: var(--r-sm); color: var(--ink-secondary); font-size: var(--fs-sm); }
+  .side-row:hover { background: var(--bg-raised); }
+  .side-row[aria-current="true"] { background: var(--accent-tint); color: var(--ink-primary); }
+  .side-row .grow { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .grip { cursor: grab; border: 1px dashed var(--edge-strong); background: var(--bg-raised); margin: 2px 0; }
+  .grip:hover { border-color: var(--accent); }
+
+  /* chips (primitives/chip.tsx: mono meta pill) */
+  .chip { display: inline-flex; align-items: center; gap: 6px; border-radius: var(--r-full); padding: 4px 9px; font: 500 var(--fs-xs)/1 var(--family-mono); background: var(--bg-raised); color: var(--ink-secondary); white-space: nowrap; }
+  .chip i { width: 5px; height: 5px; border-radius: 50%; background: currentColor; flex: none; }
+  .chip.attn { background: var(--status-attention-tint); color: var(--status-attention-text); }
+  .chip.busy { color: var(--status-busy-text); }
+  .chip.tpl { background: transparent; border: 1px solid var(--edge-strong); }
+
+  /* canvas: a well, cut into the interface */
+  .canvas { position: relative; min-height: 0; overflow: hidden; background: var(--bg-well); background-image: radial-gradient(var(--edge-subtle) 1px, transparent 1px); background-size: 20px 20px; }
+  .canvas-bar { position: absolute; top: var(--sp-3); left: var(--sp-3); right: var(--sp-3); display: flex; gap: var(--sp-2); align-items: center; z-index: 2; flex-wrap: wrap; }
+  .canvas-bar .spacer { flex: 1; }
+  .zoom { position: absolute; bottom: var(--sp-3); left: var(--sp-3); display: flex; gap: 2px; padding: 2px; border: 1px solid var(--edge-subtle); border-radius: var(--r-md); background: var(--bg-surface); z-index: 2; }
+  .zoom button { min-width: 28px; min-height: 28px; border: 0; border-radius: var(--r-sm); background: transparent; color: var(--ink-secondary); font: var(--fs-sm) var(--family-mono); }
+  svg.edges { position: absolute; left: 0; top: 0; overflow: visible; pointer-events: none; }
+  svg.edges circle { fill: var(--bg-well); stroke: var(--edge-strong); stroke-width: 1.5; }
+  svg.edges .lbl-bg { fill: var(--bg-well); stroke: none; }
+  svg.edges path { stroke: var(--edge-strong); stroke-width: 1.5; fill: none; }
+  svg.edges path.loop { stroke: var(--status-attention); stroke-dasharray: 5 4; }
+  svg.edges text { font: var(--fs-2xs) var(--family-mono); fill: var(--ink-tertiary); }
+  svg.edges text.loop { fill: var(--status-attention-text); }
+
+  /* a block: a small card on the glass */
+  .blk { position: absolute; width: 176px; z-index: 1; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--bg-surface); border: 1px solid var(--edge-strong); box-shadow: var(--elev-card); display: grid; gap: 6px; cursor: grab; }
+  .blk-kind { display: flex; align-items: center; gap: 6px; font: 500 var(--fs-2xs)/1 var(--family-mono); text-transform: uppercase; letter-spacing: var(--ls-caps); color: var(--ink-tertiary); }
+  .blk-kind .k { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  .blk-title { font: 500 var(--fs-sm)/1.25 var(--family-ui); color: var(--ink-primary); }
+  .blk-meta { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+  .blk-meta .chip { padding: 3px 7px; font-size: var(--fs-2xs); }
+  .k-instr { background: var(--acct-blue); }
+  .k-gate  { background: var(--status-attention); }
+  .k-skill { background: var(--acct-violet); }
+  .k-proto { background: var(--status-idle); }
+  .blk.proto { background: var(--bg-raised); border-style: dashed; cursor: default; }
+  .blk.proto .blk-title { color: var(--ink-secondary); }
+  .blk.sel { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent), var(--elev-card); }
+  .port { position: absolute; width: 9px; height: 9px; border-radius: 50%; background: var(--bg-well); border: 1.5px solid var(--edge-strong); }
+  .port.out { right: -5px; top: 50%; translate: 0 -50%; }
+  .port.in  { left: -5px; top: 50%; translate: 0 -50%; }
+  /* live: a program sitting on a block — glow means life */
+  .live { position: absolute; top: -24px; left: 0; display: inline-flex; align-items: center; gap: 5px; padding: 2px 7px; border-radius: var(--r-full); background: var(--bg-well); border: 1px solid var(--edge-subtle); font: var(--fs-2xs)/1.3 var(--family-mono); color: var(--status-busy-text); }
+  .dot { width: 7px; height: 7px; border-radius: 50%; flex: none; }
+  .dot.busy { background: var(--status-busy); box-shadow: var(--glow-dot-busy); animation: breathe var(--breathe-period) var(--curve-breathe) infinite alternate; }
+  .dot.attn { background: var(--status-attention); box-shadow: var(--glow-dot-attention); }
+  .live.attn { color: var(--status-attention-text); }
+  @keyframes breathe { from { opacity: .55 } to { opacity: 1 } }
+
+  /* inspector: Section cards (primitives/section.tsx) */
+  .insp { background: var(--bg-page); border-left: 1px solid var(--edge-subtle); overflow: auto; padding: var(--sp-3) var(--sp-3) var(--sp-6); display: grid; gap: var(--sp-4); align-content: start; }
+  .sec { display: grid; gap: var(--sp-2); }
+  .sec-head { display: flex; flex-direction: column-reverse; gap: 2px; }
+  .sec-title { margin: 0; font: 600 var(--fs-base)/1.25 var(--family-ui); letter-spacing: var(--ls-tight); }
+  .card { display: grid; gap: var(--sp-3); padding: var(--pad-card); border-radius: var(--r-lg); background: var(--bg-surface); border: 1px solid var(--edge-subtle); box-shadow: var(--elev-card); }
+  .field { display: grid; gap: 6px; }
+  .field label { font-size: var(--fs-xs); color: var(--ink-secondary); }
+  .input, .select, .ta { width: 100%; border-radius: var(--r-md); background: var(--bg-raised); border: 1px solid var(--edge-subtle); color: var(--ink-primary); padding: 8px 10px; font: var(--fs-sm)/1.4 var(--family-ui); }
+  .select { display: flex; justify-content: space-between; align-items: center; }
+  .ta { font-family: var(--family-mono); font-size: var(--fs-xs); line-height: var(--lh-mono); min-height: 150px; resize: vertical; background: var(--bg-well); color: var(--ink-on-well); }
+  .lockline { display: flex; gap: var(--sp-2); align-items: flex-start; padding: var(--sp-2) var(--sp-3); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-tertiary); font-size: var(--fs-xs); }
+  .seg { display: flex; gap: 2px; padding: 2px; border: 1px solid var(--edge-subtle); border-radius: var(--r-md); }
+  .seg span { flex: 1; text-align: center; padding: 6px 0; border-radius: var(--r-sm); font-size: var(--fs-xs); color: var(--ink-tertiary); }
+  .seg span[aria-pressed="true"] { color: var(--ink-primary); background: var(--bg-raised); box-shadow: 0 0 0 1px var(--edge-strong); }
+  .outcome { display: flex; align-items: center; gap: var(--sp-2); font-size: var(--fs-sm); }
+  .outcome .arrow { color: var(--ink-tertiary); }
+
+  /* buttons (primitives/button.tsx) */
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 32px; padding: 0 var(--sp-3); border-radius: var(--r-md); font: 500 var(--fs-sm)/1 var(--family-ui); cursor: pointer; white-space: nowrap; }
+  .btn-primary { background: var(--accent); color: var(--ink-on-accent); border: 0; font-weight: 600; }
+  .btn-ghost { background: transparent; color: var(--ink-primary); border: 1px solid var(--edge-strong); }
+  .btn-quiet { background: var(--bg-raised); color: var(--ink-secondary); border: 1px solid var(--edge-subtle); font-family: var(--family-mono); font-size: var(--fs-xs); }
+
+  /* banner: template updated */
+  .banner { display: flex; align-items: center; gap: var(--sp-2); padding: 6px var(--sp-3); border-radius: var(--r-md); background: var(--status-attention-tint); color: var(--status-attention-text); font-size: var(--fs-xs); }
+
+  /* --- phone frame: PageScaffold + outline as list rows ----------------- */
+  .phone { width: 390px; height: 720px; flex: none; border: 1px solid var(--edge-strong); border-radius: 28px; overflow: hidden; background: var(--bg-page); display: flex; flex-direction: column; box-shadow: var(--elev-pop); }
+  .ph-head { display: flex; align-items: center; gap: var(--sp-2); min-height: var(--head-h); padding: 0 var(--gutter); }
+  .ph-head .caret { color: var(--accent); font: 500 var(--fs-xl)/1 var(--family-mono); }
+  .ph-head .title { flex: 1; font: 500 var(--fs-xl)/1.25 var(--family-mono); }
+  .ph-body { flex: 1; overflow: auto; padding: var(--sp-2) var(--gutter) var(--sp-8); display: grid; gap: var(--sp-4); align-content: start; }
+  .rows { padding: 0; gap: 0; }
+  .row { display: flex; align-items: center; gap: var(--sp-3); min-height: var(--row-h); padding: 0 var(--pad-card); border-top: 1px solid var(--edge-subtle); }
+  .row:first-child { border-top: 0; }
+  .row .txt { flex: 1; min-width: 0; display: grid; gap: 2px; }
+  .row .t { font-size: var(--fs-base); }
+  .row .s { font: var(--fs-xs) var(--family-mono); color: var(--ink-tertiary); }
+  .row .chev { color: var(--ink-tertiary); }
+  .row.indent { padding-left: calc(var(--pad-card) + var(--sp-5)); }
+  .row.proto .t { color: var(--ink-secondary); }
+  .row .k { width: 8px; height: 8px; border-radius: 2px; flex: none; }
+  .ph-nav { display: flex; justify-content: space-around; border-top: 1px solid var(--edge-subtle); background: var(--bg-surface); padding: var(--sp-2) 0 var(--sp-4); font: var(--fs-2xs) var(--family-mono); color: var(--ink-tertiary); }
+  .ph-nav span { display: grid; justify-items: center; gap: 4px; }
+  .ph-nav .on { color: var(--accent); }
+  .note { max-width: 760px; color: var(--ink-secondary); font-size: var(--fs-sm); margin: 0; }
+  .legend { display: flex; gap: var(--sp-4); flex-wrap: wrap; font-size: var(--fs-xs); color: var(--ink-tertiary); }
+  .legend span { display: inline-flex; gap: 6px; align-items: center; }
+  .legend .k { width: 8px; height: 8px; border-radius: 2px; }
+</style>
+</head>
+<body>
+<div class="stage">
+  <div class="stage-head">
+    <div>
+      <p class="eyebrow">Mockup · Flows · approved 2026-11-18 · not product code</p>
+      <h1><b>❯</b> Flows — editor on the desk, outline on the phone</h1>
+    </div>
+    <label class="theme-pick">Theme
+      <select id="theme" class="select" style="width:auto;display:inline-block">
+        <option value="phosphor">phosphor</option><option value="light">light</option><option value="nord">nord</option>
+        <option value="tokyo-night">tokyo-night</option><option value="dracula">dracula</option><option value="github-light">github-light</option>
+      </select>
+    </label>
+  </div>
+  <div class="legend">
+    <span><i class="k k-instr"></i>Instruction — a prompt the session is given</span>
+    <span><i class="k k-gate"></i>Gate — the server checks it before moving on</span>
+    <span><i class="k k-skill"></i>Skill — invoke a skill, optional prompt</span>
+    <span><i class="k k-proto"></i>Protocol — ccrc's own, locked</span>
+    <span><i class="dot busy"></i>A program on that block, live</span>
+  </div>
+
+  <div class="frames">
+    <!-- ======================= DESK ======================= -->
+    <div class="desk">
+      <div class="wb-tabs" role="tablist">
+        <div class="wb-tab">Fleet</div>
+        <div class="wb-tab">Runs</div>
+        <div class="wb-tab" aria-selected="true">Flows · My ccrc</div>
+        <div class="wb-tab">Settings</div>
+      </div>
+
+      <div class="desk-body">
+        <!-- flows + palette -->
+        <aside class="side">
+          <div class="side-group">
+            <p class="eyebrow">My flows</p>
+            <div class="side-row" aria-current="true"><span class="grow">My ccrc</span><span class="chip busy"><i></i>2</span></div>
+            <div class="side-row"><span class="grow">Lifecycle — QA heavy</span><span class="chip">0</span></div>
+            <div class="side-row" style="color:var(--accent)"><svg class="i" viewBox="0 0 24 24"><path d="M12 5v14M5 12h14"/></svg><span class="grow">New flow…</span></div>
+          </div>
+          <div class="side-group">
+            <p class="eyebrow">Templates</p>
+            <div class="side-row"><span class="grow">ccrc</span><span class="chip tpl">v3 · ccrc</span></div>
+            <div class="side-row"><span class="grow">lifecycle</span><span class="chip tpl">plugin · plugin-a</span></div>
+          </div>
+          <div class="side-group">
+            <p class="eyebrow">Blocks — drag onto the canvas</p>
+            <div class="side-row grip"><i class="k k-instr" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">Instruction</span></div>
+            <div class="side-row grip"><i class="k k-skill" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">Skill call</span></div>
+            <div class="side-row grip"><i class="k k-gate" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">Gate · file exists</span></div>
+            <div class="side-row grip"><i class="k k-gate" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">Gate · command passes</span></div>
+            <div class="side-row grip"><i class="k k-gate" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">Gate · operator approves</span></div>
+            <div class="side-row grip"><i class="k k-gate" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">Gate · PR state</span></div>
+          </div>
+          <div class="side-group">
+            <p class="eyebrow">From plugins</p>
+            <div class="side-row grip"><i class="k k-skill" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">plugin-a · QA register</span></div>
+            <div class="side-row grip"><i class="k k-skill" style="width:8px;height:8px;border-radius:2px"></i><span class="grow">plugin-a · security pass</span></div>
+          </div>
+        </aside>
+
+        <!-- canvas -->
+        <main class="canvas">
+          <div class="canvas-bar">
+            <span class="chip tpl">copy of ccrc v3</span>
+            <span class="chip">draft · v5</span>
+            <span class="banner"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px"><circle cx="12" cy="12" r="10"/><path d="M12 8v4M12 16h.01"/></svg>Template ccrc moved to v4 — review changes</span>
+            <span class="spacer"></span>
+            <button class="btn btn-quiet">Validate</button>
+            <button class="btn btn-primary">Publish v5</button>
+          </div>
+
+          <svg class="edges" id="edges"></svg>
+
+          <div class="blk" id="b-brain" style="left:24px;top:96px">
+            <div class="blk-kind"><i class="k k-instr"></i>instruction</div>
+            <div class="blk-title">Brainstorm the spec</div>
+            <div class="blk-meta"><span class="chip">coordinator</span></div>
+          </div>
+          <div class="blk" id="b-spec" style="left:264px;top:96px">
+            <span class="live attn"><i class="dot attn"></i>project-b</span>
+            <div class="blk-kind"><i class="k k-gate"></i>gate · approval</div>
+            <div class="blk-title">Spec approved</div>
+            <div class="blk-meta"><span class="chip">operator</span></div>
+          </div>
+          <div class="blk proto" id="b-open" style="left:504px;top:96px">
+            <div class="blk-kind"><i class="k k-proto"></i>protocol <svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+            <div class="blk-title">Open run · plan</div>
+          </div>
+          <div class="blk proto" id="b-disp" style="left:504px;top:270px">
+            <div class="blk-kind"><i class="k k-proto"></i>protocol <svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+            <div class="blk-title">Dispatch wave</div>
+          </div>
+          <div class="blk sel" id="b-build" style="left:264px;top:270px">
+            <span class="live"><i class="dot busy"></i>project-a · w3</span>
+            <div class="blk-kind"><i class="k k-instr"></i>instruction</div>
+            <div class="blk-title">Build, test first</div>
+            <div class="blk-meta"><span class="chip">worker</span><span class="chip">sonnet · high</span></div>
+          </div>
+          <div class="blk proto" id="b-done" style="left:24px;top:270px">
+            <div class="blk-kind"><i class="k k-proto"></i>protocol <svg class="i" viewBox="0 0 24 24" style="width:12px;height:12px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg></div>
+            <div class="blk-title">Wave-done · re-measured</div>
+          </div>
+          <div class="blk" id="b-review" style="left:24px;top:450px">
+            <div class="blk-kind"><i class="k k-skill"></i>skill</div>
+            <div class="blk-title">Held-out review panel</div>
+            <div class="blk-meta"><span class="chip">reviewer</span><span class="chip">opus</span></div>
+          </div>
+          <div class="blk" id="b-sec" style="left:264px;top:450px">
+            <div class="blk-kind"><i class="k k-skill"></i>skill · plugin</div>
+            <div class="blk-title">Security pass</div>
+            <div class="blk-meta"><span class="chip">worker</span></div>
+          </div>
+          <div class="blk" id="b-pr" style="left:504px;top:450px">
+            <div class="blk-kind"><i class="k k-gate"></i>gate · PR state</div>
+            <div class="blk-title">PR merged</div>
+            <div class="blk-meta"><span class="chip">merge queue</span></div>
+          </div>
+
+          <div class="zoom"><button>−</button><button>100%</button><button>+</button><button>⤢</button></div>
+        </main>
+
+        <!-- inspector -->
+        <aside class="insp">
+          <section class="sec">
+            <div class="sec-head"><h2 class="sec-title">Build, test first</h2><p class="eyebrow">Block · instruction</p></div>
+            <div class="card">
+              <div class="field"><label>Kind</label>
+                <div class="seg"><span aria-pressed="true">Instruction</span><span>Skill</span><span>Gate</span></div></div>
+              <div class="field"><label>Role</label><div class="select"><span>worker</span><span class="chev">▾</span></div></div>
+              <div class="field"><label>Skill to invoke (optional)</label><div class="select"><span class="mono" style="font-size:var(--fs-xs)">superpowers:subagent-driven-development</span><span>▾</span></div></div>
+              <div class="field"><label>Model routing</label><div class="select"><span>sonnet · high</span><span>▾</span></div></div>
+            </div>
+          </section>
+          <section class="sec">
+            <div class="sec-head"><h2 class="sec-title">Prompt</h2><p class="eyebrow">Sent when a program enters this block</p></div>
+            <div class="card">
+              <div class="ta">Implement the tasks this wave owns, a failing test first for each.
+Read the plan file the brief names; its text governs.
+When the build is complete, run the whole suite once and push code, tests and notes together.
+{{plan.path}} · {{wave.tasks}}</div>
+              <div class="lockline"><svg class="i" viewBox="0 0 24 24" style="width:14px;height:14px;margin-top:2px"><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></svg><span>ccrc's worker protocol is sent with this prompt and can't be edited here: workspace branch, claims, <span class="mono">ccrc test --</span>, wave-done.</span></div>
+            </div>
+          </section>
+          <section class="sec">
+            <div class="sec-head"><h2 class="sec-title">Outcomes</h2><p class="eyebrow">Where each answer leads</p></div>
+            <div class="card">
+              <div class="outcome"><span class="chip busy"><i></i>done</span><span class="arrow">→</span><span>Wave-done</span></div>
+              <div class="outcome"><span class="chip attn"><i></i>blocked</span><span class="arrow">→</span><span>Ask coordinator</span></div>
+              <button class="btn btn-ghost" style="justify-self:start">Add outcome</button>
+            </div>
+          </section>
+        </aside>
+      </div>
+
+      <div class="wb-status">
+        <span class="ok">● agent link</span><span>Flows 2 · templates 2</span><span>2 programs on My ccrc</span><span style="margin-left:auto">⌘K palette</span><span>v0.42.7</span>
+      </div>
+    </div>
+
+    <!-- ======================= PHONE ======================= -->
+    <div class="phone">
+      <div class="ph-head"><span class="caret">❯</span><span class="title">My ccrc</span><button class="btn btn-quiet">v5 draft</button></div>
+      <div class="ph-body">
+        <div class="banner">Template ccrc moved to v4 — review changes</div>
+        <section class="sec">
+          <div class="sec-head"><h2 class="sec-title">Steps</h2><p class="eyebrow">Outline · tap to edit</p></div>
+          <div class="card rows">
+            <div class="row"><i class="k k-instr"></i><div class="txt"><span class="t">Brainstorm the spec</span><span class="s">coordinator · instruction</span></div><span class="chev">›</span></div>
+            <div class="row"><i class="k k-gate"></i><div class="txt"><span class="t">Spec approved</span><span class="s">operator approves</span></div><span class="chip attn"><i></i>1</span></div>
+            <div class="row proto"><i class="k k-proto"></i><div class="txt"><span class="t">Open run · plan</span><span class="s">protocol · locked</span></div><span class="chev">🔒</span></div>
+            <div class="row proto"><i class="k k-proto"></i><div class="txt"><span class="t">Dispatch wave</span><span class="s">protocol · locked</span></div><span class="chev">🔒</span></div>
+            <div class="row"><i class="k k-instr"></i><div class="txt"><span class="t">Build, test first</span><span class="s">worker · sonnet high</span></div><span class="chip busy"><i></i>1</span></div>
+            <div class="row proto"><i class="k k-proto"></i><div class="txt"><span class="t">Wave-done</span><span class="s">protocol · locked</span></div><span class="chev">🔒</span></div>
+            <div class="row"><i class="k k-skill"></i><div class="txt"><span class="t">Held-out review panel</span><span class="s">reviewer · opus</span></div><span class="chev">›</span></div>
+            <div class="row indent"><div class="txt"><span class="s" style="color:var(--status-attention-text)">findings → Build, test first</span><span class="s">clean → Security pass</span></div></div>
+            <div class="row"><i class="k k-skill"></i><div class="txt"><span class="t">Security pass</span><span class="s">plugin · plugin-a</span></div><span class="chev">›</span></div>
+            <div class="row"><i class="k k-gate"></i><div class="txt"><span class="t">PR merged</span><span class="s">PR state · merge queue</span></div><span class="chev">›</span></div>
+          </div>
+          <button class="btn btn-ghost" style="justify-self:start;min-height:var(--tap-min)">Add step after…</button>
+        </section>
+        <p class="note" style="font-size:var(--fs-xs)">Layout and drag-and-drop live on the desk. The phone edits prompts, gates and outcomes, and reorders through "move after".</p>
+      </div>
+      <div class="ph-nav"><span>Fleet</span><span>Runs</span><span class="on">Flows</span><span>Settings</span></div>
+    </div>
+  </div>
+</div>
+<script>
+
+  const EDGES = [
+    ['b-brain','b-spec','r','l'], ['b-spec','b-open','r','l','approved'],
+    ['b-open','b-disp','b','t'], ['b-disp','b-build','l','r'], ['b-build','b-done','l','r','done'],
+    ['b-done','b-review','b','t'], ['b-review','b-sec','r','l','clean'], ['b-sec','b-pr','r','l'],
+    ['b-review','b-build','tr','b','findings → fix round','loop'],
+  ];
+  function pt(el, side) {
+    const x = el.offsetLeft, y = el.offsetTop, w = el.offsetWidth, h = el.offsetHeight;
+    return { r: [x + w, y + h / 2], l: [x, y + h / 2], t: [x + w / 2, y], b: [x + w / 2, y + h], tr: [x + w * 0.82, y] }[side];
+  }
+  const DIR = { r: [1, 0], l: [-1, 0], t: [0, -1], b: [0, 1], tr: [0, -1] };
+  function draw() {
+    const svg = document.getElementById('edges'), NS = 'http://www.w3.org/2000/svg';
+    svg.innerHTML = '';
+    const c = svg.parentElement; svg.setAttribute('width', c.scrollWidth); svg.setAttribute('height', c.scrollHeight);
+    for (const [a, b, sa, sb, label, cls] of EDGES) {
+      const A = pt(document.getElementById(a), sa), B = pt(document.getElementById(b), sb);
+      const k = cls === 'loop' ? 45 : Math.max(30, Math.hypot(B[0] - A[0], B[1] - A[1]) / 2.5);
+      const c1 = [A[0] + DIR[sa][0] * k, A[1] + DIR[sa][1] * k], c2 = [B[0] + DIR[sb][0] * k, B[1] + DIR[sb][1] * k];
+      const p = document.createElementNS(NS, 'path');
+      p.setAttribute('d', `M${A} C${c1} ${c2} ${B}`); if (cls) p.setAttribute('class', cls);
+      p.setAttribute('marker-end', cls === 'loop' ? 'url(#ah-loop)' : 'url(#ah)');
+      svg.appendChild(p);
+      for (const q of [A]) { const o = document.createElementNS(NS, 'circle'); o.setAttribute('cx', q[0]); o.setAttribute('cy', q[1]); o.setAttribute('r', 4); svg.appendChild(o); }
+      if (label) {
+        const L = p.getPointAtLength(p.getTotalLength() / 2), t = document.createElementNS(NS, 'text');
+        t.textContent = label; if (cls) t.setAttribute('class', cls);
+        t.setAttribute('x', L.x); t.setAttribute('y', L.y + (cls === 'loop' ? -8 : -6)); t.setAttribute('text-anchor', 'middle');
+        svg.appendChild(t);
+      }
+    }
+    svg.insertAdjacentHTML('afterbegin', '<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" style="fill:var(--edge-strong);stroke:none"/></marker><marker id="ah-loop" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse"><path d="M0,0L10,5L0,10z" style="fill:var(--status-attention);stroke:none"/></marker></defs>');
+  }
+  addEventListener('load', draw); addEventListener('resize', draw); document.fonts && document.fonts.ready.then(draw);
+  document.getElementById('theme').addEventListener('change', e => document.documentElement.dataset.theme = e.target.value);
+</script>
+</body>
+</html>

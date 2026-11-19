@@ -68,6 +68,8 @@ import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './ru
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
 import * as portfolio from './portfolioStore.js';
 import * as answerMarks from './answerMarkStore.js';
+import * as flows from '../flows/flowsStore.js';
+import type { FlowDoc } from '../../../shared/flows.js';
 import * as collisions from './claimCollisions.js';
 import * as pairs from './programmePairsStore.js';
 import * as programmeFacts from './programmeFactsStore.js';
@@ -4264,6 +4266,14 @@ export class CoordStore {
   setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
   portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead, usage: portfolio.SpendUsageRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk, usage); }
   recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
+  // Flows (spec 2026-11-19 §7): one-line delegates; `flows/flowsStore.ts` is the tables' one writer.
+  listFlows(): flows.FlowsRead<flows.FlowSummary[]> { return flows.listFlows(this.db); }
+  readFlow(id: number): flows.FlowsRead<flows.FlowRecord | null> { return flows.readFlow(this.db, id); }
+  readFlowVersion(id: number, v: number): ReturnType<typeof flows.readFlowVersion> { return flows.readFlowVersion(this.db, id, v); }
+  createFlow(doc: FlowDoc, source: flows.FlowSource | null, now: number): number { return flows.createFlow(this.db, doc, source, now); }
+  saveFlowDraft(id: number, doc: FlowDoc, now: number): { changed: boolean } { return flows.saveFlowDraft(this.db, id, doc, now); }
+  publishFlow(id: number, doc: FlowDoc, now: number): ReturnType<typeof flows.publishFlow> { return flows.publishFlow(this.db, id, doc, now); }
+  deleteFlow(id: number): { changed: boolean } { return flows.deleteFlow(this.db, id); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
   askMarkRead(id: number, now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkRead { return answerMarks.askMarkRead(this.db, id, now, liveAsk); }

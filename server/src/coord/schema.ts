@@ -4037,6 +4037,26 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
   `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // Flows wave 1 (spec 2026-11-19 §7, plan `2026-11-19-flows-w1.md`): the operator's flows and their published versions.
+  // `flows.draft` and `flow_versions.doc` hold a `FlowDoc` as JSON; a read checks its shape (`shared/flows.ts#parseFlowDoc`)
+  // and answers one it cannot read `unreadable`. A `flow_versions` row is inserted once and never updated. Writers:
+  // `server/src/flows/flowsStore.ts` alone. NEW TABLES only: an older build at this `user_version` takes rule 3 and never
+  // names them. Entries 1 to 109 are on main (measured 2026-11-19: the mid-turn mail PR 2 took 108 and Overlord W1 gates B 109), so
+  // this is 110 by position; whoever lands second renumbers. RE-MEASURE the slot (it must print 109 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE flows (
+    id INTEGER PRIMARY KEY AUTOINCREMENT, title TEXT NOT NULL, sourceTemplate TEXT, sourceVersion INTEGER,
+    draft TEXT NOT NULL, createdAt INTEGER NOT NULL, updatedAt INTEGER NOT NULL
+  );
+  CREATE TABLE flow_versions (
+    flowId INTEGER NOT NULL REFERENCES flows(id), version INTEGER NOT NULL, doc TEXT NOT NULL, publishedAt INTEGER NOT NULL,
+    PRIMARY KEY (flowId, version)
+  );
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

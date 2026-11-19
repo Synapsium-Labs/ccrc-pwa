@@ -1163,6 +1163,7 @@ describe('every stylesheet under src/ is audited', () => {
       'src/docs/export/export.css', // Export's own chrome (W5 Export): never imported by the app; read into every export's <style>
       'src/face/splash.css', // the splash (Overlord face Task 9): a still layer on --bg-page, tokens only
       'src/fleet/fleet.css',
+      'src/flows/flows.css', // the Flows screen (flows design 2026-11-19 §9): the outline row's rail and the prompt field, self-grounded on --bg-raised
       'src/fleet/programmeBox.css', // a programme as a box in its project card (Task G2): the frame, the kicker, the hues
       'src/ledgers/ledgers.css',  // the Waiting on you list and the item view (desktop-polish PL5a, D-7712): pills and the programme band
       'src/inspector/inspector.css', // the inspector's shared sections (W2 Task S8, D-5474); layout only

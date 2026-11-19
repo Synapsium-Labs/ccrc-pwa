@@ -14,7 +14,7 @@ import type { ReactNode } from 'react';
 import { CountBadge, Door, Icon } from '@ccrc/ui';
 import { commandDoor } from '../command/door';
 import { badgePrint, placeBadge, useNavBadges } from '../fleet/navBadges';
-import { PLACES, type Place } from '../lib/places';
+import { PHONE_PLACES, type Place } from '../lib/places';
 import { useLocation } from '../lib/router';
 import { ROUTES, topRouteOf } from '../lib/routes';
 
@@ -50,7 +50,7 @@ export function PhoneBar(): ReactNode {
   const badges = useNavBadges();
   return (
     <div className="phone-bar">
-      {PLACES.map((place) => <PlaceDoor key={place.id} place={place} here={here === place.id} {...placeBadge(place.id, badges)} />)}
+      {PHONE_PLACES.map((place) => <PlaceDoor key={place.id} place={place} here={here === place.id} {...placeBadge(place.id, badges)} />)}
       <Door {...commandDoor('open-palette')} glyph={<Icon name="search" />} aria-label="Search and commands" className="phone-bar-door">
         <span className="phone-bar-word" aria-hidden="true">Search</span>
       </Door>

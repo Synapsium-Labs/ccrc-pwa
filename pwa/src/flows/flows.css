@@ -1,0 +1,12 @@
+/* The Flows screen (flows design 2026-11-19 §9). Two rules the design system's primitives leave to the app: the outline's
+   row, a ListRow whose two lines stack, marked by the phosphor rail when its step is the one open; and the prompt, a
+   multi-line field in the TextInput's look (the raised ground under the primary ink, the subtle hairline), set in mono
+   because a prompt is text a machine is given, three floors tall at least, growing by its own handle. */
+.flow-step { flex-direction: column; align-items: flex-start; gap: var(--sp-1); }
+.flow-step[aria-pressed='true'] { box-shadow: inset 3px 0 0 var(--accent); }
+.flow-prompt {
+  width: 100%; min-height: calc(var(--tap-min) * 3); padding: var(--sp-2) var(--sp-3);
+  border: 1px solid var(--edge-subtle); border-radius: var(--r-md);
+  background: var(--bg-raised); color: var(--ink-primary);
+  font: var(--weight-regular) var(--fs-input) / var(--lh-mono) var(--family-mono); resize: vertical;
+}

@@ -1521,3 +1521,48 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
     expect(lanesIn(planted)).toEqual(['POST /api/reader-lab/runs']);
   });
 });
+
+// ── the Flows doors (flows design 2026-11-19 §8, wave 1) ─────────────────────────────────────────────────────────────
+//
+// `server/src/flows/routes.ts` registers seven routes: the operator's flow definitions, read and edited from the console.
+// They are session-only and never a box token: a session never writes a flow (spec §8), and the engine waves read flows in
+// process, not over a door. So the census is the test box surface's: every registration is a door in `FLOW_DOORS`, in both
+// directions; the file consults no box token; none is EXEMPT; a planted call is SEEN; and the doors join neither
+// `SESSION_ONLY_ALL` nor `ALL_LANES`, so CLAUDE.md's box-token bullet owes them no sentence.
+describe('the Flows doors: seven session-only doors, no box token (flows design 2026-11-19 §8)', () => {
+  const FLOWS_SRC = read('server/src/flows/routes.ts');
+  const FLOW_DOORS = ['GET /api/flows', 'GET /api/flows/:id', 'GET /api/flows/:id/versions/:version', 'POST /api/flows',
+    'PUT /api/flows/:id/draft', 'POST /api/flows/:id/publish', 'DELETE /api/flows/:id'];
+  const REGISTERED = registrationsIn(FLOWS_SRC).map((r) => r.key);
+  const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
+
+  it('flows/routes.ts registers exactly FLOW_DOORS, once each, in both directions', () => {
+    expect(new Set(REGISTERED).size, 'a Flows route is registered twice').toBe(REGISTERED.length);
+    expect([...REGISTERED].sort(), 'flows/routes.ts and FLOW_DOORS disagree — a route was added or removed on one side only')
+      .toEqual([...FLOW_DOORS].sort());
+  });
+
+  it('the file consults no box token, and no door is EXEMPT (gate.ts, read as text)', () => {
+    for (const re of GATE_PATTERNS) {
+      expect(re.test(FLOWS_SRC), `flows/routes.ts consults the box token (${re.source}) — a Flows door would be gated by it`).toBe(false);
+    }
+    expect(lanesIn(FLOWS_SRC)).toEqual([]);
+    for (const k of FLOW_DOORS) expect(GATE_SRC, `${k} became EXEMPT`).not.toContain(`  ['${k}',`);
+  });
+
+  it('a box-token call planted after a registration is SEEN — the lane source is live (the control)', () => {
+    const LINE = "app.post('/api/flows/:id/publish', async (req, reply) => {";
+    expect(FLOWS_SRC, 'the publish registration line moved — re-point this control at it').toContain(LINE);
+    for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
+      const planted = FLOWS_SRC.replace(LINE, `${LINE}\n    ${call}`);
+      expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['POST /api/flows/:id/publish']);
+    }
+  });
+
+  it('the doors join neither the session-only coordination writes nor the box-token lanes', () => {
+    for (const door of FLOW_DOORS.map(pathOf)) {
+      expect(SESSION_ONLY_ALL, `${door} was counted as a coordination write`).not.toContain(door);
+      expect(ALL_LANES.map(pathOf), `${door} was counted as a box-token lane`).not.toContain(door);
+    }
+  });
+});

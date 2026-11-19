@@ -130,6 +130,8 @@ describe("the ids are W2's door table's", () => {
       'switch-layout', 'switch-theme', 'switch-character', 'show-shortcuts',
       // W2 Task S2b registers these three (§The door table's last column).
       'go-docs', 'new-session', 'open-palette',
+      // The Flows screen (flows design 2026-11-19 §9): a top route's door.
+      'go-flows',
       // Settings Task R2b1 (D-5504): one per section, its door the section's index row.
       'go-settings-updates', 'go-settings-appearance', 'go-settings-notifications', 'go-settings-automation',
       'go-settings-security',
@@ -241,8 +243,11 @@ describe('the top search: terms, tier and search-only (D-6714)', () => {
     // The Overlord face plan's Switch character is read without the same way; its place is pinned below.
     const ranked = (q: string): string[] => rankCommands(q, baseCommands()).map((c) => c.id).filter((id) => id !== 'toggle-inspector' && id !== 'go-measure-highlighting' && id !== 'go-reader-lab' && id !== 'session-browser' && id !== 'switch-character');
     // Desktop-polish PL5a adds `go-waiting` (a top route's door); the table is read without it, and its own place is below.
-    const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting');
+    // The Flows screen (flows design 2026-11-19 §9) adds `go-flows` the same way; its own place is below.
+    const rankedBefore = (q: string): string[] => ranked(q).filter((id) => id !== 'go-waiting' && id !== 'go-flows');
     for (const [q, ids] of BEFORE) expect(rankedBefore(q), JSON.stringify(q)).toEqual(ids);
+    // The command's own rank row: the one command whose title holds "flows", right after Go to Runs.
+    expect(rankCommands('flows', baseCommands()).map((c) => c.id)).toEqual(['go-flows']);
     // The command's own rank row: the one command whose title holds "inspector".
     expect(rankCommands('inspector', baseCommands()).map((c) => c.id)).toEqual(['toggle-inspector']);
     expect(rankCommands('character', baseCommands()).map((c) => c.id)).toEqual(['switch-character']);

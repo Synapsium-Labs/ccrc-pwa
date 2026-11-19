@@ -2,6 +2,7 @@
 // WebSocket streams; every WRITE goes through here. Each function throws
 // ApiError { status, body } on non-2xx — callers branch on status/body
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
+import type { FlowAnswer, FlowDoc, FlowProblem, FlowsListAnswer } from '../../../shared/flows';
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
 import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
@@ -970,6 +971,16 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     setStallWatch: (body: StallWatchRequest) =>
       postJsonOr<StallWatchView | 'unreadable'>('/api/coord/stall-watch', 'unreadable', body),
     /** `GET /api/face`: the operator's character, one server row (`{ character, updatedAt }`). */
+    /** The Flows doors (flows design 2026-11-19 §8): the operator's own, session-gated when armed, no box token. A refusal
+     *  rejects with `ApiError`; a publish refused `conflict` carries the draft's `problems` in its body. */
+    listFlows: () => getJson<FlowsListAnswer>('/api/flows'),
+    getFlow: (id: number) => getJson<FlowAnswer>(`/api/flows/${id}`),
+    createFlow: (body: { title?: string; template?: string }) => postJson<{ ok: true; id: number }>('/api/flows', body),
+    saveFlowDraft: async (id: number, doc: FlowDoc): Promise<{ ok: true; problems: FlowProblem[] }> => (await request(`/api/flows/${id}/draft`, {
+      method: 'PUT', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ doc }),
+    })).json() as Promise<{ ok: true; problems: FlowProblem[] }>,
+    publishFlow: (id: number) => postJson<{ ok: true; version: number }>(`/api/flows/${id}/publish`),
+    deleteFlow: async (id: number): Promise<void> => { await request(`/api/flows/${id}`, { method: 'DELETE' }); },
     getFace: () => getJson<FaceAnswer>('/api/face'),
     /** `POST /api/face` `{ character }`: answers the row; a refusal (400 `bad-request`) rejects with `ApiError`. */
     setFace: (character: CharacterName) => postJson<FaceAnswer>('/api/face', { character }),
