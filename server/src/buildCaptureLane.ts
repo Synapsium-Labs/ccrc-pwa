@@ -17,6 +17,9 @@ import {
   BUILD_CAPTURE_OUTPUT_MAX, nextCaptureJob, readBuildCaptureResult, unrecordedBuilds, type BuildCaptureJob, type BuildCaptureNotSent,
 } from '../../shared/claudeBuildTrust.js';
 import type { WatcherCoordPort } from './coord/ports.js';
+import {
+  openUntrustedBuildItems, UNTRUSTED_BUILD_ITEM_PROGRAMME, UNTRUSTED_BUILD_SETTLED_NOTE, untrustedBuildItemsToSettle,
+} from './coord/untrustedBuildItem.js';
 import { notify, type NoticeDeps } from './notice.js';
 import type { TestboxBlock } from './testbox.js';
 
@@ -54,7 +57,7 @@ export function testboxCaptureTransport(block: () => TestboxBlock | null): Build
 
 export interface BuildCaptureLaneDeps extends NoticeDeps {
   readonly coord?: Pick<WatcherCoordPort, 'claudeBuilds' | 'noteClaudeBuildsSeen' | 'markClaudeBuildAttempt'
-    | 'recordClaudeBuildVerdict' | 'hasNotice' | 'recordFeedEvent'> | undefined;
+    | 'recordClaudeBuildVerdict' | 'hasNotice' | 'recordFeedEvent' | 'itemsFor' | 'moveItem'> | undefined;
   /** Absent (a test, a script): rows are recorded and no job is sent. */
   readonly buildCapture?: BuildCaptureTransport | undefined;
 }
@@ -91,6 +94,7 @@ export class BuildCaptureLane {
       coord.noteClaudeBuildsSeen(unrecordedBuilds(records, versions), at);
       records = coord.claudeBuilds();
     }
+    this.settleCapturedItems(coord, records, at);
     const transport = d.buildCapture;
     const build = transport === undefined ? null : nextCaptureJob(records, at);
     if (transport === undefined || build === null) return;
@@ -108,6 +112,15 @@ export class BuildCaptureLane {
     if (!coord.recordClaudeBuildVerdict(result, this.now()) || result.pass) return;
     const attempts = coord.claudeBuilds().find((r) => r.build === build)?.attempts ?? 0;
     this.raiseFailure(d, build, attempts);
+  }
+
+  /** Approvals PR 2 (Task 2.2): each pass, the open untrusted-build items whose build the record now trusts settle (L1's
+   *  `untrustedBuildItemsToSettle` decides; this acts). A move that is refused (the item moved meanwhile) is left. */
+  private settleCapturedItems(coord: NonNullable<BuildCaptureLaneDeps['coord']>, records: Parameters<typeof untrustedBuildItemsToSettle>[1], at: number): void {
+    const open = openUntrustedBuildItems(coord.itemsFor(UNTRUSTED_BUILD_ITEM_PROGRAMME, at).open);
+    for (const item of untrustedBuildItemsToSettle(open, records)) {
+      coord.moveItem(item.id, 'settle', 'ccrc', { note: UNTRUSTED_BUILD_SETTLED_NOTE }, at, { programmeHasOpenRun: false });
+    }
   }
 
   /** The failure's notice: one push opening Settings, keyed by build and attempt. A store that cannot answer the dedupe
