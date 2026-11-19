@@ -84,7 +84,13 @@ export function hookAskSummary(hs: HookState | null, liveWaitingFor: string | nu
 /** D-5298 (spec §6.7): the hookstate envelope as it leaves this server on the session frame (`sessionws.ts`), with an
  *  approval's `summary` redacted. A question envelope is the operator's answer sheet and is sent as read. */
 export function wireHookAsk(ask: HookAsk): HookAsk {
-  return 'approval' in ask ? { approval: { tool: ask.approval.tool, summary: redactCommand(ask.approval.summary) } } : ask;
+  return 'approval' in ask ? {
+    approval: {
+      tool: ask.approval.tool, summary: redactCommand(ask.approval.summary),
+      // Approvals PR 2: a subagent's envelope says so, for the console's "one of its subagents asks" line.
+      ...(ask.approval.thread === 'subagent' ? { thread: 'subagent' as const } : {}),
+    },
+  } : ask;
 }
 
 function hookAskText(hs: HookState | null): string | null {

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { FleetIO } from './io.js';
 import type { HookAsk, HookAskQuestion } from '../../shared/api.js';
+import type { HookApprovalEntry } from './coord/approvalEnvelope.js';
 
 /** A hookstate file whose `updatedAt` and `aliveAt` are both older than this is presumed stale: the writing hook
  *  process may be dead, wedged, or the session may have moved on without a
@@ -83,7 +84,37 @@ export interface HookState {
   /** The hook's `waitBy` (D-5232): `subagent` when a subagent's own prompt raised this wait. Absent otherwise, and on any
    *  other value. Read by the approval census (approvals plan 2026-11-18, Task 1.3) for a prompt's thread. */
   waitBy?: 'subagent';
+  /** The hook's per-agent approval envelopes (approvals plan 2026-11-18, Task 2.1, path 6): one entry per subagent whose
+   *  permission prompt stands, kept through the main thread's and siblings' events. Absent when the file carries none, or
+   *  none that reads whole. Its readers ask `coord/approvalEnvelope.ts#paintedApprovalOf`, never this field directly. */
+  approvals?: readonly HookApprovalEntry[];
 }
+
+/** The hook's id rule for an `agent_id` it keeps (`[A-Za-z0-9_-]{1,64}`). */
+const AGENT_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+/** The longest summary the hook writes (`.[0:200]`) and the longest route word this reader keeps (the `ask` reader's). */
+const ENTRY_SUMMARY_MAX = 200;
+const ENTRY_ROUTE_MAX = 64;
+const ENTRY_TOOL_MAX = 128;
+/** The hook's `approvals` list (Task 2.1), its ONE reader. An entry is kept only when it reads whole (an id on the hook's
+ *  rule, a tool, a summary of at most 200 characters, a finite stamp, and a route word when there is one); any other
+ *  entry is dropped, and a list that is not an array reads as none. A bad list never condemns a file whose `updatedAt`
+ *  is good (`aliveAt`'s rule): an older server ignored the field, and this one degrades to that. */
+const reviveApprovalEntries = (raw: unknown): HookApprovalEntry[] => {
+  if (!Array.isArray(raw)) return [];
+  const out: HookApprovalEntry[] = [];
+  for (const e of raw) {
+    if (!isRecord(e)) continue;
+    const { agentId, tool, summary, route, at } = e;
+    if (typeof agentId !== 'string' || !AGENT_ID_RE.test(agentId)) continue;
+    if (typeof tool !== 'string' || tool === '' || tool.length > ENTRY_TOOL_MAX) continue;
+    if (typeof summary !== 'string' || summary.length > ENTRY_SUMMARY_MAX) continue;
+    if (typeof at !== 'number' || !Number.isFinite(at) || at < 0) continue;
+    if (route !== undefined && (typeof route !== 'string' || route === '' || route.length > ENTRY_ROUTE_MAX)) continue;
+    out.push({ agentId, tool, summary, at, ...(route === undefined ? {} : { route }) });
+  }
+  return out;
+};
 
 /** D-5231: the kinds string the hook writes — unique cleaned kinds, comma-joined, or empty. */
 const BG_KINDS_RE = /^(?:[a-z_-]+(?:,[a-z_-]+)*)?$/;
@@ -357,6 +388,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
     const ask = askRaw === null || askRaw === undefined ? null : reviveAsk(askRaw);
     const subagents = reviveSubagents(raw['subagents']);
     const background = reviveBackground(raw);
+    const approvals = reviveApprovalEntries(raw['approvals']);
     return {
       ok: true,
       state: {
@@ -370,6 +402,7 @@ export async function readHookStateRawMeasured(io: FleetIO, registryDir: string,
         interrupted: interruptedRaw === true,
         ...(background === undefined ? {} : { background }),
         ...(raw['waitBy'] === 'subagent' ? { waitBy: 'subagent' as const } : {}),
+        ...(approvals.length === 0 ? {} : { approvals }),
       },
       sessionId,
       identity: currentUuid === null ? 'unregistered' : sessionId === currentUuid ? 'current' : 'foreign',

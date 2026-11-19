@@ -17,6 +17,7 @@ import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubs
 import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
 import { workflowsFrame, type Proc } from './workflows/model.js';
 import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
+import { paintedApprovalOf } from './coord/approvalEnvelope.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import { framePairing } from './pane/askPairing.js';
 import type { Dialog, DialogAsk, FleetSession, DialogMulti, HookAsk, SessionStatus, SessionStreamMsg } from '../../shared/api.js';
@@ -620,13 +621,17 @@ export class SessionStream implements FeedSubscriber {
   /** Read this session's hookstate once and send `ask` / `ask_cleared` when the hook-sourced envelope appears,
    *  changes (JSON-compare), or goes away. The envelope is the fresh, current-session one (`foldHookStateRead`: a
    *  missing, foreign or malformed file reads as none), or, past the 30-minute cut, the aged one while this tick's
-   *  menu (`seenDialog`, set by the feed's pane reading just before) is that envelope's call (`nextAgedKeep`, D-6324). */
+   *  menu (`seenDialog`, set by the feed's pane reading just before) is that envelope's call (`nextAgedKeep`, D-6324).
+   *  Approvals PR 2 (Task 2.1, path 6): a subagent's prompt the hook keeps per agent is the envelope while the menu this
+   *  stream last sent is that prompt's (`paintedApprovalOf`), whatever `ask` says now, so the console shows the approval
+   *  surface for it rather than a bare menu. */
   private applyHook(raw: HookStateRawRead): void {
     const read = foldHookStateRead(raw, Date.now());
     const hs = read.ok ? read.state : null;
     this.hookWorkflowBackground = hs?.background?.kinds.includes('workflow') === true;
     this.agedKeep = nextAgedKeep(this.agedKeep, raw, this.seenDialog, !this.captureHeld);
-    const ask = hs?.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
+    const painted = paintedApprovalOf(hs === null ? null : { ask: hs.ask, approvals: hs.approvals ?? [] }, this.sentDialog);
+    const ask = painted.ask ?? (raw.ok && this.agedKeep.kept ? raw.state.ask : null);
     const json = ask === null ? null : JSON.stringify(ask);
     if (json === this.lastAskJson) return;
     this.lastAskJson = json;

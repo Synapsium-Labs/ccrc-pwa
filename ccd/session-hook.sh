@@ -4165,13 +4165,17 @@ f="$REG/$id.hookstate.json"
 # degrade it already had (D-1613 measures that failure separately for the gate,
 # just below: for the WRITE the degrade is unchanged). This file runs under `set -uo pipefail` and NOT
 # `set -e`, so a `read` hitting EOF is inert.
-subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""
-{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r subs; } < <(jq -r \
+subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""; apl=""
+# `apl` (approvals plan 2026-11-18, Task 2.1): the per-agent approval envelopes, `approvals`, carried by every write (see
+# the write's `approvals` key). An array's `tostring` holds no newline, and anything else prints `[]`, so it sits before
+# `subs` without the positional risk D-1249 describes.
+{ read -r prev_state; read -r gq; read -r gd; read -r cp; read -r cc; read -r apl; read -r subs; } < <(jq -r \
   '(.state // ""),
    (if (.graphQueries | type) == "number" then (.graphQueries | floor) else 0 end),
    (if (.graphGateDenials | type) == "number" then (.graphGateDenials | floor) else 0 end),
    (if (.ccrcPeerReads | type) == "number" then (.ccrcPeerReads | floor) else 0 end),
    (if (.ccrcClaims | type) == "number" then (.ccrcClaims | floor) else 0 end),
+   (.approvals | if type == "array" then map(select(type == "object")) | tostring else "[]" end),
    (.subagents // [] | tostring)' \
   "$f" 2>/dev/null)
 # A HOOKSTATE THAT EXISTS AND WILL NOT PARSE IS NOT A SESSION THAT COUNTED ZERO
@@ -4184,6 +4188,7 @@ subs=""; prev_state=""; gq=""; gd=""; cp=""; cc=""
 hs_unreadable=0
 [[ -f "$f" && -z "$gq" ]] && hs_unreadable=1
 [[ "$subs" == \[* ]] || subs="[]"
+[[ "$apl" == \[* ]] || apl="[]"
 [[ "$gq" =~ ^[0-9]+$ ]] || gq=0
 [[ "$gd" =~ ^[0-9]+$ ]] || gd=0
 [[ "$cp" =~ ^[0-9]+$ ]] || cp=0
@@ -4226,7 +4231,7 @@ if [[ "$event" == SessionStart && "$src" != resume ]]; then gq=0; gd=0; cp=0; cc
 # (2.1.280 to 2.1.292, `server/test/fixtures/delegation/*/agent-iso-bg.json` [M]), and no capture shows a teammate's,
 # a cloud session's or an unseen kind's, while a workflow's agents are not listed one by one. Anything else (`bg` -1
 # included) leaves it alone. Entries with no `id` (an older hook's) do not survive a prune.
-if [[ "$event" == SessionStart ]]; then subs="[]"; fi
+if [[ "$event" == SessionStart ]]; then subs="[]" apl="[]"; fi   # a subagent's standing prompt dies with it too (Task 2.1)
 if [[ "$event" == Stop && -z "$paid" && "$subs" != "[]" && "$bg" =~ ^[0-9]+$ ]]; then
   if (( bg == 0 )); then
     subs="[]"
@@ -6261,11 +6266,22 @@ bgd="${bgd:-}" bgdk="${bgdk:-}"
 # (Task 2's no-file agent event sets it too, above; it is initialised there, so it is not reset here).
 if [[ "$event" == PreCompact || "$event" == PostCompact ]] && _hook_server_cap dispatch-live-gate-v1; then hs_skip=1; fi
 
+# THE PER-AGENT APPROVAL ENVELOPES (approvals plan 2026-11-18, §3.2.2 and Task 2.1; Table 2a, path 6). `approvals` holds one
+# entry per subagent whose permission prompt stands: `{agentId, tool, summary, route, at}`, `at` being this write's own
+# stamp. A subagent's PermissionRequest (not AskUserQuestion) adds its entry, replacing that agent's older one; that agent's
+# own next tool event or its SubagentStop removes it (`ap_drop`), and so does the transcript tie (`_hook_approvals_drop`).
+# Every other event carries the list as it read it: the main thread's events and a sibling's never erase a subagent's
+# prompt, whatever they do to `ask` and with or without a `waitPrev`, so a menu painted after its hook returned keeps its
+# envelope. A SessionStart empties it (above). Newest 16 kept; no key when empty. `hookstate.ts` is its one reader.
+ap_drop="" ap_add="" ap_at="${w_upd:-${hts:-$(_hook_epoch_ms)}}"
+case "$event" in PreToolUse|PostToolUse|PermissionRequest|SubagentStop) ap_drop="$aid" ;; esac
+[[ "$event" == PermissionRequest && -n "$apr" && -n "$aid" ]] && ap_add=1
 if [[ -z "$hs_skip" ]]; then
   out=$(jq -cn \
     --argjson v 1 --arg state "$state" --arg event "${w_ev:-$event}" \
     --arg sessionId "${CLAUDE_CODE_SESSION_ID:-}" --argjson pid "${CLAUDE_PID:-0}" \
-    --argjson updatedAt "${w_upd:-${hts:-$(_hook_epoch_ms)}}" --argjson interrupted "$interrupted" \
+    --argjson apl "$apl" --arg apDrop "$ap_drop" --arg apAdd "$ap_add" \
+    --argjson updatedAt "$ap_at" --argjson interrupted "$interrupted" \
     --argjson ask "$ask_json" --argjson subagents "$subs" --argjson graphQueries "$gq" \
     --argjson graphGateDenials "$gd" --arg waitBy "$waitby" --arg aliveAt "$w_alive" \
     --argjson ccrcPeerReads "$cp" --argjson ccrcClaims "$cc" \
@@ -6280,12 +6296,15 @@ if [[ -z "$hs_skip" ]]; then
      + (if $waitBy == "subagent" then {waitBy:"subagent"} else {} end)
      + (if $aliveAt != "" then {aliveAt: ($aliveAt | tonumber)} else {} end)
      + (if $bgDelegated != "" then {bgDelegated: ($bgDelegated | tonumber), bgDelegatedKinds: $bgDelegatedKinds} else {} end)
-     + (if $waitPrev != "" and $waitBy == "subagent" then ((try ($waitPrev | fromjson) catch null) as $w | if ($w | type) == "object" then {waitPrev: $w} else {} end) else {} end)') || exit 0
+     + (if $waitPrev != "" and $waitBy == "subagent" then ((try ($waitPrev | fromjson) catch null) as $w | if ($w | type) == "object" then {waitPrev: $w} else {} end) else {} end)
+     + (($apl | map(select(.agentId != $apDrop)) + (if $apAdd != "" and ($ask | type) == "object" and ($ask | has("approval")) then [{agentId: $apDrop,
+        tool: $ask.approval.tool, summary: $ask.approval.summary, at: $updatedAt} + (if $route != "" then {route: $route} else {} end)] else [] end)
+        | .[-16:]) as $ap | if $ap == [] then {} else {approvals: $ap} end)') || exit 0
 
   # 64KB cap: drop the questions envelope before anything else — a truncated
-  # envelope is worse than none.
+  # envelope is worse than none. (The approvals list goes with it: each entry's summary is an envelope too.)
   if (( ${#out} > 65536 )); then
-    out=$(jq -c '.ask = null | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
+    out=$(jq -c '.ask = null | del(.approvals) | if (.waitPrev | type) == "object" then .waitPrev.ask = null else . end' <<<"$out" 2>/dev/null) || exit 0
     (( ${#out} <= 65536 )) || exit 0
   fi
 
@@ -6479,7 +6498,20 @@ _hook_approval_route_patch() {   # <word> -> rc 0 always
   local cur="" new="" tmp
   [[ -z "$hs_skip" && -n "${out:-}" && -f "$f" && ! -L "$f" ]] || return 0
   { IFS= read -r -d '' cur < "$f"; } 2>/dev/null; [[ "$cur" == "$out"$'\n' ]] || return 0
-  new=$(jq -c --arg r "$1" 'if (.ask | type) == "object" and (.ask | has("approval")) then .ask.approval.route = $r else empty end' <<<"$out" 2>/dev/null) && [[ -n "$new" ]] || return 0
+  new=$(jq -c --arg r "$1" --arg a "$aid" --argjson t "$ap_at" 'if (.ask | type) == "object" and (.ask | has("approval")) then .ask.approval.route = $r
+    | if (.approvals | type) == "array" then .approvals |= map(if .agentId == $a and .at == $t then .route = $r else . end) else . end else empty end' <<<"$out" 2>/dev/null) && [[ -n "$new" ]] || return 0
+  tmp="$REG/.$id.$$.hookstate.tmp"; { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
+  mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
+}
+# THE TIE'S DROP (approvals plan Task 2.1): the wait saw this subagent prompt's tool_result (a pane Yes or No, the
+# auto-deny, a hook decision), so its entry in `approvals` goes: the entry with this agent's id and this write's stamp,
+# read from the file as it stands NOW (later events have written since), never another agent's. Written only when that
+# entry is there; a write landing inside the one-jq-fork window is overwritten, as every two hook writes race (no lock).
+_hook_approvals_drop() {   # -> rc 0 always
+  local new="" tmp
+  [[ -n "$aid" && -z "$hs_skip" && -f "$f" && ! -L "$f" ]] || return 0
+  new=$(jq -c --arg a "$aid" --argjson t "$ap_at" 'if (.approvals | type) == "array" and any(.approvals[]; .agentId == $a and .at == $t)
+    then .approvals |= map(select(.agentId != $a or .at != $t)) | if .approvals == [] then del(.approvals) else . end else empty end' "$f" 2>/dev/null) && [[ -n "$new" ]] || return 0
   tmp="$REG/.$id.$$.hookstate.tmp"; { printf '%s\n' "$new" > "$tmp"; } 2>/dev/null || { rm -f "$tmp"; return 0; }
   mv -f "$tmp" "$f" 2>/dev/null || rm -f "$tmp"; return 0
 }
@@ -6511,7 +6543,7 @@ _hook_approval_wait() {
   while :; do
     now=$(_hook_epoch_ms)
     (( now < deadline )) || return 0
-    if _apr_scan; then return 0; fi
+    if _apr_scan; then _hook_approvals_drop; return 0; fi
     if (( tick % apr_poll == 0 )); then
       if _apr_call approvals ruling "$rid" --nonce "$apr_nonce"; then
         case "$APR_CODE" in
