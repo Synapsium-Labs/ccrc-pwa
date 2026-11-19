@@ -1975,6 +1975,57 @@ def status_report(auth_dir: str) -> dict:
     return report
 
 
+# ── the Codex client a request says it is (D-8743; usage-user-agent) ─────────────────────────────────────────────────
+# Every ccrc request to the Codex backend says it is a Codex client of one version: the catalogue probe
+# (`ccd/ccrc-models-probe`'s Codex arm) in its `client_version` and its user-agent, the usage poll (`ccgpt-usage.py`) in
+# its user-agent. That version is the greater of the published Codex CLI release and CLIENT_VERSION_FLOOR, never below
+# the floor. Its one owner is this library because both programs already load it by path, on every box where either
+# runs: the floor, the version's grammar and the reading of the release cache are spelled nowhere else. The cache,
+# `~/.ccrc/codex-client-release.json`, is written by the probe's release lookup alone (its `version` is the last good
+# release, as npm said it); the poll only reads it, and never looks a release up. A cache that cannot be opened or read,
+# is not a regular file, is over its cap, is not UTF-8 JSON (a deeply nested file included) or is not an object is
+# ABSENT, and an absent cache, a missing `version` or one that is not a plain X.Y.Z above the floor gives the floor. The
+# read opens without blocking (a FIFO no one writes is not waited on) and never raises.
+CLIENT_VERSION_FLOOR = "0.170.0"
+CLIENT_VERSION_RE = re.compile(r"(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})\.(0|[1-9][0-9]{0,5})")
+CLIENT_RELEASE_NAME = "codex-client-release.json"  # in ~/.ccrc
+CLIENT_RELEASE_MAX_BYTES = 262144
+
+
+def client_release_path(home: Optional[str] = None) -> str:
+    return os.path.join(os.path.expanduser("~") if home is None else home, ".ccrc", CLIENT_RELEASE_NAME)
+
+
+def read_client_release(path: Optional[str] = None) -> dict:
+    try:
+        fd = os.open(client_release_path() if path is None else path, os.O_RDONLY | os.O_NONBLOCK | os.O_CLOEXEC)
+        with os.fdopen(fd, "rb") as f:
+            if not stat.S_ISREG(os.fstat(fd).st_mode):
+                return {}
+            data = f.read(CLIENT_RELEASE_MAX_BYTES + 1)
+        if len(data) > CLIENT_RELEASE_MAX_BYTES:
+            return {}
+        c = json.loads(data.decode("utf-8"))
+    except Exception:  # every OSError, UnicodeDecodeError, JSONDecodeError and RecursionError
+        return {}
+    return c if isinstance(c, dict) else {}
+
+
+def client_version(release: object) -> str:
+    # THE ONE PLACE the floor is applied: `release` when it is a plain X.Y.Z above the floor, else the floor.
+    floor, key = CLIENT_VERSION_FLOOR, lambda v: tuple(int(n) for n in v.split("."))
+    ok = isinstance(release, str) and CLIENT_VERSION_RE.fullmatch(release) is not None
+    return release if ok and key(release) > key(floor) else floor  # type: ignore[return-value]
+
+
+def cached_client_version(home: Optional[str] = None) -> str:
+    return client_version(read_client_release(client_release_path(home)).get("version"))
+
+
+def client_user_agent(version: str) -> str:
+    return "codex_cli_rs/%s (Unknown 0; unknown) unknown" % version
+
+
 # ── the command line ─────────────────────────────────────────────────────────────────────────────────────────────
 USAGE = ("usage: ccgpt-auth.py status [--lane <id>] | signin --lane <id> [--over <absolute>] | install --from <absolute> "
          "--lane <id> | paths | secret-files, each with --auth-dir <absolute>")

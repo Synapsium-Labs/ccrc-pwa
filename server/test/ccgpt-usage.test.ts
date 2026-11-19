@@ -43,6 +43,12 @@ it('this box has a usable python3', () => {
 // signal in EITHER environment, not only outside CI.
 const IS_ROOT = typeof process.getuid === 'function' && process.getuid() === 0;
 
+// usage-user-agent (model-class-advance, D-8743's follow-up): the poll says the Codex client version the catalogue
+// probe asks as, read through the auth library: the cached published release, never below the library's floor. The
+// floor is read off the library, its one home, so no number is copied here.
+const FLOOR = /^CLIENT_VERSION_FLOOR = "(\d+\.\d+\.\d+)"$/m.exec(readFileSync(AUTH_LIB, 'utf8'))?.[1] ?? '';
+const userAgent = (version: string): string => `codex_cli_rs/${version} (Unknown 0; unknown) unknown`;
+
 // task-10 fix round 3 (task-10-fix-rulings-3.md item 1, fix round 2's own
 // concern 1, commit 467e9552): the task-10 M-4 case below needs `litellm` to be genuinely
 // UNIMPORTABLE under a fixture HOME with no `PYTHONPATH`, or it is
@@ -763,7 +769,8 @@ describe.skipIf(!PY)('ccgpt-usage.py', () => {
       expect(ep1.requests.length).toBe(1);
       const captured = ep1.requests[0];
       expect(captured.headers['originator']).toBe('codex_cli_rs');
-      expect(captured.headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
+      // usage-user-agent (D-8743's follow-up): the version is the catalogue probe's, the floor here (no cache).
+      expect(captured.headers['user-agent']).toBe(userAgent(FLOOR));
       expect(captured.headers['session_id']).toBe('00000000-0000-0000-0000-000000000000');
       // The lane's own credential, read through the auth library (codex-bridge Stage 1, Task 7). A boolean: a
       // failing `toBe` would print the synthetic token. ChatGPT-Account-Id is pinned by its own case below.
@@ -1463,7 +1470,7 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
       // D-6897 (fix round 1, T14-SPEC-4): the fallback request keeps the one
       // user-agent this file sends on both modes, so a direct lane's poll pairs `originator: ccrc` with it, not
       // with the bridge's ccrc user-agent. Pinned, so the pair a first live check measures is the pair it ships.
-      expect(requests[0].headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
+      expect(requests[0].headers['user-agent']).toBe(userAgent(FLOOR));
       expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
     } finally {
       await close();
@@ -1740,4 +1747,117 @@ describe.skipIf(!PY)('ccgpt-usage.py: the direct arm (codex bridge Stage 2, Task
       }
     }
   }, 120_000);
+});
+
+
+// ── usage-user-agent: the poll says the version the catalogue probe asks as (D-8743's follow-up) ─────────────────────
+// The auth library owns the floor and the reading of the box's release cache (`~/.ccrc/codex-client-release.json`,
+// written by the probe's release lookup alone). The poll reads that one small file and never looks the release up:
+// whatever the file holds, the poll still runs and publishes, and only the user-agent's version changes.
+describe.skipIf(!PY)('ccgpt-usage.py: the user-agent carries the Codex client version (usage-user-agent)', () => {
+  const parts = (v: string): number[] => v.split('.').map(Number);
+  const NEWER = ((): string => { const [a, b] = parts(FLOOR); return `${a}.${b! + 1}.4`; })();
+  const OLDER = ((): string => { const [a, b] = parts(FLOOR); return b! > 0 ? `${a}.${b! - 1}.9` : `${a! - 1}.999.0`; })();
+  const cachePath = (home: string): string => join(home, '.ccrc', 'codex-client-release.json');
+  const plantCache = (home: string, body: string): void => {
+    mkdirSync(dirname(cachePath(home)), { recursive: true });
+    writeFileSync(cachePath(home), body);
+  };
+  const cacheOf = (version: unknown): string => JSON.stringify({ version, readAt: nowS(), triedAt: nowS() });
+
+  /** One poll of a fresh lane (`litellm`, or `direct` with headers past the bridge's freshness) after `plant`, and the
+   *  one request it sent. */
+  async function poll(mode: 'litellm' | 'direct', plant: (home: string) => void, name: string): Promise<CapturedRequest> {
+    const home = mkTmp(`ccgpt-usage-ua-${name}-`);
+    const id = mintId();
+    if (mode === 'direct') {
+      plantModeLane(home, id, 'direct');
+      await bridgeSaw(home, id, BRIDGE_VALUES, nowS() - 901);
+    } else {
+      plantLane(home, id);
+    }
+    plant(home);
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(ccgptFile('ccgpt-usage.py'), { home, env: publisherEnv(id, url), timeoutMs: 15_000 });
+      expect(r.timedOut, `${name}: the poll hung`).toBe(false);
+      expect(r.status, `${name}: ${r.stderr}`).toBe(0);
+      expect(r.stderr.includes('Traceback'), `${name}: a traceback`).toBe(false);
+      expect(requests.length, name).toBe(1);
+      expect(readRow(home, id), name).toMatchObject({ five: 17, seven: 42 });
+      return requests[0];
+    } finally {
+      await close();
+    }
+  }
+
+  it('reads its floor off the auth library, and the cases sit around it', () => {
+    expect(FLOOR).toMatch(/^\d+\.\d+\.\d+$/);
+    expect(new Set([FLOOR, NEWER, OLDER]).size).toBe(3);
+  });
+
+  it.each<['litellm' | 'direct', string]>([['litellm', 'codex_cli_rs'], ['direct', 'ccrc']])(
+    'a %s lane says the cached release, and every other header is as before', async (mode, originator) => {
+      let home = '';
+      const req = await poll(mode, (h) => { home = h; plantCache(h, cacheOf(NEWER)); }, `cached-${mode}`);
+      expect(req.headers['user-agent']).toBe(userAgent(NEWER));
+      expect(req.headers['originator']).toBe(originator);
+      expect(req.headers['session_id']).toBe('00000000-0000-0000-0000-000000000000');
+      expect(req.headers['content-type']).toBe('application/json');
+      expect(req.headers['accept']).toBe('text/event-stream');
+      // The poll reads the cache and never writes it: the probe's lookup is its one writer.
+      expect(JSON.parse(readFileSync(cachePath(home), 'utf8'))).toMatchObject({ version: NEWER });
+    });
+
+  it.each<[string, (home: string) => void]>([
+    ['no cache', () => undefined],
+    ['a release below the floor', (h) => plantCache(h, cacheOf(OLDER))],
+    ['a cache that is not JSON', (h) => plantCache(h, '{"version":')],
+    ['a cache that is not an object', (h) => plantCache(h, JSON.stringify([NEWER]))],
+    ['a prerelease', (h) => plantCache(h, cacheOf(`${NEWER}-alpha.1`))],
+    ['a version that is a number', (h) => plantCache(h, cacheOf(171))],
+    ['a cache with no version', (h) => plantCache(h, JSON.stringify({ triedAt: nowS(), lastError: 'no answer' }))],
+    ['a deeply nested cache', (h) => plantCache(h, `{"version": ${'['.repeat(100_000)}${']'.repeat(100_000)}}`)],
+    ['a cache over its size cap', (h) => plantCache(h, cacheOf(NEWER) + ' '.repeat(300_000))],
+    ['undecodable bytes', (h) => { mkdirSync(dirname(cachePath(h)), { recursive: true }); writeFileSync(cachePath(h), Buffer.from([0xff, 0xfe])); }],
+    ['a directory where the cache goes', (h) => mkdirSync(cachePath(h), { recursive: true })],
+    // A FIFO with no writer: an ordinary open would wait for ever, and the poll would never publish.
+    ['a FIFO where the cache goes', (h) => {
+      mkdirSync(dirname(cachePath(h)), { recursive: true });
+      const r = spawnSync('mkfifo', [cachePath(h)]);
+      expect(r.status, 'mkfifo').toBe(0);
+    }],
+  ])('%s: the poll says the floor', async (name, plant) => {
+    const req = await poll('litellm', plant, name.replace(/[^a-z]+/g, '-'));
+    expect(req.headers['user-agent']).toBe(userAgent(FLOOR));
+  }, 30_000);
+
+  it.skipIf(IS_ROOT)('an unreadable cache: the poll says the floor', async () => {
+    const req = await poll('litellm', (h) => { plantCache(h, cacheOf(NEWER)); chmodSync(cachePath(h), 0o000); }, 'unreadable');
+    expect(req.headers['user-agent']).toBe(userAgent(FLOOR));
+  });
+
+  // Nothing about the version can stop the poll: an auth library placed without the version reader (an install caught
+  // between two files) still publishes, and says the version this file said before the reader existed.
+  it('an auth library without the version reader still publishes', async () => {
+    const home = mkTmp('ccgpt-usage-ua-old-lib-');
+    const id = mintId();
+    plantLane(home, id);
+    plantCache(home, cacheOf(NEWER));
+    const bin = join(home, 'old-lib-bin');
+    mkdirSync(bin, { recursive: true });
+    copyFileSync(ccgptFile('ccgpt-usage.py'), join(bin, 'ccgpt-usage.py'));
+    writeFileSync(join(bin, 'ccgpt-auth.py'), `${readFileSync(AUTH_LIB, 'utf8')}\ndel client_user_agent\ndel cached_client_version\n`);
+    const { url, close, requests } = await startEndpoint(fullHeaders());
+    try {
+      const r = await runPyAsync(join(bin, 'ccgpt-usage.py'), { home, env: publisherEnv(id, url) });
+      expect(r.timedOut).toBe(false);
+      expect(r.status, r.stderr).toBe(0);
+      expect(requests.length).toBe(1);
+      expect(requests[0].headers['user-agent']).toBe('codex_cli_rs/0.0.0 (Unknown 0; unknown) unknown');
+      expect(readRow(home, id)).toMatchObject({ five: 17, seven: 42 });
+    } finally {
+      await close();
+    }
+  });
 });

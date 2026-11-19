@@ -987,7 +987,6 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
     expect(calls[0]!.env).toEqual({
       CHATGPT_TOKEN_DIR: authDir(),
       LITELLM_LOCAL_MODEL_COST_MAP: 'True',
-      CODEX_CLIENT_VERSION: expect.stringMatching(/^\d+\.\d+\.\d+$/),
     });
     expect((catalogueAt('codex-a') as { models: unknown[] }).models).toHaveLength(9);
     expect(poisonRan()).toBe(false);
@@ -1251,7 +1250,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex arm: a codex lane gets no de
 // in one case, with a recording `curl` planted for it; the lookup program's curl arm, its lock and its skew boundary are
 // run directly, in their own describe below (fix rounds 1 and 2).
 describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the published release (D-8743)', () => {
-  const FLOOR = /^CODEX_CLIENT_VERSION="(\d+\.\d+\.\d+)"$/m.exec(fs.readFileSync(PROBE, 'utf8'))?.[1] ?? '';
+  // The floor's one home is the auth library since usage-user-agent (the usage poll says the same version): read off it.
+  const FLOOR = /^CLIENT_VERSION_FLOOR = "(\d+\.\d+\.\d+)"$/m.exec(fs.readFileSync(AUTH_LIB, 'utf8'))?.[1] ?? '';
   const parts = (v: string): number[] => v.split('.').map(Number);
   const NEWER = ((): string => { const [a, b] = parts(FLOOR); return `${a}.${b! + 1}.0`; })();
   const NEWER2 = ((): string => { const [a, b] = parts(FLOOR); return `${a}.${b! + 2}.3`; })();
@@ -1300,7 +1300,7 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     plantBackendCredential(authDir(), { accountId: 'acct-codex-a' });
   });
 
-  it('reads its floor off the probe, and the cases sit around it', () => {
+  it('reads its floor off the auth library, and the cases sit around it', () => {
     expect(FLOOR).toMatch(/^\d+\.\d+\.\d+$/);
     expect(new Set([FLOOR, NEWER, NEWER2, OLDER]).size).toBe(4);
   });
@@ -1576,7 +1576,8 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
       fs.mkdirSync(bin, { recursive: true });
       if (curl !== null) fs.writeFileSync(path.join(bin, 'curl'), `#!/bin/sh\n${curl}\n`, { mode: 0o755 });
       const PATH = curl === null ? bin : `${bin}:${process.env['PATH'] ?? ''}`;
-      const args = [lookupProgram(), cachePath(), o.seam ?? ''];
+      // The third argument is the auth library, the cache's one reader (usage-user-agent).
+      const args = [lookupProgram(), cachePath(), o.seam ?? '', lib];
       const t0 = Date.now();
       const r = spawnSync(pythonOrSkip()!, o.at === undefined ? ['-I', ...args] : ['-I', '-c', FIXED_CLOCK, String(o.at), ...args], {
         env: { HOME: home, PATH }, encoding: 'utf8', input: 'stdin-the-lookup-must-not-pass-on\n', timeout: 45_000,

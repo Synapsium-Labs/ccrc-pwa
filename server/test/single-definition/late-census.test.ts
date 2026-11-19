@@ -308,6 +308,33 @@ describe('codex bridge Stage 1 Task 5: the auth library owns its side-file names
 });
 
 
+// usage-user-agent (model-class-advance, D-8743's follow-up): the floor of the Codex client version every ccrc request
+// to the Codex backend says it is, and the reading of the box's release cache, live in ccd/ccgpt-auth.py, which the
+// catalogue probe and the usage poll both load. A second copy of the floor's value in shipped code is a second floor.
+// Tests, docs and README.md are prose about it and are left out.
+describe('usage-user-agent: the Codex client version floor is spelled once, in the auth library', () => {
+  const floorOf = (src: string): string | undefined => /^CLIENT_VERSION_FLOOR = "(\d+\.\d+\.\d+)"$/m.exec(src)?.[1];
+  const shippedHolders = (needle: string): string[] => {
+    const r = spawnSync('git', ['-C', ccrcRoot, 'grep', '-l', '-F', '-e', needle, '--', ':!server/test', ':!docs', ':!README.md'],
+      { encoding: 'utf8' });
+    if (r.status !== 0 && r.status !== 1) throw new Error(`git grep exited ${String(r.status)}: ${(r.stderr || '').trim()}`);
+    return r.stdout.split('\n').filter(Boolean).sort();
+  };
+
+  it('CONTROL: the pattern reads a floor line and passes over a use of the name', () => {
+    expect(floorOf('x = 1\nCLIENT_VERSION_FLOOR = "1.2.3"\n')).toBe('1.2.3');
+    expect(floorOf('    floor = CLIENT_VERSION_FLOOR\n')).toBeUndefined();
+  });
+
+  it('the floor\'s value appears in ccd/ccgpt-auth.py alone, and the probe no longer carries a constant of its own', () => {
+    const floor = floorOf(readFileSync(path.join(ccrcRoot, 'ccd', 'ccgpt-auth.py'), 'utf8'));
+    expect(floor, 'ccd/ccgpt-auth.py declares no CLIENT_VERSION_FLOOR').toMatch(/^\d+\.\d+\.\d+$/);
+    expect(shippedHolders(floor!)).toEqual(['ccd/ccgpt-auth.py']);
+    expect(shippedHolders('CODEX_CLIENT_VERSION=')).toEqual([]);
+  });
+});
+
+
 // W2-2b Task 1 (W2-D42, W2-D44; O13, O14): the marker's parser, formatter and fold are defined once, in lib.mjs; the arm
 // words are quoted once in ccd/history, on RECALL_ARMS' line; and every ccd/history code line naming headless-on's path
 // is historyPaths' own field or the marker's one read, store.mjs's readBounded at HEADLESS_LIST_MAX_BYTES with no link
