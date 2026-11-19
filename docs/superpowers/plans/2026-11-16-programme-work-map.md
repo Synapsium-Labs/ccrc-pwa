@@ -715,19 +715,30 @@ Task WM6 departs under its own number:
 
 - **D-8780** — `work-map-wm6-build`: Task WM6 (desktop polish run 2780), issued on 2026-11-19. An epic may list no wave
   range (spec Q5, the operator's yes, R133). The build departs from the plan's text in these ways, each named by slug:
-  `wm6-one-reader-and-one-chooser`, `PlanEpicBody.waves` is optional on the wire and every reader takes it through
-  `listedWaves` (`planPolicy.ts`), and the epic a run opens into is chosen by one decider, `epicOfRun`, which `planGate`
-  calls and which replaces its call of `epicForWave` (kept, as `epicOfRun`'s own step); `wm6-ticket-read-before-the-epic`,
-  `planGate` reads a named ticket through `p.ticket` before it chooses the epic, where it read it after, so the ticket's
-  epic can take the run, and a ticket that does not exist still names no epic, so such a run is refused as before
-  (`wave-epic-mismatch` at an unlisted wave, `ticket-unavailable` at a listed one); `wm6-live-epics-only`, the plan's "any
-  epic lists no waves" counts the live epics (not `dropped`), since a dropped epic cannot take a run and naming a ticket
-  is therefore no remedy for it; `wm6-absent-waves-clears`, a put that omits `waves` on a stored epic that lists some
-  stores none, as a put is the programme's whole desired state and `project` already reads the same way; and
+  `wm6-one-reader-and-one-chooser`, `PlanEpicBody.waves` is optional on the wire and every body-level read takes it through
+  `listedWaves` (`planPolicy.ts`; `parsePlanPut` validates the raw field before that), and the epic a run opens into is
+  chosen by one decider, `epicForOpen` (named so the plan store's `epicOfRun`, the epic of an existing run's ticket, keeps
+  its one meaning), which `planGate` calls and which replaces its call of `epicForWave` (kept, as `epicForOpen`'s own
+  step); `wm6-ticket-read-before-the-epic`, `planGate` reads a named ticket through `p.ticket` before it chooses the epic,
+  where it read it after, so the ticket's epic can take the run, and a ticket that does not exist still names no epic, so
+  such a run is refused as before (`wave-epic-mismatch` at an unlisted wave, `ticket-unavailable` at a listed one);
+  `wm6-live-epics-only`, the plan's "any epic lists no waves" counts the live epics (not `dropped`; a settled `done` one
+  counts, as the gate and the store's attach re-check already read it), since a dropped epic cannot take a run and naming
+  a ticket is therefore no remedy for it; `wm6-absent-waves-keeps`, a put that omits `waves` on a stored epic keeps its
+  stored range and an explicit `[]` clears it (the coordinator's ruling on review 2791 F6, as an absent ticket `body`
+  keeps the stored body: a coordinator that re-puts a plan without the field must not silently change how runs open), a
+  new epic that omits it lists none, and `wave-overlap` is read against the kept range; and
   `wm6-contiguity-needs-no-condition`, an empty list is trivially contiguous and overlaps nothing, so
-  `waves-not-contiguous` and `wave-overlap` read only epics that list waves by skipping the others, and the guard that
-  cannot go red there is the reader (`listedWaves`), which the mutants break. WM2's worker consented, by mail, to the edit
-  of `shared/plan.ts`'s `PlanEpicBody` line and to this section and its ticks (their claim held both). The task note
+  `waves-not-contiguous` and `wave-overlap` read only epics that list waves by skipping the others, and no mutant of that
+  condition can go red; the guard that can is the reader (`listedWaves`), which its mutant breaks. The acceptance, that a
+  plan opens runs exactly as before, is shown for plans whose live epics all list a non-empty range; a stored live epic
+  with `[]` changes as this task rules (a run with no ticket at an unlisted wave is refused `ticket-required`, and its
+  tickets open at any wave), and how many such epics are stored is unmeasured. WM2's worker consented, by mail, to the edit
+  of `shared/plan.ts`'s `PlanEpicBody` line and to this section and its ticks (their claim held both). Fix round 1 (review
+  2791, on the coordinator's rulings): `epicForOpen` joins `MUTANT_SETS` and `mutation-floors.json` with its floor measured
+  (F1), its cases are written once in `server/test/planEpicForOpenCases.ts`, the collision of a waveless ticket's epic with
+  the epic that lists the wave (F2) and a ticket of a dropped waveless epic (F5) are pinned at the decider, the gate and the
+  route, and an epic with an explicit `waves: []` is pinned end to end (F12). The task note
   (`docs/superpowers/programs/desktop-polish/wm6.md`) gives each case, the mutants and the sentences of the Linear
   hierarchy's documents that now read false, which this task does not edit.
 

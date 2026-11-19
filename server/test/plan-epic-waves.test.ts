@@ -64,11 +64,21 @@ describe('plan put: an epic may list no waves', () => {
     expect(wavesOf(x)).toEqual([]);
   });
 
-  it('a put that omits the waves of a stored epic leaves it with no waves', async () => {
+  // Review 2791 F6, the coordinator's ruling: omitting `waves` on a re-put keeps the stored range, so a coordinator that
+  // re-puts a plan without the field never changes how runs open; an explicit [] clears it.
+  it('a put that omits the waves of a stored epic keeps its range; an explicit empty list clears it', async () => {
     const x = await world();
-    expect((await planVerb(x, 'prog-a', '', put(epic('free', [1])))).statusCode).toBe(200);
+    expect((await planVerb(x, 'prog-a', '', put(epic('free', [1, 2])))).statusCode).toBe(200);
     expect((await planVerb(x, 'prog-a', '', put(epic('free')))).statusCode).toBe(200);
+    expect(wavesOf(x)).toEqual([['free', [1, 2]]]);
+    expect((await planVerb(x, 'prog-a', '', put(epic('free', [])))).statusCode).toBe(200);
     expect(wavesOf(x)).toEqual([['free', []]]);
+  });
+
+  it('an epic that keeps its range by omission still holds it against another epic', async () => {
+    const x = await world();
+    await planVerb(x, 'prog-a', '', put(epic('free', [1, 2])));
+    expect(refusal(await planVerb(x, 'prog-a', '', put(epic('free'), epic('other', [2, 3]))))).toEqual([409, 'wave-overlap']);
   });
 
   it('waves that are not a list of wave numbers are still refused plan-bad-body', async () => {
@@ -107,6 +117,33 @@ describe('runs open into an epic that lists no waves', () => {
     expect(rr.ok ? rr.runs : rr).toEqual([]);
     // a wave an epic does list still opens with no ticket, as before
     expect((await openRun(x, { ...BASE, wave: 1 })).statusCode).toBe(200);
+  });
+
+  // Review 2791 F12: an epic with an explicit `waves: []`, which main already accepted, pins the gate change end to end.
+  it('an epic with an explicit empty list: a named ticket opens at any wave and no ticket is refused ticket-required', async () => {
+    const x = await world();
+    expect((await planVerb(x, 'prog-a', '', put(epic('free', [], ['t1']), epic('ranged', [1])))).statusCode).toBe(200);
+    expect(refusal(await openRun(x, { ...BASE, wave: 9 }))).toEqual([409, 'ticket-required']);
+    const r = await openRun(x, { ...BASE, wave: 9, ticket: 't1' });
+    expect(r.statusCode, r.body).toBe(200);
+  });
+
+  // Review 2791 F2: the collision. The ticket's own waveless epic takes the run even at a wave another epic lists.
+  it('a named ticket of an epic with no waves takes that epic, even at a wave another epic lists', async () => {
+    const x = await world();
+    await planVerb(x, 'prog-a', '', put(epic('free', undefined, ['t1']), epic('ranged', [1, 2])));
+    const r = await openRun(x, { ...BASE, wave: 1, ticket: 't1' });
+    expect(r.statusCode, r.body).toBe(200);
+    expect(x.plan.planOf('prog-a').epics.flatMap((e) => e.tickets.map((t) => [e.key, t.key, t.runId !== null])))
+      .toEqual([['free', 't1', true]]);
+  });
+
+  // Review 2791 F5: a dropped epic of no waves cannot take a run, so its ticket names no epic.
+  it('a ticket of a dropped epic of no waves is wave-epic-mismatch at a wave no epic lists', async () => {
+    const x = await world();
+    await planVerb(x, 'prog-a', '', put(epic('free', undefined, ['t1']), epic('ranged', [1])));
+    expect((await planVerb(x, 'prog-a', '', put({ ...epic('free', undefined, ['t1']), droppedWhy: 'cut' }, epic('ranged', [1])))).statusCode).toBe(200);
+    expect(refusal(await openRun(x, { ...BASE, wave: 9, ticket: 't1' }))).toEqual([409, 'wave-epic-mismatch']);
   });
 
   it('a dropped epic of no waves does not turn the refusal into ticket-required', async () => {

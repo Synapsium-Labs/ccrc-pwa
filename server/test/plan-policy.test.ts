@@ -1,10 +1,12 @@
 // D-8181: the plan deciders (`coord/planPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  diffPlan, epicForWave, epicIsDone, epicOfRun, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
+  diffPlan, epicForWave, epicIsDone, linearOwnerOf, listedWaves, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
   ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
+import * as policy from '../src/coord/planPolicy.js';
+import { EPIC_FOR_OPEN_CASES } from './planEpicForOpenCases.js';
 import type { HierarchyProjectFacts, InboundRow } from '../src/coord/planStore.js';
 import { TRIAGE_DECISIONS } from '../../shared/plan.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
@@ -171,7 +173,7 @@ describe('epics without wave ranges (programme work map WM6, D-8780)', () => {
     const { waves: _w, ...rest } = epic(i, over);
     return rest as PlanEpicBody;
   };
-  it('an epic that omits waves parses and diffs as one that lists none', () => {
+  it('an epic that omits waves parses, and a new one lists none', () => {
     expect(parsePlanPut({ epics: [noWaves(1), noWaves(2)] })).toMatchObject({ ok: true });
     expect(diffPlan(emptyStored, put(noWaves(1), noWaves(2), epic(3, { waves: [1, 2] })), ctx())).toMatchObject({
       ok: true, changes: { epics: { insert: [{ key: 'e-1', waves: [] }, { key: 'e-2', waves: [] }, { key: 'e-3', waves: [1, 2] }] } },
@@ -181,31 +183,31 @@ describe('epics without wave ranges (programme work map WM6, D-8780)', () => {
     expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: 'all' }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
     expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: null }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
   });
-  it('a put that omits the waves of a stored epic patches them to none', () => {
+  // Review 2791 F6, the coordinator's ruling: a put that omits `waves` KEEPS the stored range; an explicit [] clears it.
+  it('a put that omits the waves of a stored epic keeps its range', () => {
     const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(noWaves(1)), ctx());
+    expect(r.ok && r.changes.epics.update.some((u) => 'waves' in u)).toBe(false);
+  });
+  it('an explicit empty list clears the stored range', () => {
+    const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(epic(1, { waves: [] })), ctx());
     expect(r).toMatchObject({ ok: true, changes: { epics: { update: [{ id: 1, waves: [] }] } } });
+  });
+  it('an epic that keeps its range by omission still holds it: another epic cannot take a wave in it', () => {
+    const s = stored(storedEpic('e-1', { waves: [1, 2] }));
+    expect(diffPlan(s, put(noWaves(1), epic(2, { waves: [2, 3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
   });
   it('contiguity and overlap are read among the epics that list waves', () => {
     expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [2, 4] })), ctx())).toMatchObject({ ok: false, word: 'waves-not-contiguous' });
     expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [3] }), epic(3, { waves: [3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
   });
-  it('epicOfRun: a named ticket of an epic with no waves takes that epic at any wave; the wave\'s epic otherwise', () => {
-    const es = [{ id: 1, waves: [1, 2], state: 'active' as const }, { id: 2, waves: [], state: 'planned' as const }];
-    expect(epicOfRun(es, 9, 2, true)).toEqual({ epicId: 2 });
-    expect(epicOfRun(es, 2, 1, true)).toEqual({ epicId: 1 });
-    // the ticket's epic that lists waves does not take another wave
-    expect(epicOfRun(es, 9, 1, true)).toEqual({ refused: 'wave-epic-mismatch' });
-    // a ticket that is missing names no epic
-    expect(epicOfRun(es, 9, null, true)).toEqual({ refused: 'wave-epic-mismatch' });
+  it('listedWaves: a list is its own range, [] included; an absent list keeps the stored range, else lists none', () => {
+    expect(listedWaves({ waves: [2, 3] }, [1])).toEqual([2, 3]);
+    expect(listedWaves({ waves: [] }, [1])).toEqual([]);
+    expect(listedWaves({}, [1])).toEqual([1]);
+    expect(listedWaves({})).toEqual([]);
   });
-  it('epicOfRun: no ticket and no epic lists the wave is ticket-required only where a live epic lists none', () => {
-    const waved = [{ id: 1, waves: [1], state: 'active' as const }];
-    expect(epicOfRun(waved, 9, null, false)).toEqual({ refused: 'wave-epic-mismatch' });
-    expect(epicOfRun([...waved, { id: 2, waves: [], state: 'planned' as const }], 9, null, false)).toEqual({ refused: 'ticket-required' });
-    // a dropped epic of no waves cannot take a run, so naming a ticket is no remedy
-    expect(epicOfRun([...waved, { id: 2, waves: [], state: 'dropped' as const }], 9, null, false)).toEqual({ refused: 'wave-epic-mismatch' });
-    // a wave an epic lists is found with no ticket, as before
-    expect(epicOfRun([...waved, { id: 2, waves: [], state: 'planned' as const }], 1, null, false)).toEqual({ epicId: 1 });
+  describe('epicForOpen: EPIC_FOR_OPEN_CASES of planEpicForOpenCases.ts', () => {
+    it.each(EPIC_FOR_OPEN_CASES.map((c) => [c.name, c] as const))('%s', (_n, c) => { c.run(policy); });
   });
 });
 

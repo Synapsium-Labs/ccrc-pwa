@@ -176,6 +176,9 @@ const SINGLE: Row[] = [
   { name: 'a ticket of an epic that lists waves, at a wave it does not list, beside an epic that lists none', gate: 'planGate',
     f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T() }) }),
     refusal: { refused: 'wave-epic-mismatch' } },
+  { name: 'a ticket of a dropped epic that lists no waves, at a wave no epic lists (review 2791 F5)', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'dropped' }] }, { k1: T({ epicId: 6 }) }) }),
+    refusal: { refused: 'wave-epic-mismatch' } },
   { name: 'a named ticket of an epic with no waves that another run holds, at any wave', gate: 'planGate',
     f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6, state: 'started', runId: 3 }) }) }),
     refusal: { refused: 'ticket-unavailable' } },
@@ -416,6 +419,11 @@ describe('openRunPreconditions — a claimant may coordinate from any project (D
   it('admits a named ticket of an epic that lists no waves at any wave, into that epic (programme work map WM6, D-8780)', async () => {
     const plan = planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6 }) });
     expect(await openRunPreconditions(facts({ ...WORK_B, wave: 9, ticket: 'k1' }, { ...IN_A, ...KNOWN_B, plan })))
+      .toMatchObject({ ok: true, open: { ticket: { kind: 'existing', id: 9, epicId: 6 } } });
+  });
+  it('admits a named ticket of an epic that lists no waves into that epic even at a wave another epic lists (review 2791 F2)', async () => {
+    const plan = planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6 }) });
+    expect(await openRunPreconditions(facts({ ...WORK_B, wave: 1, ticket: 'k1' }, { ...IN_A, ...KNOWN_B, plan })))
       .toMatchObject({ ok: true, open: { ticket: { kind: 'existing', id: 9, epicId: 6 } } });
   });
   it('admits a review run of a run it claims, in the reviewed run\'s project', async () => {

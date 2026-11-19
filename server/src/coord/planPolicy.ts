@@ -4,7 +4,7 @@ import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
-  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPhaseBody,
+  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanEpicBody, type PlanPhaseBody,
   type PlanPhaseRefBody, type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody,
   type PlanTicketDoneBody, type TicketDoneEvidence, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
@@ -323,9 +323,11 @@ const contiguous = (w: readonly number[]): boolean => {
   const s = [...new Set(w)].sort((a, b) => a - b);
   return s.every((n, i) => i === 0 || n === s[i - 1]! + 1);
 };
-/** THE one reader of an epic's waves (programme work map WM6, D-8780; spec Q5, R133): `waves` is optional on the wire, and an
- *  absent list and an empty one both mean the epic lists no waves. Every caller that wants an epic's waves reads them here. */
-export const listedWaves = (e: { readonly waves?: readonly number[] | undefined }): number[] => [...(e.waves ?? [])];
+/** THE one reader of an epic's waves (programme work map WM6, D-8780; spec Q5, R133): `waves` is optional on the wire. An
+ *  explicit list, `[]` included, is the epic's range; an ABSENT list keeps the stored epic's range (`stored`, as an absent
+ *  ticket `body` keeps the stored body, the coordinator's ruling on review 2791 F6) and, with no stored epic, lists none.
+ *  Every caller that wants an epic's waves reads them here (after `parsePlanPut` has validated the body's field). */
+export const listedWaves = (e: { readonly waves?: readonly number[] | undefined }, stored?: readonly number[]): number[] => [...(e.waves ?? stored ?? [])];
 /** An epic is checked against waves, and takes a run by its wave, only when it lists some. */
 export const listsWaves = (e: { readonly waves?: readonly number[] | undefined }): boolean => listedWaves(e).length > 0;
 const sameList = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((n, i) => n === b[i]);
@@ -344,14 +346,16 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
   }
   const live = put.epics.filter((e) => e.droppedWhy === undefined && byKey.get(e.key)?.state !== 'dropped');
   // Programme work map WM6 (D-8780): both checks read only the epics that list waves; one that lists none has no range to
-  // be contiguous or to overlap, however many such epics a plan holds.
+  // be contiguous or to overlap, however many such epics a plan holds. An epic whose put omits `waves` keeps its stored
+  // range (review 2791 F6), so every read here is of the range the put leaves it with.
+  const rangeOf = (e: PlanEpicBody): number[] => listedWaves(e, byKey.get(e.key)?.waves);
   for (const e of put.epics) {
-    if (listsWaves(e) && !contiguous(listedWaves(e))) return refuse('waves-not-contiguous', `epic ${e.key}: waves are not one contiguous range`);
+    const range = rangeOf(e);
+    if (range.length > 0 && !contiguous(range)) return refuse('waves-not-contiguous', `epic ${e.key}: waves are not one contiguous range`);
   }
   const owner = new Map<number, string>();
   for (const e of live) {
-    if (!listsWaves(e)) continue;
-    for (const w of listedWaves(e)) {
+    for (const w of rangeOf(e)) {
       const o = owner.get(w);
       if (o !== undefined && o !== e.key) return refuse('wave-overlap', `wave ${w} is in epics ${o} and ${e.key}`);
       owner.set(w, e.key);
@@ -386,7 +390,8 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
     } else {
       const patch: EpicPatch = {};
       if (was.project !== project) patch.project = project;
-      if (!sameList(was.waves, listedWaves(e))) patch.waves = listedWaves(e);
+      const range = rangeOf(e);
+      if (!sameList(was.waves, range)) patch.waves = range;
       if (was.ordinal !== ordinal) patch.ordinal = ordinal;
       if (was.title !== e.title) patch.title = e.title;
       if (was.summary !== e.summary) patch.summary = e.summary;
@@ -735,7 +740,7 @@ export function epicForWave(epics: readonly { id: number; waves: readonly number
  *  epic lists none is refused `ticket-required`, since naming a ticket is its remedy, and anything else `wave-epic-mismatch`,
  *  as before. `ticketEpic` is the named ticket's epic (null when the ticket is missing or none was named); `named` is whether
  *  the open named a ticket at all. */
-export function epicOfRun(
+export function epicForOpen(
   epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number, ticketEpic: number | null, named: boolean,
 ): { epicId: number } | { refused: 'wave-epic-mismatch' | 'ticket-required' } {
   const waveless = epics.filter((e) => epicAdmitsRun(e.state) && !listsWaves(e));

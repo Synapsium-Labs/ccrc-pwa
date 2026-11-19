@@ -1,7 +1,7 @@
 import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
-import { epicAdmitsRun, epicOfRun, runMustNameTicket, ticketIsHeld } from './planPolicy.js';
+import { epicAdmitsRun, epicForOpen, runMustNameTicket, ticketIsHeld } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
 import { decideOtherLane, type OtherLaneReads } from './otherLanes.js';
 
@@ -420,7 +420,7 @@ const GATES = [
     }
     // Programme work map WM6 (D-8780): a named ticket's epic that lists no waves takes the run at any wave; else the wave's epic.
     const named = typeof c.b.ticket === 'string' ? p.ticket(c.b.ticket) : null;
-    const ruled = epicOfRun(p.epics, wave, named === null ? null : named.epicId, typeof c.b.ticket === 'string');
+    const ruled = epicForOpen(p.epics, wave, named === null ? null : named.epicId, typeof c.b.ticket === 'string');
     if ('refused' in ruled) return { refused: ruled.refused };
     const epicId = ruled.epicId;
     if (typeof c.b.ticket !== 'string') {
