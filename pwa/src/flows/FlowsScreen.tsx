@@ -5,7 +5,7 @@ import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Button, Chip, EmptyState, ListRow, PageScaffold, QuickConfirm, SECTION_PURPOSE, Section, Select, TextInput } from '@ccrc/ui';
 import {
   FLOW_LIMITS, FLOW_ROLES, FLOW_VARS, GATE_KINDS, GATE_PR_STATES, canonicalFlowJson, flowExportJson, readFlowFile, validateFlow,
-  type BlockKind, type FlowAnswer, type FlowBlock, type FlowDoc, type FlowProblem, type FlowRole, type FlowsListAnswer,
+  type BlockKind, type FlowAnswer, type FlowBlock, type FlowDoc, type FlowProblem, type FlowProgrammeRow, type FlowRole, type FlowsListAnswer,
   type GateKind, type GatePrState,
 } from '../../../shared/flows';
 import { saveBytes } from '../docs/objectUrls';
@@ -27,6 +27,8 @@ const FIELD = 'grid gap-1 text-meta text-ink-secondary';
 const STACK = 'grid gap-2';
 /** A row of buttons. */
 const ACTIONS = 'flex flex-wrap gap-2';
+/** A title over its note, in a LINE. */
+const TITLED = 'grid min-w-0 gap-1';
 /** A line of text with its button at the end. */
 const LINE = 'flex flex-wrap items-center justify-between gap-3';
 /** A refusal's word, with the server's detail when it sent one (wave 2: "conflict: pinned by 1 programme"). */
@@ -125,7 +127,7 @@ function FlowsList(): ReactNode {
             <Section title="Templates" purpose="Shipped with ccrc. Use one to make your own copy; a template itself never changes here.">
               {list.templates.map((t) => (
                 <div key={`${t.id}@${t.version}`} className={LINE}>
-                  <span className="grid min-w-0 gap-1">
+                  <span className={TITLED}>
                     <span className="text-ink-primary">{t.title} <span className={MONO_META}>v{t.version}</span></span>
                     <span className={SECTION_PURPOSE}>{t.note}</span>
                   </span>
@@ -270,6 +272,7 @@ function FlowEditor(p: { readonly id: number }): ReactNode {
               ? <Section title="Step"><p className={SECTION_PURPOSE}>Select a step in the outline.</p></Section>
               : <Inspector doc={doc} block={block} onEdit={edit} onSelect={setSelected} />}
           </div>
+          {(answer.flow.pinnedBy ?? 0) > 0 && <ProgrammesOnFlow id={p.id} doc={doc} />}
           <Section title="Versions" scope={`${answer.versions.length}`} purpose="A published version never changes. A programme pins one when it starts. Save one as a file to share it.">
             {answer.versions.length === 0
               ? <p className={SECTION_PURPOSE}>Nothing published yet.</p>
@@ -380,5 +383,33 @@ function SelectField(p: {
         {p.options.map(([v, w]) => <option key={v} value={v}>{w}</option>)}
       </Select>
     </label>
+  );
+}
+
+/** Wave 3a: the programmes that pin this flow, each on the step the run machine places it, with the fact it read. A step
+ *  is named from the draft; one the draft no longer has shows its id. */
+function ProgrammesOnFlow({ id, doc }: { id: number; doc: FlowDoc }): ReactNode {
+  const [rows, setRows] = useState<FlowProgrammeRow[] | 'loading' | { failed: string }>('loading');
+  useEffect(() => {
+    let live = true;
+    api.flowProgrammes(id).then((r) => { if (live) setRows(r.programmes); }, (e: unknown) => { if (live) setRows({ failed: failWord(e) }); });
+    return () => { live = false; };
+  }, [id]);
+  return (
+    <Section title="Programmes on this flow" scope={Array.isArray(rows) ? `${rows.length}` : undefined}
+             purpose="Where each programme is, read from its runs. Steps before a wave opens are not tracked yet.">
+      {rows === 'loading' ? <p role="status">Loading…</p>
+        : 'failed' in rows ? <p role="alert">The programmes could not be read: {rows.failed}</p>
+        : rows.map((r) => (
+          <div key={r.slug} className={LINE}>
+            <span className={TITLED}>
+              <span className="text-ink-primary">{r.title}</span>
+              <span className={SECTION_PURPOSE}>{r.position.why}</span>
+            </span>
+            <span className={MONO_META}>{`v${r.version} · ${r.position.blockId === null ? 'not on a step'
+              : doc.blocks.find((b) => b.id === r.position.blockId)?.title ?? r.position.blockId}`}</span>
+          </div>
+        ))}
+    </Section>
   );
 }

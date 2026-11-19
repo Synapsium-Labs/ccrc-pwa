@@ -161,7 +161,7 @@ describe('the flow new programmes pin (flows wave 2)', () => {
     expect(await screen.findByText('Nothing published yet.')).toBeInTheDocument();
     expect(screen.queryByRole('button', { name: 'Use for new programmes' })).toBeNull();
     cleanup();
-    stubServer(() => ({ body: published({ flow: { ...published().flow, pinnedBy: 2 } }) }));
+    stubServer((c) => ({ body: c.url.endsWith('/programmes') ? { programmes: [] } : published({ flow: { ...published().flow, pinnedBy: 2 } }) }));
     render(<FlowsScreen openId={4} />);
     expect(await screen.findByText('pinned by 2 programmes')).toBeInTheDocument();
   });
@@ -184,5 +184,31 @@ describe('the flow new programmes pin (flows wave 2)', () => {
     expect(await screen.findByText('new programmes')).toBeInTheDocument();
     expect(screen.getByText('pinned by 3 programmes')).toBeInTheDocument();
     expect(screen.getAllByText(/^pinned by/)).toHaveLength(1);
+  });
+});
+
+describe('the programmes on a flow (flows wave 3a)', () => {
+  it('lists each pinning programme with the step it is on, and why', async () => {
+    const base = answerFor(skeletonFlowDoc('Mine'), [1]);
+    const answer: FlowAnswer = { ...base, flow: { ...base.flow, pinnedBy: 2 } };
+    const programmes = [
+      { slug: 'programme-a', title: 'Programme A', version: 1, position: { blockId: 'dispatch', why: 'run 12 is dispatched (wave 1 of 2)' } },
+      { slug: 'programme-b', title: 'Programme B', version: 1, position: { blockId: null, why: 'before the first wave' } },
+    ];
+    stubServer((c) => (c.url.endsWith('/programmes') ? { body: { programmes } } : { body: answer }));
+    render(<FlowsScreen openId={4} />);
+    expect(await screen.findByText('Programme A')).toBeInTheDocument();
+    expect(screen.getByText('v1 · Dispatch the wave')).toBeInTheDocument();
+    expect(screen.getByText('run 12 is dispatched (wave 1 of 2)')).toBeInTheDocument();
+    expect(screen.getByText('v1 · not on a step')).toBeInTheDocument();
+    expect(screen.getByText('before the first wave')).toBeInTheDocument();
+  });
+
+  it('asks nothing for a flow no programme pins', async () => {
+    const calls = stubServer(() => ({ body: answerFor(skeletonFlowDoc('Mine'), [1]) }));
+    render(<FlowsScreen openId={4} />);
+    await screen.findByText('Nothing published yet.').catch(() => screen.findByRole('button', { name: 'Use for new programmes' }));
+    expect(calls.some((c) => c.url.endsWith('/programmes'))).toBe(false);
+    expect(screen.queryByText('Programmes on this flow')).toBeNull();
   });
 });
