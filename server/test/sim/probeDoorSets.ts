@@ -210,6 +210,14 @@ export function probePagesCases(m: ProbeDoorModule): Record<string, SuiteCase> {
       expect(t).toContain('Is any item open?');
       expect(t.split('choices:').length - 1).toBe(1);
     },
+    'the door phrasing (door process A2): the tail names the probe_answer door and its input, and no shell command; the default tail is unchanged': () => {
+      const d = m.probePages('r1', 'start', qs, true).join('');
+      expect(d.endsWith('Answer them all in one call with the probe_answer door, its input:\n'
+        + '{"roundId":"r1","answers":[{"id":"p1","answer":"<your answer>"},{"id":"p2","answer":"<your answer>"}]}')).toBe(true);
+      expect(d).not.toContain('ccrc-api');
+      expect(d).not.toContain('<<');
+      expect(m.probePages('r1', 'start', qs, false).join('')).toBe(whole());
+    },
     'the answer command ends the text, with one entry per question id': () => {
       const t = whole();
       expect(t).toContain("ccrc-api probe answer --json - <<'JSON'");
@@ -948,6 +956,8 @@ const PROBE_PAGES_SET: MutantSet<ProbeDoorModule> = {
     { id: 'P8 the question count dropped', old: '${questions.length} question(s)', new: '0 question(s)' },
     { id: 'P9 the kind dropped', old: '(${kind})', new: '(round)' },
     { id: 'P10 the closed-book instruction dropped', old: 'Answer from memory, without reading your card,', new: 'Answer,' },
+    { id: 'P11 the door tail never chosen', old: 'const tail = door ?', new: 'const tail = false ?' },
+    { id: 'P12 the door tail always chosen', old: 'const tail = door ?', new: 'const tail = true ?' },
   ],
   suite: probePagesCases,
 };

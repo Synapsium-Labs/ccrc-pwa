@@ -72,11 +72,13 @@ export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LI
 /** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
  *  tree's `shared/`, and pinned by digest in the body like the library. */
 export const CCD_REDACT = path.resolve(__dirname, '../../shared/redact.mjs');
+/** The Overlord's door program, installed beside the body and pinned by `__CCD_DOOR_SHA256`. */
+export const CCD_DOOR_PROG = path.resolve(__dirname, '../../ccd/door-process.mjs');
 export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
 
 /** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`, the redactor's two files
  *  (`shared`, the repository's by default) and the train-proof, delegation-lease and pool-set, long-lived and door libraries' bytes (`train`, `lease`, `poolset`, `longlived`, `door`, the
- *  repository's by default): the eight pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
+ *  repository's by default): the nine pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
  *  marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures; `ccd-entry-install.test.ts` holds it
  *  equal to the installer's real output. */
 export function installedCcdBody(
@@ -87,11 +89,13 @@ export function installedCcdBody(
   poolset: string | Buffer = fs.readFileSync(CCD_POOLSET_LIB),
   longlived: string | Buffer = fs.readFileSync(CCD_LONGLIVED_LIB),
   door: string | Buffer = fs.readFileSync(CCD_DOOR_LIB),
+  prog: string | Buffer = fs.readFileSync(CCD_DOOR_PROG),
 ): string {
   const digest = createHash('sha256').update(lib).digest('hex');
   const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
   const lines = source.replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${sha(shared.redact)}`)
     .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${sha(shared.cli)}`)
+    .replace(/^__CCD_DOOR_SHA256=stamp-at-install$/m, `__CCD_DOOR_SHA256=${sha(prog)}`)
     .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`)
     .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${sha(train)}`)
     .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${sha(lease)}`)
@@ -217,6 +221,8 @@ export function installDirectEntry(home: string, opts: { body?: string | Buffer 
   fs.mkdirSync(path.join(libexec, 'shared'), { recursive: true });
   fs.copyFileSync(CCD_REDACT, path.join(libexec, 'shared', 'redact.mjs'));
   fs.copyFileSync(CCD_REDACT_CLI, path.join(libexec, 'shared', 'redact-cli.mjs'));
+  // The door program (plan question 2), beside the body, not a library and not on PATH.
+  fs.copyFileSync(CCD_DOOR_PROG, path.join(libexec, 'door-process.mjs'));
   fs.rmSync(entry, { force: true });
   if (!fs.existsSync(CCD_ENTRY)) {
     fs.writeFileSync(entry, bodyBytes, { mode: 0o755 });

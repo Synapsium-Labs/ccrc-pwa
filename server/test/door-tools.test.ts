@@ -1,0 +1,96 @@
+// Overlord W1 door process A2 (plan w1-door-process.md Task 5 Step 1): the tool table, DOOR_TOOLS, against what it is held to:
+// ccrc-api's ROUTES, the ccrc-overlord skill's door table, the fence's rules and shared/continuity-door.ts.
+import { describe, it, expect } from 'vitest';
+import fs from 'node:fs';
+import path from 'node:path';
+import {
+  DOOR_TOOLS, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS,
+} from '../../ccd/door-process.mjs';
+import * as shared from '../../shared/continuity-door.js';
+
+type Row = { name: string; verb: string; class: 'view' | 'operate'; fenced: boolean; reader: boolean; input: unknown };
+const ROWS = DOOR_TOOLS as unknown as Row[];
+const ROOT = path.resolve(__dirname, '../..');
+
+/** The keys of ccrc-api's ROUTES array, read from the file's text. */
+function routeKeys(): string[] {
+  const text = fs.readFileSync(path.join(ROOT, 'ccd/ccrc-api'), 'utf8');
+  const start = text.indexOf('declare -A ROUTES=(');
+  expect(start).toBeGreaterThan(-1);
+  const block = text.slice(start, text.indexOf('\n)\n', start));
+  return [...block.matchAll(/^\s+\[([A-Za-z0-9_.-]+)\]='/gm)].map((m) => m[1]!);
+}
+
+/** The door names of the ccrc-overlord skill's door table (starting.md), as tool names: spaces become `_`. */
+function skillDoorNames(): string[] {
+  const lines = fs.readFileSync(path.join(ROOT, 'ccd/overlord-skill/references/starting.md'), 'utf8').split('\n');
+  const head = lines.findIndex((l) => l.startsWith('| Door |'));
+  expect(head).toBeGreaterThan(-1);
+  const names: string[] = [];
+  for (let i = head + 2; i < lines.length && lines[i]!.startsWith('|'); i += 1) {
+    const first = lines[i]!.split('|')[1]!;
+    for (const m of first.matchAll(/`([^`]+)`/g)) names.push(m[1]!.replace(/ /g, '_'));
+  }
+  return names;
+}
+
+const keysOf = (v: unknown): string[] => {
+  if (Array.isArray(v)) return v.flatMap(keysOf);
+  if (v !== null && typeof v === 'object') return Object.entries(v).flatMap(([k, x]) => [k, ...keysOf(x)]);
+  if (typeof v === 'string') return [v];   // a `required` entry names a field too
+  return [];
+};
+
+describe('DOOR_TOOLS', () => {
+  it('has ten uniquely named rows', () => {
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel']);
+  });
+
+  it('every row\'s verb is a key of ccrc-api\'s ROUTES', () => {
+    const routes = routeKeys();
+    expect(routes.length).toBeGreaterThan(50);
+    for (const r of ROWS) expect(routes, `${r.name} -> ${r.verb}`).toContain(r.verb);
+  });
+
+  it('every name is a door of the ccrc-overlord skill (spaces as _), or is in DOOR_ONLY_TOOLS with a reason', () => {
+    const skill = skillDoorNames();
+    expect(skill).toContain('card');
+    expect(skill).toContain('probe_answer');
+    for (const r of ROWS) {
+      if (skill.includes(r.name)) continue;
+      const why = (DOOR_ONLY_TOOLS as Record<string, string>)[r.name];
+      expect(typeof why === 'string' && why.length > 10, `${r.name} is on neither list`).toBe(true);
+    }
+    // The named list is not stale: each entry is a real tool the skill really lacks.
+    for (const n of Object.keys(DOOR_ONLY_TOOLS)) {
+      expect(ROWS.map((r) => r.name), n).toContain(n);
+      expect(skill, `${n} is now in the skill's table; drop it from DOOR_ONLY_TOOLS`).not.toContain(n);
+    }
+  });
+
+  it('reader is true on no row', () => {
+    expect(ROWS.filter((r) => r.reader)).toEqual([]);
+  });
+
+  it('card is the one view row that is fenced, and every operate row is fenced', () => {
+    expect(ROWS.filter((r) => r.class === 'view' && r.fenced).map((r) => r.name)).toEqual(['card']);
+    expect(ROWS.filter((r) => r.class === 'operate' && !r.fenced).map((r) => r.name)).toEqual([]);
+    expect(ROWS.filter((r) => r.class === 'view' && !r.fenced).map((r) => r.name).sort()).toEqual(['note_list', 'probe', 'timer_list']);
+  });
+
+  it('no input schema names an attribution field, at any depth', () => {
+    expect([...ATTRIBUTION_FIELDS].sort()).toEqual(['byId', 'byUuid', 'fromId', 'fromUuid']);
+    for (const r of ROWS) {
+      const names = keysOf(r.input);
+      for (const f of ATTRIBUTION_FIELDS) expect(names, `${r.name} names ${f}`).not.toContain(f);
+    }
+  });
+
+  it('the claim back-off bounds equal shared/continuity-door.ts\'s', () => {
+    expect(CLAIM_RETRY_MIN_MS).toBe(shared.CLAIM_RETRY_MIN_MS);
+    expect(CLAIM_RETRY_MAX_MS).toBe(shared.CLAIM_RETRY_MAX_MS);
+  });
+
+  // TODO(coordinator): once shared/continuity-door.ts exports DELTA_REFRESH_MS and DELTA_LEASE_MS, assert here that
+  // door-process.mjs's DELTA_REFRESH_MS and DELTA_LEASE_MS equal them (import the two from the program beside the others above).
+});

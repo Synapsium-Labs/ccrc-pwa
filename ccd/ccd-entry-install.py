@@ -104,9 +104,16 @@
 # (`__CCD_REDACT_SHA256`, `__CCD_REDACT_CLI_SHA256`, each rendered from exactly
 # one placeholder line, or the install refuses before anything moves). The
 # half's three files are staged together and renamed in the order
-# shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh,
+# shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, lib/disk-retention.sh,
 # lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, before the body; a failure after any of them moved is the
 # library half's failure.
+#
+# THE DOOR PROGRAM (the Overlord's door process, plan question 2): `ccd/door-process.mjs`, a Node ESM program that is NOT a
+# bash library and NOT a launcher, is the half's third redactor-style file: published at ~/.local/libexec/ccrc/door-process.mjs
+# beside the body (mode 644, never on PATH), pinned by digest in the body (`__CCD_DOOR_SHA256`, rendered from exactly one
+# placeholder line, or the install refuses before anything moves) from the very bytes this run installs. It is read as the
+# redactor is (read_regular, no newline rule), staged in the libexec directory in its own slot, and renamed right after
+# shared/redact-cli.mjs, before lib/disk-retention.sh and the body; the updater's backup carries it as ccd-door-process.mjs.
 #
 # The library must end in exactly one newline and carry no NUL byte. The body
 # hashes the file as bash reads it (`$(<file)` drops NULs and every trailing
@@ -147,7 +154,7 @@ LONGLIVED_LIB_PIN = re.compile(rb'^__CCD_LIB_LONGLIVED_SHA256=([0-9a-f]{64})$', 
 LONGLIVED_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$', re.M)
 DOOR_LIB_PIN = re.compile(rb'^__CCD_LIB_DOOR_SHA256=([0-9a-f]{64})$', re.M)
 DOOR_LIB_PIN_PLACEHOLDER = re.compile(rb'^__CCD_LIB_DOOR_SHA256=stamp-at-install$', re.M)
-REDACT_PINS = ('__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256')
+REDACT_PINS = ('__CCD_REDACT_SHA256', '__CCD_REDACT_CLI_SHA256', '__CCD_DOOR_SHA256')
 PLACEHOLDER_PYTHON = '@CCRC_' + 'PYTHON3@'
 PLACEHOLDER_DIGEST = '@CCRC_' + 'CCD_SHA256@'
 RESIDUE = re.compile(r'@CCRC_[A-Z0-9_]+@')
@@ -189,6 +196,8 @@ REDACT_SOURCE = 'shared/redact.mjs'
 REDACT_DEST = '.local/libexec/ccrc/shared/redact.mjs'
 REDACT_CLI_SOURCE = 'shared/redact-cli.mjs'
 REDACT_CLI_DEST = '.local/libexec/ccrc/shared/redact-cli.mjs'
+DOOR_PROG_SOURCE = 'ccd/door-process.mjs'
+DOOR_PROG_DEST = '.local/libexec/ccrc/door-process.mjs'
 
 
 # THE BODY'S PROVENANCE STAMP IS WRITTEN HERE, AT INSTALL TIME, NEVER COMMITTED.
@@ -549,9 +558,11 @@ def install(tree, home):
     door_digest = hashlib.sha256(door_data).hexdigest()
     redact_data = read_regular(os.path.join(tree, *REDACT_SOURCE.split('/')))
     cli_data = read_regular(os.path.join(tree, *REDACT_CLI_SOURCE.split('/')))
+    prog_data = read_regular(os.path.join(tree, *DOOR_PROG_SOURCE.split('/')))
     # The pins first, then the stamp over them, then the launcher's digest over all (THE LIBRARY, above).
     pinned = render_redact_pins(read_regular(os.path.join(tree, *BODY_SOURCE.split('/'))),
-                                (hashlib.sha256(redact_data).hexdigest(), hashlib.sha256(cli_data).hexdigest()))
+                                (hashlib.sha256(redact_data).hexdigest(), hashlib.sha256(cli_data).hexdigest(),
+                                 hashlib.sha256(prog_data).hexdigest()))
     pinned = render_lib_pin(pinned, lib_digest)
     pins = LIB_PIN.findall(pinned)
     if len(pins) != 1 or pins[0].decode('ascii') != lib_digest:
@@ -608,6 +619,7 @@ def install(tree, home):
     door_dest = os.path.join(home, *DOOR_LIB_DEST.split('/'))
     redact_dest = os.path.join(home, *REDACT_DEST.split('/'))
     cli_dest = os.path.join(home, *REDACT_CLI_DEST.split('/'))
+    prog_dest = os.path.join(home, *DOOR_PROG_DEST.split('/'))
     bindir = os.path.dirname(entry_dest)
     libexec = os.path.dirname(body_dest)
     libdir = os.path.dirname(lib_dest)
@@ -622,7 +634,7 @@ def install(tree, home):
     if derived is None or os.path.realpath(derived) != os.path.realpath(body_dest):
         raise Refused('%s resolves to %s, whose launcher would look for its body at %s, not at %s — this'
                       ' ~/.local layout cannot host the direct entry' % (entry_dest, os.path.realpath(entry_dest), derived, body_dest))
-    for dest in (redact_dest, cli_dest, lib_dest, train_dest, lease_dest, poolset_dest, longlived_dest, door_dest, body_dest, entry_dest):
+    for dest in (redact_dest, cli_dest, prog_dest, lib_dest, train_dest, lease_dest, poolset_dest, longlived_dest, door_dest, body_dest, entry_dest):
         destination_kind(dest)
     for d in (bindir, libexec, libdir, shareddir):
         os.makedirs(d, mode=0o755, exist_ok=True)
@@ -634,8 +646,9 @@ def install(tree, home):
 
     # The library half, in its rename order: (name beside the body, destination, bytes, staging slot, state).
     beside = lambda d: d[len(os.path.dirname(BODY_DEST)) + 1:]  # noqa: E731 -- a name as the installed layout spells it
-    half = [[beside(REDACT_DEST), redact_dest, redact_data, '.1'], [beside(REDACT_CLI_DEST), cli_dest, cli_data, '.2']]
-    half = [h + [converged(h[1], h[2], BODY_MODE)] for h in half]
+    half = [[beside(REDACT_DEST), redact_dest, redact_data, '.1', shareddir], [beside(REDACT_CLI_DEST), cli_dest, cli_data, '.2', shareddir],
+            [beside(DOOR_PROG_DEST), prog_dest, prog_data, '.1', libexec]]
+    half = [h + [converged(h[1], h[2], BODY_MODE)] for h in half]  # (name, dest, bytes, slot, stage dir, state)
     lib_state = converged(lib_dest, lib_data, BODY_MODE)
     train_state = converged(train_dest, train_data, BODY_MODE)
     lease_state = converged(lease_dest, lease_data, BODY_MODE)
@@ -646,7 +659,7 @@ def install(tree, home):
     entry_state = converged(entry_dest, entry_data, ENTRY_MODE)
 
     staged_lib = staged_train = staged_lease = staged_poolset = staged_longlived = staged_door = staged_body = staged_entry = None
-    staged_half = [None, None]
+    staged_half = [None] * len(half)
     moved = []
     lib_moved = []
     # What this run has PROVED stands at each destination, so a failure after
@@ -657,8 +670,8 @@ def install(tree, home):
     body_proved = False
     entry_proved = entry_state == 'same'
     try:
-        for i, (_name, _dest, data, slot, state) in enumerate(half):
-            staged_half[i] = stage(shareddir, data, BODY_MODE, slot) if state == 'differ' else None
+        for i, (_name, _dest, data, slot, sdir, state) in enumerate(half):
+            staged_half[i] = stage(sdir, data, BODY_MODE, slot) if state == 'differ' else None
         staged_lib = stage(libdir, lib_data, BODY_MODE) if lib_state == 'differ' else None
         staged_train = stage(libdir, train_data, BODY_MODE, '.1') if train_state == 'differ' else None
         staged_lease = stage(libdir, lease_data, BODY_MODE, '.2') if lease_state == 'differ' else None
@@ -673,8 +686,8 @@ def install(tree, home):
         # the kernel has started its launcher (review 216, F4).
         self_test(home, staged_entry or entry_dest, staged_body or body_dest,
                   live=tuple(d for d, s in ((entry_dest, staged_entry), (body_dest, staged_body)) if s is None))
-        if (staged_half == [None, None] and staged_lib is None and staged_train is None and staged_lease is None and staged_poolset is None and staged_longlived is None and staged_door is None and staged_body is None
-                and staged_entry is None and [h[4] for h in half] == ['same', 'same']
+        if (all(p is None for p in staged_half) and staged_lib is None and staged_train is None and staged_lease is None and staged_poolset is None and staged_longlived is None and staged_door is None and staged_body is None
+                and staged_entry is None and all(h[5] == 'same' for h in half)
                 and lib_state == train_state == lease_state == poolset_state == longlived_state == door_state == body_state == entry_state == 'same'):
             say('converged — the launcher, the body and the library already carry these bytes')
             return 0
@@ -682,7 +695,7 @@ def install(tree, home):
         # one that loads a library pins the old one and refuses starts until the new body lands (see THE LIBRARY above).
         # The redactor's two files go before the library, and all three before the body that pins them: one half,
         # `library` in `moved` once, at its first rename, and `lib_moved` naming each file of it that was renamed.
-        for i, (name, dest, data, _slot, state) in enumerate(half):
+        for i, (name, dest, data, _slot, _sdir, state) in enumerate(half):
             if state == 'mode':
                 repair_mode(dest, BODY_MODE)
                 say_repaired(dest, BODY_MODE)
@@ -805,7 +818,7 @@ def install(tree, home):
                      ' starts as it did; but a standing body that pins a DIFFERENT library now refuses every ccd start'
                      ' (lib-digest) until the new body lands. Re-run this install to converge the pair, or restore the'
                      ' previous library (ccrc update\'s backup carries it as ccd-lib-disk-retention.sh, and the second as'
-                     ' ccd-lib-train-proof.sh, the third as ccd-lib-delegation-lease.sh, the fourth as ccd-lib-pool-set.sh, and the fifth as ccd-lib-long-lived.sh, and the sixth as ccd-lib-door.sh)'
+                     ' ccd-lib-train-proof.sh, the third as ccd-lib-delegation-lease.sh, the fourth as ccd-lib-pool-set.sh, and the fifth as ccd-lib-long-lived.sh, and the sixth as ccd-lib-door.sh, and the door program as ccd-door-process.mjs)'
                      '; of the library half, these were renamed: %s' % ', '.join(lib_moved))
         elif 'launcher' in moved and entry_proved:
             state = ('the launcher was renamed into place and re-measured as the file just staged, so what stands'
