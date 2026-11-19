@@ -39,7 +39,7 @@ export interface MailHoldFacts {
 /** What the pass does for one session: write a value (and why), clear the marker (and why), nothing, or skip (and why). */
 export type MailHoldDecision =
   | { readonly act: 'write'; readonly value: string; readonly why: 'appear' | 'differ' | 'renew' }
-  | { readonly act: 'clear'; readonly why: 'released' | 'mail-off' }
+  | { readonly act: 'clear'; readonly why: 'released' | 'disabled' }
   | { readonly act: 'none' }
   | { readonly act: 'skip'; readonly why: 'incapable' | 'unreadable' | 'unrenderable' };
 
@@ -49,7 +49,7 @@ const NONE: MailHoldDecision = { act: 'none' };
 export function decideMailHold(m: MailHoldFacts): MailHoldDecision {
   if (!m.capable) return { act: 'skip', why: 'incapable' };
   if (m.unreadable) return { act: 'skip', why: 'unreadable' };
-  if (m.mailDisabled) return m.measured === null ? NONE : { act: 'clear', why: 'mail-off' };
+  if (m.mailDisabled) return m.measured === null ? NONE : { act: 'clear', why: 'disabled' };
   if (m.held.length === 0) return m.measured === null ? NONE : { act: 'clear', why: 'released' };
   let want: string;
   try {

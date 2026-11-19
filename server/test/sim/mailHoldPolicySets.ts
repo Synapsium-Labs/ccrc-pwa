@@ -84,10 +84,10 @@ export function decideMailHoldCases(m: MailHoldPolicyModule): Record<string, Sui
       expect(d(base({ held, measured: `${NOW + 300}:${kept}` }))).toEqual({ act: 'none' });
     },
     'mailDisabled: clear a standing marker, write nothing': () => {
-      expect(d(base({ mailDisabled: true, measured: marker(NOW + 300) }))).toEqual({ act: 'clear', why: 'mail-off' });
-      expect(d(base({ mailDisabled: true, measured: 'junk' }))).toEqual({ act: 'clear', why: 'mail-off' });
+      expect(d(base({ mailDisabled: true, measured: marker(NOW + 300) }))).toEqual({ act: 'clear', why: 'disabled' });
+      expect(d(base({ mailDisabled: true, measured: 'junk' }))).toEqual({ act: 'clear', why: 'disabled' });
       expect(d(base({ mailDisabled: true }))).toEqual({ act: 'none' });
-      expect(d(base({ mailDisabled: true, held: [], measured: marker(NOW + 300) }))).toEqual({ act: 'clear', why: 'mail-off' });
+      expect(d(base({ mailDisabled: true, held: [], measured: marker(NOW + 300) }))).toEqual({ act: 'clear', why: 'disabled' });
     },
     'unreadable: skip, counted, never a write or a clear, whatever else holds': () => {
       expect(d(base({ unreadable: true }))).toEqual({ act: 'skip', why: 'unreadable' });
@@ -114,7 +114,7 @@ const DECIDE_SET: MutantSet<MailHoldPolicyModule> = {
     { id: 'H2', old: 'if (m.measured.slice(m.measured.indexOf(\':\') + 1) !== want.slice(want.indexOf(\':\') + 1)) return write(\'differ\');', new: '' },
     { id: 'H14', old: 'if (m.measured.slice(m.measured.indexOf(\':\') + 1) !== want.slice(want.indexOf(\':\') + 1)) return write(\'differ\');',
       new: 'if (m.measured.slice(m.measured.lastIndexOf(\',\') + 1) !== want.slice(want.lastIndexOf(\',\') + 1)) return write(\'differ\');' },
-    { id: 'H3', old: "if (m.mailDisabled) return m.measured === null ? NONE : { act: 'clear', why: 'mail-off' };", new: '' },
+    { id: 'H3', old: "if (m.mailDisabled) return m.measured === null ? NONE : { act: 'clear', why: 'disabled' };", new: '' },
     // The rest of the guards, one mutant each.
     { id: 'H4', old: 'if (left < MAILHOLD_RENEW_UNDER_S)', new: 'if (left <= MAILHOLD_RENEW_UNDER_S)' },
     { id: 'H5', old: "if (!mailHoldLive(parsed.hold.until, m.now)) return write('renew');", new: '' },
@@ -126,7 +126,7 @@ const DECIDE_SET: MutantSet<MailHoldPolicyModule> = {
     { id: 'H10', old: "if (m.measured === null) return write('appear');", new: "if (m.measured === null) return write('differ');" },
     { id: 'H11', old: 'renderMailHold(m.now + MAILHOLD_LEASE_S, m.held)', new: 'renderMailHold(m.now + MAILHOLD_REACH_S, m.held)' },
     { id: 'H12', old: "  } catch { return { act: 'skip', why: 'unrenderable' }; }", new: "  } catch { return NONE; }" },
-    { id: 'H13', old: "if (m.mailDisabled) return m.measured === null ? NONE : { act: 'clear', why: 'mail-off' };",
+    { id: 'H13', old: "if (m.mailDisabled) return m.measured === null ? NONE : { act: 'clear', why: 'disabled' };",
       new: "if (m.mailDisabled) return NONE;" },
   ],
   suite: decideMailHoldCases,

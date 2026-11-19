@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { MAILHOLD_LEASE_S, MAILHOLD_REACH_S } from '../../shared/mailHold.js';
@@ -26,15 +26,10 @@ const nowS = (): number => Math.floor(Date.now() / 1000);
 
 /** `cmd_route`, observed through its exit status (it refuses through `die`): `ccd-route-fields.test.ts`'s shape. */
 const route = (args: string, env: NodeJS.ProcessEnv = {}): { status: number; out: string } => {
-  try {
-    const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; cmd_route ${args}`],
-      { encoding: 'utf8', cwd: h.home, timeout: 60_000, killSignal: 'SIGKILL',
-        env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
-    return { status: 0, out };
-  } catch (e) {
-    const err = e as { status?: number | null; stdout?: string; stderr?: string };
-    return { status: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
-  }
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; exec 2>&1; cmd_route ${args}`],
+    { encoding: 'utf8', cwd: h.home, timeout: 60_000, killSignal: 'SIGKILL',
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
+  return { status: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 };
 
 describe('ccd route --set mailhold=… (Task 3.2)', () => {
