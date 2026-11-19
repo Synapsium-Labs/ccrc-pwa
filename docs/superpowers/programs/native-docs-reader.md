@@ -32,10 +32,54 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a), #2989 (D1), #3026 (D2) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) W8b (completion D, Tasks 11-14) runs as two serial runs (coordinator, 2026-11-17): D1 (Tasks 11-12 and C2's carried findings) is run 2380, **merged** 2026-11-18 (`8a6f62309`, #2989; three review rounds; reserve 8716-8718 unspent); D2 (Task 13, Task 14, lab 10 and D1's carried findings) is run 2436, **merged** 2026-11-18 (`839c05e46`, #3026; three review rounds; D-8729 and D-8730 defined, 8731-8732 unspent). D is closed (Decisions, 2026-11-18) |
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan), #2806 | run 1532, dispatched 2026-11-10; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Tasks 1-9 committed (worker-reported). Task 10 was held at Step 2 from 2026-11-11 and resumed on 2026-11-14 with CI standing in for the local server suite (Decisions, 2026-11-14). The wave-done was verified at `d56b10667`. Review runs 2104, 2116 and 2122 found 3, 2 and 1 important findings, each sent back as a fix round; on 2026-11-15 the review cap was extended from 3 to 6. Review run 2132 (round 4) found no product defect, the wave was accepted at `b7b60ed93`, and #2806 **merged** 2026-11-15 (`f6bdbf153`), its merge-queue run green with `browser (pwa)`. Run 1532 closed done (Decisions, 2026-11-15) |
-| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries are folded in by X4, the library-input text wave (run 2680, wave 27). The library programme plans its one wave after X4 lands; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)** |
+| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries were folded in by X4, the library-input text wave (run 2680, wave 27), merged 2026-11-19 (#3055, `da21717b8`), which also set X2's library share. The library programme plans its one wave from X1 §10 and X2 §6 on `main`; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)** |
 | Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)** |
 
 ## Decisions & deviations
+- **2026-11-19: X4, the library input, accepted at the review cap and landed (#3055, `da21717b8`). X2's library share set. P1 opened as run 2743 at `planned` (coordinator; in-plan rulings).**
+  - X4 ran as run 2680 (wave 27). It edited X1's and X2's specs and plans in place, so that the library programme plans its one wave from corrected text. Its reserve of two numbers is unspent.
+  - Review run 2694 (round 1, at `ed2d43cd3`) found six important items. Ruling on test 8's two uncovered cases:
+    - the genesis landing is exempt from the byte-equal check, and its baseline row equals the parent's every-entry manifest total;
+    - each landing on the library's main line carries one design's frame-asset changes and appends one row;
+    - CI fetches depth 2;
+    - X2's share is a ceiling: if X2's real code exceeds it, the library wave stops and asks.
+
+    The fixes:
+    - the sequence stick arrowheads painted `text-muted`;
+    - `dropShadow` set to `none`;
+    - the in-commit mark's worst figure corrected to 4.57;
+    - a stylesheet term in X2's estimate;
+    - `appearanceStamp` in its own L1 module.
+  - Review run 2714 (round 2, at `783cef4e7`). Rulings:
+    - a landing may be a squash or a merge, provided its message carries exactly one `Size-Design:` line; repository settings are the library programme's;
+    - shares live in a separate append-only table, which only an asset-free `shares` landing writes, and test 8 reads a design's share from the first parent, so no landing can raise its own ceiling;
+    - one design per landing is a review check, while test 8 enforces one line, line-to-row agreement and growth within the share;
+    - corrections and reverts are forward rows.
+
+    Fixed in the design:
+    - the definition cues' focus ring at 3:1;
+    - Mermaid's body-level tooltip;
+    - opaque gitGraph commit-label grounds;
+    - a literal genesis value for `FRAME_ACCEPTS`, with `hello` out.
+  - Review run 2732 (round 3, the cap, at `40b31c959`). Two items blocked as written, and the reviewer wrote each fix as an exact sentence. The coordinator accepted at the cap on condition that those sentences land verbatim before the PR. They did, verified sentence by sentence against the report at `9821c0ba1`, so no fourth round was needed. The rulings:
+    - **The halo.** Hosting made a sequence lifeline through a label about three times worse (11.17 to 3.01-4.06), so a 3 px halo in the ground colour sits behind sequence labels (6.51 or better). Crowded small pie labels look the same as in 1.1.0's own drawing and stay named outside the floor.
+    - **Resolved literals.** The definition cues keep their inline `!important` with resolved colours, never a `var()`, so the full-screen copy and an author's `classDef` cannot defeat the focus ring. This amends round 2's "drop the `!important`".
+    - **The other edge cases,** each by the reviewer's exact sentence:
+      - a lowered share never wedges the main line;
+      - a correction landing cannot change assets unchecked;
+      - test 9 drives every op in `OP_KEYS`.
+  - **X2's share, set by the coordinator:** 1 166 336 characters in total and 72 704 for the largest frame. X1's is 32 768. The genesis landing records both.
+  - Asks in X4:
+    - Ask 608, option 0: a row's measuring commit is read from history.
+    - Ask 614, option 0: test 5's drawn-pairs clause aligned with the halo.
+    - Ask 615, option 0: X1 §9 records X2's share as set.
+    - One read-only grep was stopped by a guard; the worker ran one graph query first, by the coordinator's standing answer for the wave.
+    - One plan-text edit stopped by the test-slice guard was made with the editor, by the coordinator's one-time leave, since it ran nothing.
+  - The review judge's `editorial-diff-over-bound` was accepted as the price of the one PR the brief required.
+  - **Next:**
+    - The library programme plans its one wave from X1 §10 and X2 §6 on `main`, with X1's contract as the genesis landing and X2's landing separate. The release and its signed tag are the operator's.
+    - In ccrc, P1 (X2's range reads and large files) is opened as run 2743 at `planned`. It is not dispatched until the operator approves the three designs. Its first item is the render-gate carry, together with D2's two minors (ask 600), since it is the first wave cut from a base that has #3026.
+    - X3's R1 also waits for the operator's confirmation of asks 595 and 603.
 - **2026-11-19: the three required-extension designs accepted at the review cap and landed. X1 appearance (#3048, `8781ef20a`), X2 #1418 parity (#3049, `6095bf43d`) and X3 #1420 draft review (#3050, `1bbb6730b`) are on `main`. X4, the library-input text wave, opened as run 2680 (coordinator; in-plan rulings).**
   - Each design wave ran three review rounds, the held-out panel each time (three Opus · high lenses, Sonnet · high refuters). Each was accepted at the cap with binding carries, recorded below under "Binding carries from the extension designs". Implementation of all three waits for the operator's approval of the designs.
   - **X1 (run 2631, wave 24)** defines D-8759 (the bridge's appearance op), D-8760 (the hosted theme is ccrc's) and D-8761 (the frame handle's `setAppearance`).
@@ -943,14 +987,14 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 
 Each carry lands as a design-text commit: the first item of the named wave, before that wave's code, and reviewed in that wave's review. The wave's brief quotes it.
 
-### To the first wave cut from a base that has #3026 (ask 600)
+### To the first wave cut from a base that has #3026 (ask 600): P1, run 2743
 
 - Row `W4-T10-M10`: its recorded count is 3 failed, but it measures 2 failed. Re-measure it once and drop the third red name.
 - D-8730's clauses "the next Tab follows the one bar's order" and "the one bar's layout and order are unchanged": name each as pinned (say by which row) or as descriptive only. Do not change D-8730's text.
 
-### X1 (appearance): carried by X4, run 2680
+### X1 (appearance): landed by X4 (#3055)
 
-X4 folds every X1 carry into X1's own spec and plan before the library programme plans its wave:
+X4 folded every X1 carry into X1's own spec and plan before the library programme plans its wave:
 - the Mermaid covered-kinds constant and its derivation;
 - author-styled figures keeping the plate;
 - the colour-only states;
@@ -958,7 +1002,7 @@ X4 folds every X1 carry into X1's own spec and plan before the library programme
 - the CSP and op text;
 - wave C's F5, F6, F7, A2, A3, A7 and A9 (1).
 
-Wave L is not planned from X1's text as it was at `89a9ce02a`.
+Wave L plans from X1's text on `main` after #3055, not as it was at `89a9ce02a`. X2's share is set: 1 166 336 characters in total, 72 704 for the largest frame.
 
 ### X2 (parity)
 
@@ -1015,7 +1059,11 @@ Wave L is not planned from X1's text as it was at `89a9ce02a`.
   - R1 waits for the operator's confirmation of asks 595 and 603.
   - R3 waits for the M-X3.16 device item, and names `DocsHead.tsx`, `DocsIndexView.tsx`, the control census, the tap-target floors and the residue A23 to A27.
 
-## Current next-wave brief — X4, run 2680
+## Current next wave — P1, run 2743 (planned, not dispatched)
+
+P1 is X2's first wave: range reads and large files (X2 plan, Wave P1). It was opened at `planned` on 2026-11-19 so that the programme keeps an open run. It is dispatched only after the operator approves the three extension designs. Its brief is written then, with its deviation block allocated in the same act. Its first item, before its code, is the render-gate carry and D2's two minors (Binding carries, above).
+
+## Earlier brief — X4, run 2680 (landed in #3055)
 
 Dispatched 2026-11-19 as written below (Decisions, 2026-11-19). The coordinator's rulings it names (the X1 and X2 carries, ask 608) are recorded in Decisions and in Binding carries above; its review and fix rounds are recorded in Decisions.
 
