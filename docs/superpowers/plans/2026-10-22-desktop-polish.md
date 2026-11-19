@@ -4252,8 +4252,8 @@ the session list on a phone) no longer draws a count of its subagents or delegat
 details keep every one of those facts, unchanged: the subagent disclosure, the delegated-entries disclosure and their lists.
 
 **Files.** `pwa/src/fleet/SessionMeta.tsx` (the card's `N delegated` chip, R9, D-7781, is gone), `sessionFacts.ts`
-(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix, with one allowance for
-the status word's count digits; a working row's `N in background` reads `in background` on the card), `SessionLine.tsx`
+(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix, with one data row
+(`HEADER_COUNT_ALLOWANCES`) for the status word's count digits; a working row's `N in background` reads `in background` on the card), `SessionLine.tsx`
 (the `delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
 `delegationWords.ts` (`delegationParts` answers the bare words `delegated` and `worktrees`; `DelegatedSummary.count`
 removed), `rollup.ts` (`SummaryPart.n` optional, a worker part still counted, `partWords` the one spelling) and
@@ -4274,7 +4274,8 @@ stay reachable through their fold line.
   session's subagents, delegated entries or delegated background work (the operator's ruling of 2026-11-19). D-7781's card
   chip is superseded on the card, and D-7782, which had only a card side, is retired whole: the card no longer has a
   `delegated` fact, so D-5545's prefix rule holds for every key again, with one allowance for the status word, whose header
-  form keeps the count the card dropped (`working · N in background`). The header keeps D-7781's count of every entry, its
+  form keeps the count the card dropped (`working · N in background`): one data row (`HEADER_COUNT_ALLOWANCES`, key `status`)
+  read by the rule's own comparison, so no second comparison and no other key or words are allowed. The header keeps D-7781's count of every entry, its
   disclosure and its background count. A coordinator's fold line and a programme box's footer keep their delegated rows and
   say `delegated` and `worktrees` with no number.
 

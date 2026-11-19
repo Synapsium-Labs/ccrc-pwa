@@ -491,6 +491,14 @@ export function headerFacts(f: SessionFactSet): Fact[] {
   return out;
 }
 
+/** The ONE allowance to the subset rule (D-8771, the coordinator's ruling of 2026-11-19): the header keeps a count the card
+ *  dropped, so the header's `working · 2 in background` holds the card's `working · in background`. A row names the fact key
+ *  it applies to, the header's count (`count`) and the card's spelling of the same words (`card`); no other key and no other
+ *  words are allowed, and `card-header-facts.test.tsx` reds if this table loses its row or gains a wider one. */
+export const HEADER_COUNT_ALLOWANCES: readonly { readonly key: FactKey; readonly count: RegExp; readonly card: string }[] = [
+  { key: 'status', count: / · \d+ in background$/, card: ' · in background' },
+];
+
 /** The subset rule, as a predicate the test and the harness both call: every card fact has a header fact under its
  *  key carrying its FULL text. */
 export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact[] {
@@ -499,9 +507,12 @@ export function cardWithinHeader(card: CardFacts, header: readonly Fact[]): Fact
   // The header's form BEGINS with the card's: the same words, the header adding what the glance leaves out
   // (`waiting` → `waiting on you`, `idle` → `idle · 2m ago`, `held` → `held: <the verbatim hold>`).
   // D-8771: the card carries no `delegated` fact, so D-7782's comparison of it by count is gone; every key is a prefix test.
-  // The one allowance (D-8771): the header's `working · N in background` holds the card's `working · in background`, the
-  // card having dropped the count the header keeps, so the header's count digits are not part of the prefix test.
-  const headerForm = (h: Fact): string => (h.key === 'status' ? h.text.replace(/ \d+ in background/, ' in background') : h.text);
+  // The header's form of a fact is its text with its row of `HEADER_COUNT_ALLOWANCES` applied, if it has one: the single
+  // place the prefix rule is bent (D-8771), and it is data, not a second comparison.
+  const headerForm = (h: Fact): string => {
+    const a = HEADER_COUNT_ALLOWANCES.find((x) => x.key === h.key);
+    return a === undefined ? h.text : h.text.replace(a.count, a.card);
+  };
   const holds = (c: Fact, h: Fact): boolean => h.key === c.key && headerForm(h).startsWith(c.text);
   return shown.filter((c) => !header.some((h) => holds(c, h)));
 }
