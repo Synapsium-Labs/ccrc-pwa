@@ -217,3 +217,18 @@ export function meetParkRuling(
   stmt(db, "UPDATE approvals SET state = 'stale' WHERE parkKey = ? AND state = 'parked'").run(key);
   return 'met';
 }
+
+/** After a ruling inside the window (`CoordStore#takeApprovalForRule`'s won compare-and-set, in its transaction): the row's
+ *  slot is released, and a coordinator's deny is recorded on the key (F3). Answers the take's success. */
+export function afterRulingOfRow(db: DatabaseSync, rowId: number, coordinatorDeny: boolean): { ok: true } {
+  releaseParkSlotOfRow(db, rowId);
+  if (coordinatorDeny) noteCoordinatorVerdictOfRow(db, rowId, 'denied');
+  return { ok: true };
+}
+
+/** After a decline's row write (`CoordStore#declineApproval`, in its transaction): when it moved the row, the coordinator's
+ *  decline is recorded on the key (F3). Answers whether the row moved. */
+export function noteDeclinedIf(db: DatabaseSync, rowId: number, moved: boolean): boolean {
+  if (moved) noteCoordinatorVerdictOfRow(db, rowId, 'declined');
+  return moved;
+}

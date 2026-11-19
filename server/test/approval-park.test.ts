@@ -155,13 +155,14 @@ describe('the state: one write site, the vocabularies, the readers (F8-a, F4, F9
       for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
         const p = path.join(dir, e.name);
         if (e.isDirectory()) walk(p);
-        else if (p.endsWith('.ts') && /SET state = 'parked'/.test(fs.readFileSync(p, 'utf8'))) hits.push(path.relative(path.resolve(__dirname, '..'), p));
+        else if (p.endsWith('.ts')) {
+          const n = fs.readFileSync(p, 'utf8').match(/SET state = 'parked'/g)?.length ?? 0;
+          for (let i = 0; i < n; i++) hits.push(path.relative(path.resolve(__dirname, '..'), p));
+        }
       }
     };
     walk(path.resolve(__dirname, '../src'));
-    expect(hits).toEqual(['src/coord/store.ts']);
-    const store = fs.readFileSync(path.resolve(__dirname, '../src/coord/store.ts'), 'utf8');
-    expect(store.match(/SET state = 'parked'/g)).toHaveLength(1);
+    expect(hits).toEqual(['src/coord/approvalParkStore.ts']);
   });
   it('a held row past its window, stored live, parks: its horizon is two hours, and its push is sent at park time', async () => {
     const r = await rig();

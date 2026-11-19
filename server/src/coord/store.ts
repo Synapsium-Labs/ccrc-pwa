@@ -1041,10 +1041,7 @@ export interface ApprovalRow {
    *  released at mint; a token this build does not know reads null, which never parks. `parkKey` is the key a retry
    *  repeats (null with no word). `fetchedAt` is the ruling read's first serve of a ruling (F8-c), `wouldPark` the shadow's
    *  record that the row would have parked. */
-  parkWord: ApprovalParkWord | null;
-  parkKey: string | null;
-  fetchedAt: number | null;
-  wouldPark: boolean;
+  parkWord: ApprovalParkWord | null; parkKey: string | null; fetchedAt: number | null; wouldPark: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -10060,13 +10057,9 @@ export class CoordStore {
         'UPDATE approvals SET state = ?, verdict = ?, reason = ?, ruling = ?, ruledAt = ?, answeredBy = ? ' +
         "WHERE id = ? AND state IN ('held','released') AND releaseReason IS NULL",
       ).run(r.verdict === 'allow' ? 'allowed' : 'denied', r.verdict, r.reason, r.ruling, r.now, r.by, id);
-      if (Number(res.changes) > 0) {
-        // Approvals PR 3: a row ruled inside its window releases its park slot, and a coordinator's deny is recorded on the
-        // key's park in this same transaction (F3), so no later allow of the key is signed for anyone.
-        parks.releaseParkSlotOfRow(this.db, id);
-        if (r.verdict === 'deny' && r.by !== ASK_OPERATOR_PRINCIPAL) parks.noteCoordinatorVerdictOfRow(this.db, id, 'denied');
-        return { ok: true as const };
-      }
+      // Approvals PR 3: a row ruled inside its window releases its park slot, and a coordinator's deny is recorded on the
+      // key's park in this same transaction (F3), so no later allow of the key is signed for anyone.
+      if (Number(res.changes) > 0) return parks.afterRulingOfRow(this.db, id, r.verdict === 'deny' && r.by !== ASK_OPERATOR_PRINCIPAL);
       const read = this.approvalById(id);
       if (!read.ok) throw new Error(`takeApprovalForRule: ${read.detail}`);
       if (read.row === null) return { ok: false as const, why: 'unknown-approval' as const };
@@ -10079,15 +10072,10 @@ export class CoordStore {
 
   /** The claimant's hand-over (`POST /api/questions/approval-<n>/release`): `held` -> `declined` (D-5289's word, D-5440). */
   declineApproval(id: number, by: string, now: number): boolean {
-    return tx(this.db, () => {
-      const res = this.db.prepare(
-        "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
-      ).run(now, by, id);
-      if (Number(res.changes) === 0) return false;
-      // Approvals PR 3 (F3): the coordinator's decline is recorded on the key's park in the row's own transaction.
-      parks.noteCoordinatorVerdictOfRow(this.db, id, 'declined');
-      return true;
-    });
+    // Approvals PR 3 (F3): the coordinator's decline is recorded on the key's park in the row's own transaction.
+    return tx(this.db, () => parks.noteDeclinedIf(this.db, id, Number(this.db.prepare(
+      "UPDATE approvals SET state = 'declined', ruledAt = ?, answeredBy = ? WHERE id = ? AND state = 'held'",
+    ).run(now, by, id).changes) > 0));
   }
 
   /** The window's end (`notifyAt`, D-5441): `held` -> `released`. A row a principal acted on is untouched. */
@@ -10119,27 +10107,23 @@ export class CoordStore {
   /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
    *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
   markApprovalOperator(childId: string, now: number): number {
-    return tx(this.db, () => {
-      // Approvals PR 3 (F4): a pane answer on a parked row marks it `operator` too, and voids its park first, so a later
-      // ruling on that park can never allow the next identical command.
-      parks.voidParksOfParkedRows(this.db, { childId });
-      const res = this.db.prepare(
-        "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released','parked')",
-      ).run(now, ASK_OPERATOR_PRINCIPAL, childId);
-      return Number(res.changes);
-    });
+    // Approvals PR 3 (F4): a pane answer on a parked row marks it `operator` too, and voids its park first, so a later ruling on
+    // that park can never allow the next identical command (a void park only refuses, so the two need no shared transaction).
+    parks.voidParksOfParkedRows(this.db, { childId });
+    const res = this.db.prepare(
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released','parked')",
+    ).run(now, ASK_OPERATOR_PRINCIPAL, childId);
+    return Number(res.changes);
   }
 
   /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
   markApprovalOperatorRows(ids: readonly number[], now: number): number {
-    return tx(this.db, () => {
-      parks.voidParksOfParkedRows(this.db, { ids });   // approvals PR 3 (F4), as `markApprovalOperator`
-      let n = 0;
-      const stmt = this.db.prepare(
-        "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
-      for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
-      return n;
-    });
+    parks.voidParksOfParkedRows(this.db, { ids });   // approvals PR 3 (F4), as `markApprovalOperator`
+    let n = 0;
+    const stmt = this.db.prepare(
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
+    for (const id of ids) n += Number(stmt.run(now, ASK_OPERATOR_PRINCIPAL, id).changes);
+    return n;
   }
 
   /** The hook's ceiling passed (`askAt + APPROVAL_HOOK_WAIT_S`) with no principal: `held`/`released` -> `stale`; or a
