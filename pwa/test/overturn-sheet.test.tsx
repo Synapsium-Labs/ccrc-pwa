@@ -23,6 +23,14 @@ describe('the Overturn sheet', () => {
     expect(items[1]!.textContent).toMatch(/files.*chosen/);
   });
 
+  it('two options with the same text are both drawn, each with its own key (review 2792 F8)', () => {
+    const err = vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    render(<OverturnSheet call={call({ options: ['files', 'files', 'sql'], chosen: 'sql' })} send={vi.fn()} onClose={vi.fn()} />);
+    expect(screen.getAllByRole('listitem').map((i) => i.textContent)).toEqual(['files', 'files', 'sql (chosen)']);
+    expect(err.mock.calls.filter((c) => String(c[0]).includes('same key'))).toEqual([]);
+    err.mockRestore();
+  });
+
   it('Confirm is disabled on an empty note', () => {
     render(<OverturnSheet call={call()} send={vi.fn()} onClose={vi.fn()} />);
     const confirm = screen.getByRole('button', { name: 'Confirm' }) as HTMLButtonElement;
@@ -79,5 +87,50 @@ describe('Overturn… on the Waiting on you group', () => {
     const v = waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [call({ overturnedAt: NOW, overturnNote: 'x' })] });
     render(<WaitingScreen view={v} {...props} onOverturn={vi.fn()} />);
     expect(screen.queryByRole('button', { name: 'Overturn…' })).toBeNull();
+  });
+});
+
+// Fix round 1 (review 2792 F1, F2): the acts' state lives above the two parents that draw a programme's calls, so a frame that
+// moves a programme across "has rows" or takes the open call away keeps the sheet, its typed note and Seen's pending state.
+describe('the acts on a call survive their frame', () => {
+  const props = { sessions: [], runs: [], now: NOW, onOpenItem: vi.fn(), onOpenSession: vi.fn() };
+  const withRows = () => waitingView({ items: [itemView({ id: 1, program: 'prog-a', neededBy: 'blocking' })], calls: [call()] });
+  const typeNote = (text: string) => fireEvent.change(screen.getByRole('textbox', { name: 'What should it have decided?' }), { target: { value: text } });
+  const note = () => (screen.queryByRole('textbox', { name: 'What should it have decided?' }) as HTMLTextAreaElement | null)?.value ?? null;
+
+  it('an open sheet and its note survive the programme losing its rows', () => {
+    const view = render(<WaitingScreen view={withRows()} {...props} onOverturn={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Overturn…' }));
+    typeNote('use files');
+    view.rerender(<WaitingScreen view={waitingView({ calls: [call()] })} {...props} onOverturn={vi.fn()} />);
+    expect(screen.queryByRole('form', { name: 'Overturn call 9' })).not.toBeNull();
+    expect(note()).toBe('use files');
+  });
+
+  it('an open sheet and its note survive the programme gaining rows', () => {
+    const view = render(<WaitingScreen view={waitingView({ calls: [call()] })} {...props} onOverturn={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Overturn…' }));
+    typeNote('use files');
+    view.rerender(<WaitingScreen view={withRows()} {...props} onOverturn={vi.fn()} />);
+    expect(note()).toBe('use files');
+  });
+
+  it('an open sheet survives its call leaving the list, and still sends', async () => {
+    const send = vi.fn().mockResolvedValue({ ok: true });
+    const view = render(<WaitingScreen view={withRows()} {...props} onOverturn={send} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Overturn…' }));
+    typeNote('use files');
+    view.rerender(<WaitingScreen view={waitingView({ items: [itemView({ id: 1, program: 'prog-a' })] })} {...props} onOverturn={send} />);
+    expect(note()).toBe('use files');
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(send).toHaveBeenCalledWith({ rowKind: 'call', id: 9, text: 'use files' }));
+  });
+
+  it('a Seen in flight stays asked when the programme loses its rows', () => {
+    const onSeen = vi.fn(() => new Promise<unknown>(() => undefined));
+    const view = render(<WaitingScreen view={withRows()} {...props} onSeen={onSeen} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Seen' }));
+    view.rerender(<WaitingScreen view={waitingView({ calls: [call()] })} {...props} onSeen={onSeen} />);
+    expect((screen.getByRole('button', { name: 'Seen' }) as HTMLButtonElement).disabled).toBe(true);
   });
 });

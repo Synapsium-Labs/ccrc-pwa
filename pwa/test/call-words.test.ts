@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { CallView } from '../../shared/api';
 import { ApiError } from '../src/lib/api';
 import {
-  CALLS_GROUP_WORDS, CALL_REFUSAL_TEXT, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsOf,
+  CALLS_GROUP_WORDS, CALL_REFUSAL_TEXT, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsApartOf, clearedCallsOf, openCallsOf,
 } from '../src/ledgers/callWords';
 import { MIN, NOW, waitingView } from './ledgersFixture';
 
@@ -13,16 +13,42 @@ const call = (over: Partial<CallView> = {}): CallView => ({
   overturnedAt: null, overturnNote: null, ...over,
 });
 
-describe('callsOf', () => {
-  it('splits one programme\'s calls into open and cleared', () => {
+describe('openCallsOf', () => {
+  it('one programme\'s calls still to see', () => {
     const view = { ...waitingView(), calls: [call({ id: 1 }), call({ id: 2, program: 'prog-b' })], callsCleared: [call({ id: 3 })] };
-    expect(callsOf(view, 'prog-a')).toEqual({ open: [view.calls[0]!], cleared: [view.callsCleared[0]!] });
-    expect(callsOf(view, 'prog-b').cleared).toEqual([]);
+    expect(openCallsOf(view, 'prog-a')).toEqual([view.calls[0]!]);
+    expect(openCallsOf(view, 'prog-c')).toEqual([]);
   });
   it('an older view with no calls reads as none', () => {
     const view = waitingView();
     expect('calls' in view).toBe(false);
-    expect(callsOf(view, 'prog-a')).toEqual({ open: [], cleared: [] });
+    expect(openCallsOf(view, 'prog-a')).toEqual([]);
+    expect(clearedCallsOf(view, { noProgramme: false, programme: null })).toEqual([]);
+    expect(callsApartOf(view, [], { noProgramme: false, programme: null })).toEqual([]);
+  });
+});
+
+// Fix round 1 (review 2792 F7): which programmes draw their calls apart, and which cleared calls a filtered list holds, are
+// decided here, not in the screen.
+describe('callsApartOf and clearedCallsOf', () => {
+  const ALL = { noProgramme: false, programme: null };
+  const view = {
+    ...waitingView(),
+    calls: [call({ id: 1, program: 'prog-b' }), call({ id: 2, program: 'prog-a' }), call({ id: 3, program: 'prog-c' }), call({ id: 4, program: 'prog-b' })],
+    callsCleared: [call({ id: 5, program: 'prog-a' }), call({ id: 6, program: 'prog-b' })],
+  };
+  it('a programme with calls and no rows is apart, once, in the order its first call is listed', () => {
+    expect(callsApartOf(view, ['prog-a', null], ALL)).toEqual(['prog-b', 'prog-c']);
+  });
+  it('under a programme\'s filter only that programme can be apart; under the no-programme filter none is', () => {
+    expect(callsApartOf(view, ['prog-a'], { noProgramme: false, programme: 'prog-c' })).toEqual(['prog-c']);
+    expect(callsApartOf(view, ['prog-a'], { noProgramme: false, programme: 'prog-a' })).toEqual([]);
+    expect(callsApartOf(view, [null], { noProgramme: true, programme: null })).toEqual([]);
+  });
+  it('the cleared calls follow the filter', () => {
+    expect(clearedCallsOf(view, ALL).map((c) => c.id)).toEqual([5, 6]);
+    expect(clearedCallsOf(view, { noProgramme: false, programme: 'prog-b' }).map((c) => c.id)).toEqual([6]);
+    expect(clearedCallsOf(view, { noProgramme: true, programme: null })).toEqual([]);
   });
 });
 

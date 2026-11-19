@@ -4,7 +4,7 @@ import { describe, expect, it } from 'vitest';
 import {
   COMBINED_LIST, fromWord, goalsBack, groupByProgramme, itemPills, itemPlace, listGroups, listOfFromWord, openRunsOf,
   limitRows, positionWords, programmeIsLive, programmeWaitingCount, questionRows, resolveList, shownSummary, summaryCounts, summaryWords, waitingTotal,
-  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry,
+  type ItemList, type QuestionRow, CLEARED_SHOWN, clearedGroups, clearedTrail, itemNumber, type ClearedEntry, CALL_CLEARED_WORD, callClearedHow,
 } from '../src/ledgers/ledgerWords';
 import { RATIFICATION_UNREADABLE_WORDS, RATIFY_UNAVAILABLE_TEXT, doneWhenPlacement, ratificationWords, ratifyFailureOf, ratifyOffered } from '../src/ledgers/ledgerWords';
 import type { GoalsView, Ratification, RatificationWhy } from '../../shared/ledgers';
@@ -409,10 +409,26 @@ describe('clearedTrail and itemNumber (D-8194)', () => {
   });
 
   it('joins the calls that left the group, at the operator\'s clear, an aged one at when it was made, an item first at the same instant', () => {
-    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 90 * MIN }), call(3, { at: NOW - 8 * 86_400_000 }),
+    const calls = [call(1, { seenAt: NOW - HOUR }), call(2, { seenAt: NOW - 5 * HOUR, overturnedAt: NOW - 90 * MIN }), call(3, { at: NOW - 30 * HOUR }),
       call(4, { overturnedAt: NOW - 2 * HOUR })];
     expect(clearedTrail([done(1, NOW - 2 * HOUR)], NOW, [], calls).map(idOf)).toEqual(['c1', 'i1', 'c4', 'c2', 'c3']);
     expect(clearedGroups(clearedTrail([], NOW, [], [call(5, { seenAt: NOW, program: 'prog-b' })])).map((g) => g.program)).toEqual(['prog-b']);
+  });
+
+  // Fix round 1 (review 2792 F4): a stale frame or the device's saved copy keeps calls to the trail's window, as items and asks.
+  it('windows cleared calls by the same 48 hours, edge included', () => {
+    const calls = [call(1, { seenAt: NOW - CLEARED_WINDOW_MS }), call(2, { seenAt: NOW - CLEARED_WINDOW_MS - 1 }), call(3, { overturnedAt: NOW - HOUR })];
+    expect(clearedTrail([], NOW, [], calls).map(idOf)).toEqual(['c3', 'c1']);
+  });
+
+  // Fix round 1 (review 2792 F8): a cleared call says how it cleared, never a bare tick.
+  it('says how a call cleared: seen, overturned, or aged out', () => {
+    expect(callClearedHow(call(1, { seenAt: NOW - HOUR }))).toBe('seen');
+    expect(callClearedHow(call(2, { overturnedAt: NOW - HOUR }))).toBe('overturned');
+    expect(callClearedHow(call(3, { seenAt: NOW - HOUR, overturnedAt: NOW - 2 * HOUR }))).toBe('overturned');
+    expect(callClearedHow(call(4, { seenAt: NOW - 2 * HOUR, overturnedAt: NOW - HOUR }))).toBe('seen');
+    expect(callClearedHow(call(5))).toBe('aged');
+    expect(Object.values(CALL_CLEARED_WORD)).toEqual(['seen', 'overturned', 'aged out']);
   });
 
   it('the shown count is five', () => {

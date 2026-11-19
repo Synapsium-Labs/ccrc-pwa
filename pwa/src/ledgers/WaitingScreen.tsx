@@ -16,7 +16,7 @@ import {
   CLEARED_HEADING, CLEARED_SHOWN, MENTIONS_WORD, SHOW_FEWER_WORD, clearedCountWord, clearedGroups, clearedTrail, itemNumber, itemRefWord, showAllWord, EMPTY_WORD, KIND_WORD, NO_FRAME_WORD, NO_PROGRAMME_WORD, QUESTION_PILL_WORD, QUESTION_WORD,
   COMBINED_LIST, NO_PROGRAMME_FILTER, REVIEW_CAP_WORD, ageWords, cameBack, cameBackNote, groupByProgramme, itemPills, limitRows, listGroups,
   openRunsOf, programmeIsLive, questionRows, resolveList, shownSummary, summaryWords, type ClearedEntry, type ItemList, type ProgrammeGroup,
-  type QuestionRow, type Row,
+  type QuestionRow, type Row, CALL_CLEARED_WORD, callClearedHow, callClearedOn,
 } from './ledgerWords';
 import { SpecLink } from './GoalsPanel';
 import { LimitWaitRow } from './LimitWaitRow';
@@ -28,7 +28,7 @@ import { AnswerMarkBoxes } from './AnswerMarkBox';
 import { ASK_HOW_WORD, ASK_NO_TEXT_WORD, askMarksFor, askRowsOf } from './answerMarkWords';
 import type { AskMarkRow } from '../../../shared/answerMarks';
 import { apiErrorText } from '../lib/refusalWords';
-import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsOf } from './callWords';
+import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsApartOf, clearedCallsOf, openCallsOf, type CallFilter } from './callWords';
 import { OverturnSheet, type OverturnSend } from './OverturnSheet';
 import './ledgers.css';
 
@@ -105,7 +105,7 @@ const NO_RUNS: readonly RunSummary[] = [];
 /** No calls: one frozen empty list, so a default never makes a new array per render (D-8126). */
 const NO_CALLS: readonly CallView[] = [];
 /** No act on a call: the saved copy's, and the list beside an open item's. */
-const NO_CALL_ACTS: CallActs = {};
+const NO_CALL_ACTS: CallActs = { seen: null, overturn: null, asked: new Set(), refused: new Map() };
 const NO_PROGRAMME_KEY = ' none';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
@@ -201,51 +201,65 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
   );
 }
 
-/** The two acts on a call made for the operator (D-8126), each absent where it is not offered. */
-export interface CallActs { readonly onSeen?: CallSeen | undefined; readonly onOverturn?: OverturnSend | undefined }
+/** The acts on the calls made for the operator (D-8126) and the state they keep: Seen and Overturn…, each `null` where it is not
+ *  offered, the calls whose Seen is in flight, and the refusals said on their rows. ONE copy, held by the screen above the two
+ *  parents that draw a programme's calls (`ListGroup` with rows, `CallsApart` without), so a frame that moves a programme from
+ *  one to the other, or takes a call away, loses none of it (review 2792 F1, F2). */
+export interface CallActs {
+  readonly seen: ((id: number) => void) | null;
+  readonly overturn: ((call: CallView) => void) | null;
+  readonly asked: ReadonlySet<number>;
+  readonly refused: ReadonlyMap<number, string>;
+}
 
-/** "Calls made for you (N)": the big calls coordinators made in the operator's name, collapsed, below a programme's rows
- *  (D-8126). Never part of the blocking count, the rail's counts or the summary: a call needs nothing from the operator but a
- *  glance. Each carries Seen while one is offered, asked once while in flight; the row leaves for the cleared trail on the next
- *  frame, and a rejection (offline, `not-big`, `unknown-call`) frees the button and says why on the row, because the server
- *  sends no frame on a refusal. Overturn…, on a call not yet overturned, opens its confirm sheet. Nothing is drawn for none. */
-export function CallsGroup({ calls, now, acts }: { calls: readonly CallView[]; now: number; acts: CallActs }): ReactNode {
+/** The screen's call acts and the Overturn sheet they open. Seen is asked once while in flight; a rejection (offline, `not-big`,
+ *  `unknown-call`) frees it and is said on the call's row, because the server sends no frame on a refusal. The sheet holds the
+ *  call it was opened on, so it stays, with its typed note, when that call leaves the list; it is drawn by the screen, never by
+ *  a group that a frame can unmount. Neither act is offered on a page that is not current. */
+function useCallActs(onSeen: CallSeen | undefined, onOverturn: OverturnSend | undefined, current: boolean): { acts: CallActs; sheet: ReactNode } {
   const [asked, setAsked] = useState<ReadonlySet<number>>(() => new Set());
   const [refused, setRefused] = useState<ReadonlyMap<number, string>>(() => new Map());
   const [overturning, setOverturning] = useState<CallView | null>(null);
-  if (calls.length === 0) return null;
-  const { onSeen, onOverturn } = acts;
-  const askSeen = (id: number, send: CallSeen): void => {
+  const seen = !current || onSeen === undefined ? null : (id: number): void => {
     setAsked((was) => new Set(was).add(id));
     setRefused((was) => { if (!was.has(id)) return was; const next = new Map(was); next.delete(id); return next; });
-    send(id).catch((err: unknown) => {
+    onSeen(id).catch((err: unknown) => {
       setAsked((was) => { const next = new Set(was); next.delete(id); return next; });
       setRefused((was) => new Map(was).set(id, callRefusalText(err) ?? apiErrorText(err)));
     });
   };
+  const overturn = !current || onOverturn === undefined ? null : setOverturning;
+  const sheet = overturning !== null && onOverturn !== undefined
+    ? <OverturnSheet key={overturning.id} call={overturning} send={onOverturn} onClose={() => setOverturning(null)} />
+    : null;
+  return { acts: { seen, overturn, asked, refused }, sheet };
+}
+
+/** "Calls made for you (N)": the big calls coordinators made in the operator's name, collapsed, below a programme's rows
+ *  (D-8126). Never part of the blocking count, the rail's counts or the summary: a call needs nothing from the operator but a
+ *  glance. Each carries Seen and, on a call not yet overturned, Overturn… where they are offered; the row leaves for the
+ *  cleared trail on the next frame. It keeps no state: the acts' state is the screen's (`CallActs`). Nothing is drawn for none. */
+export function CallsGroup({ calls, now, acts }: { calls: readonly CallView[]; now: number; acts: CallActs }): ReactNode {
+  if (calls.length === 0) return null;
+  const { seen, overturn, asked, refused } = acts;
   return (
-    <>
     <details className="wl-calls" data-calls={calls.length}>
       <summary className="wl-calls-sum">{CALLS_GROUP_WORDS(calls.length)}</summary>
       <ul className="wl-calls-list">
         {calls.map((c) => (
           <li key={c.id} className="wl-call" data-call={c.id}>
             <span className="wl-call-line">{callLine(c, now)}</span>
-            {onSeen !== undefined && (
-              <BareRow className="wl-call-act" disabled={asked.has(c.id)} onClick={() => askSeen(c.id, onSeen)}>{SEEN_WORD}</BareRow>
+            {seen !== null && (
+              <BareRow className="wl-call-act" disabled={asked.has(c.id)} onClick={() => seen(c.id)}>{SEEN_WORD}</BareRow>
             )}
-            {onOverturn !== undefined && c.overturnedAt === null && (
-              <BareRow className="wl-call-act" onClick={() => setOverturning(c)}>{OVERTURN_WORD}</BareRow>
+            {overturn !== null && c.overturnedAt === null && (
+              <BareRow className="wl-call-act" onClick={() => overturn(c)}>{OVERTURN_WORD}</BareRow>
             )}
             {refused.has(c.id) && <span className="wl-call-error" role="alert">{refused.get(c.id)}</span>}
           </li>
         ))}
       </ul>
     </details>
-    {overturning !== null && onOverturn !== undefined && (
-      <OverturnSheet call={overturning} send={onOverturn} onClose={() => setOverturning(null)} />
-    )}
-    </>
   );
 }
 
@@ -310,12 +324,15 @@ function ClearedRow({ entry, where, now, current }: { entry: ClearedEntry; where
     : <ClearedAskRow ask={entry.ask} where={where} now={now} current={current} />;
 }
 
-/** A cleared call (D-8126): its line as the group drew it, and where. Read only: Seen and Overturn… live in the group. */
+/** A cleared call (D-8126): its line as the group drew it, where, and how and when it cleared (review 2792 F8: an overturned call
+ *  is never a bare tick that reads as accepted). Read only: Seen and Overturn… live in the group. */
 function ClearedCallRow({ call, where, now }: { call: CallView; where?: Where | undefined; now: number }): ReactNode {
   const place = where?.(call.program);
+  const how = callClearedHow(call);
+  const tail = [place, `${CALL_CLEARED_WORD[how]} ${ageWords(callClearedOn(call), now)}`].filter((t) => t !== undefined);
   return (
-    <li className="wl-cleared-row" data-call={call.id}>
-      <span aria-hidden="true">✓ </span>{callLine(call, now)}{place === undefined ? null : ` · ${place}`}
+    <li className="wl-cleared-row" data-call={call.id} data-cleared={how}>
+      <span aria-hidden="true">{how === 'overturned' ? '✗ ' : '✓ '}</span>{callLine(call, now)}{` · ${tail.join(' · ')}`}
     </li>
   );
 }
@@ -430,6 +447,9 @@ export function NotCurrentLine({ words }: { words: string }): ReactNode {
 export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const { view, sessions, runs, now } = props;
   const { acts, sheets } = useItemActs(sessions);
+  // Before any early return: the call acts' state outlives every frame (review 2792 F1, F2). A list from the device's saved copy
+  // acts on nothing, like every other act on a saved copy.
+  const { acts: callActs, sheet: callSheet } = useCallActs(props.onSeen, props.onOverturn, props.notCurrent === undefined);
   const pick = (programme: string | null): void => props.onFilter?.(programme);
   if (view === null || sessions === null) {
     return (
@@ -438,6 +458,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
         {typeof props.unavailable === 'string'
           ? <p className="wl-note" role="alert">{props.unavailable}</p>
           : <p className="wl-note" role="status">{NO_FRAME_WORD}</p>}
+        {callSheet}
       </div>
     );
   }
@@ -465,15 +486,13 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const words = summaryWords(shownSummary(shown));
   const empty = groups.length === 0;
   // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
-  // rows draws them apart, among the groups, under the filter that shows it. Seen is offered only on a current page.
-  const callActs: CallActs = rowActs.enabled ? { onSeen: props.onSeen, onOverturn: props.onOverturn } : NO_CALL_ACTS;
-  const callsFor = (p: string | null): readonly CallView[] => (p === null ? NO_CALLS : callsOf(view, p).open);
-  const apart = noProgramme ? [] : [...new Set((view.calls ?? []).map((c) => c.program))]
-    .filter((p) => !groups.some((g) => g.program === p) && (list.programme === null || list.programme === p));
-  const apartBlock = apart.map((p) => (
+  // rows draws them apart, among the groups, under the filter that shows it.
+  const callFilter: CallFilter = { noProgramme, programme: list.programme };
+  const callsFor = (p: string | null): readonly CallView[] => (p === null ? NO_CALLS : openCallsOf(view, p));
+  const apartBlock = callsApartOf(view, groups.map((g) => g.program), callFilter).map((p) => (
     <CallsApart key={`calls:${p}`} program={p} title={titleOf(p)} hue={hues.get(p) ?? null} calls={callsFor(p)} now={now} acts={callActs} />
   ));
-  const clearedCalls = noProgramme ? NO_CALLS : (view.callsCleared ?? NO_CALLS).filter((c) => list.programme === null || c.program === list.programme);
+  const clearedCalls = clearedCallsOf(view, callFilter);
   return (
     <div className="wl">
       <header className="wl-head"><h1 className="wl-title">Waiting on you</h1></header>
@@ -533,6 +552,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                         calls={clearedCalls} now={now} where={titleOf} current={rowActs.enabled}
                         grouping={{ title: titleOf, hue: (p) => (p === null ? null : hues.get(p) ?? null) }} />}
       {sheets}
+      {callSheet}
     </div>
   );
 }

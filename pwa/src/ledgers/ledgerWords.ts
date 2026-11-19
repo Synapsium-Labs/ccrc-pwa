@@ -70,11 +70,19 @@ export type ClearedEntry =
   | { readonly kind: 'call'; readonly call: CallView; readonly at: number; readonly program: string };
 
 /** When a cleared call left the operator's group, as the wire tells it (D-8126): the operator's own Seen or Overturn, the earlier
- *  of the two; a call that aged out of the group carries neither, and reads at when it was made. The server decides which calls
- *  are cleared and windows the list, so the trail keeps every call it is sent. */
+ *  of the two; a call that aged out of the group carries neither, and reads at when it was made. */
 export function callClearedOn(c: CallView): number {
   const acts = [c.seenAt, c.overturnedAt].filter((t): t is number => t !== null);
   return acts.length === 0 ? c.at : Math.min(...acts);
+}
+
+/** How a cleared call left the operator's group (review 2792 F8), by the same reading as `callClearedOn`: the operator's own
+ *  act, the earlier of Overturn and Seen (Overturn at the same instant), or neither, when it aged out. */
+export type CallClearedHow = 'seen' | 'overturned' | 'aged';
+export const CALL_CLEARED_WORD: Readonly<Record<CallClearedHow, string>> = { seen: 'seen', overturned: 'overturned', aged: 'aged out' };
+export function callClearedHow(c: CallView): CallClearedHow {
+  if (c.overturnedAt !== null && (c.seenAt === null || c.overturnedAt <= c.seenAt)) return 'overturned';
+  return c.seenAt !== null ? 'seen' : 'aged';
 }
 
 /** The order of kinds at the same instant on the trail: an item, then an ask, then a call. */
@@ -97,15 +105,15 @@ export const clearedCountWord = (n: number): string => `${n} cleared`;
 
 /** What the Recently cleared trail draws (D-8194): the items cleared inside `CLEARED_WINDOW_MS` of the page clock, the edge
  *  included as the server's list includes it, (answer marks B) the asks the operator has that are not live and changed state
- *  inside the same window, and (D-8126) the cleared big calls the server sent, together, newest first (an item, then an ask,
+ *  inside the same window, and (D-8126) the big calls that cleared inside it, together, newest first (an item, then an ask,
  *  then a call at the same instant, then the id breaks a tie). The server sends the same window; this read keeps a list heard a
- *  while ago from showing an item or an ask that has since aged out. A copy: the inputs are not touched. */
+ *  while ago, or the device's saved copy, from showing what has since aged out. A copy: the inputs are not touched. */
 export function clearedTrail(items: readonly ItemView[], now: number, asks: readonly AskMarkRow[] = [], calls: readonly CallView[] = []): ClearedEntry[] {
   const entries: ClearedEntry[] = [
     ...items.filter((i) => i.closedAt !== null && i.closedAt >= now - CLEARED_WINDOW_MS)
       .map((item) => ({ kind: 'item' as const, item, at: item.closedAt ?? 0, program: item.program })),
     ...asks.filter((a) => a.live !== true && a.at >= now - CLEARED_WINDOW_MS).map((ask) => ({ kind: 'ask' as const, ask, at: ask.at, program: ask.program })),
-    ...calls.map((call) => ({ kind: 'call' as const, call, at: callClearedOn(call), program: call.program })),
+    ...calls.map((call) => ({ kind: 'call' as const, call, at: callClearedOn(call), program: call.program })).filter((e) => e.at >= now - CLEARED_WINDOW_MS),
   ];
   const idOf = (e: ClearedEntry): number => (e.kind === 'item' ? e.item.id : e.kind === 'ask' ? e.ask.id : e.call.id);
   return entries.sort((a, b) => b.at - a.at || CLEARED_KIND_RANK[a.kind] - CLEARED_KIND_RANK[b.kind] || idOf(b) - idOf(a));

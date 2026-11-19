@@ -1094,6 +1094,23 @@ describe('calls made for you (D-8126)', () => {
     expect(within(trail).getByText(/Chose: files/)).toBeTruthy();
   });
 
+  // Fix round 1 (review 2792 F8): an overturned call is never a bare tick that reads as accepted.
+  it('a cleared call says how it cleared, and when', () => {
+    open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - 3 * MIN }), call({ id: 4, overturnedAt: NOW - 4 * MIN, overturnNote: 'no' })] }) });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(trail.querySelector('[data-call="3"]')!.textContent).toMatch(/· seen 3m ago$/);
+    expect(trail.querySelector('[data-call="4"]')!.textContent).toMatch(/· overturned 4m ago$/);
+    expect(trail.querySelector('[data-call="4"]')!.textContent).not.toMatch(/✓/);
+  });
+
+  // Fix round 1 (review 2792 F7, the mutant it saw survive): a filtered list's trail holds only that programme's cleared calls.
+  it('the trail filtered to one programme holds only its cleared calls', () => {
+    open({ view: withItem({ callsCleared: [call({ id: 3, seenAt: NOW - MIN }), call({ id: 4, program: 'prog-b', seenAt: NOW - MIN })] }), programme: 'prog-a' });
+    const trail = screen.getByRole('region', { name: 'Recently cleared' });
+    expect(trail.querySelector('[data-call="3"]')).not.toBeNull();
+    expect(trail.querySelector('[data-call="4"]')).toBeNull();
+  });
+
   it('draws no group with none, on an older view with no calls fields', () => {
     open({ view: withItem({}) });
     expect(screen.queryByText(/Calls made for you/)).toBeNull();

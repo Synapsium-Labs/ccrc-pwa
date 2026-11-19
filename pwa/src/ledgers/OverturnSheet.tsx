@@ -45,8 +45,9 @@ export function OverturnSheet({ call, send, onClose }: {
       <form className="wl-overturn" onSubmit={confirm} aria-label={`Overturn call ${call.id}`}>
         {call.question !== null && call.question !== '' && <p className="wl-overturn-q">{call.question}</p>}
         <ul className="wl-overturn-options" aria-label="Options weighed">
-          {options.map((o) => (
-            <li key={o} className="wl-overturn-option" data-chosen={o === call.chosen ? 'true' : 'false'}>
+          {/* Keyed by place and text: two options may read the same (review 2792 F8). */}
+          {options.map((o, i) => (
+            <li key={`${i}:${o}`} className="wl-overturn-option" data-chosen={o === call.chosen ? 'true' : 'false'}>
               {o}{o === call.chosen && <span className="wl-overturn-mark">{' (chosen)'}</span>}
             </li>
           ))}

@@ -12,13 +12,27 @@ export const SEEN_WORD = 'Seen';
 /** The collapsed group's heading. */
 export const CALLS_GROUP_WORDS = (n: number): string => `Calls made for you (${n})`;
 
-/** One programme's calls from the waiting view: those still to see, and those that left the group inside the cleared
- *  window. An older server omits both fields; each then reads as none. */
-export function callsOf(view: WaitingView, program: string): { open: CallView[]; cleared: CallView[] } {
-  return {
-    open: (view.calls ?? []).filter((c) => c.program === program),
-    cleared: (view.callsCleared ?? []).filter((c) => c.program === program),
-  };
+/** One programme's calls still to see, from the waiting view. An older server omits the field, which reads as none. */
+export function openCallsOf(view: WaitingView, program: string): CallView[] {
+  return (view.calls ?? []).filter((c) => c.program === program);
+}
+
+/** The list's filter as the calls read it: the sessions in no programme (which hold no calls), one programme, or every one. */
+export interface CallFilter { readonly noProgramme: boolean; readonly programme: string | null }
+
+/** The programmes that draw their calls apart (review 2792 F7): those with calls still to see and no row of their own, each
+ *  once, in the order its first call is listed, under the filter that shows them. A call never makes a group on the rows'
+ *  account. */
+export function callsApartOf(view: WaitingView, rowPrograms: readonly (string | null)[], filter: CallFilter): string[] {
+  if (filter.noProgramme) return [];
+  return [...new Set((view.calls ?? []).map((c) => c.program))]
+    .filter((p) => !rowPrograms.includes(p) && (filter.programme === null || filter.programme === p));
+}
+
+/** The cleared calls the Recently cleared trail is given under the filter (review 2792 F7). */
+export function clearedCallsOf(view: WaitingView, filter: CallFilter): CallView[] {
+  if (filter.noProgramme) return [];
+  return (view.callsCleared ?? []).filter((c) => filter.programme === null || c.program === filter.programme);
 }
 
 /** The line of one call: the question (when it asked one), the option chosen, the reason, and the age. */
