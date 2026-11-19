@@ -53,11 +53,12 @@ stack branch `handoff/d8126-autonomy-stack`, commits `518b7c71c` to `1edff44d1` 
 
 - A6 (time and condition wakes, the coord-ball mail rung): "the server mails you at that time" (P3), and every
   `wakeOn` wake in `decision-procedure.md` and SKILL.md's unreachable-server entry.
-- A7 (placement filter, self-install): rows 36 to 38 in `wave-lifecycle-2-dispatch.md` (placement skips a lane that
-  cannot spawn; the dispatch answer's `skillInstall`).
-- A7 (#3079), a carry for this wave's text: the run events `skill-install:<installed|converged|failed|unsupported>`
-  go beside `skill-preflight:<state>` in `wave-lifecycle-2-dispatch.md`. They are added there only once #3079 is on
-  main (P11). Until then they are not in this branch.
+- A7 (#3079, on main as f4c786986): rows 36 to 38 in `wave-lifecycle-2-dispatch.md`, now written against what it
+  shipped. Placement skips a lane whose newest spawn record reads `login` or `blocked` and is under six hours old.
+  The self-install is a server lane outside the dispatch, one attempt per dispatch, that records its outcome as the
+  run event `skill-install:<installed|converged|failed|unsupported>`, which the reference now names beside
+  `skill-preflight:<state>` (A7's carry). The stack's draft had the dispatch answer carry a `skillInstall` field; A7
+  never built one, so that sentence is gone and the pin now refuses it.
 - This wave lands after both (the plan's P11).
 
 ## Agreement with the Overlord spec
@@ -77,7 +78,7 @@ sits on top of clause 21 without changing any class's meaning. Nothing in this w
 Each guard was mutated in place in a scratch tree (the contract and the held-file hunks applied), restored from a saved
 copy and checked by sha, one vitest run of `coordinator-skill.test.ts` and `coordinator-skill-autonomy.test.ts` per
 mutant. All fifteen went red: the installer without `decision-procedure.md`; "stalls honestly" put back; `review-cap`,
-the goals route or a SAFETY verb named in the procedure; "stop and report" back in a dispatch row; `skillInstall`
+the goals route or a SAFETY verb named in the procedure; "stop and report" back in a dispatch row; the `skill-install:` run event
 dropped; "ignore" given to the coordinator; the paused entry without its cause; the cap-concurrency entry rewritten
 early; the split rule stated twice; the ledger template without its goals section; clause 21 softened; clause 4
 relaxing the pause for dispatch; the debugging ceiling dropped.

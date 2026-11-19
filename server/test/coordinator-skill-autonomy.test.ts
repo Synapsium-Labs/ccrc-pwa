@@ -189,7 +189,10 @@ describe('the references carry the new dispositions (D-8126 A5-5)', () => {
 
   it('no longer calls the skill install a human act: a dispatch that measures it absent installs it (row 38)', () => {
     for (const n of lifecycle) expect(flat(read(`references/${n}`)), n).not.toContain('running the installer is a human act');
-    expect(flat(read('references/wave-lifecycle-2-dispatch.md'))).toContain('`skillInstall`');
+    // A7 (#3079) made the install a server lane that records a run event, not a field of the dispatch answer.
+    const dispatch = flat(read('references/wave-lifecycle-2-dispatch.md'));
+    expect(dispatch).toContain('`skill-install:<installed|converged|failed|unsupported>`');
+    expect(dispatch).not.toContain('`skillInstall`');
   });
 
   it('gives the ledger template a "Goals and definition of done" section', () => {

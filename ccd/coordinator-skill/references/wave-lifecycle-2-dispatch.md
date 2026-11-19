@@ -79,7 +79,7 @@ arrives within the wave's ordinary window, read the session's own screen before 
   waiting longer cannot fix it. Raise an item for the account. The wave itself goes on: close the
   dispatched run as failed (allowed for a dispatched run), then open the wave fresh without `sessionId`.
   Placement skips the lane, because ccd's placement filter skips a lane whose newest `spawnState` is
-  `login` or `blocked`.
+  `login` or `blocked`, recorded in the last six hours.
 - `spawnState: 'vanished'` — the tmux session went away mid-poll. The row will classify itself on
   the next sweep.
 - `spawnState: 'narrow'` — the pane was under 120 columns (`READER_MIN_COLS`) when it spawned, or
@@ -94,12 +94,14 @@ arrives within the wave's ordinary window, read the session's own screen before 
 - `skillState: 'absent'` — the worker reads your brief without its standing protocol, because the
   skill installer had not run on that account's home. The dispatch still happened and the brief still
   works: it carries the branch-discipline sentence in its own text for exactly this case, so the wave
-  is briefed and you go on. The agent runs the skill installer on that home itself (the operator's
-  ruling of 2026-11-09, D-8126), and the dispatch answer reports what it did as `skillInstall`:
-  `installed`, `converged` (the home already matched) or `failed`; it is `null` where nothing was
-  absent, nothing was run, or this box's ccd lacks the verb. On `failed`, raise one non-blocking `do`
-  item naming the home: that is how you report it to the operator before you treat the wave as
-  briefed, and it is never a wait. Either way you go on, and the next wave on that home measures
+  is briefed and you go on. On a work run the server installs the coordinator and worker skills on
+  that one home itself (the operator's ruling of 2026-11-09, D-8126): a lane outside the dispatch, one
+  attempt per dispatch, within a lane beat or so of it. Its outcome lands in the run's event trail as
+  `skill-install:<outcome>`: `installed`, `converged` (the home already matched), `failed`, or
+  `unsupported` (this box's ccd lacks the verb). On `failed` or `unsupported`, raise one non-blocking
+  `do` item naming the home: that is how you report it to the operator before you treat the wave as
+  briefed, and it is never a wait. A review run's reviewer skill is not installed this way, so an
+  `absent` there gets the same item. Either way you go on, and the next wave on that home measures
   `skillState` afresh.
 - `skillState: 'unmeasurable'` — say so as an unknown, not as a problem. Nothing was measured, so
   do not go hunting for a missing install and do not re-dispatch: the wave is briefed either way.
@@ -107,7 +109,8 @@ arrives within the wave's ordinary window, read the session's own screen before 
 `adopted: true` is also written to the run's event trail as `spawn-adopted:<spawnState>`, so the
 provenance of the workspace survives the conversation. Every dispatch also writes its preflight
 there as `skill-preflight:<skillState>` — on all three answers, so a trail with no such line means
-an older build, never a healthy home.
+an older build, never a healthy home. After an `absent` one on a work run, the self-install's outcome
+follows as `skill-install:<installed|converged|failed|unsupported>`, at most one per dispatch.
 
 **`slug` — the child's name, chosen at birth.** `"slug"` is an optional
 WORKSPACE slug — not the programme slug of §1, which has its own grammar — for a
