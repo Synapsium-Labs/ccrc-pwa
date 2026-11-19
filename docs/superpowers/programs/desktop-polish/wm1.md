@@ -25,8 +25,13 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 - **Measured** on `origin/main` at `9e79fb3c1` (WM0 merged): `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`
   printed 93, so this entry was 94. Forecasts A (#2987) then took 94.
 - **Step B, after WM1r (#3001) landed:** one merge of `origin/main` at `8781ef20a`, on the coordinator's word. The same
-  count printed 102 there, so this entry is **103**. Re-measured just before the push; a later slot is said in the wave-done.
-- **The fifteen conflicted files**, each resolved keeping both sides (the coordinator's terms), its counts re-measured on
+  count printed 102 there, so this entry was 103. The pre-push fetch then showed the door process A1 (#3035) at 103, so a
+  **second merge**, on the coordinator's word, took `origin/main` at `9e372d2bc` (count 103), and this entry is **104**.
+  Nine files conflicted there (`README.md`, `schema.ts` and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
+  `ccrc-api`, `coord-db`, `run-close-switch` and `sim/mutation-floors.json`), each resolved keeping both sides. Both
+  sides had added one box-token lane, one `ccrc-api` row and one route, so the lines each wrote alike merged clean one
+  short and were re-measured too (`ccd/ccrc-api`, `gate.ts`, `README.md`).
+- **The fifteen conflicted files of the first merge**, each resolved keeping both sides (the coordinator's terms), its counts re-measured on
   the merged tree: `README.md`, `ccd/ccrc-api`, `server/src/auth/gate.ts`, `server/src/coord/planPolicy.ts`,
   `planRoutes.ts`, `planStore.ts`, `schema.ts`, and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
   `ccrc-api`, `coord-db`, `open-run-preconditions`, `run-close-switch` and `sim/mutation-floors.json`. The plan files met
@@ -38,10 +43,11 @@ claim says whether it was **measured** (read on the tree, the live server or a t
   `planTicketsDone` (route `POST /api/programmes/:slug/plan/tickets/done`, `plan-door`), shaped as its neighbours; the
   other-lanes pin counts ten plan-door rows; `plan-ticket-done` has the refusal case, and a mutant of the row's word
   turns it red (§4.2, M-17). Claim 5404 holds the two other-lanes files.
-- **The counts, measured on the merged tree:** 103 migrations; 90 `ccrc-api` rows, 11 of them `plan` rows; 242 mutation
-  floors (main's 238 and WM1's 4); 282 routes scanned, 279 at the gate's HTTP half, 100 exempt HTTP, 179 gated; 91 machine
-  lanes (88 box-token lanes, plus notify, pools/epoch and updates/intent). `run-close-switch`'s rollback undoes migrations 54
-  to 103, fifty in all; main's line said forty-three, short already against its own 102, so it reads the measured fifty.
+- **The counts, measured on the tree after the second merge:** 104 migrations; 91 `ccrc-api` rows, 11 of them `plan`
+  rows; 243 mutation floors (main's 239 and WM1's 4); 283 routes scanned, 280 at the gate's HTTP half, 101 exempt HTTP, 179
+  gated; 92 machine lanes (89 box-token lanes, plus notify, pools/epoch and updates/intent). `run-close-switch`'s rollback
+  undoes migrations 54 to 104, fifty-one in all. At the first merge it read fifty (54 to 103); main's line had said
+  forty-three, short already against its own 102.
 
 ## 3. Rows, and what reds each
 
@@ -168,5 +174,10 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 28 | `tsc --noEmit` of `test/tsconfig.tests.json` (a first try was killed by the slice's 6 GB cap), then of `tsconfig.json` | 11.31, 11.57 | both clean |
 | 29 | `coord-db` | 13.69 | 1 failed, 148 passed: the delegation tables' any-statement failure case timed out at 120 s, with two OOM kills in the slice during the run |
 | 30 | `coord-db` again, alone | 11.48 | 149 passed (657 s) |
+| 31 | After the second merge (`origin/main` 9e372d2bc, migration 104): `tsc --noEmit -p tsconfig.json` | 11.06 | clean |
+| 32 | Each file alone: `run-close-switch`, `auth-gate`, `box-token-census`, `ccrc-api`, `ccrc-api-closed`, `plan-ticket-done`, `deviation-refs` (after `git fetch origin`), `ci-ledger-guard` and the 40 `single-definition/` files | 8.37 to 13.00 | every file green, 48 files: 2444 passed |
+| 33 | `mutation-floors` for the four keys and the three checks; `tsc --noEmit -p test/tsconfig.tests.json` | 9.23 | 7 passed; clean |
+| 34 | `coord-db` | 9.58 | 1 failed, 148 passed: the delegation tables' any-statement case timed out at 120 s again, with four OOM kills in the slice |
+| 35 | `coord-db` again, alone | 10.83 | 2 failed, 147 passed: two other cases (goals versions, WM0's phases) timed out at 20 s, with two OOM kills in the slice. Every failure in runs 29, 34 and 35 is a timeout, never an assertion, a different case each time; run 30 was green, and CI's fast run (which runs `coord-db`) is the arbiter |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.
