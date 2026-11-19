@@ -7,11 +7,11 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { CCD, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
+import { ccdSource, makeCcdHarness, type CcdHarness } from './ccdWsHelpers.js';
 import { MAILHOLD_REACH_S, MAILHOLD_RE_BODY, parseMailHold } from '../../shared/mailHold.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const CCD_SRC = readFileSync(CCD, 'utf8');
+const CCD_SRC = ccdSource();
 const CORPUS = (JSON.parse(readFileSync(path.join(HERE, 'fixtures', 'mailhold-grammar.json'), 'utf8')) as {
   rows: { name: string; value: string; ok: boolean }[];
 }).rows;
