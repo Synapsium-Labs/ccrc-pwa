@@ -5327,7 +5327,8 @@ fi
 # tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
-# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# deny file `$REG/child-deny.settings.json`, which the arm below reads, and its digest history `$REG/child-deny.digests`,
+# which the approval wait reads (approvals PR 0, the coordinator's ruling F6)) is denied by the same writers, after a `cd` into
 # `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
 # edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
 # relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
@@ -5579,7 +5580,7 @@ def BW: "build\ta write to a Claude Code build or its launcher";
 def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
 def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
 def TNC: "claude-" + TCH + "{1,64}";
-def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json)" + BT;
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json|child-deny\\.digests)" + BT;
 def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
 def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
 def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
@@ -6178,7 +6179,7 @@ fi
 # nonce) now run before the `waiting` write instead of after it; on any other session's, one file test.
 APPROVAL_REQUEST_MAX_BYTES=65536
 APPROVAL_DIGEST_JQ='walk(if type == "number" then (if . == floor and fabs <= 9007199254740991 then (if . == 0 then 0 else floor end) else error("non-integer") end) else . end) | [.session_id, (.agent_id // ""), .tool_name, .cwd, .tool_input]'
-apr_route="" apr_digest="" apr_nonce="" apr_body="" apr_api="" apr_ti=""
+apr_route="" apr_digest="" apr_nonce="" apr_body="" apr_api="" apr_ti="" apr_dd=""
 # The hook is installed alone, with no platform block to source, so it spells no GNU-only tool (macos-platform.test.ts):
 # `shasum -a 256` ships on macOS and with perl on Linux, and node, which the wait needs anyway, is the fallback.
 _apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
@@ -6190,18 +6191,31 @@ _apr_sha256() {   # stdin -> 64 lowercase hex on stdout; rc 1 with no tool
   s="${s%% *}"; [[ "$s" =~ ^[0-9a-f]{64}$ ]] || return 1
   printf '%s' "$s"
 }
+# The installer's digest history (approvals PR 0; `ccd/install-session-hooks.sh` is its one writer): rc 0 when a line of
+# the exact shape `<digest> <epoch ms>` names this digest. Builtins only, and read only when the digest is not current, so
+# the current-digest path gains no fork and no read. A symlink at the name is never read.
+_apr_deny_history() {   # <digest>
+  local f="$REG/child-deny.digests" l
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 1
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    [[ "$l" =~ ^([0-9a-f]{64})\ [0-9]{1,16}$ && "${BASH_REMATCH[1]}" == "$1" ]] && return 0
+  done < "$f"
+  return 1
+}
 _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest, apr_nonce, apr_body, apr_api, apr_ti
   local sum managed uuid fb canon
   # A session with no `.child` mark is no dispatched child: its prompt is the operator's (Table 2a, path 7).
   [[ -n "$id" && -e "$REG/$id.child" ]] || { apr_route=not-a-child; return 0; }
   [[ ! -e "$REG/approvals-disabled" ]] || { apr_route=kill-switch; return 0; }
   # The deny stamp: absent, unreadable or not a digest, or a managed file that cannot be read, is `deny-unreadable`; a
-  # stamp that reads but is not the managed file's current digest is `deny-unknown` (spec §6.6).
+  # stamp that reads, is not the current digest and is in no digest history is `deny-unknown` (spec §6.6).
   _ct_read "$REG/$id.deny-settings" || { apr_route=deny-unreadable; return 0; }
   sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || { apr_route=deny-unreadable; return 0; }
   [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || { apr_route=deny-unreadable; return 0; }
   managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || { apr_route=deny-unreadable; return 0; }
-  [[ "$managed" == "$sum" ]] || { apr_route=deny-unknown; return 0; }
+  # A stamp that is not current but is in the installer's digest history goes on, its digest sent as `denyDigest` (approvals
+  # PR 0: the server records the row not deny-current and caps its allow); one in no history is `deny-unknown`.
+  if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || { apr_route=deny-unknown; return 0; }; apr_dd="$sum"; fi
   command -v node >/dev/null 2>&1 || { apr_route=no-node; return 0; }
   [[ -f "$REG/approval-verify.mjs" ]] || { apr_route=no-verifier; return 0; }
   [[ -f "$HOME/.ccrc/approval-signing.pub" ]] || { apr_route=no-key; return 0; }
@@ -6215,8 +6229,9 @@ _hook_approval_gate() {   # -> apr_route, and on `sent` the request's apr_digest
   apr_nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) && apr_nonce="${apr_nonce//[^0-9a-f]/}" && [[ "$apr_nonce" =~ ^[0-9a-f]{32}$ ]] || { apr_route='nonce-failed'; return 0; }
   # Past `APPROVAL_REQUEST_MAX_BYTES` the body carries `truncated` in place of the canonical form (`-a` keeps it ASCII,
   # so jq's length is its byte count).
-  apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" --argjson max "$APPROVAL_REQUEST_MAX_BYTES" \
-    '{v: 1, sessionId: $s, sessionUuid: $u} + (if length > $max then {truncated: true} else {canonical: .} end) + {digest: $d, nonce: $n}' 2>/dev/null) \
+  apr_body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$apr_digest" --arg n "$apr_nonce" --arg dd "$apr_dd" --argjson max "$APPROVAL_REQUEST_MAX_BYTES" \
+    '{v: 1, sessionId: $s, sessionUuid: $u} + (if length > $max then {truncated: true} else {canonical: .} end) + {digest: $d, nonce: $n}
+    + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) \
     || { apr_route=canonical-failed; return 0; }
   apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || { apr_route=canonical-failed; return 0; }
   apr_route=sent
@@ -6353,8 +6368,12 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 #   Steps 1 to 3 run in `_hook_approval_gate`, ABOVE the hookstate write (approvals plan Task 1.2), so the envelope
 #   carries the first step that stopped the prompt as `ask.approval.route`; the wait below starts at the request.
 #   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
-#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
-#      deny rules never gets rulings), and only when it can VERIFY a ruling: `node` on PATH, the verifier beside this
+#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned with no
+#      deny rules the box ever installed never gets rulings) or named by the installer's digest history
+#      `$REG/child-deny.digests` (approvals PR 0: a child spawned under an older deny file, which a running Claude Code
+#      never re-reads; the request then carries `denyDigest`, and the server holds it, its row `denyCurrent: false`, its
+#      allow refused `deny-not-current` at the rule door; this wait never prints an allow for it, a deny it prints), and only when it can VERIFY a
+#      ruling: `node` on PATH, the verifier beside this
 #      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
 #      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
 #   2. The static forbidden match (`APPROVAL_FORBIDDEN_JQ`, mode `class`): a forbidden request is never sent.
@@ -6504,6 +6523,9 @@ _hook_approval_wait() {
               reason="${verdict#* }"
               case "$verdict" in
                 'allow '*)
+                  # Approvals PR 0, the second gate: a child whose digest only the history names never prints an allow,
+                  # whatever the record says; the server's rule door refuses it `deny-not-current` too. A deny prints.
+                  [[ -z "$apr_dd" ]] || return 0
                   t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
                   return 0 ;;
                 'deny '*)

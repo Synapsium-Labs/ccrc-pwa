@@ -127,6 +127,11 @@ const ARCHIVE = '/api/sessions/:id/archive';
  *  reason; named here beside it. */
 const DIGEST_CORRECT = '/api/digest/correct';
 
+/** The console's prompt route (Overlord W1 private store B, Task 5). For the designated session it records the operator's message and
+ *  queues the nudge as system mail, so it is a coordination WRITE — session-gated, no box token (the operator's door). Registered in
+ *  `server.ts`, so `SESSION_ONLY` cannot see it, for the kickoff route's reason; named here beside it. */
+const PROMPT = '/api/sessions/:id/prompt';
+
 /** Every coordination write the bullet must describe as carrying no box token. */
 /** The update control plane's session-only routes (design 2026-09-20 §12 census
  *  step (b): all six of §12's session routes — W2's four and wave 5's two moves). Registered from `server/src/update/routes.ts`,
@@ -214,7 +219,7 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
   '/api/decision-model/rows/:id/ceiling', '/api/decision-model/key', '/api/decision-model/key'];
 
 /** Every session-only route the bullet must describe as carrying no box token. */
-const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
+const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
   ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
   ...DECISION_MODEL_DOORS, ...MODELS_DOORS, ...APPROVAL_CENSUS_DOORS];
 
@@ -536,6 +541,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     expect(ALL_LANES).not.toContain('POST /api/sessions/:id/kickoff');
     expect(ALL_LANES).not.toContain(`POST ${ARCHIVE}`);
     expect(ALL_LANES).not.toContain(`POST ${DIGEST_CORRECT}`);
+    expect(ALL_LANES).not.toContain(`POST ${PROMPT}`);
     for (const door of UNGATED_DOORS) expect(ALL_LANES).not.toContain(`POST ${door}`);
   });
 

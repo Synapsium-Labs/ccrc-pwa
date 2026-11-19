@@ -13487,7 +13487,8 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
  *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
  *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
- *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, nor one the installer's
+ *                        digest history names (approvals PR 0), or its `.childshell`
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
@@ -13497,6 +13498,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `approval-unreadable` the row could not be read back.
  *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
  *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `deny-not-current`    an allow of a row whose child runs under older deny rules than the box's (approvals PR 0).
  *  `declined`            the claimant handed this row over and may not rule it later.
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
@@ -13504,7 +13506,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
 export const APPROVAL_REFUSALS = [
   'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
   'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
-  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+  'guard-forbidden', 'guard-escalate', 'deny-not-current', 'declined', 'hook-gone', 'already-ruled',
 ] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
 
