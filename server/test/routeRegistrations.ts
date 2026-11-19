@@ -44,6 +44,9 @@ export const CALLS_SRC = read('server/src/coord/coordCallsRoute.ts');
  *  `POST /api/coord/programmes/:slug/remaining`, a box-token machine lane. Handled like the call record's file: registered from
  *  `registerCoordRoutes`, written in a file of its own, so a scan of `coord/routes.ts` alone would not see it. */
 export const REMAINING_SRC = read('server/src/coord/programmeRemainingRoute.ts');
+/** A further lane source (Flows wave 3b): a coordinator's flow outcome, `POST /api/coord/programmes/:slug/flow-outcome`, a
+ *  box-token machine lane registered from `registerCoordRoutes`, written in the Flows module's own file. */
+export const FLOW_OUTCOME_SRC = read('server/src/flows/outcomeRoute.ts');
 /** The TWELFTH file that registers routes and the ninth lane source (D-8181): the plan verbs' seven. `plan show` is a session-or-token
  *  read and the six writes are box-token lanes, every one consulting `checkMailToken` in its own registration. */
 export const PLAN_SRC = read('server/src/coord/planRoutes.ts');

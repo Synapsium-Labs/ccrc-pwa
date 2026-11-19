@@ -140,6 +140,7 @@ import { registerReviewRoundsRoute } from './reviewRoundsRoute.js';
 import { endRequestHandler } from './endRequest.js';
 import { registerCoordCallsRoute } from './coordCallsRoute.js';
 import { registerProgrammeRemainingRoute } from './programmeRemainingRoute.js';
+import { registerFlowOutcomeRoute } from '../flows/outcomeRoute.js';
 import { callViewOf } from './coordCalls.js';
 import { readOperatorSecretMeta } from './ledgersSecrets.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
@@ -5008,6 +5009,8 @@ export function registerCoordRoutes(
   registerCoordCallsRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, notice, bus, now: () => Date.now(), build: deps.build?.version ?? null });
   // What a programme says is left (Overlord W2 remaining work A): its handler lives in `programmeRemainingRoute.ts`.
   registerProgrammeRemainingRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, now: () => Date.now(), build: deps.build?.version ?? null });
+  // A coordinator's flow outcome, recorded in shadow (Flows wave 3b): its handler lives in `flows/outcomeRoute.ts`.
+  registerFlowOutcomeRoute(app, { coord: deps.coord, requireMailToken, requireAttribution, now: () => Date.now() });
 
   // D-8125: the coordinator's review-cap door; its handler lives in `reviewRoundsRoute.ts`.
   registerReviewRoundsRoute(app, {

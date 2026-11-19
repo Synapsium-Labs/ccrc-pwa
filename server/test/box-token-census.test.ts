@@ -60,7 +60,7 @@ import path from 'node:path';
 import { DOCS_PAGE_PREFIX } from '../../shared/docs.js';
 import { ccdSource } from './ccdWsHelpers.js';
 import {
-  REPO, read, COORD_SRC, SERVER_SRC, UPDATE_SRC, TOKEN_SRC, LEDGER_SRC, LINEAR_PROXY_SRC, LINKING_SRC, CALLS_SRC, REMAINING_SRC, PLAN_SRC, CONTINUITY_SRC, GATE_PATTERNS, registrationsIn, lanesIn, UNGATED_DOORS, SESSION_ONLY_DOORS,
+  REPO, read, COORD_SRC, SERVER_SRC, UPDATE_SRC, TOKEN_SRC, LEDGER_SRC, LINEAR_PROXY_SRC, LINKING_SRC, CALLS_SRC, REMAINING_SRC, FLOW_OUTCOME_SRC, PLAN_SRC, CONTINUITY_SRC, GATE_PATTERNS, registrationsIn, lanesIn, UNGATED_DOORS, SESSION_ONLY_DOORS,
 } from './routeRegistrations.js';
 
 /** The Overlord's designation doors' file (Overlord W1 designation A): three session-gated routes and no box-token lane, so no lane source. */
@@ -99,13 +99,14 @@ const LINEAR_PROXY_LANES = lanesIn(LINEAR_PROXY_SRC);
 const LINKING_LANES = lanesIn(LINKING_SRC);
 const CALLS_LANES = lanesIn(CALLS_SRC);
 const REMAINING_LANES = lanesIn(REMAINING_SRC);
+const FLOW_OUTCOME_LANES = lanesIn(FLOW_OUTCOME_SRC);
 const PLAN_LANES = lanesIn(PLAN_SRC);
 const CONTINUITY_LANES = lanesIn(CONTINUITY_SRC);
 const QUIZ_LANES = lanesIn(QUIZ_SRC);
-const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
+const ALL_LANES = [...COORD_LANES, ...lanesIn(SERVER_SRC), ...UPDATE_LANES, ...TOKEN_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...FLOW_OUTCOME_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
 /** The box-token machine lanes gate.ts counts first (#1444, PL3): the coordination routes, the Linear proxy's and the programme
  *  ledgers', before `/api/notify`, `/api/pools/epoch` and the update projection read join them in the total. */
-const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
+const MACHINE_LANES = [...COORD_LANES, ...LINEAR_PROXY_LANES, ...LEDGER_LANES, ...LINKING_LANES, ...CALLS_LANES, ...REMAINING_LANES, ...FLOW_OUTCOME_LANES, ...PLAN_LANES, ...CONTINUITY_LANES, ...QUIZ_LANES];
 
 /** The one session-only write that cannot be harvested, with the reason stated so
  *  it is a recorded exception rather than a retyped list. `SESSION_ONLY` lives in
@@ -283,7 +284,10 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1 door process A1: POST /api/sessions/:id/act-key, the door process's claim, a box-token lane in the continuity file: ninety-one machine lanes in all.
   'ninety', 'ninety-one',
   // Programme work map WM1: POST /api/programmes/:slug/plan/tickets/done (`plan ticket-done`), a box-token lane in the plan file: ninety-two machine lanes in all.
-  'ninety-two'];
+  'ninety-two',
+  // Flows wave 3b: POST /api/coord/programmes/:slug/flow-outcome, a coordinator's flow outcome, a box-token lane in the Flows
+  // module's outcome file: ninety-three machine lanes in all.
+  'ninety-three'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -439,7 +443,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
     // …and the quiz file's one (Overlord W1a quiz record): the operator's record door, by name.
     expect(QUIZ_LANES, 'continuity/quizRoutes.ts lost its box-token lane, or the rule door gained a token check').toEqual(['POST /api/continuity/quiz-runs']);
-    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length);
+    expect(ALL_LANES.length).toBe(COORD_LANES.length + 3 + LINEAR_PROXY_LANES.length + LEDGER_LANES.length + LINKING_LANES.length + CALLS_LANES.length + REMAINING_LANES.length + FLOW_OUTCOME_LANES.length + PLAN_LANES.length + CONTINUITY_LANES.length + QUIZ_LANES.length);
     expect(UNGATED_DOORS.length, 'the door list collapsed').toBeGreaterThan(3);
   });
 

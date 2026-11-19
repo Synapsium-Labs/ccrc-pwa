@@ -124,6 +124,7 @@ const ROUTES: ScannedRoute[] = [
   ...scanRoutes('coord/reviewRoundsRoute.ts'),
   ...scanRoutes('coord/coordCallsRoute.ts'),
   ...scanRoutes('coord/programmeRemainingRoute.ts'),
+  ...scanRoutes('flows/outcomeRoute.ts'),
   ...scanRoutes('accounts/routes.ts'),
   ...scanRoutes('linear/proxyRoutes.ts'),
   ...scanRoutes('readerLab/routes.ts'),
@@ -754,7 +755,9 @@ describe('the scanner is looking at something', () => {
     // the HTTP half 288 -> 289, the gated count 187 -> 188, the exempt-HTTP count stays 101.
     // 293 since Flows wave 3a's `GET /api/flows/:id/programmes` (where each programme is on its flow), same file,
     // session-gated, NOT EXEMPT: the HTTP half 289 -> 290, the gated count 188 -> 189, the exempt-HTTP count stays 101.
-    expect(ROUTES.length).toBe(293);
+    // 294 since Flows wave 3b's `POST /api/coord/programmes/:slug/flow-outcome` (`flows/outcomeRoute.ts`), a box-token machine
+    // lane IN EXEMPT: the HTTP half 290 -> 291, the gated count stays 189, the exempt-HTTP count 101 -> 102.
+    expect(ROUTES.length).toBe(294);
     expect(scanRoutes('flows/routes.ts').length).toBe(9);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -940,7 +943,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 293 scanned + the static wildcard when the bundle is built.
+    // 294 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1078,6 +1081,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/claims/:id/release',
       'POST /api/continuity/quiz-runs',
       'POST /api/coord/programmes/:slug/calls',
+      'POST /api/coord/programmes/:slug/flow-outcome',
       'POST /api/coord/programmes/:slug/remaining',
       'POST /api/coordinators/:session/intent',
       'POST /api/items/:id/blocking',
@@ -1158,7 +1162,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-two with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-three with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1696,7 +1700,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 290 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 291 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1760,7 +1764,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 290 HTTP routes, not the 101 exempt.
+          //    is not itself flag-aware — the assertion that covers all 291 HTTP routes, not the 102 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

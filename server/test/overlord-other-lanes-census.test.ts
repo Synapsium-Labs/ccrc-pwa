@@ -272,6 +272,7 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/programmes/:slug/modifications/merged': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/coord/programmes/:slug/calls': ['programme-ownership', 'attribution, then `claimsProgramme`'],
   'POST /api/coord/programmes/:slug/remaining': ['programme-ownership', 'attribution, then `claimsProgramme` (measured; after the plan)'],
+  'POST /api/coord/programmes/:slug/flow-outcome': ['programme-ownership', 'attribution, then `claimsProgramme` (Flows wave 3b, shadow only)'],
   'POST /api/leases/:lease/retain': ['lease-ownership', '`decideRetain` refuses `not-lease-parent`'],
   'POST /api/runs/:id/dispatch': ['launch-profile', 'box token only; the body carries no caller identity (residual, question 8)'],
   'POST /api/runs/:id/close': ['launch-profile', 'box token only; no caller identity (residual)'],

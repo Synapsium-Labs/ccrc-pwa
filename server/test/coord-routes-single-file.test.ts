@@ -51,7 +51,9 @@ const OWN_FILE_ROUTES = new Set(['coord/coordCallsRoute.ts POST /api/coord/progr
   // test's EXEMPT list leaves unnamed (a coordinator told about it would be told how to time its own renewal), so no corpus
   // names it either way; `box-token-census.test.ts`'s `CONTINUITY_SESSION_DOORS` pins it in both directions.
   'continuity/routes.ts GET /api/coord/renewal-mode', 'continuity/routes.ts POST /api/coord/renewal-mode',
-  'coord/programmeRemainingRoute.ts POST /api/coord/programmes/:slug/remaining']);
+  'coord/programmeRemainingRoute.ts POST /api/coord/programmes/:slug/remaining',
+  // Flows wave 3b: a coordinator's flow outcome, recorded in shadow, in the Flows module's own file.
+  'flows/outcomeRoute.ts POST /api/coord/programmes/:slug/flow-outcome']);
 
 const isCoord = (p: string): boolean => COORD_PREFIXES.some((pre) => p.startsWith(pre));
 
