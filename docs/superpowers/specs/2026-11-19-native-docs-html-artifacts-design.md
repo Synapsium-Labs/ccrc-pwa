@@ -530,7 +530,7 @@ This section says how each claim is proved. The leaf plan carries the tasks, mut
 | ART-L6 | Process isolation of the artifact tab on the phone | A5's residual, recorded |
 | ART-L7 | Every supported browser sends `Sec-Fetch-Dest`, `Sec-Fetch-Mode` and `Sec-Fetch-Site` | The fail-closed fence does not break a supported browser |
 | ART-L8 | A window opened by a page with windows ticked returns a usable handle under the wrapper's COOP | §4.2's `same-origin-allow-popups` |
-| ART-L9 | `alert`, `confirm` and `prompt` work in the cross-origin frame in every supported engine | AR-A2; if an engine blocks them, the sheet says so for that browser |
+| ART-L9 | `alert`, `confirm` and `prompt` work in the cross-origin frame in every supported engine | AR-A2. An engine that blocks them fails AR-A2 for that engine, and F records the dialog rows as a gap there, never a pass |
 | ART-L10 | No token appears in the system journal after an aborted response and after a 502, with the generated log filter in place | A9 holds. If a token appears, the tier is turned off on that box (`ccrc expose artifacts --off`) and the operator is asked before F passes; never a silent residual |
 | ART-L11 | What "Clear this host's data" clears under storage partitioning | A13 |
 | ART-L12 | A `<video>` with seeking plays on the phone and on desktop | §5 Ranges |

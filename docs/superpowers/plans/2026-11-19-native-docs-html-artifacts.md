@@ -84,11 +84,11 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 
 | Row | Task 17 row | Installed action and observation | Waves |
 |---|---|---|---|
-| AR-A1 | Complete parity inventory (setup) | On a duckdns box: `ccrc expose artifacts` with two labels, then its three printed steps (copy the Caddyfile, `sudo systemctl reload caddy`, restart the server), then `ccrc doctor` shows `name` and `artifacts` green; each artifact name answers its fixed page; the console's name is unchanged; re-running `ccrc expose duckdns` keeps the artifact block; a request to the console's port naming an artifact host answers 421 | A1, A4 |
+| AR-A1 | Complete parity inventory (the tier's setup, which every row below needs) | On a duckdns box: `ccrc expose artifacts` with two labels, then its three printed steps (copy the Caddyfile, `sudo systemctl reload caddy`, restart the server), then `ccrc doctor` shows `name` and `artifacts` green; each artifact name answers its fixed page; the console's name is unchanged; re-running `ccrc expose duckdns` keeps the artifact block; a request to the console's port naming an artifact host answers 421 | A1, A4 |
 | AR-A2 | Complete parity inventory (F11) | The two dialog pages show their dialogs (ART-L9); a page's download button saves the file; the popup page opens its window only when windows was ticked, and does nothing otherwise (ART-L8) | A3, A5 |
 | AR-A3 | Complete parity inventory (F12, F13), Large files | The three pages with assets above 5 MiB in total, the WebAssembly page, the page above 2 MiB, a page with a worker, a page with SVG icons as images and the four runtime-fetch pages each run as an artifact; a video seeks (ART-L12); a reload does not re-read files above 1 MiB (browser cache) | A3, A5 |
-| AR-A4 | Complete parity inventory (isolation) | Lab rows ART-L1 to ART-L12 of the spec §10, desktop and phone, each recorded with its result | All |
-| AR-A5 | Complete parity inventory (lifecycle) | An open artifact's next load is the identical 404 after each of: Revoke, Revoke all, sign-out, a passphrase change, the idle hour, a server restart, and 2 hours for a page beside drafts; the Page details list never shows a URL | A2, A3, A5 |
+| AR-A4 | Complete parity inventory (the isolation every artifact row relies on) | Lab rows ART-L1 to ART-L12 of the spec §10, desktop and phone, each recorded with its result. Passes when every row's Decides cell holds on both; a failed lab row fails AR-A4 and is never waived | All |
+| AR-A5 | Complete parity inventory (the capability's life, which every artifact row relies on) | An open artifact's next load is the identical 404 after each of: Revoke, Revoke all, sign-out, a passphrase change, the idle hour, a server restart, and 2 hours for a page beside drafts; the Page details list never shows a URL | A2, A3, A5 |
 
 ---
 
