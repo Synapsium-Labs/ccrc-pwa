@@ -469,6 +469,7 @@ Library 1.1.0 was read from an installed copy in another ccrc worktree, read-onl
 - **The frame manifest** (`dist/frame/manifest.generated.js`) has five entries: guard 3 643, bootstrap 30 153, enhance 198 215, stylesheet 549 069 and Mermaid 3 746 940 characters, which is 4 528 020 (4 530 427 bytes). X1's test 8 now sums all five, and X1's share of 32 768 stands against that sum.
 - **The default enhance bundle** (`assets/frame/enhance.js`) is 198 215 characters, minified. Each of its 47 modules in `dist/enhance/` was minified alone with the terser already installed beside the library, in memory: they sum to 208 219, so bundling saves a factor of 0.952.
 - **The comparators** (each module minified alone): `nav` 5 997, `overlays` 855, `commands` 594, `xrefs` 916, `mentions` 1 063, `diagram-tools` 18 181, `since` 13 373, `editorial` 9 162, `strip` 3 695, `status` 2 411, `rules` 3 716 and `plans` 5 008; and `dist/frame/protocol.js` 2 329.
+- **The shared stylesheet** (fix round 1, review 2694 F5): `assets/frame/reader.css` is 549 069 characters, 413 208 of them its four fonts' data URIs. It ships unminified: its rules are 135 881 characters with those URIs emptied, and 108 532 when comments and white space are taken out, a factor of 1.252. The rules for the features X2 extends, minified: the comparison base and changes menu (`chg-`, `cm-`, `ct-` selectors) 8 544 in 52 rules, the review strip (`review-strip`, `rs-`) 3 785 in 24, `.xref` 582 in 4, `.flash` 310 in 3, the quick-jump and keys overlays (`.jump`, `.keys`) 5 330 in 27, and the figure overlay (`fig-overlay`, `fo-`) 3 051 in 13. 21 602 in all, so 27 046 shipped.
 - **The standalone reader's layout scripts:** default 158 456 bytes, `classic` 18 700, A (editorial) 39 502, B (review) 61 577 and C (guided) 55 490. **Its layout stylesheets:** default 83 988, `classic` 9 875, A 37 538, B 28 134 and C 26 491.
 - **The strip and plan marks print mode emits** were read from 1.1.0's `dist/enhance/strip.js` and `plans.js` headers: `section.review-strip`, `div.rs-wait`, `p.rs-label`, `p.rs-facts`, `span.fact`, `span.cnt`, `span.sep`, `span.task-id`, `span.step-no` and `span.who`, and `WAIT_CLIP`.
 
@@ -480,6 +481,9 @@ Library 1.1.0 was read from an installed copy in another ccrc worktree, read-onl
 | F10: what P5.5 then does on ccrc's side | Spec §6, "What ccrc's P5.5 then does"; this plan's P5.5 Step 1 (two assertions) and mutation row M11.74; spec §4.6's test strategy names M11.74 |
 | The figure-image op | Already designed (spec §6, `print-figures` and `print-figure`); its size is counted in the proposed share |
 | X2's share (X1 F4: set by the coordinator at this wave's acceptance) | Spec §6, "Size, and X2's share": 1 166 336 characters in total and 72 704 in the largest frame, proposed (revised in X4 fix round 1, review 2694 F5, with a stylesheet term); Task P5.1's per-layout `frame-cost` row |
+| Fix round 1 (review 2694): F5, the stylesheet term, `protocol.js` as a proxy, the layout bound as an assumption, the shares as a ceiling | Spec §6, "Size, and X2's share": the stylesheet row, the bootstrap row, the layout row and the two bullets after the shares |
+| Fix round 1: F1, one landing per design | Spec §6, the same block's first paragraph (X1 spec §10 test 8) |
+| Fix round 1: M7, `frameCsp`'s signature | Spec §6's layout row (R19) |
 | How test 8 and the per-layout srcdoc cap count the layouts | Spec §6, the same block; §6's layout row ("none larger than the default bundle"); X1 spec §10 test 8's `total`, `frame` and layout rows |
 | The coordinator's extra item (mail 25622): X3 no longer owns Share | This plan's Global Constraints, the ownership line: X3 owns the draft-review action and its store, and Share stays as shipped |
 
@@ -505,6 +509,7 @@ python3 over dist/frame/manifest.generated.js and assets/frame/enhance.js (read 
 node <scratch>/minsize.mjs   terser, 47 modules, in memory                            -> 208 219; comparators above
 wc -c over the standalone reader's five layout scripts and stylesheets (read only)    -> scripts 158 456 / 18 700 / 39 502 / 61 577 / 55 490; stylesheets 83 988 / 9 875 / 37 538 / 28 134 / 26 491
 node <scratch>/minfr.mjs     terser, dist/frame/protocol.js, in memory                -> 2 329
+python3 <scratch>/cssterm2.py  assets/frame/reader.css, rules by selector, read only  -> 108 532 minified, factor 1.252; comparators 21 602
 ```
 
 No test, build or install ran.
