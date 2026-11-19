@@ -6,12 +6,17 @@
  * `accounts/mask.ts#SecretMasker` reads them for its shape half and for its exact-bytes candidates, so there is one
  * copy of each and one view memo.
  *
+ * A PEM private-key block is masked here too (overlord wave 168, `response-masks-miss-pem`): its finder is the egress
+ * profiles' scanner, `shared/redact.mjs#pemBlockSpans`, the one owner of that shape (a scanner, not a regular-expression
+ * source, so it is no `CREDENTIAL_MASKS` row), and each row of a block is masked on its own (`pemRowSpans`).
+ *
  * `SHAPE_MASK` is the shape-only mask of a decoded value, a plain function of it: what the masker's keyless instance
  * answers, read without the masker, so an inner module (the transcript parse) masks with it (D-7513).
  *
  * Ring L1: this module holds no timer, no clock, no database and no route.
  */
 import { CREDENTIAL_MASKS, SECRET_MASK, type CredentialMask } from '../../../shared/api.js';
+import { pemBlockSpans } from '../../../shared/redact.js';
 
 /** A candidate run's byte bounds (a fingerprint row's `len` lies within them). */
 export const RUN_MIN_BYTES = 20;
@@ -225,8 +230,9 @@ export function runOnRows(t: string, end: number, full: number, rows: Rows, put:
   }
 }
 
-/** Every shape starts with one of these, so a text holding none of them holds no shape. */
-const SHAPE_HINT = /sk-|eyJ|_token"|OPENAI_API_KEY"/;
+/** Every shape starts with one of these, so a text holding none of them holds no shape; a PEM block's BEGIN line starts
+ *  with the last. */
+const SHAPE_HINT = /sk-|eyJ|_token"|OPENAI_API_KEY"|-----BEGIN /;
 /** A shape's start at a boundary (D-5995): `sk-` or `eyJ`. */
 export const SHAPE_STARTED = new RegExp(`${BOUNDARY}(?:sk-|eyJ)`);
 /** A row's trailing token run, read back from its row end. */
@@ -287,6 +293,27 @@ function joinWraps(t: string): Joined | null {
   return { t: parts.join(''), map: map.subarray(0, n + 1), seams };
 }
 const LINE_BREAK_ANY = new RegExp(ROW_BREAK, 'g');
+const PEM_ROW_BREAK = new RegExp(ROW_BREAK, 'g');
+/** A PEM block's span [a, b) of `t` as one span per row (overlord wave 168): split at each row break, which is kept, and
+ *  each row less its indent, a box's rules and its trailing blanks, so a block in the drawer is masked row by row, a
+ *  mark per row, and no row is joined to the next (`spliceMasked` joins only spans that touch). A block's rows are its
+ *  own: nothing runs on past `b`, so the row after its END line is never taken as a wrap. */
+function pemRowSpans(t: string, a: number, b: number, put: (x: number, y: number) => void): void {
+  const row = (x: number, y: number): void => {
+    ROW_INDENT.lastIndex = x;
+    const indent = ROW_INDENT.exec(t);
+    if (indent !== null) x += indent[0].length;
+    y = rowTextEnd(t, y);
+    if (y > x) put(x, y);
+  };
+  let p = a;
+  PEM_ROW_BREAK.lastIndex = a;
+  for (let m = PEM_ROW_BREAK.exec(t); m !== null && m.index < b; m = PEM_ROW_BREAK.exec(t)) {
+    row(p, m.index);
+    p = m.index + m[0].length;
+  }
+  if (p < b) row(p, b);
+}
 /** Whether a run holds a whole shape on its own. */
 export const matchesShape = (run: string): boolean => SHAPES.some((re) => { re.lastIndex = 0; return re.test(run); });
 /** Whether a seam lies strictly inside [a, b): one binary search over the sorted seams. */
@@ -327,6 +354,8 @@ export function shapeSpans(s: string, rows: boolean, masks: readonly RegExp[]): 
         }
         spans.push(spanIn(v, j.map[p]!, j.map[b - 1]! + 1));
       };
+      // A PEM private-key block, in the text as drawn: one span per row, and no run-on.
+      if (j === null) for (const [a, b] of pemBlockSpans(t)) pemRowSpans(t, a, b, (x, y) => spans.push(spanIn(v, x, y)));
       const r = rows ? new Rows(t) : null;
       for (const re of masks) {
         re.lastIndex = 0;

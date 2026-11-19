@@ -37,9 +37,13 @@ export interface RedactShapes {
 /** The egress mask. */
 export const EGRESS_MASK: '[REDACTED]';
 
-/** A PEM private-key block's regular-expression source (no flags): the egress profiles' `pem-block` rule and the first
- *  arm of `ccd/history/lib.mjs`'s shape layer, one source for both. */
+/** History's PEM private-key block rule, a regular-expression source (no flags): the first arm of
+ *  `ccd/history/lib.mjs`'s shape layer. The egress profiles read `pemBlockSpans` instead. */
 export const PEM_PRIVATE_KEY_SOURCE: string;
+
+/** Every PEM private-key block in `text`, `[start, end)` each, in order and never overlapping: the egress profiles'
+ *  `pem-block` scanner, and the response masks' (`server/src/accounts/shapes.ts`). Linear in the text's length. */
+export function pemBlockSpans(text: string): [number, number][];
 
 /** Every rule id, in table order. */
 export const RULE_IDS: readonly string[];
