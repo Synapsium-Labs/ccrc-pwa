@@ -161,7 +161,10 @@ cases above.
   mid-turn mail PR 2, #3073), so this PR's table is 109. It was renumbered at three absorptions of `main`, each on the conflict
   probe and under the brief's standing license, with every conflict an additive migration, pin or census line. The second
   gave the fix round's PR a merge ref for its fast run; the third followed the coordinator's mail naming 109. The mid-turn mail
-  PR 2's holder agreed the four additive co-edits (schema, the two version pins, the rollback fixture, the floors).
+  PR 2's holder agreed the four additive co-edits (schema, the two version pins, the rollback fixture, the floors). Two of
+  #3073's own suites then needed one line each (`urgent-mail-suites-meet-the-gate`): `mail-urgent-store.test.ts` asserted its
+  migration was the last one, and now pins its slot, 108, by number, as `plan-ticket-done.test.ts` pins 106;
+  `mail-urgent-route.test.ts` minted its fixture operator with `actorOf`, and now uses `gateActorOf` like every other fixture.
 - **Local measurements the box could not make**: the floors suite's two `pwa/src/face/mood.ts` sets fail to load here
   (`@ccrc/ui` is not installed in this worktree's `pwa/`), and `secret-mask`'s "typed slowly" case is the known local timing
   red (door process A1's notes measured it red on a clean `main`). The whole tests-inclusive type check is OOM-killed in the
