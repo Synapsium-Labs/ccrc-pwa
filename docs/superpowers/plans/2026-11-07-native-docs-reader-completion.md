@@ -3247,7 +3247,7 @@ narrowed; F4, no new reds, and D-8730's pinned and descriptive parts listed here
 {"id": "W4-T9-M6", "pkg": "server", "file": "../pwa/src/lib/sw-denylist.ts", "old": "// CO-TENANTS ARE NOT CCRC'S BUSINESS TO KNOW. A box may put a wiki at `/wiki`\n// and a preview at `/fleet` behind the same reverse proxy; a release tarball\n", "new": "// CO-TENANTS ARE NOT CCRC'S BUSINESS TO KNOW. The reference box happens to put\n// a docserver at `/docs` and a preview at `/fleet` behind the same\n", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  1 failed | 75 passed (76): the shipped source is clean", "sha256": "a74851f72b48e4301526d7b2d4231cd3a3ad22720000ab5b9a72d2c5399d97fe", "restored": true, "at": "ad47d42d7", "recorded": "2026-10-09-native-docs-reader-w4-pwa-foundation.md:9327"}
 {"id": "NDR-D2-RP-W4-T9-M7", "pkg": "server", "file": "../deploy/deploy.sh", "old": "export CCRC_SW_DENYLIST=\"${CCRC_SW_DENYLIST:-}\"\n", "new": "export CCRC_SW_DENYLIST=\"${CCRC_SW_DENYLIST:-}\"\nDOCS_SKIP=\"$HOME/.claude-docs-preview\"\n", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  1 failed | 75 passed (76): the shipped source is clean", "sha256": "99fb95ef51ab71af70463de9d12b8c9b3558edddb2cfddc2e629ebd62be1eeb2", "restored": true, "at": "ad47d42d7", "repoints": "W4-T9-M7 (the W4 plan's recording, line 9338): stale since #722 renamed M7.9's directory needle, before D2's base; D2 did not move it"}
 {"id": "W4-T9-M8", "pkg": "server", "file": "../pwa/vite.config.ts", "old": "        // a wiki at `/wiki` and a preview at `/fleet` behind the same proxy; a\n", "new": "        // a wiki at `/wiki` (a docserver) and a preview at `/fleet` behind the same proxy; a\n", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  1 failed | 75 passed (76): the shipped source is clean", "sha256": "b0a79692b4aa2d630a477c567367ab006e4b215d02e356c396f9bdb3a1d0cfb3", "restored": true, "at": "ad47d42d7", "recorded": "2026-10-09-native-docs-reader-w4-pwa-foundation.md:9349"}
-{"id": "W4-T10-M10", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "CCRC_DOCS_PAGE_PREFIX='/docs'\n", "new": "CCRC_DOCS_PAGE_PREFIX='/docs'\nCCRC_DOCS_PAGE_PREFIX='/docs'\n", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  2 failed | 74 passed (76): is assigned on exactly one line, and its value is DOCS_PAGE_PREFIX, the quoted prefix appears once in the whole file: the assignment", "sha256": "e6f58c1f0dcd253a4c5996b00f4319ce623a8c5b1cf1f702d5a87ec67335cf07", "restored": true, "at": "1626ae837", "recorded": "2026-10-09-native-docs-reader-w4-pwa-foundation.md:10330"}
+{"id": "W4-T10-M10", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "CCRC_DOCS_PAGE_PREFIX='/docs'\n", "new": "CCRC_DOCS_PAGE_PREFIX='/docs'\nCCRC_DOCS_PAGE_PREFIX='/docs'\n", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  2 failed | 74 passed (76): is assigned on exactly one line, and its value is DOCS_PAGE_PREFIX, the quoted prefix appears once in the whole file: the assignment", "sha256": "e6f58c1f0dcd253a4c5996b00f4319ce623a8c5b1cf1f702d5a87ec67335cf07", "restored": true, "at": "0b96bd0dc", "recorded": "2026-10-09-native-docs-reader-w4-pwa-foundation.md:10330"}
 {"id": "W4-T10-M11", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "CCRC_DOCS_PAGE_PREFIX='/docs'\n", "new": "CCRC_DOCS_PAGE_PREFIX='/doc'\n", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  2 failed | 74 passed (76): is assigned on exactly one line, and its value is DOCS_PAGE_PREFIX, the quoted prefix appears once in the whole file: the assignment", "sha256": "e6f58c1f0dcd253a4c5996b00f4319ce623a8c5b1cf1f702d5a87ec67335cf07", "restored": true, "at": "ad47d42d7", "recorded": "2026-10-09-native-docs-reader-w4-pwa-foundation.md:10341"}
 {"id": "W4-T10-M12", "pkg": "server", "file": "../ccd/ccrc-doctor-checks", "old": "  local p=\"$CCRC_DOCS_PAGE_PREFIX\" sw=", "new": "  local p='/docs' sw=", "tests": ["test/docs-parity.test.ts"], "status": "red", "red": "Tests  2 failed | 74 passed (76): the quoted prefix appears once in the whole file: the assignment, _check_docs-sw reads the variable and never spells the prefix", "sha256": "e6f58c1f0dcd253a4c5996b00f4319ce623a8c5b1cf1f702d5a87ec67335cf07", "restored": true, "at": "ad47d42d7", "recorded": "2026-10-09-native-docs-reader-w4-pwa-foundation.md:10352"}
 {"id": "RLB-T3-M19", "pkg": "server", "edits": [{"file": "src/readerLab/routes.ts", "old": "  }, async (_req, reply) => probeAnswer(reply));\n}", "new": "  }, probeHandler);\n}"}, {"file": "src/readerLab/routes.ts", "old": "/** The counter. ", "new": "const probeHandler = async (req: FastifyRequest, reply: FastifyReply): Promise<FastifyReply> => { void (req.body as unknown); return probeAnswer(reply); };\n\n/** The counter. "}], "tests": ["test/reader-lab-routes.test.ts"], "status": "red", "red": "Tests  1 failed | 20 passed (21): the probe path never reads a body: no body, raw-stream, socket or multipart access in the counter, either registration or any declaration they name (refinement (f))", "sha256": "0cdd77d803a1366fd4cfb38a2af7d75d8bef1ecfdc992d434f8b099a50e17bec", "restored": true, "at": "ad47d42d7", "recorded": "2026-11-03-native-docs-reader-reader-lab.md:5239"}
@@ -3256,7 +3256,7 @@ narrowed; F4, no new reds, and D-8730's pinned and descriptive parts listed here
 
 **Carries closed at P1 (run 2743, 2026-11-19; ask 600, the coordinator's binding carries).** D2's two minors, measured
 once, on X2's wave P1 branch.
-- `W4-T10-M10` re-measured once at `1626ae837` (its code is `main` at `0b96bd0dc`): the doubled assignment in
+- `W4-T10-M10` re-measured once on `main`'s code at `0b96bd0dc` (the branch held only docs commits above it): the doubled assignment in
   `ccd/ccrc-doctor-checks` reds `docs-parity.test.ts` with 2 failed and 74 passed of 76, the two M7.3 doctor-half cases
   ("is assigned on exactly one line, and its value is DOCS_PAGE_PREFIX" and "the quoted prefix appears once in the whole
   file: the assignment"). The third name the row carried, "H.redact gives the same answer, with no python rule table", is
@@ -3265,13 +3265,17 @@ once, on X2's wave P1 branch.
 - D-8730's two clauses, its text unchanged:
   - "the next Tab follows the one bar's order": **descriptive only.** A case asserts it,
     `reader-frame.browser.test.ts`'s "phone-born, back" (its last expectation: one Tab lands on the next stop of the
-    one bar's DOM order, computed before the press). The two rows that red that case, `NDR-D2-T13-HEAD-BACKKEY-B`
-    and `NDR-D2-T13FR2-FOCUS-LATE`, each red it at an earlier expectation (the very same element holding the focus,
-    and the focus a moment later), so no row reds the Tab step itself.
-  - "the one bar's layout and order are unchanged": **descriptive only.** Its order is asserted by
+    one bar's DOM order, computed before the press). Three recorded rows red that case, each at an earlier
+    expectation: `NDR-D2-T13-HEAD-BACKKEY-B` (the very same element holding the focus), `NDR-D2-T13FR2-FOCUS-LATE`
+    (the focus a moment later) and `NDR-D2-T13-FOCUS-ALWAYS-ON` (one frame, not focused when it was inserted). So no
+    row reds the Tab step itself.
+  - "the one bar's layout and order are unchanged": **its layout pinned in part, its order descriptive only.** The
+    layout: the take-up plan's `L11-T10-M1` (a margin on the one bar's row reds the 412 x 915 cases, the frame not
+    moving when the row becomes the one bar among them), `L11-T6-M9` and `L11-T6-M16` (each reds the one bar's
+    declarations case in `docs-compact-css.test.ts`) red changes to it; the two 2026-11-06 phone blocks staying byte
+    for byte is the diff fact each review checks (F4's (d) above), with no row. The order: asserted by
     `docs-one-bar.test.tsx`'s "a ready frame on ccrc's bar turns the row into the one bar: back, the title, Quick
-    jump, Contents", which no recorded row reds; its layout rests on the two 2026-11-06 phone blocks staying byte for
-    byte, the diff fact each review checks (F4's (d) above), and no test reds a change to them.
+    jump, Contents", which no recorded row reds.
 
 ## Where things stand
 
