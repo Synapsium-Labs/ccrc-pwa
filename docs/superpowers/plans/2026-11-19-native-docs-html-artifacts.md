@@ -241,9 +241,26 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order (P3 and P5 sha
 - Test: `server/test/ccrc-expose-artifacts.test.ts` (fixture HOME, the existing expose harness)
 
 **Interfaces:**
-- Produces: `ccrc expose artifacts` (duckdns: prompts two labels on a TTY; byo: `--artifact-origin <o> --content-origin <o>`; `--off` removes); the exposure file's three keys, and on duckdns `CCRC_DDNS_DOMAIN` as the comma list; `_exp_caddyfile` generating both blocks from the exposure file on every run of any arm, the second `<artifact-host>, <content-host> {` / optional `bind <stored bind>` / `reverse_proxy 127.0.0.1:<port>` / `}`.
+- Produces: `ccrc expose artifacts` (duckdns: prompts two labels on a TTY; byo: `--artifact-origin <o> --content-origin <o>`; `--off` removes); the exposure file's three keys, and on duckdns `CCRC_DDNS_DOMAIN` as the comma list; `_exp_caddyfile` generating both blocks from the exposure file on every run of any arm, the second `<artifact-host>, <content-host> {` / optional `bind <stored bind>` / `reverse_proxy 127.0.0.1:<port>` / `}`; and, only when the artifact keys are set, the global options block of spec §2.4 as the file's first lines, exactly:
 
-- [ ] **Step 1: Write the failing tests:** on a fixture duckdns box the arm writes the keys and the block, keeps the console's block byte for byte, and `CCRC_DDNS_DOMAIN` becomes `<console-label>,<a>,<b>`; with a stored bind the artifact block carries the same `bind`; neither block holds a `log` directive; re-running `ccrc expose duckdns` afterwards keeps the artifact block and the comma list; a label equal to the console's, or two equal labels, refuses with nothing written; on the byo arm `art.example.test` beside `ccrc.example.test` refuses with the site-rule sentence, `art.example.invalid` is accepted and the run prints the dedicated-domain sentence; the ip arm refuses; `--off` removes the keys, the two labels and the block and nothing else; `status` prints both artifact origins; no run prints the DuckDNS token. The site-rule cases are read from one table file that `artifacts-config.test.ts` reads too.
+```
+{
+	log default {
+		output stderr
+		format filter {
+			wrap json
+			fields {
+				request>uri delete
+				request>headers>Referer delete
+			}
+		}
+	}
+}
+```
+
+(tabs as shown; a console-only Caddyfile is unchanged byte for byte).
+
+- [ ] **Step 1: Write the failing tests:** on a fixture duckdns box the arm writes the keys and the block, keeps the console's block byte for byte, and `CCRC_DDNS_DOMAIN` becomes `<console-label>,<a>,<b>`; with a stored bind the artifact block carries the same `bind`; neither block holds a `log` directive; `expose: the log filter is written` (with the artifact keys set, the Caddyfile starts with exactly the global block above, holding both `delete` lines; with them unset, the Caddyfile equals today's pinned bytes and has no global block); re-running `ccrc expose duckdns` afterwards keeps the artifact block and the comma list; a label equal to the console's, or two equal labels, refuses with nothing written; on the byo arm `art.example.test` beside `ccrc.example.test` refuses with the site-rule sentence, `art.example.invalid` is accepted and the run prints the dedicated-domain sentence; the ip arm refuses; `--off` removes the keys, the two labels and the block and nothing else; `status` prints both artifact origins; no run prints the DuckDNS token. The site-rule cases are read from one table file that `artifacts-config.test.ts` reads too.
 - [ ] **Step 2: Run**; expect FAIL. **Step 3: Implement**, the site rule in bash mirroring `siteRuleProblem`, its accept list read from the same table file in the test only (the bash holds `duckdns.org` as its one accept entry, pinned by that table). **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(ccrc): expose artifacts (X5 A4.1)`.
 
 ### Task A4.2: doctor
@@ -341,6 +358,7 @@ Each row deletes or weakens one guard; the named test must go red. Run through t
 | MX5.38 | A4.2 | Doctor passes partial keys | doctor: partial keys FAIL |
 | MX5.39 | A5.2 | Open by `window.open` or without `noopener` | sheet: the Open anchor's `rel` |
 | MX5.40 | A5.2 | Tick windows by default | sheet: every checkbox starts unticked |
+| MX5.52 | A4.1 | Drop the `request>headers>Referer delete` line, or the whole global block | expose: the log filter is written |
 | MX5.50 | A2.2 | The liveness adapter compares against the generation the session was minted at, not the measured one | store: a passphrase change ends it |
 | MX5.51 | A2.2 | Treat an absent or unusable secret as live | store: a missing secret ends it; store: an unusable secret ends it |
 | MX5.49 | A5.1 | Offer the button only when the walls report a refusal | offer: every HTML page |
