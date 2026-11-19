@@ -72,6 +72,11 @@
 # `_api_server_cap` (D-7321), never a `source`; regenerate it with
 # `ccrc restamp ccd/ccrc-api`.
 set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
+# THE FENCE LEAVES THE ENVIRONMENT NEXT (Overlord W1 door process A2, review 2735 F5): the act key, its generation and the
+# counter the door process hands this run are copied into shell variables and unset before any child runs, so no curl, jq or
+# tmux inherits them. `send_request` reads the copies.
+FENCE_KEY="${CCRC_ACT_KEY-}" FENCE_GENERATION="${CCRC_ACT_GENERATION-}" FENCE_COUNTER="${CCRC_ACT_COUNTER-}"
+unset CCRC_ACT_KEY CCRC_ACT_GENERATION CCRC_ACT_COUNTER
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
 # so the corpora invoke this by explicit path. That is a caller's problem, not
@@ -672,7 +677,7 @@ REQ_OUT=''
 REQ_CODE=''
 REQ_RC=0
 # The fence's three header names (shared/continuity-door.ts, `ACT_KEY_HEADER`, `ACT_GENERATION_HEADER`, `ACT_COUNTER_HEADER`;
-# held equal by ccrc-api-act-key.test.ts).
+# held equal by door-tools-argv.test.ts).
 ACT_KEY_HEADER='x-ccrc-act-key'
 ACT_GENERATION_HEADER='x-ccrc-act-generation'
 ACT_COUNTER_HEADER='x-ccrc-act-counter'
@@ -696,12 +701,13 @@ send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an a
   # reads `\\` as `\`, `\"` as `"` and `\n`/`\r` as a newline and a carriage return, so those four are escaped, `\` first, and
   # the bytes the server receives are the body's own. `data-raw`, not `data-binary`: a body is never a `@file` read.
   # THE FENCE RIDES THE SAME CONFIG (Overlord W1 door process A2, Task 5): the door process hands a fenced call's child the act
-  # key, its generation and the counter in the child's environment, and they go on stdin as three header lines, never on the
-  # argv. All three are checked against their shapes first (the key 64 lowercase hex, the others positive integers); any one
-  # malformed adds none of them, and the server refuses the fenced call. The names are shared/continuity-door.ts's.
-  if [[ "${CCRC_ACT_KEY-}" =~ ^[0-9a-f]{64}$ && "${CCRC_ACT_GENERATION-}" =~ ^[1-9][0-9]{0,15}$ && "${CCRC_ACT_COUNTER-}" =~ ^[1-9][0-9]{0,15}$ ]]; then
-    cfg+=$'\n'"header = \"$ACT_KEY_HEADER: $CCRC_ACT_KEY\""$'\n'"header = \"$ACT_GENERATION_HEADER: $CCRC_ACT_GENERATION\""
-    cfg+=$'\n'"header = \"$ACT_COUNTER_HEADER: $CCRC_ACT_COUNTER\""
+  # key, its generation and the counter in the child's environment (copied and unset at the top, F5), and they go on stdin as
+  # three header lines, never on the argv. All three are checked against their shapes first (the key 64 lowercase hex, the
+  # others positive integers); any one malformed adds none of them, and the server refuses the fenced call. The names are
+  # shared/continuity-door.ts's.
+  if [[ "$FENCE_KEY" =~ ^[0-9a-f]{64}$ && "$FENCE_GENERATION" =~ ^[1-9][0-9]{0,15}$ && "$FENCE_COUNTER" =~ ^[1-9][0-9]{0,15}$ ]]; then
+    cfg+=$'\n'"header = \"$ACT_KEY_HEADER: $FENCE_KEY\""$'\n'"header = \"$ACT_GENERATION_HEADER: $FENCE_GENERATION\""
+    cfg+=$'\n'"header = \"$ACT_COUNTER_HEADER: $FENCE_COUNTER\""
   fi
   if [[ -n "$body" ]]; then
     esc=${body//\\/\\\\}; esc=${esc//\"/\\\"}; esc=${esc//$'\n'/\\n}; esc=${esc//$'\r'/\\r}

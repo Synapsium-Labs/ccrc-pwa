@@ -9,6 +9,7 @@ import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DOOR_TOOLS } from '../../ccd/door-process.mjs';
+import { ACT_COUNTER_HEADER, ACT_GENERATION_HEADER, ACT_KEY_HEADER } from '../../shared/continuity-door.js';
 import { harnessBin } from './ccdWsHelpers.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -42,13 +43,15 @@ beforeEach(async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   writeClientHome(home, `http://127.0.0.1:${(server.address() as AddressInfo).port}`, TOKEN);
   const bin = harnessBin(home);
-  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf 'cc-${ID}\\n'\n`, { mode: 0o755 });
+  // The recording tmux and curl append whatever of the three fence variables they inherited (F5: nothing).
+  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s' "\${CCRC_ACT_KEY-}\${CCRC_ACT_GENERATION-}\${CCRC_ACT_COUNTER-}" >> "$HOME/fence.seen"\nprintf 'cc-${ID}\\n'\n`, { mode: 0o755 });
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), `${UUID}\n`);
   // The recording curl: its own command line, then its stdin; the real curl runs on that stdin.
   fs.writeFileSync(path.join(bin, 'curl'), [
     '#!/bin/sh',
     'if [ -r /proc/$$/cmdline ]; then tr \'\\000\' \'\\n\' < /proc/$$/cmdline > "$HOME/curl.cmdline"; else printf \'%s\\n\' "$0" "$@" > "$HOME/curl.cmdline"; fi',
+    'printf \'%s\' "${CCRC_ACT_KEY-}${CCRC_ACT_GENERATION-}${CCRC_ACT_COUNTER-}" >> "$HOME/fence.seen"',
     'cat > "$HOME/curl.stdin"',
     `exec '${REAL_CURL}' "$@" < "$HOME/curl.stdin"`,
     '',
@@ -194,6 +197,22 @@ describe('the fence rides curl\'s stdin config', () => {
     expect(argv).not.toContain(TOKEN);
     // And they reached the server as headers.
     expect([seen[0]!.headers['x-ccrc-act-key'], seen[0]!.headers['x-ccrc-act-generation'], seen[0]!.headers['x-ccrc-act-counter']]).toEqual([KEY, '3', '12']);
+  });
+
+  it('no child of the client inherits the fence: curl and tmux see none of the three (review 2735 F5)', async () => {
+    const r = await door('note_close', { revises: 5 }, FENCE);
+    expect(r.status, r.stderr).toBe(0);
+    expect(stdin()).toContain(`header = "x-ccrc-act-key: ${KEY}"`);   // the fence still rode the config
+    const f = path.join(home, 'fence.seen');
+    expect(fs.existsSync(f), 'both stubs ran').toBe(true);
+    expect(fs.readFileSync(f, 'utf8')).toBe('');
+  });
+
+  it('the client\'s three header names are shared/continuity-door.ts\'s', () => {
+    const text = fs.readFileSync(path.join(ROOT, 'ccd/ccrc-api'), 'utf8');
+    const named = (v: string): string | undefined => new RegExp(`^${v}='([^']+)'$`, 'm').exec(text)?.[1];
+    expect([named('ACT_KEY_HEADER'), named('ACT_GENERATION_HEADER'), named('ACT_COUNTER_HEADER')])
+      .toEqual([ACT_KEY_HEADER, ACT_GENERATION_HEADER, ACT_COUNTER_HEADER]);
   });
 
   it('an unfenced environment adds none', async () => {

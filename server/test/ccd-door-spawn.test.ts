@@ -44,8 +44,12 @@ const REG = (): string => path.join(h.home, '.cc-sessions');
 const doorDir = (): string => path.join(REG(), '.door', ID);
 const mcp = (): string => path.join(doorDir(), 'mcp.json');
 const wsDir = (): string => path.join(h.home, 'projects', 'overlord');
+const client = (): string => path.join(h.home, '.local', 'bin', 'ccrc-api');
 const seed = (surfaced = true): void => {
   fs.mkdirSync(wsDir(), { recursive: true });
+  // The client the door process runs: a stub, since the spawn refuses without one (review 2735, departure 3).
+  fs.mkdirSync(path.dirname(client()), { recursive: true });
+  fs.writeFileSync(client(), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
   execFileSync('git', ['-C', wsDir(), 'init', '-q']);
   h.sh(`_reg_set ${ID} wrapper claude
         _reg_set ${ID} workdir '${wsDir()}'
@@ -134,6 +138,23 @@ describe('a surfaced spawn writes the tool-server config and puts only its path 
     expect(hashOn(b.lines[0]!)).toBe(sha(n2));
   });
 
+  it('a spawn removes the last process\'s delta and its temp, so a respawn\'s first prompt never reads the old lease (review 2735 F2)', () => {
+    seed();
+    fs.mkdirSync(doorDir(), { recursive: true, mode: 0o700 });
+    for (const n of ['delta', 'delta.tmp']) fs.writeFileSync(path.join(doorDir(), n), 'v=1 at=1 until=99999999999999\nold\n', { mode: 0o600 });
+    const r = spawnOnce();
+    expect(r.status, r.err).toBe(0);
+    expect(fs.readdirSync(doorDir()).sort()).toEqual(['mcp.json']);
+  });
+
+  it('under an inherited xtrace the nonce reaches no stderr (review 2735 F7)', () => {
+    seed();
+    const r = spawnOnce('set -x;');
+    expect(r.status, r.err).toBe(0);
+    expect(r.err).toContain('_door_spawn');            // the trace really ran
+    expect(r.err).not.toContain(configOf().nonce);
+  });
+
   it('a spawn with no surface writes nothing under $REG/.door/ and puts no door on the pane', () => {
     seed(false);
     const { lines, status, err } = spawnOnce();
@@ -195,6 +216,27 @@ describe('each failure refuses the spawn: no pane, its phrase in swap.log, no mc
     fs.symlinkSync(elsewhere, doorDir());
     refused(spawnOnce(), 'the door directory is a link');
     expect(fs.readdirSync(elsewhere)).toEqual([]);
+  });
+
+  it.each([
+    ['missing', (): void => fs.rmSync(client())],
+    ['a link, even to an executable', (): void => { const real = path.join(h.home, 'real-client'); fs.renameSync(client(), real); fs.symlinkSync(real, client()); }],
+    ['not executable', (): void => fs.chmodSync(client(), 0o644)],
+    ['a directory', (): void => { fs.rmSync(client()); fs.mkdirSync(client()); }],
+  ])('a client that is %s (review 2735, departure 3)', (_w, make) => {
+    seed();
+    make();
+    refused(spawnOnce(), 'the client is missing, linked or not executable');
+  });
+
+  it('a directory at mcp.json: refused, and nothing is written inside it (review 2735 F7)', () => {
+    seed();
+    fs.mkdirSync(mcp(), { recursive: true });
+    const r = spawnOnce();
+    expect(r.status).not.toBe(0);
+    expect(r.lines).toHaveLength(0);
+    expect(r.journal[0]).toContain(`${ID}: door process: the tool-server config could not be written — no pane started`);
+    expect(fs.readdirSync(mcp())).toEqual([]);
   });
 
   it('no node on PATH', () => {

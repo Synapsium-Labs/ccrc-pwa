@@ -93,6 +93,8 @@ export const ANCHOR_PREFIX = 'ccrc-anchor:';
 export const DELTA_PREFIX = 'ccrc-delta:';
 /** The one instruction (C38), the anchor's last line. */
 export const ANCHOR_INSTRUCTION = "Your card is the server's record of what stands. Read it now with `ccrc-api card`, before anything else.";
+/** The Overlord's form of it (door process A2, review 2735 F3): the Overlord has no shell and reads its card through its door. */
+export const ANCHOR_INSTRUCTION_DOOR = "Your card is the server's record of what stands. Read it now with your card door, before anything else.";
 /** What the start form's generation canary ends with, in place of the card hash (slug anchor-before-start-report). */
 export const ANCHOR_START_NOT_REPORTED = '(this start not yet reported)';
 /** The canary's card hash is this many hex characters of the card's sha256. */
@@ -175,7 +177,8 @@ function fitBytes(text: string, maxBytes: number): string {
 export function renderAnchor(f: CardFacts, a: AnchorInput, form: AnchorTextForm, mask: (text: string) => string = (t) => t): string {
   // The delta: one line, the canaries first, cut from the end at its ceiling, so a cut keeps them (nothing reaches `mask`).
   if (form === 'delta') return fitBytes([`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)].join(' · '), ANCHOR_CEILING.delta);
-  const tail = form === 'start' ? [canaryLine(a, form), countsLine(f), ANCHOR_INSTRUCTION] : [canaryLine(a, form), ANCHOR_INSTRUCTION];
+  const instruction = f.role === 'overlord' ? ANCHOR_INSTRUCTION_DOOR : ANCHOR_INSTRUCTION;
+  const tail = form === 'start' ? [canaryLine(a, form), countsLine(f), instruction] : [canaryLine(a, form), instruction];
   const fixed = tail.join('\n');
   // The prompt form is bounded by construction (two safe integers, twelve hex characters, fixed words), never cut: its
   // worst case is pinned under `ANCHOR_PROMPT_MAX_CHARS` by a test, and it carries no row's text, so nothing reaches `mask`.

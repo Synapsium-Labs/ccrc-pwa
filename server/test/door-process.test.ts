@@ -2,11 +2,11 @@
 // against a STUB client (CCRC_API) that records every invocation (argv, stdin, the fence variables in its environment) and
 // answers from files in its temp dir. The back-off cases run in-process with a fake clock. Fixture keys, nonces and ids only.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawn, type ChildProcess } from 'node:child_process';
+import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DOOR_TOOLS, DELTA_LEASE_MS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, createDoor,
+  DOOR_TOOLS, DELTA_LEASE_MS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, MAX_LINE_BYTES, PROTOCOL_VERSIONS, createDoor,
 } from '../../ccd/door-process.mjs';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -79,14 +79,14 @@ class Proc {
   private nextId = 1;
   exited: Promise<number | null>;
   raw: Rpc[] = [];
-  constructor(opts: { doorDir?: string } = {}) {
+  constructor(opts: { doorDir?: string; program?: string } = {}) {
     const env: Record<string, string> = {
       PATH: process.env['PATH'] ?? '', HOME: dir, CCRC_SESSION_ID: ID, CCRC_API: stub, CCRC_DOOR_NONCE: NONCE,
       // Stale fence variables in the process's own environment: no child may inherit them.
       CCRC_ACT_KEY: 'ab'.repeat(32), CCRC_ACT_GENERATION: '77', CCRC_ACT_COUNTER: '99',
     };
     if (opts.doorDir !== undefined) env['CCRC_DOOR_DIR'] = opts.doorDir;
-    this.child = spawn('node', [PROGRAM], { env, stdio: ['pipe', 'pipe', 'pipe'] });
+    this.child = spawn('node', [opts.program ?? PROGRAM], { env, stdio: ['pipe', 'pipe', 'pipe'] });
     this.child.stdin!.on('error', () => {});
     this.child.stdout!.setEncoding('utf8');
     this.child.stderr!.setEncoding('utf8');
@@ -156,6 +156,34 @@ describe('the door process: protocol', () => {
     await until(() => log().length >= 1, 'the start-up whoami');
     await sleep(200);
     expect(log().map((e) => e.verb)).toEqual(['whoami']);
+  });
+
+  it('ping answers an empty result; initialize agrees to a version it knows and answers its own for any other (review 2735 F7)', async () => {
+    const p = new Proc();
+    expect((await p.rpc('ping')).result).toEqual({});
+    expect((await p.rpc('initialize', { protocolVersion: PROTOCOL_VERSIONS[1] })).result.protocolVersion).toBe(PROTOCOL_VERSIONS[1]);
+    expect((await p.rpc('initialize', { protocolVersion: '1999-01-01' })).result.protocolVersion).toBe(PROTOCOL_VERSIONS[0]);
+  });
+
+  it('a line past MAX_LINE_BYTES is dropped with one parse error, and the next line is served (review 2735 F7)', async () => {
+    const p = new Proc();
+    // A valid request, once whole: a process that kept the line would answer id 99.
+    p.child.stdin!.write('{"jsonrpc":"2.0","id":99,"method":"ping","params":{"pad":"');
+    p.child.stdin!.write('x'.repeat(MAX_LINE_BYTES + 10));
+    p.child.stdin!.write('y'.repeat(MAX_LINE_BYTES + 10));
+    p.write('"}}');                             // the end of the long line: dropped with it
+    expect((await p.rpc('ping')).result).toEqual({});
+    expect(p.raw.filter((m) => m.id === null).map((m) => m.error?.code)).toEqual([-32700]);
+    expect(p.raw.filter((m) => m.id === 99)).toEqual([]);
+  });
+
+  it('started through a linked ancestor directory, the program still serves (review 2735 F1)', async () => {
+    const linked = path.join(dir, 'linked');
+    fs.symlinkSync(path.dirname(PROGRAM), linked);
+    const p = new Proc({ program: path.join(linked, path.basename(PROGRAM)) });
+    p.write(JSON.stringify({ jsonrpc: '2.0', id: 1, method: 'initialize', params: {} }));
+    await until(() => p.raw.length > 0, 'an answer to initialize', 5000);
+    expect(p.raw[0]!.result.serverInfo.name).toBe('door');
   });
 
   it('an unknown method with an id answers method-not-found; closing stdin ends the process within a short bound', async () => {
@@ -281,11 +309,13 @@ describe('the door process: refusals, errors and the cache', () => {
     expect(log().map((e) => e.verb)).toEqual(['whoami']);
   });
 
-  it('a whoami that fails refuses every call too', async () => {
+  it('a whoami that fails refuses the call that asked, and runs nothing else', async () => {
     put('rc.whoami', '3');
     const p = new Proc();
-    expect((await p.call('timer_list', {})).isError).toBe(true);
-    expect(log().map((e) => e.verb)).toEqual(['whoami']);
+    const r = await p.call('timer_list', {});
+    expect(r.isError).toBe(true);
+    expect(r.text).toContain('could not be read');
+    expect(log().every((e) => e.verb === 'whoami')).toBe(true);
   });
 
   it('a tool result is an error when the client says ok:false, when it exits non-zero, and not otherwise', async () => {
@@ -336,6 +366,25 @@ describe('the door process: refusals, errors and the cache', () => {
       expect(fs.statSync(cache()).ino).not.toBe(ino);
       expect(fs.existsSync(path.join(cacheDir(), 'delta.tmp'))).toBe(false);
       expect(fs.statSync(cache()).mode & 0o777).toBe(0o600);
+    });
+
+    it('the process writes the cache once at its start, before any call (review 2735 F2)', async () => {
+      delta(good(TEXT));
+      const p = new Proc({ doorDir: cacheDir() });
+      await until(() => fs.existsSync(cache()), 'the delta file at the start');
+      expect(fs.readFileSync(cache(), 'utf8').endsWith(TEXT)).toBe(true);
+      expect(log().map((e) => e.verb)).toEqual(['whoami', 'delta']);
+      expect(p.raw).toEqual([]);
+    });
+
+    it('calls sent together are followed by one refresh, not one each (review 2735 F7)', async () => {
+      delta(good(TEXT));
+      put('delay.timer', '0.3');
+      const p = new Proc({ doorDir: cacheDir() });
+      await Promise.all([p.call('timer_list', {}), p.call('timer_list', {}), p.call('timer_list', {})]);
+      await until(() => fetches() >= 2, 'the refresh after the calls');
+      await sleep(500);
+      expect(fetches(), 'the start\'s refresh and one after the three calls').toBe(2);
     });
 
     it('a dark answer writes an empty text', async () => {
@@ -403,6 +452,52 @@ describe('the claim\'s answers (in-process, a fake clock)', () => {
     expect(of('note').at(-1)!.key).toBe(KEY);
   });
 
+  it('a whoami that fails refuses only that call; the next call after the back-off asks again and is served (review 2735 F4)', async () => {
+    put('rc.whoami', '3');
+    const d = door();
+    const a = await d.call('note_list', {});
+    expect(a!.isError).toBe(true);
+    expect(a!.text).toContain('could not be read');
+    expect(of('whoami')).toHaveLength(1);
+    now += CLAIM_RETRY_MIN_MS - 1;
+    expect((await d.call('note_list', {}))!.isError).toBe(true);
+    expect(of('whoami'), 'no ask inside the back-off').toHaveLength(1);
+    put('rc.whoami', '0');
+    now += 1;
+    const b = await d.call('note_list', {});
+    expect(b!.isError).toBe(false);
+    expect(of('whoami')).toHaveLength(2);
+    expect(d.state()).toMatchObject({ identified: true, refused: false });
+  });
+
+  it('a whoami naming another session refuses for the life of the process, whatever a later whoami would say (review 2735 F4)', async () => {
+    answer('whoami', { id: 'lane-b-project-b', uuid: 'u-2' });
+    const d = door();
+    expect((await d.call('note_list', {}))!.text).toContain('does not serve this session');
+    answer('whoami', { id: ID, uuid: UUID });
+    now += 10 * CLAIM_RETRY_MAX_MS;
+    expect((await d.call('note_list', {}))!.text).toContain('does not serve this session');
+    expect(of('whoami')).toHaveLength(1);
+    expect(of('note')).toHaveLength(0);
+  });
+
+  it('no child gets the nonce from the base environment it was handed: the children\'s own removal (review 2735 F6)', async () => {
+    const d = createDoor({ api: stub, self: ID, nonce: NONCE, dir: null, env: { PATH: process.env['PATH'] ?? '', HOME: dir, CCRC_DOOR_NONCE: NONCE }, now: () => now });
+    await d.call('note_add', {});
+    await d.call('timer_list', {});
+    expect(log().length).toBeGreaterThan(3);
+    for (const e of log()) expect(e.nonce, `${e.verb} child holds the nonce`).toBeNull();
+  });
+
+  it('a timer note holding a NUL is refused before anything runs, and takes no counter (review 2735 F7)', async () => {
+    const d = door();
+    const r = await d.call('timer_set', { after: '90m', note: 'a\u0000b' });
+    expect(r!.isError).toBe(true);
+    expect(r!.text).toContain('NUL');
+    expect(of('timer')).toHaveLength(0);
+    expect(d.state().counter).toBe(0);
+  });
+
   it('stale-generation drops the nonce: no later claim, and reads still serve', async () => {
     answer('sessions-act-key', { ok: false, error: 'stale-generation' });
     const d = door();
@@ -439,6 +534,14 @@ describe('the claim\'s answers (in-process, a fake clock)', () => {
 });
 
 describe('the secrets', () => {
+  it('started as a program, the process deletes the nonce from its own environment at once (review 2735 F6)', () => {
+    const code = 'await import(pathToFileURL(process.argv[1]).href); process.stdout.write(`nonce-in-env=${"CCRC_DOOR_NONCE" in process.env}`); process.exit(0);';
+    const r = spawnSync('node', ['--input-type=module', '-e', `import { pathToFileURL } from 'node:url'; ${code}`, PROGRAM], {
+      env: { PATH: process.env['PATH'] ?? '', HOME: dir, CCRC_SESSION_ID: ID, CCRC_API: stub, CCRC_DOOR_NONCE: NONCE }, input: '', encoding: 'utf8', timeout: 20_000,
+    });
+    expect(r.stdout, r.stderr).toBe('nonce-in-env=false');
+  });
+
   it('a claim and a malformed line leave neither the nonce nor the key on any spawned door\'s stdout or stderr', async () => {
     const p = new Proc();
     await p.call('note_add', { kind: 'thread' });

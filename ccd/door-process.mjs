@@ -22,10 +22,11 @@
 // most one claim is in flight and writes reach the server in counter order. The counter rises by one before each fenced send and
 // is never reused, even after a send that got no answer.
 //
-// Node built-ins only: `node:child_process`, `node:fs` and `node:path` (B1's witness key adds `node:crypto`).
+// Node built-ins only: `node:child_process`, `node:fs`, `node:path` and `node:url` (B1's witness key adds `node:crypto`).
 import { execFile } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { pathToFileURL } from 'node:url';
 
 /** The claim's back-off while it answers `renewing`: from 1 s, doubling, to at most 30 s (`CLAIM_RETRY_MIN_MS`,
  *  `CLAIM_RETRY_MAX_MS` in shared/continuity-door.ts, held equal by door-tools.test.ts). */
@@ -36,6 +37,10 @@ export const DELTA_REFRESH_MS = 60_000;
 export const DELTA_LEASE_MS = 180_000;
 /** One `ccrc-api` child's bound: the client's own curl bound is 30 s. */
 export const CALL_TIMEOUT_MS = 35_000;
+/** One JSON-RPC line's bound: a longer one with no newline is dropped whole and answered with a parse error (review 2735 F7). */
+export const MAX_LINE_BYTES = 1024 * 1024;
+/** The protocol versions `initialize` agrees to; any other request is answered with the first (review 2735 F7). */
+export const PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '2024-11-05']);
 /** No tool input names an attribution field: the client fills the pane's pair itself. */
 export const ATTRIBUTION_FIELDS = Object.freeze(['fromId', 'fromUuid', 'byId', 'byUuid']);
 
@@ -111,7 +116,7 @@ export const DOOR_TOOLS = Object.freeze([
     input: object({ after: { type: 'string', pattern: '^[1-9][0-9]{0,4}[mhd]$' }, note: { type: 'string' }, run: { type: 'integer', minimum: 1 }, programme: { type: 'string' } }, ['after', 'note']),
     argv: (i) => {
       need(typeof i.after === 'string' && /^[1-9][0-9]{0,4}[mhd]$/.test(i.after), 'after is a duration such as 90m, 2h or 3d');
-      need(typeof i.note === 'string' && i.note.length > 0 && !i.note.startsWith('-'), 'note is text that does not begin with -');
+      need(typeof i.note === 'string' && i.note.length > 0 && !i.note.startsWith('-') && !i.note.includes('\0'), 'note is text that does not begin with - and holds no NUL');
       need(!(i.run !== undefined && i.programme !== undefined), 'name a run or a programme, not both');
       need(i.run === undefined || isId(i.run), 'run is a run id');
       need(i.programme === undefined || (typeof i.programme === 'string' && /^[a-z0-9][a-z0-9-]{0,63}$/.test(i.programme)), 'programme is a programme slug');
@@ -162,7 +167,8 @@ const parseJson = (s) => { try { return JSON.parse(s); } catch { return undefine
 export function createDoor(opts) {
   const { api, self, dir, env, now = () => Date.now(), log = () => {} } = opts;
   const st = { nonce: HEX64.test(opts.nonce ?? '') ? opts.nonce : null, key: null, generation: null, counter: 0,
-    nextClaimAt: 0, backoff: CLAIM_RETRY_MIN_MS, who: null, refused: false };
+    nextClaimAt: 0, backoff: CLAIM_RETRY_MIN_MS, who: null, refused: false, nextWhoAt: 0, whoBackoff: CLAIM_RETRY_MIN_MS,
+    refreshQueued: false };
   let chain = Promise.resolve();
   /** @type {<T>(fn: () => Promise<T>) => Promise<T>} */
   const serial = (fn) => { const p = chain.then(fn, fn); chain = p.then(() => {}, () => {}); return p; };
@@ -173,13 +179,22 @@ export function createDoor(opts) {
     return { ...e, ...extra };
   };
 
-  /** Start: `ccrc-api whoami` must name this process's session, or every call refuses. */
-  const ready = serial(async () => {
+  /** The identity (ruled, review 2735 F4): `ccrc-api whoami` must name this process's session. A whoami that names another
+   *  session refuses every call for the life of the process; one that fails (an exit, a timeout, an unreadable answer)
+   *  refuses only the call that asked, and the next call asks again after the claim's back-off. */
+  async function identify() {
+    if (st.refused || st.who !== null || now() < st.nextWhoAt) return;
     const r = await runClient(api, ['whoami'], childEnv({}), '');
     const w = parseJson(r.stdout);
-    if (r.code === 0 && w && w.id === self && typeof w.uuid === 'string' && w.uuid !== '') st.who = { id: w.id };
-    else { st.refused = true; log('door: whoami does not name this session; every call refuses'); }
-  });
+    if (r.code === 0 && w && typeof w.id === 'string' && typeof w.uuid === 'string' && w.uuid !== '') {
+      if (w.id === self) { st.who = { id: w.id }; st.whoBackoff = CLAIM_RETRY_MIN_MS; return; }
+      st.refused = true; log('door: whoami does not name this session; every call refuses');
+      return;
+    }
+    st.nextWhoAt = now() + st.whoBackoff; st.whoBackoff = Math.min(st.whoBackoff * 2, CLAIM_RETRY_MAX_MS);
+    log('door: whoami could not be read; this call refuses, and a later one asks again after a back-off');
+  }
+  const ready = serial(identify);
 
   /** The claim, while no key is held and a nonce is: once a back-off allows it. Never throws; the key stays in memory. */
   async function claim() {
@@ -208,7 +223,7 @@ export function createDoor(opts) {
   /** The delta cache (C38, Task 6): `ccrc-api card --anchor --form delta`, written at 0600 through `delta.tmp` and a rename.
    *  A text answer writes its text, a dark answer an empty text; a failed fetch writes nothing, so the lease lapses. */
   async function refreshDelta() {
-    if (!dir || st.refused) return;
+    if (!dir || st.who === null) return;
     const r = await runClient(api, ['card', '--anchor', '--form', 'delta'], childEnv({}), '');
     const a = parseJson(r.stdout);
     if (r.code !== 0 || !a || a.ok !== true || a.part !== 'anchor' || a.form !== 'delta') return;
@@ -229,8 +244,9 @@ export function createDoor(opts) {
     const row = DOOR_TOOLS.find((r) => r.name === name);
     if (!row) return null;
     const res = await serial(async () => {
-      await ready;
+      await identify();
       if (st.refused) return { text: 'door: this process does not serve this session (whoami named another); nothing was sent', isError: true };
+      if (st.who === null) return { text: 'door: whoami could not be read, so this session is unconfirmed; nothing was sent, and a later call asks again', isError: true };
       const i = input ?? {};
       if (i === null || typeof i !== 'object' || Array.isArray(i)) return { text: 'door: the input is not an object; nothing was sent', isError: true };
       if (namesAttribution(i)) return { text: 'door: the input names an attribution field; the client fills the pane\'s own, so nothing was sent', isError: true };
@@ -253,12 +269,22 @@ export function createDoor(opts) {
       const isError = r.code !== 0 || (j !== undefined && j !== null && typeof j === 'object' && j.ok === false);
       return { text: r.stdout, isError };
     });
-    void serial(refreshDelta);
+    void requestRefresh();
     return res;
   }
 
-  return { call, refreshDelta: () => serial(refreshDelta), ready, state: () => ({ claimed: st.key !== null, generation: st.generation,
-    counter: st.counter, nonceHeld: st.nonce !== null, refused: st.refused }) };
+  /** One refresh on the chain unless one is already queued, so calls sent together are followed by one refresh, not one each
+   *  (review 2735 F7). */
+  function requestRefresh() {
+    if (st.refreshQueued) return Promise.resolve();
+    st.refreshQueued = true;
+    return serial(async () => { st.refreshQueued = false; await refreshDelta(); });
+  }
+  // A respawn's first prompt never reads the last process's lease (review 2735 F2): the cache is written once at the start.
+  void requestRefresh();
+
+  return { call, refreshDelta: requestRefresh, ready, state: () => ({ claimed: st.key !== null, generation: st.generation,
+    counter: st.counter, nonceHeld: st.nonce !== null, refused: st.refused, identified: st.who !== null }) };
 }
 
 /** The JSON-RPC server over stdin and stdout. Every answer is a fixed shape; a parse error quotes nothing. */
@@ -273,10 +299,13 @@ export function serve(door, input, output) {
     const id = m.id;
     const hasId = typeof id === 'string' || typeof id === 'number';
     if (m.method === 'initialize') {
-      const v = typeof m.params?.protocolVersion === 'string' ? m.params.protocolVersion : '2025-06-18';
+      const asked = m.params?.protocolVersion;
+      const v = typeof asked === 'string' && PROTOCOL_VERSIONS.includes(asked) ? asked : PROTOCOL_VERSIONS[0];
       send({ jsonrpc: '2.0', id, result: { protocolVersion: v, capabilities: { tools: {} }, serverInfo: { name: 'door', version: '1' } } });
     } else if (m.method === 'notifications/initialized' || (!hasId && typeof m.method === 'string' && m.method.startsWith('notifications/'))) {
       // a notification is answered by nothing
+    } else if (m.method === 'ping' && hasId) {
+      send({ jsonrpc: '2.0', id, result: {} });
     } else if (m.method === 'tools/list') {
       send({ jsonrpc: '2.0', id, result: { tools } });
     } else if (m.method === 'tools/call') {
@@ -289,11 +318,19 @@ export function serve(door, input, output) {
       send({ jsonrpc: '2.0', id, error: { code: -32601, message: 'method not found' } });
     }
   };
+  let dropping = false;   // inside a line past MAX_LINE_BYTES: everything up to its newline is dropped
   input.setEncoding('utf8');
   input.on('data', (d) => {
     buf += d;
     let n;
-    while ((n = buf.indexOf('\n')) >= 0) { const line = buf.slice(0, n); buf = buf.slice(n + 1); handle(line); }
+    while ((n = buf.indexOf('\n')) >= 0) {
+      const line = buf.slice(0, n); buf = buf.slice(n + 1);
+      if (dropping) dropping = false; else handle(line);
+    }
+    if (buf.length > MAX_LINE_BYTES) {
+      buf = '';
+      if (!dropping) { dropping = true; send({ jsonrpc: '2.0', id: null, error: { code: -32700, message: 'parse error' } }); }
+    }
   });
 }
 
@@ -312,5 +349,9 @@ function main() {
   setInterval(() => { void door.refreshDelta(); }, DELTA_REFRESH_MS).unref();
 }
 
-const started = process.argv[1] !== undefined && path.resolve(process.argv[1]) === decodeURIComponent(new URL(import.meta.url).pathname);
-if (started) main();
+/** Started as a program: real paths on both sides (review 2735 F1), since `import.meta.url` is the real path and the spawn's
+ *  path may run through a linked ancestor (a linked `~/.local`, which the entry installer supports). */
+function startedAsProgram() {
+  try { return process.argv[1] !== undefined && import.meta.url === pathToFileURL(fs.realpathSync(process.argv[1])).href; } catch { return false; }
+}
+if (startedAsProgram()) main();

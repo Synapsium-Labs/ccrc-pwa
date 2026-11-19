@@ -70,13 +70,15 @@ _door_purge() {   # id -> remove $REG/.door/<id>/'s four named files and the dir
 # own environment (`$ENV`), never an argv, and is written to `$REG/.door/<id>/mcp.json` (0600, its directories 0700) and nowhere
 # else; the hash is taken over the nonce's 64-character hex TEXT, with no newline, as the claim door hashes it (A1's note F3).
 _door_spawn() {   # id -> 0 with --mcp-config on PROFILE_SPAWN_FLAGS and CCRC_DOOR_NONCE_SHA256 on PROFILE_SPAWN_ENV; else 1 and DOOR_SPAWN_WHY
-  local LC_ALL=C IFS=' ' id="${1-}" self="${BASH_SOURCE[0]}" dir=. prog nodebin nonce sum d f
+  local -; set +x   # a SECRETS control: an inherited xtrace would print the nonce (review 2735 F7)
+  local LC_ALL=C IFS=' ' id="${1-}" self="${BASH_SOURCE[0]}" dir=. prog nodebin nonce sum d f api="$HOME/.local/bin/ccrc-api"
   DOOR_SPAWN_WHY="the session id is not a registry id"
   _reg_id_ok "$id" && [[ "$id" != . && "$id" != .. ]] || return 1
   [[ "$self" == */* ]] && dir="${self%/*}"
   [[ "$dir" == /* ]] || dir="$PWD/$dir"
   prog="$dir/door-process.mjs" d="$REG/$DOOR_REG_DIR" f="$REG/$DOOR_REG_DIR/$id/mcp.json"
   DOOR_SPAWN_WHY="the door program is missing, linked or not the pinned one"; _door_prog_ok "$prog" || return 1
+  DOOR_SPAWN_WHY="the client is missing, linked or not executable"; [[ ! -L "$api" && -f "$api" && -x "$api" ]] || return 1
   DOOR_SPAWN_WHY="no node on PATH"; nodebin=$(command -v node 2>/dev/null) && [[ "$nodebin" == /* ]] || return 1
   DOOR_SPAWN_WHY="a door path holds a quote"; [[ "$f$prog$nodebin" != *"'"* ]] || return 1
   DOOR_SPAWN_WHY="no launch nonce could be read"
@@ -85,9 +87,11 @@ _door_spawn() {   # id -> 0 with --mcp-config on PROFILE_SPAWN_FLAGS and CCRC_DO
   DOOR_SPAWN_WHY="the door directory is a link"; [[ ! -L "$d" && ! -L "$d/$id" ]] || return 1
   DOOR_SPAWN_WHY="the door directory could not be made"
   ( umask 077; mkdir -p "$d/$id" ) 2>/dev/null && [[ ! -L "$d" && ! -L "$d/$id" ]] && chmod 700 "$d" "$d/$id" 2>/dev/null || return 1
-  DOOR_SPAWN_WHY="the tool-server config could not be written"; rm -f -- "$f.tmp" 2>/dev/null
+  # A directory at mcp.json would take the temp file inside it; the last process's delta never outlives its spawn (review 2735 F2).
+  DOOR_SPAWN_WHY="the tool-server config could not be written"; [[ ! -d "$f" ]] || return 1
+  rm -f -- "$f.tmp" "$d/$id/delta" "$d/$id/delta.tmp" 2>/dev/null
   if ! ( umask 077; set -C; CCRC_DOOR_NONCE="$nonce" jq -n --arg node "$nodebin" --arg prog "$prog" --arg id "$id" --arg dir "$d/$id" \
-    --arg api "$HOME/.local/bin/ccrc-api" '{mcpServers:{door:{type:"stdio",command:$node,args:[$prog],env:{CCRC_DOOR_NONCE:$ENV.CCRC_DOOR_NONCE,
+    --arg api "$api" '{mcpServers:{door:{type:"stdio",command:$node,args:[$prog],env:{CCRC_DOOR_NONCE:$ENV.CCRC_DOOR_NONCE,
       CCRC_SESSION_ID:$id,CCRC_DOOR_DIR:$dir,CCRC_API:$api}}}}' > "$f.tmp" && mv -f -- "$f.tmp" "$f" ) 2>/dev/null; then
     rm -f -- "$f.tmp" 2>/dev/null; return 1
   fi

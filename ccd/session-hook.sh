@@ -6242,16 +6242,16 @@ DOOR_DELTA=""
 _hook_door_delta() {   # -> DOOR_DELTA: the cache's line while its lease holds, empty for an empty one, else the unknown line
   local LC_ALL=C IFS=' ' f="$REG/.door/$id/delta" raw="" head1="" until="" now=""
   DOOR_DELTA="$DOOR_DELTA_UNKNOWN"
-  [[ ! -L "$f" && -f "$f" ]] || return 0
+  [[ ! -L "$REG/.door" && ! -L "$REG/.door/$id" && ! -L "$f" && -f "$f" ]] || return 0
   raw=$(_hook_timeout 2 head -c 1024 -- "$f" 2>/dev/null) || return 0
   head1="${raw%%$'\n'*}"
   [[ "$head1" =~ ^v=1\ at=[0-9]{1,16}\ until=([0-9]{1,16})$ ]] || return 0
   until="${BASH_REMATCH[1]}"; now=$(_hook_epoch_ms 2>/dev/null)
   [[ "$now" =~ ^[0-9]{1,16}$ ]] && (( 10#$until > 10#$now )) || return 0
-  raw="${raw#"$head1"}"; raw="${raw#$'\n'}"; raw="${raw%%$'\n'*}"
-  DOOR_DELTA="${raw:0:$DOOR_DELTA_MAX_BYTES}"
+  raw="${raw#"$head1"}"; raw="${raw#$'\n'}"; raw="${raw%%$'\n'*}"; raw="${raw//[[:cntrl:]]/}"   # no control byte reaches the model
+  [[ -z "$raw" || "$raw" == 'ccrc-delta: '* ]] && DOOR_DELTA="${raw:0:$DOOR_DELTA_MAX_BYTES}"   # the server's own prefix, or unknown
 }
-[[ "$event" == UserPromptSubmit && -n "${CCRC_DOOR_NONCE_SHA256-}" ]] && { _hook_door_delta || true; }
+[[ "$event" == UserPromptSubmit && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && { _hook_door_delta || true; }
 # ── THE ROSTER CARD'S WAKE ARM (R-5a, D-8201; the worktree-economy spec's "wake arm for D4") ─────────────────────────
 # Claude Code's idle compaction (about 55 minutes after a turn ends, D-5373) starts no turn and fires none of the card's
 # three SessionStart events, so a coordinator next wakes on the server's mail nudge, or on its idle-compaction nudge,

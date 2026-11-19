@@ -14,11 +14,13 @@ is taken here.
 - **`restart-of-a-dead-door-process-unmeasured`** (Task 5 Step 5, question 7): whether Claude Code restarts a dead stdio
   tool server is not measured. The session hook refused this worker's scratch run of the pinned build (its build
   category: the command named the launcher); it was reported and not retried. The coordinator's own probe reached the
-  server's start and stopped at sign-in before any call. It is left to B1's measurements. A dead door process means no
-  doors until the session's next start.
-- **`spawn-does-not-check-the-client`**: `_door_spawn` writes the installed client's path (`~/.local/bin/ccrc-api`) into the
-  config without checking that it exists. The door process's start (`whoami`) is the check, and it fails closed; a check at
-  the spawn would have refused every surfaced spawn in the suites that build a fixture HOME without the client.
+  server's start and stopped at sign-in before any call. Ruled (fix round 1): accepted as B1's carry, measured live on the
+  test box. Until then a dead door process means no doors until the session's next start. B1's live step should also
+  search Claude Code's cache and log directories for the nonce after a scratch run (review 2735's residual).
+- **`spawn-checks-the-client`** (was `spawn-does-not-check-the-client`; ruled in fix round 1): `_door_spawn` refuses the spawn
+  unless the installed client (`~/.local/bin/ccrc-api`) is a regular file, executable and not a link ("the client is missing,
+  linked or not executable"), so an Overlord never starts without its doors. The suites that make a surfaced spawn plant a
+  stub client. The client is not pinned the way the program is, and it is not write-denied: a same-user residual.
 - **`program-beside-the-body`**: `_door_spawn` finds the program beside ccd's body (`${BASH_SOURCE[0]}`'s directory) in both
   layouts: `ccd/door-process.mjs` in a source checkout, `~/.local/libexec/ccrc/door-process.mjs` installed. That is the
   plan's two places, read as one rule.
@@ -42,8 +44,10 @@ is taken here.
 - **`act-key-headers-tested-in-the-argv-suite`**: the plan's `ccrc-api-act-key.test.ts` cases (the three headers on curl's
   stdin, none on its argv, a malformed value adding none) live in `door-tools-argv.test.ts`, beside every row's argv run
   through the real client, so the fenced rows and the header rule are one fixture.
-- **`timer-tool-takes-after`**: the `timer_set` tool's duration field is named `after` (`90m`, `2h`, `3d`), and a note that
-  begins with `-` is refused, because `ccrc-api timer set` reads its note from the argv, where a leading dash reads as a flag.
+- **`timer-tool-takes-after`**: the `timer_set` tool's duration field is named `after` (`90m`, `2h`, `3d`). A note that
+  begins with `-`, or holds a NUL, is refused by the door itself. The client does not need the first: `parse_timer` checks
+  only its first operand (`$1`, the duration) for a flag and takes the next as the note whatever it begins with. The door
+  keeps the narrowing so a note never reads as a flag on the argv. A NUL could not ride an argv at all.
 - **`delta-shadow-not-logged`**: the card door logs a shadow anchor's size once per card hash for the start and prompt
   forms; it does not log the delta form, which the door process fetches every minute.
 - **`delta-is-the-prompt-canaries`**: the delta's canaries are the prompt form's (term, generation, card hash). Its worst
@@ -55,10 +59,19 @@ is taken here.
 - **`first-line-drops-you-are-the-overlord`**: `overlord-first-prompt` is now the plan's text, word for word: "Read your card
   with your card door, then answer your probes with your probe door." The designation's "You are the Overlord." is gone; the
   card says the role.
-- **`card-body-still-names-ccrc-api`**: the card's own text names `ccrc-api` commands in a few lines (the mail, notes and
-  timers sections, `server/src/continuity/card.ts`), and so do the anchor's instruction and the renewal's handover and spot
-  probe mails. A2 phrases the client's next-step lines and the probe page's tail as door calls; those other texts are for the
-  skill's and the card's owners, and the Overlord reads them as data.
+- **`card-body-still-names-ccrc-api`** (ruled in fix round 1): this PR owns the Overlord's form of the anchor instruction,
+  since it makes the card door. `renderAnchor` ends the Overlord's anchor with `ANCHOR_INSTRUCTION_DOOR` ("Read it now with your
+  card door"), every other role's with `ANCHOR_INSTRUCTION` (mutants D5 and D6). The card body's own `ccrc-api` lines (the
+  mail, notes and timers sections, `server/src/continuity/card.ts`) and the renewal's handover and spot-probe mails carry to
+  B1.
+- **`whoami-retries-unless-it-names-another`** (ruled in fix round 1, review 2735 F4): a `whoami` that names another session
+  refuses every call for the life of the process. Any other failure (an exit, a timeout, an unreadable answer) refuses only
+  the call that asked, and the next call asks again after the claim's own back-off (1 s, doubling, to 30 s).
+- **`delta-written-at-the-start`** (review 2735 F2): a spawn removes the last process's `delta` and `delta.tmp`, and the door
+  process writes the cache once at its start, so a respawn's first prompt reads the unknown line or this generation's
+  delta, never the last one's.
+- **`client-unsets-the-fence`** (review 2735 F5): `ccrc-api` copies the act key, its generation and the counter into shell
+  variables and unsets the exported ones before any child runs, so curl, jq and tmux inherit none of them.
 
 ## Carried, no change here
 
@@ -70,6 +83,22 @@ is taken here.
   it fails closed (a case).
 - **The deny path stands** (A1's F4): `~/.cc-sessions/.door/**` covers `mcp.json`, `delta` and both temp names.
 
+## Fix round 1 (review 2735), the smaller fixes
+
+- The program runs `main()` when started through a linked ancestor (real paths on both sides, F1).
+- Each nonce removal reds alone: the process's own environment (a case reads it after `main()`), and the children's base
+  environment (an in-process case, F6).
+- `_door_spawn` runs under `local -; set +x`, so an inherited xtrace never prints the nonce, and refuses a directory at
+  `mcp.json` (F7).
+- The hook's delta reader requires the server's `ccrc-delta: ` prefix (else the unknown line), drops control bytes, refuses a
+  linked `.door` or `<id>` directory, and gates on a 64-hex hash (F7).
+- The door process answers `ping`, agrees only to the protocol versions it knows, drops a line past 1 MiB with one parse
+  error, and queues at most one delta refresh at a time (F7). `ccrc-api`'s header-name comment names the suite that holds
+  them, and that suite now compares them to `shared/continuity-door.ts`.
+- The session hook refused one call of this round: a test edit whose text held `env | grep` (the account arm's "printing the
+  whole environment"). It was not retried; the recording stubs append the three fence variables by name instead, so nothing
+  prints the environment.
+
 ## Live steps
 
 - **Task 4 Step 5:** the session unit (`ccd/claude-session@.service`) sets no PATH, so `ccd supervise` runs with the user
@@ -79,8 +108,13 @@ is taken here.
 
 ## Measurements
 
-- **Growth** (net code lines against the merge base, the armed growth check green): `ccd/ccd` +1, `ccd/ccrc` +1,
-  `ccd/lib/door.sh` +26, `ccd (program)` +27, `ccd/session-hook.sh` +28; none over 40, no waiver.
+- **Growth** (net code lines against the merge base, the armed growth check green), after fix round 1: `ccd/ccd` +1,
+  `ccd/ccrc` +1, `ccd/lib/door.sh` +29, `ccd (program)` +30, `ccd/session-hook.sh` +28; none over 40, no waiver.
+- **Fix round 1's mutants, each red and restored from a saved copy:** eleven in the door process (the real-path start, the
+  start's refresh, the two whoami rulings, the one queued refresh, each nonce removal, ping, the line bound, the NUL note,
+  the protocol version), five in the spawn step (the xtrace guard, the client check and its link arm, the directory at
+  `mcp.json`, the delta's removal), four in the hook's reader (links, control bytes, prefix, hash shape), the client's
+  unset, and the anchor's D5 and D6 in `mutation-floors`.
 - **Mutations, each red and restored from a saved copy:** the spawn step's nonce on jq's argv and its missing umask; five
   in the door process, the counter reused after a failed send among them; the hook's lease, link, regular-file and
   hash-gate checks; and the new mutation sets' deciders (`renderAnchor`'s delta form, `FIRST_PROMPT_OF_ROLE`, the probe

@@ -35,7 +35,7 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
     // A1, the plan's: the canaries clipped before the role line (the role line takes the canaries' room).
     { id: 'A1', old: 'const room = ANCHOR_CEILING.start - utf8Bytes(head) - utf8Bytes(fixed) - 1;', new: 'const room = ANCHOR_CEILING.start - utf8Bytes(head) - 1;' },
     // A2, the plan's: the instruction dropped.
-    { id: 'A2', old: "form === 'start' ? [canaryLine(a, form), countsLine(f), ANCHOR_INSTRUCTION] :", new: "form === 'start' ? [canaryLine(a, form), countsLine(f)] :" },
+    { id: 'A2', old: "form === 'start' ? [canaryLine(a, form), countsLine(f), instruction] :", new: "form === 'start' ? [canaryLine(a, form), countsLine(f)] :" },
     // A3, the plan's: the prompt form past 600.
     { id: 'A3', old: "if (form === 'prompt') return `${ANCHOR_PREFIX} ${fixed}`;", new: '' },
     // A4, the plan's: `n` read for a start not yet minted.
@@ -53,12 +53,23 @@ export const ANCHOR_RENDER_SET: MutantSet<Anchor> = {
     { id: 'D2', old: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)]", new: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`]" },
     { id: 'D3', old: "  if (form === 'delta') return fitBytes(", new: "  if (form === ('none' as string)) return fitBytes(" },
     { id: 'D4', old: "[`${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`, ...counts(f)]", new: "[...counts(f), `${DELTA_PREFIX} ${canaryLine(a, 'prompt')}`]" },
+    // Door process A2, review 2735 F3: the Overlord's instruction names its card door, every other role's the client.
+    { id: 'D5', old: "f.role === 'overlord' ? ANCHOR_INSTRUCTION_DOOR : ANCHOR_INSTRUCTION", new: 'ANCHOR_INSTRUCTION' },
+    { id: 'D6', old: "f.role === 'overlord' ? ANCHOR_INSTRUCTION_DOOR : ANCHOR_INSTRUCTION", new: 'ANCHOR_INSTRUCTION_DOOR' },
   ],
   suite(m): Record<string, SuiteCase> {
     return {
       'the four parts, in order': () => {
         expect(m.renderAnchor(facts({ runs: read([run(1, 'prog-a')]) }), LIVE, 'start').split('\n'))
           .toEqual([`${m.ANCHOR_PREFIX} role: coordinator of prog-a`, CANARY, 'counts: 1 runs · 0 open items and asks · 0 outstanding mail · 0 notes', m.ANCHOR_INSTRUCTION]);
+      },
+      'the Overlord is sent to its card door, in both forms; every other role to the client': () => {
+        for (const form of ['start', 'prompt'] as const) {
+          expect(m.renderAnchor(facts({ role: 'overlord' }), LIVE, form).split('\n').at(-1), form).toBe(m.ANCHOR_INSTRUCTION_DOOR);
+          expect(m.renderAnchor(facts({ role: 'coordinator' }), LIVE, form).split('\n').at(-1), form).toBe(m.ANCHOR_INSTRUCTION);
+        }
+        expect(m.ANCHOR_INSTRUCTION_DOOR).toContain('your card door');
+        expect(m.ANCHOR_INSTRUCTION_DOOR).not.toContain('ccrc-api');
       },
       'a long role line is cut first, under the ceiling, the canaries whole': () => {
         const many = Array.from({ length: 20 }, (_, i) => run(i + 1, `prog-${i}-${'a'.repeat(150)}`));
