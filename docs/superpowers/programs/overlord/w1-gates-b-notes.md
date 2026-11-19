@@ -100,4 +100,26 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
 - **Local measurements the box could not make**: the floors suite's two `pwa/src/face/mood.ts` sets fail to load here
   (`@ccrc/ui` is not installed in this worktree's `pwa/`), and `secret-mask`'s "typed slowly" case is the known local timing
   red (door process A1's notes measured it red on a clean `main`). The whole tests-inclusive type check is OOM-killed in the
-  test slice here. CI is the arbiter of all three.
+  test slice on some runs; its one completed run here reported diagnostics only in `agent/` (no `ws` install in this
+  worktree's `agent/`), none in the server or its tests. CI is the arbiter of all three.
+
+## Measurements
+
+- **Characterization first**: `start-doors-characterization.test.ts` (38 cases) was committed green against `main`'s doors
+  before any door changed, and stays green, unchanged, behind the gate.
+- **Mutant sets** (floor 1, every mutant killed): `callerStandingOf` 11, `fenceVerdict` 12, `counterVerdict` 8,
+  `overlordGate` 18.
+- **Hand mutations**, each restored from a saved copy and sha-checked, each red:
+  - the decider: steps 5 and 6 swapped; the effective rung read at step 4; `other-incarnation` served the hook's way; a start
+    door skipping step 7; `pending-unrecorded` read as `designated-pending`; `not-above` mapped to pass;
+  - the store and the runner: the `ended` read dropped from the guarded counter; the fence record skipped on a fork; the
+    witness default bound to `witnessed`; the incarnation read before the standing;
+  - the doors: the gate call deleted from the handover door; `card` passed from the notes write door; the `return` dropped
+    after a refusal at the probe answer (the census reds it; the doors suite cannot see it); the card read recorded before
+    asking `card-record`; `card-unread` spelled in `routes.ts`;
+  - the identity port: `operator()` taking any minted actor; `consoleSubject` taking an unminted answer.
+- **Load timeouts, green alone**: `coord-db` ran 147/149 with two cases timed out at load 11 to 14 (the migration-failure
+  sweep at 157 s against its 120 s budget, and a delegation-lease case at 27 s), and both passed alone; the timers and backstop
+  route suites timed out the same way in a batch and passed alone (41 and 11).
+- **Growth**, armed, against the merge base: green (97 cases); raw lines `server/src/server.ts` +31/-6,
+  `server/src/coord/schema.ts` +21, `server/src/continuity/routes.ts` +30/-13; `store.ts` untouched.
