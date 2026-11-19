@@ -2,7 +2,7 @@
 // goes red when its check is deleted (mutation-table discipline).
 import { describe, expect, it } from 'vitest';
 import {
-  FLOW_LIMITS, FLOW_SCHEMA, PROTOCOL, PROTOCOL_STEPS, flowExportJson, flowPhases, parseFlowDoc, readFlowFile, skeletonFlowDoc,
+  FLOW_LIMITS, FLOW_SCHEMA, PROTOCOL, PROTOCOL_STEPS, briefBlockFor, flowExportJson, flowPhases, parseFlowDoc, readFlowFile, renderFlowPrompt, skeletonFlowDoc,
   validateFlow,
   type FlowBlock, type FlowDoc,
 } from '../../shared/flows.js';
@@ -174,5 +174,29 @@ describe('a shared flow file (spec §14.1, wave 1b)', () => {
   it('refuses text that is not JSON, and an unknown schema', () => {
     expect(readFlowFile('{nope')).toEqual({ ok: false, reason: 'the file is not JSON' });
     expect(readFlowFile(JSON.stringify({ ...ccrc(), schema: 9 }))).toEqual({ ok: false, reason: 'unknown schema 9' });
+  });
+});
+
+describe('the brief a flow composes (wave 2)', () => {
+  it('a work dispatch reads the block the dispatch step leads to', () => {
+    expect(briefBlockFor(ccrc(), 'work')?.id).toBe('build');
+  });
+  it('a review carries no prompt: review is a protocol step', () => {
+    expect(briefBlockFor(ccrc(), 'review')).toBeNull();
+  });
+  it('a dispatch that leads to a gate composes nothing', () => {
+    const d = ccrc();
+    block(d, 'build').kind = 'gate';
+    expect(briefBlockFor(d, 'work')).toBeNull();
+  });
+  it('a skill block names its skill first, and a missing variable stays as written', () => {
+    const b: FlowBlock = { ...block(ccrc(), 'build'), skill: 's:x', prompt: 'do {{run.id}} for {{plan.path}}, then {{plan.path}}' };
+    expect(renderFlowPrompt(b, { 'run.id': '7' })).toEqual({
+      text: 'Run the s:x skill.\n\ndo 7 for {{plan.path}}, then {{plan.path}}', missing: ['plan.path'],
+    });
+  });
+  it('an instruction block renders its prompt alone', () => {
+    const b: FlowBlock = { ...block(ccrc(), 'build'), kind: 'instruction', skill: undefined, prompt: 'slug {{programme.slug}}' };
+    expect(renderFlowPrompt(b, { 'programme.slug': 'programme-a' })).toEqual({ text: 'slug programme-a', missing: [] });
   });
 });
