@@ -15,6 +15,8 @@ import type { RunVerdict } from '../src/coord/runVerdicts.js';
 import { setLinking } from '../src/coord/linkingStore.js';
 import { mkTmp } from './tmpHelpers.js';
 import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
+import { landingStoreOver } from './landingFixture.js';
+import type { LandingOutcome } from '../src/coord/landingEntry.js';
 
 const TOKEN = 'k'.repeat(64);
 let dir: string;
@@ -454,5 +456,90 @@ describe('plan show carries the work map', () => {
     expect([thrown.statusCode, view(thrown).epics.length, workOf(thrown)]).toEqual([200, 2, { unreadable: 'read-failed' }]);
     failed.mockRestore();
     expect('unreadable' in workOf(await read())).toBe(false);
+  });
+
+  // Review 2795 F5: the route's gathering, one case per read it hands the decider, each red under the route mutant the review
+  // names (the task note lists them: RM-5 to RM-12).
+  const ticketId = (key: string): number => plan.planOf('prog-a').epics.flatMap((e) => e.tickets).find((t) => t.key === key)!.id;
+  const step = (id: number, ...to: Parameters<CoordStore['advance']>[1][]): void => {
+    for (const s of to) expect(coord.advance(id, s, 'test').ok, s).toBe(true);
+  };
+  const raise = (runId: number | null): number => {
+    const id = coord.raiseItem({ program: 'prog-a', runId, raisedBy: 'coord-a', kind: 'do', title: 'an item', why: 'w', how: [], options: null,
+      recommended: null, recommendedWhy: null, neededBy: 'soon', soonLabel: null, secretSlot: null }, 0);
+    coord.db.prepare('UPDATE operator_items SET heldUntil = NULL WHERE id = ?').run(id);
+    return id;
+  };
+
+  it('an ended plan reads ended, its open tickets left open', async () => {
+    await put(PLAN);
+    plan.closePlan('prog-a', 'done', null, 900);
+    const w = mapOf(await read());
+    expect([w.source, w.end, w.items.map((i) => i.status)]).toEqual(['ended', { outcome: 'done', why: null, at: 900 }, ['left-open', 'left-open']]);
+  });
+
+  it('an open item on a ticket\'s run, and one on its operator-act checkpoint, make it waiting on you', async () => {
+    await put(PLAN);
+    const runId = holdT1();
+    step(runId, 'dispatched');
+    const onRun = raise(runId);
+    coord.db.prepare("UPDATE plan_checkpoints SET kind = 'operator-act', itemId = ? WHERE key = 'e1-c1'").run(raise(null));
+    const onCheckpoint = (coord.db.prepare("SELECT itemId FROM plan_checkpoints WHERE key = 'e1-c1'").get() as { itemId: number }).itemId;
+    coord.db.prepare("UPDATE plan_tickets SET checkpointId = (SELECT id FROM plan_checkpoints WHERE key = 'e1-c1') WHERE key = 't2'").run();
+    const w = mapOf(await read());
+    expect(w.items.map((i) => [i.key, i.status, i.itemIds])).toEqual([['t1', 'waiting-on-you', [onRun]], ['t2', 'waiting-on-you', [onCheckpoint]]]);
+  });
+
+  it('an item carries its run\'s last move as the runs\' last-moves read stamps it', async () => {
+    await put(PLAN);
+    step(holdT1(), 'dispatched');
+    const t1 = mapOf(await read()).items[0]!;
+    expect(Object.hasOwn(t1, 'lastMoveAt')).toBe(true);
+    // A last-moves read that fails leaves the field off: unmeasured, never "no move" (review 2795 F3).
+    const failed = vi.spyOn(coord, 'runLastMoves').mockReturnValue({ ok: false, detail: 'locked' });
+    const unread = mapOf(await read()).items[0]!;
+    failed.mockRestore();
+    expect([Object.hasOwn(unread, 'lastMoveAt'), unread.status]).toEqual([false, 'working']);
+  });
+
+  it('evidence naming a run that did another declared ticket does not hold: the run\'s own ticket is read', async () => {
+    await put(PLAN);
+    const runId = holdT1();
+    step(runId, 'dispatched', 'closing', 'done');
+    plan.markTicketDone(ticketId('t2'), { runId }, 900);
+    const w = mapOf(await read());
+    expect(w.items.map((i) => [i.key, i.status, i.reason])).toEqual([['t1', 'done', null], ['t2', 'done-unverified', `run ${runId} did ticket t1`]]);
+  });
+
+  it('an evidence run that cannot be read answers work run-unreadable and still serves plan', async () => {
+    await put(PLAN);
+    const runId = holdT1();
+    step(runId, 'dispatched', 'closing', 'done');
+    const failed = vi.spyOn(coord, 'run').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'x' } as never);
+    const res = await read();
+    failed.mockRestore();
+    expect([res.statusCode, view(res).epics.length, workOf(res)]).toEqual([200, 2, { unreadable: 'run-unreadable' }]);
+  });
+
+  it('a pull request the landing line holds landed verifies, and the run that carried it folds in (review 2795 F2)', async () => {
+    // This case needs a landing line: the store over the same fresh database, with the landing journal beside it.
+    await app.close(); coord.db.close();
+    const dbPath = path.join(dir, 'coord.db');
+    coord = landingStoreOver(openCoordDb(dbPath), dbPath); plan = planStorePort(coord.db); app = await build();
+    await put(PLAN);
+    const e1 = plan.planOf('prog-a').epics[0]!;
+    const r = coord.openRun({ program: 'prog-a', title: 'w', project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a',
+      ticket: { kind: 'new', epicId: e1.id, project: 'project-a', title: 'w' } });
+    if (!('id' in r)) throw new Error('open refused');
+    coord.setSession(r.id, 'project-a-ws12');
+    step(r.id, 'dispatched', 'working', 'awaiting-review');
+    const HEAD = 'a'.repeat(40);
+    expect(coord.advanceLanding({ runId: r.id, to: 'merging', causedBy: 'coordinator', landing: { kind: 'pin', head: HEAD, pr: 12, mode: 'off', handoffCommit: 'c'.repeat(40) } }).ok).toBe(true);
+    const merged: LandingOutcome = { word: 'merged', head: HEAD, base: 'd'.repeat(40), mergedAt: '2026-11-11T10:00:00Z', mergeCommit: 'e'.repeat(40), train: null };
+    expect(coord.advanceLanding({ kind: 'land', project: 'project-a', pr: 12, by: 'reader', at: 5000, outcome: merged, expect: null }).ok).toBe(true);
+    step(r.id, 'closing', 'done');
+    plan.markTicketDone(ticketId('t2'), { pr: 12 }, 900);
+    const w = mapOf(await read());
+    expect([w.items.map((i) => [i.key, i.status]), w.counts.done, w.epics[0]!.total]).toEqual([[['t1', 'not-started'], ['t2', 'done']], 1, 2]);
   });
 });

@@ -5,6 +5,7 @@
 import { expect } from 'vitest';
 import type { EpicView, PhaseView, TicketView, WorkItemView, WorkMapView, WorkPhaseView } from '../../shared/plan.js';
 import type { DoneEvidenceFacts, WorkMapInput, WorkMapRun } from '../src/coord/workMap.js';
+import type { TicketDoneFacts } from '../src/coord/planPolicy.js';
 
 export type WorkMapModule = typeof import('../src/coord/workMap.js');
 export interface WorkMapCase { name: string; run(m: WorkMapModule): void }
@@ -36,6 +37,7 @@ type In = {
   runs?: WorkMapRun[]; verdicts?: WorkMapInput['verdicts']; openItems?: { id: number; runId: number | null }[];
   checkpointItems?: [string, number][]; evidence?: [string, { holds: true } | { holds: false; reason: string }][];
   closed?: [string, string][]; initiatives?: WorkMapView['initiatives']; doneWhen?: WorkMapView['doneWhen'];
+  prLinks?: [string, TicketDoneFacts['links']][];
 };
 const input = (o: In): WorkMapInput => ({
   plan: {
@@ -45,6 +47,7 @@ const input = (o: In): WorkMapInput => ({
   },
   runs: o.runs ?? [], verdicts: o.verdicts ?? new Map(), openItems: o.openItems ?? [],
   checkpointItems: new Map(o.checkpointItems ?? []), evidence: new Map(o.evidence ?? []), closed: new Map(o.closed ?? []),
+  prLinks: new Map(o.prLinks ?? []),
 });
 const map = (m: WorkMapModule, o: In): WorkMapView => m.workMapOf(input(o));
 const item = (v: WorkMapView, key: string): WorkItemView => {
@@ -206,6 +209,41 @@ export const STATUS_CASES: WorkMapCase[] = [
   { name: 'a ticket held by a run the read did not return reads state-unknown', run: (m) => {
     expect(status(m, { epics: [ep('e1', [tk('t1', { state: 'started', runId: 7 })])], runs: [] })).toBe('state-unknown');
   } },
+  // Review 2795 F4: orders and the Group column the first cases left unpinned, each red under the mutant that survived them.
+  { name: 'row 7 before row 8: a planned run both stuck and waiting behind another reads stuck', run: (m) => {
+    expect(status(m, held('planned', { verdicts: new Map([[7, { stuck: true, blockedBy: 3 }]]) }))).toBe('stuck');
+  } },
+  { name: 'row 1 before row 5: an ended plan\'s dropped ticket reads dropped, not left-open', run: (m) => {
+    const v = map(m, { epics: [ep('e1', [tk('t1', { state: 'dropped' }), tk('t2')])], end: ENDED });
+    expect([item(v, 't1').status, nz(v.counts)]).toEqual(['dropped', ['dropped:1', 'left-open:1']]);
+  } },
+  { name: 'row 2 before row 5: an ended plan\'s closed ticket reads closed with its reason, not left-open', run: (m) => {
+    const v = map(m, { epics: [ep('e1', [tk('t1')])], end: ENDED, closed: [['t1', 'not needed']] });
+    expect([item(v, 't1').status, item(v, 't1').reason, nz(v.counts)]).toEqual(['closed', 'not needed', ['closed:1']]);
+  } },
+  { name: 'Table 6\'s Group column: rows 11, 12 and 13 (in review, merging, queued) are in progress', run: (m) => {
+    const groups = (['awaiting-review', 'merging', 'closing', 'planned'] as const).map((s) => item(map(m, held(s)), 't1').group);
+    expect(groups).toEqual(['in-progress', 'in-progress', 'in-progress', 'in-progress']);
+  } },
+  { name: 'lastFailedRunId is set only on a ticket back at not-started', run: (m) => {
+    const v = map(m, { epics: [ep('e1', [tk('t1', { state: 'started', runId: 9 })])], runs: [run(4, 'failed', { ticketKey: 't1' }), run(9, 'working', { ticketKey: 't1' })] });
+    expect([item(v, 't1').status, item(v, 't1').lastFailedRunId]).toEqual(['working', null]);
+  } },
+  // Review 2795 F3: a last move that was not read is no field, never null ("no move").
+  { name: 'a run whose last move was not read gives its item no lastMoveAt; no move, or no run, reads null', run: (m) => {
+    const { lastMoveAt: _unread, ...unread } = run(7, 'working', { ticketKey: 't1' });
+    const v = map(m, { epics: [ep('e1', [tk('t1', { state: 'started', runId: 7 }), tk('t2', { state: 'started', runId: 8 }), tk('t3'), tk('t4', { state: 'started', runId: 6 })])],
+      runs: [unread, run(8, 'working', { ticketKey: 't2' })] });
+    expect([Object.hasOwn(item(v, 't1'), 'lastMoveAt'), item(v, 't2').lastMoveAt, item(v, 't3').lastMoveAt, Object.hasOwn(item(v, 't4'), 'lastMoveAt')])
+      .toEqual([false, null, null, false]);
+    const w = map(m, { declared: false, runs: [unread, run(8, 'working')] });
+    expect(w.runs!.items.map((i) => [i.runId, Object.hasOwn(i, 'lastMoveAt'), i.lastMoveAt])).toEqual([[8, true, null], [7, false, undefined]]);
+  } },
+  // Review 2795 F7: the route always fills the verdicts, so only the decider can be asked of a missing one.
+  { name: 'a done ticket whose stored evidence was not read reads done-unverified, "the evidence was not read"', run: (m) => {
+    const v = map(m, doneT(HOLDS, { evidence: [] }));
+    expect([item(v, 't1').status, item(v, 't1').reason]).toEqual(['done-unverified', 'the evidence was not read']);
+  } },
 ];
 
 // ── Table 6a: how a phase reads its tickets ───────────────────────────────────────────────────────────────────────────
@@ -350,6 +388,22 @@ export const PHASE_CASES: WorkMapCase[] = [
       .toEqual(['plan', [], [], ['t1', 't2'], [['e1', ['t1']], ['e2', ['t2']]]]);
     expect(item(v, 't1').phases).toEqual([]);
   } },
+  // Review 2795 F4 item 3: closed counts apart from the phase's own work, so it neither finishes nor holds the phase.
+  { name: '6a row 2: a closed ticket is no part of its phase\'s own work: the phase finishes at its done ticket', run: (m) => {
+    const v = map(m, { ...doneT(), epics: [ep('e1', [tk('t1', { state: 'done', runId: 5 }), tk('t2')])], closed: [['t2', 'why']],
+      phases: [ph('pa', [tref('t1'), tref('t2')])] });
+    expect([nz(phase(v, 'pa').counts), phase(v, 'pa').finish]).toEqual([['done:1', 'closed:1'], { at: 500 }]);
+  } },
+  // Review 2795 F4 item 6: a reference to the run's own auto ticket reads as the declared ticket it folds into.
+  { name: 'a phase that references only the folded auto ticket holds the declared ticket', run: (m) => {
+    const v = map(m, {
+      epics: [ep('e1', [tk('t1', { state: 'done' }), tk('run-5', { state: 'done', runId: 5, source: 'worker' })])],
+      runs: [run(5, 'done', { ticketKey: 'run-5' })],
+      done: [['t1', { at: 500, evidence: { runId: 5 } }], ['run-5', { at: 500, evidence: { runId: 5 } }]],
+      evidence: [['t1', HOLDS], ['run-5', HOLDS]], phases: [ph('pa', [tref('run-5')])],
+    });
+    expect([phase(v, 'pa').items, nz(phase(v, 'pa').counts), v.notInPhase]).toEqual([['t1'], ['done:1'], []]);
+  } },
 ];
 
 // ── The strip, the four plan states and the fallback ─────────────────────────────────────────────────────────────────
@@ -395,6 +449,34 @@ export const VIEW_CASES: WorkMapCase[] = [
     });
     expect(v.items.map((i) => i.key)).toEqual(['t1', 'run-6']);
     expect([v.counts.done, v.epics[0]!.total, phase(v, 'pa').items]).toEqual([2, 2, ['t1']]);
+  } },
+  { name: 'a reused auto ticket folds into the declared ticket its retry\'s run is evidence of (review 2795 F1)', run: (m) => {
+    // Run 7 failed; the orphan arm handed its auto ticket run-7 to the wave's next run, 12, under its first key.
+    const v = map(m, {
+      epics: [ep('e1', [tk('d1', { state: 'done' }), tk('run-7', { state: 'done', runId: 12, source: 'worker' })])],
+      runs: [run(7, 'failed', { ticketKey: 'run-7' }), run(12, 'done', { ticketKey: 'run-7' })],
+      done: [['d1', { at: 500, evidence: { runId: 12 } }], ['run-7', { at: 500, evidence: { runId: 12 } }]],
+      evidence: [['d1', HOLDS], ['run-7', HOLDS]],
+    });
+    expect([v.items.map((i) => [i.key, i.status]), v.counts.done, v.epics[0]!.total]).toEqual([[['d1', 'done']], 1, 1]);
+  } },
+  { name: 'a pull request\'s carrier folds in: the auto ticket of the run the landing line ties to it (review 2795 F2)', run: (m) => {
+    const pair = (runId: number, key: string | null) => ({ project: 'project-a', pr: 12, runId, holder: key === null ? null : { ticketId: runId, key } });
+    const base: In = {
+      epics: [ep('e1', [tk('d1', { state: 'done' }), tk('run-8', { state: 'done', runId: 8, source: 'worker' })])],
+      runs: [run(8, 'done', { ticketKey: 'run-8' })],
+      done: [['d1', { at: 500, evidence: { pr: 12 } }], ['run-8', { at: 400, evidence: { runId: 8 } }]],
+      evidence: [['d1', HOLDS], ['run-8', HOLDS]],
+    };
+    const v = map(m, { ...base, prLinks: [['d1', { kind: 'read', pairs: [pair(8, 'run-8')] }]] });
+    expect([v.items.map((i) => i.key), v.counts.done]).toEqual([['d1'], 1]);
+    // A tie that could not be read, or a run holding no auto ticket, folds nothing.
+    expect(map(m, { ...base, prLinks: [['d1', { kind: 'unreadable', detail: 'x' }]] }).items.map((i) => i.key)).toEqual(['d1', 'run-8']);
+    expect(map(m, { ...base, prLinks: [['d1', { kind: 'read', pairs: [pair(8, null)] }]] }).items.map((i) => i.key)).toEqual(['d1', 'run-8']);
+  } },
+  { name: 'an ended plan\'s strip leaves a left-open ticket out of its total, as the headline does', run: (m) => {
+    const v = map(m, doneT(HOLDS, { end: ENDED, epics: [ep('e1', [tk('t1', { state: 'done', runId: 5 }), tk('t2')])] }));
+    expect([v.epics.map((e) => [e.key, e.done, e.total]), nz(v.counts)]).toEqual([[['e1', 1, 1]], ['done:1', 'left-open:1']]);
   } },
   { name: 'declared with nothing to count reads declared-empty', run: (m) => {
     const v = map(m, { epics: [ep('e1', [tk('t1', { state: 'dropped' })])], runs: [run(4, 'working')] });

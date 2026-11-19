@@ -236,7 +236,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
         for (const c of e.checkpoints) if (c.itemId !== null && openIds.has(c.itemId)) checkpointItems.set(`${e.key}/${c.key}`, c.itemId);
       }
       const facts = plan.doneFactsOf(slug);
+      const storedEvidence = facts.flatMap((d) => (d.evidence === null ? [] : [{ project: d.project, evidence: d.evidence }]));
       const evidence = new Map<string, EvidenceVerdict>();
+      const prLinks = new Map<string, TicketDoneFacts['links']>();
       for (const d of facts) {
         if (d.evidence === null) continue;
         let run: DoneEvidenceFacts['run'] = null;
@@ -249,6 +251,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
         } else if (d.evidence !== 'malformed') {
           const l = coord.readLanding(d.project);
           landed = l.ok ? landedFactOf(l.facts.entries, d.evidence.pr) : { kind: 'unreadable', detail: l.error };
+          // The runs that carried this pull request, each with the ticket it holds, for the fold (review 2795 F2).
+          prLinks.set(d.key, evidenceLinksOf(coord, plan, d.evidence, d.project, storedEvidence));
         }
         evidence.set(d.key, doneEvidenceVerdict({ program: slug, ticketKey: d.key, evidence: d.evidence, run, landed }));
       }
@@ -257,7 +261,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
           ...view, declared: stored.planBy !== null, end: plan.planEndOf(slug),
           done: new Map(facts.map((d) => [d.key, { at: d.doneAt, evidence: d.evidence }])),
         },
-        runs, verdicts, openItems: open.map((i) => ({ id: i.id, runId: i.runId })), checkpointItems, evidence,
+        runs, verdicts, openItems: open.map((i) => ({ id: i.id, runId: i.runId })), checkpointItems, evidence, prLinks,
         // The hierarchy's close with a reason (its Task 4.3, F10) stores no programme ticket apart from a drop yet
         // (`plan take`'s close drops an Upkeep ticket), so no ticket reads closed until it does (D-8779).
         closed: new Map(),

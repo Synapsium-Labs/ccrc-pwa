@@ -45,16 +45,39 @@ export const WORK_MAP_SET = set([
   { id: 'T6-14', old: "    return { status: 'not-started', reason: null, itemIds: [] };", new: "    return { status: 'queued', reason: null, itemIds: [] };" },
   // The status's group (D3).
   { id: 'T6-G', old: "'done-unverified': 'held', 'left-open': 'left-open',", new: "'done-unverified': 'done', 'left-open': 'left-open'," },
+  // Review 2795 F4 item 5: Table 6's Group column for rows 11, 12 and 13 (F25: in review is the runs' word, in progress).
+  { id: 'T6-G11', old: "'in-review': 'in-progress',", new: "'in-review': 'waiting-on-you'," },
+  { id: 'T6-G12', old: "merging: 'in-progress',", new: "merging: 'held'," },
+  { id: 'T6-G13', old: "queued: 'in-progress',", new: "queued: 'not-started'," },
+  // Review 2795 F4 items 1 and 2 (the plan's Review Focus): row 7 before row 8, and rows 1 and 2 before row 5 when ended.
+  { id: 'T6-7b', old: "  if (verdict !== null && verdict.stuck) return 'stuck';", new: "  if (verdict !== null && state === 'planned' && verdict.blockedBy !== null) return 'blocked';\n  if (verdict !== null && verdict.stuck) return 'stuck';" },
+  { id: 'T6-1b', old: "    if (t.state === 'dropped') return { status: 'dropped', reason: null, itemIds: [] };", new: "    if (ended && t.state !== 'done') return { status: 'left-open', reason: null, itemIds: [] };\n    if (t.state === 'dropped') return { status: 'dropped', reason: null, itemIds: [] };" },
+  { id: 'T6-2b', old: "    if (closedWhy !== undefined) return { status: 'closed', reason: closedWhy, itemIds: [] };", new: "    if (ended && t.state !== 'done') return { status: 'left-open', reason: null, itemIds: [] };\n    if (closedWhy !== undefined) return { status: 'closed', reason: closedWhy, itemIds: [] };" },
   // Rows 7 and 8 need the reader: "not read" is carried on the view, never folded.
   { id: 'V-1', old: "  const verdicts: WorkMapView['verdicts'] = input.verdicts === 'not-read' ? 'not-read' : 'read';", new: "  const verdicts: WorkMapView['verdicts'] = 'read';" },
   { id: 'V-2', old: '  const workRuns = input.runs.filter((r) => r.kind === \'work\');', new: '  const workRuns = input.runs;' },
-  { id: 'V-3', old: "    if (tickets.some((x) => x.t.key === auto)) folded.set(auto, t.key);", new: '' },
+  { id: 'V-3', old: '    if (auto !== null && auto !== undefined && isAutoTicketKey(auto) && keys.has(auto)) folded.set(auto, into);', new: '' },
+  // Review 2795 F1: the fold finds the auto ticket the run holds, not the key minted from its id (the tip before this fix).
+  { id: 'V-3b', old: "    if ('runId' in ev) foldInto(runById.get(ev.runId)?.ticketKey, t.key);", new: "    if ('runId' in ev) foldInto(`run-${ev.runId}`, t.key);" },
+  // Review 2795 F2: a { pr } folds in the auto ticket of the run the landing line ties to it.
+  { id: 'V-3c', old: "      if (links !== undefined && links.kind === 'read') for (const p of links.pairs) foldInto(p.holder?.key, t.key);", new: '' },
+  { id: 'V-3d', old: "      if (links !== undefined && links.kind === 'read') for (const p of links.pairs) foldInto(p.holder?.key, t.key);", new: "      if (links !== undefined && links.kind === 'read') for (const p of links.pairs) foldInto(`run-${p.runId}`, t.key);" },
+  // Only an auto ticket folds: a run's own declared ticket stays itself.
+  { id: 'V-3e', old: ' && isAutoTicketKey(auto) && keys.has(auto)) folded.set(auto, into);', new: ' && keys.has(auto)) folded.set(auto, into);' },
   { id: 'V-4', old: "    const lastFailed = status === 'not-started'", new: '    const lastFailed = false' },
   { id: 'V-5', old: "(m === null || r.id > m ? r.id : m)", new: '(m === null ? r.id : m)' },
+  // Review 2795 F4 item 7: lastFailedRunId only at not-started.
+  { id: 'V-4b', old: "    const lastFailed = status === 'not-started'", new: '    const lastFailed = true' },
+  // Review 2795 F3: a last move not read is no field, never null.
+  { id: 'V-6', old: '  run === undefined || run.lastMoveAt === undefined ? {} : { lastMoveAt: run.lastMoveAt };', new: '  ({ lastMoveAt: run?.lastMoveAt ?? null });' },
+  // Review 2795 F7: a verdict the route did not hand reads "not read", never "holds".
+  { id: 'T6-4c', old: "(input.evidence.get(t.key) ?? { holds: false, reason: 'the evidence was not read' })", new: '(input.evidence.get(t.key) ?? { holds: true })' },
 
   // Table 6a: each reading deleted, and its order.
   { id: 'T6a-1', old: '    const keys = order.filter((k) => set.has(k) && shown(k));', new: '    const keys = order.filter((k) => set.has(k));' },
   { id: 'T6a-2', old: "      if (item.status === 'closed') { pc.closed += 1; continue; }", new: '' },
+  // Review 2795 F4 item 3: a closed ticket counted into the phase's own work keeps it from finishing.
+  { id: 'T6a-2b', old: "      if (item.status === 'closed') { pc.closed += 1; continue; }", new: "      if (item.status === 'closed') { pc.closed += 1; own += 1; continue; }" },
   { id: 'T6a-3', old: '      if (out !== null) { carried += 1; times.push(out.at); continue; }', new: '' },
   { id: 'T6a-3b', old: '    if (r === undefined || r.carriedTo === null || !numbers.has(r.carriedTo)) return null;', new: '    if (r === undefined || r.carriedTo === null) return null;' },
   { id: 'T6a-4', old: "      if (item.group === 'done') { ownDone += 1; times.push(item.doneAt); }", new: '' },
@@ -71,6 +94,8 @@ export const WORK_MAP_SET = set([
   { id: 'C-3', old: "        carriedTo: out === null ? null : { key: out.to, number: numbers.get(out.to)! },", new: '        carriedTo: null,' },
   // A whole-epic reference (D15) and the referenced set.
   { id: 'R-1', old: '      else for (const k of ticketsOfEpic.get(r.key) ?? []) out.add(canonical(k));', new: '' },
+  // Review 2795 F4 item 6: a phase's ticket references read through the fold.
+  { id: 'R-1b', old: "      if (r.kind === 'ticket') out.add(canonical(r.key));", new: "      if (r.kind === 'ticket') out.add(r.key);" },
   { id: 'R-2', old: "    const phases: WorkItemView['phases'] = status === 'dropped' ? [] : live.filter(", new: "    const phases: WorkItemView['phases'] = live.filter(" },
   { id: 'R-3', old: '  const notInPhase = live.length === 0 ? [] : order.filter((k) => shown(k) && !inAPhase.has(k));', new: '  const notInPhase = order.filter((k) => shown(k) && !inAPhase.has(k));' },
   { id: 'R-4', old: '  const notInPhase = live.length === 0 ? [] : order.filter((k) => shown(k) && !inAPhase.has(k));', new: '  const notInPhase = live.length === 0 ? [] : order.filter((k) => !inAPhase.has(k));' },
@@ -78,6 +103,8 @@ export const WORK_MAP_SET = set([
   { id: 'S-1', old: '    if (dropped && keys.length === 0) return [];', new: '    if (dropped) return [];' },
   { id: 'S-2', old: '    if (dropped && keys.length === 0) return [];', new: '' },
   { id: 'S-3', old: '      total: keys.filter((k) => COUNTED.has(byKey.get(k)!.group)).length,', new: '      total: keys.length,' },
+  // Review 2795 F4 item 4: the strip counts as the headline does, so a left-open ticket is in no total.
+  { id: 'S-3b', old: "new Set(['done', 'in-progress', 'waiting-on-you', 'held', 'not-started'])", new: "new Set(['done', 'in-progress', 'waiting-on-you', 'held', 'not-started', 'left-open'])" },
   { id: 'S-4', old: "    const cps = e.checkpoints.filter((c) => c.state !== 'dropped');", new: '    const cps = e.checkpoints;' },
   { id: 'S-5', old: "  const source: WorkMapView['source'] = ended ? 'ended' : anyTicket ? 'plan'", new: "  const source: WorkMapView['source'] = anyTicket ? 'plan'" },
   { id: 'S-6', old: ": anyTicket ? 'plan' : plan.declared ? 'declared-empty' : 'runs';", new: ": anyTicket ? 'plan' : 'runs';" },

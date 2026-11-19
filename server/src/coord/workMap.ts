@@ -9,7 +9,7 @@ import {
   type EpicView, type PhaseView, type PlanView, type TicketDoneEvidence, type TicketView, type WorkGroup, type WorkItemView,
   type WorkMapView, type WorkPhaseView, type WorkStatus, type WorkEpicView,
 } from '../../../shared/plan.js';
-import { autoTicketKey, isAutoTicketKey, phaseNumbers } from './planPolicy.js';
+import { autoTicketKey, isAutoTicketKey, phaseNumbers, type TicketDoneFacts } from './planPolicy.js';
 
 /** Who acts on each status (spec Table 6's Group column; D3). */
 export const WORK_STATUS_GROUP: Readonly<Record<WorkStatus, WorkGroup>> = {
@@ -56,7 +56,8 @@ export function doneEvidenceVerdict(f: DoneEvidenceFacts): EvidenceVerdict {
   return { holds: true };
 }
 
-/** A work run as the map reads it: the run's own fields and its ticket's key (`runs.ticketId` joined, null for none). */
+/** A work run as the map reads it: the run's own fields and its ticket's key (`runs.ticketId` joined, null for none).
+ *  `lastMoveAt` as `withLastMoves` (runWire.ts) stamps it: null for a run with no move, absent when the read failed. */
 export type WorkMapRun = Pick<RunSummary, 'id' | 'kind' | 'state' | 'wave' | 'programTitle'>
   & { runTitle?: string | null; lastMoveAt?: number | null; ticketKey: string | null };
 
@@ -78,6 +79,10 @@ export interface WorkMapInput {
   checkpointItems: ReadonlyMap<string, number>;
   /** Ticket key -> its stored evidence's verdict on this read (`doneEvidenceVerdict`). */
   evidence: ReadonlyMap<string, EvidenceVerdict>;
+  /** Ticket key of a ticket whose stored evidence is a `{ pr }` -> the landing line's ties of that pull request to the runs
+   *  that carried it, each with the ticket its run holds (`planRunFacts.ts#evidenceLinksOf`, the owner `plan ticket-done`
+   *  reads too). The fold reads them (review 2795 F2). */
+  prLinks: ReadonlyMap<string, TicketDoneFacts['links']>;
   /** Ticket key -> the reason the hierarchy's close stored (its Task 4.3, F10). Empty until that task stores one. */
   closed: ReadonlyMap<string, string>;
 }
@@ -90,6 +95,10 @@ export function verdictsReadOf(
   if (all === undefined || all.size === 0) return 'not-read';
   return new Map([...all].map(([id, v]) => [id, { stuck: v.stuck !== null, blockedBy: v.blockedBy }] as const));
 }
+
+/** A run's last move as an item carries it: the run's own `lastMoveAt` (null: no move), or no field when it was not read. */
+const lastMoveOf = (run: WorkMapRun | undefined): Pick<WorkItemView, 'lastMoveAt'> =>
+  run === undefined || run.lastMoveAt === undefined ? {} : { lastMoveAt: run.lastMoveAt };
 
 const zeroCounts = (): Record<WorkGroup, number> =>
   Object.fromEntries(WORK_GROUPS.map((g) => [g, 0])) as Record<WorkGroup, number>;
@@ -121,12 +130,23 @@ export function workMapOf(input: WorkMapInput): WorkMapView {
   // ── The tickets, each once ────────────────────────────────────────────────────────────────────────────────────────
   const tickets: { epic: EpicView; t: TicketView }[] = plan.epics.flatMap((epic) => epic.tickets.map((t) => ({ epic, t })));
   // A run's own ticket folds into the declared ticket its run is the evidence of (F2; review 2375 F2): one piece of work.
+  // The auto ticket is the one the run HOLDS (`runs.ticketId`, as `ticketDoneVerdict` compares it), never the key minted from
+  // the run's id: a failed run's auto ticket is handed to the wave's next run under its first key (review 2795 F1). A `{ pr }`
+  // folds in the auto ticket of each run the landing line ties to that pull request (review 2795 F2); a tie that could not
+  // be read folds nothing, and the `{ pr }` reads unverified by its own landing read.
+  const keys = new Set(tickets.map((x) => x.t.key));
   const folded = new Map<string, string>();
+  const foldInto = (auto: string | null | undefined, into: string): void => {
+    if (auto !== null && auto !== undefined && isAutoTicketKey(auto) && keys.has(auto)) folded.set(auto, into);
+  };
   for (const { t } of tickets) {
     const ev = input.plan.done.get(t.key)?.evidence;
-    if (isAutoTicketKey(t.key) || ev === undefined || ev === null || ev === 'malformed' || !('runId' in ev)) continue;
-    const auto = autoTicketKey(ev.runId);
-    if (tickets.some((x) => x.t.key === auto)) folded.set(auto, t.key);
+    if (isAutoTicketKey(t.key) || ev === undefined || ev === null || ev === 'malformed') continue;
+    if ('runId' in ev) foldInto(runById.get(ev.runId)?.ticketKey, t.key);
+    else {
+      const links = input.prLinks.get(t.key);
+      if (links !== undefined && links.kind === 'read') for (const p of links.pairs) foldInto(p.holder?.key, t.key);
+    }
   }
   const canonical = (key: string): string => folded.get(key) ?? key;
 
@@ -194,9 +214,12 @@ export function workMapOf(input: WorkMapInput): WorkMapView {
           x.kind === 'ticket' && canonical(x.key) === t.key && x.carriedTo === p.key)).map((src) => ({ key: src.key, number: numbers.get(src.key) ?? null })),
       };
     });
+    // No run: no move (null). A run whose last move was not read (the read failed, or the run is not among the work runs)
+    // carries no `lastMoveAt`, as `withLastMoves` leaves it: unmeasured is never "no move" (review 2795 F3).
+    const lastMove = t.runId === null ? { lastMoveAt: null } : lastMoveOf(run);
     const item: WorkItemView = {
       key: t.key, title: t.title, status, group: WORK_STATUS_GROUP[status], reason, epic: { key: epic.key, title: epic.title },
-      phases, runId: t.runId, lastMoveAt: run?.lastMoveAt ?? null, wave: run?.wave ?? null,
+      phases, runId: t.runId, ...lastMove, wave: run?.wave ?? null,
       doneAt: t.state === 'done' ? (input.plan.done.get(t.key)?.at ?? null) : null, itemIds, lastFailedRunId: lastFailed,
     };
     items.push(item);
@@ -267,7 +290,7 @@ export function workMapOf(input: WorkMapInput): WorkMapView {
       const title = r.runTitle === undefined || r.runTitle === null || r.runTitle === r.programTitle ? null : r.runTitle;
       return {
         key: autoTicketKey(r.id), title, status, group: WORK_STATUS_GROUP[status], reason: null, epic: null, phases: [],
-        runId: r.id, lastMoveAt: r.lastMoveAt ?? null, wave: r.wave, doneAt: null, itemIds, lastFailedRunId: null,
+        runId: r.id, ...lastMoveOf(r), wave: r.wave, doneAt: null, itemIds, lastFailedRunId: null,
       };
     });
     const runCounts = zeroCounts();

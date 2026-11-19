@@ -210,7 +210,11 @@ export interface WorkItemView {
    *  (F14); a carry from a source dropped since stands, and its number is null (review 2375 F10). */
   phases: { key: string; number: number; carriedTo: { key: string; number: number } | null;
     carriedFrom: { key: string; number: number | null }[] }[];
-  runId: number | null; lastMoveAt: number | null; wave: number | null;
+  runId: number | null;
+  /** The run's last move (`RunSummary.lastMoveAt`): null for no run or a run with no move; ABSENT when it could not be read,
+   *  so unmeasured never reads as quiet (review 2795 F3). */
+  lastMoveAt?: number | null;
+  wave: number | null;
   doneAt: number | null;
   /** The open operator items that make it waiting-on-you. */
   itemIds: number[];
