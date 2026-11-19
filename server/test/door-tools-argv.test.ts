@@ -23,6 +23,15 @@ const UUID = 'u-door-1';
 const KEY = 'fedcba9876543210'.repeat(4);
 const HASH = 'abcdef0123456789'.repeat(4);
 const REAL_CURL = spawnSync('/bin/sh', ['-c', 'command -v curl'], { encoding: 'utf8' }).stdout.trim() || '/usr/bin/curl';
+const onPath = (name: string): string => (process.env['PATH'] ?? '').split(':').map((d) => path.join(d, name))
+  .find((f) => { try { fs.accessSync(f, fs.constants.X_OK); return true; } catch { return false; } }) ?? name;
+const REAL_JQ = onPath('jq');
+const REAL_SH = onPath('sh');
+/** A recording stub's first lines (review 2756 F4): it marks that it ran in a file of its own, and appends the NAMES, never
+ *  the values, of every FENCE_ or CCRC_ACT_ variable it inherited. */
+const RECORD = (name: string): string[] => [
+  '#!/bin/bash', `: > "$HOME/ran.${name}"`, 'compgen -e | grep -E \'^(FENCE_|CCRC_ACT_)\' >> "$HOME/fence.seen" || true',
+];
 
 let home: string;
 let server: Server;
@@ -43,15 +52,16 @@ beforeEach(async () => {
   await new Promise<void>((r) => server.listen(0, '127.0.0.1', r));
   writeClientHome(home, `http://127.0.0.1:${(server.address() as AddressInfo).port}`, TOKEN);
   const bin = harnessBin(home);
-  // The recording tmux and curl append whatever of the three fence variables they inherited (F5: nothing).
-  fs.writeFileSync(path.join(bin, 'tmux'), `#!/bin/sh\nprintf '%s' "\${CCRC_ACT_KEY-}\${CCRC_ACT_GENERATION-}\${CCRC_ACT_COUNTER-}" >> "$HOME/fence.seen"\nprintf 'cc-${ID}\\n'\n`, { mode: 0o755 });
+  // The recording tmux, jq and sh (the client's tmux fallback runs `sh -c`) record what fence names they inherited (F5: none).
+  fs.writeFileSync(path.join(bin, 'tmux'), [...RECORD('tmux'), `printf 'cc-${ID}\\n'`, ''].join('\n'), { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'jq'), [...RECORD('jq'), `exec '${REAL_JQ}' "$@"`, ''].join('\n'), { mode: 0o755 });
+  fs.writeFileSync(path.join(bin, 'sh'), [...RECORD('sh'), `exec '${REAL_SH}' "$@"`, ''].join('\n'), { mode: 0o755 });
   fs.mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
   fs.writeFileSync(path.join(home, '.cc-sessions', `${ID}.uuid`), `${UUID}\n`);
   // The recording curl: its own command line, then its stdin; the real curl runs on that stdin.
   fs.writeFileSync(path.join(bin, 'curl'), [
-    '#!/bin/sh',
+    ...RECORD('curl'),
     'if [ -r /proc/$$/cmdline ]; then tr \'\\000\' \'\\n\' < /proc/$$/cmdline > "$HOME/curl.cmdline"; else printf \'%s\\n\' "$0" "$@" > "$HOME/curl.cmdline"; fi',
-    'printf \'%s\' "${CCRC_ACT_KEY-}${CCRC_ACT_GENERATION-}${CCRC_ACT_COUNTER-}" >> "$HOME/fence.seen"',
     'cat > "$HOME/curl.stdin"',
     `exec '${REAL_CURL}' "$@" < "$HOME/curl.stdin"`,
     '',
@@ -199,13 +209,32 @@ describe('the fence rides curl\'s stdin config', () => {
     expect([seen[0]!.headers['x-ccrc-act-key'], seen[0]!.headers['x-ccrc-act-generation'], seen[0]!.headers['x-ccrc-act-counter']]).toEqual([KEY, '3', '12']);
   });
 
-  it('no child of the client inherits the fence: curl and tmux see none of the three (review 2735 F5)', async () => {
-    const r = await door('note_close', { revises: 5 }, FENCE);
+  const fenceSeen = (): string => { const f = path.join(home, 'fence.seen'); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''; };
+  const ran = (name: string): boolean => fs.existsSync(path.join(home, `ran.${name}`));
+
+  it('no child of the client inherits the fence: tmux, jq and curl see no FENCE_ or CCRC_ACT_ name (review 2735 F5)', async () => {
+    const r = await door('timer_set', { after: '90m', note: 'n' }, FENCE);   // timer set builds its body with jq
     expect(r.status, r.stderr).toBe(0);
     expect(stdin()).toContain(`header = "x-ccrc-act-key: ${KEY}"`);   // the fence still rode the config
-    const f = path.join(home, 'fence.seen');
-    expect(fs.existsSync(f), 'both stubs ran').toBe(true);
-    expect(fs.readFileSync(f, 'utf8')).toBe('');
+    expect([ran('tmux'), ran('jq'), ran('curl')], 'each stub ran').toEqual([true, true, true]);
+    expect(fenceSeen()).toBe('');
+  });
+
+  it('a caller that exported the copies\' own names carries nothing to a child (review 2756 F2)', async () => {
+    const r = await door('timer_set', { after: '90m', note: 'n' }, { ...FENCE, FENCE_KEY: '', FENCE_GENERATION: '', FENCE_COUNTER: '' });
+    expect(r.status, r.stderr).toBe(0);
+    expect(stdin()).toContain(`header = "x-ccrc-act-key: ${KEY}"`);
+    expect([ran('tmux'), ran('jq'), ran('curl')], 'each stub ran').toEqual([true, true, true]);
+    expect(fenceSeen()).toBe('');
+  });
+
+  it('the tmux fallback\'s `sh -c` inherits no fence name either (review 2756 F4)', async () => {
+    fs.mkdirSync(path.join(home, '.ccrc'), { recursive: true });
+    fs.writeFileSync(path.join(home, '.ccrc', 'tmux-socket'), 'not a socket name!\n');   // so the client's tmux is the fallback
+    const r = await door('note_close', { revises: 5 }, { ...FENCE, FENCE_KEY: '' });
+    expect(r.status).not.toBe(0);                                                        // no pane identity: refused
+    expect(ran('sh'), 'the fallback ran').toBe(true);
+    expect(fenceSeen()).toBe('');
   });
 
   it('the client\'s three header names are shared/continuity-door.ts\'s', () => {

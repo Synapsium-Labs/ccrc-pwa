@@ -74,7 +74,9 @@
 set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sync: an inherited xtrace would print the box token (R16, D-4096)
 # THE FENCE LEAVES THE ENVIRONMENT NEXT (Overlord W1 door process A2, review 2735 F5): the act key, its generation and the
 # counter the door process hands this run are copied into shell variables and unset before any child runs, so no curl, jq or
-# tmux inherits them. `send_request` reads the copies.
+# tmux inherits them. `send_request` reads the copies. The copies' own names are unset first: a caller that exported one would
+# otherwise carry the key to every child under it (review 2756 F2).
+unset FENCE_KEY FENCE_GENERATION FENCE_COUNTER
 FENCE_KEY="${CCRC_ACT_KEY-}" FENCE_GENERATION="${CCRC_ACT_GENERATION-}" FENCE_COUNTER="${CCRC_ACT_COUNTER-}"
 unset CCRC_ACT_KEY CCRC_ACT_GENERATION CCRC_ACT_COUNTER
 

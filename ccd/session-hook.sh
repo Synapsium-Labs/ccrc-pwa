@@ -6248,8 +6248,10 @@ _hook_door_delta() {   # -> DOOR_DELTA: the cache's line while its lease holds, 
   [[ "$head1" =~ ^v=1\ at=[0-9]{1,16}\ until=([0-9]{1,16})$ ]] || return 0
   until="${BASH_REMATCH[1]}"; now=$(_hook_epoch_ms 2>/dev/null)
   [[ "$now" =~ ^[0-9]{1,16}$ ]] && (( 10#$until > 10#$now )) || return 0
-  raw="${raw#"$head1"}"; raw="${raw#$'\n'}"; raw="${raw%%$'\n'*}"; raw="${raw//[[:cntrl:]]/}"   # no control byte reaches the model
-  [[ -z "$raw" || "$raw" == 'ccrc-delta: '* ]] && DOOR_DELTA="${raw:0:$DOOR_DELTA_MAX_BYTES}"   # the server's own prefix, or unknown
+  raw="${raw#"$head1"}"; raw="${raw#$'\n'}"; raw="${raw%%$'\n'*}"; head1="$raw"   # the body line, kept before the strips below
+  # No control byte reaches the model, nor U+0085, U+2028 to U+202E or U+2066 to U+2069 (line and bidi marks; review 2756 F5).
+  raw="${raw//[[:cntrl:]]/}"; raw="${raw//$'\xc2\x85'/}"; raw="${raw//$'\xe2\x80'[$'\xa8'-$'\xae']/}"; raw="${raw//$'\xe2\x81'[$'\xa6'-$'\xa9']/}"
+  [[ -z "$head1" || "$raw" == 'ccrc-delta: '* ]] && DOOR_DELTA="${raw:0:$DOOR_DELTA_MAX_BYTES}"   # dark, the server's prefix, or unknown
 }
 [[ "$event" == UserPromptSubmit && "${CCRC_DOOR_NONCE_SHA256-}" =~ ^[0-9a-f]{64}$ ]] && { _hook_door_delta || true; }
 # ── THE ROSTER CARD'S WAKE ARM (R-5a, D-8201; the worktree-economy spec's "wake arm for D4") ─────────────────────────

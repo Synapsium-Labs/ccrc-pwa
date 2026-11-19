@@ -45,6 +45,8 @@ export const PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '202
 export const ATTRIBUTION_FIELDS = Object.freeze(['fromId', 'fromUuid', 'byId', 'byUuid']);
 
 const HEX64 = /^[0-9a-f]{64}$/;
+/** Every call's answer once a whoami has named another session. */
+const NOT_THIS_SESSION = Object.freeze({ text: 'door: this process does not serve this session (whoami named another); nothing was sent', isError: true });
 const isPage = (v) => Number.isInteger(v) && v >= 1 && v <= 999_999;
 const isId = (v) => Number.isInteger(v) && v >= 1;
 const pageSchema = { type: 'integer', minimum: 1, description: 'The page to read; 1 when absent.' };
@@ -184,23 +186,30 @@ export function createDoor(opts) {
    *  refuses only the call that asked, and the next call asks again after the claim's back-off. */
   async function identify() {
     if (st.refused || st.who !== null || now() < st.nextWhoAt) return;
-    const r = await runClient(api, ['whoami'], childEnv({}), '');
-    const w = parseJson(r.stdout);
-    if (r.code === 0 && w && typeof w.id === 'string' && typeof w.uuid === 'string' && w.uuid !== '') {
-      if (w.id === self) { st.who = { id: w.id }; st.whoBackoff = CLAIM_RETRY_MIN_MS; return; }
-      st.refused = true; log('door: whoami does not name this session; every call refuses');
-      return;
-    }
+    const w = await askWho();
+    if (w.kind === 'self') { st.who = { id: self }; st.whoBackoff = CLAIM_RETRY_MIN_MS; return; }
+    if (w.kind === 'other') return;
     st.nextWhoAt = now() + st.whoBackoff; st.whoBackoff = Math.min(st.whoBackoff * 2, CLAIM_RETRY_MAX_MS);
     log('door: whoami could not be read; this call refuses, and a later one asks again after a back-off');
   }
   const ready = serial(identify);
 
+  /** One whoami, read one way for the identity and the claim (review 2756 F6): `self` with the pane's uuid; `other`, which
+   *  refuses every call for the life of the process; or `failed` (an exit, an unreadable answer, an empty uuid). */
+  async function askWho() {
+    const r = await runClient(api, ['whoami'], childEnv({}), '');
+    const w = parseJson(r.stdout);
+    if (r.code !== 0 || !w || typeof w.id !== 'string' || typeof w.uuid !== 'string' || w.uuid === '') return { kind: 'failed', uuid: '' };
+    if (w.id === self) return { kind: 'self', uuid: w.uuid };
+    if (!st.refused) { st.refused = true; log('door: whoami does not name this session; every call refuses'); }
+    return { kind: 'other', uuid: '' };
+  }
+
   /** The claim, while no key is held and a nonce is: once a back-off allows it. Never throws; the key stays in memory. */
   async function claim() {
     if (st.key !== null || st.nonce === null || now() < st.nextClaimAt) return;
-    const w = parseJson((await runClient(api, ['whoami'], childEnv({}), '')).stdout);
-    if (!w || w.id !== self || typeof w.uuid !== 'string') { st.nextClaimAt = now() + st.backoff; return; }
+    const w = await askWho();
+    if (w.kind !== 'self') { st.nextClaimAt = now() + st.backoff; return; }   // `other` is already the permanent refusal
     const r = await runClient(api, ['sessions', 'act-key', self, '--json', '-'], childEnv({}),
       JSON.stringify({ fromId: self, fromUuid: w.uuid, nonce: st.nonce }));
     const a = parseJson(r.stdout);
@@ -223,7 +232,9 @@ export function createDoor(opts) {
   /** The delta cache (C38, Task 6): `ccrc-api card --anchor --form delta`, written at 0600 through `delta.tmp` and a rename.
    *  A text answer writes its text, a dark answer an empty text; a failed fetch writes nothing, so the lease lapses. */
   async function refreshDelta() {
-    if (!dir || st.who === null) return;
+    if (!dir) return;
+    await identify();   // a whoami that failed at the start is asked again here too, under its back-off (review 2756 F1)
+    if (st.who === null) return;
     const r = await runClient(api, ['card', '--anchor', '--form', 'delta'], childEnv({}), '');
     const a = parseJson(r.stdout);
     if (r.code !== 0 || !a || a.ok !== true || a.part !== 'anchor' || a.form !== 'delta') return;
@@ -245,7 +256,7 @@ export function createDoor(opts) {
     if (!row) return null;
     const res = await serial(async () => {
       await identify();
-      if (st.refused) return { text: 'door: this process does not serve this session (whoami named another); nothing was sent', isError: true };
+      if (st.refused) return NOT_THIS_SESSION;
       if (st.who === null) return { text: 'door: whoami could not be read, so this session is unconfirmed; nothing was sent, and a later call asks again', isError: true };
       const i = input ?? {};
       if (i === null || typeof i !== 'object' || Array.isArray(i)) return { text: 'door: the input is not an object; nothing was sent', isError: true };
@@ -259,6 +270,7 @@ export function createDoor(opts) {
       let extra = {};
       if (row.fenced) {
         await claim();
+        if (st.refused) return NOT_THIS_SESSION;
         if (st.key !== null) {
           st.counter += 1;   // before the send, never reused (F7)
           extra = { CCRC_ACT_KEY: st.key, CCRC_ACT_GENERATION: String(st.generation), CCRC_ACT_COUNTER: String(st.counter) };

@@ -150,6 +150,17 @@ describe('the delta on a plain prompt: from the cache alone, no network', () => 
     expect(context(run(prompt()).out)).toBe('ccrc-delta: term 2[31m red bell');
   });
 
+  it('the UTF-8 line and bidi marks never print, and their neighbours do (review 2756 F5)', () => {
+    const marks = '\u0085\u2028\u2029\u202a\u202b\u202c\u202d\u202e\u2066\u2067\u2068\u2069';
+    writeCache(`ccrc-delta: a${marks}b \u2027\u202f\u2065\u206a ·`, 180_000);
+    expect(context(run(prompt()).out)).toBe('ccrc-delta: ab \u2027\u202f\u2065\u206a ·');
+  });
+
+  it('a body that strips to nothing reads as the unknown line, never as the dark answer (review 2756 F5)', () => {
+    writeCache('\u0007\u001b\u202e', 180_000);
+    expect(context(run(prompt()).out)).toBe(UNKNOWN);
+  });
+
   it('a linked .door or <id> directory prints the unknown line (review 2735 F7)', () => {
     const real = path.join(home, 'real-door');
     fs.renameSync(reg('.door', ID), real);

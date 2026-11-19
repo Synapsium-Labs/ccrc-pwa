@@ -307,6 +307,8 @@ describe('the door process: refusals, errors and the cache', () => {
       expect(r.text).toContain('does not serve this session');
     }
     expect(log().map((e) => e.verb)).toEqual(['whoami']);
+    expect(p.err).toContain('whoami does not name this session');
+    expect(p.err, 'another session is not a failed read').not.toContain('could not be read');
   });
 
   it('a whoami that fails refuses the call that asked, and runs nothing else', async () => {
@@ -479,6 +481,49 @@ describe('the claim\'s answers (in-process, a fake clock)', () => {
     expect((await d.call('note_list', {}))!.text).toContain('does not serve this session');
     expect(of('whoami')).toHaveLength(1);
     expect(of('note')).toHaveLength(0);
+  });
+
+  it('a whoami that fails at the start is asked again by the refresh after its back-off, so the cache is written with no tool call (review 2756 F1)', async () => {
+    const cacheDir = path.join(dir, 'doordir');
+    fs.mkdirSync(cacheDir, { mode: 0o700 });
+    answer('delta', { ok: true, part: 'anchor', form: 'delta', hash: 'h', text: 'ccrc-delta: term 1' });
+    put('rc.whoami', '3');
+    const d = createDoor({ api: stub, self: ID, nonce: NONCE, dir: cacheDir, env: { PATH: process.env['PATH'] ?? '', HOME: dir }, now: () => now });
+    await d.ready;
+    await d.refreshDelta();
+    expect(fs.existsSync(path.join(cacheDir, 'delta')), 'inside the back-off').toBe(false);
+    put('rc.whoami', '0');
+    now += CLAIM_RETRY_MIN_MS;
+    await d.refreshDelta();
+    expect(fs.readFileSync(path.join(cacheDir, 'delta'), 'utf8').endsWith('ccrc-delta: term 1')).toBe(true);
+    expect(log().map((e) => e.verb)).toEqual(['whoami', 'whoami', 'delta']);
+  });
+
+  it('the claim reads whoami as the identity does: another session there refuses for good, a failed one only backs off (review 2756 F6)', async () => {
+    const d = door();
+    expect((await d.call('note_list', {}))!.isError).toBe(false);            // identified
+    put('rc.whoami', '3');                                                      // a good-looking answer, but the exit fails
+    expect((await d.call('note_add', {}))!.isError).toBe(false);              // served without a key
+    expect(of('sessions-act-key')).toHaveLength(0);
+    expect(d.state()).toMatchObject({ refused: false, nonceHeld: true });
+    put('rc.whoami', '0');
+    answer('whoami', { id: 'lane-b-project-b', uuid: 'u-2' });
+    now += 10 * CLAIM_RETRY_MAX_MS;
+    const r = await d.call('note_add', {});
+    expect(r!.text).toContain('does not serve this session');
+    expect(of('sessions-act-key')).toHaveLength(0);
+    expect(of('note').map((e) => e.argv[1])).toEqual(['list', 'add']);       // the refused call sent nothing
+    answer('whoami', { id: ID, uuid: UUID });
+    expect((await d.call('note_list', {}))!.text).toContain('does not serve this session');
+  });
+
+  it('a claim\'s whoami with an empty uuid is a failure, never a claim (review 2756 F6)', async () => {
+    const d = door();
+    await d.call('note_list', {});
+    answer('whoami', { id: ID, uuid: '' });
+    await d.call('note_add', {});
+    expect(of('sessions-act-key')).toHaveLength(0);
+    expect(d.state()).toMatchObject({ refused: false, claimed: false });
   });
 
   it('no child gets the nonce from the base environment it was handed: the children\'s own removal (review 2735 F6)', async () => {

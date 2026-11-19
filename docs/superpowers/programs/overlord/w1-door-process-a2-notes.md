@@ -99,6 +99,22 @@ is taken here.
   whole environment"). It was not retried; the recording stubs append the three fence variables by name instead, so nothing
   prints the environment.
 
+## Fix round 2 (review 2756)
+
+- The delta's refresh asks `whoami` again under its back-off, so a whoami that failed at the start no longer starves the
+  cache until the first tool call (F1).
+- `ccrc-api` unsets the copies' own names (`FENCE_KEY`, `FENCE_GENERATION`, `FENCE_COUNTER`) before copying into them, so a
+  caller that exported one carries nothing to a child (F2).
+- `ccd-launch-surface-moves` plants a stub client, and its one case that reaches a surfaced spawn asserts no refusal (F3).
+- The recording stubs (tmux, jq, curl, and `sh` for the client's tmux fallback) each mark that they ran in a file of their
+  own and record every inherited name with the `FENCE_` or `CCRC_ACT_` prefix, names only, never values (F4).
+- The hook's delta reader also drops U+0085, U+2028 to U+202E and U+2066 to U+2069, and a body that strips to nothing reads
+  as the unknown line, never as the dark answer (F5).
+- The claim reads `whoami` through the identity's one reader: a failed exit or an empty uuid is a failure that backs off,
+  and another session is the permanent refusal (F6).
+- Every new guard went red alone as a mutant and was restored from a saved copy. One mutant survived first: the claim's own
+  branch for another session, dead once the reader decides the refusal, so it was removed.
+
 ## Live steps
 
 - **Task 4 Step 5:** the session unit (`ccd/claude-session@.service`) sets no PATH, so `ccd supervise` runs with the user
@@ -108,8 +124,8 @@ is taken here.
 
 ## Measurements
 
-- **Growth** (net code lines against the merge base, the armed growth check green), after fix round 1: `ccd/ccd` +1,
-  `ccd/ccrc` +1, `ccd/lib/door.sh` +29, `ccd (program)` +30, `ccd/session-hook.sh` +28; none over 40, no waiver.
+- **Growth** (net code lines against the merge base, the armed growth check green), after fix round 2: `ccd/ccd` +1,
+  `ccd/ccrc` +1, `ccd/lib/door.sh` +29, `ccd (program)` +30, `ccd/session-hook.sh` +30; none over 40, no waiver.
 - **Fix round 1's mutants, each red and restored from a saved copy:** eleven in the door process (the real-path start, the
   start's refresh, the two whoami rulings, the one queued refresh, each nonce removal, ping, the line bound, the NUL note,
   the protocol version), five in the spawn step (the xtrace guard, the client check and its link arm, the directory at
