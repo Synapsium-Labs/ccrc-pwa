@@ -281,6 +281,14 @@ export function driftEventValue(field: string, linear: unknown, planned: unknown
   return driftValueText((Array.isArray(planned) ? (planned as unknown[]).map(String) : []).filter((id) => !have.has(id)));
 }
 
+/** One stored drift event as the record's field-and-value text (round 3 F1). A one-way set's stored value is the planned members
+ *  Linear lacks (`driftEventValue`), never Linear's value, so its line says so; any other field reads `<field> = <value>`, with
+ *  `(empty)` for an empty value. */
+export function driftEventText(field: string, value: string): string {
+  if (ONE_WAY_LINKS.has(field)) return `${field}: planned, missing in Linear: ${value}`;
+  return `${field} = ${value === '' ? '(empty)' : value}`;
+}
+
 // A changed* kind's watermark (review 2386 A3: one per kind, so a change made between two kinds' reads is never skipped) moves by
 // `sweepStep` below: the newest `updatedAt` its sweep read, held while a sweep goes on or a restore of one of its objects was deferred.
 
