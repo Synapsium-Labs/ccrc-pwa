@@ -8,7 +8,7 @@
 - **Hosting (§2).** Pages run on two names of their own, outside the console's site: an artifact host that serves a fixed, script-free wrapper, and a content host that serves the page's files inside the wrapper's frame. Neither name is the console's, neither is below the console's domain, and the server answers them from a second listener that has no console route, no cookie, no session and no app shell. `ccrc expose artifacts` sets them up with stock Caddy and two more names. A box without them keeps X2's in-walls tier and never falls back to the console's origin.
 - **Access (§3).** You open a page with "Open as artifact". The console, under your signed-in session, mints a 256-bit capability for that page's directory at one pinned version. The capability lives in memory only, dies with your session or a restart, after an idle hour or at 12 hours, and you can revoke it at once. A capability that reads uncommitted files lives at most 2 hours. Its content door is outside the auth gate and checks the capability itself. That door is named once in the census, on a listener the gate never sees.
 - **Isolation (§4).** The wrapper frames the page with a sandbox that allows scripts, its own origin, forms, dialogs, downloads and pointer lock, and allows windows only if you ticked "Let it open windows". The wrapper's policy pins every frame navigation to the page's own capability path. The page's policy limits every request to its own files, plus any external hosts you confirmed at launch for scripts, styles, images and fonts. So by default the page cannot send what it shows anywhere, apart from residual browser channels that §4.4 names. The page has no channel to the console, and no secret is ever posted to it.
-- **What stays fixed.** The reader frame stays `allow-scripts` only, the shell CSP stays `frame-src 'none'`, the mockup frame and its policy are unchanged, and X2's walls tier stays the default for every HTML leaf. The artifact tier is an opt-in, offered first on pages the walls refuse. No console policy is widened. No live service, proxy, DNS record or config was touched to write this.
+- **What stays fixed.** The reader frame stays `allow-scripts` only, the shell CSP stays `frame-src 'none'`, the mockup frame and its policy are unchanged, and X2's walls tier stays the default for every HTML leaf. The artifact tier is an opt-in: every HTML page offers "Open as artifact" beside its walls view. No console policy is widened. No live service, proxy, DNS record or config was touched to write this.
 - **What you must check.** Nothing here waits on a product choice; every choice was technical and is argued with its alternatives. You approve the design as a whole. Using it later needs two more public names at setup (§2.4). Two departures are defined in the leaf plan: D-8786 records your ruling in X2's spec, and D-8787 scopes the completion plan's walls sentences to the console's origin.
 
 ## 1. Context
@@ -146,8 +146,8 @@ The console name, its certificate and its block are untouched by the new arm. Re
 
 | Box | Behaviour |
 |---|---|
-| Artifact keys unset, invalid or partial | No artifact listener. "Open as artifact" is not offered. A page the walls refuse in part shows X2's sentence plus "Running it in full needs this box's artifact host (`ccrc expose artifacts`)." |
-| ip arm | Same, with "This box is reached by address, and artifacts need names." |
+| Artifact keys unset, invalid or partial | No artifact listener. "Open as artifact" shows disabled beside every HTML page's walls view, with "Running it in full needs this box's artifact host (`ccrc expose artifacts`)." |
+| ip arm (`CCRC_EXPOSE_MODE` is `ip`) | Same, with "This box is reached by address, and artifacts need names." |
 | Sign-in dark (`CCRC_AUTH` not on) | Mint refuses `auth-off` (§3.2). The walls tier works as today |
 
 No path ever serves page code from the console's origin. The fallback is the walls tier or nothing.
@@ -373,26 +373,27 @@ This section decides how the walls tier and the artifact tier sit side by side.
 | Option | Cost | Chosen |
 |---|---|---|
 | (a) Artifact tier for every HTML page | Every page needs the artifact names and a new tab, and every page runs with a real origin even when the walls would do | Rejected |
-| (b) Walls default, artifact opt-in for any page, offered first where the walls refuse something | The inline view stays instant and needs no setup. Full support is one tap away where it matters | **Chosen** |
+| (b) Walls default; "Open as artifact" offered beside the walls view on every HTML page | The inline view stays instant and needs no setup. Full support is one tap away on every page. Nothing has to decide which pages the walls fail: the shipped census does not detect dialogs, `window.open`, WebAssembly or downloads, and X2 P6 reports only its budget refusals, so a detector would be new code that misses cases | **Chosen** |
+| (b′) The same, but offered only where the walls refused something | Needs a refusal detector nothing produces today, and a page it misses has no way to run in full | Rejected |
 | (c) Walls only (X2's recommendation (a)) | Overruled by your ruling of 2026-11-19 | Rejected |
 
 ```mermaid
 flowchart TD
   L["HTML leaf opens"] --> W["Walls tier, inline, as X2 P6"]
-  W --> Q{"Did the walls refuse<br/>anything on this page?"}
-  Q -- "no" --> N["Open as artifact stays in the actions menu"]
-  Q -- "yes" --> R["A line names what was refused"]
-  R --> H{"Artifact tier<br/>available on this box?"}
-  H -- "yes" --> B["Button: Open as artifact"]
-  H -- "no" --> T["Sentence: needs ccrc expose artifacts"]
+  W --> O{"Page in an outside folder,<br/>or sign-in dark?"}
+  O -- "yes" --> N["No offer"]
+  O -- "no" --> H{"Artifact tier<br/>available on this box?"}
+  H -- "yes" --> B["Button beside the walls view:<br/>Open as artifact"]
+  H -- "no" --> T["Disabled button with its sentence:<br/>needs ccrc expose artifacts"]
 ```
-*Figure 4. Which tier a page meets. The walls tier always renders first. The artifact tier is offered as a button where the walls refused something, and is always in the actions menu when the box has it.*
+*Figure 4. Which tier a page meets. The walls tier always renders first and stays the default. Every HTML page in a project offers Open as artifact beside it when the box has the tier. Nothing decides by what the walls refused.*
 
 ### 6.2 The launch sheet
 
 | Part | Content |
 |---|---|
 | Title | "Open as artifact" |
+| Why | "The view above runs this page within ccrc's walls, where dialogs, windows, downloads, WebAssembly, workers and large files may not work. As an artifact it runs in full, in a new tab." Any refusal X2 P6 reported for this page (its budget lines) is repeated under it |
 | What runs | "This page's own code runs in a new tab on `<artifact-host>`, a separate site with no ccrc session. It can read the N files beside it at this version (M uncommitted). It cannot reach ccrc." N and M come from the scope read, before anything is minted |
 | Outside hosts | One unticked checkbox per origin the pre-scan found (the census `origins.ts` already makes), each saying "loads from this host can carry what the page shows to it, and may see this link". At most 8. An origin on the console's, artifact or content host is never offered |
 | Above the folder | "N references point above this page's folder and will not load", from the pre-scan |

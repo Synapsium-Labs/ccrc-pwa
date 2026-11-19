@@ -98,7 +98,7 @@ flowchart LR
 
 **Interfaces:**
 - Consumes: `originProblem`'s grammar rules (`server/src/auth/webauthn.ts`: a bare origin, https except loopback), `ARTIFACT_PUBLIC_SUFFIXES`.
-- Produces: `type ArtifactConfig = {state: 'on'; artifactOrigin: string; contentOrigin: string; port: number; artifactHost: string; contentHost: string} | {state: 'off'; why: 'unset' | 'partial' | 'invalid'; detail: string}`; `artifactConfig(env: {origin?: string; content?: string; port?: string}, consoleOrigin: string, consolePort: number): ArtifactConfig`; `siteRuleProblem(consoleHost: string, artifactHost: string): string | null`.
+- Produces: `type ArtifactConfig = {state: 'on'; artifactOrigin: string; contentOrigin: string; port: number; artifactHost: string; contentHost: string} | {state: 'off'; why: 'unset' | 'partial' | 'invalid' | 'by-address'; detail: string}`; `artifactConfig(env: {origin?: string; content?: string; port?: string; exposeMode?: string}, consoleOrigin: string, consolePort: number): ArtifactConfig` (`exposeMode` `ip` with no artifact keys is `off/by-address`); `siteRuleProblem(consoleHost: string, artifactHost: string): string | null`.
 
 - [ ] **Step 1: Write the failing tests:** the five rows of spec §2.3's table give the stated verdicts (`nip.io` refused), each placeholder built from a label generated per run (`genLabel()`: `t` plus 12 random hex characters); with `d` = `genLabel() + '.duckdns.org'`, `d` against `d` is refused (equal) and `'x.' + d` against `d` is refused (below); no keys is `off/unset`; two of three is `off/partial`; an `http://` origin on a non-loopback host, a trailing slash, a path, equal artifact and content origins, and `CCRC_ARTIFACT_PORT` equal to the console port are `off/invalid` with a detail naming the key; console `http://localhost:7788` with `http://127.0.0.1:7790` and `http://127.0.0.1:7791` is `on`; console `http://localhost:7788` with `http://localhost:7790` is `off/invalid` (same site); an `http://127.0.0.1` artifact origin beside an https console is `off/invalid`.
 - [ ] **Step 2: Run**; expect FAIL. **Step 3: Implement** `siteRuleProblem` as the longest common run of trailing labels (lower-cased, no trailing dot), and `artifactConfig` as one pure decision; `config.ts` calls it once and logs `console.warn('ccrc-server: artifact tier off — …')` for `partial` and `invalid`, never for `unset`.
@@ -241,10 +241,10 @@ flowchart LR
 - Test: `pwa/test/artifact-tier.test.ts`
 
 **Interfaces:**
-- Produces: `artifactOffer(walls: {refused: readonly string[]}, avail: {available: boolean; why?: string}, folder: boolean): {kind: 'button' | 'menu' | 'sentence' | 'none'; text: string}` per spec Figure 4, `none` for an outside-folder page; the sentences of spec §2.5 in `artifactWords.ts`.
+- Produces: `artifactOffer(avail: {available: boolean; why?: 'unset' | 'partial' | 'invalid' | 'by-address' | 'auth-off'}, folder: boolean): {kind: 'button' | 'disabled' | 'none'; text: string}` per spec Figure 4: `button` on every HTML page when available, whatever the walls did; `disabled` with spec §2.5's sentence for `unset`, `partial`, `invalid` and `by-address`; `none` for `auth-off` and for an outside-folder page. It takes no input about what the walls refused: no refusal detector is built. The sentences of spec §2.5 and the sheet's Why line (spec §6.2) live in `artifactWords.ts`. `by-address` comes from `GET /api/docs/artifacts` when `CCRC_EXPOSE_MODE` is `ip` (A1.2's `artifactConfig` takes `exposeMode` and answers `off/by-address`).
 
-- [ ] **Step 1: Write the failing tests:** each path of Figure 4; `unset` and the ip reason give their two sentences; `auth-off` gives no button; an outside-folder page gives `none`; the walls view itself is unchanged (`MockupFrame` props and `MOCKUP_*` imports are unchanged; the existing `mockup-view` and `mockup-frame` tests stay green).
-- [ ] **Step 2: Run**; expect FAIL. **Step 3: Implement.** **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(docs): offer the artifact tier where the walls refuse (X5 A5.1)`.
+- [ ] **Step 1: Write the failing tests:** each path of Figure 4; `offer: every HTML page` (an available box gives `button` for a page the walls ran in full and for one with a budget refusal alike); `unset`, `partial` and `invalid` give `disabled` with the setup sentence and `by-address` with the address sentence; `auth-off` gives `none`; an outside-folder page gives `none`; the sheet's Why line is `artifactWords`' constant; the walls view itself is unchanged (`MockupFrame` props and `MOCKUP_*` imports are unchanged; the existing `mockup-view` and `mockup-frame` tests stay green).
+- [ ] **Step 2: Run**; expect FAIL. **Step 3: Implement.** **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(docs): offer the artifact tier beside every HTML page's walls view (X5 A5.1)`.
 
 ### Task A5.2: the launch sheet and the Open link
 
@@ -317,6 +317,7 @@ Each row deletes or weakens one guard; the named test must go red. Run through t
 | MX5.38 | A4.2 | Doctor passes partial keys | doctor: partial keys FAIL |
 | MX5.39 | A5.2 | Open by `window.open` or without `noopener` | sheet: the Open anchor's `rel` |
 | MX5.40 | A5.2 | Tick windows by default | sheet: every checkbox starts unticked |
+| MX5.49 | A5.1 | Offer the button only when the walls report a refusal | offer: every HTML page |
 | MX5.41 | A3.3 | Delete the `fetchFence` call from the `/c/` route | content: the fences hold at the route |
 | MX5.42 | A3.2 | Allow `Sec-Fetch-Dest: serviceworker` | policy: the fence row |
 | MX5.43 | A1.1 | Derive the accept list from `PUBLIC_SUFFIX_TRAPS` | vocabulary: the accept list is exactly `['duckdns.org']`; config: `nip.io` refused |
