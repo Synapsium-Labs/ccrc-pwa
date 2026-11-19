@@ -436,6 +436,42 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
     expect(v.act).toBe('hold');
   });
 
+  // D-8789, the coordinator's ruling for a change live at merge: the own-run hold passing never puts a worker to sleep
+  // while it is doing or owed anything. Each row stacks one activity on the passing own-run case (the control).
+  describe('an own-run hold passes, and every activity still holds (D-8789)', () => {
+    const ownParked = (o: Partial<StopDoneInput> = {}): StopDoneInput => base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS), ...o,
+    });
+    const parkedStore = (o: Record<string, unknown>) => okStore({ last: { runId: 7, state: 'awaiting-review', closedAt: null }, ...o });
+    const quietMark = (o: Record<string, unknown>) => markAt({ turnAt: NOW - STOP_DONE_PARKED_IDLE_MS, stopAt: NOW - STOP_DONE_PARKED_IDLE_MS, ...o });
+
+    it('control: nothing running, nothing owed, it sleeps', () => {
+      expect(stopDoneVerdict(ownParked())).toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS, holdOk: OWN });
+    });
+
+    const activities: [StopDoneHold, Partial<StopDoneInput>][] = [
+      ['mail', { store: parkedStore({ mail: true }) }],
+      ['claim', { store: parkedStore({ claim: true }) }],
+      ['background', { row: row({ held: OWN, background: { count: 1, kinds: ['shell'] } }) }],
+      ['roster', { row: row({ held: OWN, subagents: [{ name: 'a0000000000000001', startedAt: NOW }] }) }],
+      ['marker-background', { live: readLive({ mark: quietMark({ bg: 1 }) }) }],
+      ['scheduled', { live: readLive({ mark: quietMark({ crons: 1 }) }) }],
+      ['menu', { row: row({ held: OWN, dialogPending: true }) }],
+      ['turn', { live: readLive({ turn: 'busy', mark: quietMark({}) }) }],
+      ['marker', { live: readLive({ mark: quietMark({ state: 'working' }) }) }],
+      ['live-word', { live: readLive({ word: { ok: true, word: 'shell' }, mark: quietMark({}) }) }],
+      ['viewer', { viewer: true }],
+      // The design review (2848): the amendment is for the worker's own newest placed run alone; an older ACTIVE run
+      // of its own still holds it through `openPlacedWorkers`.
+      ['run-worker', { store: parkedStore({ openWorker: true }) }],
+    ];
+    for (const [hold, o] of activities) {
+      it(`holds ${hold}`, () => {
+        expect(stopDoneVerdict(ownParked(o))).toEqual({ act: 'hold', reason: hold });
+      });
+    }
+  });
+
   it('a parked producer quiet 29 minutes holds', () => {
     for (const state of ['awaiting-review', 'merging', 'closing']) {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(29 * MIN) })), state).toEqual({ act: 'hold', reason: 'recent' });

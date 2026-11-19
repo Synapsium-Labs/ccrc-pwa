@@ -186,7 +186,9 @@ export type StopDoneLive =
 /** What the row's `.hold` is, classified by the sweep (L4) so this file still imports L0 alone (D-6091). `none`: no
  *  hold. `operator`: any text outside the programme-hold grammar (`programmeHoldOf`), the unreadable and empty
  *  placeholders included. `programme`: a programme hold naming no run. `run-terminal` / `run-live`: one naming a run
- *  the store reads in / outside `TERMINAL_RUN_STATES`. `unreadable`: one naming a run the store could not read. */
+ *  the store reads in / outside `TERMINAL_RUN_STATES`. `run-own`: one naming an open run whose worker is this session;
+ *  D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b) requires.
+ *  `unreadable`: one naming a run the store could not read. */
 export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-own' | 'run-live' | 'unreadable';
 
 export interface StopDoneInput {
