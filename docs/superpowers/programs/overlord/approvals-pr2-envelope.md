@@ -128,3 +128,8 @@ for byte.
 - `typecheck-tests` reddened three times on this branch with the test slice's memory cap killing `tsc` (2 to 10 OOM kills
   a run, `MemoryMax=6G`); once the one real type error was fixed, the file passed whole, alone. Measured, not fixed: the
   cap and the file's concurrency are not this PR's.
+- The first CI run reddened `mail-routes.test.ts`'s kebab scan of `server/src/coord`: `untrustedBuildItem.ts` quotes three
+  `BuildUntrustedReason` words, which no admission named. They are admitted through L0's `BUILD_UNTRUSTED_REASONS`, as
+  every other lane's words are. That suite was not among the ones run before the push.
+- Horkos's `rules-mixed` names `ccd/session-hook.sh`: a PR that changes a rules file may change nothing else. The brief
+  puts the hook and its readers in one PR, so the split is left to the coordinator.
