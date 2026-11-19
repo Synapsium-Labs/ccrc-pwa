@@ -28,7 +28,8 @@ import { AnswerMarkBoxes } from './AnswerMarkBox';
 import { ASK_HOW_WORD, ASK_NO_TEXT_WORD, askMarksFor, askRowsOf } from './answerMarkWords';
 import type { AskMarkRow } from '../../../shared/answerMarks';
 import { apiErrorText } from '../lib/refusalWords';
-import { CALLS_GROUP_WORDS, SEEN_WORD, callLine, callRefusalText, callsOf } from './callWords';
+import { CALLS_GROUP_WORDS, OVERTURN_WORD, SEEN_WORD, callLine, callRefusalText, callsOf } from './callWords';
+import { OverturnSheet, type OverturnSend } from './OverturnSheet';
 import './ledgers.css';
 
 export interface WaitingScreenProps {
@@ -66,6 +67,9 @@ export interface WaitingScreenProps {
   /** The operator's Seen on a big call (D-8126, `POST /api/calls/:id/seen`). Absent, or on the device's saved copy, the calls
    *  are drawn with no Seen. A rejection frees the button and is said on the call's row. */
   readonly onSeen?: CallSeen;
+  /** The one correction door (`POST /api/digest/correct`, `rowKind: 'call'`), for Overturn… on a big call (D-8126). Absent, or
+   *  on the device's saved copy, no call carries it. */
+  readonly onOverturn?: OverturnSend;
 }
 
 /** The Seen door, as the route hands it in (D-8126). */
@@ -100,6 +104,8 @@ function Mentions({ item, note, itemHref }: { item: ItemView; note: string | nul
 const NO_RUNS: readonly RunSummary[] = [];
 /** No calls: one frozen empty list, so a default never makes a new array per render (D-8126). */
 const NO_CALLS: readonly CallView[] = [];
+/** No act on a call: the saved copy's, and the list beside an open item's. */
+const NO_CALL_ACTS: CallActs = {};
 const NO_PROGRAMME_KEY = ' none';
 const keyOf = (program: string | null): string => program ?? NO_PROGRAMME_KEY;
 
@@ -195,15 +201,20 @@ export function ItemRows({ rows, now, onOpenItem, onOpenSession, currentId = nul
   );
 }
 
+/** The two acts on a call made for the operator (D-8126), each absent where it is not offered. */
+export interface CallActs { readonly onSeen?: CallSeen | undefined; readonly onOverturn?: OverturnSend | undefined }
+
 /** "Calls made for you (N)": the big calls coordinators made in the operator's name, collapsed, below a programme's rows
  *  (D-8126). Never part of the blocking count, the rail's counts or the summary: a call needs nothing from the operator but a
  *  glance. Each carries Seen while one is offered, asked once while in flight; the row leaves for the cleared trail on the next
  *  frame, and a rejection (offline, `not-big`, `unknown-call`) frees the button and says why on the row, because the server
- *  sends no frame on a refusal. Nothing is drawn for none. */
-export function CallsGroup({ calls, now, onSeen }: { calls: readonly CallView[]; now: number; onSeen?: CallSeen | undefined }): ReactNode {
+ *  sends no frame on a refusal. Overturn…, on a call not yet overturned, opens its confirm sheet. Nothing is drawn for none. */
+export function CallsGroup({ calls, now, acts }: { calls: readonly CallView[]; now: number; acts: CallActs }): ReactNode {
   const [asked, setAsked] = useState<ReadonlySet<number>>(() => new Set());
   const [refused, setRefused] = useState<ReadonlyMap<number, string>>(() => new Map());
+  const [overturning, setOverturning] = useState<CallView | null>(null);
   if (calls.length === 0) return null;
+  const { onSeen, onOverturn } = acts;
   const askSeen = (id: number, send: CallSeen): void => {
     setAsked((was) => new Set(was).add(id));
     setRefused((was) => { if (!was.has(id)) return was; const next = new Map(was); next.delete(id); return next; });
@@ -213,6 +224,7 @@ export function CallsGroup({ calls, now, onSeen }: { calls: readonly CallView[];
     });
   };
   return (
+    <>
     <details className="wl-calls" data-calls={calls.length}>
       <summary className="wl-calls-sum">{CALLS_GROUP_WORDS(calls.length)}</summary>
       <ul className="wl-calls-list">
@@ -222,18 +234,25 @@ export function CallsGroup({ calls, now, onSeen }: { calls: readonly CallView[];
             {onSeen !== undefined && (
               <BareRow className="wl-call-act" disabled={asked.has(c.id)} onClick={() => askSeen(c.id, onSeen)}>{SEEN_WORD}</BareRow>
             )}
+            {onOverturn !== undefined && c.overturnedAt === null && (
+              <BareRow className="wl-call-act" onClick={() => setOverturning(c)}>{OVERTURN_WORD}</BareRow>
+            )}
             {refused.has(c.id) && <span className="wl-call-error" role="alert">{refused.get(c.id)}</span>}
           </li>
         ))}
       </ul>
     </details>
+    {overturning !== null && onOverturn !== undefined && (
+      <OverturnSheet call={overturning} send={onOverturn} onClose={() => setOverturning(null)} />
+    )}
+    </>
   );
 }
 
 /** A programme with calls made for the operator and no row of its own (D-8126): its heading and its calls, drawn among the
  *  groups so a call is seen where the programme's rows would be, and never counted. */
-function CallsApart({ program, title, hue, calls, now, onSeen }: {
-  program: string; title: string; hue: string | null; calls: readonly CallView[]; now: number; onSeen: CallSeen | undefined;
+function CallsApart({ program, title, hue, calls, now, acts }: {
+  program: string; title: string; hue: string | null; calls: readonly CallView[]; now: number; acts: CallActs;
 }): ReactNode {
   return (
     <section className="wl-group" data-program={program} data-hue={hue ?? 'none'} data-calls-only="true" aria-label={title}>
@@ -241,7 +260,7 @@ function CallsApart({ program, title, hue, calls, now, onSeen }: {
         <span className="wl-swatch" aria-hidden="true" />
         <h2 className="wl-gtitle">{title}</h2>
       </div>
-      <CallsGroup calls={calls} now={now} onSeen={onSeen} />
+      <CallsGroup calls={calls} now={now} acts={acts} />
     </section>
   );
 }
@@ -249,12 +268,12 @@ function CallsApart({ program, title, hue, calls, now, onSeen }: {
 /** One programme's block of a list: its heading in its hue, and its rows. The combined list draws one per group, and so does
  *  the list beside an open item (plan PL9), which passes the open item as `currentId`. `specHref` is the programme's pinned spec
  *  in the Docs reader (`programmeSpecHref`, PL10, D-7952): the combined list passes it, and null or absent draws no Spec link. */
-export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks, calls = NO_CALLS, onSeen }: {
+export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, currentId = null, specHref = null, rowActs = null, itemHref = null, asks, calls = NO_CALLS, callActs = NO_CALL_ACTS }: {
   group: ProgrammeGroup; runs: readonly RunSummary[] | null; hue: string | null; now: number;
   onOpenItem: (id: number) => void; onOpenSession: (id: string) => void; currentId?: number | null; specHref?: string | null;
   rowActs?: RowActs | null; itemHref?: ItemHref | null; asks?: readonly AskMarkRow[];
   /** The programme's calls made for the operator (D-8126), drawn collapsed below its rows; none draws nothing. */
-  calls?: readonly CallView[]; onSeen?: CallSeen | undefined;
+  calls?: readonly CallView[]; callActs?: CallActs;
 }): ReactNode {
   const heard = runs ?? NO_RUNS;
   const title = group.program === null ? NO_PROGRAMME_WORD : programmeTitle(group.program, heard);
@@ -273,7 +292,7 @@ export function ListGroup({ group, runs, hue, now, onOpenItem, onOpenSession, cu
       </div>
       <ItemRows rows={group.rows} now={now} onOpenItem={onOpenItem} onOpenSession={onOpenSession} currentId={currentId} rowActs={rowActs} itemHref={itemHref}
                 {...(asks === undefined ? {} : { asks })} />
-      <CallsGroup calls={calls} now={now} onSeen={onSeen} />
+      <CallsGroup calls={calls} now={now} acts={callActs} />
     </section>
   );
 }
@@ -447,12 +466,12 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const empty = groups.length === 0;
   // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
   // rows draws them apart, among the groups, under the filter that shows it. Seen is offered only on a current page.
-  const onSeen = rowActs.enabled ? props.onSeen : undefined;
+  const callActs: CallActs = rowActs.enabled ? { onSeen: props.onSeen, onOverturn: props.onOverturn } : NO_CALL_ACTS;
   const callsFor = (p: string | null): readonly CallView[] => (p === null ? NO_CALLS : callsOf(view, p).open);
   const apart = noProgramme ? [] : [...new Set((view.calls ?? []).map((c) => c.program))]
     .filter((p) => !groups.some((g) => g.program === p) && (list.programme === null || list.programme === p));
   const apartBlock = apart.map((p) => (
-    <CallsApart key={`calls:${p}`} program={p} title={titleOf(p)} hue={hues.get(p) ?? null} calls={callsFor(p)} now={now} onSeen={onSeen} />
+    <CallsApart key={`calls:${p}`} program={p} title={titleOf(p)} hue={hues.get(p) ?? null} calls={callsFor(p)} now={now} acts={callActs} />
   ));
   const clearedCalls = noProgramme ? NO_CALLS : (view.callsCleared ?? NO_CALLS).filter((c) => list.programme === null || c.program === list.programme);
   return (
@@ -496,7 +515,7 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
                   <ListGroup key={keyOf(g.program)} group={g} runs={runs} now={now}
                              onOpenItem={(id) => props.onOpenItem(id, list)} onOpenSession={props.onOpenSession}
                              hue={g.program === null ? null : hues.get(g.program) ?? null} rowActs={rowActs} itemHref={props.itemHref ?? null} asks={liveAsks}
-                             calls={callsFor(g.program)} onSeen={onSeen}
+                             calls={callsFor(g.program)} callActs={callActs}
                              specHref={g.program === null ? null : programmeSpecHref(g.program, view.goals, heardRuns)} />
                 ))}
                 {apartBlock}

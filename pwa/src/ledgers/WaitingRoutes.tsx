@@ -127,7 +127,7 @@ export function WaitingRoute({ store = useFleetStore }: { store?: FleetStore }):
                    programme={programme} {...notCurrent} itemHref={itemHref}
                    onFilter={(programme) => navigate(waitingPath(programme), { replace: true })}
                    onOpenItem={(id, list) => navigate(itemPath(id, list))} onOpenSession={(id) => navigate(sessionPath(id))}
-                   onSeen={(id) => api.markCallSeen(id)} />
+                   onSeen={(id) => api.markCallSeen(id)} onOverturn={(body) => api.correctDigest(body)} />
   );
 }
 

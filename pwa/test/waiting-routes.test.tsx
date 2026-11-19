@@ -216,6 +216,17 @@ describe('calls made for you on the route (D-8126)', () => {
     const [, init] = fetchMock.mock.calls.find(([url]) => String(url).endsWith('/api/calls/7/seen')) as unknown as [string, RequestInit];
     expect(init.method).toBe('POST');
   });
+
+  it('Overturn… sends the one correction door\'s body, rowKind call', async () => {
+    const correct = vi.spyOn(api, 'correctDigest').mockResolvedValue({ ok: true, mailId: 1, deliveryId: 2 } as never);
+    const store = mk();
+    act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [call] }) }));
+    render(<WaitingRoute store={store} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Overturn…' }));
+    fireEvent.change(screen.getByRole('textbox', { name: 'What should it have decided?' }), { target: { value: 'use files' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm' }));
+    await waitFor(() => expect(correct).toHaveBeenCalledWith({ rowKind: 'call', id: 7, text: 'use files' }));
+  });
 });
 
 describe('the routes\' own paths', () => {
