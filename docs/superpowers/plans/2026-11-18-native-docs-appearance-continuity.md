@@ -747,10 +747,6 @@ None. The reserve block, 8774 and 8775, is unused: every change here carries out
 - X2's code sizes. X2's shares are estimates from measured comparators (X2 plan Results), not measurements of X2's code.
 - The derivation's drawings on a phone engine. Every drawing above is Chromium's. Test 5 runs on each engine the library's browser suite runs.
 
-#### A hook refusal, reported and ruled
-
-A PreToolUse hook, the knowledge-graph gate, refused one read-only `grep` over three doc files. The wave stopped that search and mailed the coordinator the exact refusal, as the standing ruling requires. The coordinator ruled (mail 25602) that the gate's own graph query is the way through it, and the search went ahead after one query.
-
 #### Commands
 
 ```text
