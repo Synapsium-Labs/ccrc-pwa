@@ -1,7 +1,7 @@
 # GPT-lane parity eval
 
-**Spec** · 2026-11-13 · Status: Draft, revised after review; the operator's rulings of 2026-11-14 (G1-G4) folded
-in · Owner: the Codex bridge programme · Linear: none · Related:
+**Spec** · 2026-11-13 · Status: Approved by the operator on 2026-11-19; the operator's rulings of 2026-11-14 (G1-G4)
+folded in · Owner: the Codex bridge programme · Linear: none · Related:
 `docs/superpowers/plans/2026-11-13-codex-bridge-gpt-lane-parity.md` (Task 6 is this eval; Task 1 adds the stats
 file's `parity` section; Task 4, the per-request record, landed in #2788), `docs/superpowers/specs/2026-10-15-codex-bridge-design.md`,
 `deploy/history-replay.mjs` (the headless-eval precedent this borrows from, and where this design departs from it, §3.4)
@@ -785,6 +785,7 @@ rules otherwise.
 
 ### Agreed
 
+- The operator approved this spec on 2026-11-19. The decisions under "Waiting on you" stay open.
 - The operator's directive of 2026-11-13: GPT lanes should perform as well as native Codex.
 - The plan's order: Task 6 waits for Tasks 4 and 5, which have both landed, and its live run waits for the operator's
   sign-off.
