@@ -170,7 +170,7 @@ programme pins it (wave 2). coord.db's snapshot carries both tables.
 ## 8. Doors (all session-gated operator doors; no box token)
 
 `GET /api/flows` (the operator's flows and the templates), `GET /api/flows/:id` (draft, versions, problems),
-`POST /api/flows` (new, empty or from a template), `PUT /api/flows/:id/draft` (save; returns problems),
+`POST /api/flows` (new, empty, from a template, or from an imported file's document, §14.1), `PUT /api/flows/:id/draft` (save; returns problems),
 `POST /api/flows/:id/publish` (refuses with the problems), `DELETE /api/flows/:id`, `GET /api/flows/:id/versions/:v`.
 Registered from `server/src/flows/routes.ts`, a lane source the box-token census reads with a hand-kept `FLOW_DOORS`.
 

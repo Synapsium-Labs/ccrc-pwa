@@ -309,6 +309,10 @@ const REGISTERED_BLOCKS: Record<string, string> = {
     + 'offers the ones a RUNNING session may move to, and each passes '
     + '`AccountRow` a different set of facts. The shared part is `AccountRow`, '
     + 'which they already share.',
+  'div.{ACTIONS}(Button,Button)':
+    'DIFFERENT THINGS, in the BUTTONS (flows design 2026-11-19 §9, §14.1). Both are `FlowsScreen.tsx`\'s, one named '
+    + 'container: the import review\'s "Import as a draft" and "Cancel", and a step\'s "Add a step after" and "Remove this '
+    + 'step", each conditional on the step. A component would take two unrelated button pairs as props and draw a div.',
   'div.{QC_ACTIONS}(Button,Button)':
     'DIFFERENT THINGS, in the BUTTONS. The container is a copied string and '
     + 'the literal half of this census has it. What sits inside is not one '

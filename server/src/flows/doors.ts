@@ -1,7 +1,7 @@
 // The Flows doors' decisions (spec 2026-11-19 §8). Ring: L1, context Coordination (C5): pure, no I/O. The routes
 // (`routes.ts`, L4) ask these and act on the answer; they compare nothing themselves.
 import {
-  parseFlowDoc, skeletonFlowDoc, validateFlow, FLOW_LIMITS,
+  parseFlowDoc, readFlowFile, skeletonFlowDoc, validateFlow, FLOW_LIMITS,
   type FlowDoc, type FlowParse, type FlowProblem, type FlowSource,
 } from '../../../shared/flows.js';
 import { findTemplate } from './templates.js';
@@ -18,12 +18,22 @@ export function flowIdOf(raw: unknown): number | null {
   return typeof raw === 'string' && /^[1-9][0-9]{0,15}$/.test(raw) && Number.isSafeInteger(Number(raw)) ? Number(raw) : null;
 }
 
-/** `POST /api/flows`: an empty flow (the wave skeleton) or a copy of a template, under the operator's title. */
+/** `POST /api/flows`: an empty flow (the wave skeleton), a copy of a template, or an imported file's document (§14.1), under
+ *  the operator's title. An import becomes a draft, never a version, and only one that keeps the rules: the operator has
+ *  read its prompts before it is sent, and publishing stays their act. */
 export function decideCreate(body: unknown): { ok: true; doc: FlowDoc; source: FlowSource | null } | DoorRefusal {
   const b = isObj(body) ? body : {};
   const title = b.title === undefined ? undefined : typeof b.title === 'string' ? b.title.trim() : null;
   if (title === null || (title !== undefined && (title === '' || title.length > FLOW_LIMITS.title))) {
     return { ok: false, refusal: 'bad-request', detail: `title: 1 to ${FLOW_LIMITS.title} characters` };
+  }
+  if (b.import !== undefined) {
+    if (b.template !== undefined) return { ok: false, refusal: 'bad-request', detail: 'a template or an import, not both' };
+    const parsed = readFlowFile(JSON.stringify(b.import));
+    if (!parsed.ok) return { ok: false, refusal: 'bad-request', detail: parsed.reason };
+    const problems = validateFlow(parsed.doc);
+    if (problems.length > 0) return { ok: false, refusal: 'conflict', detail: 'the file breaks the flow rules', problems };
+    return { ok: true, doc: { ...parsed.doc, title: title ?? parsed.doc.title }, source: null };
   }
   if (b.template === undefined) return { ok: true, doc: skeletonFlowDoc(title ?? 'New flow'), source: null };
   if (typeof b.template !== 'string') return { ok: false, refusal: 'bad-request', detail: 'template' };
