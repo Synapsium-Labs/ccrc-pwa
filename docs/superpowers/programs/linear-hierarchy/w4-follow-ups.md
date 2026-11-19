@@ -199,4 +199,6 @@ it from a saved copy.
 - The inbound close's workspace hold (F8) still lives in process memory.
 - The lane's close comment posts the stored reason without re-running §6.1's check before the write (round 5 A5's second
   half); the reason was checked when the close was decided. Not in this run's list.
+- `ccrc-api`'s `plan.ticket-done` gate (#2997) stands beside this branch's one table gate; folding it into the table is the
+  follow-up run's (the coordinator, mail 26346).
 - Not mine (the brief): the wave 4 note's gated-count prose and D-8724/D-8725.
