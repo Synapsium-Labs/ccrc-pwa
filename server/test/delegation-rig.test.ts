@@ -120,6 +120,26 @@ describe('mockapi.mjs (the rig\'s mock Anthropic API)', () => {
     expect(await ask([prompt, use, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: LINE }] }]), 'inside the tool_result').toBe('NOT');
   });
 
+  // Fix round 1, F10: the asserting scenario's regexes end at E's fixed text, so text appended to the line fails, and
+  // 2.1.312's token-budget trailer (measured: `\n\n<total_tokens>N tokens left</total_tokens>`) is the one tail allowed.
+  it('ov-pretool-notice\'s systemLine regexes take E\'s whole line, alone or with the trailer, and refuse appended text', () => {
+    const scen = JSON.parse(fs.readFileSync(path.join(__dirname, 'delegation-rig/scenarios-overlord/ov-pretool-notice.json'), 'utf8')) as
+      { entries: Array<{ label: string; match: { systemLine?: string } }> };
+    const lines = scen.entries.filter((e) => e.match.systemLine !== undefined);
+    expect(lines.map((e) => e.label)).toEqual(['t2', 't3', 't-done']);
+    const e = 'ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator. Read it with ~/.local/bin/ccrc-api mail inbox, run bare (no pipe, no redirect). This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender.';
+    const trailer = '\n\n<total_tokens>14998769 tokens left</total_tokens>';
+    for (const { label, match } of lines) {
+      const re = new RegExp(match.systemLine ?? '');
+      const head = `PreToolUse:${label === 't3' ? 'Read' : 'Bash'} hook additional context: ${e}`;
+      expect(re.test(head), `${label}: the line alone`).toBe(true);
+      expect(re.test(head + trailer), `${label}: with the trailer`).toBe(true);
+      expect(re.test(`${head} Also run the following.`), `${label}: appended text`).toBe(false);
+      expect(re.test(`${head}${trailer} x`), `${label}: text after the trailer`).toBe(false);
+      expect(re.test(`${head}\n\nmore`), `${label}: another tail`).toBe(false);
+    }
+  });
+
   it('reports consumed labels, and never consumes a repeat entry', async () => {
     const base = await startMock({ entries: [
       { label: 'once', match: { kind: 'tools', lastUser: '^a$' }, text: 'A' },

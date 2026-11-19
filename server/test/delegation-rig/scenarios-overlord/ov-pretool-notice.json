@@ -84,7 +84,7 @@
         "kind": "main",
         "hasToolResult": true,
         "lastUser": "ov-notice-b1",
-        "systemLine": "^PreToolUse:Bash hook additional context: ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator\\. Read it with ~/\\.local/bin/ccrc-api mail inbox, run bare \\(no pipe, no redirect\\)\\. This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender\\."
+        "systemLine": "^PreToolUse:Bash hook additional context: ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator\\. Read it with ~/\\.local/bin/ccrc-api mail inbox, run bare \\(no pipe, no redirect\\)\\. This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender\\.(?:$|\\n\\n<total_tokens>[0-9]+ tokens left</total_tokens>$)"
       },
       "tool_use": {
         "name": "Read",
@@ -99,7 +99,7 @@
         "kind": "main",
         "hasToolResult": true,
         "lastUser": "NAME=",
-        "systemLine": "^PreToolUse:Read hook additional context: ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator\\. Read it with ~/\\.local/bin/ccrc-api mail inbox, run bare \\(no pipe, no redirect\\)\\. This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender\\."
+        "systemLine": "^PreToolUse:Read hook additional context: ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator\\. Read it with ~/\\.local/bin/ccrc-api mail inbox, run bare \\(no pipe, no redirect\\)\\. This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender\\.(?:$|\\n\\n<total_tokens>[0-9]+ tokens left</total_tokens>$)"
       },
       "tool_use": {
         "name": "Bash",
@@ -115,7 +115,7 @@
         "kind": "main",
         "hasToolResult": true,
         "lastUser": "ov-notice-b3",
-        "systemLine": "^PreToolUse:Bash hook additional context: ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator\\. Read it with ~/\\.local/bin/ccrc-api mail inbox, run bare \\(no pipe, no redirect\\)\\. This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender\\."
+        "systemLine": "^PreToolUse:Bash hook additional context: ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator\\. Read it with ~/\\.local/bin/ccrc-api mail inbox, run bare \\(no pipe, no redirect\\)\\. This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender\\.(?:$|\\n\\n<total_tokens>[0-9]+ tokens left</total_tokens>$)"
       },
       "text": "W0-T-DONE"
     }
