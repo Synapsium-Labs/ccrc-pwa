@@ -73,7 +73,7 @@ const jqRecorder = (): { dir: string; log: string } => {
 };
 
 /** `_spawn_start <id> new` through `ccd` at `src` (the repository's by default), with `pre` run first. */
-const spawn = (pre = '', src = CCD, pathPrefix = ''): { lines: string[]; status: number | null; err: string; journal: string[] } => {
+const spawnOnce = (pre = '', src = CCD, pathPrefix = ''): { lines: string[]; status: number | null; err: string; journal: string[] } => {
   h.sh(`rm -f "$HOME/ccd-calls" "$HOME/pane-up" "$HOME/.cc-sessions/swap.log"`);
   const base = h.env();
   const env = ghContainedEnv(h.home, { ...base, A_SRC: src, A_SNIP: `${RESUME_DIES} ${pre} _spawn_start ${ID} new` }, { systemd: true, tmux: true, net: true });
@@ -93,7 +93,7 @@ const mode = (p: string): number => fs.statSync(p).mode & 0o777;
 describe('a surfaced spawn writes the tool-server config and puts only its path and the nonce\'s hash on the pane', () => {
   it('mcp.json is 0600 in a 0700 directory, its nonce 64 hex, hashing (as hex text, no newline) to the pane\'s CCRC_DOOR_NONCE_SHA256', () => {
     seed();
-    const { lines, status, err } = spawn();
+    const { lines, status, err } = spawnOnce();
     expect(status, err).toBe(0);
     expect(lines).toHaveLength(1);
     expect(mode(mcp())).toBe(0o600);
@@ -112,7 +112,7 @@ describe('a surfaced spawn writes the tool-server config and puts only its path 
   it('the pane\'s command never holds the nonce, and no jq argv does', () => {
     seed();
     const jq = jqRecorder();
-    const { lines, status, err } = spawn('', CCD, jq.dir);
+    const { lines, status, err } = spawnOnce('', CCD, jq.dir);
     expect(status, err).toBe(0);
     const { nonce } = configOf();
     expect(h.calls().join('\n')).not.toContain(nonce);
@@ -125,9 +125,9 @@ describe('a surfaced spawn writes the tool-server config and puts only its path 
 
   it('two spawns write two different nonces, each hashed on its own pane line', () => {
     seed();
-    const a = spawn();
+    const a = spawnOnce();
     const n1 = configOf().nonce;
-    const b = spawn();
+    const b = spawnOnce();
     const n2 = configOf().nonce;
     expect(n1).not.toBe(n2);
     expect(hashOn(a.lines[0]!)).toBe(sha(n1));
@@ -136,7 +136,7 @@ describe('a surfaced spawn writes the tool-server config and puts only its path 
 
   it('a spawn with no surface writes nothing under $REG/.door/ and puts no door on the pane', () => {
     seed(false);
-    const { lines, status, err } = spawn();
+    const { lines, status, err } = spawnOnce();
     expect(status, err).toBe(0);
     expect(fs.existsSync(path.join(REG(), '.door'))).toBe(false);
     expect(lines[0]).not.toContain('--mcp-config');
@@ -145,7 +145,7 @@ describe('a surfaced spawn writes the tool-server config and puts only its path 
 });
 
 describe('each failure refuses the spawn: no pane, its phrase in swap.log, no mcp.json', () => {
-  const refused = (r: ReturnType<typeof spawn>, phrase: string): void => {
+  const refused = (r: ReturnType<typeof spawnOnce>, phrase: string): void => {
     expect(r.status).not.toBe(0);
     expect(r.lines).toHaveLength(0);
     expect(r.journal).toHaveLength(1);
@@ -160,17 +160,17 @@ describe('each failure refuses the spawn: no pane, its phrase in swap.log, no mc
     const src = copyTree();
     const prog = path.join(path.dirname(src), 'door-process.mjs');
     const pin = sha(fs.readFileSync(prog));
-    expect(spawn(installedPre(pin), src).status, 'the pinned copy spawns').toBe(0);
+    expect(spawnOnce(installedPre(pin), src).status, 'the pinned copy spawns').toBe(0);
     fs.rmSync(mcp());
     fs.appendFileSync(prog, '// changed after the pin was taken\n');
-    refused(spawn(installedPre(pin), src), 'the door program is missing, linked or not the pinned one');
+    refused(spawnOnce(installedPre(pin), src), 'the door program is missing, linked or not the pinned one');
   });
 
   it('a missing program', () => {
     seed();
     const src = copyTree();
     fs.rmSync(path.join(path.dirname(src), 'door-process.mjs'));
-    refused(spawn('', src), 'the door program is missing, linked or not the pinned one');
+    refused(spawnOnce('', src), 'the door program is missing, linked or not the pinned one');
   });
 
   it('a symlinked program, even to the pinned bytes', () => {
@@ -180,7 +180,7 @@ describe('each failure refuses the spawn: no pane, its phrase in swap.log, no mc
     const real = path.join(h.home, 'real-door-process.mjs');
     fs.renameSync(prog, real);
     fs.symlinkSync(real, prog);
-    refused(spawn(installedPre(sha(fs.readFileSync(real))), src), 'the door program is missing, linked or not the pinned one');
+    refused(spawnOnce(installedPre(sha(fs.readFileSync(real))), src), 'the door program is missing, linked or not the pinned one');
   });
 
   it('a symlinked .door directory, and a symlinked <id> directory', () => {
@@ -188,18 +188,18 @@ describe('each failure refuses the spawn: no pane, its phrase in swap.log, no mc
     const elsewhere = path.join(h.home, 'elsewhere');
     fs.mkdirSync(elsewhere, { recursive: true });
     fs.symlinkSync(elsewhere, path.join(REG(), '.door'));
-    refused(spawn(), 'the door directory is a link');
+    refused(spawnOnce(), 'the door directory is a link');
     expect(fs.readdirSync(elsewhere)).toEqual([]);
     fs.rmSync(path.join(REG(), '.door'));
     fs.mkdirSync(path.join(REG(), '.door'), { mode: 0o700 });
     fs.symlinkSync(elsewhere, doorDir());
-    refused(spawn(), 'the door directory is a link');
+    refused(spawnOnce(), 'the door directory is a link');
     expect(fs.readdirSync(elsewhere)).toEqual([]);
   });
 
   it('no node on PATH', () => {
     seed();
-    refused(spawn('command() { if [[ "${1-}" == -v && "${2-}" == node ]]; then return 1; fi; builtin command "$@"; };'), 'no node on PATH');
+    refused(spawnOnce('command() { if [[ "${1-}" == -v && "${2-}" == node ]]; then return 1; fi; builtin command "$@"; };'), 'no node on PATH');
   });
 
   it('a temp file planted as a link is never written through', () => {
@@ -208,7 +208,7 @@ describe('each failure refuses the spawn: no pane, its phrase in swap.log, no mc
     const target = path.join(h.home, 'planted-target');
     fs.writeFileSync(target, 'untouched\n');
     fs.symlinkSync(target, path.join(doorDir(), 'mcp.json.tmp'));
-    const r = spawn();
+    const r = spawnOnce();
     expect(r.status, r.err).toBe(0);
     expect(fs.readFileSync(target, 'utf8')).toBe('untouched\n');
     expect(fs.lstatSync(mcp()).isFile()).toBe(true);
@@ -222,7 +222,7 @@ describe('the spawn\'s hash is the claim door\'s: the nonce it wrote claims a ke
 
   it('a start bound to the pane\'s hash, minted, issues the key to the nonce in mcp.json', async () => {
     seed();
-    const { lines, status, err } = spawn();
+    const { lines, status, err } = spawnOnce();
     expect(status, err).toBe(0);
     const paneHash = hashOn(lines[0]!);
     const { nonce } = configOf();

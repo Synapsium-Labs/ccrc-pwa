@@ -126,8 +126,9 @@ describe('the delta on a plain prompt: from the cache alone, no network', () => 
     execFileSync('mkfifo', [cache()]);
     // A writer stands ready to offer a fresh-looking cache: a hook that opened the FIFO would read it and print LINE.
     const at = Date.now();
-    const writer = spawn('bash', ['-c', 'printf "%s\\n%s" "$1" "$2" > "$3"', '_', `v=1 at=${at} until=${at + 180_000}`, LINE, cache()],
-      { stdio: 'ignore', detached: true });
+    // A node child with no shell: it blocks in its open until a reader comes, which the hook never is.
+    const writer = spawn(process.execPath, ['-e', 'require("node:fs").writeFileSync(process.argv[1], process.argv[2])',
+      cache(), `v=1 at=${at} until=${at + 180_000}\n${LINE}`], { stdio: 'ignore', detached: true });
     try {
       const { out, ms } = run(prompt());
       expect(context(out)).toBe(UNKNOWN);

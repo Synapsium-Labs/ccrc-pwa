@@ -79,4 +79,18 @@ is taken here.
 
 ## Measurements
 
-Filled in at the wave-done: growth, mutation and suite runs.
+- **Growth** (net code lines against the merge base, the armed growth check green): `ccd/ccd` +1, `ccd/ccrc` +1,
+  `ccd/lib/door.sh` +26, `ccd (program)` +27, `ccd/session-hook.sh` +28; none over 40, no waiver.
+- **Mutations, each red and restored from a saved copy:** the spawn step's nonce on jq's argv and its missing umask; five
+  in the door process, the counter reused after a failed send among them; the hook's lease, link, regular-file and
+  hash-gate checks; and the new mutation sets' deciders (`renderAnchor`'s delta form, `FIRST_PROMPT_OF_ROLE`, the probe
+  page's door tail), which run in `mutation-floors`.
+- **The first full run was red** on three guards this PR missed, fixed in one round: the shellcheck ratchet (a new
+  `node` variable in `_door_spawn` made shellcheck read an existing `why=node-missing` as arithmetic, and the hook's
+  delta reader reused two names the hook uses as arrays; both renamed, so no pin moves), the raw-spawn census (the spawn
+  suite's helper was named `spawn`; now `spawnOnce`), and the settings census (the door process's four environment
+  names and the client's three act-key names now carry their reasons). CodeQL flagged the FIFO case's `bash -c`
+  writer; it is a node child with no shell now, and the regular-file mutant still reds that case.
+- **horkos** blocks on `rules-mixed` (the entry installer and the session hook are its rules files, beside the rest of
+  the change) and on three approvals by people. This PR cannot fix them without a split, which the brief's one PR rules
+  out; they are the coordinator's to route.
