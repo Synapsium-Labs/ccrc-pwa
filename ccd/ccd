@@ -48803,7 +48803,18 @@ RANGE_MAX_PREPARES_LIVE=2
 RANGE_MAX_PREPARES_PER_MINUTE=6
 RANGE_MINUTE_MS=60000
 RANGE_ENTRY_TTL_MS=3600000
-RANGE_RESERVATION_TTL_MS=120000
+# A reservation older than this is a prepare that died, and holds no slot. It is a multiple of the copy budget, never a bare
+# number: the copy itself stops at DOCS_RANGE_PREPARE_BUDGET_MS (checked between reads), so a LIVE prepare is done, and has
+# committed, long before its reservation can read as dead. The factor (12) is above the 6 the margin needs: a reservation
+# that expires under a live prepare would let a third copy start beside two, and commit would answer prepare-busy.
+RANGE_RESERVATION_TTL_FACTOR=12
+RANGE_RESERVATION_TTL_MS=RANGE_RESERVATION_TTL_FACTOR * DOCS_RANGE_PREPARE_BUDGET_MS
+# A cache record stamped later than now by more than this is junk (a clock set back, or a planted record that would
+# otherwise never expire): seconds of skew, in ms.
+RANGE_FUTURE_SKEW_MS=5000
+# What a snapshot's `.bin` was when it was committed, from fstat of the finished file (names in .meta, fields of the stat):
+# every frame measures the opened `.bin` again and answers snapshot-gone on any difference.
+RANGE_IDENTITY_KEYS=('ino', 'mtime_ns', 'ctime_ns')
 RANGE_LOCK_WAIT_S=5
 RANGE_COPY_CHUNK=1048576
 RANGE_SMALL_FILE_MAX_BYTES=4096
@@ -48881,9 +48892,16 @@ def range_cache_dir(ctx):
     return os.path.join(os.path.dirname(ctx.reg), RANGE_CACHE_NAME)
 
 
+RangeCache = namedtuple('RangeCache', ['path', 'fd'])
+
+
 def range_open_dir(cdir):
-    """The cache directory, made 0700 if absent. A symlink, a non-directory or another user's directory in its place is a
-    contract break (helper-failed): nothing is ever read or written through it."""
+    """The cache directory, made 0700 if absent, opened ONCE as an O_DIRECTORY|O_NOFOLLOW descriptor -> RangeCache(path, fd).
+    A symlink, a non-directory or another user's directory in its place is a contract break (helper-failed): nothing is
+    ever read or written through it. Every later open, stat, rename, unlink and listing in the cache goes through the
+    descriptor (`dir_fd=`), by a bare file name, so a path swapped under the helper after this call is never followed. Only
+    the creation and the first lstat name the path: a directory cannot be addressed by descriptor before it is opened, and
+    the descriptor is compared with that lstat (device and inode) afterwards."""
     try:
         os.mkdir(cdir, 0o700)
     except OSError as e:
@@ -48892,14 +48910,23 @@ def range_open_dir(cdir):
     st = os.lstat(cdir)
     if not stat.S_ISDIR(st.st_mode) or st.st_uid != os.geteuid():
         raise RuntimeError('docs range cache: not a directory of this user')
-    if stat.S_IMODE(st.st_mode) != 0o700:
-        os.chmod(cdir, 0o700)
+    fd = os.open(cdir, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW | os.O_CLOEXEC)
+    try:
+        opened = os.fstat(fd)
+        if (opened.st_dev, opened.st_ino) != (st.st_dev, st.st_ino) or opened.st_uid != os.geteuid():
+            raise RuntimeError('docs range cache: the directory changed while it was opened')
+        if stat.S_IMODE(opened.st_mode) != 0o700:
+            os.fchmod(fd, 0o700)
+    except BaseException:
+        os.close(fd)
+        raise
+    return RangeCache(cdir, fd)
 
 
-def range_lock(cdir):
+def range_lock(cache):
     """The cache's lock, held until the returned descriptor is closed: one flock on `lock`, polled for at most
     RANGE_LOCK_WAIT_S (a holder is short, so a longer wait is a busy cache: prepare-busy)."""
-    fd = os.open(os.path.join(cdir, 'lock'), os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600)
+    fd = os.open('lock', os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=cache.fd)
     try:
         if not stat.S_ISREG(os.fstat(fd).st_mode):
             raise RuntimeError('docs range cache: the lock is not a regular file')
@@ -48919,15 +48946,16 @@ def range_lock(cdir):
         raise
 
 
-def range_read_small(path, limit):
-    """At most `limit` bytes of a regular file, or None when it is absent, not regular, unreadable or longer. Opened
-    O_NOFOLLOW and O_NONBLOCK, so a symlink is refused and a FIFO cannot hang the call."""
+def range_read_small(cache, name, limit):
+    """At most `limit` bytes of the regular file `name` in the cache, or None when it is absent, not regular, not this
+    user's, unreadable or longer. Opened O_NOFOLLOW and O_NONBLOCK, so a symlink is refused and a FIFO cannot hang the call."""
     try:
-        fd = os.open(path, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
+        fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=cache.fd)
     except OSError:
         return None
     try:
-        if not stat.S_ISREG(os.fstat(fd).st_mode):
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid():
             return None
         raw = os.read(fd, limit + 1)
     except OSError:
@@ -48937,104 +48965,117 @@ def range_read_small(path, limit):
     return raw if len(raw) <= limit else None
 
 
-def range_read_json(path):
-    raw = range_read_small(path, RANGE_SMALL_FILE_MAX_BYTES)
+def range_read_json(cache, name):
+    """A cache record: a small file of strict UTF-8 JSON that is one object -> the dict, else None. The writers
+    (`line_of`, ensure_ascii off) put a non-ASCII path in a record as UTF-8, so it is decoded as UTF-8, never as ASCII."""
+    raw = range_read_small(cache, name, RANGE_SMALL_FILE_MAX_BYTES)
     if raw is None:
         return None
     try:
-        obj = json.loads(raw.decode('ascii'))
+        obj = json.loads(raw.decode('utf-8'))
     except ValueError:
         return None
     return obj if isinstance(obj, dict) else None
 
 
-def range_write(path, body):
-    """`body` (bytes) written whole to `path` through a temporary name and a rename, so a reader never sees half of it.
-    Only ever called under the lock."""
-    tmp = path + '.tmp'
-    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+def range_write(cache, name, body):
+    """`body` (bytes) written whole to the cache file `name` through a temporary name and a rename, so a reader never
+    sees half of it. Only ever called under the lock. The temporary name is opened O_NOFOLLOW and O_NONBLOCK (a planted
+    FIFO cannot hang it) and must be a regular file."""
+    tmp = name + '.tmp'
+    fd = os.open(tmp, os.O_WRONLY | os.O_CREAT | os.O_TRUNC | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, 0o600, dir_fd=cache.fd)
     try:
-        os.write(fd, body)
+        if not stat.S_ISREG(os.fstat(fd).st_mode):
+            raise RuntimeError('docs range cache: a record is not a regular file')
+        view = memoryview(body)
+        while view:
+            view = view[os.write(fd, view):]
     finally:
         os.close(fd)
-    os.rename(tmp, path)
+    os.rename(tmp, name, src_dir_fd=cache.fd, dst_dir_fd=cache.fd)
 
 
-def range_remove(path):
+def range_remove(cache, name):
     try:
-        os.unlink(path)
+        os.unlink(name, dir_fd=cache.fd)
     except OSError as e:
         if e.errno != errno.ENOENT:
             raise
 
 
-def range_path(cdir, rid, kind):
-    return os.path.join(cdir, rid + '.' + kind)
+def range_path(rid, kind):
+    """A cache file's NAME (the cache is addressed by descriptor, never by a joined path)."""
+    return rid + '.' + kind
 
 
 def range_is_int(v):
     return isinstance(v, int) and not isinstance(v, bool) and v >= 0
 
 
-def range_scan(cdir, now):
+def range_scan(cache, now):
     """Under the lock: remove what is expired or junk, and return (entries, reservations).
-    entries: {id: {size, used, digest, bind}} for each completed snapshot (a valid .meta, its .bin, used within
-    RANGE_ENTRY_TTL_MS). reservations: {id: {size, at}} for each live one (a valid .resv younger than
-    RANGE_RESERVATION_TTL_MS). A record that does not parse, a snapshot missing a half, and an orphan copy are removed."""
+    entries: {id: {size, used, digest, bind, ino, mtime_ns, ctime_ns}} for each completed snapshot (a valid .meta, its
+    .bin, used within RANGE_ENTRY_TTL_MS; the three identity numbers are the .bin's, taken at commit). reservations:
+    {id: {size, at}} for each live one (a valid .resv younger than RANGE_RESERVATION_TTL_MS). A record that does not
+    parse, one stamped more than RANGE_FUTURE_SKEW_MS in the future, a snapshot missing a half, and an orphan copy are
+    removed."""
     kinds = {}
-    for name in os.listdir(cdir):
+    for name in os.listdir(cache.fd):
         m = re.fullmatch(RANGE_NAME_RE, name)
         if m is not None:
             kinds.setdefault(m.group(1), set()).add(m.group(2))
         elif name.endswith('.tmp'):
-            range_remove(os.path.join(cdir, name))
+            range_remove(cache, name)
     entries = {}
     resvs = {}
     for rid in sorted(kinds):
         have = kinds[rid]
-        meta = range_read_json(range_path(cdir, rid, 'meta')) if 'meta' in have else None
-        resv = range_read_json(range_path(cdir, rid, 'resv')) if 'resv' in have else None
+        meta = range_read_json(cache, range_path(rid, 'meta')) if 'meta' in have else None
+        resv = range_read_json(cache, range_path(rid, 'resv')) if 'resv' in have else None
         if 'meta' in have:
             ok = (meta is not None and 'bin' in have and meta.get('id') == rid and range_is_int(meta.get('size'))
                   and range_is_int(meta.get('used')) and isinstance(meta.get('digest'), str)
                   and re.fullmatch(FINGERPRINT_RE, meta['digest']) is not None and isinstance(meta.get('bind'), dict)
-                  and now - meta['used'] <= RANGE_ENTRY_TTL_MS)
+                  and all(range_is_int(meta.get(k)) for k in RANGE_IDENTITY_KEYS)
+                  and -RANGE_FUTURE_SKEW_MS <= now - meta['used'] <= RANGE_ENTRY_TTL_MS)
             if ok:
                 entries[rid] = {'size': meta['size'], 'used': meta['used'], 'digest': meta['digest'], 'bind': meta['bind']}
+                for k in RANGE_IDENTITY_KEYS:
+                    entries[rid][k] = meta[k]
                 for kind in ('resv', 'part'):
                     if kind in have:
-                        range_remove(range_path(cdir, rid, kind))
+                        range_remove(cache, range_path(rid, kind))
             else:
                 for kind in have:
-                    range_remove(range_path(cdir, rid, kind))
+                    range_remove(cache, range_path(rid, kind))
         elif 'resv' in have:
             ok = (resv is not None and resv.get('id') == rid and range_is_int(resv.get('size'))
-                  and range_is_int(resv.get('at')) and now - resv['at'] <= RANGE_RESERVATION_TTL_MS)
+                  and range_is_int(resv.get('at')) and -RANGE_FUTURE_SKEW_MS <= now - resv['at'] <= RANGE_RESERVATION_TTL_MS)
             if ok:
                 resvs[rid] = {'size': resv['size'], 'at': resv['at']}
             else:
                 for kind in have:
-                    range_remove(range_path(cdir, rid, kind))
+                    range_remove(cache, range_path(rid, kind))
         else:
             for kind in have:
-                range_remove(range_path(cdir, rid, kind))
+                range_remove(cache, range_path(rid, kind))
     return entries, resvs
 
 
-def range_bound(cdir):
+def range_bound(cache):
     """The cache's bound in bytes: RANGE_CACHE_BOUND_BYTES, or the value of the cache directory's `bound` file when that is
     lower. The file counts only as a regular file, opened O_NOFOLLOW and O_NONBLOCK (a symlink is refused and a FIFO cannot
     block), of at most RANGE_BOUND_FILE_MAX_BYTES bytes, every one an ASCII digit; anything else is ignored for the
     constant. A value above the constant changes nothing, so a file can only make range reads refuse sooner."""
-    raw = range_read_small(os.path.join(cdir, 'bound'), RANGE_BOUND_FILE_MAX_BYTES)
+    raw = range_read_small(cache, 'bound', RANGE_BOUND_FILE_MAX_BYTES)
     if raw is None or re.fullmatch(rb'[0-9]{1,32}', raw) is None:
         return RANGE_CACHE_BOUND_BYTES
     return min(RANGE_CACHE_BOUND_BYTES, int(raw))
 
 
-def range_starts(cdir, now):
+def range_starts(cache, now):
     """The start times (ms) in `starts` within the last minute. A file that is not what this writes reads as empty."""
-    raw = range_read_small(os.path.join(cdir, 'starts'), RANGE_SMALL_FILE_MAX_BYTES)
+    raw = range_read_small(cache, 'starts', RANGE_SMALL_FILE_MAX_BYTES)
     if raw is None:
         return []
     out = []
@@ -49044,37 +49085,37 @@ def range_starts(cdir, now):
     return out
 
 
-def range_begin(cdir):
+def range_begin(cache):
     """Take a place for one prepare, under the lock -> its id. Expired entries go first; then a prepare is refused
     prepare-busy when RANGE_MAX_PREPARES_LIVE reservations are live or RANGE_MAX_PREPARES_PER_MINUTE have started in the
     last minute. Otherwise it records its start and a reservation of size 0: its slot, until range_reserve sizes it."""
-    fd = range_lock(cdir)
+    fd = range_lock(cache)
     try:
         now = SYS.now_ms()
-        _entries, resvs = range_scan(cdir, now)
-        starts = range_starts(cdir, now)
+        _entries, resvs = range_scan(cache, now)
+        starts = range_starts(cache, now)
         if len(resvs) >= RANGE_MAX_PREPARES_LIVE or len(starts) >= RANGE_MAX_PREPARES_PER_MINUTE:
             raise fail('prepare-busy')
         rid = os.urandom(16).hex()
-        range_write(os.path.join(cdir, 'starts'), ''.join('%d\n' % t for t in starts + [now]).encode('ascii'))
-        range_write(range_path(cdir, rid, 'resv'), line_of({'id': rid, 'size': 0, 'at': now}))
+        range_write(cache, 'starts', ''.join('%d\n' % t for t in starts + [now]).encode('ascii'))
+        range_write(cache, range_path(rid, 'resv'), line_of({'id': rid, 'size': 0, 'at': now}))
         return rid
     finally:
         os.close(fd)
 
 
-def range_reserve(cdir, rid, size):
+def range_reserve(cache, rid, size):
     """Reserve `size` bytes for prepare `rid` against the bound, under the lock. What is already reserved by other
     prepares counts and is never evicted; completed entries are evicted least recently used first until the size fits.
     A size that cannot fit even with every entry gone is prepare-busy, and evicts nothing."""
-    fd = range_lock(cdir)
+    fd = range_lock(cache)
     try:
         now = SYS.now_ms()
-        entries, resvs = range_scan(cdir, now)
+        entries, resvs = range_scan(cache, now)
         mine = resvs.get(rid)
         if mine is None:
             raise fail('prepare-busy')
-        bound = range_bound(cdir)
+        bound = range_bound(cache)
         held = sum(r['size'] for k, r in resvs.items() if k != rid)
         if held + size > bound:
             raise fail('prepare-busy')
@@ -49082,41 +49123,72 @@ def range_reserve(cdir, rid, size):
         for old in sorted(entries, key=lambda k: (entries[k]['used'], k)):
             if used + size <= bound:
                 break
-            range_remove(range_path(cdir, old, 'meta'))
-            range_remove(range_path(cdir, old, 'bin'))
+            range_remove(cache, range_path(old, 'meta'))
+            range_remove(cache, range_path(old, 'bin'))
             used -= entries[old]['size']
-        range_write(range_path(cdir, rid, 'resv'), line_of({'id': rid, 'size': size, 'at': mine['at']}))
+        range_write(cache, range_path(rid, 'resv'), line_of({'id': rid, 'size': size, 'at': mine['at']}))
     finally:
         os.close(fd)
 
 
-def range_commit(cdir, rid, a, size, digest):
-    """Complete prepare `rid`, under the lock: its copy becomes <id>.bin, its binding <id>.meta, and its reservation goes.
-    A reservation that expired meanwhile (a prepare that outlived RANGE_RESERVATION_TTL_MS) is prepare-busy."""
-    fd = range_lock(cdir)
+def range_meta_line(rid, e, used):
+    """A snapshot's .meta: its size, digest, last use, binding and the identity of its .bin."""
+    rec = {'id': rid, 'size': e['size'], 'digest': e['digest'], 'used': used, 'bind': e['bind']}
+    for k in RANGE_IDENTITY_KEYS:
+        rec[k] = e[k]
+    return line_of(rec)
+
+
+def range_seal(cache, rid, size):
+    """The finished copy <id>.bin, sealed -> its identity {ino, mtime_ns, ctime_ns}: opened by descriptor-relative name,
+    refused unless it is a regular file of this user of exactly `size` bytes, made 0400 (fchmod, which moves its ctime, so
+    the numbers are taken after it), then measured. The copy is complete and closed by now, so nothing writes it again."""
+    fd = os.open(range_path(rid, 'bin'), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC, dir_fd=cache.fd)
+    try:
+        st = os.fstat(fd)
+        if not stat.S_ISREG(st.st_mode) or st.st_uid != os.getuid() or st.st_size != size:
+            raise RuntimeError('docs range cache: the finished copy is not the copy that was made')
+        os.fchmod(fd, 0o400)
+        st = os.fstat(fd)
+    finally:
+        os.close(fd)
+    return {'ino': st.st_ino, 'mtime_ns': st.st_mtime_ns, 'ctime_ns': st.st_ctime_ns}
+
+
+def range_commit(cache, rid, a, size, digest):
+    """Complete prepare `rid`, under the lock: its copy becomes <id>.bin (sealed, its identity recorded), its binding
+    <id>.meta, and its reservation goes. A reservation that expired meanwhile (a prepare that outlived
+    RANGE_RESERVATION_TTL_MS) is prepare-busy."""
+    fd = range_lock(cache)
     try:
         now = SYS.now_ms()
-        _entries, resvs = range_scan(cdir, now)
-        if rid not in resvs or not os.path.exists(range_path(cdir, rid, 'part')):
+        _entries, resvs = range_scan(cache, now)
+        if rid not in resvs:
             raise fail('prepare-busy')
-        os.rename(range_path(cdir, rid, 'part'), range_path(cdir, rid, 'bin'))
-        range_write(range_path(cdir, rid, 'meta'),
-                    line_of({'id': rid, 'size': size, 'digest': digest, 'used': now, 'bind': range_bind(a)}))
-        range_remove(range_path(cdir, rid, 'resv'))
+        try:
+            os.stat(range_path(rid, 'part'), dir_fd=cache.fd, follow_symlinks=False)
+        except FileNotFoundError:
+            raise fail('prepare-busy')
+        os.rename(range_path(rid, 'part'), range_path(rid, 'bin'), src_dir_fd=cache.fd, dst_dir_fd=cache.fd)
+        ident = range_seal(cache, rid, size)
+        e = {'size': size, 'digest': digest, 'bind': range_bind(a)}
+        e.update(ident)
+        range_write(cache, range_path(rid, 'meta'), range_meta_line(rid, e, now))
+        range_remove(cache, range_path(rid, 'resv'))
     finally:
         os.close(fd)
 
 
-def range_abort(cdir, rid):
+def range_abort(cache, rid):
     """A prepare that did not complete gives up its place and its partial copy. It never raises: what it cannot remove
     now (the lock is busy) expires with its reservation."""
     try:
-        fd = range_lock(cdir)
+        fd = range_lock(cache)
     except BaseException:
         return
     try:
-        for kind in ('part', 'resv'):
-            range_remove(range_path(cdir, rid, kind))
+        for kind in ('part', 'bin', 'resv'):
+            range_remove(cache, range_path(rid, kind))
     except OSError:
         pass
     finally:
@@ -49129,14 +49201,17 @@ def range_stat_matches(st, pin):
     return st.st_size == pin[1] and st.st_mtime_ns == pin[2]
 
 
-def range_copy(cdir, rid, size, read, check_after, want_digest):
-    """Copy `size` bytes from `read(n)` into <id>.part, hashing as it goes -> the sha256 hex. The copy ends past
-    DOCS_RANGE_PREPARE_BUDGET_MS with prepare-busy (the caller removes the partial copy). More or fewer bytes than
-    `size`, a failed `check_after`, or a digest other than `want_digest` is draft-changed: the file is not the one pinned."""
+def range_copy(cache, rid, size, read, check_after, want_digest):
+    """Copy `size` bytes from `read(n)` into <id>.part, hashing as it goes -> the sha256 hex. The copy itself ends past
+    DOCS_RANGE_PREPARE_BUDGET_MS with prepare-busy (the caller removes the partial copy): the budget is read after every
+    chunk, between two reads, and a read is one chunk of a regular file (its source was refused unless regular, and opened
+    non-blocking), so it ends within a chunk of the budget. More or fewer bytes than `size`, a failed `check_after`, or a
+    digest other than `want_digest` is draft-changed: the file is not the one pinned."""
     h = hashlib.sha256()
     copied = 0
     t0 = SYS.monotonic()
-    fd = os.open(range_path(cdir, rid, 'part'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600)
+    fd = os.open(range_path(rid, 'part'), os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW | os.O_CLOEXEC, 0o600,
+                 dir_fd=cache.fd)
     try:
         while True:
             chunk = read(RANGE_COPY_CHUNK)
@@ -49163,15 +49238,15 @@ def range_copy(cdir, rid, size, read, check_after, want_digest):
     return digest
 
 
-def range_prepared(cdir, rid, a, size, read, check_after, want_digest):
+def range_prepared(cache, rid, a, size, read, check_after, want_digest):
     """Reserve `size`, copy, commit -> the prepare's body {snapshot, size, digest}."""
-    range_reserve(cdir, rid, size)
-    digest = range_copy(cdir, rid, size, read, check_after, want_digest)
-    range_commit(cdir, rid, a, size, digest)
+    range_reserve(cache, rid, size)
+    digest = range_copy(cache, rid, size, read, check_after, want_digest)
+    range_commit(cache, rid, a, size, digest)
     return {'snapshot': rid, 'size': size, 'digest': digest}
 
 
-def range_prepare_committed(ctx, a, dl, cdir, rid):
+def range_prepare_committed(ctx, a, dl, cache, rid):
     repo = discover(ctx, a.project, dl)
     if len(a.commit) != SHOW_OID_HEX.get(repo.object_format):
         raise fail('bad-commit')
@@ -49184,10 +49259,10 @@ def range_prepare_committed(ctx, a, dl, cdir, rid):
         chunk = view[at[0]:at[0] + n]
         at[0] += len(chunk)
         return bytes(chunk)
-    return range_prepared(cdir, rid, a, len(data), read, None, None)
+    return range_prepared(cache, rid, a, len(data), read, None, None)
 
 
-def range_prepare_draft(ctx, a, dl, cdir, rid):
+def range_prepare_draft(ctx, a, dl, cache, rid):
     repo = discover(ctx, a.project, dl)
     if len(a.head) != PIN_OID_HEX.get(repo.object_format):
         raise fail('bad-commit')
@@ -49221,35 +49296,45 @@ def range_prepare_draft(ctx, a, dl, cdir, rid):
             head = _pin_git(trusted.path, DRAFT_HEAD_ARGS, dl).decode('ascii', 'replace').strip()
             if head != a.head:
                 raise fail('worktree-moved', head=head)
-        return range_prepared(cdir, rid, a, st.st_size, read, check_after, pin[1] if pin[0] == 'fp' else None)
+        return range_prepared(cache, rid, a, st.st_size, read, check_after, pin[1] if pin[0] == 'fp' else None)
     finally:
         if leaf is not None:
             SYS.close(leaf)
         SYS.close(trusted.fd)
 
 
-def range_prepare(ctx, a, dl, cdir):
+def range_prepare(ctx, a, dl, cache):
     """docs-show-range --prepare: take a place, then source, reserve, copy and commit; a prepare that ends any other way
     gives its place and its partial copy back."""
-    rid = range_begin(cdir)
+    rid = range_begin(cache)
     done = False
     try:
-        body = (range_prepare_committed if a.branch is None else range_prepare_draft)(ctx, a, dl, cdir, rid)
+        body = (range_prepare_committed if a.branch is None else range_prepare_draft)(ctx, a, dl, cache, rid)
         done = True
         return body
     finally:
         if not done:
-            range_abort(cdir, rid)
+            range_abort(cache, rid)
 
 
-def range_frame(cdir, a):
+def range_bin_identity_matches(st, e):
+    """A snapshot's opened `.bin` is the file that was sealed at commit: a regular file of the recorded size, this user's,
+    and the recorded inode, modified time and change time. A rewrite in place keeps the size; it cannot keep the change
+    time, which no write can set."""
+    return (stat.S_ISREG(st.st_mode) and st.st_uid == os.getuid() and st.st_size == e['size']
+            and st.st_ino == e['ino'] and st.st_mtime_ns == e['mtime_ns'] and st.st_ctime_ns == e['ctime_ns'])
+
+
+def range_frame(cache, a):
     """docs-show-range --snapshot: one frame, under the lock. The snapshot must exist, be unexpired and be bound to
     exactly this request (any difference, or none: snapshot-gone); the length may not pass DOCS_RANGE_FRAME_BYTES nor the
-    range pass the snapshot's end (range-too-large); a read touches the entry's last use."""
-    fd = range_lock(cdir)
+    range pass the snapshot's end (range-too-large); the opened `.bin` must still be the file sealed at commit (inode,
+    modified and change time, size: any difference is snapshot-gone and the snapshot is dropped); a read touches the
+    entry's last use."""
+    fd = range_lock(cache)
     try:
         now = SYS.now_ms()
-        entries, _resvs = range_scan(cdir, now)
+        entries, _resvs = range_scan(cache, now)
         e = entries.get(a.snapshot)
         if e is None or e['bind'] != range_bind(a):
             raise fail('snapshot-gone')
@@ -49260,8 +49345,9 @@ def range_frame(cdir, a):
         raw = None
         bfd = None
         try:
-            bfd = os.open(range_path(cdir, a.snapshot, 'bin'), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC)
-            if stat.S_ISREG(os.fstat(bfd).st_mode) and os.fstat(bfd).st_size == e['size']:
+            bfd = os.open(range_path(a.snapshot, 'bin'), os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK | os.O_CLOEXEC,
+                          dir_fd=cache.fd)
+            if range_bin_identity_matches(os.fstat(bfd), e):
                 raw = os.pread(bfd, a.length, a.offset)
         except OSError:
             raw = None
@@ -49270,11 +49356,10 @@ def range_frame(cdir, a):
                 os.close(bfd)
         if raw is None or len(raw) != a.length:
             # The copy is not the one the record describes: the snapshot is gone, whatever its record says.
-            range_remove(range_path(cdir, a.snapshot, 'meta'))
-            range_remove(range_path(cdir, a.snapshot, 'bin'))
+            range_remove(cache, range_path(a.snapshot, 'meta'))
+            range_remove(cache, range_path(a.snapshot, 'bin'))
             raise fail('snapshot-gone')
-        range_write(range_path(cdir, a.snapshot, 'meta'),
-                    line_of({'id': a.snapshot, 'size': e['size'], 'digest': e['digest'], 'used': now, 'bind': e['bind']}))
+        range_write(cache, range_path(a.snapshot, 'meta'), range_meta_line(a.snapshot, e, now))
         return {'snapshot': a.snapshot, 'offset': a.offset, 'bytesB64': base64.b64encode(raw).decode('ascii'),
                 'digest': hashlib.sha256(raw).hexdigest(), 'total': e['size']}
     finally:
@@ -49285,11 +49370,13 @@ def verb_show_range(ctx, a):
     """docs-show-range: a prepare's {snapshot, size, digest} or a frame's {snapshot, offset, bytesB64, digest, total}.
     Every call opens the cache and takes its lock first, so expired entries are removed by any range call. A frame reads
     nothing but the cache; only a prepare runs git or walks a worktree, under RANGE_DEADLINE_S."""
-    cdir = range_cache_dir(ctx)
-    range_open_dir(cdir)
-    if a.snapshot is not None:
-        return range_frame(cdir, a)
-    return range_prepare(ctx, a, Deadline(RANGE_DEADLINE_S), cdir)
+    cache = range_open_dir(range_cache_dir(ctx))
+    try:
+        if a.snapshot is not None:
+            return range_frame(cache, a)
+        return range_prepare(ctx, a, Deadline(RANGE_DEADLINE_S), cache)
+    finally:
+        os.close(cache.fd)
 
 # ===== docs: entry =====
 # The verbs, by the name ccd's front passes first. A unit swaps one entry to

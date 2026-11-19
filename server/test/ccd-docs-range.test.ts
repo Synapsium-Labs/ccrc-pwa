@@ -96,7 +96,9 @@ function plant(name: string, body: string): void {
   fs.mkdirSync(cacheDir(), { recursive: true, mode: 0o700 });
   fs.writeFileSync(path.join(cacheDir(), name), body);
 }
-const plantReservation = (size: number, at: number = Date.now()): void => {
+/** `H.range_bound` on the cache directory `dir`, opened as the verb opens it (one descriptor, every read through it). */
+const boundOf = (dir: string): string => `out(H.range_bound(H.range_open_dir(${JSON.stringify(dir)})))`;
+const plantReservation =(size: number, at: number = Date.now()): void => {
   const id = crypto.randomBytes(16).toString('hex');
   plant(`${id}.resv`, JSON.stringify({ id, size, at }));
 };
@@ -332,7 +334,7 @@ describe('docs-show-range (X2 P1.2)', () => {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const bound = (content: string): number => {
       fs.writeFileSync(path.join(dir, 'bound'), content);
-      return unitJson<number>(h.home, `out(H.range_bound(${JSON.stringify(dir)}))`);
+      return unitJson<number>(h.home, boundOf(dir));
     };
     expect(bound('999999999999999999999999')).toBe(CACHE_BOUND);
     expect(bound('536870913')).toBe(CACHE_BOUND);
@@ -342,7 +344,7 @@ describe('docs-show-range (X2 P1.2)', () => {
     // CONTROL: a lower value is used, and no file at all is the constant.
     expect(bound('8388608')).toBe(8388608);
     fs.rmSync(path.join(dir, 'bound'));
-    expect(unitJson<number>(h.home, `out(H.range_bound(${JSON.stringify(dir)}))`)).toBe(CACHE_BOUND);
+    expect(unitJson<number>(h.home, boundOf(dir))).toBe(CACHE_BOUND);
     // End to end, a bound file far above the constant leaves a prepare as it was.
     const c = committed({ [`${SPECS}/a.md`]: 'tiny\n' });
     plant('bound', '9'.repeat(30));
@@ -354,7 +356,7 @@ describe('docs-show-range (X2 P1.2)', () => {
     fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
     const target = path.join(h.home, 'one-kib');
     fs.writeFileSync(target, '1024');
-    const read = (): number => unitJson<number>(h.home, `out(H.range_bound(${JSON.stringify(dir)}))`, { timeoutMs: 10_000 });
+    const read = (): number => unitJson<number>(h.home, boundOf(dir), { timeoutMs: 10_000 });
     const boundPath = path.join(dir, 'bound');
     execFileSync('mkfifo', [boundPath]);
     expect(fs.lstatSync(boundPath).isFIFO()).toBe(true);
@@ -427,5 +429,225 @@ describe('docs-show-range (X2 P1.2)', () => {
     expect(run(committedArgs(c.commit, 'specs', 'a.md', `blob:${'e'.repeat(40)}`, ['--prepare'])))
       .toMatchObject({ ok: false, failure: 'absent-path' });
     expect(cacheNames().filter((n) => /\.(part|bin|meta)$/.test(n))).toEqual([]);
+  });
+
+  it('range: a path with a non-ASCII name prepares and reads its frames', () => {
+    // A two-byte letter and a four-byte character (an astral one: a surrogate pair in UTF-16), in a committed doc and a draft.
+    const names = ['café.md', 'x-\u{1D4B3}.md'];
+    const bodies = names.map((_n, i) => bytesOf(600_000 + i));
+    const { main, wt, head } = holder(Object.fromEntries(names.map((n, i) => [`${SPECS}/${n}`, bodies[i]!])));
+    names.forEach((name, i) => {
+      const pin = `blob:${h.git(main, 'rev-parse', `${head}:${SPECS}/${name}`)}`;
+      const prep = run(committedArgs(head, 'specs', name, pin, ['--prepare']));
+      expect(prep, name).toMatchObject({ ok: true, size: bodies[i]!.length, digest: sha(bodies[i]!) });
+      const got = readFrames((t) => committedArgs(head, 'specs', name, pin, t), String(prep['snapshot']), bodies[i]!.length);
+      expect(got.bytes.equals(bodies[i]!), name).toBe(true);
+    });
+    // The record on disk is UTF-8, as the writer makes it: the path itself, not an escape of it.
+    const meta = cacheNames().filter((n) => n.endsWith('.meta')).map((n) => fs.readFileSync(path.join(cacheDir(), n), 'utf8'));
+    expect(meta.some((m) => m.includes('café.md'))).toBe(true);
+    dropCache();
+    // A draft, stat-pinned and fp-pinned.
+    for (const name of names) {
+      const body = bytesOf(1000);
+      const p = writeDraft(wt, name, body);
+      for (const pin of [statPinOf(p), `fp:${sha(body)}`]) {
+        const prep = run(draftArgs(head, name, pin, ['--prepare']));
+        expect(prep, `${name} ${pin}`).toMatchObject({ ok: true, size: 1000, digest: sha(body) });
+        const got = readFrames((t) => draftArgs(head, name, pin, t), String(prep['snapshot']), 1000);
+        expect(got.bytes.equals(body), `${name} ${pin}`).toBe(true);
+      }
+    }
+  });
+
+  /** The helper's own dispatcher, as a unit calls it: the verb name, the three roots, then `args` less its verb. */
+  const unitArgv = (args: readonly string[]): string[] => ['docs-show-range', path.join(h.home, 'projects'),
+    path.join(h.home, 'worktrees'), path.join(h.home, '.cc-sessions'), ...args.slice(1)];
+  /**
+   * A draft prepare run inside a unit whose `SYS.read` runs `mutation` (python, one statement a line, `target` the draft's
+   * path, `os` and `subprocess` imported) at the read that ends the copy, so the file changes AFTER the last byte was read
+   * and BEFORE the after-copy check: deterministic, no timing. `mutation` null changes nothing (the control).
+   */
+  const prepareWithMidCopyChange = (wt: string, rel: string, args: readonly string[], mutation: string | null): Answer => {
+    const lines = mutation === null ? ['pass'] : mutation.split('\n');
+    return unitJson<Answer>(h.home, [
+      'import json, os, subprocess',
+      `target = ${JSON.stringify(draftFile(wt, rel))}`,
+      `wt = ${JSON.stringify(wt)}`,
+      'fired = []',
+      'class MutatesAtEnd(type(H.SYS)):',
+      '    def read(self, fd, n):',
+      '        data = super().read(fd, n)',
+      '        if data == b"" and not fired and os.fstat(fd).st_ino == os.stat(target).st_ino:',
+      '            fired.append(1)',
+      ...lines.map((l) => `            ${l}`),
+      '        return data',
+      'H.SYS = MutatesAtEnd()',
+      `reply = json.loads(H.run(${JSON.stringify(unitArgv(args))}).decode('utf-8'))`,
+      "reply['fired'] = len(fired)",
+      'out(reply)',
+    ].join('\n'));
+  };
+  const noRecord = (): string[] => cacheNames().filter((n) => /\.(part|bin|meta|resv)$/.test(n));
+
+  it('range: a draft that changes while it is copied refuses draft-changed, and a moved head refuses worktree-moved', () => {
+    const { wt, head } = holder();
+    const body = bytesOf(5000);
+    const p = writeDraft(wt, 'd.bin', body);
+    const stat = statPinOf(p);
+    const fp = `fp:${sha(body)}`;
+    const original = (): void => { fs.writeFileSync(p, body); fs.utimesSync(p, new Date(), new Date()); };
+    // CONTROL: the hook fires at the end of the copy and, changing nothing, leaves both pins preparing.
+    for (const pin of [stat, fp]) {
+      expect(prepareWithMidCopyChange(wt, 'd.bin', draftArgs(head, 'd.bin', pin, ['--prepare']), null), pin)
+        .toMatchObject({ ok: true, size: body.length, fired: 1 });
+    }
+    dropCache();
+    const changes: Record<string, string> = {
+      'grows by a byte': "open(target, 'ab').write(b'x')",
+      'shrinks by a byte': 'os.truncate(target, os.stat(target).st_size - 1)',
+      'changes its modified time only': 'st = os.stat(target)\nos.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns + 7_000_000_000))',
+      // The bytes are rewritten in place at the same size, and the modified time put back: only the change time betrays it.
+      'is rewritten in place with its modified time put back':
+        "st = os.stat(target)\nf = open(target, 'r+b')\nf.write(b'Z' * st.st_size)\nf.close()\nos.utime(target, ns=(st.st_atime_ns, st.st_mtime_ns))",
+    };
+    for (const [what, mutation] of Object.entries(changes)) {
+      // A stat pin names the file as listed (the listed pin is re-measured for each change, from the file as it stands).
+      original();
+      for (const pin of [statPinOf(p), fp]) {
+        // The fp pin never meets the rewritten bytes at the copy (they are written after it), so only the after-copy check
+        // can see a change; the stat pin is the one the listing took, the file as it stood before this change.
+        const r = prepareWithMidCopyChange(wt, 'd.bin', draftArgs(head, 'd.bin', pin, ['--prepare']), mutation);
+        expect(r, `${what} (${pin.slice(0, 5)}) ${JSON.stringify(r)}`).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present', fired: 1 });
+        expect(noRecord(), `${what}: a refusal leaves nothing in the cache`).toEqual([]);
+        dropCache(); // and the cache's own start log, which would otherwise count the prepares of this case against a minute
+        original();
+      }
+    }
+    // The head moves while the copy runs: the after-copy check reads HEAD again.
+    original();
+    const moved = prepareWithMidCopyChange(wt, 'd.bin', draftArgs(head, 'd.bin', statPinOf(p), ['--prepare']), [
+      "subprocess.run(['git', '-C', wt, '-c', 'user.name=t', '-c', 'user.email=t@example.test', 'commit', '--allow-empty', '-q', '-m', 'moved'],",
+      '               check=True)',
+    ].join('\n'));
+    expect(moved).toMatchObject({ ok: false, failure: 'worktree-moved', fired: 1 });
+    expect(moved['head']).toBe(h.git(wt, 'rev-parse', 'HEAD'));
+    expect(moved['head']).not.toBe(head);
+    expect(noRecord()).toEqual([]);
+  });
+
+  it('range: a frame naming a snapshot of another draft head, another branch, or the committed side refuses', () => {
+    const { main, wt, head } = holder();
+    const body = bytesOf(2000);
+    const p = writeDraft(wt, 'd.bin', body);
+    const pin = statPinOf(p);
+    const snapshot = String(run(draftArgs(head, 'd.bin', pin, ['--prepare']))['snapshot']);
+    const frameOf = (args: string[]): Answer => run(args);
+    const tail = frameTail(snapshot, 0, 100);
+    // CONTROL: the snapshot's own tuple reads.
+    expect(frameOf(draftArgs(head, 'd.bin', pin, tail))).toMatchObject({ ok: true, snapshot });
+    // Another head (a valid object id the snapshot was not prepared for).
+    expect(frameOf(draftArgs('b'.repeat(40), 'd.bin', pin, tail))).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    // Another branch: the same head and pin, a different bare branch name.
+    const otherBranch = ['docs-show-range', '--project', 'demo', '--draft-branch', 'ws/b', '--head', head, '--section', 'specs',
+      '--path', 'd.bin', '--pin', pin, ...tail];
+    expect(frameOf(otherBranch)).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    // The committed side: a committed frame (the draft's head read as a commit, any blob pin) naming the draft's snapshot.
+    expect(frameOf(committedArgs(head, 'specs', 'd.bin', `blob:${'e'.repeat(40)}`, tail))).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    // And the other way round: a committed snapshot read as a draft of the same path.
+    const commit = commitDocs(h, main, { [`${SPECS}/c.bin`]: bytesOf(2000) });
+    const cpin = `blob:${h.git(main, 'rev-parse', `${commit}:${SPECS}/c.bin`)}`;
+    const csnap = String(run(committedArgs(commit, 'specs', 'c.bin', cpin, ['--prepare']))['snapshot']);
+    expect(run(committedArgs(commit, 'specs', 'c.bin', cpin, frameTail(csnap, 0, 10)))).toMatchObject({ ok: true });
+    expect(run(draftArgs(commit, 'c.bin', pin, frameTail(csnap, 0, 10)))).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+  });
+
+  it('range: a snapshot rewritten in place at its own size answers snapshot-gone at its next frame', () => {
+    const blob = bytesOf(600_000);
+    const c = committed({ [`${SPECS}/a.bin`]: blob });
+    const pin = `blob:${c.blob(`${SPECS}/a.bin`)}`;
+    const prepare = (): string => String(run(committedArgs(c.commit, 'specs', 'a.bin', pin, ['--prepare']))['snapshot']);
+    const frame = (snapshot: string): Answer => run(committedArgs(c.commit, 'specs', 'a.bin', pin, frameTail(snapshot, 0, 1000)));
+    const binOf = (snapshot: string): string => path.join(cacheDir(), `${snapshot}.bin`);
+    // The finished copy is sealed read-only, and its identity is on record.
+    const s0 = prepare();
+    expect(fs.statSync(binOf(s0)).mode & 0o777).toBe(0o400);
+    // Read as text: a nanosecond time is past what a JSON number holds in JavaScript.
+    const meta = fs.readFileSync(path.join(cacheDir(), `${s0}.meta`), 'utf8');
+    const st0 = fs.statSync(binOf(s0), { bigint: true });
+    expect(meta).toContain(`"ino":${st0.ino},`);
+    expect(meta).toContain(`"mtime_ns":${st0.mtimeNs},`);
+    expect(meta).toMatch(new RegExp(`"ctime_ns":${st0.ctimeNs}[,}]`));
+    // CONTROL: frames read, and a frame's touch of the record does not disturb the identity.
+    expect(frame(s0)).toMatchObject({ ok: true });
+    expect(frame(s0)).toMatchObject({ ok: true });
+    // Rewritten in place: the same size and the same inode, other bytes. The modified time is put back, too.
+    const rewrite = (snapshot: string, keepMtime: boolean): void => {
+      const before = fs.statSync(binOf(snapshot));
+      fs.chmodSync(binOf(snapshot), 0o600);
+      const fd = fs.openSync(binOf(snapshot), 'r+');
+      fs.writeSync(fd, Buffer.alloc(before.size, 0x5a));
+      fs.closeSync(fd);
+      if (keepMtime) fs.utimesSync(binOf(snapshot), before.atime, before.mtime);
+      expect(fs.statSync(binOf(snapshot)).size).toBe(blob.length);
+    };
+    rewrite(s0, false);
+    expect(frame(s0)).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    expect(cacheNames().filter((n) => n.startsWith(s0))).toEqual([]);
+    const s1 = prepare();
+    rewrite(s1, true);
+    expect(frame(s1)).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    // A different file of the same bytes put in its place (a new inode) is not the sealed one either.
+    const s2 = prepare();
+    const raw = fs.readFileSync(binOf(s2));
+    fs.rmSync(binOf(s2));
+    fs.writeFileSync(binOf(s2), raw, { mode: 0o400 });
+    expect(frame(s2)).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    // CONTROL: a snapshot left alone still reads.
+    expect(frame(prepare())).toMatchObject({ ok: true });
+  });
+
+  it('range: a reservation or record stamped in the future is junk, and holds nothing', () => {
+    const c = committed({ [`${SPECS}/a.md`]: 'tiny\n' });
+    const pin = `blob:${c.blob(`${SPECS}/a.md`)}`;
+    const args = committedArgs(c.commit, 'specs', 'a.md', pin, ['--prepare']);
+    // Two reservations an hour ahead would fill both live slots for good: they are junk, so a prepare is not busy.
+    plantReservation(1024, Date.now() + 3_600_000);
+    plantReservation(1024, Date.now() + 3_600_000);
+    expect(cacheNames().filter((n) => n.endsWith('.resv'))).toHaveLength(2);
+    const prep = run(args);
+    expect(prep).toMatchObject({ ok: true });
+    expect(cacheNames().filter((n) => n.endsWith('.resv'))).toEqual([]);
+    // Within the skew a reservation still counts (CONTROL): one a second ahead is live, two make a third prepare busy.
+    plantReservation(1024, Date.now() + 1000);
+    plantReservation(1024, Date.now() + 1000);
+    expect(run(args)).toMatchObject({ ok: false, failure: 'prepare-busy' });
+    // A snapshot record whose last use is in the future never expires, so it is junk as well.
+    const snapshot = String(prep['snapshot']);
+    const metaFile = path.join(cacheDir(), `${snapshot}.meta`);
+    const meta = JSON.parse(fs.readFileSync(metaFile, 'utf8')) as Record<string, unknown>;
+    expect(run(committedArgs(c.commit, 'specs', 'a.md', pin, frameTail(snapshot, 0, 5)))).toMatchObject({ ok: true });
+    fs.writeFileSync(metaFile, JSON.stringify({ ...meta, used: Date.now() + 3_600_000 }));
+    expect(run(committedArgs(c.commit, 'specs', 'a.md', pin, frameTail(snapshot, 0, 5)))).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+  });
+
+  it('range: a record of another user is ignored, and the dead-reservation age is a multiple of the copy budget', () => {
+    const dir = cacheDir();
+    fs.mkdirSync(dir, { recursive: true, mode: 0o700 });
+    fs.writeFileSync(path.join(dir, 'bound'), '1000');
+    // CONTROL: this user's file reads; the same read with another uid answering `getuid` is None.
+    const read = (delta: number): unknown => unitJson<unknown>(h.home, [
+      'import os',
+      `cache = H.range_open_dir(${JSON.stringify(dir)})`,
+      'real = os.getuid()',
+      `os.getuid = lambda: real + ${delta}`,
+      "r = H.range_read_small(cache, 'bound', 32)",
+      "out(None if r is None else r.decode('ascii'))",
+    ].join('\n'));
+    expect(read(0)).toBe('1000');
+    expect(read(1)).toBeNull();
+    const consts = unitJson<{ ttl: number; budget: number }>(h.home,
+      'out({"ttl": H.RANGE_RESERVATION_TTL_MS, "budget": H.DOCS_RANGE_PREPARE_BUDGET_MS})');
+    expect(consts.ttl).toBeGreaterThanOrEqual(6 * consts.budget);
   });
 });
