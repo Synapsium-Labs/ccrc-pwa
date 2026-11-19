@@ -54,7 +54,7 @@ because no plan on this tree defines them yet, and a mention above the defined h
 
 - `reclaim-is-o4`: a reclaim names a new holder for a programme, which D-8126 lists under O4 ("who may act on a
   programme: handing it to another session after a lost id"). The row keeps O4, and R22 relaxes the operator-only
-  list for this kind alone, at `full`, armed, on `claimant-gone`. The table test that checks rows against D-8126 names
+  list for this kind alone, at `full` or `autonomous`, armed, on `claimant-gone`. The table test that checks rows against D-8126 names
   R22 as its one exception. `abandon-run` and `interrupt-session` stay class none: D-8126 keeps the abandon the
   operator's by decision (its rows 34 and 58), under no class, and its O1 "touching units or tmux" is a session's
   direct act, which the server's interrupt path is not.
@@ -90,8 +90,23 @@ because no plan on this tree defines them yet, and a mention above the defined h
   the grant's cover is refused `beyond-autonomy-cover`. F12: R22 is the ruling that classes `pause-coordination`,
   `lift-own-pause`, `abandon-run` and `interrupt-session` none against O1, and the table test names the four.
 - **For the ledger.** The W2 act catalogue plan's oracle row that maps "changing a spec's goals or scope" to
-  `widen-scope` splits: the goal to `change-goal` (now derived from a goals version's subject), scope within the goal
+  `widen-scope` splits: the goal to `change-goal` (derived, never labelled: see fix round 2), scope within the goal
   to `widen-scope`. That plan row is the coordinator's to reconcile on the ledger pull request.
+
+## Fix round 2 (review 2696)
+
+- **Ruling applied, F2b.** Under the `autonomous` rung and under coordinator autonomy, a modification whose change is
+  carried only in free text is derived `change-goal`, so it goes to the operator. Only a structured field that leaves
+  the goal and the definition of done untouched may be `widen-scope`. A modification has no such field in version 1,
+  so a structured scope field is a Later item, and a rung-covered or decided-alone `widen-scope` waits for it.
+- **The rung's cover.** It holds only when the item's effect and its whole effective class are off the critical list
+  (N1), never for an ask's answer (N2), and for `answer-approval` a deny only (N5). `goals modify`, C19, clause 22 and
+  the act read take `autonomy:<id>` beside a grant (N4). The pin test gains the class-member case.
+- **The residues.** A decided-alone `widen-scope` is stated dormant in version 1 (F9). The stall row stores its mail's
+  id, and "sent" is defined per rung of the `quiet` arm (F14). A reclaim and Confirm's revoke block a re-grant, and a
+  dead coordinator is the stall watch's live verdict measured again at the revoke (F4). The Overlord's raise creates
+  the marker exclusively, one `flock` lock orders every arm of `coord-pause`, and the stamp has a grammar (F11). The
+  stale lines S1 to S10 and the F8 nits are fixed.
 
 ## Choices made beyond the brief
 
