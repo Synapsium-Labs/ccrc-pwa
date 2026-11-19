@@ -14,6 +14,7 @@ import type { CcdResult, WatcherCoordPort } from '../src/coord/ports.js';
 import { renewalActsOf } from '../src/continuity/renewalWiring.js';
 import { profilePass, type ProfileLaneDeps, type ProfileLaneResult } from '../src/continuity/profileLane.js';
 import type { LaneArmRead } from '../src/coord/laneArm.js';
+import { routeSetOutcome } from '../src/routeSetOutcome.js';
 
 /** The three shapes a `runCcd` answer takes, as the runner builds them. */
 const NOT_RAN = { ok: false, stdout: '', stderr: 'agent link dropped', killed: 'unmeasured', signal: 'unmeasured', ran: false } as unknown as CcdResult;
@@ -130,5 +131,20 @@ describe('characterization: the launch-profile lane\'s pass counts (profilePass)
     const p = await pass(WRITTEN, []);
     expect(p.r).toMatchObject({ written: 0, failed: 0, unsupported: 1 });
     expect(p.sent).toBe(0);
+  });
+});
+
+describe('routeSetOutcome: the one mapping of a routeSet answer (P11)', () => {
+  it('a ccd that did not run is unreachable, whatever its ok and stderr say', () => {
+    expect(routeSetOutcome(NOT_RAN)).toEqual({ kind: 'unreachable', detail: 'ccd did not run' });
+    expect(routeSetOutcome({ ...NOT_RAN, stderr: '' } as CcdResult)).toEqual({ kind: 'unreachable', detail: 'ccd did not run' });
+  });
+  it('a ccd that ran and exited 0 is written', () => {
+    expect(routeSetOutcome(WRITTEN)).toEqual({ kind: 'written' });
+  });
+  it('a ccd that ran and failed is refused with its first stderr line, trimmed, or `no stderr`', () => {
+    expect(routeSetOutcome(refusedWith('  ccd: no such session lane-a  \nmore\n'))).toEqual({ kind: 'refused', reason: 'ccd: no such session lane-a' });
+    expect(routeSetOutcome(refusedWith(''))).toEqual({ kind: 'refused', reason: 'no stderr' });
+    expect(routeSetOutcome(refusedWith('   \nsecond'))).toEqual({ kind: 'refused', reason: 'no stderr' });
   });
 });
