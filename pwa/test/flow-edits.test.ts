@@ -2,6 +2,7 @@
 import { describe, expect, it } from 'vitest';
 import { skeletonFlowDoc, validateFlow, type FlowDoc } from '../../shared/flows';
 import {
+  GRID, moveBlock,
   addOutcome, addStepAfter, flowFileName, freshId, outlineOrder, removeOutcome, removeStep, setBlock, setTarget, targetOf,
 } from '../src/flows/flowEdits';
 
@@ -64,5 +65,20 @@ describe('flow edits', () => {
   it('a shared file is named from its title and version', () => {
     expect(flowFileName('My Flow: v2!', 3)).toBe('my-flow-v2-v3.flow.json');
     expect(flowFileName('!!!', 1)).toBe('flow-v1.flow.json');
+  });
+});
+
+describe('moving a step on the canvas (wave 5a)', () => {
+  it('snaps to the grid, never goes off the top or left, and leaves the original alone', () => {
+    const doc = skeletonFlowDoc('x');
+    const id = doc.blocks[0]!.id;
+    const moved = moveBlock(doc, id, { x: 21, y: -30 });
+    expect(moved.blocks[0]!.at).toEqual({ x: 24, y: 0 });
+    expect(doc.blocks[0]!.at).not.toEqual({ x: 24, y: 0 });
+    expect(GRID).toBe(8);
+  });
+  it('a move to an unknown id changes nothing', () => {
+    const doc = skeletonFlowDoc('x');
+    expect(moveBlock(doc, 'nope', { x: 8, y: 8 })).toBe(doc);
   });
 });
