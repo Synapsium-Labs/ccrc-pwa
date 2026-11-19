@@ -69,8 +69,8 @@ flowchart LR
 - `mode` is `light`, `dark` or `auto`: the resolved direction. It sets `color-scheme` and the library's defaults for any slot the host leaves out.
 - `colour.<slot>` is one value per colour slot, `#rrggbb` only. Version 1 carries no alpha in a colour slot: no ccrc token mapped to one uses alpha, and a translucent `text` or `bg` would make §5's contrast numbers depend on what is behind it. Alpha appears only inside `popShadow`'s colour. The group is all or nothing. An appearance with no colour group is valid. It means "hosted, in the library's own colours for `mode`", and it clears any host colours applied before.
 - `skin.<slot>` holds the skin's character, in ten slots, each falling back by itself (§2.3 says which ccrc token feeds each, and why the others are not carried):
-  - `radius`, `radiusSmall` and `radiusLarge`: whole pixels from 0 to 24;
-  - `controlRow`: whole pixels from 28 to 56, the height of rows in the frame's popovers, applied only under `(pointer: fine)`;
+  - `radius`, `radiusSmall` and `radiusLarge`: whole px from 0 to 24;
+  - `controlRow`: whole px from 28 to 56, the height of rows in the frame's popovers, applied only under `(pointer: fine)`;
   - `popShadow`: the popovers' elevation, one to three shadows, each two to four lengths and one colour, with no `inset`, no other function and no keyword. Both forms ccrc uses fit, measured in every palette: Refined's `0 12px 40px rgba(0, 0, 0, 0.55)` (and `rgba(26, 32, 27, 0.22)` in light palettes), and Instrument's hairline `0 0 0 1px #5F697C` (one `--edge-strong` per palette);
   - the section-label type of the popovers' own headings: `sectionFamily` (`sans` or `mono`), `sectionSize` (whole px from 10 to 16), `sectionWeight` (100 to 900, in hundreds), `sectionTracking` (em from -0.1 to 0.3) and `sectionCase` (`none` or `uppercase`).
 
@@ -123,8 +123,8 @@ The list's home is the library's `APPEARANCE_SLOTS` export, and ccrc never spell
 
 ccrc's typefaces are part of its visual language, and the frame cannot fetch them (`default-src 'none'`). ccrc passes its own Geist and Geist Mono woff2 as two optional font assets, base64 text in `FrameAssets.fonts`, read once from the files the design system already ships.
 - **Loading.** The library checks the base64 alphabet, a `wOF2` signature and a cap of 131 072 decoded bytes (128 KiB) per face, which is at most 174 764 characters of base64. ccrc's faces are 69 492 and 71 236 bytes. It then loads each face with the `FontFace` API from the decoded bytes, under a fixed family name. No CSS text is built from host input.
-- **Failure.** A face that fails any check, or fails to load, is dropped silently, and that role keeps the library's own face. A bad font never throws, never refuses the mount and never falls back to the plain view. On the ccrc side, the fonts load on their own path, and a failed font load mounts without them, never through `onFallback('assets')`.
-- **Size.** The library's derived srcdoc cap rises by exactly the two faces' cap, so fonts never push a document into `too-large`.
+- **Failure.** A face that fails any check, or fails to load, is dropped silently, and that role keeps the library's own face. A bad face never throws, never refuses the mount and never falls back to the plain view (only a malformed `fonts` asset throws, §10). On the ccrc side, the fonts load on their own path, and a failed font load mounts without them, never through `onFallback('assets')`.
+- **Size.** The library caps the srcdoc in UTF-16 code units (characters). Its derived cap rises by exactly the two faces' cap, 349 528 characters (2 x 174 764), so fonts never push a document into `too-large`.
 - **Use.** While hosted, the frame's sans role and its chrome use ccrc's UI face, and code uses ccrc's mono face. The serif reading face stays the library's. Font choice in Aa stays the reader's (§6).
 
 ### 2.3 The skin, token by token
@@ -314,7 +314,7 @@ This section lists what does not change and what the new data could do. The stan
 
 **Unchanged:**
 - The reader sandbox is exactly `allow-scripts`, and the shell CSP is exactly `frame-src 'none'`.
-- The frame's CSP is unchanged: its `style-src` and `font-src` already allow what the contract needs.
+- The frame's CSP policy is unchanged: the same directives and the same sources, with `style-src` and `font-src` already allowing what the contract needs. Its script hash sources change with the frame scripts, as at every library release (§10 test 9).
 - There is no parent-DOM access from the frame, and no new channel, port or window listener.
 - Both 2026-11-06 phone blocks stay byte for byte.
 
@@ -364,8 +364,8 @@ This section is written for the library programme to plan from. It names the lib
 | `mermaidThemeOf(colours)` (`./frame`) | pure function | Mermaid `themeVariables` derived from the slots: `surface` for the background and cluster fill, `surface2` for node fill, `text` for every text colour, `text-muted` for `lineColor` and the arrowheads, `border` for node and cluster borders, `accent` for the highlighted node. Documents still cannot set any theme key |
 | `APPEARANCE_LABEL_DEFAULT` (`./frame`) | string | "Appearance follows the app's settings": the line shown with no host label, naming no host |
 | `HostAdapters.appearance?` (`./host`) | adapter key | The contract value at mount, taken through `parseAppearance`: a bad slot value never throws. Only a value that is not a plain object throws `TypeError`, like any adapter key |
-| `FrameAssets.fonts?` (`./host`) | asset | `{sans?: string, mono?: string}`, base64 woff2. Checked as §2.2 says, and dropped rather than thrown on failure |
-| `DocFrame.setAppearance(a)` (`./host`) | method | Posts the `appearance` op after `ready`. Queued before `ready`, latest wins. Seeds later remounts |
+| `FrameAssets.fonts?` (`./host`) | asset | `{sans?: string, mono?: string}`, base64 woff2. A face that fails §2.2's checks is dropped, never thrown. A `fonts` that is not a plain object, or that has a key other than `sans` and `mono`, or a face that is not a string, throws `TypeError`, as any malformed asset does: that is a host's programming error, which TypeScript already catches |
+| `DocFrame.setAppearance(a)` (`./host`) | method | Posts the `appearance` op after `ready`. Queued before `ready`, latest wins. Seeds later remounts. An `a` that is not a plain object throws `TypeError`, as `HostAdapters.appearance` does. Any plain object is taken through `parseAppearance`, so a bad slot value never throws |
 
 The pure exports live in `./frame` because ccrc's import rule keeps `./host` to its one adapter file (`docs-scans.test.ts#LIBRARY_HOMES`), and ccrc's pure mapping module must read them.
 
@@ -394,7 +394,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 - Skin slots style the popovers and their headings, the radii of controls, cards and code, and nothing else. `controlRow` applies under `(pointer: fine)` only. The frame's own bar and the reading layout (measure, prose size, gutters, title block) never take a skin value.
 - `popShadow` replaces `--pop-shadow` on every popover, the quick jump, keys and contents drawer shadows included.
 - While hosted, the stored prefs object never carries `theme`.
-- The frame's derived srcdoc cap rises by the fonts' cap.
+- The frame's derived srcdoc cap rises by the fonts' cap, 349 528 characters.
 - While hosted, Mermaid draws with `mermaidThemeOf`, with no white plate and no invert filter, and figures already drawn are redrawn on a change, nearest first, one per task.
 - The library's four faces stay inline in its stylesheet, exactly as in 1.1.0, so a host that supplies 1.1.0's four assets keeps working. ccrc's faces are additional, optional assets. Splitting the library's faces out would save at most its two sans faces, 76 364 characters (measured), and would change the asset set a 1.1.0-style host supplies, so it is not proposed.
 
