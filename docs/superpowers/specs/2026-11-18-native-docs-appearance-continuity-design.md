@@ -67,7 +67,7 @@ flowchart LR
 
 **The contract (library-owned).**
 - `mode` is `light`, `dark` or `auto`: the resolved direction. It sets `color-scheme` and the library's defaults for any slot the host leaves out.
-- `colour.<slot>` is one value per colour slot, `#rrggbb` or `#rrggbbaa` only. The group is all or nothing. An appearance with no colour group is valid. It means "hosted, in the library's own colours for `mode`", and it clears any host colours applied before.
+- `colour.<slot>` is one value per colour slot, `#rrggbb` only. Version 1 carries no alpha in a colour slot: no ccrc token mapped to one uses alpha, and a translucent `text` or `bg` would make §5's contrast numbers depend on what is behind it. Alpha appears only inside `popShadow`'s colour. The group is all or nothing. An appearance with no colour group is valid. It means "hosted, in the library's own colours for `mode`", and it clears any host colours applied before.
 - `skin.<slot>` holds the skin's character, in ten slots, each falling back by itself (§2.3 says which ccrc token feeds each, and why the others are not carried):
   - `radius`, `radiusSmall` and `radiusLarge`: whole pixels from 0 to 24;
   - `controlRow`: whole pixels from 28 to 56, the height of rows in the frame's popovers, applied only under `(pointer: fine)`;
@@ -86,7 +86,7 @@ flowchart LR
 | Key | Pattern, after the outer spaces | Range |
 |---|---|---|
 | `mode` | `light` \| `dark` \| `auto` | Anything else reads as `auto` |
-| `colour.<slot>` | `#[0-9A-Fa-f]{6}` \| `#[0-9A-Fa-f]{8}`. Hex is case-insensitive | — |
+| `colour.<slot>` | `#[0-9A-Fa-f]{6}`. Hex is case-insensitive. No alpha form | — |
 | `radius`, `radiusSmall`, `radiusLarge` | `(0\|[1-9][0-9]?)px` | 0 to 24 |
 | `controlRow` | `[1-9][0-9]px` | 28 to 56 |
 | `popShadow` | `SHADOW(, SHADOW){0,2}`. `SHADOW` is `LEN LEN( LEN( LEN)?)? COLOUR`, single spaces between. `LEN` is `0` \| `0px` \| `-?[1-9][0-9]?px`. `COLOUR` is `#[0-9A-Fa-f]{6}` \| `#[0-9A-Fa-f]{8}` \| `rgba(INT, INT, INT, ALPHA)`, lower-case `rgba`, a comma and one space between arguments. `INT` is `0` \| `[1-9][0-9]{0,2}`, and `ALPHA` is `0` \| `1` \| `0\.[0-9]{1,3}` \| `1\.0{1,3}` | x and y offsets -64 to 64, blur 0 to 64, spread -8 to 8, `INT` 0 to 255 |
@@ -403,7 +403,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - accepts every slot at the edges of its grammar, `popShadow` at three shadows, offsets of ±64, blur 64 and spread ±8 included;
    - leaves out a `popShadow` with `inset`, four shadows, a blur of 65, a spread of 9, `rgba(256, 0, 0, 1)`, `rgba(0, 0, 0, 1.5)` or `rgb(0, 0, 0)`;
    - leaves out, without throwing, an unknown key, a 3-digit hex, `rgb()`, `var(`, `url(`, a `;`, an out-of-range length and an oversize payload, and names each in `refused`;
-   - **the forms ccrc sends:** accepts `#2E3440` and `#2e3440`, the strings `"10px"`, `"600"` and `"-0.011em"`, and a value with leading and trailing U+0020; refuses the numbers `10` and `600`;
+   - **the forms ccrc sends:** accepts `#2E3440` and `#2e3440` in a colour slot and refuses `#2E3440FF` there, while `popShadow` accepts `0 0 0 1px #2E3440FF`; accepts the strings `"10px"`, `"600"` and `"-0.011em"`, and a value with leading and trailing U+0020; refuses the numbers `10` and `600`;
    - **whitespace and digits:** refuses a `popShadow` with a tab, a line feed, U+00A0, U+2028 or U+FEFF between tokens, or two spaces in a row, an alpha of `0.5555`, and a `sectionTracking` of `0.0800em`;
    - **size:** a value whose `JSON.stringify` text is 8 192 UTF-16 code units long is judged slot by slot, and one of 8 193 is refused whole, with `refused` equal to `[{key: '*', why: 'too-large'}]`;
    - one refused colour leaves out the whole colour group; one refused skin slot leaves out only itself;
