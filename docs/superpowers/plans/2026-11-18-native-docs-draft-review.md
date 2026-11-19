@@ -230,10 +230,10 @@ R3 is the first release that can make a link, so it follows R2: the page and its
 ### Task R3.2: Export's builder gains `purpose`
 
 **Files:**
-- Modify: `pwa/src/docs/export/buildExport.tsx` (`ExportInput.purpose?: 'file' | 'review'`, default `'file'`), `provenance.ts` (the review banner lead), `policy.ts` (the `ccrc:purpose` meta name)
+- Modify: `pwa/src/docs/export/buildExport.tsx` (`ExportInput.purpose?: 'file' | 'review'`, default `'file'`; the success arm of `ExportResult` gains `inlined: readonly ExportInlinedFile[]`, `omitted: readonly { path: string; why: ExportMissing }[]` and `links: readonly string[]`, for every body kind), `provenance.ts` (the review banner lead), `policy.ts` (the `ccrc:purpose` meta name)
 - Test: `pwa/test/docs-export.test.tsx`
 
-- [ ] **Step 1: Write the failing tests:** with `purpose: 'review'` the file holds `<meta name="ccrc:purpose" content="review">` and its banner starts "Shared for review. Read-only."; with no `purpose` the bytes equal today's on one Markdown and one mockup fixture; `DOCS_EXPORT_CSP` is unchanged.
+- [ ] **Step 1: Write the failing tests:** with `purpose: 'review'` the file holds `<meta name="ccrc:purpose" content="review">` and its banner starts "Shared for review. Read-only."; with no `purpose` the bytes equal today's on one Markdown and one mockup fixture; `DOCS_EXPORT_CSP` is unchanged. **The new fields (F8)**: a Markdown export with two held images, one of them a draft, and one image that timed out lists both held images in `inlined` (the draft marked) and the timed-out one in `omitted` with `timed-out`; its `links` lists every `href` in the built bytes, in order, and nothing else (checked by parsing the bytes); a mockup export's `inlined` and `omitted` equal its `mockup.inlined` and `mockup.omitted`; a text export has all three empty.
 - [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/docs-export.test.tsx`. Expected: FAIL.
 - [ ] **Step 3: Implement** the optional field and the two text changes.
 - [ ] **Step 4: Run** every `test/docs-export*` file and `test/mockup-export.test.ts`. Expected: PASS.
@@ -357,6 +357,8 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R3-M119 | `review/shareForReview.ts` | cut every `data:` payload instead of decoding the non-raster ones | `docs-review-share` stylesheet, SVG and font rows (F7) |
 | NDR-X3-R3-M120 | `review/shareForReview.ts` | decode raster payloads as text too | `docs-review-share` PNG row (F7) |
 | NDR-X3-R3-M4 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
+| NDR-X3-R3-M121 | `export/buildExport.tsx` | `links` filled from the Markdown source, not the built bytes | `docs-export` links row (F8) |
+| NDR-X3-R3-M122 | `export/buildExport.tsx` | a Markdown export's `inlined` left empty | `docs-export` new-fields row (F8) |
 | NDR-X3-R3-M5 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
 | NDR-X3-R3-M109 | `review/ReviewRows.tsx` | Re-share uploads without opening `ReviewConfirm` | `docs-review-owner` re-share hold row (F2) |
 | NDR-X3-R2-M1 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
