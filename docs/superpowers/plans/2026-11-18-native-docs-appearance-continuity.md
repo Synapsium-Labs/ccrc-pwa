@@ -581,6 +581,22 @@ One commit per finding, then this Results commit. The coordinator ruled F2 and F
 | A10 | Fixed. Colour slots are `#rrggbb` only in version 1; alpha only inside `popShadow` |
 | A11 | Fixed. Units stated (the cap rises by 349 528 characters), the CSP sentence scoped to the policy, and `TypeError` stated for `setAppearance` on a non-object and a malformed `fonts` asset |
 
+**The adversarial re-pass** (Opus · high, over the changed sections, with an independent recomputation of the contrast rows). It found no critical issue, 8 important and 13 minor. It reproduced the lowest contrast rows independently (4.515 at the bottom), and found every mapped ccrc value accepted by its grammar in all 12 palettes and both skins. Dispositions:
+
+| Re-pass finding | Disposition |
+|---|---|
+| I-1: the ground list missed the well and `accent`; 1.1.0 draws code-block text in `text` (about 1.1:1 on a dark well in light palettes); the `.hljs-*` classes had no mapping; fixed colours remained (diff backgrounds, tool buttons, the figure overlay, selection) | Fixed. Spec §5 says which text each ground admits. §10 maps every class 1.1.0 colours onto a slot by ccrc's own chat mapping (`ui/src/components/prose.css`), drops the diff backgrounds, and derives the other fixed colours while hosted. Test 4's walk opens every popover and the overlay, and forces hover and focus |
+| I-2: `mermaidThemeOf` named five inputs, while 1.1.0 sets 15 theme variables and Mermaid's base theme falls back to its own defaults | Fixed. Every key 1.1.0 sets and every base-theme text key has a slot; test 5 checks the key set and the drawn SVG fills of four diagram kinds |
+| I-3: test 4 contradicted itself; the derivations had no hosted qualifier; 1.1.0's light defaults put `text-faint` on `surface2` at 4.44 | Fixed. Every derivation applies while an appearance is applied, and 1.1.0's values stand otherwise. The gate rows run on a fixture appearance. The 4.44 default is carried as the library's own matter |
+| I-4: meaning by colour alone beyond `chg` and `term`: `ok` equals `info` in Phosphor and Phosphor Daylight, and `term` in Dracula, Solarized Light and Catppuccin Latte; index dots carry status only in a tooltip; term and id links share one underline | Fixed while hosted: status dots take a shape each, the colour key a word and a shape, and term, id and ordinary links three underline styles. Measured equalities are in X1-12 |
+| I-5: test 10's shape row could not fail (1.1.0's block bar is a box-shadow, the attention bar a border) | Fixed. The changed mark is a stated double bar (2, 2 and 2 px) that paints no further into the margin than 1.1.0's, sampled from pixels, with a library mutation that must red |
+| I-6: test 8 summed shares, so one design could spend another's unused share | Fixed. The table records each row's measured total; each design's growth is counted row by row against its own share; the current total must equal the last row's |
+| I-7: "test 9 constrains nothing later" was false: the CSP row pinned four hashes | Fixed. One hash per `KNOWN` entry, as many as the parent's; a design that inlines a script raises it in its own commit |
+| I-8: at 4% the quick-jump selection was 1.05:1 | Fixed. It gains an inset 2 px `accent` bar; no state but a hover is shown by a tint alone while hosted |
+| M-1 to M-8, M-10, M-11 | Fixed: the 154-character bound excludes outer spaces; size by the validator's own typed walk, so a cycle or BigInt never throws; three values named as not token text; the label claim scoped; the bridge imports `readerAppearanceSupported`; the right `docs-scans` case named; Step 2's expected reds complete; the Aa line on `bg`; AP-2 checks the live verdict; two history rows annotated |
+| M-9 | Fixed with I-4 and I-5: the wide-layout attention row is named |
+| M-12, M-13 | Fixed with I-6 and I-7: the baselines are the parent commit's, and Task 1 Step 2a reads the committed size table, so no generated manifest needs to be committed |
+
 ### Carried
 
 - The library programme plans wave L from spec §10. Its release and ccrc's re-pin are the operator's.
