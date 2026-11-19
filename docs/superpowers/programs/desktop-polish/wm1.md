@@ -7,7 +7,7 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 
 | Piece | Where | Basis |
 |---|---|---|
-| Migration: `plan_tickets.doneAt INTEGER`, `plan_tickets.doneEvidence TEXT`, and the back-fill of every `done` ticket that names a run (`{"runId":n}` from its `runId`, `doneAt` from that run's `closedAt`) | `server/src/coord/schema.ts`, entry 104 (§2) | Measured: `plan-ticket-done.test.ts`'s back-fill case at the version before it |
+| Migration: `plan_tickets.doneAt INTEGER`, `plan_tickets.doneEvidence TEXT`, and the back-fill of every `done` ticket that names a run (`{"runId":n}` from its `runId`, `doneAt` from that run's `closedAt`) | `server/src/coord/schema.ts`, entry 105 (§2) | Measured: `plan-ticket-done.test.ts`'s back-fill case at the version before it |
 | The done arm of `onRunAdvancedInTx` writes `{ runId }` and the time | `server/src/coord/planStore.ts` | Measured: `a run closing done stores doneAt and its runId` |
 | `markTicketDone` (the verb's one writer: `done`, `doneAt`, `doneEvidence`, the epic settled, the sync due, one transaction); `doneFactsOf` and `ticketOfRun` (reads) | `planStore.ts`, on the port | Measured: the route cases |
 | `runMustNameTicket` (the `ticket-required` rule), `parsePlanTicketDone`, `ticketDoneVerdict` (the evidence rule as review 2375 F2 corrected it), `landedFactOf` | `server/src/coord/planPolicy.ts` (L1) | Measured: `planTicketDoneCases.ts` |
@@ -32,11 +32,18 @@ if it can, its `{ runId }` and that pull request could each close a ticket.
   printed 93, so this entry was 94. Forecasts A (#2987) then took 94.
 - **Step B, after WM1r (#3001) landed:** one merge of `origin/main` at `8781ef20a`, on the coordinator's word. The same
   count printed 102 there, so this entry was 103. The pre-push fetch then showed the door process A1 (#3035) at 103, so a
-  **second merge**, on the coordinator's word, took `origin/main` at `9e372d2bc` (count 103), and this entry is **104**.
+  **second merge**, on the coordinator's word, took `origin/main` at `9e372d2bc` (count 103), and this entry was 104.
   Nine files conflicted there (`README.md`, `schema.ts` and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
   `ccrc-api`, `coord-db`, `run-close-switch` and `sim/mutation-floors.json`), each resolved keeping both sides. Both
   sides had added one box-token lane, one `ccrc-api` row and one route, so the lines each wrote alike merged clean one
   short and were re-measured too (`ccd/ccrc-api`, `gate.ts`, `README.md`).
+- **Fix round 2's third merge**, on the coordinator's word (mail delivery 25954): the census of prompts (#3043) took 104,
+  so the merge took `origin/main` at `de1cbeddd` (count 104), and this entry is **105**. Three files conflicted
+  (`schema.ts`, `auth-gate`, `coord-db`), each resolved keeping both sides; the lines each side wrote alike (coord-db's
+  literals, auth-gate's route count, `gate.ts`'s route word, `run-close-switch`'s undo list and replay count) merged clean
+  one short and were re-measured. After it: 105 migrations, 284 routes scanned, 281 at the gate's HTTP half, 101 exempt,
+  180 gated, and `run-close-switch` replays fifty-two (54 through 105). The counts in the bullet below are the second
+  merge's.
 - **The fifteen conflicted files of the first merge**, each resolved keeping both sides (the coordinator's terms), its counts re-measured on
   the merged tree: `README.md`, `ccd/ccrc-api`, `server/src/auth/gate.ts`, `server/src/coord/planPolicy.ts`,
   `planRoutes.ts`, `planStore.ts`, `schema.ts`, and the tests `auth-gate`, `box-token-census`, `ccrc-api-closed`,
@@ -225,5 +232,9 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2`; the load i
 | 44 | Each file alone: `plan-ticket-done`, `plan-ticket-required`, `plan-store`, `plan-routes`, `plan-policy`, `plan-phases`, three `overlord-other-lanes` files (the pin file not), `coordinator-plan-reference`, `auth-gate`, `deviation-refs` (after `git fetch origin`), `dtbd`, `topology-clean`, `ci-ledger-guard` and the 40 `single-definition/` files | 6.45 to 11.52 | every file green, 55 files: 2547 passed |
 | 45 | `tsc --noEmit` of `tsconfig.json`, then of `test/tsconfig.tests.json` | 8.42, 12.56 | both clean |
 | 46 | `mutation-floors`, the whole file (after `npm ci` in `ui/` and `pwa/`) | 11.08, 12.80 | killed twice by the test slice's 6 GB memory cap (two and five OOM kills from the shared slice); a third try was stopped for the third merge, and the file runs again after it |
+| 47 | After the third merge (`origin/main` de1cbeddd, migration 105): the server compile, `plan-ticket-done` (slot pinned at 105), `run-close-switch`, `coord-db`, and the test-project compile | 9.06 to 10.80 | clean; 64 passed; 21 passed; 149 passed; clean |
+| 48 | `auth-gate` | 10.80 | 1 failed, 367 passed: the property loop's comment still said 280 HTTP routes, a line both sides wrote alike that merged clean one short; corrected to 281 |
+| 49 | `auth-gate` again | 11.57 | 368 passed |
+| 50 | `mutation-floors`, the whole file, one worker | 11.87 | 252 passed: every programme's floor mutants, WM1's 42 among them |
 
 `suite: unrun` for this wave: no full server suite ran here; CI's run on the pull request is the next.

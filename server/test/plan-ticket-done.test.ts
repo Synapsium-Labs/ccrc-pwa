@@ -115,8 +115,9 @@ describe('done carries its time and evidence (D11)', () => {
 describe('the migration back-fills a done ticket\'s evidence and time from its run (F1)', () => {
   const SLOT = MIGRATIONS.findIndex((m) => m.includes('doneEvidence')) + 1;
   it('the migration back-fills a done ticket\'s evidence and time from its run', () => {
-    // Its own slot, exactly: entry 103, user_version 104 (review 2712 F9). A landed migration never moves.
-    expect(SLOT, 'no MIGRATIONS entry adds doneEvidence').toBe(104);
+    // Its own slot, exactly: entry 104, user_version 105 (review 2712 F9; the third merge of main). A landed migration
+    // never moves.
+    expect(SLOT, 'no MIGRATIONS entry adds doneEvidence').toBe(105);
     const p = path.join(mkTmp('ccrc-ticket-done-'), '.ccrc', 'coord.db');
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);
