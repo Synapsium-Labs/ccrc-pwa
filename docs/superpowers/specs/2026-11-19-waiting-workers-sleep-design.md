@@ -180,3 +180,12 @@ back by revert. Part 2 goes live by the operator's switch.
   coordinator gets Part 4's mail instead and has to act on it.
 - **Part 1 acts on deploy.** About eleven parked workers will go to sleep within the hour. Each wakes on mail, a
   dispatch or the operator opening it.
+
+## 8. Promise delta
+
+This spec is a design for review, and it ships no behaviour. It changes no Promise. Each build pull request of the
+plan carries any delta of its own.
+
+```promise-delta
+none - a design spec for review that ships no behaviour, and the build plan carries any Promise change
+```

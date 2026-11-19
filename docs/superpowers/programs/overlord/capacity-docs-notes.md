@@ -22,6 +22,10 @@ in the draft's one commit unchanged, then edits it against today's `main`. It is
   only in stack commit `48ef4ad0e`, not on `main`. The plan says so.
 - **routes-held.** Task 3 edits `server/src/coord/routes.ts` (the caps view). Another programme's frozen run holds
   that file today. The plan now tells Task 3's worker to claim it and agree the edit with its holder first.
+- **promise-delta.** The review judge asks every spec for a `promise-delta` block. The spec now ends with §8, which
+  says it changes no Promise, in the words the other design specs of this programme use.
+- **pr1-files-note.** The review judge's first-PR rule allows one spec, one plan and nothing else, so this note trips
+  `pr1-files-invalid`. The brief asks for the note, and #3054 landed a note beside its spec the same way.
 
 ## Checked and left as written
 
