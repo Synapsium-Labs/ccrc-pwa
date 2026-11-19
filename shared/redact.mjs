@@ -49,8 +49,8 @@
 // THE EGRESS SHAPES. A child's tool input is untrusted text, and it can carry a secret the child pasted into a command.
 // Before any input is stored on an approval row, mailed to a coordinator, put in a digest or shown on a surface, the
 // egress profile masks the token-shaped strings in it:
-//   - a PEM private-key block, from its BEGIN line to its END line or, with none, to the end of the text (overlord wave
-//     163; the source `ccd/history/lib.mjs`'s shape layer reads too);
+//   - a PEM private-key block, from its BEGIN line to its END line; with no END line, its BEGIN line and the base64 lines
+//     after it, never the text past them (overlord wave 163, review 2693 F1);
 //   - `Authorization:` and `Cookie:` header values (and `Proxy-Authorization:`, `Set-Cookie:`), and the value of any
 //     header named `...-Key`, `...-Token`, `...-Secret` or `...-Signature` (`X-Api-Key:`, `Private-Token:`), to the end
 //     of the value (D-5360);
@@ -92,7 +92,8 @@
 //     `sk-...` (D-5360), a Linear API key's `lin_api_` (#1444), and a Slack webhook's path and a Telegram bot token;
 //     and, by their shapes from Gitleaks v8.30.0 (overlord wave 163; `KNOWN_TOKEN_PREFIX` says how each was read), a
 //     SendGrid `SG.` key, DigitalOcean's `dop_v1_`, `doo_v1_` and `dor_v1_` tokens, an age `AGE-SECRET-KEY-1` key,
-//     HashiCorp Vault's `hvs.` and `hvb.` tokens and a Mailgun `key-` with 32 hex, and a Google `ya29.` access token;
+//     HashiCorp Vault's `hvs.` and `hvb.` tokens and a Mailgun `key-` with 32 hex, and a Google `ya29.` access token
+//     (age's post-quantum `AGE-SECRET-KEY-PQ-1` too);
 //   - every `/`-separated segment of 32 or more base64 or hex characters that holds a digit and a letter (spec section
 //     6.7; D-5360): a segment is judged on its own, so a secret inside a URL path or a base64 value with a `/` in it is
 //     masked, while a path whose segments are short or are words (`project-a-quiet-basin-with-a-long-name`) stays
@@ -110,8 +111,8 @@
 //     `kubectl --from-literal=key=X`;
 //   - token shapes with no prefix rule: a Discord bot token (three dot-separated parts, each under 32 characters), a
 //     legacy HashiCorp Vault token (`s.` and 24 letters and digits, which `s.getElementsByClassName…` code also
-//     reads as), a `gsk_` token, a PGP private key block (`-----BEGIN PGP PRIVATE KEY BLOCK-----`: the PEM rule's bytes
-//     are history's, so widening it is a reindex), a bare secret with no name in front of it that is only short
+//     reads as), a `gsk_` token, a PGP private key block (its BEGIN line names `PGP PRIVATE KEY BLOCK`: the PEM rules
+//     read `PRIVATE KEY` alone, and history's bytes cannot change without a reindex), a bare secret with no name in front of it that is only short
 //     `/`-separated segments;
 //   - names and headers: an assignment written with spaces around `=`, a secret name the name test does not hold
 //     (`PW=`), an `X-Auth:`, `X-Password:` or `X-Api-Pass:` header, a header with no space after its colon whose name
@@ -189,27 +190,54 @@ const SINGLE_DASH_SECRET = new RegExp(String.raw`(^|[\s'"])(-(?!-)[A-Za-z0-9-]*(
 const CAMEL_SECRET_FLAG = new RegExp(String.raw`(^|[\s'"])(--?[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)*?(?:Token|Secret|Password|Passwd|Pass|ApiKey|Key))(\s+(?![<>-])|=)${VALUE}`, 'g');
 /** D-5360 round 8: xfreerdp's `/p:<password>`. */
 const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
-/** Overlord wave 163: the rows after `AIza`, but `ya29.`, take their shapes from Gitleaks v8.30.0's `config/gitleaks.toml`
- *  (github.com/gitleaks/gitleaks, under the MIT licence), rule by rule:
- *  `sendgrid-api-token`, `digitalocean-pat`, `digitalocean-access-token`, `digitalocean-refresh-token` (case-insensitive
- *  there, so spelt with both cases here: no inline `(?i:` before Node 23), `age-secret-key`, `vault-service-token`'s
- *  `hvs.` arm and `vault-batch-token`. Gitleaks ends each at a closing delimiter; here a fixed-length row masks its
- *  length and leaves what follows, as `AKIA` does, and the two Vault rows keep their lower bound and drop the upper one,
- *  so a longer run is masked whole rather than leaving a tail. Mailgun's `key-` row drops Gitleaks's `mailgun` keyword
- *  context and is fenced instead: no `_` or `-` before it, no letter, digit, `_` or `-` after its 32 hex, so a
- *  `cache-key-<md5>` stays readable. Gitleaks has no Google OAuth row: `ya29.` is ccrc's own, an access token's
- *  prefix then at least 20 characters of base64url in dot-joined parts, so a trailing full stop is never taken. */
+/** Overlord wave 163: the rows after `AIza`, but `ya29.`, take their shapes from Gitleaks v8.30.0
+ *  (https://github.com/gitleaks/gitleaks/blob/v8.30.0/config/gitleaks.toml, MIT licence:
+ *  https://github.com/gitleaks/gitleaks/blob/v8.30.0/LICENSE), from its rules `sendgrid-api-token`, `digitalocean-pat`,
+ *  `digitalocean-access-token`, `digitalocean-refresh-token`, `age-secret-key`, `vault-service-token` (its `hvs.` arm),
+ *  `vault-batch-token` and `mailgun-private-api-token`. Every departure from them:
+ *  - the left edge: Gitleaks's `\b` is this group's lookbehind, no letter or digit before, so a `_` before is allowed;
+ *  - the right edge: Gitleaks ends a match at a quote, whitespace, `;`, an escaped line break or the end. Here the
+ *    fixed-length rows (SendGrid, DigitalOcean, age) are fenced, no letter, digit, `_` or `-` after them, so a longer
+ *    run is never cut and never leaves a tail (egress's segment rule masks it whole); the two Vault rows keep their
+ *    lower bound and drop the upper one, so a longer run is masked whole;
+ *  - SendGrid: Gitleaks reads `SG.` and 66 of a case-insensitive class holding `=` and `.`; here it is the key's own
+ *    shape, 22 then `.` then 43 base64url characters, so prose of dotted words is never cut, and a full stop after the
+ *    key is not part of it;
+ *  - DigitalOcean's refresh token is case-insensitive there, so it is spelt with both cases here (no inline `(?i:`
+ *    before Node 23); its PAT and access rows are lowercase there too;
+ *  - age: Gitleaks reads `AGE-SECRET-KEY-1`; here the post-quantum identity, `AGE-SECRET-KEY-PQ-1` (age v1.3), as well;
+ *  - Mailgun: Gitleaks needs the word `mailgun` before the key and reads it in any case; here no word is needed, the
+ *    32 hex are lowercase only, and the row is fenced on both sides (no `_` or `-` before `key-`, nothing after its 32
+ *    hex), so a `cache-key-<md5>` stays readable;
+ *  - `ya29.`: Gitleaks has no Google OAuth row, so this one is ccrc's own: the prefix, then at least 20 base64url
+ *    characters in dot-joined parts (the dots not counted), so a trailing full stop is never taken. */
 const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`
-  + String.raw`SG\.[A-Za-z0-9=_.-]{66}|do[op]_v1_[a-f0-9]{64}|[dD][oO][rR]_[vV]1_[a-fA-F0-9]{64}|AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}|`
+  + String.raw`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_=-])|`
+  + String.raw`(?:do[op]_v1_[a-f0-9]{64}|[dD][oO][rR]_[vV]1_[a-fA-F0-9]{64}|AGE-SECRET-KEY-(?:PQ-)?1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58})(?![A-Za-z0-9_-])|`
   + String.raw`hvs\.[A-Za-z0-9_-]{90,}|hvb\.[A-Za-z0-9_-]{138,}|(?<![_-])key-[a-f0-9]{32}(?![A-Za-z0-9_-])|`
-  + String.raw`ya29\.(?=[A-Za-z0-9_.-]{20})[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|`;
-/** A PEM private-key block (`-----BEGIN ... PRIVATE KEY-----` to its END line, or to the end of the text when it has
- *  none): the one source. `ccd/history/lib.mjs`'s shape layer builds its first arm from it (`SECRET_SHAPE_RES`), and the
- *  egress and linear-egress profiles run it as `pem-block`. Its bytes are part of every history index text, so a change
+  + String.raw`ya29\.(?=(?:\.?[A-Za-z0-9_-]){20})[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|`;
+/** A PEM private-key block's BEGIN and END lines, the one spelling both rules below are built from. */
+const PEM_HEADER = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----`;
+const PEM_END = String.raw`-----END [A-Z ]*PRIVATE KEY-----`;
+/** History's PEM rule: a BEGIN line, to its END line or, with none, to the end of the text. `ccd/history/lib.mjs`'s shape
+ *  layer builds its first arm from it (`SECRET_SHAPE_RES`). Its bytes are part of every history index text, so a change
  *  to it is a history `BELT_VERSION` bump and a reindex (the history programme's), never a change made here alone: that
- *  is why it is not Gitleaks's `private-key` rule, whose `(?: BLOCK)?` also reads a PGP private key block (a residual). */
-export const PEM_PRIVATE_KEY_SOURCE = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`;
-const PEM_BLOCK = new RegExp(PEM_PRIVATE_KEY_SOURCE, 'g');
+ *  is why it is not Gitleaks's `private-key` rule, which also reads a PGP private key block (a residual). */
+export const PEM_PRIVATE_KEY_SOURCE = PEM_HEADER + String.raw`[\s\S]*?(?:` + PEM_END + '|$)';
+/** A line break: CR LF, LF, or the escaped `\r\n` or `\n` of a JSON string. */
+const PEM_BREAK = String.raw`(?:\r?\n|\\r\\n|\\n)`;
+/** The egress profiles' PEM rule (review 2693 F1, the coordinator's ruling): legitimately different from history's, the
+ *  opposite cost. History stores text and masks to the end when a block has no END line; egress text is SHOWN, to
+ *  whoever rules on an approval row or reads a Linear ticket, and masking to the end hid the rest of a command or a
+ *  ticket for good. So: the BEGIN line and its END line on the same line (a JSON-escaped block; never across another
+ *  BEGIN line), or the BEGIN line, then every line that is base64 (or an encrypted block's `Proc-Type:` and `DEK-Info:`
+ *  fields), blank lines between them, then its END line if one follows. A line of anything else ends it, so an unclosed
+ *  header masks itself and the key lines after it, never the prose. A base64 line ends at a line break, the end of the
+ *  text or a closing quote. Linear: each part starts with a different character. */
+const EGRESS_PEM_SOURCE = PEM_HEADER + String.raw`(?:(?:(?!-----BEGIN )[^\r\n])*?` + PEM_END + '|'
+  + String.raw`(?:(?:${PEM_BREAK}[ \t]*(?=${PEM_BREAK}))*${PEM_BREAK}[ \t]*(?:[A-Za-z0-9+/=]+|(?:Proc-Type|DEK-Info):[^\r\n\\]*)[ \t]*(?=${PEM_BREAK}|$|["'` + '`' + String.raw`]))*`
+  + String.raw`(?:(?:${PEM_BREAK}[ \t]*(?=${PEM_BREAK}))*${PEM_BREAK}[ \t]*${PEM_END})?)`;
+const PEM_BLOCK = new RegExp(EGRESS_PEM_SOURCE, 'g');
 const SLACK_HOOK = /(hooks\.slack\.com\/(?:services|workflows|triggers)\/)[^\s'"]+/gi;
 const TELEGRAM_BOT = /\bbot[0-9]{5,}:[A-Za-z0-9_-]{20,}/g;
 /** A base64 (standard or URL-safe) or hex run; hex is a subset of the class. Linear: one class, no nesting. */
