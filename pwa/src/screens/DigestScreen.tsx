@@ -28,6 +28,7 @@ import { DigestDrift } from './DigestDrift';
 import { HandledElsewhere } from '../responses/HandledElsewhere';
 import { useOpenedReceipt } from '../responses/useOpenedReceipt';
 import { digestLineKey } from '../../../shared/responses';
+import { callRefusalText } from '../ledgers/callWords';
 import './digest.css';
 
 const DAY_MS = 86_400_000;
@@ -87,7 +88,9 @@ export function digestTotalsText(d: DigestAnswer): string {
 }
 
 /** A correction refused, in words. */
-function correctionError(err: unknown): string {
+function correctionError(err: unknown, rowKind: DigestLine['rowKind']): string {
+  // A call's refusals have ONE owner, the call table (review 2792 F5): the Overturn sheet and this line say the same words.
+  if (rowKind === 'call') return callRefusalText(err) ?? apiErrorText(err);
   if (err instanceof ApiError && typeof err.body === 'object' && err.body !== null) {
     const word = (err.body as { error?: unknown }).error;
     if (word === 'not-coordinator') return 'No coordinator decided this line, so there is no one to correct.';
@@ -116,7 +119,7 @@ function DigestRow({ line, day, correct, onCorrected }: {
     setError(null);
     correct({ rowKind: line.rowKind, id: line.id, text })
       .then(() => { setOpen(false); setText(''); onCorrected(); })
-      .catch((err: unknown) => setError(correctionError(err)))
+      .catch((err: unknown) => setError(correctionError(err, line.rowKind)))
       .finally(() => setBusy(false));
   };
   // A big call (D-8126) names the option the coordinator chose and why; it has no child and no command.
