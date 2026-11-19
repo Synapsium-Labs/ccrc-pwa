@@ -55,7 +55,7 @@ const STOP_DONE_HOLD_MAP = {
   archived: 'archived: the archive already stopped it',
   stopped: 'already stopped (the registry carries its stop stamp)',
   unmeasured: 'its identity or its status was not measured',
-  held: 'a hold stands that guards more than the workspace: the operator\'s own text, one naming a run that is open or unreadable, or a box whose ccd cannot pass a programme hold (`hibernate-hold-ok`)',
+  held: 'a hold stands that guards more than the workspace: the operator\'s own text, one naming another session\'s open run or a run that is unreadable, or a box whose ccd cannot pass a programme hold (`hibernate-hold-ok`)',
   stranded: 'stranded by an automatic swap',
   'swap-blocked': 'a swap was refused for it',
   substrate: 'a substrate marker stands',
@@ -172,7 +172,7 @@ export type StopDoneLive =
  *  hold. `operator`: any text outside the programme-hold grammar (`programmeHoldOf`), the unreadable and empty
  *  placeholders included. `programme`: a programme hold naming no run. `run-terminal` / `run-live`: one naming a run
  *  the store reads in / outside `TERMINAL_RUN_STATES`. `unreadable`: one naming a run the store could not read. */
-export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-live' | 'unreadable';
+export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-own' | 'run-live' | 'unreadable';
 
 export interface StopDoneInput {
   readonly row: StopDoneRow;
@@ -229,7 +229,7 @@ export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
 export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
   return {
     row: i.row, child: i.row.child, paneDead: null, stopped: i.row.stoppedBy !== null,
-    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal'),
+    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal' || i.heldKind === 'run-own'),
     overlord: i.overlord, optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
     viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
   };

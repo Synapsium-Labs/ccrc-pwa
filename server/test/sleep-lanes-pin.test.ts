@@ -595,6 +595,22 @@ describe('the difference table (run-done | idle-hours), one row each', () => {
     expect(hbv(hbRow({ child: { kind: 'none' } })(HB)), 'idle-hours puts a non-child to sleep').toBe('hibernate');
   });
 
+  it('held — a hold naming the worker\'s OWN open run is `run-own` and passes run-done; another session\'s open run stays `run-live` (D-TBD-own-run-hold-passes)', () => {
+    const coord = { run: (id: number) => (id === 9
+      ? { ok: false, detail: 'unreadable' }
+      : { ok: true, run: { id, state: id === 5 ? 'done' : 'awaiting-review', sessionId: id === 7 ? 'other-worker' : 'this-worker' } }) as never };
+    const own = `${PROGRAMME_HOLD} run:6`;
+    expect(heldKindOf(own, coord, 'this-worker'), 'its own open run').toBe('run-own');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:7`, coord, 'this-worker'), 'another session\'s open run').toBe('run-live');
+    expect(heldKindOf(own, coord), 'a caller that names no session never answers run-own').toBe('run-live');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:5`, coord, 'this-worker'), 'a terminal run reads as before').toBe('run-terminal');
+    expect(heldKindOf(`${PROGRAMME_HOLD} run:9`, coord, 'this-worker'), 'a failed read holds').toBe('unreadable');
+    const held = (k: StopDoneHeldKind, holdOkVerb = true) => sdv({ ...SD, heldKind: k, holdOkVerb, row: { ...SD.row, held: own } });
+    expect(held('run-own'), 'passes, with the hold handed to --hold-ok').toBe('hibernate');
+    expect(held('run-own', false), 'no hold-ok token: held').toBe('held');
+    expect(held('run-live'), 'another session\'s open run still holds').toBe('held');
+  });
+
   it('differs: held — run-done passes a programme hold or a terminal run\'s, only with hibernate-hold-ok; idle-hours holds any', () => {
     const coord = { run: (id: number) => ({ ok: true, run: { id, state: id === 5 ? 'done' : 'working' } }) as never };
     const kinds: Array<[string | null, StopDoneHeldKind]> = [
