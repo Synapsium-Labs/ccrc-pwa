@@ -138,12 +138,13 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       const next = text.indexOf('\n## ', at + 1);
       const section = flat(text.slice(at, next === -1 ? undefined : next));
       expect(at, heading).toBeGreaterThanOrEqual(0);
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps\)/);
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear[^)]*with no key or slot for the team its linking must be set first\)/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
     // the API reference's inbound refusal list says the same (by its holder's consent)
     const api = flat(read('references', 'api.md'));
-    expect(api).toMatch(/`unreachable` \([^)]*a retry helps\)/);
+    // and says what plan.md says (review 2834 A5): only a binding decision, take's unresolvable home, when a retry helps
+    expect(api).toMatch(/`unreachable` \([^)]*refused only for a decision that binds it[^)]*home workspace cannot be resolved[^)]*a retry helps when Linear did not answer, and with no key or slot for the team its linking must be set first\)/);
     expect(api).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
   });
 

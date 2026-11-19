@@ -106,7 +106,10 @@ takes `{"close":{"why":"…"}}` and `{"return":{"note":"…"}}`. Refusals, all o
 team's Linear owner triages), `issue-not-inbound` (the issue is not waiting, or was not handed to you),
 `plan-bad-body` (a hand to your own programme without an `epic`, a close without a reason), `linear-text-public`,
 `not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed`,
-`reserved-programme`, `unreachable` (Linear could not be read to confirm the issue is still inbound; a retry helps) and
+`reserved-programme`, `unreachable` (Linear could not be read to confirm the issue is still inbound, refused only for a
+decision that binds it: a hand, an Upkeep placement or a take into an epic; `take` also answers it when the programme's
+home workspace cannot be resolved for an Upkeep ticket; a retry helps when Linear did not answer, and with no key or slot
+for the team its linking must be set first) and
 the client's own `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
