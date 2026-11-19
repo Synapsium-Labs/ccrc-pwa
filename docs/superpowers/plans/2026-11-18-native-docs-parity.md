@@ -496,7 +496,7 @@ The other review 2670 carries (F1 to F9, A1 to A4) go to their owning waves, P1 
 
 #### Unmeasured
 
-X2's own code sizes, the bootstrap's parser rows, and print mode's size in `render`: each is an estimate from a measured comparator, or has none. X2's library commits measure their own rows in test 8.
+X2's own code sizes, the bootstrap's parser rows, and print mode's size in `render`: each is an estimate from a measured comparator, or has none. X2's library landing measures its own row in test 8.
 
 #### Commands
 
