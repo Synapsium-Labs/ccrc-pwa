@@ -1927,6 +1927,23 @@ describe('plan take with no handed row and an unmeasured home fails closed (revi
   });
 });
 
+describe('a foreign-workspace Upkeep ticket under an unresolvable home (review 2834 A8)', () => {
+  it('zero handed rows, the ticket bound in ANOTHER workspace than the home\'s, the home\'s workspace unresolvable: refused, the ticket unchanged', async () => {
+    const r = await rig({ twoWs: true });
+    // prog-c's home is project-b (ws-b); the ticket is project-a's, in ws-a
+    r.plan.upsertInbound({ linearId: U(61), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-15', title: 'Foreign ticket', body: null, seenAt: T - 4000 });
+    const done = r.plan.placeInboundInUpkeep({ linearId: U(61), project: 'project-a', now: T - 3500 });
+    if (!done.ok) throw new Error('fixture: the Upkeep ticket was not placed');
+    r.lin.store = 'unreadable';
+    for (const body of [{ issue: 'AAA-15', epic: 'e-c' }, { issue: 'AAA-15', close: { why: 'noise' } }]) {
+      const res = await take(r, 'prog-c', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([503, 'unreachable']);
+    }
+    const t = r.plan.upkeepEpicOf('project-a')!.tickets.find((x) => x.id === done.ticketId)!;
+    expect([t.program, t.state]).toEqual([null, 'open']);
+  });
+});
+
 describe('every cause is walked at pass level: canceled, and an unreadable store (review 2524 A2)', () => {
   const canceled = (r: Rig): void => { r.lin.byId[U(12)] = node(12, { stateType: 'canceled' }); };
   it('canceled by id: a take and a triage retire the row with cause canceled', async () => {
