@@ -289,12 +289,44 @@ Every run through `ccrc test`, cd'd into `server/`, one file (or one directory, 
 | server compile (`tsconfig.json`) | clean | 8.6 |
 | tests compile (`test/tsconfig.tests.json`) | first run: 8 errors, all in `agent/src` (`ws` not found: `agent/` had no `node_modules` in this worktree, and this branch changes nothing there); after installing the agent package's dependencies (`npm ci`), clean. No memory-cap kill this time | 8.6, 8.3 |
 
-### 8.6 A co-edit this task granted
+### 8.6 The absorb of main
+
+Before the push, the probe of this round's head against `origin/HEAD` (`5da625fcb`) exited 1 on `planRoutes.ts` and
+`server.ts`. The cause was #3021 (linear wave 4 follow-ups), which landed after review 2795 read `002912bfe`, and the
+coordinator measured the same conflict against `002912bfe` (delivery 26646). This task told the coordinator before
+pushing (mail 26641). On its ruling, one `git merge` of `origin/HEAD` at `5da625fcb` (merge commit `1584cb9fe`). Three
+hunks, each resolved by keeping both sides, with no kept line changed:
+
+| File | Hunk | Kept |
+|---|---|---|
+| `server/src/coord/planRoutes.ts` | the end of `PlanRouteOpts`: this task's `runVerdicts` option beside main's new `inboundRecheck` option | both: `runVerdicts` with its comment, then `inboundRecheck` with its comment |
+| `server/src/coord/planRoutes.ts` | the line after `workOf`: main retyped the `refuse` helper (`PlanRefusal` to `Refused['refuse']`) | this task's side for `workOf` (unchanged), and main's side for the `refuse` line, which replaces the base's line this task never changed |
+| `server/src/server.ts` | `registerPlanRoutes`' options: this task's wiring line (the base line plus `runVerdicts: watcher?.runVerdicts`) beside main's new `inboundRecheck` line | both: this task's line, then main's `inboundRecheck` line. Measured against `origin/HEAD`, the branch's diff of `server.ts` is still that one property, and claim 5558's holder was told (mail 26649) |
+
+Rerun after the merge, one file per process: §8.8.
+
+### 8.7 A co-edit this task granted
 
 The linear-hierarchy wave 4 follow-ups (run 2810) asked this task, which holds `planRoutes.ts` and
 `single-definition/plan.test.ts`, for a co-edit of two doc comments and plan take's Upkeep lookup in the first, and one
 appended case in the second; this task said yes (mail 26622, 2026-11-19), noting that the work gatherer ends just above
 one of those comments and that the describe's last case is WM2's, so whoever lands second keeps both.
+
+### 8.8 The rerun after the merge
+
+Through `ccrc test`, cd'd into `server/`, one file (or the directory named) per process, `--maxWorkers=2`, after a fresh
+`git fetch origin main`, on the merge commit `1584cb9fe`. `plan-inbound` and `ccrc-api` are #3021's own changed tests
+that reach the plan routes, and `plan-vocabulary` is #3021's changed pin of the plan words.
+
+| Run | Result | Load (1 min) |
+|---|---|---|
+| `plan-routes`, `work-map`, `plan-store`, `single-definition/plan` | 45, 93, 63 and 5, all green | 7.2 to 13.9 |
+| `mail-routes` (the coordination word scan) | 61 of 61 | 13.6 |
+| `plan-inbound`, `ccrc-api`, `plan-vocabulary` | 114, 289 and 10, all green | 10.5 to 11.2 |
+| `test/single-definition` (41 files), `test/rings` (12 files) | 1531 and 133, all green | 10.7, 12.4 |
+| `deviation-refs`, `dtbd`, `topology-clean` | 34, 1 and 61, all green | 11.9, 11.4 |
+| server compile, tests compile | both clean | 11.0, 10.6 |
+| the ledger guard (`--base origin/main`) | passed by the `Ledger-Edit: D-8779` trailer | |
 
 ## 9. For later
 
