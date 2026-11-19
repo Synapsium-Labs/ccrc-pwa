@@ -592,8 +592,8 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "accepted, the path's session the sender, attribution checked against the registry, joined to that session's own start"],
   // The act-key claim (Overlord §3.3.11 H12, W1 door process A1): the door process presents its launch nonce once.
   ['POST /api/sessions/:id/act-key',
-    "the door process's one claim: box token, attribution and a launch nonce bound to the session's newest start; it issues " +
-    "the act key once — box-token gated in its own onRequest whatever the flag, no cookie accepted, the path's session the " +
+    "the door process's one claim: box token, attribution and a launch nonce bound to the start the generations lane minted " +
+    "from; it issues the act key once — box-token gated in its own onRequest whatever the flag, no cookie accepted, the path's session the " +
     'sender, attribution checked against the registry, the key stored only as its sha256'],
   // The card door (Overlord §3.3.3, W1a): a session reads its own card, page by page.
   ['GET /api/sessions/:id/card',

@@ -92,6 +92,23 @@ is taken here.
   directories' sentence. The three lists (`ACCOUNT_SECRET_PATHS`, `ACCOUNT_WRITE_DIRS`, the installer's bash copy) agree;
   only the prose is in two sentences.
 
+## Review 2660 (round 2)
+
+- **F1, the answer's mask, pinned**: the act-key answer goes through the one answer hook, because the route is not in
+  `server.ts`'s `WRITE_ANSWER_EXEMPT`. That file is held by another run, so the route is not exempted; instead
+  `continuity-act-key-route.test.ts` pins the masked status and that no credential shape matches a key (256 keys through
+  `SHAPE_ONLY_MASKER`, byte for byte). Measured: a 64-hex pattern added to `CREDENTIAL_MASKS` reds it. If a later pattern
+  caught a key, the door process would otherwise get placeholder text and fail closed with no reason given.
+- **F2, wording**: the `superseded` reason a door process reads, the wire file's header and the gate's EXEMPT reason now say
+  what the code does: a start the generations lane minted from was recorded after the door's own.
+- **F3, the nonce hash's input, for PR A2**: the start report's `doorNonceSha256` and the claim door's hash are the sha256 of
+  the nonce's 64-character lowercase hex TEXT as UTF-8, with no newline (`printf '%s' "$nonce" | sha256sum`), never of the
+  32 bytes it encodes, and never of `echo "$nonce"` (which adds a newline). A2's spawn computes it that way, and an A2 test
+  should hash the nonce the spawn wrote and post it to the real claim route. A mismatch fails closed: every claim answers
+  `renewing` (`start-unreported`) for ever. The wire file's `NONCE_SHA256_SHAPE` comment says the same.
+- **Carried, no change here**: the claim route checks neither the designation nor the term, by design (F6 puts both at the
+  fenced calls). The gate that consumes the key (PR B) must check both.
+
 ## The hook refusal
 
 A Bash call that edited the deny lists (a heredoc whose text names the guarded paths) was refused by the session hook's

@@ -4,8 +4,9 @@
  *
  *  ccd's spawn step writes a one-time launch nonce into the door process's tool-server config, and puts only the nonce's
  *  sha256 on the start report (`doorNonceSha256`). The door process presents the nonce once, to the claim door
- *  (`POST /api/sessions/:id/act-key`), which binds it to the session's newest recorded start and, once that start's
- *  generation is minted, issues the act key once. The server keeps only the key's sha256 (`continuity_act_keys`). After the
+ *  (`POST /api/sessions/:id/act-key`), which binds it to the start carrying the nonce's hash that the generations lane
+ *  minted from and, while no start the lane minted from was recorded after it and its generation has not ended, issues the
+ *  act key once. The server keeps only the key's sha256 (`continuity_act_keys`). After the
  *  claim, every fenced call carries the key and a counter that only rises. There is NO term header (ruled, F6): the server
  *  compares the generation row's `term` with the designation's itself. The nonce and the key are secrets: they never ride an
  *  argv, a log line, a transcript or a pane (ruled, F1). */
@@ -18,7 +19,8 @@ export const ACT_COUNTER_HEADER = 'x-ccrc-act-counter';
 export const ACT_GENERATION_HEADER = 'x-ccrc-act-generation';
 
 /** A launch nonce's sha256, as the start report carries it and the claim door hashes the nonce: 64 lowercase hex. The nonce
- *  itself is the same shape (32 random bytes as hex). */
+ *  itself is the same shape (32 random bytes as hex), and the hash is taken over that 64-character hex TEXT as UTF-8, with
+ *  no newline (`printf '%s' "$nonce" | sha256sum`), never over the 32 bytes it encodes. */
 export const NONCE_SHA256_SHAPE = /^[0-9a-f]{64}$/;
 /** An act key: 32 random bytes as 64 lowercase hex, from the server's `Entropy`. */
 export const ACT_KEY_SHAPE = /^[0-9a-f]{64}$/;
@@ -36,7 +38,7 @@ const CLAIM_WHY_MAP = {
   'store-unreadable': 'a read the claim needs could not be made: try again',
   'nonce-spent': 'this nonce already claimed a key: a door process restarted inside its generation serves reads only',
   'start-unreported': 'no recorded start carries this nonce yet: the start report has not landed, so keep the nonce and retry',
-  superseded: "a newer start of this session exists: this door process's start is not the session's newest",
+  superseded: "a start the generations lane minted from was recorded after this door process's own: a newer generation of this session exists",
   'not-minted': "this start's generation is not minted yet: keep the nonce and retry",
   'generation-ended': "this start's generation has ended",
 } as const;

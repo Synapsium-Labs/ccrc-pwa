@@ -10,6 +10,9 @@ import { genExpectOf, type MintInput } from '../src/continuity/continuityStore.j
 import { FAKE_T0 } from './fakeTime.js';
 import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { answerMasked } from '../src/server.js';
+import { SHAPE_ONLY_MASKER } from '../src/accounts/mask.js';
+import { CREDENTIAL_MASKS } from '../../shared/api.js';
 
 const ID = 'lane-a-project-a';
 const UUID = '11111111-2222-3333-4444-555555555555';
@@ -228,6 +231,22 @@ describe('POST /api/sessions/:id/start: the nonce hash', () => {
       const res = await app.inject({ method: 'POST', url: `/api/sessions/${ID}/start`, headers: { 'x-ccrc-mail-token': ID_GATE_TOKEN },
         payload: { fromId: ID, fromUuid: UUID, reportId: 'r-bad-0001', source: 'startup', reportedAt: FAKE_T0, doorNonceSha256: bad } });
       expect([res.statusCode, (res.json() as { detail: string }).detail], String(bad)).toEqual([400, 'doorNonceSha256']);
+    }
+  });
+});
+
+describe('the act-key answer and the answer mask (review 2660 F1)', () => {
+  // The answer goes through the one answer hook: the route is not in `WRITE_ANSWER_EXEMPT` (`server.ts`). That is safe only
+  // while no credential shape matches a key, so this pins both: if a later mask pattern caught 64 lowercase hex, the door
+  // process would receive placeholder text instead of its key and fail closed with no reason given. Exempting the route
+  // instead is a change to the exempt list, and to this case.
+  it('is masked, and the mask hands every key through byte for byte', () => {
+    expect(answerMasked('POST', '/api/sessions/:id/act-key')).toBe(true);
+    for (let i = 0; i < 256; i += 1) {
+      const key = sha(`act-key-${i}`);
+      for (const m of CREDENTIAL_MASKS) expect(new RegExp(m.source).test(key), m.id).toBe(false);
+      const answer = { ok: true, generation: 3, key };
+      expect(SHAPE_ONLY_MASKER.maskDeep(answer)).toEqual(answer);
     }
   });
 });
