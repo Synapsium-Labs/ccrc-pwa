@@ -12,7 +12,7 @@ import { RunRow } from '../src/screens/RunRow';
 import { RunDetailScreen } from '../src/screens/RunDetailScreen';
 import { api } from '../src/lib/api';
 import { createFleetStore } from '../src/stores/fleet';
-import type { RunSummary } from '../../shared/api';
+import { backgroundWords, type RunSummary } from '../../shared/api';
 import { SessionHeaderHost, type HeaderHostProps } from './sessionHost';
 import {
   COORDINATOR_WORD, HEADER_COUNT_ALLOWANCES, MARKER_ORDER, NAME_BUDGET, cardFacts, cardWithinHeader, headerFacts, headerStatusWord, markers,
@@ -285,14 +285,20 @@ describe('the rendered card is a glance, and the rendered header holds all of it
         const text = visible(head);
         // The card's status word as the CARD renders it, in the header's visible text.
         const cardWord = visible(card.querySelector('.sess-state')!);
-        // D-8771's one allowance, as `cardWithinHeader` has it: the card says `in background` and the header keeps its
-        // count (`2 in background`), so the header's count digits are set aside for the card's own words, and the header
-        // is asserted to still carry them.
-        const headerWords = text.replace(/ \d+ in background/, ' in background');
-        if (cardWord.includes('in background')) expect(text, 'the header keeps the background count').toMatch(/ \d+ in background/);
-        expect(headerWords, 'the card\'s status word is missing from the header').toContain(cardWord);
-        for (const fact of [c.name, c.status, c.context, c.marker, c.workingOn, c.role]) {
-          if (fact !== null) expect(headerWords, `${fact.key} missing from the header`).toContain(fact.text);
+        // D-8771's one allowance, read from its table row (`HEADER_COUNT_ALLOWANCES`, never a copy of its regex) and applied
+        // to the STATUS check only, on the header's own status element, where the row's anchor means something: the card
+        // says `in background` and the header keeps its count, so the count is set aside for the card's words, and the
+        // header is asserted to still carry it. Every other fact is looked for in the header's text as it is.
+        const allow = HEADER_COUNT_ALLOWANCES.find((a) => a.key === 'status')!;
+        const headerStatus = (head.querySelector('.status-line')?.textContent ?? '').replace(/\s+/g, ' ').trim();
+        expect(headerStatus, 'the header draws a status word').not.toBe('');
+        const uncounted = allow.card.replace(/^ · /, '');
+        if (cardWord.includes(uncounted)) expect(headerStatus, 'the header keeps the background count').toMatch(allow.count);
+        // Both forms, as the rule has them (L1-1): the header's status as it is, or with the count set aside.
+        expect([headerStatus, headerStatus.replace(allow.count, allow.card)].some((t) => t.includes(cardWord)),
+          'the card\'s status word is missing from the header').toBe(true);
+        for (const fact of [c.name, c.context, c.marker, c.workingOn, c.role]) {
+          if (fact !== null) expect(text, `${fact.key} missing from the header`).toContain(fact.text);
         }
         // D-8142: a coordinator's context line begins with the one role cell; a child has none.
         const roles = card.querySelectorAll('.sess-role');
@@ -436,6 +442,9 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
   it('C46 guard: a session row with subagents draws no count of subagents or delegated entries, in its text, titles or accessible names', () => {
     const busy = s({ ...worker, subagents: [{ name: 'code-reviewer', startedAt: NOW - 60_000 }, { name: 'explorer', startedAt: NOW - 30_000 }] });
     expect(busy.subagents).toHaveLength(2);
+    // L2-6 (review 2708): the dead half below cannot fail for subagents, which it never reads (`sessionFacts` hands a dead row
+    // `subagents: null`, so the `toHaveLength(2)` control above checks the input, not what reaches the row). It stays for the
+    // row's other words and titles; the live half is the one that can go red for a subagent count.
     for (const session of [busy, s({ ...busy, status: 'dead', bucket: 'dead' })]) {
       const { container } = render(<SessionLine session={session} onOpen={() => {}} onActions={() => {}} now={NOW} />);
       // Positive control: the row was drawn, with its name and some titled or named element to scan.
@@ -446,6 +455,11 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
       expect(`${container.textContent} ${named.join(' ')}`).not.toMatch(/subagent|delegated|⑂/i);
       expect(container.querySelector('.sess-meta-chip')).toBeNull();
       expect(container.querySelector('.sess-subagents')).toBeNull();
+      // L2-1 (review 2708): a count drawn as a bare number (` · 2`) has none of those words, so the row is also the same
+      // markup with and without its subagents. The same row with `subagents: null` is the control (it must be drawn).
+      const bare = render(<SessionLine session={{ ...session, subagents: null }} onOpen={() => {}} onActions={() => {}} now={NOW} />);
+      expect(bare.container.innerHTML.length).toBeGreaterThan(0);
+      expect(container.innerHTML, `${session.status}: the row is the same markup with and without subagents`).toBe(bare.container.innerHTML);
       cleanup();
     }
   });
@@ -457,6 +471,10 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
     expect(card.status).toMatchObject({ text: 'working · in background', title: '2 in background: workflow, agent' });
     const head = headerFacts(f);
     expect(head.find((h) => h.key === 'status')?.text).toBe('working · 2 in background');
+    // L1-2 (review 2708): the header's status fact carries the HEADER's own title (`backgroundWords`: the kinds, no count),
+    // the same one the rendered header puts on its status word; the card's title (with the count) is the card's.
+    expect(head.find((h) => h.key === 'status')?.title).toBe('in background: workflow, agent');
+    expect(head.find((h) => h.key === 'status')?.title).toBe(backgroundWords({ count: 2, kinds: ['workflow', 'agent'] }).title);
     // D-5545's prefix rule holds for the status key with the one documented allowance: the header's count digits.
     expect(cardWithinHeader(card, head)).toEqual([]);
     expect(cardWithinHeader(card, head.filter((h) => h.key !== 'status'))).toEqual([card.status]);
@@ -470,6 +488,18 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
     expect(HEADER_COUNT_ALLOWANCES).toHaveLength(1);
     expect(HEADER_COUNT_ALLOWANCES[0]).toMatchObject({ key: 'status', card: ' · in background' });
     expect(HEADER_COUNT_ALLOWANCES[0]!.count.source).toBe(/ · \d+ in background$/.source);
+    // L2-2 (review 2708): the regex's flags are pinned too (an `i` or `m` flag widens what it matches), as its whole text.
+    expect(HEADER_COUNT_ALLOWANCES[0]!.count.flags).toBe('');
+    expect(String(HEADER_COUNT_ALLOWANCES[0]!.count)).toBe('/ · \\d+ in background$/');
+    // L1-3: the words are `backgroundWords`' own, spelt once: the header's counted form, run through the row, is the card's
+    // uncounted form, for any count and any kinds, and a reword of `backgroundWords` would move both together.
+    for (const b of [{ count: 1, kinds: [] }, { count: 7, kinds: ['workflow'] }, { count: 12, kinds: ['a', 'b'] }]) {
+      const counted = `working · ${backgroundWords(b).text}`;
+      expect(counted.replace(HEADER_COUNT_ALLOWANCES[0]!.count, HEADER_COUNT_ALLOWANCES[0]!.card)).not.toBe(counted);
+      const bg = s({ bucket: 'working', status: 'busy', background: b });
+      expect(cardFacts(sessionFacts({ session: bg, now: NOW })).status.text)
+        .toBe(counted.replace(HEADER_COUNT_ALLOWANCES[0]!.count, HEADER_COUNT_ALLOWANCES[0]!.card));
+    }
     const name = { key: 'name' as const, text: 'row' };
     const status = (text: string) => ({ key: 'status' as const, text });
     const branch = (text: string) => ({ key: 'branch' as const, text });
@@ -488,6 +518,11 @@ describe('the header\'s delegated-entries disclosure (D-7781; the card chip is g
     expect(within('status', 'working · in background', 'working · 2 in background · now')).toBe(1);
     expect(within('status', 'working · in background', 'idle · 2 in background')).toBe(1);
     expect(within('status', 'working · in background', 'working · in background')).toBe(0);
+    // L1-1 (review 2708): a card status equal to the header word for word holds too, in the same one comparison: the rule
+    // allows both forms of the header's status, its own text and the text with the count set aside.
+    expect(within('status', 'working · 2 in background', 'working · 2 in background')).toBe(0);
+    expect(within('status', 'working · 2 in background', 'working · 3 in background')).toBe(1);
+    expect(within('branch', 'working · 2 in background', 'working · 2 in background')).toBe(0);
   });
 
   it('C46: the same session\'s header still draws both disclosures with their counts', () => {
