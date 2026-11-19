@@ -7235,20 +7235,13 @@ _ws_lane_cannot_spawn() {   # wrapper -> 0 iff the NEWEST spawn on any row of th
   local w="$1" f id wr sp best_at=-1 best_bad=0 at rc bad now
   _now_s_to now
   for f in "$REG"/*.spawn; do
-    [[ -f "$f" && ! -L "$f" ]] || continue
     id="${f##*/}"; id="${id%.spawn}"
-    [[ -n "$id" && "$id" != *.* ]] || continue
-    [[ -f "$REG/$id.wrapper" && ! -L "$REG/$id.wrapper" ]] || continue
-    _file_read_to wr "$REG/$id.wrapper" || continue
-    [[ "$wr" == "$w" ]] || continue
-    _file_read_to sp "$f" || continue
+    [[ -f "$f" && ! -L "$f" && -n "$id" && "$id" != *.* && -f "$REG/$id.wrapper" && ! -L "$REG/$id.wrapper" ]] || continue
+    _file_read_to wr "$REG/$id.wrapper" && [[ "$wr" == "$w" ]] && _file_read_to sp "$f" || continue
     [[ "$sp" =~ ^[[:space:]]*([0-9]+)[[:space:]]+([0-9]+)[[:space:]]*$ ]] || continue
-    at=$((10#${BASH_REMATCH[1]})); rc=$((10#${BASH_REMATCH[2]}))
-    bad=0; (( rc == 2 || rc == 5 )) && bad=1
+    at=$((10#${BASH_REMATCH[1]})); rc=$((10#${BASH_REMATCH[2]})); bad=0; (( rc == 2 || rc == 5 )) && bad=1
     (( bad == 1 && now - at > _WS_SPAWN_REFUSAL_TTL_S )) && continue
-    if (( at > best_at )); then best_at=$at; best_bad=$bad
-    elif (( at == best_at && bad == 0 )); then best_bad=0
-    fi
+    if (( at > best_at )); then best_at=$at; best_bad=$bad; elif (( at == best_at && bad == 0 )); then best_bad=0; fi
   done
   (( best_at >= 0 && best_bad == 1 ))
 }
@@ -10864,30 +10857,21 @@ cmd_skill_ensure() {   # ccd skill-ensure --wrapper <id> — put the coordinator
   # refused or the account's config dir is not on this box (an ordinary state: the installers skip it silently, which would
   # read as `converged`). `detail` carries the installers' own words. CCRC_SKILL_SRC is unset for the children: it names ONE
   # source and the two skills have two.
-  local usage="usage: ccd skill-ensure --wrapper <id>"
-  [[ $# -eq 2 && $1 == --wrapper ]] || die "$usage"
-  local w="$2" rc=0 dir name src dest err was_same result=converged detail="" failed=0
+  [[ $# -eq 2 && $1 == --wrapper ]] || die "usage: ccd skill-ensure --wrapper <id>"
+  local w="$2" rc=0 dir name names="coordinator worker" dest err was_same result=converged detail="" failed=0
   [[ "$w" =~ ^[a-z][a-z0-9-]{0,31}$ ]] || { echo "ccd: bad wrapper id: $w" >&2; exit 2; }
   _wrapper_rostered_now "$w" || rc=$?
-  case "$rc" in
-    0) ;;
-    1) echo "ccd: unknown-account: $w (no roster entry claims it)" >&2; exit 2 ;;
-    *) echo "ccd: could not re-read $CCRC_ACCOUNTS_SH, so skill-ensure cannot prove account '$w' exists" >&2; exit 2 ;;
-  esac
+  (( rc == 0 )) || { if (( rc == 1 )); then echo "ccd: unknown-account: $w (no roster entry claims it)" >&2; else echo "ccd: could not re-read $CCRC_ACCOUNTS_SH, so skill-ensure cannot prove account '$w' exists" >&2; fi; exit 2; }
   dir="$(_ccrc_cfg_dir "$w")"
   [[ -n "$dir" ]] || { echo "ccd: no config dir for account '$w' in this ccd's roster" >&2; exit 2; }
   _json_str probe >/dev/null || die "python3 is unavailable, so skill-ensure cannot encode its answer"
-  if [[ ! -d "$dir" ]]; then
-    failed=1; detail="the config dir of $w is not on this box"
-  else
-    for name in coordinator worker; do
-      src="$REG/$name-skill"; dest="$dir/skills/ccrc-$name"; was_same=0
-      [[ -d "$dest" ]] && diff -r -q "$src" "$dest" >/dev/null 2>&1 && was_same=1
-      err="$(env -u CCRC_SKILL_SRC bash "$REG/install-$name-skill.sh" --homes "$dir" 2>&1 >/dev/null)" || {
-        failed=1; detail+="${detail:+; }$name: ${err:-the installer failed without a message}"; continue; }
-      (( was_same )) || result=installed
-    done
-  fi
+  [[ -d "$dir" ]] || { failed=1; names=""; detail="the config dir of $w is not on this box"; }
+  for name in $names; do
+    dest="$dir/skills/ccrc-$name"; was_same=0; [[ -d "$dest" ]] && diff -r -q "$REG/$name-skill" "$dest" >/dev/null 2>&1 && was_same=1
+    err="$(env -u CCRC_SKILL_SRC bash "$REG/install-$name-skill.sh" --homes "$dir" 2>&1 >/dev/null)" || {
+      failed=1; detail+="${detail:+; }$name: ${err:-the installer failed without a message}"; continue; }
+    (( was_same )) || result=installed
+  done
   (( failed )) && result=failed
   [[ -n "$detail" ]] || detail="coordinator and worker skills are in $w's home"
   printf '{"wrapper":%s,"result":%s,"detail":%s}\n' "$(_json_str "$w")" "$(_json_str "$result")" "$(_json_str "${detail:0:600}")"
