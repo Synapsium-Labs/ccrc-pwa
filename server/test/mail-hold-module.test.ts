@@ -15,14 +15,17 @@ const STRIP = (/^MERGE_STRIP_JQ='([\s\S]*?)'$/m.exec(HOOK_TEXT) ?? [])[1] ?? '';
 const ALLOW = (/^ALLOW_ADMIN_RE='(.*)'$/m.exec(HOOK_TEXT) ?? [])[1] ?? '';
 const CAP = Number((/^MERGE_PARSE_CAP=(\d+)$/m.exec(HOOK_TEXT) ?? [])[1]);
 
+/** Every jq this file spawns is bounded and killed on expiry (PR 6, the coordinator's ruling on PR 5's untimed spawns). */
+const BOUND = { timeout: 30_000, killSignal: 'SIGKILL' } as const;
+
 interface Verdict { outcome: string; text: string; log: string; seen: string }
-interface Opts { thread?: string; pairs?: string; state?: string; armed?: string; seen?: string; ran?: string; strip?: string | null }
+interface Opts { thread?: string; pairs?: string; state?: string; armed?: string; seen?: string; ran?: string; strip?: string | null; ack?: string }
 
 /** The strip's answer for one command, as the hook's `$( )` capture holds it (trailing newlines cut): the module's
  *  `mh_prep`, then the hook's MERGE_STRIP_JQ, in one jq, as the hook's own call composes them. */
 const strip = (payload: string): string => {
   const r = spawnSync('jq', ['-L', LIB, '-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', ALLOW,
-    `include "mail-hold"; mh_prep | ${STRIP}`], { input: payload, encoding: 'utf8' });
+    `include "mail-hold"; mh_prep | ${STRIP}`], { input: payload, encoding: 'utf8', ...BOUND });
   expect(r.status, r.stderr).toBe(0);
   return r.stdout.replace(/\n+$/, '');
 };
@@ -33,10 +36,10 @@ const hold = (command: string, o: Opts = {}): Verdict => {
   const args: Record<string, string> = {
     strip: o.strip === undefined ? strip(payload) : (o.strip ?? ''), ran: o.ran ?? '1', cap: String(CAP),
     thread: o.thread ?? '', pairs: o.pairs ?? 'coordinator.42,overlord.7', state: o.state ?? 'live',
-    armed: o.armed ?? 'notice,refuse', sid: 'lane-a-project-a', now: '1795000000', seen: o.seen ?? '',
+    armed: o.armed ?? 'notice,refuse', sid: 'lane-a-project-a', now: '1795000000', seen: o.seen ?? '', ack: o.ack ?? '',
   };
   const argv = ['-L', LIB, '-j', ...Object.entries(args).flatMap(([k, v]) => ['--arg', k, v]), 'include "mail-hold"; mail_hold($ARGS.named)'];
-  const r = spawnSync('jq', argv, { input: payload, encoding: 'utf8' });
+  const r = spawnSync('jq', argv, { input: payload, encoding: 'utf8', ...BOUND });
   expect(r.status, r.stderr).toBe(0);
   const [outcome, text, log, seen, ...rest] = r.stdout.split('\u001f');
   expect(rest, 'four fields').toEqual([]);
@@ -355,5 +358,69 @@ describe('the log decision (P8, N2)', () => {
     const line = r.stdout.split('\u001f')[2] ?? '';
     expect(line).toContain('a'.repeat(128));
     expect(Buffer.byteLength(line)).toBeLessThanOrEqual(320);
+  });
+});
+
+// The subagent's ack refusal (plan Task 6.1; spec §3.5, D10). The hook passes `ack` "1" only for a joined subagent's Bash
+// call whose command holds `mail` and `ack` or `inbox` (its builtin prefilter), with or without a marker; the module
+// reads the RAW command text, never the stripped one, and refuses `mail ack` and every `mail inbox` that would ack.
+const ACK = 'ccrc: a subagent does not ack ccrc mail. Report to your parent instead.';
+describe('the subagent\'s ack refusal (Task 6.1)', () => {
+  /** A joined subagent's call with no marker standing, unless `o` says otherwise. */
+  const sub = (command: string, o: Opts = {}): Verdict => hold(command, { thread: 'sub', ack: '1', pairs: '', state: '', ...o });
+  const REFUSED: Array<[string, string]> = [
+    ['~/.local/bin/ccrc-api mail ack 7 --json -', 'mail ack'], ['ccrc-api mail inbox', 'mail inbox'],
+    ['ccrc-api mail inbox > f', 'mail inbox'], ['ccrc-api mail inbox >> f', 'mail inbox'], ['ccrc-api mail inbox &> f', 'mail inbox'],
+    ['ccrc-api mail inbox >&2', 'mail inbox'], ['ccrc-api mail inbox 2>/dev/null', 'mail inbox'], ['"$API" mail inbox', 'mail inbox'],
+    ['$API mail ack 7', 'mail ack'], ['"${API}" mail inbox', 'mail inbox'], ['/home/u/.local/bin/ccrc-api mail inbox', 'mail inbox'],
+    ['"$HOME/.local/bin/ccrc-api" mail inbox', 'mail inbox'], ['x=$(ccrc-api mail inbox)', 'mail inbox'],
+    ['echo "x; ccrc-api mail ack"', 'mail ack'], ['cd x && ~/.local/bin/ccrc-api mail inbox', 'mail inbox'],
+    ['ccrc-api mail inbox > /dev/null >&2', 'mail inbox'], ['ccrc-api mail inbox > f | cat', 'mail inbox'],
+    ['ccrc-api mail inbox; echo done', 'mail inbox'], ['ccrc-api mail list | cat; ccrc-api mail ack 7', 'mail ack'],
+  ];
+  const PASSED = [
+    'ccrc-api mail inbox | cat', 'ccrc-api mail inbox > /dev/null', 'ccrc-api mail list --to lane-a', 'ccrc-api mail fetch 7',
+    '"$API" mail inbox | head -5', 'ccrc-api mail inbox 2>&1 | cat', 'ccrc-api mail inbox >/dev/null 2>&1', 'ccrc-api mail inbox &>/dev/null',
+    'ccrc-api mail inbox |& cat', 'ccrc-api mail inbox 1> "/dev/null"', 'echo mail inbox', 'ccrc-api mail inboxes', 'grep ack mail.txt',
+  ];
+  it.each(REFUSED)('%j is refused with no marker, as %s', (c, act) => {
+    const v = sub(c);
+    expect(v).toMatchObject({ outcome: 'deny', text: ACK });
+    expect(v.log).toBe(`1795000000\tlane-a-project-a\tack\tdid\t-\t${act.replace(' ', '-')}\n`);
+  });
+  it.each(REFUSED)('%j is refused under a live marker, the delivery named in the log', (c, act) => {
+    const v = sub(c, { pairs: 'coordinator.42', state: 'live' });
+    expect(v).toMatchObject({ outcome: 'deny', text: ACK });
+    expect(v.log).toBe(`1795000000\tlane-a-project-a\tack\tdid\t42\t${act.replace(' ', '-')}\n`);
+  });
+  it.each(PASSED)('%j passes, with and without a marker', (c) => {
+    expect(sub(c)).toEqual({ outcome: '', text: '', log: '', seen: '' });
+    expect(sub(c, { pairs: 'coordinator.42', state: 'live' })).toEqual({ outcome: '', text: '', log: '', seen: '' });
+  });
+  it('read on the raw text: the strip empties `"$API"`, and the raw read still finds it (the strip given, as the hook would)', () => {
+    const c = '"$API" mail inbox';
+    const payload = JSON.stringify({ hook_event_name: 'PreToolUse', tool_name: 'Bash', tool_input: { command: c } });
+    expect(sub(c, { ran: '1', strip: strip(payload) })).toMatchObject({ outcome: 'deny', text: ACK });
+  });
+  it('without the hook\'s `ack` word nothing is refused: the main thread and an unjoined agent_id', () => {
+    for (const c of ['ccrc-api mail ack 7', 'ccrc-api mail inbox']) {
+      expect(hold(c, { pairs: '', state: '', ran: '' })).toEqual({ outcome: '', text: '', log: '', seen: '' });
+      expect(hold(c, { ran: '' })).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
+    }
+  });
+  it('shadow: with `refuse` not armed, nothing is refused and `ack would` is logged once a key, `-` for no marker', () => {
+    const first = sub('ccrc-api mail ack 7', { armed: 'notice' });
+    expect(first).toEqual({ outcome: '', text: '', log: '1795000000\tlane-a-project-a\tack\twould\t-\tmail-ack\n', seen: '\nack.-.mail-ack.would\n' });
+    expect(sub('ccrc-api mail ack 8', { armed: 'notice', seen: first.seen })).toEqual({ outcome: '', text: '', log: '', seen: '' });
+    const inbox = sub('ccrc-api mail inbox', { armed: '', seen: first.seen });
+    expect(inbox.log).toBe('1795000000\tlane-a-project-a\tack\twould\t-\tmail-inbox\n');
+    expect(inbox.seen).toBe('\nack.-.mail-ack.would\nack.-.mail-inbox.would\n');
+    expect(sub('ccrc-api mail ack 7', { armed: 'notice', pairs: 'coordinator.42', state: 'live' }).log)
+      .toBe('1795000000\tlane-a-project-a\tack\twould\t42\tmail-ack\n');
+  });
+  it('a gated act\'s subagent refusal wins over the ack refusal, and both are logged', () => {
+    const v = sub('git push && ccrc-api mail ack 7', { pairs: 'coordinator.42', state: 'live', ran: '1' });
+    expect(v).toMatchObject({ outcome: 'deny', text: ASUB('git push') });
+    expect(v.log).toBe('1795000000\tlane-a-project-a\trefuse\tdid\t42\tgit-push\n1795000000\tlane-a-project-a\tack\tdid\t42\tmail-ack\n');
   });
 });

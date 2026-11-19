@@ -3,7 +3,8 @@
 #
 # Loaded with `jq -L <dir>` and `include "mail-hold";`, beside `roster-card.jq`, by ccd/session-hook.sh's mail-hold
 # block, over the hook's own payload on stdin: `include "mail-hold"; mail_hold($ARGS.named)`. The hook reads the
-# `mailhold` route field with builtins and calls this only while one stands (a call that finds none pays nothing more).
+# `mailhold` route field with builtins and calls this only while one stands (a call that finds none pays nothing more),
+# or, for the subagent's ack refusal alone (plan Task 6.1), on a joined subagent's call its prefilter passes.
 #
 # Its inputs, all `--arg` strings:
 #   strip   MERGE_STRIP_JQ's answer for this payload, made by the hook's own call with the merge deny's arguments
@@ -16,7 +17,9 @@
 #   armed   the arming words standing, comma-separated: "notice" (`$REG/mailhold-notice-live`), "refuse"
 #           (`$REG/mailhold-refuse-live`). Nothing in the tree writes either marker;
 #   sid     the session id, for the log line; now: epoch seconds, for the log line;
-#   seen    the seen file's text: the pairs it was kept for, then one logged key a line.
+#   seen    the seen file's text: the pairs it was kept for, then one logged key a line;
+#   ack     "1" for the subagent's ack refusal: a joined subagent's Bash call whose command holds `mail`, and `ack` or
+#           `inbox` (the hook's builtin prefilter), with or without a marker (pairs and state empty then); else anything.
 #
 # Its answer, `-j`, four fields joined by U+001F: the outcome (`deny`, `notice` or empty), the text (never an envelope:
 # the hook wraps it with `_hook_deny_json` or `_hook_nudge_json`, so the envelope keeps one owner, P15), the log lines
@@ -121,6 +124,30 @@ def mh_refuse_main($a; $d; $s): "ccrc: this \($a) is held because urgent mail is
 def mh_refuse_sub($a): "ccrc: this \($a) is held because the session you work for has urgent mail waiting. Stop, and report to your parent that its urgent mail is unread.";
 def mh_overcap($b; $cap): " This command is \($b) bytes, over the hook's \($cap)-byte parse cap, so the hold reads its raw text and cannot tell prose from a command: split it into commands of at most \($cap) bytes, or write the text with the Write tool and pass it as a file (`--body-file <file>` for `gh pr create`, `ccrc-api mail send --json <file>` for a mail), which keeps the command short.";
 
+# THE SUBAGENT'S ACK REFUSAL (spec §3.5, plan Task 6.1), read on the RAW command text, never the stripped one: the strip
+# empties a double-quoted word such as `"$API"` and leaves an empty head. The head is the merge deny's head grammar
+# (`mh_head`), then a word ending in `ccrc-api` (bare, quoted or with a path) or a variable (`$API`, `"${API}"`). On the
+# raw text a form quoted inside another command, `echo "x; ccrc-api mail ack"`, counts too: stricter, fail closed.
+def mh_ack: mh_head + "[\"']?(?:[^\\s;&|()\"']*ccrc-api|\\$\\{?[A-Za-z_][A-Za-z0-9_]*\\}?)[\"']?[ \\t]+mail[ \\t]+(?<v>ack|inbox)(?=[\\s;&|()<>\"']|$)";
+# Whether an inbox only shows, read from the rest of its command: `cmd_inbox` shows only when its standard output is a
+# pipe or /dev/null. So the last redirection of standard output (`>`, `1>`, `>>`, `>|`, `&>`, `&>>`, `>&`) must name
+# /dev/null, or, with none, the command must end at a pipe (`|`, `|&`). Anything else acks: no redirection, a file, an
+# append, a duplication such as `>&2`, a redirection of another descriptor only (`2>/dev/null`), and the end of a
+# `$( )`, which the matcher does not decide (fail closed).
+def mh_shows:
+  reduce capture("(?<op>(?<fd>[0-9]+|&)?(?:>>|>\\||>&|>))[ \\t]*(?<t>\"[^\"]*\"|'[^']*'|[^\\s;&|()<>]*)|[0-9]*<[<>&]?[ \\t]*(?:\"[^\"]*\"|'[^']*'|[^\\s;&|()<>]*)|(?<e>\\|&|\\|\\||\\||&&|&|;|\\n|\\))|\"(?:[^\"\\\\]|\\\\.)*\"?|'[^']*'?|[^\\s;&|()<>\"']+"; "g") as $m
+    ({d: null, e: null};
+     if .e != null then .
+     elif $m.e != null then .e = $m.e
+     elif $m.op != null and (($m.fd // "") | . == "" or . == "1" or . == "&") then .d = ($m.t | gsub("^[\"']|[\"']$"; ""))
+     else . end)
+  | if .d != null then .d == "/dev/null" else .e == "|" or .e == "|&" end;
+# The acking forms in a raw command, each as its act word: every `mail ack`, and every `mail inbox` that does not only show.
+def mh_ackacts:
+  . as $s | [match(mh_ack; "g") | (.captures | map(select(.name == "v"))[0].string) as $v
+    | select($v == "ack" or ($s[(.offset + .length):] | mh_shows | not)) | "mail " + $v];
+def mh_ack_refuse: "ccrc: a subagent does not ack ccrc mail. Report to your parent instead.";
+
 def mail_hold($a):
   ($a.cap | tonumber) as $cap
   | ((.tool_input.command // "") | if type == "string" then . else "" end) as $raw
@@ -133,7 +160,7 @@ def mail_hold($a):
      elif ($stripped | test("[\"']")) then (($stripped | mh_acts) + ($raw | mh_rawacts))
        | reduce .[] as $x ([]; if any(.[]; . == $x) then . else . + [$x] end)
      else ($stripped | mh_acts) end) as $acts
-  | ($a.pairs | split(",")[0] | split(".")) as $first
+  | ($a.pairs | (split(",")[0] // "") | split(".")) as $first
   | ($first[1] // "-") as $d
   | ($first[0] | mh_sender) as $s
   | ($a.armed | split(",")) as $armed
@@ -155,7 +182,10 @@ def mail_hold($a):
      elif $a.state == "live" and ($sub | not) and $s != null then
        (if $armed | index("notice") then {o: "notice", t: mh_notice($d; $s), l: [["notice", "did", "-"]]}
         else {o: "", t: null, l: [["notice", "would", "-"]]} end)
-     else {o: "", t: null, l: []} end) as $v
+     else {o: "", t: null, l: []} end)
+  | (if $a.ack != "1" then . else ($raw | mh_ackacts) as $k | if ($k | length) == 0 then .
+       elif $armed | index("refuse") then (if .o == "deny" then . else .o = "deny" | .t = mh_ack_refuse end) | .l += [["ack", "did", $k[0]]]
+       else .l += [["ack", "would", $k[0]]] end end) as $v
   | ($a.seen | split("\n")) as $sl
   | (if $sl[0] == $a.pairs then $sl[1:] | map(select(. != "")) else [] end) as $keys
   | [$v.l[] | {k: "\(.[0]).\($d).\(.[2] | gsub(" "; "-")).\(.[1])", line: "\($a.now)\t\($a.sid)\t\(.[0])\t\(.[1])\t\($d)\t\(.[2] | gsub(" "; "-"))\n"}

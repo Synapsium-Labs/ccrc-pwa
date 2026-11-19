@@ -386,3 +386,87 @@ describe('MERGE_STRIP_JQ is untouched (P6, N7)', () => {
     expect(createHash('sha256').update(prog).digest('hex'), 'MERGE_STRIP_JQ changed').toBe(STRIP_SHA256);
   });
 });
+
+// The subagent's ack refusal (plan Task 6.1; spec §3.5, D10): the one arm that runs with no marker, in a joined subagent
+// only, behind a builtin prefilter on the command (`mail`, and `ack` or `inbox`). Armed by `mailhold-refuse-live`.
+describe('the subagent\'s ack refusal (Task 6.1)', () => {
+  const ACK = 'ccrc: a subagent does not ack ccrc mail. Report to your parent instead.';
+  const joined = (): void => { fs.writeFileSync(reg(`${ID}.joined`), 'agent-a1\n'); };
+  const subBash = (command: string): Out => bash(command, { agent_id: 'agent-a1' });
+  const REFUSED: Array<[string, string]> = [
+    ['~/.local/bin/ccrc-api mail ack 7 --json -', 'mail-ack'], ['~/.local/bin/ccrc-api mail inbox', 'mail-inbox'],
+    ['ccrc-api mail inbox > f', 'mail-inbox'], ['ccrc-api mail inbox >> f', 'mail-inbox'], ['ccrc-api mail inbox &> f', 'mail-inbox'],
+    ['ccrc-api mail inbox >&2', 'mail-inbox'], ['ccrc-api mail inbox 2>/dev/null', 'mail-inbox'], ['"$API" mail inbox', 'mail-inbox'],
+    ['/home/u/.local/bin/ccrc-api mail inbox', 'mail-inbox'], ['x=$(ccrc-api mail inbox)', 'mail-inbox'],
+  ];
+  const PASSED = ['ccrc-api mail inbox | cat', 'ccrc-api mail inbox > /dev/null', 'ccrc-api mail list --to lane-a', 'ccrc-api mail fetch 7'];
+  it.each(REFUSED)('a joined subagent\'s %j is refused with no marker, by _hook_deny_json, and logged once', (c, act) => {
+    joined();
+    expect(subBash(c).stdout).toBe(denyEnvelope(ACK));
+    expect(subBash(c).stdout).toBe(denyEnvelope(ACK));
+    expect(logged()).toEqual([`${ID} ack did - ${act}`]);
+  });
+  it('under a live marker a joined subagent\'s ack is refused too, and the log names the delivery', () => {
+    joined();
+    live();
+    expect(subBash('ccrc-api mail ack 7').stdout).toBe(denyEnvelope(ACK));
+    expect(logged()).toEqual([`${ID} ack did 42 mail-ack`]);
+  });
+  it.each(PASSED)('a joined subagent\'s %j passes, with and without a marker', (c) => {
+    joined();
+    expect(subBash(c).stdout).toBe('');
+    live();
+    expect(subBash(c).stdout).toBe('');
+    expect(logLines()).toEqual([]);
+  });
+  it('the main thread and an unjoined agent_id are not refused, with no marker and under one', () => {
+    for (const c of ['ccrc-api mail ack 7', 'ccrc-api mail inbox']) {
+      expect(bash(c).stdout, c).toBe('');
+      expect(bash(c, { agent_id: 'agent-zz' }).stdout, c).toBe('');
+    }
+    expect(logLines()).toEqual([]);
+    live();
+    expect(bash('ccrc-api mail ack 7').context).toBe(E('42', 'its coordinator'));
+    expect(bash('ccrc-api mail ack 7', { agent_id: 'agent-zz' }).context).toBe(E('42', 'its coordinator'));
+  });
+  it('shadow: with mailhold-refuse-live absent nothing is refused, and `ack would` is logged once a key', () => {
+    disarm('refuse');
+    joined();
+    expect(subBash('ccrc-api mail ack 7').stdout).toBe('');
+    expect(subBash('ccrc-api mail ack 8').stdout).toBe('');
+    expect(subBash('ccrc-api mail inbox').stdout).toBe('');
+    expect(logged()).toEqual([`${ID} ack would - mail-ack`, `${ID} ack would - mail-inbox`]);
+  });
+  it('the prefilter: a joined subagent\'s call with no `mail` word, or none of `ack` and `inbox`, makes no call of the block', () => {
+    const realJq = spawnSync('sh', ['-c', 'command -v jq'], { encoding: 'utf8', timeout: 10_000, killSignal: 'SIGKILL' }).stdout.trim();
+    const calls = path.join(home, 'jq-calls');
+    fs.writeFileSync(path.join(harnessBin(home), 'jq'), `#!/bin/sh\nprintf '%s\\037\\n' "$*" >> '${calls}'\nexec '${realJq}' "$@"\n`, { mode: 0o755 });
+    joined();
+    const blockCalls = (c: string): string[] => {
+      fs.writeFileSync(calls, '');
+      subBash(c);
+      return fs.readFileSync(calls, 'utf8').split('\u001f\n').filter((a) => a.includes('mail-hold') || a.includes('--arg pairs'));
+    };
+    expect(blockCalls('ls -la'), 'no mail word').toEqual([]);
+    expect(blockCalls('ccrc-api mail list --to lane-a'), 'mail, but neither ack nor inbox').toEqual([]);
+    expect(blockCalls('grep -r inbox notes'), 'inbox, but no mail').toEqual([]);
+    expect(blockCalls('ccrc-api mail inbox | cat'), 'CONTROL: the prefilter passes, so the module decides').toHaveLength(1);
+  });
+  it('with $REG/mail-disabled present, nothing is refused', () => {
+    joined();
+    fs.writeFileSync(reg('mail-disabled'), '');
+    expect(subBash('ccrc-api mail ack 7').stdout).toBe('');
+    expect(logLines()).toEqual([]);
+  });
+  it('with the module missing, nothing is refused, and `module-missing` is logged once with no marker', () => {
+    const dir = path.join(home, 'hookcopy');
+    fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
+    fs.copyFileSync(HOOK, path.join(dir, 'session-hook.sh'));
+    for (const f of fs.readdirSync(LIB)) if (f !== 'mail-hold.jq') fs.copyFileSync(path.join(LIB, f), path.join(dir, 'lib', f));
+    hook = path.join(dir, 'session-hook.sh');
+    joined();
+    expect(subBash('ccrc-api mail ack 7').stdout).toBe('');
+    expect(subBash('ccrc-api mail inbox').stdout).toBe('');
+    expect(logged()).toEqual([`${ID} - module-missing - -`]);
+  });
+});
