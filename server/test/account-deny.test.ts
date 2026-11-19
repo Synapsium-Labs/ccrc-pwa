@@ -160,6 +160,18 @@ describe('the managed account deny file (D-6202)', () => {
     expect(anyRule('Read', { file_path: '~/ccrc-backups/20261115-120000/coord.db' })).toBeUndefined();
   });
 
+  it('the list refuses a Read and a write of the door process\'s directory, which holds its launch nonce (Overlord W1 door process A1, ruled F4)', () => {
+    expect(ACCOUNT_SECRET_PATHS).toContain('~/.cc-sessions/.door/**');
+    expect(ACCOUNT_WRITE_DIRS).toContain('~/.cc-sessions/.door/**');
+    for (const f of ['~/.cc-sessions/.door/lane-a-project-a/mcp.json', '~/.cc-sessions/.door/lane-a-project-a/delta']) {
+      expect(anyRule('Read', { file_path: f }), f).toBe('Read(~/.cc-sessions/.door/**)');
+      for (const tool of ['Edit', 'Write', 'MultiEdit']) expect(anyRule(tool, { file_path: f }), `${tool} ${f}`).toBe('Edit(~/.cc-sessions/.door/**)');
+    }
+    // the registry's own fields, read around a swap, stay open
+    expect(anyRule('Read', { file_path: '~/.cc-sessions/lane-a-project-a.wrapper' })).toBeUndefined();
+    expect(anyRule('Read', { file_path: '~/.cc-sessions/.doorstep' })).toBeUndefined();
+  });
+
   it('the list refuses a write of the roster and its mirror and a direct run of the verb script, and never a read of them (F2)', () => {
     expect(ACCOUNT_ROSTER_FILES).toEqual(['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh']);
     for (const f of ACCOUNT_ROSTER_FILES) {

@@ -426,8 +426,8 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     // The fourth is the library the body pins and loads (D-6913): a release without it installs a ccd that refuses every start.
     // The fifth and sixth are the docs redactor the installer publishes beside the body and pins (D-7077, OA-C11 (a)).
     // The seventh is the body's second library, the train proof (D-7463), pinned and loaded as the fourth is.
-    // The eighth is its third, the delegation lease (wave 5), likewise, and the ninth its fourth, the pool set (the Overlord W1), and the tenth its fifth, the long-lived arms.
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh'] as const;
+    // The eighth is its third, the delegation lease (wave 5), likewise, and the ninth its fourth, the pool set (the Overlord W1), and the tenth its fifth, the long-lived arms, and the eleventh its sixth, the door process.
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh'] as const;
     const home = mkTmp('build-release-ccd-pair-');
     const root = fixtureRepo(home, {
       tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])),
@@ -457,7 +457,7 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
     const real = (rel: string): string => readFileSync(join(REPO, rel), 'utf8');
     // With the libraries the body pins (D-6913, D-7463) and the docs redactor's two files (D-7077): the installer renders their digests
     // into the body, then stamps it.
-    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh'] as const;
+    const pair = ['ccd/ccd', 'ccd/ccd-entry.py', 'ccd/ccd-entry-install.py', 'ccd/lib/disk-retention.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs', 'ccd/lib/train-proof.sh', 'ccd/lib/delegation-lease.sh', 'ccd/lib/pool-set.sh', 'ccd/lib/long-lived.sh', 'ccd/lib/door.sh'] as const;
     const home = mkTmp('build-release-ccd-stamp-');
     const root = fixtureRepo(home, { tag: 'v1.2.3', files: Object.fromEntries(pair.map((rel) => [rel, real(rel)])) });
     const out = join(home, 'out');
@@ -481,6 +481,8 @@ describe('build-release.sh: the tagged run — the matched set, checksummed', ()
       `\n__CCD_LIB_POOLSET_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[8]))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the long-lived library it shipped with').toContain(
       `\n__CCD_LIB_LONGLIVED_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[9]))).digest('hex')}\n`);
+    expect(installed, 'the installed body pins the door library it shipped with').toContain(
+      `\n__CCD_LIB_DOOR_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[10]))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the redact.mjs it shipped with').toContain(
       `\n__CCD_REDACT_SHA256=${createHash('sha256').update(readFileSync(join(dest, pair[4]))).digest('hex')}\n`);
     expect(installed, 'the installed body pins the redact-cli.mjs it shipped with').toContain(
