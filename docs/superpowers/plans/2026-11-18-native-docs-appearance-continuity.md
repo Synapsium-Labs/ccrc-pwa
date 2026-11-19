@@ -478,6 +478,9 @@ Every other mapped pair on `bg`, `surface` and `surface2`, and every `syn-*` on 
 | Mermaid (X4): a mark inside a commit (`surface2` or `bg`) on its commit's series colour, `git0` to `git7` (corrected in X4 fix round 1, review 2694 F4) | 4.57 (`surface2` on `accent`) | Phosphor Daylight | 3 |
 | Mermaid (X4 fix round 1): a sequence stick half arrowhead, `text-muted` by the stylesheet, on `surface` | 6.74 | Solarized Light | 3 |
 | Mermaid (X4 fix round 1): the same on `surface2` | 5.54 | Catppuccin Mocha | 3 |
+| Mermaid (X4 fix round 2): a definition ring, `focus` by the stylesheet, on `surface` (the focused node's only focus indicator) | 5.19 | GitHub Light | 3 |
+| Mermaid (X4 fix round 2): the same on `surface2` | 4.57 | Phosphor Daylight | 3 |
+| Mermaid (X4 fix round 2): a `click` tooltip's `text` on `surface`, at Mermaid's 0.9 opacity over any slot colour | 6.30 | Solarized Light | 4.5 |
 
 What the review measured at the old rules, and what changed:
 
