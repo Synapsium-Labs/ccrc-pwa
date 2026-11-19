@@ -88,6 +88,15 @@ describe('ccd skill-ensure', () => {
     expect(fs.existsSync(path.join(home, 'ccrc-backups'))).toBe(false);
   });
 
+  it('re-reads the roster FILE: an account removed after this ccd started is refused at exit 2, nothing written', () => {
+    // The startup snapshot still maps the id to a config dir; only the file read at the verb knows it is gone.
+    const out = h.sh('sed -i "s/claude-a/claude-z/g" "$CCRC_ACCOUNTS_SH"; ( cmd_skill_ensure --wrapper claude-a ) 2>&1; echo "rc=$?"');
+    expect(out).toContain('unknown-account: claude-a');
+    expect(out.split('\n').pop()).toBe('rc=2');
+    expect(out).not.toContain('"result"');
+    expect(fs.existsSync(path.join(home, '.claude-a', 'skills'))).toBe(false);
+  });
+
   it('answers failed with the installer refusal when a source is missing', () => {
     fs.rmSync(path.join(reg, 'coordinator-skill'), { recursive: true });
     const r = ccd(['--wrapper', 'claude-a']);

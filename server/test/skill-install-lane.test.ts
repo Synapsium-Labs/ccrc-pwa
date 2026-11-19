@@ -3,6 +3,9 @@
 // leaves alone. The dispatch's own half (it runs no install, so the serialiser never waits on one) is pinned in
 // `dispatch-skillstate.test.ts`.
 import { describe, it, expect } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+import { runMutants, type SuiteCase } from './sim/mutate.js';
 import {
   SKILL_INSTALL_OUTCOMES, SKILL_INSTALL_WINDOW_MS, skillInstallDue, skillInstallOutcomeOf, type SkillInstallRun,
 } from '../src/coord/skillInstall.js';
@@ -10,6 +13,8 @@ import { SKILL_INSTALL_PER_PASS, skillInstallPass, type SkillInstallLaneDeps } f
 import type { CcdArgv } from '../src/ccdargv.js';
 import type { CcdResult } from '../src/coord/ports.js';
 import type { RunState } from '../../shared/api.js';
+
+type SkillInstallModule = typeof import('../src/coord/skillInstall.js');
 
 const NOW = 1_790_000_000_000;
 const work: SkillInstallRun = { id: 7, kind: 'work', sessionId: 'demo-w1' };
@@ -168,4 +173,45 @@ describe('skillInstallPass', () => {
     expect(await skillInstallPass(deps)).toEqual([]);
     expect(l.calls).toEqual([]);
   });
+});
+
+// The L1 deciders' mutants, run here rather than in `sim/mutation-floors.json` (that file is held by another run while this
+// wave builds; departure `mutants-in-the-lane-test`). Every mutant must die against the cases below.
+describe('skillInstall.ts mutants (runMutants)', () => {
+  const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
+  const suite = (m: SkillInstallModule): Record<string, SuiteCase> => ({
+    due: () => { expect(m.skillInstallDue(work, [absentAt()], NOW)).toBe(true); },
+    review: () => { expect(m.skillInstallDue({ ...work, kind: 'review' }, [absentAt()], NOW)).toBe(false); },
+    unbound: () => { expect(m.skillInstallDue({ ...work, sessionId: null }, [absentAt()], NOW)).toBe(false); },
+    present: () => { expect(m.skillInstallDue(work, [ev(NOW - 1_000, 'skill-preflight:present')], NOW)).toBe(false); },
+    newest: () => { expect(m.skillInstallDue(work, [absentAt(NOW - 3_000), ev(NOW - 1_000, 'skill-preflight:present')], NOW)).toBe(false); },
+    installedAfter: () => { expect(m.skillInstallDue(work, [absentAt(NOW - 3_000), ev(NOW - 1_000, 'skill-install:failed')], NOW)).toBe(false); },
+    installedBefore: () => { expect(m.skillInstallDue(work, [ev(NOW - 3_000, 'skill-install:installed'), absentAt()], NOW)).toBe(true); },
+    edge: () => { expect(m.skillInstallDue(work, [absentAt(NOW - m.SKILL_INSTALL_WINDOW_MS)], NOW)).toBe(true); },
+    stale: () => { expect(m.skillInstallDue(work, [absentAt(NOW - m.SKILL_INSTALL_WINDOW_MS - 1)], NOW)).toBe(false); },
+    word: () => { expect(m.skillInstallOutcomeOf({ ok: true, stdout: 'x\n{"result":"converged"}\n' })).toBe('converged'); },
+    exit: () => { expect(m.skillInstallOutcomeOf({ ok: false, stdout: '{"result":"installed"}' })).toBe('failed'); },
+    lastLine: () => { expect(m.skillInstallOutcomeOf({ ok: true, stdout: '{"result":"installed"}\ntrailing' })).toBe('failed'); },
+    otherWord: () => { expect(m.skillInstallOutcomeOf({ ok: true, stdout: '{"result":"unsupported"}' })).toBe('failed'); },
+  });
+  it('every mutant is killed', async () => {
+    const report = await runMutants<SkillInstallModule>({
+      modulePath: path.join(ROOT, 'server/src/coord/skillInstall.ts'),
+      mutants: [
+        { id: 'S1 any kind', old: "if (run.kind !== 'work' || run.sessionId === null) return false;", new: 'if (run.sessionId === null) return false;' },
+        { id: 'S2 no session', old: "if (run.kind !== 'work' || run.sessionId === null) return false;", new: "if (run.kind !== 'work') return false;" },
+        { id: 'S3 any measurement', old: 'if (row.detail !== `${SKILL_PREFLIGHT_EVENT}absent`) return false;', new: '' },
+        { id: 'S4 window edge', old: 'if (now - row.at > SKILL_INSTALL_WINDOW_MS) return false;', new: 'if (now - row.at >= SKILL_INSTALL_WINDOW_MS) return false;' },
+        { id: 'S5 no window', old: 'if (now - row.at > SKILL_INSTALL_WINDOW_MS) return false;', new: '' },
+        { id: 'S6 any install', old: 'return !events.slice(preflight + 1).some(', new: 'return !events.some(' },
+        { id: 'S7 oldest measurement', old: 'for (let i = events.length - 1; i >= 0; i -= 1) {', new: 'for (let i = 0; i < events.length; i += 1) {' },
+        { id: 'O1 exit ignored', old: "if (res === null || !res.ok) return 'failed';", new: "if (res === null) return 'failed';" },
+        { id: 'O2 first line', old: ".filter((l) => l !== '').pop() ?? '';", new: ".filter((l) => l !== '').shift() ?? '';" },
+        { id: 'O3 any word', old: "return word === 'installed' || word === 'converged' ? word : 'failed';", new: "return typeof word === 'string' ? (word as 'installed') : 'failed';" },
+      ],
+      suite,
+    });
+    expect(report.results.filter((r) => r.status !== 'killed')).toEqual([]);
+    expect(report.score).toBe(1);
+  }, 60_000);
 });
