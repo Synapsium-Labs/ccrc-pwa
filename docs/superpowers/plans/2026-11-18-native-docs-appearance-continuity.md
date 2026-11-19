@@ -860,6 +860,10 @@ Choices fix round 2 made:
 - **The tooltip's opacity stays Mermaid's,** because Mermaid fades it to 0 to hide it; a forced opacity would show it always. Its contrast is measured at 0.9.
 - **`labPolicy.ts` is on the `/frame` allow-list,** because it imports `./frame` today, for the reader lab.
 
+#### Review 2732 (round 3 of 3, at `40b31c959`)
+
+The coordinator accepted X4 at the review cap, on the condition that the reviewer's replacement sentences land verbatim, with no further fix round. Each landed as its own commit: F1, the sequence-label halo (spec §10, "Crossings, and the hosted halo"; the pie stays outside the floor); F2, the cues' resolved inline colours and the hosted rules' `svg` mark, which reaches the full-screen copy (spec §10; test 4's recorded difference deleted); F3, this plan's cues choice; F4, the clickable gantt label under `strict`; F5, the superseding-share guard and "within the share"; F6, the correction's double equality; F7, test 9's drive over `OP_KEYS`; M1, the bullet names; M2, the shares table's lead; M3, the words `x1` and `x2`, the line's grammar and asset detection by sha256; R3 and R7, the main-line commit that carries 1.1.0 (Task 1 Step 2a); R4, the label floors on the shapes behind them; and X2's share, set by the coordinator on 2026-11-19 at 1 166 336 characters total and 72 704 frame. With the coordinator's leave, test 5's drawn-pairs row was brought into line with the halo paragraph.
+
 #### Deviations
 
 None. The reserve block, 8774 and 8775, is unused: every change here carries out a coordinator ruling or a reviewer's fix direction within the completion design, the rich-docs spec and the operator's rulings.
