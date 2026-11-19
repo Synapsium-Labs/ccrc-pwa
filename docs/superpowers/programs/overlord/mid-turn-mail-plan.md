@@ -13,7 +13,7 @@ programme ledger and mints any numbers. No D-number is defined here.
 - **No growth waiver.** Measured with the growth check's own counter at `67ee91d71`: `shared/api.ts` has 27 free code
   lines under its cap; PR 1 uses 3 and PR 2 another 3 (less what #3056 takes if it lands first). Every listed file
   stays under 40 net code lines per pull request (plan Table 5).
-- **The plan's own calls** (plan §4, P1 to P14): among them, the urgent column stores the sender's role; an unreadable
+- **The plan's own calls** (plan §4, P1 to P15): among them, the urgent column stores the sender's role; an unreadable
   fact in the sender rule answers `urgent-unmeasured`, never `urgent-not-allowed`; the hook's arms sit in one block
   after the last deny arm, keeping every ordering rule of spec §3.5; two arming markers, E's first and alone; the
   shadow log keeps one line per hold and rotates, and logs `stop` lines so the B trigger reads one log; the marker's
@@ -22,6 +22,11 @@ programme ledger and mints any numbers. No D-number is defined here.
   `MAIL_REJECT_CODES` beside `key-conflict` (#3056), named once in the coordinator skill's references;
   `MERGE_STRIP_JQ` stays byte-identical and the jq module computes the over-cap kinds; the ack refusal ships in its own
   pull request (PR 6); every other finding is fixed as the report directs (plan Table 8b).
+- **Fix round 2 (review 2737, the coordinator's rulings of 2026-11-19):** `urgent` is part of a mail's identity once
+  #3056 is on `main` (a differing keyed retry is `key-conflict`, a matching one echoes the stored role); the jq module
+  returns text and the hook wraps it with its existing builders; the mutation practice is an in-place edit with a
+  sha-checked restore, or a `runMutants` set for an L1 decider. Every pin of the two route field lists is named in
+  PR 3's task; the seen key carries the outcome; the minors are fixed as listed (plan Table 8c).
 - **Roll order:** server first for the wave that ships the writer and the arms (the coordinator's ruling).
 
 ## 1. Findings for the ledger
@@ -32,7 +37,8 @@ programme ledger and mints any numbers. No D-number is defined here.
 | `precompact-empty-clear` | An observation, possibly no deviation: `precompact` has no empty-value clear (an empty value fails validation), and the spec places `mailhold`'s clear "beside `precompact`'s siblings", which is where the plan puts it. | `ccd/ccd#cmd_route` |
 | `review-report-reclaimed` | The round-3 review report the brief named was reclaimed with its reviewer's clips while this wave read it. The coordinator sent what it kept (mail of 2026-11-19), and plan Table 8 maps each finding to a task. | the brief |
 | `last-deny-arm` | The spec's E ordering ("before the landing advisory") and A's ("after the deny arms") are met by one block after the last deny arm, which is the fan-out routing deny today. | `ccd/session-hook.sh` |
-| `ack-substitution-stricter` | The subagent ack refusal refuses `mail inbox` inside `$( )`, though its standard output is a pipe there and `cmd_inbox` only shows: the matcher does not decide a substitution, so it fails closed. | `ccd/ccrc-api` (`cmd_inbox`), plan Task 6.1 |
+| `ack-substitution-stricter` | The subagent ack refusal refuses `mail inbox` inside `$( )`, though its standard output is a pipe there and `cmd_inbox` only shows: the matcher does not decide a substitution, so it fails closed. Reading the raw text, it also refuses a form quoted inside another command, such as an `echo` of it. | `ccd/ccrc-api` (`cmd_inbox`), plan Task 6.1 |
+| `overcap-kinds-in-module` | The jq module computes the over-cap gated kinds from the raw payload, where spec §3.5 put them in `MERGE_STRIP_JQ`'s over-cap answer; `MERGE_STRIP_JQ` stays byte-identical (the coordinator's ruling, fix round 1). | `ccd/session-hook.sh#MERGE_STRIP_JQ`, plan P6 |
 
 ## 2. Departures from the brief and the spec
 
@@ -42,6 +48,9 @@ programme ledger and mints any numbers. No D-number is defined here.
 - The spec rules the lane row's cadence (`derivedFrom: MAIL_SWEEP_MS`) and that it carries a `staleAfterMs`; only the
   60 s value, under the 120 s renewal margin, is the plan's.
 - The subagent ack refusal is stricter than spec §3.5 for `$( )` (`ack-substitution-stricter`, above).
+- The over-cap kinds are computed in the module, not in `MERGE_STRIP_JQ` (`overcap-kinds-in-module`, above).
+- `mutation-run.py` cannot mutate bash, jq or TypeScript; the plan states the practice the coordinator ruled instead.
+  Merged plan #3036 carries the same runner sentence, which the coordinator takes to its ledger carry.
 
 ## 3. Proposed follow-ups (for the coordinator to file)
 
