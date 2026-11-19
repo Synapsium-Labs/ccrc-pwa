@@ -20,9 +20,15 @@ describe('the plan vocabulary has one home (D-8181)', () => {
   it('the plan lists, bounds and reserved words are declared once, in shared/plan.ts', () => {
     for (const c of ['EPIC_STATES', 'CHECKPOINT_KINDS', 'CHECKPOINT_STATES', 'TICKET_KINDS', 'TICKET_SOURCES', 'TICKET_STATES',
       'PLAN_END_OUTCOMES', 'BINDING_KINDS', 'BINDING_STATES', 'MIGRATION_STATES', 'INBOUND_STATES', 'HIERARCHY_STATES', 'PLAN_BOUNDS',
-      'UPKEEP_EPIC_KEY', 'UPKEEP_EPIC_TITLE', 'PLAN_REFUSALS', 'TRIAGE_DECISIONS', 'PHASE_REF_KINDS', 'PHASE_REF_OPS']) {
+      'UPKEEP_EPIC_KEY', 'UPKEEP_EPIC_TITLE', 'PLAN_REFUSALS', 'TRIAGE_DECISIONS', 'PHASE_REF_KINDS', 'PHASE_REF_OPS',
+      'WORK_STATUSES', 'WORK_GROUPS']) {
       expect(holders(decl(c)), c).toEqual(['shared/plan.ts']);
     }
+  });
+
+  it('the work map\'s status-to-group table is declared once, beside its one decider (programme work map WM2, D-8779)', () => {
+    expect(holders(decl('WORK_STATUS_GROUP'))).toEqual(['server/src/coord/workMap.ts']);
+    expect(holders(decl('workMapOf'))).toEqual(['server/src/coord/workMap.ts']);
   });
 
   it('the adopted fingerprint is spelled once, in the plan store (D-8183)', () => {

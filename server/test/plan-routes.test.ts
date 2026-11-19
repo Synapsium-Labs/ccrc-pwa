@@ -1,6 +1,6 @@
 // D-8181: the plan verbs' routes (`coord/planRoutes.ts`) over a real coord.db, on a bare Fastify instance: the box token, the
 // identity pair, attribution, the caller check, the plan's own refusals and the shared mutex.
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import Fastify, { type FastifyInstance } from 'fastify';
@@ -10,7 +10,8 @@ import { planStorePort, type PlanStorePort } from '../src/coord/planStore.js';
 import { registerPlanRoutes, type PlanRouteOpts } from '../src/coord/planRoutes.js';
 import { answerMasked } from '../src/server.js';
 import type { GateDecision } from '../src/auth/gate.js';
-import type { PlanView } from '../../shared/plan.js';
+import type { PlanView, WorkAnswer, WorkMapView } from '../../shared/plan.js';
+import type { RunVerdict } from '../src/coord/runVerdicts.js';
 import { setLinking } from '../src/coord/linkingStore.js';
 import { mkTmp } from './tmpHelpers.js';
 import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
@@ -25,6 +26,8 @@ let runs: Record<string, { program: string; epicId: number | null }>;
 let lock: Promise<unknown>;
 let session: GateDecision;
 let authEnabled: boolean;
+/** The run verdicts reader the plan read's work map reads (WM2); empty reads `not-read`. */
+let verdicts: Map<number, RunVerdict>;
 
 const NO: GateDecision = { allow: false, verdict: 'no-session', reason: 'refused', device: null };
 const serial: PlanRouteOpts['serial'] = (fn) => { const next = lock.then(fn, fn); lock = next.catch(() => undefined); return next; };
@@ -34,7 +37,7 @@ const build = async (): Promise<FastifyInstance> => {
   registerPlanRoutes(a, {
     coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS,
     sessionAuth: () => session, authEnabled, readLinearStore: async () => ({ kind: 'unreadable', code: 'ENOENT' }),
-    runOfSession: (id) => runs[id] ?? null, now: () => 1_000,
+    runOfSession: (id) => runs[id] ?? null, now: () => 1_000, runVerdicts: { all: () => verdicts },
   });
   await a.ready();
   return a;
@@ -44,7 +47,7 @@ beforeEach(async () => {
   dir = mkTmp('ccrc-plan-routes-');
   coord = new CoordStore(openCoordDb(path.join(dir, 'coord.db')));
   plan = planStorePort(coord.db);
-  runs = {}; lock = Promise.resolve(); session = NO; authEnabled = false;
+  runs = {}; lock = Promise.resolve(); session = NO; authEnabled = false; verdicts = new Map();
   app = await build();
 });
 afterEach(async () => { await app.close(); coord.db.close(); rmSync(dir, { recursive: true, force: true }); });
@@ -378,5 +381,78 @@ describe('plan show', () => {
   it('an unplanned programme answers planned false', async () => {
     const res = await app.inject({ method: 'GET', url: '/api/programmes/prog-z/plan' });
     expect(view(res)).toMatchObject({ program: 'prog-z', planned: false, epics: [] });
+  });
+});
+
+// Programme work map WM2 (D-8779; spec 2026-11-16 §5.1 and §7, D19): the plan read carries `work`, the map `workMapOf` decides
+// over every read behind it; a failing read answers its word in `work` and still serves `plan` (F15).
+describe('plan show carries the work map', () => {
+  const PLAN = { home: 'project-a', epics: [epic('e1', [1], { tickets: [{ key: 't1', kind: 'work', title: 't' }, { key: 't2', kind: 'work', title: 'u' }] }), epic('e2', [2])] };
+  const read = () => app.inject({ method: 'GET', url: '/api/programmes/prog-a/plan' });
+  const workOf = (res: { json: () => unknown }): WorkAnswer => (res.json() as { work: WorkAnswer }).work;
+  const mapOf = (res: { json: () => unknown }): WorkMapView => {
+    const w = workOf(res);
+    if ('unreadable' in w) throw new Error(`work unreadable: ${w.unreadable}`);
+    return w;
+  };
+  const holdT1 = (): number => {
+    const e1 = plan.planOf('prog-a').epics[0]!;
+    const r = coord.openRun({ program: 'prog-a', title: 'w', project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a',
+      ticket: { kind: 'existing', id: e1.tickets[0]!.id, epicId: e1.id, reproject: null } });
+    if (!('id' in r)) throw new Error('open refused');
+    return r.id;
+  };
+
+  it('the plan read carries work beside plan', async () => {
+    await put(PLAN);
+    const runId = holdT1();
+    expect(coord.advance(runId, 'dispatched', 'test').ok).toBe(true);
+    const res = await read();
+    expect(res.statusCode).toBe(200);
+    expect(view(res).epics.map((e) => e.key)).toEqual(['e1', 'e2']);
+    const w = mapOf(res);
+    expect([w.source, w.verdicts, w.items.map((i) => [i.key, i.status, i.runId])]).toEqual(['plan', 'not-read', [['t1', 'working', runId], ['t2', 'not-started', null]]]);
+    expect(w.epics.map((e) => [e.key, e.done, e.total])).toEqual([['e1', 0, 2], ['e2', 0, 0]]);
+    // the run names its ticket through the store read's join, so it is no run from before the plan (D12)
+    expect(w.beforePlan).toBe(null);
+  });
+
+  it('a stuck verdict from the reader reads stuck', async () => {
+    await put(PLAN);
+    const runId = holdT1();
+    expect(coord.advance(runId, 'dispatched', 'test').ok).toBe(true);
+    verdicts = new Map([[runId, { stuck: { reason: 'silent', since: 1 } as unknown as RunVerdict['stuck'], blockedBy: null, coordinatorGone: false }]]);
+    const w = mapOf(await read());
+    expect([w.verdicts, w.items[0]!.status]).toEqual(['read', 'stuck']);
+  });
+
+  it('a run that finished its ticket is its evidence: the ticket reads done', async () => {
+    await put(PLAN);
+    const runId = holdT1();
+    for (const to of ['dispatched', 'closing', 'done'] as const) expect(coord.advance(runId, to, 'test').ok, to).toBe(true);
+    const w = mapOf(await read());
+    expect(w.items.map((i) => [i.key, i.status])).toEqual([['t1', 'done'], ['t2', 'not-started']]);
+    coord.db.prepare("UPDATE runs SET state = 'failed' WHERE id = ?").run(runId);
+    const later = mapOf(await read());
+    expect([later.items[0]!.status, later.items[0]!.reason]).toEqual(['done-unverified', `run ${runId} is failed, not done`]);
+  });
+
+  it('a programme with no plan reads the runs fallback', async () => {
+    const r = coord.openRun({ program: 'prog-a', title: 'Wave one', project: 'project-a', wave: 1, waveOf: 2, claimedBy: 'coord-a', homeProject: 'project-a' });
+    if (!('id' in r)) throw new Error('open refused');
+    const w = mapOf(await read());
+    expect([w.source, w.runs?.items.map((i) => [i.runId, i.status, i.title])]).toEqual(['runs', [[r.id, 'queued', 'Wave one']]]);
+  });
+
+  it('a failing read answers work unreadable and still serves plan', async () => {
+    await put(PLAN);
+    const failed = vi.spyOn(coord, 'programmeWorkRuns').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'x' });
+    const res = await read();
+    expect([res.statusCode, view(res).epics.length, workOf(res)]).toEqual([200, 2, { unreadable: 'run-unreadable' }]);
+    failed.mockImplementation(() => { throw new Error('disk'); });
+    const thrown = await read();
+    expect([thrown.statusCode, view(thrown).epics.length, workOf(thrown)]).toEqual([200, 2, { unreadable: 'read-failed' }]);
+    failed.mockRestore();
+    expect('unreadable' in workOf(await read())).toBe(false);
   });
 });
