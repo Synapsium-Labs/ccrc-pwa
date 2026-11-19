@@ -280,7 +280,7 @@ and, on duckdns only, running `systemctl --user start ccrc-ddns.service` once be
 - Modify: `ccd/ccrc-doctor-checks` (`_check_name` splits `CCRC_DDNS_DOMAIN` on commas and resolves each full host with `getent hosts`; new `_check_artifacts`)
 - Test: `server/test/ccrc-doctor-artifacts.test.ts`
 
-- [ ] **Step 1: Write the failing tests:** `name` with a three-host list resolves each and names the one that fails, and a one-host value behaves exactly as today; no keys is `skip` with its reason; partial keys `FAIL` naming the missing key; a site-rule breach `FAIL`; the Caddyfile without the second block `FAIL` with the remedy `ccrc expose artifacts`; all present and the loopback port answering the fixed page `ok`; the ip arm `skip`.
+- [ ] **Step 1: Write the failing tests:** `name` with a three-host list resolves each and names the one that fails, and a one-host value behaves exactly as today; no keys is `skip` with its reason; partial keys `FAIL` naming the missing key; a site-rule breach `FAIL`; the Caddyfile without the second block `FAIL` with the remedy `ccrc expose artifacts`; `doctor: the loopback probe` (all present, and `GET /` on `127.0.0.1:<port>` sent with `Host: <artifact-host>`, because the host fence answers 421 to any other, answering 404 with the fixed sentence of `ARTIFACT_NOT_FOUND_BODY`: `ok`; a 421, a 200, a refused connection or any other body: `FAIL` naming what it got); the ip arm `skip`.
 - [ ] **Step 2: Run**; expect FAIL. **Step 3: Implement.** **Step 4: Run**; expect PASS. **Step 5: Commit** `feat(ccrc): doctor checks the artifact names (X5 A4.2)`.
 
 ## Wave A5: the console side
