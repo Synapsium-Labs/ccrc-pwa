@@ -730,7 +730,10 @@ describe('the scanner is looking at something', () => {
     // `continuity/quizRoutes.ts`, a routes file of its own: `POST /api/continuity/quiz-runs`, one box-token machine lane IN
     // EXEMPT, and `POST /api/continuity/quiz-runs/:id/rule`, session-gated (the account gate's step-up) and NOT EXEMPT: the HTTP
     // half 276 -> 278, the gated count 178 -> 179, the exempt-HTTP count 98 -> 99.
-    expect(ROUTES.length).toBe(281);
+    // 282 since the act-key claim (Overlord W1 door process A1), merged after the quiz record path, in `continuity/routes.ts`:
+    // `POST /api/sessions/:id/act-key`, one box-token machine lane IN EXEMPT: the HTTP half 278 -> 279, the gated count
+    // stays 179, the exempt-HTTP count 99 -> 100.
+    expect(ROUTES.length).toBe(282);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
     // …and the three partitions add up: the websockets plus the HTTP half.
@@ -914,7 +917,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 281 scanned + the static wildcard when the bundle is built.
+    // 282 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1093,6 +1096,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/runs/:id/items',
       'POST /api/runs/:id/review-rounds',
       'POST /api/runs/:id/route',
+      'POST /api/sessions/:id/act-key',
       'POST /api/sessions/:id/handover',
       'POST /api/sessions/:id/notes',
       'POST /api/sessions/:id/probe',
@@ -1130,7 +1134,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-one with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1668,7 +1672,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 278 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 279 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1732,7 +1736,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 278 HTTP routes, not the 99 exempt.
+          //    is not itself flag-aware — the assertion that covers all 279 HTTP routes, not the 100 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

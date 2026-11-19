@@ -33,8 +33,9 @@ the first copy is acked, and it does not apply to run mail at all. `ccd/ccrc-api
 
 ## 3. The migration slot
 
-Main stood at 102 entries when this was cut, so the entry is 103 by position. Door A1 (#3035) and the Linear hierarchy
-follow-up (#3021) are promised 103 and 104, so this renumbers at the landing merge under the coordinator's standing license.
+Main stood at 102 entries when this was cut. Door A1 (#3035) then landed 103, so after one absorption (the branch
+conflicted in the slot) the entry is 104 by position. The Linear hierarchy follow-up (#3021) is promised 104 as well, so
+whichever lands second renumbers at its landing merge, under the coordinator's standing license.
 
 ## 4. Tests and mutation measurement
 

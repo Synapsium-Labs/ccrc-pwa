@@ -147,6 +147,17 @@ describe('the start report: what is sent', () => {
     expect(bodies().map((b) => [b['model'], b['rowIncarnation']])).toEqual([[null, null], [null, null]]);
   });
 
+  it('the launch nonce\'s sha256 rides the report only when the environment holds one in its shape (Overlord W1 door process A1)', () => {
+    const h = '0123456789abcdef'.repeat(4);
+    hook(start('startup'), { CCRC_DOOR_NONCE_SHA256: h });
+    hook(start('clear'));
+    for (const bad of [h.toUpperCase(), h.slice(1), `${h}0`, `${h}\n`, '']) hook(start('resume'), { CCRC_DOOR_NONCE_SHA256: bad });
+    const b = bodies();
+    expect(b).toHaveLength(7);
+    expect(b[0]!['doorNonceSha256']).toBe(h);
+    for (const x of b.slice(1)) expect(x, JSON.stringify(x)).not.toHaveProperty('doorNonceSha256');
+  });
+
   it('an empty source is reported as other', () => {
     hook(start(''));
     expect(bodies().map((b) => b['source'])).toEqual(['other']);

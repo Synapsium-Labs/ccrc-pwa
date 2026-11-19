@@ -37,6 +37,7 @@ import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
+import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
 import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { BINOMIAL_BOUND_MUTANT_SETS } from './binomialBoundSets.js';
@@ -208,6 +209,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
+  ...ACT_KEY_MUTANT_SETS,
   ...DESIGNATION_MUTANT_SETS,
   ...BINOMIAL_BOUND_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,

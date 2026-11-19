@@ -3865,6 +3865,26 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 103: user_version 102 -> 103 ──────────────────────────────────────────
+  // The door process's act key (Overlord spec §3.3.11 H12 "The fence", Table 11.1a's row `continuity_generations`; W1, plan
+  // `w1-door-process.md` Task 1). `continuity_act_keys`, one row per generation, ever: the launch nonce's sha256 (UNIQUE, so a
+  // nonce binds at most one generation) and the key's sha256, never the key. THREE WRITERS, ONE ROW, in
+  // `server/src/continuity/actKeyStore.ts`: `issueActKey` (the row), `noteRefusedClaim` (`claimsRefused`, `lastRefusedAt`) and
+  // `advanceActCounter` (`counter`, only upward). `continuity_starts.doorNonceSha256`: the hash the spawn bound to a start,
+  // written by `insertStart` alone; null for an older hook's start, which binds no nonce. A NEW TABLE and a NULLABLE COLUMN: an
+  // older build at this `user_version` takes rule 3, never names the table, and its `insertStart` names its columns, so the
+  // column reads null. The ladder (#2994) landed 99, the quiz record (#2991) 100,
+  // forecasts B (#3003) 101 and approvals PR 0 (#3045) 102 first, so this is 103 by position (the coordinator's brief,
+  // 2026-11-18).
+  // RE-MEASURE the slot before the PR and before merge (it must print 102 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_act_keys (generationId INTEGER PRIMARY KEY, nonceSha256 TEXT NOT NULL UNIQUE, keySha256 TEXT NOT NULL,
+    issuedAt INTEGER NOT NULL, counter INTEGER NOT NULL DEFAULT 0, claimsRefused INTEGER NOT NULL DEFAULT 0, lastRefusedAt INTEGER);
+  ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT;
+  `,
+
+  // ── 104: user_version 103 -> 104 ──────────────────────────────────────────
   // The mail idempotency key (Overlord wave 164, note `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
   // `mail.clientKey`: the optional key a sender named on `POST /api/mail`, so a retried send answers the mail it already
   // made (`coord/mailKey.ts#mailKeyVerdict`). `mail_client_key_once` makes "one mail per (`fromId`, `clientKey`)" a fact of the
@@ -3873,8 +3893,8 @@ export const MIGRATIONS: readonly string[] = [
   // ONE NULLABLE COLUMN ON AN EXISTING TABLE AND ONE PARTIAL INDEX, nothing else: an older build opening a file at this
   // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing); its INSERT names its columns and never this
   // one, so a row it writes carries no key, and the index admits any number of those. The slot is the next free one by
-  // position on main today; door A1 (#3035) and #3021 are promised 103 and 104, so this renumbers at the landing merge (the
-  // coordinator's standing license). RE-MEASURE the slot before merge (it must print 102 before this entry is counted):
+  // position: door A1 (#3035) landed 103, so this is 104; #3021 is promised 104 as well, and whoever lands second renumbers
+  // (the coordinator's standing license). RE-MEASURE the slot before merge (it must print 103 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

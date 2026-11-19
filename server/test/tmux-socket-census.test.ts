@@ -151,6 +151,7 @@ describe('D-8270 — the lookup is one block, the same bytes in every script tha
     'ccd/lib/delegation-lease.sh': 'ccd/ccd',
     'ccd/lib/pool-set.sh': 'ccd/ccd',
     'ccd/lib/long-lived.sh': 'ccd/ccd',
+    'ccd/lib/door.sh': 'ccd/ccd',
     'ccd/ccrc-doctor-checks': 'ccd/ccrc',
   };
   const canonical = lookupBlock(read('ccd/ccd'));
