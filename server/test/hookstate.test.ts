@@ -808,3 +808,46 @@ describe('aliveAt beside a carried done (D-5232)', () => {
     expect(await readHookStateMeasured(localIO, reg, ID, UUID, NOW)).toEqual({ ok: false, reason: 'no-state' });
   });
 });
+
+describe('the per-agent approval envelopes, `approvals` (approvals plan 2026-11-18, Task 2.1): this reader is their one reader', () => {
+  const entry = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ agentId: 'a0000000000000001', tool: 'Bash', summary: 'rm -rf build', route: 'sent', at: NOW - 1_000, ...o });
+  const read = async (approvals: unknown) => {
+    const reg = mkTmp('ccrc-hookstate-');
+    seed(reg, ID, base(approvals === undefined ? {} : { approvals }));
+    return readHookState(localIO, reg, ID, UUID, NOW);
+  };
+
+  it('whole entries are read as written, in order; an entry with no route word carries none', async () => {
+    const second = entry({ agentId: 'b0000000000000002', summary: 'git clean -fdx', at: NOW - 500 });
+    const bare = entry({ agentId: 'c0000000000000003', route: undefined });
+    delete bare['route'];
+    expect((await read([entry(), second, bare]))?.approvals).toEqual([entry(), second, bare]);
+  });
+  it('no field, an empty list, or a list that is not an array: no `approvals`, and the file still reads', async () => {
+    for (const v of [undefined, [], 'rm -rf build', { agentId: 'a' }, 7, null]) {
+      const out = await read(v);
+      expect(out?.state, JSON.stringify(v)).toBe('working');
+      expect(out?.approvals, JSON.stringify(v)).toBeUndefined();
+    }
+  });
+  it('an entry that does not read whole is dropped; the rest stand, and a bad list never condemns the file', async () => {
+    const bad = [
+      entry({ agentId: '' }), entry({ agentId: 'has space' }), entry({ agentId: 'x'.repeat(65) }), entry({ agentId: 7 }),
+      entry({ tool: '' }), entry({ tool: 'x'.repeat(129) }), entry({ tool: null }),
+      entry({ summary: 'x'.repeat(201) }), entry({ summary: 3 }),
+      entry({ at: -1 }), entry({ at: 'now' }), entry({ at: Number.POSITIVE_INFINITY }),
+      entry({ route: '' }), entry({ route: 'x'.repeat(65) }), entry({ route: 5 }),
+      'rm -rf build', null, [entry()],
+    ];
+    const out = await read([...bad, entry()]);
+    expect(out?.state).toBe('working');
+    expect(out?.approvals).toEqual([entry()]);
+    expect((await read(bad))?.approvals).toBeUndefined();
+  });
+  it('the bounds are the hook\'s: a 64-character id, a 200-character summary, an empty summary and a 64-character route read whole', async () => {
+    const edge = entry({ agentId: 'x'.repeat(64), summary: 'y'.repeat(200), route: 'z'.repeat(64), at: 0 });
+    const empty = entry({ summary: '' });
+    expect((await read([edge, empty]))?.approvals).toEqual([edge, empty]);
+  });
+});
