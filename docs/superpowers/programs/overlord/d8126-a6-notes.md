@@ -54,8 +54,10 @@ with the source change reverted, the new tests fail (measured, below).
   mail rung alone (`ballOnly`), with no marker clock. That is the case the rung exists for.
 - `a6-wait-mail-holds`: the coordinator's own `wait:` mail holds the rung until a later exchange or re-activation moves
   the ball time past it.
-- `a6-idle-word-strict`: the rung mails only a coordinator whose live word reads `idle`, as the plan says. A `shell`
-  word holds, even though the mail gate delivers on `shell`. Doubt types nothing.
+- `a6-idle-word-strict`: the rung mails only a coordinator whose live word reads `idle`, as the plan says. It reads
+  the word through the session reading's `keystroke` policy (`turnSays`), where only `idle` is at rest, because W2's
+  census allows no new raw comparison of a live word. A `shell` word holds, even though the mail gate delivers on
+  `shell`. Doubt mails nothing.
 
 ## Measured: red first, by mutation
 

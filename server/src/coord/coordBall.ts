@@ -7,6 +7,7 @@ import {
   stallMailDisabledHold, stallSelfMail, stallSessionLive,
   type StallCoordBlockedInput, type StallInput, type StallRunRow, type StallSessionInput, type StallVerdict,
 } from './stall.js';
+import { turnSays, turnWordOf } from '../sessionReading.js';
 
 /** Whether the episode counts as an R7 breach (design 2026-11-09 R7, measure M2): a coordinator with mail held behind a
  *  PENDING DIALOG (the gate reads `waiting` through `dialogPending`, never through the live word alone) whose claimed
@@ -36,7 +37,9 @@ export interface StallCoordBallInput {
 function stallCoordBallMailInner(input: StallCoordBallInput, now: number): StallVerdict {
   const si = input.session;
   const live = stallSessionLive(si);
-  if (live === null || live.word !== 'idle') return VERDICT_NONE;
+  // Only `idle` is at rest here: the strictest reading (`keystroke`'s), so a coordinator idling over a background shell
+  // holds, as the plan's "the session reads idle" says. Doubt mails nothing.
+  if (live === null || turnSays('keystroke', turnWordOf(live.word)) !== 'rest') return VERDICT_NONE;
   if (si.deliveries.some((d) => d.toId === si.sessionId && d.state === 'queued')) return VERDICT_NONE;
   if (input.runs.length === 0 || input.ballSince === null) return VERDICT_NONE;
   const ballSince = input.ballSince;

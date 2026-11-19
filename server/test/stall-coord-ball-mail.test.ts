@@ -64,6 +64,9 @@ const NONE: StallVerdict = { act: 'none' };
 const rung = (r: 2 | 3, key = BALL): StallNotify => ({ act: 'notify', arm: 'coord-ball', rung: r, key, to: 'worker' });
 
 describe('stallCoordBallMailStep: rung 2', () => {
+  it('only idle is at rest: a shell over background work, busy and waiting each hold', () => {
+    for (const word of ['shell', 'busy', 'waiting']) expect(stallCoordBallMailStep(input({ word }), NOW), word).toEqual(NONE);
+  });
   it('idle 19 minutes is none; 20 minutes with nothing else is rung 2 to the session itself', () => {
     expect(stallCoordBallMailStep(input({ ballSince: NOW - (COORD_BALL_MAIL_MS - MIN) }), NOW)).toEqual(NONE);
     expect(stallCoordBallMailStep(input(), NOW)).toEqual(rung(2));
