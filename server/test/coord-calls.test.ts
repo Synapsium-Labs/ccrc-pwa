@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   BLOCK_CONDITION_TTL_MS, CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_SEEN_WINDOW_MS, CALL_TEXT_MAX, CALL_WHY_MAX,
-  blockExpiresAt, callBodyOf, callClearedAt, callDecision, callIsForOperator, isLiveBlock, parseWake, type CallRow,
+  blockConditionNotOk, blockExpiresAt, blockWakeDue, blockWakeMail, blockWakeReadings, callBodyOf, callClearedAt, callDecision, callIsForOperator, isLiveBlock, parseWake, type CallRow,
 } from '../src/coord/coordCalls.js';
 import { CALL_CLASSES, CALL_WAKES } from '../../shared/api.js';
 
@@ -171,6 +171,48 @@ describe('isLiveBlock', () => {
   });
 });
 
+describe('blockWakeDue', () => {
+  const T = NOW + 5_000;
+  const b = (wakeOn: string, o: Partial<CallRow> = {}) =>
+    row({ class: 'block', question: null, options: null, wakeOn: wakeOn as CallRow['wakeOn'], expiresAt: NOW + DAY, build: 'b1', ...o });
+  const f = (o: Partial<Parameters<typeof blockWakeDue>[1]> = {}): Parameters<typeof blockWakeDue>[1] =>
+    ({ now: NOW, disk: 'unknown', memory: 'unknown', build: 'b1', lastTurnAt: null, sawNotOk: true, ...o });
+  it('time: waits before its time and mails at and after it', () => {
+    const t = b(`time:${T}`, { expiresAt: T });
+    expect(blockWakeDue(t, f({ now: T - 1 }))).toBe('none');
+    expect(blockWakeDue(t, f({ now: T }))).toBe('wake-mail');
+    expect(blockWakeDue(t, f({ now: T + DAY }))).toBe('wake-mail');
+  });
+  it('disk mails when ok, and waits on not-ok and unknown', () => {
+    expect(blockWakeDue(b('disk'), f({ disk: 'ok' }))).toBe('wake-mail');
+    expect(blockWakeDue(b('disk'), f({ disk: 'not-ok' }))).toBe('none');
+    expect(blockWakeDue(b('disk'), f({ disk: 'unknown' }))).toBe('none');
+  });
+  it('memory mails when clear, and waits on not-clear and unknown', () => {
+    expect(blockWakeDue(b('memory'), f({ memory: 'clear' }))).toBe('wake-mail');
+    expect(blockWakeDue(b('memory'), f({ memory: 'not-clear' }))).toBe('none');
+    expect(blockWakeDue(b('memory'), f({ memory: 'unknown' }))).toBe('none');
+  });
+  it('update mails when the running build differs from the row\'s, and waits on a same or unread build', () => {
+    expect(blockWakeDue(b('update'), f({ build: 'b2' }))).toBe('wake-mail');
+    expect(blockWakeDue(b('update'), f({ build: 'b1' }))).toBe('none');
+    expect(blockWakeDue(b('update'), f({ build: null }))).toBe('none');
+    expect(blockWakeDue(b('update', { build: null }), f({ build: 'b2' }))).toBe('none');
+  });
+  it('account-room wakes quietly once the coordinator ran a turn since the row', () => {
+    expect(blockWakeDue(b('account-room'), f({ lastTurnAt: NOW - 999 }))).toBe('wake-quiet');
+    expect(blockWakeDue(b('account-room'), f({ lastTurnAt: NOW - 1000 }))).toBe('none');   // the turn that recorded it
+    expect(blockWakeDue(b('account-room'), f({ lastTurnAt: null }))).toBe('none');
+  });
+  it('capacity is never woken here', () => expect(blockWakeDue(b('capacity'), f({ disk: 'ok', memory: 'clear', lastTurnAt: NOW }))).toBe('none'));
+  it('an expired condition row, a woken row, a non-block and an unreadable wake are not woken', () => {
+    expect(blockWakeDue(b('disk', { expiresAt: NOW }), f({ disk: 'ok' }))).toBe('none');
+    expect(blockWakeDue(b('disk', { wokenAt: NOW - 1 }), f({ disk: 'ok' }))).toBe('none');
+    expect(blockWakeDue(row({ wakeOn: 'disk' }), f({ disk: 'ok' }))).toBe('none');
+    expect(blockWakeDue(b('disk', { wakeOn: null }), f({ disk: 'ok' }))).toBe('none');
+  });
+});
+
 describe('the operator\'s group', () => {
   it('callIsForOperator: a big call, not seen, not overturned, inside seven days', () => {
     expect(callIsForOperator(row(), NOW)).toBe(true);
@@ -202,5 +244,31 @@ describe('callDecision', () => {
     expect(callDecision(row({ at: 42 }))).toEqual({ kind: 'big-call', at: 42 });
     expect(callDecision(row({ class: 'routine' }))).toBeNull();
     expect(callDecision(row({ class: 'block' }))).toBeNull();
+  });
+});
+
+describe('the block wake\'s readings, its clearing half and its mail (D-8126 wave A6)', () => {
+  const b = (wakeOn: string, o: Partial<CallRow> = {}) =>
+    row({ class: 'block', question: null, options: null, wakeOn: wakeOn as CallRow['wakeOn'], expiresAt: NOW + DAY, ...o });
+  it('a lane level reads ok when clear, unknown when unmeasured, and not cleared for any other word', () => {
+    expect(blockWakeReadings('ok', 'ok')).toEqual({ disk: 'ok', memory: 'clear' });
+    expect(blockWakeReadings('unmeasured', 'unmeasured')).toEqual({ disk: 'unknown', memory: 'unknown' });
+    expect(blockWakeReadings('critical', 'warn')).toEqual({ disk: 'not-ok', memory: 'not-clear' });
+  });
+  it('only the row\'s own condition, read not cleared, is the first half of a clearing', () => {
+    const notOk = { disk: 'not-ok', memory: 'not-clear' } as const;
+    expect(blockConditionNotOk(b('disk'), notOk)).toBe(true);
+    expect(blockConditionNotOk(b('memory'), notOk)).toBe(true);
+    expect(blockConditionNotOk(b('disk'), { disk: 'unknown', memory: 'not-clear' })).toBe(false);
+    expect(blockConditionNotOk(b('memory'), { disk: 'not-ok', memory: 'clear' })).toBe(false);
+    expect(blockConditionNotOk(b('update'), notOk)).toBe(false);
+    expect(blockConditionNotOk(b(`time:${NOW}`), notOk)).toBe(false);
+  });
+  it('the wake mail names the call, its wake and what the thread chose', () => {
+    expect(blockWakeMail(b('disk', { id: 7, chosen: 'resume the build' }))).toEqual({
+      subject: 'wake: call 7 (disk)',
+      body: 'The thread you parked is ready to pick up: resume the build\n\nIt waited on the disk you named, and that has come. Continue it now.',
+    });
+    expect(blockWakeMail(b(`time:${NOW}`, { id: 8 })).body).toContain('It waited on the time you set,');
   });
 });

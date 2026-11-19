@@ -375,6 +375,15 @@ describe('the spec pin and the modifications (plan PL2)', () => {
       pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
   });
 
+  it('isPinned is true only for a programme that has a spec pin (R7)', () => {
+    const s = mk();
+    openRunFor(s, 'prog-a', 'lane-a');
+    expect(s.isPinned('prog-a')).toBe(false);
+    expect(s.isPinned('prog-z')).toBe(false);
+    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'Summary.', NOW, null, { kind: 'coordinator' });
+    expect(s.isPinned('prog-a')).toBe(true);
+  });
+
   it('setSpecPin replaces the pin and its In short copy, and stamps the time', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
