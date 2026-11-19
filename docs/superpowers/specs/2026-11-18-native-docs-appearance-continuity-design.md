@@ -261,7 +261,7 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 |---|---|---|
 | Body text, links, borders | Library light or dark palette | ccrc's ink, accent and edges. Edges are decorative, as in ccrc: no floor |
 | Tables | `--th-bg`, `--surface`, `--surface2`, `--border` | The same slots, from ccrc's raised and well surfaces |
-| Code blocks | Library background, hard-coded `.hljs-*` hex | ccrc's well and `--syn-*` tokens. Wells stay dark in every palette, as in ccrc's chat |
+| Code blocks | Library background, hard-coded `.hljs-*` hex | ccrc's well and `--syn-*` tokens. Wells stay dark in every palette, as in ccrc's chat. All text on a well is `code-ink` or a `syn-*`, by ccrc's own class mapping (§10) |
 | Mermaid | Fixed warm palette on a white plate, inverted by a filter in dark | Colours derived from the slots by the library's `mermaidThemeOf`. The figure's ground is `surface` (the plate) and a node's fill is `surface2`. Labels are `text`. Lines, arrowheads and edges between nodes are `text-muted`, so they meet 3:1 on both grounds. Node borders are `border`, decorative like every edge, with the node told apart by its fill and label. Accent marks the highlighted node. No white plate and no filter while hosted |
 | Focus | `outline: 2px solid var(--accent)` | The same rule on the `focus` slot, ccrc's accent |
 | Reference text | `--term`, `--id`, `--violet`, `--path`, hard-coded per mode | ccrc's lane hues `--acct-cyan`, `--acct-blue`, `--acct-violet`, and `--ink-secondary` for paths, as each palette defines them |
@@ -270,8 +270,17 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 
 **The contrast gate.** The library exports `APPEARANCE_PAIRS`: each pair of colours its stylesheet puts in front of one another, with a floor. The list is not a sample of pairs someone found. It is a product: every text colour on every ground the stylesheet paints, so a link inside a changed block or faint text on a row tint is in it by construction.
 - **The text colours:** `text`, `text-muted`, `text-faint`, `accent`, `accent-hover` and the nine semantic and reference slots (`ok`, `wait`, `no`, `info`, `chg`, `term`, `id`, `violet`, `path`).
-- **The grounds:** `bg`, `surface`, `surface2`, and every coloured tint: `chg`, `wait`, `no` and `accent` at 4% over `bg`, and `chg` at 4% over `surface` (the summary box's changed items). The table head and the row hover are accent tints over `bg`, and inline code is drawn on `surface2`. The library ships a test that its stylesheet paints no other ground under text while hosted (§10).
-- **4.5:1:** every text colour on every ground; `code-ink` and each `syn-*` on `code-block-bg`; `accent-ink` on `accent`; Mermaid labels (`text`) on `surface` and `surface2`.
+- **The grounds, and the text each admits:**
+
+  | Ground | Text colours drawn on it |
+  |---|---|
+  | `bg`, `surface`, `surface2` | the 14 text colours |
+  | every coloured tint: `chg`, `wait`, `no` and `accent` at 4% over `bg`, and `chg` at 4% over `surface` (the summary box's changed items) | the 14 text colours |
+  | `code-block-bg`, the well: code blocks and a failed figure's source | `code-ink` and the eleven `syn-*` only |
+  | `accent`: a pressed figure tool button, and selected text | `accent-ink` only |
+
+  The table head and the row hover are accent tints over `bg`. Inline code is drawn on `surface2`. Aa and the other popovers are drawn on `bg`. Mermaid's fills are §10's. While hosted, the library's stylesheet paints no other ground under text, and no text colour on a ground that does not admit it; its test 4 checks both.
+- **4.5:1:** every pair the table admits, and Mermaid labels (`text`) on every fill `mermaidThemeOf` sets.
 - **3:1:** the focus ring (`focus`) on every ground, and Mermaid lines (`text-muted`) on `surface` and `surface2`, the figure's grounds while hosted.
 - **No floor: edges.** `border` and `rule` are decorative, as ccrc's own gate treats its edges (`pwa/design/contrast-check.mjs` holds that no edge token clears 3:1 in every palette). Measured: `border` on `bg` is 1.54:1 at worst. A frame control is identified by its label, at 4.5:1, and by the focus ring, never by its border alone.
 
@@ -372,7 +381,23 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 **Frame behaviour.**
 - An appearance is applied before first paint, from the seed, and in place from the op.
 - With an appearance, the frame ignores stored theme, hides Aa's theme row, shows the one line §6 gives (plain text, not focusable), and never writes `theme`. Without one, Aa is exactly 1.1.0's.
-- `.hljs-*` rules move onto the `syn-*` slots, with today's hex as their defaults, so a host that passes nothing sees no change.
+- **Code on the well, while hosted.** All text on `code-block-bg` is `code-ink` or a `syn-*`: a code block's own text, a failed figure's source (`pre.fig-src`), and every highlighted span. 1.1.0 draws the first two in `text`, which on a dark well in a light palette is about 1.1:1, so that changes while hosted. The `.hljs-*` classes map onto the slots by ccrc's own chat mapping (`ui/src/components/prose.css`, the `.well .hljs-*` rules), with a row for each class 1.1.0 colours that ccrc does not name. Every class 1.1.0's stylesheet colours is in exactly one row:
+
+  | Slot | `.hljs-*` classes |
+  |---|---|
+  | `syn-comment` | `comment`, `quote`, `doctag`, `meta`, `meta.prompt_` |
+  | `syn-keyword` | `keyword`, `selector-tag`, `section`, `literal`, `template-tag`, `variable.language_` |
+  | `syn-string` | `string`, `regexp`, `char`, `char.escape_` |
+  | `syn-number` | `number`, `symbol`, `bullet` |
+  | `syn-function` | `title`, `title.function_`, `link` (underlined, as in ccrc) |
+  | `syn-type` | `type`, `built_in`, `title.class_`, `title.class_.inherited__` |
+  | `syn-attr` | `attr`, `attribute`, `property`, `variable`, `template-variable`, `variable.constant_`, `selector-class`, `selector-id` |
+  | `syn-punct` | `tag`, `operator`, `subst`, `selector-attr`, `selector-pseudo` |
+  | `syn-tag` | `name`, `tag .hljs-name` |
+  | `syn-deleted`, `syn-inserted` | `deletion`, `addition`, with no background: 1.1.0's dark `#490202` and `#0f5323` backgrounds are dropped while hosted, as ccrc draws none. The line's leading `-` or `+` names it in text |
+  | `code-ink` | `title.function_.invoke__`, `code`, `formula`, `emphasis`, `strong`, and any span no row names |
+
+  Without an appearance, every `.hljs-*` rule keeps 1.1.0's hex (test 4).
 - Every colour that is not a slot derives from the slots with `color-mix` in the stylesheet, each by one stated rule. Every tint is an opaque mix, `color-mix(in srgb, <slot> 4%, <ground>)`:
   - `accent-hover` is `color-mix(in srgb, accent 80%, text)`, a text colour, gated like `accent`;
   - `accent-soft` (row hover, the flash, the index and quick-jump selection) and `th-bg` are `accent` at 4% over `bg`;
@@ -385,7 +410,8 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
   - `code-comment` is `syn-comment`.
 
   `paper` and `chg-soft` are declared in 1.1.0 but drawn by no frame rule. They derive anyway, so a later rule finds them gated. No tint is mixed over `surface2`: measured, the accent over a tint on `surface2` is 4.23:1 at 6% and still 4.40:1 at 3% (Phosphor Daylight). On raised surfaces and in popovers, coloured text sits on the plain ground or on a tint mixed over `bg`, never on a tint mixed over `surface2`. `chg-x` is a length, not a colour, and stays the library's.
-- **The grounds are closed.** While hosted, every background the stylesheet paints under text is one of §5's grounds. The library ships a test that walks the corpus's rendered elements and fails on any other computed background under text (test 4).
+- **The other fixed colours, while hosted.** A figure's tool buttons are opaque `surface` with `text`, and a pressed one is `accent` with `accent-ink` (1.1.0 puts `bg` text on `accent`, and a translucent ground under the others). The full-screen figure overlay is `bg`, its bar text is `text`, its buttons `surface` with `text` and a `border` edge, and its stage is `plate`. 1.1.0 fixes these at `#161514`, `#2a2825`, `#4a463f` and `#ece8e0`. Selected text is `accent` with `accent-ink`. 1.1.0 uses a fixed translucent blue there, on which `text-faint` measures 3.61 in Catppuccin Latte.
+- **The grounds are closed.** While hosted, every background the stylesheet paints under text is one of §5's grounds, and every text colour is one that ground admits. The library ships a test that walks the corpus's rendered elements and fails on any other pair (test 4).
 - **Meaning without colour.** A palette may give `chg` the hue of `wait` or `violet`, and `term` no hue (X1-12), so each meaning carries a cue that is not colour. Read from 1.1.0's frame stylesheet and enhance code:
   - **"Changed since", in words:** a section's heading mark reads "Changed since you read it" (`marks.js`), and the changes menu names each change. This holds in 1.1.0 and stays.
   - **"Changed since", in shape:** a changed block draws a 3 px bar in the margin, and a changed row a 3 px bar on its first cell. In 1.1.0 that shape is shared: an attention rule, a waiting callout, an attention task item and, in the stack layout, an attention row also draw a 3 px left bar on a tint. So in a palette where `chg` and `wait` look alike, the block marks differ by colour alone. While hosted, every changed block and row therefore draws a mark that no attention mark draws, differing in shape (the library chooses it, a double bar for example, within the margin the bar already uses, painting only, so no layout moves). Without an appearance, the mark stays 1.1.0's (test 4).
@@ -422,7 +448,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
 4. Conformance:
    - with no appearance, the rendered output and computed styles equal 1.1.0's for the corpus;
    - the default palette passes `APPEARANCE_PAIRS`;
-   - **closed grounds:** with an appearance, every element of the corpus that holds text has a computed background, its own or the nearest painted one behind it, equal to one of §5's grounds.
+   - **closed grounds:** with an appearance, every element of the corpus that holds text has a computed background, its own or the nearest painted one behind it, equal to one of §5's grounds, and a computed `color` that ground admits. The walk runs with each popover open in turn (Aa, changes, the cross-reference card, quick jump, keys, contents), the figure overlay open, a figure tool pressed, text selected, and `:hover` and `:focus-visible` forced on every control and table row.
 5. Mermaid:
    - `mermaidThemeOf` output passes the pairs for both default modes;
    - `mermaidThemeOf`'s `lineColor` is the `text-muted` it was given, and a drawn figure's edge paths have that computed `stroke`;

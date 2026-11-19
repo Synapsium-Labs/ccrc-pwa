@@ -555,6 +555,31 @@ There is one commit per finding, then this Results commit. The coordinator ruled
 
 The library 1.1.0 copy used for every library read this round is the installed package from another ccrc worktree, copied read-only to this session's scratch after the D2 worktree was reclaimed. Version 1.1.0 was confirmed.
 
+### Fix round 2 (review run 2657, round 2 of 3, at `f6f89be82`; the coordinator's mail 25412)
+
+One commit per finding, then this Results commit. The coordinator ruled F2 and F4. Every other fix follows the report's direction. The review found all 16 round-1 items closed.
+
+| Finding | Disposition |
+|---|---|
+| F1: cross pairs outside the measured set | Fixed. `APPEARANCE_PAIRS` is the product of every text colour (14, `accent-hover` included) and every ground the stylesheet paints (spec §5), and the library tests that its grounds are closed (test 4). Tints hold at most 4%, inline code sits on the opaque `surface2`, `short-bg` is `surface`, and the summary box's 7% mix is 4% over it. Measured: 67 worst-case rows, 0 below floor ("Cross pairs", above) |
+| F2 (ruled): `chg` and `term` hues | Fixed. X1-12 accepts what each palette defines, names Tokyo Night's orange `chg`, `chg` equal to `violet` in Nord, Gruvbox Dark and One Dark, and the hueless `term` in three light palettes, and drops "keeps its magenta". Meaning never by colour alone, read from 1.1.0: the heading mark names the change in words, and a glossary link is dotted. But changed blocks and rows share their bar-and-tint shape with every attention mark (attention rules, waiting callouts, task items, stack rows), so while hosted the library draws a changed mark no attention mark has (spec §10). New library test 10 pins every cue, and AP-6 reads them installed. No distinctness gate: each cue is a shape or a word |
+| F3: the main-bundle scan reds on the plan's imports | Fixed. Task 4 names `adapterUseAllowed`'s three new arms and a planted case, runs `docs-scans` in Steps 2 and 4, and narrows the `ReaderFrame` sentence to the four adapters |
+| F4 (ruled): whose growth the library cap counts | Fixed. Test 8 is a share table in commit order: 1.1.0's total, then this contract's 32 768, then a row per later design with the share the coordinator sets. Spec §9 part (2) and Task 1 Step 2a read this contract's growth from the manifest at its own commit, and the release against the sum of the shares. Test 9 pins the op sets before and after this contract's commit, the canonical CSP, and two behaviour rows. Spec §10 states how tests 4, 8 and 9 bound later work. One reading of the ruling's letter: `frameCsp()` embeds one hash per inlined script (1.1.0's `dist/frame/csp.js`), so its text changes with any frame script and cannot equal 1.1.0's literally. Test 9 asserts it equals 1.1.0's value with each script hash source replaced by this version's: the same directives, order and non-hash sources, and four hash sources |
+| F5: value forms not pinned | Fixed. Spec §2 gives one anchored, bounded pattern per key over the text `getPropertyValue` answers: strings only, case-insensitive hex, outer ASCII spaces ignored and dropped, one U+0020 between tokens, at most 3 decimals, and a whole-value cap of 8 192 UTF-16 code units. ccrc normalises nothing. Library test 1 and Task 2 gain the rows |
+| F6: label refusal a closed list | Fixed. Refused by category, `Cc`, `Cf`, `Zl`, `Zp` and a lone surrogate, with the six rows asked for plus U+00AD and U+2029. Checked with node: the class matches a lone surrogate and U+061C, and not an astral emoji |
+| F7: Mermaid lines had no slot | Fixed. `mermaidThemeOf` names every input. Lines are `text-muted`: 5.54 at worst on `surface2` and 6.74 on `surface`. The §2 claim now holds and points at the rows |
+| A1 | Fixed. AP-1 compares computed lengths and boxes, on a fixture whose title and byline stay on one line in either face |
+| A2 | Fixed. AP-5 runs every palette and Follow the system transition under both device modes, the device flipping while on Follow the system |
+| A3 | Fixed. AP-1's host side is a probe element given the same token, so both sides are the browser's serialisation |
+| A4 | Fixed. Figure 3 goes through the bridge; Figure 1 uses §7's term |
+| A5 | Fixed. One reading of the key rule; the vacuous `rgba(` exception is gone; the `'60px'` and `'99px'` fixtures first assert the verdict refuses them |
+| A6 | Fixed. Support is decided once, by `readerAppearanceSupported`; `readerAppearanceOf` runs on hosted mounts only and has no mode-only case; new rows for a refused non-empty colour and the warning; AP-M8 names the assertions that red |
+| A7 | Fixed. Task 4 owns `shadcn-alias.test.ts`: exactly `assets.ts` imports `@/`, and the pattern catches a dynamic `import('@/…')` |
+| A8 | Fixed. The baseline is 781 080 characters (783 343 bytes). The F10 row says the three-part sum replaced round 1's 192 KiB ceiling, and why |
+| A9 | Fixed in F1's commit: `accent-hover` is `color-mix(in srgb, accent 80%, text)`, gated on every ground (5.13 at worst), and the focus ring is measured on every ground (4.57 at worst, on `surface2`) |
+| A10 | Fixed. Colour slots are `#rrggbb` only in version 1; alpha only inside `popShadow` |
+| A11 | Fixed. Units stated (the cap rises by 349 528 characters), the CSP sentence scoped to the policy, and `TypeError` stated for `setAppearance` on a non-object and a malformed `fonts` asset |
+
 ### Carried
 
 - The library programme plans wave L from spec §10. Its release and ccrc's re-pin are the operator's.
