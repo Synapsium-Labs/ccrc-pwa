@@ -351,9 +351,10 @@ export const ORACLE_STEPS: ReadonlyArray<(f: Gf) => Res | null> = [
     return null;
   },
   // 2: the capability word
-  (f) => (f.serverWords.includes(f.door.word) ? null : refuseOf('capability-missing', '2')),
+  (f) => (!Array.isArray(f.serverWords) ? refuseOf('unavailable', '2')
+    : (f.serverWords as readonly string[]).includes(f.door.word) ? null : refuseOf('capability-missing', '2')),
   // 3: the authority guard, not at a start door
-  (f) => (!isStart(f.door) && f.authority.kind !== 'coherent' ? refuseOf('authority-rolled-back', '3') : null),
+  (f) => (!isStart(f.door) && (f.authority === 'start-door' || f.authority.kind !== 'coherent') ? refuseOf('authority-rolled-back', '3') : null),
   // 4: the ladder read, then the operator's own rung (never the effective one)
   (f) => {
     if (isStart(f.door)) return null;
@@ -454,7 +455,7 @@ export function genCase(rnd: () => number): Gf {
   const generation = ok() ? { kind: 'state', state: pick(rnd, SERVING) } : pick(rnd, [
     { kind: 'state', state: pick(rnd, RENEWING) }, { kind: 'none' }, { kind: 'unmeasured', why: 'g' }]);
   return {
-    door, standing, serverWords: ok() ? [door.word, 'timers-v1'] : pick(rnd, [[], ['timers-v1']]),
+    door, standing, serverWords: ok() ? [door.word, 'timers-v1'] : pick(rnd, [[], ['timers-v1'], { kind: 'unmeasured', why: 'caps' }]),
     authority: ok() ? { kind: 'coherent' } : pick(rnd, [{ kind: 'rolled-back', cause: 'behind' }, { kind: 'unmeasured', why: 'journal' }]),
     ladder, term: rnd() < 0.9 ? 5 : null, fence, witness, card, generation,
   } as unknown as Gf;
@@ -463,6 +464,7 @@ export function genCase(rnd: () => number): Gf {
 /** What replacing one fact by its unmeasured arm does at its step, for the facts the door reads. */
 const UNMEASURED_ARMS: ReadonlyArray<{ fact: string; step: string; reads: (d: OverlordDoorRow) => boolean; swap: (f: Gf) => Gf }> = [
   { fact: 'standing', step: '1', reads: () => true, swap: (f) => ({ ...f, standing: { kind: 'unmeasured', word: 'unavailable', why: 'u' } }) as Gf },
+  { fact: 'serverWords', step: '2', reads: () => true, swap: (f) => ({ ...f, serverWords: { kind: 'unmeasured', why: 'caps' } }) as Gf },
   { fact: 'authority', step: '3', reads: (d) => !isStart(d), swap: (f) => ({ ...f, authority: { kind: 'unmeasured', why: 'journal' } }) as Gf },
   { fact: 'ladder', step: '4', reads: (d) => !isStart(d), swap: (f) => ({ ...f, ladder: { kind: 'unmeasured', why: 'u' } }) as Gf },
   { fact: 'fence facts', step: '5', reads: (d) => d.write, swap: (f) => ({ ...f, fence: f.fence === 'read-door' ? f.fence : { ...f.fence, facts: { kind: 'unmeasured', why: 'u' } } }) as Gf },

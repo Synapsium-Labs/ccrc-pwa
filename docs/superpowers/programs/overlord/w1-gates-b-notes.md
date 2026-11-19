@@ -143,6 +143,13 @@ cases above.
   the witness lookup's message back in the detail; and in `mutation-floors`, S-12 (the pending id read before the binding).
   Two older mutants of the decider's set (O-6, O-7) moved to the new text of steps 2 and 3. A shell hook refused one call of
   the test subagent, a bare `vitest --version` probe outside `ccrc test`; it was reported and not retried in any form.
+- **The fix round's fast run** (at `17300375f`) was red on one guard, `typecheck-tests`: the first-refusal oracle in
+  `sim/gateSets.ts` still read the server words and the authority as their old types, which N2 and N4 widened. The oracle now
+  reads both new arms, the generator draws unreadable server words, and the unmeasured-never-passes property swaps them. The
+  tests-inclusive type check, run here once, reports nothing in the server or its tests (only `agent/`, whose `ws` is not
+  installed in this worktree). The session hook's heavy-test arm then refused a commit call whose message named that guard,
+  and the first report of it too; nothing ran. It was reported, and on the coordinator's ruling the commit was made with its
+  message in a file.
 - **N9, a follow-up for the coordinator**: `coord/routes.ts` still holds about ten older copies of the console mapping
   (`authEnabled ? deviceActor(...) : 'flag-off'`), and `continuity/routes.ts` two `?? 'flag-off'` fallbacks. They do not call
   the port; `coord/routes.ts` is held by another run's frozen claim, so this PR leaves them. They are the next place
