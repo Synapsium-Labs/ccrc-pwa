@@ -8165,6 +8165,32 @@ export interface MailSummary {
    * means "nothing to say about a park".
    */
   parkedAt?: number | null;
+  /**
+   * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times and its replay count, so a reader can
+   * measure how long a mail waited and how long it stayed unread. `at` above is when the mail row was inserted (the
+   * server's clock).
+   *
+   * `deliveredAt` is the time at the START of the sweep pass that last put the nudge into the recipient's pane
+   * (`mailPass`'s `now`, written by `markDelivered` once the send succeeds; the server's clock), so it is earlier than
+   * the moment the nudge was typed, by the pass's earlier reads and sends. A replay re-dates it: on a replayed row it is
+   * the latest delivery, not the first, and `replayCount` says how many replays there were (0 for none).
+   *
+   * `ingestedAt` is the time of the first `UserPromptSubmit` edge of ANY kind (an operator prompt, another mail's nudge,
+   * a brief, not only this mail's) that the mail sweep sampled from the recipient's hook state after a delivery, on the
+   * FLEET BOX's clock (`markIngested`, from `sampleEdge`, every `MAIL_SWEEP_MS`, 10 s). It is written once and a replay
+   * does not move it, so it can precede `deliveredAt`; a fast turn can overwrite the edge before a sample sees it, so it
+   * can be missing or a later prompt's time.
+   *
+   * `ackedAt` is when an ack committed (`markAcked`, the server's clock): the recipient's, through the ack route, or, for
+   * an operator-message nudge, the nudge lane's own ack at the delivery, so there it equals `deliveredAt`.
+   *
+   * ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent when the stored value is
+   * not the canonical spelling of a positive whole number (zero too, except `replayCount`'s), never zero.
+   */
+  deliveredAt?: number;
+  ingestedAt?: number;
+  ackedAt?: number;
+  replayCount?: number;
 }
 
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
