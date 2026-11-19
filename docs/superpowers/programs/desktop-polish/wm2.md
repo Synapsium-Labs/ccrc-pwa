@@ -136,8 +136,8 @@ from the saved copy (never `git checkout`); a clean run after (39 of 39).
 | `server/src/server.ts` | gates-b (5558, run 2770) | one property in `registerPlanRoutes`' options | mail delivery 26421, "yes" |
 
 WM6 (run 2780) asked this task, which holds the plan file and `shared/plan.ts`, for a co-edit of the `PlanEpicBody`
-`waves` line and of the plan's Task WM6 section with a D-8780 bullet; this task said yes (mail 26350), noting both
-tasks append a deviation bullet at the end of the same list.
+`waves` line and of the plan's Task WM6 section with a deviation bullet of its own; this task said yes (mail 26350),
+noting both tasks append a deviation bullet at the end of the same list.
 
 ## 6. Test runs
 
@@ -145,13 +145,18 @@ Every run through `ccrc test`, cd'd into `server/`, `--maxWorkers=2` unless said
 
 | Run | Result | Load (1 min) |
 |---|---|---|
-| `work-map` | 84 of 84 | 12.7 |
+| `work-map` (first run, before the last cases were added) | 78 of 78 | 15.9 |
+| `work-map` with the uncommitted scratch runner of the three mutant sets | 84 of 84: every mutant killed | 12.7 |
 | `work-map`, `plan-routes`, `single-definition/plan` | one red, my own wrong expectation (an empty live epic is a chip), fixed; then `plan-routes` 39 of 39 | 12.7 |
 | `test/rings` and `coord-policy-rings` | 153 of 153 | 16.5 |
 | `test/single-definition` (41 files) | 1531 of 1531 | 19.4 |
 | `overlord-other-lanes-census`, `auth-gate`, `box-token-census`, `public-text`, `plan-inbound`, `plan-ticket-done` | 626 of 626 | about 16 |
+| `deviation-refs` (after `git fetch origin main`), `dtbd`, `topology-clean` | one real red, fixed: this note named another task's deviation number, which raised the floor seed (reworded); one 20 s timeout under load. Then `deviation-refs` alone: 34 of 34; `dtbd` and `topology-clean` green in the first run | 11.3, 12.4 |
+| The ledger guard (`.github/ci/ledger-guard.mjs --base origin/main`) | passed by the head's `Ledger-Edit` trailer; layout ok | |
+| `work-map`, `plan-routes`, `single-definition/plan` on the committed tree | 125 of 125 (81, 39 and 5) | 10.8 |
+| The private-names scan of the tree, with the operator's local list | exit 0, empty output | |
 | `sim/mutation-floors` whole | killed twice by the shared test slice's 6G memory cap (2 and 3 OOM kills; the first run's two reds were the face module's sets, cut off mid-run); then filtered to WM2's keys and the structural checks, `--maxWorkers=1`: 6 of 6 | 18.5, 14.3, 8.9 |
-| server compile (`tsconfig.json`) | clean before the server wiring line; see the PR for after | 15 |
+| server compile (`tsconfig.json`) | clean before the server wiring line, and clean after it (queued about 40 minutes for a slot) | 15, 8.5 |
 | tests compile (`test/tsconfig.tests.json`) | killed by the slice's memory cap three times (exit 137); a narrowed config naming only this task's six test files and their imports compiled clean. The narrowed config was a temporary file in `server/test/`, removed after the run | 8.8 |
 
 ## 7. For later
