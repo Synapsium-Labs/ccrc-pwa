@@ -1,8 +1,8 @@
 // Mid-turn mail PR 1 (Overlord wave 171, plan 2026-11-19-mid-turn-mail.md Task 1.1): the three delivery times
 // `mail_deliveries` has always stored, served on `MailSummary` so a reader can measure how long a mail waited and how
 // long it stayed unread. `deliveredAt` is when the lane last put the nudge into the recipient's pane (a replay re-dates
-// it), `ingestedAt` is when the recipient's `UserPromptSubmit` hook saw it arrive, and `ackedAt` is when the recipient
-// acked it. Each is optional and absent until written; a stored value that is not a positive whole number is answered
+// it), `ingestedAt` is the first `UserPromptSubmit` edge the mail sweep saw in the recipient's hook state after that
+// delivery, and `ackedAt` is when the recipient's ack committed. Each is optional and absent until written; a stored value that is not a positive whole number is answered
 // absent, never zero, because a time of zero would read as a real instant (`persistedInt`).
 import { describe, it, expect, afterEach } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
@@ -24,12 +24,22 @@ const INGESTED = 1_800_000_000_222;
 const ACKED = 1_800_000_000_333;
 const TIMES = ['deliveredAt', 'ingestedAt', 'ackedAt'] as const;
 
+// `1.5` is stored REAL, `'soon'` TEXT, `-5` and `0` are not positive, and 2^60 is an INTEGER past
+// `Number.MAX_SAFE_INTEGER`, which node:sqlite would throw on if the column were read as a number.
+const BAD = [['a fraction', '1.5'], ['text', "'soon'"], ['a negative', '-5'], ['zero', '0'],
+             ['an unsafe integer', '1152921504606846976']] as const;
+
 interface Fixture {
   s: CoordStore; home: string; runId: number;
   queued: number; delivered: number; ingested: number; acked: number; ackedQueued: number;
+  bad: Record<string, number>;
 }
 
-const fixture = (): Fixture => {
+// One store for the whole file: every case only reads it, and a coord.db opens slowly on a loaded box.
+let built: Fixture | undefined;
+const fixture = (): Fixture => (built ??= build());
+
+const build = (): Fixture => {
   const home = mkTmp('ccrc-mail-times-');
   const s = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   const r = s.openRun({ program: 'program-a', title: 'run-a', project: 'project-a', wave: 1, waveOf: 2,
@@ -53,7 +63,14 @@ const fixture = (): Fixture => {
   // Acked straight from the queue, never delivered: it has an ack time and nothing else.
   const ackedQueued = one();
   expect(s.markAcked(ackedQueued, ACKED)).toEqual({ ok: true, state: 'acked' });
-  return { s, home, runId: r.id, queued, delivered, ingested, acked, ackedQueued };
+  const bad: Record<string, number> = {};
+  for (const [label, sql] of BAD) {
+    const id = one();
+    expect(s.markAcked(id, ACKED)).toEqual({ ok: true, state: 'acked' });
+    s.db.prepare(`UPDATE mail_deliveries SET deliveredAt = ${sql}, ingestedAt = ${sql}, ackedAt = ${sql} WHERE id = ?`).run(id);
+    bad[label] = id;
+  }
+  return { s, home, runId: r.id, queued, delivered, ingested, acked, ackedQueued, bad };
 };
 
 const byDelivery = (rows: readonly MailSummary[], id: number): MailSummary => {
@@ -99,15 +116,10 @@ describe('MailSummary carries the three delivery times (mid-turn mail PR 1)', ()
     expect(timesOf(byDelivery(prog, f.delivered))).toEqual({ deliveredAt: DELIVERED });
   });
 
-  // `1.5` is stored REAL, `'soon'` TEXT, `-5` and `0` are not positive, and 2^60 is an INTEGER past
-  // `Number.MAX_SAFE_INTEGER`, which node:sqlite would throw on if the column were read as a number.
-  for (const [label, sql] of [['a fraction', '1.5'], ['text', "'soon'"], ['a negative', '-5'], ['zero', '0'],
-                              ['an unsafe integer', '1152921504606846976']] as const) {
+  for (const [label] of BAD) {
     it(`a stored time that is ${label} is answered absent, never zero`, () => {
       const f = fixture();
-      f.s.db.prepare(`UPDATE mail_deliveries SET deliveredAt = ${sql}, ingestedAt = ${sql}, ackedAt = ${sql} WHERE id = ?`)
-        .run(f.acked);
-      const row = byDelivery(f.s.mailForRecipient(TO), f.acked);
+      const row = byDelivery(f.s.mailForRecipient(TO), f.bad[label]!);
       expect(timesOf(row)).toEqual({});
       expect(row.state).toBe('acked');
     });

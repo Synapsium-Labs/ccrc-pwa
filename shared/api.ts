@@ -8150,11 +8150,13 @@ export interface MailSummary {
   parkedAt?: number | null;
   /**
    * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times, so a reader can measure how long a mail
-   * waited and how long it stayed unread. `at` above is when the mail row was inserted. `deliveredAt` is when the lane
-   * last put the nudge into the recipient's pane (a replay re-dates it, so for a replayed row it is the latest delivery,
-   * not the first). `ingestedAt` is when the recipient's `UserPromptSubmit` hook saw the nudge arrive. `ackedAt` is when
-   * the recipient acked it. ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent
-   * when the stored value is not a positive whole number, never zero.
+   * waited and how long it stayed unread. `at` above is when the mail row was inserted (the server's clock).
+   * `deliveredAt` is when the lane last put the nudge into the recipient's pane (`markDelivered`, the server's clock): a
+   * replay re-dates it, so on a replayed row it is the latest delivery, not the first. `ingestedAt` is the time of the
+   * first `UserPromptSubmit` edge in the recipient's hook state that the mail sweep saw after that delivery
+   * (`markIngested`, written once, stamped with the hook state's own time). `ackedAt` is when the ack route committed
+   * the recipient's ack (`markAcked`, the server's clock). ADDITIVE and OPTIONAL: each is absent until written, absent
+   * from an older server, and absent when the stored value is not a positive whole number, never zero.
    */
   deliveredAt?: number;
   ingestedAt?: number;
