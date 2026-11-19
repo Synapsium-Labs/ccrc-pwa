@@ -209,6 +209,7 @@ stateDiagram-v2
 | Early removal | Removed when the file's committed blob at the recorded served ref differs from the one recorded at share (a new file counts once committed) | #1420: "removed early when the same file is committed on the branch". GitHub then holds it and Share sends a permalink |
 | Pin | Stops the idle clock only | Pin keeps a link alive while a reviewer is away; a commit or retention still ends it |
 | Revoke | Takes the entry out of memory, deletes the bytes and the index entry, then answers | "A revoked link returns 404 immediately" |
+| Expiry is terminal | Every store mutation re-applies the expiry decision and, for a create, admission, to the entry it re-reads inside the store's queue, and removes a dead entry there. Pin or Unpin on an expired share refuses `expired`. Re-share of a file whose share has expired mints a new share with a new token and version 1, and tells the owner "The old link has expired and stays dead. This is a new link." | Figure 2 has no edge out of Removed: an old link is never revived (coordinator's ruling on review finding F3) |
 | Retention | Every share, pinned or not, is removed 30 days after its first share | #1420: "Snapshots are covered by retention" |
 | Tombstone | Removed shares keep a row for 7 days: project, section, path, branch, reason, time, version, comment count. No bytes, no token | "each visible in the UI" |
 
@@ -233,7 +234,7 @@ The store is a new storage owner. This section names its one writer, its durabil
 | Layout | Per share: `<tokenHash>.v<N>.html` (the bytes of version N, 0600) and `<tokenHash>.json` (the index entry, 0600). Tombstones: `<id>.removed.json`, with no token |
 | One writer | The review store adapter. The routes and the sweep reach it only through its interface |
 | Commit point | Bytes are written to a temporary name, `fsync`ed and renamed; then the index entry, naming that version, is written the same way and the directory `fsync`ed. The index rename is the commit: a crash before it leaves the old version live |
-| Concurrency | One in-process queue. Every mutation names the share's `tokenHash` and the version it expects, and re-reads the live entry inside the queue before acting, so a late view, pin or sweep never writes back a revoked or replaced entry |
+| Concurrency | One in-process queue. Every mutation names the share's `tokenHash` and the revision it expects (a counter every write bumps, pin and view included), re-reads the live entry inside the queue, re-applies the expiry decision and, for a create, admission, and only then acts, so a late view, pin or sweep never writes back a revoked, replaced or expired entry, and two concurrent creates cannot pass the 64-share cap together |
 | Boot | One directory read rebuilds the index (at most 64 live entries, so no database). Temporary files older than a minute and bytes files no index entry names are removed |
 | The token | Kept in the index entry so the owner can copy the link later; never in a file name, a tombstone, or a list to a dark console |
 | Backup | Never. `ccrc backup` and the update snapshot copy neither the directory nor any parent that contains it, and a restore never writes it |
