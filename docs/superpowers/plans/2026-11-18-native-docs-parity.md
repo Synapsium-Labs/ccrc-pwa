@@ -479,7 +479,7 @@ Library 1.1.0 was read from an installed copy in another ccrc worktree, read-onl
 | F10, the library half: the print design for the review strip's waiting list, and the plan task chips, step labels and plan facts | Spec §4.6 rows PR6 and PR8; §6's print-mode row; §6, "Print mode's strip and plan marks" |
 | F10: what P5.5 then does on ccrc's side | Spec §6, "What ccrc's P5.5 then does"; this plan's P5.5 Step 1 (two assertions) and mutation row M11.74; spec §4.6's test strategy names M11.74 |
 | The figure-image op | Already designed (spec §6, `print-figures` and `print-figure`); its size is counted in the proposed share |
-| X2's share (X1 F4: set by the coordinator at this wave's acceptance) | Spec §6, "Size, and X2's share": 1 148 928 characters in total and 45 056 in the largest frame, proposed; Task P5.1's per-layout `frame-cost` row |
+| X2's share (X1 F4: set by the coordinator at this wave's acceptance) | Spec §6, "Size, and X2's share": 1 166 336 characters in total and 72 704 in the largest frame, proposed (revised in X4 fix round 1, review 2694 F5, with a stylesheet term); Task P5.1's per-layout `frame-cost` row |
 | How test 8 and the per-layout srcdoc cap count the layouts | Spec §6, the same block; §6's layout row ("none larger than the default bundle"); X1 spec §10 test 8's `total`, `frame` and layout rows |
 | The coordinator's extra item (mail 25622): X3 no longer owns Share | This plan's Global Constraints, the ownership line: X3 owns the draft-review action and its store, and Share stays as shipped |
 
@@ -491,7 +491,7 @@ The other review 2670 carries (F1 to F9, A1 to A4) go to their owning waves, P1 
 - **Waiting items print whole and unlinked,** because paper cannot open a clip and print has no chrome anchors.
 - **Each count prints with its word,** so a monochrome page keeps its meaning.
 - **The share is two numbers.** The ruled sum over every manifest entry counts every layout bundle, although a frame inlines one. The largest-frame figure keeps the srcdoc budget tight.
-- **A layout never exceeds the default bundle,** because the standalone's layouts are 0.12 to 0.39 of its default. A layout that would need more is the coordinator's to share.
+- **A layout never exceeds the default bundle is an assumption,** not a measurement. Test 8's layout row enforces it at X2's landing; the standalone's ratios (0.12 to 0.39 of its default) do not carry over, because a library layout also carries the shared modules. A layout that would need more is the coordinator's to share, and X2's shares are a ceiling the library wave never raises itself.
 - **Print mode's cost is outside test 8,** because it is not a frame asset: it is in `render` and a print stylesheet that ccrc's print view loads.
 
 #### Unmeasured
