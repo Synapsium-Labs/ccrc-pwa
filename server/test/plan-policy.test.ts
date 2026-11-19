@@ -290,7 +290,7 @@ describe('parsePlanTake (D-8183)', () => {
 describe('triageVerdict (D-8183)', () => {
   const row = (state: InboundRow['state']): InboundRow => ({
     linearId: 'l1', workspaceId: 'ws-a', teamKey: 'AAA', identifier: 'AAA-12', title: 't', body: null, seenAt: 1, mailedTo: null, mailedAt: null,
-    handedTo: null, reason: null, actedAt: null, state, itemId: null,
+    handedTo: null, reason: null, actedAt: null, state, itemId: null, retiredWhy: null,
   });
   const owner = { id: 'coord-a', source: 'named' as const, live: true, gone: false };
   it('only the team owner triages', () => {

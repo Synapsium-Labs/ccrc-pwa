@@ -313,6 +313,8 @@ const API_ERROR_TEXT: Record<string, string> = {
   // `plan take` answer `issue-not-inbound` for an issue that is not waiting for that caller; the box names neither the owner nor the issue.
   'not-linear-owner': 'Only the Linear owner of this team decides what becomes of an issue filed in Linear, so nothing was changed. Ask the owner, or name another one on the project.',
   'issue-not-inbound': 'That issue is not waiting for this decision: it was already decided, or it was not handed to you. Nothing was changed.',
+  // D-8736: Hand on a persistent-drift item answers it when the object's project has no Linear owner to hand it to; the item stays open.
+  'no-linear-owner': 'This project has no Linear owner to hand it to, so the item stays open. Name a Linear owner for the project, or keep the plan.',
   // D-8183: the Linear proxy answers it to a session that creates a ticket in a team the plan manages, or updates one the plan bound;
   // the plan files and writes those tickets itself.
   'plan-owned': 'The plan owns the tickets of this Linear team, so nothing was written to Linear. File the work through the plan instead.',
