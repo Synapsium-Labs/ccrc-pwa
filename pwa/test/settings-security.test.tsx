@@ -84,7 +84,7 @@ describe('the Sign-in gate card, per state (spec §5.5)', () => {
     await screen.findByRole('region', { name: 'Box token' });
     const titles = screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent);
     expect(titles[0]).toBe('Sign-in gate');
-    expect(titles.slice(-4)).toEqual(['Box token', 'Linear', 'Project linking', 'Approvals']);
+    expect(titles.slice(-5)).toEqual(['Box token', 'Linear', 'Project linking', 'Approvals', 'Permission prompts (M38)']);
     expect(within(gateCard()).getByText('This box')).toBeInTheDocument();
   });
 
@@ -289,7 +289,7 @@ describe('Your sign-in and This session on Security (R2d; D-5508)', () => {
   it('Security renders seven cards in order when the gate is armed', async () => {
     await armed();
     expect(screen.getAllByRole('heading', { level: 3 }).map((h) => h.textContent))
-      .toEqual(['Sign-in gate', 'Your sign-in', 'This session', 'Box token', 'Linear', 'Project linking', 'Approvals']);
+      .toEqual(['Sign-in gate', 'Your sign-in', 'This session', 'Box token', 'Linear', 'Project linking', 'Approvals', 'Permission prompts (M38)']);
     expect(within(signInCard()).getByText('You')).toBeInTheDocument();
     expect(within(screen.getByRole('region', { name: 'This session' })).getByText('This browser')).toBeInTheDocument();
     expect(within(signInCard()).getByRole('heading', { level: 4, name: 'Passkeys' })).toBeInTheDocument();

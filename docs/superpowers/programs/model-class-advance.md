@@ -46,11 +46,12 @@ The same eight statements are pinned as the programme's definition of done (`ccr
 | R0 | The re-plan and its rulings | #2918 | merged |
 | R1 | Picker labels read from the registry, and the lane kind | #2942 | merged |
 | R3 | The agent's `models` op, read first by `GET /api/models/:lane` | #2960 | merged, first in v0.0.1259 |
-| R2 | Doctor's four warnings | #2943 | built and green; a draft until 2026-11-21 |
+| R2 | Doctor's four warnings | #2943 | built and green; main merged in on 2026-11-19; a draft until 2026-11-21 |
 | Wave 1 | The catalogue probe asks as the current Codex client (0.170.0) | #3023 | merged; measured live, below |
 | Wave 6 | The spec's D18 amended with the measured alias evidence; the Anthropic arm's plan | #3027 | merged 2026-11-18 |
-| Wave 2 | The client version follows published Codex releases, with the shipped constant as a floor (D-8743) | #3025 | merged 2026-11-18 |
+| Wave 2 | The client version follows published Codex releases, with the shipped constant as a floor (D-8743) | #3025 | merged 2026-11-18; measured live, below |
 | Wave 4 | `POST /api/models/:lane` and the phone's Models sheet (D-8752 to D-8756) | #3028 | merged 2026-11-18 |
+| Wave 5 | The read grant retired: the console reads a lane's models only through the `models` op (D-8757, D-8758) | #3041 | merged 2026-11-18 |
 
 The hourly advance has moved classes by itself, each move after a passing canary: one class on both Codex lanes on
 2026-10-26, and on one lane an opus class that stepped to an older model on 2026-11-10 and back two hours later (wave 3
@@ -65,6 +66,11 @@ wave 2 keeps the version current from now on, and wave 3 adds the "never to an o
 starts Done-when 7: a new Codex-lane session on the new model, and no sessions-behind warning a day later, are still
 owed. The second needs #2943's check.
 
+**Wave 2, measured (2026-11-18).** The fleet box updated itself to v0.0.1297, which carries wave 2. Its refresh at
+21:28Z ran the new lookup: the published Codex client read 0.170.0, with no error, and both Codex lanes' catalogues
+record that they were fetched as 0.170.0 (twelve ids). Done-when 1's "across releases" half is shown at the next
+Codex client release. On 2026-11-19 the fleet box is on v0.0.1320, which carries waves 2, 4 and 5.
+
 ## Waves
 
 The programme's plan (`ccrc-api plan show model-class-advance`) holds the same epics, tickets and checkpoints.
@@ -76,12 +82,18 @@ The programme's plan (`ccrc-api plan show model-class-advance`) holds the same e
 | 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | | planned (run 2455); waits on #2943 |
 | - | doctor | doctor-land | Land #2943 after the Codex bridge check week | #2943 | built; lands after 2026-11-21 |
 | 4 | models-sheet | models-sheet | `POST /api/models/:lane` hold, release and revert, and the Models sheet; closes #1441 | #3028 | merged |
-| 5 | read-path | retire-grant | Retire the model-file read grant; an unknown advance state reads `invalid` with the classes kept | | run 2564; dispatched when a fleet slot frees |
+| 5 | read-path | retire-grant | Retire the model-file read grant; an unknown advance state reads `invalid` with the classes kept | #3041 | merged |
 | 6 | anthropic-arm | anthropic-plan | Amend the spec's D18 with the measured alias evidence, and plan the arm | #3027 | merged |
 | 7 | anthropic-arm | anthropic-writer | The alias file, holds and doctor causes on Anthropic lanes | | planned |
 | 8 | anthropic-arm | anthropic-ccd | ccd launches a held class on its pin and carries effort to the new model | | planned |
 | 9 | anthropic-arm | anthropic-pwa | Labels and the Models sheet on Anthropic lanes | | planned |
 | 10 | acceptance | docs-and-issues | The README's context-window rule, the spec's status, #2607, and the Fable-ceiling issue | | planned |
+| - | catalogue-current | usage-user-agent | The usage reader sends the probe's Codex client version, from one reader | | run 2821; lands after 2026-11-21 |
+| - | models-sheet | transient-beside-kept-answer | The sheet names a transient answer beside a kept one; a session-screen case and two text corrections | | run 2822 |
+| - | models-sheet | revert-writes-before-refusing | A refused Revert must not leave the class held | | after #2943 |
+| - | read-path | ccrcdir-param-drop | Drop `readLaneModels`' unread `ccrcDir` parameter (D-8757) | | after #2943 |
+| - | doctor | release-lookup-warn | Doctor warns when the Codex release lookup has failed for over a day | | after #2943 |
+| - | anthropic-arm | repick-landing-notes | Six notes for the id re-pick, read with A3.6's re-check | | before wave 8 |
 | - | acceptance | natural-move | Watch the next real release through: canary, move, a new session, no sessions-behind warning | | watched from wave 1's rollout |
 
 Order: wave 3 waits on #2943, because its fix is in the writer and doctor files #2943 holds. Wave 5 builds on wave 4
@@ -97,12 +109,14 @@ session cannot read the server box's roster, so 407 was confirmed on the owner's
 
 ## Decisions & deviations
 
-- **Deviation numbers:** 8743 to 8748 were issued 2026-11-18 at run 2450's open, and 8750 to 8756 later the same day
-  (8749 went to another programme). Each is defined in the plan of the wave that departs, never here first:
+- **Deviation numbers:** 8743 to 8748 were issued 2026-11-18 at run 2450's open, and 8750 to 8756 and 8757 to 8758
+  later the same day (8749 went to another programme). Each is defined in the plan of the wave that departs, never
+  here first:
   - D-8743 in wave 2's plan (`docs/superpowers/plans/2026-11-18-model-class-advance-w2-client-version.md`);
   - D-8744 to D-8748, D-8750 and D-8751 in the Anthropic arm's plan
     (`docs/superpowers/plans/2026-11-18-model-class-advance-anthropic-arm.md`);
-  - D-8752 to D-8756 in the codex-arm plan's Deviations found, for wave 4.
+  - D-8752 to D-8756 in the codex-arm plan's Deviations found, for wave 4;
+  - D-8757 and D-8758 in the same Deviations found, for wave 5.
 - **The catalogue's client version (2026-11-18).** A Codex-lane session reported its class on an older model of its
   family after a newer release. The lane's catalogue was fresh (read hourly, 24 runs a day, no failures) and did not
   list the newer model. `ccd/ccrc-models-probe` asked the Codex catalogue as client `0.160.0`, a constant since
@@ -123,6 +137,10 @@ session cannot read the server box's roster, so 407 was confirmed on the owner's
   those guards with one bound: a `picked=` key, so a given id is acted on at most once per session, and only a positive
   hand pick stands it down (D-8744). The last round's minor points are a follow-up ticket (`repick-landing-notes`), read
   with A3.6's re-check against the A3.0 measurements before wave 8 dispatches.
+- **Two changes wait for the Codex bridge's check week to close (2026-11-21).** The week reads the doctor and the GPT
+  lanes' usage units every day, and a merge reaches the fleet within hours. So #2943's doctor checks land after it
+  (D-8689), and so does `usage-user-agent`, which changes what the usage reader sends. Both are built and reviewed
+  meanwhile.
 - **Landing without a further review round.** Waves 2, 4 and 6 each ended with a last fix round of minor or
   text-closable findings. The coordinator checked each with two independent Opus readers (one for conformance to the
   rulings, one for correctness) and landed it, rather than spend another review round.
@@ -135,17 +153,19 @@ session cannot read the server box's roster, so 407 was confirmed on the owner's
 - The repository is public: lanes are `lane-a` and `lane-b`, hosts are "the server box" and "the fleet box".
 - Every head commit on a branch that edits a plan carries a `Ledger-Edit:` trailer, in the same paragraph as
   `Co-Authored-By:` so that git reads it as a trailer.
-- D-8693's rulings stand: the argv-grammar refusal words stay `unreadable`, and an unknown advance state stays
-  `unreadable` until wave 5. No wave adds an advance state word before wave 5 lands.
+- D-8693's rulings stand: the argv-grammar refusal words stay `unreadable`. Since wave 5, an advance state word the
+  server does not know reads `invalid`, with the classes kept.
 - #2943 is never rebased: its README bytes were consented exactly as they are. No other wave edits its files.
 
-## Next-wave brief (wave 5)
+## Next-wave brief (wave 3, after #2943)
 
-- Ticket `retire-grant` (wave R3b in the codex-arm plan's re-plan). Its gate, R3 running on both boxes, is met.
-- Remove `isLaneModelsReadName` and its text in `agent/CLAUDE.md`; the server reads a lane's models only through the
-  `models` op.
-- Every op outcome reaches the caller as its own answer. `unsupported`, `not-started`, `refused` and `busy` are each
-  their own word, and none falls back to the files. The refusals the files path used to cover read `unreadable`, with
-  the refusal's code carried.
-- An advance state word the server does not know reads `invalid`, with the classes kept.
-- A test reds if the grant comes back, and both mixed-version pairs are tested.
+- Tickets `backward-move` and `effort-level-dropped` (epic catalogue-current). Its gate: #2943 merged, because both
+  fixes are in the writer and the models op files #2943 holds.
+- `backward-move`: on 2026-11-10 one Codex lane's opus class moved to an older model of its family and back two hours
+  later, each move after a passing canary. Find why (a catalogue that briefly dropped the newer model, or the version
+  order) and fix the cause, so a class never moves to an older version (Done-when 2's other half).
+- `effort-level-dropped`: when a newer catalogue no longer offers an effort level a class has stored, the registry
+  parse throws, and the lane's hourly refresh then skips the lane, so its stale catalogue is never replaced. Instead
+  the refresh keeps running, the class falls back to an offered level or is reported, and doctor names the lane and
+  its remedy.
+- Each fix carries a test that reds without it, and the wave is safe in the mixed-version window at merge.

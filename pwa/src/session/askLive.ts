@@ -243,7 +243,7 @@ export type AskSource =
   /** No menu, or no `ask`/`ask_cleared` frame yet on this connection: nothing to show. */
   | { kind: 'none' }
   /** The hook's permission envelope; its summary is already redacted on the wire. */
-  | { kind: 'approval'; approval: { tool: string; summary: string } }
+  | { kind: 'approval'; approval: { tool: string; summary: string; thread?: 'subagent' } }
   /** The pane is on the ask's review screen. `summary` lists each structured question's header and the pane's mark
    *  (a position fact; null when the tab row does not line up with the questions); never a pane line. */
   | { kind: 'review'; rows: ReviewRows; summary: { header: string; answered: boolean | null }[] }

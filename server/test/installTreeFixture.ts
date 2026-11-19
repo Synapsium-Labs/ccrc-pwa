@@ -183,6 +183,9 @@ export const TREE_FILES = [
   'ccd/lib/pool-set.sh',
   // Its fifth library (the Overlord's ccd arms): read, pinned and published exactly as the others.
   'ccd/lib/long-lived.sh',
+  'ccd/lib/door.sh',
+  // The door program (plan question 2): read with `read_regular`, pinned (`__CCD_DOOR_SHA256`) and published beside the body by the same installer.
+  'ccd/door-process.mjs',
   'ccd/ccd-cap-scopes',
   // graphify Task 10: the sweep executable `_inst_bins` ships alongside the
   // other two, unconditionally (mirrors the `ccd-cap-scopes` line — only the
@@ -256,6 +259,7 @@ export const TREE_FILES = [
   'ccd/lib/transcript.jq',
   // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.
   'ccd/lib/roster-card.jq',
+  'ccd/lib/mail-hold.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
   // the in-flight manifest's program (session-continuity 6b); placed beside it.

@@ -48,10 +48,10 @@ import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
 import { currentDetails, routableSlots, routeLinear } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
-import { restoredDescription } from './driftPolicy.js';
+import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
-  withoutPutBack, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  withoutPutBack, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -80,7 +80,9 @@ export interface RestoreTarget {
   /** The drift is in the project's link to its initiative (or the initiative's to it): the link is made again under the restore's own
    *  request id. Absent: the update alone (an update keeps the stored link mark, D-8183, so the sync sends no second link). */
   link?: boolean;
-  comment?: { body: string; requestId: string };
+  /** The drift comment: `body` names values and passes the public-text check before it is sent; refused (review 2457 F3), the
+   *  restore's field writes still go and `fallbackBody`, ccrc's own words naming the fields only, goes instead. */
+  comment?: { body: string; fallbackBody: string; requestId: string };
   restoredLine?: { line: string; linearDescription: string | null };
   /** An issue's grace stands (§7.3, `graceVerdict`): its update goes without its state, as C12's `state-held` sends it, so a
    *  restore of another field in the same pass never ends the grace (review 2386 A5). */
@@ -127,6 +129,9 @@ type Flow = 'next' | 'defer' | 'held';
 /** The steps a restore sends: an absolute update and, for a project under a live initiative, its link (never a create). */
 type Restorable = Extract<SyncStep, { kind: 'update' | 'link' }>;
 type Failure = Exclude<CcrcOpOutcome, { ok: true }>;
+/** What one restore's steps did in Linear (A-4): `wrote` a call was answered ok; `same` Linear already held the plan (the issue read
+ *  said `same`, or a link answered `conflict`). Neither: nothing went (no key, no slot). */
+interface SendNote { wrote: boolean; same: boolean }
 /** What failing a binding needs to know about its object (a skip's binding is failed with no slot: A2). */
 interface Told { slug: string; local: Local; workspaceId: string; bindingId: number | null; inputs: string; plan: StoredPlan }
 /** What a failed outcome needs to know about the object it was for. */
@@ -317,33 +322,49 @@ export class PlanSync {
     return this.withFlight(key, async () => {
       const outcome = (t: RestoreTarget, o: RestoreOutcome['outcome'], word?: string, commented = false): RestoreOutcome =>
         ({ bindingId: t.bindingId, outcome: o, ...(word === undefined ? {} : { word }), commented });
+      // Round 6 P3: a restore is a write, so it asks every hold the sync keeps, inside the flight and before it sends: the programme's
+      // persisted failure hold here, its workspace's and its key's per target below. Nothing is sent and the drift read comes again.
+      // Review 2457 A3: a hold answers `deferred` only for a target that would otherwise be sent; a moot target is `moot` held or not
+      // (`restoreTargetVerdict`), so the snapshot is read even while the programme is held (read-only then: a held programme advances
+      // no episode and asks for no fill).
+      const now = this.deps.now();
+      const programmeHeld = restoreHoldVerdict({ programmeHeldUntil: this.deps.plan.heldSyncUntil(key, now), releaseAt: 0, now }) === 'defer';
       const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
       if (store.kind === 'unreadable') return targets.map((t) => outcome(t, 'deferred'));
-      const built = this.snapshot(key, store);
+      const built = this.snapshot(key, store, programmeHeld);
       if (built === null) return targets.map((t) => outcome(t, 'moot'));
-      const live = targets.filter((t) => {
+      const heldTarget = (t: RestoreTarget): boolean => {
+        const ws = built.snap.bindings.find((x) => x.id === t.bindingId)?.workspaceId;
+        return ws !== undefined && restoreHoldVerdict({ programmeHeldUntil: null, releaseAt: this.releaseOf(key, ws), now: this.deps.now() }) === 'defer';
+      };
+      const verdicts = new Map(targets.map((t) => {
         const b = built.snap.bindings.find((x) => x.id === t.bindingId);
-        return b !== undefined && b.state === 'bound' && b.linearId !== null && b.fingerprint === t.seen;
-      });
-      const force = new Map(live.map((t) => [t.bindingId, t.tag] as const));
+        const moot = !(b !== undefined && b.state === 'bound' && b.linearId !== null && b.fingerprint === t.seen);
+        return [t.bindingId, restoreTargetVerdict({ moot, programmeHeld, targetHeld: heldTarget(t) })] as const;
+      }));
+      const force = new Map(targets.filter((t) => verdicts.get(t.bindingId) === 'send').map((t) => [t.bindingId, t.tag] as const));
       const steps = planSyncSteps(built.snap, { force }).steps;
       const deadlineAt = this.deps.now() + PLAN_SYNC_TICK_DEADLINE_MS;
       const out: RestoreOutcome[] = [];
       for (const t of targets) {
-        if (!force.has(t.bindingId)) { out.push(outcome(t, 'moot')); continue; }
+        if (!force.has(t.bindingId)) { out.push(outcome(t, verdicts.get(t.bindingId) === 'moot' ? 'moot' : 'deferred')); continue; }
         const mine = steps.filter((x): x is Restorable => (x.kind === 'update' || (x.kind === 'link' && t.link === true)) && x.bindingId === t.bindingId);
         if (mine.length === 0) { out.push(outcome(t, 'deferred')); continue; }          // nothing to send (a skip): the sync's own pass says why
         let flow: Flow = 'next';
+        const note: SendNote = { wrote: false, same: false };
         for (const step of mine) {
-          flow = await this.execute(key, this.withRestoredLine(t.holdState === true && step.kind === 'update' && step.op === 'issueUpdate' ? withoutState(step) : step, t), built, deadlineAt, pass);
+          flow = await this.execute(key, this.withRestoredLine(t.holdState === true && step.kind === 'update' && step.op === 'issueUpdate' ? withoutState(step) : step, t), built, deadlineAt, pass, note);
           if (flow !== 'next') break;
         }
         const b = this.bindingById(key, t.bindingId);
         const final = mine[mine.length - 1]!.fingerprint;
         if (flow !== 'next') { out.push(outcome(t, 'deferred')); continue; }
         if (b?.state === 'failed') { out.push(outcome(t, 'refused', b.failedWord ?? 'unknown')); continue; }
+        // A-4: a restore is recorded only when something was written. Nothing sent because Linear already holds the plan is `moot`;
+        // nothing sent because the key or the slot is missing is `deferred`: either way no comment and no record.
+        if (!note.wrote) { out.push(outcome(t, note.same ? 'moot' : 'deferred')); continue; }
         if (b === null || b.state !== 'bound' || b.fingerprint !== final) { out.push(outcome(t, 'deferred')); continue; }
-        const commented = t.comment === undefined ? false : await this.restoreComment(b, t.comment, built, pass);
+        const commented = t.comment === undefined ? false : await this.restoreComment(key, b, t.comment, built, pass);
         out.push(outcome(t, 'restored', undefined, commented));
       }
       return out;
@@ -360,17 +381,25 @@ export class PlanSync {
   }
 
   /** The drift comment on a restored object: an initiative, a project or an issue (never a milestone). A `conflict` answer is a
-   *  comment made already (the same request id). Answers whether it was sent or found made. */
-  private async restoreComment(b: BindingRow, c: { body: string; requestId: string }, built: NonNullable<ReturnType<PlanSync['snapshot']>>, pass: RestorePass): Promise<boolean> {
+   *  comment made already (the same request id). Answers whether it was sent or found made.
+   *
+   *  PUBLIC TEXT (review 2457 F3, the coordinator's ruling; spec §6.1): the comment passes the same check as every sync step's text
+   *  (`textRefusalOf`, with the binding's project facts and the installer's private tracker keys) before it is sent. Refused, the
+   *  restore's field writes have gone already and the comment is the fixed fallback (`restoreCommentChoice`), and the refusal is told
+   *  once to the owner in a fixed sentence (`mailRestoreTextRefused`), as a sync step's text refusal is told: it fails no binding
+   *  here, since the fields were put back. */
+  private async restoreComment(slug: string, b: BindingRow, c: { body: string; fallbackBody: string; requestId: string }, built: NonNullable<ReturnType<PlanSync['snapshot']>>, pass: RestorePass): Promise<boolean> {
     const slot = built.slots.get(b.workspaceId);
     if (slot === undefined || b.linearId === null) return false;
+    const chosen = restoreCommentChoice(c, textRefusalOf([c.body], textFactsOf(built.snap, b), built.snap.privateTrackerKeys));
+    if (chosen.refused) this.mailRestoreTextRefused(slug, b, built.snap.plan);
     const [op, key, target, teamKey] = b.localKind === 'programme' ? ['initiativeComment', 'initiativeId', b.linearId, null] as const
       : b.localKind === 'epic' ? ['projectComment', 'projectId', b.linearId, b.teamKey] as const
       : b.localKind === 'ticket' ? ['issueComment', 'issueId', b.identifier ?? b.linearId, b.teamKey] as const : [null, null, null, null] as const;
     if (op === null) return false;
     const out = await this.deps.call({
       op, pass, lane: 'sync', slot: slot.ref, workspaceId: b.workspaceId, teamKey, target, fields: ['body'],
-      input: { requestId: c.requestId, [key]: b.linearId, body: c.body },
+      input: { requestId: c.requestId, [key]: b.linearId, body: chosen.body },
     });
     return out.ok || (out.word === 'linear-invalid' && out.detail === 'conflict');
   }
@@ -609,7 +638,7 @@ export class PlanSync {
 
   // ── One step ──
 
-  private async execute(slug: string, step: SyncStep, built: NonNullable<ReturnType<PlanSync['snapshot']>>, deadlineAt: number, pass: SendPass = 'plan-sync'): Promise<Flow> {
+  private async execute(slug: string, step: SyncStep, built: NonNullable<ReturnType<PlanSync['snapshot']>>, deadlineAt: number, pass: SendPass = 'plan-sync', note?: SendNote): Promise<Flow> {
     const { plan } = this.deps;
     if (step.kind === 'skip') {
       // `status-missing`, `text-public`, `workspace-mismatch`: the object's binding is failed with the reason.
@@ -667,6 +696,7 @@ export class PlanSync {
       if (verdict === 'next') return 'next';
       // A10 (§5.5): the read's identifier is the issue's now (a move whose reply was lost has a new one).
       if (verdict === 'same') {
+        if (note !== undefined) note.same = true;
         this.bind(b, b.linearId, typeof held === 'object' && held.identifier !== null ? held.identifier : b.identifier, step.fingerprint, step.teamKey);
         this.progressed(slug, step.workspaceId); return 'next';
       }
@@ -686,12 +716,14 @@ export class PlanSync {
     const out = await this.deps.call(step.kind === 'update' && step.op === 'issueUpdate'
       ? { ...ask, teamKey: currentTeam, ...(moves ? { destinationTeamKey: step.teamKey } : {}) } : ask);
     if (out.ok) {
+      if (note !== undefined) note.wrote = true;
       this.bind(b, b.linearId, this.identifierOf(out, b), step.fingerprint, step.kind === 'update' && step.op === 'issueUpdate' ? step.teamKey : undefined);
       this.progressed(slug, step.workspaceId);
       return 'next';
     }
     // C4: a link answered "conflict" is a link that exists already: the same write as an ok.
     if (step.kind === 'link' && out.word === 'linear-invalid' && out.detail === 'conflict') {
+      if (note !== undefined) note.same = true;
       this.bind(b, b.linearId, b.identifier, step.fingerprint);
       return 'next';
     }
@@ -857,6 +889,16 @@ export class PlanSync {
     this.blockedUntil.set(workspaceId, Math.max(this.blockedUntil.get(workspaceId) ?? 0, until));
     void this.deps.markSlotRejected(slot.ref, slot.digest, this.deps.now()).catch(() => { /* the key card shows the rest */ });
   }
+  /** A workspace's key was refused by one of the drift pass's READS (round 6 P3, A-3): the same hold as a write's 401, on the plan
+   *  sync's own schedule (`deferTime` under a key of its own, the `linear-unauthorised` deferral), never a schedule of the pass's.
+   *  Answers the time it holds to. */
+  keyRefusedByRead(workspaceId: string, slot: Pick<SlotInfo, 'ref' | 'digest'>): number {
+    const until = this.deferTime(`read|${workspaceId}`, deferralOf('linear-unauthorised'), {});
+    this.keyRefused(workspaceId, slot, until);
+    return until;
+  }
+  /** A drift read in `workspaceId` was answered: the read hold's backoff starts again (as `progressed` does for a write's). */
+  keyReadAnswered(workspaceId: string): void { this.attempts.delete(`read|${workspaceId}`); }
   /** Until when a workspace's refused key holds every write lane there (0: not held). */
   keyBlockedUntil(workspaceId: string): number { return this.blockedUntil.get(workspaceId) ?? 0; }
 
@@ -963,6 +1005,15 @@ export class PlanSync {
     const key = s.local.kind === 'programme' ? s.slug : this.planKeyOf(s.plan, s.local);
     this.mailOnce(s.slug, `Linear sync: ${OBJECT_WORD[s.local.kind]} ${key} ${word} (${s.slug})`,
       `The Linear sync could not write the ${OBJECT_WORD[s.local.kind]} ${key} of ${s.slug} (${word}). It stays as it is until the plan or the Linear setup changes, and the sync retries by itself.`);
+  }
+
+  /** Review 2457 F3: a restore comment the public-text check refused, told once per object, in a fixed sentence (never a value, never
+   *  the check's class). The comment went out as ccrc's fallback naming the fields only, and the restore's field writes went. */
+  private mailRestoreTextRefused(slug: string, b: BindingRow, plan: StoredPlan): void {
+    const local: Local = { kind: b.localKind, id: b.localId };
+    const key = b.localKind === 'programme' ? slug : this.planKeyOf(plan, local);
+    this.mailOnce(slug, `Linear sync: ${OBJECT_WORD[b.localKind]} ${key} restore-comment text-public (${slug})`,
+      `The Linear sync put back the ${OBJECT_WORD[b.localKind]} ${key} of ${slug} after it was changed in Linear, but the comment it would have left named text that is not safe to post in a public project. It left a comment that names only the fields it put back.`);
   }
 
   /** C16: a refused PR link, told once per ticket and word, in a fixed sentence (never the URL). */

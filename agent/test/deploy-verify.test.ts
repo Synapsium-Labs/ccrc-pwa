@@ -208,11 +208,13 @@ const stampedCcd = (dir: string): Buffer => {
   const lines = readFileSync(path.join(dir, 'ccd'), 'utf8')
     .replace(/^__CCD_REDACT_SHA256=stamp-at-install$/m, `__CCD_REDACT_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact.mjs'))}`)
     .replace(/^__CCD_REDACT_CLI_SHA256=stamp-at-install$/m, `__CCD_REDACT_CLI_SHA256=${digestOf(path.join(dir, '..', 'shared', 'redact-cli.mjs'))}`)
+    .replace(/^__CCD_DOOR_SHA256=stamp-at-install$/m, `__CCD_DOOR_SHA256=${digestOf(path.join(dir, 'door-process.mjs'))}`)
     .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${libDigest}`)
     .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${digestOf(path.join(dir, 'lib', 'train-proof.sh'))}`)
     .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${digestOf(path.join(dir, 'lib', 'delegation-lease.sh'))}`)
     .replace(/^__CCD_LIB_POOLSET_SHA256=stamp-at-install$/m, `__CCD_LIB_POOLSET_SHA256=${digestOf(path.join(dir, 'lib', 'pool-set.sh'))}`)
-    .replace(/^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$/m, `__CCD_LIB_LONGLIVED_SHA256=${digestOf(path.join(dir, 'lib', 'long-lived.sh'))}`).split('\n');
+    .replace(/^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$/m, `__CCD_LIB_LONGLIVED_SHA256=${digestOf(path.join(dir, 'lib', 'long-lived.sh'))}`)
+    .replace(/^__CCD_LIB_DOOR_SHA256=stamp-at-install$/m, `__CCD_LIB_DOOR_SHA256=${digestOf(path.join(dir, 'lib', 'door.sh'))}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return Buffer.from(markGenerated(lines.join('\n')));
 };
@@ -1822,9 +1824,12 @@ describe('the verification is actually wired into the deploy, and can observe a 
       'cp -a ~/.local/libexec/ccrc/lib/delegation-lease.sh ~/ccrc-backups/$TS/ccd-lib-delegation-lease.sh;',
       'cp -a ~/.local/libexec/ccrc/lib/pool-set.sh ~/ccrc-backups/$TS/ccd-lib-pool-set.sh;',
       'cp -a ~/.local/libexec/ccrc/lib/long-lived.sh ~/ccrc-backups/$TS/ccd-lib-long-lived.sh;',
+      'cp -a ~/.local/libexec/ccrc/lib/door.sh ~/ccrc-backups/$TS/ccd-lib-door.sh;',
       // The docs redactor's two files (D-7077), in the library's guarded form.
       'cp -a ~/.local/libexec/ccrc/shared/redact.mjs ~/ccrc-backups/$TS/ccd-shared-redact.mjs;',
-      'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;']) {
+      'cp -a ~/.local/libexec/ccrc/shared/redact-cli.mjs ~/ccrc-backups/$TS/ccd-shared-redact-cli.mjs;',
+      // The door program (the Overlord door process A2), beside the body, pinned by it.
+      'cp -a ~/.local/libexec/ccrc/door-process.mjs ~/ccrc-backups/$TS/ccd-door-process.mjs;']) {
       expect(deploySh.indexOf(backup), `not backed up: ${backup}`).toBeGreaterThan(-1);
       expect(deploySh.indexOf(backup), `backed up only after the rsync: ${backup}`).toBeLessThan(rsyncAt);
     }
@@ -1844,10 +1849,11 @@ describe('the verification is actually wired into the deploy, and can observe a 
       for (const f of ['ccd', 'ccd-entry.py', 'ccd-entry-install.py']) cpSync(path.join(repoCcd, f), path.join(home, 'ccrc', 'ccd', f));
       // The libraries the body pins and the publisher places first (D-6913, D-7463).
       mkdirSync(path.join(home, 'ccrc', 'ccd', 'lib'), { recursive: true });
-      for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh', 'long-lived.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
+      for (const f of ['disk-retention.sh', 'train-proof.sh', 'delegation-lease.sh', 'pool-set.sh', 'long-lived.sh', 'door.sh']) cpSync(path.join(repoCcd, 'lib', f), path.join(home, 'ccrc', 'ccd', 'lib', f));
       // The docs redactor's two files (D-7077), which the publisher places beside the library and pins in the body.
       mkdirSync(path.join(home, 'ccrc', 'shared'), { recursive: true });
       for (const f of ['redact.mjs', 'redact-cli.mjs']) cpSync(path.join(repoCcd, '..', 'shared', f), path.join(home, 'ccrc', 'shared', f));
+      cpSync(path.join(repoCcd, 'door-process.mjs'), path.join(home, 'ccrc', 'ccd', 'door-process.mjs'));   // the door program (A2)
       return home;
     };
 
@@ -1870,6 +1876,8 @@ describe('the verification is actually wired into the deploy, and can observe a 
         'the fourth library is the tree\'s').toBe(true);
       expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'long-lived.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'long-lived.sh'))),
         'the fifth library is the tree\'s').toBe(true);
+      expect(readFileSync(path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'door.sh')).equals(readFileSync(path.join(repoCcd, 'lib', 'door.sh'))),
+        'the sixth library is the tree\'s').toBe(true);
       const entry = path.join(home, '.local', 'bin', 'ccd');
       const bodyPath = path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
       const shebang = readFileSync(entry, 'utf8').split('\n')[0]!;

@@ -97,6 +97,8 @@ describe('prefix matching is a prefix, not a substring', () => {
     // in whitelist.test.ts.
     [['ws-hold']], [['ws-hold', '--all']], [['ws-holdx', '--session', 'x']],
     [['ws-release']], [['ws-release', '--all']], [['ws-releasex', '--session', 'x']],
+    // The skill self-install (D-8126): same bare/substring refusals as the other single-flag verbs.
+    [['skill-ensure']], [['skill-ensure', '--all']], [['skill-ensurex', '--wrapper', 'x']],
   ])('refuses ccd %j', (args) => {
     expect(isExecAllowed('ccd', args as string[])).toBe(false);
   });

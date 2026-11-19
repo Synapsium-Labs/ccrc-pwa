@@ -19,7 +19,12 @@ const DIGEST = committedDigest('overlord');
 const OTHER = 'f'.repeat(64);
 
 let h: CcdHarness;
-beforeEach(() => { h = makeCcdHarness('ccrc-ccd-launch-moves-'); });
+beforeEach(() => {
+  h = makeCcdHarness('ccrc-ccd-launch-moves-');
+  // The client a surfaced spawn's door process runs: the spawn refuses without it (review 2735 departure 3, review 2756 F3).
+  fs.mkdirSync(path.join(h.home, '.local', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(h.home, '.local', 'bin', 'ccrc-api'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+});
 afterEach(() => { h.cleanup(); });
 
 /** The unit manager and tmux log instead of acting; no pane is up; the unit's start FAILS, so a swap's tail and a
@@ -212,6 +217,7 @@ describe('with the digest equal, each move goes as today', () => {
     expect(kills()).toHaveLength(1);
     expect(h.reg(ID, 'wrapper')).toBe('claude-d');
     expect(swappedLines()).toHaveLength(1);
+    expect(refusedLines(), 'the surfaced spawn after the swap was not refused').toEqual([]);
   });
   it('a row without profiledigest swaps as today', () => {
     seed(OTHER);

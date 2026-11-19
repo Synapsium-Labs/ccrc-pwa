@@ -29,7 +29,9 @@ import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
-import { RENEW_REQUESTS_CURSOR, effectiveGeneration, sessionLiveGeneration, type TimerRow } from './continuityStore.js';
+import {
+  RENEW_REQUESTS_CURSOR, effectiveGeneration, newestMintedStartOf, sessionLiveGeneration, startByNonce, type TimerRow,
+} from './continuityStore.js';
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
@@ -43,6 +45,11 @@ import {
 } from './notes.js';
 import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
 import { identityOf as generationIdentityOf } from '../roleOf.js';
+import type { Entropy } from '../time/ports.js';
+import { NONCE_SHA256_SHAPE, claimWhyText } from '../../../shared/continuity-door.js';
+import { actKeyClaimVerdict } from './actKey.js';
+import { actKeyByNonce, issueActKey, noteRefusedClaim } from './actKeyStore.js';
+import type { GateClaim, GateRun } from '../coord/overlordGateRun.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -53,8 +60,17 @@ export interface ContinuityRouteDeps {
   attribute: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The server's wall clock (`deps.time.clock.wall`): `receivedAt`, what every reader ages a start from (§11.5). */
   wall: () => number;
-  /** The card door's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
+  /** The server's entropy (`deps.time.entropy`): the act key the claim door mints, 32 bytes as hex. Absent on a server built
+   *  without one (a test of another door): the claim door answers `unavailable`, as for an absent store. */
+  entropy?: Pick<Entropy, 'hex'>;
+  /** The timer read's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
+  /** THE ONE GATE (Overlord W1 gates B, §11.2; `coord/overlordGateRun.ts`): the six start doors and the card's recording page
+   *  ask it with their own row's key, after their token and shape checks and before any store access, and stop on `refused`.
+   *  It runs the same attribution the doors ran before; a session that is not the Overlord is answered `hook` and served as
+   *  before. Absent (a server built without it, a test of another door): every start door answers `unavailable`, as for an
+   *  absent store (slug gate-dep-optional-fails-closed). */
+  gate?: (req: FastifyRequest, reply: FastifyReply, key: string, claim: GateClaim) => Promise<GateRun>;
   /** The card's registry reads (`gatherCardFacts`' ports other than the store); the timer set door's role read reuses them. */
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
   /** The private store's text-free message read, for a `miss` note's key (`NoteKeysMessages`), resolved per request. Absent, or
@@ -173,6 +189,10 @@ function bindingOf(coord: CoordStore, id: string, bound: { runId: number | null;
 }
 
 export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityRouteDeps): void {
+  const gate = deps.gate ?? (async (_req: FastifyRequest, reply: FastifyReply): Promise<GateRun> => {
+    await refuseRoute(reply, 'unavailable', { detail: 'this server has no Overlord gate' });
+    return { kind: 'refused' };
+  });
   // THE MEMO OF SERVED PAGES (slug card-read-is-the-last-page): which pages of one card hash this door served to one
   // conversation. A full read is recorded only when every page of that hash was served to it; a different hash starts
   // over. Bookkeeping, never a decision's durable state: a restart forgets a card half read, so every answer says whether
@@ -236,12 +256,19 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // the sender's current one in `fromUuid`, which alone is attributed. Absent or null (an older hook), it is `fromUuid`.
     const startedUuid = b['startedUuid'] ?? uuid;
     if (typeof startedUuid !== 'string' || !IDENTITY_RE.test(startedUuid)) return refuseRoute(reply, 'bad-request', { detail: 'startedUuid' });
+    // The launch nonce's sha256 the spawn bound (the door process, Overlord W1): absent or null (an older hook, a start no spawn
+    // bound) is stored null and binds no nonce; any other value must be the shape.
+    const doorNonceSha256 = b['doorNonceSha256'] ?? null;
+    if (doorNonceSha256 !== null && (typeof doorNonceSha256 !== 'string' || !NONCE_SHA256_SHAPE.test(doorNonceSha256))) {
+      return refuseRoute(reply, 'bad-request', { detail: 'doorNonceSha256' });
+    }
     const attributed = await deps.attribute(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
-    const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
+    const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall(),
+      doorNonceSha256 });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
     if (r.fresh) noteStart(memoKey(id, startedUuid));
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
@@ -282,6 +309,56 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_start_loads could not be written' });
     return reply.code(202).send({ ok: true, startId: r.startId, fresh: r.fresh });
+  });
+
+  /**
+   * `POST /api/sessions/:id/act-key` (Overlord W1 door process A1; spec §3.3.11 H12 "The fence", §3.6 H1): the door process's
+   * one claim. A box-token machine lane, an `auth/gate.ts` EXEMPT entry, as the start report is: the token first, then the
+   * path's session is the sender (`not-owner`), then the body's shape (`fromUuid`, and `nonce`, 64 lowercase hex: 400
+   * `bad-request` with no echo of the value), then the registry's attribution of `fromUuid`, then the facts, each read once in
+   * one synchronous stretch (`actKeyByNonce`, `newestMintedStartOf`, `startByNonce`), then `actKeyClaimVerdict`. On `issue` it mints
+   * the key (`entropy.hex(32)`), stores only its sha256 through `issueActKey`, and answers `200 { ok, generation, key }` only on
+   * `{ ok: true }`: a refused insert (two claims racing) answers `stale-generation` (`nonce-spent`), never a key. A refusal is
+   * 409 `stale-generation` or `renewing`, or 502 `unmeasured`, its why in `detail`; a spent nonce raises `claimsRefused` on the row only when its generation is this session's. THE
+   * NONCE AND THE KEY ARE SECRETS: no line this door logs names either, only the session, the start and the why.
+   */
+  app.post('/api/sessions/:id/act-key', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/act-key');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    if (b['fromId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'fromId must be the session the path names' });
+    const uuid = b['fromUuid'];
+    if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const nonce = b['nonce'];
+    if (typeof nonce !== 'string' || !NONCE_SHA256_SHAPE.test(nonce)) return refuseRoute(reply, 'bad-request', { detail: 'nonce: 64 lowercase hex' });
+    const attributed = await deps.attribute(id, uuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    const entropy = deps.entropy;
+    if (coord === undefined || entropy === undefined) return refuseRoute(reply, 'unavailable');
+    const presented = sha256(nonce);
+    const v = actKeyClaimVerdict({
+      presented, spent: actKeyByNonce(coord.db, presented), newest: newestMintedStartOf(coord.db, id), matching: startByNonce(coord.db, id, presented),
+    });
+    const refused = (error: 'renewing' | 'stale-generation' | 'unmeasured', why: Parameters<typeof claimWhyText>[0]): FastifyReply => {
+      if (why === 'nonce-spent') noteRefusedClaim(coord.db, presented, id, deps.wall());
+      console.warn(`ccrc-server: act-key: the claim of ${id} refused ${error} (${why})`);
+      return refuseRoute(reply, error, { detail: `${why}: ${claimWhyText(why)}` });
+    };
+    if (v.kind === 'refuse') return refused(v.error, v.why);
+    const key = entropy.hex(32);
+    const issued = issueActKey(coord.db, { generationId: v.generationId, nonceSha256: presented, keySha256: sha256(key), issuedAt: deps.wall() });
+    if (!issued.ok) return issued.error === 'refused' ? refused('stale-generation', 'nonce-spent')
+      : refuseRoute(reply, 'write-failed', { detail: 'continuity_act_keys could not be written' });
+    console.warn(`ccrc-server: act-key: issued to ${id} for generation ${v.n}`);
+    return reply.code(200).send({ ok: true, generation: v.n, key });
   });
 
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that
@@ -359,12 +436,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const form = q['form'] ?? 'start';
     if (part !== undefined && part !== 'anchor') return refuseRoute(reply, 'bad-request', { detail: 'part is anchor, or absent for the card' });
     if (part === undefined && q['form'] !== undefined) return refuseRoute(reply, 'bad-request', { detail: 'form is part=anchor\'s' });
-    if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt or fork' });
+    if (!isAnchorForm(form)) return refuseRoute(reply, 'bad-request', { detail: 'form is start, prompt, fork or delta' });
     // The conversation's start as this request began, before its first await (review 2087 F3).
     const key = memoKey(id, uuid);
     const begun = startOf(key);
-    const attributed = await deps.attributeReader(id, uuid);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const g = await gate(req, reply, 'card', { sessionId: id, uuid, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
@@ -377,16 +454,31 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const hash = sha256(text);
     if (part === 'anchor') {
       const { live, newest } = anchorReads(coord, id);
-      const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, form === 'prompt' ? 'prompt' : 'start', (t) => masker.maskText(t));
-      if (!anchorLive) logShadowAnchor(id, form, hash, anchor);
-      return reply.code(200).send(anchorAnswer(anchorLive, { form: form === 'prompt' ? 'prompt' : 'start', hash, text: anchor }));
+      const textForm = form === 'prompt' || form === 'delta' ? form : 'start';
+      const anchor = renderAnchor(facts, { cardHash: hash, generation: anchorGeneration(live, newest) }, textForm, (t) => masker.maskText(t));
+      // The delta is fetched every minute by the door process, so its shadow is not logged (slug delta-shadow-not-logged).
+      if (!anchorLive && textForm !== 'delta') logShadowAnchor(id, form, hash, anchor);
+      return reply.code(200).send(anchorAnswer(anchorLive, { form: textForm, hash, text: anchor }));
     }
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);
+    const slices = cardPages(text);
+    // The Overlord's read that would complete its card is a fenced write (slug card-record-is-fenced), asked before anything is
+    // written, so a refusal writes nothing (review 2803 F3). Whether this page completes the read is read off the memo as it
+    // stands; the memo is read again after the await, and a read that completes without a fence that passed is not recorded.
+    let fenced = false;
+    if (g.kind === 'pass' && (asked === undefined || asked === hash) && page <= slices.length && begun === startOf(key)) {
+      const before = served.get(key);
+      const pages = new Set(before !== undefined && before.hash === hash && before.start === begun ? before.pages : []);
+      if (pages.add(page).size === slices.length) {
+        const f = await gate(req, reply, 'card-record', { sessionId: id, uuid, uuidField: 'byUuid' });
+        if (f.kind === 'refused') return reply;
+        fenced = true;
+      }
+    }
     const stored = coord.insertSnapshot({ id: snapshotId, sessionId: id, at, facts: factsJson, hash });
     if (!stored.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_snapshots could not be written' });
     if (asked !== undefined && asked !== hash) return refuseRoute(reply, CARD_REFUSALS.cardChanged, { hash, detail: 'the card changed: read it again from page 1' });
-    const slices = cardPages(text);
     if (page > slices.length) return refuseRoute(reply, 'bad-request', { detail: `the card has ${slices.length} page(s)` });
 
     const start = startOf(key);
@@ -397,7 +489,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (begun === start) {
       served.delete(key);
       memo.pages.add(page);
-      if (memo.pages.size === slices.length) {
+      // The Overlord's read is recorded only behind a fence that passed (above); otherwise the memo stands, so a retry of the
+      // last page asks the fence and records it.
+      if (memo.pages.size === slices.length && (g.kind !== 'pass' || fenced)) {
         const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
         if (!r.ok) {
           remember(key, memo);
@@ -461,8 +555,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const waitsOn = closes ? '' : b['waitsOn'];
     const next = closes ? '' : b['next'];
     if (typeof waitsOn !== 'string' || typeof next !== 'string') return refuseRoute(reply, 'bad-request', { detail: 'waitsOn and next are strings' });
-    const attributed = await deps.attributeReader(id, b['byUuid'] as string);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const g = await gate(req, reply, 'notes-write', { sessionId: id, uuid: b['byUuid'] as string, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 
@@ -515,8 +609,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   }, async (req, reply) => {
     const c = await caller(req, reply);
     if (c === null) return reply;
-    const attributed = await deps.attributeReader(c.id, c.b['byUuid'] as string);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const g = await gate(req, reply, 'notes-read', { sessionId: c.id, uuid: c.b['byUuid'] as string, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const rawBefore = c.b['before']; const rawLimit = c.b['limit'];
@@ -568,8 +662,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       }
       threads.push({ ref, waitsOn: o['waitsOn'], next: o['next'] });
     }
-    const attributed = await deps.attributeReader(id, b['byUuid'] as string);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const g = await gate(req, reply, 'handover', { sessionId: id, uuid: b['byUuid'] as string, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 
@@ -853,11 +947,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   const mask = (text: string): string => (deps.masker ?? SHAPE_ONLY_MASKER).maskText(text);
 
   /**
-   * `GET /api/sessions/:id/probe?byId&byUuid[&page]`: the caller's open round (its newest with no answer), every question
+   * `GET /api/sessions/:id/probe?byId&byUuid[&page][&door=1]`: the caller's open round (its newest with no answer), every question
    * masked and rendered as untrusted data, never with what it expects. One page per call (`probePages`, the card's pager):
    * `200 { ok, roundId, kind, page, pages, questions: [{ id, cls }], text }`. `probe-none-open` 409 when no round of the
    * caller's is open; `unmeasured` 502 when the rounds could not be read. The text carries session-written text and is masked
-   * here, field by field before it is rendered (`secret-mask.test.ts` lists the route under INLINE, as the card).
+   * here, field by field before it is rendered (`secret-mask.test.ts` lists the route under INLINE, as the card). `door=1` (the
+   * door process's read) phrases the page's tail as the `probe_answer` door, not a shell command.
    */
   app.get('/api/sessions/:id/probe', {
     onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
@@ -870,8 +965,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (c === null) return reply;
     const pageRaw = c.b['page'] ?? '1';
     if (typeof pageRaw !== 'string' || !PAGE_RE.test(pageRaw)) return refuseRoute(reply, 'bad-request', { detail: 'page is a positive integer' });
-    const attributed = await deps.attributeReader(c.id, c.b['byUuid'] as string);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const g = await gate(req, reply, 'probe-read', { sessionId: c.id, uuid: c.b['byUuid'] as string, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
     const open = coord.openProbeRound(c.id);
@@ -879,7 +974,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const first = open.rows[0];
     if (first === undefined) return refuseRoute(reply, PROBE_REFUSALS.noneOpen, { detail: 'no probe round of yours is open' });
     const questions = open.rows.map((r) => maskedQuestion(r, mask));
-    const pages = probePages(first.roundId, first.kind, questions);
+    const pages = probePages(first.roundId, first.kind, questions, c.b['door'] === '1');
     const page = Number(pageRaw);
     if (page > pages.length) return refuseRoute(reply, 'bad-request', { detail: `the round has ${pages.length} page(s)` });
     return reply.code(200).send({
@@ -919,8 +1014,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       }
       answers.set(qid, text);
     }
-    const attributed = await deps.attributeReader(id, b['byUuid'] as string);
-    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const g = await gate(req, reply, 'probe-answer', { sessionId: id, uuid: b['byUuid'] as string, uuidField: 'byUuid' });
+    if (g.kind === 'refused') return reply;
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 

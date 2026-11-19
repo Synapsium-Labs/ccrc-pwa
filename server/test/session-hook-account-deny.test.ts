@@ -169,6 +169,35 @@ describe('the account arm denies on every session (D-6202)', () => {
     ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
   });
 
+  it.each(CALLERS)('%s: the door process\'s directory is refused in the quoted, `$HOME` and path forms, and by Read, Grep, Glob and the edit tools (Overlord W1 door process A1, ruled F4)', (_c, id, extra) => {
+    // A top-level session reaches the arm only through the prefilter's `.door` fragment; a child through its own list.
+    for (const command of [
+      'cat ~/.cc-sessions/.door/lane-a-project-a/mcp.json', "cat '~/.cc-sessions/.door/lane-a-project-a/mcp.json'",
+      'cat "$HOME/.cc-sessions/.door/lane-a-project-a/mcp.json"', 'cat $HOME/.cc-sessions/.door/lane-a-project-a/mcp.json',
+      'cat "${HOME}"/.cc-sessions/.door/lane-a-project-a/mcp.json', 'cat /srv/home/.cc-sessions/.door/lane-a-project-a/mcp.json',
+      'cat ~/.cc-sessions//.door/lane-a-project-a/mcp.json', 'ls ~/.cc-sessions/.door', 'grep -r nonce ~/.cc-sessions/.door',
+      'echo x > ~/.cc-sessions/.door/lane-a-project-a/delta', 'cd x && head ~/.cc-sessions/.door/lane-a-project-a/mcp.json',
+    ]) expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+    for (const [tool, input] of [
+      ['Read', { file_path: `${home}/.cc-sessions/.door/lane-a-project-a/mcp.json` }], ['Read', { file_path: '~/.cc-sessions/./.door/lane-a-project-a/mcp.json' }],
+      ['Grep', { pattern: 'nonce', path: '~/.cc-sessions/.door' }], ['Glob', { pattern: '~/.cc-sessions/.door/*/mcp.json' }],
+      ['Write', { file_path: '~/.cc-sessions/.door/lane-a-project-a/delta', content: 'y' }],
+    ] as const) expect(fire(id, tool, input, extra), `${tool} ${JSON.stringify(input)}`).not.toBeNull();
+    // A registry field beside it, read around a swap, stays open.
+    expect(fire(id, 'Bash', { command: 'cat ~/.cc-sessions/lane-a-project-a.wrapper' }, extra)).toBeNull();
+  });
+
+  it.each(CALLERS)('%s: every file door process A2 writes under the door directory is refused: the config, the delta cache and both temp files', (_c, id, extra) => {
+    for (const name of ['mcp.json', 'mcp.json.tmp', 'delta', 'delta.tmp']) {
+      const f = `~/.cc-sessions/.door/lane-a-project-a/${name}`;
+      for (const command of [`cat ${f}`, `cat "$HOME/.cc-sessions/.door/lane-a-project-a/${name}"`, `cp ${f} /tmp/x`, `echo x > ${f}`]) {
+        expect(fire(id, 'Bash', { command }, extra), command).not.toBeNull();
+      }
+      for (const [tool, input] of [['Read', { file_path: f }], ['Edit', { file_path: f, old_string: 'a', new_string: 'b' }],
+        ['Write', { file_path: f, content: 'y' }]] as const) expect(fire(id, tool, input, extra), `${tool} ${name}`).not.toBeNull();
+    }
+  });
+
   it.each(CALLERS)('%s: a direct delete under the store is refused, whatever verb deletes it (the PL6 follow-up: the Remove door is the operator\'s)', (_c, id, extra) => {
     for (const command of [
       'rm ~/.ccrc/operator-secrets/prog-a/x.secret', 'rm -f "$HOME/.ccrc/operator-secrets/prog-a/x.json"', 'rm -rf ~/.ccrc/operator-secrets',

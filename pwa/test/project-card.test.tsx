@@ -1522,13 +1522,47 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
     expect(container.textContent).toContain('Unowned work (1)');
   });
 
-  it('R9 on the card: a programme worker\'s live activity is a chip on its row, never a row of its own', () => {
+  it('C46 (D-8771, supersedes R9\'s chip): a programme worker with subagents and an attached activity is drawn with no count of either, and no row for the activity', () => {
+    // The worker has real subagents, so the subagent half of this absence check can fail too (the card drew none at `main`: D-5545).
+    const subbed = { ...workerA, subagents: [{ name: 'code-reviewer', startedAt: 1 }, { name: 'explorer', startedAt: 2 }] };
+    expect(subbed.subagents).toHaveLength(2);
     const w = frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'chip' })] });
-    const { container } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+    const { container } = render(<ProjectCard group={cardFor(w, [coordA, subbed], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+    // Positive control: both session rows were drawn.
+    expect(container.querySelectorAll('.sess-line').length).toBeGreaterThanOrEqual(2);
+    expect(container.textContent).toContain('worker-a');
     expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
-    const chips = [...container.querySelectorAll('.sess-meta-chip')];
-    expect(chips.map((c) => c.textContent)).toEqual(['1 delegated']);
-    expect(chips[0]!.closest('.proj-nest')).not.toBeNull();
+    expect(container.querySelectorAll('.sess-meta-chip')).toHaveLength(0);
+    const named = [...container.querySelectorAll('*')].flatMap((el) => [el.getAttribute('aria-label'), el.getAttribute('title')])
+      .filter((x): x is string => x !== null);
+    expect(named.length).toBeGreaterThan(0);
+    expect(`${container.textContent} ${named.join(' ')}`).not.toMatch(/delegated|subagent|⑂/i);
+    // L2-1 (review 2708): a count drawn as a bare number (` · 2`) carries none of those words, so the worker's row is also the
+    // same markup with and without its subagents (the W4-U35 identity, for subagents). The row of the plain worker is the control.
+    const workerRow = (worker: typeof workerA): string => {
+      const r = render(<ProjectCard group={cardFor(w, [coordA, worker], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+      const html = [...r.container.querySelectorAll('.sess-line')].find((l) => l.textContent?.includes('worker-a'))?.outerHTML;
+      r.unmount();
+      if (html === undefined) throw new Error('worker-a row not drawn');
+      return html;
+    };
+    const plain = workerRow(workerA);
+    expect(plain.length).toBeGreaterThan(0);
+    expect(workerRow(subbed), 'the row is the same markup with and without its subagents').toBe(plain);
+  });
+
+  it('C46 (D-8771, restating W4-U35 at card level): the worker\'s row markup is identical with and without its attached activity', () => {
+    const rowOf = (w: DelegationProjectionWire): string => {
+      const { container, unmount } = render(<ProjectCard group={cardFor(w, [coordA, workerA], [prun({})])} onOpen={() => {}} onActions={() => {}} />);
+      const html = [...container.querySelectorAll('.sess-line')].find((l) => l.textContent?.includes('worker-a'))?.outerHTML;
+      unmount();
+      if (html === undefined) throw new Error('worker-a row not drawn');
+      return html;
+    };
+    const none = rowOf(frame({ activities: [] }));
+    expect(none.length).toBeGreaterThan(0);
+    expect(rowOf(frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'chip' })] }))).toBe(none);
+    expect(rowOf(frame({ activities: [activity({ activityId: 'a-w', parentId: 'worker-a', placement: 'row' })] }))).toBe(none);
   });
 
   it('a session in no programme folds three delegated activities into one line, as the rollup decided (main\'s boxes)', () => {
@@ -1539,13 +1573,13 @@ describe('delegation rows on a project card (delegation broker wave 4)', () => {
       onOpen={() => {}} onActions={() => {}} onToggleChildren={() => {}} />);
     const { container, unmount } = drawn(NO_ROLLUP_PREFS);
     expect(container.querySelector('section.pg-box'), 'coord-a claims no run: it is no box').toBeNull();
-    const line = screen.getByRole('button', { name: '3 delegated' });
+    const line = screen.getByRole('button', { name: 'delegated' });
     expect(line.getAttribute('aria-expanded')).toBe('false');
     expect(line.closest('.proj-nest')?.querySelector('.proj-nest-bracket')?.textContent).toBe(NEST_BRACKET);
     expect(container.querySelectorAll('.proj-work')).toHaveLength(0);
     unmount();
     const open = drawn(toggleChildren(NO_ROLLUP_PREFS, 'coord-a'));
-    expect(screen.getByRole('button', { name: '3 delegated' }).getAttribute('aria-expanded')).toBe('true');
+    expect(screen.getByRole('button', { name: 'delegated' }).getAttribute('aria-expanded')).toBe('true');
     expect(open.container.querySelectorAll('.proj-work')).toHaveLength(3);
   });
 

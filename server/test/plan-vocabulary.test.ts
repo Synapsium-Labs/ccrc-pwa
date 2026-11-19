@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   PLAN_REFUSALS, isPlanKebab, isPlanKey, PLAN_BOUNDS, EPIC_STATES, TICKET_STATES, HIERARCHY_STATES, PHASE_REF_KINDS, PHASE_REF_OPS,
-  LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
+  LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE, INBOUND_STATES,
 } from '../../shared/plan.js';
 import { REFUSAL_STATUS, ROUTE_REFUSALS, RUN_REFUSAL_STATUS } from '../../shared/refusal.js';
 import { RUN_REFUSE_CODES, isRunRefuseCode, SERVER_CAPS } from '../../shared/api.js';
@@ -20,7 +20,7 @@ describe('the plan vocabulary (D-8181)', () => {
       expect(ROUTE_REFUSALS as readonly string[], w).toContain(w);
       expect(REFUSAL_STATUS[w as keyof typeof REFUSAL_STATUS], w).toBe(want[w] ?? 409);
     }
-    expect(PLAN_REFUSALS).toHaveLength(23);
+    expect(PLAN_REFUSALS).toHaveLength(24);
   });
 
   it('isPlanKebab admits the plan words and refuses run-unreadable', () => {
@@ -95,5 +95,22 @@ describe('the plan vocabulary (D-8181)', () => {
     expect([PHASE_REF_KINDS, PHASE_REF_OPS]).toEqual([['epic', 'ticket'], ['add', 'remove', 'carry']]);
     expect([REFUSAL_STATUS['unknown-ref'], REFUSAL_STATUS['bad-carry']]).toEqual([404, 409]);
     expect(SERVER_CAPS as readonly string[]).toContain('plan-phases-v1');
+    expect(SERVER_CAPS as readonly string[]).toContain('plan-inbound-v1');   // D-8736
+  });
+
+  it('the inbound states carry retired (D-8735): a stored row whose issue completed, was canceled or is ccrc\'s own', () => {
+    expect(INBOUND_STATES).toEqual(['waiting', 'mailed', 'handed', 'taken', 'placed', 'closed', 'raised', 'retired']);
+    expect(isPlanKebab('retired')).toBe(true);
+  });
+
+  it('the done vocabulary (programme work map WM1, D-8727): its refusal, its run refusal and its capability word', () => {
+    expect(PLAN_REFUSALS).toContain('evidence-unverified');
+    expect(REFUSAL_STATUS['evidence-unverified']).toBe(409);
+    expect(isRunRefuseCode('ticket-required')).toBe(true);
+    expect(RUN_REFUSE_CODES as readonly string[]).toContain('ticket-required');
+    expect(RUN_REFUSAL_STATUS['ticket-required']).toBe(409);
+    expect(SERVER_CAPS as readonly string[]).toContain('plan-ticket-done-v1');
+    // no ticket-not-open word: plan ticket-done reuses plan ticket-move's (review 2268 F21)
+    expect(ROUTE_REFUSALS as readonly string[]).not.toContain('ticket-not-open');
   });
 });

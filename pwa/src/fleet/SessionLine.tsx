@@ -19,7 +19,7 @@
 // the conditional that made SessionCard mean two different things is gone.
 import { memo, useRef } from 'react';
 import type { ReactNode } from 'react';
-import type { DelegationActivityWire, FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
+import type { FleetSession, ProjectPoolWire, RosterWire } from '../../../shared/api';
 import { Icon, StatusDot, TypedLabel, useNow } from '@ccrc/ui';
 import type { ChildRunContext } from './runWords';
 import type { CoordinatorPresence } from './presence';
@@ -79,7 +79,6 @@ function SessionLineView({
   coordinator = null,
   coordinatorTitle,
   now,
-  delegated,
   claudeLatest,
   claudeLaneLatest,
 }: {
@@ -124,9 +123,6 @@ function SessionLineView({
   coordinatorTitle?: string;
   /** The clock, for a test; the row ticks its own otherwise. */
   now?: number;
-  /** R9 (delegation broker wave 4): the delegated work `nestFleet` attached to this row, drawn as one chip when any
-   *  of it is live. Absent = today's row, byte for byte. */
-  delegated?: readonly DelegationActivityWire[];
   /** D-8276: the fleet's newest Claude Code build, for a test or a caller that already holds it; absent, the row reads it
    *  from the fleet store (`fleetClaudeLatest` over every row the console holds). */
   claudeLatest?: string | null;
@@ -147,7 +143,7 @@ function SessionLineView({
   const storeLaneLatest = useFleetStore((st) => laneClaudeLatest(st.sessions, session.wrapper));
   const facts = sessionFacts({
     session, now: now ?? tick, roster, projectPool, ...(childRun === undefined ? {} : { childRun }),
-    workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null, ...(delegated === undefined ? {} : { delegated }),
+    workingOn, coordinator, coordinatorTitle: coordinatorTitle ?? null,
     claudeLatest: claudeLatest === undefined ? storeLatest : claudeLatest,
     claudeLaneLatest: claudeLaneLatest === undefined ? storeLaneLatest : claudeLaneLatest,
   });

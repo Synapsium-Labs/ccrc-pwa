@@ -441,6 +441,12 @@ export const SETTINGS_CARDS = {
     approvals: {
       scope: SETTINGS_SCOPE.box, title: APPROVALS_TOPOLOGY_TEXT.title, purpose: APPROVALS_TOPOLOGY_TEXT.purpose,
     },
+    // Approvals plan 2026-11-18 §3.1 (M38): the permission-prompt counter, after the approvals line. Body: `ApprovalCensusSection.tsx`.
+    approvalCensus: {
+      scope: SETTINGS_SCOPE.box, title: 'Permission prompts (M38)',
+      purpose: 'How many permission prompts reached you, per programme-day, and which route each one took. Read only. '
+        + 'Moves beside M1 on the Week page when that page is built.',
+    },
   },
 } as const satisfies Record<SettingsSectionId, Record<string, SettingsCardText>>;
 

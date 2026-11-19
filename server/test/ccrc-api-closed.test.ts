@@ -46,7 +46,9 @@ describe("the operator's act and decline are not in ccrc-api's table", () => {
       expect(paths, `${door} is a row of the client: a session could end a run`).not.toContain(door);
     }
     const text = fs.readFileSync(CCRC_API, 'utf8');
-    expect(text).not.toMatch(/\/act\b|\/decline\b/);
+    // `(?![\w-])`, not `\b`: `/api/sessions/{id}/act-key` (the door process's claim, Overlord W1 door process A1) is another
+    // word, and `\b` ends a word at its hyphen.
+    expect(text).not.toMatch(/\/act(?![\w-])|\/decline(?![\w-])/);
   });
 });
 
@@ -300,8 +302,9 @@ describe('the client stays closed', () => {
     const cases = [...clientCode().matchAll(/^\s*(--[a-z-]+)\)/gm)].map((m) => m[1]!);
     // `--session` (delegation broker wave 3, Task 15) is the third label and is NOT a second identity-bearing flag: it belongs to
     // `parse_intent`, the focused grammar of `coordinators intent`, where it is an ASSERTION that must equal the pane-derived id
-    // (the next test holds that), the shape `asks list --parent` already has.
-    expect(cases.sort()).toEqual(['--by', '--json', '--session']);
+    // (the next test holds that), the shape `asks list --parent` already has. `--key` (Overlord wave 164) carries no identity
+    // either: it is `mail send`'s idempotency key, refused on every other row, and `ccrc-api-mail-key.test.ts` holds it.
+    expect(cases.sort()).toEqual(['--by', '--json', '--key', '--session']);
   });
 
   it('`coordinators intent` takes its identity from the pane: --session is compared with it and never builds anything (Task 15)', () => {
@@ -372,8 +375,12 @@ describe('the client stays closed', () => {
     // reds here by its line.
     const code = clientCode();
     const mentions = code.split('\n').filter((l) => /x-ccrc-mail-token/i.test(l)).map((l) => l.trim());
-    expect(mentions).toEqual([`code=$(printf 'header = "x-ccrc-mail-token: %s"\\n' "$TOKEN" \\`]);
-    expect(code).toContain(`\n    | curl "\${args[@]}" "$url" 2>/dev/null)\n`);
+    // Since the door process (Overlord W1 door process A1, ruled F1) the header is the config's first line and a body its
+    // `data-raw` line after it, both on curl's stdin; `--data-binary` is on no argv.
+    expect(mentions).toEqual([`cfg=$(printf 'header = "x-ccrc-mail-token: %s"' "$TOKEN")`]);
+    expect(code).toContain(`\n  code=$(printf '%s\\n' "$cfg" | curl "\${args[@]}" "$url" 2>/dev/null)\n`);
+    expect(code).toContain(`cfg+=$'\\n'"data-raw = \\"$esc\\""`);
+    expect(code).not.toMatch(/--data-binary "\$body"/);
     expect(code).toMatch(/^\s*local -a args=\(-sS -K - /m);
   });
 
@@ -439,7 +446,9 @@ describe('the client stays closed', () => {
     // `plan.take` and `plan.triage` (D-8183; the caller's own body, the identity in the query, no fill) to eighty-eight. `quiz.record` (Overlord W1a quiz record:
     // the operator's `ccrc quiz-record` posts its body through it, no splice and no fill; coordinator ruling, slug
     // quiz-record-posts-through-the-client) to eighty-nine.
-    expect(routeKeys().size).toBe(89);
+    // `sessions.act-key` (Overlord W1 door process A1; the door process's own body, carrying the nonce, no splice and no fill)
+    // to ninety. `plan.ticket-done` (programme work map WM1) to ninety-one, the way `plan.phase-ref` does it.
+    expect(routeKeys().size).toBe(91);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));

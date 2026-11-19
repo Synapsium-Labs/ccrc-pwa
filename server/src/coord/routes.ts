@@ -17,6 +17,7 @@ import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
 import { peerMailVerdict } from './peerBound.js';
+import { mailKeyVerdict, type MailKeyVerdict } from './mailKey.js';
 import { claimLivenessProbe, claimMailHint, lapseWindowStart, normalizeClaimPath, rechainTargets, recentlyLapsedClaims, type LivenessVerdict } from './claims.js';
 import { CCD_ARGV, ccdCan, deviceActor, sweepDec } from '../ccdargv.js';
 import { decideRoute, parseRouteRequest } from './route.js';
@@ -34,7 +35,7 @@ import { parseRunFind } from './runFind.js';
 import { runRecordTrail } from './runRecord.js';
 import { withLastMoves, withVerdicts, withWorkerSeen } from './runWire.js';
 import { createRunVerdicts } from './runVerdicts.js';
-import { toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
+import { isMailClientKeyClash, toRunSummary, type ClaimEndResult, type CoordStore, type RunRow, type StallSettingsWrite } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 import { coordinatorOfRun, runsTouching, workerOfRun } from './bindingReads.js';
 import { readSessionSpendMeasured } from '../shares.js';
@@ -103,6 +104,7 @@ import {
 } from '../../../shared/api.js';
 import { REFUSAL_STATUS, type CollectLaneRouteRefusal, type MailRouteRefusal, type RouteRefusal } from '../../../shared/refusal.js';
 import { TESTBOX_PARITY_REQUIRED_SENTENCE, type PeerRetry } from '../../../shared/api.js';
+import { isMailClientKey, MAIL_CLIENT_KEY_MAX } from '../../../shared/api.js';
 import type { TestboxActOutcome, TestboxAdminCode } from '../../../shared/testbox-admin.js';
 import { knownFleetIdentity } from '../accounts/audit.js';
 import { parityRefusedByCcd, switchActorOf, switchOnGate, writeSwitchRow } from '../testboxAdmin.js';
@@ -889,6 +891,19 @@ export function registerCoordRoutes(
         'inReplyTo must be a positive integer (a delivery id) when given');
     }
 
+    // `clientKey` (Overlord wave 164): the sender's optional idempotency key. Absent or null is none, and a send without one
+    // behaves exactly as before; a present one must have `isMailClientKey`'s shape. What it does is check 6.5's.
+    const clientKeyRaw = body['clientKey'];
+    let clientKey: string | null;
+    if (clientKeyRaw === undefined || clientKeyRaw === null) {
+      clientKey = null;
+    } else if (isMailClientKey(clientKeyRaw)) {
+      clientKey = clientKeyRaw;
+    } else {
+      return refuse(reply, 'bad-kind', { fromId, toId, subject, runId },
+        `clientKey must be 1 to ${MAIL_CLIENT_KEY_MAX} letters, digits, '_' or '-' when given`);
+    }
+
     // 3: sendable kind. `isSendableMailKind` deliberately excludes `unknown` —
     // a sender cannot ask for the we-do-not-know bucket.
     if (!isSendableMailKind(kind)) {
@@ -992,6 +1007,24 @@ export function registerCoordRoutes(
     }
     // Overlord W1 other lanes (H10): the Overlord's body sends no mail by this door, run mail included. Unrecorded.
     if (!(await refuseOtherLane(reply, 'peerMail', fromId, otherLaneReads))) return;
+
+    // 6.5: the idempotency key (Overlord wave 164). After attribution, so a key is read only for a sender proven current, and
+    // BEFORE checks 7 to 9, so a retry of a mail already accepted answers that mail even where a fresh send would now be
+    // refused (a retried peer mail is otherwise check 9's `duplicate`). The verdict is `mailKeyVerdict`'s (L1): `same`
+    // answers the original id with `already: true` and queues nothing, `conflict` is refused `key-conflict`, recorded. Every
+    // answer to a keyed send echoes `clientKey` (review 2725 F3), so a client can tell a server that ignored the key. No
+    // `await` follows this read before the insert below, so no other send can store this key in between; if one ever did,
+    // `mail_client_key_once` refuses the insert and the catch around it asks the verdict again (F5), never a 500.
+    const keyedRequest = { toId, runId, kind, subject, body: msgBody, artifacts: artifacts as string[], inReplyTo };
+    const answerKeyed = (v: MailKeyVerdict) => v.verdict === 'same'
+      ? reply.code(202).send({ ok: true, id: v.id, already: true, clientKey })
+      : v.verdict === 'conflict'
+        ? refuse(reply, 'key-conflict', { fromId, fromUuid, toId, kind, subject, runId }, v.detail)
+        : null;
+    if (clientKey !== null) {
+      const answered = answerKeyed(mailKeyVerdict(keyedRequest, coord.mailByClientKey(fromId, clientKey)));
+      if (answered !== null) return answered;
+    }
 
     // 7: recipient shape — a literal ROLE ('coordinator' or 'worker'), or an
     // existing registry row. Resolving a role to a concrete session id happens
@@ -1110,29 +1143,40 @@ export function registerCoordRoutes(
     // re-rendered"; `setDeliveryEnvelope` is the second half of the same
     // INSERT, not a second render.
     const artifactPaths = artifacts as string[];
-    const { id } = tx(coord.db, () => {
-      const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
-        artifacts: artifactPaths, answersMail });
-      const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
-      const envelope = renderEnvelope({
-        id: delivery.id, fromId, toId: resolvedToId, runId,
-        program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
-        kind, subject, body: msgBody, artifacts: artifactPaths,
-      });
-      const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
-      // Structurally impossible inside this transaction — the row was inserted
-      // six lines up and nothing else can see it. THROWN rather than ignored
-      // because `tx` rolls back on throw and rethrows: if the impossible
-      // happens, the whole mail is withdrawn rather than accepted with the
-      // placeholder envelope, which carries no `ack:` line and so names no
-      // delivery id for any recipient to ack against.
-      if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
-      return inserted;
-    });
+    let id: number;
+    try {
+      ({ id } = tx(coord.db, () => {
+        const inserted = coord.insertMail({ fromId, fromUuid, toId, runId, kind, subject, body: msgBody,
+          artifacts: artifactPaths, answersMail, clientKey, inReplyTo });
+        const delivery = coord.queueDelivery(inserted.id, resolvedToId, '');
+        const envelope = renderEnvelope({
+          id: delivery.id, fromId, toId: resolvedToId, runId,
+          program: run?.program ?? null, wave: run?.wave ?? null, waveOf: run?.waveOf ?? null,
+          kind, subject, body: msgBody, artifacts: artifactPaths,
+        });
+        const stamped = coord.setDeliveryEnvelope(delivery.id, envelope);
+        // Structurally impossible inside this transaction — the row was inserted
+        // six lines up and nothing else can see it. THROWN rather than ignored
+        // because `tx` rolls back on throw and rethrows: if the impossible
+        // happens, the whole mail is withdrawn rather than accepted with the
+        // placeholder envelope, which carries no `ack:` line and so names no
+        // delivery id for any recipient to ack against.
+        if (!stamped.ok) throw new Error(`delivery ${delivery.id} unstampable: ${stamped.why}`);
+        return inserted;
+      }));
+    } catch (e) {
+      // Review 2725 F5: the insert met `mail_client_key_once`, so another send stored this key after check 6.5 read it. The
+      // transaction rolled back; read the stored mail and answer as 6.5 would have. Any other error, or a clash the re-read
+      // cannot explain, is thrown as before.
+      if (clientKey === null || !isMailClientKeyClash(e)) throw e;
+      const answered = answerKeyed(mailKeyVerdict(keyedRequest, coord.mailByClientKey(fromId, clientKey)));
+      if (answered !== null) return answered;
+      throw e;
+    }
 
     // 202, not 200: the server has ACCEPTED the message, not delivered it —
-    // the delivery lane is minutes away by design (MAIL_SWEEP_MS, Task 8).
-    return reply.code(202).send({ ok: true, id });
+    // the delivery lane is minutes away by design (MAIL_SWEEP_MS, Task 8). A keyed send echoes its key (F3).
+    return reply.code(202).send(clientKey === null ? { ok: true, id } : { ok: true, id, clientKey });
   });
 
   /**

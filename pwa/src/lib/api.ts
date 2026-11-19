@@ -4,13 +4,14 @@
 // (e.g. 409 { error: 'draft-present', draft } from prompt).
 import type { AccountAuthCancelBody, AccountAuthCodeBody, AccountAuthStartAnswer, AccountAuthStartBody, AccountAuthStatusAnswer, AccountSetBody, AccountSignOutAnswer } from '../../../shared/api';
 import type { AccountAddAnswer, AccountAddBody, AccountCheckAnswer, AccountCredentialAnswer, AccountCredentialBody, AccountRemoveAnswer, AccountRemoveBody, AccountRemoveCheckAnswer, AccountRevokeAckBody, AccountsResponse, AccountSwitchAnswer, AckAnswer, ApplyUpdateBody, CatalogueState, CatchUp, ClaimSummary, CollectLaneRequest, CollectLaneView, CoordCaps, CoordCapsView, FleetHealth, FleetSession, IntentWriteAnswer, LifecycleQueryResult, LoginRequest, MoveRequestAnswer, NotifyEvent, PaneHistoryReply, PasskeyAssertFinish, PasskeyAssertStart, PasskeyListResponse, PasskeyRegisterFinish, PasskeyRegisterStart, ProjectPoolWire, ProjectRow, PrView, ProgrammesAnswer, ReapResult, ReviewCapLiftAnswer, ReviewCapView, RollbackUpdateBody, RouteField, RunFindAnswer, RunFindQuery, RunRecordAnswer, RunSignals, RunSpend, RunSummary, SlashCommand, StagedClip, StallWatchRequest, StallWatchView, StepUpAnswer, StepUpStart, UpdatesView, WorkItemState, WsAudit } from '../../../shared/api';
-import type { ArchiveAnswer, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
+import type { ArchiveAnswer, CallView, StopAnswer, StopBody, DialogAnswered, DialogTabRequest, DigestAnswer, DigestCorrectAnswer, DigestCorrectBody, InterruptRouteSource, QuestionAnswerBody } from '../../../shared/api';
 import type { GoalsVersion, GoalsView, ItemActBody, ItemView, WaitingView } from '../../../shared/ledgers';
 import type { AnswerMarkKind, AnswerMarkName, AnswerMarkView } from '../../../shared/answerMarks';
 import type { LinearConnectionView } from '../../../shared/linear';
 import type { DispatchAbandonRequest, DispatchAbandonView } from '../../../shared/dispatch-abandon';
 import type { LaneArmRequest, LaneArmView } from '../../../shared/lane-arm';
 import type { OverridesView } from '../../../shared/overrides';
+import type { ApprovalCensusWire } from '../../../shared/approval-census';
 import type { RunCloseRequest, RunCloseView } from '../../../shared/run-close';
 import type { ScopeSweepBusyRequest, ScopeSweepView } from '../../../shared/scope-sweep';
 import type { DelegationAdoptRequest, DelegationAdoptView } from '../../../shared/delegation-adopt';
@@ -1022,6 +1023,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     /** `GET /api/fleet/overrides` (D-8382): every override the switchboard declares with its state, and the approvals
      *  topology. Read only; Overrides in force and Security's approvals line read it through `useOverridesView`. */
     fleetOverrides: (opts?: ReadOpts) => getJson<OverridesView>('/api/fleet/overrides', opts),
+    /** The approval census read (approvals plan 2026-11-18, §3.1, M38): prompts by path and the per-programme-day counter over
+     *  the last `days` (the server defaults to 14). Session-gated; a store failure is 503 `unavailable` and no store is 501, and
+     *  both reject like every non-2xx, so a failed read is never told from an empty one by a value. The M38 card reads it. */
+    getApprovalCensus: (days?: number, opts?: ReadOpts) =>
+      getJson<ApprovalCensusWire>(days === undefined ? '/api/approvals/census' : `/api/approvals/census?days=${encodeURIComponent(String(days))}`, opts),
     /** `GET /api/models/:lane` (D-8406): the lane's classes as its own model files say them, each class's model and its
      *  catalogue label. Unknown on purpose: `asLaneModelsRead` (`lib/models.ts`) is the one reader of the answer, and an
      *  older server's 404 rejects like every non-2xx. Read through `useLaneModels`. */
@@ -1129,6 +1135,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      *  `ApiError` like every non-2xx, and the item is unchanged. */
     tickItem: (id: number, answer?: string) =>
       postJson<{ readonly ok: true; readonly item: ItemView }>(`/api/items/${id}/tick`, answer === undefined ? undefined : { answer }),
+    /** `POST /api/calls/:id/seen` (D-8126): the operator's Seen on a big call, idempotent. A refusal (`not-big`, `unknown-call`)
+     *  rejects with an `ApiError` like every non-2xx. Session-gated when armed. */
+    markCallSeen: (id: number) => postJson<{ readonly ok: true; readonly call: CallView | null }>(`/api/calls/${id}/seen`),
     /** `GET /api/programmes/:slug/goals` (PL4; PL5b): one programme's Goals, the spec it pins, its "In short" and the dated
      *  list of what changed since approval, as the `waiting` frame carries them. The programme view reads it on arrival.
      *  Session-gated when armed; a programme the box knows nothing of answers an empty view, never a refusal. */

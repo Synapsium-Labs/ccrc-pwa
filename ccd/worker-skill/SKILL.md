@@ -145,15 +145,15 @@ in your `wave-done` mail so the ledger gets it. A deviation you find is still
 never a number you invent (clause 11): report it, and the coordinator mints it
 against the programme's home project.
 
-**Task notes go in a new file, never in the ledger.** Do not edit or delete a file under
-`docs/superpowers/programs/` or an existing file under `docs/superpowers/plans/` in your pull
-request: every in-flight pull request of a wave edits the same rows, and each absorption conflicts
-there. Write what the ledger should learn (a deviation you found, a status, a measurement) into a
-NEW note, `docs/superpowers/plans/<plan>/<task-or-pr>.md`, and say so in your `wave-done` mail; the
-coordinator folds the notes into the ledger on its own `ledger/<programme>` pull request. A
-`ledger-guard` step fails a pull request that edits a ledger from any other branch. If the edit is
-genuinely your change's own, put a `Ledger-Edit: <D-TBD reason>` trailer on your pull request's head
-commit (a trailer on an earlier commit does not count); the guard passes it and reports it.
+**Task notes go in a new file, never in the ledger.** Do not edit or delete an existing file under
+`docs/superpowers/programs/` or `docs/superpowers/plans/` in your pull request: every in-flight pull
+request of a wave edits the same rows, and each absorption conflicts there. Write what the ledger
+should learn into a NEW note, `docs/superpowers/programs/<programme>/<task-or-pr>.md`, and say so
+in your `wave-done` mail; the coordinator folds the notes into the ledger on its own
+`ledger/<programme>` pull request. A `ledger-guard` step fails a pull request that edits a ledger
+from any other branch, or adds a file under `plans/` or `specs/` that is not a dated plan or spec. If
+the edit is your change's own, a `Ledger-Edit: <D-TBD reason>` trailer on your head commit passes the
+edit check (not one on an earlier commit); nothing passes the layout check.
 
 A reply may arrive addressed to the ROLE `worker` rather than to your session id.
 Nothing changes on your side: the role resolves to whichever session this run names,

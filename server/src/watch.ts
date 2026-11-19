@@ -194,6 +194,7 @@ import { abandonRefusal } from './coord/close.js';
 import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
+import { skillInstallPass } from './coord/skillInstallLane.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -1113,6 +1114,9 @@ export class FleetWatcher {
    *  request titles and commits. Written by `prPass` alone and read by the team link; in memory, re-read every sweep. */
   private readonly ticketTallies = new Map<string, ReadonlyMap<string, number>>();
   private readonly projectWalk = new ProjectWalkCache();
+  /** D-8126 (A7-5, review 2807 F6): the accounts whose `skill-ensure` call is still running, kept across the self-install
+   *  lane's passes so an overdue call still holds its home (`SkillInstallLaneDeps.inFlight`). */
+  private readonly skillInstallInFlight = new Set<string>();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -2869,6 +2873,9 @@ export class FleetWatcher {
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
       void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
+      const skillCoord = this.deps.coord;
+      if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -2915,7 +2922,7 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to the assembly as `limitsRead`
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names, registryRead.records));   // read once a tick, over the tick's own listing (D-8069) and rows (D-8126 A7-3: the spawn demotion reads no file of its own): published by `currentLimits`, handed to the assembly as `limitsRead`
       const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
         pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
         hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
@@ -3670,6 +3677,8 @@ export class FleetWatcher {
     dedupeKey?: string;
     /** The push outbox (Overlord W1): an ask's bound row, written by its move; the funnel sends that row. */
     bound?: NoticeOpts['bound'];
+    /** An approval push's source (approvals plan 2026-11-18, Task 1.4), kept on its outbox row. */
+    source?: string;
   } & PushOneMode, projects: Set<string>): void {
     // Decorated only when BOTH more than one project is active AND the
     // project is actually known (review finding 3) — an empty `e.project`
@@ -3688,6 +3697,7 @@ export class FleetWatcher {
         ...(e.url !== undefined ? { url: e.url } : {}),
         ...(e.dedupeKey !== undefined ? { dedupeKey: e.dedupeKey } : {}),
         ...(e.bound !== undefined ? { bound: e.bound } : {}),
+        ...(e.source !== undefined ? { source: e.source } : {}),
       });
   }
 
@@ -9732,6 +9742,10 @@ export class FleetWatcher {
       const last = this.dialogIds.get(r.id);
       if (dialog) {
         pending.add(r.id);
+        // The approval census (approvals plan 2026-11-18, Task 1.3): every tick a dialog is painted, before anything raises,
+        // the questions owner decides whether this prompt leaves no approvals row and writes its one census row if so. The
+        // push below carries the source it found (`pushSourceOf`, Task 1.4).
+        this.questions.observeCensus(r, dialog, this.hookStates.get(r.id) ?? null, Date.now());
         // The pane is what raises this push (`kind: 'ask'` has exactly one
         // producer, and it is this scrape), but the ANSWERABLE part comes from
         // the hook envelope: only it carries the option labels and the content
@@ -9745,10 +9759,12 @@ export class FleetWatcher {
           // `assembleFleet` (see `tick()`), so the current fleet's project
           // set isn't computed yet; it reads last tick's, same reasoning as
           // `sweepMerged` above.
+          const source = this.questions.pushSourceOf(r.id);
           this.pushOne({
             kind: 'ask', sessionId: r.id, project: r.project,
             title: '❓ Question', body: askPushBody(this.hookStates.get(r.id) ?? null, dialog),
             ...(actions ? { actions } : {}),
+            ...(source !== undefined ? { source } : {}),
           }, this.activeProjects);
           // Latched whenever this raise had no actions, cleared the moment one
           // has them — so the amendment below fires at most once per question.
@@ -9831,9 +9847,12 @@ export class FleetWatcher {
             } else {
               this.actionlessAsks.delete(r.id);
               if (outcome.kind === 'held') {
+                // Its source too (approvals PR 1, review 2638 F9a): every approval push carries one.
+                const heldSource = this.questions.pushSourceOf(r.id);
                 this.pushOne({
                   kind: 'ask', sessionId: r.id, project: r.project,
                   title: '❓ Question', body: withCoordinatorBody(outcome.parent),
+                  ...(heldSource !== undefined ? { source: heldSource } : {}),
                 }, this.activeProjects);
               }
             }
@@ -9868,6 +9887,9 @@ export class FleetWatcher {
     // D-5925, spec §5.2 step 3: a child measured ABSENT from the listing (its `.uuid` gone, not a refused or
     // unreadable row, and never on an unlistable tick, which returns before this) holds no question any more.
     if (listing !== undefined) this.questions.reseedGone(listing, recs);
+    // The approval census's sightings (review 2695 F1(b), F2(2)): one not painted for more than ASK_SETTLE_TICKS ticks, or
+    // whose child left the registry, ends here, after every row of this tick was seen.
+    this.questions.sweepCensus(new Set(recs.map((r) => r.id)));
     return pending;
   }
 

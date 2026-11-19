@@ -6,7 +6,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { mkdirSync, statSync, writeFileSync } from 'node:fs';
 import { createHash } from 'node:crypto';
 import path from 'node:path';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { OPERATOR_MODEL_SCHEMA_VERSION } from '../src/operatorModel/schema.js';
 import { PrivateStoreUnmigratable, defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
@@ -16,7 +16,7 @@ import { EVENT_ACTORS, TABLE_1 } from './sim/operatorModelSets.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ACTOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('Fixture browser', 'abcdef0123456789'));
+  .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 const sha = (s: string): string => createHash('sha256').update(s, 'utf8').digest('hex');
 
 /** A journal double: issues one above the larger of the store's highest and its own, and counts its records. */
@@ -167,7 +167,7 @@ describe('recordMessage', () => {
     const f = fixture();
     const forged = { kind: 'operator', subject: 'Fixture browser abcdef01', issuer: 'account-gate', strength: 'operator' };
     // A look-alike literal, a copy of a minted actor and the account gate's own actor (not yet through the port) all refuse.
-    for (const actor of [forged, { ...ACTOR }, actorOf('Fixture browser', 'abcdef0123456789')]) {
+    for (const actor of [forged, { ...ACTOR }, gateActorOf('Fixture browser', 'abcdef0123456789')]) {
       const r = record(f, { actor: actor as never });
       expect(r.ok).toBe(false);
       expect(!r.ok && r.error).toBe('refused');

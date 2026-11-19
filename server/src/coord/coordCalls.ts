@@ -91,6 +91,12 @@ export function callViewOf(row: CallRow): CallView {
   };
 }
 
+/** A cleared big call as the waiting view serves it (D-8126 A4): the wire shape plus `clearedAt`, read by `callClearedAt`. */
+export function clearedCallViewOf(row: CallRow, now: number): CallView {
+  const at = callClearedAt(row, now);
+  return at === null ? callViewOf(row) : { ...callViewOf(row), clearedAt: at };
+}
+
 /** The digest's predicate for the call table: only a `big` call is a line (R4). */
 export const callDecision = (row: CallRow): { kind: 'big-call'; at: number } | null =>
   row.class === 'big' ? { kind: 'big-call', at: row.at } : null;

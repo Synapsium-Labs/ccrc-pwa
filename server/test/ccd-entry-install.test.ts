@@ -18,7 +18,7 @@ import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_REDACT, CCD_REDACT_CLI, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
+import { CCD, CCD_LIB, CCD_LIB_PIN_PLACEHOLDER, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB, CCD_DOOR_LIB, CCD_REDACT, CCD_REDACT_CLI, CCD_DOOR_PROG, canonicalPython3, ghContainedEnv, installedCcdBody } from './ccdWsHelpers.js';
 import { itLinux } from './platformFixtures.js';
 import { verifyMarker } from '../../shared/mark.mjs';
 
@@ -46,7 +46,7 @@ const body = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'ccd');
 const stampedTreeBody = (): Buffer =>
   Buffer.from(installedCcdBody(fs.readFileSync(path.join(tree(), 'ccd/ccd'), 'utf8'), fs.readFileSync(path.join(tree(), 'ccd/lib/disk-retention.sh')),
     { redact: fs.readFileSync(path.join(tree(), 'shared/redact.mjs')), cli: fs.readFileSync(path.join(tree(), 'shared/redact-cli.mjs')) },
-    fs.readFileSync(path.join(tree(), 'ccd/lib/train-proof.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/delegation-lease.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/pool-set.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/long-lived.sh'))));
+    fs.readFileSync(path.join(tree(), 'ccd/lib/train-proof.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/delegation-lease.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/pool-set.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/long-lived.sh')), fs.readFileSync(path.join(tree(), 'ccd/lib/door.sh')), fs.readFileSync(path.join(tree(), 'ccd/door-process.mjs'))));
 /** The library the body pins and loads (D-6913), where the publisher puts it: `lib/` beside the body. */
 const lib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'disk-retention.sh');
 /** The second library (D-7463), beside the first. */
@@ -57,6 +57,10 @@ const leaseLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib
 const poolsetLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'pool-set.sh');
 /** The fifth library (the Overlord's ccd arms), beside the fourth. */
 const longlivedLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'long-lived.sh');
+/** The sixth library (the Overlord's door process), beside the fifth. */
+const doorLib = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'lib', 'door.sh');
+/** The door program (plan question 2), beside the body, not on PATH. */
+const doorProg = (): string => path.join(home, '.local', 'libexec', 'ccrc', 'door-process.mjs');
 const sha = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
 
 /** The template's self-test branch, extended by a fixture HOOK that runs
@@ -93,6 +97,7 @@ function plantTree(o: {
   lease?: (t: string) => string; leasePin?: (line: string) => string;
   poolset?: (t: string) => string; poolsetPin?: (line: string) => string;
   longlived?: (t: string) => string; longlivedPin?: (line: string) => string;
+  door?: (t: string) => string; doorPin?: (line: string) => string;
 } = {}): void {
   const dir = path.join(tree(), 'ccd');
   fs.mkdirSync(path.join(dir, 'lib'), { recursive: true });
@@ -110,16 +115,22 @@ function plantTree(o: {
   // The fifth library (the Overlord's ccd arms), `longlived` rewriting it as `poolset` rewrites the fourth.
   const longlivedText = o.longlived ? o.longlived(fs.readFileSync(CCD_LONGLIVED_LIB, 'utf8')) : fs.readFileSync(CCD_LONGLIVED_LIB, 'utf8');
   fs.writeFileSync(path.join(dir, 'lib', 'long-lived.sh'), longlivedText);
+  // The sixth library (the Overlord's door process), `door` rewriting it as `longlived` rewrites the fifth.
+  const doorText = o.door ? o.door(fs.readFileSync(CCD_DOOR_LIB, 'utf8')) : fs.readFileSync(CCD_DOOR_LIB, 'utf8');
+  fs.writeFileSync(path.join(dir, 'lib', 'door.sh'), doorText);
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   fs.mkdirSync(path.join(tree(), 'shared'), { recursive: true });
   fs.copyFileSync(CCD_REDACT, path.join(tree(), 'shared', 'redact.mjs'));
   fs.copyFileSync(CCD_REDACT_CLI, path.join(tree(), 'shared', 'redact-cli.mjs'));
+  // The door program, which the installer publishes beside the body and pins in it (`__CCD_DOOR_SHA256`).
+  fs.copyFileSync(CCD_DOOR_PROG, path.join(dir, 'door-process.mjs'));
   let bodyText = fs.readFileSync(CCD, 'utf8') + (o.ccd ?? '');
   if (o.pin) bodyText = bodyText.replace(/^__CCD_LIB_SHA256=.*$/m, o.pin);
   if (o.trainPin) bodyText = bodyText.replace(/^__CCD_LIB_TRAIN_SHA256=.*$/m, o.trainPin);
   if (o.leasePin) bodyText = bodyText.replace(/^__CCD_LIB_LEASE_SHA256=.*$/m, o.leasePin);
   if (o.poolsetPin) bodyText = bodyText.replace(/^__CCD_LIB_POOLSET_SHA256=.*$/m, o.poolsetPin);
   if (o.longlivedPin) bodyText = bodyText.replace(/^__CCD_LIB_LONGLIVED_SHA256=.*$/m, o.longlivedPin);
+  if (o.doorPin) bodyText = bodyText.replace(/^__CCD_LIB_DOOR_SHA256=.*$/m, o.doorPin);
   fs.writeFileSync(path.join(dir, 'ccd'), bodyText, { mode: 0o755 });
   const tpl = fs.readFileSync(path.join(REPO, 'ccd', 'ccd-entry.py'), 'utf8');
   fs.writeFileSync(path.join(dir, 'ccd-entry.py'), o.template ? o.template(tpl) : tpl);
@@ -233,6 +244,10 @@ function assertPair(): void {
   expect(fs.statSync(longlivedLib()).mode & 0o777).toBe(0o644);
   expect(fs.readFileSync(longlivedLib()).equals(fs.readFileSync(path.join(tree(), 'ccd/lib/long-lived.sh'))), 'the long-lived library is the tree\'s').toBe(true);
   expect(/^__CCD_LIB_LONGLIVED_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the published body pins the published long-lived library').toBe(sha(longlivedLib()));
+  expect(fs.lstatSync(doorLib()).isFile(), 'the door library is a regular file, not a link').toBe(true);
+  expect(fs.statSync(doorLib()).mode & 0o777).toBe(0o644);
+  expect(fs.readFileSync(doorLib()).equals(fs.readFileSync(path.join(tree(), 'ccd/lib/door.sh'))), 'the door library is the tree\'s').toBe(true);
+  expect(/^__CCD_LIB_DOOR_SHA256=([0-9a-f]{64})$/m.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the published body pins the published door library').toBe(sha(doorLib()));
   const text = fs.readFileSync(entry(), 'utf8');
   expect(text.split('\n')[0]).toBe(`#!${RENDERED} -IS`);
   expect(/^BODY_SHA256 = '([0-9a-f]{64})'$/m.exec(text)?.[1], 'the launcher names the published body').toBe(sha(body()));
@@ -1304,11 +1319,189 @@ describe('the fifth library, lib/long-lived.sh: published, pinned and refused ex
   }
 });
 
-describe('the fifth library\'s staging slot (.4) is swept, and the stage pattern admits exactly slots 1 to 4 (the Overlord W1 ccd arms)', () => {
+describe('the fifth and sixth libraries\' staging slots (.4, .5) are swept, and the stage pattern admits exactly slots 1 to 5 (the Overlord W1 ccd arms, the door process)', () => {
   it('a slot-4 staging file a killed run left in lib/ is swept by the next run', () => {
     plantTree();
     fs.mkdirSync(path.dirname(longlivedLib()), { recursive: true });
     const left = path.join(path.dirname(longlivedLib()), '.ccd.ccrc-stage.4242.4');
+    fs.writeFileSync(left, 'left by a killed run\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(left), 'the slot file was swept').toBe(false);
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('a slot-5 staging file a killed run left in lib/ is swept by the next run', () => {
+    plantTree();
+    fs.mkdirSync(path.dirname(doorLib()), { recursive: true });
+    const left = path.join(path.dirname(doorLib()), '.ccd.ccrc-stage.4242.5');
+    fs.writeFileSync(left, 'left by a killed run\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.existsSync(left), 'the slot file was swept').toBe(false);
+    assertNoLeftovers();
+  }, 60_000);
+});
+
+describe('the sixth library, lib/door.sh: published, pinned and refused exactly as the fifth (the Overlord door process)', () => {
+  it('a fresh install publishes it after the fifth library and before the body', () => {
+    plantTree();
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const said = r.stdout.split('\n').filter((l) => / published at /.test(l));
+    const at = (n: string): number => said.findIndex((l) => l.includes(n));
+    expect(at('lib/long-lived.sh')).toBeGreaterThan(-1);
+    expect(at('lib/door.sh'), 'after the fifth library').toBeGreaterThan(at('lib/long-lived.sh'));
+    expect(at('body published'), 'before the body that pins it').toBeGreaterThan(at('lib/door.sh'));
+    assertPair();
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('changed out of band, it is republished alone; mode drift is repaired in place', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const [e, b, l] = [ident(entry()), ident(body()), ident(lib())];
+    fs.appendFileSync(doorLib(), '\n# edited on the box\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(r.stdout).toContain('library published');
+    expect(r.stdout).not.toContain('body published');
+    expect([ident(entry()), ident(body()), ident(lib())]).toEqual([e, b, l]);
+    assertPair();
+    const before = ident(doorLib());
+    fs.chmodSync(doorLib(), 0o600);
+    const m = helper(['install', tree(), home]);
+    expect(m.code, m.stderr).toBe(0);
+    expect(m.stdout).toMatch(/lib\/door\.sh: mode repaired to 644/);
+    expect(ident(doorLib())).toBe(before);
+    assertPair();
+  }, 60_000);
+
+  it('its digest is rendered into the body\'s one pin line before the stamp, and a changed file needs no source edit', () => {
+    plantTree({ door: (l) => `${l}# a library edit\n` });
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    const installed = fs.readFileSync(body(), 'utf8');
+    expect(installed.match(/^__CCD_LIB_DOOR_SHA256=.*$/gm)).toEqual([`__CCD_LIB_DOOR_SHA256=${sha(doorLib())}`]);
+    expect(verifyMarker(installed)).toBe('ccrc-unmodified');
+    expect(verifyMarker(installed.replace(/^__CCD_LIB_DOOR_SHA256=.*$/m, '__CCD_LIB_DOOR_SHA256=stamp-at-install')), 'the stamp covers the pin').toBe('ccrc-edited');
+    assertPair();
+  }, 60_000);
+
+  for (const [what, doorPin] of [
+    ['no door pin line at all', (): string => '# no pin'],
+    ['two door pin placeholders', (): string => '__CCD_LIB_DOOR_SHA256=stamp-at-install\n__CCD_LIB_DOOR_SHA256=stamp-at-install'],
+    ['a literal digest of another file', (): string => `__CCD_LIB_DOOR_SHA256=${'0'.repeat(64)}`],
+  ] as const) {
+    it(`a body with ${what} is refused before anything is created`, () => {
+      plantTree({ doorPin });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toMatch(/ccd\/lib\/door\.sh is not the library .* pins/);
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+
+  for (const [shape, edit] of [
+    ['no trailing newline', (l: string) => l.replace(/\n+$/, '')],
+    ['two trailing newlines', (l: string) => `${l}\n`],
+    ['a NUL byte', (l: string) => `\0${l}`],
+  ] as const) {
+    it(`a door library with ${shape} is refused before anything is created`, () => {
+      plantTree({ door: edit });
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain('ccd/lib/door.sh must end in exactly one newline and contain no NUL byte');
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+});
+
+describe('the door program, door-process.mjs: published beside the body at 644, pinned from its installed bytes, refused when its pin is not one line (the Overlord door process)', () => {
+  const pinLine = /^__CCD_DOOR_SHA256=([0-9a-f]{64})$/m;
+  const bodyRenameFails = (t: string): string => {
+    const at = '            os.replace(staged_body, body_dest)\n';
+    if (!t.includes(at)) throw new Error('the installer has no body rename to hook');
+    return t.replace(at, "            raise OSError(5, 'fixture: the body rename failed')\n");
+  };
+
+  it('a fresh install publishes it at 644 beside the body, not on PATH, and the body pins the INSTALLED bytes in the same run', () => {
+    plantTree();
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(fs.lstatSync(doorProg()).isFile(), 'a regular file, not a link').toBe(true);
+    expect(fs.statSync(doorProg()).mode & 0o777).toBe(0o644);
+    expect(fs.readFileSync(doorProg()).equals(fs.readFileSync(path.join(tree(), 'ccd/door-process.mjs'))), 'the tree\'s bytes').toBe(true);
+    expect(pinLine.exec(fs.readFileSync(body(), 'utf8'))?.[1], 'the body pins the installed file').toBe(sha(doorProg()));
+    expect(fs.existsSync(path.join(home, '.local', 'bin', 'door-process.mjs')), 'not a launcher').toBe(false);
+    const said = r.stdout.split('\n').filter((l) => / published at /.test(l));
+    const at = (n: string): number => said.findIndex((l) => l.includes(n));
+    expect(at('door-process.mjs')).toBeGreaterThan(-1);
+    expect(at('body published'), 'before the body that pins it').toBeGreaterThan(at('door-process.mjs'));
+    assertPair();
+    assertNoLeftovers();
+  }, 60_000);
+
+  it('a converged re-run moves nothing', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    const before = [ident(doorProg()), ident(body()), ident(entry())];
+    const again = helper(['install', tree(), home]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(again.stdout).toContain('converged');
+    expect([ident(doorProg()), ident(body()), ident(entry())]).toEqual(before);
+  }, 60_000);
+
+  it('changed in the tree, it is republished alone and the body is re-pinned to it; mode drift is repaired in place', () => {
+    plantTree();
+    expect(helper(['install', tree(), home]).code).toBe(0);
+    fs.appendFileSync(path.join(tree(), 'ccd', 'door-process.mjs'), '// an edit in the tree\n');
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(0);
+    expect(pinLine.exec(fs.readFileSync(body(), 'utf8'))?.[1]).toBe(sha(doorProg()));
+    fs.chmodSync(doorProg(), 0o600);
+    const again = helper(['install', tree(), home]);
+    expect(again.code, again.stderr).toBe(0);
+    expect(fs.statSync(doorProg()).mode & 0o777).toBe(0o644);
+  }, 60_000);
+
+  for (const [what, edit] of [
+    ['no __CCD_DOOR_SHA256 placeholder', (b: string) => b.replace(/^__CCD_DOOR_SHA256=stamp-at-install$/m, '# no pin')],
+    ['two __CCD_DOOR_SHA256 placeholders', (b: string) => b.replace(/^__CCD_DOOR_SHA256=stamp-at-install$/m, '__CCD_DOOR_SHA256=stamp-at-install\n__CCD_DOOR_SHA256=stamp-at-install')],
+  ] as const) {
+    it(`a body with ${what} is refused before anything is created`, () => {
+      plantTree();
+      const f = path.join(tree(), path.relative(REPO, CCD));
+      fs.writeFileSync(f, edit(fs.readFileSync(f, 'utf8')));
+      const r = helper(['install', tree(), home]);
+      expect(r.code, r.stderr).toBe(1);
+      expect(r.stderr).toContain('__CCD_DOOR_SHA256=stamp-at-install');
+      expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+    }, 60_000);
+  }
+
+  it('a tree without the program is refused before anything is created', () => {
+    plantTree();
+    fs.rmSync(path.join(tree(), 'ccd', 'door-process.mjs'));
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(1);
+    expect([fs.existsSync(path.join(home, '.local', 'libexec')), fs.existsSync(entry())]).toEqual([false, false]);
+  }, 60_000);
+
+  it('a run that fails between the program and the body names the program among what was renamed', () => {
+    plantTree({ installer: bodyRenameFails });
+    const r = helper(['install', tree(), home]);
+    expect(r.code, r.stderr).toBe(2);
+    expect(r.stderr).toContain('refused after the library moved');
+    expect(r.stderr).toMatch(/these were renamed: [^\n]*door-process\.mjs[^\n]*\n/);
+    expect(r.stderr).toContain('ccd-door-process.mjs');
+    expect(fs.existsSync(body())).toBe(false);
+  }, 60_000);
+
+  it('a program staging file a killed run left beside the body is swept by the next run', () => {
+    plantTree();
+    fs.mkdirSync(path.dirname(doorProg()), { recursive: true });
+    const left = path.join(path.dirname(doorProg()), '.ccd.ccrc-stage.4242.1');
     fs.writeFileSync(left, 'left by a killed run\n');
     const r = helper(['install', tree(), home]);
     expect(r.code, r.stderr).toBe(0);
@@ -1340,7 +1533,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
       expect(pinOf('__CCD_REDACT_CLI_SHA256'), 'the body pins the published redact-cli.mjs').toBe(sha(shared('redact-cli.mjs')));
       // One `library published` line per file of the half, in its rename order, all before the body.
       const said = r.stdout.split('\n').filter((l) => l.includes('library published at'));
-      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh']);
+      expect(said.map((l) => /published at \S*\/libexec\/ccrc\/(\S+) /.exec(l)?.[1])).toEqual(['shared/redact.mjs', 'shared/redact-cli.mjs', 'door-process.mjs', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh']);
       expect(r.stdout.indexOf('library published')).toBeLessThan(r.stdout.indexOf('body published'));
       assertPair();
       assertNoLeftovers();
@@ -1386,7 +1579,7 @@ describe('the docs redactor half: published beside the body, pinned, staged in s
     expect(r.code, r.stderr).toBe(2);
     expect(r.stderr).toContain('refused after the library moved');
     expect(r.stderr).toContain('the library was renamed into place');
-    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh\n');
+    expect(r.stderr).toContain('; of the library half, these were renamed: shared/redact.mjs, shared/redact-cli.mjs, door-process.mjs, lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh\n');
     expect(r.stderr).not.toContain('the body was renamed into place');
     expect(fs.existsSync(body())).toBe(false);
   }, 60_000);

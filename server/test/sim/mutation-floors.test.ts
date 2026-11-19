@@ -9,6 +9,8 @@ import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } fr
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
+import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
+import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
@@ -36,6 +38,8 @@ import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
+import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
+import { FIRST_PROMPT_MUTANT_SETS } from './firstPromptSets.js';
 import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { BINOMIAL_BOUND_MUTANT_SETS } from './binomialBoundSets.js';
@@ -46,10 +50,12 @@ import { RENEWAL_READING_MUTANT_SETS } from './renewalReadingSets.js';
 import { GATE_MUTANT_SETS } from './gateSets.js';
 import { OTHER_LANES_MUTANT_SETS } from './otherLanesSets.js';
 import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
+import { PLAN_TICKET_DONE_MUTANT_SETS } from './planTicketDoneSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
+import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { simulate } from './run.js';
 import {
@@ -180,6 +186,8 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...RENEWAL_MUTANT_SETS,
   ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
+  ...MAIL_KEY_MUTANT_SETS,
+  ...URGENT_MAIL_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
@@ -206,6 +214,8 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
+  ...ACT_KEY_MUTANT_SETS,
+  ...FIRST_PROMPT_MUTANT_SETS,
   ...DESIGNATION_MUTANT_SETS,
   ...BINOMIAL_BOUND_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,
@@ -216,10 +226,12 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...GATE_MUTANT_SETS,
   ...OTHER_LANES_MUTANT_SETS,
   ...PLAN_PHASES_MUTANT_SETS,
+  ...PLAN_TICKET_DONE_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
+  ...APPROVAL_ENVELOPE_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
 };
 

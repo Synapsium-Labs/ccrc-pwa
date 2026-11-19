@@ -249,6 +249,7 @@ describe('the closed route table', () => {
     // The start report (Overlord W1a): the session hook's report of its own SessionStart.
     [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
     [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
+    [['sessions', 'act-key', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/act-key'],
     [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
     // The replay quiz's record (Overlord W1a quiz record): the operator's `ccrc quiz-record` posts its body through this row.
     [['quiz', 'record'], 'POST', '/api/continuity/quiz-runs'],
@@ -271,6 +272,8 @@ describe('the closed route table', () => {
     [['plan', 'close', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/close'],
     // `plan phase-ref` (programme work map WM0): like its siblings, the pane's identity in the query.
     [['plan', 'phase-ref', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/phases/refs'],
+    // `plan ticket-done` (programme work map WM1): like its siblings, the pane's identity in the query.
+    [['plan', 'ticket-done', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/tickets/done'],
     // The inbound path's two (D-8183): `take` by programme slug, `triage` by Linear team key; both carry the pane's identity in the query.
     [['plan', 'take', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/take'],
     [['plan', 'triage', 'AAA'], 'POST', '/api/teams/AAA/plan/triage'],
@@ -338,7 +341,8 @@ describe('the closed route table', () => {
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
     // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
     // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
-    expect(keys).toHaveLength(89);
+    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1).
+    expect(keys).toHaveLength(91);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -353,7 +357,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -527,9 +531,9 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
-      ['plan', 'phase-ref', 'prog-a', '--json', '-'],
+      ['plan', 'phase-ref', 'prog-a', '--json', '-'], ['plan', 'ticket-done', 'prog-a', '--json', '-'],
       ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'],
-      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],
@@ -990,6 +994,10 @@ describe('the token never rides curl\'s argv (R16)', () => {
   const argv = (): string[] => fs.readFileSync(path.join(home, 'curl.argv'), 'utf8').split('\n');
   const stdin = (): string => fs.readFileSync(path.join(home, 'curl.stdin'), 'utf8');
   const CONFIG = `header = "x-ccrc-mail-token: ${TOKEN}"\n`;
+  /** The config as the client writes it for a body (Overlord W1 door process A1, ruled F1): the header line, then the body
+   *  as one `data-raw` line, escaped as curl's config grammar needs. */
+  const configWith = (body: string): string => body === '' ? CONFIG
+    : `${CONFIG}data-raw = "${body.replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\n/g, '\\n').replace(/\r/g, '\\r')}"\n`;
 
   it.each([
     ['a GET', ['runs', 'list'], undefined, ''],
@@ -1010,7 +1018,10 @@ describe('the token never rides curl\'s argv (R16)', () => {
     expect(words.filter((w) => w.includes(TOKEN)), 'the token is on curl\'s argv').toEqual([]);
     expect(words.filter((w) => /x-ccrc-mail-token/i.test(w)), 'the token header is on curl\'s argv').toEqual([]);
     expect(words.some((w, i) => w === '-K' && words[i + 1] === '-'), `no \`-K -\` in argv: ${words.join(' ')}`).toBe(true);
-    expect(stdin()).toBe(CONFIG);
+    // The body rides the config too, never the argv (Overlord W1 door process A1, ruled F1).
+    if (body !== '') expect(words.filter((w) => w.includes('fromUuid') || w.includes('program')), 'the body is on curl\'s argv').toEqual([]);
+    expect(words).not.toContain('--data-binary');
+    expect(stdin()).toBe(configWith(body));
     expect(seen).toHaveLength(1);
     expect(seen[0]!.auth).toBe(TOKEN);
     expect(seen[0]!.body).toBe(body);
@@ -1994,6 +2005,52 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     // the other plan rows still send: the word gates phase-ref alone
     await run(['plan', 'show', 'prog-a']);
     expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan']);
+  });
+
+  it('the take and triage rows are refused locally without plan-inbound-v1, and no other row is (D-8736, round 4 A1)', async () => {
+    expect(SERVER_CAPS).toContain('plan-inbound-v1');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-inbound-v1'));
+    plantPane('demo-ws');
+    for (const args of [['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-']]) {
+      const r = await run(args, '{}', { TMUX_PANE: '%7' });
+      expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'capability-missing']);
+      expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain('plan-inbound-v1');
+    }
+    expect(seen).toEqual([]);
+    // the other plan rows still send: the word gates take and triage alone
+    await run(['plan', 'show', 'prog-a']);
+    expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan']);
+  });
+
+  it('take and triage send when the cap file is current and carries plan-inbound-v1, or is absent (D-8736)', async () => {
+    plantPane('demo-ws');
+    const b = '{"issue":"AAA-12","decision":"upkeep"}';
+    let r = await run(['plan', 'triage', 'AAA', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    writeCaps(SERVER_CAPS);
+    r = await run(['plan', 'triage', 'AAA', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => s.url.split('?')[0])).toEqual(['/api/teams/AAA/plan/triage', '/api/teams/AAA/plan/triage']);
+  });
+
+  it('plan ticket-done sends the pane\'s identity in the query and the body unchanged (programme work map WM1)', async () => {
+    plantPane('demo-ws');
+    const b = '{"ticket":"t1","evidence":{"runId":12}}';
+    const r = await run(['plan', 'ticket-done', 'prog-a', '--json', '-'], b, { TMUX_PANE: '%7' });
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect(seen.map((s) => [s.method, s.url, s.body])).toEqual([['POST', `/api/programmes/prog-a/plan/tickets/done?${ID}`, b]]);
+  });
+
+  it('the ticket-done row is refused locally without plan-ticket-done-v1', async () => {
+    expect(SERVER_CAPS).toContain('plan-ticket-done-v1');
+    writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-ticket-done-v1'));
+    plantPane('demo-ws');
+    const r = await run(['plan', 'ticket-done', 'prog-a', '--json', '-'], '{"ticket":"t1","evidence":{"pr":7}}', { TMUX_PANE: '%7' });
+    expect([r.status, (JSON.parse(r.stdout) as { error: string }).error]).toEqual([2, 'capability-missing']);
+    expect((JSON.parse(r.stdout) as { detail: string }).detail).toContain('plan-ticket-done-v1');
+    // the other plan rows still send, phase-ref included: the word gates ticket-done alone
+    await run(['plan', 'phase-ref', 'prog-a', '--json', '-'], '{"op":"add","phase":"p1","ref":{"kind":"epic","key":"e1"}}', { TMUX_PANE: '%7' });
+    expect(seen.map((s) => s.url)).toEqual([`/api/programmes/prog-a/plan/phases/refs?${ID}`]);
   });
 
   it('an absent or stale cap file sends', async () => {

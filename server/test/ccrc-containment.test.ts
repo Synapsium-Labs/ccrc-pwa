@@ -442,6 +442,8 @@ describe('the loopback curl front parses argv — an option it does not allowlis
   const CLAIM_CODE = 'Qx9_-'.repeat(9).slice(0, 43);
   const CLAIM_NODE = '0123abcd-0000-4000-8000-000000000001';
   const CLAIM_LINE = `data = "{\\"code\\":\\"${CLAIM_CODE}\\",\\"nodeId\\":\\"${CLAIM_NODE}\\"}"\n`;
+  // ccd/ccrc-api's body as its config line writes it (Overlord W1 door process A1): its quotes escaped.
+  const API_BODY = 'data-raw = "{\\"program\\":\\"p\\"}"\n';
   const refusedCfg: Array<[string, string[], string]> = [
     ['-K <file> (only `-K -` is admitted)', ['-K', '/tmp/x', ok], HDR],
     ['--config - (only the short spelling the senders use)', ['--config', '-', ok], HDR],
@@ -486,6 +488,12 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     ['a claim code of 42 characters', ['-K', '-', ok], CLAIM_LINE.replace(CLAIM_CODE, CLAIM_CODE.slice(1))],
     ['an uppercase node id', ['-K', '-', ok], CLAIM_LINE.replace(CLAIM_NODE, CLAIM_NODE.toUpperCase())],
     ['an unescaped claim body', ['-K', '-', ok], CLAIM_LINE.replace(/\\"/g, '"')],
+    // ccrc-api's body line (Overlord W1 door process A1): each row breaks one rule of an otherwise-admitted `data-raw` line.
+    ['a bare quote inside a data-raw body', ['-K', '-', ok], 'data-raw = "{"a":1}"\n'],
+    ['an escaped closing quote: the data-raw body never closes', ['-K', '-', ok], 'data-raw = "{\\"a\\":1}\\"\n'],
+    ['a raw carriage return inside a data-raw body', ['-K', '-', ok], 'data-raw = "{}\r"\n'],
+    ['an unquoted data-raw body', ['-K', '-', ok], 'data-raw = {}\n'],
+    ['a data-raw body beside a url line', ['-K', '-', ok], `${HDR}${API_BODY}url = "http://127.0.0.1:7788/"\n`],
   ];
   for (const [what, args, input] of refusedCfg) {
     it(`refuses ${what}: exit 97, recorded by argv alone, and nothing reaches curl (wave 13, R16)`, () => {
@@ -500,7 +508,13 @@ describe('the loopback curl front parses argv — an option it does not allowlis
     });
   }
   const passesCfg: Array<[string, string[], string]> = [
-    ['ccrc-api\'s POST shape (`-K -` header, a JSON body)', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}',
+    // Since the door process (Overlord W1 door process A1, ruled F1) ccrc-api's body rides the same config as a `data-raw`
+    // line, never `--data-binary` on the argv.
+    ['ccrc-api\'s POST shape (`-K -` header and its body line)', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}',
+      '-X', 'POST', '-H', 'content-type: application/json', `${ok}api/runs`], `${HDR}${API_BODY}`],
+    ['the body line with escaped quotes, backslashes and newlines', ['-sS', '-K', '-', '-X', 'POST', ok],
+      `${HDR}data-raw = "{\\"a\\":\\"x\\\\y\\nz\\"}"\n`],
+    ['an earlier ccrc-api\'s POST shape (a JSON body on --data-binary)', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}',
       '-X', 'POST', '-H', 'content-type: application/json', '--data-binary', '{"program":"p"}', `${ok}api/runs`], HDR],
     ['ccrc-api\'s GET shape', ['-sS', '-K', '-', '-m', '30', '-o', '/tmp/x', '-w', '%{http_code}', '-X', 'GET', `${ok}api/runs`], HDR],
     ['notify.sh\'s shape', ['-fsS', '-m', '5', '-X', 'POST', `${ok}api/notify`, '-K', '-', '-H', 'content-type: application/json',

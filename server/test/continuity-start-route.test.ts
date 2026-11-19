@@ -57,7 +57,8 @@ describe('POST /api/sessions/:id/start', () => {
     const first = await post(app, body());
     expect([first.statusCode, first.json()]).toEqual([202, { ok: true, id: 1, fresh: true }]);
     expect(rows()).toEqual([{ id: 1, sessionId: ID, reportId: 'r-0001-abcd', uuid: UUID, source: 'clear',
-      model: 'claude-opus-5-5', rowIncarnation: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: FAKE_T0 - 50, receivedAt: FAKE_T0 }]);
+      model: 'claude-opus-5-5', rowIncarnation: '0189abcd-1234-5678-9abc-0123456789ab', reportedAt: FAKE_T0 - 50, receivedAt: FAKE_T0,
+      doorNonceSha256: null }]);   // an older hook's report binds no nonce (Overlord W1 door process A1)
     const again = await post(app, body());
     expect([again.statusCode, again.json()]).toEqual([202, { ok: true, id: 1, fresh: false }]);
     expect(rows()).toHaveLength(1);

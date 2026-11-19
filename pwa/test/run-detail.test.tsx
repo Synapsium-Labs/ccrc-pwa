@@ -576,3 +576,28 @@ describe('Resume on the run page', () => {
     expect(screen.getByText('Only if this work should go on. A dead programme is abandoned, not handed over.')).toBeTruthy();
   });
 });
+
+describe('the run page Calls (D-8126)', () => {
+  const call = (id: number, over: Record<string, unknown> = {}) => ({
+    id, program: 'programme-a', runId: 410, madeBy: 'coordinator-a', class: 'big', question: 'Which store?', options: ['A', 'B'],
+    chosen: 'A', why: 'already in use', reversible: true, wakeOn: null, at: T0, seenAt: null, overturnedAt: null, overturnNote: null, ...over,
+  });
+  it('draws a collapsed section with the count and every class, read only', async () => {
+    const r = run({ state: 'merged' as RunSummary['state'] });
+    reads(r, { record: async () => record(r, { calls: [call(1), call(2, { class: 'routine', question: null })] as unknown as RunRecordAnswer['calls'] }) });
+    await open(r);
+    const section = document.querySelector('details[data-group="calls"]') as HTMLDetailsElement;
+    expect(section.open).toBe(false);
+    expect(within(section).getByText('Calls (2)')).toBeInTheDocument();
+    expect(section.querySelectorAll('li')).toHaveLength(2);
+    expect(section.textContent).toContain('big · Which store? · Chose: A · Because: already in use');
+    expect(section.textContent).toContain('routine · Chose: A');
+    expect(section.querySelector('button')).toBeNull();
+  });
+  it('draws nothing for an older record without calls', async () => {
+    const r = run({ state: 'merged' as RunSummary['state'] });
+    reads(r);
+    await open(r);
+    expect(document.querySelector('[data-group="calls"]')).toBeNull();
+  });
+});

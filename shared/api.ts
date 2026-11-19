@@ -4924,7 +4924,11 @@ export interface HookAskQuestion {
  *  both, since `session-hook.sh` writes exactly one shape per waiting state. */
 export type HookAsk =
   | { questions: HookAskQuestion[] }
-  | { approval: { tool: string; summary: string } };
+  /** `route` (approvals plan 2026-11-18, Task 1.2): where the hook sent the prompt, or the first gate that stopped it,
+   *  as `shared/approval-census.ts#parseApprovalRoute` reads it. ADDITIVE: an older hook writes none.
+   *  `thread` (Task 2.1): `subagent` when the server took the envelope from the hook's per-agent list for the menu the
+   *  pane paints (`server/src/coord/approvalEnvelope.ts#paintedApprovalOf`). ADDITIVE: absent on the hook's own `ask`. */
+  | { approval: { tool: string; summary: string; route?: string; thread?: 'subagent' } };
 
 export type SessionStreamMsg =
   /** `missing: true` → no transcript file at `file`; the UI shows a diagnostic
@@ -5532,6 +5536,14 @@ export const MAIL_MAX_ATTEMPTS = 6;
 export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
+
+/** The optional idempotency key on `POST /api/mail` (Overlord wave 164, `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+ *  A sender that may retry a send names one; the ingress keeps one mail per (`fromId`, `clientKey`) and answers a retry of the same
+ *  mail with the original id and `already: true`. The shape is `ccd/ccrc-api`'s `SAFE_RE` (letters, digits, `_`, `-`) with a length
+ *  bound, so the client's `--key` and the route accept the same words; absent or null is no key. */
+export const MAIL_CLIENT_KEY_MAX = 128;
+export const isMailClientKey = (value: unknown): value is string =>
+  typeof value === 'string' && value.length >= 1 && value.length <= MAIL_CLIENT_KEY_MAX && /^[A-Za-z0-9_-]+$/.test(value);
 
 /** Numeric fields rendered into a run hold use this one exact domain at every
  *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
@@ -6335,6 +6347,10 @@ export const MAIL_REJECT_CODES = [
   // docstring already makes for 'paused'); the both-directions membership
   // scan still covers it.
   'duplicate', 'peer-quota',
+  // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
+  'key-conflict',
+  // ingress — urgent mail (mid-turn mail, spec §3.1): the sender rule's answers, its named run and one outstanding per pair.
+  'urgent-not-allowed', 'urgent-outstanding', 'urgent-unmeasured', 'urgent-wrong-run',
   // delivery
   'undeliverable',
   // done-authority
@@ -6495,11 +6511,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `profiledigest` (Overlord W1 sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it
  * stands, ccd renders the row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create
  * is its one recorded second writer), and an empty value clears it.
+ * `mailhold` (mid-turn mail spec 2026-11-19 §3.3) is the urgent-mail hold's lease, in `shared/mailHold.ts`'s grammar. Its
+ * one writer is the mail-hold projection lane; ccd refuses it at the mint and from a session's shell, and an empty value
+ * clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest', 'mailhold'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, and the pool set's two (W1),
- *  written by the designation's doors.
+ *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, the pool set's two (W1),
+ *  written by the designation's doors, and the mail-hold projection's `mailhold`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
@@ -6776,7 +6795,10 @@ export type RunRefuseCode =
   | 'intent-held'   // D-8085: another programme's run holds a landing intent this dispatch names
   // D-8181: the plan's refusals of a run (Linear hierarchy design): the wave names no planned epic, the programme has no
   // plan, the reserved programme, a ticket another run holds or that is dropped, and a plan the coordinator closed.
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed';
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
+  // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
+  // into an epic with an open declared ticket no run holds must name one.
+  | 'ticket-required';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
@@ -6789,6 +6811,7 @@ const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'status-unmeasurable': true, 'worker-starting': true, 'attribution-required': true, 'not-a-child': true,
   'cap-review-rounds': true, 'ejection-not-merging': true, 'intent-held': true,
   'wave-epic-mismatch': true, 'plan-missing': true, 'reserved-programme': true, 'ticket-unavailable': true, 'plan-closed': true,
+  'ticket-required': true,
 };
 export const RUN_REFUSE_CODES: readonly RunRefuseCode[] = Object.keys(RUN_REFUSE_CODE_MAP) as RunRefuseCode[];
 
@@ -8146,6 +8169,32 @@ export interface MailSummary {
    * means "nothing to say about a park".
    */
   parkedAt?: number | null;
+  /**
+   * Mid-turn mail PR 1 (Overlord wave 171): this delivery's three stored times and its replay count, so a reader can
+   * measure how long a mail waited and how long it stayed unread. `at` above is when the mail row was inserted (the
+   * server's clock).
+   *
+   * `deliveredAt` is the time at the START of the sweep pass that last put the nudge into the recipient's pane
+   * (`mailPass`'s `now`, written by `markDelivered` once the send succeeds; the server's clock), so it is earlier than
+   * the moment the nudge was typed, by the pass's earlier reads and sends. A replay re-dates it: on a replayed row it is
+   * the latest delivery, not the first, and `replayCount` says how many replays there were (0 for none).
+   *
+   * `ingestedAt` is the time of the first `UserPromptSubmit` edge of ANY kind (an operator prompt, another mail's nudge,
+   * a brief, not only this mail's) that the mail sweep sampled from the recipient's hook state after a delivery, on the
+   * FLEET BOX's clock (`markIngested`, from `sampleEdge`, every `MAIL_SWEEP_MS`, 10 s). It is written once and a replay
+   * does not move it, so it can precede `deliveredAt`; a fast turn can overwrite the edge before a sample sees it, so it
+   * can be missing or a later prompt's time.
+   *
+   * `ackedAt` is when an ack committed (`markAcked`, the server's clock): the recipient's, through the ack route, or, for
+   * an operator-message nudge, the nudge lane's own ack at the delivery, so there it equals `deliveredAt`.
+   *
+   * ADDITIVE and OPTIONAL: each is absent until written, absent from an older server, and absent when the stored value is
+   * not the canonical spelling of a positive whole number (zero too, except `replayCount`'s), never zero.
+   */
+  deliveredAt?: number;
+  ingestedAt?: number;
+  ackedAt?: number;
+  replayCount?: number;
 }
 
 /** The enforced cap (spec:199-201). The COUNT is a query over `runs`, never
@@ -12341,7 +12390,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1' | 'plan-inbound-v1' | 'plan-ticket-done-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12412,7 +12461,13 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  this server answers `POST /api/programmes/:slug/plan/phases/refs` (`plan phase-ref`: add, remove, carry; `unknown-ref`,
    *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
    *  Added by the change that builds the route and the client row, cut after them. */
-  'plan-phases-v1': true,
+  'plan-phases-v1': true, 'plan-inbound-v1': true,   // plan-inbound-v1 (D-8736): `plan take` and `plan triage` answer; `ccrc-api` refuses both `capability-missing` without it
+  /** Programme work map WM1 (D-8727): this server stores a ticket's done time and evidence (`plan_tickets.doneAt` and
+   *  `doneEvidence`), answers `POST /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`; `evidence-unverified`),
+   *  and refuses `ticket-required` at `runs open` in a phased plan. `ccrc-api plan ticket-done` refuses
+   *  `capability-missing`, unsent, when a current cap file omits this word. Added by the change that builds the route and
+   *  the client row, cut after them. */
+  'plan-ticket-done-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -13920,14 +13975,14 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6; the Overlord's private store, W1), `~`-anchored: Read (and Bash) of every one of these thirteen, writes under `ACCOUNT_WRITE_DIRS`' two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' three. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
    // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
    '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
-   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*'];
-export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*', '~/.cc-sessions/.door/**'];
+export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
 export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];
@@ -14524,6 +14579,9 @@ export interface CallView {
   seenAt: number | null;
   overturnedAt: number | null;
   overturnNote: string | null;
+  /** D-8126 A4: when a cleared big call left the operator's group (`callClearedAt`), on `WaitingView.callsCleared` rows only.
+   *  OPTIONAL on the wire: an older server omits it, and the console falls back to its own reading. ADDITIVE. */
+  clearedAt?: number;
 }
 
 /** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own

@@ -24,3 +24,19 @@ describe('CallerIdentity has one measured composition, in server.ts', () => {
     expect(outsideHome(planted, parseSource('// attributionIdentity(deps)\nconst text = "attributionIdentity(deps)";', planted))).toBe(false);
   });
 });
+
+// Gates B, carry of gates A review F4: the account gate is the one minter of an operator-strength account-gate actor, so the
+// only `server/src` caller of `gateActorOf` is `accounts/gate.ts`, once.
+const GATE_HOME = 'server/src/accounts/gate.ts';
+const gateMints = (file: ParsedFile): number => file.calls.filter((c) => c.name === 'gateActorOf').length;
+
+describe('the account gate is the one caller of gateActorOf in server/src', () => {
+  it('only accounts/gate.ts calls gateActorOf, exactly once', () => {
+    const files = ALL.map(rel).filter((f) => f.startsWith('server/src/') && f !== GATE_HOME);
+    expect(files.filter((f) => gateMints(parsedFile(f)) > 0)).toEqual([]);
+    expect(gateMints(parsedFile(GATE_HOME))).toBe(1);
+  });
+  it('CONTROL: a planted call elsewhere is counted', () => {
+    expect(gateMints(parseSource("const a = gateActorOf('ccrc server', '');", 'server/src/planted.ts'))).toBe(1);
+  });
+});

@@ -1,6 +1,7 @@
 // The coordination store, ring L3 (the 08-10 spec's adapter list): every coordination read and write runs a
 // `node:sqlite` statement on the connection it is handed. That import is type-only, so the facts alone would read
 // L1; this declaration is what makes a runtime import of `CoordStore` from an L1 file an outward edge (#2370).
+import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
@@ -46,6 +47,7 @@ import * as probes from '../continuity/continuityStore.js';
 import * as designation from './overlordDesignationStore.js';
 import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
+import * as census from './approvalCensusStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
@@ -54,6 +56,9 @@ import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { KeyedMail } from './mailKey.js';
+import { urgentSenderVerdict, type UrgentFacts, type UrgentRole, type UrgentRunIds, type UrgentVerdict } from './urgentMail.js';
+import type { ChildMark } from '../../../shared/api.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -155,7 +160,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 // `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
-import type { RunLastMovesRead } from './runWire.js';
+import { incarnationOfMark, type RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -1494,6 +1499,12 @@ export const MAIL_RUN_CLOSED_ERROR = 'run closed';
  */
 export const MAIL_RECLAIM_CANCELLED_ERROR = 'coordinator reclaimed';
 
+/** The insert met `mail_client_key_once` (Overlord wave 164, review 2725 F5): another send stored this sender's key between
+ *  the ingress's read and its insert. The route then reads the stored mail and asks `mailKeyVerdict` again, so the loser of
+ *  that race answers `same` or `key-conflict`, never a 500. Any other error is not this one. */
+export const isMailClientKeyClash = (e: unknown): boolean =>
+  e instanceof Error && /UNIQUE constraint failed: mail\.fromId, mail\.clientKey/.test(e.message);
+
 /**
  * The occupant-change park (design 2026-09-08 §4), and it is its OWN sentence
  * rather than a reuse of the two above. `MAIL_RECLAIM_CANCELLED_ERROR` reads
@@ -1682,6 +1693,16 @@ const ABANDONED_PARK_SQL =
 const OUTSTANDING_OR_ABANDONED_SQL =
   `(d.state IN ${OUTSTANDING_STATES_SQL} OR ${ABANDONED_PARK_SQL})`;
 
+/** THE INBOX SET'S PREDICATE, named once (mid-turn mail, plan Task 2.1; spec §3.2): the ack door's guard
+ *  (`ackableDeliverySql`) AND the mailbox's read predicate (`OUTSTANDING_OR_ABANDONED_SQL`), over `d` (mail_deliveries)
+ *  and `rr` (the mail's run, LEFT JOINed), so it has no prefix: the read predicate is spelled over those two aliases.
+ *  `inboxFor`, `abandonedCount` and the urgent hold (`urgentHolds`, `urgentOutstanding`) read it, so the hold is the
+ *  urgent part of the set `mail inbox` prints, never a second copy of the rule. */
+const ACKABLE_OUTSTANDING_SQL: { readonly sql: string; readonly args: readonly string[] } = (() => {
+  const ack = ackableDeliverySql('d.');
+  return { sql: `${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`, args: ack.args };
+})();
+
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns.
  *
@@ -1708,7 +1729,10 @@ const MAIL_ROW_COLUMNS =
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
   'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
   // D-5838: when the park began, for the strip's `parked` line.
-  'd.parkedAt AS parkedAt';
+  'd.parkedAt AS parkedAt, ' +
+  // Mid-turn mail PR 1: the three stored times and the replay count, as TEXT (D-2545's reason: a wider integer throws).
+  'CAST(d.deliveredAt AS TEXT) AS deliveredAtText, CAST(d.ingestedAt AS TEXT) AS ingestedAtText, ' +
+  'CAST(d.ackedAt AS TEXT) AS ackedAtText, CAST(d.replayCount AS TEXT) AS replayCountText';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
@@ -1716,7 +1740,17 @@ interface MailRowDb {
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
   parkedAt: number | null;
+  deliveredAtText: string | null; ingestedAtText: string | null; ackedAtText: string | null; replayCountText: string | null;
 }
+
+/** One stored delivery number onto the wire (mid-turn mail PR 1): present only when its text is the one canonical
+ *  spelling of a positive safe integer (`parseCanonicalPositiveSafeInteger`), so a missing, fractional, textual,
+ *  hexadecimal, zero or unsafe value is absent, never zero. `replayCount` alone may also be zero, its column's default:
+ *  a first delivery not yet replayed. */
+const mailNumber = (key: 'deliveredAt' | 'ingestedAt' | 'ackedAt' | 'replayCount', text: string | null): Partial<MailSummary> => {
+  const v = key === 'replayCount' && text === '0' ? 0 : parseCanonicalPositiveSafeInteger(text);
+  return v === null ? {} : { [key]: v };
+};
 
 /** A route argument can never ask either mail read to walk more history (or
  *  more outstanding rows) than is reasonable to JSON-stringify into one
@@ -5539,7 +5573,7 @@ export class CoordStore {
   setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
-  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
+  insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number; pushSource?: string }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
   claimOutboxRow(id: number, at: number, response?: responses.PushResponseOf): ReturnType<typeof outbox.claimOutboxRow> { return outbox.claimOutboxRow(this.db, id, at, response); }
   silenceOutboxRow(id: number, why: PushSilentWhy, at: number): ReturnType<typeof outbox.silenceOutboxRow> { return outbox.silenceOutboxRow(this.db, id, why, at); }
   supersededUnbound(id: number): boolean { return outbox.supersededUnbound(this.db, id); }
@@ -6365,13 +6399,18 @@ export class CoordStore {
   }
 
   /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
-   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
-   *  so this query is economy, never a permission. */
+   *  `startedAtOrBefore`, oldest stamp first. D-8126: also a planned run with no session whose newest `run_events` row at
+   *  or after its stamp begins `DISPATCH_ORPHANED_EVENT` (the dispatch said a spawn may exist that no run owns), whatever
+   *  the stamp: a later re-dispatch restamps, which puts the older event before the stamp and hides it. Ids only: the
+   *  executor reads each run whole (`run(id)`) and decides on it, so this query is economy, never a permission. */
   stalledDispatchRunIds(startedAtOrBefore: number): number[] {
     return (this.db.prepare(
       "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
-      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
-    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+      'AND dispatchStartedAt IS NOT NULL AND (dispatchStartedAt <= ? OR substr(COALESCE((' +
+      'SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.at >= runs.dispatchStartedAt ' +
+      "ORDER BY e.id DESC LIMIT 1), ''), 1, ?) = ?) ORDER BY dispatchStartedAt, id",
+    ).all(startedAtOrBefore, DISPATCH_ORPHANED_EVENT.length, DISPATCH_ORPHANED_EVENT) as { idText: string }[])
+      .map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
   }
 
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
@@ -6802,16 +6841,98 @@ export class CoordStore {
 
   /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
    *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
-   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. */
+   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `clientKey` (Overlord
+   *  wave 164): the sender's idempotency key, which only the mail ingress passes, on `mailKeyVerdict`'s `new`; absent or
+   *  null for every other mail. This is that column's one writer too, and `mail_client_key_once` refuses a second row
+   *  with the same sender and key (`isMailClientKeyClash` names that refusal). `inReplyTo`: the delivery id the send
+   *  named, as sent, which the key compares (review 2725 F1); absent or null when it named none. `urgentAs` (mid-turn
+   *  mail, plan Task 2.2): the sender's role for an urgent mail, on `urgentSenderVerdict`'s `allowed`; absent or null for
+   *  every other mail. This is that column's one writer too. Only the mail ingress will pass it, and no caller passes it
+   *  until that ingress lands (`ingress-waits-for-routes`), so every row stays not urgent. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[]; answersMail?: number | null }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null;
+                  inReplyTo?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo, ' +
+      'urgentAs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null, m.urgentAs ?? null);
     return { id: Number(res.lastInsertRowid) };
+  }
+
+  /** The mail `fromId` stored under `clientKey` (Overlord wave 164), as `mailKeyVerdict` compares it, or null when this
+   *  sender stored none under that key. `mail_client_key_once` makes the row unique. A stored `kind` outside the sendable
+   *  vocabulary cannot equal a request's, so it is read as it is; `artifacts` that do not parse as a list of strings read as
+   *  `['']`, which no request carries (the ingress admits absolute paths only), so the decider answers `conflict`, never
+   *  `same`, on a row it cannot read. */
+  mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
+    const row = this.db.prepare(
+      'SELECT id, toId, runId, kind, subject, body, artifacts, inReplyTo FROM mail WHERE fromId = ? AND clientKey = ?',
+    ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
+      body: string; artifacts: string; inReplyTo: number | null } | undefined;
+    if (row === undefined) return null;
+    const UNREADABLE: readonly string[] = [''];
+    let artifacts: readonly string[] = UNREADABLE;
+    try {
+      const parsed: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
+    } catch { /* UNREADABLE stands */ }
+    return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
+      body: row.body, artifacts, inReplyTo: row.inReplyTo };
+  }
+
+  /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would
+   *  print and the ack door would accept (`ACKABLE_OUTSTANDING_SQL`), in delivery-id order, each with the role its mail
+   *  stored. Derived, never stored: an ack, a run's close and a child's reclaim release a delivery by leaving that set.
+   *  `mail.urgentAs` is CHECKed to the two role words, so the read casts it. A recipient with nothing held is absent. */
+  urgentHolds(): ReadonlyMap<string, readonly { readonly deliveryId: number; readonly role: UrgentRole }[]> {
+    const rows = this.urgentRows('', []) as { toId: string; deliveryId: number; role: UrgentRole }[];
+    const holds = new Map<string, { deliveryId: number; role: UrgentRole }[]>();
+    for (const r of rows) holds.set(r.toId, [...(holds.get(r.toId) ?? []), { deliveryId: r.deliveryId, role: r.role }]);
+    return holds;
+  }
+
+  /** Whether `fromId` has an urgent mail to `toId` (the resolved recipient) still on the hold's set: the fact behind
+   *  `urgent-outstanding` (spec §3.1, plan P4). */
+  urgentOutstanding(fromId: string, toId: string): boolean {
+    return this.urgentRows('AND m.fromId = ? AND d.toId = ? ', [fromId, toId]).length > 0;
+  }
+
+  /** Whether `fromId` may mark its mail to `toId` (the resolved recipient) about run `runId` urgent now (spec §3.1, plan
+   *  P2 to P4). This store reads the facts once, as run ids from the binding's one view, and `urgentSenderVerdict` (L1)
+   *  decides. The recipient's runs are those that bind its INCARNATION, built from its registry mark (`mark`, which the
+   *  caller reads) as `heldFor` and the drift lane build it (`incarnationOfMark`), so a reused worker name never lets an
+   *  earlier occupant's coordinator through; a mark that cannot be read is `urgent-unmeasured`. Every fact read sits in
+   *  one try: a read that throws, or a series that cannot be represented, is `urgent-unmeasured`, never an empty answer.
+   *  The ingress (which waits for its own PR, `ingress-waits-for-routes`) asks with no `await` between this read and its
+   *  insert, so two sends cannot both pass. */
+  urgentVerdict(fromId: string, toId: string, runId: number | null, mark: ChildMark): UrgentVerdict {
+    const ids = (r: OpenSiblingsResult): UrgentRunIds => (r.ok ? r.siblings.map((s) => s.id) : 'unmeasured');
+    let facts: UrgentFacts;
+    try {
+      const recipient = this.bindingsOf(toId);
+      const d = this.designationRead();
+      facts = { senderId: fromId, recipientId: toId, runId,
+        recipientWorksOn: mark.kind === 'unreadable' ? 'unmeasured'
+          : ids(recipient.worker({ incarnation: incarnationOfMark(this, toId, mark) })),
+        senderClaims: ids(this.bindingsOf(fromId).claimant()),
+        recipientClaims: ids(recipient.claimant()),
+        designation: d.kind === 'designated' ? { kind: d.kind, sessionId: d.sessionId } : { kind: d.kind },
+        outstanding: this.urgentOutstanding(fromId, toId) };
+    } catch (e) {
+      return { kind: 'refused', code: 'urgent-unmeasured',
+        detail: `the facts for an urgent mail to ${toId} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    return urgentSenderVerdict(facts);
+  }
+
+  private urgentRows(and: string, args: readonly string[]): unknown[] {
+    return this.db.prepare(
+      'SELECT d.toId AS toId, d.id AS deliveryId, m.urgentAs AS role FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `LEFT JOIN runs rr ON rr.id = m.runId WHERE m.urgentAs IS NOT NULL ${and}AND ${ACKABLE_OUTSTANDING_SQL.sql} ` +
+      'ORDER BY d.toId, d.id',
+    ).all(...args, ...ACKABLE_OUTSTANDING_SQL.args);
   }
 
   /**
@@ -7044,19 +7165,17 @@ export class CoordStore {
    * refuses, forever. Pure read: no row changes.
    */
   inboxFor(toId: string): { deliveryId: number; envelope: string }[] {
-    const ack = ackableDeliverySql('d.');
     return this.db.prepare(
       'SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`,
-    ).all(toId, ...ack.args) as unknown as { deliveryId: number; envelope: string }[];
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql} ORDER BY d.id ASC`,
+    ).all(toId, ...ACKABLE_OUTSTANDING_SQL.args) as unknown as { deliveryId: number; envelope: string }[];
   }
 
   /** D-6777: how many deliveries `outstandingMailFor`'s predicate admits that
    *  `inboxFor` does not (the park-ceiling rejection and its kin). `inboxFor` is
    *  a subset of that predicate by construction, so this is a plain difference. */
   abandonedCount(toId: string): number {
-    const ack = ackableDeliverySql('d.');
     const base = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       `LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
@@ -7064,8 +7183,8 @@ export class CoordStore {
     const inbox = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
-    ).get(toId, ...ack.args) as { n: number };
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql}`,
+    ).get(toId, ...ACKABLE_OUTSTANDING_SQL.args) as { n: number };
     return base.n - inbox.n;
   }
 
@@ -7146,6 +7265,8 @@ export class CoordStore {
       // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
       // keeps its park columns as history, and the wire must not call it parked.
       parkedAt: r.state === 'queued' ? r.parkedAt : null,
+      ...mailNumber('deliveredAt', r.deliveredAtText), ...mailNumber('ingestedAt', r.ingestedAtText),
+      ...mailNumber('ackedAt', r.ackedAtText), ...mailNumber('replayCount', r.replayCountText),
     }));
   }
 
@@ -9831,6 +9952,15 @@ export class CoordStore {
     return h.ok ? { ok: true, row: h.row } : { ok: false, detail: h.detail };
   }
 
+  // The approval census (approvals plan 2026-11-18, §3.1; `approvalCensusStore.ts`): its one writer, reached only through
+  // the questions owner, its retention, and the census read's three reads.
+  insertCensusRow(r: census.CensusRowInsert): ReturnType<typeof census.insertCensusRow> { return census.insertCensusRow(this.db, r); }
+  pruneCensusSummaries(before: number): number { return census.pruneCensusSummaries(this.db, before); }
+  censusRowsIn(fromMs: number, toMs: number): census.CensusRowsResult { return census.censusRowsIn(this.db, fromMs, toMs); }
+  approvalRowsForCensus(fromMs: number, toMs: number): census.ApprovalCensusSourceResult { return census.approvalRowsForCensus(this.db, fromMs, toMs); }
+  approvalPushSources(fromMs: number, toMs: number): Readonly<Record<string, number>> { return census.approvalPushSources(this.db, fromMs, toMs); }
+  censusRunSpans(fromMs: number, toMs: number): census.CensusRunSpansResult { return census.censusRunSpans(this.db, fromMs, toMs); }
+
   /** A child's rows in the given states, oldest first. */
   approvalsForChild(childId: string, states: readonly ApprovalState[]): ApprovalsReadResult {
     if (states.length === 0) return { ok: true, rows: [] };
@@ -9865,13 +9995,16 @@ export class CoordStore {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
     releaseReason?: ApprovalMintReleaseReason; denyCurrent?: boolean;
+    /** The census's two facts from mint (approvals plan 2026-11-18, Task 1.4): the statements' command words (null when
+     *  the grammar cannot list them) and `literalInRoot`. Absent: stored NULL, as on a row minted before them. */
+    commandWords?: readonly string[] | null; literalInRoot?: boolean;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt, denyCurrent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent, commandWords, literalInRoot) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
@@ -9879,6 +10012,8 @@ export class CoordStore {
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
         a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
+        a.commandWords === undefined || a.commandWords === null ? null : JSON.stringify(a.commandWords),
+        a.literalInRoot === undefined ? null : (a.literalInRoot ? 1 : 0),
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
@@ -9948,11 +10083,12 @@ export class CoordStore {
   }
 
   /** The retention (spec §6.7): every row minted before `now - APPROVAL_INPUT_RETENTION_DAYS` loses its redacted
-   *  input, and the row itself is kept as the journal. Returns the count cleared. */
+   *  input and its command words (approvals PR 1, review 2638 F11b: a command name is kept as written, so it goes with
+   *  the input), and the row itself is kept as the journal. Returns the count cleared. */
   pruneApprovalInputs(now: number): number {
     const before = now - APPROVAL_INPUT_RETENTION_DAYS * 86_400_000;
     const res = this.db.prepare(
-      'UPDATE approvals SET inputRedacted = NULL WHERE askAt < ? AND inputRedacted IS NOT NULL',
+      'UPDATE approvals SET inputRedacted = NULL, commandWords = NULL WHERE askAt < ? AND (inputRedacted IS NOT NULL OR commandWords IS NOT NULL)',
     ).run(before);
     return Number(res.changes);
   }

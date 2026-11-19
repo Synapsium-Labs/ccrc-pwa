@@ -4220,13 +4220,14 @@ screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
 - **Fix round 1 (review 2430).** The 64 KiB hold moved texts of 64 to 256 KiB, which `main` read whole, onto the
   carried-chain arms, which read a move down then a CR (CUD+CR, IND+CR) as two breaks with an empty row between and a
   text ending inside a break as an empty row: up to 3,840 bytes of a key in the drawer and the whole key in pane history
-  where `main` showed none (F1, measured by the review and again here). `chainRowSpans`, the cap's step back, a grown
+  where `main` showed none (F1, review 2430's measurement; this task's own script measured up to 2,736 bytes in the
+  drawer and up to 8,064 of 8,128 in pane history, `c44.md` §12.2, figures C45 labelled after review 2445 F7). `chainRowSpans`, the cap's step back, a grown
   read's end and pane history's slice cut now read row breaks as `ROW_BREAK` does, and `endsInRow` (so `cont`) answers
   true for a text that ends inside a break or after one the next text may complete. That also closed the same reader's
   form past `main`'s 256 KiB hold, and two pane-history forms that leaked on `main` too: CR LF at a grown read (review
-  2430 F3) and LF then CR at a slice cut. Seven more cases (fourteen in the describe), eight more mutants (twenty),
-  each red; the minors F4 to F10 are corrected in the records (`c44.md` §12). A 200-form fuzz shows this branch worse
-  than `main` in none; four forms coloured character by character leak on both alike, carried
+  2430 F3) and LF then CR at a slice cut. Seven more cases (fourteen in the describe; six red before the fix, the
+  seventh on its mutant `n2c`), eight more mutants (twenty), each red; the minors F4 to F10 are corrected in the records
+  (`c44.md` §12). A 200-form fuzz shows this branch worse than `main` in none; four forms coloured character by character leak on both alike, carried
   (`mask-perchar-fuzz-shared`).
 
 - **D-8728** — `mask-fail-open-forms`: Task C44, issued on 2026-11-17. The masker's stops that cannot prove a key's
@@ -4235,14 +4236,125 @@ screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
   the floor rather than an empty lead (`drawer-lead-floor-not-empty`), five holes found in the task and closed
   (`drawer-lead-bel-hyperlink`, `pane-cap-blank-read`, `chain-row-tail-cont`, `drawer-taint-through-escapes`,
   `r19-row-tail-arm`), the F11 comment in a file another run claims (`secret-mask-comment-consent`), and, from review
-  2430 F1, the carried-chain arms and pane history's slice cut reading row breaks as `ROW_BREAK` does, with `cont` true
-  for a text that ends inside a break (`chain-row-break-grammar`).
+  2430 F1, the carried-chain arms, the cap's step back, a grown read's end and pane history's slice cut reading row
+  breaks as `ROW_BREAK` does, with `cont` true for a text that ends inside a break (`chain-row-break-grammar`).
 
 **Acceptance.** Every server test of the masker passes at the PR's tip, but for load timeouts that `main`'s masker
-shows too (`c44.md` §11); the D-8728 rows are red at `main` as `c44.md` §4 says; each mutant in `c44.md` §5 reds;
-the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+shows too (`c44.md` §11 and §12.9); the D-8728 rows are red at `main` as `c44.md` §4 and §12.3 say (of the fix round's
+seven, six were red before it and the seventh reds its mutant `n2c`); each mutant in `c44.md` §5 and §12.4 reds; the
+server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
 
 **Rollback.** A plain revert.
+
+### Task C45: the masker follow-up to C44 (D-8749) — now
+
+**Why.** Review 2445 read C44 (#2998) and found nothing that blocked its landing, but nine findings to carry: a slice
+cut that still ends a key's rows when a LF and its CR are far apart or have an escape between them (F1), the cut's bound
+and the back reader's grammar unpinned (F3, F2), consecutive row breaks that end a key's rows (F4), a slow case that may
+have slowed (F5), rows that a drawer sending nothing passes (F6), and record figures (F7 to F9). This is secret masking,
+so fail-closed comes before a tidy screen. The task note is `docs/superpowers/programs/desktop-polish/c45.md`.
+
+**What was done.**
+- **F5 first.** `secret-mask.test.ts`'s "typed slowly" case is not slower at `main` than before C44: ratio 0.93 over six
+  alternating pairs, and 468 against 475 ms of CPU over eight in one process; its wall clock is opening five `coord.db`
+  files under load (26 to 32 s of 26 to 32 s), not the masker (`c45.md` §1). No masker change for it.
+- **F1** (`pane-cut-long-break`): the slice cut reads its break through the escape view, and a slice's lookahead reads
+  the rest of a break the cut fell inside as part of it (`lookaheadEnd`'s `lead`), not as an empty row. A LF, 64 blanks or
+  more (or NULs, or an escape), then a CR showed up to the whole key in pane history at `main`; 0 here. Cutting at the
+  break's start, the review's first proposal, leaked every form, short breaks included (measured), so it was not used.
+- **F3**: a row pins where a slice ends at 63 and 64 blanks and for an escape, so `BREAK_CUT_MAX` at 63 or 65 reds it.
+- **F2**: `breakStartAt` keeps the one family it reads back differently from `ROW_BREAK` (a CR LF, blanks or none, then
+  a CR; since fix round 2 a CR LF, blanks, then a CR CR LF; since fix round 3 a CR LF right before a CR CR LF), because
+  the difference fails closed; its docstring says where, and a brute force over 2,015,538 strings (488,280 before fix round 1's tab) pins the
+  agreement and the difference (`mask-break-grammar.test.ts`).
+- **F4** (`drawer-consecutive-breaks`): the cause is the forward grammar, not `chainBack`. `ROW_BREAK` reads CR CR LF (a
+  CR LF doubled) as one break, closing it in the drawer and pane history (the whole key at `main`); CR LF CR, CR SGR LF,
+  CR LF SGR CR, LF LF and CR LF then CUD+CR stay as at `main`, named with their sizes.
+- **F6**: C44's seven fix-round rows assert the mark too; a drawer that drops every emit reds each drawer row.
+- **Records** (F7 to F9): the row comments, `c44.md` and this plan's C44 figures corrected or labelled as review 2430's
+  or the C44 script's; D-5995 (16) names `mask-perchar-fuzz-shared`; #2998's stale lines listed in `c45.md` §10.
+- **Tests.** Three rows in `drawer-mask-rows.test.ts` (describe "D-8749"), each red at `main`, and the new
+  `mask-break-grammar.test.ts`. Twelve mutants, each red (`c45.md` §6).
+
+- **Fix round 1 (review 2514).** The first `ROW_BREAK` change also refused a LF, blanks, CR break that a CR LF followed,
+  so a LF or a move down, a blank or an SGR, then a CR CR LF ended a key's chain at a blank row: 1,152 key bytes in the
+  drawer and up to 1,160 in pane history where `main` showed 0 (review 2514 F1, blocking). The lookahead is `main`'s
+  again and `breakStartAt`'s CR CR LF arm reads back as the grammar reads forward (`row-break-lookahead-restored`), so
+  those forms measure as at `main`; a push that ends in both CRs of a CR CR LF is held (`crcr-push-end-held`, review 2514
+  F2: the whole key at `main`, 0 here). Three more rows and four mutants; the minors F3 to F14 in `c45.md` §13.
+- **Fix round 2 (review 2585).** This task's CR CR LF arm (its second commit, 9c8942ef1) read a CR LF, blanks (or an SGR), then a CR CR LF back to
+  its first CR, so pane history's step back at the 64 KiB cap stopped at the blank row: the whole 2,000-byte key where
+  `main` showed 360 bytes (review 2585 F1, blocking). The arm now reads that break back from its second CR, as `main` did,
+  the kept family's second member (`crcrlf-arm-after-crlf-blanks`); the brute force pins it with its count. One more row,
+  two mutants, a sweep of every earlier form against `main`, and the minors F2 to F14 in `c45.md` §14.
+- **Fix round 3 (review 2644).** The round-2 guard was not exact: with a CR LF (or two) between the blank row and the
+  CR CR LF, the arm still read it back to its first CR, and the whole key showed past the cap where `main` showed 360
+  bytes (review 2644 F1, blocking, at 467 of 1,001 placements). The arm now reads a CR CR LF back from its second CR
+  whenever a LF comes before it, blanks between or none (`crcrlf-arm-after-crlf`, the review's c1), the kept family's
+  third member (985 breaks); the brute force also checks the cap's step back against `main`'s reading from every LF or
+  CR: never short, never further. One more row, a placement on the round-2 row, mutants, a sweep of every form against
+  `main`, and the minors in `c45.md` §15.
+
+**Acceptance.** Every server test of the masker and the row grammar passes at the PR's tip, but for load timeouts that
+`main` shows too (`c45.md` §12, §13.6, §14.4 and §15.4); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
+round's at 20775879e as §13.5 says, fix round 2's at da2c4569d as §14 says, and fix round 3's at b1b092d3c as §15 says; each mutant in
+`c45.md` §6 reds; the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+
+**Rollback.** A plain revert.
+
+### Task C46: the fleet list drops the subagent and delegated counts (D-8771) — now
+
+**Why.** The operator, 2026-11-19: "the number of subagents in a session is noise at this point on the left panel. It's
+information useful only inside the session running them." A session's row in the fleet list (the left panel on desktop,
+the session list on a phone) no longer draws a count of its subagents or delegated entries. The session's header and
+details keep every one of those facts, unchanged: the subagent disclosure, the delegated-entries disclosure and their lists.
+
+**Files.** `pwa/src/fleet/SessionMeta.tsx` (the card's `N delegated` chip, R9, D-7781, is gone), `sessionFacts.ts`
+(`CardFacts.delegated` and `Fact.count` removed; `cardWithinHeader` compares every key by prefix, with one data row
+(`HEADER_COUNT_ALLOWANCES`) for the status word's count digits; a working row's `N in background` reads `in background` on the card), `SessionLine.tsx`
+(the `delegated` prop), `ProjectCard.tsx` and `nestFleet.ts` (a session row no longer carries its attached entries),
+`delegationWords.ts` (`delegationParts` answers the bare words `delegated` and `worktrees`; `DelegatedSummary.count`
+removed), `rollup.ts` (`SummaryPart.n` optional, a worker part still counted, `partWords` the one spelling) and
+`programmeBoxes.ts` (a comment). A coordinator's fold line and a programme box's footer are a separate grouping the
+operator taps to open the delegated rows, so they stay and drop only the numbers (the coordinator's ruling of 2026-11-19).
+Tests: `card-header-facts`, `project-card`, `session-line`, `rollup`, `fleet-rollup-render`, `fleet-screen`, `nestFleet`
+and `delegation-words`, and the real-Chrome `delegation-rows`. The two delegation specs carry a dated amendment each.
+
+**Measured.** Which pins were red at `main` and which only guard, and every figure and what was not measured, are in
+`docs/superpowers/programs/desktop-polish/c46.md`. The PR body carries the plan's matrix (before and after, Refined and
+Instrument, dark and light, at 360, 390, 1280 and 1920) and its Departures.
+
+**Acceptance.** No session row in the fleet list says `delegated`, `subagent` or `⑂`, or counts its background work, in its
+text (a working row reads `working · in background`), and none counts its subagents or delegated entries in its titles or
+accessible names; the working row's status title is the one place the background count stays (`2 in background:
+workflow, agent`, ruled in fix round 1); the header still draws both disclosures and its background count; the delegated
+rows stay reachable through their fold line.
+
+- **D-8771** — `fleet-list-drops-subagent-counts`: Task C46, issued on 2026-11-19. The fleet list draws no count of a
+  session's subagents, delegated entries or delegated background work in its text, and none of the first two in its titles;
+  a working row's status title keeps the background count (the operator's ruling of 2026-11-19, and the coordinator's
+  ruling of fix round 1). D-7781's card
+  chip is superseded on the card, and D-7782, which had only a card side, is retired whole: the card no longer has a
+  `delegated` fact, so D-5545's prefix rule holds for every key again, with one allowance for the status word, whose header
+  form keeps the count the card dropped (`working · N in background`): one data row (`HEADER_COUNT_ALLOWANCES`, key `status`)
+  read by the rule's own comparison (which holds a card status equal to the header word for word, too), so no second comparison and no other key or words are allowed. The header keeps D-7781's count of every entry, its
+  disclosure and its background count. A coordinator's fold line and a programme box's footer keep their delegated rows and
+  say `delegated` and `worktrees` with no number.
+
+**Rollback.** A plain revert.
+
+**C47: C46's records made true and its count pins made able to fail (follow-up, under D-8771).** No new deviation number and no behaviour a person sees changes. What changed, from the C46 review (run 2708): the Acceptance
+line and D-8771's first sentence above say where the one count stays (the working row's status title), as `c46.md` does (R1);
+the status allowance holds a card status equal to the header word for word as well as the card's uncounted form, in the one
+comparison (L1-1); the header's status fact takes its title from the header's own background words and the card keeps its own
+(L1-2); the card's uncounted words are taken from `backgroundWords`' own output, so they are spelt once, and the allowance row
+is built from them, with no edit to `shared/api.ts` (L1-3, by the coordinator's ruling); the both-skins rendered case reads the
+allowance row and applies it to the header's own status element only (L1-4); the comments in `sessionHeaderView.ts` and the rule
+header in `sessionFacts.ts`, and both spec amendments, say what is true (L1-5, L1-6, R4, R5, which also moves the broker spec's
+amendment beside the R table's and adds the subagent count to both); the no-count pins also fail for a bare number (L2-1), the
+allowance table pins the regex's flags (L2-2), and the dead-session half of the guard loop says it cannot fail for subagents
+(L2-6). The wire comment for the activity placement is not touched here (item 13 left C47 by the coordinator's ruling).
+**Measured** (the mutants, the reds at `main` and the runs): `docs/superpowers/programs/desktop-polish/c46.md`, "C47".
 
 ## Acceptance (the matrix, per PR)
 
@@ -4619,6 +4731,22 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   guard's layout arm refuses a new file under `docs/superpowers/specs/` or `docs/superpowers/plans/` outside the review
   judge's layout (format F1), on every branch and with no trailer escape (the operator's ruling of 2026-11-17: follow the
   judge's standard). Notes already on `main` stay where they are. Further departures, by slug, in `c43.md`.
+- **D-8749** — `mask-c44-follow-up`: Task C45, issued on 2026-11-18. The masker closes the slice-cut and doubled-CR forms
+  review 2445 carried from C44 and pins its break grammar: a slice's lookahead reads the rest of a LF ... CR break its cut
+  fell inside as part of that break, and the cut reads its break through the escape view (`pane-cut-long-break`, review
+  2445 F1, not by cutting at the break's start, which leaked every form); `ROW_BREAK` reads CR CR LF as one break, and the
+  other consecutive-break forms stay as at `main`, carried (`drawer-consecutive-breaks`, F4); `breakStartAt`'s one
+  difference from `ROW_BREAK` is kept and pinned (F2); the slow case's setup is carried as a test change
+  (`secret-mask-slow-case-db`, F5). Fix round 1 (review 2514): `ROW_BREAK`'s LF, blanks, CR lookahead is `main`'s again
+  and `breakStartAt`'s CR CR LF arm agrees with it (`row-break-lookahead-restored`, review 2514 F1: the first change ended
+  a key's chain at a LF, blank, CR CR LF, a new leak), and a push that ends in both CRs of a CR CR LF is held
+  (`crcr-push-end-held`, review 2514 F2, closed). Fix round 2 (review 2585): `breakStartAt` reads a CR LF, blanks, CR CR
+  LF back from its second CR, as `main` did, so the cap's step back crosses the blank row before it
+  (`crcrlf-arm-after-crlf-blanks`, review 2585 F1: the whole key in pane history past the cap where `main` showed 360
+  bytes, a leak since this task's second commit, 9c8942ef1). Fix round 3 (review 2644): `breakStartAt` reads a CR CR LF
+  back from its second CR whenever a LF comes before it, blanks between or none, so a CR LF right before it no longer
+  stops the cap's step back at the blank row (`crcrlf-arm-after-crlf`, review 2644 F1: the round-2 guard left that form,
+  the whole key past the cap where `main` showed 360 bytes). Sizes and runs in `c45.md`.
 
 ## Out of scope
 

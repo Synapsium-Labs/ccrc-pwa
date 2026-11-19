@@ -1677,11 +1677,12 @@ describe('delegated background work (D-5231)', () => {
     background: { count: 2, kinds: ['workflow'] }, ...over,
   });
 
-  it('a working row with background reads `working · 2 in background`, the kinds in the title', () => {
+  it('C46 (D-8771): a working row with background reads `working · in background` with no count; the count and kinds are in the title', () => {
     render(<SessionLine session={bgRow()} onOpen={() => {}} onActions={() => {}} />);
     const el = document.querySelector('.sess-state');
-    expect(el?.textContent).toBe('working · 2 in background');
-    expect(el?.getAttribute('title')).toBe('in background: workflow');
+    expect(el?.textContent).toBe('working · in background');
+    expect(el?.getAttribute('title')).toBe('2 in background: workflow');
+    expect(document.querySelector('.sess-line')?.textContent).not.toMatch(/\d+ in background/);
   });
 
   it('a working row without background reads plain `working`', () => {

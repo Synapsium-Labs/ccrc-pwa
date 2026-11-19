@@ -77,6 +77,9 @@ const QUIZ_SRC = read('server/src/continuity/quizRoutes.ts');
 /** The Models sheet's write door (programme model-class-advance, wave R4): `POST /api/models/:lane`, a routes file of its own with NO
  *  box-token lane. The operator's door, session-gated: `MODELS_DOORS`. (The read beside it, `GET /api/models/:lane`, is in `server.ts`.) */
 const MODELS_SRC = read('server/src/laneModelsRoutes.ts');
+/** The approval census's read (approvals PR 1, Task 1.4): `GET /api/approvals/census`, a routes file of its own with NO box-token
+ *  lane. The operator's read, session-gated: `APPROVAL_CENSUS_DOORS`. */
+const APPROVAL_CENSUS_SRC = read('server/src/coord/approvalCensusRoutes.ts');
 
 /** The decision-model doors (Overlord W2, decision model B): a routes file of its own with NO box-token lane. Its six registrations
  *  on five paths, the read, arm, off, ceiling and the key's `PUT` and `DELETE`, are the operator's and session-gated:
@@ -204,6 +207,12 @@ const QUIZ_SESSION_DOORS = ['/api/continuity/quiz-runs/:id/rule'];
  *  session gate, no box token, in no EXEMPT table. */
 const MODELS_DOORS = ['/api/models/:lane'];
 
+/** The approval census's read (approvals PR 1, Task 1.4), registered from `server/src/coord/approvalCensusRoutes.ts`, which no harvest
+ *  above can see: counts and redacted rows, never an input. Hand-kept for the NAME only, like `MODELS_DOORS`: the describe below
+ *  derives the file's registrations and compares in both directions. The operator's, behind the session gate, no box token, in no
+ *  EXEMPT table. */
+const APPROVAL_CENSUS_DOORS = ['/api/approvals/census'];
+
 /** The decision-model doors (Overlord W2, decision model B): five paths, the key's registered twice (`PUT` and `DELETE`), listed once per
  *  registration and compared with the file's registrations in both directions below. None consults the box token or sits in EXEMPT. */
 const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:id/arm', '/api/decision-model/rows/:id/off',
@@ -212,7 +221,7 @@ const DECISION_MODEL_DOORS = ['/api/decision-model', '/api/decision-model/rows/:
 /** Every session-only route the bullet must describe as carrying no box token. */
 const SESSION_ONLY_ALL = [...SESSION_ONLY_DOORS, KICKOFF, ARCHIVE, DIGEST_CORRECT, PROMPT, ...LEDGER_OPERATOR_DOORS, ...UPDATE_DOORS, ...TOKEN_DOORS,
   ...CONTINUITY_SESSION_DOORS, ...OVERLORD_OPERATOR_DOORS, ...NAME_LIST_DOORS, ...QUIZ_SESSION_DOORS,
-  ...DECISION_MODEL_DOORS, ...MODELS_DOORS];
+  ...DECISION_MODEL_DOORS, ...MODELS_DOORS, ...APPROVAL_CENSUS_DOORS];
 
 /** Number words, index-addressed. Starts the SCAN at `two` for the same reason
  *  `coord-pause-route.test.ts`'s `CARD_RE` does: `one` and `zero` are ordinary
@@ -271,7 +280,10 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'eighty-eight', 'eighty-nine',
 
   // Overlord W1a quiz record: POST /api/continuity/quiz-runs, the operator's record door, a box-token lane in the quiz file: ninety machine lanes in all.
-  'ninety'];
+  // Overlord W1 door process A1: POST /api/sessions/:id/act-key, the door process's claim, a box-token lane in the continuity file: ninety-one machine lanes in all.
+  'ninety', 'ninety-one',
+  // Programme work map WM1: POST /api/programmes/:slug/plan/tickets/done (`plan ticket-done`), a box-token lane in the plan file: ninety-two machine lanes in all.
+  'ninety-two'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -422,7 +434,7 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
     expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
-    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'GET /api/sessions/:id/card',
+    expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'POST /api/sessions/:id/act-key', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',
       'POST /api/timers', 'GET /api/timers', 'POST /api/timers/:id/cancel', 'GET /api/sessions/:id/probe', 'POST /api/sessions/:id/probe']);
     // …and the quiz file's one (Overlord W1a quiz record): the operator's record door, by name.
@@ -499,6 +511,18 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
     for (const call of ['requireMailToken(req, reply);', 'checkMailToken(deps.mailToken ?? null, undefined);']) {
       const planted = MODELS_SRC.replace(LINE, `${LINE}\n    ${call}`);
       expect(lanesIn(planted), `a planted ${call} went unseen`).toEqual(['POST /api/models/:lane']);
+    }
+  });
+
+  it('APPROVAL_CENSUS_DOORS is exactly what the census routes file registers, in both directions; none is a lane or EXEMPT (approvals PR 1)', () => {
+    const keys = registrationsIn(APPROVAL_CENSUS_SRC).map((r) => r.key);
+    expect(keys.map((k) => k.slice(k.indexOf(' ') + 1)).sort(),
+      'approvalCensusRoutes.ts and APPROVAL_CENSUS_DOORS disagree — a door was registered, or a name listed, on one side only').toEqual([...APPROVAL_CENSUS_DOORS].sort());
+    expect(keys, 'the census read is a GET, and only that').toEqual(['GET /api/approvals/census']);
+    expect(lanesIn(APPROVAL_CENSUS_SRC), 'the census read consults the box token — it is the operator\'s').toEqual([]);
+    for (const key of keys) expect(GATE_SRC, `${key} is EXEMPT — the operator's doors sit behind the auth gate`).not.toContain(`  ['${key}',`);
+    for (const door of APPROVAL_CENSUS_DOORS) {
+      expect(ALL_LANES.map((k) => k.slice(k.indexOf(' ') + 1)), `${door} consults the box token — it is the operator's door`).not.toContain(door);
     }
   });
 

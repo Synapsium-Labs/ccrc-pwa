@@ -233,7 +233,10 @@ type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
  *  own arm, and none is folded into another (R3b, the coordinator's rulings of 2026-11-18):
  *  - `read`: the lane's classes, and `advance` as `show` reported it (absent only from a server older than R3).
  *  - `absent`: a lane with no class registry, or one the fleet box did not find. `laneKind` keeps the reason `show` sent
- *    (`LaneAbsentKind`); absent, the fleet box's roster has no such lane (`no-such-account`, fix round 2, N1).
+ *    (`LaneAbsentKind`); absent, the fleet box's roster has no such lane (`no-such-account`, fix round 2, N1). That is
+ *    its one cause from this server: a null registry whose `show` body lacks the `anthropic` boolean is off the grammar
+ *    and reads `unreadable` (follow-up transient-beside-kept-answer). A server from before R3b fix round 1 (F1) sent no
+ *    `laneKind` at all, so from it an `absent` with none may also be a lane with no registry.
  *  - `unreadable`: the registry could not be read or parsed, or the op RAN and gave no usable answer (a timeout, an
  *    output past its cap, a lost answer, a stdout off the grammar). `code`, when present, is the box's reason
  *    (`LaneUnreadableCode`); absent, the server has no reason to name.

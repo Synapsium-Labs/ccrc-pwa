@@ -317,7 +317,8 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'operator_responses', 'response_receipts', 'response_boots', 'response_settings', 'claim_collisions', 'programme_pairs', 'decision_records', 'decision_days', 'renewal_backstop_settings',
   'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches',
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
-  'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend'] as const;
+  'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
+  'continuity_act_keys', 'approval_census', 'overlord_fence_refusals'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
  *  is the table list to read: coord.db's by default, and the private store's for its own describe (Overlord W1 private store A). */
@@ -363,6 +364,8 @@ describe(TABLES_PIN, () => {
         'staleAsk', 'takeAskForAnswer', 'untakeAsk'].map((m) => `${S}${m}`)],
       approvals: ['correctWithMail', 'declineApproval', 'insertApproval', 'lapseApproval', 'markApprovalOperator',
         'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`),
+      // The approval census (approvals PR 1): its one writer, reached only through the questions owner, and its retention.
+      approval_census: ['insertCensusRow', 'pruneCensusSummaries'].map((f) => `server/src/coord/approvalCensusStore.ts#${f}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
       continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
       // The designation's go-live restamps the pending body's generation with its term (Overlord W1 designation, X5).
@@ -448,6 +451,11 @@ describe(TABLES_PIN, () => {
       // each, reached only from its arm of the forecast lane.
       programme_health: ['server/src/coord/programmeFactsStore.ts#appendHealth'],
       run_spend: ['server/src/coord/programmeFactsStore.ts#recordRunSpend'],
+      // The door process's act key (Overlord W1 door process A1, plan w1-door-process.md Task 1): three facts, three writers,
+      // one row: the claim door's issue and refused-claim count, and the counter, reached only through gates B's guarded adapter.
+      continuity_act_keys: ['advanceActCounter', 'issueActKey', 'noteRefusedClaim'].map((f) => `server/src/continuity/actKeyStore.ts#${f}`),
+      // The gate's fence refusals (Overlord W1 gates B, plan w1-gates.md Task 5): one writer, which also prunes the table.
+      overlord_fence_refusals: ['server/src/coord/overlordGateStore.ts#recordFenceRefusal'],
     });
   });
 

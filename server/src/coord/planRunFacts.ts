@@ -3,6 +3,8 @@
 import type { CoordStore } from './store.js';
 import type { PlanStorePort } from './planStore.js';
 import type { OpenRunPlanFacts } from './openRun.js';
+import type { EvidenceLink, TicketDoneFacts } from './planPolicy.js';
+import type { TicketDoneEvidence } from '../../../shared/plan.js';
 
 /** `plan.required` is true for a slug with no `programs` row (`planOf`'s own answer), `ended` reads `planEnd`. A ticket held
  *  by the `planned` run of this very claimant is reported free: a retried open that names the same ticket after a client
@@ -12,6 +14,9 @@ export function planFactsOf(plan: PlanStorePort, coord: CoordStore, slug: string
   return {
     required: stored.required,
     ended: plan.planEndOf(slug) !== null,
+    // Programme work map WM1: a plan that declares a phase (dropped ones included: it was declared) names its tickets at open.
+    phased: plan.phasesOf(slug).length > 0,
+    tickets: (epicId) => stored.epics.find((e) => e.id === epicId)?.tickets ?? [],
     epics: stored.epics,
     ticket: (key) => {
       for (const e of stored.epics) {
@@ -27,4 +32,33 @@ export function planFactsOf(plan: PlanStorePort, coord: CoordStore, slug: string
       return null;
     },
   };
+}
+
+/** `plan ticket-done`'s links between a pull request and the run that carried it (programme work map WM1, review 2429 F2),
+ *  for `ticketDoneVerdict`, which treats a run and its pull request as one piece of work. They are read from the landing
+ *  line alone, through `CoordStore.readLanding` (no `runs.closePr`, no lineage): for a `{ pr }`, always the ticket's own
+ *  project's line, since a run that carried it and still holds another ticket refuses it (review 2712 F1); for a `{ runId }`,
+ *  the line of each project whose ticket stores a `{ pr }`. Each tie carries the ticket its run holds, read through the one
+ *  owner of a run's ticket, `plan.ticketOfRun`. A line that cannot be read answers `unreadable`, which the verdict refuses.
+ *  Stored evidence that reads as neither kind (`malformed`) ties nothing here; the verdict refuses it on its own (F3). */
+export function evidenceLinksOf(
+  coord: Pick<CoordStore, 'readLanding'>, plan: Pick<PlanStorePort, 'ticketOfRun'>, evidence: TicketDoneEvidence, project: string,
+  stored: readonly { project: string; evidence: TicketDoneEvidence | 'malformed' }[],
+): TicketDoneFacts['links'] {
+  const projects = 'pr' in evidence
+    ? [project]
+    : [...new Set(stored.filter((s) => s.evidence !== 'malformed' && 'pr' in s.evidence).map((s) => s.project))];
+  const pairs: EvidenceLink[] = [];
+  for (const p of projects) {
+    const read = coord.readLanding(p);
+    if (!read.ok) return { kind: 'unreadable', detail: `${p}: ${read.error}` };
+    for (const e of read.facts.entries) {
+      if (e.runId === null) continue;
+      if (!('pr' in evidence ? e.pr === evidence.pr : e.runId === evidence.runId)) continue;
+      const own = plan.ticketOfRun(e.runId);
+      const holder = own === null || own.ticketId === null || own.key === null ? null : { ticketId: own.ticketId, key: own.key };
+      pairs.push({ project: p, pr: e.pr, runId: e.runId, holder });
+    }
+  }
+  return { kind: 'read', pairs };
 }

@@ -1815,4 +1815,46 @@ describe('every jq `as $name` binding in the hook is parenthesised on its own (j
     const findings = programs.flatMap((p) => jqAmbiguousAs(p.body).map((f) => `${p.name}: \`${f.binding}\` follows \`${f.op}\``));
     expect(findings, 'an `as` after a binary operator reads differently on jq 1.7 and 1.8: parenthesise it on its own').toEqual([]);
   });
+
+  it('no binding in ccd/lib/mail-hold.jq binds `as` to a binary chain (mid-turn mail plan Task 5.1, N14): the module is one program', () => {
+    const mod = fs.readFileSync(path.resolve(__dirname, '../../ccd/lib/mail-hold.jq'), 'utf8');
+    expect((mod.match(/\bas \$/g) ?? []).length, 'the module\'s bindings are in the scan').toBeGreaterThanOrEqual(10);
+    expect(jqAmbiguousAs(mod).map((f) => `mail-hold.jq: \`${f.binding}\` follows \`${f.op}\``),
+      'an `as` after a binary operator reads differently on jq 1.7 and 1.8: parenthesise it on its own').toEqual([]);
+  });
+});
+
+// The mail hold's head grammar against this file's own corpus (mid-turn mail plan 2026-11-19, Task 5.1's parity case):
+// on the strip's answer for every spelling and mention above, `ccd/lib/mail-hold.jq` finds `gh pr merge` exactly where
+// GH_MERGE_RE does. Both read the same stripped text, made by the hook's own MERGE_STRIP_JQ with its own arguments.
+describe('the mail hold\'s head grammar finds `gh pr merge` where GH_MERGE_RE does, and only there', () => {
+  it('on every SPELLING and MENTION', () => {
+    const hookText = fs.readFileSync(HOOK, 'utf8');
+    const strip = (/^MERGE_STRIP_JQ='([\s\S]*?)'$/m.exec(hookText) ?? [])[1] ?? '';
+    const allow = (/^ALLOW_ADMIN_RE='(.*)'$/m.exec(hookText) ?? [])[1] ?? '';
+    const ghRe = (/^GH_MERGE_RE=.*$/m.exec(hookText) ?? [])[0] ?? '';
+    expect(strip !== '' && allow !== '' && ghRe !== '', 'the three definitions are read from the hook').toBe(true);
+    const corpus = [...SPELLINGS, ...MENTIONS];
+    const stripped = corpus.map((command) => {
+      const r = spawnSync('jq', ['-r', '--arg', 'q', "'", '--argjson', 'cap', String(CAP), '--arg', 'allow', allow, strip],
+        { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command } }), encoding: 'utf8' });
+      expect(r.status, r.stderr).toBe(0);
+      const out = r.stdout.replace(/\n+$/, '');
+      expect(out.startsWith('='), `${command}: under the cap`).toBe(true);
+      return out.slice(out.indexOf('\u001f') + 1);
+    });
+    const gh = spawnSync('bash', ['-c', `${ghRe}\nfor c in "$@"; do if [[ "$c" =~ $GH_MERGE_RE ]]; then echo 1; else echo 0; fi; done`, 'x', ...stripped],
+      { encoding: 'utf8' });
+    expect(gh.status, gh.stderr).toBe(0);
+    const mod = spawnSync('jq', ['-L', path.resolve(__dirname, '../../ccd/lib'), '-r', '--args',
+      'include "mail-hold"; $ARGS.positional[] | if (mh_acts | index("gh pr merge")) != null then "1" else "0" end', ...stripped],
+      { input: 'null', encoding: 'utf8' });
+    expect(mod.status, mod.stderr).toBe(0);
+    const rows = (out: string): string[] => out.trim().split('\n');
+    expect(rows(gh.stdout)).toHaveLength(corpus.length);
+    expect(rows(gh.stdout).filter((x) => x === '1').length, 'CONTROL: GH_MERGE_RE finds some').toBeGreaterThan(10);
+    expect(rows(gh.stdout).filter((x) => x === '0').length, 'CONTROL: and misses some').toBeGreaterThan(10);
+    const differ = corpus.filter((_, i) => rows(gh.stdout)[i] !== rows(mod.stdout)[i]);
+    expect(differ, 'the module and GH_MERGE_RE disagree').toEqual([]);
+  });
 });

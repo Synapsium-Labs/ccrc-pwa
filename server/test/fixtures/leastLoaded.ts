@@ -68,6 +68,24 @@ export interface LeastLoadedCase {
    *  can carry its own malformed content; omitted/empty means no lane gets a
    *  malformed marker. */
   authDeadMalformed?: Record<string, string>;
+  /** Registry rows' spawn records (`<id>.wrapper`, `<id>.spawn` and `<id>.uuid` in the registry directory), the one
+   *  fact A7-3's demotion reads: a lane whose NEWEST spawn recorded rc 2 (`login`) or 5 (`blocked`) is placed last until
+   *  a later spawn on it reads otherwise or the record is 6 h old. `at` is an epoch the case builds from `now`; `rc` is
+   *  written as ccd writes it (`<epoch> <rc>`), and `raw` replaces the whole file for the unreadable shapes (absence
+   *  permits, so such a row is no demotion on either side). `wrapper: null` writes no `.wrapper` file. The server reads
+   *  the rows through the registry (review 2807 F2), so a row is seeded with a `.uuid` (unless `uuid: false`) and a
+   *  `.workdir`, the rest of the identity triple the registry needs, and `link`
+   *  seeds that one file as a symlink to a regular file holding the same bytes: the two shapes the registry reads
+   *  differently from ccd (departure `spawn-reader-follows-the-registry`). Omitted/empty means no spawn anywhere. */
+  spawns?: Array<{ id: string; wrapper: string | null; uuid?: false; link?: 'spawn' | 'wrapper' }
+    & ({ at: number; rc: number } | { raw: string })>;
+  /** Pin BOTH sides' clock to the case's `now` (ccd's `_now_s_to` through a `date` stub, the server's through the
+   *  `now` it is handed), for a case that sits exactly on a time boundary. */
+  pinClock?: true;
+  /** The server's answer where it is KNOWN to differ from ccd's (departure `spawn-reader-follows-the-registry`, the
+   *  `SessionRecord.child` precedent): `expect` stays ccd's, and this is the server's. Only the two shapes ccd never
+   *  writes use it. */
+  serverExpect?: { wrapper: string; score: number };
   /** Routing slice 3. The class the placement is for, DERIVED from `ModelClass`
    *  rather than respelled. Absent means `default` — and so does an explicit
    *  `'default'`, which one case below passes on purpose: the two spellings must
@@ -481,6 +499,176 @@ export function leastLoadedCases(now: number): LeastLoadedCase[] {
       why: 'class `default` is the no-class walk byte for byte: neither the seven-day '
         + 'ceiling nor the Fable share ceiling is consulted, and the minimum wins exactly '
         + 'as it does with no class at all',
+    },
+    // A7-3 (F9): a lane whose newest spawn needs a sign-in or is blocked is DEMOTED, not skipped (the coordinator's
+    // ruling F8, run 2785): it takes the condemned lane's shape, out of scoring and out of the preferred fallback, never
+    // out of the last tier, until a spawn on it succeeds or the record is 6 h old.
+    {
+      name: 'spawn-login-lane-demoted',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'the cheapest lane\'s newest spawn needed a sign-in (rc 2), so the cheapest lane that can spawn wins',
+    },
+    {
+      name: 'spawn-blocked-lane-demoted',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 5 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'rc 5 (blocked) demotes the lane exactly as rc 2 does',
+    },
+    {
+      name: 'spawn-later-ready-spawn-makes-the-lane-placeable-again',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [
+        { id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 60, rc: 0 },
+      ],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'the NEWEST spawn on the lane decides, across rows: a later rc 0 on another row of the lane clears the demotion',
+    },
+    {
+      name: 'spawn-stale-login-refusal-expires',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600 - 300, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'a refusal older than the age bound is no verdict: the demotion makes the spawn that would clear it rarer, so it must expire',
+    },
+    {
+      name: 'spawn-stale-blocked-refusal-expires',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600 - 300, rc: 5 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'rc 5 expires exactly as rc 2 does',
+    },
+    {
+      name: 'spawn-refusal-inside-the-age-bound-still-demotes',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600 + 300, rc: 2 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'a refusal just inside the age bound still counts',
+    },
+    {
+      name: 'spawn-newer-other-failure-is-not-a-demotion',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [
+        { id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 5 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 60, rc: 3 },
+      ],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'only rc 2 and rc 5 demote: a newest spawn that vanished (rc 3) reads otherwise, so the lane is placeable',
+    },
+    {
+      name: 'spawn-another-lane\'s-failure-is-not-this-lane\'s',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-b', at: now - 600, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'the record counts for the wrapper its row names and no other',
+    },
+    {
+      name: 'spawn-every-lane-unable-still-places',
+      files: {},
+      spawns: [
+        { id: 'row-one', wrapper: 'claude', at: now - 600, rc: 5 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 600, rc: 2 },
+        { id: 'row-three', wrapper: 'claude-b', at: now - 600, rc: 2 },
+        { id: 'row-four', wrapper: 'claude-d', at: now - 600, rc: 5 },
+      ],
+      expect: { wrapper: 'claude', score: 0 },
+      why: 'no destination at all is worse than a bad one: when every lane cannot spawn the last tier names the first '
+        + 'in roster order, on both sides',
+    },
+    // Review 2807 F3: the server twin's edges, on this shared fixture so both twins run them.
+    {
+      name: 'spawn-equal-epoch-tie-is-not-a-demotion',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [
+        { id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 600, rc: 0 },
+      ],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'two records at one epoch that disagree are a tie, and a tie is not a verdict: the lane stays placeable',
+    },
+    {
+      name: 'spawn-equal-epoch-tie-of-two-refusals-demotes',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [
+        { id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2 },
+        { id: 'row-two', wrapper: 'claude-a', at: now - 600, rc: 5 },
+      ],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'a tie of two refusals is no disagreement: the lane is demoted',
+    },
+    {
+      name: 'spawn-dotted-id-is-not-a-row',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row.one', wrapper: 'claude-a', at: now - 600, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'a dotted id is not a registry row for this read on either side, so its record names no verdict',
+    },
+    {
+      name: 'spawn-row-with-no-wrapper-file-is-no-verdict',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: null, at: now - 600, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'a record whose row names no account demotes no lane',
+    },
+    ...['NOW', 'NOW 2 extra', '1e9 2', '-5 2', '+5 2', 'NOW 2.0', 'NOW 0x2', ''].map((shape) => ({
+      name: `spawn-garbage-record-${JSON.stringify(shape)}-is-no-verdict`,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', raw: shape.replace(/NOW/g, String(now - 600)) }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'only exactly two unsigned integers are a record; every other shape is absence, which permits',
+    })),
+    {
+      name: 'spawn-refusal-exactly-at-the-age-bound-still-demotes',
+      pinClock: true,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21600, rc: 2 }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      why: 'the bound is inclusive on both sides: a refusal exactly 21600 s old still demotes (strictly older expires)',
+    },
+    {
+      name: 'spawn-refusal-one-second-past-the-age-bound-expires',
+      pinClock: true,
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 21601, rc: 2 }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'one second past the bound the refusal is no verdict, on both sides',
+    },
+    // The registry's KNOWN difference from ccd (departure `spawn-reader-follows-the-registry`, the coordinator's ruling
+    // F2 (a), run 2785; the `SessionRecord.child` precedent): shapes ccd never writes, where the server's forecast can
+    // differ from ccd's placement and nothing else changes.
+    {
+      name: 'spawn-symlinked-record-ccd-refuses-the-registry-follows',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2, link: 'spawn' }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      serverExpect: { wrapper: 'claude-b', score: 40 },
+      why: 'ccd refuses a symlinked `.spawn` (no verdict); the registry follows the link and reads the refusal',
+    },
+    {
+      name: 'spawn-symlinked-wrapper-ccd-refuses-the-registry-follows',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2, link: 'wrapper' }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      serverExpect: { wrapper: 'claude-b', score: 40 },
+      why: 'ccd refuses a symlinked `.wrapper` (no verdict); the registry follows the link and names the lane',
+    },
+    {
+      name: 'spawn-row-with-no-uuid-ccd-counts-the-registry-does-not',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', at: now - 600, rc: 2, uuid: false }],
+      expect: { wrapper: 'claude-b', score: 40 },
+      serverExpect: { wrapper: 'claude-a', score: 5 },
+      why: 'ccd counts any `.spawn` beside a `.wrapper`; the registry yields only ids with a `.uuid`, so the server sees no row',
+    },
+    {
+      name: 'spawn-unreadable-record-is-not-a-demotion',
+      files: { claude: fresh(80, 40), 'claude-a': fresh(5, 3), 'claude-b': fresh(40, 20), 'claude-d': fresh(85, 45) },
+      spawns: [{ id: 'row-one', wrapper: 'claude-a', raw: 'garbage' }],
+      expect: { wrapper: 'claude-a', score: 5 },
+      why: 'absence permits: a spawn record that does not parse is no verdict on the lane',
     },
   ];
 }
