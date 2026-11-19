@@ -491,6 +491,35 @@ describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
     expect(f.argv, 'one ccd call, the existing sleep verb; no stop, no new verb').toEqual([HIB_OK(ID, own)]);
   });
 
+  // The design review (2848): a parked worker the own-run pass lets through is still held by mail, a claim, a
+  // background marker and a session cron, at the pass, one case each; and by an older ACTIVE run of its own.
+  describe('a worker the own-run hold lets through is still held at the pass (D-8789)', () => {
+    const own = 'program:programme-a wave:2 run:10';
+    const ownHeld = () => {
+      const f = fake([ID], { holdOk: true });
+      f.runs.set(ID, { runId: 10, state: 'awaiting-review', closedAt: null });
+      (f.deps.coord as { run: unknown }).run = (runId: number) => ({ ok: true as const, run: { id: runId, state: 'awaiting-review', sessionId: ID, reviews: null } as never });
+      f.atAct.set(ID, { held: own });
+      return f;
+    };
+    const quiet = { ...MARK_IDLE };
+    const cases: [string, (f: Fake) => void][] = [
+      ['mail', (f) => { f.mailTo.add(ID); }],
+      ['claim', (f) => { (f.deps.coord as { activeClaims: unknown }).activeClaims = () => [{ heldBy: ID }]; }],
+      ['marker-background', (f) => { f.deps.mark = async () => ({ ...quiet, bg: 1 }) as never; }],
+      ['scheduled', (f) => { f.deps.mark = async () => ({ ...quiet, crons: 1 }) as never; }],
+      ['run-worker', (f) => { f.openWorkers.add(ID); }],
+    ];
+    for (const [hold, arrange] of cases) {
+      it(`holds ${hold}`, async () => {
+        const f = ownHeld();
+        arrange(f);
+        await stopDonePass(f.deps, mem(), [row(ID, { held: own })], [rec(ID)], []);
+        expect(f.argv, hold).toEqual([]);
+      });
+    }
+  });
+
   it('the same hold naming ANOTHER session\'s open run composes no act (D-8789)', async () => {
     const held = 'program:programme-a wave:2 run:10';
     const f = fake([ID], { holdOk: true });
@@ -939,6 +968,43 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       const t = await h.tick();
       await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
       expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  // The design review (2848): D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest
+  // placed run alone. An older ACTIVE run of its own still holds the worker, through `openPlacedWorkers`.
+  const twoOwnRuns = async (olderState: 'working' | 'done') => {
+    const h = await harness({ holdOk: true });
+    h.coord.db.prepare('UPDATE runs SET state = ?, closedAt = ? WHERE id = ?')
+      .run(olderState, olderState === 'done' ? Date.now() - STOP_DONE_GRACE_MS - 60_000 : null, h.runId);
+    const newer = h.coord.openRun({ program: 'p', title: 't2', project: 'project-a', wave: 2, waveOf: 2, claimedBy: 'c' });
+    if (!('id' in newer)) throw new Error(`fixture openRun refused: ${JSON.stringify(newer)}`);
+    h.coord.markDispatched(newer.id, WID, WID, `ws/${WID}`, true);
+    h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL WHERE id = ?").run(newer.id);
+    const hold = `program:p wave:2 run:${newer.id}`;
+    writeFileSync(path.join(h.reg, `${WID}.hold`), hold);
+    return { h, hold };
+  };
+
+  it('kept: an older ACTIVE run of its own holds it, though the hold names its own newest placed run, parked (D-8789)', async () => {
+    const { h } = await twoOwnRuns('working');
+    try {
+      const t = await h.tick();
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('control: the older own run closed, the hold naming its own newest placed run lets it sleep (D-8789)', async () => {
+    const { h, hold } = await twoOwnRuns('done');
+    try {
+      const t = await h.tick();
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+      expect(h.stops()).toEqual([['hibernate', '--hold-ok', hold, WID]]);
     } finally {
       h.coord.db.close();
     }

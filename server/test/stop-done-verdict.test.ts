@@ -452,6 +452,9 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
       ['marker', { live: readLive({ mark: quietMark({ state: 'working' }) }) }],
       ['live-word', { live: readLive({ word: { ok: true, word: 'shell' }, mark: quietMark({}) }) }],
       ['viewer', { viewer: true }],
+      // The design review (2848): the amendment is for the worker's own newest placed run alone; an older ACTIVE run
+      // of its own still holds it through `openPlacedWorkers`.
+      ['run-worker', { store: parkedStore({ openWorker: true }) }],
     ];
     for (const [hold, o] of activities) {
       it(`holds ${hold}`, () => {

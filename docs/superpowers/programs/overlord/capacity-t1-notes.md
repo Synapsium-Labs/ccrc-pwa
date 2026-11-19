@@ -8,6 +8,8 @@ It defines no D-number: D-8789 is the number the coordinator issued for this tas
 
 ## In short
 
+- **The amendment:** D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b) requires. An older ACTIVE run of the worker's own still holds it, through `openPlacedWorkers`
+  (`run-worker`), as the design review (2848) required.
 - **Built:** `StopDoneHeldKind` gains `run-own`, a hold naming an open run whose `sessionId` is the asking session.
   `heldKindOf` answers it through `runNamesSession` on the run the store reads, never on the hold's text.
   `stopDoneSleepInput` passes it with `hibernate-hold-ok`, as it passes a programme hold. A parked worker carrying the
@@ -23,8 +25,10 @@ It defines no D-number: D-8789 is the number the coordinator issued for this tas
 - **The act:** `ccd hibernate --hold-ok <hold> <id>`, the run-done lane's existing clean stop, which `ccd ensure`
   reverses. No new act, verb or wire field.
 - **Still held, with an own-run hold passing:** unread mail, a claim, background work (the row's or the turn
-  marker's), a session cron, a dialog, a running turn, a working marker, a busy live word and an open screen
-  (`stop-done-verdict.test.ts`, "an own-run hold passes, and every activity still holds").
+  marker's), a session cron, a dialog, a running turn, a working marker, a busy live word, an open screen and an older
+  active run of its own (`stop-done-verdict.test.ts`, "an own-run hold passes, and every activity still holds"). Mail,
+  a claim, a background marker, a session cron and the older active run are pinned at the pass too, one case each
+  (`stop-done-sweep.test.ts`), and the older active run over the real store, with its control.
 
 ## 1. Departures from the plan and the draft, by slug
 
@@ -47,10 +51,10 @@ Each guard was mutated and the suites that pin it were run (`ccrc test`), then t
 | the deps-shed verdict passes `run-own` | `deps-shed-verdict` | killed (1 failed) |
 | the run-done lane names no session | `stop-done-sweep` | killed (1 failed) |
 
-The coordinator's ruling asked for a red test behind each activity hold with an own-run hold passing. Before this PR,
+The coordinator's rulings asked for a red test behind each activity hold with an own-run hold passing. Before this PR,
 no row stacked an activity on a passing hold, so a decider that skipped an activity check only when a hold passes went
 undetected. Each of these mutants in `decideSleep` (`server/src/sleep.ts`) adds `&& r.held === null` to one activity
-hold, and each is killed by its new row alone:
+hold, and each is killed by the new rows alone:
 
 | Mutant (skipped only when a hold passes) | Suite | Result |
 |---|---|---|
@@ -61,6 +65,7 @@ hold, and each is killed by its new row alone:
 | `marker-background` | `stop-done-verdict` | killed (1 failed) |
 | `scheduled` (a session cron) | `stop-done-verdict` | killed (1 failed) |
 | `turn` | `stop-done-verdict` | killed (1 failed) |
+| `run-worker` (an older active own run) | `stop-done-verdict`, `stop-done-sweep` | killed (3 failed) |
 
 The act itself is pinned by argv equality in `stop-done-sweep.test.ts`: one own-run held pass composes exactly the one
 `hibernate --hold-ok` call and nothing else, and the same hold naming another session's run composes none.

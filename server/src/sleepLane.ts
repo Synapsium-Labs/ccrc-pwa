@@ -631,12 +631,14 @@ export type StopDoneOutcome =
  *  `HOLD_REASON_PATTERN`, and a run suffix's state through the store's `run` read. Any read that cannot be made, or
  *  a run the store does not have, answers `unreadable`, which holds.
  *
- *  `run-own` (D-8789): the hold names an open run whose worker IS this session (`runNamesSession`, on the run's
- *  `sessionId`, never on the hold's text). Every dispatch writes that hold on its own worker, so reading it `run-live`
- *  held every parked worker awake (D-6092 never acted on a dispatched child). It guards the workspace, as a programme
- *  hold does, so run-done passes it; whether the run's state lets the worker sleep is the verdict's `not-done`, not
- *  this word's. A hold naming ANOTHER session's open run stays `run-live`. `sessionId` is required: a caller passes
- *  `null` to say no session is asking, and then `run-own` is never answered (the deps-shed arm, `depsShedPass.ts`). */
+ *  `run-own` (D-8789): D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run,
+ *  as F5 (b) requires. Every dispatch writes on its worker a hold naming that run, so reading it `run-live` held every
+ *  parked worker awake (D-6092 never acted on a dispatched child). The word answers when the named open run's
+ *  `sessionId` is this session (`runNamesSession`, never the hold's text), and run-done passes it as a workspace hold;
+ *  the verdict still decides on the worker's own newest placed run (`not-done` while it works) and still holds on any
+ *  other ACTIVE run of its own (`run-worker`, `openPlacedWorkers`), so the pass amounts to that amendment and no more.
+ *  A hold naming ANOTHER session's open run stays `run-live`. `sessionId` is required: a caller passes `null` to say no
+ *  session is asking, and then `run-own` is never answered (the deps-shed arm, `depsShedPass.ts`). */
 export function heldKindOf(
   held: string | null, coord: Pick<StopDoneSweepDeps['coord'], 'run'>, sessionId: string | null,
 ): StopDoneHeldKind {
