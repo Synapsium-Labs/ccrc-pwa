@@ -284,7 +284,7 @@ This section covers code, tables, Mermaid, contrast and focus. The rule: everyth
 - **3:1:** the focus ring (`focus`) on every ground, and Mermaid lines (`text-muted`) on `surface` and `surface2`, the figure's grounds while hosted.
 - **No floor: edges.** `border` and `rule` are decorative, as ccrc's own gate treats its edges (`pwa/design/contrast-check.mjs` holds that no edge token clears 3:1 in every palette). Measured: `border` on `bg` is 1.54:1 at worst. A frame control is identified by its label, at 4.5:1, and by the focus ring, never by its border alone.
 
-ccrc's test computes the mapped values for every palette through `pwa/test/helpers/paletteTokens.ts` (§3) and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library checks the same pairs on its own defaults. Measured 2026-11-18 under this map, in all twelve palettes, with each tint rounded to 8 bits as a browser paints it: every pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark), `text-faint` on a tint at 4.57 (Catppuccin Latte), `accent` on `surface2` at 4.57 and `accent` on a tint at 4.64 (Phosphor Daylight). The focus ring is 4.57:1 at worst, on `surface2`. Why 4%, and why inline code is not a tint: at 6%, `text-faint` on the `no` tint falls to 4.44 and `accent` on the `chg` tint to 4.48. Inline code inside a link inside a changed block would put `accent` on a text tint over a coloured tint. That pair falls below 4.5 at every pair of caps from 3% to 6% (4.44 at 3% and 3%, Phosphor Daylight), so inline code takes an opaque ground the gate already checks.
+ccrc's test computes the mapped values for every palette through `pwa/test/helpers/paletteTokens.ts` (§3) and checks every pair. A palette that fails reds ccrc's suite before it reaches a reader. The library does not re-gate its own defaults: without an appearance its output stays exactly 1.1.0's (§10 test 4). Measured, 1.1.0's light defaults put `text-faint` on `surface2` at 4.44. That is the library's own matter, carried for its programme, and this contract does not change it. Measured 2026-11-18 under this map, in all twelve palettes, with each tint rounded to 8 bits as a browser paints it: every pair holds. The lowest are `text-faint` on `surface2` at 4.52 (Solarized Dark), `text-faint` on a tint at 4.57 (Catppuccin Latte), `accent` on `surface2` at 4.57 and `accent` on a tint at 4.64 (Phosphor Daylight). The focus ring is 4.57:1 at worst, on `surface2`. Why 4%, and why inline code is not a tint: at 6%, `text-faint` on the `no` tint falls to 4.44 and `accent` on the `chg` tint to 4.48. Inline code inside a link inside a changed block would put `accent` on a text tint over a coloured tint. That pair falls below 4.5 at every pair of caps from 3% to 6% (4.44 at 3% and 3%, Phosphor Daylight), so inline code takes an opaque ground the gate already checks.
 
 ## 6. Aa while hosted
 
@@ -398,7 +398,7 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
   | `code-ink` | `title.function_.invoke__`, `code`, `formula`, `emphasis`, `strong`, and any span no row names |
 
   Without an appearance, every `.hljs-*` rule keeps 1.1.0's hex (test 4).
-- Every colour that is not a slot derives from the slots with `color-mix` in the stylesheet, each by one stated rule. Every tint is an opaque mix, `color-mix(in srgb, <slot> 4%, <ground>)`:
+- **While an appearance is applied**, every colour that is not a slot derives from the slots with `color-mix` in the stylesheet, each by one stated rule. Without an appearance, every derived colour, and every other rule this section changes while hosted, keeps 1.1.0's value, so test 4's first row holds. Every tint is an opaque mix, `color-mix(in srgb, <slot> 4%, <ground>)`:
   - `accent-hover` is `color-mix(in srgb, accent 80%, text)`, a text colour, gated like `accent`;
   - `accent-soft` (row hover, the flash, the index and quick-jump selection) and `th-bg` are `accent` at 4% over `bg`;
   - `wait-soft` and `wait-tint` are `wait` at 4% over `bg`, and `no-tint` is `no` at 4% over `bg`;
@@ -447,10 +447,10 @@ The pure exports live in `./frame` because ccrc's import rule keeps `./host` to 
    - Aa has no theme row with an appearance.
 4. Conformance:
    - with no appearance, the rendered output and computed styles equal 1.1.0's for the corpus;
-   - the default palette passes `APPEARANCE_PAIRS`;
+   - an appearance built from fixture values that pass `APPEARANCE_PAIRS` keeps every pair the corpus draws at its floor, on computed values. The library's own defaults are 1.1.0's and are not re-gated (§5);
    - **closed grounds:** with an appearance, every element of the corpus that holds text has a computed background, its own or the nearest painted one behind it, equal to one of §5's grounds, and a computed `color` that ground admits. The walk runs with each popover open in turn (Aa, changes, the cross-reference card, quick jump, keys, contents), the figure overlay open, a figure tool pressed, text selected, and `:hover` and `:focus-visible` forced on every control and table row.
 5. Mermaid:
-   - `mermaidThemeOf` output passes the pairs for both default modes;
+   - for a fixture appearance that passes `APPEARANCE_PAIRS`, in a light and a dark mode, `mermaidThemeOf`'s output keeps every Mermaid pair at its floor;
    - `mermaidThemeOf`'s `lineColor` is the `text-muted` it was given, and a drawn figure's edge paths have that computed `stroke`;
    - **every key assigned:** the output's keys include every key of 1.1.0's `THEME_VARIABLES` and the nine text keys §10 names; each fill key is `surface` or `surface2`, each text key `text`, each line key `text-muted`;
    - **drawn fills:** a flowchart with a cluster and an edge label, a sequence diagram with a note, and a class and a state diagram, drawn hosted: every SVG text element's computed `fill` is `text`, and the nearest shape behind it has a computed `fill` of `surface` or `surface2`;
