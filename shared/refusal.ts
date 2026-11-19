@@ -454,7 +454,7 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'unknown-session': 404,
   'code-expired': 410, 'code-used': 410,
   // 409
-  'duplicate': 409, 'superseded': 409, 'busy': 409, 'auto-needs-rollback-gate': 409, 'no-channel': 409,
+  'duplicate': 409, 'key-conflict': 409, 'superseded': 409, 'busy': 409, 'auto-needs-rollback-gate': 409, 'no-channel': 409,
   'unknown-tag': 409, 'not-newer': 409, 'refused-by-node': 409, 'stamp-unread': 409, 'floor-unread': 409,
   'no-detach-cap': 409, 'no-rollback-cap': 409, 'agent-predates-update-op': 409, 'halted': 409,
   'no-bundle': 409, 'no-previous': 409, 'no-desired': 409,

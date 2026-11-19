@@ -54,6 +54,7 @@ import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { KeyedMail } from './mailKey.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -6802,16 +6803,40 @@ export class CoordStore {
 
   /** `answersMail` (#2726, schema 65): the MAIL id of the mail this one was admitted as the invited reply to, which
    *  only the mail ingress passes, on `peerMailVerdict`'s `invited`; absent or null for every other mail. This is the
-   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. */
+   *  column's one writer, and `mail_answers_once` refuses a second row answering the same mail. `clientKey` (Overlord
+   *  wave 164): the sender's idempotency key, which only the mail ingress passes, on `mailKeyVerdict`'s `new`; absent or
+   *  null for every other mail. This is that column's one writer too, and `mail_client_key_once` refuses a second row
+   *  with the same sender and key. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
-                  artifacts: readonly string[]; answersMail?: number | null }): { id: number } {
+                  artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey) ' +
+      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null);
     return { id: Number(res.lastInsertRowid) };
+  }
+
+  /** The mail `fromId` stored under `clientKey` (Overlord wave 164), as `mailKeyVerdict` compares it, or null when this
+   *  sender stored none under that key. `mail_client_key_once` makes the row unique. A stored `kind` outside the sendable
+   *  vocabulary cannot equal a request's, so it is read as it is; `artifacts` that do not parse as a list of strings read as
+   *  `['']`, which no request carries (the ingress admits absolute paths only), so the decider answers `conflict`, never
+   *  `same`, on a row it cannot read. */
+  mailByClientKey(fromId: string, clientKey: string): KeyedMail | null {
+    const row = this.db.prepare(
+      'SELECT id, toId, runId, kind, subject, body, artifacts FROM mail WHERE fromId = ? AND clientKey = ?',
+    ).get(fromId, clientKey) as { id: number; toId: string; runId: number | null; kind: string; subject: string;
+      body: string; artifacts: string } | undefined;
+    if (row === undefined) return null;
+    const UNREADABLE: readonly string[] = [''];
+    let artifacts: readonly string[] = UNREADABLE;
+    try {
+      const parsed: unknown = JSON.parse(row.artifacts);
+      if (Array.isArray(parsed) && parsed.every((a) => typeof a === 'string')) artifacts = parsed;
+    } catch { /* UNREADABLE stands */ }
+    return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
+      body: row.body, artifacts };
   }
 
   /**
