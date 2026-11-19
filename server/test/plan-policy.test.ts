@@ -1,7 +1,7 @@
 // D-8181: the plan deciders (`coord/planPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
+  diffPlan, epicForWave, epicIsDone, epicOfRun, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
   ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
@@ -163,6 +163,49 @@ describe('states', () => {
     const es = [{ id: 1, waves: [1, 2], state: 'dropped' as const }, { id: 2, waves: [2, 3], state: 'active' as const }];
     expect(epicForWave(es, 2)).toBe(2);
     expect(epicForWave(es, 9)).toBeNull();
+  });
+});
+
+describe('epics without wave ranges (programme work map WM6, D-8780)', () => {
+  const noWaves = (i: number | string, over: Partial<PlanEpicBody> = {}): PlanEpicBody => {
+    const { waves: _w, ...rest } = epic(i, over);
+    return rest as PlanEpicBody;
+  };
+  it('an epic that omits waves parses and diffs as one that lists none', () => {
+    expect(parsePlanPut({ epics: [noWaves(1), noWaves(2)] })).toMatchObject({ ok: true });
+    expect(diffPlan(emptyStored, put(noWaves(1), noWaves(2), epic(3, { waves: [1, 2] })), ctx())).toMatchObject({
+      ok: true, changes: { epics: { insert: [{ key: 'e-1', waves: [] }, { key: 'e-2', waves: [] }, { key: 'e-3', waves: [1, 2] }] } },
+    });
+  });
+  it('waves that are not a list are plan-bad-body, absent or not', () => {
+    expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: 'all' }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: null }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+  });
+  it('a put that omits the waves of a stored epic patches them to none', () => {
+    const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(noWaves(1)), ctx());
+    expect(r).toMatchObject({ ok: true, changes: { epics: { update: [{ id: 1, waves: [] }] } } });
+  });
+  it('contiguity and overlap are read among the epics that list waves', () => {
+    expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [2, 4] })), ctx())).toMatchObject({ ok: false, word: 'waves-not-contiguous' });
+    expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [3] }), epic(3, { waves: [3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
+  });
+  it('epicOfRun: a named ticket of an epic with no waves takes that epic at any wave; the wave\'s epic otherwise', () => {
+    const es = [{ id: 1, waves: [1, 2], state: 'active' as const }, { id: 2, waves: [], state: 'planned' as const }];
+    expect(epicOfRun(es, 9, 2, true)).toEqual({ epicId: 2 });
+    expect(epicOfRun(es, 2, 1, true)).toEqual({ epicId: 1 });
+    // the ticket's epic that lists waves does not take another wave
+    expect(epicOfRun(es, 9, 1, true)).toEqual({ refused: 'wave-epic-mismatch' });
+    // a ticket that is missing names no epic
+    expect(epicOfRun(es, 9, null, true)).toEqual({ refused: 'wave-epic-mismatch' });
+  });
+  it('epicOfRun: no ticket and no epic lists the wave is ticket-required only where a live epic lists none', () => {
+    const waved = [{ id: 1, waves: [1], state: 'active' as const }];
+    expect(epicOfRun(waved, 9, null, false)).toEqual({ refused: 'wave-epic-mismatch' });
+    expect(epicOfRun([...waved, { id: 2, waves: [], state: 'planned' as const }], 9, null, false)).toEqual({ refused: 'ticket-required' });
+    // a dropped epic of no waves cannot take a run, so naming a ticket is no remedy
+    expect(epicOfRun([...waved, { id: 2, waves: [], state: 'dropped' as const }], 9, null, false)).toEqual({ refused: 'wave-epic-mismatch' });
+    // a wave an epic lists is found with no ticket, as before
+    expect(epicOfRun([...waved, { id: 2, waves: [], state: 'planned' as const }], 1, null, false)).toEqual({ epicId: 1 });
   });
 });
 

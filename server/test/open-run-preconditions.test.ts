@@ -169,6 +169,16 @@ const SINGLE: Row[] = [
   { name: 'no ticket in a phased plan whose epic has an open declared ticket', gate: 'planGate',
     f: facts({ ...WORK }, { plan: planOf({ phased: true, tickets: () => [{ key: 'k1', state: 'open', runId: null }] }) }),
     refusal: { refused: 'ticket-required' } },
+  // Programme work map WM6 (D-8780): a run with no ticket whose wave no epic lists, in a plan where a live epic lists none.
+  { name: 'no ticket, no epic lists the wave, a live epic lists none', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9 }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }) }),
+    refusal: { refused: 'ticket-required' } },
+  { name: 'a ticket of an epic that lists waves, at a wave it does not list, beside an epic that lists none', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T() }) }),
+    refusal: { refused: 'wave-epic-mismatch' } },
+  { name: 'a named ticket of an epic with no waves that another run holds, at any wave', gate: 'planGate',
+    f: facts({ ...WORK, wave: 9, ticket: 'k1' }, { plan: planOf({ epics: [{ id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6, state: 'started', runId: 3 }) }) }),
+    refusal: { refused: 'ticket-unavailable' } },
   { name: 'a ticket that does not exist (an Upkeep ticket is never found)', gate: 'planGate', f: facts({ ...WORK, ticket: 'nope' }, { plan: planOf() }),
     refusal: { refused: 'ticket-unavailable' } },
   { name: 'a ticket already started by another run', gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ state: 'started', runId: 3 }) }) }),
@@ -402,6 +412,11 @@ describe('openRunPreconditions — a claimant may coordinate from any project (D
   it('admits the next wave\'s work run of a programme homed elsewhere, stamping the claimant\'s own project', async () => {
     expect(await openRunPreconditions(facts(WORK_B, { ...IN_A, ...KNOWN_B })))
       .toMatchObject({ ok: true, home: { kind: 'agrees' }, open: { kind: 'work', project: 'demo-b', wave: 11, coordProject: 'demo-a' } });
+  });
+  it('admits a named ticket of an epic that lists no waves at any wave, into that epic (programme work map WM6, D-8780)', async () => {
+    const plan = planOf({ epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }, { id: 6, waves: [], state: 'planned' }] }, { k1: T({ epicId: 6 }) });
+    expect(await openRunPreconditions(facts({ ...WORK_B, wave: 9, ticket: 'k1' }, { ...IN_A, ...KNOWN_B, plan })))
+      .toMatchObject({ ok: true, open: { ticket: { kind: 'existing', id: 9, epicId: 6 } } });
   });
   it('admits a review run of a run it claims, in the reviewed run\'s project', async () => {
     expect(await openRunPreconditions(facts(REVIEW_B, { ...IN_A, ...KNOWN_B, ...REVIEWED_B })))

@@ -102,8 +102,10 @@ export interface PlanCheckpointBody {
 export interface PlanTicketBody {
   key: string; kind: TicketKind; title: string; body?: string; project?: string; checkpoint?: string;
 }
+/** `waves` is optional (programme work map WM6, D-8780; spec Q5): an epic with no wave range lists none. Read it through
+ *  `listedWaves` (`server/src/coord/planPolicy.ts`), the one reader, never as `e.waves` directly. */
 export interface PlanEpicBody {
-  key: string; title: string; summary: string; project?: string; waves: number[];
+  key: string; title: string; summary: string; project?: string; waves?: number[];
   checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string;
 }
 /** One reference of a phase: a whole epic or one ticket, by its key (programme work map WM0, D14). */

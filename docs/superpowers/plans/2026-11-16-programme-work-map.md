@@ -605,15 +605,15 @@ its plan's clause 21), on the operator's yes.
   epic lists waves. A run with no ticket whose wave no epic lists, in a plan where any epic lists no waves, is refused
   `ticket-required` (its remedy is to name a ticket), not `wave-epic-mismatch`.
 
-- [ ] **Step 1: Write the failing tests** — `an epic with no waves is accepted`, `two epics with no waves run side by
+- [x] **Step 1: Write the failing tests** — `an epic with no waves is accepted`, `two epics with no waves run side by
   side`, `a run naming a ticket of an epic with no waves opens`, `an epic that lists waves keeps waves-not-contiguous,
   wave-overlap and wave-epic-mismatch`, `a run with no ticket into a plan with an epic of no waves is refused
   ticket-required`.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-epic-waves.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, then every test named under Files.
-- [ ] **Step 5: Commit** — `feat(plan): an epic may run without a wave range`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, then every test named under Files.
+- [x] **Step 5: Commit** — `feat(plan): an epic may run without a wave range`.
 
 **Acceptance.** Every stored plan opens runs exactly as before. **Rollback.** A plain revert, once no stored epic lacks
 waves.
@@ -710,6 +710,26 @@ Task WM1 departs under its own number:
   `ticket-required` to `references/plan.md` is done already, by #3001. The task
   note (`docs/superpowers/programs/desktop-polish/wm1.md`) gives the migration slot, each row and what reds it, and the
   mutants.
+
+Task WM6 departs under its own number:
+
+- **D-8780** — `work-map-wm6-build`: Task WM6 (desktop polish run 2780), issued on 2026-11-19. An epic may list no wave
+  range (spec Q5, the operator's yes, R133). The build departs from the plan's text in these ways, each named by slug:
+  `wm6-one-reader-and-one-chooser`, `PlanEpicBody.waves` is optional on the wire and every reader takes it through
+  `listedWaves` (`planPolicy.ts`), and the epic a run opens into is chosen by one decider, `epicOfRun`, which `planGate`
+  calls and which replaces its call of `epicForWave` (kept, as `epicOfRun`'s own step); `wm6-ticket-read-before-the-epic`,
+  `planGate` reads a named ticket through `p.ticket` before it chooses the epic, where it read it after, so the ticket's
+  epic can take the run, and a ticket that does not exist still names no epic, so such a run is refused as before
+  (`wave-epic-mismatch` at an unlisted wave, `ticket-unavailable` at a listed one); `wm6-live-epics-only`, the plan's "any
+  epic lists no waves" counts the live epics (not `dropped`), since a dropped epic cannot take a run and naming a ticket
+  is therefore no remedy for it; `wm6-absent-waves-clears`, a put that omits `waves` on a stored epic that lists some
+  stores none, as a put is the programme's whole desired state and `project` already reads the same way; and
+  `wm6-contiguity-needs-no-condition`, an empty list is trivially contiguous and overlaps nothing, so
+  `waves-not-contiguous` and `wave-overlap` read only epics that list waves by skipping the others, and the guard that
+  cannot go red there is the reader (`listedWaves`), which the mutants break. WM2's worker consented, by mail, to the edit
+  of `shared/plan.ts`'s `PlanEpicBody` line and to this section and its ticks (their claim held both). The task note
+  (`docs/superpowers/programs/desktop-polish/wm6.md`) gives each case, the mutants and the sentences of the Linear
+  hierarchy's documents that now read false, which this task does not edit.
 
 ## Where things stand
 

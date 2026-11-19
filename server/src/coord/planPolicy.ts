@@ -85,7 +85,7 @@ export function parsePlanPut(body: unknown, opts: PlanPutOpts = {}):
     if (!textOk(e.title, PLAN_BOUNDS.titleChars, true)) return bad(`epic ${e.key}: title is not 1 to 255 characters`);
     if (typeof e.summary !== 'string' || [...e.summary].length > PLAN_BOUNDS.summaryChars) return bad(`epic ${e.key}: summary is over ${PLAN_BOUNDS.summaryChars} characters`);
     if (e.project !== undefined && !textOk(e.project, PLAN_BOUNDS.titleChars, true)) return bad(`epic ${e.key}: project is not a project name`);
-    if (!nonNegInts(e.waves, 64)) return bad(`epic ${e.key}: waves is not a list of wave numbers`);
+    if (e.waves !== undefined && !nonNegInts(e.waves, 64)) return bad(`epic ${e.key}: waves is not a list of wave numbers`);
     if (e.droppedWhy !== undefined && !textOk(e.droppedWhy, PLAN_BOUNDS.reasonChars, false)) return bad(`epic ${e.key}: droppedWhy is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
     if (!Array.isArray(e.checkpoints)) return bad(`epic ${e.key}: checkpoints is not a list`);
     if (e.checkpoints.length > PLAN_BOUNDS.checkpointsPerEpic) return tooLarge(`epic ${e.key}: more than ${PLAN_BOUNDS.checkpointsPerEpic} checkpoints`);
@@ -323,6 +323,11 @@ const contiguous = (w: readonly number[]): boolean => {
   const s = [...new Set(w)].sort((a, b) => a - b);
   return s.every((n, i) => i === 0 || n === s[i - 1]! + 1);
 };
+/** THE one reader of an epic's waves (programme work map WM6, D-8780; spec Q5, R133): `waves` is optional on the wire, and an
+ *  absent list and an empty one both mean the epic lists no waves. Every caller that wants an epic's waves reads them here. */
+export const listedWaves = (e: { readonly waves?: readonly number[] | undefined }): number[] => [...(e.waves ?? [])];
+/** An epic is checked against waves, and takes a run by its wave, only when it lists some. */
+export const listsWaves = (e: { readonly waves?: readonly number[] | undefined }): boolean => listedWaves(e).length > 0;
 const sameList = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((n, i) => n === b[i]);
 const empty = <N, P>(): Changes<N, P> => ({ insert: [], update: [], drop: [] });
 
@@ -338,12 +343,15 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
     if (e.state !== 'dropped' && !putKeys.has(e.key)) return refuse('dropped-needs-reason', `epic ${e.key} left the plan with no droppedWhy`);
   }
   const live = put.epics.filter((e) => e.droppedWhy === undefined && byKey.get(e.key)?.state !== 'dropped');
+  // Programme work map WM6 (D-8780): both checks read only the epics that list waves; one that lists none has no range to
+  // be contiguous or to overlap, however many such epics a plan holds.
   for (const e of put.epics) {
-    if (!contiguous(e.waves)) return refuse('waves-not-contiguous', `epic ${e.key}: waves are not one contiguous range`);
+    if (listsWaves(e) && !contiguous(listedWaves(e))) return refuse('waves-not-contiguous', `epic ${e.key}: waves are not one contiguous range`);
   }
   const owner = new Map<number, string>();
   for (const e of live) {
-    for (const w of e.waves) {
+    if (!listsWaves(e)) continue;
+    for (const w of listedWaves(e)) {
       const o = owner.get(w);
       if (o !== undefined && o !== e.key) return refuse('wave-overlap', `wave ${w} is in epics ${o} and ${e.key}`);
       owner.set(w, e.key);
@@ -371,14 +379,14 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
       continue;
     }
     if (was === undefined) {
-      changes.epics.insert.push({ key: e.key, project, waves: e.waves, ordinal, title: e.title, summary: e.summary });
+      changes.epics.insert.push({ key: e.key, project, waves: listedWaves(e), ordinal, title: e.title, summary: e.summary });
       for (const [i, c] of e.checkpoints.entries()) {
         changes.checkpoints.insert.push({ epicKey: e.key, key: c.key, ordinal: i, title: c.title, kind: c.kind, proves: c.proves ?? [], itemId: c.itemId ?? null });
       }
     } else {
       const patch: EpicPatch = {};
       if (was.project !== project) patch.project = project;
-      if (!sameList(was.waves, e.waves)) patch.waves = e.waves;
+      if (!sameList(was.waves, listedWaves(e))) patch.waves = listedWaves(e);
       if (was.ordinal !== ordinal) patch.ordinal = ordinal;
       if (was.title !== e.title) patch.title = e.title;
       if (was.summary !== e.summary) patch.summary = e.summary;
@@ -719,6 +727,23 @@ export function ticketDoneVerdict(f: TicketDoneFacts): { ok: true } | Refused {
 /** The epic a wave's runs belong to: the first epic, in the order given, that lists the wave and is not dropped. */
 export function epicForWave(epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number): number | null {
   return epics.find((e) => epicAdmitsRun(e.state) && e.waves.includes(wave))?.id ?? null;
+}
+
+/** Programme work map WM6 (D-8780; spec Q5, R133): the epic a run opens into. A run that names a ticket of a live epic that
+ *  lists no waves takes that epic, whatever its wave (the wave is checked against an epic only when it lists waves);
+ *  otherwise the epic that lists the wave (`epicForWave`). With neither, a run that named no ticket in a plan where a live
+ *  epic lists none is refused `ticket-required`, since naming a ticket is its remedy, and anything else `wave-epic-mismatch`,
+ *  as before. `ticketEpic` is the named ticket's epic (null when the ticket is missing or none was named); `named` is whether
+ *  the open named a ticket at all. */
+export function epicOfRun(
+  epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number, ticketEpic: number | null, named: boolean,
+): { epicId: number } | { refused: 'wave-epic-mismatch' | 'ticket-required' } {
+  const waveless = epics.filter((e) => epicAdmitsRun(e.state) && !listsWaves(e));
+  const own = ticketEpic === null ? undefined : waveless.find((e) => e.id === ticketEpic);
+  if (own !== undefined) return { epicId: own.id };
+  const listed = epicForWave(epics, wave);
+  if (listed !== null) return { epicId: listed };
+  return { refused: !named && waveless.length > 0 ? 'ticket-required' : 'wave-epic-mismatch' };
 }
 
 // ── Callers ────────────────────────────────────────────────────────────────────────────────────────────────────────────
