@@ -32,6 +32,9 @@ const NOT_MET: Readonly<Record<string, string>> = {
   'migration-in-flight': 'wave 7, the migration',
   'not-managed': 'wave 7, the migration',
   'item-act-mismatch': 'the console, the item act route',
+  // Programme work map WM1's (#2997), as `ticket-done` is in WORK_MAP_VERBS: `plan ticket-done` refuses evidence it cannot
+  // verify with it, and WM5 documents it in `plan.md` with the verb.
+  'evidence-unverified': 'programme work map WM1, plan ticket-done; WM5 documents it in plan.md',
 };
 
 describe('the coordinator skill points at the plan reference (D-8185)', () => {
