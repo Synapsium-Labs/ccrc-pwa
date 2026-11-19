@@ -39,6 +39,7 @@ export const OTHER_LANES = {
   planTicketsMove: { route: 'POST /api/programmes/:slug/plan/tickets/move', word: DOORS, via: 'plan-door' },
   planEpicsDrop: { route: 'POST /api/programmes/:slug/plan/epics/drop', word: DOORS, via: 'plan-door' },
   planPhaseRefs: { route: 'POST /api/programmes/:slug/plan/phases/refs', word: DOORS, via: 'plan-door' },
+  planTicketsDone: { route: 'POST /api/programmes/:slug/plan/tickets/done', word: DOORS, via: 'plan-door' },
   planClose: { route: 'POST /api/programmes/:slug/plan/close', word: DOORS, via: 'plan-door' },
   planTake: { route: 'POST /api/programmes/:slug/plan/take', word: DOORS, via: 'plan-door' },
   planTriage: { route: 'POST /api/teams/:team/plan/triage', word: DOORS, via: 'plan-door' },

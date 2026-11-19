@@ -1,6 +1,7 @@
 // The plan tables' SQL (Linear hierarchy design 2026-11-10 §4.2, D-8181): epics, checkpoints, tickets, the Linear bindings,
 // the sync's due queue and the per-project hierarchy settings; and the programme's phases and their references (programme
-// work map WM0, D-8715), whose one writer this is too.
+// work map WM0, D-8715), whose one writer this is too; and a ticket's done time and evidence (`doneAt`, `doneEvidence`, WM1,
+// D-8727), written here and by WM1's back-fill migration alone.
 //
 // It sits beside `store.ts` in the same ring and context (Coordination), in `ledgersStore.ts`'s idiom: every function takes
 // the store's `DatabaseSync` and is synchronous. It holds the handle (`core-vocab.test.ts`'s `HANDLE_HOLDERS`); the plan
@@ -12,7 +13,7 @@ import type { RunState } from '../../../shared/api.js';
 import {
   LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
   type BindingKind, type BindingState, type InboundState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
-  type PhaseRefKind, type PlanEndOutcome, type TicketKind, type TicketSource, type TicketState,
+  type PhaseRefKind, type PlanEndOutcome, type TicketDoneEvidence, type TicketKind, type TicketSource, type TicketState,
 } from '../../../shared/plan.js';
 import { AUTO_TICKET_PREFIX, autoTicketKey, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { tx } from './tx.js';
@@ -204,6 +205,39 @@ export function planOwnerOf(db: DatabaseSync, program: string): string | null {
   if (run !== undefined) return run.claimedBy as string;
   const prog = db.prepare('SELECT planBy FROM programs WHERE slug = ?').get(program) as Raw | undefined;
   return (prog?.planBy as string | null | undefined) ?? null;
+}
+
+/** A ticket's done facts (programme work map WM1, D-8727): `doneAt` and `doneEvidence` as stored. `evidence` is null when
+ *  none is stored and `malformed` when the column holds something that is not `{ runId }` or `{ pr }` (never folded into
+ *  none). Kept beside `TicketRow`, not in it, so a plan read stays as it was. */
+export interface TicketDoneRow {
+  ticketId: number; key: string; project: string; doneAt: number | null; evidence: TicketDoneEvidence | 'malformed' | null;
+}
+const evidenceOf = (raw: unknown): TicketDoneEvidence | 'malformed' | null => {
+  if (raw === null || raw === undefined) return null;
+  try {
+    const v = JSON.parse(String(raw)) as unknown;
+    if (typeof v === 'object' && v !== null && !Array.isArray(v) && Object.keys(v).length === 1) {
+      const [k, n] = Object.entries(v)[0]!;
+      if ((k === 'runId' || k === 'pr') && Number.isSafeInteger(n) && (n as number) >= 1) return k === 'runId' ? { runId: n as number } : { pr: n as number };
+    }
+  } catch { /* malformed below */ }
+  return 'malformed';
+};
+/** Every ticket of a programme with its done facts, in id order (the evidence check of `plan ticket-done`, and WM2's map). */
+export function doneFactsOf(db: DatabaseSync, program: string): TicketDoneRow[] {
+  const rows = db.prepare('SELECT id, key, project, doneAt, doneEvidence FROM plan_tickets WHERE program = ? ORDER BY id').all(program) as Raw[];
+  return rows.map((r) => ({
+    ticketId: r.id as number, key: r.key as string, project: r.project as string, doneAt: (r.doneAt as number | null) ?? null,
+    evidence: evidenceOf(r.doneEvidence),
+  }));
+}
+/** A run's own ticket (`runs.ticketId` and that ticket's key): null for no such run; `ticketId` null for a run with none. */
+export function ticketOfRun(db: DatabaseSync, runId: number): { ticketId: number | null; key: string | null } | null {
+  const r = db.prepare('SELECT r.ticketId AS ticketId, t.key AS key FROM runs r LEFT JOIN plan_tickets t ON t.id = r.ticketId WHERE r.id = ?')
+    .get(runId) as Raw | undefined;
+  if (r === undefined) return null;
+  return { ticketId: (r.ticketId as number | null) ?? null, key: (r.key as string | null) ?? null };
 }
 
 export function ticketById(db: DatabaseSync, id: number): TicketRow | null {
@@ -426,6 +460,21 @@ export function closePlan(db: DatabaseSync, program: string, outcome: PlanEndOut
   });
 }
 
+/** THE writer of `plan ticket-done` (programme work map WM1, D-8727): an `open` ticket no run holds is set `done` with its
+ *  time and evidence, its epic settles and the programme's sync is due, in one transaction. The verdict was
+ *  `planPolicy.ts#ticketDoneVerdict`'s; the guard here only keeps a raced write from closing a ticket that moved since. */
+export function markTicketDone(db: DatabaseSync, ticketId: number, evidence: TicketDoneEvidence, now: number): void {
+  tx(db, () => {
+    const t = ticketById(db, ticketId);
+    if (t === null) return;
+    db.prepare("UPDATE plan_tickets SET state = 'done', doneAt = ?, doneEvidence = ? WHERE id = ? AND state = 'open' AND runId IS NULL")
+      .run(now, JSON.stringify(evidence), ticketId);
+    const e = epicById(db, t.epicId);
+    if (e !== null) markSyncDueInTx(db, dueKeyOf(e), now);
+    settleEpicInTx(db, t.epicId, now);
+  });
+}
+
 export function markCheckpointMet(db: DatabaseSync, checkpointId: number, evidence: CheckpointEvidence, now: number): void {
   tx(db, () => {
     const c = db.prepare('SELECT epicId FROM plan_checkpoints WHERE id = ?').get(checkpointId) as { epicId: number } | undefined;
@@ -501,8 +550,8 @@ export function epicOfRun(db: DatabaseSync, runId: number): number | null {
 }
 
 /** Called from `advanceInner`, in its own transaction: `dispatched` starts the run's ticket and activates its epic, `done`
- *  closes the ticket and settles the epic, and a run that ends `failed` returns the ticket to `open` with no run. A review
- *  run, or a run with no ticket, moves nothing. */
+ *  closes the ticket with its time and evidence (`{ runId }`, programme work map WM1) and settles the epic, and a run that
+ *  ends `failed` returns the ticket to `open` with no run. A review run, or a run with no ticket, moves nothing. */
 export function onRunAdvancedInTx(db: DatabaseSync, runId: number, from: RunState, to: RunState, now: number): void {
   if (from === to) return;
   const run = db.prepare('SELECT program, kind, ticketId FROM runs WHERE id = ?').get(runId) as
@@ -514,7 +563,8 @@ export function onRunAdvancedInTx(db: DatabaseSync, runId: number, from: RunStat
     db.prepare("UPDATE plan_tickets SET state = 'started' WHERE id = ? AND state = 'open'").run(t.id);
     db.prepare("UPDATE plan_epics SET state = 'active', openedAt = ? WHERE id = ? AND state = 'planned'").run(now, t.epicId);
   } else if (to === 'done') {
-    db.prepare("UPDATE plan_tickets SET state = 'done' WHERE id = ? AND state IN ('open', 'started')").run(t.id);
+    db.prepare("UPDATE plan_tickets SET state = 'done', doneAt = ?, doneEvidence = ? WHERE id = ? AND state IN ('open', 'started')")
+      .run(now, JSON.stringify({ runId }), t.id);
     settleEpicInTx(db, t.epicId, now);
   } else if (to === 'failed') {
     db.prepare("UPDATE plan_tickets SET state = 'open', runId = NULL WHERE id = ? AND state IN ('open', 'started')").run(t.id);
@@ -1007,6 +1057,7 @@ export function takeUpkeepTicket(
 
 const PORT_FUNCTIONS = {
   planOf, phasesOf, writePhaseRef, planEndOf, planOwnerOf, applyPlanChanges, closePlan, settleEpicInTx, markCheckpointMet, insertTicket, updateTicket,
+  doneFactsOf, ticketOfRun, markTicketDone,
   ticketById, ticketByKey, epicOfRun, attachTicketInTx, onRunAdvancedInTx, bindingOf, ensurePending, markBound, markFailed, requeueFailed,
   bindingsOf, markSyncDue, markSyncDueInTx, dueSyncs, clearSyncDue, deferSync, heldSyncUntil, hierarchySettingsOf, setHierarchySettings,
   hierarchyProjectsOf, setLinearOwnerForAll, latestProgrammeCoordinator, coordinatorIdsOf, programmeRowId, openOperatorActs,

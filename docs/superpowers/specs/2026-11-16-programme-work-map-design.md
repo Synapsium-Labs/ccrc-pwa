@@ -285,9 +285,11 @@ flowchart LR
   C -- "no" --> F{"done?"}
   F -- "yes" --> V{"evidence<br/>verifies?"}
   V -- "yes" --> OK["done"]
-  V -- "no, or none" --> MU["marked done, but …"]
+  V -- "no, or none" --> EU{"plan<br/>ended?"}
+  EU -- "yes" --> LO["left open"]
+  EU -- "no" --> MU["marked done, but …"]
   F -- "no" --> E{"plan<br/>ended?"}
-  E -- "yes" --> LO["left open"]
+  E -- "yes" --> LO
   E -- "no" --> I{"open item<br/>on it?"}
   I -- "yes" --> W["waiting on you"]
   I -- "no" --> S{"run stuck<br/>or blocked?"}
@@ -296,7 +298,8 @@ flowchart LR
   R -- "yes" --> P["working · state unknown<br/>in review · merging · queued"]
   R -- "no" --> N["not started"]
 ```
-*Figure 2. The status decider in flow order. A ticket reaches exactly one status.*
+*Figure 2. The status decider in flow order. A ticket reaches exactly one status. A ticket marked done whose evidence
+does not verify reads left open in an ended plan, and "marked done, but …" in a live one (review 2382 L3-F1).*
 
 ### 4.1 Done is derived from evidence, and a run names its ticket
 
@@ -324,13 +327,14 @@ ticket state, without changing the hierarchy's work model.
   own auto ticket, which folds into the declared ticket it is evidence of, so the fold is reachable (review 2375 F2). The verb refuses
   `evidence-unverified` when the evidence does not hold, and reuses `plan ticket-move`'s words for the same conditions
   (F21): `plan-runs-open` for a ticket a run holds, and `plan-bad-body` for a ticket that is not `open`. On a read,
-  evidence that no longer holds makes the ticket read "marked done, but …" with the reason (Table 6, row 4).
+  evidence that no longer holds makes the ticket read "marked done, but …" with the reason (Table 6, row 4) in a live
+  plan, and left open in an ended one, which reads row 5 first (review 2382 L3-F1).
 - **A ticket done before this build** gets its evidence from WM1's migration (F1 of review 2268). Measured on `main`:
   the only writer of `done` is the done arm of `onRunAdvancedInTx`, which leaves the ticket's `runId` set, so every done
   ticket names a done run of its own programme. The migration back-fills `doneEvidence` `{ runId }` from it and `doneAt`
   from that run's `closedAt` (null when the run has none, which reads "finished, date unknown" on its phase). A done
-  ticket that still has no stored evidence reads "marked done, but no evidence stored" (Table 6, row 4), never an
-  unchecked done.
+  ticket that still has no stored evidence reads "marked done, but no evidence stored" (Table 6, row 4) in a live plan,
+  and left open in an ended one (row 5, read first there), never an unchecked done.
 - **A work run names its ticket, in a plan that declares phases (D10).** Today `runs open` with no `ticket` mints a
   ticket of its own (`run-<id>`), and the declared ticket the run was doing stays `open`, counted twice. In a plan that
   declares at least one phase, a work run that opens into an epic with an open declared ticket that no run holds must
