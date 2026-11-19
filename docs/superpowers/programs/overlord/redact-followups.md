@@ -160,3 +160,28 @@ here once a plan that defines it is on `main`.
 - The masker round that holds `mask.ts` (#3031) asked for its suites to be run: `mask-break-grammar` (4), `drawer-mask-rows`
   (51), `drawer-mask-screen` (13), `secret-mask` (96) and `redact-followups` (201), all green on a merge of the two
   branches (clean, no conflict), with `secret-mask`, `drawer-mask-rows` and `drawer-mask-screen` green on this branch too.
+
+### Fix round 2 (review 2751, the last)
+
+- Red first: 6 new drawer cases were red before the change, every one because key rows were drawn. A key coloured per
+  character in 24-bit and 8-bit colour, its BEGIN line cut by a chunk and whole, showed 28 to 39 of 40 rows. A BEGIN
+  line with a 300-character label, cut by a chunk, showed 29 rows, and one with an OSC 8 link around its label showed 34.
+- One more case pins the stop at the next BEGIN line, both where that line starts a row and where it starts mid-row.
+  Only the mid-row case reaches the clamp the review's surviving mutant removed, so that mutant is now killed. The case
+  also pins the scanner's other answer on the same whole text.
+- Two more cases came from two mutants of the carry's own bookkeeping that first survived. One pins the 64 KB window
+  when chunks cut the rows, since the line a chunk ends in is read again and must not be spent twice. The other pins a
+  kept line cut at 4 KB, whose start is unknown, so it is never taken as blank.
+- Mutation, from saved copies, each file restored byte for byte: 6 mutants, all killed, two after the cases above.
+  - the pre-check reading the raw text;
+  - the line kept to 256 raw characters;
+  - no line carried;
+  - the next-BEGIN clamp removed (the review's M1);
+  - a carried line always taken from its start;
+  - the line not counted in the window.
+- Suites, one file at a time through `ccrc test`, all green:
+  - the redaction suites, with `redact-followups` at 210;
+  - `drawer-mask-rows` (43), `drawer-mask-screen` (13), `secret-mask` (96, with a 120 s timeout), `push-masker-pin`
+    and `unprintable-characterization`;
+  - `linear-ops`, `linear-proxy-routes` and every `single-definition/*` file;
+  - the server typecheck.
