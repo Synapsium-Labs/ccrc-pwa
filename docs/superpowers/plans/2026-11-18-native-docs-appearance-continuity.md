@@ -52,13 +52,13 @@ No ccrc wave edits the library's repository. C does not start before R: its type
 | File | Ring | Task | Responsibility |
 |---|---|---|---|
 | `pwa/package.json`, `pwa/package-lock.json` | — | 1 | Exact re-pin |
-| `pwa/src/docs/reader/appearance.ts` (new) | L1 | 2 | `READER_APPEARANCE_MAP`, `READER_APPEARANCE_CONTRACTS`, `READER_APPEARANCE_LABEL`, `readerAppearanceOf` |
+| `pwa/src/docs/reader/appearance.ts` (new) | L1 | 2 | `READER_APPEARANCE_MAP`, `READER_APPEARANCE_CONTRACTS`, `readerAppearanceSupported`, `READER_APPEARANCE_LABEL`, `readerAppearanceOf` |
 | `pwa/test/reader-appearance.test.ts` (new) | — | 2 | Pure rule rows |
 | `pwa/test/reader-appearance-source.test.ts` (new) | — | 2 | Slot coverage, every palette resolves, contrast pairs, second-copy scan |
 | `pwa/test/helpers/paletteTokens.ts` (new) | — | 2 | `resolvePaletteTokens(themeId, skinId, pointer)`: both default blocks merged, `phosphor` as the default, the skin block and its `(pointer: fine)` arm, `var()` chains, `color-scheme` |
 | `pwa/src/lib/appearance.ts` (new) | L4 | 3 | `useHostAppearance()` stamp |
 | `pwa/test/host-appearance.test.tsx` (new) | — | 3 | Stamp rows |
-| `pwa/src/docs/reader/hostAppearance.ts` (new) | L3 | 4 | `readHostAppearance(root, contract)` over `getComputedStyle`, imported by `bridge.ts` only |
+| `pwa/src/docs/reader/hostAppearance.ts` (new) | L3 | 4 | `readHostAppearance(root)` over `getComputedStyle`, imported by `bridge.ts` only |
 | `pwa/src/docs/reader/assets.ts` | L3 | 4 | `loadReaderFonts()` |
 | `pwa/src/docs/reader/bridge.ts` | L3 | 4 | `appearance` at mount, `seed`, `follow`, contract detection, fonts |
 | `pwa/src/docs/reader/policy.ts` | L1 | 4 | `readerMountPlan` gains `appearance: boolean` |
@@ -108,17 +108,19 @@ export const READER_APPEARANCE_MAP: {
   readonly skin: { readonly [S in AppearanceSkinSlot]: HostToken };
 };
 export const READER_APPEARANCE_CONTRACTS: readonly number[]; // [1]
+/** The one decision on contract support: `'none'` (1.1.0) and any number outside READER_APPEARANCE_CONTRACTS are false. */
+export function readerAppearanceSupported(contract: number | 'none'): boolean;
 export const READER_APPEARANCE_LABEL = 'Appearance follows ccrc Settings'; // the contract's label, ruled copy (ask 594)
-export type ReaderAppearanceOutcome =
-  | { readonly kind: 'appearance'; readonly value: Appearance;
-      /** The library verdict's own list: each key it left out, and why. */
-      readonly refused: readonly { readonly key: string; readonly why: string }[];
-      /** `null`: every colour applied. Otherwise the colour group was dropped (spec §7). */
-      readonly dropped: null | { readonly why: 'colour-unreadable' | 'scheme-unreadable'; readonly token: string } }
-  | { readonly kind: 'mode-only'; readonly why: 'contract-unsupported' };
-export function readerAppearanceOf(
-  read: (token: HostToken) => string, colourScheme: string, contract: number | 'none',
-): ReaderAppearanceOutcome;
+export interface ReaderAppearanceOutcome {
+  readonly value: Appearance;
+  /** The library verdict's own list: each key it left out, and why. */
+  readonly refused: readonly { readonly key: string; readonly why: string }[];
+  /** `null`: every colour applied. Otherwise the colour group was dropped (spec §7): a token read empty, a value the
+   * verdict refused, or a colour scheme that is neither light nor dark. */
+  readonly dropped: null | { readonly why: 'colour-unreadable' | 'colour-refused' | 'scheme-unreadable'; readonly token: string };
+}
+/** Called only on a hosted mount, after readerAppearanceSupported answered true, so it has no mode-only case. */
+export function readerAppearanceOf(read: (token: HostToken) => string, colourScheme: string): ReaderAppearanceOutcome;
 // pwa/test/helpers/paletteTokens.ts
 export function resolvePaletteTokens(
   themeId: string, skinId: string, pointer: 'fine' | 'coarse',
@@ -130,10 +132,11 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 - [ ] **Step 1: Write the failing pure rows** in `reader-appearance.test.ts`:
   - `readerAppearanceOf` builds the raw contract, each value the token's text exactly as `read` answers it (spec §2's grammars: ccrc normalises nothing, no trim and no case change), and returns `parseAppearance`'s verdict. It checks no range or grammar of its own:
   - `readerAppearanceOf`:
-    - **every mapped token:** with a reader answering every mapped token, contract `1` and `'dark'`, it is `kind 'appearance'`. The keys of its value's `colour` equal `APPEARANCE_SLOTS.colour`, and the keys of its `skin` equal `APPEARANCE_SLOTS.skin`, both ways. Its `refused` list is empty, `dropped` is `null`, and its `label` is `READER_APPEARANCE_LABEL`;
-    - one colour token answering `''` gives `kind 'appearance'` with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
+    - **every mapped token:** with a reader answering every mapped token and `'dark'`, the keys of its value's `colour` equal `APPEARANCE_SLOTS.colour`, and the keys of its `skin` equal `APPEARANCE_SLOTS.skin`, both ways. Its `refused` list is empty, `dropped` is `null`, and its `label` is `READER_APPEARANCE_LABEL`;
+    - one colour token answering `''` gives a value with `mode` set, no colour group, and `dropped: {why:'colour-unreadable', token}`;
+    - **a colour the verdict refuses:** one colour token answering a non-empty text the library refuses, `'rgb(1, 2, 3)'` for `--accent` (the row first asserts that `parseAppearance` refuses it), gives a value with `mode` set and no colour group, `dropped: {why:'colour-refused', token: '--accent'}`, and the verdict's `refused` naming `accent`;
     - an unreadable skin token keeps every colour, leaves that slot out, and has `dropped: null`;
-    - contract `'none'` (a library without the contract) and contract `2` (one newer than ccrc knows) each give `{kind:'mode-only', why:'contract-unsupported'}`;
+    - **support, decided once:** `readerAppearanceSupported(1)` is true; `readerAppearanceSupported('none')` (a library without the contract) and `readerAppearanceSupported(2)` (one newer than ccrc knows) are false. Nothing else in ccrc compares a contract number;
     - a `colourScheme` of `'normal'` or `''` gives `mode: 'auto'`, no colour group, and `dropped.why: 'scheme-unreadable'`;
     - a skin token whose value the library refuses is left out by the verdict, and every colour stays. The fixture is `--row-h` answering `'60px'`, and the row first asserts `parseAppearance({mode: 'dark', skin: {controlRow: '60px'}}).refused` names `controlRow`, so the fixture never stands in for a range ccrc spells itself;
     - **text as read:** with `--bg-page` answering `'#2E3440'` and `--r-md` answering `' 10px'` (a leading space, as an engine may keep it), the raw contract `readerAppearanceOf` passes to `parseAppearance` (a spy) carries `'#2E3440'` and `' 10px'` unchanged, the verdict's `colour.bg` is `'#2E3440'` and its `skin.radius` is `'10px'` (the library drops outer spaces), and `refused` is empty;
@@ -187,12 +190,12 @@ The map is spec §3's table, slot for slot. Each mapped colour token was measure
 - Modify: `pwa/src/docs/reader/bridge.ts`, `pwa/src/docs/reader/assets.ts`, `pwa/src/docs/reader/policy.ts`, `pwa/test/reader-bridge.test.ts`, `pwa/test/reader-policy.test.ts`, `pwa/test/docs-scans.test.ts`
 
 **Interfaces:**
-- Consumes: Task 2's `readerAppearanceOf`, `ReaderAppearanceOutcome`; Task 1's `APPEARANCE_CONTRACT`, `HostAdapters.appearance`, `FrameAssets.fonts`, `DocFrame.setAppearance`.
+- Consumes: Task 2's `readerAppearanceSupported`, `readerAppearanceOf`, `ReaderAppearanceOutcome`; Task 1's `APPEARANCE_CONTRACT`, `HostAdapters.appearance`, `FrameAssets.fonts`, `DocFrame.setAppearance`.
 - Produces:
 
 ```ts
 // hostAppearance.ts (L3). Imported by bridge.ts only, so the library stays in the lazily loaded chunk.
-export function readHostAppearance(root: HTMLElement, contract: number): { readonly stamp: string; readonly outcome: ReaderAppearanceOutcome };
+export function readHostAppearance(root: HTMLElement): { readonly stamp: string; readonly outcome: ReaderAppearanceOutcome }; // hosted mounts only
 // assets.ts
 export function loadReaderFonts(): Promise<{ readonly sans: string; readonly mono: string }>; // base64 woff2
 // bridge.ts: ReaderMountInput gains
@@ -205,19 +208,20 @@ readonly seed: { readonly hosted: true; readonly stamp: string } | { readonly ho
 follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root and send DocFrame.setAppearance; not hosted: setPrefs({theme})
 ```
 
-- **Hosted, explicitly.** A mount is hosted when its contract answer is supported and it was given an `appearanceRoot`. The bridge decides this before any read. A mount that is not hosted never reads the root. `seed` says which case holds, with no overloaded null.
+- **Hosted, explicitly.** A mount is hosted when `readerAppearanceSupported(contract answer)` is true and it was given an `appearanceRoot`. The bridge decides this before any read, through that one function, so `readHostAppearance` runs on hosted mounts only and a `{hosted: true}` seed always carries an appearance. A mount that is not hosted never reads the root. `seed` says which case holds, with no overloaded null.
 - `readHostAppearance` calls `getComputedStyle(root)` once, and reads `color-scheme` and the mapped tokens through `getPropertyValue`. Its stamp has the same shape as Task 3's. It runs `readerAppearanceOf`, so it imports `appearance.ts`, which imports the library's `./frame` entry. Only `bridge.ts` imports it, and the main bundle reaches `bridge.ts` only through `lazyMountReader`'s dynamic import. `ReaderFrame.tsx` imports neither file by value.
 - `loadReaderFonts` reads the design system's own `Geist-Variable.woff2` and `GeistMono-Variable.woff2` through an inline asset import: `@/fonts/Geist-Variable.woff2?inline` and `@/fonts/GeistMono-Variable.woff2?inline`, through pwa's `@` alias to `ui/src` (`pwa/vite.config.ts`). It strips the `data:` prefix to the base64. No font file is copied into `pwa/`. The fonts load on their own path, beside the assets. If they fail, the bridge mounts without `fonts`, and never calls `onFallback('assets')` for them.
 - On a hosted mount, `follow` re-reads the root and sends `DocFrame.setAppearance` with the verdict, a verdict with no colour group included. It never calls `setPrefs` with a theme. On a mount that is not hosted, it sends `setPrefs({theme})`.
 
 - [ ] **Step 1: Write the failing rows** in `reader-bridge.test.ts`, with a fake `mount`:
   - **reads after the last await:** hold `deps.assets`, change the root's tokens and `data-theme` while held, release. The adapters' `appearance` is the post-release verdict, `seed` is `{hosted: true, stamp}` with the post-release stamp, and the root was read exactly once per library mount, with no await between that read and `mount`. An `openAt` remount, which rebuilds the adapters, reads once more, and its stamp updates `seed`;
-  - **an outcome of kind `appearance`** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
+  - **a hosted mount** passes `adapters.appearance` and `assets.fonts`, and passes no `prefs.theme`;
   - **a dropped colour group** still passes `adapters.appearance`, with `mode` and no `colour` group;
   - **fonts that fail to load** mount without `fonts`, and `onFallback` is never called;
   - **the faces are ccrc's files:** the base64 `loadReaderFonts` answers decodes to bytes whose sha256 equals the sha256 of `ui/src/fonts/Geist-Variable.woff2` and `ui/src/fonts/GeistMono-Variable.woff2`, read from disk in the test;
-  - **an older library:** with `deps.libraryContract` answering `'none'`, and `deps.mount` throwing `TypeError` on any key outside 1.1.0's set, the mount succeeds as a mode-only mount: `prefs.theme`, no `appearance`, no `fonts`, `seed` `{hosted: false}`, and the root is never read (a spy on `getComputedStyle` sees no call). With `deps.libraryContract` answering `2`, the same. This seam is the only way to reach the case: with the exact pin it is a build error;
+  - **an older library:** with an `appearanceRoot` given, `deps.libraryContract` answering `'none'`, and `deps.mount` throwing `TypeError` on any key outside 1.1.0's set, the mount succeeds as a mode-only mount: `prefs.theme`, no `appearance`, no `fonts`, `seed` `{hosted: false}`, and the root is never read (a spy on `getComputedStyle` sees no call). With `deps.libraryContract` answering `2`, the same. This seam is the only way to reach the case: with the exact pin it is a build error;
   - **while open, hosted:** `follow` re-reads the root and calls `DocFrame.setAppearance` once, including for a dropped colour group, and never `setPrefs`;
+  - **one warning per drop:** a mount whose outcome has `dropped` set calls `console.warn` once, with a message starting `ccrc-reader: ` and naming `dropped.why` and `dropped.token`; a second `follow` with the same drop warns again only if the token or the why changed;
   - **while open, mode only:** `follow` calls `DocFrame.setPrefs({theme})` once and reads nothing;
   - **after `destroy()`**, `follow` does nothing;
   - **the lab:** with `profile: 'lab-draw'`, no `appearance` is passed, `seed` is `{hosted: false}` and the root is never read;
@@ -230,7 +234,7 @@ follow(theme: 'light' | 'dark' | 'auto'): void;     // hosted: re-read the root 
   - **only the verdict is passed:** the row first asserts that `parseAppearance` refuses `radius: '99px'`. Then, with a reader whose `--r-md` answers `'99px'`, the adapters' `appearance` has no `radius`, and the fake `mount` (which throws on any value `parseAppearance` would leave out) does not throw.
 - [ ] **Step 2: Run to red** (`test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts`). Expected: FAIL on the new rows and the four changed `readerMountPlan` rows (two in each file) only. `docs-scans` stays green here: no source imports the new modules yet, and its planted case passes on a tree copy once `READER_ADAPTERS` names them.
 - [ ] **Step 3: Implement.**
-  - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer is checked against `READER_APPEARANCE_CONTRACTS`.
+  - Contract detection asks `deps.libraryContract`. Its default reads `APPEARANCE_CONTRACT` from a namespace import of the library's `./frame` entry, and answers `'none'` when that export is absent. The answer goes to `readerAppearanceSupported`, the one place that decides support.
   - The read sits beside D-8729's focus sample, after the Mermaid wait and before `mountDocFrame`, with no await between.
   - The lab path is decided by `readerMountPlan`, which gains `appearance: boolean`: `false` for `lab-draw`.
 - [ ] **Step 4: Run to green:** `test/reader-bridge.test.ts test/reader-policy.test.ts test/docs-scans.test.ts`. Expected: PASS, with `docs-scans`' "M8.10" case green over the three new edges.
@@ -328,14 +332,14 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 
 | Id | Mutation | Must red |
 |---|---|---|
-| AP-M1 | `bridge.ts` never passes `appearance` | Task 4 "an outcome of kind `appearance`"; AP-8 browser row |
+| AP-M1 | `bridge.ts` never passes `appearance` | Task 4 "a hosted mount"; AP-8 browser row |
 | AP-M2 | Drop one slot from `READER_APPEARANCE_MAP` | Task 2 coverage (and typecheck) |
 | AP-M3 | Add `['nord', 'dracula']` to a file under `pwa/src/docs/` | Task 2 part 3 |
 | AP-M4 | Move the appearance read above the assets await | Task 4 "reads after the last await"; AP-4 |
 | AP-M5 | `ReaderFrame` ignores stamp changes | Task 5 "while open"; AP-5 |
 | AP-M6 | One unreadable colour leaves that slot out, instead of dropping the colour group | Task 2 "one colour token answering `''`" |
 | AP-M7 | Map `text ← --ink-disabled` | Task 2 part 5, in at least one palette |
-| AP-M8 | Skip contract detection, so a `'none'` or `2` answer from `deps.libraryContract` still passes `appearance` | Task 4 "an older library" (the fake `mount` throws `TypeError`) |
+| AP-M8 | Skip contract detection, so a `'none'` or `2` answer from `deps.libraryContract` still passes `appearance` | Task 4 "an older library": its "root is never read" spy sees a call, and the fake `mount` throws `TypeError` on the `appearance` key, so the mount does not succeed |
 | AP-M9 | Remove the per-frame coalescing | Task 5 "coalesces to the latest per frame" |
 | AP-M10 | `readerAppearanceOf` returns the raw contract and skips `parseAppearance` | Task 2 "a skin token whose value the library refuses" |
 | AP-M11 | `useHostAppearance` reads the stored choice instead of the root | Task 3 "a system flip moves the stamp" |
@@ -343,7 +347,7 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
 | AP-M13 | A hosted mount sends neither `appearance` nor `prefs.theme`, so the stored theme rules | Task 6 AP-3 (stale stored theme) |
 | AP-M14 | A dropped colour group sends `setPrefs({theme})` instead of an appearance with no colours | Task 4 "while open, hosted" |
 | AP-M15 | `readerAppearanceOf` leaves the skin group out | Task 2 "every mapped token" row (its `skin` keys no longer equal `APPEARANCE_SLOTS.skin`); AP-1 skin assertions |
-| AP-M16 | `bridge.ts` never passes `fonts` | Task 4 "an outcome of kind `appearance`"; AP-1 face assertion |
+| AP-M16 | `bridge.ts` never passes `fonts` | Task 4 "a hosted mount"; AP-1 face assertion |
 | AP-M17 | `sectionFamily` answers `sans` where `--family-section` equals `--family-mono` | Task 2 section-family row; AP-1 heading family under Instrument |
 | AP-M18 | Map `radiusLarge ← --r-md` | AP-1 popover radius under both skins (Refined 14 against 10 px) |
 | AP-M19 | `readerAppearanceOf` leaves `label` out | Task 2 "every mapped token" row; AP-6 shows the library's neutral default instead of ccrc's line |
