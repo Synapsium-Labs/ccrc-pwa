@@ -55,6 +55,9 @@ stack branch `handoff/d8126-autonomy-stack`, commits `518b7c71c` to `1edff44d1` 
   `wakeOn` wake in `decision-procedure.md` and SKILL.md's unreachable-server entry.
 - A7 (placement filter, self-install): rows 36 to 38 in `wave-lifecycle-2-dispatch.md` (placement skips a lane that
   cannot spawn; the dispatch answer's `skillInstall`).
+- A7 (#3079), a carry for this wave's text: the run events `skill-install:<installed|converged|failed|unsupported>`
+  go beside `skill-preflight:<state>` in `wave-lifecycle-2-dispatch.md`. They are added there only once #3079 is on
+  main (P11). Until then they are not in this branch.
 - This wave lands after both (the plan's P11).
 
 ## Agreement with the Overlord spec
