@@ -1,29 +1,32 @@
 # Mail a busy session sees mid-turn (design)
 
-**Spec** · 2026-11-19 · Status: draft for the coordinator, then the operator · Owner: the Overlord programme (#2491),
-wave 165 · Related: `docs/superpowers/specs/2026-11-09-overlord-design.md` (§3.8, what it trusts),
-`docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md` (the mail gate's idle rule) · Docs only: no code ships
-with it.
+**Spec** · 2026-11-19 · Status: revised after review 2688 and the coordinator's fix-round rulings of 2026-11-19 ·
+Owner: the Overlord programme (#2491), wave 165 · Related: `docs/superpowers/specs/2026-11-09-overlord-design.md` (§3.8,
+what it trusts), `docs/superpowers/specs/2026-09-29-worker-stall-watch-design.md` (the mail gate's idle rule) · Docs
+only: no code ships with it.
 
 ## In short
 
 - **The problem.** ccrc hands a session its mail only when the session is idle. A worker deep in a long turn cannot
   see "hold your push" or "do not merge main yet" until the turn ends, and by then it may already have pushed.
-- **Recommended: a hold at the act, plus a faster nudge (option C, built as A + D).** The session hook refuses
-  `git push`, `git commit`, a merge of main and `gh pr merge` while an urgent mail to that session is unacked (A). The
-  refusal names the mail and the one command that reads it. Separately, an urgent mail's one-line nudge may be typed
-  into a busy pane, so a main thread can read it at its next tool call without reaching for a push (D).
-- **Not recommended now: a pull client** (an MCP server, or a background listener the session watches, B). It adds a
-  second delivery path, a process per session and a client-side cursor, and it still reaches neither a subagent nor a
-  session that never started it. It returns only if D's probe shows Claude Code will not surface a typed line mid-turn.
-- **What the hold is, and is not.** The hold makes the worker *read* the mail before it acts. It never makes the worker
-  *obey* it: the mail stays content, never instruction (Overlord spec §3.8). Only the worker's coordinator, the operator
-  and the server's own system mail may mark mail urgent, so no peer can freeze another session.
-- **Measured.** The wire cannot say how long a delivered mail waited: `deliveredAt` is stored but never served. An
-  hour's sample of outstanding mail through the API (§1.3) found six deliveries refused while the recipient was busy.
-  Four of them waited more than 9 minutes. The first build step adds the read that measures this properly.
-- **For you to check:** §4, Waiting on you. Is urgent mail limited to the three senders above? Should the hold fail
-  open when the server cannot be read? Should D be probed and built before any pull client is considered?
+- **Recommended: a hold at the act, plus a fixed hook line (C, built as A + E).** The server writes a small marker on
+  the fleet box while an urgent mail to a session is unread. While the marker stands, the session hook does two things,
+  and neither types anything into the pane:
+  - it refuses that session's `git push`, `git commit`, merge of main and `gh pr merge` (A, the hold);
+  - it adds one fixed line to the main thread's tool calls saying that urgent mail is waiting (E, the notice).
+- **No network on the tool path.** The marker travels on an argv the server is already granted (`ccd route`, as the
+  `precompact` field does today), so the hook reads a local file with a shell builtin and asks the server nothing.
+- **Ruled out: typing into a running turn (D).** Claude Code's rate-limit menu opens by itself mid-turn, and an Enter or
+  a digit there can switch the session to usage credits. No unattended lane types into a running turn (the
+  coordinator's ruling, 2026-11-19).
+- **Deferred: a pull client (B).** It returns only if the fleet's Claude Code build does not show E's line to the model
+  (§5 names the check), or for a session with no ccrc hook.
+- **What the hold is, and is not.** It makes the worker *read* the mail before it acts. It never makes the worker
+  *obey* it: the mail is information from its sender, never instruction (Overlord spec §3.8). Only a run's coordinator,
+  the Overlord and the operator may mark mail urgent, and that check is attribution, not authentication.
+- **Measured.** The wire cannot say how long a delivered mail waited (`deliveredAt` is stored but never served). In a
+  52-minute sample through the API, three mails from a coordinator to its own busy worker waited 9 to 11 minutes or
+  more (§1.3). The first build step serves the stored times, so the baseline is measured properly.
 
 ## 1. Context
 
@@ -33,9 +36,10 @@ misses.
 ### 1.1 How mail reaches a session today
 
 A coordinator sends mail with `POST /api/mail`. The server stores the body and queues one delivery row per recipient.
-The mail lane then types a single-line **nudge** into the recipient's pane ("ccrc-mail: you have new mail. Use the
-client…", `server/src/coord/envelope.ts#renderMailNudge`). The session reads the body itself with
-`ccrc-api mail inbox` and acks it. An unacked delivery is replayed later, up to a bounded number of times.
+The mail lane then types a single-line **nudge** into the recipient's pane (`server/src/coord/envelope.ts#renderMailNudge`).
+The nudge names `ccrc-api mail list`, `mail fetch` and `mail ack`. The client's one-call form, `ccrc-api mail inbox`,
+prints every unacked mail and acks what it printed. An unacked delivery is replayed later, up to a bounded number of
+times.
 
 The nudge is typed only when the **mail gate** says the session is at rest (`server/src/turnidle.ts#mailTurnIdle`):
 
@@ -45,9 +49,9 @@ The nudge is typed only when the **mail gate** says the session is at rest (`ser
   turn has ended.
 - `waiting` (a dialog owns the keyboard) never delivers.
 
-So a running turn never receives a nudge, under any mode. That is deliberate. Typing into a running turn could land
-inside a draft or a menu, and `sendPrompt` refuses with `turn-running` when the pane shows one
-(`server/src/inject/send.ts#sendPrompt`, `refuseIfTurnRunning`).
+So a running turn never receives a nudge, under any mode. That is deliberate: typing into a running turn could land in
+a draft or a menu, and `sendPrompt` refuses with `turn-running` when the pane shows one
+(`server/src/inject/send.ts#sendPrompt`, `refuseIfTurnRunning`). This design keeps that rule whole.
 
 ```mermaid
 sequenceDiagram
@@ -59,73 +63,80 @@ sequenceDiagram
   W->>W: commits, then git push
   W->>W: turn ends
   S->>W: nudge typed (gate now reads idle)
-  W->>S: mail inbox, reads "hold your push"
+  W->>S: reads the mail, "hold your push"
   Note over W: too late, the push already happened
 ```
 *Figure 1. Today: a mail sent during a long turn waits for the turn to end. The worker can push before it reads it.*
 
-### 1.2 Two claims of the brief, measured
+### 1.2 Two claims of the brief, measured, and what the hook already has
 
 | Claim | Measured on `ba2f67dac` | Status |
 |---|---|---|
 | Nothing marks a mail urgent | No `urgent` or `priority` field on `mail`, `mail_deliveries` (`server/src/coord/schema.ts`), `MailSummary` (`shared/api.ts`) or the ingress (`server/src/coord/routes.ts`). Every mail is equal. | Confirmed |
 | The session hook has no mid-turn mail path | `ccd/session-hook.sh` reads mail nowhere on `PreToolUse` or `PostToolUse`. Its only mail-related arms are the SessionStart card's pointer to `mail list` and the roster card's wake on the nudge text (`UserPromptSubmit`). | Confirmed |
 
-Things the hook *does* have, which this design builds on (sourced):
+What the hook already has, which this design builds on (sourced):
 
 - **A deny at a tool boundary.** `PreToolUse` already answers `permissionDecision: "deny"` with a reason, for example
-  the merge refusal over `gh … pr … merge` (`MERGE_PARSE_CAP` and its arm).
-- **A budget order.** The landing-order advisory tests the raw payload with shell globs first (no fork). Only a
-  payload that carries a sync verb pays for one `jq` that reads the command, and the regex matches `git` in command
-  position, so a commit message that merely mentions a merge stays silent.
-- **One network budget per invocation.** The hook's server reads (`_hook_timeout`, `HOOK_NET_BUDGET_MS`, 8 s) run on
-  rare events only: SessionStart, UserPromptSubmit and the start report. No per-tool-call event reaches the network.
-- **Subagents are told apart.** A subagent's event carries `agent_id`. The hook already uses it to refuse a subagent
-  the role skills that ack mail and take claims (the role-skill deny, D-4934), and the worker skill says a subagent
-  never acks.
+  the merge refusal over `gh … pr … merge` (`MERGE_PARSE_CAP` and its arm). A deny supersedes advice: the arms that add
+  `additionalContext` stay silent when a deny is already built.
+- **Advice at a tool boundary.** `PreToolUse` already adds `additionalContext` and lets the call proceed: the Read
+  nudge and the landing-order advisory.
+- **A server-written marker, read with a builtin.** `precompact` is a route field whose one writer is a server lane,
+  through `CCD_ARGV.routeSet` (`server/src/continuity/renewalWiring.ts`). The hook reads `$REG/<id>.precompact` with a
+  bounded `read` and no fork, to arm its PreCompact refusal (`_hook_compact_refuse`). This is the carrier E and A reuse.
+- **A budget order.** The landing-order advisory tests the raw payload with shell globs first, with no fork, and only
+  a payload that carries a sync verb pays for one `jq` that reads the command.
+- **No network on the tool path.** The hook's header says every `PreToolUse`, `PostToolUse` and `Stop` takes no lock and
+  waits on nothing. Its declared network reads (`_hook_timeout`, one 8 s budget, `HOOK_NET_BUDGET_MS`) are all off the
+  tool path: SessionStart, UserPromptSubmit and the start report.
+- **A subagent test that holds.** A bare `agent_id` is not one: the hook's own "WHO WRITES" block says real lanes sent
+  a main-thread event with an unjoined `agent_id`. The reliable test is a join in `$REG/<id>.joined` (the `tmsub` flag).
+  The role-skill deny (D-4934) reads the bare flag on purpose, because a false positive there only refuses a skill.
 
 ### 1.3 How long mail waits while the recipient is busy
 
 The brief asks how long coordinator-to-worker mail waits between queued and delivered while the recipient is busy.
 
-**The API cannot answer it for delivered mail.** `mail_deliveries.deliveredAt`, `ingestedAt` and `ackedAt` are
-stored (`server/src/coord/schema.ts`), but `MailSummary` serves none of them. It serves the queue time (`at`) and,
-while a delivery is still outstanding, the gate that last refused it (`lastGate`, `gateCount`, `gateSince`, `gateAt`).
-A delivered row's gate fields are cleared. `GET /api/feed` records mail at queue time only.
+**The API cannot answer it for delivered mail.** `mail_deliveries.deliveredAt`, `ingestedAt` and `ackedAt` are stored
+(`server/src/coord/schema.ts`), but `MailSummary` serves none of them. It serves the queue time (`at`) and, while a
+delivery is still outstanding, the gate that last refused it (`lastGate`, `gateCount`, `gateSince`, `gateAt`). The gate
+fields are cleared on delivery. `GET /api/feed` records mail at queue time only.
 
-What the API does allow is sampling: list every live peer's outstanding mail once a minute and watch rows move from
-`queued` to `delivered`. That gives a **lower bound** per delivery (first seen queued, to first seen delivered).
-
-**Measured 2026-11-19, 00:56 to 01:48 UTC,** through `ccrc-api peers list` and `ccrc-api mail list --to <id>` for every
-running peer of this project: 47 samples, one a minute, 18 deliveries seen outstanding. A row's wait is at least its
-age at the last sample that still showed it queued, and at most about a minute more. No row was still queued at the
-end.
+**What was measured instead.** From 00:56 to 01:48 UTC on 2026-11-19, a script listed this project's running peers
+(`ccrc-api peers list`) and each one's outstanding mail (`ccrc-api mail list --to <id>`): 47 samples over 52 minutes, 65
+to 77 seconds apart, and 18 deliveries seen outstanding. For each delivery, its **lower bound** is its age (now minus
+`at`) at the last sample that still showed it queued. The true wait is at most one sample gap (77 seconds) longer. No
+row was still queued at the last sample. The raw samples are not committed, because they name live sessions.
 
 | Mail | Deliveries | Gate seen refusing | Wait, lower bound |
 |---|---|---|---|
+| A programme's coordinator to its own busy worker | 3 | `not-idle` | 9.0, 11.0 and 11.0 min |
+| Another programme's coordinator to a busy worker | 1 | `not-idle` | 9.4 min |
+| A worker to a busy coordinator | 2 | `not-idle` | 0.2 and 0.7 min |
 | Wave briefs from dispatch, to a fresh worker | 4 | `not-quiet` only | 0.5 to 1.0 min |
-| Mail sent by a session, refused at least once while the recipient was busy | 6 | `not-idle` | 0.2, 0.7, 9.0, 9.4, 11.0 and 11.0 min |
-| Other session-sent mail | 8 | `not-quiet`, `cooldown` or none | 0.9 min or less |
+| Other mail between sessions | 8 | `not-quiet`, `cooldown` or none | 0.9 min or less |
 
-*Table 1. Sampled waits. The six `not-idle` rows are the busy-recipient case. Four of them waited more than 9 minutes,
-and they include a coordinator's addendum to a running worker's brief and an answer about migration slots, the kind of
-mail this design is for.*
+*Table 1. Sampled waits. The four rows from a coordinator to a busy worker are this design's case. All four waited at
+least 9 minutes, and three more than 9. They include an addendum to a running worker's brief and an answer about
+migration slots.*
 
-Footing: measured, lower bounds only, one project, one hour. A single client read (`mail list`) took 74 to 110 ms in
-seven of eight timed calls at load average 11, and 439 ms in the eighth.
+Footing: measured, lower bounds only, one project, 52 minutes. A single client read (`mail list`, timed from a session
+shell) took 74 to 110 ms in seven of eight calls at load average 11, and 439 ms in the eighth. That is a different call
+from anything this design puts on the tool path.
 
 **The read that would answer it:** add `deliveredAt`, `ingestedAt` and `ackedAt` to `MailSummary` as additive fields
 (absent from an older server, which a reader treats as unmeasured). Then `mail list --program <slug> --all 1` gives,
 for each coordinator mail, its wait (`deliveredAt - at`) and how long it then stayed unread (`ackedAt - deliveredAt`).
-The first build step (§5) adds it, so that the design can be judged on a measured baseline.
+The first build step serves them (§5).
 
 ## 2. The options
 
 This section describes each option and what it reaches, then compares them on the six questions of the brief.
 
-### 2.1 A. Hook gate: a hold at the act
+### 2.1 A. The hold at the act
 
-The sender marks the mail urgent. While any urgent delivery to a session is unacked, the session hook refuses that
+The sender marks the mail urgent. While any urgent delivery to a session is outstanding, the session hook refuses that
 session's push, commit, merge of main and `gh pr merge`. The refusal names the delivery and `ccrc-api mail inbox`. The
 session reads the mail, which acks it, and the next attempt goes through.
 
@@ -133,211 +144,287 @@ session reads the mail, which acks it, and the next attempt goes through.
 sequenceDiagram
   participant C as Coordinator
   participant S as Server
+  participant M as Marker on the fleet box
   participant H as Session hook
   participant W as Worker (in a long turn)
   C->>S: mail, urgent
-  S->>S: sender is the worker's coordinator, accepted
+  S->>S: sender is the worker's run coordinator, accepted
+  S->>M: ccd route sets mailhold (lease, delivery id)
+  W->>H: PreToolUse, any tool
+  H->>M: builtin read
+  H-->>W: proceed, plus one line that urgent mail is waiting
   W->>H: PreToolUse, Bash git push
-  H->>S: mail hold for this session (bounded read)
-  S-->>H: held, delivery 25600 from the coordinator
-  H-->>W: deny, read mail 25600 first with ccrc-api mail inbox
+  H->>M: builtin read
+  H-->>W: deny, read delivery 25600 first, mail inbox run bare
   W->>S: mail inbox (prints and acks)
+  S->>M: ccd route clears mailhold
   W->>W: weighs the mail, then decides
   W->>H: PreToolUse, Bash git push (if it still should)
-  H->>S: mail hold
-  S-->>H: clear
+  H->>M: builtin read, no marker
   H-->>W: allow
 ```
-*Figure 2. Option A: the push is refused until the urgent mail is read. Reading releases the hold. Whether to push
-after reading stays the worker's call.*
-
-The hook's arm keeps the budget order of the arms beside it, so a call that is not a gated command pays nothing.
-
-```mermaid
-flowchart TD
-  E["PreToolUse event"] --> T{"Tool is Bash?"}
-  T -- "no" --> P["proceed, no cost"]
-  T -- "yes" --> G{"Raw payload holds push, commit,<br/>merge or pull? (shell glob, no fork)"}
-  G -- "no" --> P
-  G -- "yes" --> J{"git or gh in command position,<br/>a gated verb? (one jq)"}
-  J -- "no" --> P
-  J -- "yes" --> R["one bounded read of the hold<br/>(ccrc-api, inside the net budget)"]
-  R --> V{"Answer"}
-  V -- "clear" --> P
-  V -- "held" --> D["deny, naming the delivery<br/>and mail inbox"]
-  V -- "unreadable or timed out" --> N["proceed, with a notice:<br/>urgent mail could not be checked"]
-```
-*Figure 3. The gate's arm in the hook, cheapest test first. Only a gated command reaches the network, and a failed read
-lets the act through with a notice (decision D3).*
+*Figure 2. A and E together: the notice line arrives on the next tool call, and the push is refused until the urgent
+mail is read. Reading clears the marker. Whether to push after reading stays the worker's call. The hook never asks the
+server anything.*
 
 ### 2.2 B. Pull client: a listener the session watches
 
-The session starts a client that polls the server with a cursor and prints a line per new mail (for example
-`ccrc-api mail watch`, run under Claude Code's Monitor tool, or an MCP server exposing `mail_inbox`). Each printed line
-arrives as a harness notification, and the session acks what it handled.
+The session starts a client that polls the server and prints a line per new mail (for example `ccrc-api mail watch`,
+run under Claude Code's Monitor tool, or an MCP server exposing a `mail_inbox` tool). Each printed line arrives as a
+harness notification, and the session acks what it handled.
 
 **What the outside project does.** opencrawl-core (public, Apache-2.0) was read through `gh` at
 `ccb0b20d93bb9af2fccadebbf1bf08169b87e330` (`docs/board-agent-interface.md`, `docs/board-participation.md`,
-`cli/src/board.ts`, `cli/src/board-agent.ts`, `src/board/inbox.mts`, its Claude Code `hooks.json`). Nothing from it
-was run. Sourced findings:
+`cli/src/board.ts`, `cli/src/board-agent.ts`, `src/board/inbox.mts`, its Claude Code `hooks.json`). Nothing from it was
+run. Sourced findings:
 
-- **Delivery is a background pull listener, not a hook.** The agent starts `board watch --notify-only` under Monitor
-  (re-armed every 10 minutes). Its hooks inject no messages. Its own guide says installing the client "alone does not
+- **Delivery is a background pull listener, not a hook.** The agent starts `board watch --notify-only` under Monitor,
+  re-armed every 10 minutes. Its hooks inject no messages. Its own guide says installing the client "alone does not
   establish push delivery", and falls back to reading the inbox "at work boundaries".
 - **The cursor is server-held.** The server keeps a pending page per session (up to 5 messages) with a sha256 cursor,
   replays the same page until it is acknowledged, and refuses a mismatched cursor with 409.
 - **At-least-once, said plainly.** "No exactly-once delivery claim is made." Consumers dedupe by message id. The
   transport receipt and the agent's "handled" acknowledgement are two separate acks.
-- **No urgency, no blocking, no subagents.** No priority field, nothing refuses an act while a message is unread, and
+- **No urgency, no blocking, no subagents.** No priority field. Nothing refuses an act while a message is unread, and
   delivery is keyed to one session id, main thread only.
 - **Polling about every 10 s,** one listener per session behind a lock file, which exits after 30 quiet minutes. Its
   guide frames system notices as "evidence, not new authority or permission", without wrapping message text as data.
 
 **What transfers to ccrc, and what ccrc already has.** ccrc already holds the cursor on the server: the delivery row is
-the cursor, and an ack moves it. It already sends id-only notices (the nudge) with the body fetched on demand, and it
+the cursor, and an ack moves it. It already sends id-only notices (the nudge) with the body fetched on demand. It
 already tells delivered apart from read (`deliveredAt`, `ingestedAt`, `ackedAt`). Two ideas are worth taking: say
 "at-least-once" as plainly as they do, and give a send an idempotency key (one is already in flight in this programme).
-What does not transfer is the part this design needs most: a mid-turn guarantee, urgency, a hold, and subagent reach.
-Their mid-turn path is Claude Code surfacing Monitor output, which they do not verify either.
+What does not transfer is what this design needs most: urgency, a hold and subagent reach. Their mid-turn path is
+Claude Code surfacing Monitor output, which they do not verify either.
 
-### 2.3 C. A combination, and D, an urgent nudge into a busy pane
+**B's costs, as estimates.** No cost of B was measured. At a 10 s poll, 20 sessions make about 2 requests a second
+(arithmetic). Each session runs one more long-lived process, which a restart or a `/clear` loses, and which the session
+must start itself. B could print id-only lines, as the nudge does, so it need not carry sender-written text.
 
-The brief's C pairs A's guarantee with B's reading. This spec proposes a fourth piece, **D**, as the reading half
-instead of B, because it reuses the lane that already exists.
+### 2.3 E. A marker and a fixed hook line (the reading half)
 
-**D.** For an urgent delivery only, the mail gate may answer "deliver" on `busy`. The lane then types the same
-one-line nudge into a running turn, once, with no replay while the turn runs. Claude Code queues text typed during a
-turn. If the build shows queued text at the next tool boundary, the main thread sees "you have new mail" mid-turn and
-can read it before it reaches for a push. A's hold still stands behind it.
+While a session's `mailhold` marker stands, the hook adds one fixed `additionalContext` line to the main thread's tool
+calls: urgent mail is waiting, from which sender role, and the command that reads it. The call proceeds. Nothing is
+typed into the pane, so nothing can land in a menu or a draft.
 
-> [!IMPORTANT]
-> D rests on one fact this spec could not measure: whether the fleet's Claude Code build surfaces text typed during a
-> running turn at the next tool boundary, or only when the turn ends. It is measured on the test box before D is built
-> (§5). If the answer is "only at the end", D gives nothing over today, and B is reconsidered as the reading half.
+What E reaches, and what it costs (review 2688 F8, weighed):
 
-```mermaid
-flowchart LR
-  U["urgent mail queued"] --> Q{"Recipient's word"}
-  Q -- "idle or shell" --> N1["nudge typed, as today"]
-  Q -- "busy" --> N2["D: nudge typed once<br/>into the running turn"]
-  Q -- "waiting (a dialog)" --> H1["held, as today"]
-  N2 --> M["main thread reads it at<br/>its next tool boundary (if probed true)"]
-  U --> A["A: hold on push, commit,<br/>merge until acked"]
-  A --> S1["main thread and every subagent<br/>stopped at the act"]
-```
-*Figure 4. C as proposed: D brings the mail forward for the main thread, and A guarantees that no gated act happens
-unread, in the main thread or any subagent.*
+- **A busy main thread,** at its next tool call. It does not reach a main thread blocked inside one long foreground
+  `Agent` call, which has no tool boundary of its own until the subagent returns. The hold still stops that subagent's
+  gated acts.
+- **A subagent gets no notice line,** so it is not nagged on every call. It gets the hold's refusal at a gated act, in
+  the parent wording (§3.4).
+- **A second copy of the hold.** The marker is a cached projection of a server fact, so it can go stale. Its lease
+  (§3.3) bounds that.
+- **One envelope per event.** The hook prints one `hookSpecificOutput` per event. E's line is placed after the deny
+  arms and before the other advice (§3.4).
+- **The model must see it.** E rests on Claude Code showing a `PreToolUse` `additionalContext` to the model with the
+  tool's result. The hook's existing advice arms assume the same. §5 checks it on the fleet's build, and a failed check
+  is B's trigger.
 
-### 2.4 What reaches whom
+### 2.4 D. An urgent nudge typed into a running turn (ruled out)
+
+D typed the existing nudge into a busy pane for urgent mail. The coordinator ruled it out on 2026-11-19, on review
+2688's F2 and F7:
+
+- **The rate-limit menu.** It "opens by itself when a limit lands" (`ccd/ccd`, `_pane_limit_menu`), and a limit lands
+  only on a request in flight, so a busy pane is exactly where it appears. "An Enter or a digit here can pick 'Switch to
+  usage credits'", and the nudge carries the recipient's id, which can hold digits. `sendPrompt` checks for a menu once,
+  on its first capture, and not again before Enter.
+- **No switch and no precedence.** D had no shadow or arming marker, no stated precedence against `mail-gate-strict`,
+  and no way to tell a running turn from an ended one under the default `shell` mode.
+
+The ruling: no unattended lane ever types into a running turn.
+
+### 2.5 What reaches whom
 
 | | Busy main thread | Busy subagent | A session that set nothing up |
 |---|---|---|---|
 | Today | Nothing until the turn ends | Nothing | Nudge at idle |
-| A. Hook gate | Only when it tries a gated act. The refusal names the mail. | Yes, at its gated act. Told to stop and report to its parent, because a subagent never acks. | Yes, the hook is installed in every session |
-| B. Pull client | A notification line, if the build surfaces Monitor output mid-turn (unmeasured) | No | No: the session must start the listener, and a restart or a `/clear` loses it |
-| D. Urgent nudge | The nudge at its next tool boundary, if probed true | No: typed text goes to the main thread | Yes, it rides the existing lane |
-| C = A + D | Both of the above | A's hold | Yes |
+| A. The hold | Only when it tries a gated act. The refusal names the mail. | Yes, at its gated act, told to stop and report to its parent | Yes, the hook is in every session |
+| E. The notice line | At its next tool call | No (by design) | Yes |
+| B. Pull client | A notification line, if the build surfaces Monitor output mid-turn (unmeasured) | No | No: the session must start the listener |
+| C = A + E | Both of the above | A's refusal | Yes |
 
-### 2.5 The six questions, option by option
+### 2.6 The six questions, option by option
 
-| Question | A. Hook gate | B. Pull client | D. Urgent nudge |
-|---|---|---|---|
-| Exactly-once and ordering | Not a delivery: it reads the server's hold, so it adds no copy. The hold is "any unacked urgent delivery", and acking is idempotent. Mail stays at-least-once, read in delivery-id order by `mail inbox`. | A second reader of the same rows. Its cursor must be the server's ack state, never a file of its own, or the two disagree after a crash. | Same lane, same rows. Typed once while busy, and replayed under today's rules once the session is at rest. |
-| 20+ sessions on one box | A server read only on a gated command, about 80 ms each (§1.3 timing). No process, no poller. | One process per session, about 2 requests a second for 20 sessions at a 10 s poll, all lost on every restart | No new load: one more verdict row in the lane's existing sweep |
-| Hook slow or server down | The read is bounded inside the hook's net budget. On timeout the act proceeds with a notice (D3). | A crashed listener is silent, and nothing says so. | The lane's existing back-off and park. |
-| Stale state | None held on the box. | A client cursor can go stale, so it must be server-held, as opencrawl-core does. | None held on the box. |
-| Trust (§3.8) | The hold's authority is a server row (who sent it, whether that sender is the recipient's coordinator), never the body. The refusal prints ids and the sender's role only. | Every printed line is sender-written text reaching the model unasked. It would need the untrusted renderer. | The nudge is fixed server text and carries no body. |
-| Cost in latency and tokens | Zero on every non-gated call (glob only). About 80 ms on a gated call. About 100 tokens per refusal, once per held act. | Silent polls cost no tokens. Each line is a notification turn. | About 150 tokens per nudge, the same line as today |
+| Question | A + E | B. Pull client |
+|---|---|---|
+| Exactly-once and ordering | Neither is a delivery: they read a projection of the server's hold and add no copy of any mail. Mail stays at-least-once, read in delivery-id order by `mail inbox`. Acking is idempotent. | A second reader of the same rows. Its cursor must be the server's ack state, never a file of its own, or the two disagree after a crash. |
+| 20+ sessions on one box | No process and no poller. The hook pays one builtin file test per `PreToolUse`. The server pays one `ccd route` write per hold set, renewal and clear, and holds are rare. | One process per session, about 2 requests a second for 20 sessions (arithmetic), all lost on every restart |
+| Hook slow or server down | Nothing on the tool path waits on the server. A down server cannot renew the lease, so the marker lapses within its lease and the hold fails open (D3). | A crashed listener is silent, and nothing says so |
+| Stale state | The marker can outlive a lost clear by at most its lease (§3.3) | A client cursor can go stale, so it must be server-held, as opencrawl-core does |
+| Trust (§3.8) | Fixed server text. The refusal and the line carry ids and the sender's role, never a subject or a body. | Id-only lines are possible, as the nudge does |
+| Cost in latency and tokens | Estimated, not measured: no fork on a call without a marker. About 60 tokens per main-thread tool call while a hold stands, and about 120 per refusal (estimates, §5 names the measuring read). | Silent polls cost no tokens. Each line is a notification turn. |
 
-## 3. The recommended design (C = A + D)
+## 3. The recommended design (C = A + E)
 
-This section fixes the parts of A and D that the decisions in §4 rest on. It is a design, not a plan: tasks go in the
+This section fixes the parts of A and E that the decisions in §4 rest on. It is a design, not a plan: tasks go in the
 plan that follows it.
 
 ### 3.1 Marking a mail urgent
 
-- `POST /api/mail` takes an optional `urgent: true`. Absent means not urgent, so an older client is unchanged.
-- **Who may mark it** is decided by one L1 function from server rows alone:
-  - the coordinator of an open run whose worker or reviewer is the recipient (`claimedBy` of that run);
-  - the server's own system mail (for example the landing line's ejection notice);
-  - the operator, through a session-gated door.
-  Any other sender is refused `urgent-not-allowed`, and the mail is not sent. A peer cannot hold another peer's push.
-- The flag is one more column on `mail`, written once at ingress, its one writer. It needs a `coord.db` migration slot
-  under the commuting-migrations rule (`docs/superpowers/specs/2026-11-11-coord-migrations-commute-design.md`).
+- `POST /api/mail` takes an optional `urgent: true`. Absent means not urgent, so an older client is unchanged. The flag
+  is one more column on `mail`, written once at ingress, its one writer. It needs a `coord.db` migration slot under the
+  commuting-migrations rule (`docs/superpowers/specs/2026-11-11-coord-migrations-commute-design.md`).
+- **Who may mark it,** decided by one L1 function from server rows:
+  - a run's coordinator (`claimedBy` of the run), to that run's own workers and reviewers;
+  - the Overlord (the designated session), to any coordinator;
+  - the operator, to anyone, through a session-gated door.
+  Any other sender is refused `urgent-not-allowed`, and the mail is not sent. Peers never mark mail urgent, and this
+  design makes no system mail urgent.
+- **Attribution, not authentication.** The ingress checks `fromUuid` against `$REG/<id>.uuid`, which its own docstring
+  calls "freshness, not forgery-proofness". Every session on the box can read every `.uuid` file and holds the box token,
+  so a session that forges the coordinator's identity can send urgent mail as it, as it can send ordinary mail as it
+  today. The sender check is an accident guard, like the hold itself.
+- **One outstanding urgent mail per sender and recipient.** A second urgent mail from the same sender to the same
+  recipient is refused `urgent-outstanding` until the first is acked or released (§3.2). The sender can still send it
+  as ordinary mail.
 
-### 3.2 The hold and its read
+### 3.2 The hold
 
-- **The hold** is derived, never stored: the urgent deliveries to a session whose state is not `acked`. It is one L1
-  function over the delivery rows, so the hook, the console and the stall watch read the same answer.
-- **The read** is `GET /api/mail/hold?to=<id>`, behind the box token, answering one of three: `clear`, `held` with the
-  delivery ids and each sender's role, or `unmeasured`. `ccrc-api mail hold` is its client verb. Three answers, never
-  two: an unreadable store is not `clear` (the "no overloaded null" rule).
-- **What releases it** is the ack, which `mail inbox` makes when it prints the mail. Nothing else releases it, and no
-  timer expires it: the recipient can always ack, so it can never be stuck.
+- **The hold is derived, never stored:** the urgent deliveries to a session that `mail inbox` would print and the ack
+  door would accept. It is defined by the same predicate as `inboxFor` (`server/src/coord/store.ts`:
+  `ackableDeliverySql` and `OUTSTANDING_OR_ABANDONED_SQL`), shared as one fragment, never a second copy.
+- **What releases it.** An ack, which `mail inbox` makes when it prints the mail. A run's close, a child's reclaim or a
+  park also releases it, by derivation: `cancelOutstandingDeliveries` and `cancelDeliveriesTo` move those rows to
+  `rejected`, which the predicate excludes. No timer releases it.
+- **So the recipient can always end it.** Every row the hold counts is one that `mail inbox` prints and the ack door
+  accepts. A test pins that set equality (§5), and a test closes a run with urgent mail unread and finds the hold gone.
+- **The hold lifts only on a main-thread ack, by the hook's refusal.** The ack route receives no agent identity, so the
+  server cannot tell who acked. The hook refuses the acking forms of mail in a subagent (§3.4), so a subagent cannot
+  clear its parent's hold by accident.
 
-### 3.3 The gate in the session hook
+### 3.3 The carrier: a lane-only route field
 
-- **Gated acts:** `git push`, `git commit`, `git merge`, `git pull` or `git rebase` with main, and `gh pr merge`, each
-  with `git` or `gh` in command position, by the same shape the landing-order advisory already matches.
-- **The refusal text** names the delivery ids, the sender's role (coordinator, operator or server) and
-  `~/.local/bin/ccrc-api mail inbox`. It never quotes the subject or the body: those are content, written by a model.
-- **In a subagent** the refusal says that the parent session has urgent mail, and to stop and report to the parent.
-  A subagent never acks ccrc mail, so the main thread reads it and the hold lifts for all of them.
-- **Shadow first.** The arm ships recording what it would have refused, with no refusal, behind a switch with no writer
-  in the tree. It goes live by the operator's hand, as the stall watch did.
-- **It is an accident guard, not a wall.** `bash -c` with an assembled string, a script file, a git alias or another
-  interpreter runs past it, as with every other refusal in this hook. The design says so rather than claim more.
+The marker is a new lane-only route field, `mailhold`, beside `precompact`. It is the server's write over an argv it is
+already granted, so it needs no new ccd verb, no new agent grant and no new route.
 
-### 3.4 The urgent nudge (D)
+- **Its one writer** is a server lane that projects the hold (§3.2) onto the fleet box. It composes `CCD_ARGV.routeSet`
+  with `mailhold=<until>:<delivery ids>` when a hold appears, and with an empty value when the hold derives empty. It runs
+  off the mail lane's existing sweep, never inside the ingress or the ack route.
+- **ccd's side is rows in existing tables,** as `precompact` was: a `ROUTE_FIELDS` member, a `_route_valid` row (`until`
+  in epoch seconds, then at most eight delivery ids), the empty-value clear, and a skip in `_route_any` and the settle
+  path, so the field never counts as routing and is never applied to the pane. `parseRouteFields` refuses it at every
+  door as `lane-only`. A session's own shell may not write it, as the pool set's fields refuse (`CLAUDECODE` set).
+- **The staleness rule, a lease.** The hook honours the marker only while `until` lies in the future, read against
+  the hook's own clock (`_hook_epoch_ms`, no fork where bash offers `EPOCHREALTIME`). The writer sets `until` 300 seconds ahead and renews it while the hold stands, once its
+  remaining time falls below 120 seconds. A lost clear therefore lapses within 300 seconds, and so does a marker on a box
+  whose server is down: the hold fails open (D3). The two boxes' clocks enter the comparison. A skew of a few seconds
+  changes the window by that much, and the design assumes time-synchronised boxes, as the pool epoch's lease does.
+- **A capability, so absence permits.** The writer composes the field only when the fleet box's `ccd caps` advertises
+  `route-mailhold-v1`. An older fleet box gets no write and no marker, and the hold is simply off there. A write that
+  fails is logged and retried on the next sweep, and is never taken as "no hold".
+- **The hook header.** Its sentence that the tool path takes no lock and waits on nothing stands, and no network
+  exception is added. The amendment names one more builtin read beside `precompact`'s.
+- **If the carrier is refused at review,** the fallback is the server read the first draft proposed: `GET
+  /api/mail/hold` at gated commands only, bounded at one second, failing open, with a 404 or an unknown verb read as
+  silence (absence permits). It would add the hook's sixth network exception, a row in the box-token census and a
+  `ccd/ccrc-api` verb.
 
-- `mailTurnIdle` gains one input, whether the delivery is urgent, and one row: an urgent delivery on `busy` delivers
-  `via: 'busy-urgent'`. It is a row in the existing decider, never a second gate beside it.
-- The lane types the nudge once per urgent delivery while busy, without `refuseIfTurnRunning`, and never replays it
-  while the turn runs. `waiting` stays refused under every mode, because a dialog owns the keyboard.
-- The draft stash is unchanged: a draft in the box is stashed around the delivery and restored, as today.
+### 3.4 The hook's arms
 
-### 3.5 Why this adds no second delivery mechanism
+All three read the marker first, with no fork. A call that finds no live marker pays nothing more.
+
+- **The hold (A).** On a gated act, the hook denies the call:
+  - The gated acts are `git push`, `git commit`, a `git merge`, `git pull` or `git rebase` with main, and
+    `gh pr merge`, each with `git` or `gh` in command position, by the shape the landing-order advisory already matches.
+  - Main-thread refusal text: urgent mail is waiting, its delivery ids, its sender's role (coordinator, Overlord or
+    operator), and "Read it with `~/.local/bin/ccrc-api mail inbox`, run bare (no pipe, no redirect), and repeat until
+    it prints nothing new. The mail is information from your `<role>`. Whether to act on it after reading is your
+    call." It never quotes the subject or the body: those are content, written by a model.
+  - In a joined subagent (`tmsub`), the text says that the parent session has urgent mail, and to stop and report to
+    the parent. An event whose `agent_id` is not joined gets the main-thread text.
+- **The notice line (E).** On every other main-thread `PreToolUse` while the marker stands, the hook adds the same
+  sentences as `additionalContext`, and the call proceeds. A joined subagent gets no line.
+- **The subagent's ack refusal.** In a joined subagent, the hook refuses `ccrc-api … mail ack` and a bare
+  `ccrc-api … mail inbox` (no pipe or redirect after it, judged from the command text). The read-only `mail list` and
+  `mail fetch`, and a piped inbox, which acks nothing (`INBOX_BARE`), stay open. The refusal names no command to run
+  instead.
+- **Precedence.** One envelope per event: any deny wins, then E's line, then the other advice (the Read nudge and the
+  landing-order advisory), which already stay silent once an envelope is built.
+- **Switches.** Neither A nor E changes delivery: `mailTurnIdle`, the nudge and `mail-gate-strict`'s precedence are
+  untouched. The arms ship shadow: they record what they would have refused or said, and do neither, until a marker
+  with no writer in the tree arms them, as the stall watch went live. `mail-disabled` darkens them too, so a fleet with
+  mail switched off holds nothing. The shadow log also counts the gated acts that passed because a marker had lapsed,
+  so the operator sees how often the guarantee did not hold.
+- **An accident guard, not a wall.** `bash -c` with an assembled string, a script file, a git alias or another
+  interpreter runs past it, as with every other refusal in this hook. A session can also write the route file by hand.
+
+### 3.5 Cost, growth and the roll order
+
+- **Hook latency (estimated, not measured).** A call with no marker costs one `[[ -f ]]` test. A call with a live marker
+  adds one bounded `read`, plus, on a Bash call whose payload holds a gated verb, the one `jq` the landing-order advisory
+  already pays. The measuring read is the arm timed in a fixture HOME, with and without a live marker, over enough calls to give a
+  p95.
+- **Tokens (estimated).** About 60 tokens per main-thread tool call while a hold stands, and about 120 per refusal. A
+  hold usually stands for one or two calls, because the line tells the session how to end it.
+- **Growth.** `ccd/session-hook.sh`, `server/src/coord/store.ts`, `routes.ts`, `shared/api.ts` and `schema.ts` are
+  growth-checked at 40 net lines per file per PR. The hook's arms go in a `ccd/lib` file, as the pool set's parsers do,
+  so the hook itself grows by a source line. A waiver is planned only for a file that still exceeds the limit. No new
+  route is added, so the box-token census is unchanged.
+- **Roll order: server first,** for the wave that ships the field's writer and the hook's arms (the coordinator's
+  ruling, 2026-11-19). The server writes nothing until the fleet box's `ccd caps` advertises `route-mailhold-v1`, so the
+  other order is safe too, and both fail open.
+
+### 3.6 Why this adds no second delivery mechanism
 
 The architecture rules ask for a recorded "legitimately different" reason for anything that sits beside an existing
 owner.
 
 | Piece | Beside what | Reason |
 |---|---|---|
-| A, the hold read | The mail lane's delivery | Not a delivery: it carries no body and moves no row. It is a time-of-check re-check at the act, one of the catalogue's "legitimately different" kinds. The lane stays the one writer of delivery state. |
-| D, the urgent nudge | Nothing | It is the existing lane, with one more row in its existing decider |
-| B, a pull client | The mail lane's delivery | Would be a second delivery path (another process on another box). Its only reason, reaching a busy main thread, is D's job. Rejected unless D's probe fails. |
+| The hold's projection, the `mailhold` field | The mail lane's delivery | Not a delivery: it carries no body and moves no delivery row. It projects one server fact onto another host, the fleet box, where the hook runs. That host is one of the catalogue's "legitimately different" kinds. The store stays the one owner of delivery state, and the projection has one writer. |
+| A, the hold's refusal | The mail lane's delivery | A time-of-check re-check at the act, another of the catalogue's kinds |
+| E, the notice line | The nudge | Types nothing and needs no idle pane. It is advice in the hook's existing advice channel, from the same marker. |
+| B, a pull client | The mail lane's delivery | Would be a second delivery path (another process). Deferred, its trigger stated in §5 |
 
 ## 4. Decisions
 
-The author proposes these. The operator rules on the ones marked Open, and the coordinator on the rest.
+The coordinator ruled the fix-round questions on 2026-11-19. The author proposes the rest.
 
 | # | Decision | Options considered | Chosen, and why | Status |
 |---|---|---|---|---|
-| D1 | Where the guarantee lives | Hook gate, pull client, nothing | The hook gate (A): the only option that stops a subagent and every session without set-up | Proposed |
-| D2 | What the gate reads | A server read on a gated command, a marker the server writes into the session's clips directory, a box timer | Server read: fresh, no new writer on the box. The agent may write only under `~/.cc-clips`, and a 60 s timer is too coarse for a push | Proposed |
-| D3 | When the hold cannot be read | Fail open with a notice, fail closed | Open: a server restart during `ccrc update` would otherwise stop every commit on the fleet | Open |
-| D4 | Who may mark mail urgent | The recipient's coordinator, the server and the operator, or any sender | Those three only, checked from server rows. Any sender could freeze a peer's work | Open |
-| D5 | What releases the hold | The ack, a timer, the sender's run closing | The ack: reading is the point, and the recipient can always ack | Proposed |
-| D6 | What the refusal shows | Ids and role, the subject, the body | Ids and the sender's role only. Subject and body are content (§3.8) | Proposed |
-| D7 | The reading half | D (urgent nudge), B (pull client), none | D, after the test-box probe. B only if the probe fails | Open |
-| D8 | The pull client (B) | Build it now, defer it, reject it | Deferred. Its reason is D's job, and it adds a process and a cursor per session | Deferred |
-| D9 | First step | Build the hold first, measure first | Measure first: serve `deliveredAt`, `ingestedAt` and `ackedAt` so the baseline exists | Proposed |
+| D1 | Where the guarantee lives | The hook's hold, a pull client, nothing | The hold (A): the only option that stops a subagent and every session without set-up | Proposed |
+| D2 | What the hook reads | A local marker on a granted argv, a server read at gated commands, a box timer | A marker, the `mailhold` route field: no network on the tool path, and `precompact` is the precedent | Ruled |
+| D3 | When the hold cannot be read | Fail open, fail closed | Open: the hold is an accident guard, and fail-closed would stop every commit during a restart | Ruled |
+| D4 | Who may mark mail urgent | Named senders, any sender | A run's coordinator to its own run, the Overlord to coordinators, the operator to anyone | Ruled |
+| D5 | What releases the hold | The ack, a timer, the sender's run closing | An ack, or by derivation a close, reclaim or park. Never a timer. | Proposed |
+| D6 | What the refusal and the line show | Ids and role, the subject, the body | Ids and the sender's role, with the fixed trust sentence. Subject and body are content. | Proposed |
+| D7 | The reading half | E (marker and line), D (typed nudge), B (pull client) | E. D is ruled out, and B is the fallback if E's line does not reach the model. | Ruled |
+| D8 | Typing into a running turn | Allowed behind a gate, never | Never, for any unattended lane | Ruled |
+| D9 | Urgent volume | One outstanding per sender and recipient, unbounded | One outstanding: a second is refused `urgent-outstanding` | Ruled |
+| D10 | Acking in a subagent | Refuse the acking forms, rely on the skill convention | Refuse `mail ack` and a bare `mail inbox` in a joined subagent | Ruled |
+| D11 | Roll order | Server first, fleet first | Server first, with the cap making either order fail open | Ruled |
+| D12 | First step | Build the hold first, measure first | Measure first: serve `deliveredAt`, `ingestedAt` and `ackedAt` | Proposed |
 
 ## 5. Testing and proof
 
 This section says how each piece is proved before it goes live.
 
-- **The baseline.** Once `MailSummary` serves the three times, measure the wait of every coordinator mail in one
-  programme over a week, split by the recipient's word at queue time. That is the number this design must lower.
-- **D's probe, on the test box.** Run the fleet's Claude Code build, start a turn that runs several tool calls, type a
-  line into the pane mid-turn, and record from the transcript whether the line arrived before the turn ended, and at
-  which tool boundary. Repeat for a turn that is waiting on a subagent.
-- **The hold.** L1 tests for the urgent-sender decider and the hold function, each with a mutation that reds when the
-  rule is deleted. Session-hook tests in fixture HOMEs: a gated command with a held session is denied, an ungated one
-  costs no read, a subagent gets the parent wording, a timed-out read proceeds with the notice, and a command that
-  only mentions `git push` in a message stays silent.
-- **Shadow evidence.** The arm's shadow log over a week: how many acts it would have refused, and how many of those
-  were pushes made before the urgent mail was read. The operator arms it live from that evidence.
+- **The baseline.** Once `MailSummary` serves the three times, measure the wait of every coordinator mail to a busy
+  worker in one programme over a week. That is the number this design must lower.
+- **E's line reaches the model (B's trigger).** On the test box, with the fleet's Claude Code build, start a session
+  whose hook adds a fixed `PreToolUse` `additionalContext` line, run a turn of several tool calls, and read the
+  transcript: does the line arrive with each tool result, inside the turn? If it does not, B returns as the reading half.
+  B also returns if the shadow log shows sessions that met the line and acked only after their turn ended, more than
+  occasionally.
+- **The hold's set.** An L1 test that every delivery the hold counts is one `mail inbox` prints and the ack door
+  accepts, and the reverse for urgent rows. A case that closes the run with urgent mail unread, and one that reclaims the
+  child, each finding the hold gone.
+- **The deciders.** Tests for the urgent-sender rule, `urgent-outstanding` and the lease, each with a mutation that reds
+  when the rule is deleted.
+- **The carrier.** ccd tests in fixture HOMEs: `route --set mailhold=…` writes, the empty value clears, a session shell
+  is refused, the field never counts as routing, and a value outside the vocabulary is refused.
+- **The hook.** Session-hook tests in fixture HOMEs:
+  - a gated command under a live marker is denied, and the same command under an expired one proceeds;
+  - an ungated call under a live marker gets the line and proceeds;
+  - a joined subagent gets the parent wording and no line, and an unjoined `agent_id` gets the main-thread text;
+  - a joined subagent's `mail ack` and bare `mail inbox` are refused, and its `mail list`, `mail fetch` and piped
+    inbox pass;
+  - a commit message that only mentions `git push` stays silent.
+- **Shadow evidence.** The arms' shadow log over a week: acts they would have refused, lines they would have added,
+  passes on a lapsed marker. The operator arms them from that evidence.
 
 ## 6. Promise delta
 
@@ -352,19 +439,19 @@ none - a design spec for review that ships no behaviour, and the build plan carr
 ### Agreed
 
 - The problem and the two measured claims (§1.2), from the brief of 2026-11-19 and the tree at `ba2f67dac`.
-- The operator's direction of 2026-11-19 that a client library is acceptable on its merits. This spec weighs it in
-  §2.2 and §3.5 and defers it (D8).
+- The coordinator's fix-round rulings of 2026-11-19: D2, D3, D4, D7 to D11. D is ruled out, and E is the reading half.
+- The operator's direction of 2026-11-19 that a client library is acceptable on its merits. This spec weighs it (§2.2)
+  and defers it, with its trigger stated (§5).
 
 ### Waiting on you
 
-- D3: should the hold fail open (recommended) when the server cannot be read?
-- D4: is urgent mail limited to the recipient's coordinator, the server and you?
-- D7: should D be probed and built as the reading half before any pull client is considered?
+- The second review, on F1 to F9 of review 2688.
+- Nothing waits on the operator: the coordinator ruled D3 and D4 under its own authority.
 
 ### Later
 
-- B, the pull client. It returns if D's probe shows typed text waits for the turn's end, or if a session needs mail
-  with no hook installed.
+- B, the pull client. It returns if E's line does not reach the model (§5), or for a session with no ccrc hook.
+- Urgent system mail: none is urgent in this design. A named kind can be added, each with its own dedupe.
 - A worker-skill and coordinator-skill clause for urgent mail (when a coordinator sends it, and that a worker reads it
   before a gated act). Both skills' clauses are pinned verbatim, so this is a wave of its own.
 - The console: an urgent badge on a mail row, and the hold shown on the session card.
