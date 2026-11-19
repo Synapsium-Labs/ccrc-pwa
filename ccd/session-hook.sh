@@ -4286,29 +4286,33 @@ if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 # `~/.ccrc/mail-hold-shadow.d/<id>` (the pairs, then the keys logged for them; written to a temporary file in that
 # directory and moved over), rotated to `.1` past 1 MiB, its size tested only when a line is appended. A `Stop` while
 # a marker file stands appends one `stop` line (P9): the turn end the B trigger's read compares with `ackedAt`.
-_hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) and the shadow log; nothing without a marker
-  local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" c="" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log"
-  [[ -f "$f" && ! -L "$f" && ! -e "$REG/mail-disabled" ]] || return 0
-  { IFS= read -r -d '' -n 256 v < "$f"; } 2>/dev/null   # the bytes as ccd wrote them, no trim, past a newline (195 at most)
+_hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) and the shadow log; nothing without a marker, but a joined subagent's ack
+  local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" c="" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log" m="" k=""
+  [[ -f "$f" && ! -L "$f" ]] && m=1
+  # THE SUBAGENT'S ACK REFUSAL (Task 6.1), the one arm that needs no marker: a joined subagent's Bash call whose command
+  # holds `mail`, and `ack` or `inbox`, read with builtins (`k`); the module decides the form, on the raw command text.
+  [[ -n "${tmsub:-}" && "$event" == PreToolUse && "${tool:-}" == Bash ]] && c=${payload#*\"command\":\"} c=${c%%\",\"*} && [[ "$c" == *mail* && ( "$c" == *ack* || "$c" == *inbox* ) ]] && k=1
+  [[ ( -n "$m" || -n "$k" ) && ! -e "$REG/mail-disabled" ]] || return 0
+  [[ -z "$m" ]] || { IFS= read -r -d '' -n 256 v < "$f"; } 2>/dev/null   # the bytes as ccd wrote them, no trim, past a newline (195 at most)
   if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
   if [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ && "$now" =~ ^[0123456789]+$ ]]; then
     p="${v#*:}" dl="${v#*:}" dl="${dl%%,*}" dl="${dl#*.}"
     if (( 10#${v%%:*} <= now )); then st=lapsed; elif (( 10#${v%%:*} > now + 360 )); then st=far; else st=live; fi
   fi
   if [[ "$event" == Stop ]]; then l="$now"$'\t'"$id"$'\tstop\t-\t'"$dl"$'\t-\n'
-  elif [[ -n "$st" ]]; then
+  elif [[ -n "$st" || -n "$k" ]]; then
     c=${payload#*\"command\":\"} c=${c%%\",\"*}   # the command, and at most the payload's tail after it (F7)
-    if [[ "${tool:-}" == Bash && ( "$c" == *push* || "$c" == *commit* || "$c" == *merge* || "$c" == *pull* || "$c" == *rebase* ) ]]; then
+    if [[ -n "$st" && "${tool:-}" == Bash && ( "$c" == *push* || "$c" == *commit* || "$c" == *merge* || "$c" == *pull* || "$c" == *rebase* ) ]]; then
       ran=1 strip=$(jq -L "$ROSTER_CARD_LIB" -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "include \"mail-hold\"; mh_prep | $MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || strip=""
     fi
-    [[ "$st" == live || -n "$ran" ]] || return 0
+    [[ "$st" == live || -n "$ran" || -n "$k" ]] || return 0
     [[ -f "$d/$id" && ! -L "$d/$id" ]] && { IFS= read -r -d '' -n 4096 seen < "$d/$id"; } 2>/dev/null
     if [[ -f "$ROSTER_CARD_LIB/mail-hold.jq" ]]; then
       [[ -e "$REG/mailhold-notice-live" ]] && a=notice; [[ -e "$REG/mailhold-refuse-live" ]] && a+=,refuse
       { IFS=$'\x1f' read -r -d '' o t l s; } < <(jq -L "$ROSTER_CARD_LIB" -j --arg strip "$strip" --arg ran "$ran" --arg cap "$MERGE_PARSE_CAP" --arg thread "${tmsub:+sub}" \
-        --arg pairs "$p" --arg state "$st" --arg armed "$a" --arg sid "$id" --arg now "$now" --arg seen "$seen" 'include "mail-hold"; mail_hold($ARGS.named)' <<<"$payload" 2>/dev/null) 2>/dev/null
+        --arg pairs "$p" --arg state "$st" --arg armed "$a" --arg sid "$id" --arg now "$now" --arg seen "$seen" --arg ack "$k" 'include "mail-hold"; mail_hold($ARGS.named)' <<<"$payload" 2>/dev/null) 2>/dev/null
     elif [[ "${seen%%$'\n'*}" != "$p" || $'\n'"$seen" != *$'\n'module-missing$'\n'* ]]; then   # the hook's one key: the module cannot decide it
-      [[ "${seen%%$'\n'*}" == "$p" ]] || seen="$p"$'\n'
+      [[ -n "$seen" && "${seen%%$'\n'*}" == "$p" ]] || seen="$p"$'\n'   # a seen text, even for no pairs, opens with its pairs line
       s="${seen}module-missing"$'\n' l="$now"$'\t'"$id"$'\t-\tmodule-missing\t'"$dl"$'\t-\n'
     fi
   fi

@@ -5,7 +5,7 @@ import type { Catalogue, ModelClass, ModelWindows, Registry } from './models.js'
 export declare const BLOCKED_CAUSES: readonly [
   'advance-file-unreadable', 'advance-file-invalid', 'registry-unreadable', 'registry-invalid',
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
-  'lane-not-codex-kind',
+  'lane-not-codex-kind', 'lock-unwritable',
 ];
 export type BlockedCause = (typeof BLOCKED_CAUSES)[number];
 export declare const REASON_MAX: 200;
@@ -133,3 +133,20 @@ export declare function unmeasuredMoves(a: {
   tokens: number | null;
 }): UnmeasuredMove[];
 export declare function unmeasuredMoveNotice(lane: string, m: UnmeasuredMove, tokens: number | null): string;
+export declare function clientWindowNotice(lane: string, registry: Registry, stale: boolean, room: { tokens: number | null; source: 'measured' | 'provider' | 'client' | null; model: string | null } | null): string | null;
+// ── sessions behind a move (plan W3 Task 14) ──
+export declare const BEHIND_AFTER_MS: 86400000;
+export declare function isoSeconds(ms: number): string | null;
+/** One session still on a model a move replaced: the class whose history holds the move, the model it replaced and
+ *  what replaced it (null: the class was emptied), the move's time, and the evidence (the turn and the render). */
+export interface SessionBehind {
+  class: ModelClass;
+  from: string;
+  to: string | null;
+  movedAt: string;
+  turnAt: string;
+  renderAt: string;
+}
+export declare function sessionBehind(a: {
+  advance: Advance; registry: Registry; nowMs: number; turn: unknown; usage: unknown;
+}): SessionBehind | null;

@@ -1261,9 +1261,13 @@ describeLinux('Plan 3a Task 10 — what the cutover rehearsal still holds: box-t
     expect(JSON.parse(ans!.body)).toEqual({ lane: 'codex-a' });
     const d = runInstall(home, ['doctor'], READY);
     expect(d.code, d.stdout).toBe(0);
-    // `models` moves too, from SKIP to PASS: the flip gives this box its first model registry
-    expect(doctorClasses(d.stdout), 'a check other than codex and models moved at the flip')
-      .toEqual({ ...doctorClasses(i0.stdout), codex: 'PASS', models: 'PASS' });
+    // `models` moves too, from SKIP to PASS: the flip gives this box its first model registry, and with it the four
+    // model-advance checks (auto-advance W3, D-8689) move from SKIP, measured from this case's own failing diff
+    expect(doctorClasses(d.stdout), 'a check other than codex, models and the four model-advance checks moved at the flip')
+      .toEqual({ ...doctorClasses(i0.stdout), codex: 'PASS', models: 'PASS',
+        // the flip gives the box its first model registry, whose two-part fixture pins are pin-grammar (auto-advance D16)
+        'model-advance-blocked': 'WARN', 'model-advance-held-back': 'PASS', 'model-held-behind': 'PASS',
+        'model-sessions-behind': 'PASS' });
     const codexLines = d.stdout.split('\n').filter((l) => /^(PASS|WARN|FAIL|SKIP) codex: /.test(l)).join('\n');
     expect(codexLines).toMatch(/codex-a/);
     expect(codexLines, 'doctor measured an external lane as a codex lane').not.toMatch(/codex-b/);

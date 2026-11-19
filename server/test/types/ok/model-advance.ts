@@ -3,13 +3,14 @@
 // front of tsc. `modelenv-types.test.ts`'s first case compiles `test/types/tsconfig.ok.json`, whose include is
 // `ok/**/*.ts`, so this file is checked there with no new project. It MUST compile clean, and it carries no cast.
 import {
-  ADVANCE_VERSION, AdvanceInvalid, BLOCKED_CAUSES, CANARY_RESULTS, CANDIDATE_REASONS, HISTORY_CAP, HOLD_BY, HOWS,
-  REASON_MAX, backfillAdvance, canaryEffort, causeOf, chooseCandidate, compareVersions, eligibleIds, familyOf,
-  heldBackOf, lastMoveOf, parseAdvance, parseModelId, reconcilePending, recordFailure, recordMove, resolveEffort,
-  serializeAdvance, unmeasuredMoveNotice, unmeasuredMoves,
+  ADVANCE_VERSION, AdvanceInvalid, BEHIND_AFTER_MS, BLOCKED_CAUSES, CANARY_RESULTS, CANDIDATE_REASONS, HISTORY_CAP,
+  HOLD_BY, HOWS, REASON_MAX, backfillAdvance, canaryEffort, causeOf, chooseCandidate, clientWindowNotice,
+  compareVersions, eligibleIds,
+  familyOf, heldBackOf, isoSeconds, lastMoveOf, parseAdvance, parseModelId, reconcilePending, recordFailure,
+  recordMove, resolveEffort, serializeAdvance, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../../../../shared/model-advance.mjs';
 import type {
-  Advance, BlockedCause, CandidateReason, Choice, HistoryEntry, ParsedModelId, Pending, UnmeasuredMove,
+  Advance, BlockedCause, CandidateReason, Choice, HistoryEntry, ParsedModelId, Pending, SessionBehind, UnmeasuredMove,
 } from '../../../../shared/model-advance.mjs';
 import type { Catalogue, ModelClass, Registry } from '../../../../shared/models.js';
 
@@ -52,3 +53,7 @@ export const notice: string = unmeasuredMoveNotice('lane-x', lowered[0] ?? { cla
   to: 'model-6-alpha', fromTokens: 400000, how: 'advance', cause: 'newer' }, null);
 export const causedIntent: Pending = { class: cls, from: null, to: 'model-6.1-alpha', effortFrom: null, effortTo: null,
   at: '2026-10-15T00:00:00Z', cause: 'empty' };
+export const day: 86400000 = BEHIND_AFTER_MS;
+export const iso: string | null = isoSeconds(0);
+export const behind: SessionBehind | null = sessionBehind({ advance: adv, registry: reg, nowMs: 0, turn: null, usage: null });
+export const clientNote: string | null = clientWindowNotice('lane-x', reg, true, null);
