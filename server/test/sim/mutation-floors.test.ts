@@ -10,6 +10,7 @@ import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type 
 import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
+import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
@@ -187,6 +188,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
   ...MAIL_KEY_MUTANT_SETS,
+  ...URGENT_MAIL_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,

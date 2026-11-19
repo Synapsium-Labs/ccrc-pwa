@@ -3998,6 +3998,26 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 108: user_version 107 -> 108 ──────────────────────────────────────────
+  // Urgent mail (mid-turn mail PR 2, plan `docs/superpowers/plans/2026-11-19-mid-turn-mail.md` Task 2.2, P1).
+  // `mail.urgentAs`: the sender's role for an urgent mail, `coordinator` or `overlord`, decided by
+  // `coord/urgentMail.ts#urgentSenderVerdict` and written once by `insertMail`, its one writer, from the mail ingress only.
+  // NULL = not urgent, which is every row written before this entry and every send that does not ask. Stored as the role
+  // rather than a boolean, so a later designation or a closed run never changes what an old mail says. `mail_urgent` is
+  // a partial index over the urgent rows only, so the hold's read (`urgentHolds`) and the one-outstanding test scan them
+  // and not the whole table.
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX: an older build opening a file at this `user_version` takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its INSERT names its columns and never this one, so a row it writes is not urgent.
+  // The slot is POSITIONAL: the mail idempotency key (#3056) landed 105, the work map's done evidence (#2997) 106 and the
+  // Linear wave 4 follow-ups (#3021) 107 first, so this is 108; whoever lands second renumbers (the coordinator's standing
+  // license). RE-MEASURE the slot before merge (it must print 107 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN urgentAs TEXT CHECK (urgentAs IS NULL OR urgentAs IN ('coordinator', 'overlord'));
+  CREATE INDEX mail_urgent ON mail(urgentAs) WHERE urgentAs IS NOT NULL;
+  `,
+
+  // ── 109: user_version 108 -> 109 ──────────────────────────────────────────
   // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
   // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
   // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
@@ -4009,9 +4029,9 @@ export const MIGRATIONS: readonly string[] = [
   // seeded `shadow`, gated in this build until PR 3b (`lane-arm.ts`).
   // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
   // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
-  // The coordinator's slot is 110 (#3073 takes 108 and gates B (#3076) 109); this entry is 108 BY POSITION until those land,
-  // and is renumbered when this branch absorbs main. RE-MEASURE the slot before the PR and before merge (it must print 107
-  // before this entry is counted):
+  // The slot is POSITIONAL: urgent mail (#3073) landed 108 first, so this is 109 at this branch's first merge of main; the
+  // coordinator's slot for it is 110 if Overlord gates B (#3076) lands first, and whoever lands second renumbers. RE-MEASURE
+  // the slot before the PR and before merge (it must print 108 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

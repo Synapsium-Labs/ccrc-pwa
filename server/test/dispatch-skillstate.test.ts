@@ -64,7 +64,9 @@ const harness = async (cfg: Cfg) => {
   });
   if (!('id' in opened)) throw new Error(`fixture openRun refused: ${JSON.stringify(opened)}`);
 
+  const argvs: string[][] = [];
   const runCcd = async (argv: CcdArgv): Promise<CcdResult> => {
+    argvs.push([...argv]);
     if (argv[0] === 'ws-add') seedRow(home, NEW_ID);
     return { ran: true, ok: true, stdout: '', stderr: '', killed: false, signal: null };
   };
@@ -94,7 +96,7 @@ const harness = async (cfg: Cfg) => {
   } as DispatchRunDeps;
 
   return {
-    coord, runId: opened.id,
+    coord, runId: opened.id, argvs,
     dispatch: () => dispatchRun(deps, opened.id, 'go', undefined),
     details: (): (string | null)[] => coord.runEvents(opened.id).map((e) => e.detail),
   };
@@ -113,6 +115,17 @@ describe('the dispatch preflight measures the worker skill and never refuses', (
     expect(await h.dispatch()).toMatchObject({
       ok: true, skillState: 'absent', briefQueued: true, sessionId: NEW_ID,
     });
+  });
+
+  it('an absent skill installs NOTHING inside the dispatch: the serialised path runs no skill-ensure (D-8126, A7-5)', async () => {
+    // The route runs `dispatchRun` inside the coordination serialiser. The self-install is the watcher's lane
+    // (`skillInstallLane.ts`), which reads this preflight row after the dispatch returned, so no close, reclaim or other
+    // dispatch ever waits behind two installers.
+    const h = await harness({ installed: false });
+    expect(await h.dispatch()).toMatchObject({ ok: true, skillState: 'absent' });
+    expect(h.argvs.filter((a) => a.includes('skill-ensure'))).toEqual([]);
+    expect(h.details()).toContain('skill-preflight:absent');
+    expect(h.details().filter((d) => d?.startsWith('skill-install:') === true)).toEqual([]);
   });
 
   it('reports unmeasurable, distinctly from absent, when the read FAILED', async () => {

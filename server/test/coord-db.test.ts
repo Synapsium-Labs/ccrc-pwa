@@ -763,9 +763,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[104] (mail.clientKey, mail.inReplyTo and mail_client_key_once, the mail idempotency key, Overlord wave 164),
     // and MIGRATIONS[105] (plan_tickets.doneAt and doneEvidence, a ticket's done time and evidence, programme work map WM1),
     // and MIGRATIONS[106] (linear_drift_cursors, linear_inbound_notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
-    // follow-ups, D-8734, D-8735).
-    expect(COORD_SCHEMA_VERSION).toBe(107);
-    expect(MIGRATIONS.length).toBe(107);
+    // follow-ups, D-8734, D-8735),
+    // and MIGRATIONS[107] (mail.urgentAs and mail_urgent, urgent mail, mid-turn mail PR 2).
+    expect(COORD_SCHEMA_VERSION).toBe(108);
+    expect(MIGRATIONS.length).toBe(108);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -898,8 +899,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[104] (mail.clientKey, Overlord wave 164),
     // and MIGRATIONS[105] (plan_tickets.doneAt and doneEvidence, programme work map WM1),
     // and MIGRATIONS[106] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
-    // follow-ups); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(107);
+    // follow-ups),
+    // and MIGRATIONS[107] (mail.urgentAs, mid-turn mail PR 2); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(108);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

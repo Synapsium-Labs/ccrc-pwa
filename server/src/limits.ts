@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
+import type { SessionRecord } from './registry.js';
 import { mapBounded } from './bounded.js';
 import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
@@ -68,6 +69,12 @@ export interface AccountLimits {
    *  be. That difference is why `projectHome` spends it on SCORING only, and why
    *  ccd's `_account_ok` never sees it at all. */
   authDead: boolean;
+  /** The lane's NEWEST recorded spawn (`<id>.spawn` among the registry rows whose `<id>.wrapper` names it) read rc 2
+   *  (`login`) or rc 5 (`blocked`), and no later spawn on it has read otherwise (`spawnBlockedLanesOf`). Emitted ONLY
+   *  when true, and absent means placeable: the fact is a MEASUREMENT of a failed spawn, never a reason to refuse. Like
+   *  `authDead` it leaves SCORING and the preferred fallback and never leaves `live`; ccd's `_ws_lane_cannot_spawn`
+   *  is the twin, and `projected-home.test.ts` drives both over one seeded registry. */
+  spawnBlocked?: true;
 }
 
 const FIVE_WINDOW = 18000;      // ccd: a five reading older than its own 5h window has rolled over
@@ -106,6 +113,38 @@ const authDeadMarkerOk = (raw: string): boolean => {
   const first = sp === -1 ? trimmed : trimmed.slice(0, sp);
   return /^[0-9]+$/.test(first);
 };
+
+const SPAWN_REFUSED_RC = new Set([2, 5]);
+/** How long a rc 2 / rc 5 record keeps a lane demoted: the demotion itself makes the later spawn that would clear it
+ *  rarer, and a sign-in never touches the record, so the verdict must expire (the coordinator's ruling F8, run 2785:
+ *  6 h, a demotion, not a skip). ccd's `_WS_SPAWN_REFUSAL_TTL_S` is the twin; an older refusal is no verdict, like an
+ *  unparseable record. */
+export const SPAWN_REFUSAL_TTL_S = 21600;   // `spawnVerdict`'s `login` and `blocked`
+
+/** A registry row as the demotion reads it: its id, its account and its parsed spawn record (`spawnRecordOf`). */
+export type SpawnRow = Pick<SessionRecord, 'id' | 'wrapper' | 'spawn'>;
+
+/** The lanes whose NEWEST recorded spawn needs a sign-in (rc 2) or is blocked (rc 5): ccd's `_ws_lane_cannot_spawn`'s
+ *  twin, decided over the registry rows the caller already read (review 2807 F2: one reader of `<id>.spawn` and
+ *  `<id>.wrapper`, the registry's, and no read of its own). Newest is by the epoch inside the record, across every row
+ *  of the lane, so a later rc 0 spawn on any of its rows clears the demotion; an equal epoch clears it too when either
+ *  record reads otherwise, so a tie is not a verdict. ABSENCE PERMITS: a row with no parsed record or no account names
+ *  no verdict, and a refusal older than `SPAWN_REFUSAL_TTL_S` is no verdict either. A dotted id is not a row, as in ccd.
+ *  KNOWN DIFFERENCE from ccd (departure `spawn-reader-follows-the-registry`, the `SessionRecord.child` precedent): the
+ *  registry follows a symlinked `.spawn` or `.wrapper` and yields only ids with a `.uuid`, where ccd refuses the link
+ *  and counts any row with both files. ccd writes neither shape, and the only effect is a forecast that can differ. */
+export function spawnBlockedLanesOf(rows: readonly SpawnRow[], now: number): ReadonlySet<string> {
+  const lane = new Map<string, { at: number; bad: boolean }>();
+  for (const r of rows) {
+    if (r.spawn === null || r.wrapper === '' || r.id.includes('.')) continue;
+    const bad = SPAWN_REFUSED_RC.has(r.spawn.rc);
+    if (bad && now - r.spawn.at > SPAWN_REFUSAL_TTL_S) continue;
+    const had = lane.get(r.wrapper);
+    if (had === undefined || r.spawn.at > had.at) lane.set(r.wrapper, { at: r.spawn.at, bad });
+    else if (r.spawn.at === had.at && !bad) had.bad = false;
+  }
+  return new Set([...lane].filter(([, v]) => v.bad).map(([w]) => w));
+}
 
 /** An account's pressure, or `null` when NOTHING has measured it — the
  *  distinction the whole placement rule turns on (see `projectHome`). Absent
@@ -368,7 +407,10 @@ export function projectHome(
   //
   // ABSENCE PERMITS: `!== true`, so an older `readLimits` (or an older agent
   // payload) that omits the field reads as NOT condemned, never as condemned.
-  const notCondemned = (a: { id: string }): boolean => limits[a.id]?.authDead !== true;
+  // A7-3: a lane whose newest spawn needs a sign-in or is blocked (`spawnBlocked`) is one more reason for the same
+  // last tier, exactly as ccd's `_ws_least_loaded` folds `_ws_lane_cannot_spawn` into its `condemned` variable.
+  const notCondemned = (a: { id: string }): boolean =>
+    limits[a.id]?.authDead !== true && limits[a.id]?.spawnBlocked !== true;
   const scored = scorable
     .filter(notCondemned)
     .map((a) => ({ wrapper: a.id, score: measured(limits[a.id]) }))
@@ -499,6 +541,7 @@ export async function readLimits(
   cfg: CcrcConfig,
   now = Math.floor(Date.now() / 1000),
   registryNames?: readonly string[],
+  records?: readonly SpawnRow[],
 ): Promise<Record<string, AccountLimits>> {
   const names = (await io.readdir(cfg.limitsDir)) ?? [];
   // One listing, not one stat per account.
@@ -536,6 +579,9 @@ export async function readLimits(
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );
+  // A7-3: the demotion is decided over the caller's registry rows; a caller with none (a request-time read) carries
+  // no demotion: absence permits (the coordinator's ruling F2 (a), run 2785).
+  const spawnBlockedLanes = records === undefined ? new Set<string>() : spawnBlockedLanesOf(records, now);
   const out: Record<string, AccountLimits> = {};
   // D-6436 (desktop polish C4): the files are read through the one bounded pool, not one round trip after another;
   // the loop below still settles them in listing order. A read that rejects is handed to its own row's `catch`,
@@ -594,11 +640,13 @@ export async function readLimits(
       const fiveWindowMinutes = numOrNull(raw.fiveWindowMinutes);
       out[wrapper] = { five, seven, ts, fiveResetAt, sevenResetAt, fiveRolledOver, sevenRolledOver,
                        ...(fiveWindowMinutes === null ? {} : { fiveWindowMinutes }),
-                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
+                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
     } catch {
       out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                        sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
+                       disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
+                       ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
     }
   }
   // A lane can be markered off before it ever writes telemetry (fresh
@@ -625,12 +673,13 @@ export async function readLimits(
   // the fleet — the exact self-reinforcing hole `disabled` exists to close, and
   // an auth-dead lane falls into it identically. `inRoster` is doing the same
   // job for both: the registry also holds dotless markers that name no account.
-  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes])) {
+  for (const wrapper of new Set([...disabledLanes, ...authDeadLanes, ...spawnBlockedLanes])) {
     if (wrapper in out) continue;
     if (!inRoster(cfg.roster, wrapper)) continue;
     out[wrapper] = { five: null, seven: null, ts: null, fiveResetAt: null,
                      sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false,
-                     disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper) };
+                     disabled: disabledLanes.has(wrapper), authDead: authDeadLanes.has(wrapper),
+                     ...(spawnBlockedLanes.has(wrapper) ? { spawnBlocked: true as const } : {}) };
   }
   return out;
 }

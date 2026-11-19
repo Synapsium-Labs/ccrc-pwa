@@ -18364,6 +18364,9 @@ _inst_files() {   # the artifacts the box RUNS that are not on PATH
   # The roster card's one builder (D4; its wake arm R-5a, D-8201), 0644: data for jq the hook loads with `jq -L`,
   # placed before the hook. Without it the hook makes no card (fail open).
   _inst_atomic "$tree/ccd/lib/roster-card.jq" "$HOME/.cc-sessions/lib/roster-card.jq" 644
+  # The mail hold's matcher, texts and log decision (mid-turn mail, plan Task 5.2), 0644: data for jq the hook loads with
+  # `jq -L`, placed before the hook. Without it the hook holds nothing and logs `module-missing` (fail open, D3).
+  _inst_atomic "$tree/ccd/lib/mail-hold.jq" "$HOME/.cc-sessions/lib/mail-hold.jq" 644
   # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a; a projection of FLEET_ROLES),
   # 0644: data for jq. Without it a profile-naming spawn launches without its profile and warns.
   _inst_atomic "$tree/ccd/lib/launch-profiles.json" "$HOME/.cc-sessions/lib/launch-profiles.json" 644
@@ -24996,6 +24999,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.cc-sessions/lib/launch-profiles.json" launch-profiles.json
   _upd_backup_copy "$HOME/.cc-sessions/lib/overlord-constitution.md" overlord-constitution.md
   _upd_backup_copy "$HOME/.cc-sessions/lib/roster-card.jq" roster-card.jq
+  _upd_backup_copy "$HOME/.cc-sessions/lib/mail-hold.jq" mail-hold.jq
   _upd_backup_copy "$HOME/.cc-sessions/lib/carry-dedupe.py" carry-dedupe.py
   _upd_backup_copy "$HOME/.cc-sessions/lib/inflight-manifest.py" inflight-manifest.py
   _upd_backup_copy "$HOME/.cc-sessions/approval-verify.mjs" approval-verify.mjs
@@ -29424,7 +29428,7 @@ _uninst_cc_sessions() {
   # `child-deny.digests`, the deny file's digest history (approvals PR 0), which the installer alone writes.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" "$reg/lib/inflight-manifest.py" \
-    "$reg/lib/roster-card.jq" "$reg/lib/launch-profiles.json" \
+    "$reg/lib/roster-card.jq" "$reg/lib/mail-hold.jq" "$reg/lib/launch-profiles.json" \
     "$reg/lib/overlord-constitution.md" \
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
