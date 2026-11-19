@@ -90,6 +90,10 @@ export interface AppView {
   readonly theme: string;
   /** A touch screen (a coarse pointer) at a desk width too; below 900 there always is one. */
   readonly touch?: boolean;
+  /** Let the context run service workers (reader lab 10 alone: the built app's own worker must register, activate and
+   *  control the page). Absent, workers are blocked, exactly as every other case has them: a worker that took over a page
+   *  would answer some of its requests where the harness's routes cannot see them. */
+  readonly serviceWorkers?: 'allow';
 }
 
 export interface OpenedApp {
@@ -141,12 +145,12 @@ type Unsequenced<E> = E extends HarnessEvent ? Omit<E, 'seq'> : never;
 
 /** A context at `view.width` (844 tall below 900, as a phone; 900 above), with a touch screen below 900 or when
  *  `view.touch` asks, the skin and
- *  the theme stored before the first paint (the keys the app itself reads), service workers blocked, and the fixture
- *  answering `/api` and `/ws`. The page is not navigated yet. */
+ *  the theme stored before the first paint (the keys the app itself reads), service workers blocked unless `view` allows
+ *  them, and the fixture answering `/api` and `/ws`. The page is not navigated yet. */
 export async function openApp(browser: Browser, view: AppView, fixture: AppFixture): Promise<OpenedApp> {
   const phone = view.width < 900;
   const ctx = await browser.newContext({
-    viewport: { width: view.width, height: phone ? 844 : 900 }, hasTouch: phone || view.touch === true, serviceWorkers: 'block',
+    viewport: { width: view.width, height: phone ? 844 : 900 }, hasTouch: phone || view.touch === true, serviceWorkers: view.serviceWorkers ?? 'block',
   });
   await ctx.addInitScript(([skinKey, skin, themeKey, theme]) => {
     try {

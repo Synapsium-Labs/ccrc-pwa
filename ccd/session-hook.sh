@@ -5327,7 +5327,8 @@ fi
 # tests its anchor (and a `cd` row its tail) on the whole command, since jq compiles a regex on each call.
 # A write (D-6065) to a file the launcher, the roll or this guard trusts (`TRUST`: `~/.ccrc/claude-*`,
 # `$REG/claude-roll-*`, `$REG/<id>.claude-canary`, `.claude-build`, `.deny-settings`, `$REG/.claude-roll.lock` and the
-# deny file `$REG/child-deny.settings.json`, which the arm below reads) is denied by the same writers, after a `cd` into
+# deny file `$REG/child-deny.settings.json`, which the arm below reads, and its digest history `$REG/child-deny.digests`,
+# which the approval wait reads (approvals PR 0, the coordinator's ruling F6)) is denied by the same writers, after a `cd` into
 # `.ccrc` or `.cc-sessions`, by the build's `find`, `xargs`, interpreter, variable and parent-directory arms, and by an
 # edit tool; a trusted name may hold glob characters, a glob segment directly under either directory counts, and the
 # relative spelling does too. So spec §7.6's registry sentence holds for a child here too.
@@ -5424,7 +5425,7 @@ def hbt($sep; $head; $tail): any(split($sep; null)[];
   ([match("^[\\s\\S]*(?=" + $tail + ")")] | if length == 0 then -1 else .[0].length end) as $last
   | $last >= 0 and (.[0:$last] | test($head)));
 def fmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
      | select(test(CCD + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; CCD + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "tmux(?=$|" + SP + "|[;&|)" + $q + "\"])")) | "other\ttmux"),
@@ -5529,7 +5530,7 @@ def pmatch: select(any(split("[;&|]"; null)[]; test(PANC) and test(WANC))) | sel
 def EXP: "(?:\\$\\{[^}]*\\}|\\$\\([^)]*\\)|\\$[A-Za-z_][A-Za-z0-9_]*|`[^`]*`)";
 def EXPV: WB + EXP + SP + "+" + FLAGS;
 def xmatch:
-  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
+  (("ws-rm", "ws-reap", "ws-archive", "ws-restore", "ws-reclaim", "ws-expire", "ws-collect", "ws-orphan", "scratch-rescue", "ws-shed-deps", "keep-awake", "ws-lease-mark", "delegation-adopt", "roll", "claude") as $v
      | select(test(EXPV + $v + NW)) | "verb\tccd \($v)"),
   (select(hbt("[;&|]"; EXPV + "ws-gc(?=" + SP + "|$)"; SP + "--prune" + NW)) | "verb\tccd ws-gc --prune"),
   (select(test(WB + "ccrc" + NW) and test(EXPV + "(?:update|rollback|rollout)" + NW)) | "verb\tccrc update, rollback or rollout"),
@@ -5579,7 +5580,7 @@ def BW: "build\ta write to a Claude Code build or its launcher";
 def BTR: "build\ta write to a file the Claude Code launcher, roll or guard trusts";
 def TCH: "[A-Za-z0-9_.*?\\[\\]{},-]";
 def TNC: "claude-" + TCH + "{1,64}";
-def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json)" + BT;
+def TNS: "(?:claude-roll-" + TCH + "{1,64}|" + TCH + "{1,128}\\.(?:claude-canary|claude-build|deny-settings)|\\.claude-roll\\.lock|(?:child|account)-deny\\.settings\\.json|child-deny\\.digests)" + BT;
 def DANC: "(?:" + SEPP + "|(?<![^" + WS + "=:" + $q + "\"]))";
 def TGL: GLOBW + "[*?\\[{]" + GLOBW + "/{0,8}(?=$|[" + WS + META + "])";
 def TRUST: "(?:" + DANC + "\\.ccrc" + SEPP + "(?:" + TNC + "|" + TGL + ")|" + DANC + "\\.cc-sessions" + SEPP + "(?:" + TNS + "|" + TGL + "))";
@@ -5634,7 +5635,7 @@ def pnorm: (if startswith("~/") then ($ENV.HOME // "~") + .[1:] else . end)
   | if startswith("/") then "/" + (split("/") | reduce .[] as $s ([]; if $s == "" or $s == "." then .
       elif $s == ".." then .[:-1] else . + [$s] end) | join("/")) else . end;
 def edittool: . == "Write" or . == "Edit" or . == "MultiEdit" or . == "NotebookEdit";
-def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-])))";
+def ASEC: "(?:" + DANC + "\\.cc-secrets(?![A-Za-z0-9_.-])|" + DANC + "\\.ccrc" + SEPP + "(?:auth-scratch(?![A-Za-z0-9_.-])|agent\\.env(?![A-Za-z0-9_.-])|linear(?:\\.key)?(?![A-Za-z0-9_.-])|operator-secrets(?![A-Za-z0-9_.-])|operator-model\\.db|privacy-journal\\.log(?![A-Za-z0-9_.-])|privacy-journal\\.torn(?![A-Za-z0-9_.-])|coordination-restore\\.(?:stage|foreign)" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db|codex" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "runtime\\.env(?![A-Za-z0-9_.-]))|" + DANC + "ccrc-backups" + SEPP + "[^" + WS + "/;&|()<>]{1,64}" + SEPP + "operator-model\\.db)";
 def AWD: DANC + "\\.cc-sessions" + SEPP + "\\.(?:auth|accounts)(?![A-Za-z0-9_.-])";
 def ENVP: "(?:[(`{]|\\$\\()";
 def ENVB: "^" + SP + "*(?:" + ENVP + SP + "*){0,4}(?:[A-Za-z_][A-Za-z0-9_]{0,63}=" + NS + "*" + SP + "+){0,8}(?:exec" + SP + "+)?(?:" + NS + "*/)?(?:env|printenv)(?:" + SP + "+(?:-0|--null))*" + SP + "*[)`}]{0,4}" + SP + "*$";
@@ -5642,13 +5643,27 @@ def ENVS: "(?:\\$\\(|`)" + SP + "*(?:[^" + WS + "/)`]*/)?(?:env|printenv)(?:" + 
 def BSHC: "^" + SP + "*(?:" + NS + "*/)?(?:bash|sh)" + SP + "+-c" + SP + "+";
 def ARF: DANC + "\\.ccrc" + SEPP + "accounts\\.(?:json|sh)" + BT;
 def AOPRUN: "^" + SP + "*(?:[(`{]" + SP + "*){0,4}(?:(?:then|do|else|if|while|!)" + SP + "+){0,2}(?:[A-Za-z_][A-Za-z0-9_]*=" + NS + "*" + SP + "+){0,8}(?:(?:exec|env|time|nohup|command)" + SP + "+){0,2}(?:(?:" + NS + "*/)?(?:node|nodejs|bun|deno)" + SP + "+(?:-" + NS + "*" + SP + "+){0,8})?(?:" + NS + "*/)?account-op\\.mjs" + BT;
+def PMN: "(?:operator-model\\.db|privacy-journal\\.(?:log|torn)" + BT + ")";
+def PMNS: ["operator-model.db", "operator-model.db-wal", "operator-model.db-shm", "privacy-journal.log", "privacy-journal.torn"];
+def g2re: gsub("(?<c>[.+^$()|\\\\])"; "\\\(.c)") | gsub("\\[!"; "[^") | gsub("\\*"; "[^/]*") | gsub("\\?"; "[^/]")
+  | gsub("\\{(?<x>[^{}]*)\\}"; "(?:" + (.x | gsub(","; "|")) + ")");
+def pmglob: [match(DANC + "\\.ccrc" + SEPP + "(?<g>" + GLOBW + "[*?\\[{]" + GLOBW + ")(?=$|[" + WS + META + "])"; "g") | .captures[0].string]
+  | any(.[]; g2re as $r | any(PMNS[]; try test("^(?:" + $r + ")$") catch true));
+def PMEX: "^" + SP + "*(?:ls|rm)" + NW;
+def PMBULK: NB + "(?:tar|zip|grep|rg)" + NA;
+def PMCOPY: NB + "(?:cp|rsync|scp)" + NA;
+def PMCPT: NB + "cp" + NA + "[^\n]*(?:^|" + SP + ")(?:--target-directory|-[A-Za-z]*t[A-Za-z]*)(?=$|[=" + WS + "])";
 def apmatch:
   (select(test(ASEC)) | "account\ta secret or scratch path of a fleet account"),
+  (select(test(PMN) and cdthen(CDT("\\.ccrc"); PMN; test("(?:^|[" + WS + "/=])" + PMN))) | "account\tthe private store or its journal, after a cd into ~/.ccrc"),
+  (select(test("\\.ccrc") and any(split(SEG; null)[]; (test(PMEX) | not) and pmglob)) | "account\ta glob under ~/.ccrc that can match the private store or its journal"),
+  (select(test("\\.ccrc") and any(split(SEG; null)[]; (test(PMBULK) and test(PDIR("\\.ccrc")))
+     or (test(PMCOPY) and test(PDIR("\\.ccrc") + SP + "+[^" + WS + META + "]")) or (test(PMCPT) and test(PDIR("\\.ccrc"))))) | "account\ta copy or recursive read of ~/.ccrc, which holds the private store"),
   (select(test(AWD) and (hbt(SEG; BWR; AWD) or findw(AWD) or xargsw(AWD))) | "account\ta write under the account state directories"),
   (select(test(ARF) and (hbt(SEG; BWR; ARF) or findw(ARF) or xargsw(ARF))) | "account\ta write of the roster or its mirror"),
   (select(test("account-op") and any(split(SEG; null)[]; test(AOPRUN))) | "account\ta direct run of the account script"),
   (select(test("env") and (test(ENVS) or any(split(SEG; null)[]; test(ENVB) or (test(BSHC) and (sub(BSHC; "") | test(ENVB)))))) | "account\tprinting the whole environment");
-def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)";
+def APSEC: "/\\.cc-secrets(?:/|$)|/\\.ccrc/auth-scratch(?:/|$)|/\\.ccrc/codex/[^/]+/runtime\\.env$|/\\.ccrc/agent\\.env$|/\\.ccrc/linear(?:/|$)|/\\.ccrc/linear\\.key$|/\\.ccrc/operator-secrets(?:/|$)|/\\.ccrc/operator-model\\.db|/\\.ccrc/privacy-journal\\.log$|/\\.ccrc/privacy-journal\\.torn(?:/|$)|/ccrc-backups/[^/]+/operator-model\\.db|/\\.ccrc/coordination-restore\\.(?:stage|foreign)/[^/]+/operator-model\\.db";
 def APWD: "/\\.cc-sessions/\\.(?:auth|accounts)(?:/|$)";
 def APRF: "/\\.ccrc/accounts\\.(?:json|sh)$";
 def acctpath($t; $i):
@@ -5703,6 +5718,7 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* ]
     amode=account
     [[ "$apf" == *account* || "$apf" == *.cc-secrets* || "$apf" == *auth-scratch* || "$apf" == *agent.env* \
        || "$apf" == *runtime.env* || "$apf" == *.auth* || "$apf" == *.ccrc*linear* || "$apf" == *operator-secrets* \
+       || "$apf" == *operator-model.db* || "$apf" == *privacy-journal* || "$apf" == *.ccrc* \
        || "$apf" == *printenv* || "$apf" == *prune* || "$apf" =~ $APF_ENV_RE ]] || apf=""
   fi
 fi
@@ -6276,8 +6292,12 @@ _hook_anchor_owed() {   # UserPromptSubmit: prints at most one envelope carrying
 # (the header's "no network, and on the hot path no waiting" contract is the hot path's; a PermissionRequest is not
 # on it): bounded by the request's window, never past `APPROVAL_HOOK_WAIT_S`, under the managed hook timeout.
 #   1. It engages only for a `.child` row, with `$REG/approvals-disabled` absent (the operator's kill switch), with
-#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned without the
-#      deny rules never gets rulings), and only when it can VERIFY a ruling: `node` on PATH, the verifier beside this
+#      `$REG/<id>.deny-settings` equal to the sha256 of the managed deny file (spec §6.6: a child spawned with no
+#      deny rules the box ever installed never gets rulings) or named by the installer's digest history
+#      `$REG/child-deny.digests` (approvals PR 0: a child spawned under an older deny file, which a running Claude Code
+#      never re-reads; the request then carries `denyDigest`, and the server holds it, its row `denyCurrent: false`, its
+#      allow refused `deny-not-current` at the rule door; this wait never prints an allow for it, a deny it prints), and only when it can VERIFY a
+#      ruling: `node` on PATH, the verifier beside this
 #      hook and the pinned key present. Every check runs BEFORE anything is sent, so no coordinator effort is spent on
 #      a ruling this hook could not act on (doctor's `approval-verifier-runnable` names the same three).
 #   2. The static forbidden match (`APPROVAL_FORBIDDEN_JQ`, mode `class`): a forbidden request is never sent.
@@ -6384,14 +6404,25 @@ _apr_scan() {   # -> rc 0 when the transcript shows this request resolved
   [[ "$ids" == *R* ]]
 }
 _apr_sleep() { sleep "$apr_tick" & wait $! 2>/dev/null; }
+# The installer's digest history (approvals PR 0; `ccd/install-session-hooks.sh` is its one writer): rc 0 when a line of
+# the exact shape `<digest> <epoch ms>` names this digest. Builtins only, and read only when the digest is not current, so
+# the current-digest path gains no fork and no read. A symlink at the name is never read.
+_apr_deny_history() {   # <digest>
+  local f="$REG/child-deny.digests" l
+  [[ -f "$f" && ! -L "$f" && -r "$f" ]] || return 1
+  while IFS= read -r l || [[ -n "$l" ]]; do
+    [[ "$l" =~ ^([0-9a-f]{64})\ [0-9]{1,16}$ && "${BASH_REMATCH[1]}" == "$1" ]] && return 0
+  done < "$f"
+  return 1
+}
 _hook_approval_wait() {
-  local sum managed uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
+  local sum managed dd="" uuid fb canon digest nonce body rid waits ceil deadline now tick=0 st verdict reason state j t
   [[ -n "$id" && -e "$REG/$id.child" && ! -e "$REG/approvals-disabled" ]] || return 0
   _ct_read "$REG/$id.deny-settings" || return 0
   sum="$CT_V"; [[ "$sum" =~ ^[0-9a-f]{64}$ ]] || return 0
   [[ -f "$REG/child-deny.settings.json" && ! -L "$REG/child-deny.settings.json" ]] || return 0
   managed=$(_apr_sha256 < "$REG/child-deny.settings.json") || return 0
-  [[ "$managed" == "$sum" ]] || return 0
+  if [[ "$managed" != "$sum" ]]; then _apr_deny_history "$sum" || return 0; dd="$sum"; fi
   command -v node >/dev/null 2>&1 || return 0
   [[ -f "$REG/approval-verify.mjs" && -f "$HOME/.ccrc/approval-signing.pub" ]] || return 0
   apr_api="$HOME/.local/bin/ccrc-api"
@@ -6406,11 +6437,11 @@ _hook_approval_wait() {
   nonce=$(od -An -tx1 -N16 /dev/urandom 2>/dev/null) || return 0
   nonce="${nonce//[^0-9a-f]/}"; [[ "$nonce" =~ ^[0-9a-f]{32}$ ]] || return 0
   if (( ${#canon} > APPROVAL_REQUEST_MAX_BYTES )); then
-    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n}' 2>/dev/null) || return 0
+    body=$(jq -cn --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" --arg dd "$dd" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, truncated: true, digest: $d, nonce: $n} + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) || return 0
   else
-    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" \
-      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n}' 2>/dev/null) || return 0
+    body=$(printf '%s' "$canon" | jq -Rsc --arg s "$id" --arg u "$uuid" --arg d "$digest" --arg n "$nonce" --arg dd "$dd" \
+      '{v: 1, sessionId: $s, sessionUuid: $u, canonical: ., digest: $d, nonce: $n} + (if $dd == "" then {} else {denyDigest: $dd} end)' 2>/dev/null) || return 0
   fi
   apr_ti=$(jq -c '.tool_input // null' <<<"$payload" 2>/dev/null) || return 0
   # The knobs: a value that is not the shape reads as the default; none can lengthen the wait.
@@ -6449,6 +6480,9 @@ _hook_approval_wait() {
               reason="${verdict#* }"
               case "$verdict" in
                 'allow '*)
+                  # Approvals PR 0, the second gate: a child whose digest only the history names never prints an allow,
+                  # whatever the record says; the server's rule door refuses it `deny-not-current` too. A deny prints.
+                  [[ -z "$dd" ]] || return 0
                   t=$(jq -cn '{hookSpecificOutput: {hookEventName: "PermissionRequest", decision: {behavior: "allow"}}}' 2>/dev/null) && printf '%s\n' "$t"
                   return 0 ;;
                 'deny '*)

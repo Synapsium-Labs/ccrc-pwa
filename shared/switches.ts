@@ -381,6 +381,11 @@ export const SWITCHES = {
     meaning: 'Whether a session that is neither a coordinator nor a dispatched worker keeps Claude Code\'s auto memory at its next launch: off, or on.',
     writer: 'POST /api/coord/plain-auto-memory',
   },
+  'overlord-rung': {
+    storage: { setting: 'overlord_ladder.operatorRung' }, default: 'chat', owner: 'C5',
+    meaning: 'The operator\'s rung of the Overlord\'s ladder: off, chat, advise or full. The effective rung is never above it.',
+    writer: 'POST /api/overlord/rung and POST /api/overlord/pause; Confirm the restore writes its stricter value',
+  },
   [SCOPE_SWEEP_LIVE_MARKER]: {
     storage: { marker: SCOPE_SWEEP_LIVE_MARKER }, default: 'absent: shadow, the sweep records what it would stop',
     owner: 'C4', meaning: 'The pane-scope sweep acts: an inert scope of a dead pane is stopped, three a minute at most.',

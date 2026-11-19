@@ -18,7 +18,7 @@ import { readSharesMeasured, type SharesRead } from '../src/shares.js';
 import { poolFor, readProjectPools, POOLS_DIR_NAME } from '../src/pools.js';
 import type { ProjectPoolWire } from '../../shared/api.js';
 import { parseRoster } from '../../shared/roster.js';
-import { leastLoadedCases, type LeastLoadedCase } from './fixtures/leastLoaded.js';
+import { leastLoadedCases, LEAST_LOADED_ORGS, type LeastLoadedCase } from './fixtures/leastLoaded.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, DEFAULT_TEST_ROSTER } from './helpers.js';
 import { CCD, ghContainedEnv, plantPoolEpoch, seedAccountsSh } from './ccdWsHelpers.js';
@@ -140,13 +140,18 @@ const seedAuthDeadMalformed = (byWrapper: Record<string, string>): void => {
  *  placement. */
 const shellScore = (wrapper: string): number => Number(sh(`_limit_score ${wrapper}`) || '0');
 
-/** DEFAULT_TEST_ROSTER with the case's pool tags applied. Built HERE and not in
- *  the fixture file: the fixture is the cross-language contract and imports
- *  nothing, exactly as it expresses `now` as a parameter for the same reason. */
+/** DEFAULT_TEST_ROSTER with the case's pool tags and the fixture's organization
+ *  labels (`LEAST_LOADED_ORGS`, which placement ignores on both sides) applied.
+ *  Built HERE and not in the fixture file: the fixture is the cross-language
+ *  contract and imports nothing, exactly as it expresses `now` as a parameter
+ *  for the same reason. */
 const rosterWithPools = (pools: Record<string, string> | undefined): unknown => ({
   ...DEFAULT_TEST_ROSTER,
-  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) =>
-    pools?.[a.id] !== undefined ? { ...a, pool: pools[a.id] } : a),
+  accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => ({
+    ...a,
+    ...(LEAST_LOADED_ORGS[a.id] !== undefined ? { org: LEAST_LOADED_ORGS[a.id] } : {}),
+    ...(pools?.[a.id] !== undefined ? { pool: pools[a.id] } : {}),
+  })),
 });
 
 /** The case's project tag, on disk where BOTH readers look. */
@@ -838,5 +843,41 @@ describe('ccd and projectHome agree about telemetry, not only about limits files
     expect(shH('declare -F _account_measured >/dev/null && echo defined || echo missing'))
       .toBe('defined');
     expect(shH('_account_measured a && echo yes || echo no')).toBe('no');
+  });
+});
+
+// A set side (Overlord W1 designation A, plan Task 2; the index's Q5). TypeScript-only rows: ccd's placer is unchanged
+// (Table 3.4d), so the parity harness above stays on the project rows.
+describe('projectHome and projectPlacement over a session set (C46)', () => {
+  const NO_EDGES = new Map<string, readonly string[]>();
+  const acct = (id: string, pool?: string) => ({
+    id, label: id, configDirSuffix: `.${id}`, exec: id === 'lane-a' ? { kind: 'upstream' } : { kind: 'generated' },
+    homeAble: true, hue: 'cyan', telemetry: 'anthropic', continuity: { recordedAt: 1 }, ...(pool === undefined ? {} : { pool }),
+  });
+  const r = parseRoster({ version: 1, accounts: [acct('lane-a', 'pool-a'), acct('lane-b', 'pool-b'), acct('lane-c')] });
+  const L = (five: number, seven: number): AccountLimits =>
+    ({ five, seven, ts: 1, fiveResetAt: null, sevenResetAt: null, fiveRolledOver: false, sevenRolledOver: false, disabled: false, authDead: false });
+  const lim = { 'lane-a': L(30, 30), 'lane-b': L(10, 10), 'lane-c': L(5, 5) };
+
+  it('a set without +untagged leaves the untagged account out, and +untagged brings it in', () => {
+    expect(projectPlacement(r, lim, { state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: false } }, NO_EDGES))
+      .toEqual({ kind: 'projected', wrapper: 'lane-b', score: 10 });
+    expect(projectPlacement(r, lim, { state: 'set', set: { pools: ['pool-a', 'pool-b'], untagged: true } }, NO_EDGES))
+      .toEqual({ kind: 'projected', wrapper: 'lane-c', score: 5 });
+  });
+  it('a set no account is in answers none carrying the set; an unreadable or malformed one answers unmeasurable', () => {
+    const set = { pools: ['pool-z'], untagged: false };
+    expect(projectPlacement(r, lim, { state: 'set', set }, NO_EDGES)).toEqual({ kind: 'none', set });
+    expect(projectPlacement(r, lim, { state: 'set-unreadable' }, NO_EDGES)).toEqual({ kind: 'unmeasurable' });
+    expect(projectPlacement(r, lim, { state: 'set-malformed' }, NO_EDGES)).toEqual({ kind: 'unmeasurable' });
+    expect(projectHome(r, lim, { state: 'set-malformed' }, NO_EDGES)).toBeNull();
+  });
+  it('the Overlord\'s class is asked as a set-side session: an account with no continuity record is not placed for it', () => {
+    const noCont = parseRoster({ version: 1, accounts: [acct('lane-a', 'pool-a'), { ...acct('lane-b', 'pool-a'), continuity: undefined }] });
+    const set = { state: 'set', set: { pools: ['pool-a'], untagged: false } } as const;
+    expect(projectHome(noCont, { 'lane-a': L(50, 50), 'lane-b': L(1, 1) }, set, NO_EDGES, 'opus', { kind: 'absent' }, 0))
+      .toEqual({ wrapper: 'lane-a', score: 50 });
+    expect(projectHome(noCont, { 'lane-a': L(50, 50), 'lane-b': L(1, 1) }, { state: 'tagged', name: 'pool-a' }, NO_EDGES, 'opus', { kind: 'absent' }, 0))
+      .toEqual({ wrapper: 'lane-b', score: 1 });
   });
 });

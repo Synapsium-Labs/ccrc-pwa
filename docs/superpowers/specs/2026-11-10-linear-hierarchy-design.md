@@ -148,6 +148,10 @@ that carry the same team key are one product, because they file into one team. *
   that no epic lists, or with a ticket of another epic than the one that lists its wave, is refused
   (`wave-epic-mismatch`). Waves keep their programme-wide numbering, so ledgers, branch names and the runs screen are
   unchanged.
+  **Amended 2026-11-16 (the operator's answer to desktop-polish item 359):** an epic may list no waves. A run into
+  such an epic names one of its tickets, and its wave is not checked against the epic. A run that names no ticket,
+  into a plan where any epic lists no waves, is refused `ticket-required`. Epics that list waves keep every rule
+  above. The work-map plan's Task WM6 builds this (`docs/superpowers/plans/2026-11-16-programme-work-map.md`).
 - **Run.** A work run attaches to exactly one ticket of a programme, never to a ticket in a team's Upkeep epic (§7.6).
   A review run is never filed: it attaches to the run it reviews, as today. A wave of three parallel work runs is three
   tickets. **Design call.**
@@ -341,6 +345,13 @@ The wait never runs past its bound, so trouble in Linear never stalls the fleet.
 - **Project description:** the epic's summary, then its checkpoints as a list with their state.
 - **Milestone description:** the checkpoint's kind and, once met, the met line.
 - **Issue:** the ticket's title and body.
+
+**Linear's cap (D-8708, measured live on 2026-11-17).** Linear refuses an initiative or project description over 255
+characters. So each description puts its status notes first (the initiative's Abandoned and Paused lines, the
+project's Dropped and "Part of" lines), then the text above, and is cut at its end with `…` so that it fits with the
+footer line. A milestone description is fitted the same way. The full text stays in ccrc's plan. The public-text check
+below reads both the full and the cut text. Sending the full text in Linear's longer `content` field waits for a
+capture that measures its limit, on the operator's go.
 
 Every text passes the `linear-egress` redactor profile and ends with the server's fixed footer line, as session writes
 do today. No text names a console URL, a host, a session or an account.
@@ -760,7 +771,7 @@ Every call the author made without a ruling, for the operator to check:
 1. A ticket files into the team of the project its work lands in (a per-ticket `project`, default the home project);
    an epic belongs to one workspace; a programme spanning two workspaces gets one initiative in each, same name (§3).
 2. The plan declares each epic's waves; a run in a wave no epic lists is refused `wave-epic-mismatch`; waves keep
-   programme-wide numbering (§4.1).
+   programme-wide numbering (§4.1). *Amended 2026-11-16:* an epic may list no waves, and a run into one names its ticket (§4.1).
 3. One ticket per work run, never an Upkeep ticket; review runs are never filed (§4.1).
 4. An operator-act checkpoint tied to an item is marked met when the item is done (§4.1).
 5. One binding table for every Linear id (§4.2).

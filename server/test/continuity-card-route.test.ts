@@ -11,6 +11,7 @@ import Fastify, { type FastifyInstance } from 'fastify';
 import { localIOFor, type FleetIO } from '../src/io.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { MASKED_GET_ROUTES } from '../src/server.js';
 import { registerContinuityRoutes, type ContinuityRouteDeps } from '../src/continuity/routes.js';
 import { SECRET_MASK } from '../../shared/api.js';
@@ -434,6 +435,47 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
     expect(p.form).toBe('prompt');
     expect(p.text.split('\n')).toEqual([`ccrc-anchor: term none · generation none · card ${c.hash.slice(0, 12)}`, ANCHOR_INSTRUCTION]);
     expect(Buffer.byteLength(p.text, 'utf8')).toBeLessThanOrEqual(ANCHOR_PROMPT_MAX_CHARS);
+  });
+
+  describe('the designation (Overlord W1 designation A, Task 3, X5): anchorReads asks for the generation identity', () => {
+    const view = (over: Partial<DesignationView>): DesignationView => ({
+      bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+      pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+    });
+    const boundAs = (id: string, pending: DesignationView['pending'] = null): DesignationRead =>
+      ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' }, pending }) });
+    const mintOverlord = (): void => {
+      const s = coord!.insertStart({ sessionId: ID, reportId: 'ro-1', uuid: UUID, source: 'startup', model: null, rowIncarnation: null, reportedAt: 1, receivedAt: 1 });
+      if (!s.ok) throw new Error('start');
+      const m = coord!.mintGeneration({ identity: 'overlord', sessionId: ID, role: 'overlord', term: 5, rowIncarnation: null, startId: s.id, startReportedAt: 1,
+        resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: 1 }, null, true);
+      if (!m.ok) throw new Error(m.kind);
+    };
+    const first = async (): Promise<string> => ((await anchor(app!)).json() as { text: string }).text.split('\n')[1]!;
+
+    it('a restart of the Overlord: the bound session\'s anchor names its overlord generation (term 5, generation 1)', async () => {
+      app = await open();
+      arm();
+      coord!.designationRead = () => boundAs(ID);
+      mintOverlord();
+      expect(await first()).toBe('term 5 · generation 1 (this start not yet reported)');
+    });
+    it('a rebind with the old body live: the pending body\'s anchor finds no generation under its own id', async () => {
+      app = await open();
+      arm();
+      coord!.designationRead = () => boundAs('overlord-old-owl', { sessionId: ID, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null });
+      mintOverlord();
+      expect(await first()).toBe('term none · generation none (this start not yet reported)');
+    });
+    it('an unmeasured designation reads the generation canary unmeasured, never none', async () => {
+      app = await open();
+      arm();
+      mintOverlord();
+      coord!.designationRead = () => ({ kind: 'unmeasured', why: 'x' });
+      const line = await first();
+      expect(line).not.toContain('generation none');
+      expect(line).toContain('unmeasured');
+    });
   });
 
   it('LIVE: a fork answers live alone, with no text, and gathers nothing', async () => {

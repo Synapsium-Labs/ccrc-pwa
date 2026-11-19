@@ -2,9 +2,10 @@
 // Neutral examples only: KEY-123, project-a.
 import { describe, it, expect } from 'vitest';
 import {
-  withoutTrackerIds,
+  withoutTrackerIds, slugForTicket,
   VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue,
 } from '../src/linking/policy.js';
+import { WS_SLUG_MAX } from '../../shared/slug.js';
 import type { ProjectLinkingWire } from '../../shared/linking.js';
 
 type Measured = ProjectLinkingWire['measured'];
@@ -112,5 +113,26 @@ describe('visibilityDue', () => {
     expect(VISIBILITY_RETRY_MS).toBeLessThan(3_600_000);
     // a good reading of the same age is not due
     expect(visibilityDue([{ project: 'a', at: now - VISIBILITY_RETRY_MS }], now)).toBeNull();
+  });
+});
+
+describe('slugForTicket (D-8182)', () => {
+  it('names the workspace key-123-<words>, lowercase, from the given slug else the title', () => {
+    expect(slugForTicket('KEY-123', 'fix-login', 'Ignored')).toBe('key-123-fix-login');
+    expect(slugForTicket('KEY-123', undefined, 'Fix the Login!')).toBe('key-123-fix-the-login');
+    expect(slugForTicket('KEY-123', '  ', '')).toBe('key-123');
+  });
+  it('keeps a given slug that already starts with the identifier', () => {
+    expect(slugForTicket('KEY-123', 'key-123-fix-login', 't')).toBe('key-123-fix-login');
+    expect(slugForTicket('KEY-123', 'key-123', 't')).toBe('key-123');
+    expect(slugForTicket('KEY-12', 'key-123-x', 't')).toBe('key-12-key-123-x');   // a longer id is not the same ticket
+  });
+  it('fits 31 characters, at a word boundary, never with a trailing dash', () => {
+    const s = slugForTicket('KEY-123', undefined, 'A very long ticket title that overflows the budget of a slug');
+    expect(s.length).toBeLessThanOrEqual(WS_SLUG_MAX);
+    expect(s.startsWith('key-123-')).toBe(true);
+    expect(s.endsWith('-')).toBe(false);
+    expect(WS_SLUG_MAX).toBe(31);
+    expect(slugForTicket('KEY-123', 'x'.repeat(80), 't').length).toBe(WS_SLUG_MAX);
   });
 });

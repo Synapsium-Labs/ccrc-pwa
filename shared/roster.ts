@@ -266,6 +266,9 @@ export interface AccountDef {
   /** H16, continued: the operator's record that this lane keeps the Overlord's guards, hooks and reader types.
    *  Same shape discipline as `fableBilling`: `null` for absent, a written `null` refused. */
   continuity: ContinuityRecord | null;
+  /** The operator's organization label (`orgLabelVerdict`), `null` for absent, a written `null` refused, as `pool`'s.
+   *  An opaque name, never the organization's id; `shared/accountOrg.ts` relates two accounts by it. */
+  org: string | null;
 }
 
 /**
@@ -467,6 +470,17 @@ const ID_RE = /^[a-z][a-z0-9-]{0,31}$/;
  */
 export const POOL_NAME_RE = /^[a-z][a-z0-9-]{0,31}$/;
 
+/** The organization label (plan 2026-11-16-account-organization.md §2): `POOL_NAME_RE`'s shape, minus the shapes of a
+ *  real organization id (a UUID, 32 hex digits), so no id is ever stored or shown (`org-label-refuses-id-shapes`), and
+ *  minus `ORG_CLEAR_WORD`, which the verb and the door read as "clear". `shared/roster-json.mjs` spells both again,
+ *  held equal by `roster-org.test.ts`. */
+export const ORG_ID_SHAPES: readonly RegExp[] = [/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i, /^[0-9a-f]{32}$/i];
+export const ORG_CLEAR_WORD = 'none';
+export function orgLabelVerdict(v: string): 'ok' | 'looks-like-an-id' | 'off-shape' {
+  if (ORG_ID_SHAPES.some((re) => re.test(v))) return 'looks-like-an-id';
+  return POOL_NAME_RE.test(v) && v !== ORG_CLEAR_WORD ? 'ok' : 'off-shape';
+}
+
 /**
  * The ACCOUNT-ID grammar of the pool-epoch document's `acct <id> <pool>` line
  * (account-pool-membership wave 1, "THE PROJECTION GRAMMAR — frozen by Task
@@ -522,7 +536,7 @@ const TELEMETRY_VALUES: Readonly<Record<AccountDef['telemetry'], true>> = { anth
 const GPT_TOOLCHAIN_ACCOUNT_IDS: ReadonlySet<string> = new Set(['ccrc-codex', 'ccgpt-runtime', 'ccgpt']);
 const ROOT_KEYS: ReadonlySet<string> = new Set(['version', 'accounts']);
 const ACCOUNT_KEYS: ReadonlySet<string> = new Set(
-  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool', 'fableBilling', 'continuity'],
+  ['id', 'label', 'configDirSuffix', 'exec', 'homeAble', 'hue', 'telemetry', 'hidden', 'pool', 'fableBilling', 'continuity', 'org'],
 );
 // THREE sets, not two, and written as a containment chain so the shared members
 // are never retyped. `upstream` and `external` used to share `EXEC_KEYS_BASE`
@@ -1117,6 +1131,21 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     continuity = { recordedAt: at };
   }
 
+  // The organization label, gated as `pool` is (a written `null` refused), with the id shapes refused by name.
+  const orgRaw = raw['org'];
+  const orgWord = typeof orgRaw === 'string' ? orgLabelVerdict(orgRaw) : 'off-shape';
+  // The key and the reason, never the value: a hand-edited roster may hold the organization's real id (PR A's review F6).
+  if (orgRaw !== undefined && orgWord !== 'ok') {
+    const why = typeof orgRaw !== 'string' ? 'is not a string' : orgWord === 'looks-like-an-id'
+      ? "looks like an organization's id (org-looks-like-an-id)" : `is not a name matching ^[a-z][a-z0-9-]{0,31}$ other than "${ORG_CLEAR_WORD}"`;
+    throw new RosterError(
+      `account "${id}" has an invalid "org": it ${why}.`,
+      `Set "org" for account "${id}" in ${ROSTER_PATH} to a name you choose matching ^[a-z][a-z0-9-]{0,31}$, other than ` +
+        `"${ORG_CLEAR_WORD}" and never the organization's id, or remove the key to leave it unset.`,
+    );
+  }
+  const org = orgRaw === undefined ? null : (orgRaw as string);
+
   const telemetry = raw['telemetry'];
   if (typeof telemetry !== 'string' || !Object.hasOwn(TELEMETRY_VALUES, telemetry)) {
     throw new RosterError(
@@ -1142,7 +1171,7 @@ function parseAccount(raw: unknown, index: number, assumedProvider: string[]): D
     hue = hueRaw;
   }
 
-  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool, fableBilling, continuity };
+  return { id, label, configDirSuffix, exec, homeAble, telemetry: telemetry as AccountDef['telemetry'], hue, hidden, pool, fableBilling, continuity, org };
 }
 
 /**

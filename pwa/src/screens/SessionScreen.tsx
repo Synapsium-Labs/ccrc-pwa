@@ -12,7 +12,7 @@ import { ATTENTION_DOT, Button, MailStrip, Skeleton, TaskStrip, WorkflowStrip, t
 import { staleFor } from '../session/taskStaleness';
 import { SwapSheet } from '../fleet/SwapSheet';
 import { ArchiveSheet, restoreSession } from '../fleet/ArchiveSheet';
-import { accountHue, accountLabel, accountProvider } from '../lib/accounts';
+import { accountHue, accountLabel, accountProvider, entryFor } from '../lib/accounts';
 import { api, ApiError, failedTo, INTERRUPT_REFUSAL_TEXT, refusalText } from '../lib/api';
 import { backgroundTasksClause } from '../lib/refusalWords';
 import { dayKey } from '../lib/clock';
@@ -53,8 +53,8 @@ import { isRunClosed, programmeTitle, sessionProgramme } from '../fleet/runWords
 import { HistoryTab } from '../session/HistoryTab';
 import { TimersSection } from '../session/TimersSection';
 import { TerminalDrawer } from '../session/TerminalDrawer';
-import { modelOptions, effortOptions, type PickOption } from '../lib/models';
-import { useLaneModels } from '../lib/useLaneModels';
+import { modelOptions, effortOptions, lanePickerNote, type PickOption } from '../lib/models';
+import { useLaneModelsView } from '../lib/useLaneModels';
 import '../session/chat.css';
 import { answerControlLabel, askSource } from '../session/askLive';
 import { hibernatedSince, hibernatedWords } from '../fleet/hibernated';
@@ -369,9 +369,13 @@ export function SessionScreen({
   // wire's own queued verdict. Pure, and ~95 lines of branch-by-branch
   // reasoning that had nothing to do with rendering.
   const routeInfo = live?.route ?? null;
-  // D-8406: the lane's model files, which name each class's model in the picker and give its readback.
-  const laneModels = useLaneModels(wrapper, undefined, picker === 'model');
-  const route = routeView(live, wrapper, accountProvider(roster, wrapper), laneModels);
+  // D-8406: the lane's model files, which name each class's model in the picker and give its readback. The view's
+  // transient word (R3b fix round 1, F2) is said in the picker's note, beside the last good read it kept.
+  const laneView = useLaneModelsView(wrapper, undefined, picker === 'model');
+  const laneModels = laneView.read;
+  // D-8686: the roster row decides which option lists the two pickers show (`modelListProvider`).
+  const entry = entryFor(roster, wrapper);
+  const route = routeView(live, wrapper, entry, accountProvider(roster, wrapper), laneModels);
   const { classIntended, effortIntended, classInert, effortInert,
           classUnreadable, effortUnreadable } = route;
   // Exclusively one source or the other, never both: with `route` present the
@@ -765,8 +769,9 @@ export function SessionScreen({
         onClose={() => setPicker(null)}
         eyebrow="model"
         title="Choose a model"
+        note={lanePickerNote(laneModels, laneView.transient)}
         options={modelOptions(
-          wrapper, laneModels, live?.model ?? null,
+          wrapper, entry, laneModels, live?.model ?? null,
           routeInfo
             ? {
               intended: classIntended, inert: classInert, unreadable: classUnreadable,
@@ -784,7 +789,7 @@ export function SessionScreen({
         eyebrow="effort"
         title="Reasoning effort"
         options={effortOptions(
-          wrapper, live?.effort ?? null, live?.ultracode ?? false,
+          wrapper, entry, route.effortLevels, live?.effort ?? null, live?.ultracode ?? false,
           routeInfo ? { intended: effortIntended, inert: effortInert, unreadable: effortUnreadable } : undefined,
         )}
         onPick={(o) => void pick(o)}

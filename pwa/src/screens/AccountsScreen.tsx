@@ -53,6 +53,8 @@ import type { AccountStateAnswer } from '../../../shared/accounts';
 import type { AccountPoolWire } from '../../../shared/poolrule';
 import { Button, PageScaffold, Skeleton, toast, useDesk, useNow } from '@ccrc/ui';
 import { AddAccountDoor, ConnectSheet, DoorReason } from '../accounts/ConnectSheet';
+import { ModelsSheet } from '../accounts/ModelsSheet';
+import { MODELS_ACT } from '../accounts/modelsSheetWords';
 import { RemoveSheet } from '../accounts/RemoveSheet';
 import { ReplaceSheet } from '../accounts/ReplaceSheet';
 import { MethodSwitchSheet } from '../accounts/MethodSwitchSheet';
@@ -66,6 +68,7 @@ import { CANCEL_SIGN_IN, CONTINUE, RESUME_CARD_LINE, RESUME_CARD_LINE_APPROVE, S
 import { StateLamp, TroubleCard } from '../fleet/TroubleCard';
 import { AccountKnob, useLaneActs } from '../fleet/AccountKnob';
 import { AccountHomeAble } from '../fleet/AccountHomeAble';
+import { AccountOrgRow } from '../fleet/AccountOrgRow';
 import { presenceOf } from '../fleet/presence';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { accountColorVar, accountLabel, accountPoolState, homeAbleLabelList, rosterWrapperIds } from '../lib/accounts';
@@ -358,6 +361,9 @@ export function AccountsScreen(): ReactNode {
   const openRemove = (id: string): void => setRemoving({ id, gen: ++sheetGen.current });
   const openReplace = (id: string): void => setReplacing({ id, gen: ++sheetGen.current });
   const readRoster = (): readonly RosterWire[] => useFleetStore.getState().roster;
+  // The Models sheet (model-class-advance R4): one lane's classes, keyed per opening like the sheets above.
+  const [modelling, setModelling] = useState<{ id: string; gen: number } | null>(null);
+  const openModels = (id: string): void => setModelling({ id, gen: ++sheetGen.current });
 
   // The method switches and resume (accounts plan Task A23, D-7871): the switch sheet, and the connect sheet reopened on
   // an attempt this session started on a lane it added. Each keyed per opening, as above.
@@ -527,6 +533,8 @@ export function AccountsScreen(): ReactNode {
           const notReady = !switchOn && laneWire !== undefined && !laneWire.ready ? notReadyWords(laneWire.notReadyReason) : null;
           // Whether new sessions start here (D-8195): the roster's `homeAble`, or as a placement ack set it.
           const homeOn = acts.homeAcked[wrapper] ?? entry?.homeAble ?? true;
+          // The organization label (account organization B1): as the roster has it, or as an org ack read it back.
+          const org = Object.hasOwn(acts.orgAcked, wrapper) ? acts.orgAcked[wrapper] ?? null : entry?.org ?? null;
           const canAct = connect !== null && blocked === null && inRoster;
           // An Anthropic lane on a long-lived token: its credential act is Replace token (spec §4.4, §9).
           const tokenLane = entry?.provider === 'anthropic' && entry.kind === 'token';
@@ -661,6 +669,17 @@ export function AccountsScreen(): ReactNode {
                   onConfirm={(homeAble) => acts.place(wrapper, homeAble)}
                 />
               )}
+              {inRoster && (
+                <AccountOrgRow
+                  id={wrapper}
+                  label={accountLabel(roster, wrapper)}
+                  org={org}
+                  canSet={connect !== null}
+                  blocked={blocked}
+                  busy={acts.busy[wrapper]}
+                  onSave={(o) => acts.setOrg(wrapper, o)}
+                />
+              )}
               {/* The fold's credential act and Remove (spec §4.4; Task A19). Refused, they stay drawn and disabled, named by
                   the knob row's reason (offline, or the server's own). */}
               {connect !== null && inRoster && (
@@ -692,6 +711,17 @@ export function AccountsScreen(): ReactNode {
                       onClick={() => openReauth(wrapper, 'openai-login')}
                     >
                       {SIGN_IN_AGAIN}
+                    </Button>
+                  )}
+                  {/* A Codex lane's Models (model-class-advance R4, Task 20): its classes, holds and Revert, in one sheet. */}
+                  {entry?.kind === 'codex' && (
+                    <Button
+                      variant="ghost" size="fit" disabled={!canAct}
+                      aria-describedby={blocked !== null ? `acct-knob-reason-${wrapper}` : undefined}
+                      aria-label={`${MODELS_ACT} for ${wrapper}`}
+                      onClick={() => openModels(wrapper)}
+                    >
+                      {MODELS_ACT}
                     </Button>
                   )}
                   {tokenLane && (
@@ -798,6 +828,17 @@ export function AccountsScreen(): ReactNode {
           {...(reauthing.resume !== undefined ? { resume: reauthing.resume } : {})}
           {...(reauthing.method === 'setup-token'
             ? { onPaste: () => { const id = reauthing.id; setReauthing(null); openReplace(id); } } : {})}
+        />
+      )}
+
+      {modelling !== null && (
+        <ModelsSheet
+          key={`models-${modelling.gen}`}
+          lane={modelling.id}
+          open
+          onClose={() => setModelling(null)}
+          offline={blocked}
+          act={(lane, body) => api.laneModelsAct(lane, body)}
         />
       )}
 

@@ -15,11 +15,15 @@ export interface PickSheetProps {
   title: string;
   options: PickOption[];
   onPick: (option: PickOption) => void;
+  /** A sentence about the options, shown above them, or nothing (R3b: the model picker says why the lane's read named no
+   *  model, `laneReadWords`). */
+  note?: string | null;
 }
 
-export function PickSheet({ open, onClose, eyebrow, title, options, onPick }: PickSheetProps): ReactNode {
+export function PickSheet({ open, onClose, eyebrow, title, options, onPick, note }: PickSheetProps): ReactNode {
   return (
     <Sheet open={open} onClose={onClose} eyebrow={eyebrow} title={title}>
+      {note != null && note !== '' && <p className="sheet-foot" data-testid="pick-note">{note}</p>}
       <div className="opts">
         {options.map((o) => (
           <OptionRow

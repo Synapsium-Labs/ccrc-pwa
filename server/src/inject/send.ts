@@ -10,6 +10,8 @@ import { CHAT_ABOUT_ROW_RE, FREE_TEXT_PLACEHOLDER_RE, parseAskTabs, reviewRows }
 import { hookEventIs } from '../../../shared/hook-events.js';
 import { INJECTED_PROMPTS } from '../../../shared/injected-prompts.mjs';
 import { turnWordOf } from '../sessionReading.js';
+import { squash } from '../../../shared/whitespace.js';
+import { carriesOperatorMessageMarker } from '../../../shared/operatorMessages.js';
 
 export interface SendDeps {
   tmux: Tmux;
@@ -78,7 +80,10 @@ export type SendResult =
         | 'enter-ignored-restored'
         // D-6367, `resumeIfOwn: 'whole'` only. The box is empty, so there is nothing to resume and nothing was typed
         // (the earlier send may have landed). `submitEnter`'s word for the same fact.
-        | 'nothing-to-submit';
+        | 'nothing-to-submit'
+        // `recheck` answered `stop` inside the session's queue slot, before a key was pressed: the caller's decision about WHERE
+        // this text goes changed while the call waited. Nothing was typed; the caller acts on its new decision.
+        | 'target-moved';
       draft?: string;
       pane?: string;
       /**
@@ -848,11 +853,6 @@ const ANY_PASTE_CHIP = /\[Pasted text #\d+/;
  */
 const boxRowCap = (paneRows: number): number => Math.floor((paneRows - 10) / 2);
 
-/** Whitespace removed. Claude Code wraps a long line at spaces, and a row is
- *  read trimmed, so only the non-space characters of a line survive the
- *  rendering in order; comparing those is comparing what was typed. */
-const squash = (s: string): string => s.replace(/\s+/g, '');
-
 /**
  * Every row of the box, the marker row first (read as `draftOf` reads it) and
  * then every row down to the closing rule, BLANK ROWS INCLUDED (a blank row is a
@@ -1342,7 +1342,9 @@ export function sendPrompt(
   text: string,
   opts: { onDraft?: OnDraft; attachments?: readonly string[]; resumeIfOwn?: boolean | 'whole';
           clearMailResidue?: boolean; ownStrandedClear?: boolean; holdIfAutoContinueArmed?: boolean;
-          refuseIfTurnRunning?: boolean } = {},
+          refuseIfTurnRunning?: boolean;
+          /** Asked inside the session's queue slot, before the first key: `stop` returns `target-moved` and types nothing. */
+          recheck?: () => 'go' | 'stop' } = {},
 ): Promise<SendResult> {
   const sleep = d.sleep ?? defaultSleep;
   const onDraft: OnDraft = opts.onDraft ?? 'refuse';
@@ -1476,7 +1478,9 @@ export function sendPrompt(
       // straight through to the ordinary `draft-present` refusal below,
       // untouched: F2 (never type over a human mid-sentence) is unaffected,
       // because this branch only ever PRESSES ENTER, never clears or types.
-      if (opts.resumeIfOwn === true && needle !== '' && draft.startsWith(needle) && matchesOwnDraft(pane, parts)) {
+      // A generic nudge never resumes an operator message's line: it names one message, and opens with the generic head, so
+      // the prefix test below cannot tell them apart; the line is a draft here (review 2550 F2).
+      if (opts.resumeIfOwn === true && needle !== '' && draft.startsWith(needle) && !carriesOperatorMessageMarker(boxText(pane)) && matchesOwnDraft(pane, parts)) {
         // D-6011: the resume goes through the same `submit`, so a held stash gates its retry Enter too.
         return submit(stillStartsWith(needle));
       }
@@ -1808,6 +1812,7 @@ export function sendPrompt(
     return submit(stillStartsWith(needle));
   };
   return d.queue.run(id, async (): Promise<SendResult> => {
+    if (opts.recheck?.() === 'stop') return { ok: false, error: 'target-moved' };
     const carry: StashCarry = { held: null, typed: null };
     const res = await attempt(carry);
     return res.ok || carry.held === null ? res : giveBackStash(d, id, sleep, carry, res);

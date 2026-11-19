@@ -177,6 +177,139 @@ number from `POST /api/ledger/deviations`.
   `Canceled`. Task 3.1 uses a canceled status for it only if FX2 found one, and FX2's answer 2 found `Canceled`, so
   Task 3.3's row "initiative `Completed` with 'Abandoned on <date>: <why>'" sets `Canceled` with that line instead. A
   programme ended `done` still reads `Completed`. `LINEAR_INITIATIVE_STATUSES` holds the five values FX2 recorded.
+- **D-8675 (2026-11-16)** — conflict-detail: a repeated create's "conflict on insert" and "name not unique" answers are
+  recognised in `hierarchyOps.ts`'s shapers (`ops.ts` is frozen), carried as `detail` through `runCcrcOp`. Record:
+  `2026-11-10-linear-hierarchy/w3-plan-sync.md`.
+- **D-8676 (2026-11-16)** — recovery-by-request-id: recovery adopts only ccrc's own object, at `id === requestId` (and
+  made by the viewer, for an initiative or project); a name-only match is sent again. Record: the wave 3 note.
+- **D-8677 (2026-11-16)** — link-by-fingerprint: a project's link to its initiative is tracked by its fingerprint, with
+  no link row. Record: the wave 3 note.
+- **D-8678 (2026-11-16)** — write-ask-destination-team: `LinearWriteAsk.resource` gains `destinationTeamKey`, so a
+  cross-team issue move asks the write policy about both teams. Record: the wave 3 note.
+- **D-8679 (2026-11-16)** — pr-link-rule: the dispatch's PR link is sent whenever the run's branch lacks the issue
+  identifier, and a refused link is given up for that URL with one mail. Record: the wave 3 note.
+- **D-8680 (2026-11-16)** — requeue-keeps-bound: a requeued binding with a Linear id returns to `bound`, so a retry
+  updates and never creates. Record: the wave 3 note.
+- **D-8681 (2026-11-16)** — no-unlink: wave 3 builds no `unlink` step; a project set off after linking keeps its link
+  (wave 4's open point). Wave 4 (the coordinator's ruling): links are compared one way, so a planned link missing in Linear
+  is drift and an extra link is not (`driftPolicy.ts`'s `ONE_WAY_LINKS`); a project's milestones compare the same way,
+  since nothing deletes one. Record: the wave 3 and wave 4 notes.
+- **D-8699 (2026-11-17)** — ownership-by-name-first-page: proving an initiative or project is ccrc's own reads a
+  by-name listing of 10, so with ten or more same-named objects ownership can fail. The binding is retried at every
+  requeue, directory refill and plan change, and only its mail is once. Carried to the next capture (`creator { id }` on
+  the by-id reads). Record: the wave 3 note.
+- **D-8700 (2026-11-17)** — milestone-target-date-once-met: a milestone's `targetDate` is ccrc's only from the day its
+  checkpoint is met; an open checkpoint's create and update leave it out of the input and the journal fields. Record:
+  the wave 3 note.
+- **D-8701 (2026-11-17)** — statuses-unread-distinct: project statuses never read are a directory miss, not "no status
+  of that type", and an `unknown` initiatives probe defers the initiative step, with a bounded exit after three unknown
+  refills. Record: the wave 3 note.
+- **D-8702 (2026-11-17)** — failure-hold: a deferring failure's backoff holds against every later due mark.
+  `plan_sync_due.attempts` marks the hold; `deferSync(db, program, until, why)` takes `why = 'failure' | 'wait'`, where a
+  failure increments `attempts` and a wait resets it to 0; `markSyncDue` and `markSyncDueInTx` keep the earlier `dueAt`,
+  and keep a held `dueAt` even when it is later; and a held programme's dispatch (`ensureTicketBound`, read through `heldSyncUntil`) starts no pass.
+  The plan's outcome table already said "deferred by the backoff", so this changes the interface text, not the intent.
+  Record: the wave 3 note (A7/A12) and the ledger's ruling of review round 2.
+- **D-8703 (2026-11-17)** — drift-actor-unread: the changed* documents select no actor and `ops.ts` is frozen, so a drift
+  event's actor and the persistent-drift item read "not read"; the item still shows the object, the field, both values
+  and the time. The actor joins D-8699's next-capture list. Clause (review 2408 A-6, the coordinator's ruling, the same
+  cause): §7.3 exempts an issue moved to completed by Linear's GitHub integration once the merge is recorded, and with the
+  actor unread the grace exempts ANY completion after a recorded merge, whoever made it. Record: the wave 4 note.
+- **D-8704 (2026-11-17)** — catch-up-by-fingerprint: a binding stores F(the planned inputs), not F(Linear's owned
+  fields), so a difference is a catch-up when the binding's fingerprint is not the plan's current one; the programme is
+  marked due through `markSyncDue` alone (a held programme stays held, D-8702). Gap: a person's edit made while the sync
+  is behind, or while a programme is held, is overwritten with no drift event and no comment. Record: the wave 4 note.
+- **D-8705 (2026-11-17)** — inbound-open-and-kept-text: `changedIssues` selects no `createdAt` and no creator, so an
+  inbound issue is an open one in a managed team that no binding holds and the journal's `viaFleet` does not name; the
+  inbound row keeps the reporter's title and body, cut visibly to the plan's ticket bounds and read only under `untrusted`
+  and through the secret mask, so `plan triage` and `plan take` call no Linear. Record: the wave 4 note.
+- **D-8706 (2026-11-17)** — triage-own-programme-epic: `plan triage` `hand` to the caller's own programme takes the issue
+  at once, so the body's optional `epic` is then required (`plan-bad-body`). Record: the wave 4 note.
+- **D-8707 (2026-11-17)** — write-ask-project-teams: `LinearWriteAsk.resource` gains `teamKeys`, every team a project
+  write puts the project in, so the policy is asked about each. Record: the wave 4 note.
+- **D-8708 (2026-11-17)** — description-fit-255: an initiative's or project's description is fitted to Linear's
+  255-character cap (`fitLinearDescription`, `LINEAR_DESCRIPTION_MAX_CHARS`, counted in UTF-16 units), keeping the
+  provenance line whole and cutting the body at its end with `…`. A description that fits is sent unchanged, except that trailing whitespace
+  is trimmed first, so a fitting body that ended in whitespace also takes one update on deploy. Measured
+  live on 2026-11-17: Linear refused every description over 255 characters (INVALID_INPUT), so most epics and every
+  long initiative failed `linear-invalid`. The full text stays in ccrc's plan. The status notes come first, so the cut
+  never takes the first note (a first note long enough to fill the room can cut off a second): the initiative reads Abandoned, Paused, In short, done-when; the project reads Dropped, "Part of",
+  summary, checkpoints; a note longer than the room is itself cut. That order moves the fingerprint of a bound
+  description that carries a note, so each such object takes one update on deploy. The public-text gate judges the
+  unfitted body and title as well as the fitted text. A milestone's description is fitted the same way (Kind first),
+  as insurance. Carried to the next capture, on the operator's go: the cap's INVALID_INPUT answer, with a non-ASCII
+  body, to tell characters from bytes. The same change journals the cancel comment's body; that is a defect fixed,
+  not a departure. Record: the ledger, review runs 2364 and 2368.
+- **D-8720 (2026-11-17)** — kept-plan-quiet: after *Keep the plan*, the same binding's persistent drift is not raised again
+  for seven days; a restore Linear refuses still raises the item at once (§7.4). Record: the wave 4 note (review run 2386
+  F3, the coordinator's ruling).
+- **D-8721 (2026-11-17)** — restore-comment-daily: a restore comments at most once a day on an object, whether or not its
+  item is open; §7.4 bounds only the open case. Record: the wave 4 note (review run 2386 F6, the coordinator's ruling).
+- **D-8722 (2026-11-17)** — issue-adopt-by-id: a ticket's issue is adopted by its idempotent id on any team, so a key
+  change between a lost create reply and recovery is not stranded. The id hashes kind, local id and workspace, so this is
+  safe only while one coord.db has ever filed tickets into that workspace. A second install, or a rebuilt database that
+  numbers tickets again, can adopt and rewrite another install's issue. The issue creator on the next capture (D-8699's
+  list) closes it. Record: the wave 4 note (review run 2386 F5, the coordinator's ruling).
+- **D-8723 (2026-11-17)** — w4-schema-additions: the wave's one migration departs from Task 4.1's SQL in four places.
+  `linear_inbound` gains `reason` (a close's reason, and a given-up close's refusal), `actedAt` (when the close's Linear
+  writes landed or were given up) and `itemId` (the operator item a `raise` made), beyond D-8705's `title` and `body`;
+  two tables the plan never names persist wave 3's carried findings, `linear_sync_streaks` (item 6, the D-8701 episode
+  streaks) and `linear_probe_settled` (item 1, the settled-probe marks); and `linear_drift_marks` keeps one watermark per
+  changed* kind (`initiatives`, `projects`, `milestones`, `issues`) in place of one `watermark`, so a change made between
+  two kinds' reads is never skipped (review run 2386 A3). A restore deferred on a target keeps the watermark of every kind
+  whose event rides on that target, so an initiative's link carried on a project's restore is read again (review run 2394
+  N2). Record: the wave 4 note (review run 2386 A6).
+- **D-8724 (2026-11-18)** — w4-names-and-pass-word: wave 4 names two of Task 4.1's deciders differently and adds a
+  fifth pass word. `notDrift` is built as `graceVerdict` and `graceRereads`, and `restoredLines` as
+  `restoredDescription` over `composeRestored`; the interface lines above are amended to the built names, and the rules
+  they decide are unchanged. `LINEAR_CCRC_PASSES` (`policy.ts`) gains `inbound`, the drift lane's close of an inbound
+  issue (its comment and its cancel), beyond the four of §8.3 and Task 1.2, so that close is attributed as ccrc's own
+  like every other ccrc write. Record: review run 2427 A3 and A4, the wave 4 note's rulings table.
+- **D-8725 (2026-11-18)** — w4-carried-gaps: wave 4 (#2982) landed with gaps that its reviews carried to a follow-up run
+  of the same epic, ruled to land before wave 7 touches any team beyond the programme's own. A restore does not yet
+  wait on a held programme or workspace, and the drift pass's reads do not yet honour a refused key's block (review run
+  2443 P3). A bound issue moved out of a managed team, or a milestone moved into a project ccrc does not bind, is not
+  read again (2443 P2). A page-capped changed* read keeps its old watermark (review run 2408 F3). A stored inbound row
+  whose issue later completes or is canceled is not retired (review run 2427 F1). A create whose reply was lost can
+  read as inbound, and a take or triage can then bind a second ticket to that issue (review run 2435 F2). The drift
+  pass reads Linear before ccrc's own record, so a sync write landing between the two reads is restored (2435 F1). None
+  of them deletes or adopts anything in Linear. Separately, the linear skill's refusal table lists no
+  `linear-text-public` row for the `linear` verbs, because the proxy never answers that word there (fix round 3 A-8,
+  departing from Task 4.4's skill row). Record: the wave 4 note's Follow-ups and the ledger.
+- **D-8737 (2026-11-18)** — map-shapes-early: no read on the wire carries a migration map's or report's contents before
+  wave 7, so wave 5 adds Task 7.1's `MAP_CLASSES`, `MapEntry` and `MapCounts` to `shared/plan.ts`, verbatim from Task
+  7.1's text, and builds the map and report bodies as one component over them. `ItemView` renders the body when it is
+  handed one; until wave 7 adds the read that hands it (and the map and report arms of the item act route), a map or
+  report item shows its why and how text with its controls, and those controls answer the refusal's fixed sentence.
+  Wave 7 imports these shapes and defines them nowhere else; if its capture or build finds a shape must change, it
+  changes it in `shared/plan.ts` and amends this entry. The body draws the counts and the class groups only: spec
+  §11.3's section of each programme's epics and checkpoints is not drawn, since the three shapes do not carry it, and
+  wave 7 adds that section together with the read it needs (amended in review round 2, the coordinator's ruling).
+  Record: the wave 5 note (the coordinator's ruling, run 2447).
+- **D-8738 (2026-11-18)** — owner-now-wire: wave 5 is a PWA wave, but the project linking card's Linear owner select
+  needs two facts the hierarchy read (`GET /api/hierarchy`) did not carry, so its `ownerNow` gains two optional fields,
+  both decided on the server by the owner rule's own functions and read in the PWA through one reader (`ownerFrom`,
+  `pwa/src/fleet/hierarchyWords.ts`). `project` is the project the owner was decided for (`linearOwnerOfProject`): a
+  project whose shared team key another project owns names that project, so the card can say where its owner comes
+  from and that its own owner setting is not used meanwhile (review round 1). `ifUnnamed` is the coordinator the
+  default rule picks with no named owner, and whether it is live (`linearOwnerOf` with no named owner), so the select's
+  empty option names who the operator gets by choosing it, not the named owner it would clear (review round 2); for a
+  shared-key sibling, whose owner comes from the project that owns the key, it names the sibling's own default, which
+  applies once the key is no longer shared, and the note under the select names the owner now. Both are
+  additive and absence permits: an older server's answer reads as the project's own owner and today's words. Record:
+  the wave 5 note (the coordinator's rulings of fix rounds 1 and 2, run 2447).
+- **D-8739 (2026-11-18)** — skills-clause-later: Task 6.1's clause 21, the count word "twenty-one" above the coordinator
+  contract, and the matching count words in README.md and CLAUDE.md move to a follow-up PR of the skills epic. They are
+  held because the coordinator skill's pin file and README.md are frozen by the landing-order programme's run 1850 (#2837),
+  which refused a co-edit on 2026-11-18. Wave 6's PR ships the rest of Tasks 6.1 and 6.2; the tests for
+  `references/plan.md`, the open step and the ledger template's epic column live in a new file,
+  `server/test/coordinator-plan-reference.test.ts`. Until the follow-up lands, the rule that the operator acts on hierarchy
+  items in the console, and that a coordinator never answers one for them nor asks for those approvals in its turn text,
+  lives in the coordinator SKILL.md's Linear section and `references/plan.md`, not in the contract (amended in review
+  round 1, run 2580 F1). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
+  file's measured size with clause 21 (23872); wave 6's PR shrinks that file below `main`'s cap first, so the cap moves
+  by less than the clause's bytes (amended in review round 2, run 2590 A2). Record: the wave 6 note, which carries the
+  follow-up's exact content.
 
 ## Global Constraints
 
@@ -797,8 +930,8 @@ binding to `pending`. `plan_sync_due.program` holds a programme slug or `upkeep:
     `markFailed(db, id: number, word: string, inputs: string, now: number): void`,
     `requeueFailed(db, where: { workspaceId?: string; bindingId?: number; olderThan?: number }): number` (back to
     `pending`, clearing the three `failed*` columns; Task 3.2's rules), `bindingsOf(db, program: string): BindingRow[]`
-  - queue: `markSyncDue(db, program: string, at: number): void` and `markSyncDueInTx` (both keep the earlier `dueAt`), `dueSyncs(db, now: number): string[]`,
-    `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number): void` (increments `attempts`)
+  - queue: `markSyncDue(db, program: string, at: number): void` and `markSyncDueInTx` (both keep the earlier `dueAt`, and a held one, D-8702), `dueSyncs(db, now: number): string[]`,
+    `clearSyncDue(db, program: string): void`, `deferSync(db, program: string, until: number, why: 'failure' | 'wait'): void` (a failure increments `attempts`, a wait resets it, D-8702)
   - settings: `hierarchySettingsOf(db, project)`, `setHierarchySettings(db, project, s: HierarchySettingsBody, by: string, at: number)`
 
 - [x] **Step 1: Write the failing tests** — `migration 57 applies on a file at 56 and an older build's SELECTs still run`;
@@ -1145,17 +1278,17 @@ Starts after FX2 has landed. From here new programmes are born in the new shape 
     `publicTextVerdict` (Task 2.7) first; a refused text yields `{ kind: 'skip', why: 'text-public' }` for that object,
     which the pass turns into a `failed` binding and one mail to the coordinator (§6.1).
 
-- [ ] **Step 1: Write the failing tests** — `a fresh plan yields initiative, projects, milestones, issues in that order`;
+- [x] **Step 1: Write the failing tests** — `a fresh plan yields initiative, projects, milestones, issues in that order`;
   `no milestone step until its project is bound`; `initiatives off: no initiative step and the project description names the programme`;
   `a renamed epic yields one project update, a matching fingerprint none`; `a missing status type fails the step, not the pass`
   (a `skip` with `status-missing` for that object, every other step still emitted); `requestIdOf is stable and v4-shaped`;
   `fingerprintOf ignores key order`; `a public project's issue text carries no Linear URL and no identifier`;
   `a public project's ticket whose stored title names KEY-123 is skipped text-public, every other step emitted`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-policy.test.ts`.
-- [ ] **Step 3: Implement**; pure. Whether a create sends `id: requestId` is read per kind from FX2's README answer 1;
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-policy.test.ts`.
+- [x] **Step 3: Implement**; pure. Whether a create sends `id: requestId` is read per kind from FX2's README answer 1;
   a kind with no caller id is marked `bindBy: 'name-and-creator'` on its step.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(linear): the plan sync's deciders (D-8182)`.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `feat(linear): the plan sync's deciders (D-8182)`.
 
 ### Task 3.2: The plan sync
 
@@ -1229,7 +1362,7 @@ access regained), when the initiatives probe turns `on`, when its project's team
 `PLAN_SYNC_BACKOFF_MS`'s last step (30 min) has passed since `failedAt`. A retry that fails again with the same word
 mails nothing more. `plan show` shows `failed` and its word on the epic, checkpoint or ticket (`sync`, `syncWord`).
 
-- [ ] **Step 1: Write the failing tests** (fetch faked from the recorded fixtures):
+- [x] **Step 1: Write the failing tests** (fetch faked from the recorded fixtures):
 
 ```ts
 it('a due programme is synced once after the debounce, objects bound in order', …);
@@ -1255,11 +1388,11 @@ it('a failed binding retried after the ceiling and refused again mails nothing m
 it('plan show names a failed binding and its word', …);
 ```
 
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts test/linear-directory-hierarchy.test.ts`.
-- [ ] **Step 3: Implement**; `watch.ts` gains one `runLane('linearPlanSync', …)` call; a test building a watcher ends
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync.test.ts test/lane-schedule.test.ts test/linear-directory-hierarchy.test.ts`.
+- [x] **Step 3: Implement**; `watch.ts` gains one `runLane('linearPlanSync', …)` call; a test building a watcher ends
   with `quietAtTestEnd`.
-- [ ] **Step 4: Run to pass** — plus `test/watcher-quiet-census.test.ts test/consolidation-census.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the plan sync (D-8182)`.
+- [x] **Step 4: Run to pass** — plus `test/watcher-quiet-census.test.ts test/consolidation-census.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the plan sync (D-8182)`.
 
 ### Task 3.3: Moves and closes
 
@@ -1287,7 +1420,7 @@ it('plan show names a failed binding and its word', …);
     `unsynced`; a key of the same workspace → the move above; a key of another workspace → `markFailed` and a
     `ticket-workspace-mismatch` mail.
 
-- [ ] **Step 1: Write the failing tests** — one per row above, plus `an operator-act checkpoint is met when its item is done`,
+- [x] **Step 1: Write the failing tests** — one per row above, plus `an operator-act checkpoint is met when its item is done`,
   `plan met on the last checkpoint after the last run closes the epic, and its project completes`,
   `the last epic settling done with programs.state done ends the programme and completes the initiative`,
   `a dropped ticket's cancel comment names its droppedWhy`,
@@ -1296,10 +1429,10 @@ it('plan show names a failed binding and its word', …);
   driven through `closeRun`), `plan close abandoned cancels projects and open issues with the reason`,
   `a cleared team key leaves bindings and syncs nothing for that project`,
   `a team key moved to another workspace fails the bindings and moves nothing`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-lifecycle.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/plan-sync.test.ts test/plan-sync-policy.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the plan sync moves and closes (D-8182)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-sync-lifecycle.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/plan-sync.test.ts test/plan-sync-policy.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the plan sync moves and closes (D-8182)`.
 
 ### Task 3.4: The dispatch wait, the ticket's branch name and the pull request link
 
@@ -1310,7 +1443,9 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
 **Interfaces:**
 - Produces:
   - `PlanSync.ensureTicketBound(runId: number, budgetMs: number): Promise<{ identifier: string | null }>` — joins the
-    pass in flight for the run's programme, or starts one through `passFor` with deadline `now + budgetMs`, and waits
+    pass in flight for the run's programme, or starts one through `passFor` with deadline `now + budgetMs` unless the
+    programme is held by a failure's backoff (`heldSyncUntil`, D-8702), when it starts none and answers null (a ticket
+    already bound answers its identifier first), and waits
     at most `budgetMs`; it never starts a second pass for a key in flight (Task 3.2's single flight), so a wave's
     parallel dispatches share one pass; `PLAN_SYNC_DISPATCH_WAIT_MS = 12_000`.
   - `slugForTicket(identifier: string, given: string | undefined, title: string): string` — `key-123-<words>`,
@@ -1324,16 +1459,16 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
     (`attachmentLinkURL`, as the ccrc actor). Not bound in time: dispatch as today, and the sync adds the link when the
     issue appears.
 
-- [ ] **Step 1: Write the failing tests** — `a bound ticket in a private project names the workspace key-123-…`;
+- [x] **Step 1: Write the failing tests** — `a bound ticket in a private project names the workspace key-123-…`;
   `a public project's slug never carries the identifier, and the sync links the PR`;
   `a resumed work run in a private project with a bound ticket dispatches with no slug and gets the attachment link`;
   `Linear slow: dispatch goes after 12 s with today's slug`; `a dispatch during a lane pass joins that pass and sends
   no create of its own`; `three parallel dispatches of one wave start one pass`;
   `the wait never runs inside coordMutex` (the mutex gate test still green with the new call site); `slugForTicket fits 31 characters`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-dispatch-wait.test.ts test/linking-policy.test.ts test/dispatch-mutex-gate.test.ts`.
-- [ ] **Step 3: Implement**; `routes.ts` grows by the call only.
-- [ ] **Step 4: Run to pass** — plus `test/run-routes.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): dispatch waits for its ticket's issue (D-8182)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-dispatch-wait.test.ts test/linking-policy.test.ts test/dispatch-mutex-gate.test.ts`.
+- [x] **Step 3: Implement**; `routes.ts` grows by the call only.
+- [x] **Step 4: Run to pass** — plus `test/run-routes.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): dispatch waits for its ticket's issue (D-8182)`.
 
 ### Task 3.5: The initiatives-off item and the hierarchy item route
 
@@ -1350,12 +1485,12 @@ Test `server/test/plan-dispatch-wait.test.ts`, `server/test/linking-policy.test.
     token: refuses `item-act-mismatch` for an act its action does not take; `check-again` queues the refresher's probe
     for that workspace and answers at once. Wave 4 and wave 7 add the other acts' arms in this route.
 
-- [ ] **Step 1: Write the failing tests** — `one item per workspace however many programmes wait`; `a probe that reads on settles the item`;
+- [x] **Step 1: Write the failing tests** — `one item per workspace however many programmes wait`; `a probe that reads on settles the item`;
   `a project set off raises nothing`; `check-again queues the probe`; `approve on an initiatives item is item-act-mismatch`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-items.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the initiatives-off item and the hierarchy item route (D-8182)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-items.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/secret-mask.test.ts test/auth-gate.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the initiatives-off item and the hierarchy item route (D-8182)`.
 
 ---
 
@@ -1400,25 +1535,28 @@ whose `before` would be the post-move state (Task 7.3).
     an issue's state is its **type**, never its name; labels only those ccrc set).
   - `driftVerdict(owned: OwnedFields, planned: OwnedFields, lastWritten: string | null): 'match' | 'catch-up' | 'drift'`
     — `catch-up` when `fingerprintOf(owned) === lastWritten` (ccrc wrote the current value; the plan moved on).
-  - `notDrift(field: string, before: unknown, after: unknown, ctx: { prMerged: boolean; gracePasses: number }): boolean`
-    — same state category; an issue `completed` by an integration with the merge recorded, or within one pass of
-    grace; any field ccrc does not own (§6.2).
+  - `graceVerdict(o: { drifted: readonly string[]; linearState: unknown; prMerged: boolean; driftSince: number | null }): GraceVerdict`
+    and `graceRereads(graced: readonly string[], read: ReadonlySet<string>): string[]` (built in place of the plan's
+    `notDrift(field, before, after, { prMerged, gracePasses })`; D-8724) — same state category; an issue `completed`
+    after its run's PR merged (D-8703: any actor), or within one pass of grace; any field ccrc does not own (§6.2).
   - `isPersistent(restores: readonly number[], now: number): boolean` — three within seven days
     (`DRIFT_PERSIST = { restores: 3, windowMs: 7 * 86_400_000 }`).
   - `restoreComment(kind, field, planned: string, was: string, at: number): string` — §7.2's sentence;
-    `restoredLines(description: string, line: string): string` — keeps the last three "Restored" lines.
+    `restoredDescription(planned: string, linearDescription: string | null, line: string): string`, over the private
+    `composeRestored` (built in place of the plan's `restoredLines(description, line)`; D-8724) — keeps the last three
+    "Restored" lines.
   - `isInbound(issue: { linearId: string; teamKey: string }, bound: ReadonlySet<string>, viaFleet: ReadonlySet<string>, managed: ReadonlySet<string>): boolean`
   - planStore: `managedTeams(db): { workspaceId: string; teamKey: string }[]` (`state = 'applied'`), `recordDrift`,
     `driftRestoresOf(db, bindingId, since)`, `upsertInbound`, `inboundWaiting(db, project)`.
 
-- [ ] **Step 1: Write the failing tests** — one per rule: `In Progress → In Review is not drift`, `completed by the integration with the merge recorded is not drift`,
+- [x] **Step 1: Write the failing tests** — one per rule: `In Progress → In Review is not drift`, `completed by the integration with the merge recorded is not drift`,
   `completed with no merge recorded waits one pass`, `a moved project is drift`, `a value ccrc wrote is catch-up`,
   `three restores in seven days is persistent, three in eight is not`, `restoredLines keeps three`,
   `an issue created through the journal is not inbound`; migration 58 applies after 57.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-policy.test.ts test/plan-store.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-policy.test.ts test/plan-store.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `feat(linear): migration 58 and the drift deciders (D-8183)`.
 
 ### Task 4.2: The drift pass and persistent drift
 
@@ -1447,15 +1585,15 @@ Test `server/test/drift-pass.test.ts`.
   - Acts: `hand` mails the programme's coordinator (`planOwnerOf`) with the drift record and closes the item; `keep`
     closes it and restoring goes on.
 
-- [ ] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
+- [x] **Step 1: Write the failing tests** — `a moved issue is restored with one comment`; `a renamed project gets a Restored line, three kept`;
   `the third restore in a week raises the item`; `with the item open, two edits in one pass restore once and comment once a day`;
   `a restore refused linear-forbidden raises the item at once` (Review Focus 5); `an unmanaged team is never read`;
   `hand mails the coordinator`; `a restore waits for the sync pass in flight and, when that pass wrote the newer
   planned value, writes nothing and raises no drift`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
-- [ ] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
-- [ ] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/drift-pass.test.ts`.
+- [x] **Step 3: Implement**; tests that build a watcher end with `quietAtTestEnd`.
+- [x] **Step 4: Run to pass** — plus `test/lane-schedule.test.ts test/watcher-quiet-census.test.ts test/linear-items.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): the drift pass and persistent drift (D-8183)`.
 
 ### Task 4.3: The inbound path, the Upkeep epic and the Linear owner item
 
@@ -1480,17 +1618,17 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   - `GET /api/projects/:project/upkeep` → the Upkeep epic's `EpicView` (session-gated, in `MASKED_GET_ROUTES`), for the
     console's Upkeep page (Task 5.3).
 
-- [ ] **Step 1: Write the failing tests** — `an unbound issue in a managed team is mailed to the owner once`;
+- [x] **Step 1: Write the failing tests** — `an unbound issue in a managed team is mailed to the owner once`;
   `triage by another coordinator is not-linear-owner`; `hand to the owner's own programme takes it at once`;
   `upkeep creates the Upkeep epic once and places the ticket`; `take moves an Upkeep ticket into the programme's epic`;
   `raise makes a decide item for the operator`; `no live owner raises one item per project and it settles when an owner is named and live`;
   `a hibernated owner is mailed, and no item is raised`; `an unmeasured owner raises no item`;
   `the Upkeep project is created once, outside any initiative, and never closed`; `GET upkeep answers its tickets, masked`;
   the client rows' identity and count pins.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
-- [ ] **Step 3: Implement**.
-- [ ] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/plan-inbound.test.ts test/ccrc-api.test.ts test/ccrc-api-closed.test.ts test/box-token-census.test.ts test/coordinator-skill.test.ts`.
+- [x] **Step 3: Implement**.
+- [x] **Step 4: Run to pass** — plus `test/auth-gate.test.ts test/mail-routes.test.ts test/secret-mask.test.ts`.
+- [x] **Step 5: Commit** — `feat(plan): the inbound path, the Upkeep epic and the Linear owner item (D-8183)`.
 
 ### Task 4.4: Session writes in managed teams
 
@@ -1504,12 +1642,12 @@ rows), `ccd/coordinator-skill/references/api.md` (the two verbs' refusals); Test
   through `ccrc-api plan ticket-add`", after routing and before the policy point, journaled `refused`. In an unmanaged
   team, unchanged; `comment`, `link` and reads unchanged.
 
-- [ ] **Step 1: Write the failing tests** — `create in a managed team is plan-owned and sends nothing`; `update of an unbound issue in a managed team passes`;
+- [x] **Step 1: Write the failing tests** — `create in a managed team is plan-owned and sends nothing`; `update of an unbound issue in a managed team passes`;
   `create in an unmanaged team passes`; `comment on a bound issue passes`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-proxy-routes.test.ts`.
-- [ ] **Step 3: Implement** (`LinearProxyDeps` gains `managed(workspaceId: string, teamKey: string): boolean`).
-- [ ] **Step 4: Run to pass** — plus `test/skill-size-ratchet.test.ts test/refusal-status.test.ts`.
-- [ ] **Step 5: Commit** — `feat(linear): plan-owned in managed teams (D-8183)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/linear-proxy-routes.test.ts`.
+- [x] **Step 3: Implement** (`LinearProxyDeps` gains `managed(workspaceId: string, teamKey: string): boolean`).
+- [x] **Step 4: Run to pass** — plus `test/skill-size-ratchet.test.ts test/refusal-status.test.ts`.
+- [x] **Step 5: Commit** — `feat(linear): plan-owned in managed teams (D-8183)`.
 
 ---
 
@@ -1540,15 +1678,17 @@ Every task here adds jsdom tests (`pwa/test/*.test.tsx`) and a browser file run 
 | 1280, 1470 | The row's first line holds name, key and visibility; the second the owner select, toggle and state |
 | 1920 | One grid line per row; the state line wraps under the row only when long |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the empty owner option names the default and whether it is live`, `saving the owner renders the stored row`,
+- [x] **Step 1: Write the failing tests** — jsdom: `the empty owner option names the default and whether it is live`, `saving the owner renders the stored row`,
   `the owning-project control shows only for a shared key`, `the state line links the map item`, `a refusal shows its fixed sentence`;
   browser: no sideways scroll, no clipped text with a long project name, the table above, all twenty views.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement**; words in `hierarchyWords.ts`.
-- [ ] **Step 4: Run to pass** — both.
-- [ ] **Step 5: Commit** — `feat(console): the Linear owner and hierarchy settings per project (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/project-linking-card.test.tsx`, then the browser file.
+- [x] **Step 3: Implement**; words in `hierarchyWords.ts`.
+- [x] **Step 4: Run to pass** — both.
+- [x] **Step 5: Commit** — `feat(console): the Linear owner and hierarchy settings per project (D-8184)`.
 
 ### Task 5.2: The programme page's Plan section
+
+Not built: the work map's Work card (desktop-polish) replaces this section, by the ledger's ruling of 2026-11-16. Its boxes stay unticked.
 
 **Files:** Create `pwa/src/ledgers/PlanSection.tsx`, `pwa/src/ledgers/planWords.ts`; Modify
 `pwa/src/ledgers/ProgrammeScreen.tsx`, `pwa/src/ledgers/ledgers.css`, `pwa/src/lib/api.ts` (`plan(slug)`);
@@ -1594,14 +1734,14 @@ is Task 4.3's); Test `pwa/test/epic-screen.test.tsx`, `pwa/browser/epic-page.bro
 | 1280, 1470 | Checkpoints and tickets side by side |
 | 1920 | The same, each ticket's run state inline |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `evidence {pr} links the pull request, {itemId} the item, {path} the Docs reader`,
+- [x] **Step 1: Write the failing tests** — jsdom: `evidence {pr} links the pull request, {itemId} the item, {path} the Docs reader`,
   `a ticket with a run links /runs/<id>`, `an unknown epic key says "No such epic in this programme"`,
   `the Upkeep page lists its tickets and no checkpoints`, `matchRoute parses both new paths and refuses a bad slug`;
   browser (`epic-page.browser.test.ts`): the table above in twenty views.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/epic-screen.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement** both screens over one `EpicBody` component and the two route rows.
-- [ ] **Step 4: Run to pass** — both, plus `test/app.test.tsx` (the route table's matches).
-- [ ] **Step 5: Commit** — `feat(console): the epic and Upkeep pages (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/epic-screen.test.tsx`, then the browser file.
+- [x] **Step 3: Implement** both screens over one `EpicBody` component and the two route rows.
+- [x] **Step 4: Run to pass** — both, plus `test/app.test.tsx` (the route table's matches).
+- [x] **Step 5: Commit** — `feat(console): the epic and Upkeep pages (D-8184)`.
 
 ### Task 5.4: The five hierarchy items' controls
 
@@ -1626,15 +1766,15 @@ dispatches a linear action to it; `carriesControls`), `pwa/src/ledgers/ItemView.
 
 The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DOOR_WORDS['hand-to-coordinator']`).
 
-- [ ] **Step 1: Write the failing tests** — jsdom: one per act, asserting the body sent (`{act:'approve'}`,
+- [x] **Step 1: Write the failing tests** — jsdom: one per act, asserting the body sent (`{act:'approve'}`,
   `{act:'return', note}`, `{act:'put-back'}`, `{act:'done'}`, `{act:'hand'}`, `{act:'keep'}`, `{act:'check-again'}`,
   `{act:'name', owner}`); `an act the server refuses shows its fixed sentence`; `the map's counts come before its groups`;
   browser (`linear-items.browser.test.ts`): the table above in twenty views, the act bar visible at 360 with a
   200-issue map scrolled to its middle.
-- [ ] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/linear-item-controls.test.tsx`, then the browser file.
-- [ ] **Step 3: Implement** `LinearItemControls` and the two bodies; `ItemControls` dispatches on `isLinearItemAction`.
-- [ ] **Step 4: Run to pass** — both, plus `test/item-view.test.tsx`.
-- [ ] **Step 5: Commit** — `feat(console): the hierarchy items' controls (D-8184)`.
+- [x] **Step 2: Run to fail** — `cd pwa && npx vitest run --maxWorkers=2 test/linear-item-controls.test.tsx`, then the browser file.
+- [x] **Step 3: Implement** `LinearItemControls` and the two bodies; `ItemControls` dispatches on `isLinearItemAction`.
+- [x] **Step 4: Run to pass** — both, plus `test/item-view.test.tsx`.
+- [x] **Step 5: Commit** — `feat(console): the hierarchy items' controls (D-8184)`.
 
 ---
 
@@ -1652,10 +1792,12 @@ executable block runs).
 
 **Interfaces:**
 - Produces clause 21: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
-  plan-sized with their waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
+  plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
   is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files a hierarchy object or a ticket in a managed
   team with `linear create`." The count word above the contract becomes twenty-one; §Linear shrinks so the file grows
-  by the clause line alone.
+  by the clause line alone. (Clause 21's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
+  an epic may list no waves, built by the work-map plan's Task WM6. Wave 6 writes the clause as amended here, and
+  `references/plan.md` names `ticket-required` once WM6 has landed.)
 - `references/plan.md` gains: the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duty
   `plan triage` (never another programme's plan). It names only verbs whose client row and route exist by wave 6:
   `plan map-propose` lands with its row and route in Task 7.2, and naming it here would turn both the closed-corpus

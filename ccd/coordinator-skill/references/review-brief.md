@@ -18,6 +18,7 @@ Suites: <exact commands, run in your worktree at the measured tip>.
 Carried constraints from earlier waves: <the ledger's list, verbatim>.
 Deviations already ledgered this wave: <D-numbers and one line each>.
 Report to: an absolute path under YOUR worktree; mail `review-done` with the JSON first line.
+Prompts: your lens and subagent briefs carry the two sentences of `../ccrc-coordinator/references/approval-prompts.md` word for word (the literal-path rule and the prose-names line).
 ```
 
 Do not put the worker's fingerprint, the coordinator's rulings, or any

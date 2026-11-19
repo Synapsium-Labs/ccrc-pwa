@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 242 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 278 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -72,15 +72,16 @@ import type { SessionStore } from './sessions.js';
  *     the moment the operator arms the flag. It publishes an `ok` and a build
  *     stamp and nothing about the fleet.
  *
- *  2. The eighty-two box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
- *     ledgers' coordinator lanes, the coordinator call record's one, the plan verbs', the hook's start report and its
- *     loads report, the card door, the note door's lanes, the timer doors and the probe door's lanes) plus
+ *  2. The eighty-seven box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
+ *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the hook's start report and its
+ *     loads report, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
+ *     door) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
  *     are `curl` inside a Claude Code session, ccd's `notify.sh`, `ccd-pool-sync.timer`
- *     (account-pool-membership wave 1, T7, D-3084) and, from update-management W4,
- *     `ccd-update-sync.timer`; none of them has a cookie jar and never
- *     will. All eighty-five CHECK the box token (`checkMailToken`), and the mail pair
+ *     (account-pool-membership wave 1, T7, D-3084), from update-management W4,
+ *     `ccd-update-sync.timer`, and the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`);
+ *     none of them has a cookie jar and never will. All ninety CHECK the box token (`checkMailToken`), and the mail pair
  *     records every refusal — but "checks" is not "requires", and the difference is
  *     worth stating rather than rounding off, in BOTH directions rather than only
  *     one (D-1242: this paragraph used to say it in one, and was wrong in kind
@@ -458,6 +459,10 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'box-token machine lane, box token and attribution checked (D-8126). A coordinator records a call it took in the operator\'s ' +
     'name, routine, big or block, on its own programme (`requireMailToken`, `requireAttribution`, then `claimsProgramme` ownership); ' +
     'a worker, or another programme\'s coordinator, is refused 403 and nothing is written'],
+  ['POST /api/coord/programmes/:slug/remaining',
+    'box-token machine lane, box token and attribution checked (Overlord W2 remaining work A). A coordinator states the waves ' +
+    'left of its own programme as a range with a reason, and what it waits on as edges (`requireMailToken`, `requireAttribution`, ' +
+    'then `claimsProgramme` ownership); a worker, or another programme\'s coordinator, is refused 403 and nothing is written'],
   ['POST /api/items/:id/confirm',
     'box-token machine lane, box token and attribution checked. The coordinator closes an item the operator ticked, after ' +
     're-measuring it; the item must belong to a programme the caller claims'],
@@ -496,9 +501,20 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     'box-token machine lane, box token and attribution checked. The coordinator moves or drops an open ticket (`plan ticket-move`)'],
   ['POST /api/programmes/:slug/plan/epics/drop',
     'box-token machine lane, box token and attribution checked. The coordinator drops an epic with a reason (`plan epic-drop`)'],
+  ['POST /api/programmes/:slug/plan/phases/refs',
+    'box-token machine lane, box token and attribution checked. The coordinator adds or removes one reference of a phase, or ' +
+    'carries a ticket to a later phase (`plan phase-ref`, programme work map WM0)'],
   ['POST /api/programmes/:slug/plan/close',
     'box-token machine lane, box token and attribution checked. The coordinator ends the programme\'s plan, done or abandoned with a ' +
     'reason (`plan close`), once no run of the programme is open'],
+  ['POST /api/programmes/:slug/plan/take',
+    'box-token machine lane, box token and attribution checked. The programme\'s coordinator takes an inbound issue handed to it, or an ' +
+    'Upkeep ticket, into an epic of its plan, closes it with a reason, or returns it to the team\'s Linear owner (`plan take`); the ' +
+    'write runs under the coordination mutex and calls no Linear (D-8183)'],
+  ['POST /api/teams/:team/plan/triage',
+    'box-token machine lane, box token and attribution checked. The team\'s Linear owner decides an issue filed in Linear outside ' +
+    'ccrc: hand it to a programme, place it in the team\'s Upkeep epic, close it with a reason, or raise it to the operator ' +
+    '(`plan triage`); the write runs under the coordination mutex and calls no Linear (D-8183)'],
   ['POST /api/programmes/:slug/spec',
     'box-token machine lane, box token and attribution checked. The coordinator pins the operator-approved spec and the copy of ' +
     'its In short to its own programme (`isSpecPath` bounds the path)'],
@@ -610,6 +626,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "a session answers its own probe round: box token and attribution — box-token gated in its own onRequest whatever the " +
     "flag, no cookie accepted, the path's session the caller (byId), attribution of byUuid checked against the registry, " +
     'a round of another session\'s invisible'],
+  // The replay quiz's record door (Overlord W1a, plan `2026-11-17-overlord-quiz-record.md` §5): the operator records a run.
+  ['POST /api/continuity/quiz-runs',
+    "the operator's quiz record from the box: box-token gated, refused inside a session and a pane at the client; a session " +
+    'holding the token could post a pending run, and only the operator\'s confirmation, behind a session and a step-up, ' +
+    'makes it count'],
 
   ['POST /api/token/claim',
     'a door that authenticates by a single-use code it issued itself: the fleet box trades a code ' +
@@ -1047,8 +1068,8 @@ export function originVerdict(origin: unknown, expected: string): OriginVerdict 
  * clause. Checking reads would additionally refuse `<img>`/`<link>` style
  * same-site loads of the SPA shell for no gain.
  *
- * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighty-two box-token machine
- * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — eighty-five in all — are `curl` inside a Claude Code session (no `Origin`
+ * EXEMPT ROUTES ARE SKIPPED, and it costs nothing: the eighty-seven box-token machine
+ * lanes plus `/api/notify`, `/api/pools/epoch` and `/api/updates/intent/:nodeId` — ninety in all — are `curl` inside a Claude Code session (no `Origin`
  * at all, hence `'absent'`, hence permitted even if they were checked), and
  * their real guard is a header a cross-site page cannot add without triggering a
  * preflight it will fail. (ORDER-PINNED, like reason 2 above and for the same

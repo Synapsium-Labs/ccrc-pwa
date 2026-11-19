@@ -282,8 +282,8 @@ This section is layer 3: the frame's shape, its CSP, how bytes reach it, the bri
 | Attributes not set | `src`, `name`, `allow`, `allowfullscreen` |
 | Scripts | On from the first render. The code is the library's, and the input is rendered HTML, not a script (A4). |
 | Size | Sized to the Docs pane, and the frame scrolls itself |
-| Focus | The parent focuses the frame on mount, so the layout's keys work at once |
-| Remount | Every new document, ref or `at=` commit is a remount: a new React key, a new `MessageChannel` and a new nonce. ccrc never updates a srcdoc in place. |
+| Focus | The parent focuses the frame on mount, so the layout's keys work at once, unless an element of the console outside the frame already holds focus as it mounts (the reader of the page moved to a head control while the reader was loading): that element keeps focus; the reader's own commands still focus the frame, and the reader lab's frames always take focus (amended 2026-11-18; D2, D-8729) |
+| Remount | Every new document, ref or `at=` commit is a remount: a new React key, a new `MessageChannel` and a new nonce. ccrc never updates a srcdoc in place. A link to this very page spelled with its file name (`this.md#sec`) remounts the library's frame within the same React mount: a new `MessageChannel` and nonce, the same rendered document opened at that anchor (`initialHash`), and no body read, because library 1.1.0 has no host scroll op. The stored read marks, prefs and last visit carry over; the frame's view of the visit does not: the "Changed since your last visit" notice and its menu item, open folds and shown change marks reset (amended 2026-11-18; D2, ask 553) |
 | Chrome | ccrc's header, truth line, banners and sheets stay outside the frame |
 
 ### 4.2 `READER_CSP` (Agreed)
@@ -495,10 +495,10 @@ These close the gaps found against the standalone docs server (research B). Each
 
 | Capability of the standalone docs server | Verdict | Where |
 |---|---|---|
-| Index, project and directory pages | Yes, base §4.4 | The index's "newest five" cards are Later (G10) |
+| Index, project and directory pages | Yes, base §4.4; the parts below Kept, needed before the old server goes off | The index's "newest five" cards, the project page's list of each section's docs, and readable titles with a date label in listings, are Kept: no longer Later (G10); the X2 parity design §5.1 and §5.2 adds them (amended 2026-11-18; X2 parity design) |
 | Recursive listings | Yes, base §2 (a) | Listings already recurse (`ccd/ccd:35878`); the path grammar allows 16 components (G2) |
 | Draft badges and banner | Yes, base §4.5 | More precise than today |
-| `?ref=<branch>` | Yes, base §3.1 | Stricter. `?ref=origin/<b>` reads as a local branch named `origin/<b>`; rewrite old links to the bare `?ref=<b>` (§9 Step 4). |
+| `?ref=<branch>` | Yes for a branch, base §3.1; the old spellings Kept, needed before the old server goes off | Stricter today: `?ref=origin/<b>` reads as a local branch named `origin/<b>`, and a tag or a short commit is refused, so old links are rewritten to the bare `?ref=<b>` (§9 Step 4). Designed: `?ref=origin/<b>` will read the remote-tracking branch unless a local branch of that name exists, and a tag (bare or `refs/tags/`) and a unique short commit will open at their commit, branches first (X2 parity design §5.3) (amended 2026-11-18; X2 parity design). |
 | Fetch on miss | Yes, base §2 (a) and §4.3 | `docs-fetch`, auto-refresh and the chip |
 | GitHub link | Yes, base §3.11 | |
 | Honest errors | Yes, base §4.7 | |
@@ -510,20 +510,29 @@ These close the gaps found against the standalone docs server (research B). Each
 | Read marks, last visit, reader settings | Agreed, G7 | W8 |
 | Rich layout (G8) | Agreed, the library plus W8 | |
 | Figures: Play, Animate edges, Full screen, Copy Mermaid | Agreed, W8 | |
-| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount (§4.1) |
+| Keys (`/`, `?`, j/k and the rest) | Agreed, W8 | The parent focuses the frame on mount, unless an element outside it already holds focus (§4.1); the reader's own commands still focus the frame (amended 2026-11-18; D2, D-8729) |
 | Front matter strip | Agreed, §3.4 | |
 | Footnotes | Agreed, L2 adds styles | They have no styles today |
 | Fonts | Yes, same as today | Latin subsets only; other scripts fall back to system fonts |
 | HTML specs and mockups | Yes, base §5.6, with a stricter sandbox (G9) | |
-| The `classic` old layout and the design-prototype variants | Kept, needed before the old server goes off | Today only the default layout ships (§3.3). A follow-on design says how the reader offers every kept variant. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
-| Files over 2 MiB | Kept, needed before the old server goes off | Today download only. A bounded larger read, such as the reserved `docs-show-range` verb, becomes required, not Later; the current caps are not relaxed in its place. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
-| PDFs | Kept, needed before the old server goes off | Today download only (`other` class). The follow-on design covers viewing inline as well as download, inside the current frame walls. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
-| Issue-tracker item links | Kept, needed before the old server goes off | Today off: ccrc has no per-project docs config. The follow-on design adds the configured tracker links. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
-| Folders outside ccd's projects root | Kept, needed before the old server goes off | Their own reader feature, G3 (R-e reopened). Was "moved under it as git repos" before (amended 2026-11-11; retirement parity, D-8287). |
+| The `classic` old layout and the design-prototype variants | Kept, needed before the old server goes off | Today only the default layout ships (§3.3). A follow-on design says how the reader offers every kept variant. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). Designed: the library ships `classic`, `editorial`, `review` and `guided` beside the default, chosen per device in Page details or per visit by `?variant=`; §3.3 is superseded by D-8762 once implemented (X2 parity design §4.2) (amended 2026-11-18; X2 parity design). |
+| Files over 2 MiB | Kept, needed before the old server goes off | Today download only. A bounded larger read, such as the reserved `docs-show-range` verb, becomes required, not Later; the current caps are not relaxed in its place. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). Designed: `docs-show-range` in 512 KiB frames from one snapshot (D-8764) up to 64 MiB, Markdown in parts of at most 2 MiB, images to 64 megapixels, no cap raised (X2 parity design §4.3) (amended 2026-11-18; X2 parity design). |
+| PDFs | Kept, needed before the old server goes off | Today download only (`other` class). The follow-on design covers viewing inline as well as download, inside the current frame walls. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). Designed: a separate PDF frame (`srcdoc`, `allow-scripts`, no channel) with a self-hosted viewer, inline up to 4 MiB, download up to 64 MiB; the reader frame and the shell CSP are unchanged (X2 parity design §4.4) (amended 2026-11-18; X2 parity design). |
+| Issue-tracker item links | Kept, needed before the old server goes off | Today off: ccrc has no per-project docs config. The follow-on design adds the configured tracker links. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). Designed: rules (pattern and URL template) in Settings, matched in the parse worker against a doc's item references, links opened through the external-link sheet, no tracker in code (X2 parity design §4.5) (amended 2026-11-18; X2 parity design). |
+| Folders outside ccd's projects root | Kept, needed before the old server goes off | Their own reader feature, G3 (R-e reopened). Was "moved under it as git repos" before (amended 2026-11-11; retirement parity, D-8287). Designed: added in Settings, read only in their six section directories, containment checked on the fleet box, "Not in a repository" with modified times, no history, never read without a signed-in session (X2 parity design §4.1) (amended 2026-11-18; X2 parity design). |
 | Draft review by link | Kept, needed before the old server goes off | The private draft-review store with its lifecycle, G11 (#1420) (amended 2026-11-11; retirement parity, D-8287). |
-| The figure overlay's Back-to-close | Open | The frame keeps no history entries of its own (`hash` uses `replaceState`). Esc and the close button still close it. Reconcile before the gate, keeping the frame walls (§5.1) until a reviewed design or your ruling. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
-| Print | Open | It needs `allow-modals`, which is forbidden. A genuine conflict with the frame walls comes to you as a console item; until then nothing adds `allow-modals`. Was Later before (amended 2026-11-11; retirement parity, D-8287). |
-| Reader state kept on the old server's origin | Open | Per-device state starts fresh today (G7). Reconcile with the no-feature-loss ruling before the gate; no migration is authorised here. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). |
+| The figure overlay's Back-to-close | Kept, needed before the old server goes off | The frame keeps no history entries of its own (`hash` uses `replaceState`). Esc and the close button still close it. Was Open, then Dropped before (amended 2026-11-11; retirement parity, D-8287). Designed: the frame reports the overlay as a place on its port and the console keeps the history entry, so Back closes it, within the walls; §4.4 is superseded by D-8763 once implemented (X2 parity design §4.7) (amended 2026-11-18; X2 parity design). |
+| Print | Kept, needed before the old server goes off | Printing inside the frame would need `allow-modals`, which stays forbidden. Was Open, then Later before (amended 2026-11-11; retirement parity, D-8287). Designed: Print runs in ccrc's own window from a print view of the library's render output under a print allow-list; stage 1 prints figures as their source, stage 2 adds drawn figures as checked PNG pictures through one library op, and the library's print mode adds the blocks it builds in the frame; an image or text leaf prints from the same print view, and a PDF or an HTML page from its downloaded file, a recorded difference (X2 parity design §4.6, PR1 to PR15 and PL1 to PL5) (amended 2026-11-18; X2 parity design). |
+| Reader state kept on the old server's origin | Open | Per-device state starts fresh today (G7). Reconcile with the no-feature-loss ruling before the gate; no migration is authorised here. Was Dropped before (amended 2026-11-11; retirement parity, D-8287). Every kind of state exists natively; only the old data stays behind. Waiting on your ruling (conflict C1): the recommendation is a fresh start, the alternative an opt-in import, priced (X2 parity design §4.9) (amended 2026-11-18; X2 parity design). |
+| Back returns from an in-page jump | Kept, needed before the old server goes off | Today a jump replaces the history entry. Designed with Back-to-close: a jump is a place the console keeps (X2 parity design §4.7) (amended 2026-11-18; X2 parity design). |
+| Rules index and rule paragraphs | Kept, needed before the old server goes off | Today the library's `rules` flag is off; ccrc passes it (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
+| The In short "Headlines / Full" switch | Kept, needed before the old server goes off | Removed from the library; a library option restores it (X2 parity design §5.6, §6) (amended 2026-11-18; X2 parity design). |
+| A comparison kept across reload | Kept, needed before the old server goes off | Designed: the comparison base is kept per doc for the tab, so it survives reload, Back and a link back to the doc (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
+| Attention marks for `operator` and ID qualifiers | Kept, needed before the old server goes off | ccrc passes the vocabulary the standalone server uses (X2 parity design §5.6) (amended 2026-11-18; X2 parity design). |
+| Diagrams drawn on open | Agreed, by your ruling behind lab E17 | On request until E17's `mermaid` reading holds (§5.2); F evidences it (X2 parity design §5.7) (amended 2026-11-18; X2 parity design). |
+| A per-project default branch | Kept, needed before the old server goes off | A Settings row per project (X2 parity design §5.4) (amended 2026-11-18; X2 parity design). |
+| `.ico` images | Kept, needed before the old server goes off | `ico` joins the raster types with a strict header check (X2 parity design §5.5) (amended 2026-11-18; X2 parity design). |
+| HTML pages that load sibling modules, import maps, data and models | Kept within the walls; Open beyond them | An in-walls loader runs what fits the 5 MiB budget. Dialogs, popups, page downloads, WebAssembly, assets above 5 MiB and pages above 2 MiB need a widening: waiting on your ruling (conflict C3) (X2 parity design §4.8) (amended 2026-11-18; X2 parity design). |
 
 ## 7. Amendments to the 2026-10-01 spec
 
@@ -562,7 +571,7 @@ One table holds every rule this spec changes. New mutation rows are numbered M8.
 
 | # | Guard | Test | Mutation that goes red |
 |---|---|---|---|
-| M8.1 | Frame attributes | Tokens exactly `['allow-scripts']`. `srcdoc` set. No `src`, `name`, `allow` or `allowfullscreen`. `referrerpolicy=no-referrer`. The `csp` attribute equals the meta. The frame takes focus on mount. | Add `allow-same-origin`, `allow-popups` or `allow-top-navigation`; add `allow=`; set `src`; drop `sandbox` |
+| M8.1 | Frame attributes | Tokens exactly `['allow-scripts']`. `srcdoc` set. No `src`, `name`, `allow` or `allowfullscreen`. `referrerpolicy=no-referrer`. The `csp` attribute equals the meta. The frame takes focus on mount when no element outside it holds focus, and an element outside it that holds focus keeps it; the reader's own commands still focus the frame (amended 2026-11-18; D2, D-8729). The commands clause is the library's behaviour in released 1.1.0, whose commands focus the frame themselves; no row here reds it. | Add `allow-same-origin`, `allow-popups` or `allow-top-navigation`; add `allow=`; set `src`; drop `sandbox`; focus the frame on every mount, or on none (amended 2026-11-18; D2, D-8729) |
 | M8.2 | `READER_CSP` | Re-tokenised: only the listed directives; `script-src` holds `sha256-` sources only; no host, `'self'`, `connect-src` or `frame-src`; `base-uri` and `form-action` are `'none'`; `mockupCsp(origins)` never changes it | Add a CDN host, `'self'`, `connect-src` or `'unsafe-eval'`; derive it from `MOCKUP_CSP` |
 | M8.3 | Srcdoc prefix | Starts with the CSP meta, then the click guard, the seed and the bridge bootstrap, in that order, each once, before any content. The seed is the element immediately before the bootstrap's script. | Append the meta; omit the guard; put the seed after the content; put any element between the seed and the bootstrap |
 | M8.4 | No URL in the srcdoc | Outside the inlined script and seed bodies, no `src`, `href`, `srcset`, `@import` or `url()` holds an `http(s)` or `//` value. No `modulepreload` or `preconnect` link. Script bodies are covered by M8.B1. | Keep the library's CDN default in a `src`; emit preloads |
@@ -829,7 +838,7 @@ Rows marked Ruled restate the operator's rulings: R-a to R-g, and the ruling of 
 
 ### Waiting on you
 
-Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export). The follow-on designs for §6's Kept and Open rows raise any genuine product conflict, such as print against the frame walls, as a console item when they need it (amended 2026-11-11; retirement parity, D-8287).
+Two product conflicts of the X2 parity design wait on you: reading state left on the old origin (C1) and HTML pages beyond today's walls (C3); each carries a recommendation there (amended 2026-11-18; X2 parity design). W5b's placement was ruled on 2026-10-13: after W5 (RD23) (amended 2026-10-13, Share/Export). The follow-on designs for §6's Kept and Open rows raise any genuine product conflict, such as print against the frame walls, as a console item when they need it (amended 2026-11-11; retirement parity, D-8287).
 
 ### Later
 
@@ -837,7 +846,7 @@ Nothing listed here now. W5b's placement was ruled on 2026-10-13: after W5 (RD23
 - `only` in the URL beside `at=`, if in-visit state proves too thin (`latest` needs no state: it is the page URL less `at`; amended 2026-11-16; W5b-2).
 - Ctrl/Cmd+K clashing with ccrc shortcuts, after W8's phone pass. Files over 2 MiB, PDFs and issue-tracker links left this list for §6's Kept rows, and print for its Open rows: retirement needs them (amended 2026-11-11; retirement parity, D-8287).
 - A no-JS static variant from `frameDocument`, for the Export action, once W8 lands.
-- Index page "newest five" cards (G10), as a presentation follow-up.
+- Index page "newest five" cards (G10): no longer Later, now Kept in §6's index row (amended 2026-11-18; X2 parity design).
 - Mermaid drawn on open in the reader (ruled 2026-11-03): the library change shipped in 1.1.0 and ccrc pins it; the reader moves to it when an E17 reading holds, by one recorded reading (amended 2026-11-10; library 1.1 take-up). The colouring divergences are ruled for now (the W8a row, §8); one colouring for both paths, through the library's `./highlight`, comes back only if you ask (amended 2026-10-31).
 - Any earlier plan for another viewer to own the renderer is settled outside this repo: under R-a, that viewer pins the library like any other.
 

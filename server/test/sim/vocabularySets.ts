@@ -8,6 +8,7 @@ import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
 import { STALL_ARMS } from '../../../shared/stall-watch.js';
 import { OVERLORD_REFUSAL_WORDS } from '../../../shared/refusal.js';
+import { PROGRAMME_HEALTH_WORDS } from '../../../shared/programmeFacts.js';
 import type { MutantSet, SuiteCase } from './mutate.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
@@ -22,8 +23,8 @@ export function injectedRowCases(m: InjectedPromptsModule): Record<string, Suite
   const of = (v: unknown): string | null => m.injectedPromptOf(v);
   const keys = Object.keys(rows);
   return {
-    'the nine keys, kebab and unique (the renewal act added renewal-first-prompt)': () => {
-      expect(keys).toEqual(['mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model', 'renewal-first-prompt']);
+    'the ten keys, kebab and unique (the renewal act added renewal-first-prompt, the designation overlord-first-prompt)': () => {
+      expect(keys).toEqual(['mail-nudge', 'idle-compact-nudge', 'clear', 'resume', 'compact', 'effort', 'effort-ultracode', 'model', 'renewal-first-prompt', 'overlord-first-prompt']);
       for (const k of keys) expect(k, k).toMatch(/^[a-z]+(?:-[a-z]+)*$/);
       expect(new Set(keys).size).toBe(keys.length);
     },
@@ -105,14 +106,19 @@ export type PracticeTriggersModule = typeof import('../../../shared/practice-tri
 /** The trigger table's cases over a module: its kinds, its rows in order, and its reader. */
 export function triggerParseCases(m: PracticeTriggersModule): Record<string, SuiteCase> {
   return {
-    'the kinds are the stall arm and the refusal word': () => {
-      expect(m.TRIGGER_KINDS).toEqual(['stall-arm', 'refusal']);
+    'the kinds are the stall arm, the refusal word and the health word': () => {
+      expect(m.TRIGGER_KINDS).toEqual(['stall-arm', 'refusal', 'health']);
     },
-    'the table is the stall arms\' signatures, in their order, then refusal:<word> for each Overlord word in order': () => {
+    'the table is the stall arms\' signatures, in their order, then refusal:<word> for each Overlord word in order, then health:<word> worst first': () => {
       expect(m.TRIGGER_TABLE.map(m.signatureText)).toEqual([
         ...STALL_ARMS.map((a) => `stall-arm:${a}`),
         ...OVERLORD_REFUSAL_WORDS.map((w) => `refusal:${w}`),
+        ...PROGRAMME_HEALTH_WORDS.map((w) => `health:${w}`),
       ]);
+    },
+    'every health word round-trips as health:<word> (forecasts B)': () => {
+      for (const w of PROGRAMME_HEALTH_WORDS) expect(m.parseSignature(`health:${w}`)).toEqual({ kind: 'health', key: w });
+      expect(m.parseSignature('health:blocked-on-you')).toEqual({ kind: 'health', key: 'blocked-on-you' });
     },
     'reads back every signature it writes': () => {
       for (const s of m.TRIGGER_TABLE) expect(m.parseSignature(m.signatureText(s))).toEqual(s);
@@ -123,7 +129,9 @@ export function triggerParseCases(m: PracticeTriggersModule): Record<string, Sui
       for (const t of ['', 'stall-arm', 'stall-arm:', 'stall-arm:limit-capp', 'stall-arm:quiet:1', 'stall:quiet',
         'constructor', 'stall-arm:constructor', 'stall-arm:toString',
         'refusal:', 'refusal:not-a-word', 'refusal:quiet', 'stall-arm:capability-missing', 'refusal:constructor',
-        'refusal:toString', 'refusal:rung-below:1', 'quiet:stall-arm', 'capability-missing:refusal']) {
+        'refusal:toString', 'refusal:rung-below:1', 'quiet:stall-arm', 'capability-missing:refusal',
+        'health:', 'health:healthy', 'health:quiet', 'health:capability-missing', 'health:constructor', 'health:toString',
+        'health:steady:1', 'stall-arm:steady', 'refusal:stalled', 'steady:health']) {
         expect(m.parseSignature(t), t).toBeNull();
       }
     },
@@ -137,6 +145,8 @@ export const TRIGGER_PARSE_SET: MutantSet<PracticeTriggersModule> = {
     { id: 'T1 any key under refusal', old: "if (kind === 'refusal') return isOverlordRefusal(key) ? { kind: 'refusal', key } : null;", new: "if (kind === 'refusal') return { kind: 'refusal', key: key as OverlordRefusal };" },
     { id: 'T2 no kind check', old: "  if (kind === 'stall-arm') return isStallArm(key) ? { kind: 'stall-arm', key } : null;\n  if (kind === 'refusal') return isOverlordRefusal(key) ? { kind: 'refusal', key } : null;", new: "  if (isStallArm(key)) return { kind: 'stall-arm', key };\n  if (isOverlordRefusal(key)) return { kind: 'refusal', key };" },
     { id: 'T3 the text before the first colon read as the key', old: 'const key = text.slice(at + 1);', new: 'const key = text.slice(0, at);' },
+    { id: 'T5 the health branch dropped', old: "  if (kind === 'health') return isProgrammeHealthWord(key) ? { kind: 'health', key } : null;\n", new: '' },
+    { id: 'T6 any key under health', old: "if (kind === 'health') return isProgrammeHealthWord(key) ? { kind: 'health', key } : null;", new: "if (kind === 'health') return { kind: 'health', key: key as ProgrammeHealthWord };" },
     { id: 'T4 the guard by in', old: "if (kind === 'refusal') return isOverlordRefusal(key) ?", new: "if (kind === 'refusal') return key in Object.fromEntries(OVERLORD_REFUSAL_WORDS.map((w) => [w, true])) ?" },
   ],
   suite: triggerParseCases,

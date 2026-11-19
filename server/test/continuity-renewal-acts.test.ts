@@ -30,7 +30,7 @@ const U2 = '22222222-2222-4222-8222-222222222222';
 const U3 = '33333333-3333-4333-8333-333333333333';
 const PERIOD = 30_000;
 
-const usage = (ctxTokens: number, ctxWindow: number): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxTokens: number, ctxWindow: number): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts: 1, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale: false,
 } });
 const FREE: DrainRead = { held: false };
@@ -200,19 +200,32 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.s.db.prepare('SELECT state FROM continuity_generations WHERE identity = ?').get(COORD)).toEqual({ state: 'draining' });
   });
 
-  it('the lane\'s real gather: a soft trigger waits unmeasured on the operator mark, and no soft renewal starts', async () => {
+  it('the lane\'s real gather: a soft trigger of a coordinator with no operator mark starts (the hand-offs piece: no mark is no activity)', async () => {
     const f = await atRest();
     const g = f.gen();
     // Past the least age, on the observed clock.
     f.s.db.prepare('UPDATE continuity_generations SET mintedObservedMs = ? WHERE id = ?').run(-LEAST_AGE_MS, g.id);
-    // A soft due, stored as THREE would store one; the gather's operator mark reads unmeasured until the hand-offs piece.
+    // A soft due, stored as THREE would store one. The gather reads the coordinator's `operator-at-programme` mark: prog-a has
+    // none, a measured "no activity", which opens the break, so the unmeasured wait the renewal act left is gone.
+    const soft: GenReadings = { usage: usage(10_000, 1_000_000), compactions: { kind: 'absent' }, turn: { ok: false, reason: 'absent' } as never,
+      behind: { kind: 'measured', value: true }, drain: FREE };
+    const r = await f.cycle(() => soft);
+    expect(r.waits).toEqual({});
+    expect(state(f)).toEqual({ state: 'draining', shadowState: null });
+    expect(g.id).toBe(f.gen().id);
+  });
+
+  it('the lane\'s real gather: a soft trigger waits no-break while prog-a\'s operator mark is young (the hand-offs piece)', async () => {
+    const f = await atRest();
+    const g = f.gen();
+    f.s.db.prepare('UPDATE continuity_generations SET mintedObservedMs = ? WHERE id = ?').run(-LEAST_AGE_MS, g.id);
+    expect(f.s.putOperatorMark('prog-a', f.t.ports.clock.wall())).toEqual({ ok: true });
     const soft: GenReadings = { usage: usage(10_000, 1_000_000), compactions: { kind: 'absent' }, turn: { ok: false, reason: 'absent' } as never,
       behind: { kind: 'measured', value: true }, drain: FREE };
     const r = await f.cycle(() => soft);
     expect(f.gen().dueClass).toBe('soft');
-    expect(r.waits).toMatchObject({ unmeasured: 1 });
+    expect(r.waits).toMatchObject({ 'no-break': 1 });
     expect(state(f)).toEqual({ state: 'active', shadowState: null });
-    expect(g.id).toBe(f.gen().id);
   });
 
   it('renew refused (exit 3): a proven generation goes back to active with a hold-off, and no retry is made', async () => {
@@ -492,6 +505,23 @@ describe('the renewal act, live (Task 4)', () => {
     expect(f.host.renews).toHaveLength(1);
     const cp = f.s.db.prepare('SELECT generationId FROM continuity_checkpoints').all();
     expect(cp).toEqual([{ generationId: g.id }]);
+  });
+
+  it('a restarted Overlord\'s notes (keyed by its session id) reach its seal (review 2349 F2)', async () => {
+    const f = await atRest();
+    const g = f.gen();
+    // The generation's identity is `overlord`, its session the body's session: the note door writes under the session id.
+    f.s.db.prepare("UPDATE continuity_generations SET identity = 'overlord' WHERE id = ?").run(g.id);
+    const note = f.s.appendNote({ identity: COORD, sessionId: COORD, generationId: g.id, key: { kind: 'run', id: 1 }, kind: 'thread',
+      waitsOn: 'nothing', next: 'carry on', revises: null, closes: false, at: f.t.ports.clock.wall() });
+    expect(note.ok).toBe(true);
+    f.s.stepGeneration(g.id, genExpectOf(f.gen()), { ...GEN_ACTIVE, state: 'draining', cls: 'soft' }, true, f.t.ports.clock.wall());
+    await f.cycle(() => hardCap());
+    f.t.advance(STATE_DEADLINE_S.checkpointed * 1000);
+    await f.cycle();
+    const cp = f.s.db.prepare('SELECT notes FROM continuity_checkpoints WHERE generationId = ?').get(g.id) as { notes: string } | undefined;
+    expect(cp).toBeDefined();
+    expect(JSON.parse(cp!.notes)).toHaveLength(1);
   });
 });
 

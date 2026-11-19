@@ -173,6 +173,9 @@ export interface Catalogue {
   fetchedAt: number;
   stale: boolean;
   lastError?: string;
+  /** D-8743: the Codex client version a Codex catalogue was fetched as, a plain `X.Y.Z`. Absent on any other probe's
+   *  catalogue, and on a Codex catalogue fetched before the field or through the probe's test seam. */
+  clientVersion?: string;
   models: CatalogueModel[];
 }
 
@@ -198,17 +201,57 @@ export type ModelWindows = Readonly<Record<string, number>>;
 export interface LaneClassModel {
   readonly model: string | null;
   readonly label: string | null;
+  /** D-8686 (re-plan R1): the effort levels the catalogue row for `model` lists, as `parseCatalogue` kept them (`[]`:
+   *  the row lists none). `null` when there is no catalogue, no row for the model, or no model. An older server omits
+   *  the field, and its one reader (`asLaneModelsRead`, `pwa/src/lib/models.ts`) reads that as `null`. */
+  readonly efforts: readonly string[] | null;
 }
 export type LaneClassModels = Readonly<Record<ModelClass, LaneClassModel>>;
 
-/** D-8406: `GET /api/models/:lane`'s reading of a lane's model files. The non-readings stay two: `absent` is a lane
- *  with no class registry (an Anthropic lane, or one `ccrc models <id> init` never ran on), `unreadable` one whose
- *  registry exists and could not be read or parsed, or a fleet that would not answer. A reader shows class names
- *  for both, and never a model name this tree spells. */
+/** Why a lane's read is `unreadable` when the box said why (R3b, D-8693): the `show` refusals the retired file read used
+ *  to answer past, by the coordinator's ruling of 2026-11-16 (the catalogue before the registry, the registry parsed
+ *  with the catalogue, the fleet box's roster read first, and `ccd/ccrc`'s `no-answer` on a node half that answered
+ *  nothing usable), and `no-output`: `ccrc` exited 1 printing nothing, which is `_ccrc_die` before any lane sub ran.
+ *  Derived as a TYPE from an `as const` literal, `CatalogueVerbosity`'s pattern above, and not exported: its readers
+ *  hold it through `Record<LaneUnreadableCode, …>` tables, so a word added here is a compile error until each says it. */
+const LANE_UNREADABLE_CODE_LITERAL = [
+  'catalogue-unreadable', 'catalogue-invalid', 'registry-invalid', 'roster-absent', 'roster-unreadable', 'roster-invalid',
+  'no-answer', 'no-output',
+] as const;
+export type LaneUnreadableCode = (typeof LANE_UNREADABLE_CODE_LITERAL)[number];
+
+/** Why a lane has no class registry, as `show` said it (R3b fix round 1, F1): `anthropic` is an Anthropic lane, whose
+ *  classes are the client's own aliases by design, and `never-made` a lane `ccrc models <id> init` never ran on. Derived
+ *  from an `as const` literal, the pattern above, and not exported. */
+const LANE_ABSENT_KIND_LITERAL = ['anthropic', 'never-made'] as const;
+export type LaneAbsentKind = (typeof LANE_ABSENT_KIND_LITERAL)[number];
+
+/** Why the server's builder refused to ask (`buildModelsArgv`), a type-only import, erased at compile time. */
+type ModelsArgvRefusal = import('./agent-protocol.js').ModelsArgvRefusal;
+
+/** D-8406, R3b: `GET /api/models/:lane`'s reading of a lane, through the fleet's `models` op alone. Every outcome is its
+ *  own arm, and none is folded into another (R3b, the coordinator's rulings of 2026-11-18):
+ *  - `read`: the lane's classes, and `advance` as `show` reported it (absent only from a server older than R3).
+ *  - `absent`: a lane with no class registry, or one the fleet box did not find. `laneKind` keeps the reason `show` sent
+ *    (`LaneAbsentKind`); absent, the fleet box's roster has no such lane (`no-such-account`, fix round 2, N1).
+ *  - `unreadable`: the registry could not be read or parsed, or the op RAN and gave no usable answer (a timeout, an
+ *    output past its cap, a lost answer, a stdout off the grammar). `code`, when present, is the box's reason
+ *    (`LaneUnreadableCode`); absent, the server has no reason to name.
+ *  - `unsupported`: this build does not offer the read: the fleet's agent predates the op, or the server's bare local
+ *    io has no configured home. Nothing ran.
+ *  - `not-started`: the frame never left, or the launcher could not start. Nothing ran.
+ *  - `refused`: the server's own builder refused the lane (`why`). Nothing ran.
+ *  - `busy`: the agent's one models gate was held by another request. Nothing ran, and it is transient: the next read
+ *    asks again.
+ *  A reader shows class names for every arm but `read`, and never a model name this tree spells. */
 export type LaneModelsRead =
-  | { readonly kind: 'read'; readonly classes: LaneClassModels }
-  | { readonly kind: 'absent' }
-  | { readonly kind: 'unreadable' };
+  | { readonly kind: 'read'; readonly classes: LaneClassModels; readonly advance?: LaneAdvanceRead }
+  | { readonly kind: 'absent'; readonly laneKind?: LaneAbsentKind }
+  | { readonly kind: 'unreadable'; readonly code?: LaneUnreadableCode }
+  | { readonly kind: 'unsupported' }
+  | { readonly kind: 'not-started' }
+  | { readonly kind: 'refused'; readonly why: ModelsArgvRefusal }
+  | { readonly kind: 'busy' };
 
 /** D-8406: `GET /api/models/:lane`'s 200. */
 export interface LaneModelsAnswer {
@@ -251,7 +294,6 @@ export {
   MODELS_DIR_NAME,
   registryFileName,
   catalogueFileName,
-  isLaneModelsReadName,
   laneClassModels,
   MODELS_PUSH_MAX,
   modelsPushOf,
@@ -263,3 +305,43 @@ export {
   type ModelsPushRefusal,
   type ModelsPushRoster,
 } from './models.mjs';
+
+// ── the lane's advance state, as `show` reports it (plan W4a Task 18 as re-planned, D-8686, D-5228, D-8693) ──
+// `LaneModelsRead`'s `read` arm carries it from the `models` op's `show`; ABSENT `advance` is an answer from a server
+// older than R3, whose read went through the retired file grant and never read the advance file, never folded into
+// `unreported`. Its one reader is
+// `server/src/laneModels.ts`. The four shapes are `shared/model-advance.mjs`'s own (`.d.mts`), never restated: they are
+// named through type-only `import()` expressions, erased at compile time, so the PWA bundles nothing from that file, and
+// this file's one `from` specifier stays `./models.mjs` (`server/test/models.test.ts` pins it; D-8709).
+type HistoryEntry = import('./model-advance.mjs').HistoryEntry;
+type Hold = import('./model-advance.mjs').Hold;
+type Pending = import('./model-advance.mjs').Pending;
+type Previous = import('./model-advance.mjs').Previous;
+
+/** D-8686, D-5228: how `show` reported the lane's advance file, five states never folded. `unreported`: the answer
+ *  carried no `advance` key, or an `ok` one without `pending` (only a `ccrc` older than this reader sends either).
+ *  `invalid` is also a state WORD this reader does not know (R3b, the operator's ruling of 2026-11-17): the lane's
+ *  classes are kept, and only the advance record is "not one this build reads".
+ *  The literal is NOT exported, `CatalogueVerbosity`'s pattern above: a value declared here and not in
+ *  `shared/models.mjs` would be `undefined` to an extension-less import at runtime (`server/test/models.test.ts`),
+ *  and its one reader, `server/src/laneModels.ts`, switches on the type (D-8709). */
+const LANE_ADVANCE_STATES = ['ok', 'absent', 'unreadable', 'invalid', 'unreported'] as const;
+export type LaneAdvanceState = (typeof LANE_ADVANCE_STATES)[number];
+export interface LaneClassAdvance {
+  readonly family: string | null;
+  readonly hold: Hold | null;
+  readonly previous: Previous | null;
+  /** True only when the file was read and holds a `previous` for the class: a Revert has somewhere to go. */
+  readonly revertable: boolean;
+  /** The newest SUCCESSFUL move (`lastMoveOf`), or null. */
+  readonly lastMove: HistoryEntry | null;
+}
+export interface LaneAdvanceRead {
+  readonly state: LaneAdvanceState;
+  /** The reason an `unreadable` or `invalid` file gave; null in every other state. */
+  readonly detail: string | null;
+  /** The file's pending intent (D-5188); null for none, and in every state but `ok`. */
+  readonly pending: Pending | null;
+  /** Every class, only when `state` is `ok`; null otherwise. */
+  readonly classes: Readonly<Record<ModelClass, LaneClassAdvance>> | null;
+}

@@ -1,9 +1,12 @@
 // Single-definition scanners, one area of the guard that used to be one file (see ./helpers.ts for the doctrine and the shared walkers).
 import { describe, it, expect } from 'vitest';
+import { spawnSync } from 'node:child_process';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { ARCHIVE_REFUSALS, SWAP_REFUSALS } from '../../../shared/api.js';
+import { FORBIDDEN_CCD_VERBS } from '../../src/coord/approvalguard.js';
 import { callsIn, symbolOf } from '../scan/symbols.js';
+import { parseFile, parseSource, type CallSite } from '../scan/parse.js';
 import { ALL, ALL_MJS, BASH, ccrcRoot, codeLines, here, holdersOf, isBashComment, prose, rel, stallCode, stallCodeText } from './helpers.js';
 
 
@@ -998,10 +1001,13 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
   ] as const;
   const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
   const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
-  it.each(MARKERS)('%s: no line of shell writes it', (name) => {
+  // The Overlord W1 ccd arms (plan Task 2): `ccd keep-awake` is `no-hibernate`'s one writer in the tree, for the Overlord's
+  // body alone (spec §3.2, C4), so that marker has exactly one line of shell writing it, in `ccd/lib/long-lived.sh`'s
+  // `cmd_keep_awake`; the other three still have none.
+  it.each(MARKERS)('%s: no line of shell writes it, but keep-awake\'s one line', (name) => {
     expect(SHELL_WRITE.test(`touch "$REG/${name}"`), 'CONTROL: the pattern sees a write').toBe(true);
     const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes(name) && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
-    expect(writers, `${name}: a line of shell writes it`).toEqual([]);
+    expect(writers, `${name}: a line of shell writes it`).toEqual(name === 'no-hibernate' ? [KEEP_AWAKE_WRITER('no-hibernate')] : []);
   });
   it.each(MARKERS)('%s: its one TS holder is its definer, which reaches no node: module', (name) => {
     // `hibernate-live` and `hibernate-disabled` contain no other marker; `no-hibernate` is not a substring of the three
@@ -1034,6 +1040,43 @@ describe('D-5242: hibernation’s markers have no writer, and its holds one home
     expect(ALL.filter((f) => decl.test(stallCode(f))).map(rel)).toEqual(['shared/api.ts']);
   });
 });
+
+
+// The Overlord W1 ccd arms (plan Task 2). `$REG/<id>.no-roll` (the roll's opt-out, decision U4) was written by hand only;
+// `ccd keep-awake` now writes it on the Overlord's body (spec §3.2, C4), from exactly one line of shell. The TS half: its
+// definer `server/src/coord/rollTarget.ts` and every file that names `NO_ROLL_SUFFIX` reach no write. BLIND SPOTS, stated:
+// the shell half reads bash files only (`helpers.ts#BASH`), never `ccd/*.py` or `.mjs`, and the TS half's spelled check
+// does not see a template such as `${id}.no-roll`.
+describe('the Overlord W1 ccd arms: the roll\'s opt-out has one shell writer, keep-awake', () => {
+  const DEFINER = 'server/src/coord/rollTarget.ts';
+  const SHELL_WRITE = /(?:>>?|\btouch\b|\btee\b|\b_reg_set\b|\bprintf\b[^|]*>|\bcp\b|\bmv\b|\bln\b|\binstall\b)/;
+  const TS_WRITE = /\b(?:writeFile|appendFile|rename|symlink|copyFile|mkdir|truncate|unlink|rm)(?:Sync)?\s*\(|\.write\w*\s*\(/;
+  it('no-roll: exactly one line of shell writes it, in ccd/lib/long-lived.sh\'s cmd_keep_awake', () => {
+    expect(SHELL_WRITE.test('touch "$REG/$id.no-roll"'), 'CONTROL: the pattern sees a write').toBe(true);
+    const writers = BASH.flatMap((f) => codeLines(f).filter((l) => l.includes('no-roll') && SHELL_WRITE.test(l)).map((l) => `${rel(f)}: ${l.trim()}`));
+    expect(writers, 'no-roll: its shell writers').toEqual([KEEP_AWAKE_WRITER('no-roll')]);
+  });
+  it('no-roll: its one TS holder is its definer, which reaches no node: module', () => {
+    expect(ALL.filter((f) => stallCode(f).includes("'no-roll'") || stallCode(f).includes('"no-roll"')
+      || stallCode(f).includes('`no-roll') || stallCode(f).includes('/no-roll')).map(rel).sort(),
+    'no-roll spelled on a code line outside its definer').toEqual([DEFINER]);
+    expect(stallCode(path.join(ccrcRoot, DEFINER))).not.toMatch(/from\s+['"]node:|import\s*\(\s*['"]node:|\brequire\s*\(/);
+  });
+  it('NO_ROLL_SUFFIX: the files that name it reach no write', () => {
+    const holders = ALL.filter((f) => stallCode(f).includes('NO_ROLL_SUFFIX')).map(rel).sort();
+    expect(holders, 'NO_ROLL_SUFFIX: nobody names it').toContain(DEFINER);
+    for (const f of holders) expect(stallCode(path.join(ccrcRoot, f)), `${f} reaches a write`).not.toMatch(TS_WRITE);
+  });
+});
+
+/** The one line of shell that writes `marker`: `cmd_keep_awake`'s publish, the stamp written into a temp file and linked
+ * into place, so it fails EEXIST on every kind of entry (the Overlord W1 ccd arms, review 2231 F2). */
+function KEEP_AWAKE_WRITER(marker: 'no-hibernate' | 'no-roll'): string {
+  const publish = `{ printf '%s' "$KEEP_AWAKE_STAMP" > "$t" && link "$t" "$REG/$id.${marker}"; } 2>/dev/null`;
+  return marker === 'no-hibernate'
+    ? `ccd/lib/long-lived.sh: if [[ "$field" == no-hibernate ]]; then ${publish}`
+    : `ccd/lib/long-lived.sh: else ${publish}; fi; rm -f -- "$t"`;
+}
 
 
 // D-6631 (fleet disk retention DR-19; spec 2026-10-23 sections 2.3 and 4). The orphan-worktree lane ships SHADOW behind two
@@ -1131,6 +1174,16 @@ describe('the approval wait\'s constants and canonical forms each have one home 
 describe('the approvals server half\'s vocabulary and windows each have one home (D-5298, D-5441)', () => {
   const holders = (re: RegExp): string[] => ALL.filter((f) => re.test(stallCode(f))).map(rel).sort();
   const decl = (c: string): RegExp => new RegExp(`\\b(?:const|let|var|function)\\s+${c}\\b|\\btype\\s+${c}\\s*=`);
+  // Only the ladder's typed witness receivers are unrelated to the claimant decision. Any other receiver or bare call stays visible.
+  const claimantCall = (file: string, call: CallSite): boolean => call.name === 'heldFor' && !(
+    (file === 'server/src/coord/overlordLadderRead.ts' && call.callee === 'witness.heldFor') ||
+    (file === 'server/src/coord/overlordRoutes.ts' && call.callee === '(ladder.witness ?? NO_WITNESS_YET).heldFor'));
+  it('CONTROL: claimant calls remain visible while the independent witness method is not', () => {
+    const calls = parseSource('heldFor(x); d.heldFor(x); witness.heldFor(x);').calls;
+    expect(calls.filter((c) => claimantCall('server/src/coord/overlordLadderRead.ts', c)).map((c) => c.callee)).toEqual(['heldFor', 'd.heldFor']);
+    expect(decl('heldFor').test('function heldFor() {}')).toBe(true);
+    expect(decl('heldFor').test('interface NarrowingWitness { heldFor(n: number): boolean }')).toBe(false);
+  });
   it('CONTROL: the pattern sees a declaration and passes over a use', () => {
     expect(decl('ApprovalState').test('import { type ApprovalState, isApprovalState } from')).toBe(false);
     expect(decl('approvalWindowMs').test('export function approvalWindowMs(agentId: string): number {')).toBe(true);
@@ -1154,7 +1207,8 @@ describe('the approvals server half\'s vocabulary and windows each have one home
     // so did the hold's (`raise`, D-7028; W3 Q3d, named exception 2), so `watch.ts` leaves the list; and the rule
     // handler's moved into the claimant's core (`rule`, D-7030; W3 Q3f, named exception 2), so `coord/routes.ts` leaves
     // it too.
-    expect(holders(/\bheldFor\(/)).toEqual(['server/src/coord/heldFor.ts', 'server/src/coord/questions.ts']);
+    const callers = ALL.filter((f) => /\bheldFor\b/.test(stallCode(f)) && parseFile(f).calls.some((c) => claimantCall(rel(f), c))).map(rel).sort();
+    expect(callers).toEqual(['server/src/coord/questions.ts']);
   });
   it('the 60 000 ms window is spelled nowhere but its home', () => {
     expect(holders(/\b60_000\b[^\n]*(?:approval|countdown)|(?:approval|countdown)[^\n]*\b60_000\b/i)).toEqual(['server/src/askwindow.ts']);
@@ -1759,5 +1813,59 @@ describe('the question doors: one reader, one core per principal, the old doors 
     // Nothing decides after the core: what follows the call only sends its answer (no branch, no further await).
     expect(code.slice(core), `${route} decides after the core`).not.toMatch(/\bif\s*\(|\bawait\b|\?\s*[^:]*:/);
     if (reader !== null) expect(code.indexOf(reader), `${route} reads its body before the core`).toBeLessThan(core);
+  });
+});
+
+
+// D-8666 (the delegation broker's Rider; review 2313 F1). APPENDED, for the reason the first block states. Every verb no
+// session may run (`FORBIDDEN_CCD_VERBS`, `server/src/coord/approvalguard.ts`) starts protected at the installed direct
+// entry: `ccd/ccd-entry.py#is_protected` folds its case and starts it under `bash -p`, so a case variant reached through an
+// inherited `nocasematch` folds into no verb. The entry's tuples are hand-kept beside that list, so this census asks the
+// entry's REAL classifier (both tuples, loaded from the file as a module) about each head, never a third list: a verb added
+// to `FORBIDDEN_CCD_VERBS`, or deleted from either tuple, reds it. The head is the first word, so `ws-gc --prune` is
+// `ws-gc`. KNOWN WIDTH: it asks each head exactly, upper-cased, and with one tail word; the folds beyond ASCII are the
+// reach tests' (`ccd-forbidden-verbs-entry.test.ts`, `ccd-ws-lease-mark-reach.test.ts`).
+describe('every forbidden ccd verb starts protected at the installed direct entry (D-8666; review 2313 F1)', () => {
+  const ENTRY = path.join(ccrcRoot, 'ccd', 'ccd-entry.py');
+  const HEADS = [...new Set(FORBIDDEN_CCD_VERBS.map((v) => v.split(' ')[0]!))];
+  /** The heads `source`'s own `is_protected` does NOT protect, `source` loaded as a module: each asked bare, upper-cased and
+   *  with a tail word, and listed when any of the three starts ordinary. */
+  const unprotected = (source: string, heads: readonly string[]): string[] => {
+    const py = [
+      'import json, sys, types',
+      'm = types.ModuleType("ccd_entry")',
+      'exec(compile(sys.stdin.read(), "ccd-entry.py", "exec"), m.__dict__)',
+      'heads = json.loads(sys.argv[1])',
+      'print(json.dumps([v for v in heads if not all(m.is_protected(a) for a in ([v], [v.upper()], [v, "--x"]))]))',
+    ].join('\n');
+    const r = spawnSync('python3', ['-I', '-S', '-c', py, JSON.stringify(heads)], { input: source, encoding: 'utf8' });
+    expect(r.status, `the classifier could not be asked: ${r.stderr}`).toBe(0);
+    return JSON.parse(r.stdout) as string[];
+  };
+  const source = (): string => readFileSync(ENTRY, 'utf8');
+
+  it('the census reads the list: every head, ws-gc from ws-gc --prune among them', () => {
+    expect(HEADS).toContain('ws-gc');
+    expect(HEADS).toContain('ws-rm');
+    expect(HEADS.length, 'one head per verb').toBe(FORBIDDEN_CCD_VERBS.length);
+  });
+
+  it('every head of FORBIDDEN_CCD_VERBS is protected by the entry\'s own is_protected', () => {
+    expect(unprotected(source(), HEADS)).toEqual([]);
+  });
+
+  it('CONTROL: a verb added to FORBIDDEN_CCD_VERBS that the entry does not protect is reported', () => {
+    expect(unprotected(source(), [...HEADS, 'ws-new-verb'])).toEqual(['ws-new-verb']);
+  });
+
+  it('CONTROL: each head deleted from whichever tuple names it is reported', () => {
+    const src = source();
+    for (const v of HEADS) {
+      const quoted = `'${v}'`;
+      expect(src.split(quoted).length - 1, `${v} is named once in the entry`).toBe(1);
+      const mutant = src.includes(`${quoted}, `) ? src.replace(`${quoted}, `, '') : src.replace(`, ${quoted}`, '');
+      expect(mutant, `${v}: the mutation applied`).not.toContain(quoted);
+      expect(unprotected(mutant, HEADS), `${v} deleted from its tuple`).toEqual([v]);
+    }
   });
 });

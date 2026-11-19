@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
@@ -7,6 +8,7 @@ import { DEFAULT_TEST_ROSTER } from './helpers.js';
 import { seedAccountsSh } from './ccdWsHelpers.js';
 import { ACCOUNT_DENY_RULES, CHILD_DENY_RULES, childDenyRules } from '../../shared/api.js';
 import { HOOK_EVENTS } from '../../shared/hook-events.js';
+import { CHILD_DENY_DIGESTS_FILE, CHILD_DENY_DIGESTS_MAX } from '../src/coord/approvalDenyFloor.js';
 
 const INSTALLER = path.resolve(__dirname, '../../ccd/install-session-hooks.sh');
 
@@ -440,6 +442,140 @@ describe('the children\'s deny file (spec §6.6, plan Task 15, D-5299)', () => {
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
     execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
     expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+  });
+});
+
+// Overlord approvals PR 0 (plan 2026-11-18-overlord-approvals.md §3.2.1, Task 0.2): the install spine is the one writer
+// of `child-deny.digests`, one `<digest> <epoch ms>` line per digest the managed deny file has had, newest last, at most
+// 32 lines. A child spawned under an older deny file is then routed by the hook and held by the server, its allow capped.
+describe('the children\'s deny digest history (approvals PR 0)', () => {
+  const reg = (): string => path.join(home, '.cc-sessions');
+  const denyFile = (): string => path.join(reg(), 'child-deny.settings.json');
+  const histFile = (): string => path.join(reg(), 'child-deny.digests');
+  const digestOf = (p: string): string => createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+  const lines = (): string[] => fs.readFileSync(histFile(), 'utf8').split('\n').filter((l) => l !== '');
+  const LINE = /^([0-9a-f]{64}) ([0-9]{13})$/;
+  const upstream = (id: string): void => {
+    seedAccountsSh(home, { ...DEFAULT_TEST_ROSTER, accounts: DEFAULT_TEST_ROSTER.accounts.map((a) => (a.id === 'claude' ? { ...a, id, label: id } : a)) });
+  };
+
+  it('the first run records the deny file it wrote: one line, its sha256 and the time in epoch ms', () => {
+    const before = Date.now();
+    run();
+    const ls = lines();
+    expect(ls).toHaveLength(1);
+    const m = LINE.exec(ls[0]!);
+    expect(m, ls[0]).not.toBeNull();
+    expect(m![1]).toBe(digestOf(denyFile()));
+    expect(Number(m![2])).toBeGreaterThanOrEqual(before - 1000);
+    expect(Number(m![2])).toBeLessThanOrEqual(Date.now() + 1000);
+    expect(fs.readFileSync(histFile(), 'utf8').endsWith('\n')).toBe(true);
+  });
+  // MUTATION (Task 0.2): write the line on every install, and this reds.
+  it('an unchanged deny file writes no line: a re-run keeps the history byte for byte', () => {
+    run();
+    const bytes = fs.readFileSync(histFile());
+    run();
+    expect(fs.readFileSync(histFile()).equals(bytes)).toBe(true);
+  });
+  it('a changed deny file appends its new digest after the old one', () => {
+    seedAccountsSh(home);
+    run();
+    const first = digestOf(denyFile());
+    upstream('upstream-a');
+    run();
+    const second = digestOf(denyFile());
+    expect(second).not.toBe(first);
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([first, second]);
+    run();
+    expect(lines()).toHaveLength(2);
+    // Back to the first list: its digest is not the last line, so it is recorded again.
+    seedAccountsSh(home);
+    run();
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([first, second, first]);
+  });
+  it('a box whose deny file predates the history records that file once, though it rewrites nothing', () => {
+    run();
+    fs.rmSync(histFile());
+    const bytes = fs.readFileSync(denyFile());
+    run();
+    expect(fs.readFileSync(denyFile()).equals(bytes)).toBe(true);
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([digestOf(denyFile())]);
+    run();
+    expect(lines()).toHaveLength(1);
+  });
+  // The coordinator's plan-review ruling F1 (2026-11-18): a rewrite records the OUTGOING file's digest before the incoming
+  // one, so the children spawned under the outgoing file are named even on a box whose history never held it.
+  it('a rewrite records the outgoing digest, then the incoming one', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    fs.writeFileSync(denyFile(), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n');
+    const outgoing = digestOf(denyFile());
+    run();
+    const incoming = digestOf(denyFile());
+    expect(incoming).not.toBe(outgoing);
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([outgoing, incoming]);
+  });
+  it('the outgoing digest already last is not written twice', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    fs.writeFileSync(denyFile(), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n');
+    const outgoing = digestOf(denyFile());
+    fs.writeFileSync(histFile(), `${outgoing} 1700000000000\n`);
+    run();
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([outgoing, digestOf(denyFile())]);
+    expect(lines()[0]).toBe(`${outgoing} 1700000000000`);
+  });
+  it('a symlink at the deny file\'s name is not ours: its target\'s digest is never recorded', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    const target = path.join(home, 'foreign.json');
+    fs.writeFileSync(target, '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n');
+    fs.symlinkSync(target, denyFile());
+    run();
+    expect(lines().map((l) => LINE.exec(l)?.[1])).toEqual([digestOf(denyFile())]);
+  });
+  it('keeps the newest 32 lines, the new digest last', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    const old = Array.from({ length: 40 }, (_, i) => `${i.toString(16).padStart(64, '0')} ${1700000000000 + i}`);
+    fs.writeFileSync(histFile(), `${old.join('\n')}\n`);
+    run();
+    const ls = lines();
+    expect(ls).toHaveLength(32);
+    expect(ls.slice(0, 31)).toEqual(old.slice(-31));
+    expect(LINE.exec(ls[31]!)?.[1]).toBe(digestOf(denyFile()));
+  });
+  it('drops a line not of the shape when it rewrites, and keeps every good one', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    const good = `${'a'.repeat(64)} 1700000000000`;
+    fs.writeFileSync(histFile(), `garbage\n${good}\n${'b'.repeat(63)} 1\n`);
+    run();
+    const ls = lines();
+    expect(ls).toHaveLength(2);
+    expect(ls[0]).toBe(good);
+    expect(LINE.exec(ls[1]!)?.[1]).toBe(digestOf(denyFile()));
+  });
+  it('a symlink at the history\'s name is replaced by a regular file, and its target is never written', () => {
+    fs.mkdirSync(reg(), { recursive: true });
+    const target = path.join(home, 'elsewhere.txt');
+    fs.writeFileSync(target, 'untouched\n');
+    fs.symlinkSync(target, histFile());
+    run();
+    expect(fs.lstatSync(histFile()).isSymbolicLink()).toBe(false);
+    expect(fs.readFileSync(target, 'utf8')).toBe('untouched\n');
+    expect(lines()).toHaveLength(1);
+  });
+  it('--remove, scoped or roster-wide, leaves the history byte-identical', () => {
+    run();
+    const bytes = fs.readFileSync(histFile());
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude'), path.join(home, '.claude-home')], { env: { ...process.env, HOME: home } });
+    expect(fs.readFileSync(histFile()).equals(bytes)).toBe(true);
+    // And it never starts one: a --remove over a box with no history writes none.
+    fs.rmSync(histFile());
+    execFileSync('bash', [INSTALLER, '--remove', '--homes', path.join(home, '.claude')], { env: { ...process.env, HOME: home } });
+    expect(fs.existsSync(histFile())).toBe(false);
+  });
+  it('the reader and the writer agree: the bound and the file name are the L1 module\'s', () => {
+    const src = fs.readFileSync(INSTALLER, 'utf8');
+    expect(src).toContain(`CHILD_DENY_DIGESTS="$HOME/.cc-sessions/${CHILD_DENY_DIGESTS_FILE}"`);
+    expect(src).toContain(`CHILD_DENY_DIGESTS_MAX=${CHILD_DENY_DIGESTS_MAX}\n`);
   });
 });
 

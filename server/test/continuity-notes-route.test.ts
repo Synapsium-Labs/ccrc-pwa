@@ -5,6 +5,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import { CoordStore } from '../src/coord/store.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { MASKED_GET_ROUTES } from '../src/server.js';
 import { genExpectOf, type GenRow, type MintInput } from '../src/continuity/continuityStore.js';
 import { GEN_ACTIVE } from '../src/continuity/generationMachine.js';
@@ -446,5 +447,62 @@ describe('GET /api/sessions/:id/notes: paged, every page under the tool result c
       const res = await get(app, q);
       expect([res.statusCode, res.json().error], JSON.stringify(q)).toEqual([400, 'bad-request']);
     }
+  });
+});
+
+// ── the designation (Overlord W1 designation A, Task 3, X5) ──────────────────────────────────────────────────────────
+
+describe('liveGenerationOf reads the generation identity of the designation', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 5, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const boundAs = (id: string, pending: DesignationView['pending'] = null): DesignationRead =>
+    ({ kind: 'designated', sessionId: id, term: 5, row: view({ bound: { sessionId: id, generation: 'g1' }, pending }) });
+  /** A generation of `identity` for this session, minted the way the lane does. */
+  const mintAs = (identity: string, role: 'overlord' | 'coordinator'): GenRow => {
+    reports += 1;
+    const start = c().insertStart({ sessionId: ID, reportId: `report-${reports}`, uuid: UUID, source: 'resume', model: null, rowIncarnation: null, reportedAt: NOW, receivedAt: NOW });
+    if (!start.ok) throw new Error('start');
+    const held = c().liveGenerations();
+    if (!held.ok) throw new Error(held.detail);
+    const prev = held.rows.find((g) => g.identity === identity) ?? null;
+    const m = c().mintGeneration({ identity, sessionId: ID, role, term: 5, rowIncarnation: null, startId: start.id, startReportedAt: NOW,
+      resumed: false, model: null, lane: 'lane-a', host: null, outcome: 'renewed', mono: 1, proc: 'p', now: NOW }, prev === null ? null : genExpectOf(prev), true);
+    if (!m.ok) throw new Error(m.kind);
+    return c().liveGenerations().ok ? (c().liveGenerations() as { rows: GenRow[] }).rows.find((g) => g.identity === identity)! : (() => { throw new Error('gens'); })();
+  };
+  const noteGen = (id: number): unknown => (c().db.prepare('SELECT generationId FROM continuity_notes WHERE id = ?').get(id) as { generationId: number | null }).generationId;
+
+  it('a restart of the Overlord: the bound session\'s note records its overlord generation', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    c().designationRead = () => boundAs(ID);
+    const gen = mintAs('overlord', 'overlord');
+    const id = (await post(app, note({ kind: 'run', id: run }))).json().id as number;
+    expect(noteGen(id)).toBe(gen.id);
+  });
+
+  it('a rebind with the old body live: the pending body\'s note finds no generation under its own id, never the old body\'s overlord row', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    c().designationRead = () => boundAs('overlord-old-owl', { sessionId: ID, kind: 'rebind', deadlineAt: 9, since: 1, actor: 'op', generation: null });
+    mintAs('overlord', 'overlord');
+    const id = (await post(app, note({ kind: 'run', id: run }))).json().id as number;
+    expect(noteGen(id)).toBeNull();
+  });
+
+  it('an unmeasured designation answers the door\'s unmeasured arm: 502 on a note and on a handover, and nothing is written', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    mintAs('overlord', 'overlord');
+    for (const bad of [(): DesignationRead => ({ kind: 'unmeasured', why: 'x' }), (): DesignationRead => { throw new Error('locked'); }]) {
+      c().designationRead = bad;
+      const n = await post(app, note({ kind: 'run', id: run }));
+      expect([n.statusCode, n.json().error]).toEqual([502, 'unmeasured']);
+      const h = await handover(app, goodHandover(run));
+      expect([h.statusCode, h.json().error]).toEqual([502, 'unmeasured']);
+    }
+    expect(rows()).toEqual([]);
   });
 });

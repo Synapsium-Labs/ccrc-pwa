@@ -33,7 +33,7 @@ import {
   ABANDON_REQUESTED_PREFIX, ANSWER_MAX, ITEM_KINDS, ITEM_OPTIONS_MAX, ITEM_STEPS_MAX, ITEM_TEXT_MAX, ITEM_TITLE_MAX, NEEDED_BY_LEVELS, RECOMMEND_WHY_MAX, SECRET_VALUE_MAX,
   SOON_LABEL_MAX,
   actAbandons, doneWhenOf, earlierTickBlocks, isCloseRefusedAction, parseItemActBody, refusedCloseDetail, isEndRunAction, isReleaseReviewAction, isOneLine, isSecretValue, isSlotSlug, isSpecPath, itemIsStale,
-  nextItemState, outsideDocLink, secretAnswer, secretTailOf,
+  nextItemState, outsideDocLink, parseGoalsVersion, secretAnswer, secretTailOf,
   type CoordinatorPresence, type GoalsRead, type ItemKind, type ItemView, type NeededBy, type SecretRemoveAnswer,
   type StoredSecret, type StoredSecretsAnswer, type WaitingView,
 } from '../../../shared/ledgers.js';
@@ -49,28 +49,31 @@ import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
 import { parseRankWrite, type PortfolioView } from '../../../shared/portfolio.js';
 import { portfolioFor } from './portfolio.js';
+import type { SpendUsageRead } from './portfolioStore.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
+import type { CallerIdentity } from '../auth/callerIdentity.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
 import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
 import { askForMark, markableAsks } from './questions.js';
 import { credentialBodyRoute, noStoreRoute, type AccountGate } from '../accounts/gate.js';
 import {
-  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, operatorSecretLaneId, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
+  OperatorSecretNameCollides, OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, operatorSecretLaneId, slotChains, operatorSlotNamesValid, readOperatorSecretMeta, readStoredSecrets,
   removeOperatorSecret, programmeChainKey, sweepOperatorSecretTemps, writeOperatorSecret, type OperatorSecretMeta, type OperatorSecretState,
   type RegisterSecret,
 } from './ledgersSecrets.js';
 import type { BoundRowRef } from './pushOutboxStore.js';
 import { WAITING_URL } from '../pushOutbox.js';
 import { itemBoundOf, type OutboxView } from '../pushSender.js';
+import type { OtherLane } from './otherLanes.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
 export interface LedgerCoordinatorDeps {
   coord: CoordStore | undefined;
   requireMailToken: (req: FastifyRequest, reply: FastifyReply, route: string) => boolean;
-  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid') => Promise<boolean>;
+  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid', lane?: OtherLane) => Promise<boolean>;
   notice: NoticeSink;
   bus: Bus;
   now: () => number;
@@ -105,7 +108,7 @@ export function itemViewOf(row: ItemRow, events: readonly ItemEventRow[], stale:
     options: row.options, recommended: row.recommended, recommendedWhy: row.recommendedWhy,
     neededBy: row.neededBy, soonLabel: row.soonLabel, state: row.state, stale,
     raisedAt: row.raisedAt, tickedAt: row.tickedAt, closedAt: row.closedAt, answer: row.answer, note: row.note,
-    secretSlot: row.secretSlot, action: row.action,
+    secretSlot: row.secretSlot, action: row.action, revision: row.revision,
     secretSet: secret === null ? null
       : 'unreadable' in secret ? { unreadable: true }
         // `tail: ''` for a console from before the PL6 follow-up, which reads `tail` and would say "Ends in undefined" (review
@@ -347,7 +350,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const outside = outsideDocLink([parsed.v.title, parsed.v.why, ...parsed.v.how, ...(parsed.v.options ?? []),
       ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
     if (outside !== null) return refuseOutsideDocLink(reply, outside);
-    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
+    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid', 'itemRaise'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const v = parsed.v;
     if (v.runId !== null) {
@@ -522,7 +525,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
         return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.doneWhenNeedsRuling, { detail: 'this programme already has a definition of done; change it with goals modify, citing a ruling or an itemId' });
       }
     }
-    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen);
+    coord.setSpecPin(slug, specPath, inShort, deps.now(), doneWhen, { kind: 'coordinator' });
     changed();
     return reply.code(200).send({ ok: true });
   });
@@ -568,6 +571,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
       if (item === null) return refuseRoute(reply, 'unknown-item', { detail: `no item ${itemId}` });
       if (item.program !== slug) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.notYourProgramme, { detail: `item ${itemId} belongs to another programme` });
     }
+    // What the row rests on is the store's to derive from its own itemId (Overlord W1, portfolio B; review 2240 F6).
     const id = coord.addModification(slug, { text: modText, ruling, itemId, pr, doneWhen }, deps.now());
     changed();
     return reply.code(200).send({ ok: true, id });
@@ -600,6 +604,9 @@ export interface LedgerOperatorDeps {
   presenceOf: (sessionId: string) => CoordinatorPresence;
   /** The account gate (D-5511): the secret's route is a credential act, so it asks for a step-up first (plan PL6). */
   gate: AccountGate;
+  /** The caller identity port (Overlord W1 gates A, Q17): the ratify door's gate actor at `operator` strength, and the rank
+   *  door's console arm (signed in, no device, or dark). */
+  identity: Pick<CallerIdentity, 'operator' | 'console'>;
   /** Where the operator-secret slots live (`cfg.ccrcDir`, `coord/ledgersSecrets.ts`). */
   ccrcDir: string;
   /** The egress masker's one registration of a server-held secret (`SecretMasker.ingestSecret`), `beside` the lane's rows when
@@ -626,6 +633,10 @@ export interface LedgerOperatorDeps {
   /** The live signal for an open ask (Overlord W1, portfolio): the watcher's `liveAskKey`, or a reader answering `unmeasured`
    *  when no watcher runs, so a released ask then counts as unmeasured, never as live. */
   liveAsk: LiveAskRead;
+  /** The usage sweep's reading of an open run's session for the portfolio's spend read (Overlord W2 forecasts B): the
+   *  watcher's `liveSpendReading`. Absent (a test, or no watcher): every reading is `not-ready`, so live spend reads as
+   *  unmeasured, never 0. */
+  liveSpend?: SpendUsageRead;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -637,9 +648,8 @@ const PROGRAMME_UNCLAIMED_SENTENCE =
  *  escape), the `{"value":""}` around it and room to spare (plan PL6; review 1391 A-9: 16384 refused a value the panel takes).
  *  On the secret's route the body IS the secret, so its body errors are fixed words (`credentialBodyRoute`). */
 export const SECRET_BODY_LIMIT = SECRET_VALUE_MAX * 6 + 1024;
-/** How long an act on a slot waits for that slot's previous act (review 1391 A-3): past it the act answers `slot-busy` and does
- *  nothing, so a write stuck on a sick disk never queues requests behind it without bound. */
-export const SLOT_WAIT_MS = 30_000;
+/** How long an act on a slot waits for that slot's previous act (`SLOT_WAIT_MS`, `ledgersSecrets.ts`, review 1391 A-3). */
+export { SLOT_WAIT_MS };
 
 /** The end-request items whose Abandon run is in flight, per store. The abandon's fleet act awaits before it commits, and
  *  the coordinator's withdraw and the operator's decline take no coordination hold, so while an item is in this set both
@@ -766,7 +776,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   // account gate and works while sign-in is dark, recording `flag-off` then (slug rank-works-dark), as the `lane-arm` and
   // `run-close` switches do; armed, it records the session's device actor. It awaits nothing between its read and its
   // write, so `setPortfolioRank`'s revision check inside one transaction is the whole guard against a stale tab.
-  const portfolioView = (coord: CoordStore, now: number): PortfolioView => portfolioFor(coord.portfolioFacts(now, deps.liveAsk), now);
+  const portfolioView = (coord: CoordStore, now: number): PortfolioView =>
+    portfolioFor(coord.portfolioFacts(now, deps.liveAsk, deps.liveSpend ?? (() => ({ kind: 'not-ready' as const }))), now);
   app.get('/api/portfolio', (_req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
@@ -780,7 +791,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.post('/api/portfolio/rank', (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    const actor = deps.authEnabled ? deviceActor(deps.sessionAuth(req).device) : 'flag-off';
+    // The console arm of the identity port (gates A, question 11): the device's actor, `unmeasured`, or `flag-off` dark.
+    const caller = deps.identity.console(deps.authEnabled, deps.authEnabled ? deps.sessionAuth(req).device : null);
+    const actor = caller.kind === 'signed-in' ? caller.actor.subject : caller.kind === 'device-unmeasured' ? 'unmeasured' : 'flag-off';
     const parsed = parseRankWrite(req.body);
     if (!parsed.ok) return bad(reply, parsed.detail);
     const now = deps.now();
@@ -851,6 +864,29 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
     return reply.code(200).send({ ok: true, ...goalsReadOf(coord, (req.params as { slug: string }).slug, deps.now()) });
+  });
+
+  // The operator's ratify door (Overlord W1, portfolio B, question 4; slug operator-ratify-door): it CONFERS AUTHORITY, so it
+  // takes the account gate (`cap: null`), which refuses `auth-off` while sign-in is dark. Session-gated only, no box token
+  // (`LEDGER_OPERATOR_DOORS`). The body names the version by the stamp the operator was shown (`parseGoalsVersion`); a pin
+  // that moved since is `goals-changed`, so text they were not shown is never ratified. Whether the version already reads
+  // ratified is `goalRatification`'s, asked inside `ratifyGoalsVersion`'s transaction; the door decides nothing and awaits
+  // nothing between the read and the write. A change emits the waiting frame, as the tick door does; the coordinator is not
+  // mailed, and reads the verdict through its goals read.
+  app.post('/api/programmes/:slug/goals/ratify', (req, reply) => {
+    const g = deps.gate(req, reply, { cap: null });
+    if (!g.pass) return reply;
+    const coord = deps.coord;
+    if (!coord) return refuseRoute(reply, 'not-configured');
+    const slug = (req.params as { slug: string }).slug;
+    const version = parseGoalsVersion(req.body);
+    if (version === null) return bad(reply, 'the body is { pin: { inShortAt } } or { modification: <id> }');
+    // The act confers authority, so it keeps the gate's actor (its device and session hash; review 2240 F7).
+    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), deps.identity.operator(g.actor).subject);
+    if (!res.ok && res.why === 'unknown') return refuseRoute(reply, 'not-found', { detail: 'pin' in version ? `programme ${slug} has no pin` : `no modification ${version.modification} of ${slug}` });
+    if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.goalsChanged, { inShortAt: res.inShortAt, detail: 'the goals changed since they were shown: read them again' });
+    if (res.changed) deps.bus.emit('waiting');
+    return reply.code(200).send({ ok: true, changed: res.changed, goals: coord.goalsFor(slug) });
   });
 
   app.post('/api/items/:id/tick', (req, reply) => {
@@ -1062,32 +1098,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
    * THE VALUE GOES NOWHERE ELSE. Not into a refusal, a detail, a log line, the item, the mail or the answer: every refusal
    * below is a fixed word with a fixed detail, a write failure included, and `Cache-Control: no-store` is on every answer.
    */
-  const slotChains = new Map<string, Promise<void>>();
-  /** Runs `act` once the slot's previous act has finished, or answers `busy` when that takes longer than the deadline (review
-   *  1391 A-3). A waiter that gives up releases its own place at once, so the one after it waits only for the act still
-   *  running, and the map entry stays until that act is done: the deadline never lets two acts of one slot run together. */
-  const slotWait = deps.slotWaitMs ?? SLOT_WAIT_MS;
-  const underSlot = async <T>(key: string, act: () => Promise<T>, busy: () => T): Promise<T> => {
-    const before = slotChains.get(key) ?? Promise.resolve();
-    let release!: () => void;
-    const mine = new Promise<void>((resolve) => { release = resolve; });
-    const chain = before.then(() => mine);
-    slotChains.set(key, chain);
-    let timer: ReturnType<typeof setTimeout> | undefined;
-    const late = new Promise<'late'>((resolve) => { timer = setTimeout(() => resolve('late'), slotWait); });
-    const first = await Promise.race([before.then(() => 'ready' as const), late]);
-    clearTimeout(timer);
-    if (first === 'late') {
-      release();
-      return busy();
-    }
-    try {
-      return await act();
-    } finally {
-      release();
-      if (slotChains.get(key) === chain) slotChains.delete(key);
-    }
-  };
+  /** Each act on a slot runs once that slot's previous act has finished, or answers `busy` past the deadline (`slotChains`,
+   *  `ledgersSecrets.ts`, review 1391 A-3). */
+  const underSlot = slotChains(deps.slotWaitMs ?? SLOT_WAIT_MS);
   /** `Cache-Control: no-store` on every answer of the two stored-secret doors, refusals included, from `onRequest`: the
    *  account gate's one spelling of it (`noStoreRoute`, `accounts/gate.ts`), which the secret's PUT takes too. */
   const noStore = noStoreRoute.onRequest;

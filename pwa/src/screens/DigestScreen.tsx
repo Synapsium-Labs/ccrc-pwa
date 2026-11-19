@@ -11,7 +11,7 @@
 //
 // Under the decisions, the "Out of step" section (D-5923, `DigestDrift.tsx`): the drift findings open at the window's
 // end, drawn only when the answer carries some, and never counted as a decision.
-import { useCallback, useEffect, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import type { FormEvent, ReactNode } from 'react';
 import { BackButton, Button } from '@ccrc/ui';
 import {
@@ -25,6 +25,9 @@ import { digestKey, forget, peek, put } from '../lib/screenCache';
 import { doorMark } from '../command/door';
 import { useFleetStore, type FleetStore } from '../stores/fleet';
 import { DigestDrift } from './DigestDrift';
+import { HandledElsewhere } from '../responses/HandledElsewhere';
+import { useOpenedReceipt } from '../responses/useOpenedReceipt';
+import { digestLineKey } from '../../../shared/responses';
 import './digest.css';
 
 const DAY_MS = 86_400_000;
@@ -98,8 +101,8 @@ type Correct = (body: DigestCorrectBody) => Promise<DigestCorrectAnswer>;
 const LOAD: Load = (day) => api.digest(day);
 const CORRECT: Correct = (body) => api.correctDigest(body);
 
-function DigestRow({ line, correct, onCorrected }: {
-  line: DigestLine; correct: Correct; onCorrected: () => void;
+function DigestRow({ line, day, correct, onCorrected }: {
+  line: DigestLine; day: string; correct: Correct; onCorrected: () => void;
 }): ReactNode {
   const [open, setOpen] = useState(false);
   const [text, setText] = useState('');
@@ -140,6 +143,7 @@ function DigestRow({ line, correct, onCorrected }: {
         ) : !open ? (
           <Button variant="ghost" size="fit" aria-label={`Correct ${label}`} onClick={() => setOpen(true)}>Correct</Button>
         ) : null}
+        <HandledElsewhere target={{ kind: 'digest', key: digestLineKey(day, line.rowKind, line.id) }} />
       </div>
       {open && !line.corrected && (
         <form className="digest-correct" onSubmit={submit} aria-label={`Correction for ${label}`}>
@@ -228,6 +232,9 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT, store
   }, [day, load, gen]);
 
   const shown = digest !== null && (day === null || digest.day === day) ? digest : null;
+  // One `opened` receipt for each decision line the page shows (Overlord W1, C67); drift lines and the closes line get none.
+  const opened = useMemo(() => (shown === null ? [] : shown.lines.map((l) => ({ kind: 'digest' as const, key: digestLineKey(shown.day, l.rowKind, l.id) }))), [shown]);
+  useOpenedReceipt(opened);
   const hasNext = shown !== null && shown.toMs + DAY_MS <= Date.now();
   return (
     <div className="digest-screen">
@@ -270,7 +277,7 @@ export function DigestScreen({ day: asked, load = LOAD, correct = CORRECT, store
           ) : (
             <ul className="digest-list">
               {shown.lines.map((l) => (
-                <DigestRow key={`${l.rowKind}-${l.id}`} line={l} correct={correct} onCorrected={corrected} />
+                <DigestRow key={`${l.rowKind}-${l.id}`} line={l} day={shown.day} correct={correct} onCorrected={corrected} />
               ))}
             </ul>
           )}

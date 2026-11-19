@@ -86,6 +86,8 @@ const ID_NAME_TEMPLATES: readonly IdNameTemplate[] = [
   { file: 'ccd/ccd', template: '.<id>.compactions.lock-init.XXXXXX', overhead: 30 },
   { file: 'ccd/ccd', template: '.<id>.compactions.lock-open.<pid>.<R>.<R>', overhead: 43 },
   { file: 'ccd/ccd', template: '.<id>.generation-init.XXXXXX', overhead: 24 },
+  // The Overlord W1 ccd arms (review 2231 F2): `cmd_keep_awake`'s temp file, linked into place as its marker.
+  { file: 'ccd/lib/long-lived.sh', template: '.<id>.<field>.keep-awake.XXXXXX', overhead: 35 },
   { file: 'ccd/ccd', template: '.<id>.generation-read.<pid>.<R>.<R>', overhead: 37 },
   { file: 'ccd/ccd', template: '.<id>.starts', overhead: 8 },
   // The compare-and-drop aside (path-identity spec §3.6).

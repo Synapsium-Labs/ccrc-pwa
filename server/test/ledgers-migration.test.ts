@@ -86,18 +86,22 @@ describe('the programme ledgers’ tables are one new entry that seeds nothing (
       // The typed action and the hold a later entry adds (D-8076, spec 2026-11-04 §10).
       ['action', 'TEXT', 0, null, 0], ['heldUntil', 'INTEGER', 0, null, 0],
       // The reach stamp a later entry adds (the push outbox, Overlord W1; its own pin is coord-db.test.ts).
-      ['reachedOperatorAt', 'INTEGER', 0, null, 0]]);
+      ['reachedOperatorAt', 'INTEGER', 0, null, 0],
+      // The row revision a later entry adds (Overlord W2 row revisions; its own pin is row-revisions.test.ts).
+      ['revision', 'INTEGER', 1, '0', 0]]);
     expect(colsOf(db, 'operator_item_events')).toEqual([
       ['id', 'INTEGER', 0, null, 1], ['itemId', 'INTEGER', 1, null, 0], ['at', 'INTEGER', 1, null, 0],
       ['act', 'TEXT', 1, null, 0], ['actor', 'TEXT', 1, null, 0], ['note', 'TEXT', 0, null, 0]]);
-    expect(colsOf(db, 'programme_modifications')).toEqual([
+    // The ratification columns are a later entry's (Overlord W1, portfolio B; its own pin is coord-db.test.ts).
+    expect(colsOf(db, 'programme_modifications').slice(0, 8)).toEqual([
       ['id', 'INTEGER', 0, null, 1], ['program', 'TEXT', 1, null, 0], ['at', 'INTEGER', 1, null, 0],
       ['text', 'TEXT', 1, null, 0], ['ruling', 'TEXT', 0, null, 0], ['itemId', 'INTEGER', 0, null, 0],
       ['pr', 'INTEGER', 0, null, 0], ['mergedAt', 'INTEGER', 0, null, 0]]);
     const programs = colsOf(db, 'programs');
     // The definition of done is a later entry's column (D-8126; its own pin is the describe below).
-    // The plan model's six columns come after it (D-8181, migration 59; its own pin is plan-store.test.ts).
-    expect(programs.slice(-10, -6)).toEqual([
+    // The plan model's six columns come after it (D-8181, migration 59; its own pin is plan-store.test.ts), then the
+    // goals versions' four ratification columns (Overlord W1, portfolio B; its own pin is coord-db.test.ts).
+    expect(programs.slice(-14, -10)).toEqual([
       ['specPath', 'TEXT', 0, null, 0], ['inShort', 'TEXT', 0, null, 0], ['inShortAt', 'INTEGER', 0, null, 0],
       ['doneWhen', 'TEXT', 0, null, 0]]);
     db.close();

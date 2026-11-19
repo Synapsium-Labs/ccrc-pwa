@@ -5,9 +5,10 @@ import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+import { operatorMessageIdOf } from '../../../shared/operatorMessages.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
-import type { GoalsView, ItemAct, ItemActor } from '../../../shared/ledgers.js';
+import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
 import { ABANDON_REFUSED_PREFIX, ABANDON_REQUESTED_PREFIX } from '../../../shared/ledgers.js';
 import * as ledgers from './ledgersStore.js';
 import * as calls from './coordCallsStore.js';
@@ -42,14 +43,18 @@ import {
 } from '../continuity/continuityStore.js';
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
+import * as designation from './overlordDesignationStore.js';
+import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
 import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-timers.js';
+import type { AttemptOutcome, DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
-import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
+import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
+import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
 import { decideClaim, heldWithin, lapseWindowStart, ownLapsesUnder, rechainTargets, type ClaimRow, type LivenessVerdict } from './claims.js';
@@ -58,6 +63,9 @@ import { runFind as runFindQuery, runsReviewing, type RunFindParsed } from './ru
 import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
 import * as portfolio from './portfolioStore.js';
 import * as answerMarks from './answerMarkStore.js';
+import * as collisions from './claimCollisions.js';
+import * as pairs from './programmePairsStore.js';
+import * as programmeFacts from './programmeFactsStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { decideAllocation } from './ledger.js';
 // D-2921: `CoordPlacementStamp` is declared by its CONSUMER, the L1 placement
@@ -270,6 +278,11 @@ export interface RunRow extends RunSummary {
    *  `coordProject`'s idiom and stripped off the wire by `toRunSummary`.
    *  D-5531: the ask lane fails closed on it (`run-unattributed`). */
   unattributed: boolean;
+  /** `schema.ts`'s `runs.closePr` entry (Overlord W2 done tests A, DT7; its slot moves at landing, so it is not named
+   *  here): the close's own bound PR, RAW JSON (`ClosePrFacts`), NULL for none, and NULL when the verified claim named no
+   *  PR or another one (review 2377 F1).
+   *  Parsed only by the done-test reader, which answers a malformed value `unmeasurable`; stripped by `toRunSummary`. */
+  closePr: string | null;
 }
 
 /** One open run naming a session. NOT a `RunRow`: these four columns are all
@@ -308,7 +321,7 @@ export type { CoordPlacementStamp };
  *  measurements, never sent. And `unattributed` (migration 23), the same. */
 export const toRunSummary = (row: RunRow): RunSummary => {
   const { prLineage: _prLineage, coordProject: _coordProject, sessionBornAt: _sessionBornAt,
-          sessionBornFor: _sessionBornFor, unattributed: _unattributed, ...summary } = row;
+          sessionBornFor: _sessionBornFor, unattributed: _unattributed, closePr: _closePr, ...summary } = row;
   return summary;
 };
 
@@ -869,6 +882,8 @@ export interface AskRow {
   /** D-5290: why the row was MINTED `released`; `null` for every row the hold
    *  minted, whatever happened to it after. Read through `isAskReleaseReason`. */
   releaseReason: AskReleaseReason | null;
+  /** The row's revision (Overlord W2): raised by each write that changes what an answer acts on, 0 at insert. */
+  revision: number;
 }
 
 /** `takeAskForAnswer`'s two refusals are DIFFERENT conditions a caller acts on
@@ -1012,6 +1027,10 @@ export interface ApprovalRow {
   state: ApprovalState; releaseReason: ApprovalReleaseReason | null; askAt: number; notifyAt: number;
   ruledAt: number | null; verdict: 'allow' | 'deny' | null; reason: string | null; ruling: string | null;
   answeredBy: string | null; toolUseId: string | null; corrected: boolean;
+  /** Approvals PR 0: the child's deny digest was the managed file's current one when the row was minted. A row minted
+   *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
+   *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
+  denyCurrent: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -1065,6 +1084,7 @@ interface RunRowDb {
   runTitle: string | null;
   closedBy: string | null;
   closeDetail: string | null;
+  closePr: string | null;
 }
 
 /** CAST-to-TEXT rather than `setReadBigInts(true)` (D-2590, a deliberate
@@ -1085,7 +1105,7 @@ const RUN_ROW_COLUMNS =
   'r.resumed, r.clearedAt, r.openedAt, r.dispatchStartedAt, ' +
   'r.dispatchedAt, r.closedAt, ' +
   'r.handoffCommit, r.prLineage, r.briefQueued, r.clearError, r.coordProject, r.sessionBornAt, ' +
-  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail';
+  'r.sessionBornFor, r.unattributed, r.hadChild, r.title AS runTitle, r.closedBy, r.closeDetail, r.closePr';
 
 /** ONE persisted integer, read as TEXT and proven representable.
  *
@@ -3190,9 +3210,14 @@ export class CoordStore {
     /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
      *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
     intents?: readonly string[];
+    /** Overlord W2 forecasts B, fix round 1 (F3): the conversation id the run was dispatched into, after its `/clear`
+     *  (`runs.dispatchConversation`). Written on every dispatch, NULL when omitted, so a later dispatch never keeps an
+     *  earlier one's conversation; the spend reads count a reading only in it. */
+    conversation?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
+      this.db.prepare('UPDATE runs SET dispatchConversation = ? WHERE id = ?').run(input.conversation ?? null, input.runId);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
       // Written UNCONDITIONALLY once `briefQueued` is given, both columns
       // together: recording only the interesting branch would make an older row
@@ -3259,6 +3284,9 @@ export class CoordStore {
     /** Why the run ended (D-8071): the final advance's `detail`, stored as `closeDetail`. The abandon arm passes
      *  `abandon:<reason>`; every other caller passes nothing. */
     detail?: string;
+    /** The close's own bound PR (DT7): `closeWorkRun` passes `closePrFactsOf(line, claim.prNumber)`. ONE writer of
+     *  `runs.closePr`, in this transaction; absent or null writes nothing, so the column stays NULL. */
+    closePr?: ClosePrFacts | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       if (input.expectClaimedBy !== undefined) {
@@ -3291,6 +3319,7 @@ export class CoordStore {
       // `null` is left standing rather than writing a claim this database has
       // never measured or even shape-checked.
       if (input.handoffCommit !== null) this.setHandoffCommit(input.runId, input.handoffCommit);
+      if (input.closePr != null) this.db.prepare('UPDATE runs SET closePr = ? WHERE id = ?').run(JSON.stringify(input.closePr), input.runId);
       // Review findings 8/14: cancel this run's own outstanding mail rather
       // than leave it to replay into whatever session (this run's own, next
       // wave, or — once a purged workspace slug is re-minted — an unrelated
@@ -4199,7 +4228,7 @@ export class CoordStore {
   }
 
   setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
-  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk); }
+  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead, usage: portfolio.SpendUsageRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk, usage); }
   recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
@@ -5337,6 +5366,14 @@ export class CoordStore {
     const r = this.db.prepare('SELECT planEnd FROM programs WHERE slug = ?').get(slug) as { planEnd: string | null } | undefined;
     return r !== undefined && r.planEnd === null;
   }
+  // Overlord W2 overlaps (plan w2-overlaps.md Task 3): one-line delegates over `claimCollisions.ts` and `programmePairsStore.ts`.
+  collisionsSince(since: number): collisions.CollisionsRead { return collisions.collisionsSince(this.db, since); }
+  applyPairMoves(moves: Parameters<typeof pairs.applyPairMoves>[1], now: number): number[] { return pairs.applyPairMoves(this.db, moves, now); }
+  standingPairs(): pairs.StandingPairsRead { return pairs.standingPairs(this.db); }
+  newestEpisodes(): pairs.NewestEpisodesRead { return pairs.newestEpisodes(this.db); }
+  claimHistory(since: number, cap: number): pairs.ClaimHistoryRead { return pairs.claimHistory(this.db, since, cap); }
+  goalsStamp(slug: string): string { return pairs.goalsStamp(this.db, slug); }
+  programmeLandedSince(slug: string, at: number): boolean | 'unmeasured' { return pairs.programmeLandedSince(this.db, slug, at); }
 
   /** Count of this program's runs still in a NON-terminal state — the
    *  question `setProgramState`'s caller (the close route, D-51) needs
@@ -5401,6 +5438,34 @@ export class CoordStore {
   practiceCaseNewest(): PracticeCaseNewestRead { return practiceCaseNewest(this.db); }
   /** Overlord §10.5: the table's one writer, a compare-and-set open (`practiceCasesStore.ts`). */
   openPracticeCase(due: CaseDue, seenNewest: number | null, at: number): PracticeCaseOpen { return openPracticeCase(this.db, due, seenNewest, at); }
+  /** Overlord §3.1 C2, H27 (`overlordDesignationStore.ts`): the designation row's one read and its writers; the ones that
+   *  move authority (the Settings doors' two among them) take the journal, which appends in the row's own transaction. */
+  designationRead(): DesignationRead { return designation.designationRead(this.db); }
+  designatePending(j: designation.AuthorityAppender, i: designation.DesignateInput): designation.DesignateResult { return designation.designatePending(this.db, j, i); }
+  bindPendingGeneration(sessionId: string, generation: string, at: number): designation.BindResult { return designation.bindPendingGeneration(this.db, sessionId, generation, at); }
+  goLive(j: designation.AuthorityAppender, sessionId: string, generation: string, at: number): designation.GoLiveResult { return designation.goLive(this.db, j, sessionId, generation, at); }
+  failPending(sessionId: string, outcome: AttemptOutcome, at: number, owesStop: boolean): designation.FailResult { return designation.failPending(this.db, sessionId, outcome, at, owesStop); }
+  retire(j: designation.AuthorityAppender, i: designation.RetireInput): designation.RetireResult { return designation.retire(this.db, j, i); }
+  stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
+  setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
+  setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
+  ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
+  setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
+    const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+  }
+  raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
+    const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+  }
+  clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
+    const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+  }
+  /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
+  applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
@@ -5413,7 +5478,7 @@ export class CoordStore {
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
   stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
   clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
-  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
+  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[], c: CursorAdvance | null = null): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind, c); }
   advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
   setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
   generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
@@ -5443,6 +5508,15 @@ export class CoordStore {
   handoverOf(generationId: number): HandoverRead { return handoverOf(this.db, generationId); }
   softRenewalsOf(identity: string, term: number): ReturnType<typeof softRenewalsOf> { return softRenewalsOf(this.db, identity, term); }
   recordSoftRenewal(g: { id: number; identity: string; term: number }, observedMs: number): { ok: boolean } { return recordSoftRenewal(this.db, g, observedMs); }
+  /** Overlord §3.3.9 C50, §3.3.11 (the hand-offs piece, `continuityStore.ts`): the Renew now door's request and the lane's read
+   *  of it, the prompt route's mark and the lane's quiet of it, and the Setting "when soft renewals happen". */
+  insertRenewRequest(r: { sessionId: string; actor: string; at: number; live: boolean }): ReturnType<typeof timers.insertRenewRequest> { return timers.insertRenewRequest(this.db, r); }
+  renewRequestsAfter(afterId: number, limit: number, sessionId?: string): timers.RenewRequestsRead { return timers.renewRequestsAfter(this.db, afterId, limit, sessionId); }
+  putOperatorMark(programme: string, at: number): { ok: boolean } { return timers.putOperatorMark(this.db, programme, at); }
+  operatorMarks(): timers.OperatorMarksRead { return timers.operatorMarks(this.db); }
+  advanceMarkQuiet(programme: string, readAt: number, quiet: Observed): { changed: boolean } { return timers.advanceMarkQuiet(this.db, programme, readAt, quiet); }
+  renewalModeSetting(): timers.RenewalModeRead { return timers.renewalModeSetting(this.db); }
+  setRenewalMode(mode: RenewalMode, at: number): ReturnType<typeof timers.setRenewalMode> { return timers.setRenewalMode(this.db, mode, at); }
   /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
   putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
   checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }
@@ -5460,6 +5534,9 @@ export class CoordStore {
   stampContinuityRead(sessionId: string, door: ContinuityReadDoor, at: number): { ok: boolean } { return probes.stampContinuityRead(this.db, sessionId, door, at); }
   lastContinuityRead(sessionId: string): ReturnType<typeof probes.lastContinuityRead> { return probes.lastContinuityRead(this.db, sessionId); }
   snapshotFacts(id: string): ReturnType<typeof probes.snapshotFacts> { return probes.snapshotFacts(this.db, id); }
+  closedSpotProbes(modelClass: string): ReturnType<typeof probes.closedSpotProbes> { return probes.closedSpotProbes(this.db, modelClass); }
+  backstopRead(): ReturnType<typeof probes.backstopRead> { return probes.backstopRead(this.db); }
+  setBackstop(b: { hour: number; zone: string; at: number }): { ok: boolean } { return probes.setBackstop(this.db, b); }
   /** Overlord W1 (the push outbox, `pushOutboxStore.ts`): the sender's moves and the reads. The bound-row writers and the
    *  reach stamp run inside a caller's transaction, so they take the handle and have no delegate. */
   insertUnboundRow(row: { pushId: string; payload: outbox.OutboxPayload; at: number }, response?: responses.PushResponseOf): ReturnType<typeof outbox.insertUnboundRow> { return outbox.insertUnboundRow(this.db, row, response); }
@@ -5474,12 +5551,25 @@ export class CoordStore {
   purgeOutbox(before: number): { removed: number } { return outbox.purgeOutbox(this.db, before); }
   markFirstBoot(at: number): number { return outbox.markFirstBoot(this.db, at); }
   firstBootAt(): number | null { return outbox.firstBootAt(this.db); }
-  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at); }
+  reachHeldItem(id: number, pushId: string, why: PushSilentWhy, at: number, stamp?: Parameters<typeof outbox.reachHeldItem>[5]): { changed: boolean } { return outbox.reachHeldItem(this.db, id, pushId, why, at, stamp); }
   /** Overlord W1 (the response record, `responsesStore.ts`): the boot's record and the receipts door's one transaction. The
    *  push row's writers run inside the outbox's transactions, so they take the handle and have no delegate. */
   recordResponseBoot(buildSha: string | null, at: number): ReturnType<typeof responses.recordResponseBoot> { return responses.recordResponseBoot(this.db, buildSha, at); }
   receiveReceipts(receipts: Parameters<typeof responses.receiveReceipts>[1], at: number, verdictOf: Parameters<typeof responses.receiveReceipts>[3]):
     ReturnType<typeof responses.receiveReceipts> { return responses.receiveReceipts(this.db, receipts, at, verdictOf); }
+  /** Responses B: the digest lines (inside `claimDigestDay`'s callback, so in its transaction), the lane's reads and seal, the
+   *  deleter by time in a transaction of its own, and the handled and retention doors' reads and writes. */
+  insertDigestResponses(d: Parameters<typeof responses.insertDigestResponsesInTx>[1]): { readonly inserted: number } { return responses.insertDigestResponsesInTx(this.db, d); }
+  openResponseRows(): responses.OpenRowsRead { return responses.openResponseRows(this.db); }
+  responseReceipts(id: number): ReturnType<typeof responses.receiptsOf> { return responses.receiptsOf(this.db, id); }
+  responseReplacedOn(row: Parameters<typeof responses.replacedOnOf>[1], windowEnd: number): string[] { return responses.replacedOnOf(this.db, row, windowEnd); }
+  responseBootsInWindow(after: number, through: number): number { return responses.bootsInWindowOf(this.db, after, through); }
+  sealResponse(id: number, d: Parameters<typeof responses.sealResponse>[2], at: number): { readonly changed: boolean } { return responses.sealResponse(this.db, id, d, at); }
+  deleteResponsesThrough(at: number): ReturnType<typeof responses.deleteResponsesThrough> { return responses.deleteResponsesThrough(this.db, at); }
+  responseRetention(): responses.RetentionRead { return responses.responseRetention(this.db); }
+  setResponseRetention(days: number, at: number): { readonly changed: boolean } { return responses.setResponseRetention(this.db, days, at); }
+  markResponseHandled(id: number, at: number): ReturnType<typeof responses.markResponseHandled> { return responses.markResponseHandled(this.db, id, at); }
+  responsesForRef(ref: Parameters<typeof responses.responsesForRef>[1]): responses.ResponseRowsRead { return responses.responsesForRef(this.db, ref); }
 
   /** D-6909: the review-cap state of a batch of runs (`reviewCapStore.ts`). */
   reviewCapStates(ids: readonly number[]): Map<number, ReviewCapState> {
@@ -5701,6 +5791,7 @@ export class CoordStore {
       // rebound (spec §5.3's recycled-slug hazard, extended across a
       // rollback).
       sessionBornFor: row.sessionBornFor,
+      closePr: row.closePr,
       // Migration 23's journal (D-5298), read through on the same idiom; 1 is
       // "accepted unattributed", every other value (0, the column default every
       // older row carries) is not. D-5531 reads it in the ask lane.
@@ -7122,6 +7213,20 @@ export class CoordStore {
       'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
     ).get(fromId, runId, toId, subject);
     return row !== undefined;
+  }
+
+  /** Whether a mail with this (fromId, toId, subject) has a delivery ACKED, over every delivery state of the others (the boot
+   *  pass's check that a queued operator message's nudge was typed and acked; F3). */
+  hasAckedMailWithSubject(fromId: string, toId: string, subject: string): boolean {
+    return this.db.prepare("SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = ? AND m.toId = ? AND m.subject = ? AND d.state = 'acked' LIMIT 1")
+      .get(fromId, toId, subject) !== undefined;
+  }
+
+  /** The largest `n` of any `operator-message:<n>` mail from `operator`, over every delivery state, or `none` (the boot
+   *  pass's check against the private store's highest id, Overlord W1 private store B). */
+  highestOperatorMessageMail(): number | 'none' {
+    const rows = this.db.prepare("SELECT subject FROM mail WHERE fromId = 'operator' AND subject LIKE 'operator-message:%'").all() as { subject: string }[];
+    return rows.reduce<number | 'none'>((hi, r) => { const n = operatorMessageIdOf(r.subject); return n !== null && (hi === 'none' || n > hi) ? n : hi; }, 'none');
   }
 
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
@@ -8765,7 +8870,7 @@ export class CoordStore {
     const now = input.now ?? Date.now();
     const callerLiveness = input.callerLiveness ?? 'unmeasurable';
     const deliverable = input.holderDeliverable ?? ((): PeerDeliverable => 'unknown');
-    return tx(this.db, () => {
+    const answer = tx(this.db, () => {
       // 1 — expire lapsed rows IN THE SAME TX, then read, then insert (D11).
       this.expireLapsedInner(now);
       const liveRows = this.db.prepare(
@@ -8864,6 +8969,10 @@ export class CoordStore {
         input.sessionId, paths, now);
       return { ok: true as const, claims: out, lapsedSince, rechained };
     });
+    // Overlord W2 overlaps (plan w2-overlaps.md question 4, review F5): a refusal's collisions are recorded AFTER the claim's
+    // own transaction committed, in one of their own, and a failed record is swallowed there, so this answer never changes.
+    if (!answer.ok && answer.why === 'conflict') collisions.recordCollisionsAfterRefusal(this.db, input, answer.conflicts, now);
+    return answer;
   }
 
   /** THE GUARD IS IN THE `WHERE`, not in the read above it — `setWorkItemState`'s
@@ -9187,13 +9296,13 @@ export class CoordStore {
   private static readonly ASK_COLS =
     'CAST(id AS TEXT) AS idText, at, childId, parentId, CAST(runId AS TEXT) AS runIdText, ' +
     'askKey, askAt, dialogId, question, options, ' +
-    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason';
+    'state, answeredBy, answer, answeredAt, releasedAt, releaseReason, revision';
 
   private hydrateAsk(r: {
     idText: string; at: number; childId: string; parentId: string; runIdText: string | null;
     askKey: string; askAt: number; dialogId: string; question: string; options: string;
     state: string; answeredBy: string | null; answer: string | null;
-    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null;
+    answeredAt: number | null; releasedAt: number | null; releaseReason: string | null; revision: number;
   }): { ok: true; ask: AskRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'ask id');
     if (!id.ok) return id;
@@ -9505,7 +9614,7 @@ export class CoordStore {
    *  asked (a wedge, not a race, is the failure this guard closes). */
   settleAsk(id: number, by: string, answer: string, now: number): void {
     this.db.prepare(
-      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ? " +
+      "UPDATE asks SET state = 'answered', answeredBy = ?, answer = ?, answeredAt = ?, revision = revision + 1 " +
       "WHERE id = ? AND state = 'answering'",
     ).run(by, answer, now, id);
   }
@@ -9518,7 +9627,7 @@ export class CoordStore {
   /** With the push outbox's bound write (Overlord W1): the CAS, the reach stamp and the bound row in ONE tx; `false` lost. */
   releaseAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
   releaseAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
-    const cas = this.db.prepare("UPDATE asks SET state = 'released', releasedAt = ? WHERE id = ? AND state = 'held'");
+    const cas = this.db.prepare("UPDATE asks SET state = 'released', releasedAt = ?, revision = revision + 1 WHERE id = ? AND state = 'held'");
     const move = (): boolean => Number(cas.run(now, id).changes) > 0;
     return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
@@ -9533,7 +9642,7 @@ export class CoordStore {
   declineAsk(id: number, now: number): boolean;
   declineAsk(id: number, now: number, bound: outbox.BoundWrite): outbox.BoundRowRef | false;
   declineAsk(id: number, now: number, bound?: outbox.BoundWrite): boolean | outbox.BoundRowRef {
-    const cas = this.db.prepare("UPDATE asks SET state = 'declined', releasedAt = ? WHERE id = ? AND state = 'held'");
+    const cas = this.db.prepare("UPDATE asks SET state = 'declined', releasedAt = ?, revision = revision + 1 WHERE id = ? AND state = 'held'");
     const move = (): boolean => Number(cas.run(now, id).changes) > 0;
     return bound === undefined ? move() : tx(this.db, () => move() && outbox.reachInTx(this.db, 'ask', id, bound, now));
   }
@@ -9567,7 +9676,7 @@ export class CoordStore {
    *  trace that survives a failure in this window. */
   staleAsk(dialogId: string, childId: string, now: number): boolean {
     const res = this.db.prepare(
-      "UPDATE asks SET state = 'stale', releasedAt = ? " +
+      "UPDATE asks SET state = 'stale', releasedAt = ?, revision = revision + 1 " +
       "WHERE dialogId = ? AND childId = ? AND state IN ('held','answering')",
     ).run(now, dialogId, childId);
     return Number(res.changes) > 0;
@@ -9620,7 +9729,9 @@ export class CoordStore {
    *  rather than the permanent wedge it replaces. */
   restampAsk(a: { id: number; dialogId: string; askKey: string; askAt: number }): boolean {
     const res = this.db.prepare(
-      "UPDATE asks SET askAt = ? WHERE id = ? AND state = 'held' AND dialogId = ? AND askKey = ?",
+      // Row revisions (Overlord W2, question 2): this runs on every 2-second tick, most often with the `askAt` the row
+      // already holds, so it raises only when `askAt` moves.
+      "UPDATE asks SET askAt = ?1, revision = revision + (askAt IS NOT ?1) WHERE id = ?2 AND state = 'held' AND dialogId = ?3 AND askKey = ?4",
     ).run(a.askAt, a.id, a.dialogId, a.askKey);
     return Number(res.changes) > 0;
   }
@@ -9663,13 +9774,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected';
+    'answeredBy, toolUseId, corrected, denyCurrent';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
+    denyCurrent: number;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9693,6 +9805,7 @@ export class CoordStore {
         verdict: r.verdict === 'allow' || r.verdict === 'deny' ? r.verdict : null,
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
+        denyCurrent: r.denyCurrent === 1,
       },
     };
   }
@@ -9744,25 +9857,28 @@ export class CoordStore {
   }
 
   /** Minted by `POST /api/approvals`, `held` — or, with a `releaseReason`, `released` at once (forbidden, truncated,
-   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. */
+   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. `denyCurrent`
+   *  (approvals PR 0) is optional only so the test callers that predate it, the pin files among them, run unedited: absent
+   *  stores 1, current, which is open for a caller that forgets it. The raise, the one production caller, always passes
+   *  it, and the approvals routes suite reds if it stops (review 2648 F3, the report's leave option). */
   insertApproval(a: {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
-    releaseReason?: ApprovalMintReleaseReason;
+    releaseReason?: ApprovalMintReleaseReason; denyCurrent?: boolean;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
-        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt,
+        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
@@ -9914,10 +10030,19 @@ export class CoordStore {
   }
 
   /** The beat claims its day BEFORE it pushes: true only for the one call that inserted the row, so a restart, or a
-   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). */
-  claimDigestDay(day: string, sentAt: number, count: number): boolean {
-    const res = this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count);
-    return Number(res.changes) > 0;
+   *  second beat racing this one, finds the day taken and sends nothing (spec §10, "a restart never sends two"). With
+   *  `onClaim` (the digest lines' response rows, W1 responses B), the claim and the callback share one transaction and the
+   *  callback runs only when the claim won, under its own savepoint: its rows go all or none, a throw from it is logged and
+   *  never costs the claim, and a failure that took the whole transaction fails the claim too (`responseWriteInTx`). */
+  claimDigestDay(day: string, sentAt: number, count: number, onClaim?: () => unknown): boolean {
+    return tx(this.db, () => {
+      const won = Number(this.db.prepare('INSERT OR IGNORE INTO digests (day, sentAt, count) VALUES (?, ?, ?)').run(day, sentAt, count).changes) > 0;
+      if (won && onClaim !== undefined) {
+        const w = responses.responseWriteInTx(this.db, onClaim);
+        if (!w.ok) responses.warnResponseWrite(`digest:${w.detail}`, `the digest's response rows were not written (${w.detail}); the claim stands`);
+      }
+      return won;
+    });
   }
 
   // ── pool edges ────────────────────────────────────────────────────────
@@ -11227,9 +11352,10 @@ export class CoordStore {
     return bound === undefined ? res : { ...res, row: row as outbox.BoundRowRef | null };
   }
   itemHistory(id: number): ItemEventRow[] { return ledgers.itemHistory(this.db, id); }
-  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen); }
-  setDoneWhen(program: string, doneWhen: readonly string[], now: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now); }
+  setSpecPin(program: string, specPath: string, inShort: string, now: number, doneWhen: readonly string[] | null, source: WrittenSource): void { ledgers.setSpecPin(this.db, program, specPath, inShort, now, doneWhen, source); }
+  setDoneWhen(program: string, doneWhen: readonly string[], now: number, modId: number): void { ledgers.setDoneWhen(this.db, program, doneWhen, now, modId); }
   addModification(program: string, m: { text: string; ruling: string | null; itemId: number | null; pr: number | null; doneWhen?: readonly string[] | null }, now: number): number { return ledgers.addModification(this.db, program, m, now); }
+  ratifyGoalsVersion(program: string, version: GoalsVersion, now: number, actor: string): ledgers.RatifyResult { return ledgers.ratifyGoalsVersion(this.db, program, version, now, actor); }
   markModificationsMerged(program: string, pr: number, mergedAt: number): number { return ledgers.markModificationsMerged(this.db, program, pr, mergedAt); }
   goalsFor(program: string): GoalsView { return ledgers.goalsFor(this.db, program); }
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
@@ -11248,6 +11374,24 @@ export class CoordStore {
   markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }
   overturnCallTx(id: number, note: string, now: number): void { calls.overturnCallTx(this.db, id, note, now); }
   markBlockWoken(id: number, now: number): boolean { return calls.markBlockWoken(this.db, id, now); }
+  insertRemaining(program: string, byId: string, statement: programmeFacts.NewRemaining, edges: readonly programmeFacts.NewEdge[], build: string | null, now: number): programmeFacts.InsertRemainingResult { return programmeFacts.insertRemaining(this.db, program, byId, statement, edges, build, now); }
+  remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
+  openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }
+  edgeTargetCheck(slug: string, target: programmeFacts.EdgeTarget): { ok: true } | { ok: false; detail: string } { return programmeFacts.edgeTargetCheck(this.db, slug, target); }
+  openEdgesToMeasure(): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesToMeasure(this.db); }
+  settleEdge(id: number, settle: programmeFacts.EdgeSettle, now: number): { written: boolean } { return programmeFacts.settleEdge(this.db, id, settle, now); }
+  sealForecast(seal: programmeFacts.NewSeal, now: number): { written: boolean } { return programmeFacts.sealForecast(this.db, seal, now); }
+  scoreForecast(id: number, outcome: 'met' | 'missed', now: number): { written: boolean } { return programmeFacts.scoreForecast(this.db, id, outcome, now); }
+  forecastsOf(q: { program: string } | { dueBy: number }): programmeFacts.SealedForecast[] { return programmeFacts.forecastsOf(this.db, q); }
+  unsealedClosesOf(now: number): { closes: programmeFacts.UnsealedClose[]; missed: number } { return programmeFacts.unsealedClosesOf(this.db, now, TERMINAL_RUN_STATES_SQL); }
+  leadHistoryOf(program: string, asOf: number): programmeFacts.ForecastHistory { return programmeFacts.leadHistoryOf(this.db, program, asOf); }
+  outcomeFactsOf(sealId: number): programmeFacts.OutcomeFacts | null { return programmeFacts.outcomeFactsOf(this.db, sealId); }
+  appendHealth(program: string, verdict: programmeFacts.HealthVerdict, noticed: boolean, now: number): { id: number } { return programmeFacts.appendHealth(this.db, program, verdict, noticed, now); }
+  newestHealthOf(programs: readonly string[]): programmeFacts.HealthRow[] { return programmeFacts.newestHealthOf(this.db, programs); }
+  healthNoticedSince(program: string, word: string, since: number): boolean { return programmeFacts.healthNoticedSince(this.db, program, word, since); }
+  recordRunSpend(row: programmeFacts.NewRunSpend, now: number): { written: boolean } { return programmeFacts.recordRunSpend(this.db, row, now); }
+  unspentClosesOf(firstPassAt: number): programmeFacts.UnspentClose[] { return programmeFacts.unspentClosesOf(this.db, firstPassAt, TERMINAL_RUN_STATES_SQL); }
+  spendOf(programs: readonly string[]): programmeFacts.RunSpendRow[] { return programmeFacts.spendOf(this.db, programs); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

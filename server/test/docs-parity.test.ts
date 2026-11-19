@@ -522,7 +522,8 @@ const M79_NAME = ['doc', 'server'].join('');
  * `/render`, `/frame`, `/host`, and `/assets/<path>?raw` (a path with a `..` segment is no specifier). The bare package and
  * every other subpath stay hits. The W8a plan's refinement (i): the PWA's vite.config.ts keeps the unmodified check.
  * NOT EXHAUSTIVE: the scan is line by line, so a line inside a multi-line template literal or inside a block comment
- * that does not start with `*` is read as code.
+ * that does not start with `*` is read as code, and so is JSX text (`<p>import('…')</p>`: what stands before `import(` is
+ * markup, which the scan cannot tell from code).
  */
 const M79_LIBRARY_SPECIFIER = /(\bfrom\s*|\bimport\s*\(\s*)(['"])@synapsium-labs\/docserver\/(?:render|frame|host|assets\/(?!(?:[A-Za-z0-9._-]+\/)*\.\.[\/?])[A-Za-z0-9._\/-]+\?raw)\2/g;
 

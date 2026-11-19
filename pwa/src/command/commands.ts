@@ -81,6 +81,7 @@ export const SESSION_COMMANDS: readonly { id: string; title: string }[] = [
   { id: 'open-history', title: 'Show history' },
   { id: 'session-docs', title: "Open this session's docs" },
   { id: 'session-swap', title: 'Move to another account' },
+  { id: 'session-renew', title: 'Renew now' },
   { id: 'session-archive', title: 'Archive this session' },
   { id: 'session-restore', title: 'Restore this session' },
   { id: 'open-terminal', title: 'Open the terminal' },

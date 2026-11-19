@@ -31,7 +31,8 @@ get wrong when editing `src/whitelist.ts`.
   `ws-lease-mark` requires `--lease` (the write of one delegation lease's carrier; only the server composes it, delegation
   broker wave 5), `ws-lease-audit` requires `--lease` (the read-only measure of one leased tree; it writes nothing to any
   durable path, its residuals named in `ccd/lib/delegation-lease.sh`, and only the server composes it, delegation broker
-  wave 5). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
+  wave 5), `keep-awake` requires `--session` (the set or clear of one session's two sleep markers; only the server
+  composes it, through the designation's doors, Overlord W1 ccd arms). **Ungrantable verbs:** `ws-rm`, `ws-gc`. An empty prefix
   `[]` grants every subcommand and is fatal.
 - `EXEC_WHITELIST` and its prefix lists are `Object.freeze`d at load; `isExecAllowed` uses `Object.hasOwn` +
   `GRANTABLE_COMMANDS.includes` + `Array.isArray` so prototype-named keys (`constructor`, `__proto__`) fail
@@ -67,13 +68,13 @@ get wrong when editing `src/whitelist.ts`.
   steered session on a remote fleet. The name must pass `isRegistryId`; `~/.ccrc` may be a link, but `history` and
   `steer-on` must each be a real directory or absent (`lstat`), and a live link at the marker is refused. A hard link at a
   marker's name cannot be detected (same user). `read`, `readdir` and `lstat` admit none of it.
-  And one more READ grant (D-8406): a lane's class registry and catalogue, `~/.ccrc/models/<lane>.classes.json` and
-  `<lane>.json`, by exact name (`isLaneModelsReadName`, `shared/models.mjs`) and canonical-path equality
-  (`isLaneModelsFile`), for the session's model picker. `~/.ccrc/models` stays unlistable, and its other files unread.
+  No file under `~/.ccrc/models` is readable: the lane-models read grant (D-8406) is retired (model-class-advance R3b),
+  and the server reads a lane's models only through the `models` op's `show`. `test/whitelist.test.ts` reds if a lane's
+  registry or catalogue becomes readable again.
 - `ptyOpen` only ever spawns `tmux attach -t =cc-<sessionId>:` (exact — `tmuxTarget`, D-3525) with `sessionId` sanitized to `[A-Za-z0-9_-]+` —
   never an arbitrary command.
-- The **`update` op** (design 2026-09-20 §10) is one of the FIVE wire-triggered spawn classes outside the exec whitelist
-  (the others are `token-sync`, `account`, `testbox` and `testbox-admin`, below). It spawns
+- The **`update` op** (design 2026-09-20 §10) is one of the SIX wire-triggered spawn classes outside the exec whitelist
+  (the others are `token-sync`, `account`, `testbox`, `testbox-admin` and `models`, below). It spawns
   exactly one of two argv templates — `$HOME/.local/bin/ccrc update|rollback --to <tag> --detach --from pwa`, built by
   `updateLauncherPath` + `updateSpawnArgv` (`shared/agent-protocol.ts`), `tag` the only variable token — validated by
   `isReleaseTag` in `validateReq` BEFORE any case body runs (`bad-tag`/`bad-kind`, never `bad-request`, which from this
@@ -126,6 +127,16 @@ get wrong when editing `src/whitelist.ts`.
   `readTestboxAdminStatus`). The log line names the op and the sub only. `bad-request` from it means the agent predates
   it. `test/testbox-admin-op.test.ts`'s source scan and `server/test/whitelist-subset.test.ts`'s layer 4d red the day
   the op reaches an exec path.
+- The **`models` op** (auto-advance spec 2026-10-13 §2.7, D14; D-8687) is the sixth. It spawns the absolute launcher
+  (`updateLauncherPath`) with exactly `models <lane> show` or `models <lane> hold|release|revert <class>`, built ONLY by
+  `buildModelsArgv` (`shared/agent-protocol.ts`, which the server's two arms call too); the lane is checked by
+  `isModelsLaneId`. It takes **no stdin**. Its port (`src/modelsop.ts`) is `testboxAdminOp.ts`'s shape through
+  `boundedStdinSpawn`: an explicit `{HOME, PATH, LANG}` with the agent's own `node` first on PATH (D-5227), a 256 KiB
+  stdout cap (`too-large`), 40 s and then SIGTERM to the group and SIGKILL 5 s later. One gate per agent process answers
+  a second op `busy`. Every answer, a refusal included, is `ok: true` with a `kind` and `fleetIdentity`; the agent
+  never parses the verb's JSON (the server reads it), and `bad-request` from it means the agent predates it.
+  `test/models-op.test.ts`'s source scan and `server/test/whitelist-subset.test.ts`'s layer 4e red the day it reaches
+  an exec path.
 - The **`overlord-history` op** (Overlord W1, `docs/superpowers/plans/2026-11-14-overlord-w1/w1-board-history.md`) spawns
   NO process. It runs `ccd/history/overlord-worker.mjs` in a `node:worker_threads` worker (`src/historyOp.ts`) with
   `env: {}` and both streams drained, one slot per agent process freed only on the worker's `exit`, and a 20 s deadline.

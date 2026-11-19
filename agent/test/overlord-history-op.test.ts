@@ -328,7 +328,8 @@ describe('the op\'s bounds and its resolver', () => {
 });
 
 describe('the word overlord-history in ready.ops (Task 4)', () => {
-  const TEN = ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes'];
+  // The eleventh word is the models op (D-8688), the last fixed one; overlord-history makes a full list twelve.
+  const ELEVEN = ['update', 'token-sync', 'account', 'disk', 'pressure', 'testbox', 'testbox-tools-sync', 'testbox-admin', 'backup', 'readdir-mtimes', 'models'];
   let agent: RunningAgent | undefined;
   const clients: TestClient[] = [];
   afterEach(async () => {
@@ -348,17 +349,17 @@ describe('the word overlord-history in ready.ops (Task 4)', () => {
 
   it('advertised, last, on a Linux agent whose worker entry is found; the word passes CAP_WORD', async () => {
     const ops = await opsWith({ platform: 'linux', resolve: () => resolveOverlordWorker() });
-    expect(ops).toEqual([...TEN, OVERLORD_HISTORY_OP]);
+    expect(ops).toEqual([...ELEVEN, OVERLORD_HISTORY_OP]);
     expect(CAP_WORD.test(OVERLORD_HISTORY_OP)).toBe(true);
     expect(ops.length).toBeLessThanOrEqual(MAX_CAP_WORDS);
   });
 
   it('withheld when the resolver answers absent, the other ten unchanged', async () => {
-    expect(await opsWith({ platform: 'linux', resolve: () => null })).toEqual(TEN);
+    expect(await opsWith({ platform: 'linux', resolve: () => null })).toEqual(ELEVEN);
   });
 
   it('withheld on macOS, the other ten unchanged', async () => {
-    expect(await opsWith({ platform: 'darwin', resolve: () => resolveOverlordWorker() })).toEqual(TEN);
+    expect(await opsWith({ platform: 'darwin', resolve: () => resolveOverlordWorker() })).toEqual(ELEVEN);
   });
 
   it('the boot check reads no role: a sentinel ccrc.env in the home is never opened (R1)', async () => {
@@ -375,7 +376,7 @@ describe('the word overlord-history in ready.ops (Task 4)', () => {
     syncBuiltinESMExports();
     try {
       const ops = await opsWith({ platform: 'linux', resolve: () => resolveOverlordWorker() }, home);
-      expect(ops, 'a server role recorded on disk changes nothing').toEqual([...TEN, OVERLORD_HISTORY_OP]);
+      expect(ops, 'a server role recorded on disk changes nothing').toEqual([...ELEVEN, OVERLORD_HISTORY_OP]);
     } finally {
       Object.assign(fs, { openSync: real.openSync, readFileSync: real.readFileSync });
       Object.assign(fs.promises, { open: real.open, readFile: real.readFile });

@@ -9,7 +9,7 @@ One part of the wave lifecycle. `wave-lifecycle.md` lists every part.
 refuters per critical or important finding (one per minor, returned as advisory), at most 8 findings per lens,
 majority deciding, model and effort literal in the script. The REVIEWER
 runs it — this session dispatches the review run and rules on the report it returns (step 1
-below, clause 12); a lens that returned nothing is a review not yet done, never an approval.
+below, clause 12); a lens that returned nothing is a review not yet done, never an approval. Every brief for an Agent-tool subagent, a workflow `agent()` call or an implementer carries both sentences of `references/approval-prompts.md`, word for word.
 
 **Order is load-bearing here, and it is the opposite of what you might guess.**
 A program is `active` only while it has at least one open (non-`done`,
@@ -50,6 +50,24 @@ every later advance of that run and its close that answer the same wave-done sub
 the ordinary path verifies the head that is landing. That rule ends with the wave-done it answered: once the run goes
 back to `working` (a send-back, or a lost merge race recorded from `merging`) or a fresh `wave-done` arrives, submit
 the worker's fingerprint exactly as the worker reports it.
+
+**State what is left.** At the plan and at every wave boundary, state the waves left as a range, with a reason, through
+`ccrc-api programme remaining`. State `0..0` before you close your last run: the door needs an open run of your
+programme. `runId` names the run whose boundary this is (leave it out at the plan). What the programme waits on goes in
+`edges`, each a `needs-landed` edge on another programme's run (`{"predicate":"run-closed","runId":N}`) or on a run's
+own pull request (`{"predicate":"pr-merged","runId":N,"pr":P}`, met only when that run closes with pull request P as its
+own, merged), or a `needs-decision` edge on an open item of your own programme
+(`{"predicate":"operator-confirms","itemId":N}`), each with a one-line `why`. Only the server clears an edge, when it
+measures the target; a later statement that leaves an edge out does not end it. A `pr-merged` edge on a pull request the
+run does not close with ends the block when the run closes; it does not wait for that pull request to merge. A
+`run-closed` edge is met only by a run whose close records a merged pull request, so one on a review run, an abandoned
+run, or a run closed with no verified pull request ends the block at once, never met.
+
+```bash
+"$API" programme remaining <slug> --json - <<'JSON'
+{"lo":2,"hi":3,"reason":"wave 4 of the plan, and its review","runId":123}
+JSON
+```
 
 1. Dispatch a review run and rule on its report (SKILL.md steps 5–6, clause 12); this session never reads the diff itself.
 2. Update the ledger — Waves row, Decisions, Carried constraints, and the

@@ -25,6 +25,9 @@ import { WORKER_KICKOFF_PREFIX } from '../src/coord/dispatch.js';
 import { SUBAGENT_CLASSES } from '../../shared/models.mjs';
 import { STALL_RESUMING_KINDS, STALL_WAKE_KINDS } from '../src/coord/stall.js';
 import { COLLECT_LANE_LIVE_MARKER } from '../src/collectLane.js';
+import { TICKET_KINDS } from '../../shared/plan.js';
+import { parsePlanTicketAdd } from '../src/coord/planPolicy.js';
+import { clientRoutes } from './ccrcApiTable.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/worker-skill');
@@ -52,6 +55,9 @@ const frontmatter = skill.slice(4, skill.indexOf('\n---', 4));
 // D-5292, the measured shape itself, escaped below), and a curly apostrophe pasted into
 // SKILL.md reds this pin without looking like a change. SKILL.md's contract
 // section states the same rule where an editor of the prose will see it.
+// Approvals PR P: the literal-path rule, word for word, as reviewer clause 9 and the coordinator skill's
+// approval-prompts reference carry it.
+const RULE = 'Remove only literal paths you have written out, never a path held in a variable or built by a command, a glob after a `cd`, or a path inside `bash -c`. Leave temporary directories to the reaper, or name them in full.';
 const CONTRACT = [
   "Learn who you are on EVERY call: `fromId` and `fromUuid` come from `ccrc-api whoami`, which reads the pane you are in and REFUSES rather than naming another session. Re-read them each time. `/clear` rotates that uuid and dispatch `/clear`s you on every wave >= 2, so a uuid you cached is guaranteed stale.",
   "Commit on THIS workspace's own branch (`ws/<slug>`), never a separate feature branch. The done-fingerprint re-measures the workspace branch's tip, so work parked on a feature branch leaves that tip unmoved and wedges every close `stale-tip` forever (F5 — the server's own `stale-tip` detail names this as the almost-certain cause).",
@@ -59,7 +65,7 @@ const CONTRACT = [
   // PRE-DELIVERY budget only; a delivered-but-unacked nudge has its own.
   "Ack before you act: `mail inbox`, run bare (no pipe, no redirect, no `head` or `tail`), acks what it printed; by hand, key the ack on the DELIVERY id, never the mail row's own `id` — a brief that never landed retries `MAIL_MAX_ATTEMPTS` (6) times and then parks unread, while a delivered nudge you leave unacked replays `MAIL_REPLAY_MAX_ATTEMPTS` (20) times and then parks read-but-unanswered. Reply to the coordinator through mail (`toId:'coordinator'`), never by typing into your own pane.",
   "A draft in your input box never stops mail. The delivery lane stashes it with Claude Code's own prompt stash (ctrl+s), delivers, and Claude Code restores it after the delivery; if you see `Draft restored`, that is why. Keep using your box normally. The one draft case you can cause is a draft typed over a stash you already hold yourself, which makes the lane refuse (`stash-occupied`), so send or pop your own stash rather than leaving it held.",
-  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. In a shell script, never delete through a variable (`rm -rf \"$X\"`): use a literal path under your scratch directory, or leave temp directories to the reaper; such deletes stop your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries this rule, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
+  "Every question rides the AskUserQuestion tool — the structured ask the session hook captures — never free text in your pane. If this session has a parent, that parent may answer it before the operator is notified; ask as if a colleague who has read the plan will answer, because one may. " + RULE + " You never delete through a variable (`rm -rf \"$X\"`), and a delete of any other shape stops your work on a permission prompt the operator must answer. Subagents never read this skill, and they raise almost all of these prompts: every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word. Ask one question per AskUserQuestion call, single-select, so your parent can rule it; split independent decisions into separate calls.",
   "Your requirements are the brief plus the plan file it names, including that plan's deviation ledger, and the plan's text governs over your recollection of the spec. Invoke the execution skill the brief names rather than improvising one.",
   "Large payloads travel as files: write the file, then name its ABSOLUTE path in the mail's `artifacts` (a relative entry is refused `bad-kind`). Never ask for content to be pasted into your pane (F7).",
   "Never run `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive` or `ws-restore`. This workspace's lifecycle belongs to ccd and to the human, at any wave, for any reason.",
@@ -217,12 +223,13 @@ describe('the worker skill: its contract', () => {
   // SKILL.md's clause 5 line itself, so dropping it reds by name rather than
   // only as a whole-clause mismatch above.
   it('clause 5 carries the no-variable-rm rule into every subagent brief (D-5292)', () => {
-    const SUBAGENT_BRIEF = 'every subagent brief you write carries this rule';
+    const SUBAGENT_BRIEF = 'every subagent brief you write carries the rule above and the prose-names line of `../ccrc-coordinator/references/approval-prompts.md`, word for word';
     const line = skill.split('\n').find((l) => l.startsWith('5. '));
     expect(line, 'SKILL.md has no clause 5').toBeTruthy();
     expect(CONTRACT[4]).toContain(SUBAGENT_BRIEF);
     expect(line, 'clause 5 no longer carries the rule into subagent briefs').toContain(SUBAGENT_BRIEF);
     expect(line, 'clause 5 no longer forbids deletes through a variable').toContain('never delete through a variable (`rm -rf "$X"`)');
+    expect(line, 'clause 5 no longer carries the literal-path rule word for word (approvals PR P)').toContain(RULE);
   });
 
   // ── the COUNT, which the verbatim pin above structurally cannot see ──────
@@ -854,6 +861,13 @@ describe('the worker skill: the routing clauses (routing slice 2)', () => {
     expect(skill).not.toContain('reclaim-pause');
   });
 
+  // The Overlord W1 ccd arms: `ccd keep-awake` sets and clears the sleep markers on the Overlord's body; it is the server's
+  // act through the designation's doors, never a worker's.
+  it('never names keep-awake — the sleep markers\' writer is the server\'s', () => {
+    expect(`${skill}\nccd keep-awake\n`, 'CONTROL: a planted mention is seen').toContain('keep-awake');
+    expect(skill).not.toContain('keep-awake');
+  });
+
   // The stall watch's level and quiet time are the operator's alone (stall-watch
   // settings design 2026-10-05 §10). The skill never names the door that sets
   // them.
@@ -1046,5 +1060,50 @@ describe('the worker skill: the Linear section links by the repository\'s visibi
 
   it('it names no tracker id of this repository', () => {
     expect(linear).not.toMatch(new RegExp(`\\b${['CCRC', 'P'].join('')}-[0-9]`));
+  });
+});
+
+// Linear hierarchy wave 6 (D-8185, plan Task 6.2): a worker files the work it leaves for later as a follow-up ticket of its
+// own run's epic through `plan ticket-add`, never as a Linear issue, and the Linear skill says the hierarchy is ccrc's.
+describe('the worker skill: follow-ups go into the plan (D-8185)', () => {
+  const linear = skill.slice(skill.indexOf('\n## Linear\n'), skill.indexOf('\n## When something is wrong'));
+  const block = (): string => {
+    const m = /```bash\n("\$API" plan ticket-add <slug> --json - <<JSON\n(\{[^\n]+\})\nJSON\n)```/.exec(linear);
+    expect(m, 'the Linear section has no executable `plan ticket-add` block').not.toBeNull();
+    return m![2]!;
+  };
+
+  it('the worker files follow-ups with plan ticket-add into its own epic', () => {
+    const flat = linear.replace(/\s+/g, ' ');
+    // Review 2590 F1: the rule holds in any team (design §12, ruling 29; a planned programme is born in the new shape before
+    // its team is migrated); only the `plan-owned` refusal is a managed team's.
+    expect(flat).toContain('**A follow-up goes into the plan, never straight into Linear.**');
+    expect(flat).toContain('(`plan show <slug>` names it), in any team;');
+    expect(flat).toContain('in a managed team `linear create` answers `plan-owned`.');
+    // Review 2580 F2: a run with no ticket (a review run, or an older programme with no plan) has no epic to file into.
+    expect(flat).toContain('With no ticket on your run (a review run, or an older programme with no plan), ask your coordinator.');
+    expect(flat).toContain('a `follow-up` ticket in your run\'s epic');
+    expect(flat).toContain('`plan show <slug>`');
+    expect(clientRoutes().map((r) => r.key)).toEqual(expect.arrayContaining(['plan.ticket-add', 'plan.show']));
+    expect(TICKET_KINDS as readonly string[]).toContain('follow-up');
+  });
+
+  it('its example body is one the route parses, as a follow-up', () => {
+    const body = JSON.parse(block().replace(/<your run's epic>/g, 'w1-capture').replace(/<new key>/g, 'w1-later')
+      .replace(/<what is left>/g, 'Write the notes')) as unknown;
+    const parsed = parsePlanTicketAdd(body);
+    expect(parsed.ok, JSON.stringify(parsed)).toBe(true);
+    expect(parsed.ok && parsed.add.ticket.kind).toBe('follow-up');
+  });
+
+  it('the Linear skill says the hierarchy is ccrc\'s', () => {
+    const linearSkill = readFileSync(path.join(root, 'ccd/linear-skill/SKILL.md'), 'utf8').replace(/\s+/g, ' ');
+    expect(linearSkill).toContain('**The hierarchy is ccrc\'s.**');
+    // Review 2580 F3: a team is managed once its migration is applied (design §7.1, `managedTeams`), not when the hierarchy is on.
+    expect(linearSkill).toContain('In a managed team (a team whose migration is applied)');
+    expect(linearSkill).toContain('that restore comment is ccrc\'s own');
+    expect(linearSkill).toContain('Never edit one of these by hand');
+    expect(linearSkill).toContain('never file a hierarchy object or a ticket there with `linear create`');
+    expect(linearSkill).toContain('`plan ticket-add`');
   });
 });

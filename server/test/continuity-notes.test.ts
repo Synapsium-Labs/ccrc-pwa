@@ -7,8 +7,8 @@ import { notesCases } from './continuityNotesCases.js';
 
 describe('the note vocabulary', () => {
   it('lists in order, one guard each', () => {
-    expect(NOTE_KEY_KINDS).toEqual(['programme', 'item', 'run']);
-    expect(NOTE_KINDS).toEqual(['thread', 'caution']);
+    expect(NOTE_KEY_KINDS).toEqual(['programme', 'item', 'run', 'message']);
+    expect(NOTE_KINDS).toEqual(['thread', 'caution', 'miss']);
     expect(KEY_FACTS).toEqual(['live', 'gone', 'not-yours', 'unmeasured']);
     const refused: unknown[] = ['', 'constructor', '__proto__', null, undefined, 0, {}, ['run']];
     for (const [guard, members, near] of [[isNoteKeyKind, NOTE_KEY_KINDS, 'Run'], [isNoteKind, NOTE_KINDS, 'threads'],

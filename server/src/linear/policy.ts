@@ -13,8 +13,9 @@
 import type { LinearCcrcJournalOp } from './hierarchyOps.js';
 
 /** ccrc's own passes (D-8180), THE ONE LIST: the type below is derived from it and `ccrcActor` (`journal.ts`) mints
- *  an actor for each member and for nothing else. Attribution only, as the session pair is. */
-export const LINEAR_CCRC_PASSES = ['plan-sync', 'drift-restore', 'migration', 'put-back'] as const;
+ *  an actor for each member and for nothing else. Attribution only, as the session pair is. `inbound` (D-8183) is the drift lane's
+ *  close of an inbound issue: its comment and its cancel. */
+export const LINEAR_CCRC_PASSES = ['plan-sync', 'drift-restore', 'migration', 'put-back', 'inbound'] as const;
 /** Which of ccrc's own passes a write belongs to. */
 export type CcrcPass = (typeof LINEAR_CCRC_PASSES)[number];
 
@@ -30,6 +31,13 @@ export interface LinearWriteAsk {
     workspaceId: string;
     /** The resolved current team (spec §4.5), never the reference's prefix; null for an initiative (no team). */
     teamKey: string | null;
+    /** C15: the team an issue update MOVES the issue into, when it is not the current one; absent or null: not a move. A
+     *  policy that may not permit writes into that team reads it here, since the write lands there. */
+    destinationTeamKey?: string | null;
+    /** D-8707: every team a PROJECT write puts the project in (a project belongs to several: the epic's own team and each team its
+     *  tickets file into), whatever `teamKey` says; absent on every other write. A policy that may not permit writes into one of
+     *  them reads it here, since the write lands there. */
+    teamKeys?: readonly string[];
     /** The resolved current identifier; null on a create. */
     issue: string | null;
     /** The resolved parent's team when `parent` is set, else null. */

@@ -1501,17 +1501,21 @@ step 10 of
      named here, derived from `gate.ts`'s own EXEMPT reasons (D-1233/D-1234). -->
 
 What is gated, and what is not: **everything except** `/health` (deploy's own
-liveness gate reads the shipped sha out of it), the eighty-five machine lanes the
+liveness gate reads the shipped sha out of it), the ninety machine lanes the
 fleet host reaches (thirty-nine box-token-consulting coordination routes plus
 the Linear proxy's routes under `/api/linear/proxy/`, which a session's `ccrc-api linear`
 verbs call and which refuse any call without the token whatever `CCRC_AUTH` says,
 the programme ledgers' item and goal routes (`/api/programmes/:slug/{items,spec,modifications,modifications/merged}`
 and `/api/items/:id/{confirm,return,withdraw,blocking}`),
-the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,epics/drop,close}`),
+the programme doors (`POST /api/coord/programmes/:slug/calls`, the coordinator's call record, and
+`POST /api/coord/programmes/:slug/remaining`, what a programme says is left),
+the plan verbs' routes (`POST /api/programmes/:slug/plan` and `/api/programmes/:slug/plan/{met,tickets,tickets/move,phases/refs,epics/drop,close,take}`, and the inbound triage `POST /api/teams/:team/plan/triage`),
 the hook's start report (`POST /api/sessions/:id/start`) and its loads report (`POST /api/sessions/:id/start/loads`), the card door (`GET /api/sessions/:id/card`), the note door
 (`POST /api/sessions/:id/notes`, `GET /api/sessions/:id/notes`, `POST /api/sessions/:id/handover`), the timer doors
 (`POST /api/timers`, `GET /api/timers`, `POST /api/timers/:id/cancel`), the probe door
-(`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`),
+(`GET /api/sessions/:id/probe`, `POST /api/sessions/:id/probe`), the replay quiz's record door
+(`POST /api/continuity/quiz-runs`, which the operator's `ccrc quiz-record` reaches through `ccrc-api` and which records a run
+as pending only; its rule door, `POST /api/continuity/quiz-runs/:id/rule`, is gated, behind a session and a step-up),
 `/api/notify`, which refuses an absent token like every lane,
 `/api/pools/epoch` and `/api/updates/intent/:nodeId` — the callers are `curl` inside a
 Claude Code session, `ccd-pool-sync.timer` and, from update-management W4, `ccd-update-sync.timer`, none with a cookie jar, though the
@@ -1668,7 +1672,7 @@ without it neither half of ccrc runs:
 produces it (`CCRC_ACCOUNTS`, `CCRC_HOME_ABLE`, `CCRC_MEASURED`,
 `CCRC_ANTHROPIC_BACKEND`, `CCRC_SUBAGENT_CLASSES`, `CCRC_CODEX_BACKEND`,
 `CCRC_UPSTREAM`, `CCRC_PAY_PER_USE`, `_ccrc_cfg_dir`, `_ccrc_id_wrapper`, `_ccrc_dir_id`,
-`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_fable_billing`, `_ccrc_continuity`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
+`_ccrc_label`, `_ccrc_hue`, `_ccrc_pool`, `_ccrc_fable_billing`, `_ccrc_continuity`, `_ccrc_org`, `_ccrc_secrets_file`, `_ccrc_auth_dir` — the whole emitted surface, because a
 field the projection drops is a field no drift detector can see). `ccrc install` generates it from the box's
 own installed roster, and the deploy fallback from the
 roster **read back off the box**, never from the local file, so ccd's routing
@@ -1678,7 +1682,7 @@ which is why both write it to a temp file and `mv` it into place — the deploy 
 scp-to-temp + `mv` as `ccd` itself, landing it **before** `ccd` and before every installer.
 
 An account entry is `{id, label, configDirSuffix, exec, homeAble, hue, telemetry,
-hidden, pool, fableBilling, continuity}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
+hidden, pool, fableBilling, continuity, org}` — validated by `shared/roster.ts` (`parseRoster`), whose errors all
 carry a remedy. `id` is `^[a-z][a-z0-9-]{0,31}$` because it becomes a filename
 under `~/.local/bin/`, a bash `case` pattern and a session-id prefix; `label` is
 what the PWA renders; `homeAble: false` holds an account out of automatic
@@ -1770,6 +1774,7 @@ roster `parseRoster` throws on is refused by the CLI too.
 | `exec.upstream` | `CODEX_UPSTREAMS` on a `codex` lane, absent reading its first word, `backend`; rendered into `lane.json` | `CODEX_UPSTREAMS` | “a codex lane with an unknown exec.upstream” |
 | `fableBilling` | `FABLE_BILLINGS` (included or credits), optional; a written `null` is refused; emitted into accounts.sh | `FABLE_BILLINGS` | “a fableBilling outside the set” |
 | `continuity` | an object whose one key is `recordedAt`, non-negative integer epoch seconds, optional; a written `null` is refused; emitted into accounts.sh | `recordedAt` | “a continuity with an extra key” |
+| `org` | `orgLabelVerdict`: `POOL_NAME_RE`'s shape, never `ORG_CLEAR_WORD` or one of `ORG_ID_SHAPES` (an organization id), optional; a written `null` is refused; emitted into accounts.sh | `orgLabelVerdict` | “an org shaped like an organization id” |
 
 Each row is resolved against the three files it names by
 `server/test/readme-roster-mirror.test.ts`, so a gate deleted from either
@@ -1983,7 +1988,7 @@ ccrc account seed --id <id>                # the first-run seed on its own: onbo
 ccrc account enable --id <id> [--force]    # remove the -disabled marker, under the placement lock, once the lane is ready
 ccrc account disable --id <id>             # write it; refused for the last placeable home-able lane
 ccrc account credential --id <id> --credential -   # replace a token lane's 0600 key file, validated first
-ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off]   # a token lane's stated account; placement; its billing and continuity facts
+ccrc account set --id <id> [--stated -] [--placement overflow|full] [--fable-billing included|credits] [--continuity on|off] [--org <label>|none]   # a token lane's stated account; placement; its billing and continuity facts; its organization label
 ccrc account remove --id <id> [--mode remove|discard] [--dry-run] [--rehome-sleeping] [--keep-credential] \
     [--keep-codex-auth | --delete-codex-auth]
 ```
@@ -4059,7 +4064,7 @@ general remote-shell:
   Every granted verb outside that bare-token handful, unlike `stop`, requires a longer prefix before
   anything after it is unconstrained: `pr-state` needs `--session` or
   `--project`; `pr-open`/`ws-archive`/`ws-restore`/`ws-audit`/`ws-attic`/
-  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size` need `--session`;
+  `ws-hold`/`ws-release`/`ws-rename`/`ws-title`/`route`/`win-size`/`keep-awake` need `--session`;
   `coord-pause`, `reclaim-pause`, `scope-sweep-busy` and `delegation-adopt` need `--state`, `project-pool` needs `--project` and `project-add` needs `--name`; and
   `ws-reap` and `ws-reclaim` need `--expect` — a load-bearing confirmation
   token, so an unconfirmed reap or reclaim can never cross the wire at all.
@@ -4073,7 +4078,7 @@ general remote-shell:
   `UNGRANTABLE_VERBS` and `REQUIRED_VERB_FLAG` (`agent/src/whitelist.ts`)
   make a grant of `ws-rm` or `ws-gc`, an empty prefix, or a gated verb
   (`ws-reap`, `ws-reclaim`, `ws-rename`, `coord-pause`, `reclaim-pause`, `scope-sweep-busy`, `delegation-adopt`,
-  `project-pool`, `project-add`, `route`, `win-size`) without its flag a type error, and
+  `project-pool`, `project-add`, `route`, `win-size`, `keep-awake`) without its flag a type error, and
   `auditExecWhitelist` re-checks the same rules when the agent loads —
   together with any command key other than `tmux` and `ccd`, such as one of
   `FORBIDDEN_COMMANDS` (`gh`, `git`, the shells and interpreters, `ssh`,
@@ -4976,7 +4981,9 @@ functions, inherited shell options) stripped, and the body refuses them
 `find` that answered "no rows" once turned an honest `containment-unproven` into `reclaimable`. It
 is a startup boundary, not a sandbox: `PATH` and every binary it selects are trusted, and a writer
 who replaces both files is not stopped. `ws-expire`, `ws-collect`, `ws-audit --session <id> --expire` and
-`ws-audit --session <id> --collect` are decided the same way.
+`ws-audit --session <id> --collect` are decided the same way. `ws-rm`, `ws-reap`, `ws-gc`, `ws-archive`, `ws-restore`,
+`roll` and `claude` start under `bash -p` too, so an inherited `nocasematch` cannot fold a case variant into one of them;
+the body does not refuse them when it was started another way.
 
 **After a box move.** Each registry row's entry field (`$REG/<id>.workdirid`) records the device and inode of the
 directory its session entered, and the rows rung refuses a child while any other row cannot be placed. A registry copied
@@ -5137,6 +5144,13 @@ listing on the same connection shows the file absent and records its retirement 
 such a snapshot, make sure the legacy file is gone. A restore that rolls both files back together, a whole home or a
 whole file system, is outside this proof: after one, raise the cleanup pause and make a fresh confirmed change in
 Settings before allowing Live.
+
+The Overlord's private store, `operator-model.db` (the operator's messages and the read ledger), is snapshotted beside
+`coord.db` at mode 0600, in a backup directory made 0700, and `ccrc coordination-snapshot restore` puts both back as one set.
+A backup taken before the store existed has no `operatorModel` member in its manifest, and its restore leaves the live
+store in place; a manifest that names the store as absent moves the live store into `coordination-restore.foreign/<id>/`
+and deletes nothing. As with the landing journal, no backup copies `~/.ccrc/privacy-journal.log`: leave it in place when a
+snapshot goes back, so the next message id starts above every id it records and none is issued twice.
 
 **Orphan worktrees (fleet disk retention, D-6631).** A linked worktree that no registry row names, and that no collector
 owns, is the orphan-tree lane's: the registry orphans under the worktree root, and the `.claude/worktrees/*` and
@@ -5646,7 +5660,8 @@ stays awake), no pane menu, background work or subagents, a turn marker that rea
 exactly 0) and nothing scheduled (`crons` exactly 0; an older hook's marker, with no `crons`, holds) whose latest main
 event is more than N ago (6 h; `$REG/hibernate-after-hours`, 1 to 168, overrides), no hold, no open run naming it as
 worker or claimant in any non-terminal state, no claim, no outstanding mail, nobody with it open, not stranded,
-swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate`. The sweep (`sleepLane.ts`,
+swap-blocked, under a substrate fault or archived, and no `$REG/<id>.no-hibernate` (written by hand, or by `ccd keep-awake` on
+the Overlord's body, its one writer in the tree). The sweep (`sleepLane.ts`,
 every 5 minutes) logs a `ccrc-server: hibernate-shadow <id> idle=<h>h` line, at most once per session an hour, until the
 operator ARMS it with `$REG/hibernate-live`; armed, on a box whose `ccd caps` lists `hibernate`, it composes `ccd
 hibernate <id>` for at most three sessions a sweep, each on the coordination serialiser and the session's queue after
@@ -5677,7 +5692,16 @@ session whose lane runs nothing newer is never rolled for the build, and a sessi
 reach is not rolled for it again (in this server process). It is rolled when it passes hibernation's gate at a 90-minute quiet window (`autoRollVerdict`,
 `server/src/coord/rollTarget.ts`). It is skipped, by name, when hibernation is armed and will take it within 30 minutes
 (the wake brings the release), when its live status moved in the last 10 minutes (`compacting`), or when it carries
-`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). Under the
+`$REG/<id>.no-roll` (`.no-hibernate` does not stop a roll; it only means hibernation is never due). `ccd keep-awake` is
+the one writer of both markers in the tree, on the Overlord's body: it writes the stamp `keep-awake v1`, and `off` removes
+only a marker holding exactly that stamp. The renewal's fresh start (`ccd hibernate --roll --fresh`) passes a `.no-roll`
+holding exactly that stamp, and nothing else; a plain `--roll` refuses every `.no-roll`, a dangling link included. When
+its route record carries an ordered account list (`acctorder`, written only for the Overlord), that fresh start also
+picks the account it wakes on, last in its re-measure (`_fresh_pick_to`, `ccd/lib/long-lived.sh`): the first listed
+account under 70% load that serves its class, then for a Fable class the same on Opus, then the least loaded, else its
+current account; when none can take it, it refuses at exit 3 with `unplaced` and stops nothing, and a proven move writes
+one `swap` journal row (reason `fresh-pick`) and never `home`. A
+`touch` keeps the stamp, so an operator opts the Overlord's body out by writing other bytes into the marker. Under the
 `Coordinators only` setting a session that is not a coordinator (an unreadable `.child` counts as a child) is never
 rolled, and picks the release up when it next starts for another reason. The act is a row of the
 sleep executor (`server/src/rollLane.ts`) and ONE ccd verb, `ccd hibernate --roll` (D-7458): ccd re-measures, sleeps
@@ -5729,13 +5753,17 @@ test jobs; tested in
 `server/test/ci-ledger-guard.test.ts`) fails a pull request that MODIFIES, DELETES or RENAMES AWAY an existing
 file there unless its head branch is `ledger/<programme>` (the name is this guard's own convention: no earlier
 ledger-branch name existed). A pull request ADDS a per-task note instead,
-`docs/superpowers/plans/<plan>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
+`docs/superpowers/programs/<programme>/<task-or-pr>.md`, and the coordinator folds the notes into the ledger in one
 ledger pull request per wave. There is no `merge=union` driver: it silently corrupts a row edited in place. The
 escape is a `Ledger-Edit: <D-TBD reason>` trailer on the pull request's HEAD commit (only the head commit's
 trailers count, read with `git log -1 --format=%(trailers:key=Ledger-Edit,valueonly)`; a trailer on an earlier
-commit does not), which passes and is written to the step summary. The
-guard skips with a notice on a shallow checkout and on a merge-queue run. It runs warn-only
-(`LEDGER_GUARD_MODE: warn` in `ci.yml`) until the open pull requests that edit a ledger have landed.
+commit does not), which passes and is written to the step summary. Its layout arm (D-8719) holds every branch,
+ledger branches included, with no trailer escape, to the repo's review judge's layout: a file added, copied or
+renamed in under `docs/superpowers/specs/` or `docs/superpowers/plans/` is a dated spec
+(`YYYY-MM-DD-<slug>-design.md`, or its `-design.promise-ids.json`) or a dated plan (`YYYY-MM-DD-<slug>.md`),
+directly in that directory. The
+guard skips with a notice on a shallow checkout and on a merge-queue run. It runs in enforce mode
+(`LEDGER_GUARD_MODE: enforce` in `ci.yml`), so a violation of either arm fails the check.
 
 **The native merge queue (landing-order wave 2).** On a project whose `main` ruleset requires
 GitHub's merge queue — measured before each landing, never remembered — a producer lands before its
@@ -7795,7 +7823,8 @@ you need to reason about one.*
   `lib/train-proof.sh` (the train proof of a PR a merge train landed, beside it, D-7463) and
   `lib/delegation-lease.sh` (the delegation broker's lease carrier, `ws-lease-mark` and the read-only
   `ws-lease-audit`, beside them) and `lib/pool-set.sh` (a session's pool set, the Overlord's W1: the
-  route fields `poolset` and `acctorder`); `ccrc`, the box
+  route fields `poolset` and `acctorder`) and `lib/long-lived.sh` (the Overlord's ccd arms: the
+  `keep-awake` verb's region); `ccrc`, the box
   lifecycle CLI, with the files it sources or execs (`ccrc-doctor-checks`,
   `ccrc-wrapper-shape`, `ccrc-adopt`); `session-hook.sh` (the Claude Code hook that reports each
   session's state), `install-session-hooks.sh` (the idempotent installer that
@@ -7972,6 +8001,7 @@ implements — that list is the authority; the table below is a map:
 | `clip <png> [id]` | file an image under `~/.cc-clips` and type its path into the input box of the session the most recently active attached client is on, or of the id given |
 | `route --session <id> --set <field>=<value>… [--apply]` | write a session's routing record (model class, effort, …); `--apply` also applies it to an idle live pane |
 | `win-size --session <id> --mode smallest\|canonical` | un-pin / pin one session's window size |
+| `keep-awake --session <id> --state on\|off` | the server's set / clear of one session's two sleep markers, `.no-hibernate` and `.no-roll`, holding its own stamp (the Overlord's body; never run by hand or by a session) |
 | `ws-add [--no-rc] [--route <field>=<value>]… <project> [slug]` · `ws-rename --session <id> --branch <name>` | a new worktree, branch and session for a project; rename a workspace's branch before it is pushed |
 | `ws-hold --session <id> --reason <text>` · `ws-release --session <id>` | declare / end a program's claim on a workspace |
 | `ws-title --session <id> (--title <text> \| --clear)` | set or clear a workspace's operator title and its `named` marker (the slug and branch never change); `--clear` hands the row back to the ai-title sweep |
@@ -8561,6 +8591,7 @@ restore() { cp -a "$1" "$2.restore" && mv -f "$2.restore" "$2"; }
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-train-proof.sh ~/.local/libexec/ccrc/lib/train-proof.sh   # its second library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-delegation-lease.sh ~/.local/libexec/ccrc/lib/delegation-lease.sh   # its third library, when the backup has one
 [ ! -f ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-pool-set.sh ~/.local/libexec/ccrc/lib/pool-set.sh   # its fourth library, when the backup has one
+[ ! -f ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ] || restore ~/ccrc-backups/<ts>/ccd-lib-long-lived.sh ~/.local/libexec/ccrc/lib/long-lived.sh   # its fifth library, when the backup has one
 restore ~/ccrc-backups/<ts>/ccd-body ~/.local/libexec/ccrc/ccd
 restore ~/ccrc-backups/<ts>/ccd ~/.local/bin/ccd
 restore ~/ccrc-backups/<ts>/notify.sh ~/.cc-sessions/notify.sh
@@ -8882,7 +8913,9 @@ arm can clear it (the verb says so, as `scope-sweep-busy` does): remove it by ha
 The operator reads and sets the switch in the console, not in a file (D-8114). **Settings › Automation › Worktrees left behind**,
 after Leftover processes, shows what the door's GET serves and nothing it decides itself: whether the server keeps worktrees now
 (the marker; neither choice is checked when it could not be read), the lane's mode at its last pass (keeping, not keeping yet and
-only recording, paused, or not read) with every count, whether the fleet box's keep switch and its change check are available,
+only recording, paused, or not read) with every count (but for the would-keep figure after a pass that could not read
+everything it needs, where it says the card cannot say how many until the next pass), whether the fleet box's keep switch
+and its change check are available,
 missing or not read, and the worktrees the last pass would keep, or kept: project, worktree and the session that started the agent,
 each with what the change check measured or that none was read, at most 50 and then "and N more". A list it cannot read is
 dropped and the card says no list was served; the switch stays drawn. It polls once a minute.
@@ -8935,9 +8968,10 @@ These conventions carry more weight here than style:
   one newline and carry no NUL byte (the body hashes it as bash reads it), or the install refuses.
   `ccd/lib/train-proof.sh` (the train proof, D-7463) is the second library and
   `ccd/lib/delegation-lease.sh` (the delegation lease carrier, wave 5) the third, and `ccd/lib/pool-set.sh`
-  (a session's pool set, the Overlord's W1) the fourth; each is treated the same way, their pins
-  `__CCD_LIB_TRAIN_SHA256=stamp-at-install`, `__CCD_LIB_LEASE_SHA256=stamp-at-install` and
-  `__CCD_LIB_POOLSET_SHA256=stamp-at-install`; the body reads and checks all four before it evaluates any.
+  (a session's pool set, the Overlord's W1) the fourth, and `ccd/lib/long-lived.sh` (the Overlord's ccd arms) the fifth;
+  each is treated the same way, their pins `__CCD_LIB_TRAIN_SHA256=stamp-at-install`,
+  `__CCD_LIB_LEASE_SHA256=stamp-at-install`, `__CCD_LIB_POOLSET_SHA256=stamp-at-install` and
+  `__CCD_LIB_LONGLIVED_SHA256=stamp-at-install`; the body reads and checks all five before it evaluates any.
   `ccd/session-hook.sh` carries a generated helpers region (`shared/hook-helpers.mjs`);
   after editing `ccd/ccd`'s epoch helper, or on a conflict in the region's stamp line, run
   `bash ccd/ccrc restamp ccd/session-hook.sh`; `hook-helpers-generated.test.ts` reds when the
@@ -8948,7 +8982,7 @@ These conventions carry more weight here than style:
   `ccd/ccrc`; after editing it, run `bash ccd/ccrc restamp ccd/ccd-update-sync`.
 - **A feature pull request does not edit the shared ledgers.** An existing file under
   `docs/superpowers/programs/` or `docs/superpowers/plans/` changes only on a `ledger/<programme>` branch;
-  add a new `docs/superpowers/plans/<plan>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
+  add a new `docs/superpowers/programs/<programme>/<task-or-pr>.md` note instead, or put a `Ledger-Edit: <reason>`
   trailer on the head commit. `.github/ci/ledger-guard.mjs` checks it (D-6926).
 
 Design records live in `docs/superpowers/specs/`; the architecture rules the code is held to

@@ -19,6 +19,8 @@ import { OUTBOX_SEND_DEADLINE_MS } from '../../shared/push-outbox.js';
 
 /** The push outbox lane's beat: a refused row's first retry lands 30 to 60 s after the refusal (plan Task 2). */
 export const OUTBOX_LANE_PERIOD_MS = 30_000;
+/** The response lane's beat (Table 11.5's ten-minute `responses` cadence): it seals and deletes, and nothing waits on it. */
+export const RESPONSES_LANE_PERIOD_MS = 10 * 60_000;
 
 /** The catalogue lane's cadence (design 2026-09-20 §7), the SCHEDULED poll's own: `catalogue.ts` re-exports it, so
  *  `routes.ts`'s refresh-door interval derives `SCHEDULED_POLLS_PER_HOUR` from the SAME constant the watcher polls on
@@ -27,9 +29,18 @@ export const OUTBOX_LANE_PERIOD_MS = 30_000;
  *  `POST /api/updates/refresh`. */
 export const CATALOGUE_POLL_INTERVAL_MS = 30 * 60_000;
 
+/** The Linear plan sync's beat (D-8182, Linear hierarchy §5.2): a tick takes the programmes due past their debounce. */
+export const PLAN_SYNC_BEAT_MS = 5_000;
 /** The weekly replay quiz lane's look (Overlord W1a, the replay quiz piece): once a day. The item it raises is weekly by its own
  *  key (the ISO week), so a day only bounds how late in a week the item appears. */
 export const QUIZ_LANE_PERIOD_MS = 86_400_000;
+/** The forecast lane's look (Overlord W2 forecasts A): once a minute, so a seal lands within a minute of its boundary, and
+ *  forecasts B's spend arm reads a closed run's session before its workspace is reclaimed. */
+export const FORECAST_LANE_PERIOD_MS = 60_000;
+/** The decision model's anchor-set lane's look (Overlord W2, the decision model PR B): once a day, the quiz lane's period by
+ *  reference. The anchors are re-asked daily because drift is counted in days (question 10: 4 of 20 moved against the line's
+ *  baseline), and the maintenance cap that bounds a pass is a UTC day's, so a pass that runs short resumes the next day. */
+export const DECISION_ANCHOR_PERIOD_MS = QUIZ_LANE_PERIOD_MS;
 
 /** The server's own server-caps beat: once a minute, a third of `SERVER_CAPS_LEASE_S`, so one missed write never turns
  *  an arm off. The fleet node's writer (`ccd-update-sync.timer`, `OnUnitActiveSec=60s`) keeps the same period.
@@ -196,8 +207,8 @@ export type LaneName =
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
-  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz';
+  | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -281,6 +292,11 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // One pass at a time; a pass older than two send deadlines is abandoned, since each send has its own deadline timer.
   { name: 'pushOutbox', cadenceMs: OUTBOX_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
     staleAfterMs: 2 * OUTBOX_SEND_DEADLINE_MS, warnKey: 'ccrc-server: the push outbox lane failed' },
+  // The response lane (Overlord §4.3, Table 11.1c, Table 11.5; W1 responses B): seals each response row once its window
+  // closes and deletes rows past the operator's retention. One pass at a time; it holds no deadline timer, so a pass older
+  // than two periods is abandoned.
+  { name: 'responses', cadenceMs: RESPONSES_LANE_PERIOD_MS, derivedFrom: null, clock: 'mono', flight: 'skip',
+    staleAfterMs: 2 * RESPONSES_LANE_PERIOD_MS, warnKey: 'ccrc-server: the responses lane failed' },
   // The four lanes that select destructive acts. Child reclaim is the census's own cadence; the other three are its siblings on
   // the same tick, at the same cadence, and follow it by reference. All four throttle on the monotonic clock (spec K11, §5.1
   // rule 1b: a cadence is real time, so a wall clock stepped back must not hold a lane for the step, nor one stepped forward
@@ -348,6 +364,13 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'cases', cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the case lane failed',
     derivedFrom: { name: 'DRIFT_SWEEP_MS', reason: 'a read-and-record pass over durable rows, as the drift reconciler is; a case needs days of evidence, so the beat only bounds how late it is recorded' },
   },
+  // The overlaps arm (Overlord spec §5.5 and §5.6, Table 11.1c; W2, plan w2-overlaps.md Task 4): one read-and-record pass at a
+  // time over the refused claims' record, the radar's map and the claims history. In PR A it records pairs and sends nothing.
+  {
+    name: 'overlaps', cadenceMs: LANDING_RADAR_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 5 * 60_000,
+    warnKey: 'ccrc-server: the overlaps arm failed',
+    derivedFrom: { name: 'landingRadar', reason: 'the arm reads the radar\'s map, which changes no faster than the radar lane writes it' },
+  },
   // The run-close lane (D-8077, spec 2026-11-04 §12; the ruled plan's W1): one pass at a time, on the dead-coordinator lane's
   // own cadence by reference. It starts in shadow, writes the `closes` map the screen counts down on, and closes only once the
   // operator arms its group. Its pass catches its own failure, so no warnKey.
@@ -375,6 +398,26 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // day and raises at most one operator item an ISO week, keyed by the week (`quiz.ts#quizLaneVerdict`); a thrown pass is
   // caught here. It raises nothing while the record path is absent (`QUIZ_RECORD_READY`).
   { name: 'quiz', cadenceMs: QUIZ_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the quiz lane failed', derivedFrom: null },
+  // The Linear plan sync (D-8182): one tick at a time. A tick's deadline plus one call's timeout stays under `staleAfterMs`, and
+  // a tick restarted as stuck only joins the passes in flight (`planSync.ts`), so a restart never sends a second write.
+  { name: 'linearPlanSync', cadenceMs: PLAN_SYNC_BEAT_MS, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 120_000, warnKey: 'ccrc-server: linear plan sync failed' },
+  // The Linear drift pass (D-8183, §7.2): one tick a minute, and it takes at most ONE managed workspace whose own pass period
+  // (`DRIFT_PASS_MS`, thirty minutes) has passed, so most beats read nothing; with no managed team it makes no call at all. A tick
+  // is a handful of reads and one restore flight per programme met, bounded by `staleAfterMs`; a tick the runner restarts as
+  // stuck finds the first still running (`DriftPass` returns at once) and never starts a second pass.
+  { name: 'linearDrift', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear drift pass failed' },
+  // The forecast lane (Overlord W2 forecasts A; spec Table 11.1d; plan `w2-forecasts-health.md` Task 4): one pass at a time,
+  // once a minute, on the monotonic clock (no row is on the wall clock; review 2265, F4). It seals each closed work run at its
+  // boundary and scores each seal at its 85% date (`coord/forecastLane.ts`); a thrown pass is caught here.
+  { name: 'forecasts', cadenceMs: FORECAST_LANE_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the forecast lane failed', derivedFrom: null },
+  // The decision model's anchor-set lane (Overlord W2, plan `w2-decision-model.md` Task 9, Table 11.1c): one pass at a time, once a
+  // day on the quiz lane's period by reference. It re-asks the anchors, admits lines and runs the canary through `gatherDecisions`
+  // on the maintenance count, holds an armed row that drifted, and asks nothing of a row that is off, so every row ships quiet.
+  // A pass catches a throw in one row and goes on; a thrown pass is caught here.
+  {
+    name: 'decisionAnchors', cadenceMs: DECISION_ANCHOR_PERIOD_MS, clock: 'mono', flight: 'skip', warnKey: 'ccrc-server: the decision anchors lane failed',
+    derivedFrom: { name: 'QUIZ_LANE_PERIOD_MS', reason: 'drift is counted in days against a UTC-day maintenance cap, so the lane looks once a day, as the quiz lane does' },
+  },
 ];
 
 export function laneRow(name: string): LaneRow {

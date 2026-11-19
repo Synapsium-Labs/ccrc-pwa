@@ -4,6 +4,8 @@
 // replacement) or an SVG's `data:image/svg+xml;base64,` URL (never a `blob:`), loaded through the page's queue
 // (concurrency 2) from an image the pin rule admits. Everything else is a refused span with its reason. Every page is
 // a placeholder (`demo`, `main`, `example-org/example-repo`, `https://evil.example`, `https://a.example`).
+import { readFileSync, readdirSync } from 'node:fs';
+import path from 'node:path';
 import { StrictMode } from 'react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { act, cleanup, fireEvent, render, waitFor } from '@testing-library/react';
@@ -16,7 +18,10 @@ import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { SHARED_COMPONENTS } from '../src/lib/markdown';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import { renderHast } from '../src/lib/renderHast';
-import { DocImage, DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
+import { DocImage, DocsAssetContext, planImageRef, rasterDataUrl, svgDataUrl, type DocsAssetContextValue } from '../src/docs/DocImage';
+import { planMockupAssets } from '../src/docs/mockup/plan';
+import type { MockupContext } from '../src/docs/mockup/ports';
+import { pinFor } from '../src/docs/useDocsVisit';
 import { DocLink, DocLinkContext, type DocLinkContextValue } from '../src/docs/DocLink';
 import {
   detachUrls, docsLocation, imagePinFor, type ImagePin,
@@ -964,5 +969,121 @@ describe('T13 review 3-4: an image that answered 401 loads again once sign-in re
     act(() => clearAuthLost());
     await new Promise((r) => setTimeout(r, 30));
     expect(assets.raster).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('the plain view, the reader and the mockup planner share one pin rule and one size basis (completion plan Task 6)', () => {
+  const REF_URL = '/docs/demo/specs/a.md?ref=main';
+
+  function linkCtx(url: string, tree: DocsTreeOk): DocLinkContextValue {
+    const page = leafAt(url);
+    return {
+      project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
+      pageSource: 'committed', urls: new WeakMap(), onFragment: vi.fn(),
+    };
+  }
+
+  /** The mockup attempt's context for the same page: its own pin is what the tree opens for it. */
+  function mockupCtx(url: string, tree: DocsTreeOk): MockupContext {
+    const pin = pinFor(tree, leafAt(url));
+    if (pin === null) throw new Error('fixture page does not open');
+    return { project: 'demo', pin, tree };
+  }
+
+  const ONE = { key: 'k', raw: 'i.png', basePath: 'specs/a.md', kind: 'image', depth: 0 } as const;
+  const draftPage = { draft: draftOf('modified') };
+  const cases: { name: string; url: string; tree: DocsTreeOk }[] = [
+    { name: 'a committed page and an asset with a modified draft', url: '/docs/demo/specs/a.md',
+      tree: withImage({ draft: draftOf('modified', { fp: FP_2 }) }, draftPage) },
+    { name: 'a committed page in a ref view whose leaf opens committed', url: '/docs/demo/specs/a.md?ref=main&view=committed',
+      tree: withImage({ draft: draftOf('modified', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and a modified asset', url: REF_URL, tree: withImage({ draft: draftOf('modified', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and an added asset', url: REF_URL,
+      tree: withImage({ committed: null, draft: draftOf('added', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and an untracked asset', url: REF_URL,
+      tree: withImage({ committed: null, draft: draftOf('untracked', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and a conflicted asset', url: REF_URL,
+      tree: withImage({ draft: draftOf('conflicted', { fp: FP_2 }) }, draftPage) },
+    { name: 'a draft page and a deleted asset', url: REF_URL,
+      tree: withImage({ draft: draftOf('deleted', { kind: 'absent', fp: null, size: null }) }, draftPage) },
+    { name: 'a draft page and a withheld asset', url: REF_URL, tree: withImage({ draft: draftOf('modified', { fp: null }) }, draftPage) },
+    { name: 'a draft page and a type-changed asset', url: REF_URL,
+      tree: withImage({ draft: draftOf('typechange', { kind: 'symlink', fp: null }) }, draftPage) },
+    { name: 'a draft page and an asset with no draft', url: REF_URL, tree: withImage({}, draftPage) },
+    { name: 'an asset the listing does not hold', url: '/docs/demo/specs/a.md', tree: treeOk({ entries: [entry('specs', 'a.md')] }) },
+    { name: 'an asset committed as a symlink', url: '/docs/demo/specs/a.md',
+      tree: withImage({ committed: { kind: 'symlink', blob: '1'.repeat(40), size: 5 } }) },
+  ];
+
+  for (const c of cases) {
+    it(`makes the same pin decision: ${c.name}`, () => {
+      const plain = planImageRef(linkCtx(c.url, c.tree), 'i.png', 0);
+      const row = planMockupAssets([ONE], mockupCtx(c.url, c.tree)).rows[0]!;
+      if (plain.kind === 'pinned') {
+        expect(row.verdict).toMatchObject({ v: 'inline', pin: plain.pin, draft: plain.draft });
+      } else {
+        expect(plain.kind).toBe('refused');
+        const why = plain.kind === 'refused' ? plain.why : '';
+        expect(row.verdict).toEqual({ v: 'missing', why: why === 'absent' ? 'absent-at-commit' : why });
+      }
+    });
+  }
+
+  it('makes the same size decision on a non-version page: over the class cap is refused by one and skipped by the other', () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    for (const [url, img] of [
+      ['/docs/demo/specs/a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } }],
+      [REF_URL, { draft: draftOf('modified', { fp: FP_2, size: cap + 1 }) }],
+    ] as const) {
+      const tree = withImage(img as Partial<DocsEntry>, draftPage);
+      expect(planImageRef(linkCtx(url, tree), 'i.png', 0).kind).toBe('refused');
+      const row = planMockupAssets([ONE], mockupCtx(url, tree)).rows[0]!;
+      expect(row.verdict).toEqual({ v: 'skipped', why: 'too-large' });
+    }
+    const atCap = withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap } });
+    expect(planImageRef(linkCtx('/docs/demo/specs/a.md', atCap), 'i.png', 0).kind).toBe('pinned');
+    expect(planMockupAssets([ONE], mockupCtx('/docs/demo/specs/a.md', atCap)).rows[0]!.size).toEqual({ kind: 'listed', bytes: cap });
+  });
+
+  it('keeps the plain view\'s version-page rule: no listed-size check on a version page, even at the listing\'s own commit', () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const tree = withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } });
+    const plan = planImageRef(linkCtx(`/docs/demo/specs/a.md?at=${COMMIT_A}`, tree), 'i.png', 0);
+    expect(plan).toMatchObject({ kind: 'pinned', pin: committedPin('i.png', COMMIT_A) });
+  });
+
+  it('differs where the seed limits differ: the plain view defers the image at the per-page limit, the planner admits it', () => {
+    const tree = withImage();
+    const plain = planImageRef(linkCtx('/docs/demo/specs/a.md', tree), 'i.png', DOCS_MAX_IMAGES_PER_PAGE);
+    expect(plain).toMatchObject({ kind: 'pinned', deferred: true });
+    const row = planMockupAssets([ONE], mockupCtx('/docs/demo/specs/a.md', tree)).rows[0]!;
+    expect(row.verdict.v).toBe('inline');
+    expect(plain.kind === 'pinned' && row.verdict.v === 'inline' ? plain.pin : null).toEqual(row.verdict.v === 'inline' ? row.verdict.pin : undefined);
+  });
+});
+
+// C2's known duplicate, closed at D2's first item: the base64 of an image's bytes has one owner, `mockup/load.ts`'s
+// `base64Of` (C2's ruling that load.ts exports it rather than a caller copying it), and DocImage's two data: URL
+// builders take it from there. Characterised against the old copy first: each builder's output is exactly the bytes'
+// base64, at and around the 32 768-byte chunk the encoder spreads into `String.fromCharCode`.
+describe('the data: URL builders take their base64 from its one owner (D2 first item)', () => {
+  const bytesOf = (n: number): Uint8Array => Uint8Array.from({ length: n }, (_, i) => (i * 131 + 7) & 0xff);
+
+  it.each([0, 1, 2, 3, 0x7fff, 0x8000, 0x8001, 0x10003])('%i bytes: svgDataUrl and rasterDataUrl hold exactly their base64', (n) => {
+    const bytes = bytesOf(n);
+    const want = Buffer.from(bytes).toString('base64');
+    expect(svgDataUrl(bytes)).toBe(`data:image/svg+xml;base64,${want}`);
+    expect(rasterDataUrl(bytes, 'image/png')).toBe(`data:image/png;base64,${want}`);
+  });
+
+  it('under src/docs only mockup/load.ts encodes base64, and DocImage imports base64Of from it', () => {
+    const root = path.join(import.meta.dirname, '..', 'src', 'docs');
+    const files = (readdirSync(root, { recursive: true }) as string[])
+      .filter((f) => /\.tsx?$/.test(f)).map((f) => f.split(path.sep).join('/')).sort();
+    expect(files.length).toBeGreaterThan(40);
+    const encoders = files.filter((f) => /\bbtoa\(/.test(readFileSync(path.join(root, f), 'utf8')));
+    expect(encoders).toEqual(['mockup/load.ts']);
+    expect(readFileSync(path.join(root, 'DocImage.tsx'), 'utf8'))
+      .toMatch(/^import \{[^}]*\bbase64Of\b[^}]*\} from '\.\/mockup\/load';$/m);
   });
 });

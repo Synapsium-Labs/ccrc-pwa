@@ -72,8 +72,8 @@ import path from 'node:path';
 import { rosterFromJson, RosterInvalid } from '../shared/roster-json.mjs';
 import {
   CLASSES, CatalogueInvalid, MODEL_ID_RE, MODELS_DIR_NAME, MODELS_LANE_ID_RE, PROBE_KINDS, RegistryInvalid, SUBAGENT_CLASSES,
-  WINDOW_MAX, WINDOW_MIN, availableFor, catalogueFileName, deriveModels, parseCatalogue, parseRegistry, parseWindows,
-  registryFileName,
+  WINDOW_MAX, WINDOW_MIN, availableFor, catalogueFileName, deriveModels, laneClassModels, parseCatalogue, parseRegistry,
+  parseWindows, registryFileName,
 } from '../shared/models.mjs';
 import {
   CLIENT_DEFAULT_CONTEXT_TOKENS, LANE_ENV_KEYS, ModelEnvInvalid, classesTsv, clearSettingsEnv, contextWindowFor,
@@ -432,14 +432,15 @@ function readAdvance(id) {
 }
 
 /** The lane's advance file as `show` reports it (auto-advance spec §2.7, D14: the Models panel reads it through
- *  `show`): `absent`; `ok` with each class's family, hold, previous and history; or `unreadable` / `invalid` with
+ *  `show`): `absent`; `ok` with each class's family, hold, previous and history, and the file's `pending` intent
+ *  (D-8693: a reader tells an older `ccrc`'s `ok` without it apart, D-5228); or `unreadable` / `invalid` with
  *  the reason. Never folded into `absent`: "nothing recorded yet" and "a file nobody can read" have two remedies. */
 function advanceReport(id) {
   const r = readAdvance(id);
   if (r.err !== undefined) {
     return { state: r.err[0] === 'advance-file-unreadable' ? 'unreadable' : 'invalid', detail: r.err[1] };
   }
-  return r.advance === null ? { state: 'absent' } : { state: 'ok', classes: r.advance.classes };
+  return r.advance === null ? { state: 'absent' } : { state: 'ok', classes: r.advance.classes, pending: r.advance.pending };
 }
 
 /** The sentence every `writeJsonFile` refusal ends with, named because its callers reword it where it would be
@@ -1206,7 +1207,9 @@ function renderRefusal(registry, catalogue, windows) {
  *  when there is no registry file: an Anthropic lane, or one `init` never ran
  *  on. An unseeded registry (deviation B-1, every class null) still gets the
  *  decision, `{ tokens: null, rule: 'none', unmeasured: [] }`: no key, as
- *  `materialise` writes no env block for it. `advance` is the lane's advance file (`advanceReport`). */
+ *  `materialise` writes no env block for it. `advance` is the lane's advance file (`advanceReport`). `labels` is each
+ *  class's model and catalogue label (`laneClassModels`), null with no registry: the server's `models` op path reads
+ *  the class labels from it, because that path receives no catalogue to derive them from (D-8693). */
 function describe(account, registry, catalogue, reading) {
   const anthropic = isAnthropicLane(account);
   const derived = deriveModels(registry, catalogue);
@@ -1224,6 +1227,7 @@ function describe(account, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
     advance: advanceReport(account.id),
+    labels: registry === null ? null : laneClassModels(registry, catalogue),
     windowNotices: windowNotices(account.id, registry, catalogue, windows),
   };
 }
@@ -1274,6 +1278,7 @@ function orphanDescribe(id, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: contextWindowFor(registry, catalogue, windowsOf(reading)),
     advance: advanceReport(id),
+    labels: laneClassModels(registry, catalogue),
     windowNotices: windowNotices(id, registry, catalogue, windowsOf(reading)),
   };
 }

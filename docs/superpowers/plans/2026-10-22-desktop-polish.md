@@ -3769,6 +3769,481 @@ every server test file that drives a copy passes; the `macos.yml` run on the bra
 wave-done mail (it runs after the one push).
 **Rollback.** A plain revert.
 
+### Task C36: the terminal view's stale and overlapping characters, from the drawer's provisional mask (D-8665) — now
+
+**Why.** The operator saw a session's terminal on desktop drawn with doubled lines, two lines' letters interleaved in
+one row, and leftover characters in rows that should be blank, with tmux's status row ending `‹secret m` and its date
+alone on the row below. The brief's lead, a terminal narrower or wider than the program believes, was measured and does
+not hold: the xterm, the tmux client and the window are 220 columns on every glass and in both views. Each claim below
+is labelled measured or inferred in `c36.md`, with the widths, the reproduction and the screenshots.
+
+**What was done.**
+- **The cause** (measured through a real tmux at the drawer's 220 x 51, on headless xterm). With fingerprint rows held,
+  the drawer's masker drew a 15-column provisional `SECRET_MASK` in place of an open run whose hold had expired, and
+  erased it later with `CUB 15` and `ECH 15`. The date that ends tmux's status row is 9 columns and ends in the last
+  column of the last row, so the mask ran past the edge, the terminal wrapped and scrolled the whole screen, and every
+  later redraw landed a row off tmux's picture of the glass: all 51 rows differed from the raw stream's screen, against
+  none with the shape-only masker.
+- **The change**, in `DrawerMask` alone: a withheld run is drawn as nothing until it resolves, so the drawer sends the
+  stream's own bytes unless a secret is masked in it. No mark can be drawn and taken back safely without knowing the
+  cursor's column (a mark at the right edge leaves the wrap pending, and neither `CUB` nor a saved cursor recovers it,
+  measured). D-5995's fail-closed rule and its accepted gaps are unchanged. No window size, no `ccd`, no PWA file.
+- **Tests.** `drawer-mask-screen.test.ts` renders on `@xterm/headless` (a new server dev dependency): Claude-Code-like
+  redraws ending on the status row's date leave the screen exactly as the raw stream draws it; a secret-free stream cut
+  anywhere reaches the terminal byte for byte; a key typed one key at a time still never shows past its first 19 bytes;
+  and no byte of a withheld run reaches the screen before it resolves, nor ever when it never resolves (two leak
+  mutants turn it red). Red first on `main`'s masker. `@xterm/headless` is pinned to 6.0.0, the PWA's xterm release. Two assertions in `secret-mask.test.ts` that pinned the drawn mark now pin its absence.
+
+- **D-8665** — `drawer-provisional-mark-dropped`: Task C36, issued on 2026-11-16. The drawer's provisional mask, 15
+  columns drawn in place of a shorter run and erased with `CUB` and `ECH`, ran past the right edge on tmux's status
+  row and moved the glass a row off tmux's picture of it. A withheld run is now drawn as nothing until it resolves.
+  Departures are named by slug in `c36.md`, `drawer-final-mask-columns` among them (reported, not fixed).
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip and its three cases are red on `main`'s masker;
+`secret-mask.test.ts` and `pty.test.ts` pass in full; before and after screenshots at 1920 and 390 px from a fixture.
+**Rollback.** A plain revert.
+
+### Task C37: the programme page shows its work, done and outstanding (design) (D-8669) — now
+
+**Why.** The operator, 2026-11-16, on a programme's page: "I want to see at a glance on that page what work remains
+outstanding in the programme, what work is already done, at a high level." The page shows Goals, Waiting on you and the
+open runs, and nothing lists the work the programme set out to do. This task is the design only: a spec with mockups,
+and a build plan. No product code.
+
+**What was done.** The spec is `docs/superpowers/specs/2026-11-16-programme-work-map-design.md`, with desktop, phone
+and no-plan mockups in the folder beside it. The build plan is `docs/superpowers/plans/2026-11-16-programme-work-map.md`.
+- **Measured.** Five programmes of different shapes, and the server's plans and runs (spec §2). The stored plan (epics
+  and tickets, from the Linear hierarchy's wave 2) is the one structured source whose status the server moves itself.
+  2 of the 16 programmes with runs have one today. Plan checkboxes are not a status: 1,724 of 23,366 are ticked across
+  862 plans, 4 of 274 in this plan and none of the Overlord's 1,513. Ledger Waves tables are typed by hand and go stale
+  (this programme's has 40 rows for waves 1 to 42, against wave 132).
+  A machine wave is one run (no wave of six programmes holds two work runs), so a stage such as the Overlord's W1 spans
+  many waves and is stored nowhere; and the plan's rule tying each epic to a range of waves makes epics act as stages.
+- **Decided.** The card is built on the Linear hierarchy's plan model (programme, epic, checkpoint, ticket; its wave 2
+  is on `main`) and supersedes that plan's Task 5.2. To it the design adds a sequence axis: phases in order, each
+  referencing the epics and tickets it takes on, a ticket allowed in several phases, and a slip recorded as a carry
+  from one phase to a later one. The hierarchy's work model is unchanged; epics without wave ranges, which would let
+  them run side by side, are put to the operator (Q5). Done is derived from evidence the server checks (a done run, or
+  a pull request landed on the landing line), stored with its time and re-checked on every read. The Work card sits
+  below Goals: "N of M done" with a bar and a strip of each epic's count and checkpoints, then phases in order, each
+  ticket inside with its epic as a tag, a carried ticket counted once. The view carries both axes, so which one leads
+  changes only the card. Every status comes from one L1 decider in Coordination (`workMapOf`), served as an additive `work` field on
+  `GET /api/programmes/:slug/plan`. A plan with no phases groups by epic, and a programme with no plan shows its work
+  runs so far, under a note that what remains is not known. The Runs card stays for the acts; on desktop, Waiting on
+  you moves to the top of the right column.
+- **The builder check** (a fresh reader of the first draft) found two gaps that would make "N of M" wrong: a run opened
+  with no ticket mints its own, so the declared ticket stays "not started" forever, and nothing can mark a declared
+  ticket done except its own run. In a plan that declares phases, `runs open` now refuses `ticket-required` while the
+  run's epic has an open declared ticket that no run holds, and a coordinator's `plan ticket-done` records a finished
+  ticket with evidence the server verifies (the hierarchy's approved "the coordinator closes it").
+- **The review** (run 2252, 19 findings, all text) led to the coordinator's rulings: done derived and verified, carries
+  recorded, the view carrying both axes, and the hierarchy's model left unchanged except through the operator (Q5).
+  The rest corrected the refusal vocabulary, the claims each task waits for, the overlaps with the hierarchy's wave 3 in
+  flight and its Tasks 4.1, 4.3 and 6.1, the plan's four states (none, declared empty, ended, unreadable), the stuck
+  verdicts' reader, and three cells of the measurement.
+- **For the operator.** Five questions, raised as Waiting on you items. The operator answered four with the
+  recommendations: a stage is a "phase" (R129, item 355), phases lead the card (R130, item 354), a phase becomes a
+  Linear label written by the hierarchy's sync (R131, item 356), and live programmes declare their plans at their next
+  wave boundary after the build lands (R132, item 353). Q5, may an epic have no wave range, is open.
+- **The build** is seven tasks, WM0 to WM6, one PR each; WM6 is built only if Q5 is answered yes. Only WM4 touches
+  claim 4522's files (`ProgrammeScreen.tsx`, `pwa/src/lib/api.ts` and their test), so it waits for that claim. WM0 and
+  WM1 wait for the hierarchy wave 3's claim on `planStore.ts`, or a co-edit grant, and WM1 for `shared/api.ts`.
+
+**Departure `phase-is-not-epic`.** The first draft mapped a phase to an epic and a task to a ticket, and asked only which
+words the card should use. The operator's answer to that question (item 351, 2026-11-16): "the thing is that a
+wave/phase can have many tickets/epics in it potentially, so these are separate concepts I believe." Then, the same day:
+"I guess we can allow references to epics / tickets that are part of a wave/phase"; a ticket in more than one phase is
+"a good idea"; and "I guess if we properly implement linear it should have the initiatives, projects, etc." The spec now
+keeps the two axes apart, builds the work on the hierarchy's model unchanged, and adds phases that reference it, with
+recorded carries (spec §3 and §8, D14 to D18). Items 349 to 351 were replaced by four new ones on the corrected model
+(353 to 356), and the review added a fifth (Q5).
+
+- **D-8669** — `work-map-design`: Task C37, issued on 2026-11-16. The programme page's Work card takes the programme's
+  stored plan as the one source of its work list, on two axes, the sequence (phases, added to the plan) and the work
+  (epics and tickets), with a status decided once on the server, and falls back to the programme's runs. It replaces the
+  Linear hierarchy plan's Task 5.2. Departures are named by slug in the build plan: `phase-is-not-epic`,
+  `hierarchy-5-2-replaced`, `waiting-card-moves-right` and `ticket-required-and-done`.
+
+**Acceptance.** The spec, its mockups and the build plan are on `main`. A fresh builder read the spec before the PR.
+`deviation-refs`, `dtbd` and `topology-clean` pass, and the private-name scan of every new file is clean.
+**Rollback.** A plain revert; nothing ships.
+
+### Task C38: seven console items from the delegation broker programme (D-8670) — now
+
+**Why.** The delegation broker programme closed with seven minor console items carried to its Rider (its entries of
+2026-11-07 and 2026-11-09), and the operator agreed they come here. Each was measured on `main` first; `c38.md` has a
+row per item with the measurement, the cause, the fix or the reason not, and the test.
+
+**What was done.**
+- **The Sheet owns the close** (`ui/src/primitives/sheet.tsx`, every sheet in the app at once). The page's hiding follows
+  `open`, as Radix's trap does: as a sheet turns closed its panel's exit no longer leaves the page `aria-hidden`, so a
+  refusal's live region and a focus placed as it leaves are announced (item 1). Shift+Tab pressed first, from the panel,
+  goes to the sheet's last control instead of the page (item 2). A switch card's confirm closed by Cancel, Escape or the
+  scrim gives the focus back to its radio group, on the checked radio, even when a disabled fieldset dropped the
+  opener's focus to the page before the sheet could read it, and a radio is no longer treated as a text field on a phone
+  (item 5: measured for a radio opener on Worktrees left behind and Shadow lanes, the other cards and openers inferred;
+  `c38.md` row 5).
+- **The worktree row's box** (`ProjectCard.tsx`, `fleet.css`) says `aria-busy` while its act is in flight and draws the
+  page's focus ring after a keyboard action, reversing review 1623 F8 (d) (item 3).
+- **Worktrees left behind's read** (`useDelegationAdoptView.ts`): a poll nobody asked for moves no `landed`, so a failed
+  poll no longer re-renders the Settings page once a minute (item 7).
+- **Not changed.** Item 6: the console has no words table for ccd's free failure text, so a switch card keeps relaying
+  it after its own sentence. Item 4 reproduces, and waits: its file, `pwa/src/lib/refusalWords.ts`, was under another
+  programme's claim for the whole task.
+- **Tests.** `sheet-trap-hide.test.tsx` and `delegation-adopt-view.test.tsx` (new), a row in `project-card.test.tsx`,
+  `browser/confirm-focus.browser.test.ts` (new, Chrome), the ring row in `delegation-rows.browser.test.ts`, and
+  Shadow lanes' browser row now waiting out its confirm's exit. Red first on `main`, and every fix mutated away once
+  (`c38.md`'s table).
+
+- **D-8670** — `c38-sheet-owns-the-close`: Task C38, issued on 2026-11-16. Items 1, 2 and 5 are fixed once in the
+  Sheet, not per caller. The further departures are named by slug in `c38.md`: the box draws the ring
+  (`c38-box-draws-the-ring`), a radio opener's focus goes to its group's checked radio (`c38-radio-opener-goes-home`),
+  ccd's text stays verbatim (`c38-ccd-text-stays-verbatim`), item 4 waits for its file
+  (`c38-item-4-waits-for-claim-4522`), and Shadow lanes' browser row waits out its confirm's exit
+  (`c38-shadow-lanes-row-waits-out-the-exit`).
+
+**Acceptance.** pwa's whole suite and ui's typecheck pass at the PR's tip; the new rows are red on `main`; the browser
+leg passes, with `confirm-focus.browser.test.ts` red on `main`'s Sheet.
+
+**Rollback.** A plain revert.
+
+### Task C39: a masked key is one column in the terminal view, so no row moves (D-8694) — now
+
+**Why.** Review 2248 (F1) found C36's residual broader than its note said: the drawer's final mark, `SECRET_MASK`
+(15 columns), is drawn once per ROW SEGMENT of a key, so the head of a key a program broke across rows, a whole short
+shape key or a short tail followed by text could run past the right edge, and every later redraw landed a row off,
+over tmux's status row too. Each claim below is labelled measured or inferred in `c39.md`, with the measurements, the
+options and the screenshots.
+
+**What was done.**
+- **Measured** (a real tmux at the drawer's 220 x 51 and a deterministic sweep over every start column, on headless
+  xterm, synthetic keys). Other rows move exactly when a mark is wider than the text it replaces and the excess reaches
+  the row's last column: a head under 15 columns starting at columns 207 to 220 (14 of 44 placements), a short tail
+  whose row's text is pushed past the edge, a whole 11-character `sk-` key ending at columns 217 to 220. Up to 48 of 51
+  rows differ on the pane's last rows, and tmux's relative move down writes over the status row. A key on one row
+  never moves another row (0 of 316 placements at each of three rows). C36's departure note is corrected in `c39.md`.
+- **Ruled.** No mark keeps the row's width without showing the key's length, so the options went to the coordinator
+  before any build: A (exact width) shows the length, B (never wider than 15) shows a short segment's width, G (the
+  label at 15 columns or wider, else one column) shows one bit per segment; all three were declined for that reason.
+  C, a constant one-column mark, shows nothing beyond today's constant mark and was ruled.
+- **The change.** The drawer draws `DRAWER_SECRET_MASK` (U+2327 `⌧`, East Asian Width Neutral, one column in xterm's
+  width table, no SGR around it) for each masked run, one per row a key touches; `spliceMasked` takes the mark as a
+  parameter defaulting to `SECRET_MASK`, and only `DrawerMask.out` passes another. Every other egress is byte for byte
+  unchanged. No `ccd`, tmux window size or PWA change.
+- **Tests.** Seven cases in `drawer-mask-screen.test.ts` (heads at 207 to 220 at the edge and 7 columns
+  before it, both maskers, with and without tmux's scroll region; a short tail pushed past the edge; a whole `sk-` key
+  ending at 217 to 220; the status-row overwrite; the mark's width and code point; the other egresses' output, pinned
+  by digest from `main`, the sliced arm included; and, from review 2307's fix round, one mark per row a key touches for
+  keys of 11 to 8,192 characters, with no SGR beside a mark): six are red on `main`, and the seventh, one mark per row,
+  is red on review 2307's `o1c` and `o7` (review 2326 F4). Leak mutants (draw the key, send it unmasked, a mark as wide as the key) are each red. Twelve
+  drawer assertions in `secret-mask.test.ts` now pin the new mark, under a co-edit grant from claim 4548's holder.
+
+- **D-8694** — `drawer-mark-one-column`: Task C39, issued on 2026-11-16. The drawer's final mark is one column
+  (`DRAWER_SECRET_MASK`, U+2327) instead of `SECRET_MASK`, so a masked key never runs past the text it replaces and
+  never moves tmux's rows; every other egress keeps `SECRET_MASK`. Departures are named by slug in `c39.md`.
+
+**Acceptance.** `drawer-mask-screen.test.ts` passes at the PR's tip, six of its seven C39 cases are red on `main`'s
+masker and the seventh on `o1c` and `o7`;
+`secret-mask.test.ts` and every other test of the masker pass; before and after screenshots at 1920 and 390 px from a
+fixture.
+
+**Rollback.** A plain revert.
+
+### Task C40: the sheet never lifts an aria-hidden it did not set (D-8698) — now
+
+**Why.** C38's third review (2310) found one gap, in two shapes, in how the Sheet tells the page's own hidden elements
+from Radix's marks. The `aria-hidden` package marks a node that is already hidden as uncontrolled and never puts its
+`aria-hidden` back. The Sheet took the page's own to be the hidden nodes with no Radix mark. So when a dialog still
+mounted had marked an element the page hid itself, the next sheet lifted that element as it closed, and it stayed
+announced for good. The two shapes are a sheet opened while the previous one is still in its exit (F2, a regression from
+`main` since C38) and two confirms overlapping over a sheet that holds a live region (F1). `c40.md` holds the
+measurements, the search of the app for F2, the mutants and the browser run.
+
+**What was done.**
+- **The fix, at the owner** (`ui/src/primitives/sheet.tsx`, `useHidingFollowsOpen`, and a record it reads,
+  `ui/src/lib/modal-layers.ts`). An element the page hid itself is never lifted, whatever modal marked it. Every other
+  mark is lifted, whether it is the sheet's own or another modal's. C38's topmost-dialog rule, the re-hide on a reopen
+  during the exit and the focus guards are unchanged. A single sheet with no overlapping exit behaves as before.
+- **The record** (fix round 2, review 2334 F1 and F2). Each modal layer, `Sheet` and the command palette's drawer,
+  records at its panel's mount, before its own Radix hiding runs, what the page hid itself: the hidden nodes no modal has
+  marked, plus what every layer still mounted recorded (since Task C42, D-8714: only those still `aria-hidden`).
+
+  The answer does not depend on tree order or on another modal's marks. So it removes the first build's cost (review
+  2323 F1: a sheet rendered before the closing menu kept the page hidden through its exit). It also removes round 1's
+  two costs: the palette's hand-off, and a layer that an effect closes one commit after the sheet under it. The ordering
+  of the read before Radix's hiding is inferred from, and verified against, the installed React and Radix sources. Its
+  effect is measured in jsdom and in Chrome.
+- **Tests.** `sheet-trap-hide.test.tsx` gains eleven rows and two extensions (25 rows):
+  - F2 and F1, red on `main`.
+  - The menu's hand-off with the opening sheet earlier in the tree, red on the first build.
+  - Four rows for the palette's hand-off (both tree orders, the palette closing or gone) and one for the effect-driven
+    layer, all red on round 1.
+  - Two StrictMode hand-offs.
+  - The focus guards staying hidden while a sheet closes.
+  - Section 1's first row closing its reopened sheet again, and the three-deep row asserted after the confirm unmounts.
+
+  `browser/sheet-stack-hide.browser.test.ts` (new, Chrome) holds three groups:
+  - the stacked swap flow (Session actions, Swap account, its confirm, Cancel; review 2310 F4);
+  - the session menu's hand-off over a chat with and without a live region, red on `main`'s Sheet;
+  - the palette's hand-off to Show shortcuts, red on `main`'s and on round 1's.
+- **F2 in the app.** Seven handlers in five places close one modal and open another in one commit (found by a code
+  search); the session menu's rows and the palette's commands are the common ones. In Chrome, on one transcript with a
+  code block, the menu marked none of the elements the page hid itself. So F2 is not reached on that page with that
+  transcript. The browser rows plant such an element to hold the fix in the real flows.
+- **`c38.md`'s mutation row M1** now reads 5 of §1's 6 rows, re-measured at `main` (review 2310 F6).
+
+- **D-8698** — `c40-lift-only-own-marks`: Task C40, issued on 2026-11-16. The Sheet never lifts an element the page hid
+  itself, whatever modal marked it, and lifts every other mark. What the page hid is a record each modal layer (`Sheet`
+  and the command palette's drawer) keeps at its panel's mount: the hidden nodes no modal has marked, plus what every
+  layer still mounted recorded (fix round 2, review 2334). It replaces two earlier reads, each of which cost a window
+  where the page stayed hidden through a sheet's exit while `main` announced it:
+  - the first build's read of every hidden node in the `open` effect (review 2323 F1);
+  - round 1's same read at the panel's mount (review 2334 F1, the palette's hand-off; F2, a layer an effect closes one
+    commit after the sheet under it).
+
+  The record as merged had one cost of another kind (corrected by Task C42, review 2343 F1): a node the page un-hid while
+  a layer was open stayed in every later layer's record as the page's own, so a later layer that mounted while the first
+  was still mounted hid it again and nothing lifted it; it stayed hidden for good (measured in jsdom; no route in the app
+  reaches it, inferred from a code search). Task C42 (D-8714) removed it for the sheets (measured); the palette as the
+  outer layer, and a hide the page makes during a later layer, stay open (`c42.md`). The only modal layers are the two
+  that keep the record. A future Radix modal that
+  kept no record would not bring back the old read's window: its marks on an element the page hid itself would hide that
+  element from a later sheet's record, so the sheet would lift it and it would stay announced for good, C38's original
+  failure (review 2310 F2; review 2343 F6; inferred from code).
+
+**Acceptance.** The new jsdom rows are red on `main` (F2, F1), on the first build (the reversed tree order) or on round
+1 (the palette's hand-off, the effect-driven layer), and green at the tip; every C38 row stays green. The new browser
+file passes in Chrome. Its hand-off rows are red on `main`'s Sheet, and its palette rows are red on round 1's. Every pwa
+test file that renders a Sheet, a QuickConfirm or the command palette passes, as do ui's typecheck and the deviation-refs,
+dtbd and topology-clean guards.
+
+**Rollback.** A plain revert.
+
+### Task C41: a key across any number of rows is masked, in the terminal view and pane history (D-8710) — now
+
+**Why.** Review 2326 (F3) found an exact-bytes leak on `main` that C39 neither caused nor changed: the masker joined a
+run that ends its row with the next row's leading run only, so a fingerprinted key a program draws on three or more
+rows reached the drawer whole. The same review saw two related shapes (O1, O2). This is secret masking, so fail-closed
+comes first. Each claim is labelled measured or inferred in the task note, `docs/superpowers/programs/desktop-polish/c41.md` (`c41.md` below; moved out of
+`plans/` in fix round 2 by the operator's ruling), with the measurements, the mutants and the costs.
+
+**What was done.**
+- **Measured on `main`** (synthetic keys; byte probes of the masker and the drawer; a private tmux 3.6 server with a
+  client at the drawer's 220 x 51). F3 at three to 70 rows under every separator tried, at 25 to 220 columns: no mark,
+  a whole row shown. Through a real tmux, a 500-character key a program drew on three rows arrived unmasked under each
+  of four program separators, and a two-row key's first row showed too, because the drawer held back only the last
+  row's run of a chunk. O1: a shape key longer than a drawer holds was masked for one chunk, then drawn (2,713 of
+  12,000 characters). O2: a move down then CR between rows split every key, but tmux re-renders it as a cursor
+  position, so no drawer receives it from tmux. And a long shape key's rows after any chunk cut showed once the 1 KiB
+  context lost its start. Every other egress joins no rows at all (`c41.md` §3).
+- **The change** (`server/src/accounts/mask.ts`, `shapes.ts`). One row break, LF then CR included, under every row
+  reader. The exact-bytes join walks every row a key fills, read once and searched by length, so it stays linear. The
+  drawer holds a run with every row it continues and reads what it sends with what it holds; a taint lasts as long as
+  its run, with one mark; and a masked run's rows are walked across a chunk boundary by the shapes' own walk. Bounded
+  by measured cost and the commits' security review (rows of 12 units or more, 128 rows, 2 MiB of row-join hashing a
+  frame, failing closed, and twice a drawer's hold). No `ccd`, tmux or PWA change; the drawer draws C39's mark only.
+- **Tests.** `drawer-mask-rows.test.ts` (new, nine cases) and two cases in `drawer-mask-screen.test.ts` on C36's
+  harness: three and four rows under seven separators on the screen, and a 500-character key at 220 columns whole and
+  cut. Ten of the eleven are red on `main`; the eleventh pins the lookahead. Nineteen mutants, each red.
+- **C39's carries** (review 2326): F1, case 7's samples are loops; F2, `c39.md`'s "only a wider row" scoped to a
+  segment that fits its row, with the terminal-wrap residual measured through a real tmux; F4, the count of C39 cases
+  red on `main`; F5, the budget's figure; F6, C38's Rollback line restored.
+- **Fix round 1** (review 2352, `c41.md` §11). The drawer's window and pane history's slice overlap were one run's hold
+  (about 9 KiB), narrower than the rows of a key near the 8,192-byte ceiling with a colour escape or a wide indent on
+  each, so such a key could show whole (F1, F2): the drawer reads twice that for a key's rows and pane history's slices
+  overlap by as much (18 KiB; `secret-mask.test.ts`'s overlap bound moved from 16 to 18 KiB, its one changed line, with
+  its claim holder's consent, by the coordinator's ruling), and the drawer's walk stops at the window's first whole row. The hold counts a key's own units, not a cursor move's indent (F9). The round also closed three holes
+  it found in the hold: a colour tmux re-sends inside a row, a hold that expired inside the escape moving to the next
+  row, and a chunk cut inside a hyperlink's terminator. Nine more cases: eight red at a69085c93 (review 2370 F12; this
+  line said seven), the 17,802-byte block across a slice boundary among them and red at 29219c442 (16 KiB of overlap)
+  too, and the budget's fail-closed arm red on its mutant (F4); ten more mutants, each red. The 128-row and 12-unit
+  bounds stay as they are: a key past them shows in full with no mark and no notice, as on `main`, which for a key at the
+  run ceiling is 66 columns or fewer after a five-column prefix with a two-column indent on its other rows, 64 or fewer
+  with the prefix and no indent, 65 or fewer with the indent and no prefix, and 63 or fewer with neither (F3; measured in
+  fix round 2, review 2370 F15, and by review 2411 F14).
+- **Fix round 2** (review 2370, `c41.md` §12). Two holes in round 1's own mechanism, each less than `main` leaks. The
+  drawer sent a key's held rows later with only 1 KiB of context, so a key whose hold began inside it drew its tail
+  (F1): now a match's spans in held text carry to where that text is sent. At a chain longer than its 18 KiB window the
+  drawer held from the window's first row, and a window with no row break read its first byte as the chain's start, so
+  up to the whole key could show; pane history did the same past its 18 KiB overlap (F2, F3): now such a chain is read
+  again over the whole text and withheld from its start, pane history's lookahead reads on while the same walk still
+  reaches the cut and carries the match into the next slice, and past 256 KiB both send the chain's rows masked (the
+  coordinator's rulings). Review 2411 measured three forms where those claims do not hold, none showing more than
+  `main`: the drawer's 64-byte lead of sent text starting inside a row's escapes (the whole key at every phase in small
+  chunks), pane history's cap arm reading no run in a blank indent (the whole key at 15 of 16 placements), and a key
+  coloured per character on one joined row (up to 7,539 bytes); and slices and pushes past the 25 ms bound on hostile
+  key-free panes (26 to 37 ms). All four are carried to Task C44 (D-8728, `mask-fail-open-forms`). Eleven more cases
+  (29 in all), eight red at e37701c43 for key bytes drawn (the drawer's cap row first on its marks count, review 2411
+  F8); of the three that pass there, the F8 row reds on its mutants (`r16`, `r18`) and the key-free pane-history row pins
+  bytes, but no recorded mutant reds the F4 row (`m-win2` survives by design, review 2411 F10). The secret-mask overlap pin
+  stays at 18 KiB; the comment above it changed with its claim holder's consent. The task note moved to
+  `docs/superpowers/programs/desktop-polish/c41.md` by the operator's ruling (coordinator mail 23009).
+
+- **D-8710** — `drawer-mask-row-join-n-rows`: Task C41, issued on 2026-11-17. The exact-bytes row join walks every row a
+  key fills, bounded by the longest held length, and the drawer holds, reads ahead and taints by the rows a key spans,
+  so a key across any number of rows is masked whatever the separator. Further departures are named by slug in
+  `c41.md` §9: the two-row hold (`drawer-mask-two-row-hold`), the long shape key across a cut
+  (`drawer-mask-long-shape-across-cut`), the bounds (`drawer-mask-row-join-bounds`), fix round 1's three holes in the
+  hold (`drawer-hold-run-across-escapes`, `drawer-flush-cut-row-escape`, `drawer-hold-string-escape-terminator`), and
+  five not changed, carried to a follow-up masking task (`shape-walk-narrow-rows`, `egress-no-row-join`,
+  `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`) or put to the coordinator (`drawer-mark-terminal-wrap`).
+
+**Acceptance.** Every server test of the masker passes at the PR's tip; ten of the eleven new cases are red on `main`'s
+masker, eight of fix round 1's nine at a69085c93, and eight of fix round 2's eleven at e37701c43 (`c41.md` §12); each mutant in `c41.md` §6 reds, but for those §6 names surviving by design (bounds that now set only cost, and an arm no chain reaches); deviation-refs, dtbd, topology-clean, single-definition and the server test
+typecheck pass.
+
+**Rollback.** A plain revert.
+
+### Task C42: a node the page un-hides is not kept hidden by the next modal layer (D-8714) — now
+
+**Why.** Review 2343 of Task C40 found that C40's modal-layer record (`ui/src/lib/modal-layers.ts`) only ever grows. The
+page hides a body-level node X; layer A records X as the page's own, and A's Radix marks X as already hidden, so its undo
+never takes that `aria-hidden` off. If the page then un-hides X while A is open, and layer B mounts while A still is,
+B's record took X in from A's as the page's own; B's Radix hid X again, nothing lifted it, and X stayed hidden after every
+dialog had gone (F1, a regression from `main` in that one shape; no route in `pwa/src` or `ui/src` reaches it). The
+review also found the record's prune unpinned (F2), a reopen during the exit that puts back a mark another modal has
+since taken off (F3, on `main` before C40), the palette's Chrome row without its overlap control (F4), and five text
+slips (F5 to F9). Review 2353 of the first build found that build's filter ineffective under StrictMode, three deep with
+a layer held in its exit, and when B closes before A, and ruled the deletion variant (fix round 1). `c42.md` holds the
+measurements, each row and what reds it, and the mutants.
+
+**What was done.**
+- **F1, at the record.** A node in a still-mounted layer's record that no longer carries `aria-hidden="true"` is deleted
+  from that record, which the layer's sheet holds by reference, and is not taken into the new layer's. So no layer keeps
+  a node the page un-hid as its own, and whichever closes last lifts it, like any other mark. The rule the record keeps:
+  a page's un-hide during a layer is honoured; a hide the page makes during a layer cannot be told from a modal's mark,
+  and is lost. Every C38 and C40 row stays green, and no caller changed.
+- **F3, in the sheet.** A reopen during the exit puts back only the lifted nodes that a modal still marks
+  (`data-aria-hidden`), so a node whose mark the palette's undo removed is not hidden again with no mark.
+- **Tests.** `sheet-trap-hide.test.tsx` has 55 rows (30 new). The F1 rows cover three models of the page's un-hide (a
+  direct removal, a portal un-set by state, and a portal writing `aria-hidden="false"`) and four shapes (the hand-off in
+  both tree orders, B over A with A closed by code, and B closing before A); four hand-offs run under StrictMode, and
+  one three-deep chain keeps a layer in its exit. Each un-hide shape has a control where the page never un-hides X. Two
+  rows pin the "hide during a layer" class as it stands. One row each covers the prune (through the palette), S15 (a
+  layer leaving under the palette) and F3. `sheet-stack-hide.browser.test.ts`'s palette group reads the overlap right
+  after Show shortcuts, names the focused element at each read, and keeps the still-closing variant (10 rows).
+- **Text.** The StrictMode comments follow React 19's order and say what survives its undo (F5, review 2353 F8);
+  `c40.md` and the D-8698 entry are corrected on the cost, on a modal that keeps no record (F6), on the mutant table (F7)
+  and on the row counts (F8); the browser file's header names each read's moment and the palette group (F9).
+
+- **D-8714** — `c42-record-forgets-unhidden`: Task C42, issued on 2026-11-17. A node in a mounted modal layer's record
+  that no longer carries `aria-hidden="true"` is deleted from that record and not taken into the new one (review 2343
+  F1, review 2353's variant), and a reopen during the exit puts back only nodes a modal still marks (F3). The rule: the
+  page's un-hide during a layer is honoured; a hide the page makes during a layer cannot be told from a modal's mark and
+  is lost (the node ends announced; measured, two rows pin it; at `main` 6c2d705d2 both shapes ended hidden, and before
+  C40, at f8251a39d, one ended announced and one hidden, so this is a change from `main` in a shape no route reaches). The
+  palette as the outer layer keeps a node it hid after the page un-hid it (it never lifts its own marks; measured by
+  review 2353). The prune is now a bound on what the record retains, not a guard any row can tell apart (measured; why
+  is inferred). Further departures, by slug:
+  - `c42-prune-row-via-palette`: the brief's sequential shape for F2 needs no prune once the record filters a node the
+    page un-hid (measured), so the F2 row goes through the palette; since the variant it reds only with the delete
+    removed too (measured).
+  - `c42-reverse-close-residual`, narrowed to `c42-palette-outer`: the reverse close (B over A, B closes before A) is
+    fixed for sheets (measured: three rows); a palette as the outer layer stays open.
+
+**Acceptance.** The F1, StrictMode, three-deep, reverse-close and F3 rows are red at `main` or at the first build
+(296a56403) and green at the tip; every control stays hidden; every C38 and C40 row stays green; each mutant reds the
+rows `c42.md` names; the browser file passes in Chrome at 390 and 1280; ui's typecheck and the deviation-refs, dtbd and
+topology-clean guards pass.
+**Rollback.** A plain revert.
+
+### Task C43: task notes leave docs/superpowers/plans/, and the ledger guard holds new specs and plans to the review judge's layout (D-8719) — now
+
+**Why.** The operator ruled on 2026-11-17 that this repo follows its review judge's standard and fixes the judge's
+findings in-repo. The judge's one blocking reason on every programme PR was `spec-misplaced`: the PR's task note at
+`docs/superpowers/plans/<plan>/<task>.md`. Its layout rule (format F1) reads only files a PR adds: under the specs
+directory a new file is `YYYY-MM-DD-<slug>-design.md` or its `-design.promise-ids.json`, under the plans directory
+`YYYY-MM-DD-<slug>.md`, each directly in that directory, the slug `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` and at most 40
+characters. Its settings have no key for a notes directory, so the fix is ours. `docs/superpowers/programs/desktop-polish/c43.md`
+holds each changed place, each row and what reds it, the mutants and the open-PR measure.
+
+**Steps.**
+- [x] The new route: a per-task note is ADDED at `docs/superpowers/programs/<programme>/<task-or-pr>.md`; notes already
+  on `main` stay where they are. Every place that told a worker or a coordinator the old route now names the new one.
+- [x] The layout arm, red first: the ledger guard (the one existing mechanism) refuses an added or copied file, or a
+  rename's target, under `docs/superpowers/specs/` or `docs/superpowers/plans/` that is not one of the shapes above, as
+  `layout`, with the path and the shape it should take, on every branch and with no trailer escape; `enforce`, `warn`
+  and the fail-closed exit are kept. 13 rows were red before the arm (measured); 16 mutants are each killed (measured).
+- [x] CLAUDE.md: one bullet under "Conventions that shape every change" says we follow the judge's standard, names its
+  check, and points at the guard's layout arm. The judge's name leaves the committed hashed private-name list (the
+  operator's ruling of 2026-11-17: "yeah remove it from private names").
+- [x] The open-PR measure: 8 of 20 open PRs add a file the arm refuses (read-only, listed in `c43.md`).
+
+**Files.** `.github/ci/ledger-guard.mjs`, `.github/workflows/ci.yml` (the job's comment), `server/test/ci-ledger-guard.test.ts`,
+`ccd/worker-skill/SKILL.md`, `ccd/coordinator-skill/SKILL.md` (clause 15, and one unpinned sentence trimmed for the
+skill-size cap), `server/test/coordinator-skill.test.ts` (its
+pin), `README.md`, `CONTRIBUTING.md`, `CLAUDE.md`, `shared/private-names.mjs` and
+`server/test/private-names-characterization.test.ts` (the judge's row removed on the operator's ruling of 2026-11-17,
+and the digest re-pinned), this plan, and `docs/superpowers/programs/desktop-polish/c43.md`.
+
+- [x] Fix round 1 (review 2396): rows for a one-digit month or day, an uppercase or digit-first slug and text after
+  the extension; the layout rows assert the refusal line and the path; the README's warn-only sentence corrected; a
+  spec's images and mockup pages go under `docs/design/<spec file name less its extension>/` (the guard's message,
+  CLAUDE.md and CONTRIBUTING).
+
+**Acceptance.** The ledger guard's suite, coordinator-skill, worker-skill, reviewer-skill, skill-size-ratchet, the
+private-names suites, single-definition, deviation-refs, dtbd and topology-clean pass; the guard passes on this branch
+against `origin/main`.
+**Rollback.** A plain revert; the open PRs that add a note under `plans/<plan>/` pass the guard again.
+
+### Task C44: the masker closes the fail-open forms C41 left, and bounds the cost of its re-reads (D-8728) — now
+
+**Why.** Review 2411 read C41 (#2966) and measured three forms in which the masker's ruled fail-closed claims do not
+hold, none showing more than `main`: the drawer's 64-byte lead of sent text starting inside a row's escapes (F1), pane
+history's cap arm reading no run in a blank indent (F2), and a key coloured per character on one joined row (F3); and a
+cost past the 25 ms bound on hostile key-free panes (F4). This is secret masking, so fail-closed comes before a tidy
+screen. The task note is `docs/superpowers/programs/desktop-polish/c44.md`.
+
+**What was done.**
+- **Records first.** C41's records (`c41.md` §10 and §12, its section above, D-5995 items (3), (7) and (16), and the
+  2 MiB row-join cut) say what review 2411 measured, each residual marked `mask-fail-open-forms`; once the fixes landed,
+  D-5995 (3), (7) and (16) say what C44 closed and what it costs.
+- **Measured on `main`** (synthetic keys, `main`'s masker and this branch's in one script). F1: the whole key in a
+  styled listing, an OSC 8 listing at 110 columns and a cursor-positioned listing at 200 columns in small chunks; one row
+  (110 bytes) at 66 of 330 three-chunk cases and 702 of 839 cuts at a 7 or 13 ms gap. F2: the whole key at 15 of 16
+  placements (448 bytes at the 16th) with 2,600 blanks of indent a row. F3: 1,477 to 7,538 bytes of a key coloured
+  per character on one joined row. F7's arm: 98 bytes of a 108-byte shape key whose row ends at the window's first byte.
+- **The change** (`server/src/accounts/mask.ts` only). F1: the walk holds a run that joins back into the drawer's sent
+  text from its first unsent byte (`floor`), not a row later; a run that ends its row and reaches past it is held from
+  it. Not `lead = ''`: it reds `secret-mask.test.ts`'s "a compatible key typed slowly" row (measured). F2: the cap arm
+  reads from the row before when its read ends in an indent or between escapes, and a read that is all one row's indent
+  grows. F3: slices and windows end outside an escape, a chain cut at a cap is carried on through every later slice in
+  its own units, and a text's unfinished row is handed to the next text. F4: `WHOLE_HELD_MAX` 256 KiB → 64 KiB, past
+  which a chain's rows are masked: the review's hostile key-free slices and pushes fall from 10 to 47 ms to 5.8 to 18.1
+  ms at the same load. F7: r19's arm takes the open tail only. The drawer's one-mark taint reads through escapes.
+- **Tests.** Seven cases in `drawer-mask-rows.test.ts` (describe "D-8728"), six red at `main` (five for key bytes, the
+  F4 row for its read bound) and the seventh red on its mutant; the drawer's cap row checks key bytes first (F8); the
+  6,000-character row allows a mark each for the rows either side of a key masked past the hold. The `secret-mask.test.ts`
+  overlap pin's comment (F11), with its claim holder's consent. Twelve mutants, each red (`c44.md` §5).
+- **Carried, measured and unchanged** (`c44.md` §7): `drawer-mask-cursor-roundtrip`, `drawer-mask-scrolled-head`,
+  `shape-walk-narrow-rows`, `egress-no-row-join`. The 300-key fuzz stays a script (F9: past ten minutes).
+- **Fix round 1 (review 2430).** The 64 KiB hold moved texts of 64 to 256 KiB, which `main` read whole, onto the
+  carried-chain arms, which read a move down then a CR (CUD+CR, IND+CR) as two breaks with an empty row between and a
+  text ending inside a break as an empty row: up to 3,840 bytes of a key in the drawer and the whole key in pane history
+  where `main` showed none (F1, measured by the review and again here). `chainRowSpans`, the cap's step back, a grown
+  read's end and pane history's slice cut now read row breaks as `ROW_BREAK` does, and `endsInRow` (so `cont`) answers
+  true for a text that ends inside a break or after one the next text may complete. That also closed the same reader's
+  form past `main`'s 256 KiB hold, and two pane-history forms that leaked on `main` too: CR LF at a grown read (review
+  2430 F3) and LF then CR at a slice cut. Seven more cases (fourteen in the describe), eight more mutants (twenty),
+  each red; the minors F4 to F10 are corrected in the records (`c44.md` §12). A 200-form fuzz shows this branch worse
+  than `main` in none; four forms coloured character by character leak on both alike, carried
+  (`mask-perchar-fuzz-shared`).
+
+- **D-8728** — `mask-fail-open-forms`: Task C44, issued on 2026-11-17. The masker's stops that cannot prove a key's
+  start fail closed, its cap arm masks a chain's rows whatever the read ends in, and its re-reads are bounded in cost
+  (review 2411 F1 to F4, F7). Further departures are named by slug in `c44.md` §9: the 64 KiB hold (`mask-hold-64k`),
+  the floor rather than an empty lead (`drawer-lead-floor-not-empty`), five holes found in the task and closed
+  (`drawer-lead-bel-hyperlink`, `pane-cap-blank-read`, `chain-row-tail-cont`, `drawer-taint-through-escapes`,
+  `r19-row-tail-arm`), the F11 comment in a file another run claims (`secret-mask-comment-consent`), and, from review
+  2430 F1, the carried-chain arms and pane history's slice cut reading row breaks as `ROW_BREAK` does, with `cont` true
+  for a text that ends inside a break (`chain-row-break-grammar`).
+
+**Acceptance.** Every server test of the masker passes at the PR's tip, but for load timeouts that `main`'s masker
+shows too (`c44.md` §11); the D-8728 rows are red at `main` as `c44.md` §4 says; each mutant in `c44.md` §5 reds;
+the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
+
+**Rollback.** A plain revert.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
@@ -4139,6 +4614,11 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   as dead code. Ruled with it: Q8's default A applies to inline code in assistant messages, as the plan names it. The
   Docs reader's `doc-body` and the compaction recap's `compaction-body` keep today's inline code until the operator
   rules otherwise.
+- **D-8719** — `c43-notes-leave-plans`: Task C43, issued on 2026-11-17. A per-task note is added at
+  `docs/superpowers/programs/<programme>/<task-or-pr>.md`, no longer under `docs/superpowers/plans/<plan>/`, and the ledger
+  guard's layout arm refuses a new file under `docs/superpowers/specs/` or `docs/superpowers/plans/` outside the review
+  judge's layout (format F1), on every branch and with no trailer escape (the operator's ruling of 2026-11-17: follow the
+  judge's standard). Notes already on `main` stay where they are. Further departures, by slug, in `c43.md`.
 
 ## Out of scope
 

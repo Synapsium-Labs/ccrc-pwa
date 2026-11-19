@@ -5,11 +5,13 @@
 // or opted-out session, or one hibernation will take within 30 minutes, is skipped by name; the setting off rolls
 // nothing. Pure: no fixture HOME, no process, no network.
 import { describe, expect, it } from 'vitest';
+import * as rollTargetModule from '../src/coord/rollTarget.js';
+import { rollHandoffCases } from './sim/handoffSets.js';
 import { VIEWER_OPEN_TTL_MS, type ChildMark } from '../../shared/api.js';
 import { sessionRoleOf } from '../src/roleOf.js';
 import { CLAUDE_ROLL_TARGETS, CLAUDE_ROLL_TARGETS_DEFAULT, isClaudeRollTargets } from '../../shared/claudeVersion.js';
 import {
-  AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, rollTargetsOf,
+  AUTO_ROLL_SKIPS, ROLL_COMPACT_QUIET_MS, ROLL_HIBERNATION_LEAD_MS, ROLL_QUIET_MS, autoRollVerdict, longLivedOf, rollTargetsOf,
   rollTargetVerdict, type AutoRollInput,
 } from '../src/coord/rollTarget.js';
 import { HIBERNATE_AFTER_MS_DEFAULT, hibernateVerdict, type HibernateInput, type HibernateMark } from '../src/coord/hibernate.js';
@@ -33,6 +35,7 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
     id: 'project-a', status: 'idle', archivedAt: null, bucket: 'idle', held: null, unmeasured: [], statusUnmeasured: false,
     dialogPending: false, background: null, subagents: null, stranded: null, swapBlocked: null, substrate: null,
   },
+  overlord: false,
   optedOut: false,
   store: o.store ?? { ok: true, openWorker: false, openClaimant: false, claim: false, mail: false },
   viewer: o.viewer ?? false,
@@ -44,6 +47,9 @@ const sleep = (ageMs: number, o: { word?: string; mark?: HibernateMark; unread?:
 const input = (ageMs: number, o: Partial<AutoRollInput> = {}): AutoRollInput => ({
   targets: CLAUDE_ROLL_TARGETS_DEFAULT,
   role: 'coordinator',
+  longLived: false,
+  continuityLive: false,
+  overlord: false,
   release: INSTALLED,
   startedAt: PANE_START,
   build: { kind: 'unmeasured' },
@@ -86,6 +92,33 @@ describe('the setting (D-7453; D-8276)', () => {
 
   it('a setting that could not be read rolls nothing', () => {
     expect(autoRollVerdict(input(2 * HOUR, { targets: null }))).toEqual({ act: 'skip', reason: 'setting-unreadable' });
+  });
+});
+
+describe('the Overlord hold and the unread designation (Overlord W1 designation A, Task 3)', () => {
+  it('a bound or pending body is skipped overlord, right after the setting checks, whatever its idle state', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, sleep: sleep(2 * HOUR, { unread: true }) }))).toEqual({ act: 'skip', reason: 'overlord' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, targets: 'off' }))).toEqual({ act: 'skip', reason: 'setting-off' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: true, release: null }))).toEqual({ act: 'skip', reason: 'overlord' });
+  });
+
+  it('an unmeasured designation skips every row designation-unreadable, and is not the Overlord skip', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: 'unmeasured' }))).toEqual({ act: 'skip', reason: 'designation-unreadable' });
+    expect(autoRollVerdict(input(2 * HOUR, { overlord: 'unmeasured', role: 'child' }))).toEqual({ act: 'skip', reason: 'designation-unreadable' });
+  });
+
+  it('any other row is rolled as before', () => {
+    expect(autoRollVerdict(input(ROLL_QUIET_MS + MIN, { overlord: false }))).toEqual({ act: 'roll', idleMs: ROLL_QUIET_MS + MIN });
+  });
+
+  it('the idle gate of an ordinary session never reads unmeasured: its sleep input carries a real overlord value', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { sleep: { ...sleep(2 * HOUR), overlord: false } }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { sleep: { ...sleep(2 * HOUR), overlord: null } }))).toEqual({ act: 'skip', reason: 'idle-gate', hold: 'unmeasured' });
+  });
+
+  it('the words are in the skip list', () => {
+    expect(AUTO_ROLL_SKIPS).toEqual(expect.arrayContaining(['overlord', 'designation-unreadable']));
   });
 });
 
@@ -148,14 +181,39 @@ describe('the role (D-8276): every idle session under all, coordinators only und
   });
 
   it('rollTargetVerdict is the filter: setting first, then the role, which only coordinators reads', () => {
-    expect(rollTargetVerdict('coordinators', 'coordinator')).toEqual({ take: true });
-    expect(rollTargetVerdict('off', 'coordinator')).toEqual({ take: false, skip: 'setting-off' });
-    expect(rollTargetVerdict('coordinators', 'child')).toEqual({ take: false, skip: 'not-coordinator' });
-    expect(rollTargetVerdict('coordinators', null)).toEqual({ take: false, skip: 'role-unknown' });
-    expect(rollTargetVerdict('all', 'coordinator')).toEqual({ take: true });
-    expect(rollTargetVerdict('all', 'child')).toEqual({ take: true });
-    expect(rollTargetVerdict('all', null)).toEqual({ take: true });
-    expect(rollTargetVerdict('off', 'child')).toEqual({ take: false, skip: 'setting-off' });
+    expect(rollTargetVerdict('coordinators', 'coordinator', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'coordinator', false, false)).toEqual({ take: false, skip: 'setting-off' });
+    expect(rollTargetVerdict('coordinators', 'child', false, false)).toEqual({ take: false, skip: 'not-coordinator' });
+    expect(rollTargetVerdict('coordinators', null, false, false)).toEqual({ take: false, skip: 'role-unknown' });
+    expect(rollTargetVerdict('all', 'coordinator', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('all', 'child', false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('all', null, false, false)).toEqual({ take: true });
+    expect(rollTargetVerdict('off', 'child', false, false)).toEqual({ take: false, skip: 'setting-off' });
+  });
+});
+
+describe('the hand-off to the renewal lane (Overlord W1a, the renewal hand-offs, Task 5; spec §3.3.8)', () => {
+  // The decider's cases live once in `sim/handoffSets.ts` (its mutation floor runs them against each mutant).
+  for (const [name, run] of Object.entries(rollHandoffCases(rollTargetModule))) it(name, run);
+
+  it('autoRollVerdict carries it: an idle coordinator behind on release is renewal-owns while live, and rolled while shadow', () => {
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true }))).toEqual({ act: 'skip', reason: 'renewal-owns' });
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: false }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    expect(autoRollVerdict(input(2 * HOUR, { role: 'coordinator', longLived: false, continuityLive: true }))).toEqual({ act: 'roll', idleMs: 2 * HOUR });
+    // Before anything is measured: the hand-off is decided on the frame's facts alone.
+    expect(autoRollVerdict(input(2 * HOUR, { longLived: true, continuityLive: true, sleep: sleep(2 * HOUR, { unread: true }) })))
+      .toEqual({ act: 'skip', reason: 'renewal-owns' });
+  });
+
+  it('longLivedOf: a decided role by its column; agreeing ambiguities decide; coordinator-or-plain reads the live generation', () => {
+    expect(longLivedOf({ kind: 'role', role: 'coordinator' }, false)).toBe(true);
+    expect(longLivedOf({ kind: 'role', role: 'overlord' }, 'unmeasured')).toBe(true);
+    expect(longLivedOf({ kind: 'role', role: 'worker' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'role', role: 'plain' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'worker-or-reviewer' }, 'unmeasured')).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, true)).toBe(true);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, false)).toBe(false);
+    expect(longLivedOf({ kind: 'undecided', between: 'coordinator-or-plain' }, 'unmeasured')).toBeNull();
   });
 });
 
@@ -350,7 +408,8 @@ describe('claimed runs and claims do not hold a roll (D-7562)', () => {
 describe('the vocabulary', () => {
   it('every skip is named, in the order the ladder tests them', () => {
     expect([...AUTO_ROLL_SKIPS]).toEqual([
-      'setting-unreadable', 'setting-off', 'role-unknown', 'not-coordinator', 'release-unmeasured', 'start-unmeasured',
+      'setting-unreadable', 'setting-off', 'role-unknown', 'renewal-owns', 'not-coordinator', 'designation-unreadable', 'overlord',
+      'release-unmeasured', 'start-unmeasured',
       'no-roll', 'idle-gate', 'hibernation-due', 'compacting',
     ]);
   });

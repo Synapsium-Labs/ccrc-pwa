@@ -14,19 +14,22 @@
 //   * A write's answer is a line under the row (`ResultLine`), never a toast while the card is on screen.
 // Every word is L0's (`LANE_ARM_TEXT`), but the not-available line, the Settings sections' one sentence
 // (`COLLECT_SECTION_TEXT.notAvailable`); nothing branches on the viewer's screen or pointer.
-import { useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { QuickConfirm, Section, Skeleton } from '@ccrc/ui';
+import { Button, QuickConfirm, Section, Skeleton } from '@ccrc/ui';
 import {
   ANCHOR_SLOT_LANE, CONTINUITY_LANE, LANE_ARM_TEXT, LAUNCH_PROFILE_LANE, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG,
-  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmLane, type LaneArmRefusal, type LaneArmRequest, type LaneArmRowView,
+  type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmLane, type LaneArmQuizView, type LaneArmRefusal, type LaneArmRequest, type LaneArmRowView,
 } from '../../../shared/lane-arm';
-import { api, refusalText } from '../lib/api';
+import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
+import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
+import { ApiError, api, apiErrorText, refusalText, type QuizRuleAction } from '../lib/api';
+import { isRecord } from '../lib/wire';
 import {
   NotedRadioSet, ResultLine, SETTINGS_AMBER_NOTE, SETTINGS_CARDS, SETTINGS_NOW_CLASS, UNCONFIRMED_TEXT, useResultLine,
 } from './settingsText';
 import { COLLECT_SECTION_TEXT } from './collectLaneWords';
-import { asLaneArmView, laneArmChecked, laneArmLines } from './laneArmWords';
+import { asLaneArmView, laneArmChecked, laneArmLines, laneArmQuizDate } from './laneArmWords';
 import { laneArmWriteRefusal, useLaneArmView, type LaneArmPoll } from './useLaneArmView';
 
 const T = LANE_ARM_TEXT;
@@ -45,7 +48,11 @@ const SHADOW_LOG: Readonly<Record<LaneArmLane, string | null>> = {
   [ANCHOR_SLOT_LANE]: null,
 };
 
-export function ShadowLanesSection({ pollMs }: { pollMs?: number }): ReactNode {
+/** The hook is told the session's step-up is fresh until an act proves otherwise (the secret door's rule, `ItemView`). */
+const ASSUME_FRESH = Infinity;
+const NO_STEP_UP_DEPS: StepUpDeps = {};
+
+export function ShadowLanesSection({ pollMs, stepUpDeps = NO_STEP_UP_DEPS }: { pollMs?: number; stepUpDeps?: StepUpDeps }): ReactNode {
   const poll = useLaneArmView(pollMs);
   const { view, failure } = poll;
   const card = SETTINGS_CARDS.automation.shadowLanes;
@@ -57,6 +64,7 @@ export function ShadowLanesSection({ pollMs }: { pollMs?: number }): ReactNode {
         <>
           {failure !== null && <p className={SETTINGS_AMBER_NOTE}>{T.stale}</p>}
           {view.lanes.map((row) => <LaneRow key={row.lane} row={row} poll={poll} />)}
+          {view.quizBaseline !== undefined && <QuizBlock quiz={view.quizBaseline} reload={poll.reload} stepUpDeps={stepUpDeps} />}
         </>
       ) : failure !== null ? (
         <p className="settings-note">{T.unread}</p>
@@ -137,5 +145,61 @@ function LaneRow({ row, poll }: { row: LaneArmRowView; poll: LaneArmPoll }): Rea
         onClose={() => setPending(null)}
       />
     </>
+  );
+}
+
+/** The replay quiz's block (Overlord W1a, plan 2026-11-17 §6): each pending run, in the order recorded, with Confirm and Discard
+ *  through the step-up (`useStepUp`'s `runAct`, the secret door's flow), then the baseline line. A ruling that lands re-reads
+ *  the card; a refusal is said as the rows say theirs and re-reads too (the run may already be ruled). */
+function QuizBlock({ quiz, reload, stepUpDeps }: { quiz: LaneArmQuizView; reload: () => void; stepUpDeps: StepUpDeps }): ReactNode {
+  const [busy, setBusy] = useState(false);
+  const [refusal, setRefusal] = useState<string | null>(null);
+  const stepUp = useStepUp(ASSUME_FRESH, stepUpDeps);
+  const mounted = useRef(true);
+  useEffect(() => { mounted.current = true; return () => { mounted.current = false; }; }, []);
+  const rule = async (id: number, action: QuizRuleAction): Promise<void> => {
+    if (busy) return;
+    setBusy(true);
+    setRefusal(null);
+    try {
+      let ruled = false;
+      const outcome = await stepUp.runAct(async () => { await api.ruleQuizRun(id, action); ruled = true; });
+      if (outcome === 'step-up' || !ruled) return;
+      reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.status === 401) return;
+      const body = err instanceof ApiError && isRecord(err.body) ? err.body : {};
+      const detail = typeof body.detail === 'string' && body.detail.trim() !== '' ? body.detail.trim() : apiErrorText(err);
+      if (mounted.current) setRefusal(`${T.refused} (${detail})`);
+      reload();
+    } finally {
+      if (mounted.current) setBusy(false);
+    }
+  };
+  const b = quiz.baseline;
+  const baselineLine = b.state === 'recorded' ? T.quizBaseline.recorded(laneArmQuizDate(b.at))
+    : b.state === 'not-yet' ? T.quizBaseline.notYet : T.quizBaseline.unreadable;
+  // In the order they were recorded (review 2442 F3): never by a field inside a report, which its poster chose.
+  const runs = quiz.pending.ok ? [...quiz.pending.runs].sort((x, y) => x.id - y.id) : [];
+  return (
+    <div data-quiz-baseline={b.state}>
+      {quiz.pending.ok ? runs.map((r) => (
+        <div key={r.id} data-quiz-run={r.id}>
+          <p className={SETTINGS_NOW_CLASS.note}>{T.quizPending(laneArmQuizDate(r.measuredAt), laneArmQuizDate(r.recordedAt), r)}</p>
+          <Button variant="primary" size="fit" disabled={busy} onClick={() => { void rule(r.id, 'confirm'); }}>{T.quizConfirm}</Button>
+          <Button variant="ghost" size="fit" disabled={busy} onClick={() => { void rule(r.id, 'discard'); }}>{T.quizDiscard}</Button>
+        </div>
+      )) : (
+        <>
+          <p className={SETTINGS_AMBER_NOTE}>{T.quizPendingUnreadable}</p>
+          <p className={SETTINGS_NOW_CLASS.note}>{quiz.pending.detail}</p>
+        </>
+      )}
+      {runs.length > 0 && <p className={SETTINGS_NOW_CLASS.note}>{T.quizRuleNote}</p>}
+      <ConfirmItsYou stepUp={stepUp} subject="a replay quiz run" />
+      {refusal !== null && <p className={SETTINGS_AMBER_NOTE} role="alert">{refusal}</p>}
+      <p className={b.state === 'unreadable' ? SETTINGS_AMBER_NOTE : SETTINGS_NOW_CLASS.note}>{baselineLine}</p>
+      {b.state === 'unreadable' && <p className={SETTINGS_NOW_CLASS.note}>{b.detail}</p>}
+    </div>
   );
 }

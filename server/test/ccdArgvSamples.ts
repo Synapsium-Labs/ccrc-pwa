@@ -151,6 +151,8 @@ export const CCD_ARGV_SAMPLES: Record<keyof typeof CCD_ARGV, unknown[]> = {
   winSize: ['demo-quiet-basin', 'smallest'],
   // Overlord W1 pool set (plan Task 6): the read-only pool answer, its id refused by the builder unless a registry id.
   poolAnswer: ['demo-quiet-basin'],
+  // Overlord W1 ccd arms (plan Task 3): the sleep markers' verb, server-composed, `win-size`'s `--session`-first shape.
+  keepAwake: ['demo-quiet-basin', 'on'],
   // NATIVE DOCS READER wave 2. Read-only verbs, one grant each; the two
   // `docs-show` builders share `['docs-show','--project']`. The `null` tails
   // are the samples, so `whitelist-subset.test.ts`'s layer 2c pins the shortest argv of `docsTree` and

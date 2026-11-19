@@ -2566,7 +2566,7 @@ MODELS_SUBAGENT_CLASSES="haiku sonnet"
 
 usage() {
   cat <<EOF
-usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|expose|token|restamp|version|watchdog|history|test|testbox-admin}
+usage: $PROG {doctor|status|adopt|wrappers|account|memory|models|codex|install|update|rollback|versions|channel|rollout|uninstall|backup|coordination-snapshot|settings|logs|passwd|expose|token|restamp|version|watchdog|history|test|testbox-admin|quiz-record}
 
 The lifecycle CLI for a Claude Code fleet box — installs, updates and
 diagnoses a box, as a sibling to ccd (which drives sessions once one is
@@ -2782,6 +2782,7 @@ already running).
             session's prose is not configuration) unless [--purge-memory]
             is also given; $(_uninst_history_kept_line); never worktrees, never tmux state
   backup    take update's backup step standalone: coord.db snapshot, the
+            private store's (operator-model.db, 0600, in a 0700 directory), the
             delegation journal and checkpoint with their manifest
             (coordination-snapshot.json), dists, ccd and the units to
             ~/ccrc-backups/<ts>/ (never
@@ -2839,7 +2840,7 @@ already running).
   restamp   re-stamp one file ccrc generated (a "ccrc:generated" marker, as
             on the session hook's generated region) after its body changed. A file
             with no marker is refused, never adopted; so is ccd/ccd, which is
-            stamped at install time$(_usage_history_paragraph)$(_usage_test_paragraph)
+            stamped at install time$(_usage_history_paragraph)$(_usage_test_paragraph)$(_usage_quiz_paragraph)
 
   -h, --help   print this message and exit 0
 
@@ -8581,7 +8582,7 @@ _acct_enable() {   # [--id X] [--force]
 # is measured by `check`, so it refuses `not-a-token-lane`. `--placement full|overflow`: whether fresh sessions may
 # be placed on the lane (`homeAble`), under the placement lock, refused `last-home-able` for the only placeable lane.
 _acct_set() {
-  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity=""
+  local id="" stated=0 placement="" v="" was_placeable=0 f="" done_note="" method="" attempt="" billing="" continuity="" org=""
   while [ $# -gt 0 ]; do
     case "$1" in
       -h|--help) usage; exit 0 ;;
@@ -8603,7 +8604,9 @@ _acct_set() {
       --continuity=on|--continuity=off) continuity="${1#*=}" ;;
       --continuity) { [ "${2:-}" = on ] || [ "${2:-}" = off ]; } || _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written."; continuity="$2"; shift ;;
       --continuity=*) _acct_refuse 2 bad-value "the flag --continuity takes on or off. Nothing was written." ;;
-      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off and --method setup-token|login|openai-login --attempt <attemptId>" ;;
+      --org=?*) org="${1#*=}" ;;   # the organization label, or none; its shape is the op's to refuse (account organization A3)
+      --org) [ -n "${2:-}" ] || _acct_refuse 2 missing-value "the flag --org takes a label or none. Nothing was written."; org="$2"; shift ;;
+      *) _acct_refuse 2 unknown-argument "ccrc account set has no argument \"$1\" - it takes --id, --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off, --org <label>|none and --method setup-token|login|openai-login --attempt <attemptId>" ;;
     esac
     shift
   done
@@ -8611,13 +8614,16 @@ _acct_set() {
   if [ -n "$method" ] || [ -n "$attempt" ]; then
     { [ -n "$method" ] && [ -n "$attempt" ]; } \
       || _acct_refuse 2 missing-value "the flags --method and --attempt come together: the method is installed from what that sign-in attempt captured. Nothing was written."
-    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity" ]; } \
-      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing or --continuity beside it. Nothing was written."
+    { [ "$stated" -eq 0 ] && [ -z "$placement$billing$continuity$org" ]; } \
+      || _acct_refuse 2 bad-argument "the flag --method is its own act and takes no --stated, --placement, --fable-billing, --continuity or --org beside it. Nothing was written."
     _acct_set_method "$id" "$method" "$attempt"
     return 0
   fi
-  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity" ] \
-    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits or --continuity on|off. Nothing was written."
+  [ "$stated" -eq 1 ] || [ -n "$placement$billing$continuity$org" ] \
+    || _acct_refuse 2 missing-value "ccrc account set needs --stated -, --placement overflow|full, --fable-billing included|credits, --continuity on|off or --org <label>|none. Nothing was written."
+  # The label's shape is refused before the stated account or the placement is written (PR A's review, F2): the op owns
+  # the gate, so the verb asks it, read-only, and holds no copy of the id shapes.
+  [ -z "$org" ] || _acct_write_op "Nothing was written." org-check --org "$org"
   _acct_known_or_refuse "$id"
   _acct_lane_lock "$id" "Nothing was written."
   _acct_lane "$id"
@@ -8648,11 +8654,18 @@ _acct_set() {
     done_note="${done_note}The placement was recorded. "
     _acct_projection "The roster records lane $id's placement as $placement."
   fi
-  if [ -n "$billing$continuity" ]; then   # the serviceability facts (H16), under the same marker lock as the placement write
+  if [ -n "$billing$continuity$org" ]; then   # the serviceability facts (H16) and the organization label, under the placement's marker lock
     [ -n "$placement" ] || _acct_marker_lock "${done_note}Nothing else was written."
     _acct_write_op "${done_note}Nothing else was written." set-facts --file "$(_acct_roster_path)" --id "$id" \
-      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} --recorded-at now
-    _acct_projection "The roster records lane $id's ${billing:+billing }${billing:+${continuity:+and }}${continuity:+continuity }fact${billing:+${continuity:+s}}."
+      ${billing:+--fable-billing "$billing"} ${continuity:+--continuity "$continuity"} ${org:+--org "$org"} --recorded-at now
+    local -a facts_named=()   # its own name: shellcheck reads one name across functions, and `w` is a string elsewhere
+    [ -z "$billing" ] || facts_named+=("billing fact"); [ -z "$continuity" ] || facts_named+=("continuity record")
+    [ -z "$org" ] || facts_named+=("organization label")
+    case ${#facts_named[@]} in
+      1) v=${facts_named[0]} ;; 2) v="${facts_named[0]} and ${facts_named[1]}" ;;
+      *) v="${facts_named[0]}, ${facts_named[1]} and ${facts_named[2]}" ;;
+    esac
+    _acct_projection "The roster records lane $id's $v."
   fi
   _acct_read_op "The change was written; only this report failed." set-done --file "$(_acct_roster_path)" --id "$id"
   printf '%s\n' "$ACCT_OUT"
@@ -24815,6 +24828,7 @@ _upd_floor_check() {
 CAP_FLOOR_ROWS=(
   'poolset|pool-set|the operator clears the set from their own shell, never a session: ccd route --session <id> --set poolset= --set acctorder='
   'profiledigest|launch-surface-v1|the operator clears the launch digest from their own shell, never a session: ccd route --session <id> --set profiledigest='
+  'acctorder|keep-awake-v1|the operator releases the Overlord from their own shell, never a session: ccd keep-awake --session <id> --state off, then ccd route --session <id> --set acctorder='
 )
 _cap_floor_standing() {   # -> CAP_FLOOR_STANDING: "<row>| <id>…" per row whose fact stands, CAP_FLOOR_NEEDS: their words, comma-joined; rc 0 measured (no registry: nothing stands), 1 unlistable
   local LC_ALL=C IFS=' ' reg="$_SVC_REG" row e n ids
@@ -24913,12 +24927,21 @@ _upd_backup() {
   # reordered floor sentences — a wording consistency, since the redacted
   # path (~/ccrc-backups/<ts>, about 30 characters) never comes close to
   # the 200-character cut.
-  mkdir "$UPD_BACKUP_DIR" \
+  # 0700 (Overlord W1 private store, Task 4): the directory holds the operator's private store, whose snapshot is 0600 too.
+  mkdir -m 700 "$UPD_BACKUP_DIR" \
     || _ccrc_die "already exists: $UPD_BACKUP_DIR (another backup started in the same second) — refusing to reuse a backup directory; nothing on this box was changed by this step"
   if [ -f "$HOME/.ccrc/coord.db" ]; then
     node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
       "$HOME/.ccrc/coord.db" "$UPD_BACKUP_DIR/coord.db" \
       || _ccrc_die "the coord.db snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
+  fi
+  # The private store, by the same script, beside coord.db; the manifest names it, and a restore puts both back as one set.
+  # Never ~/.ccrc/privacy-journal.log: a restore leaves it in place, so a restored store never reissues a message id.
+  # Gated as `capture` gates it (lstat): any entry at the path, a dangling link included, is snapshotted or refuses here.
+  if [ -e "$HOME/.ccrc/operator-model.db" ] || [ -L "$HOME/.ccrc/operator-model.db" ]; then
+    node --no-warnings "$CCRC_HERE/../deploy/backup-coord.mjs" \
+      "$HOME/.ccrc/operator-model.db" "$UPD_BACKUP_DIR/operator-model.db" \
+      || _ccrc_die "the private store (operator-model.db) snapshot failed — refusing to install with an incomplete backup (read backup-coord.mjs's lines above)"
   fi
   _upd_backup_set
   # THE COORDINATION SNAPSHOT RUNS LAST (delegation broker wave 3, O3). The two authoritative sidecars
@@ -24931,7 +24954,7 @@ _upd_backup() {
   local cerr=""
   cerr="$(node --no-warnings "$CCRC_HERE/../deploy/coordination-snapshot.mjs" capture --dir "$UPD_BACKUP_DIR" 2>&1 >/dev/null)" \
     || _ccrc_die "the coordination snapshot failed — refusing to install with an incomplete backup (${cerr//$'\n'/ })"
-  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
+  local shown="$UPD_BACKUP_DIR"; [ "${UPD_REDACT_ACTIVE:-0}" = 1 ] && shown="$(_upd_redact "$shown")"; echo "$say: $shown (coord.db snapshot, the private store's snapshot when it exists, coordination sidecars and manifest, dists, ccd and its body, units — taken before anything was installed)"   # redacted only in an update-family run (X1's scope): `ccrc backup`'s result line stays a usable absolute path
   # A torn journal tail (D-4655): the capture never writes the journal and the server heals its own, so a tail it finds is LEFT OUT of the
   # snapshot, which is still a valid one, and the helper says so in one warning line on its stderr. The backup succeeded; the operator is
   # told, after the result line, in the same WARN shape every other line of this family uses. Only the helper's own line is relayed.
@@ -24962,6 +24985,7 @@ _upd_backup_set() {
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/train-proof.sh" ccd-lib-train-proof.sh   # its second library (D-7463): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" ccd-lib-delegation-lease.sh   # its third library (wave 5): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/pool-set.sh" ccd-lib-pool-set.sh   # its fourth library (the Overlord's pool set): restored before the body that pins it
+  _upd_backup_copy "$HOME/.local/libexec/ccrc/lib/long-lived.sh" ccd-lib-long-lived.sh   # its fifth library (the Overlord's ccd arms): restored before the body that pins it
   _upd_backup_copy "$HOME/.local/libexec/ccrc/ccd" ccd-body
   _upd_backup_copy "$HOME/.local/bin/ccd"          ccd
   _upd_backup_copy "$HOME/.cc-sessions/session-hook.sh" session-hook.sh
@@ -29394,7 +29418,8 @@ _uninst_cc_sessions() {
   fi
   # `child-deny.settings.json` is the box's one children's deny file (D-5299); this is its
   # ONE remover (D-5392): `install-session-hooks.sh --remove` runs per account and leaves it.
-  # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it.
+  # `account-deny.settings.json` (D-6202) is every session's account deny file, removed with it, and so is
+  # `child-deny.digests`, the deny file's digest history (approvals PR 0), which the installer alone writes.
   rm -f -- "$reg/session-hook.sh" "$reg/install-session-hooks.sh" "$reg/notify.sh" \
     "$reg/compact-card.mjs" "$reg/approval-verify.mjs" "$reg/lib/transcript.jq" "$reg/lib/carry-dedupe.py" "$reg/lib/inflight-manifest.py" \
     "$reg/lib/roster-card.jq" "$reg/lib/launch-profiles.json" \
@@ -29402,7 +29427,7 @@ _uninst_cc_sessions() {
     "$reg/install-coordinator-skill.sh" "$reg/install-worker-skill.sh" \
     "$reg/install-reviewer-skill.sh" "$reg/install-history-skill.sh" "$reg/install-linear-skill.sh" \
     "$reg/install-graphify-skill.sh" "$reg/child-deny.settings.json" \
-    "$reg/account-deny.settings.json" \
+    "$reg/account-deny.settings.json" "$reg/child-deny.digests" \
     || _ccrc_die "removing ccrc's files under $reg failed"
   rmdir -- "$reg/lib" 2>/dev/null || true   # the transcript reader's directory, empty once its file is gone
   # The conflict radar's two mirrors (landing order wave 3b, and wave 5d's `lander`): `$reg/landing/<project>/enabled` and
@@ -29627,12 +29652,12 @@ _uninst_tree_bins() {
   # and its directory only if that leaves it empty — anything else an operator
   # keeps under ~/.local/libexec is not ccrc's to remove.
   rm -f -- "$HOME/.local/libexec/ccrc/ccd" "$HOME/.local/libexec/ccrc/lib/disk-retention.sh" "$HOME/.local/libexec/ccrc/lib/train-proof.sh" "$HOME/.local/libexec/ccrc/lib/delegation-lease.sh" \
-    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
+    "$HOME/.local/libexec/ccrc/lib/pool-set.sh" "$HOME/.local/libexec/ccrc/lib/long-lived.sh" "$HOME/.local/libexec/ccrc/shared/redact.mjs" "$HOME/.local/libexec/ccrc/shared/redact-cli.mjs" \
     || _ccrc_die "removing ccd's body and library from \$HOME/.local/libexec/ccrc failed"
   rmdir -- "$HOME/.local/libexec/ccrc/shared" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc/lib" 2>/dev/null || :
   rmdir -- "$HOME/.local/libexec/ccrc" 2>/dev/null || :
-  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
+  echo "uninstall: tree: ~/ccrc removed; ccd, ccd-cap-scopes, ccd-graph-sweep, ccd-account-health, ccd-telemetry-keepalive, ccd-account-auth, ccd-usage-sweep, ccd-usage-sweep.py, ccd-tmp-sweep, ccd-scope-sweep, ccd-land-probe, ccd-testbox-times, ccd-carry-dedupe-sweep, ccd-tool-adj, ccd-history-sweep, ccd-pool-sync, ccd-update-sync, ccgpt-auth.py, ccgpt-proxy.py, ccgpt-usage.py, ccgpt-runtime, ccrc-codex, ccrc-api and the ccrc launcher removed from \$HOME/.local/bin, and ccd's body from \$HOME/.local/libexec/ccrc; its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; the completed-install record and the node's update state (~/.ccrc/previous, install-step, update.json, update.lock, update-intent) removed$vsaid$msaid$nsaid"
   echo "uninstall: tree: the box token's node records (~/.ccrc/box-token-generation, token-sync.json) removed; its value and state files stay with ~/.ccrc/mail.token, and ~/.cc-secrets/ccrc-mail.token is not touched"
   # ── the one entry that is not ccrc's own binary ─────────────────────────
   # `_inst_graphify_engine` converges `$HOME/.local/bin/graphify` onto the
@@ -30196,6 +30221,13 @@ _usage_test_paragraph() {
     '            prints the slice and the queue. See README, "Test containment"'
 }
 
+_usage_quiz_paragraph() {
+  printf '\n%s' \
+    '  quiz-record  record a replay quiz run, by hand outside any session or pane:' \
+    '            ccrc quiz-record --report <file> --sha <64 hex>. The run is' \
+    '            pending until you confirm it on the Shadow lanes card'
+}
+
 # Guard so the script can be `source`d (the way server/test/ccd-clip.test.ts:32
 # and server/test/ccd-workspaces.test.ts:487 source ccd itself, to call one
 # function directly without running the whole CLI) without running a command
@@ -30268,6 +30300,7 @@ case "$VERB" in
   history) exec node --no-warnings "$CCRC_HERE/history/cli.mjs" "$@" ;;
   test)    exec bash "$CCRC_HERE/ccrc-test" "$@" ;;
   testbox-admin) exec bash "$CCRC_HERE/ccrc-testbox-admin" "$@" ;;
+  quiz-record) exec bash "$CCRC_HERE/ccrc-quiz-record" "$@" ;;
   *) _ccrc_usage_die "$VERB" ;;
 esac
 

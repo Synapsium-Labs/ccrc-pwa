@@ -52,8 +52,15 @@ export const CCD_POOLSET_LIB = path.resolve(__dirname, '../../ccd/lib/pool-set.s
 /** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
 export const CCD_POOLSET_LIB_PIN_PLACEHOLDER = '__CCD_LIB_POOLSET_SHA256=stamp-at-install';
 
+/** The fifth library `CCD` loads at its foot (the Overlord's ccd arms): the long-lived arms, beside the others in `ccd/lib/`,
+ *  pinned the same way. */
+export const CCD_LONGLIVED_LIB = path.resolve(__dirname, '../../ccd/lib/long-lived.sh');
+
+/** Its committed pin placeholder, rendered at install time like `CCD_LIB_PIN_PLACEHOLDER`. */
+export const CCD_LONGLIVED_LIB_PIN_PLACEHOLDER = '__CCD_LIB_LONGLIVED_SHA256=stamp-at-install';
+
 /** Every library `CCD` loads, in load order: the file and the name it is installed under in `lib/` beside the body. */
-export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB];
+export const CCD_LIBS: readonly string[] = [CCD_LIB, CCD_TRAIN_LIB, CCD_LEASE_LIB, CCD_POOLSET_LIB, CCD_LONGLIVED_LIB];
 
 /** The docs redactor's two files (D-7077, OA-C11 (a)): installed beside the body in `shared/`, read by the installer from the
  *  tree's `shared/`, and pinned by digest in the body like the library. */
@@ -61,8 +68,8 @@ export const CCD_REDACT = path.resolve(__dirname, '../../shared/redact.mjs');
 export const CCD_REDACT_CLI = path.resolve(__dirname, '../../shared/redact-cli.mjs');
 
 /** What `ccd/ccd-entry-install.py` publishes for a ccd source beside library bytes `lib`, the redactor's two files
- *  (`shared`, the repository's by default) and the train-proof, delegation-lease and pool-set libraries' bytes (`train`, `lease`, `poolset`, the
- *  repository's by default): the six pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
+ *  (`shared`, the repository's by default) and the train-proof, delegation-lease and pool-set and long-lived libraries' bytes (`train`, `lease`, `poolset`, `longlived`, the
+ *  repository's by default): the seven pin placeholders rendered to their files' SHA-256 FIRST, then the line-2 placeholder swapped, in place, for the
  *  marker `markGenerated` writes, so the stamp covers the pins. A mirror for fixtures; `ccd-entry-install.test.ts` holds it
  *  equal to the installer's real output. */
 export function installedCcdBody(
@@ -71,6 +78,7 @@ export function installedCcdBody(
   train: string | Buffer = fs.readFileSync(CCD_TRAIN_LIB),
   lease: string | Buffer = fs.readFileSync(CCD_LEASE_LIB),
   poolset: string | Buffer = fs.readFileSync(CCD_POOLSET_LIB),
+  longlived: string | Buffer = fs.readFileSync(CCD_LONGLIVED_LIB),
 ): string {
   const digest = createHash('sha256').update(lib).digest('hex');
   const sha = (b: string | Buffer): string => createHash('sha256').update(b).digest('hex');
@@ -79,7 +87,8 @@ export function installedCcdBody(
     .replace(/^__CCD_LIB_SHA256=stamp-at-install$/m, `__CCD_LIB_SHA256=${digest}`)
     .replace(/^__CCD_LIB_TRAIN_SHA256=stamp-at-install$/m, `__CCD_LIB_TRAIN_SHA256=${sha(train)}`)
     .replace(/^__CCD_LIB_LEASE_SHA256=stamp-at-install$/m, `__CCD_LIB_LEASE_SHA256=${sha(lease)}`)
-    .replace(/^__CCD_LIB_POOLSET_SHA256=stamp-at-install$/m, `__CCD_LIB_POOLSET_SHA256=${sha(poolset)}`).split('\n');
+    .replace(/^__CCD_LIB_POOLSET_SHA256=stamp-at-install$/m, `__CCD_LIB_POOLSET_SHA256=${sha(poolset)}`)
+    .replace(/^__CCD_LIB_LONGLIVED_SHA256=stamp-at-install$/m, `__CCD_LIB_LONGLIVED_SHA256=${sha(longlived)}`).split('\n');
   if ((lines[1] ?? '').startsWith('# ccrc:stamp-at-install')) lines.splice(1, 1);
   return markGenerated(lines.join('\n'));
 }
@@ -513,6 +522,33 @@ function containedBridgeBase(env: NodeJS.ProcessEnv): { CCGPT_BRIDGE_UPSTREAM_BA
   return { CCGPT_BRIDGE_UPSTREAM_BASE: typeof named === 'string' && named !== '' ? named : CLOSED_AUTH_BASE };
 }
 
+/** The model probe's release lookup for every contained env (model-class-advance wave 2, D-8743): the caller's own
+ *  CCRC_MODELS_PROBE_RELEASE_FIXTURE when it names one, else a file under HOME that does not exist, which the probe
+ *  reads as a failed lookup (it then asks as its cache, else its floor). By `containedAuthBase`'s rule: unset or EMPTY,
+ *  the probe asks npm's registry over the network, so an empty caller value names none. A case that drives the real
+ *  lookup removes the key from the env this returns, and plants its own `curl`. */
+function containedReleaseAnswer(env: NodeJS.ProcessEnv, home: string): { CCRC_MODELS_PROBE_RELEASE_FIXTURE: string } {
+  const named = env['CCRC_MODELS_PROBE_RELEASE_FIXTURE'];
+  return { CCRC_MODELS_PROBE_RELEASE_FIXTURE: typeof named === 'string' && named !== '' ? named : path.join(home, 'no-codex-release-answer') };
+}
+
+/** The CCRC_ names a contained env sets as CONTAINMENT rather than as a knob (D-8743): a test that strips the ccrc knobs
+ *  from a contained env keeps these, or the containment they carry is gone with the knobs. Both values `ghContainedEnv`
+ *  sets, the probe's release seam (`containedReleaseAnswer`) and the codex auth library's endpoint (`containedAuthBase`,
+ *  fix round 2); `ccd-harness-integrity.test.ts` checks this list against what `ghContainedEnv` sets. */
+export const CONTAINED_CCRC_SEAMS: readonly string[] = ['CCRC_MODELS_PROBE_RELEASE_FIXTURE', 'CCRC_CODEX_AUTH_BASE'];
+
+/** Deletes every CCRC_ name from `env`, in place, except the containment seams (`CONTAINED_CCRC_SEAMS`) and the names in
+ *  `keep`, and returns it. THE ONE STRIP: `ccd-harness-integrity.test.ts` refuses a hand-written one-line `CCRC_` delete
+ *  loop anywhere else under server/test (a one-line-shape guard: its comment names what it misses), because each such loop dropped the probe's release seam until fix round 1 of
+ *  model-class-advance wave 2 (review A9). */
+export function stripCcrcKnobs(env: NodeJS.ProcessEnv, keep: readonly string[] = []): NodeJS.ProcessEnv {
+  for (const k of Object.keys(env)) {
+    if (k.startsWith('CCRC_') && !CONTAINED_CCRC_SEAMS.includes(k) && !keep.includes(k)) delete env[k];
+  }
+  return env;
+}
+
 export function ghContainedEnv(
   home: string, env: NodeJS.ProcessEnv = {}, opts: ContainOpts = {},
 ): NodeJS.ProcessEnv {
@@ -535,7 +571,7 @@ export function ghContainedEnv(
     XDG_RUNTIME_DIR: path.join(home, 'no-runtime-dir'),
     DBUS_SESSION_BUS_ADDRESS: `unix:path=${path.join(home, 'no-bus')}`,
   };
-  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  if (!opts.systemd && !opts.tmux && !opts.net) return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${bin}:${env['PATH'] ?? ''}` };
   // THE SECOND STRUCTURAL BOUNDARY for the ccd runners, and the reason it is a
   // poison rather than an absence: `_have_systemctl` is `command -v systemctl`,
   // so REMOVING systemctl would send every ccd test down `_supervised_start`'s
@@ -598,7 +634,7 @@ export function ghContainedEnv(
   // Prepended to whatever the caller passed, never the other way round: a
   // snippet that supplies its own PATH must not be able to displace the poison,
   // which is the difference between structural and advisory.
-  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), PATH: `${bin}:${env['PATH'] ?? ''}` };
+  return { ...env, ...bus, ...containedAuthBase(env), ...containedBridgeBase(env), ...containedReleaseAnswer(env, home), PATH: `${bin}:${env['PATH'] ?? ''}` };
 }
 
 /** The one reader every append-only call log in this file goes through: absent

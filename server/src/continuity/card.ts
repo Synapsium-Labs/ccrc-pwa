@@ -23,9 +23,10 @@
  * L1, pure: no `fs`, no store, no clock.
  */
 import {
-  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardItem, type CardMail, type CardRenderer, type CardRun, type CardSection,
-  type CardTimer, type Fact,
+  BYTES_PER_TOKEN, CARD_MAIL_MAX, CARD_PAGE_CHARS, type CardFacts, type CardGoal, type CardItem, type CardMail, type CardRenderer, type CardRun,
+  type CardSection, type CardTimer, type Fact,
 } from '../../../shared/continuity-card.js';
+import type { RatifiedByKind } from '../../../shared/ledgers.js';
 import { TIMER_PREVIEW_CHARS } from '../../../shared/continuity-timers.js';
 import { NOTES_CAP, type KeyFact } from '../../../shared/continuity.js';
 import { FLEET_ROLES, FLEET_ROLE_NAMES, isFleetRole, type FleetRole } from '../../../shared/fleetRoles.js';
@@ -188,13 +189,21 @@ function mailSections(f: CardFacts): readonly CardSection[] {
   });
 }
 
+/** Who ratified a ratified goal, in the card's words (review 2240 F8). Printed inside the goal's fenced block, beside the
+ *  session-written text it describes; a word this build cannot name reads as not known. */
+const RATIFIER_WORDS: Readonly<Record<RatifiedByKind, string>> = {
+  coordinator: 'ratified by the coordinator', operator: 'ratified by the operator', item: 'ratified by the answer to an item',
+};
+const ratifiedGoalLine = (g: CardGoal): string =>
+  `${g.ratifiedBy !== undefined && Object.hasOwn(RATIFIER_WORDS, g.ratifiedBy) ? RATIFIER_WORDS[g.ratifiedBy] : 'ratified by an unknown source'}: ${g.text}`;
+
 function programmeSections(f: CardFacts): readonly CardSection[] {
   return factSections('ledger', f.ledger, (programmes) => {
     const sorted = [...programmes].sort((a, b) => (a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0));
     return sorted.map((p, i) => {
       const slug = oneLine(p.slug);
       const where = `in programme ${slug}'s ledger`;
-      const ratified = p.goals.filter((g) => g.ratified).map((g) => g.text);
+      const ratified = p.goals.filter((g) => g.ratified).map(ratifiedGoalLine);
       const unratified = p.goals.filter((g) => !g.ratified).map((g) => g.text);
       const lines = [`Programme ${slug}:`];
       if (ratified.length > 0) lines.push('goals marked ratified:', block(ratified.join('\n'), SHORT_CAP_BYTES, where));

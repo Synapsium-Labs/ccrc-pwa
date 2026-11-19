@@ -29,7 +29,11 @@ const openRun = (c: CoordStore, claimedBy: string, kind: 'work' | 'review' = 'wo
 const cardRole = async (c: CoordStore, over: Partial<CardFactsDeps> = {}) => {
   const { facts, renderer } = await gatherCardFacts(deps(c, over), ME, NOW);
   const card = { role: facts.role, roleWhy: facts.roleWhy, renderer, intent: facts.intent };
-  expect(await sessionRoleRead(deps(c, over), ME)).toEqual(card);
+  // The role read also carries the designation it read (Overlord W1 designation A, X5), for the card's generation lookup:
+  // the four pinned outputs are compared alone, and a store with no designation row answers `none`.
+  const { designation, ...four } = await sessionRoleRead(deps(c, over), ME);
+  expect(four).toEqual(card);
+  expect(designation).toEqual({ kind: 'none' });
   return card;
 };
 

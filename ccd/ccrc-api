@@ -21,13 +21,14 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, eighty-four rows, and nothing else; the
+#   * The route comes from ROUTES below, eighty-nine rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
 #     review-rounds` is refused the same way for `review-rounds-v1` (D-8125),
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
-#     the seven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181), and the three
+#     the ten `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
+#     `capability-missing` for `plan-phases-v1` (programme work map WM0), and the three
 #     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
@@ -93,7 +94,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Eighty-four rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Eighty-nine rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -216,7 +217,9 @@ declare -A ROUTES=(
   # are box-token gated and attribution-checked, and a coordinator may act only on its own programme's items and pin. The
   # `{id}` of the first, second and last three is the programme's slug (a `SAFE_RE` shape); of the four item-move rows, the
   # item's id. `items list` is a read that names its caller in the query: `byId` and `byUuid` are the caller's own,
-  # supplied as flags.
+  # supplied as flags. The three `goals` POSTs are the exception: their pair is the PANE's, appended by this client, and a body
+  # that names either is refused (review 2240 F1; the block that does it sits beside the note door's, below). The `items.*`
+  # rows are unchanged: the caller types the pair into their body.
   [items.raise]='POST|/api/programmes/{id}/items|yes|-'
   [items.list]='GET|/api/programmes/{id}/items|yes|byId,byUuid'
   [items.confirm]='POST|/api/items/{id}/confirm|yes|-'
@@ -234,6 +237,10 @@ declare -A ROUTES=(
   # body and REFUSES a body that names either, so a caller cannot attribute a call to another coordinator. Sent unless a CURRENT cap
   # file omits `calls-v1` (the gate beside the goals read's, below).
   [calls.record]='POST|/api/coord/programmes/{id}/calls|yes|-'
+  # What a programme says is left (Overlord W2 remaining work A): the coordinator states the waves left as a range with a
+  # reason, and what it waits on as edges, at the plan and at every wave boundary. Gated on the server like `calls.record`;
+  # the pane's pair is appended LAST, as the note and probe rows' (review 2265, F9).
+  [programme.remaining]='POST|/api/coord/programmes/{id}/remaining|yes|-'
   # Linear, through the server's proxy and the key ccrc holds for each workspace (D-7669, #1444): sessions never sign
   # in to Linear and never hold a key. Thirteen rows, nine reads and four writes; the SERVER decides each row's class,
   # never the method, which is why `search`, a read, is a POST: its text is free text, and free text never rides a URL
@@ -264,6 +271,11 @@ declare -A ROUTES=(
   # one JSON report, as the hook builds it or keeps it on one line of its spool.
   [sessions.start]='POST|/api/sessions/{id}/start|yes|-'
   [sessions.loads]='POST|/api/sessions/{id}/start/loads|yes|-'
+  # The replay quiz's record (Overlord W1a quiz record, plan 2026-11-17 §5): the operator's `ccrc quiz-record` posts one
+  # single-arm report through this row, its body (`report`, `sha256`, `recordedBy`) on stdin (`--json -`). The run is recorded
+  # pending: only the operator's confirmation on the Shadow lanes card, behind a session and a step-up, makes it count, so a
+  # session calling this row records nothing that counts (coordinator ruling, slug quiz-record-posts-through-the-client).
+  [quiz.record]='POST|/api/continuity/quiz-runs|no|-'
   # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
   # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
   # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
@@ -297,6 +309,13 @@ declare -A ROUTES=(
   [plan.ticket-move]='POST|/api/programmes/{id}/plan/tickets/move|yes|-'
   [plan.epic-drop]='POST|/api/programmes/{id}/plan/epics/drop|yes|-'
   [plan.close]='POST|/api/programmes/{id}/plan/close|yes|-'
+  # `plan phase-ref` (programme work map WM0, D-8715): add or remove one reference of a phase, or carry a ticket to a later one.
+  # Behind `plan-v1` like its siblings, and refused locally `capability-missing` when a CURRENT cap file omits `plan-phases-v1`.
+  [plan.phase-ref]='POST|/api/programmes/{id}/plan/phases/refs|yes|-'
+  # The inbound path's two (D-8183): `plan.take`'s `{id}` is the programme's slug, `plan.triage`'s a Linear team key (a SAFE_RE shape).
+  # Both carry the pane's identity in the query and take the caller's body whole, like the rows above.
+  [plan.take]='POST|/api/programmes/{id}/plan/take|yes|-'
+  [plan.triage]='POST|/api/teams/{id}/plan/triage|yes|-'
   # The timers (Overlord W1a, the timers piece; spec §3.3.12 C61, C64): a session sets, lists and cancels its OWN timers. All
   # three are parsed whole by `parse_timer`, which derives the pane's pair and refuses a typed one; `{id}` is the timer's id. All
   # are refused locally `capability-missing` when a CURRENT cap file omits `timers-v1`.
@@ -1182,6 +1201,22 @@ main() {
     append_body_field 'byId' "$DERIVED_ID" 'the note body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the note body is not a JSON object; byUuid cannot be added'
   fi
+  # THE GOALS ROWS' IDENTITY (review 2240 F1, the coordinator's ruling), the note door's rule: `goals pin`, `goals modify` and
+  # `goals merged` are attributed to this pane, because the ratification a coordinator's pin carries rests on this attribution.
+  # A body that names `byId` or `byUuid` is refused, unsent; a bodyless call is refused (`no-body`); and the pane's pair is
+  # appended LAST, byId then byUuid, so a spelling of `byId` the textual test misses never outranks it (review 2039, F7). The
+  # residual is a same-user forger with the box token and a raw HTTP call, which this does not stop.
+  if [[ "$key" == 'goals.pin' || "$key" == 'goals.modify' || "$key" == 'goals.merged' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' "${key/./ } needs a body on --json"
+    local goalsbody="${body//[[:space:]]/}"
+    case "$goalsbody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a goals write is attributed to this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the goals body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the goals body is not a JSON object; byUuid cannot be added'
+  fi
   # THE PROBE ANSWER'S IDENTITY, the note door's rule above, word for word: a body that names `byId` or `byUuid` is refused
   # unsent, a bodyless call is refused, and the pane's pair is appended LAST.
   if [[ "$key" == 'probe.answer' ]]; then
@@ -1194,6 +1229,18 @@ main() {
     derive_identity
     append_body_field 'byId' "$DERIVED_ID" 'the probe body is not a JSON object; byId cannot be added'
     append_body_field 'byUuid' "$DERIVED_UUID" 'the probe body is not a JSON object; byUuid cannot be added'
+  fi
+  # THE REMAINING-WORK DOOR'S IDENTITY (Overlord W2 remaining work A), the probe answer's rule above, word for word.
+  if [[ "$key" == 'programme.remaining' ]]; then
+    [[ -n "$body" ]] || refuse 'no-body' 'programme remaining needs a body on --json'
+    local rembody="${body//[[:space:]]/}"
+    case "$rembody" in
+      *'"byId":'*|*'"byUuid":'*)
+        refuse 'bad-body' 'the body names byId or byUuid; a statement is made as this pane, and the client fills both' ;;
+    esac
+    derive_identity
+    append_body_field 'byId' "$DERIVED_ID" 'the statement body is not a JSON object; byId cannot be added'
+    append_body_field 'byUuid' "$DERIVED_UUID" 'the statement body is not a JSON object; byUuid cannot be added'
   fi
   if [[ "$key" == 'note.list' ]]; then
     derive_identity
@@ -1352,6 +1399,13 @@ main() {
   # sends. The empty word is the "is the file current and well-formed" probe, as above.
   if [[ "$key" == plan.* ]] && ! _api_server_cap plan-v1 && _api_server_cap ''; then
     refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
+  fi
+
+  # THE PHASES' GATE (programme work map WM0, D-8715), the plan door's fail direction: a CURRENT, well-formed cap file that
+  # omits `plan-phases-v1` says the server is older than the phases, so `capability-missing` is answered, naming the word,
+  # and nothing is sent; an absent, stale, torn or future file sends.
+  if [[ "$key" == 'plan.phase-ref' ]] && ! _api_server_cap plan-phases-v1 && _api_server_cap ''; then
+    refuse 'capability-missing' 'the server this box talks to does not keep phases yet (it does not advertise plan-phases-v1); no reference was changed'
   fi
 
   # THE TIMERS' GATE (Overlord W1a, the timers piece, plan Task 11), the plan door's fail direction: a CURRENT, well-formed cap file

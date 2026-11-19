@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 51 id-taking calls across 17 files.
+// THE CLAIM: 54 id-taking calls across 19 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -71,6 +71,8 @@ const ID_BUILDERS = {
   coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', delegationAdopt: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
   projectAddClone: 'no-id', projectAddEmpty: 'no-id',
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
+  // The Overlord W1 ccd arms (plan Task 3): `keepAwake` has no caller yet; designation A's create and retire add their rows.
+  keepAwake: 'id',
   // The Overlord W1 pool set (plan Task 6): `poolAnswer`'s one id is refused by the builder itself unless `isRegistryId`
   // admits it, as `leaseMark`'s are, so the census's dash-led probe cannot reach it and the row is `no-id`. Nothing makes
   // a later `server/src` caller (the renewal rows piece, the designation door) enter this census: the builder's own
@@ -126,6 +128,7 @@ const ID_PROBE = {
   routeApply: [PROBE_ID, 'class', 'x', null],
   routeSet: [PROBE_ID, { effort: 'high' }, null],
   winSize: [PROBE_ID, 'smallest'],
+  keepAwake: [PROBE_ID, 'on'],
 } satisfies { [K in IdBuilder]: Parameters<(typeof CCD_ARGV)[K]> };
 
 const ID_ARG_AT: Readonly<Record<string, number>> = Object.fromEntries(
@@ -314,6 +317,9 @@ const GATES = {
   'profile-lane-id': { file: 'continuity/profileLane.ts', scope: 'profilePass', re: /if \(!isRegistryId\(r\.id\)\) \{ routeUnread \+= 1; continue; \}/ },
   /** The renewal act's ccd adapter refuses an id that is not a registry id before it composes any argv (Overlord W1a). */
   'renew-id': { file: 'continuity/ccdSessionHost.ts', scope: 'renew', re: /if \(!isRegistryId\(sessionId\)\) return \{ kind: 'refused'/ },
+  /** The renewal acts' PreCompact field write refuses an id that is not a registry id before it composes any argv (Overlord W1a,
+   *  the renewal hand-offs). */
+  'precompact-id': { file: 'continuity/renewalWiring.ts', scope: 'routePrecompact', re: /if \(!isRegistryId\(id\)\) return \{ kind: 'refused'/ },
   /** `POST /api/runs` checks `claimedBy`, then `sessionId`, as given: two gates of its decider's table (D-5384), right
    *  after the shape gate, so a refusal comes before any registry read. */
   'run-open-checks': {
@@ -392,6 +398,10 @@ const GATES = {
     file: 'collectLane.ts', scope: 'parseCollectRecordName',
     re: /return id !== undefined && isTmpRootId\(id\) \? id : null;/,
   },
+  /** The Overlord body's route composer refuses an id that is not a registry id before it composes `route --set` (Overlord W1 designation A). */
+  'overlord-body-route': { file: 'coord/overlordBody.ts', scope: 'setRoute', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
+  /** The Overlord body's keep-awake composer refuses an id that is not a registry id before it composes `keep-awake`. */
+  'overlord-body-keep-awake': { file: 'coord/overlordBody.ts', scope: 'keepAwake', re: /if \(!isRegistryId\(id\)\) return refuse\(/ },
 } as const satisfies Readonly<Record<string, GateHome>>;
 
 type Gate = keyof typeof GATES;
@@ -510,6 +520,14 @@ const CENSUS: readonly CensusRow[] = [
   // continuity/ccdSessionHost.ts (Overlord W1a, the renewal act): the id is a stored generation row's, and `renew` refuses a
   // non-registry id itself before `hibernate` composes an argv.
   { file: 'continuity/ccdSessionHost.ts', scope: 'renew', builder: 'hibernate', id: 'sessionId', origin: ['stored'], gate: ['renew-id'] },
+  // continuity/renewalWiring.ts (Overlord W1a, the renewal hand-offs): the id is a stored generation row's, and the PreCompact
+  // field write refuses a non-registry id itself before `routeSet` composes an argv.
+  { file: 'continuity/renewalWiring.ts', scope: 'routePrecompact', builder: 'routeSet', id: 'id', origin: ['stored'], gate: ['precompact-id'] },
+  // coord/overlordBody.ts (Overlord W1 designation A, plan Task 4): the door's ids are minted by the door or read from the designation
+  // row; each composer refuses a non-registry id itself before it composes. The stop goes through `stopCreatedOf`, which composes
+  // no `CCD_ARGV` call of its own: it runs the stop route's own `stopArgvFor` (behind its `readSessionRecord` and `stopPairRefused`).
+  { file: 'coord/overlordBody.ts', scope: 'setRoute', builder: 'routeSet', id: 'id', origin: ['stored'], gate: ['overlord-body-route'] },
+  { file: 'coord/overlordBody.ts', scope: 'keepAwake', builder: 'keepAwake', id: 'id', origin: ['stored'], gate: ['overlord-body-keep-awake'] },
 ];
 
 /** The files whose gates ask the predicate themselves. */
@@ -526,6 +544,8 @@ const GATE_FILES = [
   'continuity/profileLane.ts',
   // continuity/ccdSessionHost.ts (Overlord W1a, the renewal act): `renew` vets its id with the predicate before `hibernate`.
   'continuity/ccdSessionHost.ts',
+  // continuity/renewalWiring.ts (Overlord W1a, the renewal hand-offs): the PreCompact field write vets its id before `routeSet`.
+  'continuity/renewalWiring.ts',
   // ccdargv.ts (delegation broker wave 5): `CCD_ARGV.leaseMark` vets the parent and a promoted session with the predicate
   // inside the builder, which throws before any argv is built (W5-G6b).
   'ccdargv.ts',
@@ -535,6 +555,8 @@ const GATE_FILES = [
   'coord/radar.ts',
   // coord/archiveDoor.ts (D-8199): a claims choice's `heir` is vetted by the predicate before the hand-over reads its row.
   'coord/archiveDoor.ts',
+  // coord/overlordBody.ts (Overlord W1 designation A): `setRoute` and `keepAwake` vet their id with the predicate before composing.
+  'coord/overlordBody.ts',
 ] as const;
 
 const IMPORTS_PREDICATE = /import\s*\{[^}]*\bisRegistryId\b[^}]*\}\s*from\s*'(?:\.\.\/)+shared\/api\.js'/;
@@ -556,7 +578,7 @@ function paired(): { readonly site: Site; readonly row: CensusRow }[] {
 describe('every id-taking argv call has an origin and a gate (spec §2.3)', () => {
   it('every CCD_ARGV key is classified id or no-id', () => {
     expect(Object.keys(ID_BUILDERS).sort()).toEqual(Object.keys(CCD_ARGV).sort());
-    expect(ID_KEYS).toHaveLength(32);
+    expect(ID_KEYS).toHaveLength(33);   // 33: the Overlord W1 ccd arms add keepAwake
     expect(Object.keys(ID_PROBE).sort()).toEqual([...ID_KEYS].sort());
     for (const k of ID_KEYS) {
       const args = ID_PROBE[k] as readonly unknown[];

@@ -86,8 +86,9 @@ import {
   integrityCheck, foreignKeyRows, ftsMeasure, dropFtsTables, getStep, setStep, setCounter, adoptStore,
   peekStoreId, stageRestore, commitRestore, abortRestore,
   ensureSegmentDir, createSegment, segmentInserts, publishSegment, listSegments, removeStaleSegmentTemps, setSegmentSeq,
-  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter, segmentHasBlob, segmentFileFacts,
+  openSegment, segmentMeta, segmentBlobsAfter, segmentRowsAfter, segmentHasBlob, segmentFileFacts, ftsStructureOn,
 } from './store.mjs';
+import { decideFtsMerge } from './fts-structure.mjs';
 import { isBoundaryLine } from '../compact-card.mjs';
 import {
   deriveNodes, reparseTargets, reparseLeaves, clearLeafCrashes, indexNodesFts, NODES_FTS_STEP, rederiveGistsFor, redactNodeFields, reparseFailClosed, rerollNodes,
@@ -6605,9 +6606,11 @@ const REINDEX_META = 'fts_reindex_rid';
  *  mark it will become, the last blob_id re-derived, and the highest blob_id the generation covers
  *  (D-4344, history-reindex-mark-by-rederivation). */
 const REDERIVE_META = 'fts_rederive';
-/** Pages per merge step. Negative: FTS5 merges every b-tree level, including a single segment
- *  holding a deleted term (measured, 22.16.0); a positive N merges only levels holding usermerge
- *  segments. */
+/** Pages per merge step, its sign decideFtsMerge's (D-8726, history-fts-fold-once). Negative folds: FTS5 puts every
+ *  segment on one level and starts one merge of them all, which also rewrites a single segment holding a deleted term, so
+ *  it is how a contentless delete's bytes get purged (measured, 22.16.0); it discards a merge in progress and takes a new
+ *  segment id, so it runs only when no merge is in progress and below FTS_SEGMENTS_DRAIN. Positive continues the merge in
+ *  progress, taking no new segment id, and otherwise merges only levels holding usermerge segments. */
 const MERGE_PAGES = 64;
 /** Blobs per backfill transaction. */
 const BACKFILL_BATCH = 256;
@@ -7168,11 +7171,15 @@ export function mergeSteps(db, ctx, budget) {
   // and the blob paths that share ftsStmts must not start to need it (D-4609 (history-nodes-fts-merged-after-rewrite)).
   const mergeNodes = db.prepare("SELECT 1 AS t FROM sqlite_master WHERE type = 'table' AND name = 'nodes_fts'").get() === undefined
     ? null : db.prepare("INSERT INTO nodes_fts (nodes_fts, rank) VALUES ('merge', ?)");
+  // D-8726 (history-fts-fold-once): each call reads the table's structure in its own transaction and folds only when no merge
+  // is in progress, so writer commits between ticks never restart the merge: a refold every tick never finished, and each one
+  // took a segment id until FTS5's 2000-segment limit failed every commit with SQLITE_FULL.
+  const step = (table, stmt) => withTx(db, 'NORMAL', () => { stmt.run(decideFtsMerge(ftsStructureOn(db, table), MERGE_PAGES).pages); });
   while (budgetLeft(budget)) {
     const before = f.total.get().n;
-    withTx(db, 'NORMAL', () => { f.merge.run(-MERGE_PAGES); });
+    step('blobs_fts', f.merge);
     const between = f.total.get().n;
-    if (mergeNodes !== null) withTx(db, 'NORMAL', () => { mergeNodes.run(-MERGE_PAGES); });
+    if (mergeNodes !== null) step('nodes_fts', mergeNodes);
     if (between - before < 2 && f.total.get().n - between < 2) {
       withTx(db, 'NORMAL', () => { d.done.run(ctx.nowMs, null, MERGE_STEP, 1); });
       return;

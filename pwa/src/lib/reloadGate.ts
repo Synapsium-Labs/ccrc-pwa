@@ -58,11 +58,11 @@ export type ReloadEvent =
   | { readonly kind: 'move'; readonly from: string; readonly to: string; readonly held: boolean };
 
 /** The screen a path is on: the route `matchRoute` names and its parameter (`'<id> <param>'`, the parameter empty when
- *  the pattern captures none), or `'none'` for a path outside the table. A Docs page turn stays on one screen, because
+ *  the pattern captures none; a later capture, an epic's key, follows it), or `'none'` for a path outside the table. A Docs page turn stays on one screen, because
  *  the `docs` route captures nothing. */
 export function screenOf(path: string): string {
   const at = matchRoute(path);
-  return at === null ? 'none' : `${at.route.id} ${at.param ?? ''}`;
+  return at === null ? 'none' : `${at.route.id} ${[at.param ?? '', ...at.rest].join(' ')}`;
 }
 
 /** Whether a move between `from` and `to` at `nowMs` runs a pending reload. */

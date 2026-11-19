@@ -61,16 +61,19 @@
 // `generationsPass` (synchronous, one transaction per write, nothing awaited) reads `coord.db`, decides and writes. So a
 // pass after a restart resumes from the cursor and the stored columns, never from memory, and the simulator drives the
 // pass itself on its fake clock.
+// The gather's optional `w1` port (W1's renewal readings, `renewalReadingsWiring.ts`) adds each wired producer's reading, and
+// `renewalInputsOf` spreads them over its `W1` defaults, so a field no producer answers keeps `W1`.
 import { CONTINUITY_LANE, laneArmGate } from '../../../shared/lane-arm.js';
-import { RENEWAL_LANE_PERIOD_MS, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
+import { RENEWAL_LANE_PERIOD_MS, RENEWAL_MODE_DEFAULT, SOFT_BUDGET, noteKeyText, type ProbeRoundKind } from '../../../shared/continuity.js';
 import { CARD_MAIL_MAX, type CardFacts, type CardMail, type CardNote } from '../../../shared/continuity-card.js';
 import { familyClassOf } from '../../../shared/models.js';
+import { orgRelation } from '../../../shared/accountOrg.js';
 import type { ChildMark, RunKind } from '../../../shared/api.js';
 import type { CoordStore } from '../coord/store.js';
 import type { TurnMarkRead } from '../coord/stall.js';
 import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { newestClaimedWorkRuns } from '../coord/bindingReads.js';
-import { roleFactsOf, roleOf, type RoleReading } from '../roleOf.js';
+import { designationFactFrom, identityOf, roleFactsOf, roleOf, type DesignationFact, type RoleReading } from '../roleOf.js';
 import { startedBeforeRelease } from '../coord/rollTarget.js';
 import type { ReleaseRead } from '../rollLane.js';
 import type { Clock, Entropy } from '../time/ports.js';
@@ -78,7 +81,10 @@ import { observeTime, observedStepCapMs, type ObservedGap } from '../time/observ
 import type { MeasuredStat } from '../io.js';
 import type { UsageRead } from '../usage.js';
 import { compactionInFlight, compactionsBegunSince, compactionsSince, newestCompactionAt, type CompactionsRead } from './compactions.js';
-import { effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
+import { RENEW_REQUESTS_CURSOR, effectiveGeneration, genExpectOf, genViewOf, type GenRow, type MintInput } from './continuityStore.js';
+import { renewNowStands, renewalModeOf } from './renewNow.js';
+import { precompactField, precompactRetractions } from './precompact.js';
+import { markAges, markProgrammesOf, operatorQuietOf, type MarkReading } from './operatorMark.js';
 import { generationStep, type GenEvent } from './generationMachine.js';
 import { snapshotFactsOf } from './card.js';
 import { probeRound } from './probes.js';
@@ -96,6 +102,7 @@ import type { GenAction, GenStep } from './generationMachine.js';
 import { softRenewalMay, type SoftInputs, type SoftReading } from './softRenewal.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { DrainRead } from './renewalDrain.js';
+import type { W1Inputs } from './renewalReadings.js';
 import {
   actsOfStep, beforeDeadline, handoverSince, holdOffStands, itemAboutOf, renewalFeed, renewalItemPrefix, renewalPermit, renewOwed,
   standingActs, type ItemAbout, type ItemStanding, type PermitWait, type RenewalAct,
@@ -105,20 +112,28 @@ import {
 export const GENERATIONS_LANE = 'generations';
 /** At most this many starts a pass (the plan's 200): a backlog drains over several passes. */
 export const GENERATIONS_START_BATCH = 200;
-/** A generation's term in W1a: the designation's term arrives with W1. */
+/** A generation's term for every identity but the Overlord's, whose start mints with the designation's term. */
 export const GENERATIONS_TERM = 1;
 /** How many of a coordinator's newest starts the first mint looks through for one that mints (review 2003 F2). */
 export const FIRST_MINT_LOOKBACK = 20;
+/** At most this many Renew now requests a pass: a backlog drains over several passes. */
+export const RENEW_REQUEST_BATCH = 200;
 
 /** The store members the pass reaches, declared by this consumer, so a test can hand a small fake. */
 export type GenerationsCoord = Pick<CoordStore, 'startsSince' | 'startsOf' | 'liveGenerations' | 'mintGeneration' | 'advanceObserved'
   | 'setGenerationDue' | 'clearShadowWalk' | 'generationsCursor' | 'advanceCursor' | 'laneArmSetting' | 'openCoordinatorIds'
   | 'run' | 'bindingRunsOf' | 'cardReadOfStart' | 'stepGeneration' | 'probeRows' | 'openRound' | 'snapshotFacts' | 'liveNotes'
-  | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf' | 'itemsFor'>;
+  | 'designationRead' | 'mailForRecipient' | 'handoverOf' | 'softRenewalsOf' | 'recordSoftRenewal' | 'renewCallsOf' | 'itemsFor'
+  | 'renewRequestsAfter' | 'operatorMarks' | 'advanceMarkQuiet' | 'bindingsOf' | 'renewalModeSetting'>;
 
 /** What the registry says of one row at the pass: its current conversation (null: unreadable), its account and its child
  *  mark. */
-export interface RegistryFacts { readonly id: string; readonly uuid: string | null; readonly lane: string | null; readonly child: ChildMark }
+export interface RegistryFacts {
+  readonly id: string; readonly uuid: string | null; readonly lane: string | null; readonly child: ChildMark;
+  /** The route's `precompact` field as the registry read it (null: not set), or `unread` when it could not be read. Absent
+   *  reads `unread`, so the PreCompact field is never written over a value nobody read (the hand-offs piece, Task 6). */
+  readonly precompact?: string | null | 'unread';
+}
 
 /** The fleet reads of one generation, made by `gatherGenerationReadings`. */
 export interface GenReadings {
@@ -133,6 +148,9 @@ export interface GenReadings {
   /** The soft preconditions' fleet reads, which the hand-offs piece's gather and W1 will fill (the operator mark, the
    *  readers and the Overlord's place); absent, each reads unmeasured as before. The simulator's world hands them. */
   readonly soft?: Partial<Pick<SoftInputs, 'readersRunning' | 'operatorQuietObservedMs' | 'placeHiddenObservedMs'>>;
+  /** The Overlord's renewal readings (W1, `renewalReadingsWiring.ts`): each field its producer's mapped answer, spread over
+   *  `renewalInputsOf`'s `W1` defaults; a field absent keeps `W1`. */
+  readonly w1?: Partial<W1Inputs>;
 }
 
 /** The deciders the pass asks, named so that a simulator can hand a mutant of one to the same pass (as `observe` is). */
@@ -182,9 +200,16 @@ export interface GenerationsInput {
   readonly readings: ReadonlyMap<number, GenReadings>;
   /** The box's `hibernate-fresh` (`capSupported`): without it no renewal starts, live or shadow (Table 11.1d). Absent: false. */
   readonly canRenew?: boolean;
-  /** The soft renewal Setting (R19); renew when the operator is away unless set on schedule. Absent: `when-away`. */
+  /** The soft renewal Setting (R19); renew when the operator is away unless set on schedule. Absent: the stored Setting
+   *  (`renewal_mode_settings`, the hand-offs piece), whose lost row or unreadable word is `when-away`. */
   readonly softMode?: SoftInputs['mode'];
+  /** The roster's organization label of an account (`AccountDef.org`), as the server holds it. Absent: no account is
+   *  labelled, so every resume onto another account reads its organization as unknown (account organization §4). */
+  readonly orgOf?: OrgOf;
 }
+
+/** An account's organization label, or null when it has none or is not rostered: unknown, never "same". */
+export type OrgOf = (account: string) => string | null;
 
 /** The generation an act is for, as the pass read it. */
 export interface ActTarget {
@@ -218,13 +243,16 @@ export interface GenerationsResult {
   /** The acts this pass planned (live only; the caller takes them), the steps it recorded in shadow (log lines, each naming
    *  the would-be acts), and the due generations whose renewal waited, by why. */
   readonly planned: readonly PlannedAct[];
+  /** The sessions whose `precompact=refuse` outlived its reason (`precompactRetractions`): the caller writes `allow` for each,
+   *  live or shadow, so the operator's lowering of the row switches the arm off too (ruling F2 on review 2312). */
+  readonly retract: readonly string[];
   readonly recorded: readonly string[];
   readonly waits: Readonly<Partial<Record<PermitWait, number>>>;
   /** Generations whose due write named at least one trigger it could not read. */
   readonly blind: number;
   readonly cleared: number;
   /** A read that failed and stopped part of the pass, or null. */
-  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'card-reads' | 'probes' | null;
+  readonly unread: 'cursor' | 'starts' | 'generations' | 'registry' | 'designation' | 'card-reads' | 'probes' | 'marks' | 'renew-requests' | null;
   /** A mint that could not be written stopped the batch. */
   readonly stopped: boolean;
 }
@@ -243,6 +271,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   let cardRead = 0; let probesFed = 0; let roundsOpened = 0; let emptyRounds = 0;
   let stopped = false;
   const planned: PlannedAct[] = [];
+  const retract: string[] = [];
   const recorded: string[] = [];
   const waits: Partial<Record<PermitWait, number>> = {};
   // A written step's acts: planned while live, recorded (and logged) in shadow, naming every machine action.
@@ -260,7 +289,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   const result = (): GenerationsResult => {
     logPass(deps.log, { skipped, held, superseded, stopped, failures, gaps, emptyRounds, waits });
     return { live, read, minted, firstMinted, skipped, held, superseded, gaps, due, cardRead, probesFed, roundsOpened, planned,
-      recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
+      retract, recorded, waits, blind, cleared, unread: failures[0]?.what ?? null, stopped };
   };
 
   // ---- ONE: every live generation's accumulator advances by the lane's step cap (review 1896 R4.1), before any mint, so a
@@ -281,6 +310,16 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       coord.advanceObserved(g.id, genExpectOf(g), step.at);
     }
   }
+  // Each operator mark's `quiet` advances by the same cap (ruling R4, slug operator-mark-observed): a compare-and-set on the
+  // `at` it read, so a prompt that lands meanwhile is never overwritten, and a mark that reads as no activity stops aging.
+  const marksRead = coord.operatorMarks();
+  if (!marksRead.ok) fail('marks', marksRead.detail, 'no operator mark ages');
+  else {
+    for (const m of marksRead.rows) {
+      if (!markAges(m)) continue;
+      coord.advanceMarkQuiet(m.programme, m.at, (deps.observe ?? observeTime)(m.quiet, clock.mono(), deps.proc, cap).at);
+    }
+  }
 
   // The role as this pass reads it, for the mints below and for the renewal permit (review 2149 F12: a generation's role is
   // fixed at its mint, so a coordinator whose programme closed is re-read before its renewal starts).
@@ -296,15 +335,27 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       return r.ok && r.run !== null ? r.run.kind : 'unmeasured';
     } catch { return 'unmeasured'; }
   };
+  // The designation, read once a pass (X5, X7). Unmeasured fails the mint step closed (`fail('designation', …)`), and a role read
+  // for the renewal permit then reads undecided, so a coordinator's renewal holds as a role change.
+  let designation: DesignationFact | 'unmeasured';
+  let designationWhy = 'the designation could not be read';
+  try {
+    const read = coord.designationRead();
+    designation = designationFactFrom(read);
+    if (read.kind === 'unmeasured') designationWhy = read.why;
+  } catch (e) { designation = 'unmeasured'; designationWhy = e instanceof Error ? e.message : String(e); }
   const roleFor = (sessionId: string): RoleReading => {
+    if (designation === 'unmeasured') return { kind: 'undecided', between: 'coordinator-or-plain' };
     const child: ChildMark = registry.get(sessionId)?.child ?? { kind: 'unreadable' };
-    return roleOf(roleFactsOf(sessionId, { child, childRunKind: runKind(child), openCoordinators, intentDeclared: 'unmeasured' }));
+    return roleOf(roleFactsOf(sessionId, { child, childRunKind: runKind(child), openCoordinators, intentDeclared: 'unmeasured', designation }));
   };
 
   // ---- TWO: the starts after the cursor mint and end generations; then a coordinator with no generation mints its first.
   const notJudged = 'no start is judged and the cursor stays';
   if (input.registry === null) fail('registry', 'the registry could not be listed', notJudged);
+  else if (designation === 'unmeasured') fail('designation', designationWhy, notJudged);
   else {
+    const fact: DesignationFact = designation;
     const cursor = coord.generationsCursor(GENERATIONS_LANE);
     const starts = cursor.ok ? coord.startsSince(cursor.lastStartId, GENERATIONS_START_BATCH) : null;
     let gens = coord.liveGenerations();
@@ -320,8 +371,10 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       };
       const liveOf = (g: GenRow | null): StartFacts['live'] => g === null ? null
         : { state: g.state, reportedAt: g.startReportedAt, rowIncarnation: g.rowIncarnation, lane: g.lane };
+      const identityFor = (sessionId: string): string => identityOf(sessionId, fact);
       const mintInput = (s: StartRow, v: Extract<StartVerdict, { mint: true }>): MintInput => ({
-        identity: s.sessionId, sessionId: s.sessionId, role: v.role, term: GENERATIONS_TERM, rowIncarnation: s.rowIncarnation,
+        identity: identityFor(s.sessionId), sessionId: s.sessionId, role: v.role,
+        term: identityFor(s.sessionId) === 'overlord' && fact.kind === 'row' ? fact.term : GENERATIONS_TERM, rowIncarnation: s.rowIncarnation,
         startId: s.id, startReportedAt: s.reportedAt, resumed: v.resumed, model: s.model, lane: v.lane, host: null,
         outcome: v.outcome, mono: clock.mono(), proc: deps.proc, now,
       });
@@ -335,7 +388,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         let cursorDone = false;
         for (const [i, { start: s, newest }] of plan.judged.entries()) {
           const last = i === plan.judged.length - 1;
-          const liveGen = gens.rows.find((g) => g.identity === s.sessionId) ?? null;
+          const liveGen = gens.rows.find((g) => g.identity === identityFor(s.sessionId)) ?? null;
           const verdict = startVerdict({
             source: s.source, uuid: s.uuid, reportedAt: s.reportedAt, rowIncarnation: s.rowIncarnation,
             registry: registryOf(s.sessionId), role: roleFor(s.sessionId), newest, live: liveOf(liveGen),
@@ -370,7 +423,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
       if (!passed.ok) fail('cursor', passed.detail, 'the batch ran, and no coordinator\'s first generation is minted');
       else if (!stopped && gens.ok && openCoordinators !== 'unmeasured') {
         for (const id of openCoordinators) {
-          if (gens.rows.some((g) => g.identity === id)) continue;
+          if (gens.rows.some((g) => g.identity === identityFor(id))) continue;
           const role = roleFor(id);
           if (role.kind !== 'role' || role.role !== 'coordinator') continue;
           const mine = coord.startsOf(id, FIRST_MINT_LOOKBACK);
@@ -463,24 +516,51 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
   // ---- THREE: the `renewalDue` answer is recorded for every generation whose `state` is at rest (`active` or `degraded`),
   // whatever a shadow walk holds (review 2003 F1).
   const gens = coord.liveGenerations();
+  // The PreCompact field's retraction (ruling F2 on review 2312): it walks the registry rows that carry the field, not only
+  // the live generations, and a shadow pass plans it too, so the field never outlives the row's setting or its generation.
+  retract.push(...precompactRetractions(input.registry ?? [], live, gens.ok ? new Set(gens.rows.map((g) => g.sessionId)) : null));
   if (!gens.ok) { fail('generations', gens.detail, 'no due is recorded'); return result(); }
+  // The operator's Renew now requests after the lane's own cursor (slug renew-request-read-by-cursor): a request sets
+  // `renewNow` for its session's generation, and the cursor rides the last due write that reads one, so a request is read
+  // once. Requests no judged generation reads (one already walking, or ended) are passed over with the cursor. Only a request
+  // pressed while the row was live is read as one, and only on a live pass (ruling F1 on review 2312): a shadow press, or a
+  // live press read once the row is lowered, is passed over with the cursor and logged, so it never renews, then or later.
+  const reqCursor = coord.generationsCursor(RENEW_REQUESTS_CURSOR);
+  const reqs = reqCursor.ok ? coord.renewRequestsAfter(reqCursor.lastStartId, RENEW_REQUEST_BATCH) : null;
+  if (!reqCursor.ok) fail('cursor', reqCursor.detail, 'no Renew now request is read');
+  else if (reqs !== null && !reqs.ok) fail('renew-requests', reqs.detail, 'no Renew now request is read');
+  const requested = new Set(live && reqs !== null && reqs.ok ? reqs.rows.filter((r) => r.live).map((r) => r.sessionId) : []);
+  for (const r of reqs !== null && reqs.ok ? reqs.rows : []) {
+    if (!live || !r.live) deps.log(`ccrc-server: generations: shadow: ${r.sessionId} Renew now ${r.id} read; pressed or read in shadow, so nothing renews`);
+  }
+  const lastReq = reqs !== null && reqs.ok ? reqs.rows.at(-1) : undefined;
+  const reqAdvance = reqCursor.ok && lastReq !== undefined ? { lane: RENEW_REQUESTS_CURSOR, from: reqCursor.lastStartId, to: lastReq.id } : null;
+  const readers = gens.rows.filter((g) => judgedForDue(g) && requested.has(g.sessionId));
   for (const g of gens.rows) {
     if (!judgedForDue(g)) continue;
     const wave: Reading<boolean> = g.role !== 'coordinator' ? { kind: 'unmeasured', why: 'not a coordinator' } : (() => {
       const runs = newestClaimedWorkRuns(coord, g.identity);
       return runs.ok ? { kind: 'measured', value: waveBoundaryOf(runs.runs) } : { kind: 'unmeasured', why: runs.detail };
     })();
-    const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass')));
+    const renewNow = renewNowStands(requested.has(g.sessionId), g.dueWhy, live);
+    const d = D.renewalDue(renewalInputsOf(g, input.readings.get(g.id), wave, now, probeFailed.get(g.id) ?? later('probes unread this pass'),
+      input.orgOf, renewNow));
     if (d.due) due += 1;
     if (d.blind.length > 0) blind += 1;
     coord.setGenerationDue(g.id, genExpectOf(g), d.due
-      ? { due: true, why: d.why, cls: d.cls, at: now, observedMs: g.observed.ms } : { due: false }, d.blind);
+      ? { due: true, why: d.why, cls: d.cls, at: now, observedMs: g.observed.ms } : { due: false }, d.blind,
+      g === readers.at(-1) ? reqAdvance : null);
   }
+  if (reqAdvance !== null && readers.length === 0) coord.advanceCursor(reqAdvance);
 
   // ---- FOUR: the renewal walk (the header): each live generation's ordered events, then a `clearing` one's owed `renew`.
   const walk = coord.liveGenerations();
   if (!walk.ok) { fail('generations', walk.detail, 'no renewal step is fed'); return result(); }
   const overlord = overlordReadingOf(walk.rows, live);
+  const softMode = input.softMode ?? renewalModeOf(coord.renewalModeSetting()) ?? RENEWAL_MODE_DEFAULT;
+  // The marks as they stand after step ONE aged them, read once and only for a pass with a soft due to permit.
+  let marksNow: readonly MarkReading[] | 'unmeasured' | null = null;
+  const marks = (): readonly MarkReading[] | 'unmeasured' => (marksNow ??= marksOf(coord.operatorMarks()));
   for (const g0 of walk.rows) {
     let g = g0;
     const eff = effectiveGeneration(g, live);
@@ -492,7 +572,7 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
         isCoordinator: g.role === 'coordinator', cls: g.dueClass, canRenew: input.canRenew === true, overlord,
         roleChanged: g.role === 'coordinator' && !(roleNow.kind === 'role' && roleNow.role === 'coordinator'),
         holdOff: holdOffStands(softTimesOf(g)),
-        soft: g.dueClass === 'soft' ? D.softRenewalMay(softInputsOf(coord, g, r, overlord, input.softMode ?? 'when-away')) : { start: true },
+        soft: g.dueClass === 'soft' ? D.softRenewalMay(softInputsOf(coord, g, r, overlord, softMode, marks())) : { start: true },
       });
       if (permit.feed) due = { cls: permit.cls }; else waits[permit.waitFor] = (waits[permit.waitFor] ?? 0) + 1;
     }
@@ -540,8 +620,26 @@ export function generationsPass(deps: GenerationsDeps, input: GenerationsInput):
     if (calls !== null && !calls.ok) { fail('generations', calls.detail, `generation ${g.id}'s renew waits for the next pass, and`); continue; }
     const owed = calls === null ? null : renewOwed('clearing', g.attempts, calls.calls.map((c) => c.try));
     if (owed !== null) planned.push({ target: targetOf(g), act: { kind: 'renew', try: owed } });
+    // The PreCompact arm's field (the hand-offs piece, Task 6; slug precompact-field-from-the-budget): `precompactField` of the
+    // soft budget's count, planned only when it differs from what the registry read, and never over a field it could not
+    // read or from a count it could not read. Live only (this loop's `live` check above); a field that outlives the row's
+    // setting or its generation is retracted by step THREE's `precompactRetractions`.
+    const reg = registry.get(g.sessionId);
+    const have = reg === undefined || reg.precompact === undefined ? 'unread' : reg.precompact;
+    const used = softRenewalsInWindowOf(coord, g);
+    if (have !== 'unread' && Number.isInteger(used)) {
+      const want = precompactField(used);
+      if (have !== want) planned.push({ target: targetOf(g), act: { kind: 'precompact-field', value: want } });
+    }
   }
   return result();
+}
+
+/** The soft renewals of the identity's line within the budget's window of observed time (the accumulator carries across
+ *  mints); NaN when they could not be read, which is not a count. `softRenewalMay`'s count and `precompactField`'s. */
+function softRenewalsInWindowOf(coord: Pick<GenerationsCoord, 'softRenewalsOf'>, g: GenRow): number {
+  const stamps = coord.softRenewalsOf(g.identity, g.term);
+  return stamps.ok ? stamps.observedMs.filter((at) => g.observed.ms - at < SOFT_BUDGET.windowMs).length : Number.NaN;
 }
 
 /** Where a degraded generation's item stands (`ItemStanding`): only a coordinator has a programme to raise it on. */
@@ -575,20 +673,29 @@ function overlordReadingOf(rows: readonly GenRow[], live: boolean): OverlordGene
   return o === undefined ? 'none' : effectiveGeneration(o, live).state;
 }
 
+/** The marks as step ONE read them, for `operatorQuietOf`: `unmeasured` when that read failed. */
+const marksOf = (read: ReturnType<GenerationsCoord['operatorMarks']>): readonly MarkReading[] | 'unmeasured' => read.ok ? read.rows : 'unmeasured';
+
+/** A coordinator's programmes, the open runs it claims (`markProgrammesOf`, the prompt route's own rule, with no worker side). */
+function coordinatorProgrammes(coord: Pick<GenerationsCoord, 'bindingsOf'>, identity: string): readonly string[] | 'unmeasured' {
+  try { return markProgrammesOf(coord.bindingsOf(identity).claimant(), { ok: true, siblings: [] }); } catch { return 'unmeasured'; }
+}
+
 /** `softRenewalMay`'s inputs from stored columns and measured readings (ruling R4, slug gather-in-the-act-lane): the observed
  *  times (`softTimesOf`), the soft renewals of the identity's line within the budget's window of observed time (the
- *  accumulator carries across mints), the hold table's drain, and the operator mark `unmeasured` until the renewal hand-offs
- *  piece brings it. A count that could not be read is not a count, so the decider waits `unmeasured`. */
-function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf'>, g: GenRow, r: GenReadings | undefined,
-  overlord: OverlordGenerationReading, mode: SoftInputs['mode']): SoftInputs {
-  const stamps = coord.softRenewalsOf(g.identity, g.term);
-  const inWindow = stamps.ok ? stamps.observedMs.filter((at) => g.observed.ms - at < SOFT_BUDGET.windowMs).length : Number.NaN;
+ *  accumulator carries across mints), the hold table's drain, and, for a coordinator, the `operator-at-programme` mark of
+ *  its programmes (`operatorQuietOf`; the hand-offs piece). A count that could not be read is not a count, so the decider
+ *  waits `unmeasured`. */
+function softInputsOf(coord: Pick<GenerationsCoord, 'softRenewalsOf' | 'bindingsOf'>, g: GenRow, r: GenReadings | undefined,
+  overlord: OverlordGenerationReading, mode: SoftInputs['mode'], marks: readonly MarkReading[] | 'unmeasured'): SoftInputs {
+  const inWindow = softRenewalsInWindowOf(coord, g);
   const na: SoftReading<number> = { kind: 'not-applicable' };
   return {
     role: g.role,
     hibernateHold: r?.drain ?? { held: true, reason: 'unmeasured' },
     readersRunning: g.role === 'coordinator' ? na : later('W1'),
-    operatorQuietObservedMs: g.role === 'coordinator' ? later('operator-mark') : g.role === 'overlord' ? later('W1') : na,
+    operatorQuietObservedMs: g.role === 'coordinator' ? operatorQuietOf(coordinatorProgrammes(coord, g.identity), marks)
+      : g.role === 'overlord' ? later('W1') : na,
     placeHiddenObservedMs: g.role === 'overlord' ? later('W1') : na,
     ...r?.soft,
     mode, ...softTimesOf(g), softRenewalsInWindow: inWindow, overlordOutsideActive: !overlordFirst(overlord),
@@ -672,7 +779,7 @@ const W1 = later('W1');
 /** The gather's readings, as `renewalDue`'s inputs. Every reading that is not a fresh measurement reaches the decider as
  *  unmeasured with its reason: a stale sidecar is unmeasured, never a reading below the cap. */
 export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Reading<boolean>, nowMs: number,
-  probeFailedUnfixed: Reading<boolean>): RenewalInputs {
+  probeFailedUnfixed: Reading<boolean>, orgOf: OrgOf = () => null, renewNow = false): RenewalInputs {
   const unread = later('unread this pass');
   const usage = (pick: 'ctxTokens' | 'ctxWindow'): Reading<number> => usageReading(r, pick);
   const compactions = ((): Reading<number> => {
@@ -693,17 +800,32 @@ export function renewalInputsOf(g: GenRow, r: GenReadings | undefined, wave: Rea
     if (g.model === null || g.prevModel === null) return later('model unknown');
     return { kind: 'measured', value: { resumed: true, otherClass: familyClassOf(g.model) !== familyClassOf(g.prevModel) } };
   })();
+  // Table 3 of the account organization plan: the relation of this generation's account to the previous one's. An unknown
+  // relation is unmeasured, never "same" (slug unknown-org-is-no-preference), and blinds `resumed-other-org` alone.
+  const startOtherOrg = ((): Reading<boolean> => {
+    if (!g.resumed) return { kind: 'measured', value: false };
+    if (g.prevLane === null) return later('previous account unknown');
+    if (g.lane === null) return later('account unknown');
+    const rel = orgRelation({ id: g.lane, org: orgOf(g.lane) }, { id: g.prevLane, org: orgOf(g.prevLane) });
+    return rel === 'unknown' ? later('organization unknown') : { kind: 'measured', value: rel === 'other' };
+  })();
   return {
     role: g.role, contextTokens: usage('ctxTokens'), windowTokens: usage('ctxWindow'), fittedCeilingTokens: W1, turns: W1,
     compactions, idleMs, backstopDue: W1, installBehind: r === undefined ? unread : r.behind,
-    probeFailedUnfixed, modelDrift: W1, startResumed, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
+    probeFailedUnfixed, modelDrift: W1, startResumed, startOtherOrg, entryRetired: W1, termRaised: W1, accountOutsideSet: W1,
     classUnservable: W1, accountLoadMove: W1, compactionRefused: later('compaction'), classChanged: W1, evaluationDue: W1,
-    notLocal: W1, waveBoundary: wave, renewNow: false,
+    notLocal: W1, waveBoundary: wave, renewNow,
+    ...definedOf(r?.w1),
   };
 }
 
+/** The renewal readings the wiring answered, without a key it left undefined: an absent field keeps its `W1` default. */
+function definedOf(w1: Partial<W1Inputs> | undefined): Partial<W1Inputs> {
+  return Object.fromEntries(Object.entries(w1 ?? {}).filter(([, v]) => v !== undefined)) as Partial<W1Inputs>;
+}
+
 /** One usage figure from a fresh sidecar, or why it is unmeasured: a stale sidecar is unmeasured, never a reading. */
-function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow'): Reading<number> {
+export function usageReading(r: GenReadings | undefined, pick: 'ctxTokens' | 'ctxWindow'): Reading<number> {
   if (r === undefined) return later('unread this pass');
   if (r.usage.kind !== 'reading') return later(`usage ${r.usage.kind}`);
   if (r.usage.usage.stale) return later('usage stale');
@@ -740,7 +862,7 @@ function ctxReading(r: GenReadings | undefined): Reading<CtxReading> {
 function probeFactsOf(coord: Pick<GenerationsCoord, 'snapshotFacts' | 'liveNotes' | 'mailForRecipient'>, g: GenRow, kind: ProbeRoundKind,
   snapshotId: string | null, now: number): CardFacts | string {
   if (kind === 'spot') {
-    const notes = coord.liveNotes(g.identity);
+    const notes = coord.liveNotes(g.sessionId); // keyed by session id, as the note door writes (review 2349 F2)
     if (!notes.ok) return notes.detail;
     let mail: CardMail[];
     try {
@@ -784,6 +906,9 @@ export interface GatherPorts {
   /** The hold table's drain for a session (`drainVerdict` over its row and live reads). Absent: no drain is read, which
    *  holds as unmeasured. */
   drainOf?(id: string): Promise<DrainRead>;
+  /** The renewal readings for one generation (`renewalReadingsOf`), over the base readings of the same sample. Absent: every
+   *  W1 field keeps its default. */
+  w1?(g: GenRow, base: GenReadings): Promise<Pick<GenReadings, 'w1' | 'soft'>>;
 }
 
 /** The compactions last read per session and the stamp they were read at: a read cache, never a decision's memory. */
@@ -827,7 +952,9 @@ export async function gatherGenerationReadings(coord: Pick<GenerationsCoord, 'li
       : release.kind === 'unreadable' ? later('install record unreadable')
       : started === null ? later('process start unmeasured') : { kind: 'measured', value: startedBeforeRelease(started, release.at) };
     const drain = ports.drainOf !== undefined && drainRead(g) ? await ports.drainOf(id) : undefined;
-    out.set(g.id, drain === undefined ? { usage, compactions, turn, behind } : { usage, compactions, turn, behind, drain });
+    const base: GenReadings = drain === undefined ? { usage, compactions, turn, behind } : { usage, compactions, turn, behind, drain };
+    const more = ports.w1 === undefined ? undefined : await ports.w1(g, base);
+    out.set(g.id, more === undefined ? base : { ...base, w1: more.w1, soft: more.soft });
   }
   for (const id of [...memo.keys()]) if (!targets.some((g) => g.sessionId === id)) memo.delete(id);
   return out;

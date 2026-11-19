@@ -4,6 +4,8 @@ import { FLEET_ROLES, type FleetRole } from '../../shared/fleetRoles.js';
 import * as roleOfModule from '../src/roleOf.js';
 import { ROLE_AMBIGUITIES, ROLE_FACTS_CHILD_AXIS, roleOf, sessionRoleOf, sessionRoleOfReading, type RoleAmbiguity, type RoleFacts, type RoleReading } from '../src/roleOf.js';
 import { roleFactsOfCases } from './sim/renewalDeciderSets.js';
+import { designationFactOfCases, identityOfCases } from './sim/designationSets.js';
+import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 
 const BASE: RoleFacts = { designation: 'none', auditBody: false, replayBody: false, child: { kind: 'none' },
   childRunKind: 'unmeasured', claimsOpenRun: 'no', declaredIntent: 'no' };
@@ -116,4 +118,38 @@ describe('SessionRole as a view of roleOf', () => {
 
 describe('roleFactsOf: the one assembly of a session\'s role facts (Overlord W1a, renewal deciders Task 0)', () => {
   for (const [name, fn] of Object.entries(roleFactsOfCases(roleOfModule))) it(name, fn);
+});
+
+describe('designationFactOf (Overlord W1 designation A, Task 3)', () => {
+  for (const [name, fn] of Object.entries(designationFactOfCases(roleOfModule))) it(name, fn);
+});
+describe('identityOf (X5)', () => {
+  for (const [name, fn] of Object.entries(identityOfCases(roleOfModule))) it(name, fn);
+});
+
+describe('designationFactFrom: every caller narrows a DesignationRead the same way', () => {
+  const view = (over: Partial<DesignationView>): DesignationView => ({
+    bound: null, pending: null, term: 4, designatedTerm: 1, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },
+    pastIds: [], actor: 'op', lastAttempt: null, stopsOwed: [], ...over,
+  });
+  const pending = (kind: 'designate' | 'rebind') => ({ sessionId: 'overlord-new-owl', kind, deadlineAt: 9, since: 1, actor: 'op', generation: null });
+  it('unmeasured stays unmeasured, for the caller to fail closed on', () => {
+    expect(roleOfModule.designationFactFrom({ kind: 'unmeasured', why: 'x' })).toBe('unmeasured');
+  });
+  it('no row is none', () => {
+    expect(roleOfModule.designationFactFrom({ kind: 'not-designated', row: null })).toEqual({ kind: 'none' });
+  });
+  it('a pending-only row is a row with no live id, carrying the pending id, its kind and the row term', () => {
+    const r: DesignationRead = { kind: 'not-designated', row: view({ pending: pending('designate') }) };
+    expect(roleOfModule.designationFactFrom(r)).toEqual({ kind: 'row', live: null, pending: 'overlord-new-owl', pendingKind: 'designate', term: 4 });
+  });
+  it('a retired row (no binding, no attempt) is a row with nothing live or pending', () => {
+    expect(roleOfModule.designationFactFrom({ kind: 'not-designated', row: view({}) }))
+      .toEqual({ kind: 'row', live: null, pending: null, pendingKind: null, term: 4 });
+  });
+  it('a live binding carries its id and term; a rebind attempt beside it is pending as well', () => {
+    const r: DesignationRead = { kind: 'designated', sessionId: 'overlord-quiet-otter', term: 4,
+      row: view({ bound: { sessionId: 'overlord-quiet-otter', generation: 'g1' }, pending: pending('rebind') }) };
+    expect(roleOfModule.designationFactFrom(r)).toEqual({ kind: 'row', live: 'overlord-quiet-otter', pending: 'overlord-new-owl', pendingKind: 'rebind', term: 4 });
+  });
 });

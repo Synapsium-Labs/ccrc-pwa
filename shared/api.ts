@@ -9293,6 +9293,12 @@ export interface LifecycleMeas {
    *  regular, empty file older than ccd's bound that no process holds), comma-joined; the tail removes them with the
    *  tree. Null: no stale lock passed, an older ccd, or another act. */
   readonly staleLock: string | null;
+  /** A `swap` row's landing relation to the account it left (account organization PR C, #2909): `_org_rel`'s word,
+   *  `same`, `other` or `unknown`. Null: an older ccd, or another act. */
+  readonly org: string | null;
+  /** A rescue's organization near miss (#2909): the lowest score of a `same` candidate that lost to a lower-scored
+   *  `other` landing, as digits. Null: none, a move that was not a rescue, an older ccd, or another act. */
+  readonly orgnear: string | null;
 }
 
 /** Derived from the interface, never restated beside it — `LIFECYCLE_ACT_MAP`'s
@@ -9320,6 +9326,8 @@ const LIFECYCLE_MEAS_KEY_MAP: Record<keyof LifecycleMeas, true> = {
   witness: true,
   heldBy: true,
   staleLock: true,
+  org: true,
+  orgnear: true,
 };
 /** The one list `server/test/ccd-lifecycle-contain.test.ts` checks ccd's
  *  emitted keys against — imported, not re-typed, so the two sides cannot
@@ -12333,7 +12341,7 @@ export function backgroundOnlyRefusal(body: unknown): { count: number | null; ki
 
 /** One capability word the server advertises. Spelled once, as the keys of `SERVER_CAP_MAP`. */
 export type ServerCap = 'dispatch-live-gate-v1' | 'hook-main-state-v1' | 'ask-pairing-v1' | 'questions-v1' | 'review-rounds-v1' | 'goals-read-v1' | 'calls-v1' | 'plan-v1'
-  | 'timers-v1' | 'push-outbox-v1';
+  | 'timers-v1' | 'push-outbox-v1' | 'plan-phases-v1';
 
 /** Every word, with what it promises. The value is `true`; the promise is the comment, which a word's reader may
  *  rely on and nothing weaker. `PR_REASON_MAP`'s idiom: a word added to `ServerCap` and not here is TS2741. */
@@ -12400,6 +12408,11 @@ const SERVER_CAP_MAP: Readonly<Record<ServerCap, true>> = {
    *  hold-failure fallback send an unbound push, with no stamp. A claimed attempt is never retried. W3's hold arming reads
    *  it. Added by the change that moves every push behind the one sender, cut after every site writes rows. */
   'push-outbox-v1': true,
+  /** Programme work map WM0 (D-8715): `plan put` takes and stores `phases`, `plan show` answers them (`PlanView.phases`), and
+   *  this server answers `POST /api/programmes/:slug/plan/phases/refs` (`plan phase-ref`: add, remove, carry; `unknown-ref`,
+   *  `bad-carry`). `ccrc-api plan phase-ref` refuses `capability-missing`, unsent, when a current cap file omits this word.
+   *  Added by the change that builds the route and the client row, cut after them. */
+  'plan-phases-v1': true,
 };
 
 /** The words this server advertises, in `GET /health`'s `caps`, and in the file a `server` or `both` node writes. */
@@ -13220,7 +13233,7 @@ export const DELEGATION_SPOOL_BOUNDS = {
  *  it by `ccd-spawn-child-settings.test.ts`. One `|`-joined string, not eight quoted literals, for the reason that
  *  list gives: the verb censuses count a quoted verb as a composer of it, and this list composes nothing. */
 const CHILD_DENY_CCD_VERBS: readonly string[] =
-  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
+  'ws-rm|ws-reap|ws-gc --prune|ws-archive|ws-restore|ws-reclaim|ws-expire|ws-collect|ws-orphan|scratch-rescue|ws-shed-deps|keep-awake|ws-lease-mark|delegation-adopt|roll|claude'.split('|');
 
 /** Whether the deny file also names each verb's path-qualified forms (`Bash(*\/ccd ws-rm:*)`,
  *  `Bash(~/.local/bin/ccd ws-rm:*)` and the like). FALSE until plan Task 13 records, on the rig, that Claude Code's
@@ -13472,7 +13485,8 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
  *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
  *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
- *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, nor one the installer's
+ *                        digest history names (approvals PR 0), or its `.childshell`
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
@@ -13482,6 +13496,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `approval-unreadable` the row could not be read back.
  *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
  *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `deny-not-current`    an allow of a row whose child runs under older deny rules than the box's (approvals PR 0).
  *  `declined`            the claimant handed this row over and may not rule it later.
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
@@ -13489,7 +13504,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
 export const APPROVAL_REFUSALS = [
   'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
   'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
-  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+  'guard-forbidden', 'guard-escalate', 'deny-not-current', 'declined', 'hook-gone', 'already-ruled',
 ] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
 
@@ -13833,7 +13848,8 @@ export function credentialMaskSource(id: CredentialMaskId): string {
   return CREDENTIAL_MASKS.find((m) => m.id === id)!.source;
 }
 
-/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513). */
+/** What a masked credential reads as, everywhere session-derived text leaves the server (D-5513), except the drawer
+ *  (`DRAWER_SECRET_MASK`, D-8694). */
 export const SECRET_MASK = '‹secret masked›';
 /** What the rest of a text reads as once it holds more candidate runs than the exact-bytes check's hard ceiling: the
  *  check fails closed, so no run is ever passed through unchecked (D-5513). */
@@ -13904,10 +13920,13 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6), `~`-anchored: Read (and Bash) of the first seven, writes under the last two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1), `~`-anchored: Read (and Bash) of every one of these thirteen, writes under `ACCOUNT_WRITE_DIRS`' two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
-  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**'];
+  ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
+   // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
+   '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
+   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*'];
 export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
@@ -14223,11 +14242,12 @@ export interface AccountSwitchAnswer {
  *  `auth-in-progress`   a sign-in for the lane is in flight (409, spec §3.9).
  *  `not-a-token-lane`   a stated account for a sign-in lane, whose account `check` measures (409).
  *  `duplicate-id`       the verb found the id taken although the server's roster did not hold it (409): a race the
- *                       reconcile settles. */
+ *                       reconcile settles.
+ *  `org-looks-like-an-id` an organization label shaped like an organization id (400, account organization A3). */
 export const ACCOUNT_WRITE_REFUSALS = [
   'key-charset', 'confirm-mismatch', 'not-discardable', 'lane-exists', 'bad-stated', 'token-unverified',
   'config-dir-exists', 'live-sessions', 'sleeping-sessions', 'upstream', 'last-home-able', 'auth-in-progress',
-  'not-a-token-lane', 'duplicate-id',
+  'not-a-token-lane', 'duplicate-id', 'org-looks-like-an-id',
 ] as const;
 export type AccountWriteRefusal = (typeof ACCOUNT_WRITE_REFUSALS)[number];
 

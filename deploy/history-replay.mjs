@@ -296,7 +296,7 @@ export function paneRefusal(env) {
 const liveChildren = new Map();
 /** The signal that stopped the driver (its name), or null. main resets it at entry. */
 let stopping = null;
-const STOP_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
+export const STOP_SIGNALS = Object.freeze(['SIGINT', 'SIGTERM', 'SIGHUP']);
 const STOP_GRACE_MS = 5_000;
 
 /** Signal a child's whole group. ESRCH (already gone) is the expected answer and any other failure leaves nothing more
@@ -312,7 +312,7 @@ function signalGroup(pid, sig) {
 
 /** main's handler for SIGINT, SIGTERM and SIGHUP: the first signal names the stop; every group gets SIGTERM; the groups
  *  still registered after the grace get SIGKILL (read at that moment, not a snapshot). */
-function onStopSignal(sig) {
+export function onStopSignal(sig) {
   if (stopping === null) stopping = sig;
   for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGTERM');
   setTimeout(() => { for (const pid of liveChildren.keys()) signalGroup(pid, 'SIGKILL'); }, STOP_GRACE_MS).unref();
@@ -341,7 +341,7 @@ async function yieldToSignals() {
  *  recorded (its run.json is written), and the subcommand then refuses at its next check. A signal that arrives after
  *  runBatch's last check is not answered (the post-last-check window, named in the header above). A run stopped in
  *  flight is still charged once, by its spend line. */
-function refuseIfStopping() {
+export function refuseIfStopping() {
   if (stopping !== null) refuse('interrupted', `${stopping} received; no spawn starts after this, and no run.json, step0a.json or probe.json is written`);
 }
 
@@ -891,7 +891,7 @@ export function spendTokens(facts) {
 /** The largest ledger or stream the driver reads back. */
 const OUT_STREAM_CAP = 256 * 1024 * 1024;
 /** The largest run.json, or --step0a input, the driver reads. */
-const OUT_JSON_CAP = 16 * 1024 * 1024;
+export const OUT_JSON_CAP = 16 * 1024 * 1024;
 
 /** Read the regular file at `p`, whole and no larger than `cap` bytes.
  *  - `{state: 'absent'}` when nothing is there (ENOENT at the lstat, or at the open if it went in between);
@@ -902,7 +902,7 @@ const OUT_JSON_CAP = 16 * 1024 * 1024;
  *  Nothing but a regular file is ever opened for read.
  *  @param {string} p  @param {number} cap  @param {boolean} [follow] W2-D69: follow a link to what it names, as Claude Code reads a CLAUDE.md, still opening nothing but a regular file and never blocking on a FIFO (O_NONBLOCK). Every --out read leaves it false.
  *  @returns {{state: 'absent'} | {state: 'bytes', bytes: Buffer} | {state: 'bad', why: 'not-regular' | 'over-cap' | 'unreadable', code?: string}} */
-function readPlain(p, cap, follow = false) {
+export function readPlain(p, cap, follow = false) {
   const unreadable = (e) => ({ state: 'bad', why: 'unreadable', code: String(e?.code ?? 'EUNKNOWN') });
   let st;
   try {
@@ -1051,7 +1051,7 @@ function writeWhole(fd, bytes, tmp, rel) {
 /** Write `bytes` to `<out>/<rel>` whole: a target that exists and is not a regular file refuses `out-refused`; the bytes
  *  go to a tmp file `<rel>.tmp-<pid>` created exclusively, mode `mode`, then a rename, so no write follows a link.
  *  @param {string} out  @param {string} rel  @param {string | Buffer} bytes  @param {number} [mode] */
-function writePlain(out, rel, bytes, mode = 0o600) {
+export function writePlain(out, rel, bytes, mode = 0o600) {
   const p = path.join(out, rel);
   const have = lstatOrNull(out, rel);
   if (have !== null && !have.isFile()) refuse('out-refused', `${rel} is not a regular file`);
@@ -1072,7 +1072,7 @@ function writePlain(out, rel, bytes, mode = 0o600) {
  *  0700, non-recursively; a mkdir that fails (a directory nobody may write into) refuses `out-refused`
  *  `<path so far> unwritable <code>`.
  *  @param {string} out  @param {string} rel */
-function ensurePlainDir(out, rel) {
+export function ensurePlainDir(out, rel) {
   let cur = out;
   let sofar = '';
   for (const seg of rel.split('/')) {
@@ -1467,7 +1467,7 @@ function writePidRecord(out, name, pid) {
 /** lstat `<out>/<rel>`, answering null for ENOENT. Every caller is under --out, so any other failure (unmeasured never
  *  reads as absent) refuses `out-refused` `<rel> unreadable <code>`, never a raw errno (D-5986).
  *  @param {string} out  @param {string} rel */
-function lstatOrNull(out, rel) {
+export function lstatOrNull(out, rel) {
   try {
     return lstatSync(path.join(out, rel));
   } catch (e) {
@@ -1695,7 +1695,7 @@ function requireClaim(who, opts, outs) {
 /** The outcome of a job whose run.json exists (resume), or null when it has none. A run.json that does not
  *  parse, one recorded for another account, mode, model or settings mode, or a stream whose bytes changed since,
  *  refuses: a resumed batch builds on what was recorded, and only for the job that recorded it. */
-function finishedOutcome(job) {
+export function finishedOutcome(job) {
   const { streamPath, runJsonPath } = runPaths(job.out, job.name);
   refuseLinkedDirs(job.out, job.name);   // D-5986: before run.json or the stream is read
   const runJson = readPlain(runJsonPath, OUT_JSON_CAP);   // D-5986: a FIFO or a link there refuses, never blocks or follows
@@ -2368,7 +2368,7 @@ const STEP0A_REQUIRED = Object.freeze(['out', 'account', 'budget', 'writer-model
  *  that does while the spelling given did not, and the realpath is what spawnEnv receives. Called right after prepareOut,
  *  before any roster read or spawn.
  *  @param {string} out prepareOut's answer */
-function refuseColonInRealOut(out) {
+export function refuseColonInRealOut(out) {
   if (out.includes(':')) refuse('args-invalid', "out contains ':'");
 }
 
@@ -2379,7 +2379,7 @@ function refuseColonInRealOut(out) {
  *  runs. The TypeErrors stay as defence.
  *  @param {string} home  @param {string} outArg
  *  @param {ReadonlyArray<readonly [string, unknown]>} models flag name and value */
-function refuseUnusableInputs(home, outArg, models) {
+export function refuseUnusableInputs(home, outArg, models) {
   if (home.includes(':')) refuse('args-invalid', "HOME contains ':'");
   if (path.resolve(outArg).includes(':')) refuse('args-invalid', "out contains ':'");
   for (const [flag, value] of models) {
@@ -2577,7 +2577,7 @@ const bashCommandOf = (input) => (input !== null && typeof input === 'object' &&
  *  permission denial names one of them, by tool_use_id or by its input (`denied`), and whether any of their
  *  tool_results is an error (`tool_error`, null when none came back). `result_seen` says whether the stream
  *  holds a result event carrying `permission_denials` at all: without one, `denied: false` measured nothing. */
-function probeFindingOf(facts, command) {
+export function probeFindingOf(facts, command) {
   const calls = facts.toolPairs.filter((p) => p.name === 'Bash' && bashCommandOf(p.input) === command);
   const ids = new Set(calls.map((p) => p.id));
   const denials = Array.isArray(facts.permissionDenials) ? facts.permissionDenials : [];
@@ -2600,7 +2600,7 @@ function writeProbeJson(out, value) {
 }
 
 /** The sha256 of the bytes `<out>/<rel>` holds now, read back through readPlain (D-5986). */
-function shaOfPlain(out, rel) {
+export function shaOfPlain(out, rel) {
   const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
   if (read.state !== 'bytes') refuse('out-refused', `${rel} is not a regular file`);
   return sha256Hex(read.bytes);
@@ -4686,7 +4686,7 @@ function pinWriterInput(out, rel, text) {
  *  input, nor reads an id as another pair); a path that is not a regular file refuses as every read under --out does
  *  (D-5986). One function, so the three pins are one spelling.
  *  @param {string} out  @param {string} rel  @param {string} text  @param {string} what */
-function pinOutBytes(out, rel, text, what) {
+export function pinOutBytes(out, rel, text, what) {
   const read = readPlain(path.join(out, rel), OUT_JSON_CAP);
   if (read.state === 'absent') { writePlain(out, rel, text); return; }
   if (read.state === 'bad') refuse('out-refused', `${rel} ${badWord(read)}`);
@@ -4697,7 +4697,7 @@ function pinOutBytes(out, rel, text, what) {
  *  part 1 no validator has read it yet. One function, so the sourcing subcommands can ask it before prepareOut makes
  *  --out, and a refused model leaves no --out (R10); openWriter asks it again, for every other caller.
  *  @param {unknown} model */
-function refuseWriterModel(model) {
+export function refuseWriterModel(model) {
   refuseOpusModel('writer-model', model);
 }
 
@@ -4705,7 +4705,7 @@ function refuseWriterModel(model) {
  *  EXACT_MODEL_ID_RE and OPUS_MODEL_RE), refused `args-invalid` under the flag that names the role, before admission and
  *  any spawn. One function, so the writer's check and the judge's are one spelling.
  *  @param {string} flag  @param {unknown} model */
-function refuseOpusModel(flag, model) {
+export function refuseOpusModel(flag, model) {
   if (typeof model !== 'string' || !EXACT_MODEL_ID_RE.test(model) || !OPUS_MODEL_RE.test(model)) {
     refuse('args-invalid', `${flag} ${JSON.stringify(model)} is not an exact Opus model id`);
   }
@@ -5324,7 +5324,7 @@ function loadInputs(flags, name, cap = OUT_JSON_CAP) {
 /** A frozen list (the quiz's by default; W2-5b1 Task 4 reads the pilot's) (W2-D73) through Task 6's one reader, loadFrozenList (its sha checked before a byte is parsed,
  *  quiz-sha-mismatch; its bytes the canonical list their own fields give, input-invalid), after loadInput's git-tree
  *  rule (W2-D25); and its families. */
-function loadFrozen(p, sha256, section = 'quiz') {
+export function loadFrozen(p, sha256, section = 'quiz') {
   if (typeof p !== 'string' || p === '') refuse('args-invalid', '--frozen names no path');
   const g = insideGitTree(path.dirname(path.resolve(p)));
   if (g.state === 'inside') refuse('input-invalid', `frozen in-git-tree ${g.at}`);
@@ -5397,7 +5397,7 @@ export function recheckCode(record, root = TREE_ROOT, opts = {}) {
   return v.stamps;
 }
 
-function subcommandHome(env) {
+export function subcommandHome(env) {
   if (typeof env.HOME !== 'string' || !path.isAbsolute(env.HOME)) refuse('args-invalid', 'HOME is unset or not absolute');
   return path.resolve(env.HOME);
 }
@@ -5416,12 +5416,12 @@ function requireNamedNode(record, storeId) {
   if (!record.nodes.some((n) => n.store_id === storeId)) refuse('input-invalid', `store ${storeId} is not one of the record's nodes`);
 }
 /** A sourced entry as the frozen list takes it: its eleven W2-D73 fields, its rank left behind. */
-const frozenEntryOf = (e) => Object.fromEntries(FROZEN_ENTRY_KEYS.map((k) => [k, e[k]]));
+export const frozenEntryOf = (e) => Object.fromEntries(FROZEN_ENTRY_KEYS.map((k) => [k, e[k]]));
 /** The pilot's caps: part 1's quiz caps as the open record's defaults give them (the pilot runs before part 1; W2-D71). */
 const pilotCaps = () => Object.fromEntries(['family', 'boundary', 'kind_per_family'].map((k) => [k, DRAFT_SPEC.quiz.fields.caps.fields[k].value]));
 /** One warning line when any writer run failed (R6): a non-zero exit, a signal or no result event. Each such run's
  *  candidate is counted writer-malformed, so a failing account would otherwise drain the population quietly. */
-function warnFailedRuns(counts) {
+export function warnFailedRuns(counts) {
   const n = counts?.writer?.failed_runs ?? 0;
   if (n > 0) process.stderr.write(`ccrc history-replay: warning: ${n} writer run(s) failed (a non-zero exit, a signal or no result event); each is counted writer-malformed\n`);
 }
@@ -5944,7 +5944,7 @@ function refuseWriterAdmission({ home, accountId, budget, limits, quotas, settin
  *  as a stamp, as the batch preflight does; the writer passes none, so its words and order are unchanged. Writes nothing.
  *  @param {{ home: string, accountId: string, limits: { threshold_pct: number, max_age_ms: number }, expected: object,
  *    allowCodeChange?: boolean }} o */
-function refuseSpawnAdmission({ home, accountId, limits, expected, allowCodeChange = false }) {
+export function refuseSpawnAdmission({ home, accountId, limits, expected, allowCodeChange = false }) {
   const { json, roster } = readRoster(home);
   const launch = admitAccount(json, roster, accountId, home);
   const wrapperSha256 = wrapperSha(launch);
@@ -7048,7 +7048,7 @@ export function armNodeOf(run, storeId) {
   return { questions, nAll, account: r.account, expected, budget, spendBudget, limits: r.limits, settingsMode: run.settingsMode };
 }
 /** One arm run (W2-D50): the family's id as CCRC_RECALL_SESSION, the arm, and boundary N as CCRC_RECALL_ASOF. */
-function armJob(ctx, q, arm, attempt, stdin, move = null) {
+export function armJob(ctx, q, arm, attempt, stdin, move = null) {
   const job = { launch: ctx.launch, mode: 'arm', model: ctx.model, settingsMode: ctx.settingsMode,
     recall: { session: q.ccrc_id, arm, asof: q.boundary_uuid }, stdin, out: ctx.out, name: armRunName(ctx.section, q.qid, arm, attempt, move), lang: ctx.lang };
   return ctx.timeoutMs === undefined ? job : { ...job, timeoutMs: ctx.timeoutMs };
@@ -7056,7 +7056,7 @@ function armJob(ctx, q, arm, attempt, stdin, move = null) {
 /** One arm's recorded attempts, each classified (W2-D80), its outcome and the attempt it owes next (null when settled).
  *  A recorded run is W2-4's finishedOutcome, which refuses a run recorded for another account, model or settings mode,
  *  or a changed stream; its exit code must be an integer or null, or classifyRun would throw (D-6309's rule). */
-function armAttemptsOf(ctx, q, arm, move = null) {
+export function armAttemptsOf(ctx, q, arm, move = null) {
   const attempts = [];
   for (let n = 1; n <= ARM_ATTEMPTS_MAX; n += 1) {
     const job = armJob(ctx, q, arm, n, '', move);
@@ -7140,7 +7140,7 @@ async function maskingAgreementOf(snapshots, site, build, agree) {
  *        quiz-unanswerable `<qid> payload <word>`, never dropping the question (D-6469);
  *  then preflightSpawn (R26): the wrapper's sha, the gate (W2-D55: the budget, then the limits row), and the one spawn,
  *  `--version`, with W2-D56's preflight against ctx.expected. Answers each pending (qid, arm)'s stdin and the version. */
-async function armBatchPreflight(ctx, pending) {
+export async function armBatchPreflight(ctx, pending) {
   const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
   const qs = pending.map((s) => s.q);
   requireListed(ctx.home, ctx.storeId, familiesOf(qs));   // W2-D78 (i)
@@ -7231,7 +7231,7 @@ function excludeOwedArms(ctx, s) {
  *  `tree-moved`, `wrapper-moved`, `code-changed` and the four unmeasured words; a measured code change is a stamp under
  *  `allowCodeChange`). Answers the measured version and the stamps.
  *  @returns {Promise<{ version: string, stamps: string[] }>} */
-async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange = false }) {
+export async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCodeChange = false }) {
   const wrapperSha256 = wrapperSha(launch);   // wrapper-unmeasured before any spawn
   gate();
   const version = await measureClaudeVersion(launch, out, lang);
@@ -7241,7 +7241,7 @@ async function preflightSpawn({ launch, home, out, lang, gate, expected, allowCo
   return { version: version.version, stamps: verdict.stamps };
 }
 /** How many batch manifests the section holds (Q14): 0 before its first. */
-function armBatchCount(ctx) {
+export function armBatchCount(ctx) {
   const rel = armBatchDir(ctx.section);
   const st = lstatOrNull(ctx.out, rel);
   if (st === null) return 0;
@@ -7257,7 +7257,7 @@ function armBatchCount(ctx) {
 /** Q14: the batch's manifest, written after its preflight and before its first spawn, never replaced: the version the
  *  preflight measured, the stamps in force, and each planned run with its stdin's sha. A run's version is the last
  *  manifest that names it (a recorded run is never planned again). */
-function writeArmManifest(ctx, version, planned) {
+export function writeArmManifest(ctx, version, planned) {
   const n = armBatchCount(ctx) + 1;
   ensurePlainDir(ctx.out, armBatchDir(ctx.section));
   const rel = `${armBatchDir(ctx.section)}/${String(n).padStart(4, '0')}.json`;
@@ -7286,7 +7286,7 @@ function answerRecordOf(ctx, s, a) {
 }
 /** Every settled question's two records, written once: a settled question's runs never change, so a record already there
  *  is left as it is; anything there that is not a regular file refuses out-refused (D-5986). */
-function settleAnswers(ctx, states) {
+export function settleAnswers(ctx, states) {
   for (const s of states) {
     if (s.state !== 'answered' && s.state !== 'run-failed') continue;
     ensurePlainDir(ctx.out, `${ctx.section}/answers`);
@@ -7976,7 +7976,7 @@ export function step0bStdinOf(card, p) {
 // ── measuring and acting ──
 /** Q11: the synthetic transcript path does not exist, measured before --out. A path that exists, or one whose lstat
  *  fails for another reason, refuses input-invalid: the denial probes would name a real file. */
-function refuseSyntheticPresent(p) {
+export function refuseSyntheticPresent(p) {
   try {
     lstatSync(p);
   } catch (e) {
@@ -7992,7 +7992,7 @@ function refuseSyntheticPresent(p) {
  *  card lines must agree (maskingAgreementOf, site step0b), or the preflight refuses input-invalid
  *  `masking-snapshots-disagree step0b` before any spawn or persistence, never masking with the newest reading. Answers
  *  the agreed card line. Called before --out and before every arm batch, for the pilot and the quiz section alike. */
-async function step0bCardOf(ctx) {
+export async function step0bCardOf(ctx) {
   const snapshots = maskingSnapshotsOf(ctx.rs, ctx.home);
   requireListed(ctx.home, ctx.storeId, familiesOf([ctx.q]));   // W2-D78 (i)
   refuseRecallOff(ctx.home, [ctx.q.ccrc_id]);   // W2-D78 (ii)
@@ -8006,7 +8006,7 @@ async function step0bCardOf(ctx) {
 }
 /** One run as the result records it: its outcome's code, signal and charge, its init session, its result subtype, its
  *  main-thread and total messages (R1), and every error field its events carried (Q31; W2-5b1 Task 4's errorFieldsOf). */
-function step0bRunOf(mode, o) {
+export function step0bRunOf(mode, o) {
   const read = readPlain(o.streamPath, OUT_STREAM_CAP);
   if (read.state !== 'bytes') refuse('out-refused', `run-stream-changed ${o.name}`);
   const f = o.facts;

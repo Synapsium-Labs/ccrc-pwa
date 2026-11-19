@@ -11,6 +11,8 @@ to the vocabularies the mechanism enforces, not the rows themselves.
 The held-out review panel (`references/review-panel.md`) is NOT routed by this table: its model
 and effort are literal in its script, whatever row the wave under review ran on.
 
+**Every brief for an Agent-tool subagent, a workflow `agent()` call or an implementer carries both sentences of `references/approval-prompts.md`, word for word.** A subagent never reads a skill, and it raises almost every permission prompt, so the literal-path rule and the prose-names line must sit in the brief itself.
+
 
 Keyed on the shape of the work, because that is what the evidence keys on; the lifecycle-stage
 tables circulating online have no primary source. Effort names do not correspond across classes,

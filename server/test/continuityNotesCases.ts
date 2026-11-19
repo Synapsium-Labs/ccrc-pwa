@@ -26,6 +26,7 @@ const ORDER: readonly KeyFact[] = ['live', 'unmeasured', 'not-yours', 'gone'];
 function expected(n: NotesModule.NoteInput, key: KeyFact, count: number | 'unmeasured', revised: NotesModule.RevisedFact): string {
   if (n.closes && n.revises === null) return 'bad-request';
   if (!n.closes && n.kind === 'thread' && isBlankText(n.next)) return 'bad-request';
+  if (!n.closes && (n.kind === 'miss') !== (n.key.kind === 'message')) return 'bad-request';
   if ([...n.waitsOn].length > NOTES_CAP.chars || [...n.next].length > NOTES_CAP.chars) return NOTE_REFUSALS.tooLong;
   if ((n.revises === null) !== (revised === 'not-revising')) return 'unmeasured';
   const facts = [...(revised === 'not-revising' ? [] : [revised]), ...(n.closes ? [] : [key])];
@@ -50,13 +51,23 @@ export function notesCases(m: Notes): Record<string, Case> {
       let n = 0;
       const pairs = [[texts[0]!, texts[1]!], [texts[2]!, 'x'], ['x', texts[2]!], [texts[3]!, texts[3]!], ['x', ' \t '], ['x', '\u200b\u2800']] as const;
       for (const key of KEY_FACTS) for (const revised of REVISED) for (const count of counts) for (const closes of [false, true])
-        for (const revises of [null, 7]) for (const kind of ['thread', 'caution'] as const) for (const [waitsOn, next] of pairs) {
-          const input = note({ kind, waitsOn, next, revises, closes });
-          expect(word(m.noteVerdict(input, key, count, revised)), JSON.stringify({ key, revised, count, closes, revises, kind, w: waitsOn.length, x: next.length }))
+        for (const revises of [null, 7]) for (const kind of ['thread', 'caution', 'miss'] as const)
+          for (const keyKind of ['run', 'message'] as const) for (const [waitsOn, next] of pairs) {
+          const input = note({ kind, waitsOn, next, revises, closes, key: { kind: keyKind, id: 11 } });
+          expect(word(m.noteVerdict(input, key, count, revised)), JSON.stringify({ key, revised, count, closes, revises, kind, keyKind, w: waitsOn.length, x: next.length }))
             .toBe(expected(input, key, count, revised));
           n += 1;
         }
-      expect(n).toBe(4 * 5 * 5 * 2 * 2 * 2 * 6);
+      expect(n).toBe(4 * 5 * 5 * 2 * 2 * 3 * 2 * 6);
+    },
+    'noteVerdict: a miss is keyed to a message, and nothing else is': () => {
+      const msg = { kind: 'message', id: 12 } as const;
+      expect(m.noteVerdict(note({ kind: 'miss', key: msg, next: '' }), 'live', 0, 'not-revising')).toEqual({ ok: true });
+      expect(m.noteVerdict(note({ kind: 'miss', key: { kind: 'run', id: 11 } }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
+      expect(m.noteVerdict(note({ kind: 'thread', key: msg }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
+      expect(m.noteVerdict(note({ kind: 'caution', key: msg }), 'live', 0, 'not-revising')).toEqual({ ok: false, refusal: 'bad-request' });
+      expect(m.noteVerdict(note({ kind: 'miss', key: msg }), 'not-yours', 0, 'not-revising')).toEqual({ ok: false, refusal: 'note-key-unknown' });
+      expect(m.noteVerdict(note({ kind: 'miss', key: msg }), 'unmeasured', 0, 'not-revising')).toEqual({ ok: false, refusal: 'unmeasured' });
     },
     'noteVerdict: the plan\'s named cases': () => {
       expect(m.noteVerdict(note(), 'live', CAP - 1, 'not-revising')).toEqual({ ok: true });
@@ -230,6 +241,24 @@ export function notesCases(m: Notes): Record<string, Case> {
         expect([run(state, true), run(state, false), run(state, 'unmeasured')], state).toEqual(['live', 'not-yours', 'unmeasured']);
       }
       for (const state of ['done', 'failed']) expect(run(state, true), state).toBe('gone');
+    },
+    'noteKeyFact: a message, for the designated caller or not': () => {
+      const f = m.noteKeyFact;
+      type D = 'live' | 'pending' | 'none' | 'unmeasured';
+      const msg = (message: 'absent' | 'unmeasured' | { sessionId: string }, callerDesignation: D) =>
+        f({ kind: 'message', message, callerDesignation }, CALLER);
+      const row = { sessionId: 'lane-b-project-a' };
+      const ds: D[] = ['live', 'pending', 'none', 'unmeasured'];
+      // A pending body is not the designated session yet: it reads as `designationFactOf` does (N2).
+      expect(ds.map((d) => msg(row, d))).toEqual(['live', 'not-yours', 'not-yours', 'unmeasured']);
+      expect(ds.map((d) => msg('absent', d))).toEqual(['gone', 'gone', 'gone', 'unmeasured']);
+      expect(ds.map((d) => msg('unmeasured', d))).toEqual(['unmeasured', 'unmeasured', 'unmeasured', 'unmeasured']);
+    },
+    'handoverVerdict: a thread naming a message is reference-unknown': () => {
+      const t = handover().threads[0]!;
+      const h = handover({ threads: [t, { ...t, ref: { kind: 'message', id: 12 } }] });
+      expect(m.handoverVerdict(h, ['live', 'live'])).toEqual({ ok: false, refusal: 'reference-unknown' });
+      expect(m.handoverVerdict(h, ['unmeasured', 'unmeasured'])).toEqual({ ok: false, refusal: 'reference-unknown' });
     },
     'revisedNoteFact: a live note of the caller\'s, a superseded one, another\'s, none, unread': () => {
       const f = m.revisedNoteFact;
