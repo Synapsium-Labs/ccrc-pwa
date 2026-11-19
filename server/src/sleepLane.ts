@@ -27,6 +27,7 @@ import {
 import type { SleepPolicy } from './sleep.js';
 import { designationFactFrom, designationFactOf, type DesignationFact } from './roleOf.js';
 import type { LaneName } from './laneSchedule.js';
+import { runNamesSession } from './coord/runBinding.js';
 
 /**
  * PUT A SESSION TO SLEEP, THE ONE EXECUTOR (D-7042; ARCH-43, consolidation spec K1): L4, it reads, logs and acts; it
@@ -646,7 +647,7 @@ export function heldKindOf(
     const r = coord.run(hold.runId);
     if (!r.ok || r.run === null) return 'unreadable';
     if ((TERMINAL_RUN_STATES as readonly string[]).includes(r.run.state)) return 'run-terminal';
-    return sessionId !== null && r.run.sessionId === sessionId ? 'run-own' : 'run-live';
+    return sessionId !== null && runNamesSession(r.run, sessionId) ? 'run-own' : 'run-live';
   } catch {
     return 'unreadable';
   }
