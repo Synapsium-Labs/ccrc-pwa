@@ -131,6 +131,18 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
+  it('plan triage and plan take each name unreachable (a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4)', () => {
+    for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
+      const text = plan();
+      const at = text.indexOf(`\n${heading}\n`);
+      const next = text.indexOf('\n## ', at + 1);
+      const section = flat(text.slice(at, next === -1 ? undefined : next));
+      expect(at, heading).toBeGreaterThanOrEqual(0);
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps\)/);
+      expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
+    }
+  });
+
   it('a ticket names its project when its work lands outside the home project (review 2580 A4)', () => {
     expect(flat(plan())).toContain('Name `project` on a ticket whose work lands outside the home project.');
   });

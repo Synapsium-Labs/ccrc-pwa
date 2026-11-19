@@ -329,7 +329,11 @@ number from `POST /api/ledger/deviations`.
   it `issue-not-inbound`, and a raised row's open item settles (review run 2427 F1, round 5 F2). A stored row whose issue
   moved out of a managed team is retired too, with its own cause, `moved-out` (review run 2457 F4, D-8733's "inbound counts
   only issues now in a managed team"): take, triage and the close re-read the issue by id before acting and refuse it
-  `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. The retire
+  `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. When the
+  doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused), a decision that binds the issue
+  (a take into an epic, an Upkeep placement, a hand) is refused `unreachable` (503, the Linear read's existing word: a retry
+  helps), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
   `waiting` and its owner is mailed once more, under a subject carrying the reopen's time. Record: the wave 4 follow-ups note.
