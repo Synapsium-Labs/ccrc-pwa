@@ -23,7 +23,7 @@ refusal path is re-grounded from `origin/handoff/d8126-autonomy-stack`.
 - A new guard ships with a test that goes red when the guard is removed. Characterization pins come first, green on
   `main`, in a commit of their own.
 - Each task is one pull request. Push once per round. Nothing private in any text.
-- D-numbers are issued by the allocator. Until issued, each call is `D-TBD-<slug>` as the spec names it.
+- D-numbers are issued by the allocator, never taken or invented. The spec's five calls are D-8789 to D-8793 (below).
 - 30 minutes is `STOP_DONE_PARKED_IDLE_MS`; no second constant for the same time.
 
 ## Review focus
@@ -37,13 +37,15 @@ refusal path is re-grounded from `origin/handoff/d8126-autonomy-stack`.
 
 ---
 
-### Task 1: the worker's own-run hold passes sleep (spec Part 1, `D-TBD-own-run-hold-passes`)
+### Task 1: the worker's own-run hold passes sleep (spec Part 1, `D-8789`)
 
 **Files:**
 - Modify: `server/src/stopDone.ts` (`StopDoneHeldKind`, `heldPasses`, the `held` text in `STOP_DONE_HOLD_MAP`)
-- Modify: `server/src/sleepLane.ts` (`heldKindOf`, its two call sites)
-- Modify: `server/src/depsShedPass.ts` only if it calls `heldKindOf`
-- Test: `server/test/stop-done-sweep.test.ts`, `server/test/stop-done.test.ts` (or the verdict's own suite)
+- Modify: `server/src/sleepLane.ts` (`heldKindOf`, and its call in the run-done input)
+- Modify: `server/src/depsShedPass.ts` (it calls `heldKindOf` too). The deps-shed verdict (`server/src/depsShed.ts`)
+  passes only `none`, `programme` and `run-terminal`, so `'run-own'` holds there unchanged: this task widens nothing
+  the deps shed removes, and a test pins that.
+- Test: `server/test/stop-done-sweep.test.ts`, `server/test/stop-done-verdict.test.ts`, the deps-shed suite
 
 **Interfaces:**
 - Produces: `StopDoneHeldKind` gains `'run-own'`: the hold names an open run whose `sessionId` is this session.
@@ -59,7 +61,7 @@ refusal path is re-grounded from `origin/handoff/d8126-autonomy-stack`.
 - [ ] **Step 3:** implement; run `./node_modules/.bin/vitest run test/stop-done-sweep.test.ts` and the verdict suite.
 - [ ] **Step 4:** run the guard suites the change can reach (`single-definition`, `rings`, `typecheck-tests`); commit.
 
-### Task 2: an idle worker on a `working` run sleeps after 30 minutes, in shadow (spec Parts 2 and 4)
+### Task 2: an idle worker on a `working` run sleeps after 30 minutes, in shadow (spec Parts 2 and 4, D-8790, D-8791)
 
 **Files:**
 - Modify: `server/src/sleep.ts`, `server/src/stopDone.ts`, `server/src/sleepLane.ts`, `server/src/coord/store.ts`
@@ -79,13 +81,16 @@ refusal path is re-grounded from `origin/handoff/d8126-autonomy-stack`.
   holds `run-worker`; shadow row writes no act and no mail; live sends exactly one mail across a restart.
 - [ ] Implement, run the suites, commit.
 
-### Task 3: a run holds a slot only while its worker works (spec Part 3)
+### Task 3: a run holds a slot only while its worker works (spec Part 3, D-8792, D-8793)
 
 **Files:**
 - Modify: `server/src/coord/dispatch.ts` (`capsMeasured`), `server/src/coord/dispatchDecide.ts`,
   `server/src/coord/advance.ts`, `server/src/turnverdict.ts` (`workerReadingFor`), `server/src/coord/routes.ts`
   (caps view), `shared/api.ts` (`CoordCapsUsage.waiting`), `pwa/src/fleet/CapsControl.tsx`
-- Start from stack commits `81fc8422b` (D-6093) and `48ef4ad0e` (D-6094); re-ground on `main`.
+- Start from stack commits `81fc8422b` (D-6093) and `48ef4ad0e` (D-6094); re-ground on `main`. `workerReadingFor`,
+  `caps-stale-runs.test.ts` and `worker-reading-for.test.ts` come from `48ef4ad0e`; none is on `main` yet.
+- `server/src/coord/routes.ts` was held by another programme's frozen run when this plan landed: claim it, and agree
+  the edit with its holder, before the first edit.
 
 **Interfaces:**
 - Produces: `WorkerReading = 'busy' | 'waiting' | 'gone' | 'unmeasured'`; `waiting` = turn verdict idle, `bg === 0`,
@@ -101,11 +106,33 @@ refusal path is re-grounded from `origin/handoff/d8126-autonomy-stack`.
 Re-ground, in order, each as its own pull request under the fleet-capacity plan's gates and review band:
 - **Task 4, W1-4 (D-6095):** stack commits `45509bb6d` to `4c709ee94`.
 - **Task 5, W1-4b (D-6096):** stack commits `d2d92cff8` to `31f37745e` and the two fix commits after them.
-- **Task 6, W1-5 (D-6097):** stack commits `70c53d9eb`, `c121218b4`; only after A5 is on `main`.
+- **Task 6, W1-5 (D-6097):** stack commits `70c53d9eb`, `c121218b4`; only after D-8126 A5 is on `main`.
 
 For each: cherry-pick onto a fresh branch from `main`, resolve against today's code, re-derive every census and pin,
 run the suites the commits touch, and have it reviewed again as unreviewed work.
 
 ## Deviations found
 
-None yet. The spec's `D-TBD-<slug>` calls become numbers when the allocator issues them.
+- **D-8789 (2026-11-19)** — own-run-hold-passes. Task 1 (spec Part 1): a workspace hold that names the worker's own
+  newest placed open run passes the run-done sleep exactly as a programme hold does (through `ccd hibernate --hold-ok`, on
+  a box that has `hibernate-hold-ok`), so a worker parked at review, merge or close sleeps after 30 minutes quiet; a hold
+  naming any other open run, an operator's own text or an unreadable run read keeps holding. It restores ruling F5 (b)
+  of the fleet-capacity design, which D-6092 never achieved on the fleet, and is live at once. Issued to run 2838.
+- **D-8790 (2026-11-19)** — working-idle-sleeps. Task 2 (spec Part 2): the run-done sleep policy gains one case, a
+  worker whose newest placed run is `working` and whose turn marker has been quiet for `STOP_DONE_PARKED_IDLE_MS`, which
+  `not-done` and the worker's own `run-worker` no longer hold; a `dispatched` run, a second active run and every use hold
+  still hold. It ships in shadow as the `working-idle-sleep` row on the Shadow lanes card, armed by the operator. Issued
+  to run 2838.
+- **D-8791 (2026-11-19)** — coordinator-told-of-sleep. Task 2 (spec Part 4): when the lane puts a worker to sleep on a
+  `working` run, it queues one system mail to that run's coordinator (`worker-asleep: run <id>`, keyed on the run and
+  the sleep so a restart never sends it twice) instead of changing the stall watch, which keeps holding every rung for a
+  sleeper; a worker parked at review, merge or close sends none. Issued to run 2838.
+- **D-8792 (2026-11-19)** — cap-counts-working. Task 3 (spec Part 3): `capsMeasured` counts a run in an active state
+  unless its worker is measured waiting (asleep, stopped, dead or archived, or awake with its turn marker quiet for 30
+  minutes and no background work or session cron), and every reading it cannot make keeps the run counted. It departs
+  from D-6094 (stack commit `48ef4ad0e`), which read idle at the instant of asking and bounded it by the run's age: the
+  reading gains the marker's quiet time and the two-hour bound goes. Live, in a commit of its own. Issued to run 2838.
+- **D-8793 (2026-11-19)** — cap-governs-starts. Task 3 (spec Part 3): the dispatch cap governs starts, not wakes; a
+  waiting worker that wakes on mail is never refused and counts again from that moment, so busy workers may pass the cap
+  for a while and new starts are refused until the count is back under it, with the wake budget still pacing wakes. The
+  operator's to confirm. Issued to run 2838.

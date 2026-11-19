@@ -1,7 +1,8 @@
 # Waiting workers sleep and hold no slot (design)
 
-**Status:** draft for the operator's approval (2026-11-19). It defines no D-numbers: the plan asks the allocator for
-them, and until then each call below is named by a slug (`D-TBD-<slug>`).
+**Status:** adopted by the Overlord programme (2026-11-19, the operator's direction). Its five calls carry the numbers
+the allocator issued, D-8789 to D-8793, defined in the plan's "Deviations found"; D-8793 stays the operator's to
+confirm.
 
 **Related:** `2026-10-20-fleet-capacity-and-worker-lifecycle-design.md` (§3.1, §3.4, §3.5, rulings F5 and F7) and its
 plan `docs/superpowers/plans/2026-10-20-fleet-capacity-w1.md` (D-6091 to D-6097);
@@ -79,7 +80,7 @@ or `closing` never passes. The fix: a hold that names **the worker's own newest 
 the process, so it passes for the run-done policy exactly as a programme hold does (through `ccd hibernate --hold-ok`,
 on a box that has `hibernate-hold-ok`). A hold naming any other open run, an operator's own text and an unreadable
 hold keep holding. This restores ruling F5 (b); it is a behaviour change in a commit of its own, live at once
-(`D-TBD-own-run-hold-passes`).
+(`D-8789`).
 
 ### Part 2. An idle worker on a `working` run sleeps after 30 minutes
 
@@ -91,7 +92,7 @@ The run-done policy (`server/src/stopDone.ts`, `server/src/sleep.ts`) gains one 
 - A `dispatched` run is not included: its worker has not started, and its brief is unread mail.
 - Every hold that marks a use stays as it is: `mail`, `marker-background`, `scheduled`, `claim`, `viewer`, `menu`,
   `roster`, `bucket`, `turn`, the act-time re-measure and `ccd`'s `attached`.
-- It ships in shadow, as one row on the Shadow lanes card, and the operator arms it (`D-TBD-working-idle-sleeps`).
+- It ships in shadow, as one row on the Shadow lanes card, and the operator arms it (`D-8790`).
 - The asleep row and the journal line say "waiting on a working run" where they say "parked at …" today.
 
 ### Part 3. A run holds a slot only while its worker works
@@ -101,9 +102,9 @@ The run-done policy (`server/src/stopDone.ts`, `server/src/sleep.ts`) gains one 
 (no background work, no session cron). A worker between turns keeps its slot. This builds on D-6094 from the stranded
 stack (`handoff/d8126-autonomy-stack`, commit `48ef4ad0e`), with one real change: that commit reads "idle" at the
 instant of asking and guards only by the run's age, so its reading gains the marker's quiet time, and its two-hour
-bound goes (`D-TBD-cap-counts-working`). It ships live, in a commit of its own.
+bound goes (`D-8792`). It ships live, in a commit of its own.
 
-- **The cap governs starts, not wakes** (`D-TBD-cap-governs-starts`, the operator's to confirm). A waiting worker that
+- **The cap governs starts, not wakes** (`D-8793`, the operator's to confirm). A waiting worker that
   wakes on mail is never refused, as an asked wake never is; it counts again from that moment. So busy workers can
   pass the cap for a while when waiting workers wake after their slots were given away, and new starts are refused
   until the count is back under it. The wake budget still paces the wakes.
@@ -120,7 +121,7 @@ waiting worker every few hours to ask whether it still waits is the loop the ant
 
 Instead, when the lane puts a worker to sleep on a `working` run, it queues one system mail to that run's coordinator
 (`queueSystemMail`, keyed on the run and the sleep so a restart never sends it twice): the run, when the worker's last
-turn ended, and that mail or a send-back wakes it (`D-TBD-coordinator-told-of-sleep`). The coordinator then knows
+turn ended, and that mail or a send-back wakes it (`D-8791`). The coordinator then knows
 whether its worker waits for something or stopped short, and acts by its own skill. A worker parked at review, merge
 or close sends no such mail: there the wait is the coordinator's own.
 
@@ -135,8 +136,8 @@ From the stack, re-grounded on `main` and reviewed again, under the fleet-capaci
 - **W1-4 (D-6095):** a refused dispatch is stamped, journalled and put in the feed; a lane mails the oldest refused
   coordinator per programme when the cap has room.
 - **W1-4b (D-6096):** the in-place bind, and the `self-dispatch` refusal.
-- **W1-5 (D-6097):** the refusal's words and the coordinator skill's entry. It lands after the Overlord programme has
-  landed A5, which rewrites the same skill text.
+- **W1-5 (D-6097):** the refusal's words and the coordinator skill's entry. It lands after D-8126 A5 is on `main`: the
+  Overlord programme's A5 rewrites the same skill text.
 
 ### Order
 
