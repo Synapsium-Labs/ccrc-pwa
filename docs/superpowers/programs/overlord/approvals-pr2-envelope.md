@@ -194,5 +194,7 @@ for byte.
   every other lane's words are. That suite was not among the ones run before the push.
 - Horkos's `rules-mixed` names `ccd/session-hook.sh`: a PR that changes a rules file may change nothing else. The brief
   puts the hook and its readers in one PR, so the split is left to the coordinator.
+- Fix round 1's first push reddened `session-hook-turnmark.test.ts`, which pins the prefilter's `read` list by content: the
+  call key's read (`ap_call`) is in it now. That suite was not among the ones run before the push.
 - `sim/mutation-floors` is killed by the test slice's memory cap on this box (the reviewer measured it twice); its sets'
   mutants were run here one by one through the suites that run the same cases modules, and CI is its arbiter.

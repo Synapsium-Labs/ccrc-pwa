@@ -746,7 +746,7 @@ describe('the payload parse needs no regex engine', () => {
     // is spelled on one physical line because nothing may be added above the `_hook_emit_context "$CARD" "$CARD_COMPACT"` line README cites; the delegation spool's definitions (`DSP_DEFS`), spliced in
     // by the shell only for a payload that names a delegation tool or event; the spool's extra output expression (`dsp_out`); and the launch record's
     // output expression (`lrc_out`). All four are scanned, because a regex builtin in any of them fails the whole program on a jq without Oniguruma.
-    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" \'', '" <<<"$payload"');
+    const parse = between('{ read -r event; read -r psid; read -r paid; read -r aid; read -r ap_call; read -r dsp_bucket; read -r dsp_cut; read -r dsp_cwd; read -r dsp_line; read -r lrc_line; } < <(jq -r --arg sid "$id" --arg gen "$dsp_gen" --arg ver "$dsp_ver" --arg wr "$lrc_w" \'', '" <<<"$payload"');
     const spoolDefs = between("DSP_DEFS='", "'; dsp_dir=");
     const spoolOut = between("dsp_out=', ((", ") | .[])'");
     const lrcOut = between("lrc_out=', (", ")'");
