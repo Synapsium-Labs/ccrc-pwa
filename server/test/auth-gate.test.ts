@@ -784,8 +784,10 @@ describe('the scanner is looking at something', () => {
     // 301 -> 308, the gated count 190 -> 197, the exempt-HTTP count stays 111.
     // 312 since Flows wave 2's `PUT /api/flows/default` (the flow new programmes pin), same file, session-gated, NOT EXEMPT:
     // the HTTP half 308 -> 309, the gated count 197 -> 198, the exempt-HTTP count stays 111.
-    expect(ROUTES.length).toBe(312);
-    expect(scanRoutes('flows/routes.ts').length).toBe(8);
+    // 313 since Flows wave 3a's `GET /api/flows/:id/programmes` (where each programme is on its flow), same file,
+    // session-gated, NOT EXEMPT: the HTTP half 309 -> 310, the gated count 198 -> 199, the exempt-HTTP count stays 111.
+    expect(ROUTES.length).toBe(313);
+    expect(scanRoutes('flows/routes.ts').length).toBe(9);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/delegationBackfillRoutes.ts').length).toBe(2);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
@@ -976,7 +978,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 312 scanned + the static wildcard when the bundle is built.
+    // 313 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1760,7 +1762,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 309 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 310 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1824,7 +1826,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 309 HTTP routes, not the 111 exempt.
+          //    is not itself flag-aware — the assertion that covers all 310 HTTP routes, not the 111 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

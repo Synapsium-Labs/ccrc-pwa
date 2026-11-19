@@ -1581,10 +1581,11 @@ describe('the reader lab door: three session-gated routes, an exempt probe pair,
 // process, not over a door. So the census is the test box surface's: every registration is a door in `FLOW_DOORS`, in both
 // directions; the file consults no box token; none is EXEMPT; a planted call is SEEN; and the doors join neither
 // `SESSION_ONLY_ALL` nor `ALL_LANES`, so CLAUDE.md's box-token bullet owes them no sentence.
-describe('the Flows doors: eight session-only doors, no box token (flows design 2026-11-19 §8, wave 2)', () => {
+describe('the Flows doors: nine session-only doors, no box token (flows design 2026-11-19 §8, waves 2 and 3a)', () => {
   const FLOWS_SRC = read('server/src/flows/routes.ts');
   const FLOW_DOORS = ['GET /api/flows', 'GET /api/flows/:id', 'GET /api/flows/:id/versions/:version', 'POST /api/flows',
-    'PUT /api/flows/:id/draft', 'POST /api/flows/:id/publish', 'DELETE /api/flows/:id', 'PUT /api/flows/default'];
+    'PUT /api/flows/:id/draft', 'POST /api/flows/:id/publish', 'DELETE /api/flows/:id', 'PUT /api/flows/default',
+    'GET /api/flows/:id/programmes'];
   const REGISTERED = registrationsIn(FLOWS_SRC).map((r) => r.key);
   const pathOf = (k: string): string => k.slice(k.indexOf(' ') + 1);
 
