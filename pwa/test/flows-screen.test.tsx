@@ -214,3 +214,22 @@ describe('the programmes on a flow (flows wave 3a)', () => {
     expect(screen.queryByText('Programmes on this flow')).toBeNull();
   });
 });
+
+describe('moving a step on the canvas (flows wave 5a)', () => {
+  it('a moved step is an unsaved change, and the saved draft carries its new place', async () => {
+    let doc = skeletonFlowDoc('Mine');
+    const calls = stubServer((c) => {
+      if (c.method === 'PUT') { doc = (c.body as { doc: FlowDoc }).doc; return { body: { ok: true, problems: [] } }; }
+      return { body: answerFor(doc) };
+    });
+    render(<FlowsScreen openId={4} />);
+    const first = doc.blocks[0]!;
+    const step = await screen.findByRole('button', { name: `${first.title}: arrow keys move it` });
+    fireEvent.keyDown(step, { key: 'ArrowRight', shiftKey: true });
+    expect(screen.getByText('unsaved changes')).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('button', { name: 'Save draft' }));
+    await waitFor(() => expect(calls.some((c) => c.method === 'PUT')).toBe(true));
+    const saved = (calls.find((c) => c.method === 'PUT')!.body as { doc: FlowDoc }).doc;
+    expect(saved.blocks.find((b) => b.id === first.id)?.at).toEqual({ x: first.at.x + 40, y: first.at.y });
+  });
+});

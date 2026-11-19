@@ -205,7 +205,8 @@ hues stay accounts') and live positions (a breathing dot on a block).
    in shadow with what the engine would do next. Going live is the operator's arm, after the shadow has run.
 4. **Gates**: approval, PR state, attested. *As built so far (`plans/2026-11-20-flows-w4a.md`, 4a):* `attested`, through the
    outcome door with required evidence; approval and PR state are 4b.
-5. **The canvas**: drag and drop, connect by dragging, live positions.
+5. **The canvas**: drag and drop, connect by dragging, live positions. *As built so far (`plans/2026-11-20-flows-w5a.md`, 5a):*
+   moving a step by pointer or keyboard, with no library; connecting and live positions are 5b.
 6. **Plugins**: per-session loading, plugin templates, `requires` and the confirm-to-install screen (§14.3).
 7. **Harnesses** (§14.2), once the harness adapter seam exists: capability tables, derived support levels, the policy hook.
 8. **Managed flows** (§14.4): the managed door and read-only managed flows.

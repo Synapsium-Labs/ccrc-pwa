@@ -124,3 +124,14 @@ export function flowFileName(title: string, version: number): string {
   const slug = title.toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 60) || 'flow';
   return `${slug}-v${version}.flow.json`;
 }
+
+/** The canvas grid a moved step snaps to (wave 5a), in diagram pixels. */
+export const GRID = 8;
+const snap = (v: number): number => Math.max(0, Math.round(v / GRID) * GRID);
+
+/** Places a step at `at`, snapped to the grid and kept off the top and left edges. Any step moves, ccrc's own included:
+ *  a locked step can be placed, never edited (spec §4). An unknown id returns `doc` itself. */
+export function moveBlock(doc: FlowDoc, id: string, at: { x: number; y: number }): FlowDoc {
+  if (!doc.blocks.some((b) => b.id === id)) return doc;
+  return { ...doc, blocks: doc.blocks.map((b) => (b.id === id ? { ...b, at: { x: snap(at.x), y: snap(at.y) } } : b)) };
+}
