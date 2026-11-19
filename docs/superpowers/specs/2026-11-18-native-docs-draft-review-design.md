@@ -320,6 +320,14 @@ Every guard ships with a test that goes red when the guard is removed. The leaf 
 
 The real-browser leg proves what jsdom cannot: the copy runs no script and cannot read the console's cookie; a 10 MiB copy opens; a link inside the copy does not navigate, and the listed one opens with no `Referer`; an installed PWA does not answer `/review` with its shell or a cached copy. Its harness gains a server mode that carries the exact route headers, and one context with service workers allowed. Task 17's Draft review row is then run on the installed release (leaf plan, Acceptance).
 
+## 8. Promise delta
+
+This design changes no Promise. It designs the required draft-review scope that the native Docs reader programme already records (#1420, the operator's ruling of 2026-10-25), and adds no capability or scenario.
+
+```promise-delta
+none - design of recorded required draft-review scope of the native Docs reader programme; no Promise capability or scenario changes
+```
+
 ## Where things stand
 
 ### Agreed
