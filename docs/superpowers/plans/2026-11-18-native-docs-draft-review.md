@@ -2,7 +2,7 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Build "Share for review" (#1420): a frozen, read-only draft snapshot behind a private capability link, with its lifecycle (R1-R4), then signed-in comments (R5), as the spec below designs it.
+**Goal:** Build "Share for review" (#1420): a frozen, read-only draft snapshot behind a private capability link, with its lifecycle (R1-R3), then signed-in comments (R4), as the spec below designs it.
 
 **Architecture:** The owner's browser builds the snapshot with Export's own `buildExport` and uploads it once. A new server module, `server/src/review/`, keeps it in a never-backed-up file store and serves it only to a holder of a 256-bit token, which travels in the URL fragment and is posted, after a tap, from a fixed review page to one exempt read door. Owner and comment doors are session-gated. A sweep applies idle expiry, retention and early removal on commit through the existing docs tree read, handed to the module as a port.
 
@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Design wave X3 builds nothing. Every task below belongs to a later implementation run; this file is that run's plan.
-- The two product choices are the operator's, answered on 2026-11-18 after the coordinator released this wave's asks: a capability link with no session to read; comments from signed-in sessions only, never merge approval. Comments are wave R5, a follow-on (the coordinator's direction): nothing in R1-R4 names, needs or anticipates them, and R5 adds its fields additively.
+- The two product choices are the operator's, answered on 2026-11-18 after the coordinator released this wave's asks: a capability link with no session to read; comments from signed-in sessions only, never merge approval. Comments are wave R4, a follow-on (the coordinator's direction): nothing in R1-R3 names, needs or anticipates them, and R4 adds its fields additively.
 - Reader sandbox exactly `allow-scripts`, shell CSP exactly `frame-src 'none'`, no parent-DOM access, no extra message channel: none changes. The review page is a separate document with its own header policy.
 - Both 2026-11-06 phone blocks stay byte for byte; the tap, one-bar and desktop-fit budgets stand. Share for review adds no head or bar control: one button in the existing Share sheet, rows in Page details and a list in the Docs index.
 - `@synapsium-labs/docserver` stays exactly 1.1.0. No library change is needed.
@@ -21,6 +21,7 @@
 - The store is `~/.ccrc/review-shares/` (0700, files 0600), one writer (`server/src/review/store.ts`), never in `ccrc backup` or the update snapshot, never restored.
 - Rings: `shared/docsReview.ts` L0 (imports only `shared/` siblings); `server/src/review/policy.ts` L1 (pure: no `fs`, no fastify, no clock read); `server/src/review/ports.ts` L2 (the tree-read port, declared by this consumer); `server/src/review/store.ts` L3; `server/src/review/routes.ts` and `sweep.ts` L4; composition in `server/src/server.ts#buildServer`, beside `composeDocs`.
 - Every test and typecheck runs through `ccrc test -- <command>`, foreground, tool timeout at least 600000 ms. Fixture HOMEs only. Mutation scratch outside the worktree; restore from a saved copy, never `git checkout`.
+- Release order (coordinator's ruling on F13): no release hands out a `/review#…` link before the page that opens it exists. R1 ships the read side and can make no link; R2 ships the page; R3, the owner's create, comes last. Every spec amendment lands with the wave that ships its behaviour: D-8765 with R1, D-8767 with R2, D-8766 with R3.
 - Public repository: private-name scan of every changed file before each commit and before the push. Push once per round (D-8397).
 
 ## Review Focus
@@ -31,7 +32,7 @@
 | Two tabs re-share the same file at once | One version per accepted call, bytes and index agree | R1.3 `concurrent re-share` |
 | The server stops between renaming new bytes and renaming the index | The old version stays live; boot removes the unreferenced bytes | R1.3 `crash before the index rename` |
 | The served ref is origin's branch while the local branch differs | The sweep reads the recorded served ref and removes nothing | R1.4 `served ref, not the local branch` |
-| A reviewer opens the link on a device with the PWA installed | The review page loads from the network with its headers, never the shell or a cached copy | R3.3 `installed PWA does not answer /review` |
+| A reviewer opens the link on a device with the PWA installed | The review page loads from the network with its headers, never the shell or a cached copy | R2.3 `installed PWA does not answer /review` |
 
 ---
 
@@ -41,15 +42,16 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 
 | Wave | Tasks | Owns (create or modify) | Depends on |
 |---|---|---|---|
-| R1 server | R1.1-R1.5 | `shared/docsReview.ts`; `shared/docs.ts` (the export cap); `pwa/src/docs/export/policy.ts` (re-export, one line); `server/src/review/**`; `server/src/server.ts` (composition only); `server/src/config.ts` (one path); `server/src/auth/gate.ts` (class 9); `server/test/auth-gate.test.ts`, `box-token-census.test.ts`, the rings data files the rings suites ask for (`server/test/rings/*.data.ts`); new `server/test/review-*.test.ts`; `README.md` (auth paragraph) | none |
-| R2 owner side | R2.1-R2.3 | `pwa/src/docs/export/buildExport.tsx`, `provenance.ts` (`purpose`); new `pwa/src/docs/review/**`; `pwa/src/docs/share.ts`, `ShareSheet.tsx`, `docsText.ts`; `pwa/src/lib/api.ts` (four calls); the Page details host and the Docs index screen (one mount each); `pwa/test/docs-scans.test.ts` (M4.EX16); `design/audit.mjs` (new chrome); new `pwa/test/docs-review-*.test.ts(x)` | R1 merged |
-| R3 review page | R3.1-R3.3 | new `pwa/review.html`, `pwa/src/review/**`; `pwa/vite.config.ts` (second entry, `globIgnores`); `pwa/src/lib/sw-denylist.ts`; `server/src/review/routes.ts` (the page routes); `pwa/browser/app.ts` (a server mode and a service-worker context); new `pwa/browser/docs-review.browser.test.ts`; `pwa/test/docs-scans.test.ts` (the `DOMParser` allowance) | R2 merged |
-| R4 amendments | R4.1 | base spec Goals 1 and 3, decision `product`, Non-goal, §4.13, M4.EX16's text, new §4.18; rich-docs §6 rows G11 and "Draft review by link"; README Docs section | R3 merged; claims taken at its run-open, after X1 and X2 have merged |
-| R5 comments (follow-on) | R5.1-R5.2 | `shared/docsReview.ts` (additive fields and limits); `server/src/review/policy.ts`, `store.ts`, `routes.ts`; the census and gate tests; `pwa/src/lib/api.ts` (two calls); `pwa/src/docs/review/ReviewList.tsx`, `ReviewRows.tsx`; `pwa/src/review/main.ts`; new `server/test/review-comments.test.ts`, `pwa/test/docs-review-comments.test.tsx` | R4 merged |
+| R1 server, read side | R1.1-R1.5 | `shared/docsReview.ts`; `shared/docs.ts` (the export cap); `pwa/src/docs/export/policy.ts` (re-export, one line); `server/src/review/**`; `server/src/server.ts` (composition only); `server/src/config.ts` (one path); `server/src/auth/gate.ts` (class 9); `server/test/auth-gate.test.ts`, `box-token-census.test.ts`, the rings data files the rings suites ask for (`server/test/rings/*.data.ts`); new `server/test/review-*.test.ts`; `README.md` (auth paragraph); the base spec (D-8765) | none |
+| R2 review page | R2.1-R2.3 | new `pwa/review.html`, `pwa/src/review/**`; `pwa/vite.config.ts` (second entry, `globIgnores`); `pwa/src/lib/sw-denylist.ts`; `server/src/review/routes.ts` (the page routes); `pwa/browser/app.ts` (a server mode and a service-worker context); new `pwa/browser/docs-review.browser.test.ts`; `pwa/test/docs-scans.test.ts` (the `DOMParser` allowance); the base and rich-docs specs (D-8767) | R1 merged |
+| R3 owner side | R3.1-R3.4 | `server/src/review/routes.ts` (owner doors); `pwa/src/docs/export/buildExport.tsx`, `provenance.ts` (`purpose`); new `pwa/src/docs/review/**`; `pwa/src/docs/share.ts`, `ShareSheet.tsx`, `docsText.ts`; `pwa/src/lib/api.ts` (four calls); the Page details host and the Docs index screen (one mount each); `pwa/test/docs-scans.test.ts` (M4.EX16); `design/audit.mjs` (new chrome); new `pwa/test/docs-review-*.test.ts(x)`; the base spec (D-8766), rich-docs §6 pointers, README Docs section | R2 merged |
+| R4 comments (follow-on) | R4.1-R4.2 | `shared/docsReview.ts` (additive fields and limits); `server/src/review/policy.ts`, `store.ts`, `routes.ts`; the census and gate tests; `pwa/src/lib/api.ts` (two calls); `pwa/src/docs/review/ReviewList.tsx`, `ReviewRows.tsx`; `pwa/src/review/main.ts`; new `server/test/review-comments.test.ts`, `pwa/test/docs-review-comments.test.tsx` | R3 merged |
+
+Each wave's spec files are claimed at its run-open; the appearance and parity waves (X1, X2) edit the same specs, so a claim that answers 409 waits for its holder.
 
 ---
 
-## Wave R1 — server
+## Wave R1 — server, read side
 
 ### Task R1.1: L0 vocabulary and limits
 
@@ -134,34 +136,96 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 - [ ] **Step 4: Run** it and `test/rings`. Expected: PASS.
 - [ ] **Step 5: Commit** `feat(review): the sweep (X3 R1.4)`.
 
-### Task R1.5: L4 the doors, the gate and the census
+### Task R1.5: L4 the read door, the gate, the census and the first amendments
 
 **Files:**
 - Create: `server/src/review/routes.ts`
-- Modify: `server/src/server.ts` (one plugin installing `installDocsRequestPolicy` and registering the JSON doors; the page routes are R3.2's); `server/src/auth/gate.ts` (`EXEMPT` gains `POST /api/review/open`, class 9 "draft review by capability: the token in the body is the credential; the door reads no session", and the header's class count); `server/test/auth-gate.test.ts` (nine classes; `FLAG_AWARE` gains the create door); `server/test/box-token-census.test.ts` (`REVIEW_SRC`, hand-kept `REVIEW_DOORS`, both directions, a planted token call seen, the never-read scan); `README.md` (auth paragraph: class 9)
+- Modify: `server/src/server.ts` (one plugin registering the read door; the page routes are R2.2's, the owner doors R3.1's); `server/src/auth/gate.ts` (`EXEMPT` gains `POST /api/review/open`, class 9 "draft review by capability: the token in the body is the credential; the door reads no session", and the header's class count); `server/test/auth-gate.test.ts` (nine classes); `server/test/box-token-census.test.ts` (`REVIEW_SRC`, hand-kept `REVIEW_DOORS`, both directions, a planted token call seen, the never-read scan); `README.md` (auth paragraph: class 9); the base spec (D-8765's sentences, below), claimed at R1's run-open
 - Test: `server/test/review-routes.test.ts`, `server/test/review-backup.test.ts`
 
 **Interfaces:**
 - Consumes: R1.1-R1.4.
-- Produces the five JSON doors of spec §5 that are not R5's:
-  - `POST /api/review/shares` — body `{ source: ReviewSource; bytes: string /* base64 */; credentialShapes: number }`, `bodyLimit` = `Math.ceil(DOCS_EXPORT_MAX_BYTES * 4 / 3) + 4096`; `{ ok: true; share: ReviewShareWire }` or `{ ok: false; why }` (403 `auth-off`, 413 `too-large`, 409 `store-full`, 503 `store-unreadable`, 400 `bad-source`);
-  - `GET /api/review/shares?project=&section=&path=` (each optional; all absent lists every share) — `{ ok: true; shares }`, 400 `bad-query`;
-  - `POST /api/review/shares/:id/pin` body `{ pinned: boolean }`; `POST /api/review/shares/:id/revoke` — `{ ok: true; share }` or 404 `unknown-share`;
+- Produces the read door of spec §5 (no route of R1 can create a share, so an R1 release hands out no link; tests seed the store through its own interface):
   - `POST /api/review/open` body `{ token }`, `bodyLimit` `REVIEW_OPEN_BODY_BYTES` — 200 `application/octet-stream`, `Content-Disposition: attachment`, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, and `x-ccrc-review-shared-at`, `x-ccrc-review-version`, `x-ccrc-review-idle-days`; otherwise 404 `{"ok":false,"error":"not-found"}` with the same four headers; 429 `busy` past `REVIEW_OPEN_STREAMS` reads in flight; no rate-limit config.
 
-- [ ] **Step 1: Write the failing route tests** (`buildServer` on a fixture HOME, armed and dark): create dark is 403 `auth-off`; create armed and signed in gives a share whose `link` is `https://<origin>/review#<43 chars>`; the list on a dark gate, over shares made armed, gives every `link` as `null`; a snapshot of `DOCS_EXPORT_MAX_BYTES + 1` bytes is 413; the 65th live share is 409; open with the token is 200, byte-identical to the upload, with each header; **M-X3.1**: unknown, 42-character, revoked and expired tokens give byte-identical 404s (status, headers less `date`, body); open sets `lastViewedAt` and a second open 30 s later does not rewrite it; revoke then open is 404 with no tick between; open behaves the same with a cookie and with the box token; open makes zero `runCcd` calls (a `runCcd` that throws).
-- [ ] **Step 2: Write the census and gate tests**: `REVIEW_DOORS` equals the five registrations; none consults the box token; only the open door is `EXEMPT`, with "reason 9"; the never-read scan finds none of `req.cookies`, `checkMailToken`, `requireMailToken`, `runCcd`, `ReviewTreeReader` or `docs.readers` in the open door's handler, with a planted control for each; `auth-gate.test.ts`'s class list has nine entries and `gate.ts`'s number words read nine.
+- [ ] **Step 1: Write the failing route tests** (`buildServer` on a fixture HOME, armed and dark, the store seeded through `put`): open with the token is 200, byte-identical to the seeded bytes, with each header; **M-X3.1**: unknown, 42-character, revoked and expired tokens give byte-identical 404s (status, headers less `date`, body); open sets `lastViewedAt` and a second open 30 s later does not rewrite it; `remove` through the store then open is 404 with no tick between; open behaves the same with a cookie and with the box token; open makes zero `runCcd` calls (a `runCcd` that throws).
+- [ ] **Step 2: Write the census and gate tests**: `REVIEW_DOORS` equals the one registration; none consults the box token; only the open door is `EXEMPT`, with "reason 9"; the never-read scan finds none of `req.cookies`, `checkMailToken`, `requireMailToken`, `runCcd`, `ReviewTreeReader` or `docs.readers` in the open door's handler, with a planted control for each; `auth-gate.test.ts`'s class list has nine entries and `gate.ts`'s number words read nine.
 - [ ] **Step 3: Write M-X3.7**, `review-backup.test.ts`: it reads `ccd/ccrc#_upd_backup_set`, `#cmd_backup` and `deploy/deploy.sh`'s backup lines, and fails if any copied path is `~/.ccrc/review-shares`, `~/.ccrc` itself or `$HOME`, with planted controls for each.
 - [ ] **Step 4: Run** `ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/review-backup.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL on each new case.
-- [ ] **Step 5: Implement** `registerReviewRoutes(app, deps)` in `routes.ts`; register its plugin after the docs plugin in `buildServer`; add the `EXEMPT` row and the README sentence.
+- [ ] **Step 5: Implement** `registerReviewOpenRoute(app, deps)` in `routes.ts`; register its plugin after the docs plugin in `buildServer`; add the `EXEMPT` row and the README sentence; write D-8765's amendments into the base spec, each marked "(amended <date>; draft review, X3, D-8765)".
 - [ ] **Step 6: Run** those four files and `test/single-definition`, `test/rings`, `test/citations.test.ts`, `test/anchors.test.ts`, `test/docs-parity.test.ts`. Expected: PASS.
-- [ ] **Step 7: Commit** `feat(review): doors, gate class 9 and census (X3 R1.5)`.
+- [ ] **Step 7: Commit** `feat(review): the read door, gate class 9, census and D-8765 (X3 R1.5)`.
 
 ---
 
-## Wave R2 — owner side
+## Wave R2 — the review page
 
-### Task R2.1: Export's builder gains `purpose`
+### Task R2.1: The page
+
+**Files:**
+- Create: `pwa/review.html`, `pwa/src/review/main.ts`, `pwa/src/review/review.css` (no React; imports only `shared/docsReview.ts`)
+- Modify: `pwa/vite.config.ts` (`build.rollupOptions.input` gains `review`; workbox `globIgnores` gains `review.html`); the base spec's M5.16 and the rich-docs spec's A2b and M8.10 (D-8767's sentences), claimed at R2's run-open; `pwa/test/docs-scans.test.ts` (`new DOMParser(` allowed in `pwa/src/review/main.ts` beside `parse.ts`, with a planted control)
+- Test: `pwa/test/review-page.test.ts` (jsdom)
+
+- [ ] **Step 1: Write the failing tests** (**M-X3.10**): after load, `location.hash` is empty and no request has been made; the only control is "Open draft", and the POST to `/api/review/open` happens only on its click, with the token in the JSON body; on 200 the frame's `sandbox` attribute is the empty string and its `srcdoc` equals the response text; the banner reads "Draft, not committed. Shared for review on {date}. Read-only."; "Links in this copy" lists each `https:` href of the bytes once, as `<a rel="noreferrer noopener" target="_blank">`, and no `javascript:` or `data:` href; a 404 shows exactly "This link has expired, was revoked, or never existed." and no frame.
+- [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/review-page.test.ts test/docs-scans.test.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement** the page and its entry.
+- [ ] **Step 4: Run** them, then `ccrc test -- npm run build` and a check that the built service worker's precache list has no `review.html` (a case in `test/browser-dist.test.ts`). Expected: PASS.
+- [ ] **Step 5: Write** D-8767's amendments into both specs, each marked "(amended <date>; draft review, X3, D-8767)", and run `test/docs-scans.test.ts` again. Expected: PASS.
+- [ ] **Step 6: Commit** `feat(docs): the review page and D-8767 (X3 R2.1)`.
+
+### Task R2.2: The page routes and the service worker
+
+**Files:**
+- Modify: `server/src/review/routes.ts` (`GET /review` sends the built `review.html` with the spec §3.5 policy header, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`; `GET /review.html` always 404), `server/src/auth/gate.ts` (`GET /review` joins class 9), `server/test/auth-gate.test.ts`, `box-token-census.test.ts` (`REVIEW_DOORS` three: R1.5's door, the page and `/review.html`); `pwa/src/lib/sw-denylist.ts` (own list gains `/^\/review(\/|$)/`), `pwa/test/sw-denylist.test.ts`
+- Test: `server/test/review-routes.test.ts`
+
+- [ ] **Step 1: Write the failing tests:** the `GET /review` CSP header equals the spec string exactly, with no `'unsafe-inline'` in `script-src` and no `allow-` token; the route answers the same bytes with and without a cookie, armed and dark; `GET /review.html` is 404 dark and never 200 armed; **M-X3.12**: `swDenylist(undefined)` matches `/review` and `/review/` and not `/reviews`.
+- [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/auth-gate.test.ts test/box-token-census.test.ts` and `cd ../pwa && ccrc test -- ./node_modules/.bin/vitest run test/sw-denylist.test.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement** the two routes and the denylist entry.
+- [ ] **Step 4: Run** them. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(review): the review page routes (X3 R2.2)`.
+
+### Task R2.3: The real browser
+
+**Files:**
+- Modify: `pwa/browser/app.ts` (a `reviewServer` mode answering `/review`, `/review.html` and `/api/review/*` with exactly R2.2's headers and R1.5's bodies, served from a store the test seeds, and an option for a context with `serviceWorkers: 'allow'`)
+- Create: `pwa/browser/docs-review.browser.test.ts`
+
+- [ ] **Step 1: Write the failing browser tests:** a snapshot holding `<script>` and an `onerror` image runs neither (a global the payload would set stays unset) and `document.cookie` cannot be read from inside the frame; a 10 MiB snapshot opens and its last element is in the frame's DOM; clicking a link inside the frame does not navigate the frame, and the listed link opens a new tab whose request carries no `Referer`; **`installed PWA does not answer /review`**: with the built service worker installed and controlling the page, a navigation to `/review` reaches the server (the mode records it) and the response carries the CSP header.
+- [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-review.browser.test.ts`. Expected: FAIL before the harness mode exists, then on any guard removed.
+- [ ] **Step 3: Implement** the harness mode and option.
+- [ ] **Step 4: Run** it and the existing browser files that import `app.ts` (`browser/` whole, through `ccrc test`). Expected: PASS.
+- [ ] **Step 5: Commit** `test(docs): the review page in a real browser (X3 R2.3)`.
+
+---
+
+## Wave R3 — owner side
+
+R3 is the first release that can make a link, so it follows R2: the page and its door are already installed, and a service worker installed before R2 has had a release to update.
+
+### Task R3.1: The owner doors
+
+**Files:**
+- Modify: `server/src/review/routes.ts` (`registerReviewOwnerRoutes`), `server/src/server.ts` (one plugin installing `installDocsRequestPolicy` and registering the owner doors), `server/test/auth-gate.test.ts` (`FLAG_AWARE` gains the create door), `server/test/box-token-census.test.ts` (`REVIEW_DOORS` seven: R1's open door, R2's two page routes, these four)
+- Test: `server/test/review-routes.test.ts`
+
+**Interfaces:**
+- Consumes: R1.1-R1.5.
+- Produces:
+  - `POST /api/review/shares` — body `{ source: ReviewSource; bytes: string /* base64 */; credentialShapes: number }`, `bodyLimit` = `Math.ceil(DOCS_EXPORT_MAX_BYTES * 4 / 3) + 4096`; `{ ok: true; share: ReviewShareWire }` or `{ ok: false; why }` (403 `auth-off`, 413 `too-large`, 409 `store-full`, 503 `store-unreadable`, 400 `bad-source`);
+  - `GET /api/review/shares?project=&section=&path=` (each optional; all absent lists every share) — `{ ok: true; shares }`, 400 `bad-query`;
+  - `POST /api/review/shares/:id/pin` body `{ pinned: boolean }`; `POST /api/review/shares/:id/revoke` — `{ ok: true; share }` or 404 `unknown-share`.
+
+- [ ] **Step 1: Write the failing tests:** create dark is 403 `auth-off`; create armed and signed in gives a share whose `link` is `https://<origin>/review#<43 chars>`, and opening it through R1's door gives the uploaded bytes; the list on a dark gate, over shares made armed, gives every `link` as `null`; a snapshot of `DOCS_EXPORT_MAX_BYTES + 1` bytes is 413; the 65th live share is 409; `REVIEW_DOORS` equals the seven registrations and none of the four is `EXEMPT`.
+- [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL.
+- [ ] **Step 3: Implement** the four doors.
+- [ ] **Step 4: Run** them. Expected: PASS.
+- [ ] **Step 5: Commit** `feat(review): the owner doors (X3 R3.1)`.
+
+
+
+### Task R3.2: Export's builder gains `purpose`
 
 **Files:**
 - Modify: `pwa/src/docs/export/buildExport.tsx` (`ExportInput.purpose?: 'file' | 'review'`, default `'file'`), `provenance.ts` (the review banner lead), `policy.ts` (the `ccrc:purpose` meta name)
@@ -171,9 +235,9 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 - [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/docs-export.test.tsx`. Expected: FAIL.
 - [ ] **Step 3: Implement** the optional field and the two text changes.
 - [ ] **Step 4: Run** every `test/docs-export*` file and `test/mockup-export.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(docs): Export's builder takes a review purpose (X3 R2.1)`.
+- [ ] **Step 5: Commit** `feat(docs): Export's builder takes a review purpose (X3 R3.2)`.
 
-### Task R2.2: Share for review in the Share sheet
+### Task R3.3: Share for review in the Share sheet
 
 **Files:**
 - Create: `pwa/src/docs/review/shareForReview.ts` (L1, pure), `pwa/src/docs/review/upload.ts`, `pwa/src/docs/review/ReviewConfirm.tsx`
@@ -181,7 +245,7 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 - Test: `pwa/test/docs-review-share.test.tsx`, `pwa/test/docs-share.test.ts`
 
 **Interfaces:**
-- Consumes: R1.5's wire, R2.1, `shared/redact.mjs#redactCount`, `shared/api.ts#CREDENTIAL_MASKS`.
+- Consumes: R3.1's wire, R3.2, `shared/redact.mjs#redactCount`, `shared/api.ts#CREDENTIAL_MASKS`.
 - Produces: `reviewOfferFor(tree, page, entry, opened, exportReady): { offered: true } | { offered: false; sentence: string }`; `credentialCount(exportText: string): number` (cuts every `data:image/…;base64,…` payload, then sums `redactCount('linear-egress', text, shapesOf(CREDENTIAL_MASKS)).masked`).
 - Exact sentences: button "Share for review"; confirm title "Share a private copy for review"; hold "This draft holds {n} strings that look like credentials." with "Go back" and "Share anyway"; done "Anyone with this link can read this copy until {date}."; the `new-draft` refusal gains " Share for review sends a private copy."
 
@@ -189,9 +253,9 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/docs-review-share.test.tsx test/docs-share.test.ts test/docs-share-sheet.test.tsx test/docs-scans.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the module, the upload and the sheet arm.
 - [ ] **Step 4: Run** them. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(docs): Share for review (X3 R2.2)`.
+- [ ] **Step 5: Commit** `feat(docs): Share for review (X3 R3.3)`.
 
-### Task R2.3: The owner's controls and the newer-draft notice
+### Task R3.4: The owner's controls and the newer-draft notice
 
 **Files:**
 - Create: `pwa/src/docs/review/ReviewRows.tsx`, `ReviewList.tsx`, `reviewWords.ts` (L1)
@@ -202,71 +266,19 @@ Docs workers stay serial (ledger), so the waves run one after another, each one 
 - [ ] **Step 2: Run** `ccrc test -- ./node_modules/.bin/vitest run test/docs-review-owner.test.tsx`. Expected: FAIL.
 - [ ] **Step 3: Implement** the rows, the list and the words.
 - [ ] **Step 4: Run** it, `test/contrast.test.ts` and the design audit. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(docs): owner controls for shared drafts (X3 R2.3)`.
+- [ ] **Step 5: Write** D-8766's amendments into the base spec and point rich-docs §6 rows G11 and "Draft review by link" at this feature's spec; update the README Docs section. Run `cd server && ccrc test -- ./node_modules/.bin/vitest run test/docs-parity.test.ts test/citations.test.ts test/anchors.test.ts`. Expected: PASS.
+- [ ] **Step 6: Commit** `feat(docs): owner controls for shared drafts and D-8766 (X3 R3.4)`.
 
 ---
 
-## Wave R3 — the review page
+## Wave R4 — signed-in comments (follow-on)
 
-### Task R3.1: The page
+The operator adopted comments from signed-in readers only; spec §3.6 and its threats C1-C5 govern. Every field is additive: an R1-R3 build that reads an index entry with `comments` ignores it, and R4 reads an entry without it as no notes.
 
-**Files:**
-- Create: `pwa/review.html`, `pwa/src/review/main.ts`, `pwa/src/review/review.css` (no React; imports only `shared/docsReview.ts`)
-- Modify: `pwa/vite.config.ts` (`build.rollupOptions.input` gains `review`; workbox `globIgnores` gains `review.html`), `pwa/test/docs-scans.test.ts` (`new DOMParser(` allowed in `pwa/src/review/main.ts` beside `parse.ts`, with a planted control)
-- Test: `pwa/test/review-page.test.ts` (jsdom)
-
-- [ ] **Step 1: Write the failing tests** (**M-X3.10**): after load, `location.hash` is empty and no request has been made; the only control is "Open draft", and the POST to `/api/review/open` happens only on its click, with the token in the JSON body; on 200 the frame's `sandbox` attribute is the empty string and its `srcdoc` equals the response text; the banner reads "Draft, not committed. Shared for review on {date}. Read-only."; "Links in this copy" lists each `https:` href of the bytes once, as `<a rel="noreferrer noopener" target="_blank">`, and no `javascript:` or `data:` href; a 404 shows exactly "This link has expired, was revoked, or never existed." and no frame.
-- [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/review-page.test.ts test/docs-scans.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the page and its entry.
-- [ ] **Step 4: Run** them, then `ccrc test -- npm run build` and a check that the built service worker's precache list has no `review.html` (a case in `test/browser-dist.test.ts`). Expected: PASS.
-- [ ] **Step 5: Commit** `feat(docs): the review page (X3 R3.1)`.
-
-### Task R3.2: The page routes and the service worker
+### Task R4.1: Server: the comment vocabulary, store and doors
 
 **Files:**
-- Modify: `server/src/review/routes.ts` (`GET /review` sends the built `review.html` with the spec §3.5 policy header, `Cache-Control: no-store`, `Referrer-Policy: no-referrer`, `X-Content-Type-Options: nosniff`, `X-Frame-Options: DENY`; `GET /review.html` always 404), `server/src/auth/gate.ts` (`GET /review` joins class 9), `server/test/auth-gate.test.ts`, `box-token-census.test.ts` (`REVIEW_DOORS` seven: R1.5's five, the page and `/review.html`); `pwa/src/lib/sw-denylist.ts` (own list gains `/^\/review(\/|$)/`), `pwa/test/sw-denylist.test.ts`
-- Test: `server/test/review-routes.test.ts`
-
-- [ ] **Step 1: Write the failing tests:** the `GET /review` CSP header equals the spec string exactly, with no `'unsafe-inline'` in `script-src` and no `allow-` token; the route answers the same bytes with and without a cookie, armed and dark; `GET /review.html` is 404 dark and never 200 armed; **M-X3.12**: `swDenylist(undefined)` matches `/review` and `/review/` and not `/reviews`.
-- [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-routes.test.ts test/auth-gate.test.ts test/box-token-census.test.ts` and `cd ../pwa && ccrc test -- ./node_modules/.bin/vitest run test/sw-denylist.test.ts`. Expected: FAIL.
-- [ ] **Step 3: Implement** the two routes and the denylist entry.
-- [ ] **Step 4: Run** them. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(review): the review page routes (X3 R3.2)`.
-
-### Task R3.3: The real browser
-
-**Files:**
-- Modify: `pwa/browser/app.ts` (a `reviewServer` mode answering `/review`, `/review.html` and `/api/review/*` with exactly R3.2's headers and R1.5's bodies, and an option for a context with `serviceWorkers: 'allow'`)
-- Create: `pwa/browser/docs-review.browser.test.ts`
-
-- [ ] **Step 1: Write the failing browser tests:** a snapshot holding `<script>` and an `onerror` image runs neither (a global the payload would set stays unset) and `document.cookie` cannot be read from inside the frame; a 10 MiB snapshot opens and its last element is in the frame's DOM; clicking a link inside the frame does not navigate the frame, and the listed link opens a new tab whose request carries no `Referer`; **`installed PWA does not answer /review`**: with the built service worker installed and controlling the page, a navigation to `/review` reaches the server (the mode records it) and the response carries the CSP header.
-- [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/docs-review.browser.test.ts`. Expected: FAIL before the harness mode exists, then on any guard removed.
-- [ ] **Step 3: Implement** the harness mode and option.
-- [ ] **Step 4: Run** it and the existing browser files that import `app.ts` (`browser/` whole, through `ccrc test`). Expected: PASS.
-- [ ] **Step 5: Commit** `test(docs): the review page in a real browser (X3 R3.3)`.
-
----
-
-## Wave R4 — the amendments
-
-### Task R4.1: Amend the base and rich-docs specs and the README
-
-**Files:** base spec §0 Goals 1 and 3, decision `product`, Non-goal "Share links that ccrc hosts", §4.13's expiring-links bullet, M4.EX16's text, new §4.18 (a short pointer to this spec); rich-docs §6 rows G11 and "Draft review by link"; README Docs section. Claimed at R4's run-open.
-
-- [ ] **Step 1:** Write the amendments exactly as the spec's §6 "Amendments this feature carries" words them, each marked "(amended <date>; draft review, X3)".
-- [ ] **Step 2:** Run `cd server && ccrc test -- ./node_modules/.bin/vitest run test/docs-parity.test.ts test/citations.test.ts test/anchors.test.ts` and `cd ../pwa && ccrc test -- ./node_modules/.bin/vitest run test/docs-scans.test.ts`. Expected: PASS.
-- [ ] **Step 3: Commit** `docs(docs): draft review amendments (X3 R4.1)`.
-
----
-
-## Wave R5 — signed-in comments (follow-on)
-
-The operator adopted comments from signed-in readers only; spec §3.6 and its threats C1-C5 govern. Every field is additive: an R1-R4 build that reads an index entry with `comments` ignores it, and R5 reads an entry without it as no notes.
-
-### Task R5.1: Server: the comment vocabulary, store and doors
-
-**Files:**
-- Modify: `shared/docsReview.ts` (`REVIEW_MAX_COMMENTS = 100`, `REVIEW_COMMENT_MAX_CHARS = 2000`, `interface ReviewComment { at: number; version: number; text: string }`, `ReviewShareWire.comments?: readonly ReviewComment[]`); `server/src/review/policy.ts` (`admitComment`); `server/src/review/store.ts` (`addComment`, through the same queue and version re-read; a tombstone keeps only the count); `server/src/review/routes.ts` (two doors); `server/test/auth-gate.test.ts` (`FLAG_AWARE` gains the comment door); `server/test/box-token-census.test.ts` (`REVIEW_DOORS` nine; a scan that no `server/src/review/**` file imports a forge or pull-request module, with a planted control)
+- Modify: `shared/docsReview.ts` (`REVIEW_MAX_COMMENTS = 100`, `REVIEW_COMMENT_MAX_CHARS = 2000`, `interface ReviewComment { at: number; version: number; text: string }`, `ReviewShareWire.comments?: readonly ReviewComment[]`); `server/src/review/policy.ts` (`admitComment`); `server/src/review/store.ts` (`addComment`, through the same queue and version re-read; a tombstone keeps only the count); `server/src/review/routes.ts` (two doors); `server/test/auth-gate.test.ts` (`FLAG_AWARE` gains the comment door); `server/test/box-token-census.test.ts` (`REVIEW_DOORS` nine (R3's seven and these two); a scan that no `server/src/review/**` file imports a forge or pull-request module, with a planted control)
 - Test: `server/test/review-comments.test.ts`
 
 **Interfaces:**
@@ -279,9 +291,9 @@ The operator adopted comments from signed-in readers only; spec §3.6 and its th
 - [ ] **Step 2: Run** `cd server && ccrc test -- ./node_modules/.bin/vitest run test/review-comments.test.ts test/auth-gate.test.ts test/box-token-census.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the fields, the decider, the store write and the two doors.
 - [ ] **Step 4: Run** them and `test/single-definition`, `test/rings`. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(review): signed-in comments, server half (X3 R5.1)`.
+- [ ] **Step 5: Commit** `feat(review): signed-in comments, server half (X3 R4.1)`.
 
-### Task R5.2: PWA: notes on the review page and in the owner's list
+### Task R4.2: PWA: notes on the review page and in the owner's list
 
 **Files:**
 - Modify: `pwa/src/lib/api.ts` (`reviewThread`, `reviewComment`), `pwa/src/review/main.ts`, `pwa/src/docs/review/ReviewList.tsx`, `ReviewRows.tsx` (the count)
@@ -291,7 +303,7 @@ The operator adopted comments from signed-in readers only; spec §3.6 and its th
 - [ ] **Step 2: Run** `cd pwa && ccrc test -- ./node_modules/.bin/vitest run test/docs-review-comments.test.tsx test/review-page.test.ts`. Expected: FAIL.
 - [ ] **Step 3: Implement** the two calls and the three views, notes as text nodes only.
 - [ ] **Step 4: Run** them and `test/contrast.test.ts`. Expected: PASS.
-- [ ] **Step 5: Commit** `feat(docs): signed-in comments, PWA half (X3 R5.2)`.
+- [ ] **Step 5: Commit** `feat(docs): signed-in comments, PWA half (X3 R4.2)`.
 
 ---
 
@@ -307,8 +319,8 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R1-M4 | `review/policy.ts` | `commitVerdict` compares `fp` | `review-policy` blob rows (M-X3.5) |
 | NDR-X3-R1-M5 | `review/policy.ts` | another served ref is not `unmeasured` | `review-policy`, `review-sweep` served-ref row (M-X3.5) |
 | NDR-X3-R1-M6 | `review/policy.ts` | `unmeasured` answers `committed` | `review-policy`, `review-sweep` (M-X3.5) |
-| NDR-X3-R1-M7 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
-| NDR-X3-R1-M8 | `review/policy.ts` | `admitCreate` drops `auth-off` | `review-policy`, `review-routes` (M-X3.8) |
+| NDR-X3-R3-M101 | `review/policy.ts` | `projectList` ignores `armed` | `review-policy`, `review-routes` dark list (M-X3.8) |
+| NDR-X3-R3-M102 | `review/policy.ts` | `admitCreate` drops `auth-off` | `review-policy`, `review-routes` (M-X3.8) |
 | NDR-X3-R1-M11 | `review/store.ts` | `markViewed` skips the version re-read | `review-store` revoke-during-read (M-X3.2) |
 | NDR-X3-R1-M12 | `review/store.ts` | `remove` deletes from memory last | `review-routes` revoke-then-open (M-X3.2) |
 | NDR-X3-R1-M13 | `review/store.ts` | the index written before the bytes | `review-store` crash row |
@@ -323,23 +335,23 @@ Each row is measured red and then restored from a saved copy, with the failing c
 | NDR-X3-R1-M22 | `review/routes.ts` | the streaming cap raised to 64 | `review-routes` busy row |
 | NDR-X3-R1-M23 | `auth/gate.ts` | the create door added to `EXEMPT` | `auth-gate`, `box-token-census` |
 | NDR-X3-R1-M24 | `ccd/ccrc` | the backup set copies `~/.ccrc` whole | `review-backup` (M-X3.7) |
-| NDR-X3-R2-M1 | `review/shareForReview.ts` | offered on a committed leaf | `docs-review-share` |
-| NDR-X3-R2-M2 | `ShareSheet.tsx` | upload before the credential check | `docs-review-share` (M-X3.14) |
-| NDR-X3-R2-M3 | `review/shareForReview.ts` | scan the source text only | `docs-review-share` inline-script row (M-X3.14) |
-| NDR-X3-R2-M4 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
-| NDR-X3-R2-M5 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
-| NDR-X3-R3-M1 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
-| NDR-X3-R3-M2 | `src/review/main.ts` | post the token on load | `review-page` (M-X3.10) |
-| NDR-X3-R3-M3 | `src/review/main.ts` | `sandbox="allow-scripts"` | `review-page`, browser script row (M-X3.10) |
-| NDR-X3-R3-M4 | `review/routes.ts` | `script-src 'self' 'unsafe-inline'` | `review-routes` page CSP row (M-X3.10) |
-| NDR-X3-R3-M5 | `vite.config.ts` | drop `review.html` from `globIgnores` | `browser-dist` precache row, browser installed-PWA row (M-X3.12) |
-| NDR-X3-R3-M6 | `sw-denylist.ts` | drop the `/review` entry | `sw-denylist` (M-X3.12) |
-| NDR-X3-R3-M7 | `review/routes.ts` | `GET /review.html` serves the file | `review-routes` (M-X3.12) |
-| NDR-X3-R5-M1 | `review/policy.ts` | `admitComment` drops `auth-off` | `review-comments` dark rows (M-X3.8, C1) |
-| NDR-X3-R5-M2 | `review/policy.ts` | caps raised to 200 notes or 4000 characters | `review-comments` (M-X3.9, C3) |
-| NDR-X3-R5-M3 | `review/policy.ts` | control characters kept | `review-comments` |
-| NDR-X3-R5-M4 | `review/ReviewList.tsx` | a note rendered through the Markdown component | `docs-review-comments` literal row (M-X3.15, C2) |
-| NDR-X3-R5-M5 | `review/routes.ts` | the module imports the pull-request module | `box-token-census` forge-import scan (M-X3.15, C4) |
+| NDR-X3-R3-M1 | `review/shareForReview.ts` | offered on a committed leaf | `docs-review-share` |
+| NDR-X3-R3-M2 | `ShareSheet.tsx` | upload before the credential check | `docs-review-share` (M-X3.14) |
+| NDR-X3-R3-M3 | `review/shareForReview.ts` | scan the source text only | `docs-review-share` inline-script row (M-X3.14) |
+| NDR-X3-R3-M4 | `review/upload.ts` | re-render the body instead of sending `buildExport`'s bytes | `docs-review-share` SHA row (M-X3.13) |
+| NDR-X3-R3-M5 | `review/ReviewRows.tsx` | notice on an equal `fp` | `docs-review-owner` |
+| NDR-X3-R2-M1 | `src/review/main.ts` | keep the hash | `review-page` (M-X3.10) |
+| NDR-X3-R2-M2 | `src/review/main.ts` | post the token on load | `review-page` (M-X3.10) |
+| NDR-X3-R2-M3 | `src/review/main.ts` | `sandbox="allow-scripts"` | `review-page`, browser script row (M-X3.10) |
+| NDR-X3-R2-M4 | `review/routes.ts` | `script-src 'self' 'unsafe-inline'` | `review-routes` page CSP row (M-X3.10) |
+| NDR-X3-R2-M5 | `vite.config.ts` | drop `review.html` from `globIgnores` | `browser-dist` precache row, browser installed-PWA row (M-X3.12) |
+| NDR-X3-R2-M6 | `sw-denylist.ts` | drop the `/review` entry | `sw-denylist` (M-X3.12) |
+| NDR-X3-R2-M7 | `review/routes.ts` | `GET /review.html` serves the file | `review-routes` (M-X3.12) |
+| NDR-X3-R4-M1 | `review/policy.ts` | `admitComment` drops `auth-off` | `review-comments` dark rows (M-X3.8, C1) |
+| NDR-X3-R4-M2 | `review/policy.ts` | caps raised to 200 notes or 4000 characters | `review-comments` (M-X3.9, C3) |
+| NDR-X3-R4-M3 | `review/policy.ts` | control characters kept | `review-comments` |
+| NDR-X3-R4-M4 | `review/ReviewList.tsx` | a note rendered through the Markdown component | `docs-review-comments` literal row (M-X3.15, C2) |
+| NDR-X3-R4-M5 | `review/routes.ts` | the module imports the pull-request module | `box-token-census` forge-import scan (M-X3.15, C4) |
 
 
 ## Acceptance (Task 17, Draft review row)
@@ -380,4 +392,4 @@ The spec's §6 amendments to base Goals 1 and 3, decision `product`, the Non-goa
 
 **Commands run:** `ccrc-api mail inbox`; `ccrc-api claims take` (claim 5299); `gh issue view 1420|1419|276 -R Synapsium-Labs/ccrc-pwa`; `grep` and `sed` reads of the files above; one `graphify query`. No test was run: the wave changes documents only.
 
-**Asks:** two, ask 595 (access model) and ask 603 (comments). The coordinator released both to the operator (mails 25240 and 25405), and both came back answered on the structured ask on 2026-11-18. Access model: capability link (the recommendation). Reviewer comments: signed-in comments only (not the recommendation, which was none). Following the coordinator's direction for an adopted comment feature, comments are the follow-on wave R5 with their own threats (spec §3.6, C1-C5), and nothing in R1-R4 depends on them. The finished ask records are no longer listed, so who answered is read from the release mails, not measured.
+**Asks:** two, ask 595 (access model) and ask 603 (comments). The coordinator released both to the operator (mails 25240 and 25405), and both came back answered on the structured ask on 2026-11-18. Access model: capability link (the recommendation). Reviewer comments: signed-in comments only (not the recommendation, which was none). Following the coordinator's direction for an adopted comment feature, comments are the follow-on wave R4 with their own threats (spec §3.6, C1-C5), and nothing in R1-R3 depends on them. The finished ask records are no longer listed, so who answered is read from the release mails, not measured.

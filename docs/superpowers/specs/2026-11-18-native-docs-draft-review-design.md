@@ -156,7 +156,7 @@ The page reads `location.hash`, clears it with `history.replaceState`, and shows
 
 ### 3.6 Comments from signed-in readers (follow-on wave)
 
-The operator adopted comments for signed-in readers only (this wave's ask, released by the coordinator and answered on 2026-11-18). As the coordinator directed for an adopted comment feature, they are a follow-on: the leaf plan's wave R5, after the core waves R1-R4, which neither need nor anticipate them. They carry their own threat model.
+The operator adopted comments for signed-in readers only (this wave's ask, released by the coordinator and answered on 2026-11-18). As the coordinator directed for an adopted comment feature, they are a follow-on: the leaf plan's wave R4, after the core waves R1-R3, which neither need nor anticipate them. They carry their own threat model.
 
 | # | Threat | Rule |
 |---|---|---|
@@ -251,8 +251,8 @@ Every new route names its gate under the box-token census rules. None consults t
 | `GET /api/review/shares` (the owner's list, optionally by project, section and path) | Session-gated; links only when armed | `REVIEW_DOORS` | `bad-query` |
 | `POST /api/review/shares/:id/pin` (body `{pinned}`) | Session-gated | `REVIEW_DOORS` | `unknown-share` |
 | `POST /api/review/shares/:id/revoke` | Session-gated; never refused while the share exists | `REVIEW_DOORS` | `unknown-share` |
-| `POST /api/review/thread` (body `{token}`), wave R5 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | one 404 for every unknown token |
-| `POST /api/review/comment` (body `{token, text}`), wave R5 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | `too-long`, `too-many`, 404 |
+| `POST /api/review/thread` (body `{token}`), wave R4 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | one 404 for every unknown token |
+| `POST /api/review/comment` (body `{token, text}`), wave R4 | Session-gated; refuses `auth-off` dark | `REVIEW_DOORS` | `too-long`, `too-many`, 404 |
 | `POST /api/review/open` (the read) | `EXEMPT`, new class 9 "draft review by capability"; the token in the body is the credential | `REVIEW_DOORS`; `auth-gate.test.ts` class list and number words; README auth paragraph; a never-read scan like the reader lab's (no cookie, no box token, no fleet port, no ccd argv) | one identical 404 for every failure; 429 `busy` past 4 streaming reads |
 | `GET /review` (the review page) | `EXEMPT`, class 9 | As the read door | none |
 
@@ -279,7 +279,7 @@ Technical choices are decided here with their reason. The two product choices we
 | X3-13 | Flooding the read door | A shared rate limit; cheap misses plus a streaming cap | Cheap misses plus a cap of 4 streaming reads: a shared budget would let one caller lock every reviewer out | Proposed |
 | X3-14 | Server module | Inside `server/src/docs/`; its own `server/src/review/` | Its own module, consuming the docs tree read through a port it declares: the docs module's guards stay unchanged | Proposed |
 
-**Amendments this feature carries** (made by the leaf plan's last wave, not here, so they cannot collide with the appearance and parity waves):
+**Amendments this feature carries.** Each lands with the wave that ships its behaviour, never here and never all at the end (coordinator's ruling on review finding F13), so no release runs behaviour its specs still forbid. The release order makes a link impossible to hand out before the page that opens it: the leaf plan's R1 ships the read door and the store and can make no link, R2 ships the review page, and R3 ships the owner's create last.
 
 - Base Goal 3 gains: "Share for review stores a snapshot the owner explicitly shares, on the owner's own server, for a bounded time (§4.18)." Base Goal 1 and the `product` decision gain the review page and read door as the one documented exception to "behind that install's own session gate".
 - Base Non-goal "Share links that ccrc hosts" narrows to general hosted publishing; the expiring-links bullet of base §4.13 points here.
