@@ -14575,6 +14575,9 @@ export interface CallView {
   seenAt: number | null;
   overturnedAt: number | null;
   overturnNote: string | null;
+  /** D-8126 A4: when a cleared big call left the operator's group (`callClearedAt`), on `WaitingView.callsCleared` rows only.
+   *  OPTIONAL on the wire: an older server omits it, and the console falls back to its own reading. ADDITIVE. */
+  clearedAt?: number;
 }
 
 /** The answer of `POST /api/coord/programmes/:slug/calls`: the call's id, its class, and when a `block` lapses on its own
