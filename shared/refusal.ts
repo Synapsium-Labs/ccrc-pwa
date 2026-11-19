@@ -660,6 +660,8 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   // The phase words (programme work map WM0, D-8715): a reference to a plan object or phase that is not there, or is dropped,
   // reads like the other absent objects; a refused carry is a state that exists.
   'unknown-ref': 404, 'bad-carry': 409,
+  // Programme work map WM1 (D-8727): evidence that does not verify is a refusal of a state that exists.
+  'evidence-unverified': 409,
 };
 
 /** The runtime list, derived from the table (`PR_REASONS`'s idiom). */
@@ -671,7 +673,7 @@ export const ROUTE_REFUSALS = Object.keys(REFUSAL_STATUS) as RouteRefusal[];
 export type OpenRunConflict = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'workspace-spent' | 'spent-unmeasured'
   | 'claimed-by-another' | 'review-in-flight' | 'attribution-required' | 'not-a-child' | 'cap-review-rounds'
-  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'>;
+  | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed' | 'ticket-required'>;
 
 /** Each one's status (D-5384). Measured from the open route's inline sends on
  *  landing day — every one answered 409 — never chosen. */
@@ -685,6 +687,8 @@ export const RUN_REFUSAL_STATUS: Readonly<Record<OpenRunConflict, number>> = {
   'cap-review-rounds': 409,
   // D-8181: chosen, not measured — the plan's five words, 409 like the family.
   'wave-epic-mismatch': 409, 'plan-missing': 409, 'reserved-programme': 409, 'ticket-unavailable': 409, 'plan-closed': 409,
+  // Programme work map WM1 (D-8727): chosen, not measured — a new word, 409 like the plan's five.
+  'ticket-required': 409,
 };
 
 /** The `reject.code` words `POST /api/runs/:id/advance` answers (D-6733, audit ticket ARCH-33,

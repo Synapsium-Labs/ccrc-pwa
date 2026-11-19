@@ -144,6 +144,8 @@ describe('the INSTALLED ccd carries a marker that matches its own bytes', () => 
   // The docs redactor's two files (D-7077), which the installer publishes beside the library and pins in the body.
   mkdirSync(path.join(tree, 'shared'), { recursive: true });
   for (const f of ['redact.mjs', 'redact-cli.mjs']) copyFileSync(path.join(REPO, 'shared', f), path.join(tree, 'shared', f));
+  // The door program, which the installer publishes beside the body and pins in it.
+  copyFileSync(path.join(REPO, 'ccd', 'door-process.mjs'), path.join(tree, 'ccd', 'door-process.mjs'));
   const r = spawnSync(canonicalPython3(), ['-IS', path.join(tree, 'ccd', 'ccd-entry-install.py'), 'install', tree, home],
     { encoding: 'utf8', cwd: home, env: { HOME: home, PATH: process.env['PATH'] ?? '/usr/bin:/bin' } });
   const ccd = r.status === 0 ? readFileSync(path.join(home, '.local', 'libexec', 'ccrc', path.basename(CCD)), 'utf8') : '';

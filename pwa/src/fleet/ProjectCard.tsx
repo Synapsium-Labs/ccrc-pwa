@@ -29,7 +29,7 @@ import { Fragment, memo, useEffect, useLayoutEffect, useRef, useState } from 're
 import type { ReactNode } from 'react';
 import { BareRow, Button, QuickConfirm, toast, useNow } from '@ccrc/ui';
 import type {
-  DelegationActivityWire, FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
+  FleetSession, ProjectedHome, ProjectPoolWire, ProjectPoolsWire, RosterWire, RunSummary,
 } from '../../../shared/api';
 import { orphanNote, type OrphanNote } from './orphanWords';
 import { addWorkspaceLabel, poolOfPlacement, type ProjectPlacementRead } from './placementWords';
@@ -39,7 +39,7 @@ import { archivableReleased } from './archiveReleased';
 import { fleetRowKey, nestFleet, type DelegationGroupKind, type FleetRow } from './nestFleet';
 import { childRunContext, workingOnCard, type FleetTreeGroup } from './fleetTree';
 import { ProjectCardHead } from './ProjectCardHead';
-import type { CardRollup, RolledRow } from './rollup';
+import { partWords, type CardRollup, type RolledRow } from './rollup';
 import { CROSSING_GLYPH, DISPATCH_GLYPH, boundOpenRun, dispatchWindow, waveLabel } from './runWords';
 import {
   cardAbroad, cardBoxes, fleetHues, foldedCard, rowRun, trayOf, type BoxState, type ProgHue, type ProgrammeBoxView, type SummaryRow,
@@ -468,9 +468,6 @@ function ProjectCardView({
   const folded = collapsed ? foldedCard(ranked, prog.elsewhere, prog.lone) : null;
   const shownAbroad = cardAbroad(abroad, prog.boxes);
   const rowKey = fleetRowKey;
-  // R9 (delegation broker wave 4): each session row's attached activities, by session id, off the tree's own rows.
-  const delegatedOf = new Map(tree.flatMap((r) =>
-    (r.kind === 'session' && r.delegated !== undefined ? [[r.session.id, r.delegated] as const] : [])));
   // Delegation broker wave 4: a group's members render only while the operator holds it open; the header always does.
   const groupOpen: Readonly<Record<DelegationGroupKind, boolean>> = { 'offline-coordinator': offlineOpen, unowned: unownedOpen };
   const memberOf = (row: RolledRow): DelegationGroupKind | null =>
@@ -546,7 +543,7 @@ function ProjectCardView({
    *  fold — which is three places that have to agree about what a row on THIS
    *  card knows: its pool, its run door and whether its repo needs saying. */
   const line = (
-    s: FleetSession, note: OrphanNote | null = null, delegated?: readonly DelegationActivityWire[],
+    s: FleetSession, note: OrphanNote | null = null,
   ): ReactNode => (
     <SessionLine
       key={s.id}
@@ -561,7 +558,6 @@ function ProjectCardView({
       childRun={childRunContext(s, runs, coordOf)}
       coordinator={note?.presence ?? null}
       {...(note === null ? {} : { coordinatorTitle: note.title })}
-      {...(delegated === undefined ? {} : { delegated })}
     />
   );
 
@@ -617,9 +613,7 @@ function ProjectCardView({
         </BareRow>
       );
     }
-    // R9: the chip rides the row `nestFleet` attached it to; a box draws its coordinator's row itself, so that row's
-    // activities are read back off the tree by id.
-    return row.kind === 'session' ? line(row.session, noteFor(row), row.delegated ?? delegatedOf.get(row.session.id))
+    return row.kind === 'session' ? line(row.session, noteFor(row))
       : <PendingSpawn run={row.run} nowMs={nowMs} />;
   };
 
@@ -640,7 +634,7 @@ function ProjectCardView({
             <Fragment key={p.word}>
               {i > 0 && ' · '}
               <span className={`proj-children-part${p.word === 'needs you' ? ' proj-children-part--needs-you' : ''}`}>
-                {`${p.n} ${p.word}`}
+                {partWords(p)}
               </span>
             </Fragment>
           ))}

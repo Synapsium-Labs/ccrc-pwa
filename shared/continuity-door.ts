@@ -53,3 +53,12 @@ export function isClaimWhy(v: unknown): v is ClaimWhy {
  *  12; the spec-fixes run adds them to Table 11.5b). */
 export const CLAIM_RETRY_MIN_MS = 1_000;
 export const CLAIM_RETRY_MAX_MS = 30_000;
+
+/** THE DELTA CACHE (C38, "a delta on every prompt"; plan Task 6, question 12): the door process refreshes the card door's
+ *  `delta` form after each call it serves and every `DELTA_REFRESH_MS`, and writes `$REG/.door/<id>/delta` with a first line
+ *  `v=1 at=<ms> until=<ms>`, `until` being `at` plus `DELTA_LEASE_MS`; the session hook prints the text while `until` is ahead
+ *  of now, and the unknown line once it has passed. The text is one line of at most `DELTA_MAX_BYTES` UTF-8 bytes, as the
+ *  anchor's ceilings are counted. ccd/door-process.mjs and ccd/session-hook.sh carry copies, held equal by their tests. */
+export const DELTA_REFRESH_MS = 60_000;
+export const DELTA_LEASE_MS = 180_000;
+export const DELTA_MAX_BYTES = 300;

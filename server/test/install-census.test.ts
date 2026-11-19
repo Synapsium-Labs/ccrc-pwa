@@ -1976,6 +1976,33 @@ describe('ccd\'s docs redactor (D-7077, OA-C11 (a)): the two shared/ files the b
   });
 });
 
+describe('the door program (the Overlord door process A2): backed up by the update and by deploy.sh, before the library and the body that pins it, and removed by the uninstall', () => {
+  const progDest = '.local/libexec/ccrc/door-process.mjs';
+
+  it('the update backup takes it right after the redactor, before the library and the body — arm 3 restores in that order', () => {
+    const { libDest } = libDecl();
+    const { bodyDest } = pairDecl();
+    const sources = calls(fnBody('_upd_backup_set'), '_upd_backup_copy').map((a) => a[0]!);
+    const at = sources.indexOf(`$HOME/${progDest}`);
+    expect(at, '_upd_backup_set does not back up the door program').toBeGreaterThan(-1);
+    expect(at).toBeGreaterThan(sources.indexOf(`$HOME/${redactDecl()[1]!.dest}`));
+    expect(at).toBeLessThan(sources.indexOf(`$HOME/${libDest}`));
+    expect(at).toBeLessThan(sources.indexOf(`$HOME/${bodyDest}`));
+  });
+
+  it('deploy.sh backs it up, guarded, before the library, in the same remote command', () => {
+    const { libDest } = libDecl();
+    const text = deployText();
+    const guarded = `{ [ ! -f ~/${progDest} ] || cp -a ~/${progDest} ~/ccrc-backups/$TS/ccd-door-process.mjs; }`;
+    expect(text.indexOf(guarded), 'deploy.sh does not back up the door program, guarded').toBeGreaterThan(-1);
+    expect(text.indexOf(guarded)).toBeLessThan(text.indexOf(`[ ! -f ~/${libDest} ] || cp -a`));
+  });
+
+  it('the uninstall removes it by name', () => {
+    expect(rmFOperands(fnBody('_uninst_tree_bins'))).toContain(`$HOME/${progDest}`);
+  });
+});
+
 describe('every file either installer copies out of the tree is tracked in this repository', () => {
   // Header: AND THE SOURCES. A placement whose source no commit carries dies
   // on every real tree; a fixture that stubs the file hides that (D-3165).
@@ -2426,7 +2453,7 @@ describe('the libexec census: what _inst_bins places under ~/.local/libexec/ccrc
     const ub = fnBody('_uninst_tree_bins');
     const removed = census('_uninst_tree_bins', 'removal', rmFOperands(ub), [LIBEXEC_DIR], assignments(ub));
     const deployed = deployPlaced('install_atomic', DEPLOY_LIBEXEC_DIRS);
-    for (const set of [placed, removed, deployed]) set.delete('ccd');   // the body: the pair describe's (D-3696)
+    for (const set of [placed, removed, deployed]) { set.delete('ccd'); set.delete('door-process.mjs'); }   // the body: the pair describe's (D-3696) and the door program's, published beside it by the same pair installer (not a launcher: `_inst_bins` never places it)
     expect(placed.size, 'the _inst_bins reader found nothing under ~/.local/libexec/ccrc: it has gone stale').toBeGreaterThan(0);
     expect([...placed].filter((n) => !removed.has(n)).sort(), '_inst_bins places these and _uninst_tree_bins never removes them').toEqual([]);
     expect([...removed].filter((n) => !placed.has(n)).sort(), '_uninst_tree_bins removes these and _inst_bins never places them').toEqual([]);

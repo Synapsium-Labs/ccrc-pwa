@@ -1,7 +1,7 @@
 import { isPositiveDecimalSafeInteger, isRegistryId, shapeProgramSlug } from '../../../shared/api.js';
 import type { RunKind, RunRefuseCode, RunSummary } from '../../../shared/api.js';
 import { LINEAR_SYNC_PROGRAMME, type EpicState, type TicketState } from '../../../shared/plan.js';
-import { epicAdmitsRun, epicForWave, ticketIsHeld } from './planPolicy.js';
+import { epicAdmitsRun, epicForWave, runMustNameTicket, ticketIsHeld } from './planPolicy.js';
 import type { OpenRunTicket } from './planStore.js';
 import { decideOtherLane, type OtherLaneReads } from './otherLanes.js';
 
@@ -94,6 +94,8 @@ export interface OpenRunFacts {
 
 export interface OpenRunPlanFacts {
   required: boolean; ended: boolean;
+  /** Programme work map WM1: the plan declares at least one phase; `tickets` lists one epic's tickets, as stored. */
+  phased: boolean; tickets(epicId: number): readonly { key: string; state: TicketState; runId: number | null }[];
   epics: readonly { id: number; waves: readonly number[]; state: EpicState }[];
   ticket(key: string): { id: number; epicId: number; project: string; state: TicketState; runId: number | null } | null;
 }
@@ -203,7 +205,7 @@ export function shapeHomeProject(raw: string): HomeProjectShape {
  *  body key, with `by`), as opposed to the `error` words. */
 export type OpenRunConflictCode = Extract<RunRefuseCode,
   'project-mismatch' | 'home-mismatch' | 'claimant-is-a-worker' | 'attribution-required' | 'not-a-child'
-  | 'reserved-programme' | 'plan-closed' | 'plan-missing' | 'wave-epic-mismatch' | 'ticket-unavailable'>;
+  | 'reserved-programme' | 'plan-closed' | 'plan-missing' | 'wave-epic-mismatch' | 'ticket-unavailable' | 'ticket-required'>;
 
 /** One refusal, carrying the gate that answered it (for the order table; the
  *  route does not send it) and exactly the body fields the inline sends wrote:
@@ -419,6 +421,8 @@ const GATES = [
     const epicId = epicForWave(p.epics, wave);
     if (epicId === null) return { refused: 'wave-epic-mismatch' };
     if (typeof c.b.ticket !== 'string') {
+      // Programme work map WM1 (D-8727, spec §4.1 D10): a phased plan's run names its open declared ticket, after the wave's epic.
+      if (runMustNameTicket(p.phased, p.tickets(epicId))) return { refused: 'ticket-required' };
       c.ticket = { kind: 'new', epicId, project, title: c.b.title as string };
       return undefined;
     }

@@ -1654,8 +1654,8 @@ describe('ccrc backup and update: the coordination snapshot callers (delegation 
     const pairs = sourcedCcrc(home, '_upd_backup_pairs');
     expect(pairs.code, pairs.stderr).toBe(0);
     const names = pairs.stdout.split('\n').filter(Boolean).map((l) => l.split('\t')[2]);
-    const at = ['ccd-shared-redact.mjs', 'ccd-shared-redact-cli.mjs', 'ccd-lib-disk-retention.sh', 'ccd-body'].map((n) => names.indexOf(n));
-    expect(at.every((i) => i >= 0), `the listing names all four: ${JSON.stringify(names)}`).toBe(true);
+    const at = ['ccd-shared-redact.mjs', 'ccd-shared-redact-cli.mjs', 'ccd-door-process.mjs', 'ccd-lib-disk-retention.sh', 'ccd-body'].map((n) => names.indexOf(n));
+    expect(at.every((i) => i >= 0), `the listing names all five: ${JSON.stringify(names)}`).toBe(true);
     expect([...at].sort((a, b) => a - b)).toEqual(at);
   });
 

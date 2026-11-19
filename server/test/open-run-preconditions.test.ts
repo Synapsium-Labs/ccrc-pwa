@@ -66,7 +66,7 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     claimantListed: async () => ({ ok: true }),
     claimantProject: async () => ({ kind: 'measured', project: 'demo' }),
     sessionMark: async () => ({ kind: 'absent' }),
-    plan: () => ({ required: false, ended: false, epics: [], ticket: () => null }),
+    plan: () => ({ required: false, ended: false, phased: false, epics: [], ticket: () => null, tickets: () => [] }),
     otherLaneReads: NOT_DESIGNATED_READS,
     ...over,
   };
@@ -74,7 +74,7 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
 
 /** D-8181: a stored plan with one epic listing waves 1 to 3, and tickets by key. */
 const planOf = (over: Partial<OpenRunPlanFacts> = {}, tickets: Record<string, ReturnType<OpenRunPlanFacts['ticket']>> = {}): ((s: string) => OpenRunPlanFacts) =>
-  () => ({ required: true, ended: false, epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }], ticket: (k) => tickets[k] ?? null, ...over });
+  () => ({ required: true, ended: false, phased: false, epics: [{ id: 5, waves: [1, 2, 3], state: 'planned' }], ticket: (k) => tickets[k] ?? null, tickets: () => [], ...over });
 const T = (over: Record<string, unknown> = {}) => ({ id: 9, epicId: 5, project: 'demo', state: 'open' as const, runId: null, ...over });
 
 const BAD_SLUG = 'a/b';
@@ -165,6 +165,10 @@ const SINGLE: Row[] = [
     refusal: { refused: 'wave-epic-mismatch' } },
   { name: "a ticket of another epic than the wave's", gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ epicId: 6 }) }) }),
     refusal: { refused: 'wave-epic-mismatch' } },
+  // Programme work map WM1 (D-8727): in a phased plan, no ticket into an epic with an open declared ticket no run holds.
+  { name: 'no ticket in a phased plan whose epic has an open declared ticket', gate: 'planGate',
+    f: facts({ ...WORK }, { plan: planOf({ phased: true, tickets: () => [{ key: 'k1', state: 'open', runId: null }] }) }),
+    refusal: { refused: 'ticket-required' } },
   { name: 'a ticket that does not exist (an Upkeep ticket is never found)', gate: 'planGate', f: facts({ ...WORK, ticket: 'nope' }, { plan: planOf() }),
     refusal: { refused: 'ticket-unavailable' } },
   { name: 'a ticket already started by another run', gate: 'planGate', f: facts({ ...WORK, ticket: 'k1' }, { plan: planOf({}, { k1: T({ state: 'started', runId: 3 }) }) }),

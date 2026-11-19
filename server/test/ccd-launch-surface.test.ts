@@ -30,7 +30,12 @@ const RESUME_DIES = `sleep() { :; };
     };`;
 
 let h: CcdHarness;
-beforeEach(() => { h = makeCcdHarness('ccrc-ccd-launch-surface-'); });
+beforeEach(() => {
+  h = makeCcdHarness('ccrc-ccd-launch-surface-');
+  // The client a surfaced spawn's door process runs: the spawn refuses without it (review 2735, departure 3).
+  fs.mkdirSync(path.join(h.home, '.local', 'bin'), { recursive: true });
+  fs.writeFileSync(path.join(h.home, '.local', 'bin', 'ccrc-api'), '#!/bin/sh\nexit 3\n', { mode: 0o755 });
+});
 afterEach(() => { h.cleanup(); });
 
 /** The row's workspace: a git repository of its own (PR A2's workspace step links into it and writes its exclude file). */

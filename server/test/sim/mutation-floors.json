@@ -73,6 +73,7 @@
   "server/src/continuity/renewalFeed.ts#renewalPermit": 1,
   "server/src/continuity/renewalFeed.ts#renewalFeed": 1,
   "server/src/continuity/renewalFeed.ts#renewAnswerEvent": 1,
+  "server/src/continuity/renewalFeed.ts#FIRST_PROMPT_OF_ROLE": 1,
   "server/src/continuity/renewalFeed.ts#renewalHoldsMail": 1,
   "server/src/continuity/renewalOrder.ts#overlordFirst": 1,
   "server/src/continuity/renewalDrain.ts#drainVerdict": 1,
@@ -238,5 +239,9 @@
   "server/src/coord/programmeMeasures.ts#runSpendVerdict": 1,
   "server/src/usage.ts#readSpendTurns": 1,
   "server/src/coord/forecastLane.ts#spendReadingOf": 1,
+  "server/src/coord/planPolicy.ts#runMustNameTicket": 1,
+  "server/src/coord/planPolicy.ts#parsePlanTicketDone": 1,
+  "server/src/coord/planPolicy.ts#ticketDoneVerdict": 1,
+  "server/src/coord/planPolicy.ts#landedFactOf": 1,
   "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1
 }

@@ -23,7 +23,16 @@ import { RENEWAL_LANE_PERIOD_MS, STATE_DEADLINE_S, type GenerationState, type Tr
 import type { GenAction, GenEvent } from './generationMachine.js';
 import { overlordFirst, type OverlordGenerationReading } from './renewalOrder.js';
 import type { SoftAnswer, SoftWait } from './softRenewal.js';
-import type { RenewResult } from './sessionHost.js';
+import type { RenewalPrompt, RenewResult } from './sessionHost.js';
+import type { FleetRole } from '../../../shared/fleetRoles.js';
+
+/** THE FIRST LINE OF A RENEWED GENERATION, BY ROLE (Overlord W1 door process A2, Task 5): the `INJECTED_PROMPTS` row the
+ *  renewal act delivers at `first-prompt` and at `renudge-card`. The Overlord has no shell, so its line names its doors
+ *  (`overlord-first-prompt`, which designation A sends to a new body too); every other role reads its card with `ccrc-api`. */
+export const FIRST_PROMPT_OF_ROLE: Readonly<Record<FleetRole, RenewalPrompt>> = {
+  overlord: 'overlord-first-prompt', auditor: 'renewal-first-prompt', replay: 'renewal-first-prompt', worker: 'renewal-first-prompt',
+  reviewer: 'renewal-first-prompt', coordinator: 'renewal-first-prompt', plain: 'renewal-first-prompt',
+};
 
 /** Why a due generation's renewal does not start this pass. */
 export type PermitWait = 'capability-missing' | 'role-changed' | 'overlord-first' | SoftWait;

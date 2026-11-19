@@ -5,8 +5,8 @@ import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
   type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPhaseBody,
-  type PlanPhaseRefBody, type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody, type TicketState,
-  type TriageDecision,
+  type PlanPhaseRefBody, type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody,
+  type PlanTicketDoneBody, type TicketDoneEvidence, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
 import { isLinearIdentifier } from '../linear/ops.js';
 import { requestIdOf } from '../linear/planSyncPolicy.js';
@@ -282,6 +282,26 @@ export function parsePlanPhaseRef(body: unknown): { ok: true; move: PlanPhaseRef
     return { ok: true, move: { op: 'carry', from: body.from, to: body.to, ticket: body.ticket } };
   }
   return verbBad('op is not add, remove or carry');
+}
+
+/** `plan ticket-done` (programme work map WM1, D-8727): `{ ticket, evidence: { runId } | { pr } }`, exactly one evidence
+ *  key, a positive integer. The caller's identity rides the query, so a body naming `byId` or `byUuid` is refused as an
+ *  unknown field. */
+export function parsePlanTicketDone(body: unknown): { ok: true; done: PlanTicketDoneBody } | VerbBad {
+  if (!isObj(body)) return verbBad('the body is not an object');
+  const x = closed(body, ['ticket', 'evidence'], 'body');
+  if (x) return verbBad(x);
+  if (!isPlanKey(body.ticket)) return verbBad('ticket is not a plan key');
+  const ev = body.evidence;
+  if (!isObj(ev)) return verbBad('evidence is not an object');
+  const keys = Object.keys(ev);
+  if (keys.length !== 1) return verbBad('evidence names exactly one of runId or pr');
+  const k = keys[0]!;
+  const v = ev[k];
+  if ((k !== 'runId' && k !== 'pr') || !Number.isSafeInteger(v) || (v as number) < 1) {
+    return verbBad('evidence is not a run id or a pull request number');
+  }
+  return { ok: true, done: { ticket: body.ticket, evidence: k === 'runId' ? { runId: v as number } : { pr: v as number } } };
 }
 
 /** `plan epic-drop`: the epic's key and a reason. */
@@ -599,6 +619,102 @@ export function dropEpicInto(
   for (const c of epic.checkpoints) if (c.state === 'open') changes.checkpoints.drop.push({ id: c.id, why });
   for (const t of epic.tickets) if (t.state === 'open') changes.tickets.drop.push({ id: t.id, why });
   return null;
+}
+
+/** Programme work map WM1 (D-8727; spec §4.1, D10): `runs open` with no `ticket` must name one when the plan declares at
+ *  least one phase and the wave's epic holds an `open` ticket that is not an auto ticket (`isAutoTicketKey`) and that no run
+ *  holds. A plan with no phases, or an epic with no such ticket, mints the run's own ticket as before. */
+export function runMustNameTicket(phased: boolean, tickets: readonly { key: string; state: TicketState; runId: number | null }[]): boolean {
+  if (!phased) return false;
+  return tickets.some((t) => t.state === 'open' && t.runId === null && !isAutoTicketKey(t.key));
+}
+
+/** What `plan ticket-done`'s verdict reads (programme work map WM1, D-8727), gathered by the route. `run` is the run a
+ *  `{ runId }` names (null when there is no such run; `ticketId`/`ticketKey` its own ticket, null for none); `landed` what
+ *  the landing line says of a `{ pr }` for the ticket's own project; `stored` the done evidence already stored on the
+ *  programme's tickets; `links` the landing line's pairs of a pull request and the run that carried it, which tie a stored
+ *  piece of evidence of the other kind to this one (review 2429 F2; `evidenceLinksOf`, planRunFacts.ts, reads them). */
+export interface TicketDoneFacts {
+  program: string;
+  ticket: { id: number; key: string; project: string; state: TicketState; runId: number | null };
+  evidence: TicketDoneEvidence;
+  run: { program: string; kind: string; state: string; ticketId: number | null; ticketKey: string | null } | null;
+  landed: { kind: 'landed' } | { kind: 'unlanded'; state: string } | { kind: 'no-entry' } | { kind: 'unreadable'; detail: string } | null;
+  /** The programme's other tickets' stored evidence; `malformed` is a column that reads as neither kind (review 2712 F3). */
+  stored: readonly { ticketId: number; key: string; project: string; evidence: TicketDoneEvidence | 'malformed' }[];
+  /** The landing line's ties of a pull request to the run that carried it, each with the ticket that run holds (its own
+   *  ticket, `plan.ticketOfRun`; null for none), as `planRunFacts.ts#evidenceLinksOf` reads them (review 2712 F1). */
+  links: { kind: 'read'; pairs: readonly EvidenceLink[] } | { kind: 'unreadable'; detail: string };
+}
+export interface EvidenceLink { project: string; pr: number; runId: number; holder: { ticketId: number; key: string } | null }
+
+/** What one project's landing line says of pull request `pr` (its entries in line order): `landed` when any entry for it is,
+ *  else the newest entry's state, else no entry. */
+export function landedFactOf(entries: readonly { pr: number; state: string }[], pr: number): NonNullable<TicketDoneFacts['landed']> {
+  const mine = entries.filter((e) => e.pr === pr);
+  if (mine.length === 0) return { kind: 'no-entry' };
+  return mine.some((e) => e.state === 'landed') ? { kind: 'landed' } : { kind: 'unlanded', state: mine[mine.length - 1]!.state };
+}
+
+/** THE evidence rule of `plan ticket-done` (spec §4.1, review 2375 F2), and the ticket's own state in `plan ticket-move`'s
+ *  words (F21): a ticket a run holds is `plan-runs-open`, one not `open` is `plan-bad-body`. `{ runId }` verifies when that
+ *  run is a `work` run of this programme in state `done` whose own ticket is this ticket, an auto ticket or none; `{ pr }`
+ *  when the landing line holds that pull request `landed` for the ticket's own project (F19). A piece of evidence already
+ *  stored on another ticket of the programme does not verify (F2: one run or pull request closes at most one ticket), except
+ *  on the run's own auto ticket, which folds into the declared one. A pull request is one project's: the same number in
+ *  another project is another pull request. A run and the pull request it carried are one piece of work (review 2429 F2,
+ *  the coordinator's ruling): a `{ pr }` the landing line ties to a run stored on another ticket does not verify, nor a
+ *  `{ runId }` tied to a pull request stored on another, except that run's own auto ticket again; a link that cannot be
+ *  read refuses, as an unreadable landing line does. A `{ pr }` the landing line ties to a run that holds another declared
+ *  ticket does not verify either, whether or not that ticket stores evidence yet (review 2712 F1); on the `{ pr }` side the
+ *  exception is the linked run's own auto ticket alone, compared by ticket id (F2); and evidence another ticket stores that
+ *  reads as neither kind refuses, since it could be this evidence (F3). */
+export function ticketDoneVerdict(f: TicketDoneFacts): { ok: true } | Refused {
+  const t = f.ticket;
+  if (ticketIsHeld(t)) return refuse('plan-runs-open', `ticket ${t.key} is held by run ${t.runId ?? '?'}: it is recorded done once that run ends`);
+  if (t.state !== 'open') return refuse('plan-bad-body', `ticket ${t.key} is ${t.state}: only an open ticket is recorded done`);
+  const ev = f.evidence;
+  if ('runId' in ev) {
+    const r = f.run;
+    if (r === null) return refuse('evidence-unverified', `no run ${ev.runId}`);
+    if (r.program !== f.program || r.kind !== 'work') return refuse('evidence-unverified', `run ${ev.runId} is not a work run of ${f.program}`);
+    if (r.state !== 'done') return refuse('evidence-unverified', `run ${ev.runId} is ${r.state}, not done`);
+    if (r.ticketId !== null && r.ticketId !== t.id && !(r.ticketKey !== null && isAutoTicketKey(r.ticketKey))) {
+      return refuse('evidence-unverified', `run ${ev.runId} did ticket ${r.ticketKey ?? '?'}, not ${t.key}`);
+    }
+  } else {
+    const l = f.landed;
+    if (l === null || l.kind === 'no-entry') {
+      return refuse('evidence-unverified', `the landing line of ${t.project} holds no pull request ${ev.pr}: name the run that carried it`);
+    }
+    if (l.kind === 'unreadable') return refuse('evidence-unverified', `the landing line of ${t.project} could not be read (${l.detail})`);
+    if (l.kind === 'unlanded') return refuse('evidence-unverified', `pull request ${ev.pr} of ${t.project} is ${l.state}, not landed`);
+  }
+  if (f.links.kind === 'unreadable') return refuse('evidence-unverified', `the landing line that ties runs to pull requests could not be read (${f.links.detail})`);
+  const unread = f.stored.find((s) => s.ticketId !== t.id && s.evidence === 'malformed');
+  if (unread !== undefined) return refuse('evidence-unverified', `ticket ${unread.key} stores evidence that cannot be read: it could be this evidence`);
+  const pairs = f.links.pairs;
+  // The { pr } side: this pull request's ties (its own project's line) to the runs that carried it.
+  const ties = 'pr' in ev ? pairs.filter((p) => p.project === t.project && p.pr === ev.pr) : [];
+  const ownAutoOf = (p: EvidenceLink): number | null => (p.holder !== null && isAutoTicketKey(p.holder.key) ? p.holder.ticketId : null);
+  const holding = ties.find((p) => p.holder !== null && p.holder.ticketId !== t.id && !isAutoTicketKey(p.holder.key));
+  if (holding !== undefined && holding.holder !== null) {
+    return refuse('evidence-unverified', `pull request ${holding.pr} was carried by run ${holding.runId}, which holds ticket ${holding.holder.key}: they close one ticket`);
+  }
+  const ownAuto = 'runId' in ev && f.run !== null ? f.run.ticketId : null;
+  const taken = f.stored.find((s) => {
+    const se = s.evidence;
+    if (s.ticketId === t.id || se === 'malformed') return false;
+    if ('runId' in ev) {
+      if (s.ticketId === ownAuto) return false;
+      return 'runId' in se ? se.runId === ev.runId
+        : pairs.some((p) => p.project === s.project && p.pr === se.pr && p.runId === ev.runId);
+    }
+    return 'pr' in se ? se.pr === ev.pr && s.project === t.project
+      : ties.some((p) => p.runId === se.runId && s.ticketId !== ownAutoOf(p));
+  });
+  if (taken !== undefined) return refuse('evidence-unverified', `this evidence is already stored on ticket ${taken.key}: it closes one ticket`);
+  return { ok: true };
 }
 
 /** The epic a wave's runs belong to: the first epic, in the order given, that lists the wave and is not dropped. */
