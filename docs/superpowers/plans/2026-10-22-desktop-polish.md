@@ -4264,7 +4264,8 @@ so fail-closed comes before a tidy screen. The task note is `docs/superpowers/pr
   break's start, the review's first proposal, leaked every form, short breaks included (measured), so it was not used.
 - **F3**: a row pins where a slice ends at 63 and 64 blanks and for an escape, so `BREAK_CUT_MAX` at 63 or 65 reds it.
 - **F2**: `breakStartAt` keeps the one family it reads back differently from `ROW_BREAK` (a CR LF, blanks or none, then
-  a CR), because the difference fails closed; its docstring says where, and a brute force over 2,015,538 strings (488,280 before fix round 1's tab) pins the
+  a CR; since fix round 2 a CR LF, blanks, then a CR CR LF; since fix round 3 a CR LF right before a CR CR LF), because
+  the difference fails closed; its docstring says where, and a brute force over 2,015,538 strings (488,280 before fix round 1's tab) pins the
   agreement and the difference (`mask-break-grammar.test.ts`).
 - **F4** (`drawer-consecutive-breaks`): the cause is the forward grammar, not `chainBack`. `ROW_BREAK` reads CR CR LF (a
   CR LF doubled) as one break, closing it in the drawer and pane history (the whole key at `main`); CR LF CR, CR SGR LF,
@@ -4281,15 +4282,22 @@ so fail-closed comes before a tidy screen. The task note is `docs/superpowers/pr
   again and `breakStartAt`'s CR CR LF arm reads back as the grammar reads forward (`row-break-lookahead-restored`), so
   those forms measure as at `main`; a push that ends in both CRs of a CR CR LF is held (`crcr-push-end-held`, review 2514
   F2: the whole key at `main`, 0 here). Three more rows and four mutants; the minors F3 to F14 in `c45.md` §13.
-- **Fix round 2 (review 2585).** This task's first CR CR LF arm read a CR LF, blanks (or an SGR), then a CR CR LF back to
+- **Fix round 2 (review 2585).** This task's CR CR LF arm (its second commit, 9c8942ef1) read a CR LF, blanks (or an SGR), then a CR CR LF back to
   its first CR, so pane history's step back at the 64 KiB cap stopped at the blank row: the whole 2,000-byte key where
   `main` showed 360 bytes (review 2585 F1, blocking). The arm now reads that break back from its second CR, as `main` did,
   the kept family's second member (`crcrlf-arm-after-crlf-blanks`); the brute force pins it with its count. One more row,
   two mutants, a sweep of every earlier form against `main`, and the minors F2 to F14 in `c45.md` §14.
+- **Fix round 3 (review 2644).** The round-2 guard was not exact: with a CR LF (or two) between the blank row and the
+  CR CR LF, the arm still read it back to its first CR, and the whole key showed past the cap where `main` showed 360
+  bytes (review 2644 F1, blocking, at 467 of 1,001 placements). The arm now reads a CR CR LF back from its second CR
+  whenever a LF comes before it, blanks between or none (`crcrlf-arm-after-crlf`, the review's c1), the kept family's
+  third member (985 breaks); the brute force also checks the cap's step back against `main`'s reading from every LF or
+  CR: never short, never further. One more row, a placement on the round-2 row, mutants, a sweep of every form against
+  `main`, and the minors in `c45.md` §15.
 
 **Acceptance.** Every server test of the masker and the row grammar passes at the PR's tip, but for load timeouts that
-`main` shows too (`c45.md` §12, §13.6 and §14.6); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
-round's at 20775879e as §13.5 says, and fix round 2's at da2c4569d as §14 says; each mutant in
+`main` shows too (`c45.md` §12, §13.6, §14.4 and §15.4); the D-8749 rows are red at `main` as `c45.md` §2, §3 and §5 say, and the fix
+round's at 20775879e as §13.5 says, fix round 2's at da2c4569d as §14 says, and fix round 3's at b1b092d3c as §15 says; each mutant in
 `c45.md` §6 reds; the server test typecheck, single-definition, deviation-refs, dtbd and topology-clean pass.
 
 **Rollback.** A plain revert.
@@ -4681,7 +4689,10 @@ C1's move of B4's limiter into `server/src/bounded.ts` stays under D-6388. Issue
   (`crcr-push-end-held`, review 2514 F2, closed). Fix round 2 (review 2585): `breakStartAt` reads a CR LF, blanks, CR CR
   LF back from its second CR, as `main` did, so the cap's step back crosses the blank row before it
   (`crcrlf-arm-after-crlf-blanks`, review 2585 F1: the whole key in pane history past the cap where `main` showed 360
-  bytes, a leak since this task's first commit). Sizes and runs in `c45.md`.
+  bytes, a leak since this task's second commit, 9c8942ef1). Fix round 3 (review 2644): `breakStartAt` reads a CR CR LF
+  back from its second CR whenever a LF comes before it, blanks between or none, so a CR LF right before it no longer
+  stops the cap's step back at the blank row (`crcrlf-arm-after-crlf`, review 2644 F1: the round-2 guard left that form,
+  the whole key past the cap where `main` showed 360 bytes). Sizes and runs in `c45.md`.
 
 ## Out of scope
 
