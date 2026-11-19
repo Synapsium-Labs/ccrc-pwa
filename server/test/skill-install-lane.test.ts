@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { runMutants, type SuiteCase } from './sim/mutate.js';
 import {
-  SKILL_INSTALL_OUTCOMES, SKILL_INSTALL_WINDOW_MS, skillInstallDue, skillInstallOutcomeOf, type SkillInstallRun,
+  SKILL_INSTALL_OUTCOMES, SKILL_INSTALL_WINDOW_MS, skillInstallCandidate, skillInstallDue, skillInstallOutcomeOf, type SkillInstallRun,
 } from '../src/coord/skillInstall.js';
 import { SKILL_INSTALL_PER_PASS, skillInstallPass, type SkillInstallLaneDeps } from '../src/coord/skillInstallLane.js';
 import type { CcdArgv } from '../src/ccdargv.js';
@@ -17,7 +17,7 @@ import type { RunState } from '../../shared/api.js';
 type SkillInstallModule = typeof import('../src/coord/skillInstall.js');
 
 const NOW = 1_790_000_000_000;
-const work: SkillInstallRun = { id: 7, kind: 'work', sessionId: 'demo-w1' };
+const work: SkillInstallRun = { id: 7, kind: 'work', state: 'dispatched', sessionId: 'demo-w1' };
 const ev = (at: number, detail: string | null) => ({ at, detail });
 const absentAt = (at = NOW - 1_000) => ev(at, 'skill-preflight:absent');
 
@@ -31,6 +31,15 @@ describe('skillInstallDue', () => {
     expect(skillInstallDue({ ...work, sessionId: null }, [absentAt()], NOW)).toBe(false);
     expect(skillInstallDue(work, [ev(NOW - 1_000, 'route-defaulted')], NOW)).toBe(false);
     expect(skillInstallDue(work, [], NOW)).toBe(false);
+  });
+  it('only an ACTIVE run is due: a run past working, or not yet dispatched, has no worker reading the skill (review 2807, F9)', () => {
+    for (const state of ['dispatched', 'working', 'unknown'] as const) {
+      expect(skillInstallDue({ ...work, state }, [absentAt()], NOW), state).toBe(true);
+    }
+    for (const state of ['planned', 'awaiting-review', 'merging', 'closing', 'done', 'failed'] as RunState[]) {
+      expect(skillInstallDue({ ...work, state }, [absentAt()], NOW), state).toBe(false);
+      expect(skillInstallCandidate({ ...work, state }), state).toBe(false);
+    }
   });
   it('the NEWEST measurement decides: present or unmeasurable after an older absent is not due', () => {
     expect(skillInstallDue(work, [absentAt(NOW - 3_000), ev(NOW - 1_000, 'skill-preflight:present')], NOW)).toBe(false);
@@ -89,6 +98,7 @@ const lane = (opts: { answer?: (argv: CcdArgv) => Promise<CcdResult>; verbs?: st
     },
     fleetState: { ccdVerbs: opts.verbs === undefined ? ['ws-add', 'skill-ensure'] : opts.verbs },
     now: () => NOW,
+    inFlight: new Set<string>(),
   };
   const addRun = (id: number, over: Partial<(typeof runs)[number]> = {}, journal = [absentAt()]): void => {
     runs.push({ id, kind: 'work', sessionId: `demo-w${id}`, state: 'dispatched', ...over });
@@ -166,6 +176,45 @@ describe('skillInstallPass', () => {
     expect(l.calls).toHaveLength(SKILL_INSTALL_PER_PASS + 2);
   });
 
+  it('one install per home at a time: an overdue call still holds its account, so a second due run on it waits (review 2807, F6)', async () => {
+    let finish: (r: CcdResult) => void = () => {};
+    let hang = true;
+    const l = lane({ answer: () => (hang ? new Promise<CcdResult>((resolve) => { finish = resolve; })
+      : Promise.resolve({ ran: true, ok: true, stdout: '{"result":"converged"}\n', stderr: '', killed: false, signal: null })) });
+    l.addRun(1);
+    l.addRun(2);   // the same account, `lane-a`
+    // Run 1's call outlives its deadline and is recorded failed; its call still runs, so run 2 is not attempted.
+    expect(await skillInstallPass({ ...l.deps, deadlineMs: 20 })).toEqual(['failed']);
+    expect(l.calls).toHaveLength(1);
+    expect(l.deps.inFlight.has('lane-a')).toBe(true);
+    // A later pass while it still runs: nothing new starts on that home, and run 2 is still waiting, unrecorded.
+    expect(await skillInstallPass({ ...l.deps, deadlineMs: 20 })).toEqual([]);
+    expect(l.calls).toHaveLength(1);
+    expect(l.installs(2)).toEqual([]);
+    // The overdue call settles: the home is free, and run 2's install runs on the next pass.
+    hang = false;
+    finish({ ran: true, ok: true, stdout: '{"result":"installed"}\n', stderr: '', killed: false, signal: null });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(l.deps.inFlight.has('lane-a')).toBe(false);
+    expect(await skillInstallPass({ ...l.deps, deadlineMs: 20 })).toEqual(['converged']);
+    expect(l.calls).toHaveLength(2);
+    expect(l.installs(1).map((e) => e.detail)).toEqual(['skill-install:failed']);
+  });
+
+  it('a call that settles inside its deadline frees its account at once, and a refused argv never holds it', async () => {
+    const l = lane();
+    l.addRun(1);
+    l.addRun(2);
+    expect(await skillInstallPass(l.deps)).toEqual(['installed', 'installed']);
+    expect(l.deps.inFlight.size).toBe(0);
+    const bad = lane();
+    bad.addRun(3);
+    bad.records[0] = { id: 'demo-w3', wrapper: 'Not-An-Id' };
+    expect(await skillInstallPass(bad.deps)).toEqual(['failed']);
+    expect(bad.calls).toEqual([]);
+    expect(bad.deps.inFlight.size).toBe(0);
+  });
+
   it('an unreadable store reads nothing and runs nothing', async () => {
     const l = lane();
     l.addRun(1);
@@ -183,6 +232,13 @@ describe('skillInstall.ts mutants (runMutants)', () => {
     due: () => { expect(m.skillInstallDue(work, [absentAt()], NOW)).toBe(true); },
     review: () => { expect(m.skillInstallDue({ ...work, kind: 'review' }, [absentAt()], NOW)).toBe(false); },
     unbound: () => { expect(m.skillInstallDue({ ...work, sessionId: null }, [absentAt()], NOW)).toBe(false); },
+    inactive: () => { expect(m.skillInstallDue({ ...work, state: 'awaiting-review' }, [absentAt()], NOW)).toBe(false); },
+    candidate: () => {
+      expect(m.skillInstallCandidate(work)).toBe(true);
+      expect(m.skillInstallCandidate({ ...work, kind: 'review' })).toBe(false);
+      expect(m.skillInstallCandidate({ ...work, sessionId: null })).toBe(false);
+      expect(m.skillInstallCandidate({ ...work, state: 'done' })).toBe(false);
+    },
     present: () => { expect(m.skillInstallDue(work, [ev(NOW - 1_000, 'skill-preflight:present')], NOW)).toBe(false); },
     newest: () => { expect(m.skillInstallDue(work, [absentAt(NOW - 3_000), ev(NOW - 1_000, 'skill-preflight:present')], NOW)).toBe(false); },
     installedAfter: () => { expect(m.skillInstallDue(work, [absentAt(NOW - 3_000), ev(NOW - 1_000, 'skill-install:failed')], NOW)).toBe(false); },
@@ -198,8 +254,10 @@ describe('skillInstall.ts mutants (runMutants)', () => {
     const report = await runMutants<SkillInstallModule>({
       modulePath: path.join(ROOT, 'server/src/coord/skillInstall.ts'),
       mutants: [
-        { id: 'S1 any kind', old: "if (run.kind !== 'work' || run.sessionId === null) return false;", new: 'if (run.sessionId === null) return false;' },
-        { id: 'S2 no session', old: "if (run.kind !== 'work' || run.sessionId === null) return false;", new: "if (run.kind !== 'work') return false;" },
+        { id: 'S1 any kind', old: "return run.kind === 'work' && run.sessionId !== null && ACTIVE.has(run.state);", new: 'return run.sessionId !== null && ACTIVE.has(run.state);' },
+        { id: 'S2 no session', old: "return run.kind === 'work' && run.sessionId !== null && ACTIVE.has(run.state);", new: "return run.kind === 'work' && ACTIVE.has(run.state);" },
+        { id: 'S8 any state', old: "return run.kind === 'work' && run.sessionId !== null && ACTIVE.has(run.state);", new: "return run.kind === 'work' && run.sessionId !== null;" },
+        { id: 'S9 candidate unasked', old: 'if (!skillInstallCandidate(run)) return false;', new: '' },
         { id: 'S3 any measurement', old: 'if (row.detail !== `${SKILL_PREFLIGHT_EVENT}absent`) return false;', new: '' },
         { id: 'S4 window edge', old: 'if (now - row.at > SKILL_INSTALL_WINDOW_MS) return false;', new: 'if (now - row.at >= SKILL_INSTALL_WINDOW_MS) return false;' },
         { id: 'S5 no window', old: 'if (now - row.at > SKILL_INSTALL_WINDOW_MS) return false;', new: '' },

@@ -1,6 +1,7 @@
 import path from 'node:path';
 import type { CcrcConfig } from './config.js';
 import type { FleetIO } from './io.js';
+import type { SessionRecord } from './registry.js';
 import { mapBounded } from './bounded.js';
 import type { ProjectedHome } from '../../shared/api.js';
 import { inRoster, type AccountDef, type Roster } from '../../shared/roster.js';
@@ -69,7 +70,7 @@ export interface AccountLimits {
    *  ccd's `_account_ok` never sees it at all. */
   authDead: boolean;
   /** The lane's NEWEST recorded spawn (`<id>.spawn` among the registry rows whose `<id>.wrapper` names it) read rc 2
-   *  (`login`) or rc 5 (`blocked`), and no later spawn on it has read otherwise (`readSpawnBlockedLanes`). Emitted ONLY
+   *  (`login`) or rc 5 (`blocked`), and no later spawn on it has read otherwise (`spawnBlockedLanesOf`). Emitted ONLY
    *  when true, and absent means placeable: the fact is a MEASUREMENT of a failed spawn, never a reason to refuse. Like
    *  `authDead` it leaves SCORING and the preferred fallback and never leaves `live`; ccd's `_ws_lane_cannot_spawn`
    *  is the twin, and `projected-home.test.ts` drives both over one seeded registry. */
@@ -113,54 +114,35 @@ const authDeadMarkerOk = (raw: string): boolean => {
   return /^[0-9]+$/.test(first);
 };
 
-/** The spawn records that name a lane (A7-3): a registry row's `<id>.wrapper` and `<id>.spawn`, which is
- *  `<epoch> <rc>`. The same grammar as ccd's `_ws_lane_cannot_spawn`: exactly two unsigned integers, anything else is
- *  no verdict. */
-const SPAWN_RECORD_RE = /^\s*(\d+)\s+(\d+)\s*$/;
 const SPAWN_REFUSED_RC = new Set([2, 5]);
-/** How long a rc 2 / rc 5 record keeps a lane out of placement: the skip itself stops the later spawn that would clear
- *  it, and a sign-in never touches the record, so the verdict must expire. ccd's `_WS_SPAWN_REFUSAL_TTL_S` is the
- *  twin; an older refusal is no verdict, like an unparseable record. */
+/** How long a rc 2 / rc 5 record keeps a lane demoted: the demotion itself makes the later spawn that would clear it
+ *  rarer, and a sign-in never touches the record, so the verdict must expire (the coordinator's ruling F8, run 2785:
+ *  6 h, a demotion, not a skip). ccd's `_WS_SPAWN_REFUSAL_TTL_S` is the twin; an older refusal is no verdict, like an
+ *  unparseable record. */
 export const SPAWN_REFUSAL_TTL_S = 21600;   // `spawnVerdict`'s `login` and `blocked`
 
-/** The lanes whose NEWEST recorded spawn needs a sign-in (rc 2) or is blocked (rc 5): mirrors ccd's
- *  `_ws_lane_cannot_spawn`. Newest is by the epoch INSIDE the record, across every row of the lane, so a later rc 0
- *  spawn on any of its rows clears the skip; an equal epoch clears it too when either record reads otherwise, so a tie
- *  is not a verdict. ABSENCE PERMITS: a record that is missing, a symlink, unreadable or off the grammar names no
- *  verdict. A refusal older than `SPAWN_REFUSAL_TTL_S` is no verdict either. `registryNames` is the listing the caller already holds.
- *
- *  THE COMMON FLEET COSTS ONE READ PER ROW AND NO MORE: only a record that itself reads rc 2 or 5 can make a lane
- *  unable to spawn, and only a record at or after the oldest such one can undo it, so the wrapper files (and the
- *  symlink checks bash makes) are read for those rows alone. */
-export async function readSpawnBlockedLanes(
-  io: FleetIO, cfg: CcrcConfig, registryNames: readonly string[], now = Math.floor(Date.now() / 1000),
-): Promise<ReadonlySet<string>> {
-  const ids = registryNames.filter((n) => n.endsWith('.spawn') && !n.startsWith('.'))
-    .map((n) => n.slice(0, -'.spawn'.length)).filter((id) => id !== '' && !id.includes('.'));
-  const rows = (await mapBounded(ids, LIMITS_READ_CONCURRENCY, async (id) => {
-    const raw = await io.readFile(path.join(cfg.registryDir, `${id}.spawn`)).catch(() => null);
-    const m = raw === null ? null : SPAWN_RECORD_RE.exec(raw);
-    return m === null ? null : { id, at: Number(m[1]), rc: Number(m[2]) };
-  })).filter((r): r is { id: string; at: number; rc: number } => r !== null)
-    .filter((r) => !SPAWN_REFUSED_RC.has(r.rc) || now - r.at <= SPAWN_REFUSAL_TTL_S);
-  const refused = rows.filter((r) => SPAWN_REFUSED_RC.has(r.rc));
-  if (refused.length === 0) return new Set();
-  const floor = Math.min(...refused.map((r) => r.at));
-  const regular = async (file: string): Promise<boolean> => {
-    const k = await io.lstatMeasured(file);
-    return k.ok && k.kind === 'regular';
-  };
+/** A registry row as the demotion reads it: its id, its account and its parsed spawn record (`spawnRecordOf`). */
+export type SpawnRow = Pick<SessionRecord, 'id' | 'wrapper' | 'spawn'>;
+
+/** The lanes whose NEWEST recorded spawn needs a sign-in (rc 2) or is blocked (rc 5): ccd's `_ws_lane_cannot_spawn`'s
+ *  twin, decided over the registry rows the caller already read (review 2807 F2: one reader of `<id>.spawn` and
+ *  `<id>.wrapper`, the registry's, and no read of its own). Newest is by the epoch inside the record, across every row
+ *  of the lane, so a later rc 0 spawn on any of its rows clears the demotion; an equal epoch clears it too when either
+ *  record reads otherwise, so a tie is not a verdict. ABSENCE PERMITS: a row with no parsed record or no account names
+ *  no verdict, and a refusal older than `SPAWN_REFUSAL_TTL_S` is no verdict either. A dotted id is not a row, as in ccd.
+ *  KNOWN DIFFERENCE from ccd (departure `spawn-reader-follows-the-registry`, the `SessionRecord.child` precedent): the
+ *  registry follows a symlinked `.spawn` or `.wrapper` and yields only ids with a `.uuid`, where ccd refuses the link
+ *  and counts any row with both files. ccd writes neither shape, and the only effect is a forecast that can differ. */
+export function spawnBlockedLanesOf(rows: readonly SpawnRow[], now: number): ReadonlySet<string> {
   const lane = new Map<string, { at: number; bad: boolean }>();
-  await mapBounded(rows.filter((r) => r.at >= floor), LIMITS_READ_CONCURRENCY, async (r) => {
-    const wf = path.join(cfg.registryDir, `${r.id}.wrapper`);
-    if (!(await regular(path.join(cfg.registryDir, `${r.id}.spawn`))) || !(await regular(wf))) return;
-    const wrapper = (await io.readFile(wf).catch(() => null))?.replace(/\0/g, '').replace(/\n+$/, '');
-    if (wrapper === undefined || wrapper === null || wrapper === '') return;
-    const bad = SPAWN_REFUSED_RC.has(r.rc);
-    const had = lane.get(wrapper);
-    if (had === undefined || r.at > had.at) lane.set(wrapper, { at: r.at, bad });
-    else if (r.at === had.at && !bad) lane.set(wrapper, { at: had.at, bad: false });
-  });
+  for (const r of rows) {
+    if (r.spawn === null || r.wrapper === '' || r.id.includes('.')) continue;
+    const bad = SPAWN_REFUSED_RC.has(r.spawn.rc);
+    if (bad && now - r.spawn.at > SPAWN_REFUSAL_TTL_S) continue;
+    const had = lane.get(r.wrapper);
+    if (had === undefined || r.spawn.at > had.at) lane.set(r.wrapper, { at: r.spawn.at, bad });
+    else if (r.spawn.at === had.at && !bad) had.bad = false;
+  }
   return new Set([...lane].filter(([, v]) => v.bad).map(([w]) => w));
 }
 
@@ -559,6 +541,7 @@ export async function readLimits(
   cfg: CcrcConfig,
   now = Math.floor(Date.now() / 1000),
   registryNames?: readonly string[],
+  records?: readonly SpawnRow[],
 ): Promise<Record<string, AccountLimits>> {
   const names = (await io.readdir(cfg.limitsDir)) ?? [];
   // One listing, not one stat per account.
@@ -596,7 +579,9 @@ export async function readLimits(
       return content !== null && authDeadMarkerOk(content) ? wrapper : null;
     }))).filter((w): w is string => w !== null),
   );
-  const spawnBlockedLanes = await readSpawnBlockedLanes(io, cfg, regNames, now);
+  // A7-3: the demotion is decided over the caller's registry rows; a caller with none (a request-time read) carries
+  // no demotion: absence permits (the coordinator's ruling F2 (a), run 2785).
+  const spawnBlockedLanes = records === undefined ? new Set<string>() : spawnBlockedLanesOf(records, now);
   const out: Record<string, AccountLimits> = {};
   // D-6436 (desktop polish C4): the files are read through the one bounded pool, not one round trip after another;
   // the loop below still settles them in listing order. A read that rejects is handed to its own row's `catch`,

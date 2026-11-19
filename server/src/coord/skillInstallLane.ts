@@ -9,12 +9,11 @@
 // (departure `install-latency-is-one-lane-beat`): the dispatch route's file is held, so nothing kicks the lane at once.
 //
 // What decides is L1 (`skillInstall.ts`); this file reads, runs and records.
-import { ACTIVE_RUN_STATES, type RunState } from '../../../shared/api.js';
 import { CCD_ARGV, ccdCan } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
-import { SKILL_INSTALL_EVENT, skillInstallDue, skillInstallOutcomeOf, type SkillInstallOutcome } from './skillInstall.js';
+import { SKILL_INSTALL_EVENT, skillInstallCandidate, skillInstallDue, skillInstallOutcomeOf, type SkillInstallOutcome } from './skillInstall.js';
 
 /** The bound on one `skill-ensure` call: two installers over one home, no network. */
 export const SKILL_ENSURE_DEADLINE_MS = 60_000;
@@ -29,22 +28,30 @@ export interface SkillInstallLaneDeps {
   readonly fleetState: Pick<FleetState, 'ccdVerbs'> | undefined;
   readonly now: () => number;
   readonly deadlineMs?: number;
+  /** The accounts whose `skill-ensure` call is still running, OWNED BY THE CALLER and kept across passes (review 2807,
+   *  F6): an entry leaves only when its runner call settles, not when the deadline gives up on it, so an overdue call
+   *  still holds its home and two installs never run on one home at once. */
+  readonly inFlight: Set<string>;
 }
 
-const ACTIVE: ReadonlySet<RunState> = new Set(ACTIVE_RUN_STATES);
-
-/** One due run's outcome, or `null` when its worker's account is not known this pass (it is looked at again on the
- *  next). The capability gate sits in this scope with the call it gates. The deadline's handle is local to this one
- *  call, so it is a deadline, never a scheduler. */
+/** One due run's outcome, or `null` when nothing is attempted this pass and the run is looked at again on the next: its
+ *  worker's account is not known, or an install on that account's home is still running. The capability gate sits in
+ *  this scope with the call it gates. The deadline's handle is local to this one call, so it is a deadline, never a
+ *  scheduler. */
 async function installFor(deps: SkillInstallLaneDeps, wrapper: string): Promise<SkillInstallOutcome | null> {
   if (!ccdCan(deps.fleetState, 'skillEnsure')) return 'unsupported';
-  if (wrapper === '') return null;
+  if (wrapper === '' || deps.inFlight.has(wrapper)) return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const overdue = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deps.deadlineMs ?? SKILL_ENSURE_DEADLINE_MS); });
+  deps.inFlight.add(wrapper);
   try {
     const verb = (async () => {
-      const res = await deps.runCcd(CCD_ARGV.skillEnsure(wrapper));
-      return res.ran === false ? null : res;
+      try {
+        const res = await deps.runCcd(CCD_ARGV.skillEnsure(wrapper));
+        return res.ran === false ? null : res;
+      } finally {
+        deps.inFlight.delete(wrapper);   // the call settled: only now is the home free
+      }
     })();
     return skillInstallOutcomeOf(await Promise.race([verb, overdue]));
   } catch {
@@ -55,7 +62,8 @@ async function installFor(deps: SkillInstallLaneDeps, wrapper: string): Promise<
 }
 
 /** One pass. Never throws on a run it cannot read: an unreadable store, a run with no registry row or no account
- *  answers nothing this pass and is looked at again on the next (the window in `skillInstallDue` bounds the retries). */
+ *  answers nothing this pass and is looked at again on the next, until `skillInstallDue`'s window closes. A recorded
+ *  outcome, `failed` included, is the one attempt for that dispatch (F5): nothing retries it. */
 export async function skillInstallPass(deps: SkillInstallLaneDeps): Promise<SkillInstallOutcome[]> {
   const read = deps.coord.runs();
   if (!read.ok) return [];
@@ -64,9 +72,7 @@ export async function skillInstallPass(deps: SkillInstallLaneDeps): Promise<Skil
   const done: SkillInstallOutcome[] = [];
   for (const run of read.runs) {
     if (done.length >= SKILL_INSTALL_PER_PASS) break;
-    // Economy, never a permission: only an active run has a worker that reads the skill now.
-    if (!ACTIVE.has(run.state)) continue;
-    if (!skillInstallDue(run, deps.coord.runEvents(run.id), deps.now())) continue;
+    if (!skillInstallCandidate(run) || !skillInstallDue(run, deps.coord.runEvents(run.id), deps.now())) continue;
     const outcome = await installFor(deps, (run.sessionId === null ? undefined : wrapperOf.get(run.sessionId)) ?? '');
     if (outcome === null) continue;
     // `sweep`: the server's lane caused the row, as the dead-dispatch pass's close is caused.

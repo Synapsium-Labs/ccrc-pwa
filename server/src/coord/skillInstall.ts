@@ -5,8 +5,12 @@
 // serialiser by construction, so the install never delays a bind, a close or another dispatch (departure
 // `install-outcome-is-a-run-event`). The outcome is ONE run event, `skill-install:<outcome>`, its one writer the lane.
 //
-// L1: pure deciders over facts the lane read. No I/O, and only a type import.
-import type { RunKind } from '../../../shared/api.js';
+// ONE ATTEMPT PER DISPATCH, by design (review 2807, F5): the first outcome recorded after a `skill-preflight:absent` row
+// ends the self-install for that measurement, `failed` included. A later dispatch writes a fresh preflight row, and only
+// that makes the run due again.
+//
+// L1: pure deciders over facts the lane read. No I/O; its one value import is L0 vocabulary.
+import { ACTIVE_RUN_STATES, type RunKind, type RunState } from '../../../shared/api.js';
 
 /** The `run_events.detail` prefix of the dispatch's skill measurement; followed by `present`, `absent` or `unmeasurable`.
  *  `dispatch.ts` writes it through this constant. */
@@ -21,26 +25,37 @@ const OUTCOME_WORDS: Record<SkillInstallOutcome, true> = { installed: true, conv
 /** Every outcome word, derived from the type. */
 export const SKILL_INSTALL_OUTCOMES = Object.keys(OUTCOME_WORDS) as SkillInstallOutcome[];
 
-/** How old a `skill-preflight:absent` row may be and still be acted on. A dispatch older than this is not the one in
- *  hand: a server that starts after an upgrade does not install on every run an older build left `absent`, and a box
- *  whose verb kept failing is not retried forever. */
+/** How old a `skill-preflight:absent` row may be and still be acted on, once. A dispatch older than this is not the one
+ *  in hand: a server that starts after an upgrade does not install on every run an older build left `absent`. The window
+ *  bounds when the single attempt may start, never a series of retries: there are none. */
 export const SKILL_INSTALL_WINDOW_MS = 30 * 60_000;
 
 /** One run as the lane reads it from `runs()`. */
 export interface SkillInstallRun {
   readonly id: number;
   readonly kind: RunKind;
+  readonly state: RunState;
   readonly sessionId: string | null;
 }
 
+const ACTIVE: ReadonlySet<RunState> = new Set(ACTIVE_RUN_STATES);
+
+/** The half of `skillInstallDue` the run row alone decides: a WORK run, a bound session, an ACTIVE state
+ *  (`ACTIVE_RUN_STATES`: a run past `working` has no worker reading the skill now). The lane asks it first, so a closed
+ *  run's journal is never read. */
+export function skillInstallCandidate(run: SkillInstallRun): boolean {
+  return run.kind === 'work' && run.sessionId !== null && ACTIVE.has(run.state);
+}
+
 /** Whether run `run` waits for a self-install, from its own journal (oldest row first) at `now`: a WORK run with a
- *  bound session whose NEWEST skill measurement is `absent`, measured inside the window, with no install outcome
- *  recorded after it. A review run measures the reviewer skill, which `skill-ensure` does not install, so it is never
- *  due. Every doubt answers false: the dispatch stands either way. */
+ *  bound session, in an ACTIVE state (`ACTIVE_RUN_STATES`: a run past `working` has no worker reading the skill now),
+ *  whose NEWEST skill measurement is `absent`, measured inside the window, with no install outcome recorded after it. A
+ *  review run measures the reviewer skill, which `skill-ensure` does not install, so it is never due. Every doubt
+ *  answers false: the dispatch stands either way. */
 export function skillInstallDue(
   run: SkillInstallRun, events: readonly { at: number; detail: string | null }[], now: number,
 ): boolean {
-  if (run.kind !== 'work' || run.sessionId === null) return false;
+  if (!skillInstallCandidate(run)) return false;
   let preflight = -1;
   for (let i = events.length - 1; i >= 0; i -= 1) {
     if (events[i]!.detail?.startsWith(SKILL_PREFLIGHT_EVENT) === true) { preflight = i; break; }

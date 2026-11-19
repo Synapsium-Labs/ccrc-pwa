@@ -7221,7 +7221,7 @@ _ws_slug_new() {   # project -> echo a free, valid slug (or fail)
 
 _WS_SPAWN_REFUSAL_TTL_S=21600   # 6h: how long a rc 2 / rc 5 spawn record keeps a lane out of placement (twin: SPAWN_REFUSAL_TTL_S)
 _ws_lane_cannot_spawn() {   # wrapper -> 0 iff the NEWEST spawn on any row of this lane recorded rc 2 (login) or rc 5 (blocked)
-  # F9: `projectHome` (server/src/limits.ts, `readSpawnBlockedLanes`) is the twin, and `projected-home.test.ts` drives both
+  # F9: `projectHome` (server/src/limits.ts, `spawnBlockedLanesOf`) is the twin, and `projected-home.test.ts` drives both
   # over one seeded registry. A row is `$REG/<id>.wrapper` with `$REG/<id>.spawn` = `<epoch> <rc>` (`_spawn` writes it
   # always). NEWEST is by the epoch inside the record, across every row of the lane, so a later rc 0 spawn on ANY of its
   # rows clears the skip, and an equal epoch clears it too when either says otherwise: ties are not a verdict.
