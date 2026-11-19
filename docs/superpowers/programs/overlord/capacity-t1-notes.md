@@ -16,9 +16,15 @@ It defines no D-number: D-8789 is the number the coordinator issued for this tas
   and any hold on a box without `hibernate-hold-ok` still hold. Whether the run's state lets the worker sleep is still
   the verdict's (`not-done` for a `working` run). ccd's `_hib_hold_ok` already passes any programme-grammar hold, the
   `run:` suffix included, so ccd is not changed.
-- **Live at merge:** yes. The run-done lane has no arming switch, so on a box whose ccd lists `hibernate-hold-ok`,
-  a dispatched worker parked at `awaiting-review`, `merging` or `closing`, quiet 30 minutes, is put to sleep from the
-  first pass after the update. That is D-6092's intended act, which the own-run hold had blocked until now.
+- **Live at merge:** this change acts as soon as a box runs it, on every box whose ccd lists `hibernate-hold-ok`, and
+  on no other box. There, a dispatched worker parked at `awaiting-review`, `merging` or `closing` and quiet 30 minutes
+  is put to sleep from the first pass after the update. That is D-6092's intended act, which the own-run hold had
+  blocked until now. The coordinator ruled that it ships without a shadow: it adds no lane and repairs an existing one.
+- **The act:** `ccd hibernate --hold-ok <hold> <id>`, the run-done lane's existing clean stop, which `ccd ensure`
+  reverses. No new act, verb or wire field.
+- **Still held, with an own-run hold passing:** unread mail, a claim, background work (the row's or the turn
+  marker's), a session cron, a dialog, a running turn, a working marker, a busy live word and an open screen
+  (`stop-done-verdict.test.ts`, "an own-run hold passes, and every activity still holds").
 
 ## 1. Departures from the plan and the draft, by slug
 
@@ -40,6 +46,24 @@ Each guard was mutated and the suites that pin it were run (`ccrc test`), then t
 | `run-own` passes without `hibernate-hold-ok` | `stop-done-verdict`, `stop-done-sweep`, `sleep-lanes-pin` | killed (3 failed) |
 | the deps-shed verdict passes `run-own` | `deps-shed-verdict` | killed (1 failed) |
 | the run-done lane names no session | `stop-done-sweep` | killed (1 failed) |
+
+The coordinator's ruling asked for a red test behind each activity hold with an own-run hold passing. Before this PR,
+no row stacked an activity on a passing hold, so a decider that skipped an activity check only when a hold passes went
+undetected. Each of these mutants in `decideSleep` (`server/src/sleep.ts`) adds `&& r.held === null` to one activity
+hold, and each is killed by its new row alone:
+
+| Mutant (skipped only when a hold passes) | Suite | Result |
+|---|---|---|
+| `mail` | `stop-done-verdict` | killed (1 failed) |
+| `claim` | `stop-done-verdict` | killed (1 failed) |
+| `menu` (a dialog) | `stop-done-verdict` | killed (1 failed) |
+| `background` | `stop-done-verdict` | killed (1 failed) |
+| `marker-background` | `stop-done-verdict` | killed (1 failed) |
+| `scheduled` (a session cron) | `stop-done-verdict` | killed (1 failed) |
+| `turn` | `stop-done-verdict` | killed (1 failed) |
+
+The act itself is pinned by argv equality in `stop-done-sweep.test.ts`: one own-run held pass composes exactly the one
+`hibernate --hold-ok` call and nothing else, and the same hold naming another session's run composes none.
 
 ## 3. Carried
 

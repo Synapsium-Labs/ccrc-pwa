@@ -480,6 +480,27 @@ describe('stopDonePass: finished workers sleep at run close (D-6091)', () => {
     expect(f.argv).toEqual([HIB_OK(ID, 'program:programme-a wave:4')]);
   });
 
+  it('a hold naming the worker\'s own parked run: the one act is the hibernate that `ccd ensure` reverses, with --hold-ok and nothing else (D-8789)', async () => {
+    const own = 'program:programme-a wave:2 run:10';
+    const f = fake([ID], { holdOk: true });
+    f.runs.set(ID, { runId: 10, state: 'awaiting-review', closedAt: null });
+    (f.deps.coord as { run: unknown }).run = (runId: number) => ({ ok: true as const, run: { id: runId, state: 'awaiting-review', sessionId: ID, reviews: null } as never });
+    f.atAct.set(ID, { held: own });
+    const out = await stopDonePass(f.deps, mem(), [row(ID, { held: own })], [rec(ID)], []);
+    expect(out).toEqual([{ id: ID, kind: 'hibernated', runId: 10 }]);
+    expect(f.argv, 'one ccd call, the existing sleep verb; no stop, no new verb').toEqual([HIB_OK(ID, own)]);
+  });
+
+  it('the same hold naming ANOTHER session\'s open run composes no act (D-8789)', async () => {
+    const held = 'program:programme-a wave:2 run:10';
+    const f = fake([ID], { holdOk: true });
+    f.runs.set(ID, { runId: 10, state: 'awaiting-review', closedAt: null });
+    (f.deps.coord as { run: unknown }).run = (runId: number) => ({ ok: true as const, run: { id: runId, state: 'awaiting-review', sessionId: 'project-a-other-basin', reviews: null } as never });
+    f.atAct.set(ID, { held });
+    await stopDonePass(f.deps, mem(), [row(ID, { held })], [rec(ID)], []);
+    expect(f.argv).toEqual([]);
+  });
+
   it('a planned run naming the child does not hold sleep', async () => {
     const f = fake([ID]);
     f.planned.add(ID);
