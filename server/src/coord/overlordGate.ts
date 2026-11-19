@@ -43,14 +43,19 @@ export type CallerStanding =
 function placeOf(sessionId: string, designation: Exclude<DesignationRead, { kind: 'unmeasured' }>):
   { readonly kind: 'bound' | 'pending'; readonly incarnation: string | null } | null {
   // The session's place is the designation fact's one owner's (`roleOf.ts#designationFactOf`); the row adds its incarnation.
+  // The binding is read FIRST, as `identityOf` reads it (review 2803 F1): asked with the pending attempt set aside, so a row
+  // whose pending attempt names the bound id leaves that id the binding, its incarnation checked. `designationFactOf` itself
+  // reads the pending id first, which its other callers keep (slug gate-reads-the-binding-first).
   const fact = designationFactFrom(designation);
   if (fact === 'unmeasured' || fact.kind === 'none') return null;
-  const place = designationFactOf(sessionId, fact);
-  if (place === 'live' && designation.kind === 'designated' && designation.row.bound !== null) {
+  const bound = designationFactOf(sessionId, { ...fact, pending: null, pendingKind: null }) === 'live';
+  if (bound && designation.kind === 'designated' && designation.row.bound !== null) {
     return { kind: 'bound', incarnation: designation.row.bound.generation };
   }
   const pending = designation.row?.pending ?? null;
-  if (place === 'pending' && fact.pendingKind === 'designate' && pending !== null) return { kind: 'pending', incarnation: pending.generation };
+  if (designationFactOf(sessionId, fact) === 'pending' && fact.pendingKind === 'designate' && pending !== null) {
+    return { kind: 'pending', incarnation: pending.generation };
+  }
   return null;
 }
 

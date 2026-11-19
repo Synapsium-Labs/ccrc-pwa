@@ -110,11 +110,13 @@ cases above.
 
 ## Fix round 1 (review 2803)
 
-- **F1, the binding is read first** (slug `designation-fact-reads-the-binding-first`): fixed in the one owner,
-  `roleOf.ts#designationFactOf`, which now reads `live` before `pending`, as `identityOf` does. Its other callers agree: four
-  test `!== 'none'` or the role, and the prompt door's `=== 'pending'` reads a pending body, which a row whose pending attempt
-  names the bound id is not. A case and a mutant (F5 of its set) pin the order, and the gate's standing cases hold a row whose
-  bound id is also the pending attempt's.
+- **F1, the binding is read first** (slug `gate-reads-the-binding-first`): fixed in `overlordGate.ts#placeOf`, not in
+  `roleOf.ts#designationFactOf`, because one of that owner's callers does not agree: the private store's message keys
+  (`noteKeys.ts`) read a row whose pending attempt names the bound id as a pending body, and
+  `continuity-notes-message.test.ts` pins that ("pending first"). So `placeOf` asks the same owner twice: first with the pending
+  attempt set aside (the binding), then as it stands (a pending `designate` attempt). No new run/session equality site. The
+  gate's standing cases hold the row for a rebind and a designate attempt, and a mutant of its set (S-12) reads the pending id
+  first and is killed. `roleOf.ts` is unchanged.
 - **F2, the counter before the witness** (slug `counter-then-witness-spend`): a passing write runs the guarded counter's
   compare-and-set first, then spends the witness; a counter that cannot advance leaves the witness unspent for a retry, and a
   spend whose recorder throws refuses the write 503 `unavailable` at step 7a (`overlordGate.ts#spendVerdict`). They are not one
@@ -136,6 +138,11 @@ cases above.
   arm, `start-door`; N5, the runner's header says what it branches on; N6, a fence refusal that cannot be recorded logs one line
   naming the door and the reason word; N7, the census checks the recording call's form; N8, `FACT_ARM_MAP` is checked against
   the unions it spells, and a stray comment went.
+- **The round's mutations**, each red, each restored from a saved copy and sha-checked: the witness spent before the counter
+  (two cases), a spend whose throw reads as success, the card record asked after the snapshot (the doors suite and the census),
+  the witness lookup's message back in the detail; and in `mutation-floors`, S-12 (the pending id read before the binding).
+  Two older mutants of the decider's set (O-6, O-7) moved to the new text of steps 2 and 3. A shell hook refused one call of
+  the test subagent, a bare `vitest --version` probe outside `ccrc test`; it was reported and not retried in any form.
 - **N9, a follow-up for the coordinator**: `coord/routes.ts` still holds about ten older copies of the console mapping
   (`authEnabled ? deviceActor(...) : 'flag-off'`), and `continuity/routes.ts` two `?? 'flag-off'` fallbacks. They do not call
   the port; `coord/routes.ts` is held by another run's frozen claim, so this PR leaves them. They are the next place

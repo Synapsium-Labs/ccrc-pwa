@@ -559,12 +559,6 @@ export function designationFactOfCases(m: RoleOfDesignationModule): Record<strin
       expect(m.designationFactOf('overlord-quiet-otter', d)).toBe('live');
       expect(m.designationFactOf('overlord-new-owl', d)).toBe('pending');
     },
-    // Gates B, review 2803 F1: the binding is read first, as identityOf reads it.
-    'a pending attempt naming the bound id leaves it live, whatever the attempt': () => {
-      for (const kind of ['designate', 'rebind'] as const) {
-        expect(m.designationFactOf('overlord-quiet-otter', row('overlord-quiet-otter', 'overlord-quiet-otter', kind)), kind).toBe('live');
-      }
-    },
   };
 }
 
@@ -593,8 +587,6 @@ const DESIGNATION_FACT_SET: MutantSet<RoleOfDesignationModule> = { modulePath: R
     { id: 'F2 the bound id read as none', old: "if (d.live === sessionId) return 'live';", new: "if (d.live === sessionId) return 'none';" },
     { id: 'F3 a row names every id live', old: "if (d.live === sessionId) return 'live';", new: "if (d.live !== null) return 'live';" },
     { id: 'F4 a pending attempt names every id pending', old: "if (d.pending === sessionId) return 'pending';", new: "if (d.pending !== null) return 'pending';" },
-    { id: 'F5 the pending id read before the binding', old: "if (d.live === sessionId) return 'live';\n  if (d.pending === sessionId) return 'pending';",
-      new: "if (d.pending === sessionId) return 'pending';\n  if (d.live === sessionId) return 'live';" },
   ], suite: designationFactOfCases };
 const IDENTITY_SET: MutantSet<RoleOfDesignationModule> = { modulePath: ROLE_OF_MODULE, mutants: [
     { id: 'I1 a rebind pending body keyed overlord', old: "d.pending === sessionId && d.pendingKind === 'designate'", new: 'd.pending === sessionId' },
