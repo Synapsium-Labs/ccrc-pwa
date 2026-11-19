@@ -2,8 +2,8 @@
 import { describe, expect, it } from 'vitest';
 import {
   INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict, upkeepLookupOf,
+  closeRefusedCommentBody, closeTextRefusedMail,
 } from '../src/linear/inboundPolicy.js';
-import { closeRefusedCommentBody, closeTextRefusedMail } from '../src/linear/inboundPolicy.js';
 import { handedRowOf } from '../src/coord/planPolicy.js';
 import { RETIRE_WHYS, inboundRetirable, retireWhyOf } from '../src/linear/inboundRetire.js';
 

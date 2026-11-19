@@ -1,0 +1,101 @@
+# Linear hierarchy, wave 4 follow-ups, second set (D-8183) — task note
+
+This note is run 2810's record for the programme ledger; the coordinator folds it into the ledger on its own pull request.
+The run closes the findings that #3021's review rounds 3 to 5 (review runs 2571, 2753 and 2798) carried here under the
+coordinator's rulings, before wave 7's pilot touches another team. It edits the plan in one place: D-8735 is amended in
+place (item 9, a `Ledger-Edit:` trailer on the head commit, no new number). It defines no departure: D-8740 and D-8741,
+issued to this run, are unused. No migration.
+
+## In short
+
+- **Fourteen items, in the brief's order**, each fixed with a test seen red, or carried with its reason (item 14).
+- **Correctness first:** a returned or reopened inbound note no longer outlives its `waiting` row (1); `plan take` fails
+  closed on an unmeasured home (2); the drift record names a one-way set's value for what it is (3); the inbound lane's close
+  re-runs the public-text check before it posts (6).
+- **Tests and words:** a workspace-keyed malformed count reds (4); the lowest-id twins name each other and a test holds them
+  together (5); single-definition rows (7); `ccrc-api`'s ticket-done gate is a row of the one table gate (8); the refusal
+  lists, comments and walk words say what the code does (9 to 12); the first note's figures are corrected in place (13).
+- **No live Linear call, capture or probe**, and no Linear key read: every test runs on the fixtures, faked at the pass's
+  `call` or at callLinear's FetchLike.
+
+## The items
+
+| # | Finding | What changed | Test (red measured) |
+|---|---|---|---|
+| 1 | A returned or reopened note outlives its row (round 4 F2) | One rule, one writer: a note lives only while its row is `waiting`. `setInboundState` (`planStore.ts`), the one writer of an inbound row's state, deletes the row's note whenever it moves the row to any other state, inside the caller's transaction or one of its own. So a triage (`handed`, `placed`, `closed`, `raised`), a take (`taken`), a return to a live owner (`mailed`) and the lane's own mail each clear it in their own transaction. The lane's and the retire's separate clears are gone (one clear, not three). Migration 107's comment now says so. | `plan-inbound.test.ts`: a `returned` and a `reopened` note on a `waiting` row, then the owner triages it each way, or a coordinator takes it, before the lane's beat: the note is gone and the next beat mails nothing (10 red against the code before: `expected { kind: 'returned', …(3) } to be null`); `plan-store.test.ts`: every non-waiting state deletes it, no `state` or `waiting` keeps it, a rolled-back outer transaction keeps both |
+| 2 | An unmeasured home resolves a foreign Upkeep ticket (round 3 F10, the coordinator's ruling) | `upkeepLookupOf` (`inboundPolicy.ts`, L1): with no handed row, a take into an epic or a close looks the Upkeep ticket up in the programme home's measured workspace only. No home, or a home with no team key, is `issue-not-inbound`; a home with a team key whose workspace could not be resolved (the Linear store read failed, was not listed, or no slot routes the team) is `unreachable` (503: a retry helps). A return keeps its path. | `plan-inbound.test.ts` "review 2571 F10": no home, no team key and an unreadable store, each for a take into an epic and a close, with zero handed rows and a ticket in another workspace: refused, the ticket unchanged (red: `expected [ 200, '' ] to deeply equal [ 503, 'unreachable' ]`, and `[ 409, 'ticket-workspace-mismatch' ]` where `issue-not-inbound` was due); `plan-inbound-policy.test.ts` the three cases |
+| 3 | The drift record reads a one-way set as Linear's value (round 3 F1) | `driftEventText` (`driftPolicy.ts`, L1, keyed on `ONE_WAY_LINKS` beside `driftEventValue`): a one-way field's line reads `<field>: planned, missing in Linear: <ids>`, any other `<field> = <value>`. `DriftPass#recordBlock` uses it for the item's why and the Hand mail. An event stored before reads right too: it already held the planned members Linear lacks. | `drift-pass.test.ts`: a project missing a planned milestone, persistently drifted: the item's why and the Hand mail body both carry the new line and neither `milestoneIds = ` (red: `expected 'Linear holds this epic differently fr…' to contain 'milestoneIds: planned, missing in Lin…'`); a scalar line unchanged; `drift-policy.test.ts` each one-way field and a scalar |
+| 4 | Nothing pins a per-issue malformed count against a workspace-keyed one (round 3 F3) | Test only (the brief preferred a test to correcting the note). | `plan-inbound.test.ts`: issue A is left with three malformed close answers and leaves the lane; issue B in the same workspace must still need its own four. Every use of the count keyed by `row.workspaceId`: red, `expected 'malformed' to be null` (B given up at its second answer); restored from a saved copy, `cmp` equal |
+| 5 | The lowest-id rule is written twice (round 3 F6, the coordinator's ruling: accept) | `bindingByLinearIdOf` (`driftPolicy.ts`, an L1 reader over rows the pass already holds) and the store's `bindingByLinearId` (`planStore.ts`, an SQL point read) each name the other as its legitimately different twin, and the test that holds them together. | `drift-pass.test.ts`: on a duplicate, both answer the same binding, with the rows in id order and reversed; a first-wins `bindingByLinearIdOf` reds (`expected 5 to be 4`) |
+| 6 | The lane's close posts the stored reason unchecked (round 4 F6; round 5 A5's second half) | `InboundLane#act` re-runs the one text check (`textRefusalOf`) inside the flight, after the by-id re-read and before the comment, with the facts of the project that owns the row's team (a team no project claims: mode `unknown`, public, with its team key) and the installer's private tracker keys (`PlanSync#privateKeys`, the list the sync's own check reads). Refused: the close still happens, with a fallback comment carrying no stored text (`closeRefusedCommentBody`), then the cancel; the owner gets one mail naming the identifier, the team and the class, never the text (`closeTextRefusedMail`). | `plan-inbound.test.ts`: a reason that fails the check at act time: the comment carries none of it, the cancel is sent, one owner mail over two passes (red: `expected 'Closed: see AAA-99 for the dupe…' not to contain 'AAA-99'`); a clean reason still posts `Closed: <reason>`; `plan-inbound-policy.test.ts` the two builders |
+| 7 | No single-definition rows for three new lists (round 4 F5) | Each stays where it is, for a recorded reason (in the test): `RETIRE_WHYS` is a server-only stored word no wire or PWA file reads, in an L1 file of its own so the store and the policy both reach it; `DRIFT_KEEP_NOTE` is a server-only note the pass writes and reads back; `HIERARCHY_ITEM_REFUSALS` is a refusal word, whose home is the refusal table. | `single-definition/plan.test.ts` (co-edit by its holder's consent): each declared once at its home, the Keep note's words spelled once (red with a second `RETIRE_WHYS`: `RETIRE_WHYS: expected [ …(2) ] to deeply equal [ Array(1) ]`) |
+| 8 | `ccrc-api`'s ticket-done gate stands beside the table gate (#2997, D-8727) | The table carries row key, cap word and refusal text, and one check reads it: `plan.phase-ref`, `plan.take`, `plan.triage` and `plan.ticket-done` are rows of it. Every refusal text is unchanged byte for byte. The cap-reader census pins seven call lines (was eight), and its reader drops the two dead literal arms. | `ccrc-api.test.ts` both sides' cases green; the census reds with the table gate's check line deleted; the ticket-done refused case reds with its row removed |
+| 9 | The refusal lists omit `unreachable` and `capability-missing` (round 3 F2, round 4 F4) | `references/plan.md` (plan triage and plan take) and, by its holder's consent, `references/api.md` name the doors' `unreachable` (a retry helps) and the client's `capability-missing` for `plan-inbound-v1`. D-8735 is amended in place to state the `unreachable` refusal of a binding door decision when the by-id re-read cannot be made. | `coordinator-plan-reference.test.ts`: both sections and api.md (red before: `expected ' ## The Linear owner: plan triage An …' to match /`unreachable` …/`) |
+| 10 | Three comments overstate or misplace (round 3 F4, round 4 F1, F3) | `inboundRecheck`'s and `recheckRows`' comments (`planRoutes.ts`): an unmeasured re-read refuses only a decision that binds the issue. `keepIssueNode`'s doc: the watermark still reads a dropped issue's `updatedAt` (`DriftPass#passOf` leaves `read.changed` whole). | Words only |
+| 11 | A malformed page past `DRIFT_MAX_PAGES` re-reads the cap every second pass (round 3 F5) | Recorded as a tolerance (below), not bounded. | — |
+| 12 | `not-found` is a walk word the lane never asks about (round 3 F9) | Dropped from `ROW_WORDS` (`inboundPolicy.ts`): the by-id read retires the row `moved-out`, so the walk rule is never asked, and asked anyway it stops the walk, the safe side. | `plan-inbound-policy.test.ts` (red with the word put back: `expected false to be true`) |
+| 13 | The first note's figures and words (round 3 F7, F8; round 4 F7, F8; round 5 A1) | Corrected in place in `w4-follow-ups.md`: where D-8733..D-8736 sit (after D-8739); the round 2 reds (10 red and 6 test-only, not seventeen); the F4 and A6 mutation rows re-measured at this run's tip; WM1's cap word on its own `SERVER_CAP_MAP` entry; and the walk words. | Measured below |
+| 14 | The plan's wave-epic words for an epic with no waves (after #3075) | Carried: #3075 had not merged when the rest was green (the brief: do not wait). | — |
+
+## Tolerance recorded (item 11)
+
+A changed* read refused `malformed` drops the kind's cursor and restarts the sweep from `since`
+(`driftCursorAfterFailure`), so a stale cursor cannot wedge a kind. If the malformed page lies past `DRIFT_MAX_PAGES` (10),
+each sweep reads 10 pages, stores a cursor, fails on that page at the next pass and restarts: the kind's watermark stays at
+`since` and the kind re-reads 10 pages every second pass, one rate-service call a page on lane `sync`. That is at most
+10 extra calls a pass for one kind of one workspace, for as long as Linear keeps answering that page malformed; before the
+cursor (D-8734) the page cap alone applied, so it is not a regression. Nothing is skipped: the watermark never moves past a
+change it did not read. It is accepted, not bounded; a later run can count the restarts and back off if the fleet shows it.
+
+## Rulings the build made
+
+- **Item 1:** the note is deleted on any move out of `waiting`, not mailed: the owner or a coordinator who acts on the row has
+  acted, and the note only ever spoke to the owner's next mail about a `waiting` row. Cost if wrong: an owner who triages a
+  returned issue without reading the return's note never sees it.
+- **Item 2:** a home with a team key whose workspace cannot be resolved answers `unreachable`, a misconfigured slot included.
+  Cost: a slot that will never route reads as retryable.
+- **Item 6:** a reason refused at act time still closes and cancels, with a fallback comment, as the drift restore's refused
+  comment does (review 2457 F3), rather than giving the close up. The lane judges a team no project owns as `unknown`,
+  public, while `plan take`'s close judged it under the programme's home: the lane's is the stricter reading, kept.
+  Cost: a reason the take accepted under a private home may be withheld from Linear.
+- **Item 6:** the owner's mail is sent before the comment and the cancel, so it says the cancel is under way and that a
+  refused cancel gets its own mail; a retried comment answered `conflict` may leave an earlier comment standing, so the mail
+  does not say what the comment reads.
+- **The final review's minors:** `InboundLane#retire` now drops the issue's malformed count, so a reopened issue's close
+  counts afresh and the map does not grow with retired issues (a test, red first).
+- **Tasks 1 and 3** measured their red by reverting the source after the fix was written; the red is recorded, only the
+  order departs from red first.
+
+## Co-edits by consent
+
+`server/src/coord/planRoutes.ts` and `server/test/single-definition/plan.test.ts` (desktop polish WM2, mail 26625): the two
+doc comments, `plan take`'s Upkeep lookup (8 lines, told to the holder, mail 26668) and one import name; one appended
+`it()`. `ccd/coordinator-skill/references/api.md` (Overlord D-8126 A5, mail 26634): the inbound refusal list only.
+
+## Carried, not built here
+
+- Item 14 (above): waits on #3075.
+- `plan take` reads `coord.programHome(slug)` twice (in `takeRowOf` and at the new lookup), inside one `serial`, so they
+  cannot disagree; returning it from `takeRowOf` is past the consented lines.
+
+## Suites run (fleet slice, `--maxWorkers=2`, at most 12 files a command)
+
+Every command through `ccrc test --`, in `server/`, at the pushed tip's tree:
+
+- drift-pass, drift-policy, plan-inbound, plan-inbound-policy, plan-store, plan-routes, plan-sync, plan-sync-lane,
+  plan-sync-lifecycle, plan-sync-policy, linear-items, hierarchy-routes: 674 passed.
+- ccrc-api, ccrc-api-closed, census-w3/claimant, coordinator-plan-reference, coordinator-skill, single-definition/plan,
+  public-text, refusal-status, plan-vocabulary, plan-ticket-done, plan-sync-owned, plan-dispatch-wait: 810 passed.
+- plan-sync-description, plan-dispatch-route, lane-schedule, linear-proxy-routes, overlord-other-lanes-census,
+  overlord-other-lanes-routes, auth-gate, box-token-census, token-shared, single-definition/late-census, core-vocab,
+  writers-map: 894 passed.
+- growth-check, growth-caps, deviation-refs (after `git fetch origin main`), anchors, citations, topology-clean,
+  single-definition/refusal-table, vocabularies, mail-routes, coord-policy-rings, oss-metadata, ownership: 487 passed,
+  3 skipped, and one load timeout (deviation-refs' "two real trees" case at 20 s, on a loaded box); deviation-refs re-run
+  alone: 34 passed. The first run of this group, after the six tasks, was 488 passed, 3 skipped.
+- The server typecheck (`tsc --noEmit -p tsconfig.json`): clean. No migration changed, so coord-db was not run.
+
+**The first note's mutation rows, re-measured at this tip** (item 13; each mutant applied from a saved copy, three files run,
+restored byte for byte and compared): the take gate out, 8 red in plan-inbound; the triage gate out, 9; the close's by-id
+re-read replaced, 4; the interval at 0, 11; the call after `detect` out, 12; the note's clear out of `setInboundState`, 11 in
+plan-inbound and 2 in plan-store; the retirable guard out, 1 in plan-store. drift-pass stayed green under every one.
