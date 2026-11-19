@@ -4253,6 +4253,62 @@ fi
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_PEERS_RE  ]]; then cp=$((cp + 1)); fi
 if [[ -n "$gcmd" && "$gcmd" =~ $CCRC_CLAIMS_RE ]]; then cc=$((cc + 1)); fi
 
+# ── THE MAIL HOLD (mid-turn mail spec 2026-11-19 §3.5; plan Tasks 5.1 and 5.2, calls P5 to P9, P14, P15) ─────────────
+# The `mailhold` route field (`$REG/<id>.mailhold`, written by the server's projection lane alone, `ccd route` its only
+# carrier) says urgent mail waits for this session: `<until>:<role>.<delivery>[,…]`. While it is live (`now < until <=
+# now + 360`, MAILHOLD_REACH_S), `_hook_mail_hold` refuses the session's gated acts (A: `git push`, `git commit`, a sync
+# of main, `gh pr merge`, `ccd pr-admin-merge`) and adds one fixed line to every other main-thread tool call (E). It is
+# CALLED ONCE, AFTER THE LAST DENY ARM (P5, slug last-deny-arm), and only while no deny is built: a deny already built is
+# kept byte for byte, and both arms overwrite advice (the graph arm's Read nudge, the landing advisory's nudge). It is
+# defined here, beside the precompact read, because its marker read is the same kind: builtins only, one `[[ -f ]]`, a
+# bounded `read` refusing a symlink, the grammar's regular expression (MAILHOLD_RE_BODY in shared/mailHold.ts, copied
+# character for character; mailhold-parity.test.ts holds the three readers equal) and the inline clock, compared with
+# `10#` (P14). A call that finds no marker pays the `[[ -f ]]` and nothing more.
+# The matcher, the texts and the log's decision live in `ccd/lib/mail-hold.jq` (its header says how), so this function
+# keeps the read, the strip (its own MERGE_STRIP_JQ call with the merge deny's arguments, on a Bash call whose payload
+# holds a gated word; the merge deny's call site stays as it is, so the strip may run twice, P6) and the writes. The
+# module returns text, and `_hook_deny_json` or `_hook_nudge_json` builds the envelope (P15).
+# FAIL OPEN (D3): an unreadable or malformed marker, a lapsed or far one, a missing module (logged `module-missing`
+# once a hold), a failing jq and `$REG/mail-disabled` hold nothing. SHADOW until armed (P7): `$REG/mailhold-notice-live`
+# arms E and `$REG/mailhold-refuse-live` arms A; nothing in the tree writes either, and unarmed the arms log `would`.
+# THE SHADOW LOG (P8): `~/.ccrc/mail-hold-shadow.log`, one tab-separated line per hold, arm, act and outcome
+# (`<epoch> <id> <arm> <outcome> <delivery> <act>`), kept to one line a key by the seen file
+# `~/.ccrc/mail-hold-shadow.d/<id>` (the pairs, then the keys logged for them; written to a temporary file in that
+# directory and moved over), rotated to `.1` past 1 MiB, its size tested only when a line is appended. A `Stop` while
+# a marker file stands appends one `stop` line (P9): the turn end the B trigger's read compares with `ackedAt`.
+_hook_mail_hold() {   # PreToolUse or Stop -> pre_json (A's deny or E's nudge) and the shadow log; nothing without a marker
+  local f="$REG/$id.mailhold" v="" now="" st="" p="" dl="-" strip="" ran="" seen="" a="" o="" t="" l="" s="" j="" d="$HOME/.ccrc/mail-hold-shadow.d" log="$HOME/.ccrc/mail-hold-shadow.log"
+  [[ -f "$f" && ! -L "$f" && ! -e "$REG/mail-disabled" ]] || return 0
+  { read -r -n 512 v < "$f"; } 2>/dev/null
+  if [[ -n "${EPOCHREALTIME:-}" ]]; then now="${EPOCHREALTIME%%[.,]*}"; else printf -v now '%(%s)T' -1; fi
+  if [[ "$v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ && "$now" =~ ^[0123456789]+$ ]]; then
+    p="${v#*:}" dl="${v#*:}" dl="${dl%%,*}" dl="${dl#*.}"
+    if (( 10#${v%%:*} <= now )); then st=lapsed; elif (( 10#${v%%:*} > now + 360 )); then st=far; else st=live; fi
+  fi
+  if [[ "$event" == Stop ]]; then l="$now"$'\t'"$id"$'\tstop\t-\t'"$dl"$'\t-\n'
+  elif [[ -n "$st" ]]; then
+    if [[ "${tool:-}" == Bash && ( "$payload" == *push* || "$payload" == *commit* || "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ]]; then
+      ran=1 strip=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || strip=""
+    fi
+    [[ "$st" == live || -n "$ran" ]] || return 0
+    [[ -f "$d/$id" && ! -L "$d/$id" ]] && { IFS= read -r -d '' -n 4096 seen < "$d/$id"; } 2>/dev/null
+    if [[ -f "$ROSTER_CARD_LIB/mail-hold.jq" ]]; then
+      [[ -e "$REG/mailhold-notice-live" ]] && a=notice; [[ -e "$REG/mailhold-refuse-live" ]] && a+=,refuse
+      { IFS=$'\x1f' read -r -d '' o t l s; } < <(jq -L "$ROSTER_CARD_LIB" -j --arg strip "$strip" --arg ran "$ran" --arg cap "$MERGE_PARSE_CAP" --arg thread "${tmsub:+sub}" \
+        --arg pairs "$p" --arg state "$st" --arg armed "$a" --arg sid "$id" --arg now "$now" --arg seen "$seen" 'include "mail-hold"; mail_hold($ARGS.named)' <<<"$payload" 2>/dev/null) 2>/dev/null
+    elif [[ "${seen%%$'\n'*}" != "$p" || $'\n'"$seen" != *$'\n'module-missing$'\n'* ]]; then   # the hook's one key: the module cannot decide it
+      [[ "${seen%%$'\n'*}" == "$p" ]] || seen="$p"$'\n'
+      s="${seen}module-missing"$'\n' l="$now"$'\t'"$id"$'\t-\tmodule-missing\t'"$dl"$'\t-\n'
+    fi
+  fi
+  if [[ "$o" == deny ]] && j=$(_hook_deny_json "$t"); then pre_json=$j
+  elif [[ "$o" == notice ]] && j=$(_hook_nudge_json "$t"); then pre_json=$j; fi
+  [[ -n "$l" ]] && mkdir -p "$d" 2>/dev/null || return 0
+  if [[ -n "$s" ]]; then { printf '%s' "$s" > "$d/.$id.$$" && mv -f "$d/.$id.$$" "$d/$id"; } 2>/dev/null || rm -f "$d/.$id.$$"; fi
+  [[ -n "$(find "$log" -size +1024k 2>/dev/null)" ]] && mv -f "$log" "$log.1" 2>/dev/null
+  { printf '%s' "$l" >> "$log"; } 2>/dev/null
+}
+
 # ── THE PRECOMPACT LINE (Overlord W1a, W0-05) ────────────────────────────
 # An automatic compaction can fire PreCompact with no PostCompact after it, so
 # the server counts a compaction from this line, joined to its journal record
@@ -5941,66 +5997,8 @@ if [[ "$event" == PreToolUse && "$pre_json" != *'"permissionDecision":"deny"'* \
   fi
 fi
 
-# ── THE MAIL HOLD (mid-turn mail spec 2026-11-19 §3.5; plan Tasks 5.1 and 5.2, calls P5 to P9, P14, P15) ─────────────
-# The `mailhold` route field (`$REG/<id>.mailhold`, written by the server's projection lane alone, `ccd route` its only
-# carrier) says urgent mail waits for this session: `<until>:<role>.<delivery>[,…]`. While it is live (`now < until <=
-# now + 360`, MAILHOLD_REACH_S), this block refuses the session's gated acts (A: `git push`, `git commit`, a sync of
-# main, `gh pr merge`, `ccd pr-admin-merge`) and adds one fixed line to every other main-thread tool call (E). ONE BLOCK
-# AFTER THE LAST DENY ARM (P5, slug last-deny-arm): a deny already built is kept byte for byte, and both arms overwrite
-# advice (the graph arm's Read nudge, the landing advisory's nudge). The marker read is builtins only: one `[[ -f ]]`,
-# a bounded `read` refusing a symlink, the grammar's regular expression (MAILHOLD_RE_BODY in shared/mailHold.ts, copied
-# character for character; mailhold-parity.test.ts holds the three readers equal) and the inline clock, compared with
-# `10#` (P14). A call that finds no marker pays the `[[ -f ]]` and nothing more.
-# The matcher, the texts and the log's decision live in `ccd/lib/mail-hold.jq` (its header says how), so this block
-# keeps the read, the strip (its own MERGE_STRIP_JQ call with the merge deny's arguments, on a Bash call whose payload
-# holds a gated word; the merge deny's call site stays as it is, so the strip may run twice, P6) and the writes. The
-# module returns text, and `_hook_deny_json` or `_hook_nudge_json` builds the envelope (P15).
-# FAIL OPEN (D3): an unreadable or malformed marker, a lapsed or far one, a missing module (logged `module-missing`
-# once a hold), a failing jq and `$REG/mail-disabled` hold nothing. SHADOW until armed (P7): `$REG/mailhold-notice-live`
-# arms E and `$REG/mailhold-refuse-live` arms A; nothing in the tree writes either, and unarmed the arms log `would`.
-# THE SHADOW LOG (P8): `~/.ccrc/mail-hold-shadow.log`, one tab-separated line per hold, arm, act and outcome
-# (`<epoch> <id> <arm> <outcome> <delivery> <act>`), kept to one line a key by the seen file
-# `~/.ccrc/mail-hold-shadow.d/<id>` (the pairs, then the keys logged for them; written to a temporary file in that
-# directory and moved over), rotated to `.1` past 1 MiB, its size tested only when a line is appended. A `Stop` while
-# a marker file stands appends one `stop` line (P9): the turn end the B trigger's read compares with `ackedAt`.
-mh_f="$REG/$id.mailhold"
-if [[ ( "$event" == PreToolUse || "$event" == Stop ) && -f "$mh_f" && ! -L "$mh_f" && ! -e "$REG/mail-disabled" \
-      && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then
-  mh_v="" mh_now="" mh_st="" mh_p="" mh_dl="-" mh_strip="" mh_ran="" mh_seen="" mh_a="" mh_o="" mh_t="" mh_l="" mh_s=""
-  mh_d="$HOME/.ccrc/mail-hold-shadow.d" mh_log="$HOME/.ccrc/mail-hold-shadow.log"
-  { read -r -n 512 mh_v < "$mh_f"; } 2>/dev/null
-  if [[ -n "${EPOCHREALTIME:-}" ]]; then mh_now="${EPOCHREALTIME%%[.,]*}"; else printf -v mh_now '%(%s)T' -1; fi
-  if [[ "$mh_v" =~ ^([123456789][0123456789]{0,10}):((coordinator|overlord)\.[123456789][0123456789]{0,9})(,(coordinator|overlord)\.[123456789][0123456789]{0,9}){0,7}$ && "$mh_now" =~ ^[0123456789]+$ ]]; then
-    mh_p="${mh_v#*:}" mh_dl="${mh_v#*:}" mh_dl="${mh_dl%%,*}" mh_dl="${mh_dl#*.}"
-    if (( 10#${mh_v%%:*} <= mh_now )); then mh_st=lapsed; elif (( 10#${mh_v%%:*} > mh_now + 360 )); then mh_st=far; else mh_st=live; fi
-  fi
-  if [[ "$event" == Stop ]]; then
-    mh_l="$mh_now"$'\t'"$id"$'\tstop\t-\t'"$mh_dl"$'\t-\n'
-  elif [[ -n "$mh_st" ]]; then
-    if [[ "${tool:-}" == Bash && ( "$payload" == *push* || "$payload" == *commit* || "$payload" == *merge* || "$payload" == *pull* || "$payload" == *rebase* ) ]]; then
-      mh_ran=1 mh_strip=$(jq -r --arg q "'" --argjson cap "$MERGE_PARSE_CAP" --arg allow "$ALLOW_ADMIN_RE" "$MERGE_STRIP_JQ" <<<"$payload" 2>/dev/null) || mh_strip=""
-    fi
-    if [[ "$mh_st" == live || -n "$mh_ran" ]]; then
-      [[ -f "$mh_d/$id" && ! -L "$mh_d/$id" ]] && { IFS= read -r -d '' -n 4096 mh_seen < "$mh_d/$id"; } 2>/dev/null
-      if [[ -f "$ROSTER_CARD_LIB/mail-hold.jq" ]]; then
-        [[ -e "$REG/mailhold-notice-live" ]] && mh_a=notice; [[ -e "$REG/mailhold-refuse-live" ]] && mh_a+=,refuse
-        { IFS=$'\x1f' read -r -d '' mh_o mh_t mh_l mh_s; } < <(jq -L "$ROSTER_CARD_LIB" -j --arg strip "$mh_strip" --arg ran "$mh_ran" --arg cap "$MERGE_PARSE_CAP" \
-          --arg thread "${tmsub:+sub}" --arg pairs "$mh_p" --arg state "$mh_st" --arg armed "$mh_a" --arg sid "$id" --arg now "$mh_now" \
-          --arg seen "$mh_seen" 'include "mail-hold"; mail_hold($ARGS.named)' <<<"$payload" 2>/dev/null) 2>/dev/null
-      elif [[ "${mh_seen%%$'\n'*}" != "$mh_p" || $'\n'"$mh_seen" != *$'\n'module-missing$'\n'* ]]; then   # the hook's one key
-        [[ "${mh_seen%%$'\n'*}" == "$mh_p" ]] || mh_seen="$mh_p"$'\n'
-        mh_s="${mh_seen}module-missing"$'\n' mh_l="$mh_now"$'\t'"$id"$'\t-\tmodule-missing\t'"$mh_dl"$'\t-\n'
-      fi
-    fi
-  fi
-  if [[ "$mh_o" == deny ]] && mh_j=$(_hook_deny_json "$mh_t"); then pre_json=$mh_j
-  elif [[ "$mh_o" == notice ]] && mh_j=$(_hook_nudge_json "$mh_t"); then pre_json=$mh_j; fi
-  if [[ -n "$mh_l" ]] && mkdir -p "$mh_d" 2>/dev/null; then
-    if [[ -n "$mh_s" ]]; then { printf '%s' "$mh_s" > "$mh_d/.$id.$$" && mv -f "$mh_d/.$id.$$" "$mh_d/$id"; } 2>/dev/null || rm -f "$mh_d/.$id.$$"; fi
-    [[ -n "$(find "$mh_log" -size +1024k 2>/dev/null)" ]] && mv -f "$mh_log" "$mh_log.1" 2>/dev/null
-    { printf '%s' "$mh_l" >> "$mh_log"; } 2>/dev/null
-  fi
-fi
+# THE MAIL HOLD (`_hook_mail_hold`, defined beside the precompact read): after the last deny arm, while no deny is built.
+if [[ ( "$event" == PreToolUse || "$event" == Stop ) && "$pre_json" != *'"permissionDecision":"deny"'* ]]; then _hook_mail_hold || true; fi
 
 # `carry-only-a-main-thread-wait` (D-4039, task review): who raised the wait. `waitby` is "subagent" only when THIS event
 # freshly set `waiting` and carries an `agent_id` (`$paid`); it is stored as the additive key `waitBy`, preserved with
