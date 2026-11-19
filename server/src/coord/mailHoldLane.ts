@@ -25,7 +25,7 @@ import type { MailHoldPair } from '../../../shared/mailHold.js';
 import { CCD_ARGV, MAILHOLD_ROUTE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
-import { routeSetOutcome } from '../routeSetOutcome.js';
+import { routeSetOutcome, type RouteSetOutcome } from '../routeSetOutcome.js';
 import { decideMailHold, type MailHoldDecision } from './mailHoldPolicy.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
 
@@ -103,7 +103,8 @@ export async function mailHoldPass(deps: MailHoldLaneDeps, rows: readonly MailHo
     const d = decideMailHold({ held, measured, unreadable, now, capable, mailDisabled });
     if (d.act === 'none') continue;
     if (d.act === 'skip') { c[d.why] += 1; continue; }
-    await write(deps, r.id, d, c);
+    const value = d.act === 'write' ? d.value : '';
+    settle(deps, r.id, d, routeSetOutcome(await deps.runCcd(CCD_ARGV.routeSet(r.id, { mailhold: value }, sweepDec(deps.fleetState, MAIL_HOLD_LANE_ACTOR)))), c);
   }
   for (const id of holds.keys()) if (!listed.has(id)) c.unlisted += 1;
   const result: MailHoldLaneResult = { mailDisabled, storeUnread: false, ...c };
@@ -111,9 +112,8 @@ export async function mailHoldPass(deps: MailHoldLaneDeps, rows: readonly MailHo
   return result;
 }
 
-async function write(deps: MailHoldLaneDeps, id: string, d: Extract<MailHoldDecision, { act: 'write' | 'clear' }>, c: Counts): Promise<void> {
-  const value = d.act === 'write' ? d.value : '';
-  const out = routeSetOutcome(await deps.runCcd(CCD_ARGV.routeSet(id, { mailhold: value }, sweepDec(deps.fleetState, MAIL_HOLD_LANE_ACTOR))));
+/** Count one write's answer, and log a failure once an episode. */
+function settle(deps: MailHoldLaneDeps, id: string, d: Extract<MailHoldDecision, { act: 'write' | 'clear' }>, out: RouteSetOutcome, c: Counts): void {
   if (out.kind === 'written') {
     deps.memory.failing.delete(id);
     if (d.act === 'clear') c.cleared += 1;
