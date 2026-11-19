@@ -74,7 +74,7 @@ export const PAINTED_SET: MutantSet<ApprovalEnvelopeModule> = {
     { id: 'PA-10 the same call by any stamp (review 2774 F5)', old: 'e.at === hs.updatedAt && ', new: '' },
     { id: 'PA-11 the same call by summary only', old: 'e.tool === own.tool && ', new: '' },
     { id: 'PA-12 the same call by tool only', old: 'e.summary === own.summary && ', new: '' },
-    { id: 'PA-13 the same call of any age (review 2774 F5)', old: ' && isLive(e, now));', new: '));' },
+    { id: 'PA-13 the same call of any age (review 2774 F5)', old: ' && isLive(e, now));', new: ');' },
     { id: 'PA-14 no subagent mark', old: ', thread: \'subagent\' as const } },', new: ' } },' },
     { id: 'PA-15 the route is dropped', old: '...(entry.route === undefined ? {} : { route: entry.route }), ', new: '' },
     { id: 'PA-16 the entry is not reported', old: '  entry,\n});', new: '  entry: null,\n});' },

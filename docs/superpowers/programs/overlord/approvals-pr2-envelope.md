@@ -168,7 +168,8 @@ for byte.
 
 - **L1 deciders, in `MUTANT_SETS` and `mutation-floors.json` (floor 1 each), all killed.** Fix round 2 rewrote the
   envelope's two sets against the reworked decider and ran each mutant through the suite that runs the same cases
-  module (`approval-envelope.test.ts`), because the floors suite is killed by the test slice's memory cap on this box:
+  module (`approval-envelope.test.ts`), and then the floors suite itself, filtered to this PR's four sets (`-t`), which
+  fits the test slice's memory cap where the whole file does not:
   - `approvalEntryFor`, 33: no shape check; the title or the body unread; whitespace kept; a long summary required whole;
     a 50-character match; a short summary matched as a substring; a short bound of 10; no command-block test; any one
     line taken as the command (2774 F2); the description never set aside; two lines set aside; an empty summary a command
@@ -224,3 +225,7 @@ for byte.
   a real capture does (`cc280-permission.txt`), so the command block could not be read from it; it now paints them.
   `typecheck-tests` was killed by the memory cap again, so the changed test files were typechecked through a narrow
   config extending the suite's own; one real error (a case without `updatedAt`) was found and fixed that way.
+- Fix round 2's first push reddened `sim/mutation-floors`: one new mutant (`PA-13`, the same call of any age) left an
+  extra closing parenthesis, which the floors suite refuses as invalid. The hand driver had counted the transform failure
+  as a kill. Every mutant of the four sets is now checked to compile before it runs, `PA-13` is killed by a case, and the
+  floors suite, filtered to these four sets, passes here.
