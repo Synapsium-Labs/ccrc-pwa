@@ -33,9 +33,12 @@ export interface SkillInstallLaneDeps {
 
 const ACTIVE: ReadonlySet<RunState> = new Set(ACTIVE_RUN_STATES);
 
-/** The verb's answer, or `null` when it did not run or ran out its deadline. The deadline's handle is local to this one
+/** One due run's outcome, or `null` when its worker's account is not known this pass (it is looked at again on the
+ *  next). The capability gate sits in this scope with the call it gates. The deadline's handle is local to this one
  *  call, so it is a deadline, never a scheduler. */
-async function ensureWithin(deps: SkillInstallLaneDeps, wrapper: string): Promise<{ ok: boolean; stdout: string } | null> {
+async function installFor(deps: SkillInstallLaneDeps, wrapper: string): Promise<SkillInstallOutcome | null> {
+  if (!ccdCan(deps.fleetState, 'skillEnsure')) return 'unsupported';
+  if (wrapper === '') return null;
   let timer: ReturnType<typeof setTimeout> | undefined;
   const overdue = new Promise<null>((resolve) => { timer = setTimeout(() => resolve(null), deps.deadlineMs ?? SKILL_ENSURE_DEADLINE_MS); });
   try {
@@ -43,9 +46,9 @@ async function ensureWithin(deps: SkillInstallLaneDeps, wrapper: string): Promis
       const res = await deps.runCcd(CCD_ARGV.skillEnsure(wrapper));
       return res.ran === false ? null : res;
     })();
-    return await Promise.race([verb, overdue]);
+    return skillInstallOutcomeOf(await Promise.race([verb, overdue]));
   } catch {
-    return null;   // a refused argv or a throwing runner: the verb did not run
+    return skillInstallOutcomeOf(null);   // a refused argv or a throwing runner: the verb did not run
   } finally {
     if (timer !== undefined) clearTimeout(timer);
   }
@@ -56,20 +59,16 @@ async function ensureWithin(deps: SkillInstallLaneDeps, wrapper: string): Promis
 export async function skillInstallPass(deps: SkillInstallLaneDeps): Promise<SkillInstallOutcome[]> {
   const read = deps.coord.runs();
   if (!read.ok) return [];
+  // The bound worker's registry row, by session id: a read of the row the run names, never a binding decision.
+  const wrapperOf = new Map(deps.records.map((r) => [r.id, r.wrapper]));
   const done: SkillInstallOutcome[] = [];
   for (const run of read.runs) {
     if (done.length >= SKILL_INSTALL_PER_PASS) break;
     // Economy, never a permission: only an active run has a worker that reads the skill now.
     if (!ACTIVE.has(run.state)) continue;
     if (!skillInstallDue(run, deps.coord.runEvents(run.id), deps.now())) continue;
-    let outcome: SkillInstallOutcome;
-    if (!ccdCan(deps.fleetState, 'skillEnsure')) {
-      outcome = 'unsupported';
-    } else {
-      const wrapper = deps.records.find((r) => r.id === run.sessionId)?.wrapper ?? '';
-      if (wrapper === '') continue;
-      outcome = skillInstallOutcomeOf(await ensureWithin(deps, wrapper));
-    }
+    const outcome = await installFor(deps, (run.sessionId === null ? undefined : wrapperOf.get(run.sessionId)) ?? '');
+    if (outcome === null) continue;
     // `sweep`: the server's lane caused the row, as the dead-dispatch pass's close is caused.
     deps.coord.recordRunEvent(run.id, 'sweep', `${SKILL_INSTALL_EVENT}${outcome}`, deps.now());
     done.push(outcome);
