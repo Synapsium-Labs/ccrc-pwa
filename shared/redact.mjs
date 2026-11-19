@@ -20,8 +20,8 @@
 //   - `docs`: the native Docs reader's redactor (docs W1, design 2026-10-01 section 2 (b)). Every mask is `***`. ccd's
 //     python `REDACT_RULES` is a parity copy of its rows (`docs-parity.test.ts`).
 //   - `linear-egress`: the redactor for prose a session sends to Linear (#1444): a title, a description, a comment body,
-//     a search term. It lists only the credential-shape rules of `egress` (`jwt`, `header`, `bearer`, the two
-//     URL-userinfo rules, `secret-assigns`, `known-token`), and leaves out `token-segments`, the flag rules,
+//     a search term. It lists only the credential-shape rules of `egress` (`pem-block`, `jwt`, `header`, `bearer`, the
+//     two URL-userinfo rules, `secret-assigns`, `known-token`), and leaves out `token-segments`, the flag rules,
 //     `json-pair`, `yaml-secret`, `secret-word` and the program-scoped rules: those were built for command lines, and
 //     over a ticket they would mask a commit SHA, a UUID or a dated spec path, or read prose as argv. Every mask is
 //     `[REDACTED]`, and it takes the caller's `shapes` as `egress` does.
@@ -49,6 +49,8 @@
 // THE EGRESS SHAPES. A child's tool input is untrusted text, and it can carry a secret the child pasted into a command.
 // Before any input is stored on an approval row, mailed to a coordinator, put in a digest or shown on a surface, the
 // egress profile masks the token-shaped strings in it:
+//   - a PEM private-key block, from its BEGIN line to its END line or, with none, to the end of the text (overlord wave
+//     163; the source `ccd/history/lib.mjs`'s shape layer reads too);
 //   - `Authorization:` and `Cookie:` header values (and `Proxy-Authorization:`, `Set-Cookie:`), and the value of any
 //     header named `...-Key`, `...-Token`, `...-Secret` or `...-Signature` (`X-Api-Key:`, `Private-Token:`), to the end
 //     of the value (D-5360);
@@ -88,6 +90,9 @@
 //   - a known token by its prefix, at any length: `sk_live_`, `sk_test_`, `rk_live_`, `ghp_`, `gho_`, `ghu_`, `ghs_`,
 //     `ghr_`, `github_pat_`, `glpat-`, `xox[abprs]-`, `xapp-`, `npm_`, `pypi-`, `AKIA...`, `ASIA...`, `AIza...`,
 //     `sk-...` (D-5360), a Linear API key's `lin_api_` (#1444), and a Slack webhook's path and a Telegram bot token;
+//     and, by their shapes from Gitleaks v8.30.0 (overlord wave 163; `KNOWN_TOKEN_PREFIX` says how each was read), a
+//     SendGrid `SG.` key, DigitalOcean's `dop_v1_`, `doo_v1_` and `dor_v1_` tokens, an age `AGE-SECRET-KEY-1` key,
+//     HashiCorp Vault's `hvs.` and `hvb.` tokens and a Mailgun `key-` with 32 hex, and a Google `ya29.` access token;
 //   - every `/`-separated segment of 32 or more base64 or hex characters that holds a digit and a letter (spec section
 //     6.7; D-5360): a segment is judged on its own, so a secret inside a URL path or a base64 value with a `/` in it is
 //     masked, while a path whose segments are short or are words (`project-a-quiet-basin-with-a-long-name`) stays
@@ -104,8 +109,10 @@
 //     -t`, `rar -hp<pw>`, `smbclient -U user%pw`, `lftp -u user,pw`, `wrangler secret put X --value X`,
 //     `kubectl --from-literal=key=X`;
 //   - token shapes with no prefix rule: a Discord bot token (three dot-separated parts, each under 32 characters), a
-//     HashiCorp Vault token (`s....`, `hvs....`, `hvb....`), a `gsk_` token, a bare secret with no name in front of it
-//     that is only short `/`-separated segments;
+//     legacy HashiCorp Vault token (`s.` and 24 letters and digits, which `s.getElementsByClassName…` code also
+//     reads as), a `gsk_` token, a PGP private key block (`-----BEGIN PGP PRIVATE KEY BLOCK-----`: the PEM rule's bytes
+//     are history's, so widening it is a reindex), a bare secret with no name in front of it that is only short
+//     `/`-separated segments;
 //   - names and headers: an assignment written with spaces around `=`, a secret name the name test does not hold
 //     (`PW=`), an `X-Auth:`, `X-Password:` or `X-Api-Pass:` header, a header with no space after its colon whose name
 //     has no `-Key` / `-Token` suffix (`apikey:X`, `token:X`), a `DSN=`, `?sig=` or `?signature=` value, a cookie
@@ -182,7 +189,27 @@ const SINGLE_DASH_SECRET = new RegExp(String.raw`(^|[\s'"])(-(?!-)[A-Za-z0-9-]*(
 const CAMEL_SECRET_FLAG = new RegExp(String.raw`(^|[\s'"])(--?[a-z][a-z0-9]*(?:[A-Z][a-z0-9]*)*?(?:Token|Secret|Password|Passwd|Pass|ApiKey|Key))(\s+(?![<>-])|=)${VALUE}`, 'g');
 /** D-5360 round 8: xfreerdp's `/p:<password>`. */
 const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
-const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`;
+/** Overlord wave 163: the rows after `AIza`, but `ya29.`, take their shapes from Gitleaks v8.30.0's `config/gitleaks.toml`
+ *  (github.com/gitleaks/gitleaks, under the MIT licence), rule by rule:
+ *  `sendgrid-api-token`, `digitalocean-pat`, `digitalocean-access-token`, `digitalocean-refresh-token` (case-insensitive
+ *  there, so spelt with both cases here: no inline `(?i:` before Node 23), `age-secret-key`, `vault-service-token`'s
+ *  `hvs.` arm and `vault-batch-token`. Gitleaks ends each at a closing delimiter; here a fixed-length row masks its
+ *  length and leaves what follows, as `AKIA` does, and the two Vault rows keep their lower bound and drop the upper one,
+ *  so a longer run is masked whole rather than leaving a tail. Mailgun's `key-` row drops Gitleaks's `mailgun` keyword
+ *  context and is fenced instead: no `_` or `-` before it, no letter, digit, `_` or `-` after its 32 hex, so a
+ *  `cache-key-<md5>` stays readable. Gitleaks has no Google OAuth row: `ya29.` is ccrc's own, an access token's
+ *  prefix then at least 20 characters of base64url in dot-joined parts, so a trailing full stop is never taken. */
+const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`
+  + String.raw`SG\.[A-Za-z0-9=_.-]{66}|do[op]_v1_[a-f0-9]{64}|[dD][oO][rR]_[vV]1_[a-fA-F0-9]{64}|AGE-SECRET-KEY-1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58}|`
+  + String.raw`hvs\.[A-Za-z0-9_-]{90,}|hvb\.[A-Za-z0-9_-]{138,}|(?<![_-])key-[a-f0-9]{32}(?![A-Za-z0-9_-])|`
+  + String.raw`ya29\.(?=[A-Za-z0-9_.-]{20})[A-Za-z0-9_-]+(?:\.[A-Za-z0-9_-]+)*|`;
+/** A PEM private-key block (`-----BEGIN ... PRIVATE KEY-----` to its END line, or to the end of the text when it has
+ *  none): the one source. `ccd/history/lib.mjs`'s shape layer builds its first arm from it (`SECRET_SHAPE_RES`), and the
+ *  egress and linear-egress profiles run it as `pem-block`. Its bytes are part of every history index text, so a change
+ *  to it is a history `BELT_VERSION` bump and a reindex (the history programme's), never a change made here alone: that
+ *  is why it is not Gitleaks's `private-key` rule, whose `(?: BLOCK)?` also reads a PGP private key block (a residual). */
+export const PEM_PRIVATE_KEY_SOURCE = String.raw`-----BEGIN [A-Z ]*PRIVATE KEY-----[\s\S]*?(?:-----END [A-Z ]*PRIVATE KEY-----|$)`;
+const PEM_BLOCK = new RegExp(PEM_PRIVATE_KEY_SOURCE, 'g');
 const SLACK_HOOK = /(hooks\.slack\.com\/(?:services|workflows|triggers)\/)[^\s'"]+/gi;
 const TELEGRAM_BOT = /\bbot[0-9]{5,}:[A-Za-z0-9_-]{20,}/g;
 /** A base64 (standard or URL-safe) or hex run; hex is a subset of the class. Linear: one class, no nesting. */
@@ -365,6 +392,7 @@ const needShape = (shapes, id) => {
 };
 
 const RULES = Object.freeze([
+  sub('pem-block', PEM_BLOCK, R),
   sub('json-pair', JSON_PAIR, (m, key, sep) => (JSON_SECRET_KEY.test(key) ? `"${key}"${sep}"${R}"` : m)),
   sub('yaml-secret', YAML_SECRET, (_m, name, sep) => `${name}${sep}${R}`),
   {
@@ -422,7 +450,7 @@ export const RULE_IDS = Object.freeze(RULES.map((r) => r.id));
 /** The profiles: each a frozen list of the rule ids it runs, in order. No profile inherits another's. */
 export const PROFILES = Object.freeze({
   egress: Object.freeze([
-    'json-pair', 'yaml-secret', 'jwt', 'secret-assigns', 'program-flags', 'header', 'bearer', 'secret-word',
+    'pem-block', 'json-pair', 'yaml-secret', 'jwt', 'secret-assigns', 'program-flags', 'header', 'bearer', 'secret-word',
     'url-userinfo-quoted', 'url-userinfo', 'user-quoted', 'user-flag', 'proxy-userinfo', 'cert-pass',
     'user-empty-pass', 'p-flag', 'p-quoted', 'secret-flag', 'single-dash-secret', 'camel-secret-flag', 'rdp-pass',
     'pass-arg', 'slack-hook', 'telegram-bot', 'known-token', 'token-segments',
@@ -431,7 +459,7 @@ export const PROFILES = Object.freeze({
     'docs-url-userinfo', 'docs-query-token', 'docs-gh-token', 'docs-linear-key', 'docs-authorization',
   ]),
   'linear-egress': Object.freeze([
-    'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
+    'pem-block', 'jwt', 'header', 'bearer', 'url-userinfo-quoted', 'url-userinfo', 'secret-assigns', 'known-token',
   ]),
   'history-base': Object.freeze([
     'history-json', 'history-named-head', 'history-named-tail', 'history-named-value-v1', 'history-bearer',
