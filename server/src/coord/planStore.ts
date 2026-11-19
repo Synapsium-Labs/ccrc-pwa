@@ -904,8 +904,9 @@ export function setInboundState(
   if (db.isTransaction) write(); else tx(db, write);
 }
 /** THE ONE RETIRE of a stored inbound row (review 2457 F4, A6; D-8735): the state, its cause and the deletion of the row's stored note
- *  (`setInboundState` deletes it with any move out of `waiting`) are ONE act, so no retire leaves an orphan note behind and none leaves a row retired with no cause. A row that is not retirable now
- *  (`inboundRetirable`: taken, placed, an acted close, already retired, or gone) is left as it is and the answer is false: a door's
+ *  (`setInboundState` deletes it with any move out of `waiting`) are ONE act, so no retire leaves an orphan note behind and none
+ *  leaves a row retired with no cause. A row that is not retirable now (`inboundRetirable`: taken, placed, an acted close, already
+ *  retired, or gone) is left as it is and the answer is false: a door's
  *  re-read ran outside the transaction, so the row is judged again here. The caller holds the transaction (`retireInbound` opens one). */
 export function retireInboundInTx(db: DatabaseSync, linearId: string, why: RetireWhy): boolean {
   const row = inboundOf(db, linearId);

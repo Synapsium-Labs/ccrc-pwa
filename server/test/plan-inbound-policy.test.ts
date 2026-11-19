@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import {
   INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict, upkeepLookupOf,
 } from '../src/linear/inboundPolicy.js';
+import { closeRefusedCommentBody, closeTextRefusedMail } from '../src/linear/inboundPolicy.js';
 import { handedRowOf } from '../src/coord/planPolicy.js';
 import { RETIRE_WHYS, inboundRetirable, retireWhyOf } from '../src/linear/inboundRetire.js';
 
@@ -135,5 +136,24 @@ describe('upkeepLookupOf (review 2571 F10)', () => {
   });
   it('a home with a team key whose workspace could not be resolved is unreachable', () => {
     expect(upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'unreachable' });
+  });
+});
+
+describe('the close builders for a reason that failed the public-text check (final review minor 4)', () => {
+  const sample = { identifier: 'AAA-12', teamKey: 'AAA', title: 'distinctive-title-zq', body: 'distinctive-body-zq' };
+  it('the comment carries no reason text and carries ccrc\'s provenance', () => {
+    const body = closeRefusedCommentBody();
+    expect(body).toContain('Closed by ccrc');
+    expect(body).toMatch(/ccrc/i);
+    expect(body).not.toContain('Closed: ');
+  });
+  it('the mail names the identifier, team key and class, and echoes neither title nor body', () => {
+    const m = closeTextRefusedMail(sample, 'some-class');
+    expect(m.subject).toContain('AAA-12');
+    expect(m.body).toContain('AAA-12');
+    expect(m.body).toContain('team AAA');
+    expect(m.body).toContain('some-class');
+    expect(m.body).not.toContain('You closed');
+    for (const text of [m.subject, m.body]) { expect(text).not.toContain('distinctive-title-zq'); expect(text).not.toContain('distinctive-body-zq'); }
   });
 });

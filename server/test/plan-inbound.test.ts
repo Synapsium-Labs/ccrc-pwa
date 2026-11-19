@@ -1258,6 +1258,27 @@ describe('the malformed count is per issue (round 4 F2)', () => {
     expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
   });
 
+  it('a retired issue that reopens and is closed again starts its malformed count afresh (final review minor 5, D-8183)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'malformed';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    for (const wait of [30_000, 120_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(3);          // three malformed answers stand
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);                        // it reopens
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise again' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1_800_000);
+    await passAt(r, r.t.now + 1_800_000);
+    // a count kept through the retire (3) would reach the give-up at the second answer
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(2);
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBeNull();
+  });
+
   it('a count left by one issue of a workspace never counts against another issue of it (round 3 F3, D-8183)', async () => {
     const r = await rig();
     await detect(r, [node(12), node(13)]);

@@ -8,8 +8,8 @@
  * issue whose team's Linear owner is live or unmeasured is mailed to it, once, with the reporter's text only inside the untrusted
  * block; with no owner, or a gone one (dead or absent), it stays `waiting` and the project raises ONE *Name a Linear owner* item,
  * which settles itself in the beat that finds the owner live. A `raised` issue whose operator item is answered or closed comes back
- * to the owner as a mail, and the item settles. `act` makes the Linear writes of a `closed` issue (one comment with the reason,
- * then the cancel), in the issue's own flight, and records `actedAt` only after both landed.
+ * to the owner as a mail, and the item settles. `act` makes the Linear writes of a `closed` issue (one comment, with the reason or,
+ * when the reason fails the public-text check at act time, a fallback with no text, then the cancel), in the issue's own flight, and records `actedAt` only after both landed.
  *
  * THE ROUTES CALL NO LINEAR. `plan triage` and `plan take` only write the store; the one place that writes an inbound issue in
  * Linear is `act` below, under the pass `inbound`.
@@ -27,9 +27,8 @@ import {
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
-import { textRefusalOf } from './planSyncPolicy.js';
+import { textRefusalOf, uuidOf } from './planSyncPolicy.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
-import { uuidOf } from './planSyncPolicy.js';
 import type { DriftPassDeps } from './driftPass.js';
 import type { LinearStoreRead } from './store.js';
 
@@ -104,6 +103,7 @@ export class InboundLane {
    *  item is left asking about an issue that is gone. Writes nothing of the issue that was read: only the state and the cause. */
   private retire(row: InboundRow, why: RetireWhy, now: number): void {
     const { coord, plan } = this.deps;
+    this.malformed.delete(row.linearId);   // a reopened issue's next close counts its own answers; the map never grows with retired issues
     const item = row.state === 'raised' && row.itemId !== null ? coord.itemById(row.itemId) : null;
     if (item !== null && (item.state === 'open' || item.state === 'checking')) {
       coord.moveItemWithMail(item.id, 'settle', 'ccrc', { note: 'The issue is no longer inbound in Linear.' }, now, { programmeHasOpenRun: false }, () => plan.retireInboundInTx(row.linearId, why));
@@ -261,7 +261,7 @@ export class InboundLane {
 
   // ── A closed issue's Linear writes ──
 
-  /** For each `closed` issue not yet acted: one comment with the reason, then the cancel, inside the issue's own flight; the row
+  /** For each `closed` issue not yet acted: one comment (the reason, or a fallback with no text when the reason fails the public-text check now), then the cancel, inside the issue's own flight; the row
    *  is `actedAt` only after both are ok (a comment answered `conflict` is one made already). A directory not yet read waits
    *  without a word; a team with no `canceled` status mails the owner once and leaves the row. */
   private async act(): Promise<void> {

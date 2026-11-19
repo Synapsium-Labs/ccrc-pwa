@@ -818,7 +818,7 @@ describe('a row\'s note lives only while its row is waiting (round 4 F2)', () =>
   const note = { kind: 'returned', program: 'prog-a', note: 'not mine', at: 9 } as const;
   const fresh = (id: string) => { upsertInbound(db, inboundIn(id)); setInboundNote(db, id, note); };
 
-  it('setInboundState to any state but waiting deletes the note, in a transaction of its own', () => {
+  it('setInboundState to any state but waiting deletes the note', () => {
     for (const state of ['mailed', 'handed', 'closed', 'raised', 'placed', 'taken', 'retired'] as const) {
       fresh(`L-${state}`);
       setInboundState(db, `L-${state}`, { state });
