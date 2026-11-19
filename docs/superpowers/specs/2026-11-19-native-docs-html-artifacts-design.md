@@ -361,7 +361,7 @@ The fences bind browsers only. A client that is not a browser can send any heade
 
 | Path | Closed by |
 |---|---|
-| Console to tab | `rel="noopener"`, on which this isolation rests. The wrapper's `Cross-Origin-Opener-Policy` is `same-origin-allow-popups` (§4.2), which keeps a window the page opens usable and does not itself sever the console. No `postMessage` is sent and none is listened for, so the `pwa/src` rule of no message listener holds |
+| Console to tab | `rel="noopener"`, on which this isolation rests. The wrapper's `Cross-Origin-Opener-Policy` is `same-origin-allow-popups` (§4.2), which keeps a window the page opens usable and does not itself sever the console. The console posts no message to the tab and listens for no window `message`, so the `pwa/src` rule of no window message listener holds |
 | Tab to console | Different site: the session cookie is host-only on the console's name (`server/src/auth/cookie.ts`, no `Domain`), so it is never sent to an artifact name. A request from the page to the console is cross-site: a write is refused by the gate's origin check (`foreign-origin`), and a read cannot be read back (no CORS). The docs plugin also refuses anything not same-origin (`foreign-request`) |
 | Secrets to the page | The mint answer goes to the console's tab only. The wrapper and the page receive the token (already in their URL) and the page's own files. No session id, box token, account name or console URL is ever written into the wrapper or any content response |
 
