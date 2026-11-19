@@ -80,8 +80,8 @@ export function FleetCards({ selectedId, onOpen }: {
   // time when it is rebuilt, which is on a new tree, a new preference or selection, or a move of `roll.next` (a window's
   // end, or a box's stall boundary, where the rollup is rebuilt to the same answer: harmless, one rebuild a boundary).
   const tree = useMemo(
-    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks, delegation),
-    [sessions, projects.knownProjects, activeRuns, acks, delegation]);
+    () => fleetTree(sessions, projects.knownProjects, activeRuns, acks),
+    [sessions, projects.knownProjects, activeRuns, acks]);
   const unplaced = useMemo(() => unplacedActivities(sessions, delegation), [sessions, delegation]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
   const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
@@ -217,9 +217,6 @@ export function FleetCards({ selectedId, onOpen }: {
           archivedOpen={folded.has(`${g.project}::archived`)}
           /* The same inversion, for the Released fold (workspace lifecycle spec §5.1). */
           releasedOpen={folded.has(`${g.project}::released`)}
-          /* The same inversion, for the delegation broker's two groups (wave 4): both start closed. */
-          offlineOpen={folded.has(`${g.project}::offline-coordinator`)}
-          unownedOpen={folded.has(`${g.project}::unowned`)}
           onArchiveReleased={flows.openArchiveAll}
           archivingReleased={archiveAll.archiving.has(g.project)}
         />

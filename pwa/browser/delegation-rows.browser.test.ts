@@ -1,22 +1,17 @@
-// The delegation broker's rows on a project card (wave 4, PR2), measured in a real Chrome over the production build at
-// 390, 1280 and 1920, in both skins and both palettes. The jsdom suites (test/project-card.test.tsx,
-// test/fleet-rollup-render.test.tsx) pin the markup; this file holds what they cannot: that every row of delegated work,
-// every worktree with its chips and every group member fits its card at each width, with no sideways scroll.
+// The delegation broker's entries in the fleet list, the fleet foot's region and the session header (wave 4, PR2; delegation
+// visibility), measured in a real Chrome over the production build at 390, 1280 and 1920, in both skins and both palettes.
+// The jsdom suites (test/fleet-screen.test.tsx, test/fleet-rollup-render.test.tsx, test/project-card.test.tsx) pin the markup;
+// this file holds what they cannot. Desktop polish C48 (D-8782): the fleet list draws NO delegation row on a card (not a
+// session's agent or workflow, not a worktree, not an unowned tree, no group of them), so what is measured on the page now is
+// that none is drawn and the card still fits at each width, plus the rows that remain: the region at the foot of the list
+// (entries whose session is in no fleet list: a long name and a long raw session id) and the session header's entry list.
 //
-// The fixture is one card, project-a: a programme (`port-api`: its coordinator, which has delegated work, and one worker,
-// whose worktree sits under the coordinator `via` it, beside the coordinator's own) and a session in no programme, whose raw worktree (a long name and a
-// long path, a works-on chip, `inferred` and the creating Bash call) nests under it; both heads' folds are opened. Both groups
-// are opened too: a worktree whose parent is gone and one unowned tree. The frame also carries three listed sessions'
-// activities (an agent's and a workflow-less row, a chip), and the fleet list draws no row for any of them (D-8782). One activity's
-// session is in no fleet list, so the fleet foot's region draws it, with a long name and a long raw session id; the region is opened too.
+// The fixture is one card, project-a: a programme (`port-api`: its coordinator and one worker) and a session in no
+// programme. The frame carries entries of all three listed sessions, two worktrees, an offline one and an unowned tree, none of
+// which may be drawn on the card; one activity's session is in no fleet list, so the region draws it, opened here.
 // Instrument is put in its project mode (`GROUP_MODE_KEY`), where it draws the same project cards as Refined.
-// Delegation broker wave 5, PR10: the frame is a newer server's, so the worktree rows carry their controls. The lone session's
-// raw worktree offers all three (Keep worktree, Attach to…, Not delegated) on the longest row; the worker's worktree is kept,
-// with its two words (`worktree kept`, `kept until <date>`) and two controls; the unowned tree's hidden lease offers Not
-// delegated. The offline group's worktree is an older server's row and offers none. Every control must sit inside its row
-// and card, and on a phone reach the tap floor.
 //
-//   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=2 browser/delegation-rows.browser.test.ts
+//   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=1 browser/delegation-rows.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { chromium, type Browser } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
@@ -58,7 +53,6 @@ const SESSIONS = [
   session('lone-tidy-pass', 'project-a'),
 ];
 
-const LONG_PATH = '/w/project-a/.claude/worktrees/agent-a1b2c3d4e5f6-a-very-long-worktree-name-that-should-wrap-rather-than-push';
 const DELEGATION = frame({
   activities: [
     activity({ activityId: 'a-lone', parentId: 'lone-tidy-pass',
@@ -70,18 +64,12 @@ const DELEGATION = frame({
   ],
   leases: [
     lease({ leaseId: 'l-lone', parentId: 'lone-tidy-pass', sourceKind: 'raw', project: 'project-b', adminRecord: 'agent-l1',
-      canonicalPath: LONG_PATH, disposition: 'ephemeral', expiresAt: null }),
-    lease({ leaseId: 'l-via', parentId: 'port-w1', adminRecord: 'agent-v1', canonicalPath: '/w/project-a/.claude/worktrees/agent-v1',
-      disposition: 'adopted', expiresAt: new Date(NOW + 7 * 86_400_000).toISOString() }),
-    // The coordinator's own worktree, an older server's row (no controls): with the worker's, the coordinator has two
-    // delegation children, so its fold line names `worktrees` (D-8771) and the no-number pin below has a line to read.
-    lease({ leaseId: 'l-coord', parentId: 'port-coord', adminRecord: 'agent-c1', canonicalPath: '/w/project-a/.claude/worktrees/agent-c1',
-      firstObservedAt: '2026-10-26T10:02:00.000Z' }),
+      canonicalPath: '/w/project-a/.claude/worktrees/agent-a1b2c3d4e5f6-a-very-long-worktree-name', disposition: 'ephemeral', expiresAt: null }),
+    lease({ leaseId: 'l-via', parentId: 'port-w1', adminRecord: 'agent-v1', canonicalPath: '/w/project-a/.claude/worktrees/agent-v1' }),
     lease({ leaseId: 'l-off', parentId: 'coord-gone', group: 'offline-coordinator', sourceKind: 'raw', adminRecord: 'agent-o1',
       canonicalPath: '/w/project-a/.claude/worktrees/agent-o1' }),
   ],
-  unowned: [unowned({ adminRecord: 'agent-u1', canonicalPath: '/w/project-a/.claude/worktrees/agent-u1', verdict: 'conflicting',
-    leaseId: '0b0c3f8e-5d55-4c1e-9a77-2f1d8c3e4a10' })],
+  unowned: [unowned({ adminRecord: 'agent-u1', canonicalPath: '/w/project-a/.claude/worktrees/agent-u1', verdict: 'conflicting' })],
 });
 
 const FIXTURE: AppFixture = {
@@ -120,145 +108,19 @@ afterAll(async () => {
 async function open(skin: string, theme: string, width: number) {
   const opened = await openApp(browser!, { skin, theme, width }, FIXTURE);
   await opened.ctx.addInitScript(([key]) => {
-    try { localStorage.setItem(key, 'project'); } catch { /* the default mode is then measured, and the rows are absent */ }
+    try { localStorage.setItem(key, 'project'); } catch { /* the default mode is then measured */ }
   }, [GROUP_MODE_KEY] as const);
   await opened.page.goto(server!.origin + '/');
-  await opened.page.waitForSelector('.proj-group-toggle', { timeout: 20_000 });
-  // Both groups start closed: open each, as the operator would, so every row is drawn. A head's children that fold (two
-  // reach `CHILD_FOLD_MIN`) are opened too: the coordinator's two worktrees.
-  for (const name of ['Offline coordinator', 'Unowned work']) {
-    await opened.page.locator('.proj-group-toggle', { hasText: name }).click();
-  }
+  await opened.page.waitForSelector('.proj-card', { timeout: 20_000 });
+  // The region at the foot of the list starts closed: open it, as the operator would, so its row is drawn. It is the one
+  // place a delegation entry is still listed outside a session's details (D-8782).
   await opened.page.locator('.fleet-unlisted .proj-group-toggle').click();
-  const folded = opened.page.locator('.proj-children-toggle[aria-expanded="false"]');
-  for (let n = await folded.count(); n > 0; n = await folded.count()) await folded.first().click();
-  await opened.page.waitForSelector('.proj-work >> nth=5', { timeout: 20_000 });
+  await opened.page.waitForSelector('.fleet-unlisted .proj-work', { timeout: 20_000 });
   await opened.page.evaluate(async () => { await document.fonts.ready; });
   await opened.page.waitForTimeout(400); // the first paint's transitions settle
   return opened;
 }
 
-interface RowFit {
-  readonly text: string;
-  readonly inCard: boolean;
-  readonly overflow: number;
-  readonly cells: { readonly text: string; readonly inRow: boolean; readonly width: number }[];
-}
-
-/** Every delegation row on a card: whether it sits inside its card, how far its content overflows its own box, and
- *  whether each of its chips sits inside the row with a width of its own. */
-const measureRows = (): RowFit[] => [...document.querySelectorAll<HTMLElement>('.proj-card .proj-work')].map((row) => {
-  const card = row.closest('.proj-card')!.getBoundingClientRect();
-  const r = row.getBoundingClientRect();
-  const within = (a: DOMRect, b: DOMRect): boolean => a.left >= b.left - 0.5 && a.right <= b.right + 0.5;
-  return {
-    text: row.textContent ?? '',
-    inCard: within(r, card),
-    overflow: row.scrollWidth - row.clientWidth,
-    cells: [...row.querySelectorAll<HTMLElement>('.proj-work-chip, .sess-workson')].map((c) => {
-      const cr = c.getBoundingClientRect();
-      return { text: c.textContent ?? '', inRow: within(cr, r), width: cr.width };
-    }),
-  };
-});
-
-/** PR10: every worktree control on a card: its label and accessible name, whether it sits inside its row and its card on
- *  all four sides (fix round 1, F9 (j)), its height, and whether a tap at its centre, with the control scrolled to the
- *  middle of the screen, reaches it rather than the floating button (F9 (i)); and the tap floor the token resolves to (a
- *  coarse pointer at 390, so the floor is measured where a thumb uses it). */
-const measureControls = (): { floor: number; controls: { text: string; name: string; inRow: boolean; inCard: boolean;
-  height: number; reached: boolean }[] } => {
-  const probe = document.createElement('div');
-  probe.style.height = 'var(--tap-min)';
-  document.body.append(probe);
-  const floor = probe.getBoundingClientRect().height;
-  probe.remove();
-  const within = (a: DOMRect, b: DOMRect): boolean =>
-    a.left >= b.left - 0.5 && a.right <= b.right + 0.5 && a.top >= b.top - 0.5 && a.bottom <= b.bottom + 0.5;
-  return {
-    floor,
-    controls: [...document.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls button')].map((b) => {
-      b.scrollIntoView({ block: 'center', inline: 'nearest' });
-      const r = b.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      return { text: b.textContent ?? '', name: b.getAttribute('aria-label') ?? '',
-        inRow: within(r, b.closest('.proj-work')!.getBoundingClientRect()),
-        inCard: within(r, b.closest('.proj-card')!.getBoundingClientRect()), height: r.height,
-        reached: hit !== null && b.contains(hit) };
-    }),
-  };
-};
-
-/** PR10 fix round 2 (review 1623 F6): every scroller scrolled to its end (the page, and on the desk the fleet column, which
- *  scrolls on its own), so the page's last row of controls sits where it rests. */
-const scrollToEnd = (): void => {
-  window.scrollTo(0, document.documentElement.scrollHeight);
-  for (const el of document.querySelectorAll<HTMLElement>('body *')) {
-    const y = getComputedStyle(el).overflowY;
-    if ((y === 'auto' || y === 'scroll') && el.scrollHeight > el.clientHeight + 1) el.scrollTop = el.scrollHeight;
-  }
-};
-/** At that resting place, every button drawn whole in view in the fleet list: a tap at its centre reaches it, and its
- *  box meets no floating button (Refined's `+ New`, Instrument's round `+`). The measured set is the fleet list's buttons
- *  (the cards' controls and toggles, then the fleet foot's toggle, the list's own last row). The page's last row of
- *  controls must be among them: the list's end padding and the screen's own bottom padding (`.fleet`'s) are the band that
- *  keeps that last row clear, so a screen that stops reserving it is seen here (review 1626 F6). The New project door
- *  that once followed the list (review 1624 F8) heads it now (add-project spec 2026-11-04 §2, as redrawn), so nothing
- *  outside the list is measured. Only a phone's width mounts a floating button; at 1280 and 1920 neither skin does
- *  (`fabs` is 0), so there the overlap half of the check is empty by design and the tap half still runs. */
-const measureResting = (): {
-  lastShown: boolean; fabs: number;
-  buttons: { name: string; control: boolean; reached: boolean; underFab: string | null }[];
-} => {
-  const list = document.querySelector<HTMLElement>('.fleet-list')!;
-  let view = { top: 0, bottom: window.innerHeight };
-  for (let el = list.parentElement; el !== null; el = el.parentElement) {
-    const y = getComputedStyle(el).overflowY;
-    if ((y === 'auto' || y === 'scroll') && el.scrollHeight > el.clientHeight + 1) {
-      const r = el.getBoundingClientRect();
-      view = { top: Math.max(0, r.top), bottom: Math.min(window.innerHeight, r.bottom) };
-      break;
-    }
-  }
-  const last = [...list.querySelectorAll<HTMLElement>('.proj-card .proj-work-controls')].filter((c) => c.querySelector('button') !== null).at(-1);
-  const fabs = [...document.querySelectorAll<HTMLElement>('.ref-fab, .fab')].map((f) => f.getBoundingClientRect())
-    .filter((f) => f.width > 0 && f.height > 0);
-  const shown = [...list.querySelectorAll<HTMLElement>('button')].filter((b) => {
-    const r = b.getBoundingClientRect();
-    return r.width > 0 && r.height > 0 && r.top >= view.top - 0.5 && r.bottom <= view.bottom + 0.5;
-  });
-  return {
-    lastShown: last !== undefined && [...last.querySelectorAll<HTMLElement>('button')].every((b) => shown.includes(b)),
-    fabs: fabs.length,
-    buttons: shown.map((b) => {
-      const r = b.getBoundingClientRect();
-      const hit = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2);
-      const fab = fabs.find((f) => r.left < f.right && r.right > f.left && r.top < f.bottom && r.bottom > f.top);
-      return { name: b.getAttribute('aria-label') ?? (b.textContent ?? '').trim(), control: last?.contains(b) ?? false,
-        reached: hit !== null && b.contains(hit), underFab: fab === undefined ? null : `${Math.round(r.bottom)} > ${Math.round(fab.top)}` };
-    }),
-  };
-};
-
-/** PR10 fix round 1, F9 (h): on every delegation work line drawn with a visible bracket, the bracket sits on the words' first line
- *  (its vertical centre inside the first word's box), even when the line wraps its controls under the words. */
-const measureBrackets = (): { text: string; onWords: boolean; wrapped: boolean }[] =>
-  [...document.querySelectorAll<HTMLElement>('.proj-card .proj-nest')].flatMap((nest) => {
-    const bracket = nest.querySelector<HTMLElement>(':scope > .proj-nest-bracket');
-    const work = nest.querySelector<HTMLElement>(':scope > .proj-work');
-    const first = work?.querySelector<HTMLElement>('.proj-work-part');
-    if (bracket === null || work === null || first === null || first === undefined) return [];
-    const br = bracket.getBoundingClientRect();
-    const fr = first.getBoundingClientRect();
-    if (br.width === 0 || br.height === 0) return [];   // a row in a programme box draws no bracket
-    const mid = br.top + br.height / 2;
-    return [{ text: work.textContent ?? '', onWords: mid >= fr.top - 0.5 && mid <= fr.bottom + 0.5,
-      wrapped: work.getBoundingClientRect().height > fr.height * 2 }];
-  });
-
-/** The fleet foot's region and each of its rows: inside the fleet list's box, and nothing overflowing its own box. A
- *  region without its `min-width: 0` widens the list's one grid track past the list, which this sees at every width,
- *  the desk sidebar's included (where the page itself does not scroll). */
 const measureUnlisted = (): { text: string; inList: boolean; overflow: number }[] => {
   const list = document.querySelector<HTMLElement>('.fleet-list')!.getBoundingClientRect();
   const within = (a: DOMRect, b: DOMRect): boolean => a.left >= b.left - 0.5 && a.right <= b.right + 0.5;
@@ -371,10 +233,10 @@ const expectWords = (words: readonly PartsFit[]): void => {
   expect(words.reduce((n, w) => n + w.midLine, 0), 'some separator is measured mid-line').toBeGreaterThan(0);
 };
 
-describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
+describe.each(SKINS)('the fleet list draws no delegation row on a card in %s (D-8782)', (skin) => {
   for (const theme of THEMES) {
     for (const width of WIDTHS) {
-      it(`at ${width} (${theme}): no sideways scroll, no page error, every row and chip inside its card`, async () => {
+      it(`at ${width} (${theme}): no sideways scroll, no page error, no delegation row on a card, the region's row fits`, async () => {
         const { ctx, page, errors } = await open(skin, theme, width);
         try {
           const shots = process.env['CCRC_SHOTS'];
@@ -383,261 +245,58 @@ describe.each(SKINS)('delegation rows on a project card in %s', (skin) => {
           }
           const sideScroll = await page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
           expect(sideScroll, 'sideways scroll').toBe(0);
-          const rows = await page.evaluate(measureRows);
-          // D-8782: the lone session's worktree, the coordinator's two in the box, and one per group. The three listed sessions'
-          // activities in the frame are no row, so none of their names is on the page.
-          expect(rows, 'five delegation rows').toHaveLength(5);
-          const said = await page.evaluate(() => document.querySelector('.fleet-list')?.textContent ?? '');
-          expect(said.length, 'positive control: the fleet list was read').toBeGreaterThan(0);
-          for (const gone of ['map every caller', 'read the plan', 'check the wire']) expect(said, `${gone}: no activity row`).not.toContain(gone);
-          for (const row of rows) {
-            expect(row.inCard, `${row.text}: inside its card`).toBe(true);
-            expect(row.overflow, `${row.text}: nothing overflows the row`).toBeLessThanOrEqual(1);
-            for (const c of row.cells) {
-              expect(c.inRow, `${c.text}: inside its row`).toBe(true);
-              expect(c.width, `${c.text}: drawn`).toBeGreaterThan(0);
-            }
+          // Positive controls: the three listed sessions' rows are drawn, so an empty `.proj-work` set is not an empty card.
+          const drawn = await page.evaluate(() => {
+            const lines = [...document.querySelectorAll('.sess-line')];
+            return { rows: lines.length, withSubagents: lines.some((l) => l.textContent?.includes('port-w1')),
+              card: document.querySelector('.proj-card')?.textContent ?? '' };
+          });
+          expect(drawn.rows, 'positive control: the session rows were drawn').toBeGreaterThanOrEqual(3);
+          expect(drawn.withSubagents, 'positive control: the row with subagents was drawn').toBe(true);
+          // D-8782: no delegation row, group header or control on any card, and none of the frame's names on one.
+          expect(await page.locator('.proj-card .proj-work').count(), 'no delegation row on a card').toBe(0);
+          expect(await page.locator('.proj-card .proj-group-toggle').count(), 'no group header on a card').toBe(0);
+          expect(await page.locator('.proj-work-controls').count(), 'no worktree control anywhere on the page').toBe(0);
+          for (const gone of ['map every caller', 'read the plan', 'check the wire', 'agent-l1', 'agent-v1', 'agent-o1', 'agent-u1', 'Offline coordinator', 'Unowned work']) {
+            expect(drawn.card, `${gone}: not on a card`).not.toContain(gone);
           }
+          // D-8771 (and C46): no session row counts its delegated entries or subagents, in its text or accessible name.
+          const scanned = await page.evaluate(() => {
+            const lines = [...document.querySelectorAll('.sess-line')];
+            return lines.flatMap((line) => [line.textContent ?? '', ...[...line.querySelectorAll('*')]
+              .flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')]).filter((x): x is string => x !== null)]);
+          });
+          expect(scanned.filter((s) => /delegated|subagent|⑂/i.test(s)), 'no session row counts its delegated entries or subagents').toEqual([]);
+          expect(await page.locator('.sess-meta-chip').count(), 'the R9 chip is gone').toBe(0);
+          const folds = await page.evaluate(() => [...document.querySelectorAll('.proj-children-part')].map((e) => e.textContent ?? ''));
+          expect(folds.filter((s) => /delegated|worktrees/.test(s)), 'no fold line names delegated work or worktrees').toEqual([]);
+          // The region: one toggle and its one row, inside the fleet list, nothing overflowing.
           const unlisted = await page.evaluate(measureUnlisted);
           expect(unlisted, 'the region and its one row').toHaveLength(2);
           for (const u of unlisted) {
             expect(u.inList, `${u.text}: inside the fleet list`).toBe(true);
             expect(u.overflow, `${u.text}: nothing overflows it`).toBeLessThanOrEqual(1);
           }
-          // F1 (review 1424): a long name never hides the condition word or the `from` part, on a card or in the region.
+          // F1 (review 1424): a long name never hides the condition word or the `from` part, in the region.
           const words = await page.evaluate(measureParts, { words: CONDITION_WORDS, floorCh: NAME_FLOOR_CH, gapFloor: GAP_FLOOR_PX });
-          expect(words.filter((w) => w.hasCondition).length, 'every worktree row and the region\'s row has a condition word').toBe(5);
-          if (width !== 390) {
-            // Review 1435 G1: on the desk a name longer than the floor that fits is drawn whole, so the name grows. Asked
-            // first, so a name that stops growing is named here rather than by the floor's sub-pixel margin below.
-            const fits = words.find((w) => w.text.includes('agent-v1'));
-            expect(fits?.name, 'agent-v1: has a name part').not.toBeNull();
-            expect(fits!.name!.cut, 'agent-v1: drawn whole').toBe(false);
-          }
+          expect(words.filter((w) => w.hasCondition).length, 'the region\'s row has a condition word').toBe(1);
           expectWords(words);
           if (width === 390) {
-            // Review 1431 F3: the long name is cut, in a box that clips, with an ellipsis; and the region row's `from`
-            // part starts a line of its own, so the middot rule above is measured on a real wrapped line.
-            for (const long of ['reconcile every reader']) {
-              const row = words.find((w) => w.text.includes(long));
-              expect(row?.name, `${long}: has a name part`).not.toBeNull();
-              expect(row!.name!.cut, `${long}: its name is cut`).toBe(true);
-              expect(row!.name!.clips, `${long}: its text's box clips`).toBe(true);
-              expect(row!.name!.ellipsis, `${long}: with an ellipsis`).toBe(true);
-            }
-            expect(words.find((w) => w.text.includes('reconcile every reader'))!.lineStarts, 'the region row wraps').toBeGreaterThan(0);
+            // Review 1431 F3: the long name is cut, in a box that clips, with an ellipsis; and the region row's `from` part
+            // starts a line of its own, so the middot rule is measured on a real wrapped line.
+            const row = words.find((w) => w.text.includes('reconcile every reader'));
+            expect(row?.name, 'reconcile every reader: has a name part').not.toBeNull();
+            expect(row!.name!.cut, 'its name is cut').toBe(true);
+            expect(row!.name!.clips, 'its text\'s box clips').toBe(true);
+            expect(row!.name!.ellipsis, 'with an ellipsis').toBe(true);
+            expect(row!.lineStarts, 'the region row wraps').toBeGreaterThan(0);
           }
-          const chips = rows.flatMap((r) => r.cells.map((c) => c.text));
-          expect(chips.filter((t) => t === 'inferred'), 'each raw worktree wears inferred').toHaveLength(2);
-          expect(chips.some((t) => t.includes('project-b')), 'the works-on chip').toBe(true);
-          // D-8771 (superseding R9): the worker's attached activity is never a row and no session row counts it or any
-          // subagent, in its text or its accessible name; the fold lines keep the words and no number.
-          const scanned = await page.evaluate(() => {
-            const lines = [...document.querySelectorAll('.sess-line')];
-            const texts = lines.flatMap((line) => [line.textContent ?? '', ...[...line.querySelectorAll('*')]
-              .flatMap((e) => [e.getAttribute('aria-label'), e.getAttribute('title')]).filter((x): x is string => x !== null)]);
-            return { rows: lines.length, withSubagents: lines.some((l) => l.textContent?.includes('port-w1')), texts };
-          });
-          expect(scanned.rows, 'positive control: the session rows were drawn').toBeGreaterThanOrEqual(3);
-          expect(scanned.withSubagents, 'positive control: the row with subagents was drawn').toBe(true);
-          expect(scanned.texts.filter((s) => /delegated|subagent|⑂/i.test(s)), 'no session row counts its delegated entries or subagents').toEqual([]);
-          expect(await page.locator('.sess-meta-chip').count(), 'the R9 chip is gone').toBe(0);
-          const folds = await page.evaluate(() => [...document.querySelectorAll('.proj-children-part')].map((e) => e.textContent ?? ''));
-          const delegatedFolds = folds.filter((s) => /delegated|worktrees/.test(s));
-          expect(delegatedFolds.length, 'positive control: a fold names delegated work').toBeGreaterThan(0);
-          expect(delegatedFolds.every((s) => !/\d/.test(s)), 'a fold names delegated work with no number').toBe(true);
-          // PR10: the six controls of the three newer-server rows, each inside its row and card on all four sides, reached by
-          // a tap at its centre (never under the floating button), named uniquely, and on a phone at the tap floor.
-          const shown = await page.evaluate(measureControls);
-          expect(shown.controls.map((c) => c.text).sort(), 'the worktree controls').toEqual(
-            ['Attach to…', 'Keep worktree', 'Keep worktree', 'Not delegated', 'Not delegated', 'Not delegated']);
-          expect(new Set(shown.controls.map((c) => c.name)).size, 'each control\'s name is its own').toBe(6);
-          for (const c of shown.controls) {
-            expect(c.name.startsWith(c.text), `${c.name}: its name carries its label`).toBe(true);
-            expect(c.inRow, `${c.name}: inside its row`).toBe(true);
-            expect(c.inCard, `${c.name}: inside its card`).toBe(true);
-            expect(c.reached, `${c.name}: a tap at its centre reaches it`).toBe(true);
-            if (width === 390) expect(c.height, `${c.name}: reaches the tap floor`).toBeGreaterThanOrEqual(shown.floor - 0.5);
-          }
-          expect(rows.some((r) => r.text.includes('worktree kept until')), 'the kept words, said once').toBe(true);
-          // Fix round 2 (review 1623 F6): the page's last row of controls, where it rests at the end of the list.
-          await page.evaluate(scrollToEnd);
-          await page.waitForTimeout(150);
-          const resting = await page.evaluate(measureResting);
-          expect(resting.lastShown, 'the last row of controls is drawn whole at the end of the list').toBe(true);
-          expect(resting.buttons.some((c) => c.control), 'the last row of controls is measured').toBe(true);
-          expect(resting.fabs, 'a floating button at a phone\'s width only').toBe(width === 390 ? 1 : 0);
-          for (const c of resting.buttons) {
-            expect(c.underFab, `${c.name}: clear of the floating button at the end of the list`).toBeNull();
-            expect(c.reached, `${c.name}: a tap at its centre reaches it at the end of the list`).toBe(true);
-          }
-          // Task C38 (D-8670, review 1624), reversing F8 (d): the box a script focuses after a keyboard action draws the page's
-          // ring, and no ancestor up to its card clips it (the ring reaches 4px outside the box: a 2px outline, 2px offset).
-          await page.keyboard.press('Shift');
-          const ring = await page.evaluate(() => {
-            const box = document.querySelector<HTMLElement>('.proj-card .proj-work-controls')!;
-            box.focus();
-            const style = getComputedStyle(box);
-            const reach = (parseFloat(style.outlineWidth) || 0) + (parseFloat(style.outlineOffset) || 0);
-            const r = box.getBoundingClientRect();
-            const clippedBy: string[] = [];
-            for (let el = box.parentElement; el !== null && !el.classList.contains('proj-card'); el = el.parentElement) {
-              const cs = getComputedStyle(el);
-              if (cs.overflowX === 'visible' && cs.overflowY === 'visible') continue;
-              const c = el.getBoundingClientRect();
-              if (r.left - reach < c.left - 0.5 || r.right + reach > c.right + 0.5 || r.top - reach < c.top - 0.5 || r.bottom + reach > c.bottom + 0.5) {
-                clippedBy.push(el.className);
-              }
-            }
-            return { visible: box.matches(':focus-visible'), outline: style.outlineStyle, drawn: reach > 0, clippedBy };
-          });
-          expect(ring, 'the script-focused box after a keyboard action: focus-visible, with its ring drawn whole')
-            .toEqual({ visible: true, outline: 'solid', drawn: true, clippedBy: [] });
-          const brackets = await page.evaluate(measureBrackets);
-          expect(brackets.length, 'the bracketed work lines').toBeGreaterThan(0);
-          for (const b of brackets) expect(b.onWords, `${b.text}: its bracket sits on the words' first line`).toBe(true);
-          if (width === 390) expect(brackets.some((b) => b.wrapped), 'a line that wraps is measured').toBe(true);
-          if (shots !== undefined && shots !== '') {
-            // Fix round 2 (review 1623 F6): the evidence views. On the desk, the offline-coordinator row and the unowned row
-            // scrolled into view; at every width, an open confirm and a refusal.
-            if (width !== 390) {
-              for (const [name, text] of [['offline', 'Offline coordinator'], ['unowned', 'Unowned work']] as const) {
-                await page.locator('.proj-card .proj-group-toggle', { hasText: text }).evaluate((t) =>
-                  (t.parentElement?.querySelector('.proj-work') ?? t).scrollIntoView({ block: 'start' }));
-                await page.waitForTimeout(150);
-                await page.screenshot({ path: `${shots}/delegation-${skin}-${theme}-${width}-${name}.png` });
-              }
-            }
-            const notDelegated = page.locator('.proj-card .proj-work-controls button', { hasText: 'Not delegated' }).first();
-            await notDelegated.scrollIntoViewIfNeeded();
-            await notDelegated.click();
-            await page.waitForSelector('[role="dialog"]');
-            await page.waitForTimeout(400);
-            await page.screenshot({ path: `${shots}/delegation-${skin}-${theme}-${width}-confirm.png` });
-            await page.keyboard.press('Escape');
-            await page.waitForTimeout(400);
-            await page.route('**/api/leases/**', (route) => route.fulfill({ status: 409, contentType: 'application/json',
-              body: JSON.stringify({ ok: false, error: 'carrier-behind', detail: '' }) }));
-            const keep = page.locator('.proj-card .proj-work-controls button', { hasText: 'Keep worktree' }).first();
-            await keep.scrollIntoViewIfNeeded();
-            await keep.click();
-            await page.locator('.proj-card [role="alert"]', { hasText: 'has not caught up' }).first().waitFor();
-            await page.screenshot({ path: `${shots}/delegation-${skin}-${theme}-${width}-refusal.png` });
-          }
-          expect(errors).toEqual([]);
+          expect(errors, 'page errors').toEqual([]);
         } finally {
           await ctx.close();
         }
-      });
+      }, 60_000);
     }
-  }
-});
-
-// ---- where the focus goes around a worktree control's real sheet (review 1624 F3) ------------------------------------
-// jsdom unmounts a closed sheet at once, so the card suite cannot see what the real one does: its panel stays mounted
-// through a 180-320 ms exit, holding the focus, and it gives the focus back to its opener as it closes. Both arms (the
-// bottom sheet at 390, the centred dialog at 1280 and 1920), in both skins and both palettes (review 1626 F14), on the lone
-// session's raw worktree, which offers all three controls: Cancel gives the focus back to the control that opened the
-// confirm; Keep leaves it on the row's box; a confirmed act that is refused leaves it on the box with the sentence said;
-// and an ask the row stops offering while it is open (the row moves to `promoted`, so Attach, its opener, goes) places it
-// on the box in the commit that closes the ask, while the closing panel still holds it (review 1626 F10). A row that
-// leaves while its confirm is open (its record dropped, or its state one this build cannot read) hands the focus to its
-// card's heading (review 1626 F2), also after a `Tab` has moved the focus inside the confirm, which arms the confirm's
-// focus trap: the hand-off waits until the trap has gone (review 1628 F1).
-const FOCUS_ROW = 'agent-l1';
-/** What holds the focus, named the way the row would name it. */
-const focusAt = (): string => {
-  const a = document.activeElement;
-  if (a === null || a === document.body) return 'body';
-  if (a.closest('[role="dialog"]') !== null) return `dialog: ${(a.textContent ?? '').trim() || a.getAttribute('aria-label') || a.tagName}`;
-  if (a.classList.contains('proj-work-controls')) return `box: ${a.getAttribute('aria-label') ?? ''}`;
-  if (a.classList.contains('proj-card-toggle')) return `card: ${a.querySelector('.proj-card-name')?.textContent ?? ''}`;
-  return a.getAttribute('aria-label') ?? a.className;
-};
-const keptAnswer = (): string => JSON.stringify({ ok: true, lease: 'l-lone', generation: 2, disposition: 'retained',
-  expiresAt: new Date(NOW + 7 * 86_400_000).toISOString(), carrier: 'pending' });
-
-/** The next frame with the lone session's worktree changed by `over`, or gone when `over` is null. */
-const withLone = (over: object | null): object => ({ type: 'delegation', delegation: { ...DELEGATION,
-  leases: DELEGATION.leases.flatMap((l) => (l.leaseId !== 'l-lone' ? [l] : over === null ? [] : [{ ...l, ...over }])) } });
-
-describe.each(SKINS)('the focus around a worktree control\'s real sheet in %s (review 1624 F3)', (skin) => {
-  for (const theme of THEMES) for (const width of WIDTHS) {
-    it(`at ${width} (${theme}): Cancel, Keep, a refusal and a dropped ask each leave the focus where the row says`, async () => {
-      const { ctx, page, errors, send } = await open(skin, theme, width);
-      try {
-        const control = (name: string) => page.getByRole('button', { name: `${name} (${FOCUS_ROW})`, exact: true });
-        const settled = async (): Promise<void> => {
-          await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });
-          await page.waitForTimeout(150);
-        };
-        // Cancel: the sheet gives the focus back to the control that opened it.
-        await control('Not delegated').scrollIntoViewIfNeeded();
-        await control('Not delegated').click();
-        await page.waitForSelector('[role="dialog"]');
-        expect(await page.evaluate(focusAt), 'a danger confirm opens on Cancel').toBe('dialog: Cancel');
-        await page.getByRole('dialog').getByRole('button', { name: 'Cancel', exact: true }).click();
-        await settled();
-        expect(await page.evaluate(focusAt), 'after Cancel').toBe(`Not delegated (${FOCUS_ROW})`);
-        // Keep acts at once: the focus waits on the row's box while the controls are disabled, and stays there.
-        await page.route('**/api/leases/**', (route) => route.fulfill({ status: 200, contentType: 'application/json', body: keptAnswer() }));
-        await control('Keep worktree').click();
-        await page.getByText(/^Worktree kept until/).first().waitFor();
-        expect(await page.evaluate(focusAt), 'after Keep').toBe(`box: Worktree ${FOCUS_ROW}`);
-        // A confirmed act the door refuses: the sentence is said, and the focus is on the box.
-        await page.unroute('**/api/leases/**');
-        await page.route('**/api/leases/**', (route) => route.fulfill({ status: 409, contentType: 'application/json',
-          body: JSON.stringify({ ok: false, error: 'carrier-behind', detail: '' }) }));
-        await control('Attach to…').click();
-        await page.waitForSelector('[role="dialog"]');
-        await page.getByRole('dialog').getByRole('button', { name: 'Attach to lone-tidy-pass', exact: true }).click();
-        await page.locator('.proj-card [role="alert"]', { hasText: 'has not caught up' }).first().waitFor();
-        await settled();
-        expect(await page.evaluate(focusAt), 'after a refusal').toBe(`box: Worktree ${FOCUS_ROW}`);
-        // A dropped ask: Attach is open when the next frame moves the row to `promoted`. Attach, the sheet's opener, is
-        // gone, so the sheet gives the focus back to nothing, and the closing panel holds it until the row places it.
-        await page.unroute('**/api/leases/**');
-        await control('Attach to…').click();
-        await page.waitForSelector('[role="dialog"]');
-        send('/ws/fleet', withLone({ disposition: 'promoted' }));
-        await control('Attach to…').waitFor({ state: 'detached' });
-        await settled();
-        expect(await page.evaluate(focusAt), 'after a dropped ask').toBe(`box: Worktree ${FOCUS_ROW}`);
-        expect(errors).toEqual([]);
-      } finally {
-        await ctx.close();
-      }
-    });
-
-    it(`at ${width} (${theme}): a row that leaves while its confirm is open hands the focus to its card's heading (review 1626 F2)`, async () => {
-      const { ctx, page, errors, send } = await open(skin, theme, width);
-      try {
-        const attach = page.getByRole('button', { name: `Attach to… (${FOCUS_ROW})`, exact: true });
-        for (const [variant, frame, key] of [
-          ['its record dropped', withLone(null), null],
-          ['its state one this build cannot read', withLone({ disposition: 'future-word' }), null],
-          ['its record dropped, after a Tab inside the confirm', withLone(null), 'Tab'],
-          ['its state one this build cannot read, after a Tab inside the confirm', withLone({ disposition: 'future-word' }), 'Tab'],
-        ] as const) {
-          send('/ws/fleet', withLone({}));
-          await attach.scrollIntoViewIfNeeded();
-          await attach.click();
-          await page.waitForSelector('[role="dialog"]');
-          if (key !== null) {
-            await page.keyboard.press(key);
-            expect(await page.evaluate(focusAt), `${variant}: the focus moved inside the confirm`).toMatch(/^dialog: /);
-          }
-          send('/ws/fleet', frame);
-          await attach.waitFor({ state: 'detached' });
-          await page.waitForSelector('[role="dialog"]', { state: 'detached', timeout: 5_000 });
-          await page.waitForTimeout(300);
-          expect(await page.evaluate(focusAt), variant).toBe('card: project-a');
-        }
-        expect(errors).toEqual([]);
-      } finally {
-        await ctx.close();
-      }
-    });
   }
 });
 

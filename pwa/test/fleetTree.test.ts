@@ -8,8 +8,8 @@ import { withRunBinding } from './runBindingFixture';
 import { fingerprint, recording, type Recorded } from './characterise';
 import { STATE_WORD } from '../src/fleet/sessionFacts';
 import { childOfRunLabel } from '../src/fleet/runWords';
-import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
-import { activitiesStartedBy, creatorChip, inferredChip, readDelegation } from '../src/fleet/delegationWords';
+import { activity, frame } from './delegationFixture';
+import { activitiesStartedBy, readDelegation } from '../src/fleet/delegationWords';
 
 /** W4-U0: every `fleetTree` call this file's cases make, recorded (see `characterise.ts`). */
 const treeCalls: Recorded<Parameters<typeof fleetTreeOf>>[] = [];
@@ -60,7 +60,7 @@ const runs = [
 /** `[card, [[id, depth], …]]` per card, in display order. */
 const shape = (sessions: FleetSession[], rs: RunSummary[] = runs) =>
   fleetTree(sessions, [], rs).map((g) => [g.project, g.rows.map((r) =>
-    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth] : [r.kind, r.depth])] as const);
+    r.kind === 'session' ? [r.session.id, r.depth] : [`spawn:${r.run.id}`, r.depth])] as const);
 
 describe('fleetTree — a coordinator\'s workspaces nest under it across projects (D-5527)', () => {
   it('a cross-project child nests under its coordinator, on the coordinator\'s card, when the server placed it there', () => {
@@ -275,100 +275,46 @@ describe('the header title for a review run', () => {
   });
 });
 
-// Delegation broker wave 4, PR2 Task 2.5: each delegation row on ONE card. Every case calls the UNRECORDED
-// `fleetTreeOf`, so W4-U0's fingerprints below stay exactly what main produced.
-describe('fleetTree — delegation rows land on their parent\'s card (delegation broker wave 4)', () => {
+// Delegation broker wave 4, PR2 Task 2.5 put each delegation row on ONE card. The fleet list draws no delegation row (D-8782),
+// so `fleetTree` takes no frame and no card holds one; what is left of the frame here is the fleet foot's selection, the
+// activities whose parent the list does not carry (`unplacedActivities`), which nothing draws as a row of a card.
+describe('fleetTree and the delegation frame (delegation broker wave 4, D-8782)', () => {
   const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a' });
   const mainB = fleetSession({ id: 'main-b', project: 'project-b', workspace: null, workdir: '/work/project-b' });
   /** `[card, [row ids]]`, in group order. */
   const ids = (groups: ReturnType<typeof fleetTreeOf>) => groups.map((g) => [g.project, g.rows.map((r) =>
-    r.kind === 'session' ? r.session.id : r.kind === 'lease' ? `lease:${r.lease.leaseId}`
-      : r.kind === 'unowned' ? `unowned:${r.item.adminRecord}`
-        : r.kind === 'delegation-group' ? `group:${r.group}` : r.kind)] as const);
-  const count = (groups: ReturnType<typeof fleetTreeOf>, pred: (r: (typeof groups)[number]['rows'][number]) => boolean) =>
-    groups.reduce((n, g) => n + g.rows.filter(pred).length, 0);
+    r.kind === 'session' ? r.session.id : r.kind)] as const);
 
-  it('W4-U20: a worktree in project-b whose parent lives in project-a lands on project-a\'s card, nested', () => {
-    const w = frame({ leases: [lease({ leaseId: 'l-b', project: 'project-b', parentId: 'coord-a',
-      canonicalPath: '/work/project-b/.claude/worktrees/agent-b1' })] });
-    const tree = ids(fleetTreeOf([coordA, mainB], [], [], {}, w));
-    expect(tree).toEqual([['project-a', ['coord-a', 'lease:l-b']], ['project-b', ['main-b']]]);
-  });
-
-  it('W4-U21: an unowned tree of a project nothing else names creates that project\'s card, holding only the group', () => {
-    const w = frame({ unowned: [unowned({ project: 'project-c', adminRecord: 'u-c' })] });
-    const tree = ids(fleetTreeOf([coordA], [], [], {}, w));
-    expect(tree).toEqual([['project-a', ['coord-a']], ['project-c', ['group:unowned', 'unowned:u-c']]]);
-  });
-
-  it('W4-U22: one worktree is drawn on exactly one card', () => {
-    const w = frame({ leases: [
-      lease({ leaseId: 'l-b', project: 'project-b', parentId: 'coord-a' }),
-      lease({ leaseId: 'l-gone', project: 'project-b', parentId: 'coord-gone' }),
-      lease({ leaseId: 'l-a', project: 'project-a', parentId: 'main-b' }),
-    ] });
-    const groups = fleetTreeOf([coordA, mainB], ['project-a', 'project-b'], [], {}, w);
-    for (const id of ['l-b', 'l-gone', 'l-a']) {
-      expect(count(groups, (r) => r.kind === 'lease' && r.lease.leaseId === id), id).toBe(1);
-    }
-    // A parent the fleet does not carry: the worktree renders on its own project, in the offline group.
-    expect(ids(groups).find(([p]) => p === 'project-b')![1]).toEqual(['main-b', 'lease:l-a', 'group:offline-coordinator', 'lease:l-gone']);
-  });
-
-  it('W4-U36: an activity whose parent the fleet does not carry is on no card (the wire gives it no project), and one whose parent it does carry draws no row either (D-8782)', () => {
+  it('W4-U36 (D-8782): an activity whose parent the fleet does not carry is unplaced (the wire gives it no project), and one whose parent it does carry is not', () => {
     const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' }), activity({ activityId: 'a-here', parentId: 'coord-a' })] });
-    const groups = fleetTreeOf([coordA, mainB], [], [], {}, w);
-    expect(ids(groups)).toEqual([['project-a', ['coord-a']], ['project-b', ['main-b']]]);
+    // Positive control: the cards exist and hold their sessions, so the absence of any other row is not an empty tree.
+    expect(ids(fleetTreeOf([coordA, mainB], [], [], {}))).toEqual([['project-a', ['coord-a']], ['project-b', ['main-b']]]);
     expect(unplacedActivities([coordA, mainB], w).map((a) => a.activityId)).toEqual(['a-gone']);
     expect(unplacedActivities([coordA, mainB], null)).toEqual([]);
     expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toEqual([]);
   });
 
   // Review 1029's F2: the reader at the tree's own seam. The members arrive as the socket parses them, objects with
-  // words this build has never heard of and a field it does not know, never normalized before `fleetTree`.
-  it('W4-U7b: the tree reads the frame through readDelegation: future words re-filed, every member kept, none running', () => {
+  // words this build has never heard of and a field it does not know, never normalized before the selection reads them.
+  it('W4-U7b: the selection reads the frame through readDelegation: future words re-filed, every member kept, none running', () => {
     const future = {
       asOf: '2026-10-26T10:10:00.000Z',
       activities: [
-        { ...activity({ activityId: 'a-group' }), group: 'future-group', futureField: 1 },
-        { ...activity({ activityId: 'a-words' }), placement: 'future-placement', liveness: 'future-liveness' },
+        { ...activity({ activityId: 'a-group', parentId: 'coord-gone' }), group: 'future-group', futureField: 1 },
+        { ...activity({ activityId: 'a-words', parentId: 'coord-gone' }), placement: 'future-placement', liveness: 'future-liveness' },
       ],
-      leases: [
-        { ...lease({ leaseId: 'l-raw', sourceKind: 'raw' }), group: 'future-group', liveness: 'future-liveness', workspace: 'future-workspace' },
-        { ...lease({ leaseId: 'l-agent', adminRecord: 'agent-a2', canonicalPath: '/work/project-a/.claude/worktrees/agent-a2' }),
-          workspace: 'future-workspace' },
-      ],
-      unowned: [{ ...unowned({ adminRecord: 'u-future' }), workspace: 'future-workspace' }],
+      leases: [],
+      unowned: [],
     } as unknown as DelegationProjectionWire;
-    const groups = fleetTreeOf([coordA, mainB], [], [], {}, future);
-    expect(ids(groups)).toEqual([
-      ['project-a', ['coord-a', 'lease:l-agent', 'group:offline-coordinator', 'lease:l-raw', 'group:unowned', 'unowned:u-future']],
-      ['project-b', ['main-b']],
-    ]);
-    const rows = groups.flatMap((g) => g.rows);
-    expect(rows.flatMap((r) => (r.kind === 'delegation-group' ? [[r.group, r.count]] : []))).toEqual([['offline-coordinator', 1], ['unowned', 1]]);
-    // The two activities are no row (D-8782), and the frame's reader still files them: the session's details read it.
-    const acts = new Map(readDelegation(future).activities.map((a) => [a.activityId, a] as const));
-    const trees = new Map(rows.flatMap((r) => (r.kind === 'lease' ? [[r.lease.leaseId, r.lease] as const] : [])));
-    const items = rows.flatMap((r) => (r.kind === 'unowned' ? [r.item] : []));
-    expect([acts.size, trees.size, items.length], 'every member is kept, once').toEqual([2, 2, 1]);
-    expect(rows.map((r) => r.kind)).not.toContain('activity' as never);
+    const acts = new Map(unplacedActivities([coordA], future).map((a) => [a.activityId, a] as const));
+    expect([...acts.keys()].sort(), 'every member is kept, once').toEqual(['a-group', 'a-words']);
     expect(acts.get('a-group')).toMatchObject({ group: 'offline-coordinator', liveness: 'live', futureField: 1 });
     expect(acts.get('a-words')).toMatchObject({ group: 'parent', placement: 'row', liveness: 'unmeasured' });
-    expect(trees.get('l-raw')).toMatchObject({ group: 'offline-coordinator', liveness: 'unmeasured', workspace: 'unmeasured' });
-    expect(trees.get('l-agent')).toMatchObject({ group: 'parent', liveness: 'live', workspace: 'unmeasured' });
-    expect(items).toMatchObject([{ adminRecord: 'u-future', workspace: 'unmeasured' }]);
     // Only what the server measured live reads live: no future word becomes "running".
-    const live = [...acts.values(), ...trees.values()].filter((m) => m.liveness === 'live');
-    expect(live.map((m) => ('activityId' in m ? m.activityId : m.leaseId))).toEqual(['a-group', 'l-agent']);
-    // The raw tree keeps both of its chips, whatever its other words; the agent one wears neither.
-    const raw = trees.get('l-raw')!;
-    expect(inferredChip(raw)?.text).toBe('inferred');
-    expect(creatorChip(raw)?.title).toContain(TOOL_USE_ID);
-    expect(inferredChip(trees.get('l-agent')!)).toBeNull();
+    expect([...acts.values()].filter((m) => m.liveness === 'live').map((m) => m.activityId)).toEqual(['a-group']);
   });
 
-  it('VIS-T1: the unlisted selection returns the entries in opening order; an archived or released parent keeps its own on its card', () => {
+  it('VIS-T1: the unlisted selection returns the entries in opening order; an archived or released parent keeps its own in its details, not here', () => {
     const arch = fleetSession({ id: 'coord-arch', project: 'project-a', workspace: null, archivedAt: 1_800_000_000_000 });
     const rel = fleetSession({ id: 'w-rel', project: 'project-a', workspace: 'w-rel',
       releasedFrom: { runId: 9, program: 'port-api', programTitle: null, claimedBy: 'coord-a', closedAt: 1, child: true } });
@@ -380,7 +326,7 @@ describe('fleetTree — delegation rows land on their parent\'s card (delegation
     ] });
     expect(unplacedActivities([coordA, arch, rel], w).map((a) => a.activityId)).toEqual(['a-early', 'a-late']);
     // D-8782: those two are no row on that card (no offline group either); the frame still names them for their parents' details.
-    expect(ids(fleetTreeOf([coordA, arch, rel], [], [], {}, w)).flatMap(([, rows]) => rows)).toEqual(['coord-a']);
+    expect(ids(fleetTreeOf([coordA, arch, rel], [], [], {})).flatMap(([, rows]) => rows)).toEqual(['coord-a']);
     expect(activitiesStartedBy('coord-arch', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-arch']);
     expect(activitiesStartedBy('w-rel', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-rel']);
   });
@@ -406,13 +352,5 @@ describe('W4-U0: today\'s tree, characterised before delegation rows (delegation
         "60a7f4debb02b3e1",
       ]
     `);
-  });
-
-  it('W4-U19 (rule 6): every input above with no frame renders the identical JSON', () => {
-    expect(treeCalls.length).toBeGreaterThan(0);
-    for (const c of treeCalls) {
-      const [sessions, projects, runs, acks] = c.args;
-      expect(JSON.stringify(fleetTreeOf(sessions, projects, runs, acks, null))).toBe(c.json);
-    }
   });
 });

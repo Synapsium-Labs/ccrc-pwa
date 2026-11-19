@@ -4356,42 +4356,53 @@ allowance table pins the regex's flags (L2-2), and the dead-session half of the 
 (L2-6). The wire comment for the activity placement is not touched here (item 13 left C47 by the coordinator's ruling).
 **Measured** (the mutants, the reds at `main` and the runs): `docs/superpowers/programs/desktop-polish/c46.md`, "C47".
 
-### Task C48: the fleet list drops subagent and workflow rows (D-8782) — now
+### Task C48: the fleet list drops every delegation row (D-8782) — now
 
 **Why.** The operator, 2026-11-19, on C46: "the number of subagents in a session is noise at this point on the left panel.
 It's information useful only inside the session running them." C46 (D-8771) and C47 took the counts off a session's row, and
 left the delegation rows themselves. The operator then sent a screenshot of rows still nested under a session in the left
-panel ("workflow · not confirmed", "agent · not confirmed", one per helper) and called it the same noise. So the rows go too.
+panel ("workflow · not confirmed", "agent · not confirmed", one per helper) and called it the same noise. So the rows go
+too. A scope change the same day, "Yeah I want them out too", took the worktree rows and the unowned rows with them: the
+fleet list draws no delegation row at all.
 
-**Files.** `pwa/src/fleet/nestFleet.ts` (the `activity` row kind is removed, with its key, its ordering ahead of worktrees and
-its place in the `offline-coordinator` group; `CardDelegation` carries no activities), `fleetTree.ts` (the card rule no longer
-slices activities onto a card; `unplacedActivities` is unchanged), `rollup.ts` and `delegationWords.ts` (`delegationParts`
-answers only `worktrees`: the `delegated` word of a fold line and a programme box's footer is gone with the rows),
-`ProjectCard.tsx` (the activity row's view and its arm of the group-member test), and a comment in `programmeBoxes.ts`.
-`fleet.css` needed no change: every `proj-work` rule is shared by worktree rows, unowned rows and the session header's entry
-list. Tests: a new `c48-fleet-list-no-activity-rows`, and `nestFleet`, `fleetTree`, `rollup`, `delegation-words`,
-`project-card`, `fleet-rollup-render` and `fleet-screen` cases that held an activity row, rewritten to say there is none; the
-real-Chrome `delegation-rows` fixture keeps its activities in the frame to show none is drawn. The two delegation specs carry
-a dated amendment each.
+**Files.** `pwa/src/fleet/nestFleet.ts` (the `activity`, `lease`, `unowned` and `delegation-group` row kinds are removed with
+`delegationPass`, `CardDelegation` and rules 6 to 11; `nestFleet(sessions, runs)` takes no delegation input), `fleetTree.ts`
+(`delegationSlices` and the `delegation` argument are removed; `unplacedActivities` is unchanged), `rollup.ts` (the fold
+counts workers only; `SummaryPart` is a counted part; `isWorker`, `delegatedWords` and the bare-word arm are removed),
+`programmeBoxes.ts` (the footer names workers only), `delegationWords.ts` (the worktree, unowned, group and control words, the
+inferred chips and `delegationParts` are removed; `activityLine`, `delegatedChip`, `activitiesStartedBy`, `readDelegation` and the
+region's words stay), `ProjectCard.tsx` (`WorktreeControls`, the row arms, the group toggles and the `offlineOpen` and
+`unownedOpen` props are removed), `FleetCards.tsx` (the group keys), `WorkLine.tsx` (the `children` tail), `fleet.css` (the
+`.proj-work-chip` and `.proj-work-controls` rules and the wrapped-line bracket rule) and `design/audit.mjs` (their two entries).
+Tests: the `nestFleet`, `fleetTree`, `rollup`, `delegation-words`, `project-card`, `fleet-rollup-render`, `fleet-screen`,
+`fleet-css` and `role-census` cases that held a delegation row are rewritten to say there is none, each with a positive
+control; `worktree-confirm-close` and `leaseCardFixture` go with the controls they drove; the real-Chrome `delegation-rows`
+fixture keeps its activities, worktrees and unowned tree in the frame to show none is drawn. The two delegation specs carry a
+dated amendment each. Nothing leaves the wire or the server, and `pwa/src/lib/api.ts`'s two client calls for the worktree
+controls (`operatorRetainLease`, `resolveLease`) are left in place as dead client code: that file was held by another
+claim, so removing them is a follow-up.
 
-**What stays.** Worktree rows (leases) and their controls, unowned rows and the two groups' headers while a member exists,
-session rows, spawn rows and the programme tree; the session's own details, whose `N delegated` disclosure and list still
-carry every activity with its condition word and title; and the fleet foot's region of activities whose parent is not
-listed (`unplacedActivities`), which the ruling did not name.
+**What stays.** Session rows, spawn rows and the programme tree; the session's own details, whose `N delegated` disclosure and
+list still carry every activity with its condition word and title; the fleet foot's region of activities whose parent is not
+listed (`unplacedActivities`), which the ruling did not name; and the Settings switch for keeping a finished delegated
+worktree. The details do not list a session's worktrees today (measured), so after this change no screen of the PWA lists a
+session's worktrees or an unowned tree (Settings' "Worktrees left behind" card lists only what the lane's last pass kept),
+and the Keep worktree, Attach to… and Not delegated controls have no door in it; the coordinator raises that follow-up.
 
 **Measured.** Which new cases were red at `main`, the files run and what was seen in a real browser are in
 `docs/superpowers/programs/desktop-polish/c48.md`.
 
-**Acceptance.** For a card whose session has an agent, a workflow and a worktree, the fleet list draws the session row and the
-worktree row and no text, title or accessible name of the agent or the workflow; an offline coordinator's activities draw no
-row and no group header; the session's details still list both activities.
+**Acceptance.** For a card whose session has an agent, a workflow, a worktree and an unowned tree, the fleet list draws the
+session row and nothing of the others, in text, titles or accessible names; an offline coordinator's work draws no group
+header and no row; the session's details still list both activities.
 
-- **D-8782** — `fleet-list-drops-activity-rows`: Task C48, issued on 2026-11-19. The fleet list draws no row for a session's
-  subagents or workflows, under a listed parent or in the `offline-coordinator` group, and a group header with no member is
-  not drawn. The `activity` row kind has no producer, so it is removed with the view, the words and the rollup arm that only
-  it used; a fold line and a programme box's footer say `worktrees` and no longer `delegated`. This supersedes the delegation
-  broker's wave 4 rule (§5.8, rules 6 to 11) for activity rows in the fleet list only: worktree rows, unowned rows and the
-  programme tree keep it, and the session's own details keep every activity (the operator's ruling of 2026-11-19).
+- **D-8782** — `fleet-list-drops-delegation-rows`: Task C48, issued on 2026-11-19. The fleet list draws no delegation row: not
+  a session's subagent or workflow, not a worktree, not an unowned tree, and no group header for them. No row kind of
+  `delegationPass` survives, so its row kinds, its card slice, its view, its words, its controls and the rollup arms only they
+  used are removed, and a fold line and a programme box's footer name workers only. This supersedes the delegation broker's
+  wave 4 rule (§5.8, rules 6 to 11) for the fleet list, and the operator's first reading of this task (rows for worktrees
+  and unowned work stay); the session's own details keep every activity (the operator's ruling and scope change of
+  2026-11-19).
 
 **Rollback.** A plain revert.
 

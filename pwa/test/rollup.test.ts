@@ -4,14 +4,13 @@
 import { describe, expect, it } from 'vitest';
 import { DEAD_LIFECYCLE } from './fleetFixture';
 import { withRunBinding } from './runBindingFixture';
-import type { DelegationProjectionWire, FleetSession, RunSummary } from '../../shared/api';
+import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetTree } from '../src/fleet/fleetTree';
 import {
   NO_ROLLUP_PREFS, ROLLUP_RECENT_MS, nextRollupBoundary, operatorAsk, prunePrefs, rollupCard, rollupFleet as rollupFleetOf,
   toggleChildren, toggleProject, type CardRollup, type RolledRow, type RollupPrefs,
 } from '../src/fleet/rollup';
 import { fingerprint, type Recorded } from './characterise';
-import { activity, frame, lease } from './delegationFixture';
 
 /** W4-U0: every card each `rollupFleet` call of this file's cases rolls up, recorded as `rollupCard`'s own answer
  *  (see `characterise.ts`). */
@@ -39,7 +38,7 @@ const card = (cards: ReadonlyMap<string, CardRollup>, project: string): CardRoll
 /** `[what, depth]` per row: a session by id, a spawn by run, the summary line by its text. */
 const shape = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =>
   r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'pending' ? [`spawn:${r.run.id}`, r.depth]
-    : r.kind === 'summary' ? [`» ${r.text}`, r.depth] : [r.kind, r.depth]);
+    : [`» ${r.text}`, r.depth]);
 
 describe('rollup — projects (rule 2)', () => {
   it('rolls up an inactive project: nothing working, nobody waiting, no change in 30 minutes', () => {
@@ -235,50 +234,30 @@ describe('rollup — the fixes after review (D-6088)', () => {
   });
 });
 
-// Delegation broker wave 4, PR2 Task 2.6: delegated work is counted beside workers, and never folds a worker away.
-// Every case calls the UNRECORDED `rollupFleetOf`, so W4-U0's fingerprints below stay exactly what main produced.
-describe('rollup — delegation rows under a coordinator (delegation broker wave 4)', () => {
+// Delegation broker wave 4, PR2 Task 2.6 counted delegated work beside workers. A delegation row is no row of the fleet list
+// any more (D-8782), so the rollup folds workers only and its summary line names workers only.
+describe('rollup — a coordinator\'s fold line names workers only (D-8782)', () => {
   const coordFleet = (workers: number) => {
     const coord = sess('coord', 'project-c', { role: 'coordinator', status: 'busy', bucket: 'working', bucketSince: NOW - 4 * HOUR });
     const kids = Array.from({ length: workers }, (_, i) => sess(`w${i + 1}`, 'project-c', { role: 'child', status: 'busy', bucket: 'working' }));
     return { sessions: [coord, ...kids], runs: kids.map((k, i) => run(10 + i, 'coord', k.id)) };
   };
-  const rolled = (sessions: FleetSession[], runs: RunSummary[], w: DelegationProjectionWire, prefs: RollupPrefs = NO_ROLLUP_PREFS) =>
-    card(rollupFleetOf(fleetTree(withRunBinding(sessions, runs), [], runs, {}, w), prefs, NOW, null).cards, 'project-c');
+  const rolled = (sessions: FleetSession[], runs: RunSummary[], prefs: RollupPrefs = NO_ROLLUP_PREFS) =>
+    card(rollupFleetOf(fleetTree(withRunBinding(sessions, runs), [], runs, {}), prefs, NOW, null).cards, 'project-c');
   const kinds = (rows: readonly RolledRow[]): [string, number][] => rows.map((r) =>
-    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'summary' ? [`» ${r.text}`, r.depth]
-      : r.kind === 'lease' ? [`lease:${r.lease.leaseId}`, r.depth] : [r.kind, r.depth]);
+    r.kind === 'session' ? [r.session.id, r.depth] : r.kind === 'summary' ? [`» ${r.text}`, r.depth] : [r.kind, r.depth]);
 
-  it('W4-U24: one worker and one worktree are not folded; the worker stays visible, as it does today', () => {
+  it('one worker is not folded; the worker stays visible, as it does today', () => {
     const { sessions, runs } = coordFleet(1);
-    const c = rolled(sessions, runs, frame({ leases: [lease({ leaseId: 'l1', parentId: 'coord', project: 'project-c' })] }));
-    expect(kinds(c.rows)).toEqual([['coord', 0], ['w1', 1], ['lease:l1', 1]]);
+    expect(kinds(rolled(sessions, runs).rows)).toEqual([['coord', 0], ['w1', 1]]);
   });
 
-  it('W4-U25 (D-8782): one worker and two live activities: the activities are no row and no word, so nothing folds and the worker stays', () => {
-    const { sessions, runs } = coordFleet(1);
-    const w = frame({ activities: [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })] });
-    expect(kinds(rolled(sessions, runs, w).rows)).toEqual([['coord', 0], ['w1', 1]]);
-    expect(kinds(rolled(sessions, runs, w, toggleChildren(NO_ROLLUP_PREFS, 'coord')).rows)).toEqual([['coord', 0], ['w1', 1]]);
-  });
-
-  it('W4-U25b (D-8771, D-8782): one worker and two worktrees: the line names `worktrees` with no number, and with two activities beside them says no `delegated`', () => {
-    const { sessions, runs } = coordFleet(1);
-    const trees = [lease({ leaseId: 'l1', parentId: 'coord', project: 'project-c' }),
-      lease({ leaseId: 'l2', parentId: 'coord', project: 'project-c', adminRecord: 'agent-a2', canonicalPath: '/work/project-c/.claude/worktrees/agent-a2' })];
-    const acts = [activity({ activityId: 'a1', parentId: 'coord' }), activity({ activityId: 'a2', parentId: 'coord' })];
-    const folded = rolled(sessions, runs, frame({ leases: trees, activities: acts }));
-    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · worktrees', 1], ['w1', 1]]);
-    const open = rolled(sessions, runs, frame({ leases: trees, activities: acts }), toggleChildren(NO_ROLLUP_PREFS, 'coord'));
-    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 1 worker · 1 working · worktrees', 1], ['w1', 1], ['lease:l1', 1], ['lease:l2', 1]]);
-  });
-
-  it('W4-U26: a card whose only change is a live activity stays inactive (the class never reads a delegation row, and an activity is no row: D-8782)', () => {
-    const quiet = sess('coord', 'project-c', { role: 'coordinator' });
-    const c = rolled([quiet], [], frame({ activities: [activity({ parentId: 'coord', lastEventAt: new Date(NOW).toISOString() })] }));
-    expect(kinds(c.rows)).toEqual([['coord', 0]]);
-    expect(c.cls).toBe('inactive');
-    expect(c.lastActive).toBe(NOW - 5 * HOUR);
+  it('W4-U25 (D-8782): two workers fold into one line that says `workers`, and no `delegated` or `worktrees`', () => {
+    const { sessions, runs } = coordFleet(2);
+    const folded = rolled(sessions, runs);
+    expect(kinds(folded.rows)).toEqual([['coord', 0], ['» 2 workers · 2 working', 1]]);
+    const open = rolled(sessions, runs, toggleChildren(NO_ROLLUP_PREFS, 'coord'));
+    expect(kinds(open.rows)).toEqual([['coord', 0], ['» 2 workers · 2 working', 1], ['w1', 1], ['w2', 1]]);
   });
 });
 

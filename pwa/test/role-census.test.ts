@@ -226,8 +226,6 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.acct-disclosure': META,
     '.pool-note': META,
     '.proj-pending, .proj-work': META,
-    // A worktree line's controls and the sentence a refused or unread act leaves (delegation broker wave 5, PR10), in the line's own role.
-    '.proj-work-controls': META,
     '.fleet-archived-row, .fleet-runs-row': META,
     '.archive-size': META,
     '.accounts-projection': META,

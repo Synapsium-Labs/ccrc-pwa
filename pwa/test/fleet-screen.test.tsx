@@ -16,7 +16,7 @@ import { REFINED_SET } from '../src/skins/refined/parts';
 import { AccountsStrip } from '../src/fleet/AccountsStrip';
 import { ToastHost } from '@ccrc/ui';
 import { TEST_ROSTER } from './rosterFixture';
-import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
+import { activity, frame, lease, unowned } from './delegationFixture';
 import { clearScreenCache } from '../src/lib/screenCache';
 
 // foldState.ts persists to localStorage — clear it so one test's fold can
@@ -3359,58 +3359,68 @@ describe('the predicted-conflict chip renders after the claimed-files strip (lan
   });
 });
 
-// Delegation broker wave 4, PR2 Task 2.7: the `delegation` frame's two marks on `.fleet-list`. W4-U27, the older
+// Delegation broker wave 4, PR2 Task 2.7: the `delegation` frame's marks on `.fleet-list`. W4-U27, the older
 // server's screen against the base's own render, is `older-server-render.test.tsx` (review 1029's F1).
 describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => {
-  // Review 1029's F2, end to end: the frame as the socket carries it, through the store and the real `fleetTree` (no
-  // reader mock, nothing normalized first) to the card's rows. Each row is read as its cells, the words the page shows.
-  it('W4-U7c: a frame of future words reaches the cards re-filed: every member drawn once, unmeasured, never running', () => {
-    const store = makeLiveStore();
-    renderFleet(<FleetScreen store={store} />);
+  // Review 1029's F2, end to end, now that the list draws no delegation row (D-8782): the frame as the socket carries it,
+  // words this build has never heard of included, through the store and the real `fleetTree`, reaches no row of any card.
+  // Desktop polish C48: the operator's ruling of 2026-11-19, a session's agent, workflow, worktree and an unowned tree are
+  // noise on the left panel; the card draws the session row only.
+  const cardText = (project: string): string => {
+    const c = [...document.querySelectorAll<HTMLElement>('.proj-card')].find((el) => el.querySelector('.proj-card-name')?.textContent === project);
+    if (c === undefined) throw new Error(`no ${project} card`);
+    return c.textContent ?? '';
+  };
+  const sendFrame = (sessions: object[], delegation: object): void => {
     act(() => {
       const s = latestFleetSocket();
       s.open();
-      s.message({ type: 'fleet', sessions: [session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' })] });
-      s.message({ type: 'delegation', delegation: {
-        asOf: '2026-10-26T10:10:00.000Z',
-        activities: [
-          { ...activity({ activityId: 'a-group', displayName: 'regroup' }), group: 'future-group', futureField: 1 },
-          { ...activity({ activityId: 'a-words', displayName: 'reword' }), placement: 'future-placement', liveness: 'future-liveness' },
-        ],
-        leases: [
-          { ...lease({ leaseId: 'l-raw', sourceKind: 'raw' }), group: 'future-group', liveness: 'future-liveness', workspace: 'future-workspace' },
-          { ...lease({ leaseId: 'l-agent', adminRecord: 'agent-a2', canonicalPath: '/work/project-a/.claude/worktrees/agent-a2' }),
-            workspace: 'future-workspace' },
-        ],
-        unowned: [{ ...unowned({ adminRecord: 'u-future' }), workspace: 'future-workspace' }],
-      } });
+      s.message({ type: 'fleet', sessions });
+      s.message({ type: 'delegation', delegation });
     });
-    const card = (): HTMLElement => {
-      const c = [...document.querySelectorAll<HTMLElement>('.proj-card')].find((el) => el.querySelector('.proj-card-name')?.textContent === 'project-a');
-      if (c === undefined) throw new Error('no project-a card');
-      return c;
-    };
-    // D-8782: coord-a's two activities are no row, so its one worktree is its only delegation child and nothing folds (D-6088's
-    // W/D rule needs two); the offline group counts its one worktree, and the unowned group is as before.
-    expect(card().querySelector('.proj-children-toggle'), 'one worktree: no fold line, and no `delegated` word').toBeNull();
-    expect(card().textContent).not.toMatch(/delegated|regroup|reword/);
-    fireEvent.click(within(card()).getByRole('button', { name: /Offline coordinator \(1\)/ }));
-    fireEvent.click(within(card()).getByRole('button', { name: /Unowned work \(1\)/ }));
-    const cells = [...card().querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-part')].map((p) => p.textContent));
-    const chips = [...card().querySelectorAll('.proj-work')].map((r) => [...r.querySelectorAll('.proj-work-chip')].map((c) => c.textContent));
-    // Under coord-a, its worktree; then the offline group (its worktree); then the unowned group. No activity row anywhere.
-    expect(cells).toEqual([
-      ['agent worktree', 'agent-a2', 'not confirmed', 'unmeasured'],
-      ['worktree', 'agent-a1', 'unmeasured', 'unmeasured', 'from coord-a'],
-      ['u-future', 'no owner found', 'unmeasured'],
-    ]);
-    expect(chips).toEqual([[], ['inferred', `Bash call …${TOOL_USE_ID.slice(-8)}`], []]);
-    expect(card().textContent).not.toContain('unrecognised');
-    // No delegation row or toggle says running in its title either: the page's titles, read off the DOM.
-    const titles = [...card().querySelectorAll('.proj-work[title], .proj-group-toggle[title], .proj-children-toggle[title]')]
-      .map((e) => e.getAttribute('title') ?? '');
-    expect(titles.length).toBeGreaterThan(0);
-    for (const t of titles) expect(t, t).not.toMatch(/running/i);
+  };
+
+  it('C48 (D-8782): a card whose session has an agent, a workflow, a worktree and an unowned tree draws the session row and nothing of them', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    sendFrame([session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' })], frame({
+      activities: [activity({ activityId: 'a-agent', displayName: 'map the tree' }),
+        activity({ activityId: 'a-flow', sourceKind: 'workflow', displayName: 'nightly sweep' })],
+      leases: [lease({ leaseId: 'l-1', sourceKind: 'raw' })],
+      unowned: [unowned()],
+    }));
+    const list = document.querySelector<HTMLElement>('.fleet-list')!;
+    // Positive controls: the frame was read (it marks the list measured) and the session row is drawn.
+    expect(list.getAttribute('data-delegation')).toBe('measured');
+    expect(cardText('project-a')).toContain('coord-a');
+    expect(list.querySelectorAll('.proj-work')).toHaveLength(0);
+    expect(list.querySelectorAll('.proj-group-toggle')).toHaveLength(0);
+    const named = [...list.querySelectorAll('*')].flatMap((el) => [el.getAttribute('aria-label'), el.getAttribute('title')])
+      .filter((x): x is string => x !== null);
+    expect(`${list.textContent} ${named.join(' ')}`).not.toMatch(/map the tree|nightly sweep|not confirmed|worktree|Unowned work|agent-u1|Keep worktree|Not delegated/);
+  });
+
+  it('C48 (D-8782): an offline coordinator\'s work draws no group header and no row, and a frame of future words changes nothing', () => {
+    const store = makeLiveStore();
+    renderFleet(<FleetScreen store={store} />);
+    sendFrame([session({ id: 'coord-a', project: 'project-a', workdir: '/work/project-a', status: 'busy', bucket: 'working' })], {
+      asOf: '2026-10-26T10:10:00.000Z',
+      activities: [
+        { ...activity({ activityId: 'a-group', displayName: 'regroup' }), group: 'future-group', futureField: 1 },
+        { ...activity({ activityId: 'a-words', displayName: 'reword' }), placement: 'future-placement', liveness: 'future-liveness' },
+      ],
+      leases: [
+        { ...lease({ leaseId: 'l-raw', sourceKind: 'raw' }), group: 'future-group', liveness: 'future-liveness', workspace: 'future-workspace' },
+        { ...lease({ leaseId: 'l-gone', parentId: 'coord-gone' }), group: 'offline-coordinator' },
+      ],
+      unowned: [{ ...unowned({ adminRecord: 'u-future' }), workspace: 'future-workspace' }],
+    });
+    const list = document.querySelector<HTMLElement>('.fleet-list')!;
+    expect(cardText('project-a')).toContain('coord-a');
+    expect(list.querySelectorAll('.proj-work')).toHaveLength(0);
+    expect(list.textContent).not.toMatch(/Offline coordinator|Unowned work|regroup|reword|u-future|unrecognised/);
+    // The two activities' parent is listed, so the foot's region holds nothing either.
+    expect(list.hasAttribute('data-delegation-unplaced')).toBe(false);
   });
 
   it('a measured frame marks the list measured, and counts an activity no card can draw', () => {
@@ -3569,7 +3579,7 @@ describe('the fleet list\'s delegation marks (delegation broker wave 4)', () => 
     expect(list().innerHTML).toBe(before);
     expect(toggle().getAttribute('aria-expanded')).toBe('true');
     expect(document.querySelectorAll('.banner, .halt-banner')).toHaveLength(banners);
-    // coord-b leaves the fleet list: its entry leaves its card and joins the region, from its raw id, drawn once.
+    // coord-b leaves the fleet list: its entry (in no row of its card) joins the region, from its raw id, drawn once.
     act(() => latestFleetSocket().message({ type: 'fleet', sessions: [coordA] }));
     expect(toggle().textContent).toContain('Delegated work, session not listed (2)');
     expect(region()).toEqual([
