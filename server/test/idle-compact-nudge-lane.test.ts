@@ -223,7 +223,7 @@ describe('sweepIdleCompactNudge: a coordinator\'s open run counts as open work (
   });
   it('an unreadable run read holds: nothing typed even with a fresh task list', async () => {
     const { h, coord, w } = await rig();
-    vi.spyOn(coord, 'openRunsOfClaimant').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
+    vi.spyOn(coord, 'bindingRunsOf').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'bad row' });
     await w.sweepIdleCompactNudge([fleetRow()], [], TICK);
     expect(anySends(h.calls)).toEqual([]);
   });

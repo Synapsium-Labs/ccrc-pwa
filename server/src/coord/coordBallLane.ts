@@ -7,25 +7,49 @@ import {
   type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallRunRow, type StallSessionInput,
 } from './stall.js';
 import { coordBallSince, coordWaitSentAt, stallR7Breach, type StallCoordBallInput } from './coordBall.js';
+import { runsClaimedBy } from './runBinding.js';
+import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import type { IdleNudgeOpenRun } from '../idlenudge.js';
 import type { WatcherCoordPort } from './ports.js';
 
 /** The coord-ball rung's input for one coordinator: every non-terminal run it claims, whether any of their programmes holds
  *  a `blocking` open item, its live blocks, its newest `wait:` mail, and the newest time the ball sat with it on a claimed
  *  run (each run judged on its own mail and re-activation). Null when a read failed (warned) or it claims no open run. */
+/** Every non-terminal run `id` claims, in id order, whatever its state and with or without a worker (a planned run has none:
+ *  its `sessionId` reads ''). The series is the binding's own (`bindingRunsOf`, read for the runs it claims, as
+ *  `newestClaimedWorkRuns` does), and each run's columns are `run(id)`'s. `stallCandidates` is the wrong question here: it
+ *  keeps only the ACTIVE runs of bound workers, and an `awaiting-review` run is exactly what the coord-ball rung looks for.
+ *  ALL-OR-FAILURE: a series or a run that cannot be read fails the whole read. */
+export function claimedOpenRuns(store: Pick<WatcherCoordPort, 'bindingRunsOf' | 'run'>, id: string):
+  { readonly ok: true; readonly runs: StallRunRow[] } | { readonly ok: false; readonly detail: string } {
+  const series = store.bindingRunsOf(id);
+  if (!series.ok) return { ok: false, detail: series.detail };
+  const runs: StallRunRow[] = [];
+  for (const b of runsClaimedBy(series.runs, id)) {
+    if ((TERMINAL_RUN_STATES as readonly string[]).includes(b.state)) continue;
+    const read = store.run(b.id);
+    if (!read.ok) return { ok: false, detail: read.detail };
+    const r = read.run;
+    if (r === null) continue;
+    runs.push({ id: r.id, kind: r.kind, state: r.state, sessionId: r.sessionId ?? '', claimedBy: r.claimedBy, dispatchedAt: r.dispatchedAt,
+      program: r.program, wave: r.wave, waveOf: r.waveOf, project: r.project, workspace: r.workspace });
+  }
+  return { ok: true, runs: runs.sort((a, b) => a.id - b.id) };
+}
+
 export function coordBallInputOf(
   store: WatcherCoordPort, si: StallSessionInput, now: number, warn: (line: string) => void,
 ): StallCoordBallInput | null {
   const id = si.sessionId;
-  const claimed = store.openRunsOfClaimant(id);
+  const claimed = claimedOpenRuns(store, id);
   if (!claimed.ok) {
-    warn(`ccrc-server: stall-watch coord-ball runs of ${id} unreadable (${claimed.kind}: ${claimed.detail}) — held this sweep`);
+    warn(`ccrc-server: stall-watch coord-ball runs of ${id} unreadable (${claimed.detail}) — held this sweep`);
     return null;
   }
   if (claimed.runs.length === 0) return null;
   const perRun: StallInput[] = [];
   for (const run of claimed.runs) {
-    if (run.sessionId === '') continue;
+    if (!run.sessionId) continue;   // a planned run has no worker, so no mail of its own
     const read = store.stallMailFor(run.sessionId, [run.id], now - BACKLOG_HORIZON_MS);
     if (!read.ok) {
       warn(`ccrc-server: stall-watch coord-ball mail of run ${run.id} unreadable (${read.kind}: ${read.detail}) — held this sweep`);
@@ -48,7 +72,7 @@ export function coordBallInputOf(
  *  item, and the newest run event across them. Null when it claims none; a read that throws or fails is `{ ok: false }`. */
 export function idleNudgeOpenRunOf(store: WatcherCoordPort, id: string): IdleNudgeOpenRun {
   try {
-    const claimed = store.openRunsOfClaimant(id);
+    const claimed = claimedOpenRuns(store, id);
     if (!claimed.ok) return { ok: false };
     if (claimed.runs.length === 0) return null;
     const blocked = [...new Set(claimed.runs.map((r) => r.program))].some((p) => store.programmeHasBlockingItem(p));

@@ -2665,7 +2665,7 @@ describe('sweepStalls: the R7 count on a coord-blocked episode (D-8126)', () => 
       status: word, statusUpdatedAt: BUSY_AT, version: '2.1.284', startedAt: STARTED_AT,
     }));
     seedTurnMark(r.h.home, COORD, { sessionId: COORD_UUID });
-    if (pinned) r.coord.setSpecPin('demo-program', 'docs/superpowers/specs/demo.md', 'in short', BUSY_AT, null);
+    if (pinned) r.coord.setSpecPin('demo-program', 'docs/superpowers/specs/demo.md', 'in short', BUSY_AT, null, { kind: 'coordinator' });
     const lv = r.coord.setStallSettings({ level: 'alert' }, Date.now(), r.coord.stallSettings());
     if (lv.kind !== 'written') throw new Error('fixture write refused');
     at(MAIL_AT);

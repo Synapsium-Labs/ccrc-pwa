@@ -14,8 +14,26 @@ with the source change reverted, the new tests fail (measured, below).
   the migration number in a comment. So the wave builds on main's A3 unchanged: `wokenAt`, `build` and `markBlockWoken`
   are already there.
 - **No migration.** The wave adds no table or column, so it takes no migration slot and moves no coord-db pin.
-- The stack's final re-pin commit carried no A6 hunk that main still needs: the lane count and the port's member
-  list were re-derived here against main (53 lanes; seven port members).
+- The stack's final re-pin commit carried no A6 hunk that main still needs. The lane count and the port's member list
+  were re-derived here against main (53 lanes, six new port members).
+
+## What was rebuilt rather than ported
+
+- **Growth.** The stack grew `watch.ts` by 161 net code lines and took `stall.ts` past its D-8635 cap (1619 against
+  1603). The deciders now live in a new L1 file, `coord/coordBall.ts` (the rung's decider, its two derived facts and the
+  R7 predicate). The reads live in `coord/coordBallLane.ts` (the rung's input, the nudge's open-run fact, the R7 notice
+  and the ball-only claimants) and `coord/blockWakeLane.ts` (the wake pass). The wake's level mapping, its clearing
+  half and its mail words are in `coordCalls.ts` (L1). Measured by the growth check's own counter: `watch.ts` +37,
+  `stall.ts` 1586 (cap 1603), `store.ts` +6. No waiver.
+- **`a6-claimed-runs-through-the-binding`.** The stack added a store read, `openRunsOfClaimant` (`WHERE claimedBy = ?`),
+  and split `stallCandidates`' cast-and-prove to share it. That is a fifth session-keyed binding reader, which ARCH-62's
+  census caps at four. The claimed runs are read instead from the binding's own series (`bindingRunsOf`, then
+  `runsClaimedBy`, then `run(id)`), as `newestClaimedWorkRuns` does, so `store.ts` gains only the four one-line
+  delegations.
+- **`a6-wake-turn-in-l1`.** The stack's lane compared the turn marker's start with the row's time. `blockWakeDue` now
+  takes `lastTurnAt` and decides that itself, so the lane decides nothing.
+- **Two `NOT_BINDING_SITES` rows** (`runSessionCensus.ts`) name `coordBall.ts`'s two mail checks: a delivery to the
+  coordinator, and a mail it sent. No run is read there.
 
 ## Slugs (departures and readings; the coordinator mints numbers)
 

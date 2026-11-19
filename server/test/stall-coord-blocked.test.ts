@@ -367,6 +367,9 @@ describe('coord-blocked: the R7 count (stallR7Breach)', () => {
   it('no held mail is none: the episode is the count\'s unit', () => {
     expect(stallR7Breach(input({ worker: dialog(), deliveries: [] }), true)).toBe(false);
   });
+  it('a coordinator that claims no run is none: R7 counts a coordinator working a programme', () => {
+    expect(stallR7Breach(input({ worker: dialog(), runs: [] }), true)).toBe(false);
+  });
   it('the push itself is unchanged by the count', () => {
     expect(verdict(input({ worker: dialog() }))).toEqual(fire(MAIL_AT));
   });

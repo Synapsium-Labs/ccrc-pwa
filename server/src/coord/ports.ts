@@ -81,7 +81,7 @@ export type WatcherCoordMember =
   | 'markDeadCoordinatorBreakerDirty' | 'markDelivered' | 'markDriftPushed' | 'markDriftShadowed' | 'markIngested'
   | 'markLanded' | 'markParkEscalated' | 'markReleaseNotified' | 'markTimersFired' | 'markUnreachable' | 'maxMailDeliveryId'
   | 'maxRunEventId' | 'mergingRuns' | 'mintGeneration' | 'moveItem' | 'newestEpisodes' | 'node' | 'nodeByLabel' | 'nodes' | 'noteClaudeBuildsSeen' | 'noteDispatchRefusal' | 'noteGate' | 'noteLeaseDetail'
-  | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openReleaseReviewItems' | 'openResponseRows' | 'openRound' | 'openRunsOfClaimant' | 'operatorMarks' | 'outstandingMailFor' | 'parkDelivery' | 'parkedDeliveries' | 'pendingTimers'
+  | 'openAllocations' | 'openCloseRefusedItems' | 'openCoordinatorIds' | 'openPracticeCase' | 'openReleaseReviewItems' | 'openResponseRows' | 'openRound' | 'operatorMarks' | 'outstandingMailFor' | 'parkDelivery' | 'parkedDeliveries' | 'pendingTimers'
   | 'plainAutoMemorySettings' | 'poolEpoch' | 'practiceCaseNewest' | 'probeRows' | 'programOpenRunCount' | 'programmeActivity' | 'programmeHasBlockingItem' | 'programmeHasOpenRun' | 'programmeLeftPlannedAt' | 'programmeLive' | 'projectDelegationCheckpoint'
   | 'projectDelegationCheckpointChanges' | 'pruneApprovalInputs' | 'pruneAskQuestions' | 'pruneCensusSummaries' | 'purgeTimers' | 'putCheckpoint' | 'queueDelivery' | 'queueRunCloseWarning'
   | 'raiseItem' | 'raiseItemWithMail' | 'raiseLedgerFloor' | 'readLanding' | 'recentProvenance' | 'recordClaudeBuildVerdict' | 'recordDriftPass' | 'recordFeedEvent' | 'recordGap' | 'recordLinkingReading'

@@ -188,6 +188,10 @@ describe('blockWakeDue', () => {
     expect(blockWakeDue(b('disk'), f({ disk: 'not-ok' }))).toBe('none');
     expect(blockWakeDue(b('disk'), f({ disk: 'unknown' }))).toBe('none');
   });
+  it('a disk or memory reading that was clear all along is no clearing: it waits until a not-ok reading was seen', () => {
+    expect(blockWakeDue(b('disk'), f({ disk: 'ok', sawNotOk: false }))).toBe('none');
+    expect(blockWakeDue(b('memory'), f({ memory: 'clear', sawNotOk: false }))).toBe('none');
+  });
   it('memory mails when clear, and waits on not-clear and unknown', () => {
     expect(blockWakeDue(b('memory'), f({ memory: 'clear' }))).toBe('wake-mail');
     expect(blockWakeDue(b('memory'), f({ memory: 'not-clear' }))).toBe('none');
