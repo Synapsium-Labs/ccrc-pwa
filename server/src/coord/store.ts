@@ -5,6 +5,7 @@ import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { NODE_ID_RE } from '../../../shared/agent-protocol.js';
+import { operatorMessageIdOf } from '../../../shared/operatorMessages.js';
 import type { LandingIntentHold } from '../../../shared/landingIntents.js';
 import { tx } from './tx.js'; // D-5896: the primitive, not the db adapter
 import type { GoalsVersion, GoalsView, ItemAct, ItemActor, WrittenSource } from '../../../shared/ledgers.js';
@@ -43,6 +44,7 @@ import {
 import * as timers from '../continuity/continuityStore.js';
 import * as probes from '../continuity/continuityStore.js';
 import * as designation from './overlordDesignationStore.js';
+import * as ladder from './overlordLadderStore.js';
 import * as outbox from './pushOutboxStore.js';
 import * as responses from './responsesStore.js';
 import type { PushSilentWhy } from '../../../shared/push-outbox.js';
@@ -50,7 +52,7 @@ import type { TimerActor, TimerCancelReason } from '../../../shared/continuity-t
 import type { AttemptOutcome, DesignationRead } from '../../../shared/overlord-designation.js';
 import type { GenView } from '../continuity/generationMachine.js';
 import type { Observed } from '../time/observed.js';
-import type { BookState, ContinuityReadDoor, HandoverNote, RenewalTrigger } from '../../../shared/continuity.js';
+import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
@@ -1025,6 +1027,10 @@ export interface ApprovalRow {
   state: ApprovalState; releaseReason: ApprovalReleaseReason | null; askAt: number; notifyAt: number;
   ruledAt: number | null; verdict: 'allow' | 'deny' | null; reason: string | null; ruling: string | null;
   answeredBy: string | null; toolUseId: string | null; corrected: boolean;
+  /** Approvals PR 0: the child's deny digest was the managed file's current one when the row was minted. A row minted
+   *  for a child under an older deny file (the installer's history named it) is `false`, and the rule door refuses its
+   *  allow (`approvalAllowRefusal`). The column defaults to 1, and anything but 1 reads `false`. */
+  denyCurrent: boolean;
 }
 export type ApprovalReadResult = { ok: true; row: ApprovalRow | null } | { ok: false; detail: string };
 export type ApprovalsReadResult = { ok: true; rows: ApprovalRow[] } | { ok: false; detail: string };
@@ -3204,9 +3210,14 @@ export class CoordStore {
     /** Landing intents (wave 5g): written after the items, in this transaction, from the run's own row. The store does
      *  not parse them: a repeated key throws on the primary key and rolls the whole dispatch back. */
     intents?: readonly string[];
+    /** Overlord W2 forecasts B, fix round 1 (F3): the conversation id the run was dispatched into, after its `/clear`
+     *  (`runs.dispatchConversation`). Written on every dispatch, NULL when omitted, so a later dispatch never keeps an
+     *  earlier one's conversation; the spend reads count a reading only in it. */
+    conversation?: string | null;
   }): AdvanceResult {
     return tx(this.db, () => {
       this.markDispatched(input.runId, input.sessionId, input.workspace, input.branch, input.resumed);
+      this.db.prepare('UPDATE runs SET dispatchConversation = ? WHERE id = ?').run(input.conversation ?? null, input.runId);
       if (input.clearedAt !== null) this.setClearedAt(input.runId, input.clearedAt);
       // Written UNCONDITIONALLY once `briefQueued` is given, both columns
       // together: recording only the interesting branch would make an older row
@@ -4217,7 +4228,7 @@ export class CoordStore {
   }
 
   setPortfolioRank(w: portfolio.RankWrite, actor: string, now: number): portfolio.RankWriteResult { return portfolio.setPortfolioRank(this.db, w, actor, now); }
-  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk); }
+  portfolioFacts(now: number, liveAsk: portfolio.LiveAskRead, usage: portfolio.SpendUsageRead): portfolio.PortfolioFacts { return portfolio.portfolioFacts(this.db, now, TERMINAL_RUN_STATES_SQL, liveAsk, usage); }
   recordAnswerMark(w: answerMarks.AnswerMarkWrite, actor: string, now: number): answerMarks.AnswerMarkWriteResult { return answerMarks.recordAnswerMark(this.db, w, actor, now); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
@@ -5438,6 +5449,23 @@ export class CoordStore {
   stopDone(sessionId: string): designation.StopDoneResult { return designation.stopDone(this.db, sessionId); }
   setModelClass(j: designation.AuthorityAppender, i: Parameters<typeof designation.setModelClass>[2]): designation.SettingResult { return designation.setModelClass(this.db, j, i); }
   setAccountSet(j: designation.AuthorityAppender, i: Parameters<typeof designation.setAccountSet>[2]): designation.SettingResult { return designation.setAccountSet(this.db, j, i); }
+  /** Overlord §7.5, H25 (`overlordLadderStore.ts`): the ladder's reads and writers; the three door writers open their own `tx()`. */
+  ladderRows(): ladder.LadderRowsRead { return ladder.ladderRows(this.db); }
+  ladderRungRead(): ladder.LadderRungRead { return ladder.ladderRungRead(this.db); }
+  setRung(j: designation.AuthorityAppender, move: ladder.RungMoveInput): ladder.LadderWrite {
+    const actor = ladder.rungActorBefore(move); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.setRungInTx(this.db, j, move));
+  }
+  raiseLatch(j: designation.AuthorityAppender, latch: ladder.LatchRaiseInput): ReturnType<typeof ladder.raiseLatchInTx> {
+    const actor = ladder.ladderActor(latch.raisedBy, 'brake'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.raiseLatchInTx(this.db, j, latch));
+  }
+  clearLatch(j: designation.AuthorityAppender, clear: ladder.LatchClearInput): ladder.LadderWrite {
+    const actor = ladder.ladderActor(clear.actor, 'widen'); if (!actor.ok) return actor;
+    return tx(this.db, () => ladder.clearLatchInTx(this.db, j, clear));
+  }
+  /** IN-TX seam: Confirm calls this inside its existing transaction after appending the Confirm record. */
+  applyRestore(stricter: ladder.StricterLadder, confirmSequence: number, at: number): void { ladder.applyRestoreInTx(this.db, stricter, confirmSequence, at); }
   /** Overlord §3.3.11: the start report's one writer, idempotent on the hook's report id (`continuityStore.ts`). */
   insertStart(row: StartInsert): StartInsertResult { return insertStart(this.db, row); }
   insertStartLoads(sessionId: string, r: StartLoadsReport, receivedAt: number): StartLoadsInsertResult { return insertStartLoads(this.db, sessionId, r, receivedAt); }
@@ -5450,7 +5478,7 @@ export class CoordStore {
   mintGeneration(i: MintInput, e: GenExpect | null, live: boolean, c: CursorAdvance | null = null): MintResult { return mintGeneration(this.db, i, e, live, c); }
   stepGeneration(id: number, e: GenExpect, next: GenView, live: boolean, now: number, card: { hash: string; snapshotId: string } | null = null): { changed: boolean } { return stepGeneration(this.db, id, e, next, live, now, card); }
   clearShadowWalk(id: number, e: GenExpect, now: number): { changed: boolean } { return clearShadowWalk(this.db, id, e, now); }
-  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind); }
+  setGenerationDue(id: number, e: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[], c: CursorAdvance | null = null): { changed: boolean } { return setGenerationDue(this.db, id, e, due, blind, c); }
   advanceObserved(id: number, e: GenExpect, o: Observed): { changed: boolean } { return advanceObserved(this.db, id, e, o); }
   setHoldOff(id: number, e: GenExpect): { changed: boolean } { return setHoldOff(this.db, id, e); }
   generationsCursor(lane: string): CursorRead { return generationsCursor(this.db, lane); }
@@ -5480,6 +5508,15 @@ export class CoordStore {
   handoverOf(generationId: number): HandoverRead { return handoverOf(this.db, generationId); }
   softRenewalsOf(identity: string, term: number): ReturnType<typeof softRenewalsOf> { return softRenewalsOf(this.db, identity, term); }
   recordSoftRenewal(g: { id: number; identity: string; term: number }, observedMs: number): { ok: boolean } { return recordSoftRenewal(this.db, g, observedMs); }
+  /** Overlord §3.3.9 C50, §3.3.11 (the hand-offs piece, `continuityStore.ts`): the Renew now door's request and the lane's read
+   *  of it, the prompt route's mark and the lane's quiet of it, and the Setting "when soft renewals happen". */
+  insertRenewRequest(r: { sessionId: string; actor: string; at: number; live: boolean }): ReturnType<typeof timers.insertRenewRequest> { return timers.insertRenewRequest(this.db, r); }
+  renewRequestsAfter(afterId: number, limit: number, sessionId?: string): timers.RenewRequestsRead { return timers.renewRequestsAfter(this.db, afterId, limit, sessionId); }
+  putOperatorMark(programme: string, at: number): { ok: boolean } { return timers.putOperatorMark(this.db, programme, at); }
+  operatorMarks(): timers.OperatorMarksRead { return timers.operatorMarks(this.db); }
+  advanceMarkQuiet(programme: string, readAt: number, quiet: Observed): { changed: boolean } { return timers.advanceMarkQuiet(this.db, programme, readAt, quiet); }
+  renewalModeSetting(): timers.RenewalModeRead { return timers.renewalModeSetting(this.db); }
+  setRenewalMode(mode: RenewalMode, at: number): ReturnType<typeof timers.setRenewalMode> { return timers.setRenewalMode(this.db, mode, at); }
   /** Overlord §3.3.2 C37, §3.3.11 H12 (the renewal act, `continuityStore.ts`): the generations lane's checkpoint and renew-call writers, and the reads. */
   putCheckpoint(c: CheckpointInsert): ReturnType<typeof putCheckpoint> { return putCheckpoint(this.db, c); }
   checkpointBefore(identity: string, liveGenerationId: number): CheckpointRead { return checkpointBefore(this.db, identity, liveGenerationId); }
@@ -7176,6 +7213,20 @@ export class CoordStore {
       'SELECT 1 AS x FROM mail WHERE fromId = ? AND runId IS ? AND toId = ? AND subject = ? LIMIT 1',
     ).get(fromId, runId, toId, subject);
     return row !== undefined;
+  }
+
+  /** Whether a mail with this (fromId, toId, subject) has a delivery ACKED, over every delivery state of the others (the boot
+   *  pass's check that a queued operator message's nudge was typed and acked; F3). */
+  hasAckedMailWithSubject(fromId: string, toId: string, subject: string): boolean {
+    return this.db.prepare("SELECT 1 AS x FROM mail m JOIN mail_deliveries d ON d.mailId = m.id WHERE m.fromId = ? AND m.toId = ? AND m.subject = ? AND d.state = 'acked' LIMIT 1")
+      .get(fromId, toId, subject) !== undefined;
+  }
+
+  /** The largest `n` of any `operator-message:<n>` mail from `operator`, over every delivery state, or `none` (the boot
+   *  pass's check against the private store's highest id, Overlord W1 private store B). */
+  highestOperatorMessageMail(): number | 'none' {
+    const rows = this.db.prepare("SELECT subject FROM mail WHERE fromId = 'operator' AND subject LIKE 'operator-message:%'").all() as { subject: string }[];
+    return rows.reduce<number | 'none'>((hi, r) => { const n = operatorMessageIdOf(r.subject); return n !== null && (hi === 'none' || n > hi) ? n : hi; }, 'none');
   }
 
   /** Whether an OUTSTANDING peer mail with this exact (fromId, toId, subject)
@@ -9723,13 +9774,14 @@ export class CoordStore {
   private static readonly APPROVAL_COLS =
     'CAST(id AS TEXT) AS idText, childId, parentId, CAST(runId AS TEXT) AS runIdText, digest, nonce, agentId, tool, ' +
     'inputRedacted, truncated, class, state, releaseReason, askAt, notifyAt, ruledAt, verdict, reason, ruling, ' +
-    'answeredBy, toolUseId, corrected';
+    'answeredBy, toolUseId, corrected, denyCurrent';
 
   private hydrateApproval(r: {
     idText: string; childId: string; parentId: string; runIdText: string | null; digest: string; nonce: string;
     agentId: string; tool: string; inputRedacted: string | null; truncated: number; class: string; state: string;
     releaseReason: string | null; askAt: number; notifyAt: number; ruledAt: number | null; verdict: string | null;
     reason: string | null; ruling: string | null; answeredBy: string | null; toolUseId: string | null; corrected: number;
+    denyCurrent: number;
   }): { ok: true; row: ApprovalRow } | { ok: false; detail: string } {
     const id = persistedInt(r.idText, 'approval id');
     if (!id.ok) return id;
@@ -9753,6 +9805,7 @@ export class CoordStore {
         verdict: r.verdict === 'allow' || r.verdict === 'deny' ? r.verdict : null,
         reason: r.reason, ruling: r.ruling, answeredBy: r.answeredBy, toolUseId: r.toolUseId,
         corrected: r.corrected === 1,
+        denyCurrent: r.denyCurrent === 1,
       },
     };
   }
@@ -9804,25 +9857,28 @@ export class CoordStore {
   }
 
   /** Minted by `POST /api/approvals`, `held` — or, with a `releaseReason`, `released` at once (forbidden, truncated,
-   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. */
+   *  unparseable, or held for nobody: D-5530, D-5531). Those are the only states a row is inserted in. `denyCurrent`
+   *  (approvals PR 0) is optional only so the test callers that predate it, the pin files among them, run unedited: absent
+   *  stores 1, current, which is open for a caller that forgets it. The raise, the one production caller, always passes
+   *  it, and the approvals routes suite reds if it stops (review 2648 F3, the report's leave option). */
   insertApproval(a: {
     childId: string; parentId: string; runId: number | null; digest: string; nonce: string; agentId: string;
     tool: string; inputRedacted: string; truncated: boolean; class: string; askAt: number; notifyAt: number;
-    releaseReason?: ApprovalMintReleaseReason;
+    releaseReason?: ApprovalMintReleaseReason; denyCurrent?: boolean;
   }): number {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
     }
     const stmt = this.db.prepare(
       'INSERT INTO approvals (childId, parentId, runId, digest, nonce, agentId, tool, inputRedacted, truncated, ' +
-      'class, state, releaseReason, askAt, notifyAt) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'class, state, releaseReason, askAt, notifyAt, denyCurrent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     );
     stmt.setReadBigInts(true);
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
-        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt,
+        a.class, reason === null ? 'held' : 'released', reason, a.askAt, a.notifyAt, a.denyCurrent === false ? 0 : 1,
       ).lastInsertRowid;
       if (typeof exactId !== 'bigint' || exactId < 1n || exactId > BigInt(Number.MAX_SAFE_INTEGER)) {
         throw new Error('insertApproval: generated approval id is not a positive safe integer');
@@ -11322,6 +11378,20 @@ export class CoordStore {
   remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
   openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }
   edgeTargetCheck(slug: string, target: programmeFacts.EdgeTarget): { ok: true } | { ok: false; detail: string } { return programmeFacts.edgeTargetCheck(this.db, slug, target); }
+  openEdgesToMeasure(): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesToMeasure(this.db); }
+  settleEdge(id: number, settle: programmeFacts.EdgeSettle, now: number): { written: boolean } { return programmeFacts.settleEdge(this.db, id, settle, now); }
+  sealForecast(seal: programmeFacts.NewSeal, now: number): { written: boolean } { return programmeFacts.sealForecast(this.db, seal, now); }
+  scoreForecast(id: number, outcome: 'met' | 'missed', now: number): { written: boolean } { return programmeFacts.scoreForecast(this.db, id, outcome, now); }
+  forecastsOf(q: { program: string } | { dueBy: number }): programmeFacts.SealedForecast[] { return programmeFacts.forecastsOf(this.db, q); }
+  unsealedClosesOf(now: number): { closes: programmeFacts.UnsealedClose[]; missed: number } { return programmeFacts.unsealedClosesOf(this.db, now, TERMINAL_RUN_STATES_SQL); }
+  leadHistoryOf(program: string, asOf: number): programmeFacts.ForecastHistory { return programmeFacts.leadHistoryOf(this.db, program, asOf); }
+  outcomeFactsOf(sealId: number): programmeFacts.OutcomeFacts | null { return programmeFacts.outcomeFactsOf(this.db, sealId); }
+  appendHealth(program: string, verdict: programmeFacts.HealthVerdict, noticed: boolean, now: number): { id: number } { return programmeFacts.appendHealth(this.db, program, verdict, noticed, now); }
+  newestHealthOf(programs: readonly string[]): programmeFacts.HealthRow[] { return programmeFacts.newestHealthOf(this.db, programs); }
+  healthNoticedSince(program: string, word: string, since: number): boolean { return programmeFacts.healthNoticedSince(this.db, program, word, since); }
+  recordRunSpend(row: programmeFacts.NewRunSpend, now: number): { written: boolean } { return programmeFacts.recordRunSpend(this.db, row, now); }
+  unspentClosesOf(firstPassAt: number): programmeFacts.UnspentClose[] { return programmeFacts.unspentClosesOf(this.db, firstPassAt, TERMINAL_RUN_STATES_SQL); }
+  spendOf(programs: readonly string[]): programmeFacts.RunSpendRow[] { return programmeFacts.spendOf(this.db, programs); }
 
   /** Whether the programme has a run that is not `done` or `failed`; `planned` counts as open. This is
    *  `programOpenRunCount`'s question, and the one the operator's dismiss asks (spec §3.4). */

@@ -68,7 +68,10 @@ import { Viewers } from './viewer.js';
 import { MAIL_TOKEN_HEADER, checkMailToken } from './coord/token.js';
 import { registerCoordRoutes, sendCloseOutcome, type OperatorDoorWiring } from './coord/routes.js';
 import { registerLedgerOperatorRoutes, waitingViewOf } from './coord/ledgersRoutes.js';
+import { registerDecisionModelRoutes } from './coord/decisionModelRoutes.js';
 import { registerNameListRoutes } from './operatorModel/nameListRoutes.js';
+import { promptTargetVerdict, type PromptTargetVerdict } from './operatorModel/messages.js';
+import { NO_DESIGNATION, promptRecheck, recordOperatorPrompt } from './operatorModel/promptRecord.js';
 import { readOperatorSecretMeta } from './coord/ledgersSecrets.js';
 import { coordinatorPresenceIn, type WaitingView } from '../../shared/ledgers.js';
 import { attributionVerdict } from './coord/attribution.js';
@@ -81,23 +84,31 @@ import { createReaderLabRuns } from './readerLab/runs.js';
 import { installReaderLabCounter, registerReaderLabRoutes } from './readerLab/routes.js';
 import { operatorActRoute, servedFleetReads, servedFromWatcher, servedProjectReads, takenAfter } from './servedRead.js';
 import { registerTokenRoutes } from './token/routes.js';
+import { registerLaneModelsRoutes } from './laneModelsRoutes.js';
 import { overridesViewNow } from './overridesRead.js';
 import { readLaneModels } from './laneModels.js';
 import { registerLinearRoutes, registerLinearWorkspaceRoutes } from './linear/routes.js';
 import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
+import { registerQuizRoutes } from './continuity/quizRoutes.js';
+import { liveStateOf, markOperatorPrompt } from './continuity/promptHandoffs.js';
+import { promptRenewing } from './continuity/renewNow.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { compactRefusal } from './continuity/compactOwner.js';
 import { laneArmRowViewOf } from './coord/laneArm.js';
 import { childReclaimGenerationRead } from './coord/childReclaim.js';
 import { incarnationOf } from './coord/delegationLeaseDoor.js';
+import { attributionIdentity } from './auth/attributionIdentity.js';
 import { registerPlanRoutes } from './coord/planRoutes.js';
+import { otherLaneReadsOf } from './coord/otherLaneReads.js';
 import { registerHierarchyRoutes } from './coord/hierarchyRoutes.js';
 import { registerFaceRoutes } from './face/routes.js';
 import { ccdOverlordBody, stopCreatedOf } from './coord/overlordBody.js';
 import { NO_OVERLORD_STORE, registerOverlordRoutes } from './coord/overlordRoutes.js';
+import { ladderConditionInputs } from './coord/overlordLadderRead.js';
+import { NO_LADDER_AUTHORITY } from './coord/overlordAuthorityJournal.js';
 import { renewalHostOf } from './continuity/renewalWiring.js';
 import { registerResponseRoutes } from './responses/routes.js';
 import { readLinearStore } from './linear/store.js';
@@ -262,12 +273,14 @@ export const MASKED_GET_ROUTES: ReadonlySet<string> = new Set([
   '/api/programmes/:slug/plan',
   // The hierarchy settings (D-8181): the owner ids are session ids a coordinator took.
   '/api/hierarchy',
+  // A project's Upkeep epic (D-8183): its tickets' titles are what a person typed in Linear.
+  '/api/projects/:project/upkeep',
   // A session's live notes (Overlord W1a, the notes piece): what each thread waits on and what comes next, written by it.
   '/api/sessions/:id/notes',
   // A session's pending timers, its own read and the operator's (Overlord W1a, the timers piece): each note a session wrote.
   '/api/timers', '/api/sessions/:id/timers',
   // The portfolio (Overlord W1): programme titles a coordinator wrote, and blocking items' titles a session wrote.
-  '/api/portfolio',
+  '/api/portfolio', '/api/overlord/ladder',
 ]);
 /** Whether the one answer hook masks a route's answer (D-5995). */
 export const answerMasked = (method: string, url: string | undefined): boolean =>
@@ -2105,22 +2118,26 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // its handle's `serial`: one mutex holds a plan write and a run's open apart. The follow-up verb's own-epic check reads the
   // caller's open run (the binding's one view, `bindingsOf(...).worker()`, ARCH-42), and that run's ticket's epic, from the
   // plan port.
+  // Overlord W1 other lanes (H10): one reads instance for the plan doors and the Linear proxy's writes. With no store the
+  // designation reads unmeasured, so only a caller whose launch profile reads overlord or cannot be read is refused.
+  const otherLaneReads = otherLaneReadsOf({ coord: deps.coord ?? { designationRead: () => ({ kind: 'unmeasured', why: 'no coordination store' }) }, io: deps.io, cfg: deps.cfg });
   registerPlanRoutes(app, {
     coord: deps.coord, plan: deps.plan, serial: coordRoutes.serial, mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'), otherLaneReads,
     sessionAuth, authEnabled: deps.cfg.authEnabled, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
     runOfSession: (id) => {
       const open = deps.coord?.bindingsOf(id).worker();
       const run = open?.ok === true ? open.siblings[0] : undefined;
       return run === undefined ? null : { program: run.program, epicId: deps.plan?.epicOfRun(run.id) ?? null };
     },
-    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys,
+    now: () => Date.now(), privateTrackerKeys: deps.cfg.privateTrackerKeys, presenceOf,
   });
 
   // The per-project hierarchy settings (D-8181), in a file of their own, on the same mutex as the plan writes.
   registerHierarchyRoutes(app, {
     plan: deps.plan, serial: coordRoutes.serial, presenceOf, by: (req) => pwaDec(req)?.actor ?? deviceActor(sessionAuth(req).device),
     itemOf: (id) => deps.coord?.itemById(id) ?? null, checkInitiatives: async (w) => deps.planSync?.checkInitiatives(w) ?? false,
+    driftAct: (i, a, b) => deps.driftPass?.act(i, a, b) ?? { ok: false, word: 'unavailable' },
   });
 
   // The update control plane (design 2026-09-20 §12, update-management W2),
@@ -2136,6 +2153,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // `box-token-census.test.ts`'s lane sources read by name. `deps.tokenDriver`
   // is read at request time, so a box with no driver answers `no-claim`/`501`.
   registerTokenRoutes(app, deps);
+  // The Models sheet's write door, `POST /api/models/:lane` (model-class-advance R4): Hold, Release and Revert, registered
+  // from its own file, which `auth-gate.test.ts`'s `ROUTES` and the box-token census (`MODELS_DOORS`) read by name.
+  registerLaneModelsRoutes(app, {
+    io: deps.io, ccrcDir: deps.cfg.ccrcDir, hasLane: (l) => deps.cfg.roster.byId.has(l),
+    actorOf: (req) => deviceActor(sessionAuth(req).device),
+  });
   // The Linear connection's two credential writes take the account gate with a step-up (D-5511, D-5512), built here
   // from the same measured inputs every gate decision reads: no ccd verb is involved, so its routes ask `cap: null`.
   const accountGate = createAccountGate({
@@ -2165,10 +2188,13 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   // the box token read at request time as every lane reads it, and `attributionVerdict` over this server's registry.
   registerLinearProxyRoutes(app, {
     ccrcDir: deps.cfg.ccrcDir, mailToken: () => deps.mailToken ?? null,
-    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
+    attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'), otherLaneReads,
     rate: deps.linearRate ?? null, refresher: deps.linearRefresher ?? null,
     journal: deps.linearJournal ?? null, policy: deps.linearPolicy ?? null,
     fetch: deps.linear?.fetch, timeoutMs: deps.linear?.timeoutMs,
+    // D-8183: the plan owns the tickets of a managed team (`plan-owned`).
+    managed: (w, t) => deps.plan?.managedTeams().some((m) => m.workspaceId === w && m.teamKey.toUpperCase() === t.toUpperCase()) ?? false,
+    boundIssue: (w, i) => deps.plan?.issueBound(w, i) ?? false,
   });
   // The linking standard's routes (D-8147), from their own file: the operator's team key and override per project.
   registerLinkingRoutes(app, {
@@ -2178,9 +2204,14 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
     runCcd: deps.runCcd, fleetState: () => deps.fleetState,
   });
+  // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
+  const identity = attributionIdentity({
+    attribute: (id, uuid, field) => attributionVerdict(deps.io, deps.cfg, id, uuid, field),
+    incarnation: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+  });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
-    coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(),
+    coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared
@@ -2195,8 +2226,12 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     },
     // The timer set door's stamp: two agreeing reads of `.generation` (slug setter-stamp-is-a-double-read).
     setterStamp: (id) => incarnationOf({ io: deps.io, registryDir: deps.cfg.registryDir }, id),
+    operatorActor: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off'),
+    notice,
     masker: deps.masker,
   });
+  // The replay quiz's record door (box token, the operator's shell) and its rule door (session and step-up), from their own file.
+  registerQuizRoutes(app, { coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), gate: accountGate });
   // The lane routes, Check and the kill switch (accounts plan Task A14, D-7732), registered from their own file, which
   // `auth-gate.test.ts`'s `ROUTES` and `box-token-census.test.ts` read by name. Each takes the same account gate on the
   // `account-v2` cap, and runs the ONE reconciling `AccountOps` arm `index.ts` built; a server with none (a test, a
@@ -2277,7 +2312,8 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     ? { coord: deps.coord, journal: deps.overlordAuthority } : NO_OVERLORD_STORE;
   if (overlordStore === NO_OVERLORD_STORE) console.warn('ccrc-server: the Overlord designation doors answer unavailable (no coordination store or authority journal)');
   registerOverlordRoutes(app, {
-    gate: accountGate, serial: coordRoutes.serial, ...overlordStore, host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    gate: accountGate, identity, serial: coordRoutes.serial, ...overlordStore, consoleFacts: (req) => ({ armed: deps.cfg.authEnabled, device: deps.cfg.authEnabled ? sessionAuth(req).device : null }), host: renewalHostOf(deps, deps.coord ?? { startsOf: () => ({ ok: false, detail: 'no coordination store' }) }, null),
+    ladder: deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY },
     // Read at call time, as the continuity routes read `deps.time`: a test server may hand none.
     clock: { wall: () => deps.time.clock.wall() }, entropy: { uuid: () => deps.time.entropy.uuid(), hex: (n) => deps.time.entropy.hex(n) }, dec: pwaDec,
     body: ccdOverlordBody({
@@ -2567,7 +2603,17 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   app.post('/api/sessions/:id/prompt', async (req, reply) => {
     const { id } = req.params as { id: string };
     if (!(await knownId(id))) return reply.code(404).send({ ok: false, error: 'unknown-session' });
-    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown };
+    const body = (req.body ?? {}) as { text?: unknown; replaceDraft?: unknown; attachments?: unknown; resume?: unknown; overlordTerm?: unknown };
+    // The designated session's prompt is recorded, then nudged through the mail lane; nothing is typed (Overlord W1 private store, Task 5).
+    const designation = () => deps.coord?.designationRead() ?? NO_DESIGNATION;
+    const aimed = async (verdict: PromptTargetVerdict) => {
+      if (verdict.kind === 'refuse') return refuseRoute(reply, verdict.word, { detail: verdict.detail });
+      if (verdict.kind === 'type') return null;
+      const out = await recordOperatorPrompt({ gate: (ask) => accountGate(req, reply, ask), identity, store: deps.operatorModel, coord: deps.coord, masker: deps.masker, wall: () => deps.time.clock.wall(), warn: (l) => console.warn(l) }, id, verdict.term, body);
+      return out.kind === 'replied' ? reply : reply.code(out.status).send(out.body);
+    };
+    const first = await aimed(promptTargetVerdict(designation(), id, body));
+    if (first !== null) return first;
     const raw = Array.isArray(body.attachments) ? body.attachments : [];
     if (raw.length > MAX_ATTACHMENTS) {
       return reply.code(400).send({ ok: false, error: 'bad-attachment' });
@@ -2592,12 +2638,19 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     if (typeof body.text !== 'string' || (body.text.length === 0 && attachments.length === 0)) {
       return reply.code(400).send({ ok: false, error: 'bad-request' });
     }
+    // The renewal hand-offs (Overlord W1a, Tasks 2 and 3): a session between conversations answers `renewing` and the console
+    // keeps the draft; a prompt typed marks the programmes the session coordinates or serves (`operator-at-programme`).
+    if (deps.coord !== undefined && promptRenewing(liveStateOf(deps.coord, id))) return refuseRoute(reply, 'renewing');
     // D-6367: Retry over our own left text. `resume === true` is this field's one reader; anything else is today's call.
     const res = await sendPrompt(sendDeps, id, body.text, {
       onDraft: body.replaceDraft === true ? 'replace' : 'refuse', attachments,
       ...(body.resume === true ? { resumeIfOwn: 'whole' as const } : {}),
+      recheck: promptRecheck(designation, id, body),
     });
+    // The designation moved while the send waited its turn: nothing was typed, so the words are recorded or refused as a new prompt.
+    if (!res.ok && res.error === 'target-moved') return (await aimed(promptTargetVerdict(designation(), id, body))) ?? refuseRoute(reply, 'stale-designation');
     if (!res.ok) console.warn(`ccrc-server: prompt ${id}: ${res.error} ${refusalShape(res)}`); // D-6366: countable, no text
+    else if (deps.coord !== undefined) markOperatorPrompt(deps.coord, id, deps.time.clock.wall(), (l) => console.warn(l));
     return res.ok ? res : reply.code(409).send(res);
   });
 
@@ -2678,21 +2731,27 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     return answer;
   });
 
-  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerNameListRoutes(app, { store: () => deps.operatorModel, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, identity, time: deps.time, registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered' });
+  registerDecisionModelRoutes(app, {
+    store: () => deps.decisions?.store, ccrcDir: deps.cfg.ccrcDir, gate: accountGate, time: deps.time, notice,
+    actorOf: (req) => (deps.cfg.authEnabled ? deviceActor(sessionAuth(req).device) : 'flag-off'),
+    registerSecret: (l, v, o) => deps.masker?.ingestSecret(l, v, o) ?? 'unregistered',
+    resolve: (h) => deps.decisions?.resolve(h) ?? Promise.resolve([]),
+  });
   // Programme ledgers (plan PL4): the operator's tick, dismiss, waiting list and goals. Session-gated, no box token, except the
   // goals read (D-8126), which takes a session OR the box token, so it is handed `authEnabled`, `sessionAuth` and the token.
   // The secret's route (plan PL6) takes the account gate with a step-up, writes the slot under `cfg.ccrcDir`, and registers
   // the value with the egress masker (no masker: `unregistered`, said in the answer, never a silent skip). The PL6 follow-up's
   // stored-secrets read and Remove door ride the same registration; a Remove retires the slot's lane in the masker.
   registerLedgerOperatorRoutes(app, {
-    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, ccrcDir: deps.cfg.ccrcDir,
+    coord: deps.coord, bus, now: () => Date.now(), presenceOf, gate: accountGate, identity, ccrcDir: deps.cfg.ccrcDir,
     // The operator's act on an end-request item runs the abandon arm in the same hold the abandon route uses (D-8076).
     withAbandon: coordRoutes.withAbandon, sendClose: sendCloseOutcome,
     authEnabled: deps.cfg.authEnabled, sessionAuth, mailToken: () => deps.mailToken ?? null,
     registerSecret: (laneId, value, o) => deps.masker?.ingestSecret(laneId, value, o) ?? 'unregistered',
     retireSecret: (laneId) => { deps.masker?.retireSecret(laneId); },
     ...(deps.plan === undefined ? {} : { plan: deps.plan }),
-    liveAsk,
+    liveAsk, liveSpend: (sid) => (watcher === undefined ? { kind: 'not-ready' as const } : watcher.liveSpendReading(sid)),
   });
 
   /**
@@ -3701,7 +3760,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
    *  and `reclaim.ts#moveClaims` over this server's store, registry and tmux. Called inside the coordination serialiser. */
   const claimsPort = (coord: CoordStore, id: string): ClaimsCoordPort => ({
     bindingsOf: (sid) => coord.bindingsOf(sid),
-    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux }, id, choice, claimed),
+    moveClaims: (choice, claimed) => moveClaims({ coord, io: deps.io, cfg: deps.cfg, tmux: deps.tmux, otherLaneReads }, id, choice, claimed),
   });
 
   app.post('/api/sessions/:id/stop', async (req, reply) => {

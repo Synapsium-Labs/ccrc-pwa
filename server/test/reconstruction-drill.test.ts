@@ -408,6 +408,32 @@ describe('the reconstruction drill', () => {
     expect(Object.keys(r)).not.toContain('edges');
   });
 
+  it('programme_forecasts is a table no artifact mirrors: reconstruct() rebuilds no seal (Overlord W2 forecasts A)', () => {
+    // A sealed forecast is the forecast lane's own record. No ledger, registry or `.prhistory` carries one, so a DB loss
+    // forgets every seal and every score: the lane seals closes again only inside its 7-day look-back, and calibration
+    // reads unmeasured until enough seals are scored again. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('programme_forecasts');
+    expect(Object.keys(r)).not.toContain('forecasts');
+  });
+
+  it('programme_health is a table no artifact mirrors: reconstruct() rebuilds no health row (Overlord W2 forecasts B)', () => {
+    // A health row is the forecast lane's own record of a change of word. No ledger, registry or `.prhistory` carries one, so
+    // a DB loss forgets every row: the lane's next pass reads each programme's first word as a first row (no notice) and
+    // the portfolio shows no health until it has run. A named loss, not a gap.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('programme_health');
+    expect(Object.keys(r)).not.toContain('health');
+  });
+
+  it('run_spend is a table no artifact mirrors: reconstruct() rebuilds no spend row (Overlord W2 forecasts B)', () => {
+    // A run's spend is read once, at its close, from the usage sweep, which keeps no history. Nothing else carries it, so a
+    // DB loss forgets what every closed run cost and the portfolio counts each such run unmeasured, never 0. A named loss.
+    const r = reconstruct(fx);
+    expect(JSON.stringify(r)).not.toContain('run_spend');
+    expect(Object.keys(r)).not.toContain('spend');
+  });
+
   it('refuses to invent a program when the ledger is missing', () => {
     // A DB loss with no committed ledger is an unrecoverable program, and the
     // honest answer is a loud failure — the same polarity as the migration

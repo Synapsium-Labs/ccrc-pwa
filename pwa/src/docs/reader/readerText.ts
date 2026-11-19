@@ -1,5 +1,6 @@
 // Every sentence the reader frame shows itself (native Docs reader, W8a Task 5; the rich-docs spec's (amended 2026-10-31)
-// section 4.6 and M8.7, M8.19): the fixed fallback note and the words of the two sheets. Ring L1: strings and pure
+// section 4.6 and M8.7, M8.19): the fixed fallback note and the words of the three sheets (link, copy and copy-failed).
+// Ring L1: strings and pure
 // formatters, no I/O and no import. The library's own page chrome is the library's; only what ccrc's host shows
 // lives here.
 

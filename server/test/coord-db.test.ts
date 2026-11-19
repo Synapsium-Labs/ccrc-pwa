@@ -748,9 +748,19 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[90] (overlord_designation, the Overlord's designation row, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, a run's own bound PR as its close measured it, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, the programme's phases, programme work map WM0),
-    // and MIGRATIONS[93] (plan_tickets.doneAt and doneEvidence, a ticket's done time and evidence, programme work map WM1).
-    expect(COORD_SCHEMA_VERSION).toBe(94);
-    expect(MIGRATIONS.length).toBe(94);
+    // and MIGRATIONS[93] (programme_forecasts, the sealed forecasts, Overlord W2 forecasts A),
+    // and MIGRATIONS[94] (the drift, migration and inbound stores and the sync's streaks, Linear hierarchy wave 4, D-8183),
+    // and MIGRATIONS[95] (the designation actor columns, Overlord W1 gates A),
+    // and MIGRATIONS[96] (continuity_renew_requests, operator_marks, operator_mark_quiet and renewal_mode_settings, the renewal
+    // hand-offs, Overlord W1a),
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, the decision model's arming, Overlord W2).
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder).
+    // and MIGRATIONS[99] (the replay quiz run's state, counts and ruling on continuity_quiz_runs, Overlord W1a quiz record).
+    // and MIGRATIONS[100] (programme_health, run_spend and runs.dispatchConversation, Overlord W2 forecasts B),
+    // and MIGRATIONS[101] (approvals.denyCurrent, the row's own deny-current fact, Overlord approvals PR 0),
+    // and MIGRATIONS[102] (plan_tickets.doneAt and doneEvidence, a ticket's done time and evidence, programme work map WM1).
+    expect(COORD_SCHEMA_VERSION).toBe(103);
+    expect(MIGRATIONS.length).toBe(103);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -863,14 +873,23 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[84] (claim_collisions and programme_pairs, Overlord W2),
     // and MIGRATIONS[85] (decision_records and decision_days, Overlord W2)
     // and MIGRATIONS[86] (asks.revision and operator_items.revision, Overlord W2),
-    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A)
+    // and MIGRATIONS[87] (renewal_backstop_settings, Overlord W1 renewal readings A),
     // and MIGRATIONS[88] (programme_remaining and programme_edges, Overlord W2),
     // and MIGRATIONS[89] (prevLane on continuity_generations, account organization D),
     // and MIGRATIONS[90] (overlord_designation, Overlord W1),
     // and MIGRATIONS[91] (runs.closePr, Overlord W2 done tests A),
     // and MIGRATIONS[92] (plan_phases and plan_phase_refs, programme work map WM0),
-    // and MIGRATIONS[93] (plan_tickets.doneAt and doneEvidence, programme work map WM1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(94);
+    // and MIGRATIONS[93] (programme_forecasts, Overlord W2 forecasts A),
+    // and MIGRATIONS[94] (the drift, migration and inbound stores, Linear hierarchy wave 4),
+    // and MIGRATIONS[95] (the designation actor columns, gates A),
+    // and MIGRATIONS[96] (the renewal hand-offs' four tables, Overlord W1a),
+    // and MIGRATIONS[97] (decision_rows, decision_host and decision_lines, Overlord W2),
+    // and MIGRATIONS[98] (overlord_ladder and overlord_latches, Overlord W1 ladder),
+    // and MIGRATIONS[99] (the replay quiz run's state and counts, Overlord W1a quiz record),
+    // and MIGRATIONS[100] (programme_health, run_spend and runs.dispatchConversation, Overlord W2 forecasts B),
+    // and MIGRATIONS[101] (approvals.denyCurrent, Overlord approvals PR 0),
+    // and MIGRATIONS[102] (plan_tickets.doneAt and doneEvidence, programme work map WM1); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(103);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1821,7 +1840,7 @@ describe('coord.db: migration 12 — runs.coordProject', () => {
   it('a database from a NEWER build still READS — rollback is real', () => {
     const dir = mkTmp('ccrc-mig12-fwd-');
     const p = path.join(dir, '.ccrc', 'coord.db');
-    const db = openCoordDb(p); db.exec('PRAGMA user_version = 99'); db.close();
+    const db = openCoordDb(p); db.exec(`PRAGMA user_version = ${COORD_SCHEMA_VERSION + 1}`); db.close();
     expect(() => openCoordDb(p).close()).not.toThrow();
   });
 });
@@ -2404,7 +2423,7 @@ describe('coord.db: migration 24 — the approvals table (D-5298, coordinator-fi
     const cols = (db.prepare("SELECT name FROM pragma_table_info('approvals')").all() as { name: string }[]).map((r) => r.name);
     expect(cols).toEqual(['id', 'childId', 'parentId', 'runId', 'digest', 'nonce', 'agentId', 'tool', 'inputRedacted',
       'truncated', 'class', 'state', 'releaseReason', 'askAt', 'notifyAt', 'ruledAt', 'verdict', 'reason', 'ruling',
-      'answeredBy', 'toolUseId', 'corrected']);
+      'answeredBy', 'toolUseId', 'corrected', 'denyCurrent']);
     db.close();
   });
 });

@@ -15,6 +15,7 @@ import { openExternal } from '../lib/markdown';
 import { navigate } from '../lib/router';
 import { DocInLinkContext, DocLinkContext, type DocLinkContextValue } from './DocLink';
 import { docsLocation, imagePinFor } from './docsLinks';
+import { base64Of } from './mockup/load';
 import { mockupSizeBasis } from './mockup/plan';
 import {
   DOC_IMAGE_REFUSED_SENTENCE, DOC_IMAGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, failureSentence, fillSentence,
@@ -156,13 +157,6 @@ export const SVG_DATA_PREFIX = 'data:image/svg+xml;base64,';
 
 function notOkFailure(a: DocsNotOk): Extract<Fetched, { s: 'failed' }> {
   return { s: 'failed', sentence: a.s === 'failed' ? failureSentence(a.body) : slotSentence(a), auth: a.s === 'auth' };
-}
-
-/** Bytes as base64, in chunks small enough to spread into `String.fromCharCode`. */
-function base64Of(bytes: Uint8Array): string {
-  let binary = '';
-  for (let i = 0; i < bytes.length; i += 0x8000) binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
-  return btoa(binary);
 }
 
 /** An SVG's bytes as the only `src` Docs ever gives an SVG (spec 5.5): `data:image/svg+xml;base64,...`, never a

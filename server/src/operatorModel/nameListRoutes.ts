@@ -41,6 +41,7 @@ import { OperatorSecretStoredUnrecorded, SLOT_WAIT_MS, slotChains, type Register
 import { mintNameListKey, readNameListKey, readPrivateNameList, writeNameListKey } from './nameListRead.js';
 import type { TimePorts } from '../time/ports.js';
 import type { OperatorModelStore } from './store.js';
+import type { CallerIdentity } from '../auth/callerIdentity.js';
 
 export interface NameListRouteDeps {
   /** The private store, read at request time (`deps.operatorModel`); absent on a server without one. */
@@ -48,6 +49,8 @@ export interface NameListRouteDeps {
   ccrcDir: string;
   /** The account gate: the upload asks it for a step-up (`{ cap: null, stepUp: true }`). */
   gate: AccountGate;
+  /** Gates A: validate the gate's actor through the port. This list stores no actor or journal record. */
+  identity: Pick<CallerIdentity, 'operator'>;
   /** The clock (`uploadedAt`, the key's `setAt`) and the entropy a new key is minted from. */
   time: TimePorts;
   /** The egress masker's registration of a server-held secret (`SecretMasker.ingestSecret`): the minted key is told to it. */
@@ -110,7 +113,9 @@ export function registerNameListRoutes(app: FastifyInstance, deps: NameListRoute
   const writeFailed = (reply: FastifyReply, detail: string) => refuseRoute(reply, 'write-failed', { detail });
 
   app.put('/api/overlord/private-names', credentialBodyRoute(NAME_LIST_BODY_MAX), async (req, reply) => {
-    if (!deps.gate(req, reply, { cap: null, stepUp: true }).pass) return reply;
+    const pass = deps.gate(req, reply, { cap: null, stepUp: true });
+    if (!pass.pass) return reply;
+    deps.identity.operator(pass.actor);
     const store = deps.store();
     if (store === undefined) return refuseRoute(reply, 'not-configured', { detail: 'this server has no private store' });
     const parsed = parseUpload(req.body);

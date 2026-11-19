@@ -1,6 +1,7 @@
 // D-8406: the session's model picker names a class's model from the lane's own files, never from a name the tree
-// spells. Three layers, each against fixture files only: the models kernel's derivation (`laneClassModels`) and the
-// read grant's shape (`isLaneModelsReadName`), the server's reader (`readLaneModels`), and `GET /api/models/:lane`.
+// spells. Three layers, against fixture files and stub ops only: the models kernel's derivation (`laneClassModels`),
+// the server's reader (`readLaneModels`, through the `models` op alone since R3b retired the file-read grant), and
+// `GET /api/models/:lane`.
 import { afterEach, describe, expect, it } from 'vitest';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
@@ -8,9 +9,10 @@ import type { FastifyInstance } from 'fastify';
 import { buildServer, type Deps } from '../src/server.js';
 import type { FleetIO } from '../src/io.js';
 import { readLaneModels } from '../src/laneModels.js';
+import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import {
-  MODELS_DIR_NAME, catalogueFileName, isLaneModelsReadName, laneClassModels, parseCatalogue, parseRegistry,
-  registryFileName, type LaneModelsAnswer,
+  MODELS_DIR_NAME, catalogueFileName, laneClassModels, parseCatalogue, parseRegistry, registryFileName,
+  type LaneModelsAnswer,
 } from '../../shared/models.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -80,61 +82,40 @@ describe('laneClassModels carries the catalogue\'s effort levels (D-8686)', () =
   });
 });
 
-describe('isLaneModelsReadName (D-8406): the read grant admits a lane\'s registry and catalogue and nothing else', () => {
-  it.each([
-    ['lane-a.classes.json', true], ['lane-a.json', true], ['a.json', true],
-    ['lane-a.effort.json', false], ['lane-a.windows.json', false], ['lane-a.advance.json', false],
-    ['lane-a.classes.tsv', false], ['lane-a.aliases.json', false], ['litellm.json', false], ['refresh.json', false],
-    ['Lane-a.json', false], ['1lane.json', false], ['../lane-a.json', false], ['lane-a/x.json', false], ['.json', false],
-    ['lane-a.json.bak', false], [`${'a'.repeat(33)}.json`, false], ['', false],
-  ])('%s -> %s', (name, want) => {
-    expect(isLaneModelsReadName(name)).toBe(want);
-  });
-
-  it('refuses a value that is not a string', () => {
-    expect(isLaneModelsReadName(undefined)).toBe(false);
-    expect(isLaneModelsReadName(42)).toBe(false);
-  });
+/** `show`'s answer for a lane over the seeded REGISTRY and CATALOGUE, as `deploy/models-op.mjs`'s `describe` prints it
+ *  (the keys the server reads). */
+const showOf = (lane: string, over: Record<string, unknown> = {}): ModelsAsked => ({
+  kind: 'exited', code: 0,
+  stdout: `${JSON.stringify({
+    ok: true, op: 'show', id: lane, registry: REGISTRY,
+    labels: laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE)), advance: { state: 'absent' }, ...over,
+  })}\n`,
 });
 
-describe('readLaneModels (D-8406)', () => {
-  it('reads the registry and the catalogue through the fleet io', async () => {
-    const deps = testDeps(mkTmp('ccrc-lanemodels-'));
-    seedLane(deps.cfg.home, 'gpt', REGISTRY, CATALOGUE);
-    const r = await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt');
-    expect(r).toEqual({ kind: 'read', classes: laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE)) });
+describe('readLaneModels (D-8406, R3b)', () => {
+  it('reads the lane through the models op, and the lane\'s files on the server\'s box are never read', async () => {
+    const base = testDeps(mkTmp('ccrc-lanemodels-'));
+    seedLane(base.cfg.home, 'gpt', REGISTRY, CATALOGUE);
+    const reads: string[] = [];
+    const io: FleetIO = {
+      ...base.io, models: async (lane) => showOf(lane),
+      readFileMeasured: async (p, t, s) => { reads.push(p); return base.io.readFileMeasured(p, t, s); },
+    };
+    const r = await readLaneModels(io, base.cfg.ccrcDir, 'gpt');
+    expect(r).toMatchObject({ kind: 'read', classes: laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE)) });
+    expect(reads).toEqual([]);
   });
 
   it('a lane with no registry is absent: an Anthropic lane, or one init never ran on', async () => {
-    const deps = testDeps(mkTmp('ccrc-lanemodels-'));
-    expect(await readLaneModels(deps.io, deps.cfg.ccrcDir, 'claude')).toEqual({ kind: 'absent' });
-  });
-
-  it('a registry that is not JSON, or not a registry, is unreadable, never absent', async () => {
-    const deps = testDeps(mkTmp('ccrc-lanemodels-'));
-    seedLane(deps.cfg.home, 'gpt', '{not json', CATALOGUE);
-    expect(await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'unreadable' });
-    seedLane(deps.cfg.home, 'gpt', { probe: 'codex' }, CATALOGUE);
-    expect(await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'unreadable' });
-  });
-
-  it('a catalogue that is absent or unreadable costs the labels only', async () => {
-    const deps = testDeps(mkTmp('ccrc-lanemodels-'));
-    seedLane(deps.cfg.home, 'gpt', REGISTRY, '{not json');
-    const r = await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt');
-    expect(r.kind).toBe('read');
-    if (r.kind !== 'read') return;
-    expect(r.classes.opus).toEqual({ model: 'gpt-6.1-sol', label: null, efforts: null });
-  });
-
-  it('a fleet that refuses the read (an agent from before the grant) is unreadable', async () => {
     const base = testDeps(mkTmp('ccrc-lanemodels-'));
-    seedLane(base.cfg.home, 'gpt', REGISTRY, CATALOGUE);
-    const asked: string[] = [];
-    const io: FleetIO = { ...base.io, readFileMeasured: async (p) => { asked.push(p); return { ok: false, reason: 'unreadable' }; } };
-    expect(await readLaneModels(io, base.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'unreadable' });
-    const dir = path.join(base.cfg.ccrcDir, MODELS_DIR_NAME);
-    expect(asked.sort()).toEqual([path.join(dir, 'gpt.classes.json'), path.join(dir, 'gpt.json')]);
+    const io: FleetIO = { ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null }) };
+    expect(await readLaneModels(io, base.cfg.ccrcDir, 'claude')).toEqual({ kind: 'absent' });
+  });
+
+  it('local mode with no ccrc launcher in the configured home is not-started, even with the lane\'s files in place', async () => {
+    const deps = testDeps(mkTmp('ccrc-lanemodels-'));
+    seedLane(deps.cfg.home, 'gpt', REGISTRY, CATALOGUE);
+    expect(await readLaneModels(deps.io, deps.cfg.ccrcDir, 'gpt')).toEqual({ kind: 'not-started' });
   });
 });
 
@@ -148,34 +129,56 @@ describe('GET /api/models/:lane (D-8406)', () => {
   };
 
   it('answers the lane\'s classes, models and labels', async () => {
-    const deps = testDeps(mkTmp('ccrc-lanemodels-'));
-    seedLane(deps.cfg.home, 'gpt', REGISTRY, CATALOGUE);
-    const res = await (await serve(deps)).inject({ method: 'GET', url: '/api/models/gpt' });
+    const base = testDeps(mkTmp('ccrc-lanemodels-'));
+    const res = await (await serve({ ...base, io: { ...base.io, models: async (lane) => showOf(lane) } }))
+      .inject({ method: 'GET', url: '/api/models/gpt' });
     expect(res.statusCode).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
     const body = res.json<LaneModelsAnswer>();
     expect(body).toEqual({
       ok: true, lane: 'gpt',
-      models: { kind: 'read', classes: laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE)) },
+      models: {
+        kind: 'read', classes: laneClassModels(parseRegistry(REGISTRY), parseCatalogue(CATALOGUE)),
+        advance: { state: 'absent', detail: null, pending: null, classes: null },
+      },
     });
   });
 
   it('a rostered lane with no registry answers absent', async () => {
-    const res = await (await serve(testDeps(mkTmp('ccrc-lanemodels-')))).inject({ method: 'GET', url: '/api/models/claude' });
+    const base = testDeps(mkTmp('ccrc-lanemodels-'));
+    const io: FleetIO = { ...base.io, models: async (lane) => showOf(lane, { registry: null, labels: null }) };
+    const res = await (await serve({ ...base, io })).inject({ method: 'GET', url: '/api/models/claude' });
     expect(res.statusCode).toBe(200);
     expect(res.json<LaneModelsAnswer>().models).toEqual({ kind: 'absent' });
   });
 
-  it('a lane the roster does not hold is not-found, and no file is read for it', async () => {
+  // R3b: each outcome reaches the wire as its own answer, never folded.
+  it.each([
+    ['unsupported', { kind: 'unsupported' }, { kind: 'unsupported' }],
+    ['not-started', { kind: 'not-started' }, { kind: 'not-started' }],
+    ['refused', { kind: 'refused', why: 'bad-lane' }, { kind: 'refused', why: 'bad-lane' }],
+    ['busy', { kind: 'busy' }, { kind: 'busy' }],
+    ['timeout', { kind: 'timeout' }, { kind: 'unreadable' }],
+    ['a carried refusal', { kind: 'exited', code: 1, stdout: `${JSON.stringify({ ok: false, error: 'catalogue-unreadable' })}\n` },
+      { kind: 'unreadable', code: 'catalogue-unreadable' }],
+  ] as const)('%s answers 200 with its own models arm', async (_n, asked, want) => {
     const base = testDeps(mkTmp('ccrc-lanemodels-'));
-    let reads = 0;
-    const io: FleetIO = { ...base.io, readFileMeasured: async (p, t, s) => { reads++; return base.io.readFileMeasured(p, t, s); } };
+    const io: FleetIO = { ...base.io, models: async () => asked as ModelsAsked };
+    const res = await (await serve({ ...base, io })).inject({ method: 'GET', url: '/api/models/gpt' });
+    expect(res.statusCode).toBe(200);
+    expect(res.json<LaneModelsAnswer>().models).toEqual(want);
+  });
+
+  it('a lane the roster does not hold is not-found, and nothing is asked for it', async () => {
+    const base = testDeps(mkTmp('ccrc-lanemodels-'));
+    let asked = 0;
+    const io: FleetIO = { ...base.io, models: async () => { asked++; return { kind: 'unsupported' }; } };
     const app = await serve({ ...base, io });
     for (const url of ['/api/models/lane-zz', '/api/models/..%2Faccounts', '/api/models/litellm']) {
       const res = await app.inject({ method: 'GET', url });
       expect(res.statusCode, url).toBe(404);
       expect(res.json(), url).toEqual({ ok: false, error: 'not-found' });
     }
-    expect(reads).toBe(0);
+    expect(asked).toBe(0);
   });
 });

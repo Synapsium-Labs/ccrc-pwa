@@ -33,6 +33,7 @@ import {
   OPEN_RUN_GATES, openRunPreconditions,
   type OpenRunFacts, type OpenRunGate, type OpenRunPlanFacts, type ReviewedRunFacts,
 } from '../src/coord/openRun.js';
+import { NOT_DESIGNATED_READS, boundReads, overlordDetail, owedReads, pendingReads, unmeasuredReads } from './otherLanesFixture.js';
 
 const WORK = {
   program: 'demo-program', title: 'Wave two', project: 'demo',
@@ -66,6 +67,7 @@ function facts(body: Record<string, unknown>, over: Partial<OpenRunFacts> = {}):
     claimantProject: async () => ({ kind: 'measured', project: 'demo' }),
     sessionMark: async () => ({ kind: 'absent' }),
     plan: () => ({ required: false, ended: false, phased: false, epics: [], ticket: () => null, tickets: () => [] }),
+    otherLaneReads: NOT_DESIGNATED_READS,
     ...over,
   };
 }
@@ -192,6 +194,20 @@ const SINGLE: Row[] = [
     f: facts({ ...WORK, homeProject: 'demo-home', sessionId: 'ws-1' }, {
       claimantProject: async () => ({ kind: 'measured', project: 'demo-home' }), sessionMark: async () => ({ kind: 'child' }) }),
     refusal: { refused: 'project-mismatch', by: 'demo-home', detail: CROSSING_DETAIL } },
+  // Overlord W1 other lanes (C48): the Overlord's body never becomes a claimant.
+  { name: 'the Overlord\'s bound body as claimant', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: boundReads('coord-1') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
+  { name: 'a pending attempt\'s body as claimant', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: pendingReads('coord-1', 'rebind') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
+  { name: 'an id still owed its stop as claimant', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: owedReads('coord-1') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
+  { name: 'an unreadable designation and a claimant whose profile reads overlord', gate: 'overlordClaimant',
+    f: facts({ ...WORK }, { otherLaneReads: unmeasuredReads({ kind: 'measured', word: 'overlord' }) }),
+    refusal: { error: 'unmeasured', detail: 'the Overlord\'s designation could not be read (bad pending kind), and this '
+      + 'caller\'s launch profile reads overlord, so POST /api/runs cannot rule out that it is the Overlord; transient, retry' } },
 ];
 
 /** One row per adjacent order-dependent pair: the body trips both, the
@@ -228,12 +244,14 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
   { name: 'sessionId on a review + a stale uuid', pair: ['reviewSession', 'attribution'], gate: 'reviewSession',
     f: facts({ ...REVIEW, sessionId: 'ws-1' }, { attribute: async () => STALE }),
     refusal: { error: 'bad-request', detail: 'sessionId is refused on a review run — it always spawns fresh on its own workspace' } },
-  { name: 'a stale uuid + unreadable target (who asks is decided before the store answers)',
-    pair: ['attribution', 'reviewRead'], gate: 'attribution',
-    f: facts({ ...REVIEW }, { attribute: async () => STALE, reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+  { name: 'a stale uuid + the Overlord\'s body as claimant (who asks is decided before what it is)',
+    pair: ['attribution', 'overlordClaimant'], gate: 'attribution',
+    f: facts({ ...REVIEW }, { attribute: async () => STALE, reviewed: () => ({ ok: false, detail: 'database is locked' }),
+      otherLaneReads: boundReads('coord-1') }),
     refusal: { error: 'stale-uuid', detail: STALE.detail } },
-  { name: 'no uuid once upgraded + unreadable target', pair: ['attribution', 'reviewRead'], gate: 'attribution',
-    f: facts({ ...REVIEW, claimedByUuid: undefined }, { reviewed: () => ({ ok: false, detail: 'database is locked' }) }),
+  { name: 'no uuid once upgraded + the Overlord\'s body as claimant', pair: ['attribution', 'overlordClaimant'], gate: 'attribution',
+    f: facts({ ...REVIEW, claimedByUuid: undefined }, { reviewed: () => ({ ok: false, detail: 'database is locked' }),
+      otherLaneReads: boundReads('coord-1') }),
     refusal: { refused: 'attribution-required', detail: "upgrade the fleet box's ccrc-api (ccrc rollout)" } },
   { name: 'missing target (the kind gate reads the target the read gate loads)',
     pair: ['reviewRead', 'reviewKind'], gate: 'reviewRead',
@@ -285,6 +303,10 @@ const PAIRS: (Row & { pair: [OpenRunGate, OpenRunGate] })[] = [
     f: facts({ ...WORK, sessionId: 'ws-1' }, {
       claimantProject: async () => ({ kind: 'none' }), sessionMark: async () => ({ kind: 'root' }) }),
     refusal: { refused: 'project-mismatch', detail: NO_PROJECT_DETAIL } },
+  { name: 'the Overlord\'s body opens a review + unreadable target (refused before the reviewed run is read)',
+    pair: ['overlordClaimant', 'reviewRead'], gate: 'overlordClaimant',
+    f: facts({ ...REVIEW }, { reviewed: () => ({ ok: false, detail: 'database is locked' }), otherLaneReads: boundReads('coord-1') }),
+    refusal: { error: 'overlord-not-a-coordinator', detail: overlordDetail('coord-1', 'POST /api/runs') } },
 ];
 
 /** Adjacent pairs no single input trips together, and why. Each is bridged by
@@ -306,6 +328,19 @@ describe('openRunPreconditions — one row per gate (D-5384)', () => {
       expect(await openRunPreconditions(r.f)).toStrictEqual({ ok: false, refusal: { gate: r.gate, ...r.refusal } });
     });
   }
+});
+
+describe('openRunPreconditions — overlordClaimant passes everyone else to reviewRead (Overlord W1 other lanes)', () => {
+  const unreadable = { reviewed: () => ({ ok: false as const, detail: 'database is locked' }) };
+  it.each([
+    ['another session is the bound body', boundReads('coord-9')],
+    ['nobody is designated', NOT_DESIGNATED_READS],
+    ['an unreadable designation and a coordinator profile', unmeasuredReads({ kind: 'measured', word: 'coordinator' })],
+    ['an unreadable designation and no profile', unmeasuredReads({ kind: 'absent' })],
+  ])('%s: the open reaches reviewRead', async (_n, reads) => {
+    expect(await openRunPreconditions(facts({ ...REVIEW }, { ...unreadable, otherLaneReads: reads })))
+      .toStrictEqual({ ok: false, refusal: { gate: 'reviewRead', error: 'run-unreadable', detail: 'database is locked' } });
+  });
 });
 
 describe('openRunPreconditions — the gate-order table (D-5384)', () => {

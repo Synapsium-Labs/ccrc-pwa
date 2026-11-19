@@ -24,7 +24,7 @@ import { execFileSync, spawnSync } from 'node:child_process'; import { randomByt
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, linkSync, symlinkSync, chmodSync, readdirSync, lstatSync, existsSync, readlinkSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
-import { CCD, ccdSource } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
+import { CCD, ccdSource, stripCcrcKnobs } from './ccdWsHelpers.js'; import { mkTmp } from './tmpHelpers.js';
 import { itLinux } from './platformFixtures.js';
 
 const IS_DARWIN = process.platform === 'darwin';
@@ -1727,7 +1727,7 @@ describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwi
     writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
       { mode: 0o755 });
     const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
-    for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+    stripCcrcKnobs(env);
     // A constant script: the source and the platform arrive in the environment, never in the command or its argv.
     env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
     env['A11_OS'] = os;
@@ -1768,7 +1768,7 @@ describe('backups: creating ~/.cc-secrets excludes it from Time Machine on darwi
       writeFileSync(path.join(bin, 'tmutil'), '#!/bin/sh\nprintf \'%s\\n\' "$*" >> "$HOME/tmutil-calls"\nexit 0\n',
         { mode: 0o755 });
       const env: NodeJS.ProcessEnv = { ...process.env, HOME: home, PATH: `${bin}:${process.env['PATH'] ?? ''}` };
-      for (const k of Object.keys(env)) if (k.startsWith('CCRC_')) delete env[k];
+      stripCcrcKnobs(env);
       env['A11_CCRC_SRC'] = path.join(ccdRoot, 'ccrc');
       env['A11_OS'] = os;
       const r = spawnSync('bash', ['-c', '. "$A11_CCRC_SRC"; CCD_OS="$A11_OS"; _inst_lane_state'],

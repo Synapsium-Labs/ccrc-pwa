@@ -43,24 +43,20 @@ export const PORTFOLIO_FOR_SET = set([
   // count a released ask that is not live up to now. P-FOR-20 to P-FOR-27 are the fix round's (review 2130, F3 and F4), and
   // P-FOR-28 to P-FOR-33 portfolio B's (its F10).
   { id: 'P-FOR-1', old: 'series.length === 0 ? { n: 0, medianMs: null, p85Ms: null }', new: 'series.length === 0 ? { n: 0, medianMs: 0, p85Ms: 0 }' },
-  { id: 'P-FOR-2', old: 'if (!countsAsWave(r.kind)) continue;', new: "if (r.kind === 'unknown') continue;" },
   { id: 'P-FOR-3', old: 'if (a.answeredBy !== ASK_OPERATOR_PRINCIPAL) return null;', new: 'if (false) return null;' },
   { id: 'P-FOR-4', old: 'if (a.live === true) return clipped', new: 'if (true) return clipped' },
   { id: 'P-FOR-5', old: "if (a.state === 'stale' || a.releasedAt === null) return null;", new: 'if (a.releasedAt === null) return null;' },
   { id: 'P-FOR-6', old: 'return ranked && runs.some(', new: 'return runs.some(' },
   { id: 'P-FOR-7', old: 'r.closedAt !== null && r.closedAt >= now - WINDOW_MS)', new: 'r.closedAt !== null)' },
   { id: 'P-FOR-8', old: "w.bucket === 'failed' && w.rep.closeDetail === NEVER_STARTED_DETAIL", new: "w.bucket === 'failed'" },
-  { id: 'P-FOR-9', old: 'if (d === null || w.rep.closedAt === null || rebuiltWave(w)) cycleUnmeasured += 1;', new: 'if (d === null || w.rep.closedAt === null || rebuiltWave(w)) {}' },
   { id: 'P-FOR-10', old: 'return shownAt !== null && shownAt <= now;', new: 'return true;' },
   { id: 'P-FOR-11', old: 'asks: asks.filter((a) => a.live === true).length', new: 'asks: asks.length' },
-  { id: 'P-FOR-12', old: 'open: isOpenRun(r), r', new: 'open: false, r' },
   { id: 'P-FOR-13', old: '...(rank !== undefined && readable === null ? { rankUnreadable: true as const } : {}),', new: '' },
   { id: 'P-FOR-14', old: 'now - Math.min(...started)', new: 'now - Math.max(...started)' },
   { id: 'P-FOR-15', old: 'r.reviews !== null && doneRunIds.has(r.reviews)', new: 'r.reviews !== null' },
   { id: 'P-FOR-16', old: 'closedSince(w, now - WEEK_MS)', new: 'closedSince(w, now - WINDOW_MS)' },
   { id: 'P-FOR-17', old: 'clipped(a.releasedAt, a.answeredAt, from, to)', new: 'a.answeredAt - a.releasedAt' },
   { id: 'P-FOR-18', old: "if (a.state === 'released' || a.state === 'declined') {", new: "if (a.state === 'released') {" },
-  { id: 'P-FOR-19', old: "isRunState(state) ? WAVE_BUCKET[state] : 'working'", new: "isRunState(state) ? WAVE_BUCKET[state] : 'queued'" },
   // answering-or-unknown-ask-is-unmeasured, one mutant per arm; asks-unmeasured-is-windowed; the inclusive window edges.
   { id: 'P-FOR-20', old: "return a.answeredAt === null ? 'unmeasured' :", new: 'return a.answeredAt === null ? null :' },
   { id: 'P-FOR-21', old: "  // not know reached the operator, and no signal shows its end.\n  return 'unmeasured';", new: "  // not know reached the operator.\n  if (a.state === 'answering') return null;\n  return 'unmeasured';" },
@@ -71,12 +67,31 @@ export const PORTFOLIO_FOR_SET = set([
   { id: 'P-FOR-26', old: 'w.rep.closedAt >= t', new: 'w.rep.closedAt > t' },
   { id: 'P-FOR-27', old: 'r.closedAt >= now - WINDOW_MS', new: 'r.closedAt > now - WINDOW_MS' },
   // Portfolio B, review 2130 F10: durations never negative, and a rebuilt wave never aged or timed from its stand-in.
-  { id: 'P-FOR-28', old: 'cycles.push(Math.max(0, w.rep.closedAt - d));', new: 'cycles.push(w.rep.closedAt - d);' },
   { id: 'P-FOR-29', old: 'Math.max(0, now - Math.min(...started))', new: '(now - Math.min(...started))' },
   { id: 'P-FOR-30', old: 'const started = open.filter((w) => !rebuiltWave(w))', new: 'const started = open' },
-  { id: 'P-FOR-31', old: 'w.rep.closedAt === null || rebuiltWave(w)) cycleUnmeasured', new: 'w.rep.closedAt === null) cycleUnmeasured' },
   { id: 'P-FOR-32', old: 'oldestOpenUnmeasured: open.filter(rebuiltWave).length,', new: 'oldestOpenUnmeasured: 0,' },
-  { id: 'P-FOR-33', old: "const rebuiltWave = (w: Wave): boolean => w.runs.some((r) => r.rebuilt === true);", new: "const rebuiltWave = (w: Wave): boolean => w.rep.rebuilt === true && w.runs.length > 99;" },
+  // W2's measures (forecasts B, Task 8): the shown row, F9's own reading, the spend read's unmeasured counts and dedupe.
+  { id: 'P-FOR-W1', old: "if (f.kind === 'unforecastable') return { kind: 'unforecastable', reason: f.reason, sealedAt: seal.sealedAt };", new: '' },
+  { id: 'P-FOR-W2', old: "row.state === 'measured' && row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;", new: "row.cost !== null) add(row.class, row.cost); else runsUnmeasured += 1;" },
+  { id: 'P-FOR-W3', old: 'add(row.class, row.cost); else runsUnmeasured += 1;', new: 'add(row.class, row.cost); else add(null, 0);' },
+  { id: 'P-FOR-W4', old: 'if (counted.has(l.sessionId)) continue;', new: '' },
+  // Fix round 1 (F1): an open run's live reading is judged by `runSpendVerdict`, with the run's dispatch facts.
+  { id: 'P-FOR-W5', old: 'redispatched: l.redispatched,', new: 'redispatched: false,' },
+  { id: 'P-FOR-W6', old: "v.state !== 'measured' || v.cost === null) { runsUnmeasured += 1; continue; }", new: "v.state !== 'measured' || v.cost === null) { continue; }" },
+  { id: 'P-FOR-W7', old: 'if (!SPEND_KINDS.includes(r.kind) || !isOpenRun(r) || r.dispatchedAt === null) continue;', new: 'if (!isOpenRun(r) || r.dispatchedAt === null) continue;' },
+  { id: 'P-FOR-W8', old: '|| !isOpenRun(r) || r.dispatchedAt === null) continue;', new: '|| !isOpenRun(r)) continue;' },
+  { id: 'P-FOR-W9', old: 'resumed: l.resumed, clearedAt: l.clearedAt,', new: 'resumed: false, clearedAt: null,' },
+  { id: 'P-FOR-W10', old: '...(health === undefined ? {} : { health: { word: health.word, evidence: health.evidence, at: health.at } }),', new: '' },
+  { id: 'P-FOR-W11', old: 'const forecast = forecastEntry(seals[seals.length - 1]);', new: 'const forecast = forecastEntry(seals[0]);' },
+  { id: 'P-FOR-W12', old: "if (!SPEND_KINDS.includes(r.kind) || isOpenRun(r)) continue;", new: 'if (isOpenRun(r)) continue;' },
+  // Clearing shipped (#3002): the entry's flag and the critical path's walk read it.
+  { id: 'P-FOR-W13', old: 'clearingShipped: EDGE_CLEARING_SHIPPED },', new: 'clearingShipped: false },' },
+  { id: 'P-FOR-W14', old: '      EDGE_CLEARING_SHIPPED),', new: '      false),' },
+  { id: 'P-FOR-W15', old: 'conversation: l.conversation }', new: "conversation: l.reading.kind === 'reading' ? l.reading.sidecarUuid : null }" },
+  { id: 'P-FOR-W16', old: 'dispatchedAt: r.dispatchedAt, closedAt: now,', new: 'dispatchedAt: r.dispatchedAt, closedAt: r.dispatchedAt,' },
+  // F7: the entry's blocking names its edges; F4: nothing measured is null, never 0.
+  { id: 'P-FOR-W17', old: '...(blockingEdges === null ? {} : { blocking: { ...blocking, edges: blockingEdges } }),', new: '' },
+  { id: 'P-FOR-W18', old: 'let total: number | null = null,', new: 'let total: number | null = 0,' },
 ]);
 
 export const PORTFOLIO_MUTANT_SETS: Record<string, MutantSet<never>> = {

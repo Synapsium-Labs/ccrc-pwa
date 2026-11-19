@@ -126,7 +126,7 @@ describe('DECISION_QUESTIONS: W2 seven rows (Table 3.7b, plan Table 1)', () => {
 
 describe('decisionMarkOf: a session sees a band, never a number (H6)', () => {
   const answered: DecisionCheck = {
-    row: 'relay.method', outcome: 'answered', revision: 'r', modelId: 'model-a', hostKind: 'local', lineGen: 0, recordId: 1,
+    row: 'relay.method', outcome: 'answered', revision: 'r', modelId: 'model-a', hostKind: 'local', origin: 'http://127.0.0.1:9000', lineGen: 0, recordId: 1,
     verdict: 'yes', p: 0.8, band: 'very-likely', ms: 5, attempts: 1, reused: false, egress: 'not-hosted',
   };
   const others: DecisionCheck[] = DECISION_OUTCOMES.filter((o) => o !== 'answered')

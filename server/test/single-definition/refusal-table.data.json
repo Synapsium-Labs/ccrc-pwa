@@ -2,9 +2,6 @@
   "codeOnly": {
   },
   "waveMap": {
-    "renewing": "W1a",
-    "renew-pending": "W1a",
-    "renew-not-long-lived": "W1a",
     "proposal-stale": "W3",
     "proposal-limit": "W3",
     "no-new-evidence": "W3",

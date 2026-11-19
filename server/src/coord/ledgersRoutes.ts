@@ -49,8 +49,10 @@ import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
 import { parseRankWrite, type PortfolioView } from '../../../shared/portfolio.js';
 import { portfolioFor } from './portfolio.js';
+import type { SpendUsageRead } from './portfolioStore.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
+import type { CallerIdentity } from '../auth/callerIdentity.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
 import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
@@ -64,13 +66,14 @@ import {
 import type { BoundRowRef } from './pushOutboxStore.js';
 import { WAITING_URL } from '../pushOutbox.js';
 import { itemBoundOf, type OutboxView } from '../pushSender.js';
+import type { OtherLane } from './otherLanes.js';
 
 /** What the coordinator routes need. `requireMailToken` and `requireAttribution` are `registerCoordRoutes`'s own closures,
  *  handed in rather than rebuilt, so the gate and the sender check are one implementation for every lane. */
 export interface LedgerCoordinatorDeps {
   coord: CoordStore | undefined;
   requireMailToken: (req: FastifyRequest, reply: FastifyReply, route: string) => boolean;
-  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid') => Promise<boolean>;
+  requireAttribution: (reply: FastifyReply, whoId: string, whoUuid: string, uuidField: 'byUuid', lane?: OtherLane) => Promise<boolean>;
   notice: NoticeSink;
   bus: Bus;
   now: () => number;
@@ -347,7 +350,7 @@ export function registerLedgerCoordinatorRoutes(app: FastifyInstance, deps: Ledg
     const outside = outsideDocLink([parsed.v.title, parsed.v.why, ...parsed.v.how, ...(parsed.v.options ?? []),
       ...(parsed.v.recommendedWhy === null ? [] : [parsed.v.recommendedWhy]), ...(parsed.v.soonLabel === null ? [] : [parsed.v.soonLabel])]);
     if (outside !== null) return refuseOutsideDocLink(reply, outside);
-    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid'))) return;
+    if (!(await deps.requireAttribution(reply, who.byId, who.byUuid, 'byUuid', 'itemRaise'))) return;
     if (!owns(coord, reply, who.byId, slug)) return;
     const v = parsed.v;
     if (v.runId !== null) {
@@ -601,6 +604,9 @@ export interface LedgerOperatorDeps {
   presenceOf: (sessionId: string) => CoordinatorPresence;
   /** The account gate (D-5511): the secret's route is a credential act, so it asks for a step-up first (plan PL6). */
   gate: AccountGate;
+  /** The caller identity port (Overlord W1 gates A, Q17): the ratify door's gate actor at `operator` strength, and the rank
+   *  door's console arm (signed in, no device, or dark). */
+  identity: Pick<CallerIdentity, 'operator' | 'console'>;
   /** Where the operator-secret slots live (`cfg.ccrcDir`, `coord/ledgersSecrets.ts`). */
   ccrcDir: string;
   /** The egress masker's one registration of a server-held secret (`SecretMasker.ingestSecret`), `beside` the lane's rows when
@@ -627,6 +633,10 @@ export interface LedgerOperatorDeps {
   /** The live signal for an open ask (Overlord W1, portfolio): the watcher's `liveAskKey`, or a reader answering `unmeasured`
    *  when no watcher runs, so a released ask then counts as unmeasured, never as live. */
   liveAsk: LiveAskRead;
+  /** The usage sweep's reading of an open run's session for the portfolio's spend read (Overlord W2 forecasts B): the
+   *  watcher's `liveSpendReading`. Absent (a test, or no watcher): every reading is `not-ready`, so live spend reads as
+   *  unmeasured, never 0. */
+  liveSpend?: SpendUsageRead;
 }
 
 /** The tick's words to the operator, and the reasons behind the two programme refusals. */
@@ -766,7 +776,8 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   // account gate and works while sign-in is dark, recording `flag-off` then (slug rank-works-dark), as the `lane-arm` and
   // `run-close` switches do; armed, it records the session's device actor. It awaits nothing between its read and its
   // write, so `setPortfolioRank`'s revision check inside one transaction is the whole guard against a stale tab.
-  const portfolioView = (coord: CoordStore, now: number): PortfolioView => portfolioFor(coord.portfolioFacts(now, deps.liveAsk), now);
+  const portfolioView = (coord: CoordStore, now: number): PortfolioView =>
+    portfolioFor(coord.portfolioFacts(now, deps.liveAsk, deps.liveSpend ?? (() => ({ kind: 'not-ready' as const }))), now);
   app.get('/api/portfolio', (_req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
@@ -780,7 +791,9 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.post('/api/portfolio/rank', (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    const actor = deps.authEnabled ? deviceActor(deps.sessionAuth(req).device) : 'flag-off';
+    // The console arm of the identity port (gates A, question 11): the device's actor, `unmeasured`, or `flag-off` dark.
+    const caller = deps.identity.console(deps.authEnabled, deps.authEnabled ? deps.sessionAuth(req).device : null);
+    const actor = caller.kind === 'signed-in' ? caller.actor.subject : caller.kind === 'device-unmeasured' ? 'unmeasured' : 'flag-off';
     const parsed = parseRankWrite(req.body);
     if (!parsed.ok) return bad(reply, parsed.detail);
     const now = deps.now();
@@ -869,7 +882,7 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
     const version = parseGoalsVersion(req.body);
     if (version === null) return bad(reply, 'the body is { pin: { inShortAt } } or { modification: <id> }');
     // The act confers authority, so it keeps the gate's actor (its device and session hash; review 2240 F7).
-    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), String(g.actor));
+    const res = coord.ratifyGoalsVersion(slug, version, deps.now(), deps.identity.operator(g.actor).subject);
     if (!res.ok && res.why === 'unknown') return refuseRoute(reply, 'not-found', { detail: 'pin' in version ? `programme ${slug} has no pin` : `no modification ${version.modification} of ${slug}` });
     if (!res.ok) return refuseRoute(reply, LEDGER_ROUTE_REFUSALS.goalsChanged, { inShortAt: res.inShortAt, detail: 'the goals changed since they were shown: read them again' });
     if (res.changed) deps.bus.emit('waiting');

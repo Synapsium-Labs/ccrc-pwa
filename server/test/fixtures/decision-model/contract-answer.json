@@ -1,0 +1,24 @@
+{
+  "id": "resp-a-0001",
+  "model": "model-a-1.0.0",
+  "provider": "host-a",
+  "answers": {
+    "KEY_CHOICE_A": {
+      "type": "choice",
+      "choice": "OPT_2",
+      "confidence": 0.81,
+      "probabilities": { "OPT_1": 0.12, "OPT_2": 0.81, "NONE": 0.07 }
+    },
+    "KEY_CHOICE_B": {
+      "type": "choice",
+      "choice": "OPT_2",
+      "confidence": 0.77,
+      "probabilities": { "OPT_2": 0.77, "OPT_1": 0.15, "NONE": 0.08 }
+    },
+    "KEY_NOUL": {
+      "type": "noul",
+      "noul": 0.93
+    }
+  },
+  "usage": { "input_tokens": 412, "output_tokens": 0 }
+}

@@ -55,13 +55,26 @@ const TIME_PORT_FILES: readonly string[] = [
   'server/src/coord/decisionModelHttp.ts',
   'server/src/coord/decisionModelStore.ts',
   'server/src/coord/decisionModelAsk.ts',
+  // PR B: the anchor-set lane reads the wall clock and chance only through the time ports it is handed; the anchors are data.
+  'server/src/coord/decisionAnchors.ts',
+  'server/src/coord/decisionModelLane.ts',
   // Overlord W2, remaining work: the vocabulary, the body's rules and the store take `now` as an argument.
   'server/src/coord/programmeRemaining.ts',
   'server/src/coord/programmeFactsStore.ts',
+  // Overlord W1, gates A: the caller identity port and its attribution adapter read no clock; the entries make a later read red.
+  'server/src/auth/callerIdentity.ts',
+  'server/src/auth/attributionIdentity.ts',
   // Overlord W2, done tests A: the vocabulary, the pure deciders and the one reader read no clock.
   'shared/doneTests.ts',
   'server/src/coord/doneTests.ts',
   'server/src/coord/doneTestRead.ts',
+  // Overlord W2, forecasts A: the deciders take `asOf`, `now` and the seed as arguments, and the lane reads them through
+  // `now` and the `Entropy` port, never the ambient clock or `Math.random`.
+  'server/src/coord/forecast.ts',
+  'server/src/coord/forecastLane.ts',
+  // Overlord W2, forecasts B: the health decider and the shared measures take `now` and every range as arguments.
+  'server/src/coord/programmeHealth.ts',
+  'server/src/coord/programmeMeasures.ts',
 ];
 const TIME_PORT_SCOPE = { test: (f: string): boolean => TIME_PORT_FAMILIES.test(f) || TIME_PORT_FILES.includes(f) };
 /** The one file allowed to read the ambient sources: the system adapters. */

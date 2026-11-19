@@ -213,7 +213,8 @@ describe('the visit opens the version (refinement (p), M9.11)', () => {
     const f = versionLoaders();
     const spy = readerSpy();
     const settle = async (): Promise<void> => { await act(async () => { await new Promise((r) => setTimeout(r, 30)); }); };
-    const shas = (): (string | null)[] => spy.inputs.map((i) => i.document.version?.sha ?? null);
+    // The version rides the mount input's seed since the reader's history (completion plan Task 12), not the document.
+    const shas = (): (string | null)[] => spy.inputs.map((i) => i.version?.sha ?? null);
     open('/docs/demo/specs/a.md', f, spy.reader);
     await waitFor(() => expect(spy.inputs.length).toBe(1));
     expect(shas()).toEqual([COMMIT_A]);
@@ -231,7 +232,7 @@ describe('the visit opens the version (refinement (p), M9.11)', () => {
     await waitFor(() => expect(spy.inputs.length).toBe(4));
     await settle();
     expect(shas()).toEqual([COMMIT_A, VERSION, COMMIT_A, VERSION]);
-    expect(spy.inputs.every((i) => i.document.version?.draft === false)).toBe(true);
+    expect(spy.inputs.every((i) => i.version?.draft === false)).toBe(true);
     expect(f.file).toHaveBeenCalledTimes(2);
   });
 

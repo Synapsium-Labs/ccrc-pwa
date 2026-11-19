@@ -96,6 +96,19 @@ export const SOFT_BUDGET = { count: 3, windowMs: 21_600_000 } as const;
 /** Table 11.5b, observed time: a break (R19), no operator message for this long, or no visible place for this long. */
 export const BREAK_NO_MESSAGE_MS = 1_200_000;
 export const BREAK_PLACE_HIDDEN_MS = 300_000;
+/** Table 11.1e, the mark `operator-at-programme` (W1a): a coordinator's operator activity lasts this long, observed, after the
+ *  operator's newest prompt into any session of its programme; older, it reads as no activity (C50, the hand-offs piece). */
+export const OPERATOR_MARK_MS = 1_800_000;
+/** Table 11.1d (W1a), the Setting "Renew when I'm away" / "Renew on schedule" (R19): when soft renewals happen. The default is
+ *  when the operator is away. Read back through `isRenewalMode`, never cast. */
+export const RENEWAL_MODES = ['when-away', 'on-schedule'] as const;
+export type RenewalMode = (typeof RENEWAL_MODES)[number];
+export const RENEWAL_MODE_DEFAULT: RenewalMode = 'when-away';
+export function isRenewalMode(v: unknown): v is RenewalMode {
+  return typeof v === 'string' && (RENEWAL_MODES as readonly string[]).includes(v);
+}
+/** `GET`/`POST /api/coord/renewal-mode`'s answer: the stored mode (null when it does not read), the default and the choices. */
+export interface RenewalModeView { mode: RenewalMode | null; default: RenewalMode; choices: readonly RenewalMode[] }
 /** Table 3.3.11b: the hard cap, or half the window, whichever is lower. */
 export const HARD_CAP_TOKENS = 250_000;
 /** Table 3.3.11b: the soft ceiling, as a fraction of the fitted ceiling. */
@@ -113,13 +126,16 @@ export const CHECKPOINT_THREAD = { messages: 60, tokens: 6_000 } as const;
 /** Table 11.5b: the caps on `continuity_notes` for one identity. */
 export const NOTES_CAP = { count: 200, chars: 500 } as const;
 /** The continuity notes (Overlord spec §3.3.2, C37; the notes piece of W1a). What a note keys to: a programme (by slug), an
- *  item or a run (by id), each a row the server can look up. `request` joins in W2 and `message` (a `miss`) in W1, as their
- *  rows appear (slug note-keys-in-w1a). */
+ *  item or a run (by id), or a message of the operator's (by id, a `miss`'s key), each a row the server can look up.
+ *  `request` joins in W2, as its row appears (slug note-keys-in-w1a). */
 export type NoteKey =
   | { readonly kind: 'programme'; readonly slug: string }
   | { readonly kind: 'item'; readonly id: number }
-  | { readonly kind: 'run'; readonly id: number };
-const NOTE_KEY_KIND_MAP = { programme: 'a programme, by slug', item: 'an item, by id', run: 'a run, by id' } as const;
+  | { readonly kind: 'run'; readonly id: number }
+  | { readonly kind: 'message'; readonly id: number };
+const NOTE_KEY_KIND_MAP = {
+  programme: 'a programme, by slug', item: 'an item, by id', run: 'a run, by id', message: "a message of the operator's, by id",
+} as const;
 export type NoteKeyKind = keyof typeof NOTE_KEY_KIND_MAP;
 export const NOTE_KEY_KINDS = Object.keys(NOTE_KEY_KIND_MAP) as NoteKeyKind[];
 export function isNoteKeyKind(v: unknown): v is NoteKeyKind {
@@ -128,6 +144,7 @@ export function isNoteKeyKind(v: unknown): v is NoteKeyKind {
 const NOTE_KIND_MAP = {
   thread: 'an open thread: what it waits on and what comes next',
   caution: 'something the next generation should watch for',
+  miss: "a message of the operator's the Overlord missed, keyed to it",
 } as const;
 export type NoteKind = keyof typeof NOTE_KIND_MAP;
 export const NOTE_KINDS = Object.keys(NOTE_KIND_MAP) as NoteKind[];

@@ -1,40 +1,42 @@
-// D-8406, D-8686, D-8687, D-8688, D-8693: a lane's model state as the session's model picker reads it through
-// `GET /api/models/:lane`. Ring L3, context C1 (Fleet Registry & Accounts). Never rejects.
+// D-8406, D-8686, D-8687, D-8693, R3b: a lane's model state as the session's model picker and the Models sheet read it
+// through `GET /api/models/:lane`. Ring L3, context C1 (Fleet Registry & Accounts). Never rejects.
 //
-// THE OP FIRST (D-8687). `io.models(lane, 'show')` runs `ccrc models <lane> show` on the fleet's box (the agent's
-// `models` op, or the local arm in local mode), and `readShowAnswer` reads its one JSON object: the class labels
-// (`describe`'s `labels`, which `laneClassModels` built on that box) and the lane's advance state (`LaneAdvanceRead`).
+// THE OP ALONE (R3b). `io.models(lane, 'show')` runs `ccrc models <lane> show` on the fleet's box (the agent's `models`
+// op, or the local arm in local mode), and `readShowAnswer` reads its one JSON object: the class labels (`describe`'s
+// `labels`, which `laneClassModels` built on that box) and the lane's advance state (`LaneAdvanceRead`). Nothing here
+// reads a model file: the file-read grant (D-8406) and the files fallback (D-8688) are retired, and the agent refuses
+// every file under `~/.ccrc/models`.
 // Concurrent reads of one lane on one io share one op; there is no cache, so `no-store` still means "as the files are".
+// The ONE exception is the read that follows an act (`{ fresh: true }`, the POST's): it starts a `show` of its own and
+// never joins one already running, because a joined show may have read the lane before the act wrote (the local arm has no
+// gate, and `show` takes no lane lock). Same op, same `readShowAnswer`, no second reader.
 //
-// THE FILES UNDER THE GRANT AS THE FALLBACK (D-8688, retired by R3b). When nothing ran (`unsupported`: an agent that
-// predates the op; `refused`, `not-started`, `busy`), and when `show` failed on something the files path never reads
-// (FALLBACK_REFUSALS, or `ccrc` dying before the lane; the coordinator's ruling of 2026-11-16: a lane must never become
-// unreadable where the file read answers), `readLaneModelFiles` reads the registry and catalogue (`registryFileName`,
-// `catalogueFileName` under `~/.ccrc/models`) through the fleet's `read` op (the agent admits exactly these two names,
-// `isLaneModelsReadName`) and hands every judgement to the models kernel. Its answer carries no `advance`.
-//
-// The two non-readings stay two (`LaneModelsRead`): `absent` is a lane with no class registry, `unreadable` one whose
-// registry exists and could not be read or parsed, or an op that RAN and gave no usable answer (`timeout`,
-// `too-large`, `lost`, a stdout off the grammar), which never falls back: it may have run a verb whose state is unknown.
-// Nothing here names a model.
-import path from 'node:path';
+// EVERY OUTCOME KEEPS ITS OWN ARM (`LaneModelsRead`; the coordinator's rulings for R3b, 2026-11-18). When nothing ran,
+// the seam's word is the answer: `unsupported` (an agent that predates the op, or the bare local io), `not-started`,
+// `refused` (with the builder's `why`) and `busy` (transient: the next read asks again). An op that RAN and gave no usable
+// answer (`timeout`, `too-large`, `lost`, a stdout off the grammar) is `unreadable`: it may have run a verb whose state
+// is unknown. A `show` refusal the retired files path used to answer past (`CARRIED_CODES`), and `ccrc` dying before
+// the lane, is `unreadable` WITH the box's reason, so the sheet can name it; the argv-grammar words stay `unreadable`
+// with no code (D-8693). `absent` is a lane with no class registry, with the reason `show` gave (`laneKind`). Nothing here
+// names a model.
 import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import { ADVANCE_VERSION, AdvanceInvalid, lastMoveOf, parseAdvance } from '../../shared/model-advance.mjs';
 import {
-  CLASSES, MODELS_DIR_NAME, catalogueFileName, laneClassModels, parseCatalogue, parseRegistry, registryFileName,
-  type Catalogue, type LaneAdvanceRead, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type ModelClass,
-  type Registry,
+  CLASSES, type LaneAdvanceRead, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead, type LaneUnreadableCode,
+  type ModelClass,
 } from '../../shared/models.js';
 import type { FleetIO } from './io.js';
 
-/** `show` refusals that fall back to the files (ruling of 2026-11-16, D-8693): the op path reads the catalogue before
- *  the registry and refuses on it, and parses the registry WITH the catalogue; it reads the fleet box's roster first
+/** `show` refusals carried as `unreadable`'s `code` (R3b; D-8693 named them): the op path reads the catalogue before the
+ *  registry and refuses on it, and parses the registry WITH the catalogue; it reads the fleet box's roster first
  *  (`readRoster`'s three words); and `ccd/ccrc`'s `_models_answer` refuses `no-answer` when its node half answered
- *  nothing usable. The files path does none of these. */
-const FALLBACK_REFUSALS: readonly string[] = [
-  'catalogue-unreadable', 'catalogue-invalid', 'registry-invalid', 'roster-absent', 'roster-unreadable', 'roster-invalid',
-  'no-answer',
-];
+ *  nothing usable. Keyed on `LaneUnreadableCode`, so the type and this table cannot disagree; `no-output` is not a
+ *  word `show` prints (it is an empty stdout at exit 1) and is decided before this table is asked. */
+const CARRIED_CODES: Readonly<Record<Exclude<LaneUnreadableCode, 'no-output'>, true>> = {
+  'catalogue-unreadable': true, 'catalogue-invalid': true, 'registry-invalid': true, 'roster-absent': true,
+  'roster-unreadable': true, 'roster-invalid': true, 'no-answer': true,
+};
+const isCarriedCode = (v: unknown): v is LaneUnreadableCode => typeof v === 'string' && Object.hasOwn(CARRIED_CODES, v);
 
 /** One `show` per (io, lane) in flight; the entry goes when it settles, so the next read asks again. */
 const inFlightShows = new WeakMap<FleetIO, Map<string, Promise<ModelsAsked>>>();
@@ -49,50 +51,45 @@ function showOnce(io: FleetIO, lane: string): Promise<ModelsAsked> {
   return asked;
 }
 
-export async function readLaneModels(io: FleetIO, ccrcDir: string, lane: string): Promise<LaneModelsRead> {
+/** `fresh`: begin a `show` of this read's own, never joining one in flight (the read an act asks for after it ends, F2).
+ *  A fresh `show` is not entered in the in-flight map either: a plain read that began after the act could share it, but
+ *  the map stays the plain reads' alone.
+ *
+ *  WHY ITS OWN SHOW, NOT AN INVALIDATED MAP (review 2523 F3). Dropping the lane's in-flight entry when an act ends would
+ *  serve the same purpose, but this is simpler and holds on both arms: the local arm has no gate, so a joined show may have
+ *  read the lane before the act wrote. On the agent arm (the live setting) a GET's `show` still running when this one starts
+ *  makes the agent's one models gate answer `busy`, so this read is `busy` and the 200 carries no classes (the sheet then
+ *  offers no act, and says the box was busy); the sheet reads the lane again after every act, and that read recovers it. */
+export interface LaneModelsReadOpts { readonly fresh?: boolean }
+
+/** `_ccrcDir` is unread since R3b, which retired the files fallback; it stays in the signature only because callers in a
+ *  test file an open pull request holds still pass it (D-8757), and goes once that pull request has landed (the plan
+ *  ticket `ccrcdir-param-drop`). */
+export async function readLaneModels(io: FleetIO, _ccrcDir: string, lane: string, opts: LaneModelsReadOpts = {}): Promise<LaneModelsRead> {
   let asked: ModelsAsked;
-  try { asked = await showOnce(io, lane); } catch { asked = { kind: 'lost' }; }
+  try { asked = await (opts.fresh === true ? io.models(lane, 'show') : showOnce(io, lane)); } catch { asked = { kind: 'lost' }; }
   switch (asked.kind) {
-    case 'unsupported': case 'refused': case 'not-started': case 'busy':
-      return readLaneModelFiles(io, ccrcDir, lane);
+    case 'unsupported': case 'not-started': case 'busy':
+      return { kind: asked.kind };
+    case 'refused':
+      return { kind: 'refused', why: asked.why };
     case 'timeout': case 'too-large': case 'lost':
       return { kind: 'unreadable' };
-    case 'exited': {
-      const read = readShowAnswer(lane, asked.code, asked.stdout);
-      return read === 'fallback' ? readLaneModelFiles(io, ccrcDir, lane) : read;
-    }
+    case 'exited':
+      return readShowAnswer(lane, asked.code, asked.stdout);
   }
-}
-
-/** The files under the D-8406 grant: the body `readLaneModels` had before the op, unchanged. */
-async function readLaneModelFiles(io: FleetIO, ccrcDir: string, lane: string): Promise<LaneModelsRead> {
-  const dir = path.join(ccrcDir, MODELS_DIR_NAME);
-  const [reg, cat] = await Promise.all([
-    io.readFileMeasured(path.join(dir, registryFileName(lane))),
-    io.readFileMeasured(path.join(dir, catalogueFileName(lane))),
-  ]);
-  if (!reg.ok) return { kind: reg.reason === 'absent' ? 'absent' : 'unreadable' };
-  let registry: Registry;
-  // No catalogue handed to `parseRegistry`: with one, an effort level the classed model does not list refuses the
-  // whole file, and a label read must not fail for an effort fact (the parser's own header says the same).
-  try { registry = parseRegistry(JSON.parse(reg.content)); } catch { return { kind: 'unreadable' }; }
-  let catalogue: Catalogue | null = null;
-  if (cat.ok) {
-    try { catalogue = parseCatalogue(JSON.parse(cat.content)); } catch { catalogue = null; }
-  }
-  return { kind: 'read', classes: laneClassModels(registry, catalogue) };
 }
 
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStrOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
 
-/** THE ONE reader of `show`'s JSON in TypeScript. `'fallback'` is a `show` refusal the files path reads past
- *  (FALLBACK_REFUSALS), or `ccrc` dying before the lane (`_ccrc_die`: exit 1, nothing on stdout, since `show` prints
- *  its body unconditionally); every other answer off the grammar is `unreadable`, and a half view is never returned.
- *  The exit code must agree with the body: an answer at 0, a refusal at 1 or 2. */
-function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsRead | 'fallback' {
+/** THE ONE reader of `show`'s JSON in TypeScript. Every answer off the grammar is `unreadable`, and a half view is never
+ *  returned. A refusal in `CARRIED_CODES` is `unreadable` with its code, and so is `ccrc` dying before the lane
+ *  (`_ccrc_die`: exit 1, nothing on stdout, since `show` prints its body unconditionally), as `no-output`. The exit code
+ *  must agree with the body: an answer at 0, a refusal at 1 or 2. */
+function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsRead {
   if (code !== 0 && code !== 1 && code !== 2) return { kind: 'unreadable' };
-  if (stdout === '' && code === 1) return 'fallback';
+  if (stdout === '' && code === 1) return { kind: 'unreadable', code: 'no-output' };
   // exactly one JSON object, with at most one trailing newline
   const body = stdout.endsWith('\n') ? stdout.slice(0, -1) : stdout;
   if (body === '' || body.includes('\n')) return { kind: 'unreadable' };
@@ -102,10 +99,16 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
   if ((raw.ok === false) !== (code !== 0)) return { kind: 'unreadable' };
   if (raw.ok === false) {
     if (raw.error === 'no-such-account') return { kind: 'absent' };
-    return typeof raw.error === 'string' && FALLBACK_REFUSALS.includes(raw.error) ? 'fallback' : { kind: 'unreadable' };
+    return isCarriedCode(raw.error) ? { kind: 'unreadable', code: raw.error } : { kind: 'unreadable' };
   }
   if (raw.ok !== true || raw.op !== 'show' || raw.id !== lane) return { kind: 'unreadable' };
-  if (raw.registry === null) return { kind: 'absent' };
+  // F1: `show` says why there is no registry (`anthropic`), and the answer keeps it, so a surface can tell an Anthropic
+  // lane (its classes are the client's own) from one never initialised. Any other value says nothing, and none is kept.
+  if (raw.registry === null) {
+    if (raw.anthropic === true) return { kind: 'absent', laneKind: 'anthropic' };
+    if (raw.anthropic === false) return { kind: 'absent', laneKind: 'never-made' };
+    return { kind: 'absent' };
+  }
   const reg = raw.registry;
   if (!isObj(reg) || !isObj(reg.classes) || !isObj(raw.labels)) return { kind: 'unreadable' };
   const pins = reg.classes;
@@ -132,7 +135,8 @@ function classRow(raw: unknown): LaneClassModel | null {
 }
 
 /** `show`'s `advance` key (D-5228): five states never folded; `null` is "off the grammar", and the caller then
- *  answers `unreadable` for the whole read. */
+ *  answers `unreadable` for the whole read. A state WORD this reader does not know is `invalid` with no detail, and the
+ *  lane's classes are kept (R3b, the operator's ruling of 2026-11-17): it costs the advance record only. */
 function readAdvanceReport(raw: unknown): LaneAdvanceRead | null {
   const none = { detail: null, pending: null, classes: null } as const;
   if (raw === undefined) return { state: 'unreported', ...none };
@@ -159,6 +163,6 @@ function readAdvanceReport(raw: unknown): LaneAdvanceRead | null {
       return { state: 'ok', detail: null, pending: adv.pending, classes };
     }
     default:
-      return null;
+      return typeof raw.state === 'string' ? { state: 'invalid', ...none } : null;
   }
 }

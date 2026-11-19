@@ -13,7 +13,7 @@ import { planViewOf } from '../src/coord/planRoutes.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
-import { planSyncSteps, requestIdOf, type SyncSnapshot, type SyncStep } from '../src/linear/planSyncPolicy.js';
+import { linkMarkOf, planSyncSteps, requestIdOf, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep } from '../src/linear/planSyncPolicy.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
@@ -48,8 +48,8 @@ const directory = {
 const AAA = { id: U(1), key: 'AAA' };
 const KEY = { id: U(3), key: 'KEY' };
 
-function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: TicketRow[]; end?: SyncSnapshot['program']['end']; paused?: boolean;
-  mode?: 'public' | 'private'; wsInitiatives?: 'on' | 'off' | 'unknown'; teamKey?: string | null; inShort?: string | null; epicIds?: number } = {}): SyncSnapshot {
+function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: TicketRow[]; end?: ProgrammeSnapshot['program']['end']; paused?: boolean;
+  mode?: 'public' | 'private'; wsInitiatives?: 'on' | 'off' | 'unknown'; teamKey?: string | null; inShort?: string | null; epicIds?: number } = {}): ProgrammeSnapshot {
   const plan: StoredPlan = { program: 'prog', planBy: null, required: true, epics: [{ ...epic(o.epic), checkpoints: o.cps ?? [], tickets: o.tickets ?? [] }] };
   return {
     program: { slug: 'prog', rowid: 7, title: 'The programme', end: o.end ?? null, inShort: o.inShort === undefined ? 'Short words' : o.inShort,
@@ -62,7 +62,7 @@ function snap(o: { epic?: Partial<EpicRow>; cps?: CheckpointRow[]; tickets?: Tic
   };
 }
 /** Apply every create and update the deciders emit as if sent, until nothing is left: the state after a full first sync. */
-function settle(s: SyncSnapshot): SyncSnapshot {
+function settle<S extends SyncSnapshot>(s: S): S {
   let nextId = 100;
   let linear = 500;
   for (let i = 0; i < 14; i += 1) {
@@ -581,6 +581,51 @@ describe('the pass: moves and closes', () => {
     expect(sent.some((a) => a.input['statusId'] === U(34) || a.input['stateId'] === U(24))).toBe(false);
   });
 
+  const epicFingerprint = (r: Rig): string | null => r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'epic')!.fingerprint;
+  const renameEpic = (r: Rig, title: string): void => {
+    r.plan.applyPlanChanges(SLUG, changes({ epics: { insert: [], update: [{ id: epicRow(r, 'e1').id, title }], drop: [] } }), OWNER, r.t.now, null);
+  };
+
+  it('D-8183 (round 1 A3, round 2 A4): an update of a linked project sends no second link, and its fingerprint keeps the link mark', async () => {
+    const r = await rig();
+    await tick(r);
+    const mark = linkMarkOf(epicFingerprint(r)).mark;
+    expect(mark).not.toBeNull();                          // the link is in the stored fingerprint: no link row
+    const from = r.asks.length;
+    renameEpic(r, 'Renamed epic'); await tick(r);
+    expect(opsOf(r, from)).toEqual(['projectUpdate']);
+    expect(linkMarkOf(epicFingerprint(r)).mark).toBe(mark);
+    due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual(['projectUpdate']);    // settled
+  });
+
+  it('D-8183: a failed initiative sends its linked projects no update, and a project updated meanwhile is not linked again when it binds again', async () => {
+    const r = await rig();
+    await tick(r);
+    r.respond.current = (ask) => (ask.op === 'initiativeUpdate' ? { ok: false, word: 'not-found', maybeSent: false } : defaultRespond(ask));
+    r.db.prepare('UPDATE programs SET title = ? WHERE slug = ?').run('Programme renamed', SLUG);
+    const from = r.asks.length;
+    due(r); await tick(r);
+    const ib = r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'programme')!;
+    expect(ib).toMatchObject({ state: 'failed', failedWord: 'not-found' });
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate']);                      // the failure sends the linked project nothing
+    renameEpic(r, 'Renamed epic'); due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate']);     // the plan changed: one update, no link to a failed initiative
+    r.respond.current = defaultRespond;
+    r.plan.requeueFailed({ bindingId: ib.id, to: 'bound' });
+    due(r); await tick(r);
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate', 'initiativeUpdate']);   // the initiative binds again: no second link
+  });
+
+  it('D-8183: a project created while the initiative is live is linked once', async () => {
+    const r = await rig({ epics: 'two' });
+    await tick(r);
+    expect(opsOf(r).filter((o) => o === 'initiativeToProjectCreate')).toHaveLength(2);   // one link per project
+    renameEpic(r, 'Renamed epic'); due(r); await tick(r);
+    due(r); await tick(r);
+    expect(opsOf(r).filter((o) => o === 'initiativeToProjectCreate')).toHaveLength(2);
+  });
+
   it('plan close abandoned cancels projects and open issues with the reason', async () => {
     const r = await rig();
     await tick(r);
@@ -589,10 +634,12 @@ describe('the pass: moves and closes', () => {
     r.plan.closePlan(SLUG, 'abandoned', 'the work moved to another programme', r.t.now);
     await tick(r);
     const sent = r.asks.slice(from);
-    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate', 'issueOwned', 'issueComment', 'issueUpdate', 'initiativeToProjectCreate']);
+    expect(opsOf(r, from)).toEqual(['initiativeUpdate', 'projectUpdate', 'issueOwned', 'issueComment', 'issueUpdate']);   // D-8183: the update keeps the link mark, so no second link
     expect(sent[0]!.input).toMatchObject({ status: 'Canceled', description: expect.stringContaining('Abandoned on ') });
     expect(sent[1]!.input['statusId']).toBe(U(34));
     expect(sent[3]!.input['body']).toEqual(expect.stringContaining('the work moved to another programme'));
+    // D-8183: the journal's closed list for a comment names `body`; a cancel comment naming another field is refused by the real journal.
+    expect(sent[3]!.fields).toEqual(['body']);
     expect(sent[4]!.input['stateId']).toBe(U(24));
     expect(r.plan.bindingsOf(SLUG).every((b) => b.state === 'bound')).toBe(true);
     const settled = r.asks.length;
@@ -685,6 +732,43 @@ describe('the pass: moves and closes', () => {
     expect(sentInput(r, 'projectCreate')['teamIds']).toEqual([WS.a.teams[0].id, CCC_TEAM.id].sort());
     return { r, t2: epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!.id };
   }
+
+  it("D-8183 (round 1 A1): a ticket added later on a second team: the project gains the team (projectUpdate) before the issue is created (issueCreate)", async () => {
+    const r = await rig({ extraTeam: true });
+    await tick(r);
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-b'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const from = r.asks.length;
+    await tick(r);
+    const sent = opsOf(r, from);
+    expect(sent).toContain('issueCreate');
+    expect(sent.indexOf('projectUpdate')).toBeGreaterThanOrEqual(0);
+    expect(sent.indexOf('projectUpdate')).toBeLessThan(sent.indexOf('issueCreate'));
+    expect(sentInput(r, 'projectUpdate', from)['teamIds']).toEqual([WS.a.teams[0].id, CCC_TEAM.id].sort());
+    expect(sentInput(r, 'issueCreate', from)['teamId']).toBe(CCC_TEAM.id);
+  });
+
+  it('D-8183 (round 1 A11): a create lost under the old team key is adopted under the changed key, then the next pass sends the move', async () => {
+    const r = await rig({ extraTeam: true });
+    r.db.prepare("UPDATE project_linking SET teamKey = 'AAA' WHERE project = 'project-b'").run();
+    r.plan.applyPlanChanges(SLUG, changes({ tickets: { insert: [ticket('t2', { project: 'project-b' })], update: [], drop: [] } }), OWNER, r.t.now, null);
+    r.respond.current = (ask) => (ask.op === 'issueCreate' && ask.input['title'] === 'Ticket t2' ? { ok: false, word: 'timeout', maybeSent: true } : defaultRespond(ask));
+    await tick(r);                                         // the create is sent and its reply lost: the binding stays pending
+    const lost = r.asks.find((a) => a.op === 'issueCreate' && a.input['title'] === 'Ticket t2')!;
+    const t2 = epicRow(r, 'e1').tickets.find((t) => t.key === 't2')!.id;
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'pending' });
+    r.db.prepare("UPDATE project_linking SET teamKey = 'CCC' WHERE project = 'project-b'").run();   // the key changes before the recovery
+    r.respond.current = (ask) => {
+      if (ask.op === 'issueCreate' && ask.input['title'] === 'Ticket t2') return { ok: false, word: 'linear-invalid', maybeSent: false, detail: 'conflict' };
+      if (ask.op === 'issueOwned' && ask.input['id'] === lost.input['requestId']) return ok({ issue: { id: lost.input['requestId'], identifier: 'AAA-42', teamKey: 'AAA', stateType: 'unstarted' } });
+      return defaultRespond(ask);
+    };
+    r.t.now += 400_000;                                    // past the backoff of the lost create's timeout hold
+    const from = r.asks.length;
+    due(r); await tick(r);
+    expect(r.plan.bindingsOf(SLUG).find((b) => b.localKind === 'ticket' && b.localId === t2)).toMatchObject({ state: 'bound', teamKey: 'CCC' });      // the move's ok records the planned team
+    expect(r.asks.slice(from).find((a) => a.op === 'issueUpdate' && a.target === 'AAA-42')).toMatchObject({ teamKey: 'AAA', destinationTeamKey: 'CCC' });
+  });
 
   it("F3: a second team's ticket whose project key is cleared sends no projectUpdate (the team stays on the epic's project)", async () => {
     const { r } = await secondTeam();

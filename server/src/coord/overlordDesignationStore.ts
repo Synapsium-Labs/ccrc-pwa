@@ -20,6 +20,9 @@ import {
   type AttemptOutcome, type DesignationRead, type DesignationView, type OverlordModelClass, type PendingKind,
 } from '../../../shared/overlord-designation.js';
 import type { PoolSet } from '../../../shared/poolset.js';
+import { readActorColumns, type ActorWire } from '../../../shared/overlord-identity.js';
+import type { RecordedActor } from '../auth/callerIdentity.js';
+import { isAccountGateOperator } from '../auth/attributionIdentity.js';
 
 /** What a writer needs of the journal: the one synchronous append (declared here by its consumer, so a test passes a fake). */
 export type AuthorityAppender = Pick<OverlordAuthorityJournal, 'appendInTx'>;
@@ -28,9 +31,23 @@ export type AuthorityAppender = Pick<OverlordAuthorityJournal, 'appendInTx'>;
 export interface AuthorityRefused { readonly ok: false; readonly authority: AuthorityAppendError; readonly detail: string }
 /** The row holds a value its writer would not write (a hand edit, a newer build): a writer refuses to build on it. */
 export interface RowUnreadable { readonly ok: false; readonly reason: 'unmeasured'; readonly detail: string }
+/** The actor is not one the attribution adapter minted for the operator at `operator` strength (gates A, review M6): no row. */
+export interface ActorRefused { readonly ok: false; readonly reason: 'actor' }
+
+/** The one actor check a designation writer makes: minted by the adapter (`isRecordedActor`), kind `operator`, issuer
+ *  `account-gate` and strength `operator`: neither a forged object, a session actor nor a console-only actor may write. */
+const actorRefused = (a: unknown): boolean => !isAccountGateOperator(a);
+const ACTOR_REFUSED: ActorRefused = { ok: false, reason: 'actor' };
+/** The actor's four values, in the column order every writer spells: subject, kind, issuer, strength. */
+const actorCols = (a: ActorWire): [string, string, string, string] => [a.subject, a.kind, a.issuer, a.strength];
 
 type Raw = Record<string, unknown>;
 const ROW = 'SELECT * FROM overlord_designation WHERE id = 1';
+/** The pending actor's four columns: set together from one `RecordedActor`, and nulled together by every pending clear. */
+const PENDING_ACTOR_COLUMNS = ['pendingActor', 'pendingActorKind', 'pendingActorIssuer', 'pendingActorStrength'] as const;
+/** The pending slot's nine columns, emptied: spliced into each writer's own UPDATE, so the writers map sees the writer. */
+const CLEAR_PENDING = 'pendingId = NULL, pendingGeneration = NULL, pendingKind = NULL, pendingSince = NULL, pendingDeadlineAt = NULL, '
+  + PENDING_ACTOR_COLUMNS.map((c) => `${c} = NULL`).join(', ');
 /** The narrowest values: a first designate has no row, and journals its choice from them (`first-designate-journals-from-the-narrowest`). */
 const NARROWEST_SET: PoolSet = { pools: [], untagged: false };
 const NARROWEST_MODEL: OverlordModelClass = 'opus';
@@ -57,11 +74,18 @@ function narrow(r: Raw): DesignationView | string {
   let pending: DesignationView['pending'] = null;
   if (pendingId !== null) {
     const kind = r['pendingKind'];
-    const deadlineAt = intOrNull(r['pendingDeadlineAt']); const since = intOrNull(r['pendingSince']); const actor = strOrNull(r['pendingActor']);
+    const deadlineAt = intOrNull(r['pendingDeadlineAt']); const since = intOrNull(r['pendingSince']);
     if (typeof kind !== 'string' || !(PENDING_KINDS as readonly string[]).includes(kind)) return 'the pending kind is not a kind word';
-    if (deadlineAt === null || since === null || actor === null) return 'the pending attempt lacks its deadline, start or actor';
-    pending = { sessionId: pendingId, kind: kind as PendingKind, deadlineAt, since, actor, generation: strOrNull(r['pendingGeneration']) };
+    if (deadlineAt === null || since === null) return 'the pending attempt lacks its deadline or start';
+    // The four pending actor columns read together, or the row is unmeasured: never a view with a half actor (gates A, F11).
+    const pa = readActorColumns(r['pendingActor'], r['pendingActorKind'], r['pendingActorIssuer'], r['pendingActorStrength']);
+    if (pa.kind === 'unreadable') return `the pending actor's ${pa.column} does not read`;
+    pending = { sessionId: pendingId, kind: kind as PendingKind, deadlineAt, since, actor: pa.actor.subject, actorDetail: pa.actor,
+      generation: strOrNull(r['pendingGeneration']) };
   } else if (r['pendingKind'] !== null && r['pendingKind'] !== undefined) return 'a pending kind stands with no pending id';
+  // An older build clears the pending subject and id, but does not know the three additive metadata columns.
+  // With no pending subject or id, those stale columns describe no actor and must not wedge the designation.
+  else if (r['pendingActor'] !== null && r['pendingActor'] !== undefined) return 'a pending actor stands with no pending id';
   const term = intOrNull(r['term']); const designatedTerm = intOrNull(r['designatedTerm']);
   if (term === null || term < 0 || designatedTerm === null || designatedTerm < 0) return 'a term is not a count';
   const model = parseOverlordModel(r['model']);
@@ -71,8 +95,8 @@ function narrow(r: Raw): DesignationView | string {
   const pastIds = idList(r['pastIds']); const stopsOwed = idList(r['stopsOwed']);
   if (pastIds === null) return 'pastIds is not a JSON array of strings';
   if (stopsOwed === null) return 'stopsOwed is not a JSON array of strings';
-  const actor = strOrNull(r['actor']);
-  if (actor === null) return 'the actor is missing';
+  const live = readActorColumns(r['actor'], r['actorKind'], r['actorIssuer'], r['actorStrength']);
+  if (live.kind === 'unreadable') return `the actor's ${live.column} does not read`;
   const aId = strOrNull(r['attemptId']); const aOut = r['attemptOutcome']; const aAt = intOrNull(r['attemptAt']);
   let lastAttempt: DesignationView['lastAttempt'] = null;
   if (aId !== null || aOut !== null || aAt !== null) {
@@ -81,7 +105,7 @@ function narrow(r: Raw): DesignationView | string {
   }
   return {
     bound: sessionId === null || generation === null ? null : { sessionId, generation }, pending, term, designatedTerm, model,
-    accountPools, pastIds, actor, lastAttempt, stopsOwed,
+    accountPools, pastIds, actor: live.actor.subject, actorDetail: live.actor, lastAttempt, stopsOwed,
   };
 }
 
@@ -113,16 +137,19 @@ function append(db: DatabaseSync, journal: AuthorityAppender, entry: OverlordAut
   return a.ok ? { ok: true, journalled: a.kind === 'appended' } : { ok: false, authority: a.error, detail: a.detail };
 }
 
+/** The live actor's four columns, set together from one `RecordedActor` (`actorCols`' order). */
+const SET_ACTOR = 'actor = ?, actorKind = ?, actorIssuer = ?, actorStrength = ?';
+
 const withId = (ids: readonly string[], id: string): string[] => (ids.includes(id) ? [...ids] : [...ids, id]);
 
 // ── designatePending ──────────────────────────────────────────────────────────────────────────────────────────────────
 
 export interface DesignateInput {
-  sessionId: string; deadlineAt: number; model: OverlordModelClass; accountPools: PoolSet; actor: string; at: number;
+  sessionId: string; deadlineAt: number; model: OverlordModelClass; accountPools: PoolSet; actor: RecordedActor; at: number;
   /** The door's operation key (minted through `Entropy`); the model-class record's is this plus `-model`, the set's plus `-set`. */
   opKey: string;
 }
-export type DesignateResult = { ok: true; changed: true } | { ok: false; reason: 'exists' } | AuthorityRefused | RowUnreadable;
+export type DesignateResult = { ok: true; changed: true } | { ok: false; reason: 'exists' } | AuthorityRefused | RowUnreadable | ActorRefused;
 
 /** Insert or update the row with a pending designate attempt. Refuses `exists` when a session is bound or pending, read in the
  *  same transaction, so two racing designates are safe. It records the account set and the model class (C46, X2) and no
@@ -131,6 +158,7 @@ export type DesignateResult = { ok: true; changed: true } | { ok: false; reason:
 // and its head row stay committed with no designation row, because `tx` commits on a normal return. That is reachable only when the
 // guard is already damaged (`journal-append` or `diverged`, each calling `writerFailed`); a throw would be worse, the record being a file.
 export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i: DesignateInput): DesignateResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
   return tx(db, (): DesignateResult => {
     const h = held(db);
     if ('ok' in h) return h;
@@ -143,12 +171,16 @@ export function designatePending(db: DatabaseSync, journal: AuthorityAppender, i
       from: row === null ? NARROWEST_MODEL : row.model, to: i.model });
     if (!model.ok) return model;
     db.prepare(
-      'INSERT INTO overlord_designation (id, pendingId, pendingKind, pendingSince, pendingDeadlineAt, pendingActor, term, designatedTerm, '
-      + "model, accountPools, actor, updatedAt) VALUES (1, ?, 'designate', ?, ?, ?, 0, 0, ?, ?, ?, ?) "
+      'INSERT INTO overlord_designation (id, pendingId, pendingKind, pendingSince, pendingDeadlineAt, pendingActor, pendingActorKind, '
+      + 'pendingActorIssuer, pendingActorStrength, term, designatedTerm, model, accountPools, actor, actorKind, actorIssuer, actorStrength, updatedAt) '
+      + "VALUES (1, ?, 'designate', ?, ?, ?, ?, ?, ?, 0, 0, ?, ?, ?, ?, ?, ?, ?) "
       + 'ON CONFLICT(id) DO UPDATE SET pendingId = excluded.pendingId, pendingGeneration = NULL, pendingKind = excluded.pendingKind, '
       + 'pendingSince = excluded.pendingSince, pendingDeadlineAt = excluded.pendingDeadlineAt, pendingActor = excluded.pendingActor, '
-      + 'model = excluded.model, accountPools = excluded.accountPools, actor = excluded.actor, updatedAt = excluded.updatedAt',
-    ).run(i.sessionId, i.at, i.deadlineAt, i.actor, i.model, JSON.stringify({ pools: i.accountPools.pools, untagged: i.accountPools.untagged }), i.actor, i.at);
+      + 'pendingActorKind = excluded.pendingActorKind, pendingActorIssuer = excluded.pendingActorIssuer, pendingActorStrength = excluded.pendingActorStrength, '
+      + 'model = excluded.model, accountPools = excluded.accountPools, actor = excluded.actor, actorKind = excluded.actorKind, '
+      + 'actorIssuer = excluded.actorIssuer, actorStrength = excluded.actorStrength, updatedAt = excluded.updatedAt',
+    ).run(i.sessionId, i.at, i.deadlineAt, ...actorCols(i.actor), i.model, JSON.stringify({ pools: i.accountPools.pools, untagged: i.accountPools.untagged }),
+      ...actorCols(i.actor), i.at);
     return { ok: true, changed: true };
   });
 }
@@ -189,8 +221,10 @@ export function goLive(db: DatabaseSync, journal: AuthorityAppender, sessionId: 
     const a = append(db, journal, { kind: 'authority-designate', opKey: `go-live-term-${term}`, term, sessionId, generation });
     if (!a.ok) return a;
     db.prepare(
-      'UPDATE overlord_designation SET sessionId = ?, generation = ?, term = ?, designatedTerm = ?, pendingId = NULL, pendingGeneration = NULL, '
-      + 'pendingKind = NULL, pendingSince = NULL, pendingDeadlineAt = NULL, pendingActor = NULL, attemptId = NULL, attemptOutcome = NULL, '
+      // The binding names the operator who started it (X2): the attempt's four actor columns, copied before the clear (the
+      // right-hand sides read the row as it was).
+      'UPDATE overlord_designation SET sessionId = ?, generation = ?, term = ?, designatedTerm = ?, actor = pendingActor, actorKind = pendingActorKind, '
+      + `actorIssuer = pendingActorIssuer, actorStrength = pendingActorStrength, ${CLEAR_PENDING}, attemptId = NULL, attemptOutcome = NULL, `
       + 'attemptAt = NULL, updatedAt = ? WHERE id = 1',
     ).run(sessionId, generation, term, term, at);
     restampOverlordGeneration(db, sessionId, term);
@@ -219,13 +253,12 @@ export function failPending(db: DatabaseSync, sessionId: string, outcome: Attemp
     return { ok: true, changed: true };
   });
 }
-/** The pending slot's six columns, emptied: spliced into each writer's own UPDATE, so the writers map sees the writer. */
-const CLEAR_PENDING = 'pendingId = NULL, pendingGeneration = NULL, pendingKind = NULL, pendingSince = NULL, pendingDeadlineAt = NULL, pendingActor = NULL';
 
 // ── retire ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
-export interface RetireInput { actor: string; at: number; opKey: string }
-export type RetireResult = { ok: true; changed: false } | { ok: true; changed: true; term: number; owed: string[] } | AuthorityRefused | RowUnreadable;
+export interface RetireInput { actor: RecordedActor; at: number; opKey: string }
+export type RetireResult =
+  | { ok: true; changed: false } | { ok: true; changed: true; term: number; owed: string[] } | AuthorityRefused | RowUnreadable | ActorRefused;
 
 /** Question 8's three cases. Nothing live or pending: nothing written. A pending-only row: outcome `retired`, its id owed, its
  *  generation ended, no term raised, no append. A live row: appends `authority-retire` (raised term, `previousSessionId` the bound id) first, then
@@ -233,6 +266,7 @@ export type RetireResult = { ok: true; changed: false } | { ok: true; changed: t
  *  is a narrowing, so the journal answers `row-only` where it cannot append and the row is still written; any refusal
  *  (`not-in-transaction`) writes nothing. `owed` is the ids this call put on `stopsOwed`. The retiring actor is the row's. */
 export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireInput): RetireResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
   return tx(db, (): RetireResult => {
     const h = held(db);
     if ('ok' in h) return h;
@@ -241,8 +275,8 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
     const p = row.pending;
     if (row.bound === null) {
       const id = p!.sessionId;
-      db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, actor = ?, attemptId = ?, attemptOutcome = 'retired', attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
-        .run(i.actor, id, i.at, JSON.stringify(withId(row.stopsOwed, id)), i.at);
+      db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, ${SET_ACTOR}, attemptId = ?, attemptOutcome = 'retired', attemptAt = ?, stopsOwed = ?, updatedAt = ? WHERE id = 1`)
+        .run(...actorCols(i.actor), id, i.at, JSON.stringify(withId(row.stopsOwed, id)), i.at);
       endOverlordGeneration(db, id); // a cancelled pending body's generation ends `retired` too (review 2366 N3)
       return { ok: true, changed: true, term: row.term, owed: [id] };
     }
@@ -255,9 +289,9 @@ export function retire(db: DatabaseSync, journal: AuthorityAppender, i: RetireIn
     const owed = p === null ? [bound] : withId([bound], p.sessionId);
     const stops = owed.reduce<readonly string[]>(withId, row.stopsOwed);
     const la = p === null ? row.lastAttempt : { sessionId: p.sessionId, outcome: 'retired' as const, at: i.at };
-    db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, sessionId = NULL, generation = NULL, term = ?, pastIds = ?, stopsOwed = ?, actor = ?, `
+    db.prepare(`UPDATE overlord_designation SET ${CLEAR_PENDING}, sessionId = NULL, generation = NULL, term = ?, pastIds = ?, stopsOwed = ?, ${SET_ACTOR}, `
       + 'attemptId = ?, attemptOutcome = ?, attemptAt = ?, updatedAt = ? WHERE id = 1')
-      .run(term, JSON.stringify(withId(row.pastIds, bound)), JSON.stringify(stops), i.actor,
+      .run(term, JSON.stringify(withId(row.pastIds, bound)), JSON.stringify(stops), ...actorCols(i.actor),
         la?.sessionId ?? null, la?.outcome ?? null, la?.at ?? null, i.at);
     return { ok: true, changed: true, term, owed };
   });
@@ -280,10 +314,10 @@ export function stopDone(db: DatabaseSync, sessionId: string): StopDoneResult {
 
 // ── the Settings doors' writers (designation C, plan Tasks 8 and 9) ─────────────────────────────────────────────────────
 
-export interface SettingInput { actor: string; at: number; opKey: string }
+export interface SettingInput { actor: RecordedActor; at: number; opKey: string }
 export type SettingResult =
   | { ok: true; changed: false } | { ok: true; changed: true; journalled: boolean }
-  | { ok: false; reason: 'not-found' } | AuthorityRefused | RowUnreadable;
+  | { ok: false; reason: 'not-found' } | AuthorityRefused | RowUnreadable | ActorRefused;
 
 /** One Settings move, before its writer's own UPDATE (so the writers map sees each writer): the row read in this transaction,
  *  `changed: false` when the value is the row's own (an exact compare, so a reorder of the set is a change), else the authority
@@ -303,11 +337,12 @@ function settingFirst<T>(db: DatabaseSync, journal: AuthorityAppender, pick: (r:
 
 /** C45: the model class, journalled as `authority-model-class` (`fable` widens, `opus` narrows: the journal's direction). */
 export function setModelClass(db: DatabaseSync, journal: AuthorityAppender, i: SettingInput & { model: OverlordModelClass }): SettingResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
   return tx(db, (): SettingResult => {
     const first = settingFirst(db, journal, (r) => r.model, (m) => m === i.model,
       (from) => ({ kind: 'authority-model-class', opKey: i.opKey, from, to: i.model }));
     if ('done' in first) return first.done;
-    db.prepare('UPDATE overlord_designation SET model = ?, actor = ?, updatedAt = ? WHERE id = 1').run(i.model, i.actor, i.at);
+    db.prepare(`UPDATE overlord_designation SET model = ?, ${SET_ACTOR}, updatedAt = ? WHERE id = 1`).run(i.model, ...actorCols(i.actor), i.at);
     return { ok: true, changed: true, journalled: first.journalled };
   });
 }
@@ -315,14 +350,15 @@ export function setModelClass(db: DatabaseSync, journal: AuthorityAppender, i: S
 /** C46: the account set, journalled as `authority-account-set`. The journal canonicalises both lists, so a pure reorder is no
  *  change of membership there; the order lives in this row only. */
 export function setAccountSet(db: DatabaseSync, journal: AuthorityAppender, i: SettingInput & { accountPools: PoolSet }): SettingResult {
+  if (actorRefused(i.actor)) return ACTOR_REFUSED;
   const next = i.accountPools;
   return tx(db, (): SettingResult => {
     const first = settingFirst(db, journal, (r) => r.accountPools,
       (p) => p.untagged === next.untagged && p.pools.length === next.pools.length && p.pools.every((x, n) => x === next.pools[n]),
       (from) => ({ kind: 'authority-account-set', opKey: i.opKey, from, to: next }));
     if ('done' in first) return first.done;
-    db.prepare('UPDATE overlord_designation SET accountPools = ?, actor = ?, updatedAt = ? WHERE id = 1')
-      .run(JSON.stringify({ pools: next.pools, untagged: next.untagged }), i.actor, i.at);
+    db.prepare(`UPDATE overlord_designation SET accountPools = ?, ${SET_ACTOR}, updatedAt = ? WHERE id = 1`)
+      .run(JSON.stringify({ pools: next.pools, untagged: next.untagged }), ...actorCols(i.actor), i.at);
     return { ok: true, changed: true, journalled: first.journalled };
   });
 }

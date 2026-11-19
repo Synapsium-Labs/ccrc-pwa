@@ -538,7 +538,7 @@ const SNAPSHOT_FACTS: CardFacts = {
 };
 const SNAPSHOT = snapshotFactsJson(SNAPSHOT_FACTS);
 /** A usage reading; `ts` is the statusline's clock in epoch SECONDS (1 by default: older than any compaction line). */
-const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', usage: {
+const usage = (ctxTokens: number, ctxWindow: number, stale = false, ts = 1): UsageRead => ({ kind: 'reading', uuid: null, usage: {
   ts, model: 'claude-opus-5-5', class: null, effort: null, ctxPct: null, ctxTokens, ctxWindow, cost: null, cacheExpiresAt: null, stale,
 } });
 const lines = (n: number, at: number): CompactionsRead => ({ kind: 'lines', skipped: 0, eventsAbsent: false,
@@ -1432,6 +1432,8 @@ describe('shadow is structural: the lane imports nothing that sends', () => {
       '../../../shared/continuity-card.js', './card.js', './probes.js', './probeSchedule.js',
       // The renewal act: the walk's deciders (L1). The acts are planned here and taken by `renewalActs.ts`, never imported.
       './softRenewal.js', './renewalOrder.js', './renewalFeed.js',
+      // The renewal hand-offs: Renew now's and the mark's readers and the PreCompact field's decider (L1); none of them sends.
+      './renewNow.js', './operatorMark.js', './precompact.js',
       // Account organization PR D: the organization relation (L0, imports nothing) that reads `startOtherOrg`.
       '../../../shared/accountOrg.js'];
     const edges = parsedFile('server/src/continuity/generationsLane.ts').imports.filter((e) =>

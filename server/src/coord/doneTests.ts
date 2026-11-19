@@ -75,6 +75,14 @@ const TARGET_WHY_MAP = {
   'facts-mismatch': true, 'no-such-row': true, 'run-unreadable': true,
 } as const satisfies Record<string, true>;
 type TargetWhy = keyof typeof TARGET_WHY_MAP;
+/** The whys that can never change for the row they answer: a pull request only the run's lineage names, or one the run
+ *  never closed with, and a run closed with no close record. Every other why may be answered by a later build or a later
+ *  read (`state-unknown` is a word a newer build wrote), so a caller that ends something on an `unmeasurable` answer ends
+ *  it only on these (remaining work B's edge arm, review 2439 F1). */
+const PERMANENT_TARGET_WHY_MAP = {
+  'lineage-unattributed': true, 'not-this-runs-pr': true, 'no-close-record': true,
+} as const satisfies Partial<Record<TargetWhy, true>>;
+export const isPermanentTargetWhy = (why: string): boolean => Object.hasOwn(PERMANENT_TARGET_WHY_MAP, why);
 
 /** Every kebab word this context spells, for `mail-routes.test.ts`'s code scan: a predicate, a done test's refusal and why
  *  a target is unmeasurable. None is a mail rejection or a run refusal: a refusal is `bad-request` at its door (DT9). */
@@ -177,4 +185,26 @@ export function targetVerdict(target: DoneTarget, facts: TargetFacts): TargetAns
   if (target.predicate === 'run-closed') return runClosed(target.runId, r);
   if (target.predicate === 'pr-merged') return prMerged(target.runId, target.pr, r);
   return reviewPassed(target.runId, r, facts.reviews);
+}
+
+/** What the drift grace gathers to ask whether a run's PR is merged (Linear hierarchy design §7.3: Linear's GitHub integration
+ *  completes an issue when its PR merges): the run's stored lineage, unvalidated, its own workspace branch, and its session's PR
+ *  as the newest fleet listing shows it (null when the listing has no row for that session), or why the run was not read. */
+export type RunMergedFacts =
+  | { run: ReadFailure }
+  | { run: 'read'; lineage: unknown; ownBranch: string | null; listing: { phase: string | null; branch: string | null } | null };
+
+/** Whether a run's PR is merged as the server knows it, for an open run as well as a closed one: a `merged` phase in its folded
+ *  `.prhistory` lineage, else its session's listed PR merged on the run's own workspace branch. It is NOT `pr-merged`, which
+ *  reads only the run's own close record: the grace asks while the run is still open (merging, no close record yet), and a
+ *  wait for the close would restore an issue the merge just completed. A run not read, or a lineage that is no list, reads
+ *  as no merge there; the grace then holds its usual one pass. Moved here from the drift pass (#2964 made this file the one
+ *  decider of "merged" from a run's lineage; the coordinator's ruling on review 2408's fix round 3). */
+export function runPrMergedSeen(f: RunMergedFacts): boolean {
+  if (f.run !== 'read') return false;
+  const inLineage = Array.isArray(f.lineage)
+    && f.lineage.some((e) => typeof e === 'object' && e !== null && (e as { phase?: unknown }).phase === 'merged');
+  if (inLineage) return true;
+  const l = f.listing;
+  return l !== null && l.phase === 'merged' && f.ownBranch !== null && l.branch !== null && l.branch === f.ownBranch;
 }

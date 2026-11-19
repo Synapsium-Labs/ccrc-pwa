@@ -457,6 +457,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   push; a push before that only hands work to another session or comes before a stop that could lose the work. Every
   push re-runs the PR's checks, so a push per commit buys CI runs and nothing else (expected: about 2.8 runs per
   merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
+- **Follow the review judge's standard** (the operator's rulings of 2026-11-17). Every PR here carries the `horkos`
+  check: Horkos is this repo's review judge, and its name is not secret. We follow its standard: a new spec or plan
+  takes its dated layout, directly in `docs/superpowers/specs/` or `docs/superpowers/plans/`, a task note goes under
+  `docs/superpowers/programs/<programme>/`, and a spec's images and mockup pages go under
+  `docs/design/<spec file name less its extension>/`, linked from the spec by relative path. A blocking reason it posts is fixed in that PR where the PR can fix
+  it. It is not a required check, so landing still gates on the required checks. The ledger guard's layout arm
+  (`.github/ci/ledger-guard.mjs`, D-8719) mirrors its layout rule in this repo, so CI catches a misplaced file first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked
@@ -629,7 +636,7 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered in `server.ts` for the kickoff route's reason, so `box-token-census.test.ts` names it beside that
   route's literal. So does `POST /api/digest/correct` (coordinator-first routing D-5300): it queues the operator's
   correction of a digest line as durable system mail to that line's coordinator, consults no box token, is
-  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
+  session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal too. So does `POST /api/sessions/:id/prompt` (Overlord W1 private store B): for the designated session it records the operator's message in the private store, then queues the nudge as system mail and writes the `@overlord` operator mark in one `coord.db` transaction, and types nothing; it consults no box token, is session-gated when armed, and is registered in `server.ts`, so the census names it beside the kickoff literal as well. The programme ledgers' operator doors (plan PL4), `GET /api/waiting`, `GET /api/items/:id` (one item by its id, whatever its state and age, D-8194), `GET /api/programmes/:slug/goals`,
   `POST /api/items/:id/tick`, `POST /api/items/:id/dismiss`, `POST /api/items/:id/act` and `POST /api/items/:id/decline` (the operator's
   Abandon run and Keep the run on an end-request item: body-less, the act running the abandon arm inside the coordination hold as
   the operator and closing its item, the decline mailing the asker), `POST /api/calls/:id/seen` (D-8126: the operator's Seen on a big call a coordinator made in their name), `PUT /api/items/:id/secret` (plan PL6), and
@@ -646,8 +653,10 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   registered by `registerLedgerOperatorRoutes` in `server/src/coord/ledgersRoutes.ts`, called from `server.ts`; the census reads
   that file as a lane source of its own and keeps their names in a hand-kept `LEDGER_OPERATOR_DOORS`, checked against it in both
   directions. The operator's read and cancel of a session's timers (Overlord W1a, the timers piece), `GET /api/sessions/:id/timers`
-  and `POST /api/sessions/:id/timers/:timerId/cancel`, and the operator's daily backstop setting (Overlord W1, the renewal readings),
-  `GET` and `POST /api/continuity/renewal-backstop`, consult no box token either and are session-gated when armed; they register
+  and `POST /api/sessions/:id/timers/:timerId/cancel`, the operator's daily backstop setting (Overlord W1, the renewal readings),
+  `GET` and `POST /api/continuity/renewal-backstop`, the operator's Renew now, `POST /api/sessions/:id/renew`, and the Setting
+  "when soft renewals happen", `GET`/`POST /api/coord/renewal-mode` (the renewal hand-offs), consult no box token either and are
+  session-gated when armed; they register
   from `server/src/continuity/routes.ts` beside the session's own box-token timer doors, and the census keeps every session-gated
   door of that file in a hand-kept `CONTINUITY_SESSION_DOORS`, checked against it in both directions. The operator's private-name list doors (Overlord W2, private names B),
   `PUT /api/overlord/private-names` (the upload, which replaces the list, behind the account gate's step-up, so it refuses while
@@ -657,8 +666,17 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   (Overlord W1 designation A), `GET /api/overlord/designation` and `POST` and `DELETE /api/overlord/designate` (Start the Overlord and
   its retire), consult no box token either: each asks the account gate first, the two writes with a step-up, and runs on the
   coordination serialiser, so they are session-gated when armed and refuse `auth-off` dark. So do its two Settings doors (designation C),
-  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). They register from `server/src/coord/overlordRoutes.ts`
-  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
+  `POST /api/overlord/model` (a step-up for `fable`) and `POST /api/overlord/account-set` (a step-up for a widening). `GET /api/overlord/ladder`,
+  `POST /api/overlord/rung`, `POST /api/overlord/pause` and `POST /api/overlord/latches/:cause/clear` consult no box token and are
+  session-gated when armed. A rung lowering and Pause work dark, a raise takes the account gate's step-up, and a latch clear always
+  takes the step-up. Both sets of doors register from `server/src/coord/overlordRoutes.ts`
+  and the census keeps their names in a hand-kept `OVERLORD_OPERATOR_DOORS`, checked against that file in both directions. The operator's decision-model doors (Overlord W2, decision model B), `GET /api/decision-model`, `POST /api/decision-model/rows/:id/arm`, `POST /api/decision-model/rows/:id/off`, `POST /api/decision-model/rows/:id/ceiling`, and `PUT` and `DELETE /api/decision-model/key`, consult no box token either and are session-gated when armed: the five writes refuse `auth-off` while sign-in is dark and ask the account gate's step-up for a widening only (arming and setting a key always; switching an armed gate off and raising a ceiling; never a narrowing, so an emergency off is one tap), and the read never answers any part of the key; they register from `server/src/coord/decisionModelRoutes.ts`, which the census reads as a lane source of its own and checks against a hand-kept `DECISION_MODEL_DOORS` in both directions. The Models sheet's write door, `POST /api/models/:lane` (hold, release and revert of a class, the answer re-read, never inferred), consults no box token either and is session-gated when armed, its audit line naming the device; it registers from `server/src/laneModelsRoutes.ts` (the read beside it, `GET /api/models/:lane`, is in `server.ts`), which the census reads as a lane source of its own and checks against a hand-kept `MODELS_DOORS` in both directions. The replay quiz's
+rule door (Overlord W1a quiz record), `POST /api/continuity/quiz-runs/:id/rule` (the operator's Confirm or Discard of a recorded
+run on the Shadow lanes card, behind the account gate's step-up, so it refuses while sign-in is dark), consults no box token
+either and is session-gated when armed; its record door, `POST /api/continuity/quiz-runs`, is a box-token lane whose caller is
+the operator's own shell on the fleet box (`ccrc quiz-record`, through `ccrc-api`), and it records a run as pending only. Both
+register from `server/src/continuity/quizRoutes.ts`, which the census reads as a lane source of its own and checks against a
+hand-kept `QUIZ_SESSION_DOORS` in both directions. The box-token lifecycle's `POST /api/token/claim` (EXEMPT: it authenticates by a single-use code
   the server sent over the agent link, never by the token it hands out) and `POST /api/token/rotate` (session-only,
   the console's "Rotate now") consult no box token either; they register from `server/src/token/routes.ts`, which
   the census reads as a lane source of its own and checks against `CODE_DOORS` and `TOKEN_DOORS` in both directions.

@@ -4,8 +4,9 @@
 // the session's lane, as that lane's own files say it: the class registry (`registryFileName`, `shared/models.mjs`) says
 // which model a class maps to, and the catalogue says what that model is called. `GET /api/models/:lane` reads both
 // (`LaneModelsRead`, `shared/models.ts`), the same facts `ccrc models <lane> show` prints. A model advance moves the
-// registry, and the row's label follows it with no code change. When the lane has no registry, or it or its catalogue
-// cannot be read, a row reads its class name alone ("Opus class"), never a model name this file remembers: the
+// registry, and the row's label follows it with no code change. When the lane has no registry, or the read does not
+// answer its classes (`LaneModelsRead`'s other arms, each worded by `laneReadWords`), a row reads its class name alone
+// ("Opus class"), never a model name this file remembers: the
 // labels it used to hard-code went stale on the gpt lane once that lane's registry moved on. `model-name-census.test.ts`
 // keeps a model display name out of `pwa/src` for good. WHICH LIST a lane gets is the roster's lane kind's to decide
 // (D-8686, re-plan R1), with the temporary wrapper fallback named once, in `modelListProvider`.
@@ -24,10 +25,16 @@
 // The alias is set in ONE place, the lane's `settings.json` `env` block
 // (`deploy/models-op.mjs`'s materialiser writes it from the registry, `shared/modelenv.mjs` names its keys).
 import type { RosterWire, RouteField } from '../../../shared/api';
-import { CLASSES, type LaneClassModel, type LaneModelsRead, type ModelClass } from '../../../shared/models';
+import { MODELS_ARGV_REFUSALS, type ModelsArgvRefusal } from '../../../shared/agent-protocol';
+import {
+  CLASSES, type LaneAdvanceRead, type LaneAdvanceState, type LaneClassAdvance, type LaneClassModel, type LaneModelsRead,
+  type LaneAbsentKind, type LaneUnreadableCode, type ModelClass,
+} from '../../../shared/models';
+import { CANARY_RESULTS, HOLD_BY, HOWS, type HistoryEntry, type Hold, type Pending, type Previous } from '../../../shared/model-advance.mjs';
 import type { ProviderId } from '../../../shared/providers';
 import { EFFORT_LADDER, type EffortRung } from '../../../shared/routing-ladder';
 import { managedCodex } from '../accounts/connectFlow';
+import { ApiError } from './apiError';
 
 /**
  * Routing slice 6, Task 4: the intended-value override an option list is
@@ -235,21 +242,109 @@ export function modelReadbackFor(
   return key === undefined || key === '' ? null : key;
 }
 
+const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
+const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
+/** The advance read's five states. `LANE_ADVANCE_STATES` is deliberately not exported (`shared/models.ts`, D-8709: a
+ *  value declared in a `.ts` twin is `undefined` to an extension-less import), so the list is kept here and pinned to
+ *  `LaneAdvanceState` by its type: a state added there is a compile error until it is added here. */
+const ADVANCE_STATE_WORDS: Readonly<Record<LaneAdvanceState, true>> = { ok: true, absent: true, unreadable: true, invalid: true, unreported: true };
+const isAdvanceState = (v: string): v is LaneAdvanceState => Object.hasOwn(ADVANCE_STATE_WORDS, v);
+/** The advance grammar's own word lists (`HOLD_BY`, `HOWS`, `CANARY_RESULTS`: `shared/model-advance.mjs`, which imports no
+ *  `node:*`), never a copy: a word the writer adds is read by the next build with no second edit. */
+const inList = (list: readonly string[], v: unknown): boolean => typeof v === 'string' && list.includes(v);
+/** An advance this build does not read, for any reason: the state words, and no class. The lane's own class models are
+ *  untouched by it. */
+const INVALID_ADVANCE: LaneAdvanceRead = { state: 'invalid', detail: null, pending: null, classes: null };
+
+const asHold = (v: unknown): Hold | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || typeof v.at !== 'string' || !inList(HOLD_BY, v.by)) return undefined;
+  return { at: v.at, by: v.by as Hold['by'] };
+};
+const asPrevious = (v: unknown): Previous | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || !strOrNull(v.model) || !strOrNull(v.effort)) return undefined;
+  return { model: v.model, effort: v.effort };
+};
+/** One history entry: the fields the sheet reads are held to their grammar, and the entry's other keys ride along. */
+const asMove = (v: unknown): HistoryEntry | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || typeof v.at !== 'string' || !inList(HOWS, v.how)) return undefined;
+  if (!strOrNull(v.from) || !strOrNull(v.to) || typeof v.ok !== 'boolean') return undefined;
+  if (!inList(CANARY_RESULTS, v.canary)) return undefined;
+  return { ...v } as HistoryEntry;
+};
+const asPending = (v: unknown): Pending | null | undefined => {
+  if (v === null) return null;
+  if (!isObj(v) || typeof v.at !== 'string' || typeof v.class !== 'string' || !(CLASSES as readonly string[]).includes(v.class)) return undefined;
+  if (!strOrNull(v.to)) return undefined;
+  // `how`: absent is an automatic advance's intent (it carries none), `hand` a hand set-class's; any other word is off the grammar.
+  if (v.how !== undefined && v.how !== 'hand') return undefined;
+  return { ...v } as unknown as Pending;
+};
+const asClassAdvance = (v: unknown): LaneClassAdvance | undefined => {
+  if (!isObj(v) || !strOrNull(v.family) || typeof v.revertable !== 'boolean') return undefined;
+  const hold = asHold(v.hold);
+  const previous = asPrevious(v.previous);
+  const lastMove = asMove(v.lastMove);
+  if (hold === undefined || previous === undefined || lastMove === undefined) return undefined;
+  return { family: v.family, hold, previous, revertable: v.revertable, lastMove };
+};
+
+/** The lane's advance state as `show` reported it (`LaneAdvanceRead`): five states never folded, and `undefined` for
+ *  an answer off the grammar. A state with no `detail` or `pending` key reads them as null (absence permits); the
+ *  classes are read only for `ok`, where every class must read. */
+function asLaneAdvance(raw: unknown): LaneAdvanceRead | undefined {
+  if (!isObj(raw) || typeof raw.state !== 'string' || !isAdvanceState(raw.state)) return undefined;
+  const state = raw.state;
+  const detail = raw.detail === undefined ? null : raw.detail;
+  if (!strOrNull(detail)) return undefined;
+  const pending = raw.pending === undefined ? null : asPending(raw.pending);
+  if (pending === undefined) return undefined;
+  if (state !== 'ok') return { state, detail, pending, classes: null };
+  if (!isObj(raw.classes)) return undefined;
+  const classes = {} as Record<ModelClass, LaneClassAdvance>;
+  for (const cls of CLASSES) {
+    const c = asClassAdvance(raw.classes[cls]);
+    if (c === undefined) return undefined;
+    classes[cls] = c;
+  }
+  return { state, detail, pending, classes };
+}
+
 /** D-8406: `GET /api/models/:lane`'s answer, held to its shape: the lane's `LaneModelsRead`, or `null` for anything
  *  else (an older server's 404 body, a malformed answer). A `read` must carry every class with a model and a label that
  *  are each a string or null, and (D-8686) an `efforts` that is an array of strings, or null; one that does not is not
  *  trusted for any class. An `efforts` that is absent (an older server) or null reads as `null`, "not known": absence
- *  permits. The ONE reader of that wire. Pure. */
+ *  permits. An `advance` key (model-class-advance R4) is read through `asLaneAdvance`: ABSENT stays absent (an agent
+ *  without the op: the advance file was not read, which is not `unreported`), and one off its grammar reads as an
+ *  `invalid` advance with no detail (F8), never as a lost answer: the classes are kept. The POST's 200 carries `models` too, and reads through here. The ONE
+ *  reader of that wire. Pure. */
 export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
   if (typeof raw !== 'object' || raw === null) return null;
   const models = (raw as { models?: unknown }).models;
   if (typeof models !== 'object' || models === null) return null;
   const kind = (models as { kind?: unknown }).kind;
-  if (kind === 'absent' || kind === 'unreadable') return { kind };
+  // R3b: each arm the read can answer instead of the classes. An `unreadable` keeps a `code` this build words and drops one
+  // it does not (absence permits: it reads as an unreadable with no reason, never a lost answer); a `refused` must carry a
+  // builder word.
+  if (kind === 'absent') {
+    // F1: the reason `show` gave, kept when it is one this build reads; any other value reads as "not said".
+    const laneKind = (models as { laneKind?: unknown }).laneKind;
+    return typeof laneKind === 'string' && Object.hasOwn(LANE_ABSENT_KINDS, laneKind) ? { kind, laneKind: laneKind as LaneAbsentKind } : { kind };
+  }
+  if (kind === 'unsupported' || kind === 'not-started' || kind === 'busy') return { kind };
+  if (kind === 'unreadable') {
+    const code = (models as { code?: unknown }).code;
+    return typeof code === 'string' && Object.hasOwn(LANE_UNREADABLE_CODE_WORDS, code) ? { kind, code: code as LaneUnreadableCode } : { kind };
+  }
+  if (kind === 'refused') {
+    const why = (models as { why?: unknown }).why;
+    return typeof why === 'string' && (MODELS_ARGV_REFUSALS as readonly string[]).includes(why) ? { kind, why: why as ModelsArgvRefusal } : null;
+  }
   if (kind !== 'read') return null;
   const classes = (models as { classes?: unknown }).classes;
   if (typeof classes !== 'object' || classes === null) return null;
-  const strOrNull = (v: unknown): v is string | null => v === null || typeof v === 'string';
   const out = {} as Record<ModelClass, LaneClassModel>;
   for (const cls of CLASSES) {
     const c = (classes as Record<string, unknown>)[cls];
@@ -261,7 +356,86 @@ export function asLaneModelsRead(raw: unknown): LaneModelsRead | null {
     }
     out[cls] = { model, label, efforts: efforts === undefined || efforts === null ? null : [...(efforts as string[])] };
   }
-  return { kind: 'read', classes: out };
+  const rawAdvance = (models as { advance?: unknown }).advance;
+  if (rawAdvance === undefined) return { kind: 'read', classes: out };
+  const advance = asLaneAdvance(rawAdvance);
+  // An advance off its grammar is not trusted, and costs only itself: the classes the lane's files name still read, and the
+  // advance is `invalid` ("not one this build reads"), so the pickers keep their models and a completed POST keeps its answer.
+  return { kind: 'read', classes: out, advance: advance ?? INVALID_ADVANCE };
+}
+
+/** The absent read's reasons (`LaneAbsentKind`, deliberately not exported as a value from `shared/models.ts`), pinned to
+ *  the type: a reason added there is a compile error until it is added here. */
+const LANE_ABSENT_KINDS: Readonly<Record<LaneAbsentKind, true>> = { anthropic: true, 'never-made': true };
+
+/** R3b: the box's reason for an `unreadable` read, as a clause that finishes "The lane's models could not be read: …".
+ *  Keyed on `LaneUnreadableCode`, so a reason the server adds is a compile error here until it is worded. */
+export const LANE_UNREADABLE_CODE_WORDS: Readonly<Record<LaneUnreadableCode, string>> = {
+  'catalogue-unreadable': 'the lane\'s model catalogue cannot be read on the fleet box',
+  'catalogue-invalid': 'the lane\'s model catalogue is not one the fleet box accepts',
+  'registry-invalid': 'the lane\'s class registry is not one the fleet box accepts with its catalogue',
+  'roster-absent': 'the fleet box has no account roster yet, so the lane could not be looked up (run the install on the fleet box)',
+  'roster-unreadable': 'the fleet box\'s account roster exists but cannot be read, so the lane could not be looked up',
+  'roster-invalid': 'the fleet box\'s account roster is not one its ccrc accepts, so the lane could not be looked up',
+  'no-answer': 'the fleet box\'s model tool gave no usable answer (if it keeps happening, re-run the install on the fleet box)',
+  'no-output': 'the fleet box\'s ccrc stopped before it read the lane and printed nothing (re-run the install on the fleet box)',
+};
+
+/** R3b: what a lane read that did not answer its classes says, one sentence per arm, for every surface that names a
+ *  lane's models (the Models sheet and the model picker); `null` for a `read`, which shows its classes instead. Each arm
+ *  keeps its own words: `busy` says the box was busy, `unsupported` that this build does not offer the read, and an
+ *  `unreadable` names the box's reason when it gave one. The two transient arms (`busy`, `not-started`) say what
+ *  happened and that the next open reads again, and promise nothing more: the hook asks once more, not until it lands
+ *  (fix round 2, N2). An `absent` with no lane kind (`show` answered `no-such-account`) says only that the lane's models
+ *  were not found (N1). Pure. */
+export function laneReadWords(read: LaneModelsRead): string | null {
+  switch (read.kind) {
+    case 'read': return null;
+    case 'absent':
+      if (read.laneKind === 'anthropic') return 'This is an Anthropic lane: its classes are the client\'s own aliases, so it has no class registry to show.';
+      if (read.laneKind === 'never-made') return 'This lane has no class registry, so its classes have no models to show.';
+      return 'The fleet box did not find this lane\'s models, so no model is shown.';
+    case 'unreadable':
+      return read.code === undefined
+        ? 'The lane\'s models could not be read just now, so no model is shown.'
+        : `The lane's models could not be read: ${LANE_UNREADABLE_CODE_WORDS[read.code]}. No model is shown.`;
+    case 'unsupported':
+      return 'This build does not offer the read of a lane\'s models here: the fleet box\'s agent predates it, or this server has no fleet box to ask. Update the fleet box to see the models.';
+    case 'not-started':
+      return 'The request for the lane\'s models did not reach the fleet box, or its model tool could not be started there. Opening the picker or the Models sheet reads the lane again.';
+    case 'refused':
+      return 'This server would not ask about this lane: its name is not one the model tool takes. No model is shown.';
+    case 'busy':
+      return 'The fleet box was busy with another models request, so the lane was not read this time. Opening the picker or the Models sheet reads the lane again.';
+  }
+}
+
+/** The model picker's note (R3b; fix rounds 1 and 2, F1, F2 and N1): `laneReadWords`, only where a model is actually
+ *  missing. An Anthropic lane's `absent` is by design (its rows are the client's own aliases, named as always), so the
+ *  picker says nothing over it, even beside a transient word; nor over a `read`, nor before the first read lands.
+ *  `transient` is the hook's word for a newest answer kept beside an older non-transient one (`busy`, `not-started`): it
+ *  is said, and the kept answer's rows stay. Pure. */
+export function lanePickerNote(read: LaneModelsRead | null, transient: 'busy' | 'not-started' | null = null): string | null {
+  if (read !== null && read.kind === 'absent' && read.laneKind === 'anthropic') return null;
+  if (transient !== null) return laneReadWords({ kind: transient });
+  if (read === null) return null;
+  return laneReadWords(read);
+}
+
+/** Why a read of the lane failed (F12), for a surface that says so: `signed-out` (the gate's 401), `foreign-origin` (the
+ *  gate's 403 `foreign-origin`: the page was opened at an address the console does not accept, which signing in cannot
+ *  cure), `refused` (any other 403), `not-in-roster` (the route's 404 `not-found`: the lane has left the roster),
+ *  `no-answer` (no answer arrived, or the server answered with a 5xx: offline, a dropped link, a fleet box that did not
+ *  reply) and `unreadable` (an answer came that this console cannot read: a 4xx of any other kind, a 404 without the
+ *  route's word, or a 2xx the one reader above refused, which the caller names itself). Pure. */
+export type LaneReadFailure = 'signed-out' | 'foreign-origin' | 'refused' | 'not-in-roster' | 'no-answer' | 'unreadable';
+export function laneReadFailureOf(err: unknown): LaneReadFailure {
+  if (!(err instanceof ApiError)) return 'no-answer';
+  const word = typeof err.body === 'object' && err.body !== null ? (err.body as { error?: unknown }).error : undefined;
+  if (err.status === 401) return 'signed-out';
+  if (err.status === 403) return word === 'foreign-origin' ? 'foreign-origin' : 'refused';
+  if (err.status === 404 && word === 'not-found') return 'not-in-roster';
+  return err.status >= 500 ? 'no-answer' : 'unreadable';
 }
 
 /** Whether a class's readback can be measured on this lane (D-6334): the lane's provider is known and the list

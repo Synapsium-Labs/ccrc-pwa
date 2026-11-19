@@ -16,8 +16,8 @@ import { refuseRoute } from '../refuse.js';
 import { REG_GENERATION_SHAPE, shapeProgramSlug } from '../../../shared/api.js';
 import { CARD_BUDGET_TOKENS, isAnchorForm, type AnchorForm, type Fact } from '../../../shared/continuity-card.js';
 import {
-  PROBE_ROUND_MAX, isNoteKeyKind, isNoteKind, noteKeyText, type ContinuityReadDoor, type HandoverNote, type HandoverThread, type KeyFact,
-  type NoteKey,
+  PROBE_ROUND_MAX, RENEWAL_MODES, RENEWAL_MODE_DEFAULT, isNoteKeyKind, isNoteKind, isRenewalMode, noteKeyText, type ContinuityReadDoor,
+  type HandoverNote, type HandoverThread, type KeyFact, type NoteKey, type RenewalModeView,
 } from '../../../shared/continuity.js';
 import { timerNoteFits, type TimerView } from '../../../shared/continuity-timers.js';
 import { BACKSTOP_ZONE_MAX, isBackstopHour, isBackstopZone, type BackstopRead } from '../../../shared/renewal-readings.js';
@@ -29,8 +29,11 @@ import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
-import { effectiveGeneration, type TimerRow } from './continuityStore.js';
-import { noteKeyReader } from './noteKeys.js';
+import { RENEW_REQUESTS_CURSOR, effectiveGeneration, sessionLiveGeneration, type TimerRow } from './continuityStore.js';
+import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
+import type { NoticeSink } from '../notice.js';
+import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
+import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
 import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
@@ -39,7 +42,7 @@ import {
   type NoteVerdictRefusal, type RevisedFact,
 } from './notes.js';
 import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
-import { designationFactFrom, identityOf as generationIdentityOf, type DesignationFact } from '../roleOf.js';
+import { identityOf as generationIdentityOf } from '../roleOf.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -54,6 +57,9 @@ export interface ContinuityRouteDeps {
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The card's registry reads (`gatherCardFacts`' ports other than the store); the timer set door's role read reuses them. */
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
+  /** The private store's text-free message read, for a `miss` note's key (`NoteKeysMessages`), resolved per request. Absent, or
+   *  null while the store is not open: a `message` key then reads `unmeasured` and the door refuses `unmeasured`. */
+  operatorModel?: () => NoteKeysMessages | null | undefined;
   /** The setter's stamp: `incarnationOf`'s two agreeing reads of `$REG/<id>.generation`. NOT `cardRegistry.incarnation`, its
    *  single read (slug setter-stamp-is-a-double-read): the stamp keys a timer whose mismatch later cancels it, irreversibly,
    *  so a file that changes between the reads answers `unmeasured` and the set refuses `timer-unmeasured`, where the card's
@@ -65,6 +71,10 @@ export interface ContinuityRouteDeps {
   cardMemoMax?: number;
   /** The continuity row's gate (`laneArmGate`), unless a test opens it to drive a live walk, as the generations lane's. */
   continuityGate?: (lane: typeof CONTINUITY_LANE) => string | null;
+  /** Who the operator's doors record as the actor: the signed-in device, or `flag-off` while sign-in is dark. Absent: `flag-off`. */
+  operatorActor?: (req: FastifyRequest) => string;
+  /** The feed's notice sink (`noticeSink`): a Settings change is a record-only row naming the actor. Absent: no row. */
+  notice?: NoticeSink;
 }
 
 /** The identity pair's grammar, the linking read's and the Linear proxy's: `SESSION_ID_RE`'s, so an id the timer doors
@@ -111,7 +121,7 @@ const NOTE_DETAIL: Readonly<Record<NoteVerdictRefusal, string>> = {
   [NOTE_REFUSALS.referenceUnknown]: 'a thread names no live programme, open item or non-terminal run of yours',
   [NOTE_REFUSALS.notAsked]: 'no handover was asked: your generation is not checkpointed',
   unmeasured: 'could not check: a row it needs could not be read; try again',
-  'bad-request': 'a thread names its next act (next is not blank), and a close names the note it closes in revises',
+  'bad-request': 'a thread names its next act (next is not blank), a miss is keyed to a message and only a miss is, and a close names the note it closes in revises',
 };
 /** A round's id, as the lane mints it, and a question's id inside its round. */
 const ROUND_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
@@ -292,10 +302,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (anchorLogged.size > (deps.cardMemoMax ?? CARD_MEMO_MAX)) anchorLogged.delete(anchorLogged.keys().next().value!);
     console.warn(`ccrc-server: anchor-slot shadow: the ${form} anchor for ${id} is ${[...text].length} characters, ${utf8Bytes(text)} bytes (card ${hash.slice(0, 12)}); not served`);
   };
-  /** The designation as this call reads it, or `unmeasured` (a read that throws included). */
-  const designationReadOf = (coord: CoordStore): DesignationFact | 'unmeasured' => {
-    try { return designationFactFrom(coord.designationRead()); } catch { return 'unmeasured'; }
-  };
   /** The generation canary's two reads: the identity's live generation, and the session's newest start. */
   const anchorReads = (coord: CoordStore, id: string): { live: Fact<AnchorGenRow | null>; newest: Fact<AnchorStart | null> } => {
     const gens = coord.liveGenerations();
@@ -366,7 +372,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (part === 'anchor' && form === 'fork') return reply.code(200).send(anchorAnswer(anchorLive, { form }));
     const at = deps.wall();
     const masker = deps.masker ?? SHAPE_ONLY_MASKER;
-    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry }, id, at);
+    const { facts, renderer } = await gatherCardFacts({ coord, ...deps.cardRegistry, messages: deps.operatorModel }, id, at);
     const text = masker.maskText(trimCard(renderCard(renderer, facts), CARD_BUDGET_TOKENS).text);
     const hash = sha256(text);
     if (part === 'anchor') {
@@ -424,16 +430,6 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     return { id, b: by };
   };
   const refuseNote = (reply: FastifyReply, r: NoteVerdictRefusal, more = '') => refuseRoute(reply, r, { detail: `${NOTE_DETAIL[r]}${more}` });
-  /** The identity's live generation, as the one accessor reads it (`effectiveGeneration`), or what kept it from being read. */
-  const liveGenerationOf = (coord: CoordStore, id: string) => {
-    const gens = coord.liveGenerations();
-    const fact = designationReadOf(coord);
-    if (!gens.ok || fact === 'unmeasured') return 'unmeasured' as const;
-    const row = gens.rows.find((g) => g.identity === generationIdentityOf(id, fact));
-    if (row === undefined) return 'no-generation' as const;
-    const live = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
-    return { row, state: effectiveGeneration(row, live).state };
-  };
 
   /**
    * `POST /api/sessions/:id/notes { byId, byUuid, key, kind, waitsOn, next, revises?, closes? }`: append one note. A
@@ -484,9 +480,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       ? { key: closed?.key ?? { kind: 'run', id: revises! }, kind: closed?.kind ?? 'thread', waitsOn: '', next: '', revises, closes }
       : { key: key!, kind: kind as NoteInput['kind'], waitsOn, next, revises, closes };
     // A close's key is not read (`noteVerdict` skips it: close-needs-no-live-key), so it is not measured either.
-    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id)(input.key), id);
+    const keyFact: KeyFact = closes ? 'unmeasured' : noteKeyFact(noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined)(input.key), id);
     const live = coord.liveNotes(id);
-    const gen = liveGenerationOf(coord, id);
+    const gen = liveGenerationOf(coord, id, deps.continuityGate);
     if (gen === 'unmeasured') return refuseNote(reply, 'unmeasured', ' (the generations)');
     const verdict = noteVerdict(input, keyFact, live.ok ? live.notes.length : 'unmeasured', revised);
     // The detail names the key only when the revised note, if any, is a live note of the caller's; else the note's id.
@@ -530,7 +526,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     const live = coord.liveNotes(c.id);
     if (!live.ok) return refuseRoute(reply, 'unmeasured', { detail: 'could not check: continuity_notes could not be read' });
-    const read = noteKeyReader(coord, c.id);
+    const read = noteKeyReader(coord, c.id, deps.operatorModel?.() ?? undefined);
     const wire = live.notes.map((n) => ({
       id: n.id, key: n.key, kind: n.kind, waitsOn: n.waitsOn, next: n.next, revises: n.revises, at: n.at,
     }));
@@ -577,12 +573,12 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
 
-    const gen = liveGenerationOf(coord, id);
+    const gen = liveGenerationOf(coord, id, deps.continuityGate);
     const asked = handoverAsked(typeof gen === 'string' ? gen : gen.state);
     if (asked !== 'asked' || typeof gen === 'string') {
       return refuseNote(reply, asked === 'unmeasured' ? 'unmeasured' : NOTE_REFUSALS.notAsked, asked === 'unmeasured' ? ' (the generations)' : '');
     }
-    const read = noteKeyReader(coord, id);
+    const read = noteKeyReader(coord, id, deps.operatorModel?.() ?? undefined);
     const note: HandoverNote = { threads, cautions: cautions as string[], tone };
     const verdict = handoverVerdict(note, threads.map((t) => noteKeyFact(read(t.ref), id)));
     if (!verdict.ok) return refuseNote(reply, verdict.refusal);
@@ -754,6 +750,64 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const cut = cancelOf(coord, timerId, 'operator-cancel', 'operator', deps.wall());
     if (cut !== 'ok') return refuseRoute(reply, cut, cut === 'write-failed' ? { detail: 'continuity_timers could not be written' } : {});
     return reply.code(200).send({ ok: true, id: timerId });
+  });
+
+  /**
+   * `POST /api/sessions/:id/renew`: the operator's Renew now (Table 11.1e, W1a; the hand-offs piece, Task 1). Session-gated
+   * like the timer doors above, in `CONTINUITY_SESSION_DOORS`. It records a request (`continuity_renew_requests`, this door its
+   * one writer) and decides nothing about the renewal: the generations lane reads the request after its own cursor and makes
+   * the session's live generation due `operator` (hard), so every check the lane makes still applies. The request carries
+   * whether the `continuity` row was live when it was pressed: a press in shadow is recorded for the record only, and the lane
+   * never turns it into a due, then or after the row is armed (ruling F1 on review 2312). Refused `renew-not-long-lived`
+   * (409) for a session with no live generation of a long-lived role, `renew-pending` (409) while a request of its waits for
+   * the lane, `unmeasured` (502) when a row could not be read. `200 { ok, id, shadow }`, `shadow` true for a press in shadow.
+   */
+  app.post('/api/sessions/:id/renew', async (req, reply) => {
+    const { id } = req.params as { id: string };
+    if (!IDENTITY_RE.test(id)) return refuseRoute(reply, 'bad-request', { detail: 'the path names a session id' });
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const gens = coord.liveGenerations();
+    const live: RenewDoorFacts['live'] = !gens.ok ? 'unmeasured' : sessionLiveGeneration(gens.rows, id);
+    const cursor = coord.generationsCursor(RENEW_REQUESTS_CURSOR);
+    const after = cursor.ok ? coord.renewRequestsAfter(cursor.lastStartId, 1, id) : null;
+    const verdict = renewDoorVerdict({ live, pending: after === null || !after.ok ? 'unmeasured' : after.rows.length > 0 });
+    if (verdict !== 'ok') {
+      return refuseRoute(reply, verdict, verdict === 'unmeasured' ? { detail: 'the generations or the requests could not be read' } : {});
+    }
+    const armed = laneArmRowViewOf(CONTINUITY_LANE, coord.laneArmSetting(CONTINUITY_LANE), (deps.continuityGate ?? laneArmGate)(CONTINUITY_LANE)).live;
+    const w = coord.insertRenewRequest({ sessionId: id, actor: deps.operatorActor?.(req) ?? 'flag-off', at: deps.wall(), live: armed });
+    if (!w.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_renew_requests could not be written' });
+    return reply.code(200).send({ ok: true, id: w.id, shadow: !armed });
+  });
+
+  /** `GET`/`POST /api/coord/renewal-mode` — Settings › Automation › "When soft renewals happen" (the hand-offs piece, Task 4;
+   *  spec §3.3.11 R19, Table 11.1d): `when-away` (the default) or `on-schedule`. The roll-idle door's shape, registered here
+   *  beside Renew now because it is a continuity setting (slug renewal-mode-door-in-continuity-routes): session-gated when
+   *  sign-in is armed, open dark, in `CONTINUITY_SESSION_DOORS`; it moves no session while the `continuity` row is shadow. The
+   *  one writer is `CoordStore.setRenewalMode`; a change is a record-only feed row naming the actor. */
+  const renewalModeView = (coord: CoordStore): RenewalModeView =>
+    ({ mode: renewalModeOf(coord.renewalModeSetting()), default: RENEWAL_MODE_DEFAULT, choices: RENEWAL_MODES });
+  app.get('/api/coord/renewal-mode', async (_req, reply) => {
+    if (deps.coord === undefined) return refuseRoute(reply, 'unavailable');
+    return reply.code(200).send({ ok: true, ...renewalModeView(deps.coord) });
+  });
+  app.post('/api/coord/renewal-mode', async (req, reply) => {
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const body = req.body as { mode?: unknown } | null | undefined;
+    const mode = body !== null && typeof body === 'object' ? body.mode : undefined;
+    if (!isRenewalMode(mode)) return refuseRoute(reply, 'bad-request', { detail: `mode must be one of ${RENEWAL_MODES.join(', ')}` });
+    let before: ReturnType<typeof renewalModeOf>;
+    try { before = renewalModeOf(coord.setRenewalMode(mode, deps.wall()).before); } catch {
+      return refuseRoute(reply, 'write-failed', { detail: 'renewal_mode_settings could not be written' });
+    }
+    if (before !== mode) {
+      deps.notice?.({ kind: 'coord', sessionId: '', title: 'renewal mode changed', runId: null,
+        body: `when soft renewals happen: ${before ?? 'unreadable'} -> ${mode}; by ${deps.operatorActor?.(req) ?? 'flag-off'}` },
+      'record-only', { degraded: 'renewal mode written, feed archive degraded' });
+    }
+    return reply.code(200).send({ ok: true, ...renewalModeView(coord) });
   });
 
   // THE DAILY BACKSTOP'S DOORS (R19, Table 11.1d's Settings row; W1, plan `w1-renewal-readings.md` Task 2, slug

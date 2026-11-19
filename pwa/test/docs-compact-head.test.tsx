@@ -22,6 +22,7 @@ import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
+import { createReaderProgress, type ReaderBar } from '../src/docs/readerBar';
 import { navigate, useLocation } from '../src/lib/router';
 import {
   COMMIT_A, FP_1, draftOf, entry, fakeLoaders, fileResponse, holder, okFile, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
@@ -427,5 +428,133 @@ describe('Page details (refinements (c), (d), (f))', () => {
     const dot = b.querySelector('.docs-more-dot');
     expect(dot).toHaveAttribute('data-tone', 'warn');
     expect(dot).toHaveAttribute('aria-hidden', 'true');
+  });
+});
+
+describe('the phone head is one shell across the swap at ready (asks 554 and 555)', () => {
+  /** A leaf page on the phone with its tree `ok`, and a bar the reader publishes once it is ready on ccrc's bar. `url` is
+   *  the page's (a version page's carries `at`). */
+  function phone(url = '/docs/demo/specs/a.md'): { readonly el: (bar: ReaderBar | null) => ReactNode; readonly bar: ReaderBar } {
+    atWidth(412);
+    const tree = treeOk({ entries: [entry('specs', 'a.md')] });
+    const visit: DocsVisit = {
+      tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
+      file: { s: 'loading', pin: { kind: 'committed', commit: COMMIT_A, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' } },
+      freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
+      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+    };
+    const bar: ReaderBar = { title: 'Doc title', command: vi.fn(), progress: createReaderProgress() };
+    const page = pageAt(url);
+    return { bar, el: (b) => <DocsHead page={page} visit={visit} tree={tree} readerBar={b} /> };
+  }
+  const back = (): HTMLElement => {
+    const el = document.querySelector<HTMLElement>('.docs-head .docs-back');
+    if (el === null) throw new Error('no back button');
+    return el;
+  };
+  const row = (): HTMLElement => document.querySelector<HTMLElement>('.docs-head .docs-compact-bar')!;
+  const region = (): HTMLElement => document.querySelector<HTMLElement>('.docs-head .docs-more-panel')!;
+  const title = (): HTMLElement => document.querySelector<HTMLElement>('.docs-head .docs-title')!;
+  const truthLine = (): HTMLElement => {
+    const el = region().querySelector<HTMLElement>('.docs-truth');
+    if (el === null) throw new Error('the panel holds no truth line');
+    return el;
+  };
+
+  it('back, the row, the panel and the header are the same DOM nodes once the bar is published, and nothing refocuses', () => {
+    const { el, bar } = phone();
+    const { rerender } = render(el(null));
+    expect(document.querySelector('.docs-one-bar'), 'the compact row first').toBeNull();
+    const nodes = { head: document.querySelector('.docs-head'), back: back(), row: row(), panel: region() };
+    back().focus();
+    expect(document.activeElement).toBe(nodes.back);
+    const focus = vi.spyOn(HTMLElement.prototype, 'focus');
+    rerender(el(bar));
+    expect(document.querySelector('.docs-one-bar'), 'then the one bar').not.toBeNull();
+    expect(document.querySelector('.docs-head'), 'the header').toBe(nodes.head);
+    expect(back(), 'back').toBe(nodes.back);
+    expect(row(), 'the row').toBe(nodes.row);
+    expect(region(), 'the panel').toBe(nodes.panel);
+    expect(document.activeElement, 'back keeps the focus a reader of the page gave it').toBe(nodes.back);
+    expect(focus, 'by being the same element, never by a refocus').not.toHaveBeenCalled();
+    // And back to the row when the reader withdraws its bar.
+    rerender(el(null));
+    expect(document.querySelector('.docs-one-bar')).toBeNull();
+    expect(back()).toBe(nodes.back);
+    expect(document.activeElement).toBe(nodes.back);
+  });
+
+  it('a control focused inside the open panel is drawn anew at the swap, so it is not left focused and hidden (D-8730)', () => {
+    const { el, bar } = phone();
+    const { rerender } = render(el(null));
+    fireEvent.click(more());
+    const link = region().querySelector<HTMLElement>('a[href]');
+    expect(link, 'the open panel holds a link (a crumb)').not.toBeNull();
+    link!.focus();
+    expect(document.activeElement).toBe(link);
+    rerender(el(bar));
+    expect(region(), 'the swap closes the panel').toHaveAttribute('hidden');
+    expect(link!.isConnected, 'the focused link was drawn anew, not kept inside the closed panel').toBe(false);
+    expect(document.activeElement, 'so focus is not left on a hidden control').toBe(document.body);
+  });
+
+  // The case above focuses a crumb, so it pins the crumbs' key only. The truth line under them holds controls of its own
+  // (D-8730 names them with the panel): the copy-commit button on every leaf, and Back to the latest on a version page.
+  it.each([
+    ['the copy-commit button', '/docs/demo/specs/a.md', () => within(truthLine()).getByRole('button', { name: DOCS_HEAD_TEXT.copyCommit })],
+    ['a version page\'s Back to the latest', `/docs/demo/specs/a.md?at=${'9'.repeat(40)}`, () => within(truthLine()).getByRole('link', { name: DOCS_HEAD_TEXT.backToLatest })],
+  ] as const)('the truth line is drawn anew at the swap too: %s, focused in the open panel, is not left focused and hidden (D-8730)', (_what, url, control) => {
+    const { el, bar } = phone(url);
+    const { rerender } = render(el(null));
+    fireEvent.click(more());
+    const c = control();
+    c.focus();
+    expect(document.activeElement).toBe(c);
+    rerender(el(bar));
+    expect(region(), 'the swap closes the panel').toHaveAttribute('hidden');
+    expect(c.isConnected, 'the focused truth-line control was drawn anew, not kept inside the closed panel').toBe(false);
+    expect(document.activeElement, 'so focus is not left on a hidden control').toBe(document.body);
+  });
+
+  it('the swap replaces what differs: Page details gives way to the title, and each names the one panel', () => {
+    const { el, bar } = phone();
+    const { rerender } = render(el(null));
+    const id = region().id;
+    expect(id).not.toBe('');
+    expect(more()).toHaveAttribute('aria-controls', id);
+    rerender(el(bar));
+    expect(screen.queryByRole('button', { name: /^Page details/ }), 'the row\'s Page details is gone').toBeNull();
+    expect(title()).toHaveAttribute('aria-controls', region().id);
+    expect(region().id, 'one panel, one id, in both states').toBe(id);
+  });
+
+  it('the swap closes an open panel, as the two components it replaced did, in both directions', () => {
+    const { el, bar } = phone();
+    const { rerender } = render(el(null));
+    fireEvent.click(more());
+    expect(more()).toHaveAttribute('aria-expanded', 'true');
+    expect(region()).not.toHaveAttribute('hidden');
+    rerender(el(bar));
+    expect(title()).toHaveAttribute('aria-expanded', 'false');
+    expect(region()).toHaveAttribute('hidden');
+    fireEvent.click(title());
+    expect(title()).toHaveAttribute('aria-expanded', 'true');
+    expect(region()).not.toHaveAttribute('hidden');
+    rerender(el(null));
+    expect(more()).toHaveAttribute('aria-expanded', 'false');
+    expect(region()).toHaveAttribute('hidden');
+  });
+
+  it('after the swap the panel opens and closes on the title, and Escape returns focus to the title', () => {
+    const { el, bar } = phone();
+    const { rerender } = render(el(null));
+    rerender(el(bar));
+    fireEvent.click(title());
+    expect(region()).not.toHaveAttribute('hidden');
+    const inside = region().querySelector<HTMLElement>('a, button')!;
+    inside.focus();
+    fireEvent.keyDown(inside, { key: 'Escape' });
+    expect(title()).toHaveAttribute('aria-expanded', 'false');
+    expect(document.activeElement).toBe(title());
   });
 });

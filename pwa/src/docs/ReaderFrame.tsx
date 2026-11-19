@@ -30,11 +30,18 @@
 // latched, so a walk that ends with a 401 starts the new body at once, with no mount of its own (review 2372 F1). A body whose
 // images reported none stops listening when the walk ends.
 //
+// A body also owns its history (completion plan Task 12 part B, `readerHistory.ts`): when the leaf hands it the opened pin
+// (`opened`), the body's run starts the commit-list read as the render starts, so it runs beside the render and the images,
+// and awaits the seed once the images are in and before the mount. The mount then carries the version seed (the served
+// commit, the draft flag, the commits and the day filter) and the `changes` and `openVersion` of that body, which are closed
+// over the body's own pin and text and answer nothing once the body ends. The document carries no version of its own: the
+// seed is the one carrier. Without `opened` there is no history read and no version list, and the seed is the served hash alone.
+//
 // The library's host and the frame's asset texts reach the main bundle only through the two literal dynamic imports in
 // `lazyMountReader`; this file names the adapter's types with `import type` only.
 import { THEMES } from '@ccrc/ui';
 import { useContext, useEffect, useMemo, useReducer, useRef, useState, type ReactNode } from 'react';
-import type { DocsShowOk } from '../../../shared/docs';
+import type { DocPin, DocsPageLocation, DocsShowOk } from '../../../shared/docs';
 import { utf8ByteLength } from '../lib/markdownGuard';
 import { DOCS_PARSE_BUDGET_MS, DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import type { MarkdownParser } from '../lib/markdownRunner';
@@ -43,6 +50,7 @@ import { onAuthRegained } from '../lib/auth';
 import { navigate, replaceFragment } from '../lib/router';
 import { useThemeChoice } from '../lib/theme';
 import { DocsAssetContext } from './DocImage';
+import type { DocsHistoryLoader } from './failures';
 import type { DocLinkContextValue } from './DocLink';
 import { DocMarkdown, DocPlain, docMarkdownSource, docsPlainNote, DOC_FORMATTING } from './DocMarkdown';
 import {
@@ -51,6 +59,8 @@ import {
 } from './ReaderSheets';
 import type { ReaderImages, loadReaderImages } from './reader/images';
 import type { ReaderMount, ReaderMountInput, ReaderThemePref } from './reader/bridge';
+import { readerServedHash, readerVersionSeed } from './reader/history';
+import { startReaderHistory } from './readerHistory';
 import {
   copyDecision, readerBarTitle, readerBodyReducer, readerDocKey, readerPrefsOf, routeReaderLink,
   type ReaderBodyState, type ReaderLink,
@@ -68,6 +78,8 @@ export interface ReaderDeps {
   render(src: string, o: { budgetMs: number; signal?: AbortSignal }): Promise<ReaderRenderOutcome>;
   mount(el: HTMLElement, input: ReaderMountInput): Promise<ReaderMount>;
   images: typeof loadReaderImages;
+  /** The doc's commit list (B2's history loader). Absent, no commit list is read. */
+  readonly history?: DocsHistoryLoader;
 }
 
 /** The default `mount`: the adapter and the frame's texts load on first use, each through its own literal `import()`
@@ -87,9 +99,15 @@ export interface ReaderFrameProps {
   readonly link: LinkBase;
   readonly parser: MarkdownParser;
   readonly reader: ReaderDeps;
+  /** What the body's history is read for: the pin the leaf opened it at, the page now and the day filter of the history
+   *  entry the page stands on. Absent, no history is read and the frame offers no `changes` or `openVersion`. */
+  readonly opened?: { readonly pin: DocPin; readonly page: DocsPageLocation & { kind: 'path' }; readonly only: string | null };
   /** The visit's pending fragment: handed to the frame as its `initialHash` when it mounts. */
   readonly pendingFragment: string | null;
-  /** Called once the fragment is handed over. */
+  /** Called when this body's frame reports `ready` with an anchor to spend: at the first `ready` when the mount was handed
+   *  the fragment, and at the `ready` of each frame a same-page link reopened at its anchor (`openAt`), whether or not the
+   *  mount was handed one. So it can run more than once for one body, and the handler must bear a repeat (the leaf's,
+   *  `DocsLeaf`'s `setFragment(null)`, does). */
   onFragmentConsumed(): void;
 }
 
@@ -101,15 +119,19 @@ type Ask =
 
 const NO_IMAGES: ReaderImages = { urls: {}, drafts: 0, auth: 0 };
 
-/** The pending fragment as the frame's `initialHash`: the address bar holds it percent-encoded, and the frame matches
- *  decoded ids. A malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
-function decodedFragment(fragment: string | null): string | null {
-  if (fragment === null) return null;
+/** A fragment as the frame matches it: the address bar holds it percent-encoded, and the frame matches decoded ids. A
+ *  malformed escape keeps the raw text (as `fragmentTarget` does in the plain view). */
+function decodedId(fragment: string): string {
   try {
     return decodeURIComponent(fragment);
   } catch {
     return fragment;
   }
+}
+
+/** The pending fragment as the frame's `initialHash` (`decodedId`), or none. */
+function decodedFragment(fragment: string | null): string | null {
+  return fragment === null ? null : decodedId(fragment);
 }
 
 /** What was thrown, for the console only: an error's name and message, else its type. */
@@ -200,6 +222,8 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
     let uncount: ((delta: number) => void) | null = null;
     /** The listener for sign-in: subscribed before the images walk, and kept after it only when the walk reported a 401. */
     let unwatchAuth: (() => void) | null = null;
+    /** The anchor a same-page link last opened the frame at, held by the visit until the frame opened at it is ready. */
+    let reopened: string | null = null;
 
     const drop = (): void => {
       mount?.destroy();
@@ -242,6 +266,15 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           break;
         case 'hash':
           replaceFragment(r.id);
+          // The policy says the frame did not scroll (a link to this very page spelled with its file name): this body's
+          // live mount opens the same document again at the anchor. The visit holds the anchor too, so a fallback of the
+          // frame opened at it lands the plain view there; that frame's `ready` spends it. `mount` is null before the mount
+          // lands and after a fallback or the body's end, so a late link opens nothing.
+          if (r.reopen && mount !== null && mount.openAt !== undefined) {
+            reopened = r.id;
+            cur.link.onFragment(r.id, location.pathname + location.search);
+            mount.openAt(decodedId(r.id));
+          }
           break;
         case 'sheet':
           setAsk({ kind: 'link', ask: { url: r.url, host: r.host, foreign: r.foreign } });
@@ -261,6 +294,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
 
     void (async () => {
       const first = live.current;
+      // The body's history starts with its render, so the commit list is read beside the render and the images.
+      const opened = first.props.opened;
+      const history = opened === undefined ? null : startReaderHistory({
+        project: first.props.link.project, show: first.props.show, text, pin: opened.pin,
+        page: () => (live.current.props.opened ?? opened).page, only: opened.only,
+        history: first.props.reader.history ?? null, loaders: first.assets?.loaders ?? null,
+        queue: first.assets?.queue ?? null, signal: ac.signal,
+      });
       let outcome: ReaderRenderOutcome;
       try {
         outcome = await first.props.reader.render(text, { budgetMs: DOCS_PARSE_BUDGET_MS(bytes), signal: ac.signal });
@@ -326,6 +367,14 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         uncount(counted);
       }
 
+      // The version seed: the served commit (or a draft's head) with the doc's commits and the day filter. It is awaited here,
+      // after the images, so the frame is seeded when it mounts; a body that ended or landed meanwhile mounts nothing.
+      const shown = first.props.show;
+      const seed = history === null
+        ? readerVersionSeed(readerServedHash(shown) ?? '', shown.source === 'draft', null, null)
+        : await history.seed;
+      if (ac.signal.aborted || landed) return;
+
       const cur = live.current;
       const el = hostRef.current;
       if (el === null) {
@@ -337,18 +386,23 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
       // The bar is read once, here: the frame keeps it for its life (refinement (f)).
       const chrome = cur.barSlot?.chrome ?? 'frame-bar';
       const progress = chrome === 'host-bar' ? createReaderProgress() : null;
+      /** The fragment this mount was handed: `onReady` spends it. */
+      const handedFragment = cur.props.pendingFragment;
+      let spent = false;
       const input: ReaderMountInput = {
         document: {
           result: outcome.result,
           scan: { mermaid: outcome.mermaid },
           images: images.urls,
-          initialHash: decodedFragment(cur.props.pendingFragment),
-          // The W8a plan's refinement (k): the commit a committed doc was read at, or the head a draft was read over with its flag.
-          // The adapter keeps this only for a full hex sha (`withServedVersion`).
-          version: cur.props.show.source === 'draft'
-            ? { sha: cur.props.show.head ?? null, draft: true }
-            : { sha: cur.props.show.commit ?? null, draft: false },
+          initialHash: decodedFragment(handedFragment),
         },
+        // The W8a plan's refinement (k) and Task 12: the commit a committed doc was read at, or the head a draft was read over
+        // with its flag, with the doc's commits and the day filter. Absent for a served hash that is not a full commit.
+        ...(seed === null ? {} : { version: seed }),
+        ...(history === null ? {} : {
+          changes: (sha: string) => history.changes(sha),
+          openVersion: (v: { sha?: string; only?: string }) => history.openVersion(v),
+        }),
         bytes,
         docKey: readerDocKey(cur.props.link.project, cur.props.show.section, cur.props.show.path),
         title: leafName(cur.props.show.path),
@@ -357,7 +411,18 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
         onHash: replaceFragment,
         copy: onCopy,
         onReady: () => {
-          if (!ac.signal.aborted && !landed) dispatch({ e: 'ready' });
+          if (ac.signal.aborted || landed) return;
+          dispatch({ e: 'ready' });
+          // The fragment is spent here, once and only for this body: a fallback raised before `ready`, after the mount has
+          // resolved included, keeps it for the plain view's scroll.
+          if (!spent && handedFragment !== null) {
+            spent = true;
+            live.current.props.onFragmentConsumed();
+          } else if (reopened !== null) {
+            // The frame opened at a same-page link's anchor is up: the visit no longer holds the anchor for the plain view.
+            reopened = null;
+            live.current.props.onFragmentConsumed();
+          }
         },
         onFallback: (r) => fallBack(String(r)),
         chrome,
@@ -386,8 +451,6 @@ function ReaderBody(p: ReaderFrameProps & { readonly text: string; readonly onSi
           progress,
         });
       }
-      // The fragment is spent only once the frame is up: a fallback before this keeps it for the plain view's scroll.
-      if (cur.props.pendingFragment !== null) cur.props.onFragmentConsumed();
       const latest = live.current.prefs;
       if (latest !== seededPrefs.current) {
         seededPrefs.current = latest;

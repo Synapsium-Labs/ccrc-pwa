@@ -196,6 +196,7 @@ const APP_SHEETS: Readonly<Record<string, string>> = {
   'shell.css': 'pwa/src/styles/shell.css',
   'chat.css': 'pwa/src/session/chat.css',
   'tool-card.css': 'ui/src/components/tool-card.css',
+  'models-sheet.css': 'pwa/src/accounts/models-sheet.css', // the Models sheet (model-class-advance R4)
 };
 type TypeRole = '--fs-ui' | '--fs-meta';
 /** The step each type role replaced: its Refined value (ADOPTED holds that). */
@@ -310,6 +311,15 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
     '.history-row--gap, .history-gap': META,
   },
   // The transcript's tool rows live in @ccrc/ui's sheet, not chat.css (D-5463).
+  'models-sheet.css': {
+    // The advance note, a class's name, the facts under its model and a refusal.
+    '.acct-models-note': META,
+    '.acct-models-class .acct-models-name': META,
+    '.acct-models-facts p': META,
+    '.acct-models-class .acct-models-refusal': META,
+    // The four class names the unreadable-files read draws.
+    '.acct-models .acct-models-names li': META,
+  },
   'tool-card.css': {
     // The word `failed` on an errored call's row (T4a, D-6387): a status word beside the dot, the same role as the
     // row's other meta text.

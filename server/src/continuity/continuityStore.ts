@@ -191,6 +191,11 @@ export type GenExpect = Pick<GenRow, 'term' | 'n' | 'state' | 'shadowState' | 'w
 export const genExpectOf = (r: GenRow): GenExpect =>
   ({ term: r.term, n: r.n, state: r.state, shadowState: r.shadowState, walk: r.walk });
 
+/** A session's live generation among the rows `liveGenerations` read (its newest), or null when it has none: the one lookup
+ *  the console's prompt route and the Renew now door share (the renewal hand-offs). A generation row's own session, no run. */
+export const sessionLiveGeneration = (rows: readonly GenRow[], sessionId: string): GenRow | null =>
+  rows.filter((g) => g.sessionId === sessionId).at(-1) ?? null;
+
 /** The column a walk moves. */
 export type GenColumn = 'state' | 'shadowState';
 
@@ -361,8 +366,14 @@ export function mintGeneration(db: DatabaseSync, input: MintInput, expect: GenEx
       const carried = observedOf(newest?.observed)?.ms ?? 0;
       const n = (intOrNull(newest?.n) ?? 0) + 1;
       if (old !== null) {
+        // An `operator` due ends with its generation (ruling F1 on review 2312): the operator's Renew now was for this
+        // conversation, so an ended row never carries one.
         const ended = stmt(db, "UPDATE continuity_generations SET state = 'ended', outcome = ?, walk = NULL, deadlineAt = NULL, "
-          + `shadowDeadlineAt = NULL WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
+          + "shadowDeadlineAt = NULL, dueSince = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueSince END, "
+          + "dueSinceObservedMs = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueSinceObservedMs END, "
+          + "dueClass = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueClass END, "
+          + "dueWhy = CASE WHEN dueWhy = 'operator' THEN NULL ELSE dueWhy END "
+          + `WHERE ${CAS}`).run(input.outcome, ...casArgs(old.id, old));
         if (Number(ended.changes) !== 1) throw new Superseded();
       }
       const mode: WalkMode = old?.walk === 'live' || live ? 'live' : 'shadow';
@@ -452,16 +463,24 @@ export function clearShadowWalk(db: DatabaseSync, id: number, expect: GenExpect,
 /** What a pass learnt of `renewalDue`: due (the trigger, its class, the wall time and the accumulator at which it became
  *  due) or not, and always the triggers it could not read. A generation already due keeps the time it became due. */
 export type DueWrite = { due: true; why: RenewalTrigger; cls: TriggerClass; at: number; observedMs: number } | { due: false };
-export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[]): { changed: boolean } {
+/** `cursor`, when given, advances a cursor in the same transaction (the Renew now requests' `renew-requests`, the hand-offs
+ *  piece), so a request is read once: a due write that is refused leaves the cursor, and the next pass reads it again. */
+export function setGenerationDue(db: DatabaseSync, id: number, expect: GenExpect, due: DueWrite, blind: readonly RenewalTrigger[],
+  cursor: CursorAdvance | null = null): { changed: boolean } {
   try {
     const b = JSON.stringify(blind);
-    if (!due.due) {
-      return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
-        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`).run(b, ...casArgs(id, expect)));
-    }
-    return changedOf(stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
-      + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`)
-      .run(due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)));
+    const st = !due.due
+      ? stmt(db, 'UPDATE continuity_generations SET dueSince = NULL, dueWhy = NULL, dueClass = NULL, '
+        + `dueSinceObservedMs = NULL, blind = ? WHERE ${CAS}`)
+      : stmt(db, 'UPDATE continuity_generations SET dueSince = COALESCE(dueSince, ?), dueWhy = ?, dueClass = ?, '
+        + `dueSinceObservedMs = COALESCE(dueSinceObservedMs, ?), blind = ? WHERE ${CAS}`);
+    const args = !due.due ? [b, ...casArgs(id, expect)] : [due.at, due.why, due.cls, due.observedMs, b, ...casArgs(id, expect)];
+    if (cursor === null) return changedOf(st.run(...args));
+    return tx(db, () => {
+      const w = changedOf(st.run(...args));
+      if (w.changed && !advanceCursorIn(db, cursor)) throw new Superseded();
+      return w;
+    });
   } catch {
     return { changed: false };
   }
@@ -1339,6 +1358,131 @@ export function snapshotFacts(db: DatabaseSync, id: string): { ok: true; facts: 
   } catch (e) {
     return { ok: false, detail: `continuity_snapshots read failed: ${e instanceof Error ? e.message : String(e)}` };
   }
+}
+
+// ------------------------------------------------------------------------------------------------- the hand-offs
+// `continuity_renew_requests`, `operator_marks` and `operator_mark_quiet` (Overlord spec §3.3.9 C50, §3.3.11, Table 11.1e;
+// W1a, the hand-offs piece, plan `w1a-renewal-handoffs.md` Tasks 1 and 3). One writer each: the Renew now door
+// (`continuity/routes.ts`) inserts a request and the generations lane reads it after its `renew-requests` cursor; the
+// console's prompt route writes a mark's `at`; the generations lane writes the mark's `quiet`, in a row of its own keyed on
+// the `at` it read (the coordinator's ruling F5 on review 1902), so the route and the lane never write one row.
+
+/** The lane's cursor over the Renew now requests, a row of `continuity_cursor` beside the starts cursor. */
+export const RENEW_REQUESTS_CURSOR = 'renew-requests';
+
+/** One Renew now. `live`: the `continuity` row was live when the operator pressed it; a press made in shadow is recorded for
+ *  the record only, and the lane never turns it into an `operator` due, then or after the row is armed (the coordinator's
+ *  ruling F1 on review 2312). */
+export interface RenewRequestRow { readonly id: number; readonly sessionId: string; readonly actor: string; readonly at: number; readonly live: boolean }
+export type RenewRequestsRead = { ok: true; rows: RenewRequestRow[] } | { ok: false; detail: string };
+
+/** The door's one write. */
+export function insertRenewRequest(db: DatabaseSync, r: Omit<RenewRequestRow, 'id'>): { ok: true; id: number } | { ok: false } {
+  try {
+    const res = stmt(db, 'INSERT INTO continuity_renew_requests (sessionId, actor, at, live) VALUES (?, ?, ?, ?)')
+      .run(r.sessionId, r.actor, r.at, r.live ? 1 : 0);
+    return { ok: true, id: Number(res.lastInsertRowid) };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** The requests after `afterId`, oldest first, at most `limit`; `sessionId`, when given, only that session's. */
+export function renewRequestsAfter(db: DatabaseSync, afterId: number, limit: number, sessionId?: string): RenewRequestsRead {
+  try {
+    const raws = (sessionId === undefined
+      ? stmt(db, 'SELECT id, sessionId, actor, at, live FROM continuity_renew_requests WHERE id > ? ORDER BY id LIMIT ?').all(afterId, limit)
+      : stmt(db, 'SELECT id, sessionId, actor, at, live FROM continuity_renew_requests WHERE id > ? AND sessionId = ? ORDER BY id LIMIT ?')
+        .all(afterId, sessionId, limit)) as Record<string, unknown>[];
+    const rows: RenewRequestRow[] = [];
+    for (const raw of raws) {
+      const id = intOrNull(raw.id); const at = intOrNull(raw.at); const live = intOrNull(raw.live);
+      if (id === null || at === null || (live !== 0 && live !== 1) || typeof raw.sessionId !== 'string' || typeof raw.actor !== 'string') {
+        return { ok: false, detail: `continuity_renew_requests row ${String(raw.id)} does not read` };
+      }
+      rows.push({ id, sessionId: raw.sessionId, actor: raw.actor, at, live: live === 1 });
+    }
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `continuity_renew_requests read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** One programme's mark: `at`, the wall ms of the operator's newest prompt there, and the lane's `quiet` for that `at`, or
+ *  null when the lane has not advanced it since (which reads as 0: ruling F5). */
+export interface OperatorMarkRow { readonly programme: string; readonly at: number; readonly quiet: Observed | null }
+export type OperatorMarksRead = { ok: true; rows: OperatorMarkRow[] } | { ok: false; detail: string };
+
+/** The prompt route's one write: the programme's mark moves to `at`, so any `quiet` the lane kept is for an older `at`. */
+export function putOperatorMark(db: DatabaseSync, programme: string, at: number): { ok: boolean } {
+  try {
+    stmt(db, 'INSERT INTO operator_marks (programme, at) VALUES (?, ?) ON CONFLICT (programme) DO UPDATE SET at = excluded.at')
+      .run(programme, at);
+    return { ok: true };
+  } catch {
+    return { ok: false };
+  }
+}
+
+/** Every mark, with the lane's `quiet` only when it was kept for the mark's current `at`. */
+export function operatorMarks(db: DatabaseSync): OperatorMarksRead {
+  try {
+    const raws = stmt(db, 'SELECT m.programme AS programme, m.at AS at, q.quiet AS quiet FROM operator_marks m '
+      + 'LEFT JOIN operator_mark_quiet q ON q.programme = m.programme AND q.at = m.at ORDER BY m.programme').all() as Record<string, unknown>[];
+    const rows: OperatorMarkRow[] = [];
+    for (const raw of raws) {
+      const at = intOrNull(raw.at);
+      const quiet = raw.quiet === null ? null : observedOf(raw.quiet);
+      if (typeof raw.programme !== 'string' || at === null || (raw.quiet !== null && quiet === null)) {
+        return { ok: false, detail: `operator_marks row ${String(raw.programme)} does not read` };
+      }
+      rows.push({ programme: raw.programme, at, quiet });
+    }
+    return { ok: true, rows };
+  } catch (e) {
+    return { ok: false, detail: `operator_marks read failed: ${e instanceof Error ? e.message : String(e)}` };
+  }
+}
+
+/** The lane's one write of a mark's `quiet`, a compare-and-set on the `at` it read: a prompt that moved the mark since the
+ *  read changes nothing (`changed: false`), so the reset the route made is never overwritten. */
+export function advanceMarkQuiet(db: DatabaseSync, programme: string, readAt: number, quiet: Observed): { changed: boolean } {
+  try {
+    return tx(db, () => {
+      const row = stmt(db, 'SELECT at FROM operator_marks WHERE programme = ?').get(programme) as { at: unknown } | undefined;
+      if (row === undefined || intOrNull(row.at) !== readAt) return { changed: false };
+      stmt(db, 'INSERT INTO operator_mark_quiet (programme, at, quiet) VALUES (?, ?, ?) ON CONFLICT (programme) '
+        + 'DO UPDATE SET at = excluded.at, quiet = excluded.quiet').run(programme, readAt, JSON.stringify(quiet));
+      return { changed: true };
+    });
+  } catch {
+    return { changed: false };
+  }
+}
+
+/** The Setting "when soft renewals happen" (R19; Table 11.1d, W1a), `renewal_mode_settings`, as read: a row, no row, or a
+ *  read that failed. Nothing is decided here: `renewalModeOf` (`renewNow.ts`) says what the stored word means. */
+export type RenewalModeRead = { kind: 'row'; mode: unknown } | { kind: 'absent' } | { kind: 'unreadable'; detail: string };
+
+export function renewalModeSetting(db: DatabaseSync): RenewalModeRead {
+  try {
+    const r = stmt(db, 'SELECT mode FROM renewal_mode_settings WHERE id = 1').get() as { mode: unknown } | undefined;
+    return r === undefined ? { kind: 'absent' } : { kind: 'row', mode: r.mode };
+  } catch (e) {
+    return { kind: 'unreadable', detail: e instanceof Error ? e.message : String(e) };
+  }
+}
+
+/** The Settings door's one write, in one transaction: the row before, the write (an insert for a lost row), the row after.
+ *  The door has narrowed `mode`; a write that changes nothing runs no `UPDATE`, so `updatedAt` stays. */
+export function setRenewalMode(db: DatabaseSync, mode: string, at: number): { before: RenewalModeRead; after: RenewalModeRead } {
+  return tx(db, () => {
+    const before = renewalModeSetting(db);
+    if (before.kind === 'unreadable') throw new Error(`renewal mode setting unreadable inside the write: ${before.detail}`);
+    if (before.kind === 'absent') stmt(db, 'INSERT INTO renewal_mode_settings (id, mode, updatedAt) VALUES (1, ?, ?)').run(mode, at);
+    else if (before.mode !== mode) stmt(db, 'UPDATE renewal_mode_settings SET mode = ?, updatedAt = ? WHERE id = 1').run(mode, at);
+    return { before, after: renewalModeSetting(db) };
+  });
 }
 
 // ── The renewal readings (Overlord W1, plan `w1-renewal-readings.md`, PR A) ──────────────────────────────────────────────

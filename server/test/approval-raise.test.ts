@@ -2,8 +2,8 @@
 // PR; plan 2026-10-26-consolidation-w3-questions.md). `POST /api/approvals` keeps steps 1 to 5 inline (no store, box
 // token, body shape, the kill switch, attribution) and hands steps 6 to 15 to the server's `Questions` instance, which
 // answers one closed verdict the route maps byte for byte. Here each fixture request maps to its arm, with the deps the
-// route builds in `registerCoordRoutes` replaced one at a time by fixtures: a null signer, a `denyEngaged` that answers
-// false, a `liveVersionOf` that answers null, a `heldFor` that throws or answers its own verdicts. The route's bytes for
+// route builds in `registerCoordRoutes` replaced one at a time by fixtures: a null signer, a `denyStanding` that answers
+// `none` or `history` (approvals PR 0), a `liveVersionOf` that answers null, a `heldFor` that throws or answers its own verdicts. The route's bytes for
 // each arm are `question-doors-pin.test.ts`'s rows.
 import { describe, it, expect, afterEach, vi } from 'vitest';
 import { heldFor } from '../src/coord/heldFor.js';
@@ -34,7 +34,7 @@ const raiseDeps = (fx: Approvals, over: Partial<ApprovalRaiseDeps> = {}): Approv
     signerFor: () => ({}) as never,
     rulingsAllowedHere,
     heldFor,
-    denyEngaged: async () => true,
+    denyStanding: async () => 'current',
     liveVersionOf: async () => '2.1.302',
     journalDigestMismatch: (sessionId, now) => { journal.push(`${now} digest-mismatch ${sessionId}`); },
     ...over,
@@ -74,10 +74,34 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'not-a-child' });
   });
 
-  it('step 9: a denyEngaged that answers false is deny-not-engaged, and is read before the version', async () => {
+  it('step 9: a denyStanding that answers none is deny-not-engaged, and is read before the version', async () => {
     f = await standardFixture();
-    const v = await createQuestions({ coord: f.coord }).raiseApproval(req(), raiseDeps(f, { denyEngaged: async () => false, liveVersionOf: async () => null }), NOW);
+    const v = await createQuestions({ coord: f.coord }).raiseApproval(req(), raiseDeps(f, { denyStanding: async () => 'none', liveVersionOf: async () => null }), NOW);
     expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'deny-not-engaged' });
+  });
+
+  // Approvals PR 0 (the coordinator's plan-review rulings F5 and F6, 2026-11-18): a child whose deny digest the
+  // installer's history names is held like a current child, its class left as the classifier gave it, and the row
+  // records that its deny rules are not current; the brief tells its claimant it may not allow it.
+  it('step 9: a denyStanding of history mints the row held, its class unchanged, denyCurrent false, and briefs no allow', async () => {
+    f = await standardFixture();
+    const q = createQuestions({ coord: f.coord });
+    const v = await q.raiseApproval(req(), raiseDeps(f, { denyStanding: async () => 'history' }), NOW);
+    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60 });
+    const r = f.coord.approvalById(1);
+    expect(r.ok && r.row !== null && { state: r.row.state, cls: r.row.class, denyCurrent: r.row.denyCurrent })
+      .toEqual({ state: 'held', cls: 'ordinary', denyCurrent: false });
+    const body = (f.coord.db.prepare("SELECT body FROM mail WHERE subject LIKE 'approval:%'").get() as { body: string }).body;
+    expect(body).toContain('not run under the box\'s current deny rules');
+    expect(body).not.toContain('Allow it once');
+  });
+  it('step 9: a denyStanding of current mints denyCurrent true, and the brief offers the allow', async () => {
+    f = await standardFixture();
+    await createQuestions({ coord: f.coord }).raiseApproval(req(), raiseDeps(f), NOW);
+    const r = f.coord.approvalById(1);
+    expect(r.ok && r.row?.denyCurrent).toBe(true);
+    const body = (f.coord.db.prepare("SELECT body FROM mail WHERE subject LIKE 'approval:%'").get() as { body: string }).body;
+    expect(body).toContain('Allow it once');
   });
 
   it('step 10: a liveVersionOf that answers null is version-unverified, unread; an uncaptured build names itself (D-8289)', async () => {
