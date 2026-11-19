@@ -11497,6 +11497,10 @@ export class CoordStore {
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
   newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+  /** Whether the programme has a Goals (spec) pin: R7's test for a pinned programme. */
+  isPinned(program: string): boolean { return ledgers.isPinned(this.db, program); }
+  /** Whether the programme holds a `blocking` item in state `open`, waiting on the operator (a `checking` one is the coordinator's). */
+  programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
 
   // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
   // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).
@@ -11506,10 +11510,13 @@ export class CoordStore {
   bigCallsIn(fromMs: number, toMs: number): CallRow[] { return calls.bigCallsIn(this.db, fromMs, toMs); }
   callsForOperator(now: number): { open: CallRow[]; cleared: CallRow[] } { return calls.callsForOperator(this.db, now); }
   liveBlocksOf(madeBy: string, now: number): CallRow[] { return calls.liveBlocksOf(this.db, madeBy, now); }
+  blockClaimants(now: number): string[] { return calls.blockClaimants(this.db, now); }
+  blocksToWake(madeBy: string, now: number): CallRow[] { return calls.blocksToWake(this.db, madeBy, now); }
   callById(id: number): CallRow | null { return calls.callById(this.db, id); }
   markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }
   overturnCallTx(id: number, note: string, now: number): void { calls.overturnCallTx(this.db, id, note, now); }
   markBlockWoken(id: number, now: number): boolean { return calls.markBlockWoken(this.db, id, now); }
+  wakeBlockTx(id: number, now: number, onWoken: () => void): boolean { return calls.wakeBlockTx(this.db, id, now, onWoken); }
   insertRemaining(program: string, byId: string, statement: programmeFacts.NewRemaining, edges: readonly programmeFacts.NewEdge[], build: string | null, now: number): programmeFacts.InsertRemainingResult { return programmeFacts.insertRemaining(this.db, program, byId, statement, edges, build, now); }
   remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
   openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }
