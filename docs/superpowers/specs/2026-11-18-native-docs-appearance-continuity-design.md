@@ -353,7 +353,7 @@ This section gives the numbers the implementation must keep. Geometry budgets ar
 | Open to `ready` | hosted median of 9 opens at most 1.10 x the BASE median of 9, desktop Chromium, same runner | `frame-cost` browser row |
 | Change while open | frame root shows the new values within 100 ms. Same iframe and nonce. Scroll within 1 px | `reader-appearance` browser row |
 | Mermaid redraw | one figure per task, no single gap over E17's 200 ms | `reader-appearance` browser row |
-| Contrast | 4.5:1 for every text colour on every ground and tint, code on the well, and the labels of the covered Mermaid kinds. 3:1 for the focus ring on `bg`, `surface`, `surface2` and the tints, and the covered kinds' lines. Edges have no floor. Tints at most 4%. A Mermaid kind outside `MERMAID_HOSTED_KINDS`, or an author-styled figure, keeps 1.1.0's drawing and is not gated here (§10) | unit gate, every palette, both skins; the library's test 5 for the covered kinds |
+| Contrast | 4.5:1 for every text colour on every ground and tint, code on the well, and the labels of the covered Mermaid kinds on the shapes painted behind them. 3:1 for the focus ring on `bg`, `surface`, `surface2` and the tints, and the covered kinds' lines. Edges have no floor. Tints at most 4%. A Mermaid kind outside `MERMAID_HOSTED_KINDS`, or an author-styled figure, keeps 1.1.0's drawing and is not gated here (§10) | unit gate, every palette, both skins; the library's test 5 for the covered kinds |
 
 ## 10. The library's part
 
