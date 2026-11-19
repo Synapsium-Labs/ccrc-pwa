@@ -206,7 +206,7 @@ describe('calls made for you on the route (D-8126)', () => {
     chosen: 'sql', why: 'it is already there', reversible: true, wakeOn: null, at: NOW - 5 * MIN, seenAt: null, overturnedAt: null, overturnNote: null };
 
   it('Seen posts the operator\'s Seen door for that call, with no body', async () => {
-    const fetchMock = vi.fn(async () => new Response(JSON.stringify({ ok: true, call: { ...call, seenAt: NOW } }), { status: 200, headers: { 'content-type': 'application/json' } }));
+    const fetchMock = vi.fn(async (_url: RequestInfo | URL, _init?: RequestInit) => new Response(JSON.stringify({ ok: true, call: { ...call, seenAt: NOW } }), { status: 200, headers: { 'content-type': 'application/json' } }));
     vi.stubGlobal('fetch', fetchMock);
     const store = mk();
     act(() => store.setState({ fleetFrameSeen: true, sessions: [], waiting: waitingView({ items: [itemView({ id: 1, program: 'prog-a' })], calls: [call] }) }));
