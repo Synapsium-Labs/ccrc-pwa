@@ -197,6 +197,8 @@ const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
  *  `digitalocean-access-token`, `digitalocean-refresh-token`, `age-secret-key`, `vault-service-token` (its `hvs.` arm),
  *  `vault-batch-token` and `mailgun-private-api-token`. Every departure from them:
  *  - the left edge: Gitleaks's `\b` is this group's lookbehind, no letter or digit before, so a `_` before is allowed;
+ *    an escaped line break or an ANSI code before the token is a boundary too (`TOKEN_LEFT_ESCAPE`, overlord wave 168),
+ *    where Gitleaks's `\b` misses it;
  *  - the right edge: Gitleaks ends a match at a quote, whitespace, `;`, an escaped line break or the end. Here the
  *    fixed-length rows (SendGrid, DigitalOcean, age) are fenced, no letter, digit, `_` or `-` after them, so a longer
  *    run is never cut and never leaves a tail (egress's segment rule masks it whole); the two Vault rows keep their
@@ -212,7 +214,13 @@ const RDP_PASS = /(^|[\s'"])\/p:[^\s;&|'"]+/g;
  *    hex), so a `cache-key-<md5>` stays readable;
  *  - `ya29.`: Gitleaks has no Google OAuth row, so this one is ccrc's own: the prefix, then at least 20 base64url
  *    characters in dot-joined parts (the dots not counted), so a trailing full stop is never taken. */
-const KNOWN_TOKEN_PREFIX = String.raw`(?<![A-Za-z0-9_-])(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?<![A-Za-z0-9])(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`
+/** What may stand right before a known token though it ends in a letter (overlord wave 168, review 2693 F4): a
+ *  JSON-escaped line feed, carriage return or tab, and an ANSI CSI sequence (a colour code), raw or JSON-escaped. Each
+ *  row group's left edge reads it as a boundary, so a token at the start of an escaped line or a coloured span is
+ *  masked in `linear-egress` too, which has no segment rule behind it. Linear: the CSI's two classes are disjoint, so
+ *  each lookbehind reads back over one run of each at most. */
+const TOKEN_LEFT_ESCAPE = String.raw`(?<=\\[nrt]|(?:\x1b|\\u001[bB])\[[0-?]*[ -/]*[@-~])`;
+const KNOWN_TOKEN_PREFIX = String.raw`(?:(?<![A-Za-z0-9_-])|` + TOKEN_LEFT_ESCAPE + String.raw`)(?:(?:sk|rk)_(?:live|test)_|gh[pousr]_|github_pat_|glpat-|lin_api_|xox[abprs]-|xapp-|npm_|pypi-)[A-Za-z0-9_-]+|(?:(?<![A-Za-z0-9])|` + TOKEN_LEFT_ESCAPE + String.raw`)(?:(?:AKIA|ASIA)[0-9A-Z]{16}|hf_[A-Za-z0-9]{30,}|AIza[0-9A-Za-z_-]{20,}|`
   + String.raw`SG\.[A-Za-z0-9_-]{22}\.[A-Za-z0-9_-]{43}(?![A-Za-z0-9_=-])|`
   + String.raw`(?:do[op]_v1_[a-f0-9]{64}|[dD][oO][rR]_[vV]1_[a-fA-F0-9]{64}|AGE-SECRET-KEY-(?:PQ-)?1[QPZRY9X8GF2TVDW0S3JN54KHCE6MUA7L]{58})(?![A-Za-z0-9_-])|`
   + String.raw`hvs\.[A-Za-z0-9_-]{90,}|hvb\.[A-Za-z0-9_-]{138,}|(?<![_-])key-[a-f0-9]{32}(?![A-Za-z0-9_-])|`
@@ -238,7 +246,9 @@ const PEM_BLANK_LINE = /^(?:[ \t\r]|\\r)*$/;
  *  Linear ticket, and masking to the end hid the rest of a command or a ticket for good. It is a scanner, not a second
  *  redactor: one step of this table, run over the same text in the same place, written as a function because no single
  *  regular expression walks lines without recursing once per line (review 2704 F2 overflowed the stack at about 1.3
- *  million short lines). From each BEGIN line it masks:
+ *  million short lines). `pemBlockSpans` finds the blocks, `[start, end)` each, and is their one finder: `pem-block`
+ *  masks each as one mark, and the response masks (`server/src/accounts/shapes.ts`, overlord wave 168) mask each row
+ *  of one on its own. From each BEGIN line a block runs:
  *  - through the first END line within `PEM_END_WINDOW` characters, unless another BEGIN line comes first, whatever the
  *    lines between look like (a prefix, a quote, a trailing space, CR CR LF, string concatenation, a JSON-escaped or
  *    space-joined block);
@@ -247,9 +257,28 @@ const PEM_BLANK_LINE = /^(?:[ \t\r]|\\r)*$/;
  *    carriage return before the line end is left in place.
  *  Linear: the BEGIN, END and line-end searches only move forward, each kept once found, and every character is read a
  *  bounded number of times. */
-function maskPemBlocks(text, tally) {
-  if (!text.includes('PRIVATE KEY')) return text;
-  let out = ''; let from = 0;
+export function pemBlockSpans(text) {
+  return pemScan(text, null).spans;
+}
+/** The same finder over one text of a stream (review 2729 F1, the coordinator's ruling): `carry` is the block the last
+ *  text ended inside (null: none), and the answer's `carry` is the block this text ends inside. A carried block runs on
+ *  from this text's start through its END line, or with none to the first blank line, as the scanner's do, with two
+ *  differences (review 2751 F4). It releases `PEM_END_WINDOW` characters after its BEGIN line even with no blank line,
+ *  where the scanner's walk to a blank line has no limit, so a BEGIN mention with no blank line after it masks the next
+ *  64 KB of a stream and no more. And it stops at the next BEGIN line, which starts a block of its own, where the
+ *  scanner's walk of a block with no END line runs on through a second BEGIN line to the first blank line. The response
+ *  masks' drawer keeps it per stream (`server/src/accounts/mask.ts#DrawerMask`), so a key streamed in chunks stays
+ *  masked after its BEGIN line has left the context. */
+export function pemStreamSpans(text, carry) {
+  return pemScan(text, carry);
+}
+/** `pemBlockSpans` and `pemStreamSpans`: the blocks of `text`, and the block it ends inside. */
+function pemScan(text, carry) {
+  /** @type {[number, number][]} */
+  const spans = [];
+  /** @type {{ left: number, lineStart: boolean } | null} */
+  let open = null;
+  if (carry === null && !text.includes('PRIVATE KEY')) return { spans, carry: open };
   // The first END line at or after `endFrom` (null: none), and the next line feed and escaped `\n` at or after `seen`
   // (Infinity: none). Each is searched again only when a query passes it, so each search moves forward only.
   let end = null; let endFrom = Infinity;
@@ -268,34 +297,81 @@ function maskPemBlocks(text, tally) {
     if (lf === Infinity && esc === Infinity) return [text.length, 0];
     return lf <= esc ? [lf, 1] : [esc, 2];
   };
+  /** A block with no END line, from `from`: the rest of its first line (unless `test` and that whole line is blank),
+   *  then every line up to the first blank one, or up to the first line that starts at or past `limit`. Answers where
+   *  it stops, and whether it reached the end of the text: the line the text ends in is not known to be blank even
+   *  when it is so far (empty after a last line break, or blanks), since a stream may go on with it. */
+  const walk = (from, test, limit) => {
+    let [le, brk] = lineEnd(from);
+    if (test && brk > 0 && PEM_BLANK_LINE.test(text.slice(from, le))) return [from, false];
+    let stop = le;
+    let reached = brk === 0;
+    while (brk > 0) {
+      if (le + brk >= limit) break;
+      const [ne, nbrk] = lineEnd(le + brk);
+      if (PEM_BLANK_LINE.test(text.slice(le + brk, ne))) {
+        if (nbrk === 0) reached = true;   // the line the text ends in: blank so far
+        break;
+      }
+      stop = ne; le = ne; brk = nbrk;
+      if (brk === 0) reached = true;
+    }
+    // Leave a carriage return (raw, or JSON-escaped before an escaped `\n`) with the line break it belongs to.
+    if (text[stop - 1] === '\r') stop -= 1;
+    else if (stop - from >= 2 && text[stop - 2] === '\\' && text[stop - 1] === 'r' && text.startsWith('\\n', stop)) stop -= 2;
+    return [Math.max(stop, from), reached];
+  };
+  const endsInBreak = text.endsWith('\n') || text.endsWith('\\n');   // a line feed, or JSON's escaped one
   PEM_HEADER_RE.lastIndex = 0;
-  for (let m = PEM_HEADER_RE.exec(text); m !== null; m = PEM_HEADER_RE.exec(text)) {
+  let first = PEM_HEADER_RE.exec(text);
+  if (carry !== null) {
+    // The block the last text ended inside runs on from this text's start.
+    const nextBegin = first === null ? Infinity : first.index;
+    const e = nextEnd(0);
+    let stop;
+    if (e !== null && e.index < nextBegin && e.index + e[0].length <= carry.left) {
+      stop = e.index + e[0].length;
+    } else {
+      const limit = Math.min(carry.left, nextBegin);
+      let reached;
+      [stop, reached] = walk(0, carry.lineStart, limit);
+      if (stop > nextBegin) stop = nextBegin;
+      if (reached && text.length < limit) open = { left: carry.left - text.length, lineStart: endsInBreak };
+    }
+    if (stop > 0) spans.push([0, stop]);
+    if (first !== null && first.index < stop) { PEM_HEADER_RE.lastIndex = stop; first = PEM_HEADER_RE.exec(text); }
+  }
+  for (let m = first; m !== null; m = PEM_HEADER_RE.exec(text)) {
     const after = m.index + m[0].length;
     const following = PEM_HEADER_RE.exec(text);   // the next BEGIN line, if any
     const nextBegin = following === null ? Infinity : following.index;
     const e = nextEnd(after);
     let stop;
+    open = null;
     if (e !== null && e.index < nextBegin && e.index + e[0].length - after <= PEM_END_WINDOW) {
       stop = e.index + e[0].length;
     } else {
       // No END line: the rest of the BEGIN line, then every line up to the first blank one.
-      let [le, brk] = lineEnd(after);
-      stop = le;
-      while (brk > 0) {
-        const [ne, nbrk] = lineEnd(le + brk);
-        if (PEM_BLANK_LINE.test(text.slice(le + brk, ne))) break;
-        stop = ne; le = ne; brk = nbrk;
-      }
-      // Leave a carriage return (raw, or JSON-escaped before an escaped `\n`) with the line break it belongs to.
-      if (text[stop - 1] === '\r') stop -= 1;
-      else if (stop - after >= 2 && text[stop - 2] === '\\' && text[stop - 1] === 'r' && text.startsWith('\\n', stop)) stop -= 2;
-      if (stop < after) stop = after;
+      let reached;
+      [stop, reached] = walk(after, false, Infinity);
+      const left = PEM_END_WINDOW - (text.length - after);
+      if (reached && left > 0) open = { left, lineStart: endsInBreak };
     }
-    out += `${text.slice(from, m.index)}${R}`;
-    tally.masked += 1;
-    from = stop;
+    spans.push([m.index, stop]);
     // The next BEGIN line is found again from here, unless this block's lines took it in.
     PEM_HEADER_RE.lastIndex = nextBegin !== Infinity && nextBegin >= stop ? nextBegin : stop;
+  }
+  return { spans, carry: open };
+}
+/** The egress profiles' `pem-block` step: each of `pemBlockSpans`' blocks as one mark. */
+function maskPemBlocks(text, tally) {
+  const spans = pemBlockSpans(text);
+  if (spans.length === 0) return text;
+  let out = ''; let from = 0;
+  for (const [a, b] of spans) {
+    out += `${text.slice(from, a)}${R}`;
+    tally.masked += 1;
+    from = b;
   }
   return out + text.slice(from);
 }

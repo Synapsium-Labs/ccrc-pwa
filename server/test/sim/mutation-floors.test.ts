@@ -9,6 +9,7 @@ import { COORD_BLOCKED_INVARIANTS, coordBlockedDay, type CoordBlockedModule } fr
 import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type SuiteCase } from './mutate.js';
 import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
+import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
@@ -182,6 +183,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...RENEWAL_MUTANT_SETS,
   ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
+  ...MAIL_KEY_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,

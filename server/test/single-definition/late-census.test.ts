@@ -970,3 +970,28 @@ describe('codex bridge: Claude Code\'s identity beta is spelled once', () => {
     expect(r.stdout.split('\n').filter(Boolean).sort()).toEqual(['ccd/codexbridge/inbound.py']);
   });
 });
+
+
+// Overlord wave 168 (`response-masks-miss-pem`). APPENDED. A PEM private-key block has one finder, `pemBlockSpans` in
+// `shared/redact.mjs`: the egress profiles' `pem-block` step and the response masks (`server/src/accounts/shapes.ts`)
+// both read it, and no other source file spells the block's BEGIN or END line, so the two can never drift apart.
+describe('a PEM private-key block has one finder (overlord wave 168)', () => {
+  const FILES = [...new Set([...ALL, ...ALL_MJS])];
+  const holders = (re: RegExp): string[] => FILES.filter((f) => re.test(stallCode(f))).map(rel).sort();
+  const SPELLING = /PRIVATE KEY-----/;
+  const DECL = /\bfunction\s+pemBlockSpans\b|\b(?:const|let|var)\s+pemBlockSpans\s*=/;
+  it('CONTROL: the patterns see the spelling and a declaration, and pass over a use', () => {
+    expect(SPELLING.test('const PEM_END = String.raw`-----END [A-Z ]*PRIVATE KEY-----`;')).toBe(true);
+    expect(DECL.test('export function pemBlockSpans(text) {')).toBe(true);
+    expect(DECL.test("import { pemBlockSpans } from '../../../shared/redact.js';")).toBe(false);
+  });
+  it("the block's BEGIN and END lines are spelt in shared/redact.mjs alone", () => {
+    expect(holders(SPELLING)).toEqual(['shared/redact.mjs']);
+  });
+  it('pemBlockSpans is declared once, and both the pem-block step and the response masks read it', () => {
+    expect(holders(DECL)).toEqual(['shared/redact.mjs']);
+    expect(stallCode(path.join(ccrcRoot, 'shared/redact.mjs'))).toMatch(/function maskPemBlocks\([^)]*\) \{\n\s*const spans = pemBlockSpans\(text\);/);
+    expect(callsIn(symbolOf('server/src/accounts/shapes.ts', 'shapeSpans')).map((c) => c.name ?? ''))
+      .toEqual(expect.arrayContaining(['pemBlockSpans', 'pemRowSpans']));
+  });
+});

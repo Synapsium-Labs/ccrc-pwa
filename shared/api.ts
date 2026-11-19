@@ -5535,6 +5535,14 @@ export const MAIL_SUBJECT_MAX_BYTES = 200;
 export const MAIL_ARTIFACTS_MAX = 64;
 export const MAIL_ARTIFACT_PATH_MAX_BYTES = 4096;
 
+/** The optional idempotency key on `POST /api/mail` (Overlord wave 164, `docs/superpowers/programs/overlord/mail-idempotency-key.md`).
+ *  A sender that may retry a send names one; the ingress keeps one mail per (`fromId`, `clientKey`) and answers a retry of the same
+ *  mail with the original id and `already: true`. The shape is `ccd/ccrc-api`'s `SAFE_RE` (letters, digits, `_`, `-`) with a length
+ *  bound, so the client's `--key` and the route accept the same words; absent or null is no key. */
+export const MAIL_CLIENT_KEY_MAX = 128;
+export const isMailClientKey = (value: unknown): value is string =>
+  typeof value === 'string' && value.length >= 1 && value.length <= MAIL_CLIENT_KEY_MAX && /^[A-Za-z0-9_-]+$/.test(value);
+
 /** Numeric fields rendered into a run hold use this one exact domain at every
  *  JavaScript seam. Safe integers stringify as plain decimal digits; larger
  *  integers can lose identity or switch to exponent punctuation the session hook
@@ -6337,6 +6345,8 @@ export const MAIL_REJECT_CODES = [
   // docstring already makes for 'paused'); the both-directions membership
   // scan still covers it.
   'duplicate', 'peer-quota',
+  // ingress — the idempotency key (Overlord wave 164): a `clientKey` this sender already used on a DIFFERENT mail.
+  'key-conflict',
   // delivery
   'undeliverable',
   // done-authority
@@ -6497,11 +6507,14 @@ export function parseWaveDoneSignals(body: string): WaveDoneSignals {
  * `profiledigest` (Overlord W1 sandbox, spec §3.6 H1) is the sha256 the server expects of the row `profile` names: while it
  * stands, ccd renders the row's surface whole or refuses the spawn. The launch-profile lane writes it (designation's create
  * is its one recorded second writer), and an empty value clears it.
+ * `mailhold` (mid-turn mail spec 2026-11-19 §3.3) is the urgent-mail hold's lease, in `shared/mailHold.ts`'s grammar. Its
+ * one writer is the mail-hold projection lane; ccd refuses it at the mint and from a session's shell, and an empty value
+ * clears it.
  */
-export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest'] as const;
+export const ROUTE_WRITABLE_FIELDS = ['class', 'effort', 'subagent', 'workflow', 'compact', 'browser', 'profile', 'automem', 'compactwindow', 'precompact', 'poolset', 'acctorder', 'profiledigest', 'mailhold'] as const;
 /** The route fields only a server lane writes (Overlord W1a; "one writer per route field: the lane"): the launch-profile
- *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, and the pool set's two (W1),
- *  written by the designation's doors.
+ *  lane's four (`profiledigest` since the W1 sandbox), the generations lane's `precompact`, the pool set's two (W1),
+ *  written by the designation's doors, and the mail-hold projection's `mailhold`.
  *  `parseRouteFields`, the one door parse, refuses each as `lane-only` with a 400 naming it, at the operator's route
  *  door, the spawn and dispatch `route` bodies, and the coordinator's `POST /api/runs/:id/route`. The lane composes
  *  `CCD_ARGV.routeSet` itself and never passes a door. Derived: `ROUTE_WRITABLE_FIELDS` from `profile` on. */
