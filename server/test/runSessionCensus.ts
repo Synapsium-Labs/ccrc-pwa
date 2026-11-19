@@ -253,6 +253,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the designation's bound session against the session a console prompt names (promptTargetVerdict, private store B): the designation read, no run is read" },
   { file: 'server/src/operatorModel/messages.ts', text: 'designation.sessionId === row.sessionId',
     why: "the designation's bound session against the session an operator message was recorded for (nudgeRecovery, the boot pass): the designation read and the message row, no run is read" },
+  { file: 'server/src/coord/urgentMail.ts', text: 'd.sessionId === f.senderId',
+    why: "the designation's bound session against the sender an urgent mail names (urgentSenderVerdict, mid-turn mail PR 2): the designation read, no run is read" },
   { file: 'server/src/continuity/generationsLane.ts', text: 'g.sessionId === id',
     why: 'the compactions read cache pruned to the generations the gather still reads: a cache key, no run is read' },
   { file: 'server/src/continuity/generationStart.ts', text: 'n.sessionId !== s.sessionId',
