@@ -66,7 +66,8 @@ const jqRecorder = (): { dir: string; log: string } => {
   const dir = path.join(h.home, 'jqwrap');
   const log = path.join(h.home, 'jq-argv.log');
   fs.mkdirSync(dir, { recursive: true });
-  const real = execFileSync('bash', ['-c', 'command -v jq'], { encoding: 'utf8' }).trim();
+  // The real jq, found by walking PATH here (no shell spawned outside the contained environment).
+  const real = (process.env.PATH ?? '').split(':').map((d) => path.join(d, 'jq')).find((f) => { try { fs.accessSync(f, fs.constants.X_OK); return true; } catch { return false; } }) ?? 'jq';
   fs.writeFileSync(path.join(dir, 'jq'), `#!/bin/bash\nprintf '%s\\n' "$*" >> '${log}'\nexec '${real}' "$@"\n`, { mode: 0o755 });
   return { dir, log };
 };
