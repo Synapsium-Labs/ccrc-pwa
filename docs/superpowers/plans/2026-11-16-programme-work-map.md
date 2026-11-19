@@ -736,8 +736,8 @@ Task WM2 departs under its own number:
   holder's consent by mail: one read in `server/src/coord/store.ts` (`programmeWorkRuns`) and the three floor rows (claim
   5529), the `runVerdicts` wiring property in `server/src/server.ts` (claim 5558), and, after CI's first fast run, the
   plan doors' inline snapshot in `server/test/overlord-other-lanes-pin.test.ts` (claim 5572), which records the whole plan
-  read. That run also asked `isPlanKebab` to admit the map's words (`map-words-are-plan-words`: the map's sources, verdict
-  reads and unreadable words are lists in `shared/plan.ts` too) and the WM0 characterization to set `work` aside
+  read. That run also asked `isPlanKebab` to admit the map's words (`map-words-are-plan-words`: the map's sources and verdict
+  reads are lists in `shared/plan.ts` too, with `read-failed`, never the store's `run-unreadable`) and the WM0 characterization to set `work` aside
   (`characterization-reads-plan-only`). The task note
   (`docs/superpowers/programs/desktop-polish/wm2.md`) gives each row and what reds it, the mutants and the test runs.
 

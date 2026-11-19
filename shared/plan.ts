@@ -90,7 +90,7 @@ export const isPlanKebab = (tok: string): boolean => (planKebab ??= new Set<stri
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
   ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
   ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
-  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, ...WORK_UNREADABLE,
+  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED,
 ])).has(tok);
 
 // ── Wire types ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -189,9 +189,11 @@ export const WORK_SOURCES = ['plan', 'declared-empty', 'ended', 'runs'] as const
 export type WorkSource = (typeof WORK_SOURCES)[number];
 /** The run verdicts reader's state on the map: `not-read` skips the stuck and blocked rows (Table 6 rows 7 and 8). */
 export const WORK_VERDICT_READS = ['read', 'not-read'] as const;
-/** Why `work` could not be read: the store's word for a run read that answers a failure, or `read-failed` for a read that
- *  throws. */
-export const WORK_UNREADABLE = ['run-unreadable', 'read-failed'] as const;
+/** The work map's own word for a read behind `work` that throws. */
+export const WORK_READ_FAILED = 'read-failed';
+/** Why `work` could not be read: the store's run read-failure word (`run-unreadable`, its own family's, which the plan's
+ *  words do not admit), or `read-failed`. */
+export type WorkUnreadable = 'run-unreadable' | typeof WORK_READ_FAILED;
 /** One ticket (or, in the no-plan fallback, one work run) on the map. */
 export interface WorkItemView {
   key: string;
@@ -264,7 +266,7 @@ export interface WorkMapView {
   runs: { items: WorkItemView[]; waves: { from: number; to: number } | null } | null;
 }
 /** The plan read's `work` field: the map, or why the reads behind it failed (D19). Absent means an older server. */
-export type WorkAnswer = WorkMapView | { unreadable: (typeof WORK_UNREADABLE)[number] };
+export type WorkAnswer = WorkMapView | { unreadable: WorkUnreadable };
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
   ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };

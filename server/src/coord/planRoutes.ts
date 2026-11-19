@@ -41,7 +41,7 @@ import { NO_PLAN_CHANGES } from './planStore.js';
 import type { RunVerdicts } from './runVerdicts.js';
 import { withLastMoves } from './runWire.js';
 import { doneEvidenceVerdict, verdictsReadOf, workMapOf, type DoneEvidenceFacts, type EvidenceVerdict } from './workMap.js';
-import type { WorkAnswer } from '../../../shared/plan.js';
+import { WORK_READ_FAILED, type WorkAnswer } from '../../../shared/plan.js';
 
 export interface PlanRouteOpts {
   /** The coordination store, for the programme rows and the project's team key; undefined (a test, a script): `unavailable`. */
@@ -264,7 +264,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       });
     } catch (e) {
       console.warn(`ccrc-server: the work map of ${slug} could not be read (${e instanceof Error ? e.message : String(e)})`);
-      return { unreadable: 'read-failed' };
+      return { unreadable: WORK_READ_FAILED };
     }
   };
 
