@@ -2239,7 +2239,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     actKey: (g, key) => (deps.coord === undefined ? { kind: 'unmeasured', why: noCoord } : actKeyFact(deps.coord.db, g, key)),
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
     witness: () => ({ kind: 'unmeasured', why: 'the witness report is not built' }), recordWitness: () => {},
-    recordFenceRefusal: (row) => { if (deps.coord !== undefined) recordFenceRefusal(deps.coord.db, row); },
+    recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
   });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {

@@ -5,15 +5,20 @@
 //   const g = await gate(req, reply, '<row key>', { … });
 //   if (g.kind === 'refused') return reply;
 //
-// The card door's recording page asks a second row, `card-record`, before its `insertCardRead` call. A new Overlord door that
-// forgets the call, names another row, goes on after a refusal or reads the store first turns this red.
+// The card door's recording page asks a second row, `card-record`, before anything is written (before its `insertSnapshot` and
+// its `insertCardRead` calls), and stops on `refused` the same way (review 2803 F3, N7). A new Overlord door that forgets the
+// call, names another row, goes on after a refusal or reads the store first turns this red.
+//
+// The scan reads every file an `overlord` row may name (the four files `overlord-doors-census.test.ts` lists) and refuses a row
+// naming any other (review 2803 F5). The runner call is told from the account gate's `deps.gate(req, reply, { … })` by its
+// third argument: a string literal is the runner's row key, an object literal is the account gate's, which is not scanned.
 //
 // WHAT THE SCAN CANNOT SEE: a route registered through a helper, a loop or another registrar (`app.route({…})`, a
 // `registerX(app)` that is not one of the files named here, a computed path), a handler that is not an inline function
 // (an identifier is refused, not followed), a gate call reached through a helper inside the handler (the call must be a
 // top-level `const g = await gate(…)` statement of the handler), and a store reached through a name other than `coord`
 // (every door reads the store through the `coord` local or `deps.coord`; a differently named alias would pass the
-// "before the store" arm). It reads literal `app.get|post|put|delete('<path>', …)` calls with the repo's one parser wrapper
+// "before the store" arm), and a row naming a file outside the four (refused by the subset test, not followed). It reads literal `app.get|post|put|delete('<path>', …)` calls with the repo's one parser wrapper
 // (`scan/parse.ts`), as the other censuses do.
 import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
@@ -25,6 +30,10 @@ import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 const REPO = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const CONTINUITY = 'server/src/continuity/routes.ts';
 const OVERLORD_ROUTES = 'server/src/coord/overlordRoutes.ts';
+const LEDGERS_ROUTES = 'server/src/coord/ledgersRoutes.ts';
+const NAME_LIST_ROUTES = 'server/src/operatorModel/nameListRoutes.ts';
+/** The files an `overlord` row may name: the same four `overlord-doors-census.test.ts` reads. */
+const SCANNED = [OVERLORD_ROUTES, CONTINUITY, LEDGERS_ROUTES, NAME_LIST_ROUTES] as const;
 const sourceOf = (rel: string): string => readFileSync(path.join(REPO, rel), 'utf8');
 const VERBS = new Set(['get', 'post', 'put', 'delete']);
 
@@ -54,11 +63,13 @@ export function registrationsIn(text: string, file: string): Reg[] {
   return out;
 }
 
-/** A call's callee as `gate` or `deps.gate`, or null. */
+/** A runner call: `gate(req, reply, '<key>', …)` or `deps.gate(req, reply, '<key>', …)`. The account gate's
+ *  `deps.gate(req, reply, { … })` has an object literal for its third argument and is not one. */
 const isGateCall = (n: ts.Node): n is ts.CallExpression =>
   ts.isCallExpression(n) && (
     (ts.isIdentifier(n.expression) && n.expression.text === 'gate')
-    || (ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === 'deps' && n.expression.name.text === 'gate'));
+    || (ts.isPropertyAccessExpression(n.expression) && ts.isIdentifier(n.expression.expression) && n.expression.expression.text === 'deps' && n.expression.name.text === 'gate'))
+  && !(n.arguments[2] !== undefined && ts.isObjectLiteralExpression(n.arguments[2]));
 const callsNamed = (root: ts.Node, name: string): boolean => {
   let found = false;
   walk(root, (n) => {
@@ -89,6 +100,30 @@ export function overlordRowsOf(file: string): Map<string, string[]> {
     by.set(k, [...(by.get(k) ?? []), key]);
   }
   return by;
+}
+
+/** Whether the statement after a gate call's `const <name> = await gate(…)` declaration is `if (<name>.kind === 'refused')` whose
+ *  branch ends in a `return`. With `top` set the declaration must be a top-level statement of that block. */
+function stopViolations(call: ts.CallExpression, label: string, top: ts.Block | null): string[] {
+  const aw = call.parent;
+  const decl = aw !== undefined && ts.isAwaitExpression(aw) ? aw.parent : undefined;
+  const stmt = decl !== undefined && ts.isVariableDeclaration(decl) ? decl.parent?.parent : undefined;
+  const block = stmt?.parent;
+  if (decl === undefined || !ts.isVariableDeclaration(decl) || stmt === undefined || !ts.isVariableStatement(stmt) || block === undefined
+    || !ts.isBlock(block) || (top !== null && block !== top) || !ts.isIdentifier(decl.name)) {
+    return [`${label}: the gate( call is not a ${top !== null ? 'top-level ' : ''}\`const g = await gate(...)\` statement`];
+  }
+  const at = block.statements.indexOf(stmt);
+  const next = block.statements[at + 1];
+  const name = decl.name.text;
+  const cond = next !== undefined && ts.isIfStatement(next) ? next.expression : undefined;
+  const stops = cond !== undefined && ts.isBinaryExpression(cond) && cond.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
+    && ts.isPropertyAccessExpression(cond.left) && ts.isIdentifier(cond.left.expression) && cond.left.expression.text === name && cond.left.name.text === 'kind'
+    && ts.isStringLiteralLike(cond.right) && cond.right.text === 'refused';
+  if (!stops) return [`${label}: the statement after the gate( declaration is not \`if (${name}.kind === 'refused') …\``];
+  const then = (next as ts.IfStatement).thenStatement;
+  const last = ts.isBlock(then) ? then.statements[then.statements.length - 1] : then;
+  return last === undefined || !ts.isReturnStatement(last) ? [`${label}: the 'refused' branch does not return`] : [];
 }
 
 /** Everything wrong with one registration's handler against its row keys (the first key is the door's own; a second names
@@ -122,46 +157,31 @@ export function violationsOfRegistration(r: Reg | undefined, keys: readonly stri
   const first = gates[0]!;
   if (keyOf(first) !== own) bad.push(`${own}: the first gate( call does not name its own row (it names ${JSON.stringify(keyOf(first))})`);
   // The first call is a top-level `const g = await gate(...)` and the next statement stops on `refused`.
-  const aw = first.parent;
-  const decl = aw !== undefined && ts.isAwaitExpression(aw) ? aw.parent : undefined;
-  const stmt = decl !== undefined && ts.isVariableDeclaration(decl) ? decl.parent?.parent : undefined;
-  if (decl === undefined || !ts.isVariableDeclaration(decl) || stmt === undefined || !ts.isVariableStatement(stmt) || stmt.parent !== body || !ts.isIdentifier(decl.name)) {
-    bad.push(`${own}: the first gate( call is not a top-level \`const g = await gate(...)\` statement of the handler`);
-  } else {
-    const at = body.statements.indexOf(stmt);
-    const next = body.statements[at + 1];
-    const name = decl.name.text;
-    const cond = next !== undefined && ts.isIfStatement(next) ? next.expression : undefined;
-    const stops = cond !== undefined && ts.isBinaryExpression(cond) && cond.operatorToken.kind === ts.SyntaxKind.EqualsEqualsEqualsToken
-      && ts.isPropertyAccessExpression(cond.left) && ts.isIdentifier(cond.left.expression) && cond.left.expression.text === name && cond.left.name.text === 'kind'
-      && ts.isStringLiteralLike(cond.right) && cond.right.text === 'refused';
-    if (!stops) bad.push(`${own}: the statement after the gate( declaration is not \`if (${name}.kind === 'refused') …\``);
-    else {
-      const then = (next as ts.IfStatement).thenStatement;
-      const last = ts.isBlock(then) ? then.statements[then.statements.length - 1] : then;
-      if (last === undefined || !ts.isReturnStatement(last)) bad.push(`${own}: the 'refused' branch does not return`);
-    }
-  }
+  bad.push(...stopViolations(first, own, body));
   // Before the first `coord` or `deps.coord` use (an identifier named coord, a property access included).
   let firstCoord = Number.POSITIVE_INFINITY;
   walk(body, (n) => { if (ts.isIdentifier(n) && n.text === 'coord') firstCoord = Math.min(firstCoord, n.getStart()); });
   if (first.getStart() > firstCoord) bad.push(`${own}: the store (coord) is used before the first gate( call`);
-  // The card's recording page: its row's gate( call precedes insertCardRead(.
+  // The card's recording page: its row's gate( call precedes every write (insertSnapshot(, insertCardRead() and stops on refused.
   for (const extra of keys.slice(1)) {
-    const asked = gates.filter((g) => keyOf(g) === extra).map((g) => g.getStart());
-    const inserts = callsOf(body, 'insertCardRead');
+    const askedCalls = gates.filter((g) => keyOf(g) === extra);
+    const asked = askedCalls.map((g) => g.getStart());
     if (asked.length === 0) bad.push(`${own}: no gate( call names ${extra}`);
-    if (inserts.length === 0) bad.push(`${own}: no insertCardRead( call (the arm that ${extra} fences)`);
-    if (asked.length > 0 && inserts.some((c) => c.getStart() < Math.min(...asked))) bad.push(`${own}: insertCardRead( is called before the ${extra} gate( call`);
+    for (const write of ['insertSnapshot', 'insertCardRead']) {
+      const inserts = callsOf(body, write);
+      if (inserts.length === 0) bad.push(`${own}: no ${write}( call (the arm that ${extra} fences)`);
+      if (asked.length > 0 && inserts.some((c) => c.getStart() < Math.min(...asked))) bad.push(`${own}: ${write}( is called before the ${extra} gate( call`);
+    }
+    for (const c of askedCalls) bad.push(...stopViolations(c, `${own}/${extra}`, null));
   }
   return bad;
 }
 
 /** The whole file's violations, over its `overlord` rows. */
-export function violationsOf(text: string, file: string): string[] {
+export function violationsOf(text: string, file: string, rows: Map<string, string[]> = overlordRowsOf(file)): string[] {
   const regs = registrationsIn(text, file);
   const out: string[] = [];
-  for (const [reg, keys] of overlordRowsOf(file)) out.push(...violationsOfRegistration(regs.find((r) => r.reg === reg), keys));
+  for (const [reg, keys] of rows) out.push(...violationsOfRegistration(regs.find((r) => r.reg === reg), keys));
   return out;
 }
 
@@ -202,13 +222,32 @@ describe('every overlord door asks the one gate, with its own row, before the st
     expect(record[0]!.getStart()).toBeLessThan(calls[0]!.getStart());
   });
 
-  it('no registration in coord/overlordRoutes.ts is an overlord-group row today, and the check is the same one (generic)', () => {
-    const rows = overlordRowsOf(OVERLORD_ROUTES);
-    expect([...rows.keys()]).toEqual([]);
-    const text = sourceOf(OVERLORD_ROUTES);
-    // Non-vacuity: the file is scanned and registers doors.
-    expect(registrationsIn(text, OVERLORD_ROUTES).length).toBeGreaterThan(0);
-    expect(violationsOf(text, OVERLORD_ROUTES)).toEqual([]);
+  it('every overlord row names a scanned file, and the scan covers the four files a row may name (F5)', () => {
+    const files = new Set(Object.values(OVERLORD_DOORS).filter((r) => r.group === 'overlord').map((r) => r.file));
+    expect(files.size).toBeGreaterThan(0);
+    for (const f of files) expect(SCANNED as readonly string[], f).toContain(f);
+  });
+
+  for (const file of SCANNED.filter((f) => f !== CONTINUITY)) {
+    it(`${file}: any overlord-group row it holds is checked as the continuity file's are (none today)`, () => {
+      const text = sourceOf(file);
+      // Non-vacuity: the file is scanned and registers doors.
+      expect(registrationsIn(text, file).length).toBeGreaterThan(0);
+      expect(violationsOf(text, file)).toEqual([]);
+    });
+  }
+
+  it('the card door asks card-record before insertSnapshot( and insertCardRead(, and stops on a refusal (F3, N7)', () => {
+    const r = registrationsIn(CONTINUITY_TEXT, CONTINUITY).find((x) => x.reg === 'GET /api/sessions/:id/card')!;
+    const record: ts.CallExpression[] = [];
+    walk(r.handler!, (n) => { if (isGateCall(n) && ts.isStringLiteralLike(n.arguments[2]!) && (n.arguments[2] as ts.StringLiteral).text === 'card-record') record.push(n); });
+    expect(record).toHaveLength(1);
+    for (const write of ['insertSnapshot', 'insertCardRead']) {
+      const calls = callsOf(r.handler!, write);
+      expect(calls.length, write).toBeGreaterThan(0);
+      for (const c of calls) expect(record[0]!.getStart(), write).toBeLessThan(c.getStart());
+    }
+    expect(stopViolations(record[0]!, 'card/card-record', null)).toEqual([]);
   });
 
   it('the whole continuity file is clean, over every overlord row', () => {
@@ -250,8 +289,31 @@ describe('CONTROL: the census goes red on each way to break the form (edited in 
   });
 
   it('a card handler that records before asking card-record', () => {
-    const t = mutate(CONTINUITY_TEXT, /if \(g\.kind === 'pass'\) \{/, "coord.insertCardRead({} as never);\n        if (g.kind === 'pass') {");
+    const t = mutate(CONTINUITY_TEXT, /(\n\s*)(const f = await gate\(req, reply, 'card-record')/, '$1coord.insertCardRead({} as never);$1$2');
     expect(violationsOf(t, CONTINUITY).join('\n')).toMatch(/card: insertCardRead\( is called before the card-record gate\( call/);
+  });
+
+  it('a card handler whose card-record call sits after insertSnapshot (the F3 order undone)', () => {
+    const t = mutate(CONTINUITY_TEXT, /(\n\s*)(const f = await gate\(req, reply, 'card-record')/, '$1coord.insertSnapshot({} as never);$1$2');
+    expect(violationsOf(t, CONTINUITY).join('\n')).toMatch(/card: insertSnapshot\( is called before the card-record gate\( call/);
+  });
+
+  it('a card handler whose card-record refused branch does not return', () => {
+    const t = mutate(CONTINUITY_TEXT, /(await gate\(req, reply, 'card-record'[^\n]*\n\s*)if \(f\.kind === 'refused'\) return reply;/, "$1if (f.kind === 'refused') void 0;");
+    expect(violationsOf(t, CONTINUITY).join('\n')).toMatch(/card\/card-record: the 'refused' branch does not return/);
+  });
+
+  it('a card handler where something sits between the card-record declaration and its refused check', () => {
+    const t = mutate(CONTINUITY_TEXT, /(await gate\(req, reply, 'card-record'[^\n]*\n)/, '$1        void 0;\n');
+    expect(violationsOf(t, CONTINUITY).join('\n')).toMatch(/card\/card-record: the statement after the gate\( declaration is not/);
+  });
+
+  it('a planted overlord row on a ledger registration that holds only the account gate is red (the account gate is not the runner)', () => {
+    const text = sourceOf(LEDGERS_ROUTES);
+    expect(violationsOf(text, LEDGERS_ROUTES)).toEqual([]);
+    const planted = new Map([['POST /api/programmes/:slug/goals/ratify', ['planted-door']]]);
+    expect(text).toMatch(/app\.post\('\/api\/programmes\/:slug\/goals\/ratify'[^\n]*\n\s*const g = deps\.gate\(req, reply, \{/);
+    expect(violationsOf(text, LEDGERS_ROUTES, planted)).toContain('planted-door: the handler never calls gate(');
   });
 
   it('a card handler that never asks card-record', () => {

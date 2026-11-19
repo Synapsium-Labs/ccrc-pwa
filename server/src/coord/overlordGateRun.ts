@@ -1,8 +1,9 @@
 // The gate runner (Overlord W1, gates B; spec §11.2; plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 5).
 // Ring L4, context C5: every Overlord door's one call, after its `onRequest` token check and its own body parse. It READS each
 // fact once through a port filled at L5, ASKS the L1 deciders (`overlordGate.ts`), REFUSES through `refuseRoute`, and RECORDS
-// what the verdict names, each through its one writer. It holds no `if` over a gate word and spells none (a scan in
-// `overlord-gate-run.test.ts` holds that): which facts a door reads, step 1's early answer and every refusal are the deciders'.
+// what the verdict names, each through its one writer. It spells no gate word (a scan in `overlord-gate-run.test.ts` holds
+// that), and it branches only on the deciders' answers: which facts a door reads, step 1's early answer, what to record and
+// every refusal are the deciders'.
 //
 // Fail closed: the runner never throws. A port that throws reads as that fact's unmeasured arm, which refuses at its own step
 // (slug `unmeasured-refuses-at-its-step`). A port whose producer has not landed is bound at L5 to its stated default, which
@@ -20,8 +21,9 @@ import { designationFactFrom, identityOf } from '../roleOf.js';
 import type { AuthorityState } from './overlordAuthorityCoherence.js';
 import { doorRow, type OverlordDoorRow } from './overlordDoors.js';
 import {
-  callerStandingOf, counterVerdict, gateReads, incarnationNeeded, overlordGate, standingVerdict, witnessRecordOf,
-  type FenceFacts, type FencePresented, type FenceWhy, type GateFacts, type GateVerdict, type WitnessRecord, type WitnessVerdict,
+  callerStandingOf, counterVerdict, fenceVerdict, gateReads, incarnationNeeded, overlordGate, spendVerdict, standingVerdict, witnessRecordOf,
+  type FenceFacts, type FencePresented, type FenceVerdict, type FenceWhy, type GateFacts, type GateStep, type GateVerdict, type WitnessRecord,
+  type WitnessVerdict,
 } from './overlordGate.js';
 import type { ActKeyFact, CounterAnswer, FenceRefusalRow } from './overlordGateStore.js';
 
@@ -94,6 +96,13 @@ export function overlordGateRun(deps: OverlordGateDeps):
     if (r === null || live === null) return;
     attempt(() => deps.recordWitness({ sessionId, generationId: live.id, door, ...r, at: deps.now() }), () => undefined);
   };
+  /** The witness spend on a passing write: true when it was recorded, false when the recorder threw (which refuses). */
+  const spendWitness = (r: WitnessRecord | null, live: GenRow, sessionId: string, door: string): boolean =>
+    r === null || attempt(() => { deps.recordWitness({ sessionId, generationId: live.id, door, ...r, at: deps.now() }); return true; }, () => false);
+  const refusedFence = (reply: FastifyReply, v: FenceVerdict, step: GateStep): GateRun => {
+    if (v.kind === 'refuse') void refuseRoute(reply, v.word, { detail: v.detail, step });
+    return { kind: 'refused' };
+  };
   const recordFence = (sessionId: string, generationId: number | null, door: string, why: FenceWhy | null): void => {
     if (why === null) return;
     attempt(() => deps.recordFenceRefusal({ sessionId, generationId, door, why, at: deps.now() }), () => undefined);
@@ -164,29 +173,34 @@ export function overlordGateRun(deps: OverlordGateDeps):
       // W2's operation-key lookup is read here and decided right after step 7, before step 7a (the act rows piece adds its
       // port and its arm; its hash binds the door, the path parameters and the body).
       witness = live === null ? { kind: 'unmeasured', why: 'no live generation' }
-        : attempt<WitnessVerdict>(() => deps.witness(claim.sessionId, live!.id, headerOf(req, WITNESS_KEY_HEADER)), (why) => ({ kind: 'unmeasured', why }));
+        // A thrown lookup's message never reaches the detail: the witness key may be in it (review 2803 N3).
+        : attempt<WitnessVerdict>(() => deps.witness(claim.sessionId, live!.id, headerOf(req, WITNESS_KEY_HEADER)), () => ({ kind: 'unmeasured', why: 'the witness lookup failed' }));
     }
-    const authority = reads.ladder ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : { kind: 'coherent' } as const;
+    const authority: GateFacts['authority'] = reads.authority
+      ? attempt<AuthorityState>(() => deps.authority(), () => ({ kind: 'unmeasured', why: 'journal' })) : 'start-door';
+    const serverWords = attempt<GateFacts['serverWords']>(() => deps.serverWords(), (why) => ({ kind: 'unmeasured', why }));
 
-    const verdict = overlordGate({
-      door, standing, serverWords: attempt(() => deps.serverWords(), () => []), authority, ladder, term, fence, witness, card, generation,
-    });
+    const verdict = overlordGate({ door, standing, serverWords, authority, ladder, term, fence, witness, card, generation });
     if (verdict.kind === 'refuse') {
       if (verdict.record === 'fence-refusal') recordFence(claim.sessionId, live?.id ?? null, key, verdict.why);
       recordWitness(witnessRecordOf(verdict, witness), live, claim.sessionId, key);
       return refused(reply, verdict);
     }
     if (verdict.kind === 'hook') return { kind: 'hook', caller };
-    if (!door.write || live === null) return { kind: 'pass', caller, generation: live === null ? null : { id: live.id, n: live.n, term: live.term } };
-    // A write that passed: the witness is spent, then the counter's compare-and-set, a TOCTOU re-check of step 7's read
-    // (legitimately different: two racing writes both read the same stored counter; only one may advance it).
-    recordWitness(witnessRecordOf(verdict, witness), live, claim.sessionId, key);
+    if (!door.write) return { kind: 'pass', caller, generation: live === null ? null : { id: live.id, n: live.n, term: live.term } };
+    // A write with no live generation is the fence's to refuse; the decider refused it at step 5, and this answers the same
+    // if that ever changed (review 2803 N1).
+    if (live === null) return refusedFence(reply, fenceVerdict('generation', presented, term, { kind: 'read', live: null }), '7');
+    // A write that passed: the counter's compare-and-set first, a TOCTOU re-check of step 7's read (legitimately different: two
+    // racing writes both read the same stored counter; only one may advance it); then the witness is spent, and a spend that
+    // could not be recorded refuses the write (review 2803 F2). A counter that could not advance leaves the witness unspent.
     const counted = counterVerdict(attempt<CounterAnswer>(() => deps.counter(live!.id, presented.counter ?? 0), () => 'unmeasured'));
     if (counted.kind === 'refuse') {
       recordFence(claim.sessionId, live.id, key, counted.why);
-      void refuseRoute(reply, counted.word, { detail: counted.detail, step: '7' });
-      return { kind: 'refused' };
+      return refusedFence(reply, counted, '7');
     }
+    const spent = spendVerdict(spendWitness(witnessRecordOf(verdict, witness), live, claim.sessionId, key));
+    if (spent.kind === 'refuse') return refused(reply, spent);
     return { kind: 'pass', caller, generation: { id: live.id, n: live.n, term: live.term } };
   };
 }

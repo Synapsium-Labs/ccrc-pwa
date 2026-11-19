@@ -462,10 +462,23 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     const factsJson = snapshotFactsJson(facts);
     const snapshotId = sha256(factsJson);
+    const slices = cardPages(text);
+    // The Overlord's read that would complete its card is a fenced write (slug card-record-is-fenced), asked before anything is
+    // written, so a refusal writes nothing (review 2803 F3). Whether this page completes the read is read off the memo as it
+    // stands; the memo is read again after the await, and a read that completes without a fence that passed is not recorded.
+    let fenced = false;
+    if (g.kind === 'pass' && (asked === undefined || asked === hash) && page <= slices.length && begun === startOf(key)) {
+      const before = served.get(key);
+      const pages = new Set(before !== undefined && before.hash === hash && before.start === begun ? before.pages : []);
+      if (pages.add(page).size === slices.length) {
+        const f = await gate(req, reply, 'card-record', { sessionId: id, uuid, uuidField: 'byUuid' });
+        if (f.kind === 'refused') return reply;
+        fenced = true;
+      }
+    }
     const stored = coord.insertSnapshot({ id: snapshotId, sessionId: id, at, facts: factsJson, hash });
     if (!stored.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_snapshots could not be written' });
     if (asked !== undefined && asked !== hash) return refuseRoute(reply, CARD_REFUSALS.cardChanged, { hash, detail: 'the card changed: read it again from page 1' });
-    const slices = cardPages(text);
     if (page > slices.length) return refuseRoute(reply, 'bad-request', { detail: `the card has ${slices.length} page(s)` });
 
     const start = startOf(key);
@@ -476,13 +489,9 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     if (begun === start) {
       served.delete(key);
       memo.pages.add(page);
-      if (memo.pages.size === slices.length) {
-        // The Overlord's read that completes its card is a fenced write (slug card-record-is-fenced): its own row, before the
-        // record. A refusal records nothing, and the memo stands, so a retry of this page may record it.
-        if (g.kind === 'pass') {
-          const fenced = await gate(req, reply, 'card-record', { sessionId: id, uuid, uuidField: 'byUuid' });
-          if (fenced.kind === 'refused') { remember(key, memo); return reply; }
-        }
+      // The Overlord's read is recorded only behind a fence that passed (above); otherwise the memo stands, so a retry of the
+      // last page asks the fence and records it.
+      if (memo.pages.size === slices.length && (g.kind !== 'pass' || fenced)) {
         const r = coord.insertCardRead({ sessionId: id, uuid, snapshotId, hash, pages: slices.length, at });
         if (!r.ok) {
           remember(key, memo);

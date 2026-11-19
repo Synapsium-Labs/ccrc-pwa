@@ -101,11 +101,13 @@ export type DesignationFact = { readonly kind: 'none' }
   | { readonly kind: 'row'; readonly live: string | null; readonly pending: string | null;
       readonly pendingKind: PendingKind | null; readonly term: number };
 
-/** `pending` when the id is the pending attempt, `live` when it is the binding, `none` otherwise. */
+/** `live` when the id is the binding, `pending` when it is the pending attempt, `none` otherwise. The binding is read
+ *  first, as `identityOf` reads it (Overlord W1 gates B, review 2803 F1): a row whose pending attempt names the bound id
+ *  leaves that id the live binding, never a pending body. */
 export function designationFactOf(sessionId: string, d: DesignationFact): RoleFacts['designation'] {
   if (d.kind === 'none') return 'none';
-  if (d.pending === sessionId) return 'pending';
   if (d.live === sessionId) return 'live';
+  if (d.pending === sessionId) return 'pending';
   return 'none';
 }
 

@@ -26,7 +26,9 @@ coordinator to fold into the programme ledger. Each departure is named by a plai
 4. **One console mapping** (`console-results-are-minted`). `attributionIdentity.ts#consoleSubject` is the one owner of the
    console answer's text: `flag-off` dark, `unmeasured` with no device, the device actor's subject signed in. `console()`
    now mints its three answers (frozen, held in a private set), so a hand-built `{ kind: 'dark' }` is no answer and maps to
-   `null`, which every caller refuses: the rank door answers `internal`, the ladder's brakes `actor`. Its callers: the rank
+   `null`, which the rank door refuses (`internal`) and the ladder's brakes refuse (`actor`). `server.ts`'s `consoleActor`
+   helper, whose callers take a string, records `unmeasured` for that `null`, never `flag-off`; it cannot occur there,
+   since the helper hands `consoleSubject` the port's own answer (review 2803 N2). Its callers: the rank
    door, the ladder's brakes (`ladderActor`), and one `consoleActor` helper in `server.ts` that the renewal operator doors,
    the decision-model doors and the responses doors share (three copies of the same mapping there before).
 5. **The renewal operator doors** (`renewal-doors-record-through-the-console-arm`). `POST /api/sessions/:id/renew` and
@@ -105,6 +107,39 @@ now mints through `gateActorOf` like the others. The third, `ccd-harness-integri
 ships", hit its 20 s budget on CI and passes alone here (13/13). `horkos` blocks on `proof-not-built` only (a non-author
 unblocks it; nothing in the PR fixes it), and routes on `test-edited` and `test-weakened`, which are the four restated
 cases above.
+
+## Fix round 1 (review 2803)
+
+- **F1, the binding is read first** (slug `designation-fact-reads-the-binding-first`): fixed in the one owner,
+  `roleOf.ts#designationFactOf`, which now reads `live` before `pending`, as `identityOf` does. Its other callers agree: four
+  test `!== 'none'` or the role, and the prompt door's `=== 'pending'` reads a pending body, which a row whose pending attempt
+  names the bound id is not. A case and a mutant (F5 of its set) pin the order, and the gate's standing cases hold a row whose
+  bound id is also the pending attempt's.
+- **F2, the counter before the witness** (slug `counter-then-witness-spend`): a passing write runs the guarded counter's
+  compare-and-set first, then spends the witness; a counter that cannot advance leaves the witness unspent for a retry, and a
+  spend whose recorder throws refuses the write 503 `unavailable` at step 7a (`overlordGate.ts#spendVerdict`). They are not one
+  transaction: the spend is door process B's writer, behind its own port. That departs from the plan's runner order (Task 5,
+  item 6), as ruled.
+- **F3, a refusal writes nothing** (slug `card-record-asked-before-any-write`): the card door asks `card-record` before
+  `insertSnapshot`, when the page would complete the Overlord's read (read off the memo as it stands), and records the read
+  only behind a fence that passed. The doors suite asserts all five tables unchanged on every refusal, with no exemption.
+- **F4**: the bound session's note-generation pin is back, through `passGate()`, beside the 403 case, and the door's own 502
+  `unmeasured` arm has a case again (a coordinator whose generations cannot be read).
+- **F5**: the gate census scans every file an `overlord` row may name, and tells the runner's call from the account gate's.
+- **R1, ruled: no `continuity-v1` before door process B.** `continuity-v1` joins `SERVER_CAPS` only in, or after, the pull
+  request that binds the witness. If the order were broken, a designated Overlord's every write door, and the last page of
+  each card it reads (the recording page, a write), would refuse 502 `unmeasured` at step 7a.
+- **The card record by a pending body** gets its own slug, `card-record-pending-reads-renewing` (the coordinator's ruling,
+  carry 7): spec §11.2 lets the card skip step 9, and this one arm, after step 7a, refuses a recorded read under a pending term.
+- **Nits**: N1, a write with no live generation refuses through the fence decider; N2, unreadable server words answer
+  `unavailable` at step 2; N3, a thrown witness lookup's message never reaches the detail; N4, an unread authority is its own
+  arm, `start-door`; N5, the runner's header says what it branches on; N6, a fence refusal that cannot be recorded logs one line
+  naming the door and the reason word; N7, the census checks the recording call's form; N8, `FACT_ARM_MAP` is checked against
+  the unions it spells, and a stray comment went.
+- **N9, a follow-up for the coordinator**: `coord/routes.ts` still holds about ten older copies of the console mapping
+  (`authEnabled ? deviceActor(...) : 'flag-off'`), and `continuity/routes.ts` two `?? 'flag-off'` fallbacks. They do not call
+  the port; `coord/routes.ts` is held by another run's frozen claim, so this PR leaves them. They are the next place
+  `console-results-are-minted` would reach.
 
 ## For the coordinator
 

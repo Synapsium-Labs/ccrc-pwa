@@ -301,6 +301,57 @@ describe('unmeasured facts refuse unavailable, never pass', () => {
   });
 });
 
+describe('a passing write: the counter first, then the witness spend (review 2803 F2, N2, N3)', () => {
+  it('the counter is advanced BEFORE the witness is recorded', async () => {
+    const { gen, key } = fresh();
+    const order: string[] = [];
+    const r = await rig({
+      counter: (g, c) => { order.push('counter'); return advanceCounterGuarded(s.db, g, c); },
+      recordWitness: (c) => { order.push(`witness:${c.outcome}`); },
+    });
+    const res = await call(r, 'notes-write', act(gen, key, 1));
+    expect(res.statusCode).toBe(200);
+    expect(order).toEqual(['counter', 'witness:used']);
+  });
+  it('a counter that answers unmeasured refuses 503 with the witness unspent, and a retry with the same witness passes', async () => {
+    const { gen, key } = fresh();
+    const spent: string[] = [];
+    const r1 = await rig({ counter: () => 'unmeasured', recordWitness: (c) => { spent.push(c.outcome); } });
+    const res1 = await call(r1, 'notes-write', act(gen, key, 1, 'w-same'));
+    expect(res1.statusCode).toBe(503);
+    expect(json(res1)).toMatchObject({ ok: false, error: 'unavailable', step: '7' });
+    expect(spent).toEqual([]);
+    expect(storedCounter(gen)).toBe(0);
+    const r2 = await rig({ recordWitness: (c) => { spent.push(c.outcome); } });
+    const res2 = await call(r2, 'notes-write', act(gen, key, 1, 'w-same'));
+    expect(res2.statusCode).toBe(200);
+    expect(spent).toEqual(['used']);
+    expect(storedCounter(gen)).toBe(1);
+  });
+  it('a recordWitness that throws on the used record refuses 503 unavailable at step 7a', async () => {
+    const { gen, key } = fresh();
+    const r = await rig({ recordWitness: () => { throw new Error('disk full'); } });
+    const res = await call(r, 'notes-write', act(gen, key, 1));
+    expect(res.statusCode).toBe(503);
+    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', step: '7a' });
+  });
+  it('a witness port that throws puts no part of its message in the reply (N3)', async () => {
+    const { gen, key } = fresh();
+    const hex = 'a1b2c3d4e5f60718'.repeat(4);
+    const r = await rig({ witness: () => { throw new Error(`no report for ${hex}`); } });
+    const res = await call(r, 'notes-write', act(gen, key, 1));
+    expect(res.statusCode).toBe(502);
+    expect(res.body).not.toContain(hex);
+    expect(json(res)).toMatchObject({ error: 'unmeasured', step: '7a', detail: expect.stringContaining('the witness lookup failed') });
+  });
+  it('a serverWords port that throws refuses 503 unavailable at step 2 (N2)', async () => {
+    const r = await rig({ serverWords: () => { throw new Error('boom'); } });
+    const res = await call(r, 'notes-read', {});
+    expect(res.statusCode).toBe(503);
+    expect(json(res)).toMatchObject({ ok: false, error: 'unavailable', step: '2' });
+  });
+});
+
 describe('the act key is never answered, recorded or logged', () => {
   const SECRET = 'f0e1d2c3b4a59687'.repeat(4);
   it('appears in no reply body, no fence-refusal row and no console.warn line, whether it was right or wrong', async () => {

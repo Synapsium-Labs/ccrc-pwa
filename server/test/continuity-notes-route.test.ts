@@ -3,8 +3,12 @@
 // newest first, each with its key's fact; `POST …/handover` stores one handover note per generation, only while the
 // caller's generation is `checkpointed` as `effectiveGeneration` reads it. Fixture HOMEs only.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import type { FastifyInstance } from 'fastify';
+import path from 'node:path';
+import Fastify, { type FastifyInstance } from 'fastify';
+import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
+import { registerContinuityRoutes } from '../src/continuity/routes.js';
+import { passGate } from './overlordGateFixture.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { MASKED_GET_ROUTES } from '../src/server.js';
 import { genExpectOf, type GenRow, type MintInput } from '../src/continuity/continuityStore.js';
@@ -487,6 +491,39 @@ describe('liveGenerationOf reads the generation identity of the designation', ()
     const res = await post(app, note({ kind: 'run', id: run }));
     expect([res.statusCode, res.json().error]).toEqual([403, 'not-the-overlord']);
     expect(rows()).toEqual([]);
+  });
+
+  // The passing path, behind a gate that passes (the gate's own answers are held by `overlord-gate-doors.test.ts`): the door
+  // records the generation of the designation's identity (review 2803 F4; the case this replaced pinned it before gates B).
+  it('a restart of the Overlord: the bound session\'s note, past a passing gate, records its overlord generation', async () => {
+    coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const a = Fastify({ logger: false });
+    registerContinuityRoutes(a, {
+      coord, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => time.ports.clock.wall(),
+      attributeReader: async () => ({ ok: true }), gate: passGate(),
+      cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false },
+      setterStamp: async () => ({ kind: 'unmeasured', reason: 'absent' }),
+    });
+    await a.ready();
+    app = a;
+    const run = runOf('prog-a', ID);
+    c().designationRead = () => boundAs(ID);
+    const gen = mintAs('overlord', 'overlord');
+    const res = await post(a, note({ kind: 'run', id: run }));
+    expect(res.statusCode).toBe(202);
+    expect(noteGen(res.json().id as number)).toBe(gen.id);
+  });
+
+  it('a generations read that fails is the door\'s own 502 unmeasured, on a note and on a handover, and nothing is written', async () => {
+    app = await open();
+    const run = runOf('prog-a', ID);
+    c().liveGenerations = () => ({ ok: false, detail: 'x' });
+    const n = await post(app, note({ kind: 'run', id: run }));
+    expect([n.statusCode, n.json().error]).toEqual([502, 'unmeasured']);
+    const h = await handover(app, goodHandover(run));
+    expect([h.statusCode, h.json().error]).toEqual([502, 'unmeasured']);
+    expect(rows()).toEqual([]);
+    expect(c().db.prepare('SELECT COUNT(*) AS n FROM continuity_handovers').get()).toEqual({ n: 0 });
   });
 
   it('a rebind with the old body live: the pending body\'s note finds no generation under its own id, never the old body\'s overlord row', async () => {

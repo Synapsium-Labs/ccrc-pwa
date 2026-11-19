@@ -181,6 +181,19 @@ export function callerStandingCases(m: OverlordGateModule): Record<string, Suite
       const d: DesignationRead = { kind: 'not-designated', row: viewOf(BOUND, null) };
       expect(standOf(m, 'lane-a', { kind: 'measured', incarnation: 'inc-a' }, d).kind).toBe('other');
     },
+    'a pending attempt naming the bound id leaves it the binding, for a rebind and for a designate (review 2803 F1)': () => {
+      for (const kind of ['rebind', 'designate'] as const) {
+        const d: DesignationRead = { kind: 'designated', sessionId: 'lane-a', term: 5, row: viewOf(BOUND, pending('lane-a', kind, 'inc-z')) };
+        expect(m.incarnationNeeded('lane-a', d), kind).toBe(true);
+        expect(standOf(m, 'lane-a', { kind: 'measured', incarnation: 'inc-a' }, d).kind, `${kind} agreeing`).toBe('designated');
+        expect(standOf(m, 'lane-a', { kind: 'measured', incarnation: 'inc-z' }, d).kind, `${kind} pending's own incarnation`).toBe('other-incarnation');
+        expect(standOf(m, 'lane-a', { kind: 'measured', incarnation: 'inc-other' }, d).kind, `${kind} another`).toBe('other-incarnation');
+        expect(standOf(m, 'lane-a', { kind: 'unmeasured', reason: 'absent' }, d).kind, `${kind} absent`).toBe('other-incarnation');
+        const na = standOf(m, 'lane-a', 'not-asked', d);
+        expect([na.kind, na.word], `${kind} not asked`).toEqual(['unmeasured', 'unavailable']);
+        expect(standOf(m, 'lane-x', 'not-asked', d).kind, `${kind} another id`).toBe('other');
+      }
+    },
     'the unmeasured designation is unavailable for every caller, the reason carried': () => {
       const d = DESIGNATION_FIXTURES.unmeasured!;
       for (const id of IDS) {
@@ -623,7 +636,7 @@ export function overlordGateCases(m: OverlordGateModule): Record<string, SuiteCa
     'gateReads: what each door reads': () => {
       for (const key of GATE_DOOR_KEYS) for (const write of [true, false]) for (const cls of ['card-probe-note', 'other'] as const) {
         const d = door(key, { write, ladderClass: cls });
-        expect(m.gateReads(d), `${key} ${write} ${cls}`).toEqual({ ladder: cls === 'other', card: cls === 'other', fence: write });
+        expect(m.gateReads(d), `${key} ${write} ${cls}`).toEqual({ ladder: cls === 'other', authority: cls === 'other', card: cls === 'other', fence: write });
       }
     },
   };
@@ -693,8 +706,8 @@ export const OVERLORD_GATE_SET: MutantSet<OverlordGateModule> = {
     G('O-3', "if (s.kind === 'other-incarnation') return refuse('not-the-overlord', '1', \"the caller's incarnation is not the designation's\");", "if (s.kind === 'other-incarnation') return door.others === 'hook' ? { kind: 'hook' } : refuse('not-the-overlord', '1', 'x');"),
     G('O-4', "if (door.write && fence !== 'read-door') {", "if (door.write && !start && fence !== 'read-door') {"),
     G('O-5', "if (s.kind === 'pending-unrecorded') return refuse('renewing', '1', \"the designated body's incarnation is not recorded yet\");", "if (s.kind === 'pending-unrecorded') return null;"),
-    G('O-6', '!f.serverWords.includes(door.word)', 'f.serverWords.includes(door.word)'),
-    G('O-7', "if (!start && f.authority.kind !== 'coherent') {", "if (f.authority.kind !== 'coherent') {"),
+    G('O-6', '!words.includes(door.word)', 'words.includes(door.word)'),
+    G('O-7', "if (!start && authority !== 'start-door' && authority.kind !== 'coherent') {", "if (authority !== 'start-door' && authority.kind !== 'coherent') {"),
     G('O-8', "'witness-unwitnessed');", 'null);'),
     G('O-9', "draining: true, checkpointed: true, clearing: true, carded: true, probing: true, ended: true,", "draining: true, checkpointed: true, clearing: true, carded: true, probing: true, ended: false,"),
     G('O-10', "door.write && door.act === 'read' && s.kind === 'designated-pending'", "door.write && s.kind === 'designated-pending'"),

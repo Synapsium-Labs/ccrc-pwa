@@ -18,7 +18,10 @@
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
-import type { FastifyInstance, LightMyRequestResponse } from 'fastify';
+import Fastify, { type FastifyInstance, type LightMyRequestResponse } from 'fastify';
+import { openCoordDb } from '../src/coord/db.js';
+import { registerContinuityRoutes } from '../src/continuity/routes.js';
+import { refuseRoute } from '../src/refuse.js';
 import { CoordStore } from '../src/coord/store.js';
 import { OVERLORD_DOORS } from '../src/coord/overlordDoors.js';
 import type { AuthorityAppender } from '../src/coord/overlordDesignationStore.js';
@@ -285,23 +288,19 @@ describe('with continuity-v1 among the server\'s words (forced here)', () => {
 
   const fenceRows = (): number => (r.coord.db.prepare('SELECT COUNT(*) AS n FROM overlord_fence_refusals').get() as { n: number }).n;
 
-  it('a forged card read (attributed, no act key) records no continuity_card_reads row: the recording page is fenced at step 7', async () => {
+  it('a forged card read on a one-page card (attributed, no act key) is refused 409 stale-generation at step 7 on page 1, writing nothing at all', async () => {
     mintOverlord(1);
     const before = counts(r.coord);
     const fenced = fenceRows();
     const res = await DOORS[0]!.call(r.app, ID, UUID);
     const body = res.json();
     // The fixture's card is ONE page, so the page that is served is also the recording one: the read door passed (`card`), the
-    // recording page (`card-record`) was asked, and its fence refused for want of an act key. A multi-page card would serve its
-    // earlier pages with `recorded: false`; either way no read row is written, and the refusal is counted as a fact.
-    if (res.statusCode === 200) {
-      expect(body.ok).toBe(true);
-      expect(body.recorded).toBe(false);
-    } else {
-      expect([res.statusCode, body.error, body.step, body.detail]).toEqual([REFUSAL_STATUS['stale-generation'], 'stale-generation', '7', 'no act key presented']);
-      expect(fenceRows()).toBe(fenced + 1);
-    }
-    expect(counts(r.coord)).toEqual({ ...before, continuity_snapshots: counts(r.coord).continuity_snapshots });
+    // recording page (`card-record`) was asked BEFORE anything was written, and its fence refused for want of an act key
+    // (review 2803 F3). No page is served, and the refusal is counted as a fact.
+    expect([res.statusCode, body.error, body.step, body.detail]).toEqual([REFUSAL_STATUS['stale-generation'], 'stale-generation', '7', 'no act key presented']);
+    expect(body.text).toBeUndefined();
+    expect(fenceRows()).toBe(fenced + 1);
+    expect(counts(r.coord)).toEqual(before);
     expect(counts(r.coord).continuity_card_reads).toBe(0);
   });
 
@@ -310,5 +309,53 @@ describe('with continuity-v1 among the server\'s words (forced here)', () => {
     const res = await DOORS[0]!.call(r.app, ID, UUID);
     expect([res.statusCode, res.json().error, res.json().step]).toEqual([REFUSAL_STATUS['stale-designation'], 'stale-designation', '5']);
     expect(counts(r.coord).continuity_card_reads).toBe(0);
+  });
+});
+
+// The Overlord's own card is one fixed line today (`CARD_OVERLORD_LINE`), so no full-server fixture can make it more than one
+// page. The page arithmetic of the recording fence is the door's, whoever's card it pages, so this case builds the continuity
+// routes by hand over a session whose card is three pages, behind a scripted gate: the read door passes it as the Overlord
+// (`kind: 'pass'`) and the recording row's fence refuses it, as the real runner does for a read with no act key.
+describe('a multi-page card read behind a gate whose card-record fence refuses (review 2803 F3)', () => {
+  it('the pages before the last answer 200 recorded:false; the last is refused 409 and nothing at all is written by that call', async () => {
+    const home = mkTmp('ccrc-gate-doors-pages-');
+    const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+    const asked: string[] = [];
+    const app = Fastify({ logger: false });
+    registerContinuityRoutes(app, {
+      coord, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => NOW,
+      attributeReader: async () => ({ ok: true }),
+      gate: async (_req, reply, key) => {
+        asked.push(key);
+        if (key !== 'card-record') return { kind: 'pass', caller: {} as never, generation: null };
+        void refuseRoute(reply, 'stale-generation', { detail: 'no act key presented', step: '7' });
+        return { kind: 'refused' };
+      },
+      cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false },
+      setterStamp: async () => ({ kind: 'unmeasured', reason: 'absent' }),
+    });
+    await app.ready();
+    try {
+      for (let i = 0; i < 15; i += 1) {
+        const m = coord.insertMail({ fromId: OTHER, fromUuid: 'u', toId: ID, runId: null, kind: 'status', subject: `s${i} ${'x'.repeat(1000)}`, body: 'b', artifacts: [] });
+        coord.queueDelivery(m.id, ID, '<mail/>');
+      }
+      const p1 = await getOf(app, 'card', by(ID, UUID), ID);
+      const first = p1.json();
+      expect([p1.statusCode, first.ok, first.recorded]).toEqual([200, true, false]);
+      expect(first.pages).toBeGreaterThan(1);
+      for (let p = 2; p < first.pages; p += 1) {
+        const mid = await getOf(app, 'card', { ...by(ID, UUID), page: String(p), hash: first.hash }, ID);
+        expect([mid.statusCode, mid.json().recorded], `page ${p}`).toEqual([200, false]);
+      }
+      expect(asked.every((k) => k === 'card')).toBe(true);   // no page before the last asked the recording row
+      const before = counts(coord);
+      const last = await getOf(app, 'card', { ...by(ID, UUID), page: String(first.pages), hash: first.hash }, ID);
+      expect([last.statusCode, last.json().error, last.json().step]).toEqual([REFUSAL_STATUS['stale-generation'], 'stale-generation', '7']);
+      expect(last.json().text).toBeUndefined();
+      expect(asked.at(-1)).toBe('card-record');
+      expect(counts(coord)).toEqual(before);
+      expect(counts(coord).continuity_card_reads).toBe(0);
+    } finally { await app.close(); coord.db.close(); removeTmpFixtures(); }
   });
 });

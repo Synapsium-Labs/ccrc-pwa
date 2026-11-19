@@ -38,8 +38,6 @@ export type CallerStanding =
   | { readonly kind: 'other' }                         // any other session, a rebind's pending body included
   | { readonly kind: 'unmeasured'; readonly word: 'unavailable' | 'registry-unmeasurable'; readonly why: string };
 
-/** Step 1 (§11.2; questions 4 and 5), first match: an unmeasured designation; then, for the bound id or a pending `designate`
- *  attempt's id, the incarnation (not asked, not recorded, equal, different or absent, unreadable); otherwise `other`. */
 /** The caller's place in the designation row: its binding (with the incarnation recorded for it), a pending `designate`
  *  attempt's body (its incarnation `null` until the create answers), or neither. A rebind's pending body is neither. */
 function placeOf(sessionId: string, designation: Exclude<DesignationRead, { kind: 'unmeasured' }>):
@@ -62,6 +60,8 @@ export function incarnationNeeded(sessionId: string, designation: DesignationRea
   return designation.kind !== 'unmeasured' && placeOf(sessionId, designation) !== null;
 }
 
+/** Step 1 (§11.2; questions 4 and 5), first match: an unmeasured designation; then, for the bound id or a pending `designate`
+ *  attempt's id, the incarnation (not asked, not recorded, equal, different or absent, unreadable); otherwise `other`. */
 export function callerStandingOf(
   caller: { readonly sessionId: string; readonly incarnation: IncarnationRead | 'not-asked' },
   designation: DesignationRead,
@@ -160,8 +160,10 @@ export function witnessRecordOf(verdict: GateVerdict, witness: WitnessVerdict | 
 export interface GateFacts {
   readonly door: OverlordDoorRow;
   readonly standing: CallerStanding;
-  readonly serverWords: readonly string[];
-  readonly authority: AuthorityState;
+  /** `SERVER_CAPS`, or the unmeasured arm when it could not be read (step 2 refuses `unavailable`). */
+  readonly serverWords: readonly string[] | { readonly kind: 'unmeasured'; readonly why: string };
+  /** The authority guard's state; `start-door` for a start door, which skips step 3 and never reads it. */
+  readonly authority: AuthorityState | 'start-door';
   /** The ladder's composed read; `start-door` for a start door, whose steps 4, 6 and 10 are skipped and never read. */
   readonly ladder: { readonly kind: 'read'; readonly rung: EffectiveRung } | { readonly kind: 'unmeasured'; readonly why: string } | 'start-door';
   /** `designationRead()`'s term, when standing is designated or designated-pending; null when it has none. */
@@ -195,7 +197,10 @@ const GATE_RECORD_MAP = { 'fence-refusal': true, 'witness-unwitnessed': true } a
 const COUNTER_ANSWER_MAP = {
   advanced: true, 'not-above': true, ended: true, unmeasured: true,
 } as const satisfies Record<Parameters<typeof counterVerdict>[0], true>;
-const FACT_ARM_MAP = { 'not-asked': true, 'read-door': true, 'start-door': true, 'read-current': true, 'read-stale': true } as const;
+const FACT_ARM_MAP = {
+  'not-asked': true, 'read-door': true, 'start-door': true, 'read-current': true, 'read-stale': true,
+} as const satisfies Record<'not-asked' | Extract<GateFacts['fence'] | GateFacts['ladder'], string>
+  | Exclude<Extract<GateFacts['card'], string>, 'none'>, true>;
 export const isOverlordGateKebab = (word: string): boolean =>
   [STANDING_KIND_MAP, FENCE_WHY_MAP, WITNESS_WHY_MAP, GATE_RECORD_MAP, COUNTER_ANSWER_MAP, FACT_ARM_MAP]
     .some((m) => Object.prototype.hasOwnProperty.call(m, word));
@@ -212,9 +217,17 @@ const START: DoorClass = 'card-probe-note';
 
 /** Which facts a door's order reads past step 1: a start door reads no ladder, card or generation state; a read door no
  *  fence or witness. The runner reads exactly these, so an unreadable ladder never stops a generation from starting. */
-export function gateReads(door: OverlordDoorRow): { readonly ladder: boolean; readonly card: boolean; readonly fence: boolean } {
+export function gateReads(door: OverlordDoorRow):
+  { readonly ladder: boolean; readonly authority: boolean; readonly card: boolean; readonly fence: boolean } {
   const start = door.ladderClass === START;
-  return { ladder: !start, card: !start, fence: door.write };
+  return { ladder: !start, authority: !start, card: !start, fence: door.write };
+}
+
+/** A passing write's witness spend, after the counter advanced (review 2803 F2): the spend that could not be recorded refuses
+ *  the write, so one hook report never backs two writes. The counter goes first, so a counter that could not advance leaves
+ *  the witness unspent for a retry. */
+export function spendVerdict(spent: boolean): GateVerdict {
+  return spent ? { kind: 'pass' } : refuse('unavailable', '7a', 'the witness could not be marked used');
 }
 
 /** Step 1 alone: the verdict when who calls decides it (another session, another incarnation, an unmeasured standing, a body
@@ -236,12 +249,16 @@ export function overlordGate(f: GateFacts): GateVerdict {
   const first = standingVerdict(door, s);
   if (first !== null) return first;
   // Step 2: the door's capability word.
-  if (!f.serverWords.includes(door.word)) return refuse('capability-missing', '2', `this server does not hold ${door.word}`);
+  const words = f.serverWords;
+  if (!Array.isArray(words)) return refuse('unavailable', '2', `the server's words could not be read: ${(words as { why: string }).why}`);
+  if (!words.includes(door.word)) return refuse('capability-missing', '2', `this server does not hold ${door.word}`);
   const start = door.ladderClass === START;
   // Step 3: the authority guard.
-  if (!start && f.authority.kind !== 'coherent') {
-    return refuse('authority-rolled-back', '3', f.authority.kind === 'rolled-back' ? `the authority journal rolled back: ${f.authority.cause}`
-      : `the authority journal reads unmeasured: ${f.authority.why}`);
+  const authority = f.authority;
+  if (!start && authority === 'start-door') return refuse('authority-rolled-back', '3', 'the authority guard was not read');
+  if (!start && authority !== 'start-door' && authority.kind !== 'coherent') {
+    return refuse('authority-rolled-back', '3', authority.kind === 'rolled-back' ? `the authority journal rolled back: ${authority.cause}`
+      : `the authority journal reads unmeasured: ${authority.why}`);
   }
   // Step 4: the operator's rung (offStep).
   const ladder = f.ladder;
