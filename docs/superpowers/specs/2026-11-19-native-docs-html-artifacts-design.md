@@ -518,7 +518,7 @@ Two departures, defined in the leaf plan's `## Deviations found` with the exact 
 
 | Number | What it changes | Lands with |
 |---|---|---|
-| D-8786 | X2's spec: the C3 row, the In short bullet "What you must check", the C3 bullet in "Waiting on you", the §4.8 bullet "Not within the walls" and the paragraph "The widening, priced, not designed" now record the ruling and point here | Wave A1 |
+| D-8786 | X2's spec: the C3 row, the In short bullet "What you must check", the C3 bullet in "Waiting on you", the §4.8 bullet "Not within the walls" and the paragraph "The widening, priced, not designed" now record the ruling and point here. Because that In short bullet names C1 too, C1's ruling (ask 596, a fresh start) is recorded in the same act: its §3 row, its §4.9 sentence and its "Waiting on you" bullet, which moves to Agreed | Wave A1 |
 | D-8787 | The completion plan's Global Constraints sentences on sandbox and CSP widening and `allow-modals` now bind frames on the console's origin. The artifact tier, on its own site, is the reviewed design those sentences wait for | Wave A3, the first wave whose code serves a page |
 
 The block's third number is unused, recorded in the plan without a definition.
