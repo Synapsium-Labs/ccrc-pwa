@@ -1319,6 +1319,17 @@ describe('the close path of a take with no project judges the text as a public p
   });
 });
 
+describe('a team no project claims is judged as unknown, public, at the door as in the lane (review 2834 F1)', () => {
+  it('a coordinator\'s close of a handed row on an unowned team under a PRIVATE home is refused as public text', async () => {
+    const r = await rig({ mode: 'private', progs: true });
+    r.plan.upsertInbound({ linearId: U(40), workspaceId: WS.a.id, teamKey: 'CCC', identifier: 'CCC-40', title: 't', body: null, seenAt: T });
+    r.plan.setInboundState(U(40), { state: 'handed', handedTo: 'prog-b' });
+    const res = await take(r, 'prog-b', { issue: 'CCC-40', close: { why: 'dup of CCC-77' } }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
+    expect(rowOf(r, 40)!.state).toBe('handed');
+  });
+});
+
 describe('inboundByIdentifier is keyed by workspace (round 4 A2)', () => {
   it('two workspaces each with an AAA-12 resolve each their own', async () => {
     const r = await rig({ twoWs: true });

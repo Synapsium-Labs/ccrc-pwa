@@ -257,6 +257,14 @@ export function textRefusalOf(texts: readonly string[], facts: readonly { teamKe
   return null;
 }
 
+/** Review 2834 F1, the ONE writer of "a team no project claims is judged as `unknown`, public" (design §6.1): the project fact
+ *  `textRefusalOf` reads for one issue's text. `owner` is the owning project's linking reading (its team key and mode), or null
+ *  when no project claims the issue's team; then the fact is the issue's own team with mode `unknown`, which is public. The plan
+ *  routes' door and the inbound lane's act-time check both come here, so they never disagree on an unowned team. */
+export function textFactOfTeam(owner: { teamKey: string | null; mode: LinkingMode } | null, issueTeam: string | null): { teamKey: string | null; mode: LinkingMode } {
+  return owner ?? { teamKey: issueTeam, mode: 'unknown' };
+}
+
 /** The project facts that speak for a binding's text (review 2457 F3): a ticket's and an epic's own project; an initiative's, every
  *  epic's of the plan (the strictest reading: the one fact set `planSyncSteps` picks per workspace is a subset of it); a checkpoint's
  *  epic's. A project the snapshot does not describe is judged as `unknown`, public (§6.1), with the binding's own team. */

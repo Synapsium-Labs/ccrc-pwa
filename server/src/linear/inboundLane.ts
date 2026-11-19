@@ -27,7 +27,7 @@ import {
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
-import { textRefusalOf, uuidOf } from './planSyncPolicy.js';
+import { textFactOfTeam, textRefusalOf, uuidOf } from './planSyncPolicy.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
 import type { DriftPassDeps } from './driftPass.js';
 import type { LinearStoreRead } from './store.js';
@@ -308,7 +308,7 @@ export class InboundLane {
   private textRefusal(row: InboundRow): string | null {
     const { coord, plan, planSync } = this.deps;
     const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf());
-    const fact = project === null ? { teamKey: row.teamKey, mode: 'unknown' as const } : coord.linkingOf(project);
+    const fact = textFactOfTeam(project === null ? null : coord.linkingOf(project), row.teamKey);
     return textRefusalOf([row.reason ?? ''], [fact], planSync.privateKeys());
   }
 

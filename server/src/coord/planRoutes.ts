@@ -26,6 +26,7 @@ import {
 } from '../../../shared/plan.js';
 import { programmeNameFromSlug } from '../../../shared/api.js';
 import { publicTextVerdict } from '../linking/policy.js';
+import { textFactOfTeam } from '../linear/planSyncPolicy.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import type { AttributionRead } from './openRun.js';
 import { evidenceLinksOf } from './planRunFacts.js';
@@ -238,7 +239,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       if (text === undefined || text === '') continue;
       // no project to read a linking mode from (round 5 A5): the mode is `unknown`, which design §6.1 treats as public; the
       // issue's own team key stands for the project's
-      const l = project === null ? { teamKey: issueTeam ?? null, mode: 'unknown' as const } : coord.linkingOf(project);
+      const l = textFactOfTeam(project === null ? null : coord.linkingOf(project), issueTeam ?? null);
       const v = publicTextVerdict(text, l.teamKey, l.mode, opts.privateTrackerKeys);
       if (!v.ok) return { refuse: v.word, detail: v.ids === undefined ? v.class : `${v.class}: ${v.ids.join(', ')}` };
     }
@@ -772,8 +773,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       return ok();
     }
     if ('close' in t) {
-      const project = upkeep !== null ? upkeep.project : teamOwnerProject(handed!.teamKey, plan.hierarchyProjectsOf()) ?? coord.programHome(slug);
-      // no project at all is judged as a public one (round 5 A5): the check is never skipped
+      const project = upkeep !== null ? upkeep.project : teamOwnerProject(handed!.teamKey, plan.hierarchyProjectsOf());
+      // a handed row's team that no project claims is judged as unknown, public (round 5 A5, review 2834 F1): never the programme home's mode
       const unfit = textRefusal(coord, [[project, t.close.why, handed?.teamKey]]);
       if (unfit !== null) return unfit;
       if (handed !== null) plan.setInboundState(handed.linearId, { state: 'closed', reason: mask(t.close.why) });
