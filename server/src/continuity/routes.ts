@@ -29,7 +29,9 @@ import { laneArmRowViewOf } from '../coord/laneArm.js';
 import { anchorAnswer, anchorGeneration, renderAnchor, type AnchorGenRow, type AnchorStart } from './anchor.js';
 import { cardPages, renderCard, snapshotFactsJson, trimCard } from './card.js';
 import { gatherCardFacts, sessionRoleRead, type CardFactsDeps } from './cardFacts.js';
-import { RENEW_REQUESTS_CURSOR, effectiveGeneration, sessionLiveGeneration, type TimerRow } from './continuityStore.js';
+import {
+  RENEW_REQUESTS_CURSOR, effectiveGeneration, newestMintedStartOf, sessionLiveGeneration, startByNonce, type TimerRow,
+} from './continuityStore.js';
 import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow.js';
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
@@ -43,6 +45,10 @@ import {
 } from './notes.js';
 import { timerBodyVerdict, timerCancelVerdict, timerSetVerdict, type SetFacts } from './timers.js';
 import { identityOf as generationIdentityOf } from '../roleOf.js';
+import type { Entropy } from '../time/ports.js';
+import { NONCE_SHA256_SHAPE, claimWhyText } from '../../../shared/continuity-door.js';
+import { actKeyClaimVerdict } from './actKey.js';
+import { actKeyByNonce, issueActKey, noteRefusedClaim } from './actKeyStore.js';
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -53,6 +59,9 @@ export interface ContinuityRouteDeps {
   attribute: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The server's wall clock (`deps.time.clock.wall`): `receivedAt`, what every reader ages a start from (§11.5). */
   wall: () => number;
+  /** The server's entropy (`deps.time.entropy`): the act key the claim door mints, 32 bytes as hex. Absent on a server built
+   *  without one (a test of another door): the claim door answers `unavailable`, as for an absent store. */
+  entropy?: Pick<Entropy, 'hex'>;
   /** The card door's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** The card's registry reads (`gatherCardFacts`' ports other than the store); the timer set door's role read reuses them. */
@@ -236,12 +245,19 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     // the sender's current one in `fromUuid`, which alone is attributed. Absent or null (an older hook), it is `fromUuid`.
     const startedUuid = b['startedUuid'] ?? uuid;
     if (typeof startedUuid !== 'string' || !IDENTITY_RE.test(startedUuid)) return refuseRoute(reply, 'bad-request', { detail: 'startedUuid' });
+    // The launch nonce's sha256 the spawn bound (the door process, Overlord W1): absent or null (an older hook, a start no spawn
+    // bound) is stored null and binds no nonce; any other value must be the shape.
+    const doorNonceSha256 = b['doorNonceSha256'] ?? null;
+    if (doorNonceSha256 !== null && (typeof doorNonceSha256 !== 'string' || !NONCE_SHA256_SHAPE.test(doorNonceSha256))) {
+      return refuseRoute(reply, 'bad-request', { detail: 'doorNonceSha256' });
+    }
     const attributed = await deps.attribute(id, uuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
 
     const coord = deps.coord;
     if (coord === undefined) return refuseRoute(reply, 'unavailable');
-    const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall() });
+    const r = coord.insertStart({ sessionId: id, reportId, uuid: startedUuid, source, model, rowIncarnation, reportedAt, receivedAt: deps.wall(),
+      doorNonceSha256 });
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_starts could not be written' });
     if (r.fresh) noteStart(memoKey(id, startedUuid));
     return reply.code(202).send({ ok: true, id: r.id, fresh: r.fresh });
@@ -282,6 +298,56 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     }
     if (!r.ok) return refuseRoute(reply, 'write-failed', { detail: 'continuity_start_loads could not be written' });
     return reply.code(202).send({ ok: true, startId: r.startId, fresh: r.fresh });
+  });
+
+  /**
+   * `POST /api/sessions/:id/act-key` (Overlord W1 door process A1; spec §3.3.11 H12 "The fence", §3.6 H1): the door process's
+   * one claim. A box-token machine lane, an `auth/gate.ts` EXEMPT entry, as the start report is: the token first, then the
+   * path's session is the sender (`not-owner`), then the body's shape (`fromUuid`, and `nonce`, 64 lowercase hex: 400
+   * `bad-request` with no echo of the value), then the registry's attribution of `fromUuid`, then the facts, each read once in
+   * one synchronous stretch (`actKeyByNonce`, `newestMintedStartOf`, `startByNonce`), then `actKeyClaimVerdict`. On `issue` it mints
+   * the key (`entropy.hex(32)`), stores only its sha256 through `issueActKey`, and answers `200 { ok, generation, key }` only on
+   * `{ ok: true }`: a refused insert (two claims racing) answers `stale-generation` (`nonce-spent`), never a key. A refusal is
+   * 409 `stale-generation` or `renewing`, or 502 `unmeasured`, its why in `detail`; a spent nonce raises `claimsRefused` on the row only when its generation is this session's. THE
+   * NONCE AND THE KEY ARE SECRETS: no line this door logs names either, only the session, the start and the why.
+   */
+  app.post('/api/sessions/:id/act-key', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/act-key');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    if (b['fromId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'fromId must be the session the path names' });
+    const uuid = b['fromUuid'];
+    if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const nonce = b['nonce'];
+    if (typeof nonce !== 'string' || !NONCE_SHA256_SHAPE.test(nonce)) return refuseRoute(reply, 'bad-request', { detail: 'nonce: 64 lowercase hex' });
+    const attributed = await deps.attribute(id, uuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const coord = deps.coord;
+    const entropy = deps.entropy;
+    if (coord === undefined || entropy === undefined) return refuseRoute(reply, 'unavailable');
+    const presented = sha256(nonce);
+    const v = actKeyClaimVerdict({
+      presented, spent: actKeyByNonce(coord.db, presented), newest: newestMintedStartOf(coord.db, id), matching: startByNonce(coord.db, id, presented),
+    });
+    const refused = (error: 'renewing' | 'stale-generation' | 'unmeasured', why: Parameters<typeof claimWhyText>[0]): FastifyReply => {
+      if (why === 'nonce-spent') noteRefusedClaim(coord.db, presented, id, deps.wall());
+      console.warn(`ccrc-server: act-key: the claim of ${id} refused ${error} (${why})`);
+      return refuseRoute(reply, error, { detail: `${why}: ${claimWhyText(why)}` });
+    };
+    if (v.kind === 'refuse') return refused(v.error, v.why);
+    const key = entropy.hex(32);
+    const issued = issueActKey(coord.db, { generationId: v.generationId, nonceSha256: presented, keySha256: sha256(key), issuedAt: deps.wall() });
+    if (!issued.ok) return issued.error === 'refused' ? refused('stale-generation', 'nonce-spent')
+      : refuseRoute(reply, 'write-failed', { detail: 'continuity_act_keys could not be written' });
+    console.warn(`ccrc-server: act-key: issued to ${id} for generation ${v.n}`);
+    return reply.code(200).send({ ok: true, generation: v.n, key });
   });
 
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that

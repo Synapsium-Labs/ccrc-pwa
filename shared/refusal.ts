@@ -490,6 +490,9 @@ export const REFUSAL_STATUS: Readonly<Record<RouteRefusal, number>> = {
   'not-a-child': 409, 'approvals-disabled': 409, 'single-box': 409, 'deny-not-engaged': 409, 'digest-mismatch': 409,
   'version-unverified': 409, 'approval-released': 409, 'parent-changed': 409, 'guard-forbidden': 409,
   'guard-escalate': 409, 'declined': 409, 'hook-gone': 409, 'already-ruled': 409,
+  // Approvals PR 0: an allow of a row whose child runs under older deny rules than the box's. CHOSEN: the conflict
+  // status of the approval routes' other refusals.
+  'deny-not-current': 409,
   // The digest routes (plan Task 17, D-5300): CHOSEN, not measured — new words, the approval routes' statuses.
   'not-coordinator': 409, 'digest-unreadable': 503, 'unknown-call': 404,
   // The step-up routes (D-5512, plan Task A5): CHOSEN, not measured — new words. 403 for a session that is signed

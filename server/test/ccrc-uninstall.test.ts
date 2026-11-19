@@ -392,6 +392,8 @@ function plantInstalledBox(home: string, opts: { versioned?: string[] } = {}): v
   writeFileSync(join(reg, 'child-deny.settings.json'), '{"permissions":{"deny":["Bash(ccd ws-rm:*)"]}}\n', { mode: 0o644 });
   // The account deny file (D-6202): written by install-session-hooks.sh beside it, removed here with it.
   writeFileSync(join(reg, 'account-deny.settings.json'), '{"permissions":{"deny":["Bash(ccrc account:*)"]}}\n', { mode: 0o644 });
+  // The deny file's digest history (approvals PR 0): written by install-session-hooks.sh, removed here with it.
+  writeFileSync(join(reg, 'child-deny.digests'), `${'a'.repeat(64)} 1700000000000\n`, { mode: 0o644 });
   writeFileSync(join(reg, 'coordinator-skill', 'SKILL.md'), '# the coordinator skill\n');
   writeFileSync(join(reg, 'worker-skill', 'SKILL.md'), '# the worker skill\n');
   writeFileSync(join(reg, 'reviewer-skill', 'SKILL.md'), '# the reviewer skill\n');
@@ -779,7 +781,7 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     for (const f of ['session-hook.sh', 'install-session-hooks.sh', 'notify.sh', 'compact-card.mjs',
       'install-coordinator-skill.sh', 'install-worker-skill.sh', 'install-reviewer-skill.sh',
       'install-graphify-skill.sh', 'install-history-skill.sh', 'install-linear-skill.sh', 'child-deny.settings.json',
-      'account-deny.settings.json', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
+      'account-deny.settings.json', 'child-deny.digests', 'coordinator-skill', 'worker-skill', 'reviewer-skill', 'history-skill', 'linear-skill']) {
       expect(existsSync(join(home, '.cc-sessions', f)), `${f} survived`).toBe(false);
     }
     for (const f of ['alpha.uuid', 'coordinator-paused', 'mail-disabled',
@@ -1000,14 +1002,14 @@ describe('ccrc uninstall: the remove set (spec §7)', () => {
     const home = mkTmp('ccrc-uninst-redactor-');
     plantInstalledBox(home);
     const libexec = join(home, '.local', 'libexec', 'ccrc');
-    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs']) {
+    for (const rel of ['ccd', 'lib/disk-retention.sh', 'lib/train-proof.sh', 'lib/delegation-lease.sh', 'lib/pool-set.sh', 'lib/long-lived.sh', 'lib/door.sh', 'shared/redact.mjs', 'shared/redact-cli.mjs']) {
       mkdirSync(path.dirname(join(libexec, rel)), { recursive: true });
       writeFileSync(join(libexec, rel), `# fixture ${rel}\n`, { mode: 0o644 });
     }
     const r = runVerb(home, 'uninstall');
     expect(r.code, r.stderr).toBe(0);
     expect(existsSync(libexec), 'a ccrc libexec directory survived the uninstall').toBe(false);
-    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
+    expect(r.stdout).toContain('its libraries and redactor (lib/disk-retention.sh, lib/train-proof.sh, lib/delegation-lease.sh, lib/pool-set.sh, lib/long-lived.sh, lib/door.sh, shared/redact.mjs, shared/redact-cli.mjs) with it; ');
   });
 
   it('W29-I3: uninstall removes the reader, and ~/.local/libexec/ccrc with it only when that leaves it empty', () => {

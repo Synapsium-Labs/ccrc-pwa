@@ -152,7 +152,8 @@ real values: `deploy/reference-fleet.md` (gitignored).
   `~/.ccrc/codex/*/runtime.env`, `~/.ccrc/agent.env`, the Linear slot store `~/.ccrc/linear/`, the legacy
   `~/.ccrc/linear.key` (D-7675) or the operator's secret slots `~/.ccrc/operator-secrets/` (D-7714), or the Overlord's private store and every copy of it (`~/.ccrc/operator-model.db*`, `~/.ccrc/privacy-journal.log`, `~/.ccrc/privacy-journal.torn/`, `~/ccrc-backups/*/operator-model.db*`, `~/.ccrc/coordination-restore.stage/*/operator-model.db*`, `~/.ccrc/coordination-restore.foreign/*/operator-model.db*`); writes under `~/.cc-sessions/.auth/` or `~/.cc-sessions/.accounts/`; or prints the
   whole environment (bare `env`, `printenv`). They are the operator's, from
-  the PWA's Accounts screen or their own shell. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
+  the PWA's Accounts screen or their own shell. `~/.cc-sessions/.door/` is the Overlord's door process directory (its
+  tool-server config holds the launch nonce): no session reads or writes it. `ACCOUNT_DENY_RULES` (`shared/api.ts`) is passed to every session's
   spawn in `~/.cc-sessions/account-deny.settings.json`, the session hook's account arm refuses the path-qualified,
   quoted and `$VAR` forms, and the classifier marks the verbs forbidden, so no approval can rule one. It is an
   accident guard: `bash -c` with an assembled string, another interpreter or a script file runs past it. The same three
@@ -457,6 +458,13 @@ generated value is never hand-edited, and the contrast gate rules on the result 
   push; a push before that only hands work to another session or comes before a stop that could lose the work. Every
   push re-runs the PR's checks, so a push per commit buys CI runs and nothing else (expected: about 2.8 runs per
   merged PR down to about 2.1). Worker clause 20 and the coordinator's brief sentence carry it to the fleet.
+- **Follow the review judge's standard** (the operator's rulings of 2026-11-17). Every PR here carries the `horkos`
+  check: Horkos is this repo's review judge, and its name is not secret. We follow its standard: a new spec or plan
+  takes its dated layout, directly in `docs/superpowers/specs/` or `docs/superpowers/plans/`, a task note goes under
+  `docs/superpowers/programs/<programme>/`, and a spec's images and mockup pages go under
+  `docs/design/<spec file name less its extension>/`, linked from the spec by relative path. A blocking reason it posts is fixed in that PR where the PR can fix
+  it. It is not a required check, so landing still gates on the required checks. The ledger guard's layout arm
+  (`.github/ci/ledger-guard.mjs`, D-8719) mirrors its layout rule in this repo, so CI catches a misplaced file first.
 - **Deviation ledger (D-N):** plans carry a `## Deviations found` section of numbered `D-N` entries (global,
   monotonic across project history — not reset per plan; ONE namespace, the old build-scoped `D-B<k>-<m>` ids
   were reconciled into it and survive only as `was D-B4-9` aliases — zero bare legacy refs remain in tracked

@@ -13485,7 +13485,8 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *                        it, or it is its own claimant: nothing minted (spec §6.3 server step 1, amended by D-5530).
  *  `approvals-disabled`  either kill switch is on (`$REG/approvals-disabled`, `~/.ccrc/approvals-disabled`).
  *  `single-box`          this server's role is `both` and the operator has not placed `~/.ccrc/approvals-single-box`.
- *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, or its `.childshell`
+ *  `deny-not-engaged`    the child's `.deny-settings` is not the managed deny file's digest, nor one the installer's
+ *                        digest history names (approvals PR 0), or its `.childshell`
  *                        does not show the bash pin (D-5360's requirement, Task 15's two fields).
  *  `digest-mismatch`     the digest is not sha256 over the canonical string sent, or that string does not
  *                        re-canonicalise to itself. Journaled for doctor's `approval-digest-mismatch`.
@@ -13495,6 +13496,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
  *  `approval-unreadable` the row could not be read back.
  *  `parent-changed`      the caller is the row's stored parent, but the child's binding no longer answers it.
  *  `guard-forbidden`, `guard-escalate`  an allow of a row the classifier did not class `ordinary`.
+ *  `deny-not-current`    an allow of a row whose child runs under older deny rules than the box's (approvals PR 0).
  *  `declined`            the claimant handed this row over and may not rule it later.
  *  `hook-gone`           the row's window has passed: the hook has returned and cannot print a ruling (D-5441).
  *  `already-ruled`       a principal (the claimant or the operator) already acted on the row.
@@ -13502,7 +13504,7 @@ export function isApprovalReleaseReason(v: unknown): v is ApprovalReleaseReason 
 export const APPROVAL_REFUSALS = [
   'not-a-child', 'approvals-disabled', 'single-box', 'deny-not-engaged', 'digest-mismatch',
   'version-unverified', 'approval-released', 'unknown-approval', 'approval-unreadable', 'parent-changed',
-  'guard-forbidden', 'guard-escalate', 'declined', 'hook-gone', 'already-ruled',
+  'guard-forbidden', 'guard-escalate', 'deny-not-current', 'declined', 'hook-gone', 'already-ruled',
 ] as const;
 export type ApprovalRefusal = (typeof APPROVAL_REFUSALS)[number];
 
@@ -13918,14 +13920,14 @@ export const ACCOUNT_DENY_SUBS: readonly string[] =
   'add|auth-start|auth-code|auth-cancel|set|check|enable|disable|credential|remove|seed|openrouter-management'.split('|');
 
 /** The account paths the guard covers (spec §3.1; the Linear slot store and legacy key, D-7675; the operator's pasted
- *  secrets, programme ledgers plan PL6; the Overlord's private store, W1), `~`-anchored: Read (and Bash) of every one of these thirteen, writes under `ACCOUNT_WRITE_DIRS`' two. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
+ *  secrets, programme ledgers plan PL6; the Overlord's private store, W1; the door process's directory, which holds its launch nonce, W1 door process A1), `~`-anchored: Read (and Bash) of every one of these fourteen, writes under `ACCOUNT_WRITE_DIRS`' three. Exact, never a parent: a session confirming a move reads `~/.cc-sessions/swap.log`
  *  and `~/.cc-sessions/<id>.wrapper`; a read of `.accounts/<id>.json` (spec §3.1 lists writes only) or `~/.ccrc/linear.json` is not refused. */
 export const ACCOUNT_SECRET_PATHS: readonly string[] =
   ['~/.cc-secrets/**', '~/.ccrc/auth-scratch/**', '~/.ccrc/codex/*/runtime.env', '~/.ccrc/agent.env', '~/.ccrc/linear/**', '~/.ccrc/linear.key', '~/.ccrc/operator-secrets/**',
    // Overlord W1 private store A (spec §9.4): the operator's private store, its journal, quarantine, backup copy and restore leftovers
    '~/.ccrc/operator-model.db*', '~/.ccrc/privacy-journal.log', '~/.ccrc/privacy-journal.torn/**', '~/ccrc-backups/*/operator-model.db*',
-   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*'];
-export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**'];
+   '~/.ccrc/coordination-restore.stage/*/operator-model.db*', '~/.ccrc/coordination-restore.foreign/*/operator-model.db*', '~/.cc-sessions/.door/**'];
+export const ACCOUNT_WRITE_DIRS: readonly string[] = ['~/.cc-sessions/.auth/**', '~/.cc-sessions/.accounts/**', '~/.cc-sessions/.door/**'];
 /** The roster and its generated mirror: the files that carry an account's placement, pool and billing and continuity
  *  facts (`set-facts` writes them, behind the door's step-up). Writes only; a read stays open. Exact files, as above. */
 export const ACCOUNT_ROSTER_FILES: readonly string[] = ['~/.ccrc/accounts.json', '~/.ccrc/accounts.sh'];

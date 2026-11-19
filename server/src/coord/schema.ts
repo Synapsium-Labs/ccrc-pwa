@@ -3847,6 +3847,44 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 102: user_version 101 -> 102 ──────────────────────────────────────────
+  // The stale deny digest (Overlord approvals PR 0, plan 2026-11-18-overlord-approvals.md §3.2.1; the coordinator's
+  // plan-review ruling F5, 2026-11-18). `approvals.denyCurrent`: 1 when the child's deny digest was the managed deny
+  // file's current one at mint, 0 when the installer's digest history named it instead (a child spawned under an older
+  // deny file, which a running Claude Code never re-reads). The row's `class` stays the classifier's; the rule door
+  // refuses an allow on a 0 row (`approvalAllowRefusal`), while a deny or a hand-over stays open. ONE writer, the store's
+  // `insertApproval`, called by the raise.
+  // ONE ADDITIVE COLUMN with a constant default and a CHECK, and nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 (it warns, reads as-is and migrates nothing), never names the column, and its inserts
+  // store 1. Its rule door does not read the column, but a rollback is a restart, which empties the held inputs, so it
+  // refuses a 0 row's allow `guard-escalate` (the PR's note says so). The slot is the next free one by position: the quiz record (#2991) took
+  // 100 and forecasts B (#3003) 101, so this is 102, and the landing merge renumbers by position (the coordinator's word, 2026-11-18). RE-MEASURE the slot before merge:
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN denyCurrent INTEGER NOT NULL DEFAULT 1 CHECK (denyCurrent IN (0, 1));
+  `,
+
+  // ── 103: user_version 102 -> 103 ──────────────────────────────────────────
+  // The door process's act key (Overlord spec §3.3.11 H12 "The fence", Table 11.1a's row `continuity_generations`; W1, plan
+  // `w1-door-process.md` Task 1). `continuity_act_keys`, one row per generation, ever: the launch nonce's sha256 (UNIQUE, so a
+  // nonce binds at most one generation) and the key's sha256, never the key. THREE WRITERS, ONE ROW, in
+  // `server/src/continuity/actKeyStore.ts`: `issueActKey` (the row), `noteRefusedClaim` (`claimsRefused`, `lastRefusedAt`) and
+  // `advanceActCounter` (`counter`, only upward). `continuity_starts.doorNonceSha256`: the hash the spawn bound to a start,
+  // written by `insertStart` alone; null for an older hook's start, which binds no nonce. A NEW TABLE and a NULLABLE COLUMN: an
+  // older build at this `user_version` takes rule 3, never names the table, and its `insertStart` names its columns, so the
+  // column reads null. The ladder (#2994) landed 99, the quiz record (#2991) 100,
+  // forecasts B (#3003) 101 and approvals PR 0 (#3045) 102 first, so this is 103 by position (the coordinator's brief,
+  // 2026-11-18).
+  // RE-MEASURE the slot before the PR and before merge (it must print 102 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE continuity_act_keys (generationId INTEGER PRIMARY KEY, nonceSha256 TEXT NOT NULL UNIQUE, keySha256 TEXT NOT NULL,
+    issuedAt INTEGER NOT NULL, counter INTEGER NOT NULL DEFAULT 0, claimsRefused INTEGER NOT NULL DEFAULT 0, lastRefusedAt INTEGER);
+  ALTER TABLE continuity_starts ADD COLUMN doorNonceSha256 TEXT;
+  `,
+
+  // ── 104: user_version 103 -> 104 ──────────────────────────────────────────
   // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
   // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
   // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
@@ -3862,12 +3900,13 @@ export const MIGRATIONS: readonly string[] = [
   // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
   // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
   //
-  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 102` warns, reads as-is, names none of these and boots
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 104` warns, reads as-is, names none of these and boots
   // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
   // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
   // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98, the Overlord's ladder (#2994) took 99, the quiz
-  // record (#2991) took 100 and the health changes (#3003) took 101, so this, the seventh lander, takes 102. RE-MEASURE
-  // the slot before the PR and before merge (it must print 101 before this entry is counted):
+  // record (#2991) took 100, the health changes (#3003) took 101, approvals PR 0 (#3045) took 102 and door A1 (#3035)
+  // took 103, so this, the ninth lander, takes 104. RE-MEASURE the slot before the PR and before merge (it must print 103
+  // before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

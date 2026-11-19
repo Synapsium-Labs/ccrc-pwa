@@ -36,6 +36,7 @@ import { ANSWER_MARK_MUTANT_SETS } from './answerMarkSets.js';
 import { SERVICEABILITY_MUTANT_SETS } from './serviceabilitySets.js';
 import { OVERLORD_AUTHORITY_MUTANT_SETS } from './overlordAuthoritySets.js';
 import { HANDOFF_MUTANT_SETS } from './handoffSets.js';
+import { ACT_KEY_MUTANT_SETS } from './actKeySets.js';
 import { DESIGNATION_MUTANT_SETS } from './designationSets.js';
 import { DECISION_MODEL_MUTANT_SETS } from './decisionModelSets.js';
 import { BINOMIAL_BOUND_MUTANT_SETS } from './binomialBoundSets.js';
@@ -49,6 +50,7 @@ import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
+import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { simulate } from './run.js';
 import {
@@ -205,6 +207,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...SERVICEABILITY_MUTANT_SETS,
   ...OVERLORD_AUTHORITY_MUTANT_SETS,
   ...HANDOFF_MUTANT_SETS,
+  ...ACT_KEY_MUTANT_SETS,
   ...DESIGNATION_MUTANT_SETS,
   ...BINOMIAL_BOUND_MUTANT_SETS,
   ...DECISION_MODEL_MUTANT_SETS,
@@ -218,6 +221,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
+  ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
 };
 
