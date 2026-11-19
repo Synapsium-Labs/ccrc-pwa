@@ -125,12 +125,14 @@ describe('only an option known to take an argument takes the next word (F3)', ()
   it.each([
     'git --no-pager stash push', 'git -P stash push -m wip', 'git --no-pager log --grep commit', 'git -P log -S push',
     'git -C push status', 'git --no-pager log --grep merge origin/main', 'git --no-pager grep push src/',
+    // Fix round 2, F4: `--exec-path` takes no separate word (it prints the path), so `x` is the verb here.
+    'git --exec-path x push',
   ])('%j is no gated act', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
   // One row per option with an argument (each a mutant: drop it from the list and its row passes).
   it.each([
     ['git -C x push', 'git push'], ['git -c k=v push', 'git push'], ['git --git-dir x push', 'git push'],
     ['git --work-tree x push', 'git push'], ['git --namespace x push', 'git push'], ['git --config-env a=B push', 'git push'],
-    ['git --exec-path x push', 'git push'], ['git --super-prefix x push', 'git push'], ['git -C "my repo" push', 'git push'],
+    ['git --attr-source HEAD push', 'git push'], ['git --shallow-file x push', 'git push'], ['git --super-prefix x push', 'git push'], ['git -C "my repo" push', 'git push'],
     ['gh -R o/r pr merge 42', 'gh pr merge'], ['gh --repo o/r pr merge 42', 'gh pr merge'], ['gh pr -R o/r merge 42', 'gh pr merge'],
   ])('%j: the option takes its argument, and the act is held', (c, act) => {
     expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') });
@@ -151,6 +153,55 @@ describe('naming main: the quoted HEAD (F4) and the ruled forms (F13)', () => {
     'git merge FETCH_HEAD', 'git fetch origin main && git rebase FETCH_HEAD', 'git pull', 'git merge upstream/main',
     'git merge @{u}', 'git -c alias.p=push p', 'git merge mainline', 'git merge main-fix', 'git pull origin maintenance',
     'git merge refs/heads/main-old', 'git pull origin main-x:foo',
+  ])('%j is no gated act', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
+});
+
+// Fix round 2 (review 2794).
+describe('a target after a heredoc message (F1): the substitution crosses its newlines', () => {
+  it.each([
+    ['git merge --no-ff -m "$(cat <<\'EOF\'\nMerge the work\n\nDetails\nEOF\n)" origin/main', 'git merge'],
+    ['git pull -m "$(cat <<\'EOF\'\nMerge the work\nEOF\n)" origin main', 'git pull'],
+    ['git merge -m "$(cat <<\'EOF\'\nMerge the work\nEOF\n)" main', 'git merge'],
+    ['git merge --no-ff -m "$(cat <<\'EOF\'\nMerge the 6" display work\nEOF\n)" origin/main', 'git merge'],
+  ])('%j is held as %s', (c, act) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') }); });
+  it.each([
+    'git merge -m "$(cat <<\'EOF\'\nx\nEOF\n)" feat && git checkout main', 'git merge -m "$(cat <<\'EOF\'\nx\nEOF\n)" feat\necho main',
+  ])('CONTROL: %j, a main after the command ends, holds nothing', (c) => {
+    expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
+  });
+});
+
+describe('a substitution in the target read is one opaque word (F3, ruled)', () => {
+  it.each([
+    'git rebase -i $(git merge-base HEAD origin/main)', 'git rebase "$(git merge-base HEAD origin/main)"',
+    'git rebase $(git merge-base HEAD main)', 'git rebase --onto $(git merge-base HEAD origin/main) HEAD~2',
+    'git merge -m "$(echo main)" feat', 'git merge -m "$(git log -1 --format=%s main)" feat', 'git merge -m "$(git log\nmain)" feat',
+  ])('%j is no sync of main', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
+  it.each([
+    ['git pull $(echo origin) main', 'git pull'], ['git merge $(git rev-parse HEAD) origin/main', 'git merge'],
+  ])('%j: a target outside the substitution is read', (c, act) => {
+    expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') });
+  });
+  it('RESIDUAL, recorded: `git merge $(git rev-parse main)` names main only inside the substitution, and passes', () => {
+    expect(hold('git merge $(git rev-parse main)')).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') });
+  });
+});
+
+describe('every spelling of main, with its suffixes (F6, F7, ruled)', () => {
+  // One row per form and per suffix kind, each a mutant.
+  it.each([
+    ['git rebase origin', 'git rebase'], ['git merge origin', 'git merge'], ['git rebase -i origin', 'git rebase'],
+    ['git merge origin feature', 'git merge'], ['git rebase --onto origin x', 'git rebase'],
+    ['git merge main~1', 'git merge'], ['git merge main^2', 'git merge'], ['git merge main^{commit}', 'git merge'],
+    ['git merge main@{1}', 'git merge'], ['git merge origin/main@{1}', 'git merge'], ['git merge origin/main^{commit}', 'git merge'],
+    ['git merge origin/HEAD~1', 'git merge'], ['git merge refs/heads/main~1', 'git merge'],
+    ['git merge refs/remotes/origin/main^', 'git merge'], ['git merge refs/remotes/origin/HEAD', 'git merge'],
+    ['git merge remotes/origin/main', 'git merge'], ['git merge heads/main', 'git merge'], ['git rebase origin~2', 'git rebase'],
+  ])('%j is held as %s', (c, act) => { expect(hold(c)).toMatchObject({ outcome: 'deny', text: A(act, '42', 'its coordinator') }); });
+  it.each([
+    'git pull origin', 'git pull origin feature-x', 'git merge origin/feature', 'git merge main~x', 'git merge origin/mainline',
+    'git merge main2', 'git merge refs/heads/main-x', 'git merge feature/main', 'git pull origin main2:main', 'git pull origin +main2',
+    'git merge origins', 'git merge heads/main2',
   ])('%j is no gated act', (c) => { expect(hold(c)).toMatchObject({ outcome: 'notice', text: E('42', 'its coordinator') }); });
 });
 
@@ -176,6 +227,9 @@ describe('over the cap, the raw read is a superset (F2)', () => {
     ['git -C $(pwd) push', 'git push'], ['git -C "$(git rev-parse --show-toplevel)" push origin HEAD', 'git push'],
     ['gh -R $(echo o/r) pr merge 42', 'gh pr merge'], ['git -C $(cd x; pwd) push', 'git push'],
     ['git merge -m "sync; ok" origin/main', 'git merge'], ['git -c "a;b" push', 'git push'],
+    // Fix round 2, F2: a `$(…)` with its own inner quotes inside a "…" span, and a $'…' span, keep their segment whole.
+    ['git merge -m "$(echo "a;b")" main', 'git merge'], ['git -C "$(dirname "a;b")" push', 'git push'], ["git -C $'a;b' push", 'git push'],
+    ['git merge --no-ff -m "$(cat <<\'EOF\'\nMerge the 6" display work\nEOF\n)" origin/main', 'git merge'],
   ];
   for (const [layout, pad] of pads) {
     it.each(ACTS)(`%j (${layout}) is held as %s`, (c, act) => {
