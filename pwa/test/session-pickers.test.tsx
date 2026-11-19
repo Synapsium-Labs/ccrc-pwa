@@ -900,6 +900,29 @@ describe('the model picker says why it names no model (R3b)', () => {
     expect(screen.getByRole('button', { name: /Gamma 6\.1/ })).toBeInTheDocument();
   });
 
+  // Follow-up transient-beside-kept-answer (item 2): an Anthropic lane's absent rides through a busy. The read on mount is
+  // the absent; the picker opening asks again and the box is busy. The absent keeps its lane kind, so the picker adds no
+  // note over the alias rows, and the busy does not replace it (if it did, the note would say the box was busy).
+  it('an Anthropic absent, then busy on opening: still no note, and the alias rows as always', async () => {
+    const asked: string[] = [];
+    vi.stubGlobal('fetch', vi.fn(async (url: RequestInfo | URL) => {
+      const u = String(url);
+      if (!u.includes('/api/models/')) return new Response('{}', { status: 200 });
+      asked.push(u);
+      const lane = decodeURIComponent(u.split('/api/models/')[1]!.split('?')[0]!);
+      const models = asked.length === 1 ? { kind: 'absent', laneKind: 'anthropic' } : { kind: 'busy' };
+      return new Response(JSON.stringify({ ok: true, lane, models }), { status: 200, headers: { 'content-type': 'application/json' } });
+    }));
+    renderScreen();
+    await waitFor(() => expect(asked.length).toBe(1)); // the read on mount
+    await act(async () => { await Promise.resolve(); });
+    openModelSheet();
+    await waitFor(() => expect(asked.length).toBe(2)); // the picker opening asks again, and the box is busy
+    await act(async () => { await Promise.resolve(); });
+    expect(await screen.findByRole('button', { name: /Opus class/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('pick-note')).toBeNull();
+  });
+
   it('a busy box: the note says the word', async () => {
     answerLaneWith({ kind: 'busy' });
     renderScreen({ wrapper: 'gpt' });

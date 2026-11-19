@@ -253,10 +253,30 @@ describe('the lane-models helpers (D-8406)', () => {
     // and an Anthropic lane's absent kept beside a transient word still says nothing over its alias rows
     expect(lanePickerNote({ kind: 'absent', laneKind: 'anthropic' }, 'busy')).toBeNull();
     expect(lanePickerNote({ kind: 'absent', laneKind: 'anthropic' }, 'not-started')).toBeNull();
-    expect(lanePickerNote({ kind: 'unreadable' }, 'busy')).toBe(laneReadWords({ kind: 'busy' }));
+    // follow-up transient-beside-kept-answer (item 1): a kept answer that names no model keeps its own words, and the
+    // transient word follows them; the note says both, never only the newer one
+    expect(lanePickerNote({ kind: 'unreadable' }, 'busy')).toBe(`${laneReadWords({ kind: 'unreadable' })} ${laneReadWords({ kind: 'busy' })}`);
     expect(lanePickerNote({ kind: 'busy' })).toBe(laneReadWords({ kind: 'busy' }));
     expect(lanePickerNote(GPT_LANE, 'busy')).toBe(laneReadWords({ kind: 'busy' }));
     expect(lanePickerNote(GPT_LANE, 'not-started')).toBe(laneReadWords({ kind: 'not-started' }));
+  });
+
+  // Follow-up transient-beside-kept-answer (item 1): every kept answer that names no model, beside each transient word, in
+  // the picker's note: the kept answer's sentence first, then the transient one.
+  describe('lanePickerNote: a kept answer and the transient word beside it', () => {
+    const KEPT: readonly LaneModelsRead[] = [
+      { kind: 'unreadable' }, { kind: 'unreadable', code: 'catalogue-invalid' }, { kind: 'unsupported' },
+      { kind: 'refused', why: 'bad-lane' }, { kind: 'absent', laneKind: 'never-made' }, { kind: 'absent' },
+    ];
+    for (const kept of KEPT) {
+      for (const word of ['busy', 'not-started'] as const) {
+        it(`${JSON.stringify(kept)} beside ${word}`, () => {
+          const said = laneReadWords(kept)!;
+          const transient = laneReadWords({ kind: word })!;
+          expect(lanePickerNote(kept, word)).toBe(`${said} ${transient}`);
+        });
+      }
+    }
   });
 
   it('laneReadWords gives every arm but read its own sentence, and an unreadable names the box\'s reason', () => {

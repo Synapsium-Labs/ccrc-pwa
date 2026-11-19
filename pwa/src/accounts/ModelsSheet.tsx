@@ -27,7 +27,7 @@ import { CLASSES, type LaneModelsRead, type ModelClass } from '../../../shared/m
 import { forget, put, laneModelsKey } from '../lib/screenCache';
 import { api } from '../lib/api';
 import { useLaneModelsView, type LaneModelsControl, type LaneModelsReadOutcome } from '../lib/useLaneModels';
-import { laneReadWords, type LaneReadFailure } from '../lib/models';
+import { laneReadWords, laneTransientBeside, type LaneReadFailure } from '../lib/models';
 import { AccountSheet, type Announcement } from './AccountSheet';
 import {
   MODELS_READ_FAILED, MODELS_RETRY, MODELS_REVERT_CONFIRM, MODELS_SHEET_TITLE, actDoneWords, modelsReadStateWords,
@@ -91,14 +91,16 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
   readNow.current = read;
   const shown: LaneModelsRead | null = fresh !== null && fresh.over === read ? fresh.read : read;
   const shownNow = useRef(shown);
-  // The read's one state sentence: a non-read answer's own words, or the transient word beside a kept good read (F2).
-  // The two never show together, so they are one element.
+  // The read's state, in up to two lines: a non-read answer's own words, then the transient word of a newer answer the
+  // hook kept it beside (F2; follow-up transient-beside-kept-answer: a kept answer that names no model keeps its words,
+  // and the word follows on its own line). `laneTransientBeside` decides, as it does for the picker's note; the act's
+  // fresh read (`shown !== read`) carries no word.
+  const beside = shown !== null && shown === read ? laneTransientBeside(shown, view.transient) : null;
   const stateNote: { testid: string; kind: string; text: string | null } | null =
-    shown === null ? null
-      : shown.kind !== 'read' ? { testid: 'models-read-state', kind: shown.kind, text: modelsReadStateWords(shown) }
-        : view.transient !== null && shown === read
-          ? { testid: 'models-read-transient', kind: view.transient, text: laneReadWords({ kind: view.transient }) }
-          : null;
+    shown === null || shown.kind === 'read' ? null
+      : { testid: 'models-read-state', kind: shown.kind, text: modelsReadStateWords(shown, beside) };
+  const transientNote: { testid: string; kind: string; text: string | null } | null =
+    beside === null ? null : { testid: 'models-read-transient', kind: beside, text: laneReadWords({ kind: beside }) };
   shownNow.current = shown;
 
   const [busy, setBusy] = useState<ModelClass | null>(null);
@@ -197,9 +199,9 @@ export function ModelsSheet({ lane, open, onClose, offline, act = defaultAct, lo
         </div>
       )}
       {shown === null && readFailure === null && <Skeleton lines={4} />}
-      {stateNote !== null && (
-        <p className="acct-models-note" data-testid={stateNote.testid} data-kind={stateNote.kind}>{stateNote.text}</p>
-      )}
+      {[stateNote, transientNote].map((n) => n !== null && (
+        <p key={n.testid} className="acct-models-note" data-testid={n.testid} data-kind={n.kind}>{n.text}</p>
+      ))}
       {shown !== null && shown.kind !== 'read' && shown.kind !== 'absent' && (
         <ul className="acct-models-names">
           {CLASSES.map((cls) => <li key={cls} data-testid={`models-name-${cls}`}>{classLabel(cls)}</li>)}
