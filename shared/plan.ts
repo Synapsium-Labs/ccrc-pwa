@@ -90,7 +90,7 @@ export const isPlanKebab = (tok: string): boolean => (planKebab ??= new Set<stri
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
   ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
   ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
-  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED,
+  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED, ...MAP_CLASSES,
 ])).has(tok);
 
 // ── Wire types ─────────────────────────────────────────────────────────────────────────────────────────────────────────
@@ -292,3 +292,18 @@ export interface MapEntry {
   target?: { programme?: string; epic?: string; checkpoint?: string; successor?: string; ticketKey?: string; kind?: TicketKind };
 }
 export interface MapCounts { created: number; moved: number; closed: number; left: number; skipped: number }
+/** An open issue as the map's draft read it (design §10.3): its state TYPE, its team KEY, the ids of its project, parent
+ *  and milestone, and its title and description. Linear text: read only under `untrusted`. */
+export interface IssueSnapshot {
+  state: string; team: string; project: string | null; parent: string | null; milestone: string | null; title: string; description: string;
+}
+/** A team's migration map (D-8186, Task 7.1): every open issue of `team` once in `entries`; `backlog` the new paused
+ *  programmes it proposes, `epics` the structure it declares for a done programme that has no plan and no live run (§10.1);
+ *  `snapshot` each listed issue as read when the map was stored, by its UUID (the server fills it, never the owner). */
+export interface MapBody {
+  team: string;
+  backlog?: { slug: string; title: string; epics: PlanEpicBody[] }[];
+  epics?: { programme: string; epics: PlanEpicBody[] }[];
+  entries: MapEntry[];
+  snapshot: Record<string, IssueSnapshot>;
+}
