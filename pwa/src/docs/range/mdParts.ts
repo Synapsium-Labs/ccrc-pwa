@@ -15,8 +15,10 @@
 //   6. inside a line longer than the gate, at a code point boundary, never between a surrogate pair (continued).
 // A top-level fence is one a line opens at 0 to 3 columns of indentation with a marker of at most 64 characters, closed by
 // a line of the same marker, at least as long, at 0 to 3 columns. Its content is literal: nothing inside it is read as
-// anything else. A top-level fence opened at column 1 to 3 (inside a list item, most likely) that meets a non-blank line
-// indented less than its opener stops being reopenable: the rest of it is a zone, and a reopened part ends before that line.
+// anything else. A top-level fence opened at or right of the content column of an open list item (the item's marker
+// line, then indented or lazy lines, tracked in O(1) state) that meets a non-blank line indented less than its opener
+// stops being reopenable: its list item is over, the rest of it is a zone, and a reopened part ends before that line.
+// A fence at column 1 to 3 that no list item holds keeps its column-0 content and stays reopenable, as one at column 0 does.
 // A zone is an exclusion zone for cuts of kinds 1 to 3, so a fence is never cut while any other cut fits. A zone is
 // opened by any fence opener outside a top-level fence and a zone that is not a top-level one: after blockquote marks
 // (`>`), list markers or four or more columns of indentation, or with a marker of more than 64 characters. It ends at
@@ -78,8 +80,34 @@ const REOPEN_MARKER_MAX = 64;
 /** The most bytes of the info string's first word a reopened fence carries (its language, for highlighting). */
 const REOPEN_INFO_MAX = 64;
 
-/** An open top-level fence: its marker, the lines a part reopens and closes it with, and the column (0 to 3) it opened at. */
-interface Fence { mark: string; reopen: string; close: string; col: number }
+/** An open top-level fence: its marker, the lines a part reopens and closes it with, the column (0 to 3) it opened at, and
+ *  whether a list item held it (a list item was open at its opener and it sits at the item's content column or right of it).
+ *  The marker of an item that has a fence of its own on its line makes a zone instead (`zoneOpened`). */
+interface Fence { mark: string; reopen: string; close: string; col: number; list: boolean }
+
+/** Whether a list item is open at a line, outside every fence and zone, as one number: 0 for none; the item's content
+ *  column when it is open (after its marker line or a line of the item); the content column negated after a blank line
+ *  (a `gap`: only a line indented to the column still belongs to the item). A nested item keeps its outer item's column. */
+type ListState = number;
+const LIST_MARKER_RE = /^( {0,3})([-*+]|\d{1,9}[.)])(?:( +)|\t|$)/;
+const NEW_BLOCK_RE = /^ {0,3}(?:#{1,6}(?:[ \t]|$)|>)/;
+
+/** The list state after one line that is outside every fence and zone (or that closes one). A line that is none of the
+ *  below and sits left of the content column ends the item, except a lazy continuation (a plain line, not the start of
+ *  a block, right after an item's text). */
+function listAfter(list: ListState, line: string): ListState {
+  if (BLANK_RE.test(line)) return list > 0 ? -list : list;
+  const col = Math.abs(list);
+  const m = LIST_MARKER_RE.exec(line);
+  if (m !== null) {
+    const spaces = (m[3] ?? '').length;
+    const cc = m[1]!.length + m[2]!.length + (spaces >= 1 && spaces <= 4 ? spaces : 1);
+    return list === 0 || m[1]!.length < col ? cc : col;
+  }
+  if (list === 0) return 0;
+  if (indentOf(line) >= col) return col;
+  return list > 0 && !NEW_BLOCK_RE.test(line) && !FENCE_OPEN_RE.test(line) ? list : 0;
+}
 
 /** An exclusion zone: its marker character and length, its quote depth, and its content column (see the header). */
 interface Zone { ch: string; len: number; bq: number; cc: number }
@@ -135,10 +163,11 @@ function zoneVerdict(zone: Zone, line: string): 'end' | 'close' | 'stay' {
   return 'stay';
 }
 
-/** The zone that the rest of a top-level fence opened at column 1 to 3 becomes, when `line` (non-blank) sits left of its
- *  opener: the list item that held it is over. Null for any other case. */
+/** The zone that the rest of a top-level fence held by a list item becomes, when `line` (non-blank) sits left of its
+ *  opener: the list item that held it is over. Null for any other case, a fence in no list item included (review 2915 F4:
+ *  a top-level fence at column 1 to 3 with column-0 content is still open). */
 function converted(fence: Fence | null, line: string): Zone | null {
-  if (fence === null || fence.col === 0 || BLANK_RE.test(line) || indentOf(line) >= fence.col) return null;
+  if (fence === null || !fence.list || BLANK_RE.test(line) || indentOf(line) >= fence.col) return null;
   return { ch: fence.mark[0]!, len: fence.mark.length, bq: 0, cc: 0 };
 }
 
@@ -176,8 +205,9 @@ function fenceClosed(fence: Fence, line: string): Fence | null {
 type States = { fence: Fence | null; zone: Zone | null };
 const NONE: States = { fence: null, zone: null };
 
-/** What a line opens, outside a fence and a zone: a top-level fence, or a zone (a container fence, or a long marker). */
-function opened(line: string): States {
+/** What a line opens, outside a fence and a zone: a top-level fence, or a zone (a container fence, or a long marker).
+ *  `list` is the list state before the line: a fence at column 2 or more while an item is open is held by it. */
+function opened(line: string, list: ListState): States {
   const m = FENCE_OPEN_RE.exec(line);
   if (m === null) return { fence: null, zone: zoneOpened(line) };
   const mark = m[2]!;
@@ -186,18 +216,28 @@ function opened(line: string): States {
   if (mark.length > REOPEN_MARKER_MAX) return { fence: null, zone: { ch: mark[0]!, len: mark.length, bq: 0, cc: 0 } };
   const word = info.trim().split(/[ \t]/)[0] ?? '';
   const keep = word !== '' && utf8Bytes(word) <= REOPEN_INFO_MAX ? word : '';
-  return { fence: { mark, reopen: mark + (keep === '' ? '' : ' ' + keep) + '\n', close: mark + '\n', col: m[1]!.length }, zone: null };
+  const col = m[1]!.length;
+  return { fence: { mark, reopen: mark + (keep === '' ? '' : ' ' + keep) + '\n', close: mark + '\n', col, list: list !== 0 && col >= Math.abs(list) }, zone: null };
+}
+
+/** The list state after `line`, given the one before it and the states `next` after it. `outside` is whether the line began
+ *  outside every fence and zone: a fence it opens that no item holds ends the item, a zone it opens or a line that closes
+ *  a fence or zone is read as a plain line, and a line inside a fence or zone that stays changes nothing. */
+function listNext(list: ListState, outside: boolean, next: States, line: string): ListState {
+  if (next.fence !== null) return outside && !next.fence.list ? 0 : list;
+  if (next.zone !== null) return outside ? listAfter(list, line) : list;
+  return listAfter(list, line);
 }
 
 /** The fence and zone states after `line`, given the states before it (at most one of them is not null). */
-function stateAfter(fence: Fence | null, zone: Zone | null, line: string): States {
+function stateAfter(fence: Fence | null, zone: Zone | null, line: string, list: ListState): States {
   if (fence !== null) return { fence: fenceClosed(fence, line), zone: null };
   if (zone !== null) {
     const v = zoneVerdict(zone, line);
     if (v === 'stay') return { fence: null, zone };
     if (v === 'close') return NONE;
   }
-  return opened(line);
+  return opened(line, list);
 }
 
 /** A test-only counter: `chars` grows by every character the cutter examines (searched, sliced or measured). It changes
@@ -205,8 +245,8 @@ function stateAfter(fence: Fence | null, zone: Zone | null, line: string): State
 export interface Probe { chars: number }
 
 /** A cut candidate: its offset, the bytes before it, the fence whose closing line ends the part (null for none), and the
- *  fence and zone states the next part starts in. */
-interface Cut { off: number; bytes: number; closeWith: Fence | null; fence: Fence | null; zone: Zone | null }
+ *  fence, zone and list states the next part starts in. */
+interface Cut { off: number; bytes: number; closeWith: Fence | null; fence: Fence | null; zone: Zone | null; list: ListState }
 
 /** The largest offset in `[from, to)` whose prefix `text.slice(from, off)` is at most `budget` UTF-8 bytes, at a code
  *  point boundary, and at least one code point past `from`, so a cut always makes progress. */
@@ -232,6 +272,7 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
   let inside: Fence | null = null; // the top-level fence this part starts inside (it reopens it)
   let state: Fence | null = null; // the top-level fence state at `start`
   let zoneState: Zone | null = null; // the zone at `start`
+  let listState: ListState = 0; // the list state at `start`
   let continued = false;
   while (start < text.length) {
     const reopen = inside === null ? null : inside.reopen;
@@ -246,6 +287,7 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
     let bytes = 0;
     let fence = state;
     let zone = zoneState;
+    let list = listState;
     let prevRank = RANK_LINE;
     let firstLineEnd = -1;
     let atEnd = false;
@@ -258,14 +300,14 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
       if (off > start) {
         if (conv !== null && fence === inside) {
           // A reopened fence meets the line that ends its list item: the part ends before it, with the fence closed.
-          if (head + bytes + utf8Bytes(fence!.close) <= maxBytes) best[RANK_FORCE] = { off, bytes, closeWith: fence, fence: null, zone: conv };
+          if (head + bytes + utf8Bytes(fence!.close) <= maxBytes) best[RANK_FORCE] = { off, bytes, closeWith: fence, fence: null, zone: conv, list };
           break;
         }
         if (conv !== null) {
-          if (head + bytes <= maxBytes) best[RANK_ZONE] = { off, bytes, closeWith: null, fence: null, zone: conv };
+          if (head + bytes <= maxBytes) best[RANK_ZONE] = { off, bytes, closeWith: null, fence: null, zone: conv, list };
         } else if (fromZone && verdict === 'end') {
           // The zone this part started in is over: the part ends before the line that ends it.
-          if (head + bytes <= maxBytes) best[RANK_FORCE] = { off, bytes, closeWith: null, fence: null, zone: null };
+          if (head + bytes <= maxBytes) best[RANK_FORCE] = { off, bytes, closeWith: null, fence: null, zone: null, list };
           break;
         } else {
           // A boundary inside a zone is a cut of the lowest rank; a line that ends the zone by its container's end is
@@ -273,18 +315,20 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
           const zoneHere = zone !== null && verdict !== 'end' ? zone : null;
           const rank = zoneHere !== null ? RANK_ZONE : fence === null && HEADING_RE.test(line) ? RANK_HEADING : prevRank;
           const tail = fence !== null ? utf8Bytes(fence.close) : 0;
-          if (head + bytes + tail <= maxBytes) best[rank] = { off, bytes, closeWith: fence, fence, zone: zoneHere };
+          if (head + bytes + tail <= maxBytes) best[rank] = { off, bytes, closeWith: fence, fence, zone: zoneHere, list };
         }
       }
       if (fromZone && verdict === 'close') {
         // The zone this part started in is closed by this line: the part ends right after it, so the closer, which on its
         // own would open a fence, stays at the end of this part, and nothing after it is read with it.
-        if (head + bytes + lineBytes <= maxBytes) best[RANK_FORCE] = { off: end, bytes: bytes + lineBytes, closeWith: null, fence: null, zone: null };
+        if (head + bytes + lineBytes <= maxBytes) best[RANK_FORCE] = { off: end, bytes: bytes + lineBytes, closeWith: null, fence: null, zone: null, list: listAfter(list, line) };
         break;
       }
       if (conv !== null) { fence = null; zone = conv; }
       const blank = fence === null && BLANK_RE.test(line);
-      ({ fence, zone } = stateAfter(fence, zone, line));
+      const outside = fence === null && zone === null;
+      ({ fence, zone } = stateAfter(fence, zone, line, list));
+      list = listNext(list, outside, { fence, zone }, line);
       if (head + bytes + lineBytes > maxBytes) break;
       bytes += lineBytes;
       off = end;
@@ -302,6 +346,7 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
       start = pick.off;
       state = pick.fence;
       zoneState = pick.zone;
+      listState = pick.list;
       inside = pick.fence;
       continue;
     }
@@ -318,7 +363,9 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
       const first = lineAt(win, start, start, probe).line;
       const conv = converted(state, first);
       if (conv !== null) { state = null; zoneState = conv; }
-      ({ fence: state, zone: zoneState } = stateAfter(state, zoneState, first));
+      const outside = state === null && zoneState === null;
+      ({ fence: state, zone: zoneState } = stateAfter(state, zoneState, first, listState));
+      listState = listNext(listState, outside, { fence: state, zone: zoneState }, first);
       inside = state;
     } else if (closeText === null) {
       inside = null;

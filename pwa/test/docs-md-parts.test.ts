@@ -300,6 +300,33 @@ describe('splitMarkdownParts', () => {
     }
   });
 
+  /** A top-level fence opened at one column in no list, whose content sits at column 0 and is longer than a part: every part
+   *  ends outside a fence (a cut inside it closes it and the next part reopens it), and the text after its real closer is
+   *  never code. Review 2915 F4: a non-blank line left of the opener is not "its list item ended" when no list holds it. */
+  function noListFenceHolds(t: string, max: number): void {
+    const { parts } = splitMarkdownParts(t, max);
+    checkCover(t, parts, max);
+    expect(parts.length, 'the fence is longer than a part').toBeGreaterThanOrEqual(2);
+    expect(parts.filter((p) => p.reopen !== null).length, 'a part that starts inside the fence reopens it').toBeGreaterThan(0);
+    for (const [i, p] of parts.entries()) {
+      const f = topLevelFences(partText(t, p));
+      expect(f.openAtEnd, `part ${i} ends outside a fence: ${JSON.stringify(partText(t, p).slice(-40))}`).toBe(false);
+      expect(f.inside.has('end'), `part ${i}: the text after the real closer is not code`).toBe(false);
+    }
+  }
+
+  it('md parts: a top-level fence opened at one column in no list, with content at column 0, is closed and reopened across parts', () => {
+    noListFenceHolds(' ```\n' + 'xxxxxxxx\n'.repeat(70) + '# h\n\nafter\n```\nend\n', 500);
+  });
+
+  it('md parts: the same fence with a four-space content line is closed and reopened across parts', () => {
+    noListFenceHolds(' ```\n' + 'xxxxxxxx\n'.repeat(35) + '    four\n' + 'xxxxxxxx\n'.repeat(35) + '# h\n\nafter\n```\nend\n', 500);
+  });
+
+  it('md parts: the same fence with a list-looking content line is closed and reopened across parts', () => {
+    noListFenceHolds(' ```\n' + 'xxxxxxxx\n'.repeat(35) + '- list-like\n' + 'xxxxxxxx\n'.repeat(35) + '# h\n\nafter\n```\nend\n', 500);
+  });
+
   it('md parts: a fence in a list item after a nested item is never cut, blank lines inside it included', () => {
     noCutInFences('1. Configure\n    - edit\n\n    ```yaml\n    a: 1\n\n    b: 2\n    ```\n', 'plain\n', 40, 200);
   });
