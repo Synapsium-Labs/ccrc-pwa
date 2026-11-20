@@ -308,7 +308,8 @@ export interface MapEntry {
 export const MIGRATION_PLAN_BY = 'ccrc-migration';
 /** Why a listed issue still waits in a migration's report (review 2892 F3): its live programme's wave boundary, or the Linear
  *  object it is placed under (its epic's project, or the project's Upkeep epic) not created yet; and for a replaced level, a
- *  ticket placed under it whose write has not settled yet, so its close can relate to it (review 2918 F2). */
+ *  ticket under it still to be placed or whose write has not settled yet, so its close can relate to the first one placed; a
+ *  level with none placed (each skipped, or taken by the Linear owner) closes with no relation (review 2918 F2, review 2955 A3). */
 export const MIGRATION_WAITING_WHY = ['live-programme', 'epic-not-in-linear', 'upkeep-not-in-linear', 'placed-ticket-not-applied'] as const;
 export type MigrationWaitingWhy = (typeof MIGRATION_WAITING_WHY)[number];
 export interface MapCounts { created: number; moved: number; closed: number; left: number; skipped: number }

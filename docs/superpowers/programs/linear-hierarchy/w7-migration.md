@@ -157,6 +157,28 @@ The rulings, for that run:
 | A3 | The waiting words cover a leaf not yet placed, and say that a leaf later skipped means the level closes with no relation. |
 | A4 | D-8802 is cited at the put-back gate it explains. |
 
+## Run 2984 (w7-fixes): what was built
+
+The follow-up run the rulings above name (plan ticket `w7-fixes`, epic `migration`). No departure number was needed (the two
+issued to the run stay unused), and no file outside the run's claims was edited, so no consent was asked; D-8796's text is amended
+in the plan under the head commit's `Ledger-Edit` trailer, as the brief allowed.
+
+| Item | Built | Test, and what reds it |
+|---|---|---|
+| F1 | `saveReport` takes the tick's lists (`skipped`, `unrelated`, `taken`), and all four of its calls pass the same sets, so an early return on an unread read keeps what the tick learned | `migration-apply.test.ts`, one test per early return: "F1: … stays listed when step 2's own next read is refused", "F1: … stays listed when step 3's closer read is then refused" and "F1: … kept when step 3 then ends early on a refused adoption read"; each goes red, and only it, with `unrelated` dropped from its own return's save |
+| A2 | a level joins `unrelated` only once its state write lands (`closeIssue`), and a step-2 row that `reconcileMove` finds already closed joins it there | "A2: a no-relation close whose state write is refused is not listed as unrelated until the write lands" |
+| F2 | an issue a live binding holds (`issueBound`, the store's one reader, the same one `IssueHeldError` uses) leaves the migration: `migrationPolicy.ts#shedTaken` moves it from `skipped` to the report's new `taken` list, at the start of every apply tick, on every tick of an applied row whose report is open, and when a follow-up map is stored; an adoption refused `IssueHeldError` answers `taken`, not `changed`; `fresh`, the closers' relation, and the done check treat a taken issue as settled, so nothing waits on it and the owner's follow-up mail never names it. The console lists it as "Taken by the Linear owner", after the skipped ones; the owner's map reference (`references/plan.md`) says so | "F2: an issue on the skipped list that the owner then takes leaves it for `taken`, …", "F2: a replaced level whose only leaf is taken closes with no relation, …", the two review 2918 F1 tests updated to the new end state, `migration-policy.test.ts` `shedTaken`, `migration-body.test.tsx` "lists the issues taken by the Linear owner on their own" |
+| A1 | a closer-class entry naming an issue a live binding holds is asked before any call, in step 2 (an unapplied row) and in step 3: no comment, no relation, no close, and it goes to `taken` | "A1: a stale closer and a replaced epic naming an issue a live binding holds …", "A1: a closer whose move row is unapplied, then held by a live binding, …" (taken between the map's approval and the close) |
+| F3 | the two cap comments in `migration.ts` and D-8796's sentence say what bounds the sync's two passes: step 1's structure pass on lane `migration`, the Upkeep epic's create on lane `sync` as the plan sync's own (it has no move row), each bounded by its lane, the pass deadline and the one rate service, never by the writes cap | — |
+| F4 | — (the guard stands) | `plan-store.test.ts` "graceBindingsOf leaves out a retired binding whose grace still stands": red without `state <> 'retired'` |
+| A3 | `placed-ticket-not-applied`'s words (console and `shared/plan.ts`) cover a leaf still to be placed and say a level with none placed closes with no relation | `migration-body.test.tsx` "a replaced level's wait covers a leaf still to be placed, …" |
+| A4 | D-8802 cited at the put-back gate in `migration.ts` | — |
+
+Two minor points of the round's task review are left, each judged not worth a change now: the report item's one-line summary
+counts skipped issues but not taken ones (the report's own list shows them); and the held check of a skipped identifier that
+no map entry names falls back to the identifier alone (a binding holding the issue with no identifier stored is then missed,
+and the issue stays skipped until the operator's Done).
+
 ## Follow-ups and open points
 
 - **The F3/F5 interaction, built in fix round 1** (wave 3's carry: a bound ticket put back could take its held team off its
