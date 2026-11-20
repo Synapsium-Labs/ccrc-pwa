@@ -240,15 +240,23 @@ fixes: the program row's limit is 40 + 321 = 361.
 
 ## The live gate (read-only)
 
-- **The branch's four model-advance doctor checks** were run from the work tree against the fleet box's own files,
-  with no install and no `--fix`. All four PASS, across 2 lanes:
+- **The branch's four model-advance doctor checks** were run from the work tree against the fleet box's own files, with
+  no install and no `--fix`. Run at the first close, and again at fix round 1's tip, all four PASS:
   - `model-advance-held-back`
   - `model-held-behind`
   - `model-sessions-behind`
   - `model-advance-blocked`
-- **No aliases file.** The fleet box has no aliases file yet, so on every Anthropic lane:
-  - The reader answers `absent`, with no fork.
-  - No marker is filled, no held key is spliced, and no orphaned level is carried.
-  - The effort rule keeps the haiku rule.
-  - Every new branch answers today's behaviour, which each task's "no file" tests pin.
+
+  The second run found 17 lanes with a model registry or an aliases file: the box's aliases refresh had started writing
+  aliases files between the two runs.
+- **What the new branches meet at merge, measured read-only at fix round 1** (counts only, no lane named):
+  - **No hold anywhere.** No advance file holds a class, so no held key is spliced and no `held=` word is written.
+  - **12 aliases files have no id for any class yet.** On those lanes every new branch answers today's behaviour: the
+    reader answers `facts -`, the effort rule keeps the haiku rule, and no orphaned level is carried. A fresh alias
+    launch is marked and stays unfilled until a reading names an id.
+  - **3 lanes have ids.** Their haiku rows list levels, so by D-8750 a haiku class there now takes an effort level, at
+    the route verb and at spawn. That is the designed change: the model's data says it takes one.
+  - **1 of those 3 lanes has an orphaned fable level.** Under a record whose effort is `auto`, its fable sessions launch
+    with that level on `--effort` (D23, D-8852, D-8859), and `routeapplied` keeps `auto`.
+  - **Lanes with no aliases file:** every new branch answers today's behaviour, as each task's "no file" tests pin.
 - **Rollout.** The marker is written from the first spawn after install. The fleet box goes first at rollout.
