@@ -148,9 +148,41 @@ describe('the Flows doors', () => {
     await app.close();
   });
 
+  it('names the default flow new programmes pin, and refuses one that cannot be (wave 2)', async () => {
+    const { app } = await open();
+    const draftOnly = await create(app, {});
+    const id = await create(app, { template: 'ccrc' });
+    await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
+    const put = (flowId: unknown) => app.inject({ method: 'PUT', url: '/api/flows/default', payload: { flowId } });
+    expect((await put('x')).statusCode).toBe(400);
+    expect((await put(99)).statusCode).toBe(404);
+    expect((await put(draftOnly)).statusCode).toBe(409);
+    expect((await put(id)).json()).toEqual({ ok: true, defaultFlowId: id });
+    const list = (await app.inject({ method: 'GET', url: '/api/flows' })).json() as FlowsListAnswer;
+    expect(list.defaultFlowId).toBe(id);
+    expect(list.flows.find((f) => f.id === id)?.pinnedBy).toBe(0);
+    expect((await read(app, id)).isDefault).toBe(true);
+    expect((await read(app, draftOnly)).isDefault).toBe(false);
+    expect((await put(null)).json()).toEqual({ ok: true, defaultFlowId: null });
+    await app.close();
+  });
+
+  it('refuses to delete a flow a programme pins (wave 2)', async () => {
+    const { app, coord } = await open();
+    const id = await create(app, { template: 'ccrc' });
+    await app.inject({ method: 'POST', url: `/api/flows/${id}/publish` });
+    await app.inject({ method: 'PUT', url: '/api/flows/default', payload: { flowId: id } });
+    coord.openRun({ program: 'programme-a', title: 'wave 1', project: 'project-a', wave: 1, waveOf: 1, claimedBy: 'lane-a-project-a' });
+    const del = await app.inject({ method: 'DELETE', url: `/api/flows/${id}` });
+    expect(del.statusCode).toBe(409);
+    expect(del.json()).toMatchObject({ ok: false, error: 'conflict', detail: 'pinned by 1 programme' });
+    expect(((await app.inject({ method: 'GET', url: '/api/flows' })).json() as FlowsListAnswer).flows[0].pinnedBy).toBe(1);
+    await app.close();
+  });
+
   it('is session-gated when the gate is armed', async () => {
     const { app } = await open(true);
-    for (const [method, url] of [['GET', '/api/flows'], ['POST', '/api/flows'], ['PUT', '/api/flows/1/draft']] as const) {
+    for (const [method, url] of [['GET', '/api/flows'], ['POST', '/api/flows'], ['PUT', '/api/flows/1/draft'], ['PUT', '/api/flows/default']] as const) {
       expect((await app.inject({ method, url, payload: method === 'GET' ? undefined : {} })).statusCode).toBe(401);
     }
     await app.close();

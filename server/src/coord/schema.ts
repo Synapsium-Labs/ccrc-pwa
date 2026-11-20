@@ -4057,6 +4057,23 @@ export const MIGRATIONS: readonly string[] = [
     PRIMARY KEY (flowId, version)
   );
   `,
+
+  // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
+  // Flows wave 2 (plan `2026-11-19-flows-w2.md`): the operator's default flow, and the flow a programme pins.
+  // `flow_settings` is one row (`id = 1`); `defaultFlowId` NULL is "no default". `programs.flowId`/`flowVersion` are the
+  // programme's flow pin, written once in the row's first INSERT from the default's newest version and never updated; both
+  // NULL is "no flow pinned" (today's method, as built in). Not the spec pin (`specPath`) and not the landing pin. Writers:
+  // `flow_settings` by `server/src/flows/flowsStore.ts` alone; the two columns by the `programs` inserters
+  // (`CoordStore.openRun`, `planStore.applyPlanChanges`), which take the value from `flows/flowPinSql.ts`. Every
+  // `INSERT INTO programs` names its columns, so an older build at this `user_version` leaves both NULL. Same slot rule as
+  // 110 (flows wave 1): whoever lands second renumbers; RE-MEASURE (it must print 110 before this entry is counted):
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE flow_settings (id INTEGER PRIMARY KEY CHECK (id = 1), defaultFlowId INTEGER REFERENCES flows(id));
+  INSERT INTO flow_settings (id, defaultFlowId) VALUES (1, NULL);
+  ALTER TABLE programs ADD COLUMN flowId INTEGER;
+  ALTER TABLE programs ADD COLUMN flowVersion INTEGER;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

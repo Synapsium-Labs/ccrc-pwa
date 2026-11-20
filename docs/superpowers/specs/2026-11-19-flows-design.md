@@ -171,7 +171,9 @@ programme pins it (wave 2). coord.db's snapshot carries both tables.
 
 `GET /api/flows` (the operator's flows and the templates), `GET /api/flows/:id` (draft, versions, problems),
 `POST /api/flows` (new, empty, from a template, or from an imported file's document, §14.1), `PUT /api/flows/:id/draft` (save; returns problems),
-`POST /api/flows/:id/publish` (refuses with the problems), `DELETE /api/flows/:id`, `GET /api/flows/:id/versions/:v`.
+`POST /api/flows/:id/publish` (refuses with the problems), `DELETE /api/flows/:id` (refused while a programme pins the flow,
+wave 2), `GET /api/flows/:id/versions/:v`, and `PUT /api/flows/default` (wave 2: `{ flowId }`, the flow new programmes pin, or
+null; refuses a flow with no published version).
 Registered from `server/src/flows/routes.ts`, a lane source the box-token census reads with a hand-kept `FLOW_DOORS`.
 
 ## 9. The PWA
@@ -192,7 +194,10 @@ hues stay accounts') and live positions (a breathing dot on a block).
    connect outcomes), read-only diagram, validate, publish. Nothing executes.
 1b. **Share** (§14.1): export a published version to a file, import a file as a new flow's draft. Nothing executes.
 2. **Pins and the brief.** Split protocol from method in the three skills (characterization tests first); programmes pin a
-   version; dispatch composes the brief from the pinned flow, shadow-compared to today's.
+   version; dispatch composes the brief from the pinned flow, shadow-compared to today's. *As built
+   (`plans/2026-11-19-flows-w2.md`):* the operator names a default flow; a programme pins its newest version at the
+   programme row's first write; every dispatch records a `flow-brief:` shadow event. The skill split moved to the wave that
+   sends the composed brief live, because removing the method from the skills before then removes it from every session.
 3. **The engine, shadow then live**: positions, the outcome door, instruction and skill blocks.
 4. **Gates**: approval, PR state, attested.
 5. **The canvas**: drag and drop, connect by dragging, live positions.

@@ -183,6 +183,31 @@ export function flowPhases(doc: FlowDoc): Map<string, number> {
   return phase;
 }
 
+/** The block a dispatch's brief comes from (wave 2): for a work run, the block the `dispatch` step's `dispatched`
+ *  edge leads to, when it carries a prompt (an instruction or a skill). A review is the protocol's own step, so it
+ *  composes nothing. */
+export function briefBlockFor(doc: FlowDoc, kind: 'work' | 'review'): FlowBlock | null {
+  if (kind !== 'work') return null;
+  const dispatch = doc.blocks.find((b) => b.kind === 'protocol' && b.step === 'dispatch');
+  const edge = dispatch && doc.edges.find((e) => e.from === dispatch.id && e.outcome === 'dispatched');
+  const to = edge && doc.blocks.find((b) => b.id === edge.to);
+  return to && (to.kind === 'instruction' || to.kind === 'skill') ? to : null;
+}
+
+/** A block's prompt with its variables filled. A variable with no value stays as written and is listed in
+ *  `missing`, never blanked, so a shadow comparison shows what the server could not fill. */
+export function renderFlowPrompt(block: FlowBlock, vars: Partial<Record<FlowVar, string>>): { text: string; missing: FlowVar[] } {
+  const missing = new Set<FlowVar>();
+  const body = (block.prompt ?? '').replace(VAR_RE, (whole, name: string) => {
+    if (!oneOf(FLOW_VARS, name)) return whole;
+    const v = vars[name];
+    if (v === undefined) { missing.add(name); return whole; }
+    return v;
+  });
+  const text = block.kind === 'skill' ? `Run the ${block.skill ?? ''} skill.${body ? `\n\n${body}` : ''}` : body;
+  return { text, missing: [...missing] };
+}
+
 function reachable(doc: FlowDoc): Set<string> {
   const seen = new Set<string>();
   const stack = [doc.start];
@@ -324,14 +349,18 @@ export function skeletonFlowDoc(title: string): FlowDoc {
 
 /** The wire (spec §8). A flow's list row, its versions, and the two answers the Flows screen reads. */
 export interface FlowSource { template: string; version: number }
-export interface FlowSummary { id: number; title: string; source: FlowSource | null; updatedAt: number; latestVersion: number | null }
+/** `pinnedBy` (wave 2): how many programmes pin this flow; absent from an older server reads as 0. */
+export interface FlowSummary { id: number; title: string; source: FlowSource | null; updatedAt: number; latestVersion: number | null; pinnedBy?: number }
 export interface FlowVersionRow { version: number; publishedAt: number }
 export interface FlowTemplateView { id: string; version: number; title: string; note: string; doc: FlowDoc }
-export interface FlowsListAnswer { flows: FlowSummary[]; templates: FlowTemplateView[] }
+/** `defaultFlowId` (wave 2): the flow new programmes pin; absent from an older server reads as null. */
+export interface FlowsListAnswer { flows: FlowSummary[]; templates: FlowTemplateView[]; defaultFlowId?: number | null }
 /** One flow. `draft` keeps the read's distinction: an unreadable draft carries its reason and no problems. */
 export interface FlowAnswer {
   flow: FlowSummary;
   draft: FlowParse;
   problems: FlowProblem[];
   versions: FlowVersionRow[];
+  /** Wave 2: whether new programmes pin this flow; absent from an older server reads as false. */
+  isDefault?: boolean;
 }

@@ -5,7 +5,7 @@ import type { FastifyInstance } from 'fastify';
 import type { FlowAnswer, FlowsListAnswer } from '../../../shared/flows.js';
 import { refuseRoute } from '../refuse.js';
 import type { CoordStore } from '../coord/store.js';
-import { decideCreate, decideDraft, decidePublish, flowIdOf, problemsOf, type DoorRefusal } from './doors.js';
+import { decideCreate, decideDefault, decideDraft, decidePublish, flowIdOf, problemsOf, type DoorRefusal } from './doors.js';
 import { FLOW_TEMPLATES } from './templates.js';
 
 export interface FlowsRouteOpts {
@@ -23,8 +23,21 @@ export function registerFlowsRoutes(app: FastifyInstance, opts: FlowsRouteOpts):
     if (opts.coord === undefined) return refuseRoute(reply, 'unavailable');
     const list = opts.coord.listFlows();
     if (!list.ok) return refuseRoute(reply, 'unavailable', { detail: list.detail });
-    const answer: FlowsListAnswer = { flows: list.value, templates: [...FLOW_TEMPLATES] };
+    const answer: FlowsListAnswer = { flows: list.value, templates: [...FLOW_TEMPLATES], defaultFlowId: opts.coord.readDefaultFlow() };
     return answer;
+  });
+
+  // Wave 2: the flow new programmes pin. Registered before the `:id` routes.
+  app.put('/api/flows/default', async (req, reply) => {
+    if (opts.coord === undefined) return refuseRoute(reply, 'unavailable');
+    const d = decideDefault(req.body);
+    if (!d.ok) return refuse(reply, d);
+    const done = opts.coord.setDefaultFlow(d.flowId);
+    if (!done.ok) {
+      return done.refused === 'not-found' ? refuseRoute(reply, 'not-found')
+        : refuseRoute(reply, 'conflict', { detail: 'the flow has no published version' });
+    }
+    return { ok: true, defaultFlowId: d.flowId };
   });
 
   app.get('/api/flows/:id', async (req, reply) => {
@@ -35,7 +48,7 @@ export function registerFlowsRoutes(app: FastifyInstance, opts: FlowsRouteOpts):
     if (!read.ok) return refuseRoute(reply, 'unavailable', { detail: read.detail });
     if (read.value === null) return refuseRoute(reply, 'not-found');
     const { draft, versions, ...flow } = read.value;
-    const answer: FlowAnswer = { flow, draft, problems: problemsOf(draft), versions };
+    const answer: FlowAnswer = { flow, draft, problems: problemsOf(draft), versions, isDefault: opts.coord.readDefaultFlow() === id };
     return answer;
   });
 
@@ -85,7 +98,9 @@ export function registerFlowsRoutes(app: FastifyInstance, opts: FlowsRouteOpts):
     if (opts.coord === undefined) return refuseRoute(reply, 'unavailable');
     const id = flowIdOf((req.params as { id?: unknown }).id);
     if (id === null) return refuseRoute(reply, 'bad-request', { detail: 'id' });
-    if (!opts.coord.deleteFlow(id).changed) return refuseRoute(reply, 'not-found');
+    const done = opts.coord.deleteFlow(id);
+    if ('refused' in done) return refuseRoute(reply, 'conflict', { detail: `pinned by ${done.by} programme${done.by === 1 ? '' : 's'}` });
+    if (!done.changed) return refuseRoute(reply, 'not-found');
     return { ok: true };
   });
 }

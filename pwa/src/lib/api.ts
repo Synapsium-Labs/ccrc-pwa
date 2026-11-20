@@ -982,6 +982,10 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     })).json() as Promise<{ ok: true; problems: FlowProblem[] }>,
     publishFlow: (id: number) => postJson<{ ok: true; version: number }>(`/api/flows/${id}/publish`),
     deleteFlow: async (id: number): Promise<void> => { await request(`/api/flows/${id}`, { method: 'DELETE' }); },
+    /** Wave 2: the flow new programmes pin (null: none). */
+    setDefaultFlow: async (flowId: number | null): Promise<{ ok: true; defaultFlowId: number | null }> => (await request('/api/flows/default', {
+      method: 'PUT', headers: { 'content-type': 'application/json', accept: 'application/json' }, body: JSON.stringify({ flowId }),
+    })).json() as Promise<{ ok: true; defaultFlowId: number | null }>,
     getFace: () => getJson<FaceAnswer>('/api/face'),
     /** `POST /api/face` `{ character }`: answers the row; a refusal (400 `bad-request`) rejects with `ApiError`. */
     setFace: (character: CharacterName) => postJson<FaceAnswer>('/api/face', { character }),

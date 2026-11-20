@@ -63,3 +63,11 @@ export function decidePublish(draft: FlowParse | null): { ok: true; doc: FlowDoc
 
 /** A read's problems: none to report for a draft the read could not parse (its reason says why). */
 export const problemsOf = (draft: FlowParse): FlowProblem[] => (draft.ok ? validateFlow(draft.doc) : []);
+
+/** `PUT /api/flows/default`: `{ flowId }`, a flow id or null to clear. Whether the flow can be one is the store's. */
+export function decideDefault(body: unknown): { ok: true; flowId: number | null } | DoorRefusal {
+  const v = isObj(body) ? body.flowId : undefined;
+  if (v === null) return { ok: true, flowId: null };
+  if (typeof v === 'number' && Number.isSafeInteger(v) && v > 0) return { ok: true, flowId: v };
+  return { ok: false, refusal: 'bad-request', detail: 'flowId must be a flow id or null' };
+}

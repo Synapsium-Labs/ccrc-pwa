@@ -69,6 +69,7 @@ import { readProgrammes as readProgrammesQuery } from './programmesRead.js';
 import * as portfolio from './portfolioStore.js';
 import * as answerMarks from './answerMarkStore.js';
 import * as flows from '../flows/flowsStore.js';
+import { PROGRAM_FLOW_PIN_COLUMNS, PROGRAM_FLOW_PIN_VALUES } from '../flows/flowPinSql.js';
 import type { FlowDoc } from '../../../shared/flows.js';
 import * as collisions from './claimCollisions.js';
 import * as pairs from './programmePairsStore.js';
@@ -2134,8 +2135,8 @@ export class CoordStore {
         }
         const now = Date.now();
         this.db.prepare(
-          'INSERT INTO programs (slug, title, createdAt, state, homeProject) VALUES (?, ?, ?, ?, ?) ' +
-          'ON CONFLICT(slug) DO NOTHING',
+          `INSERT INTO programs (slug, title, createdAt, state, homeProject, ${PROGRAM_FLOW_PIN_COLUMNS}) ` +
+          `VALUES (?, ?, ?, ?, ?, ${PROGRAM_FLOW_PIN_VALUES}) ON CONFLICT(slug) DO NOTHING`,
         ).run(input.program, input.programmeTitle ?? programmeNameFromSlug(input.program), now, 'active', input.homeProject ?? null);
         const insertRun = this.db.prepare(
           'INSERT INTO runs (program, wave, waveOf, project, state, claimedBy, openedAt, kind, reviews, coordProject, unattributed, title) ' +
@@ -4273,7 +4274,11 @@ export class CoordStore {
   createFlow(doc: FlowDoc, source: flows.FlowSource | null, now: number): number { return flows.createFlow(this.db, doc, source, now); }
   saveFlowDraft(id: number, doc: FlowDoc, now: number): { changed: boolean } { return flows.saveFlowDraft(this.db, id, doc, now); }
   publishFlow(id: number, doc: FlowDoc, now: number): ReturnType<typeof flows.publishFlow> { return flows.publishFlow(this.db, id, doc, now); }
-  deleteFlow(id: number): { changed: boolean } { return flows.deleteFlow(this.db, id); }
+  deleteFlow(id: number): ReturnType<typeof flows.deleteFlow> { return flows.deleteFlow(this.db, id); }
+  readDefaultFlow(): number | null { return flows.readDefaultFlow(this.db); }
+  setDefaultFlow(id: number | null): ReturnType<typeof flows.setDefaultFlow> { return flows.setDefaultFlow(this.db, id); }
+  flowPinnedBy(id: number): number { return flows.flowPinnedBy(this.db, id); }
+  readProgrammeFlowPin(slug: string): flows.FlowPin | null { return flows.readProgrammeFlowPin(this.db, slug); }
   answerMarksOf(kind: answerMarks.AnswerMarkKind, ids: readonly number[]): answerMarks.AnswerMarksRead { return answerMarks.answerMarksOf(this.db, kind, ids); }
   askMarkTargets(now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkTargetsRead { return answerMarks.askMarkTargets(this.db, now, liveAsk); }
   askMarkRead(id: number, now: number, liveAsk: portfolio.LiveAskRead): answerMarks.AskMarkRead { return answerMarks.askMarkRead(this.db, id, now, liveAsk); }
