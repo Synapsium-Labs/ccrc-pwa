@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, spliceCcd } from './ccdWsHelpers.js';
 import {
   MANAGER_STANDIN_MARK, assertManagerStandIns, ccrcFunction, codexAuthDir, eventually, freePort, killLaneProcesses,
   laneProxyAnswersAs, laneProxyGets, laneProxyMode, laneProxyParked, laneProxyProbeMode, laneProxyRelease,
@@ -26,6 +26,7 @@ import {
 import { pythonOrSkip } from './ccgptHarness.js';
 import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRaw, stepRoster, stepRow } from './fixtures/advanceCases.js';
 import { REASON_MAX } from '../../shared/model-advance.mjs';
+import { modelsPushDecision } from '../../shared/models.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -2347,5 +2348,229 @@ describe.skipIf(PY === null || !HAS_FLOCK)('the advance step on a direct lane (c
     expect(oneObject(r)).toMatchObject({ changed: true, restarted: true });
     expect(fs.readFileSync(yamlPath(), 'utf8')).not.toContain('# the previous rendering');
     expect(laneCalls()).toEqual(['ours lane-a litellm', 'stop lane-a litellm', 'ours lane-a litellm', 'start lane-a litellm']);
+  }, T);
+});
+
+// ── Model-class Anthropic arm A2, Task A2.4 (D-8751): the hourly refresh and the push carry Anthropic lanes ─────────
+// The refresh runs the lane's `aliases-refresh` through `_models_node_locked` once per Anthropic row of the `lanes` op,
+// after the Codex steps and inside the same deadline, and pushes one line per class that moved through the Codex step's
+// own `_models_push`. Every case runs in a `mkTmp` HOME with a real `aliases-refresh` over fixture cache files and a
+// recording `notify.sh`; the ids are invented (`claude-opus-9-1`, `claude-opus-9-2`).
+describe.skipIf(!HAS_FLOCK)('the hourly refresh and the push carry Anthropic lanes (model-class Anthropic arm A2.4, D-8751)', () => {
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const S1 = 'claude-sonnet-9-1';
+  const S2 = 'claude-sonnet-9-2';
+  const C1 = '2026-11-16T00:00:00Z';
+  const T0 = '2026-11-16T06:00:00Z';
+  const C2 = '2026-11-16T12:00:00Z';
+  const T1 = '2026-11-16T18:00:00Z';
+  const row = (id: string, suffix: string, over: Record<string, unknown> = {}): Record<string, unknown> => ({
+    id, label: id, configDirSuffix: suffix, exec: { kind: 'generated' }, homeAble: true, telemetry: 'anthropic', ...over,
+  });
+  const ANTH_ROSTER = {
+    version: 1,
+    accounts: [
+      row('lane-up', '.claude', { exec: { kind: 'upstream' } }),
+      row('lane-a', '.claude-lane-a'),
+      row('lane-b', '.claude-lane-b'),
+      row('lane-d', '.claude-lane-d', { telemetry: 'none' }),
+    ],
+  };
+  const aliasesOf = (id: string): string => models(`${id}.aliases.json`);
+  const cacheJson = (fetchedAt: string, targets: Record<string, string>, ids: string[]): unknown => ({
+    version: 2, fetchedAt: Date.parse(fetchedAt), staleAt: Date.parse(fetchedAt) + 3_600_000, resolution: 'token_org',
+    catalog: { config: {
+      provider_alias_targets: Object.fromEntries(Object.entries(targets).map(([c, id]) => [c, { default: id }])),
+      models: ids.map((id) => ({
+        id, name: `Name ${id}`, min_claude_code_version: null,
+        runtime: { effort_levels: ['low', 'high'], default_effort: 'high' }, thinking: { type: 'effort' },
+      })),
+    } },
+  });
+  const plantCache = (suffix: string, json: unknown): void => {
+    const dir = join(home, suffix, 'cache', 'model-catalog');
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(join(dir, 'cache-fixture.json'), `${JSON.stringify(json)}\n`);
+  };
+  const setupAnth = (): void => {
+    home = mkTmp('ccrc-models-anth-');
+    installTree(home, ANTH_ROSTER, { opStub: OP_STUB });
+    env(home);
+    fs.mkdirSync(join(home, '.ccrc', 'models'), { recursive: true });
+  };
+  const run = (call: string, extra: NodeJS.ProcessEnv = {}): Result => sourced(call, extra);
+  const aliasCalls = (): string[] => opCalls().filter((c) => c.startsWith('aliases-refresh'));
+  const OK = (id: string): Record<string, unknown> => ({ id, ok: true, aliases: { ok: true, moved: [] } });
+  const rows = (r: Result): Record<string, unknown>[] => oneObject(r)['refreshed'] as Record<string, unknown>[];
+  const idsOf = (id: string): Record<string, string | null> =>
+    Object.fromEntries(Object.entries((JSON.parse(fs.readFileSync(aliasesOf(id), 'utf8')) as {
+      classes: Record<string, { id: string | null }> }).classes).map(([c, v]) => [c, v.id]));
+
+  it('refresh refreshes each Anthropic lane once, after nothing else, and leaves a lane with no kind alone', () => {
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1]));
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toEqual({ ok: true, op: 'refresh', refreshed: [OK('lane-up'), OK('lane-a'), OK('lane-b')] });
+    expect(aliasCalls()).toEqual([
+      'aliases-refresh --file --id lane-up --reg', 'aliases-refresh --file --id lane-a --reg',
+      'aliases-refresh --file --id lane-b --reg']);
+    expect(fs.existsSync(aliasesOf('lane-d')), 'a lane that is not Anthropic has no aliases file').toBe(false);
+    expect(idsOf('lane-a')['opus']).toBe(X1);
+    expect(notifyCalls(), 'a baseline is no move').toEqual([]);
+  });
+
+  it('refresh <id> refreshes an Anthropic lane, runs only that lane, and a lane that is neither still refuses no-such-lane', () => {
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1]));
+    const r = run('cmd_models refresh lane-a', { CCRC_MODELS_NOW: T0 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(oneObject(r)).toEqual({ ok: true, op: 'refresh', refreshed: [OK('lane-a')] });
+    expect(aliasCalls()).toEqual(['aliases-refresh --file --id lane-a --reg']);
+    expect(fs.existsSync(aliasesOf('lane-b'))).toBe(false);
+    const none = run('cmd_models refresh lane-d', { CCRC_MODELS_NOW: T0 });
+    expect(none.code).toBe(1);
+    expect(oneObject(none)).toMatchObject({ ok: false, error: 'no-such-lane' });
+    expect(aliasCalls(), 'the refused lane ran nothing').toHaveLength(1);
+  });
+
+  it('a spent budget defers it: budget-deferred, nothing written, no push, and the run is not a failure', () => {
+    for (const budget of ['0', '5']) {
+      setupAnth();
+      plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1]));
+      const r = run('cmd_models refresh lane-a', { CCRC_MODELS_NOW: T0, CCRC_MODELS_ADVANCE_BUDGET_S: budget });
+      expect(r.code, `budget ${budget}: ${r.stdout}${r.stderr}`).toBe(0);
+      expect(oneObject(r)).toEqual({ ok: true, op: 'refresh', refreshed: [
+        { id: 'lane-a', ok: true, aliases: { ok: false, error: 'budget-deferred', moved: [] } }] });
+      expect(fs.existsSync(aliasesOf('lane-a')), `budget ${budget}: the aliases file was written`).toBe(false);
+      expect(aliasCalls(), `budget ${budget}: the op ran`).toEqual([]);
+      expect(!fs.existsSync(lockPathOf()) || lockFree(), `budget ${budget}: the lock is held`).toBe(true);
+      fs.rmSync(home, { recursive: true, force: true });
+    }
+  });
+
+  it('an Anthropic move reaches the push: one line, in the Codex step\'s own shape, and the server would push it', () => {
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1, X2]));
+    expect(run('cmd_models refresh lane-a', { CCRC_MODELS_NOW: T0 }).code).toBe(0);
+    expect(notifyCalls()).toEqual([]);
+    plantCache('.claude-lane-a', cacheJson(C2, { opus: X2 }, [X1, X2]));
+    const r = run('cmd_models refresh lane-a', { CCRC_MODELS_NOW: T1 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(rows(r)).toEqual([{ id: 'lane-a', ok: true,
+      aliases: { ok: true, moved: [{ class: 'opus', from: X1, to: X2 }] } }]);
+    const line = 'lane-a: opus claude-opus-9-1 → claude-opus-9-2';
+    expect(notifyCalls()).toEqual([`--push\t${line}`]);
+    const roster = new Map((ANTH_ROSTER.accounts as { id: string; exec: { kind: string }; telemetry: string }[]).map((a) => [a.id, a]));
+    expect(modelsPushDecision(line, roster)).toEqual({
+      verdict: 'pushable', lane: 'lane-a', cls: 'opus', kind: 'moved', tag: 'models-advance:lane-a:opus' });
+  });
+
+  it('a move of two classes is two pushes, one per class, in class order', () => {
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1, sonnet: S1 }, [X1, X2, S1, S2]));
+    expect(run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 }).code).toBe(0);
+    plantCache('.claude-lane-a', cacheJson(C2, { opus: X2, sonnet: S2 }, [X1, X2, S1, S2]));
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T1 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(notifyCalls()).toEqual([
+      '--push\tlane-a: sonnet claude-sonnet-9-1 → claude-sonnet-9-2',
+      '--push\tlane-a: opus claude-opus-9-1 → claude-opus-9-2']);
+  });
+
+  // Inert at merge (the wave contract): main's ccrc and main's ccd, as they stood before this arm, beside this branch's
+  // models op. MAIN is #2943's merge commit on main, so every full-history clone holds it; a clone without it reds.
+  it('inert at merge: an older ccrc never runs aliases-refresh, and an older ccd never reads the aliases file', () => {
+    const MAIN = 'ea0c3010a0';
+    const show = (f: string): string => {
+      const g = spawnSync('git', ['-C', REPO, 'show', `${MAIN}:${f}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      expect(g.status, `this checkout cannot read ${f} at ${MAIN}`).toBe(0);
+      return g.stdout;
+    };
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1]));
+    fs.writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), `${show('ccd/ccrc')}\n# fixture fakes\n${FAKES}\n`);
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    // The positive control: the older ccrc did reach the op, asked it for the lanes, and refreshed none of them (it keeps
+    // only registry rows, and every lane here is an Anthropic one).
+    expect(opCalls().map((l) => l.split(' ')[0]), 'the older ccrc asked for the lanes').toContain('lanes');
+    expect(oneObject(r)).toEqual({ ok: true, op: 'refresh', refreshed: [] });
+    expect(aliasCalls(), 'the older ccrc ran the new op').toEqual([]);
+    for (const id of ['lane-up', 'lane-a', 'lane-b']) expect(fs.existsSync(aliasesOf(id)), id).toBe(false);
+    expect(notifyCalls()).toEqual([]);
+    const libs = spawnSync('git', ['-C', REPO, 'ls-tree', '--name-only', `${MAIN}`, 'ccd/lib/'], { encoding: 'utf8' })
+      .stdout.split('\n').filter((f) => /^ccd\/lib\/[^/]+\.sh$/.test(f));
+    const olderCcd = spliceCcd(show('ccd/ccd'), libs.map(show));
+    expect(olderCcd.length, 'the older ccd was read').toBeGreaterThan(100_000);
+    expect(olderCcd).not.toMatch(/aliases\.json|aliaslaunch|model-aliases/);
+  });
+
+  it('a refresh with no move pushes nothing: a baseline, the same cache again, and a lane with no cache', () => {
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1]));
+    expect(run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 }).code).toBe(0);
+    expect(run('cmd_models refresh --all', { CCRC_MODELS_NOW: T1 }).code).toBe(0);
+    expect(aliasCalls()).toHaveLength(6);
+    expect(notifyCalls()).toEqual([]);
+  });
+
+  it('an Anthropic lane whose refresh is refused fails its row and the run, and the other lanes still run', () => {
+    setupAnth();
+    fs.writeFileSync(aliasesOf('lane-a'), '{"v": 2}\n');
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 });
+    expect(r.code, r.stdout + r.stderr).toBe(1);
+    const o = oneObject(r);
+    expect(o['ok']).toBe(false);
+    const rs = o['refreshed'] as Record<string, unknown>[];
+    expect(rs.map((x) => x['id'])).toEqual(['lane-up', 'lane-a', 'lane-b']);
+    expect(rs[1]).toMatchObject({ id: 'lane-a', ok: false, aliases: { ok: false, error: 'aliases-file-invalid', moved: [] } });
+    expect(String(rs[1]!['reason'])).toContain('aliases');
+    expect(rs[0]).toEqual(OK('lane-up'));
+    expect(rs[2]).toEqual(OK('lane-b'));
+    expect(fs.readFileSync(aliasesOf('lane-a'), 'utf8')).toBe('{"v": 2}\n');
+  });
+
+  it('a held lane lock is a failed row naming lock-busy, never a hang', () => {
+    setupAnth();
+    fs.mkdirSync(join(home, '.ccrc', 'locks'), { recursive: true });
+    const holder = spawn('flock', [lockPathOf('lane-a'), 'sleep', '30'], { stdio: 'ignore', detached: true });
+    trackChild(home, holder);
+    try {
+      let tries = 0;
+      while (lockFree() && tries++ < 100) spawnSync('sleep', ['0.1']);
+      const r = run('cmd_models refresh lane-a', { CCRC_MODELS_NOW: T0, CCRC_MODELS_LOCK_S: '1' });
+      expect(r.code, r.stdout + r.stderr).toBe(1);
+      expect(rows(r)[0]).toMatchObject({ id: 'lane-a', ok: false, aliases: { ok: false, error: 'lock-busy', moved: [] } });
+      expect(fs.existsSync(aliasesOf('lane-a'))).toBe(false);
+    } finally {
+      // The holder is its own process group's leader: ending the group ends the `sleep` under the `flock` too.
+      process.kill(-holder.pid!, 'SIGKILL');
+    }
+  });
+
+  it('moveline builds the Codex step\'s own line from one moved entry, with none for a first id', () => {
+    setupAnth();
+    const r = run(`jq -rn "$MODELS_JQ_DEFS"'({class: "opus", from: "a-1", to: "a-2"}, {class: "sonnet", from: null, to: "b-1"}) | moveline("lane-a")'`);
+    expect(r.stdout.split('\n').filter(Boolean)).toEqual(['lane-a: opus a-1 → a-2', 'lane-a: sonnet none → b-1']);
+  });
+});
+
+describe.skipIf(PY === null || !HAS_FLOCK)('the Anthropic rows reach the strict output path, beside a Codex lane\'s advance (A2.4)', () => {
+  it('a full refresh with the advance step entered carries each Anthropic lane\'s aliases row after the Codex rows', async () => {
+    await setup({ opStub: OP_STUB });
+    tier(0);
+    const r = sourced('cmd_models refresh --all', { CCRC_MODELS_PROBE_FIXTURE: rawPath(), CCRC_MODELS_NOW: '2026-11-16T06:00:00Z' });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const rs = oneObject(r)['refreshed'] as Record<string, unknown>[];
+    expect(rs.map((x) => x['id'])).toEqual(['lane-a', 'lane-up', 'lane-c']);
+    expect(rs[0]).toEqual({ ...QUIET_ROW, advance: [MOVED] });
+    expect(rs[1]).toEqual({ id: 'lane-up', ok: true, aliases: { ok: true, moved: [] } });
+    expect(rs[2]).toEqual({ id: 'lane-c', ok: true, aliases: { ok: true, moved: [] } });
+    expect(opCalls().filter((c) => c.startsWith('aliases-refresh')).map((c) => c.split(' ')[3]))
+      .toEqual(['lane-up', 'lane-c']);
+    // The Codex lane's one push and no Anthropic push.
+    expect(notifyCalls()).toEqual(['--push\tlane-a: opus model-5.6-gamma → model-6.1-gamma']);
   }, T);
 });

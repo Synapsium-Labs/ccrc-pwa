@@ -199,7 +199,9 @@ export function driftScoped(kind: DriftKind, managed: ReadonlySet<string>, f: { 
 
 /** D-8733 (drift-reads-every-team): `changedIssues` is asked with every team key the slot lists, so a bound issue moved out of a
  *  managed team is still read. An issue read from a team ccrc does not manage that no pre-read binding holds is dropped right at
- *  the read, before the compare, the grace re-read, the inbound detect or the watermark's nodes see it. */
+ *  the read, before the compare, the grace re-read or the inbound detect see it. The watermark still reads its `updatedAt`
+ *  (`DriftPass#passOf` leaves `read.changed` whole, review 2753 F3): that stores nothing of the issue, and holding the watermark
+ *  back for nodes never kept would re-read them at every pass. */
 export function keepIssueNode(o: { teamKey: unknown; linearId: unknown; managed: ReadonlySet<string>; boundIds: ReadonlySet<string> }): boolean {
   return managedKey(o.managed, typeof o.teamKey === 'string' ? o.teamKey : null) || (typeof o.linearId === 'string' && o.boundIds.has(o.linearId));
 }
@@ -213,7 +215,10 @@ export function milestonesJudged(planned: readonly string[], boundBeforeRead: Re
 /** THE binding of each Linear id among a workspace's bindings (review 2524 F3): the LOWEST binding id holding it. No uniqueness rules
  *  out two bindings of one workspace holding one Linear id, so one rule picks between them, and it is the store's own
  *  (`bindingByLinearId`, `ORDER BY id LIMIT 1`): the pass's pre-read follows it, so the compare and its `syncWroteSince` check read
- *  the same row. Rows in any order; a binding with no Linear id holds nothing. */
+ *  the same row. Rows in any order; a binding with no Linear id holds nothing.
+ *  Legitimately different from its twin `planStore.ts#bindingByLinearId` (the same rule, written twice on purpose): this is an L1
+ *  reader over rows the pass already holds, the store's is an SQL point read (L3), and L1 may not call the store. Pinned to
+ *  agree by drift-pass.test.ts ("the two twins agree on a duplicate"). */
 export function bindingByLinearIdOf<B extends { id: number; linearId: string | null }>(rows: readonly B[]): Map<string, B> {
   const out = new Map<string, B>();
   for (const b of rows) {
@@ -277,6 +282,14 @@ export function driftEventValue(field: string, linear: unknown, planned: unknown
   if (!ONE_WAY_LINKS.has(field)) return driftValueText(linear);
   const have = new Set(Array.isArray(linear) ? (linear as unknown[]).map(String) : []);
   return driftValueText((Array.isArray(planned) ? (planned as unknown[]).map(String) : []).filter((id) => !have.has(id)));
+}
+
+/** One stored drift event as the record's field-and-value text (round 3 F1). A one-way set's stored value is the planned members
+ *  Linear lacks (`driftEventValue`), never Linear's value, so its line says so; any other field reads `<field> = <value>`, with
+ *  `(empty)` for an empty value. */
+export function driftEventText(field: string, value: string): string {
+  if (ONE_WAY_LINKS.has(field)) return `${field}: planned, missing in Linear: ${value}`;
+  return `${field} = ${value === '' ? '(empty)' : value}`;
 }
 
 // A changed* kind's watermark (review 2386 A3: one per kind, so a change made between two kinds' reads is never skipped) moves by

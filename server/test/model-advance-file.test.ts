@@ -2,13 +2,15 @@
 // dedup and the pending intent — `shared/model-advance.mjs`'s file half. Pure: nothing here reads or writes a
 // file; `deploy/models-op.mjs`'s one writer is measured through its ops (Tasks 5 and 6). Neutral ids only.
 import { describe, it, expect } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import fs, { readFileSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
+import { mkTmp } from './tmpHelpers.js';
 import {
   AdvanceInvalid, CANDIDATE_REASONS, HISTORY_CAP, REASON_MAX, backfillAdvance, causeOf, familyOf, heldBackOf,
-  lastMoveOf, parseAdvance, reconcilePending, recordFailure, recordMove, serializeAdvance, unmeasuredMoveNotice,
-  unmeasuredMoves,
+  lastMoveOf, parseAdvance, reconcilePending, recordFailure, recordMove, seedAnthropicAdvance, serializeAdvance,
+  unmeasuredMoveNotice, unmeasuredMoves,
 } from '../../shared/model-advance.mjs';
 import type { Advance, HandPending, HistoryEntry } from '../../shared/model-advance.mjs';
 import { CLASSES } from '../../shared/models.js';
@@ -619,5 +621,106 @@ describe('clientWindowNotice: a stale catalogue drops an unmeasured class model 
     ['no window in force', { room: { ...ROOM, tokens: null } }],
   ] as [string, { stale?: boolean; room?: Parameters<typeof clientWindowNotice>[3] }][])('%s is null', (_w, o) => {
     expect(clientWindowNotice('lane-x', PINS, o.stale ?? true, o.room === undefined ? ROOM : o.room)).toBeNull();
+  });
+});
+
+// ── Model-class Anthropic arm A2, Task A2.3: the advance file on an Anthropic lane ─────────────────────────────────
+// A hold carries the id it holds (`hold.model`), a class the time of its last release (`releasedAt`) and a history
+// entry the time of the evidence its move rests on (`evidenceAt`): three optional keys, each a whole-second ISO time
+// or a model id, and each kept by an older build as an unknown key. The seed an Anthropic lane starts from has no
+// registry to read a family off, so each class's family is its own class word.
+describe('the advance file on an Anthropic lane (model-class Anthropic arm A2.3)', () => {
+  const AT = '2026-11-17T06:00:00Z';
+  const withHold = (hold: unknown): any => { const a = example(); a.classes.opus.hold = hold; return a; };
+
+  it('seedAnthropicAdvance: every class its own word as family, no hold, previous or history, and no pending intent', () => {
+    const a = seedAnthropicAdvance();
+    expect(a.v).toBe(1);
+    expect(a.pending).toBeNull();
+    for (const c of CLASSES) {
+      expect(a.classes[c]).toEqual({ family: c, hold: null, previous: null, history: [] });
+    }
+    expect(Object.keys(a.classes)).toEqual([...CLASSES]);
+    expect(parseAdvance(a)).toEqual(a);
+    // A fresh object each call: editing one never edits the next.
+    a.classes.opus.history.push(entry());
+    expect(seedAnthropicAdvance().classes.opus.history).toEqual([]);
+  });
+
+  it('a hold may carry the id it holds; a hold with none still parses (every hold written before)', () => {
+    expect(parseAdvance(withHold({ at: AT, by: 'hand', model: 'claude-opus-9-1' })).classes.opus.hold)
+      .toEqual({ at: AT, by: 'hand', model: 'claude-opus-9-1' });
+    expect(parseAdvance(withHold({ at: AT, by: 'hand' })).classes.opus.hold).toEqual({ at: AT, by: 'hand' });
+  });
+
+  it.each([
+    ['a hold.model that is not an id', (a) => { a.classes.opus.hold = { at: AT, by: 'hand', model: 'not an id' }; }, 'classes.opus.hold.model'],
+    ['a hold.model that is not a string', (a) => { a.classes.opus.hold = { at: AT, by: 'hand', model: 7 }; }, 'classes.opus.hold.model'],
+    ['a hold.model of null', (a) => { a.classes.opus.hold = { at: AT, by: 'hand', model: null }; }, 'classes.opus.hold.model'],
+    ['a releasedAt that is not a time', (a) => { a.classes.opus.releasedAt = '2026-11-17'; }, 'classes.opus.releasedAt'],
+    ['a releasedAt with milliseconds', (a) => { a.classes.opus.releasedAt = '2026-11-17T06:00:00.123Z'; }, 'classes.opus.releasedAt'],
+    ['an entry evidenceAt that is not a time', (a) => { a.classes.opus.history = [{ ...entry(), evidenceAt: 'yesterday' }]; }, 'classes.opus.history[0].evidenceAt'],
+    ['an entry evidenceAt that is a number', (a) => { a.classes.opus.history = [{ ...entry(), evidenceAt: 1 }]; }, 'classes.opus.history[0].evidenceAt'],
+  ] as [string, (a: any) => void, string][])('refuses %s, naming the field', (_w, spoil, field) => {
+    const a = example();
+    spoil(a);
+    expect(() => parseAdvance(a)).toThrow(AdvanceInvalid);
+    try { parseAdvance(a); } catch (e) { expect((e as AdvanceInvalid).field).toBe(field); }
+  });
+
+  it('keeps hold.model, releasedAt and evidenceAt through parse, recordMove and serialize', () => {
+    const a = example();
+    a.classes.opus.hold = { at: AT, by: 'revert', model: 'claude-opus-9-1' };
+    a.classes.opus.releasedAt = AT;
+    a.classes.sonnet.history = [{ ...entry(), evidenceAt: AT }];
+    const p = parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(p.classes.opus.hold).toEqual({ at: AT, by: 'revert', model: 'claude-opus-9-1' });
+    expect(p.classes.opus['releasedAt']).toBe(AT);
+    expect(p.classes.sonnet.history[0]!['evidenceAt']).toBe(AT);
+    const moved = recordMove(p, 'opus', { ...entry(), evidenceAt: AT });
+    expect(moved.classes.opus.hold).toEqual(p.classes.opus.hold);
+    expect(moved.classes.opus['releasedAt']).toBe(AT);
+    expect(moved.classes.opus.history.at(-1)!['evidenceAt']).toBe(AT);
+  });
+
+  it('the four Anthropic cause words are blocked causes, and there are exactly four of them', () => {
+    for (const w of ['alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid']) {
+      expect(BLOCKED_CAUSES, w).toContain(w);
+    }
+    expect(BLOCKED_CAUSES.filter((w) => w.startsWith('alias'))).toHaveLength(4);
+    expect(Object.isFrozen(BLOCKED_CAUSES)).toBe(true);
+  });
+
+  // The older build, as it stood before this task: #2943's merge commit on main, whose `parseAdvance` keeps keys it does
+  // not know. The file is read out of git history into the run's own temporary directory (it cannot be a fixture: a
+  // second copy of the rules would drift); CI clones with full history, and a checkout without that commit reds.
+  const OLDER = 'ea0c3010a0';
+  const olderFiles = (): string | null => {
+    const dir = mkTmp('model-advance-older-');
+    fs.mkdirSync(path.join(dir, 'shared'));
+    for (const f of ['model-advance.mjs', 'models.mjs', 'base-url.mjs']) {
+      const r = spawnSync('git', ['-C', REPO, 'show', `${OLDER}:shared/${f}`], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024 });
+      if (r.status !== 0) return null;
+      fs.writeFileSync(path.join(dir, 'shared', f), r.stdout);
+    }
+    return path.join(dir, 'shared', 'model-advance.mjs');
+  };
+
+  it('an older parseAdvance build reads a hold with model and a releasedAt: both keys kept, and a history entry with evidenceAt', async () => {
+    const file = olderFiles();
+    // A main commit (#2943's merge), so every full-history clone holds it; a clone that cannot read it reds here
+    // rather than passing with nothing asserted.
+    expect(file, `this checkout does not hold commit ${OLDER}, the older build this test reads`).not.toBeNull();
+    if (file === null) return;
+    const older = await import(pathToFileURL(file).href) as { parseAdvance: (j: unknown) => Advance };
+    expect('seedAnthropicAdvance' in older, 'the build under test is the older one').toBe(false);
+    const a = seedAnthropicAdvance();
+    a.classes.opus.hold = { at: AT, by: 'hand', model: 'claude-opus-9-1' };
+    a.classes.opus['releasedAt'] = AT;
+    a.classes.sonnet.history = [{ ...entry({ from: 'claude-sonnet-9-1', to: 'claude-sonnet-9-2' }), evidenceAt: AT }];
+    const read = older.parseAdvance(JSON.parse(serializeAdvance(a)));
+    expect(read.classes.opus.hold).toEqual({ at: AT, by: 'hand', model: 'claude-opus-9-1' });
+    expect(read.classes.opus['releasedAt']).toBe(AT);
+    expect(read.classes.sonnet.history[0]!['evidenceAt']).toBe(AT);
   });
 });

@@ -13,7 +13,7 @@ describe('maskedQuestion: masked once, graded masked', () => {
 describe('gradeAnswers: closed-form, a missing answer fails', () => {
   for (const [name, run] of Object.entries(gradeAnswersCases(door))) it(name, run);
 });
-describe('bookOf: open or unmeasured, never closed in W1a', () => {
+describe('bookOf: open, closed or unmeasured, from the cards and the read ledger', () => {
   for (const [name, run] of Object.entries(bookOfCases(door))) it(name, run);
 });
 describe('probePages: each question one untrusted block, choices as JSON strings', () => {

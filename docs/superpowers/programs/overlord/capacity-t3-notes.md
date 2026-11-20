@@ -10,7 +10,7 @@ to run 2838 and defined in the plan's "Deviations found".
 ## What changed against the draft
 
 - **shadow-switch.** The draft changed the cap at merge. Here a new Shadow lanes row, `cap-counts-working`
-  (`shared/lane-arm.ts`, seeded `shadow` by migration 110), is the only switch (`dispatch.ts#capCountsWorkingArmed`).
+  (`shared/lane-arm.ts`, seeded `shadow` by migration 112), is the only switch (`dispatch.ts#capCountsWorkingArmed`).
   In shadow the count, every refusal, the resume check and the send-back check are exactly today's. Only while the row
   is armed does the cap leave waiting runs out, hand out freed slots, skip the check for a live resume (D-6093), and
   admit a send-back to a sleeper. The row gets the same census and single-definition coverage as the other rows: the
@@ -59,8 +59,10 @@ to run 2838 and defined in the plan's "Deviations found".
   can say the right thing in each mode: armed, "3 / 4 working, 2 waiting"; shadow, "5 / 4, 2 of them waiting", the
   count the cap still uses. With an older server it says today's "5 / 4". The draft's single wording would have shown a
   count in shadow that the cap does not use.
-- **migration-slot.** The seed takes slot 110, the next free one on `main` today. Capacity Task 2, approvals PR 3 and
-  door B1 build on the same slot, so whoever lands second moves up. The entry says how to re-measure.
+- **migration-slot.** The seed takes slot 112, the next free one on `main`. It took 110 first; door B1 (#3099) landed
+  110 and capacity Task 2 (#3101) landed 111 before this pull request, so it moved up once, at the one absorb of `main`
+  for fix round 2, with the coord-db pins re-counted. Approvals PR 3 builds on the slots after 111 too, so whoever lands
+  second moves up. The entry says how to re-measure.
 - **seed-or-ignore.** The seed is `INSERT OR IGNORE`. The first full run on the PR found that
   `decision-model-records.test.ts` rolls a database back one version by dropping later tables. It cannot drop a row
   from an older table, so a plain insert met the row on replay and refused. A file that already holds the row now
@@ -81,8 +83,18 @@ to run 2838 and defined in the plan's "Deviations found".
   files (`abandonDeadDispatch.ts`), so a timer there would point an edge outward. It needs no `routes.ts` change. The
   bound comes from a measurement. One awake worker's read is about 25 agent and tmux operations in sequence, and twelve
   round trips from the fleet box to the server at load 10 to 15 took a median of about 140 ms, so about 3.5 s a read
-  at the median. The tail is cut.
-- **send-back-plan.** Review 2875 F3: `dispatchDecide.ts#sendBackCapPlan` (L1) answers `today`, `free` or `recount` from
+  at the median. That per-read figure is derived (25 operations times the median), not a measured read. Under load many
+  reads will reach 5 s and read `unmeasured`, so the armed rule frees fewer slots, which fails safe. The tail is cut.
+  **Armed only, a stated departure (review 2898 F-A):** an at-cap dispatch or send-back whose run names a session waits
+  on two reads in series under the coordination lock. The first reads the dispatching worker (`resumeSkipsCap`), then
+  the counted workers in parallel (`workerReadings`), each up to 5 s, so up to about 10 s a refusal. The two cover
+  different workers (the dispatching run is not counted), so they cannot be one read. A fresh spawn pays one. Shadow
+  pays none: no worker is read on the refusal's path.
+- **shadow-one-in-flight.** Review 2898 F-B: at most one deferred shadow record per door (dispatch, send-back) is in
+  flight per store. A refusal that finds its door's record scheduled or running skips its own and writes nothing, so a
+  client that retries at a full cap cannot stack full reading passes. The flag clears when the record ends, however it
+  ends.
+- **send-back-plan.** (Its docstring says where each decision is made, review 2898 F-C.) Review 2875 F3: `dispatchDecide.ts#sendBackCapPlan` (L1) answers `today`, `free` or `recount` from
   measured facts (armed, port, cap full, the edge, the worker's facts or null), with the free-resume rule inside it.
   `sendBackCapCheck` (L4) reads, asks it, and acts. It reads the worker only when the plan without it is not `today`.
   A freed slot is pending as data (`freedSlotPending`), L4 asks the watcher's window, which records into it, and the
@@ -129,3 +141,7 @@ to run 2838 and defined in the plan's "Deviations found".
 Part 3 stays in shadow. The item asking the operator to arm it carries OA-F2 (from Part 2's shadow, after Part 2 is
 armed) and OA-F3: the caps view's `waiting` count and the `cap-counts-working shadow:` journal lines, with each run's
 reading.
+
+**A condition before the operator arms (review 2898 F-A, the coordinator's ruling).** Armed, an at-cap dispatch or
+send-back whose run names a session waits on two reads in series under the coordination lock, up to about 10 s (see
+**read-deadline**). Before arming, put one deadline over both reads. The arming item carries this.

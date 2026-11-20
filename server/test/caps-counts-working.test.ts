@@ -393,6 +393,46 @@ describe('the dispatch door in shadow: today\'s count and refusals, and a record
       `ccrc-server: cap-counts-working shadow: dispatch of run ${id} refused at 1/1; armed, 1 left out would free a slot (run ${a} gone)`);
   });
 
+  it('review 2898 F-B: one record per door in flight; a refusal that finds one skips its own, and the next after it records', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const calls: string[] = [];
+    const f = fixture({ workerFacts: factsPort(ASLEEP, calls) });
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    f.holder('a', 'demo-a');
+    const lines = (): string[] => warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('cap-counts-working'));
+    for (let i = 0; i < 3; i++) expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
+    expect(f.deferred).toHaveLength(1);
+    // The send-back door has its own flag: a dispatch record in flight does not hold it back.
+    const sb = f.parked('awaiting-review');
+    expect((await sendBackCapCheck(f.coord, f.deps, sb, 'working'))()).toEqual({ limit: 1, running: 1 });
+    expect((await sendBackCapCheck(f.coord, f.deps, sb, 'working'))()).toEqual({ limit: 1, running: 1 });
+    expect(f.deferred).toHaveLength(2);
+    await f.settle();
+    expect(lines()).toHaveLength(2);
+    // Settled, the flags are clear: the next refusal at each door records again.
+    expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
+    expect((await sendBackCapCheck(f.coord, f.deps, sb, 'working'))()).toEqual({ limit: 1, running: 1 });
+    expect(f.deferred).toHaveLength(2);
+    await f.settle();
+    expect(lines()).toHaveLength(4);
+  });
+
+  it('review 2898 F-B: a record that fails clears its flag too', async () => {
+    let fail = true;
+    const warn = vi.spyOn(console, 'warn').mockImplementation((line: unknown) => {
+      if (fail && String(line).includes('cap-counts-working')) throw new Error('journal unwritable');
+    });
+    const f = fixture({ workerFacts: factsPort(ASLEEP) });
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    f.holder('a', 'demo-a');
+    expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
+    await f.settle();
+    expect(warn.mock.results.some((r) => r.type === 'throw')).toBe(true);
+    fail = false;
+    expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
+    expect(f.deferred).toHaveLength(1);
+  });
+
   it('review 2875 F1: a worker port that never answers does not hold the shadow refusal', async () => {
     const never = (): Promise<WorkerFacts> => new Promise<WorkerFacts>(() => undefined);
     const f = fixture({ workerFacts: never });

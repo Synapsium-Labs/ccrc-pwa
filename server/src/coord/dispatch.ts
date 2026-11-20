@@ -322,10 +322,22 @@ async function factsOf(workerFacts: NonNullable<CapPorts['workerFacts']>, sessio
   try { return await workerFacts(sessionId); } catch { return { kind: 'unmeasured' }; }
 }
 
-/** `ports.deferShadowRecord`, or its default: after this turn, unawaited, a failure swallowed. */
-function deferShadow(ports: CapPorts, work: () => Promise<void>): void {
-  if (ports.deferShadowRecord !== undefined) { ports.deferShadowRecord(work); return; }
-  setImmediate(() => { work().catch(() => undefined); });
+/** Which door's shadow record each store has in flight (review 2898 F-B): keyed on the store, so one server holds one
+ *  set, and a test's fixture its own. */
+const shadowInFlight = new WeakMap<CoordStore, Set<'dispatch' | 'advance'>>();
+
+/** `ports.deferShadowRecord`, or its default: after this turn, unawaited, a failure swallowed. At most ONE record per door
+ *  is in flight (review 2898 F-B): a refusal that finds its door's record scheduled or running skips its own and writes
+ *  nothing, so a client that retries at a full cap cannot stack full reading passes. The flag clears when the work ends,
+ *  however it ends. */
+function deferShadow(coord: CoordStore, ports: CapPorts, door: 'dispatch' | 'advance', work: () => Promise<void>): void {
+  const doors = shadowInFlight.get(coord) ?? new Set<'dispatch' | 'advance'>();
+  shadowInFlight.set(coord, doors);
+  if (doors.has(door)) return;
+  doors.add(door);
+  const run = (): Promise<void> => work().catch(() => undefined).finally(() => { doors.delete(door); });
+  if (ports.deferShadowRecord !== undefined) { ports.deferShadowRecord(run); return; }
+  setImmediate(() => { void run(); });
 }
 
 /**
@@ -359,13 +371,19 @@ export async function workerReadings(
 }
 
 /**
- * D-8792: the send-back door's cap check, as the thunk the advance gate asks (`advanceGate`'s `overConcurrency`). The plan
- * is `sendBackCapPlan`'s (L1); this reads what it decides on and acts. `today`: today's check, read lazily when the gate
- * asks, exactly as before. Armed, `free`: a send-back to a worker that is awake or asleep is a resume and is never refused
- * at the cap; `recount`: the count over the runs whose worker still works, a freed slot handed out only when the window
- * admits it, and only when the gate asks. Read inside the coordination serialiser, before the gate, so the gate stays
- * synchronous; other gates still bind. Shadow (review 2875 F7): today's check, and when it refuses a send-back that arming
- * would admit, one journal line, written after the refusal and outside the serialiser (`deferShadowRecord`).
+ * D-8792: the send-back door's cap check, as the thunk the advance gate asks (`advanceGate`'s `overConcurrency`). Read
+ * inside the coordination serialiser, before the gate, so the gate stays synchronous; other gates still bind.
+ *
+ * Where each decision is made (review 2898 F-C). Two are made HERE, before the plan is asked: with no worker port, or with
+ * room under today's cap, this answers today's check at once (`today`, read lazily when the gate asks, exactly as
+ * before). The plan, `sendBackCapPlan` (L1), is then always asked with `armed: true, port: true, capFull: true`: the
+ * question is what the ARMED rule does with this run's edge and worker, and the plan decides the edge (`sendBackCharged`)
+ * and the free resume (`resumeSkipsCap`). Its `today` answers today's check. The armed row is read here too
+ * (`capCountsWorkingArmed`), and it decides only what is done with the plan's answer. Armed, `free`: a send-back to a
+ * worker that is awake or asleep is a resume and is never refused at the cap; `recount`: the count over the runs whose
+ * worker still works, a freed slot handed out only when the window admits it, and only when the gate asks. Shadow (review
+ * 2875 F7): today's check, and when it refuses a send-back the armed rule would admit, one journal line, written after
+ * the refusal and outside the serialiser (`deferShadowRecord`, one in flight at a time).
  */
 export async function sendBackCapCheck(
   coord: CoordStore, ports: CapPorts, id: number, to: RunState,
@@ -383,7 +401,7 @@ export async function sendBackCapCheck(
   if (!armed) {
     return () => {
       const over = today();
-      if (over !== null) deferShadow(ports, () => shadowSendBackRecord(coord, workerFacts, id, sessionId, plan));
+      if (over !== null) deferShadow(coord, ports, 'advance', () => shadowSendBackRecord(coord, workerFacts, id, sessionId, plan));
       return over;
     };
   }
@@ -746,7 +764,7 @@ export async function dispatchRun(
   const workerFacts = deps.workerFacts;
   if (admitMarkerRefusal(names) === null && caps.overConcurrency !== null && workerFacts !== undefined) {
     if (!capCountsWorkingArmed(coord)) {
-      deferShadow(deps, () => shadowDispatchRecord(coord, workerFacts, id));
+      deferShadow(coord, deps, 'dispatch', () => shadowDispatchRecord(coord, workerFacts, id));
     } else {
       if (run.sessionId !== null) resumeFree = resumeSkipsCap(await factsOf(workerFacts, run.sessionId), 'dispatch');
       if (!resumeFree) {

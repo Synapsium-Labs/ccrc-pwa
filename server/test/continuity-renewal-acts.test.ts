@@ -11,7 +11,7 @@ import {
   generationsPass, type EmptyTries, type GenReadings, type GenerationsDeps, type PlannedAct, type RegistryFacts,
 } from '../src/continuity/generationsLane.js';
 import { runRenewalActs } from '../src/continuity/renewalActs.js';
-import { RENEWAL_HANDOVER_SUBJECT } from '../src/continuity/renewalFeed.js';
+import { OVERLORD_HANDOVER_BODY, OVERLORD_SPOT_PROBE_BODY, RENEWAL_HANDOVER_BODY, RENEWAL_HANDOVER_SUBJECT, SPOT_PROBE_BODY, SPOT_PROBE_SUBJECT } from '../src/continuity/renewalFeed.js';
 import type { DeliverResult, ReceiptRead, RenewalPrompt, RenewResult, SessionHost } from '../src/continuity/sessionHost.js';
 import type { DrainRead } from '../src/continuity/renewalDrain.js';
 import { snapshotFactsJson } from '../src/continuity/card.js';
@@ -552,6 +552,31 @@ describe('the renewal act, shadow (Task 4; Review Focus 3)', () => {
     expect(f.mails).toEqual([]);
     expect(f.s.itemsFor('prog-a', f.t.ports.clock.wall()).open).toEqual([]);
     expect(f.gen().state).toBe('active');
+  });
+});
+
+describe('the renewal mails by role (Overlord W1 door process B1: RENEWAL_MAIL_OF_ROLE)', () => {
+  it("an overlord's handover ask and spot round name its doors and no ccrc-api; a coordinator's keep the ccrc-api form", async () => {
+    const mails: string[] = [];
+    const target = (sessionId: string, role: 'overlord' | 'coordinator') =>
+      ({ genId: 1, identity: sessionId, sessionId, role, n: 2, startId: 3, cls: null, episode: 0 }) as never;
+    const logs: string[] = [];
+    const r = await runRenewalActs({ coord: {} as never, host: {} as never, mail: (to, subject, body) => { mails.push(`${to} ${subject}: ${body}`); return true; },
+      now: () => 0, log: (l) => logs.push(l) }, [
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'ask-handover' } },
+      { target: target('lane-a-overlord', 'overlord'), act: { kind: 'spot-probe' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'ask-handover' } },
+      { target: target(COORD, 'coordinator'), act: { kind: 'spot-probe' } },
+    ] as never);
+    expect(logs).toEqual([]);
+    expect(r.mailed).toBe(4);
+    expect(mails).toEqual([
+      `lane-a-overlord ${RENEWAL_HANDOVER_SUBJECT}: ${OVERLORD_HANDOVER_BODY}`, `lane-a-overlord ${SPOT_PROBE_SUBJECT}: ${OVERLORD_SPOT_PROBE_BODY}`,
+      `${COORD} ${RENEWAL_HANDOVER_SUBJECT}: ${RENEWAL_HANDOVER_BODY}`, `${COORD} ${SPOT_PROBE_SUBJECT}: ${SPOT_PROBE_BODY}`,
+    ]);
+    expect(mails.slice(0, 2).join('\n')).not.toContain('ccrc-api');
+    expect(OVERLORD_HANDOVER_BODY).toContain('note handover door');
+    expect(OVERLORD_SPOT_PROBE_BODY).toContain('probe door');
   });
 });
 

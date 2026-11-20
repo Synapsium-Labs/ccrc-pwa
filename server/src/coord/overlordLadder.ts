@@ -26,6 +26,23 @@ export function degradedReading(designation: DesignationRead, live: 'unmeasured'
   return live.state === 'degraded' ? 'standing' : 'lifted';
 }
 
+/** The `off-model` condition's reading (Table 7.5a), from `offModelOf`'s answer (`continuity/hookReports.ts`, structurally):
+ *  no designation, and a designated session with no live generation, read `lifted` as `degradedReading` does; an unreadable
+ *  designation or generation is `unmeasured`; otherwise a measured answer is `standing` or `lifted`, and one that could not be
+ *  measured is `unmeasured`, never `lifted`. "Its replay not passed" reads as not passed in W1, because no replay of an
+ *  off-model generation exists before W3 (slug `off-model-replay-reads-not-passed-in-w1`), so a measured off-model stands. */
+export function offModelReading(
+  designation: DesignationRead, live: 'unmeasured' | 'no-generation' | 'present',
+  answer: { readonly ok: true; readonly value: boolean } | { readonly ok: false; readonly detail: string },
+): ConditionReading {
+  if (designation.kind === 'unmeasured') return 'unmeasured';
+  if (designation.kind === 'not-designated') return 'lifted';
+  if (live === 'unmeasured') return 'unmeasured';
+  if (live === 'no-generation') return 'lifted';
+  if (!answer.ok) return 'unmeasured';
+  return answer.value ? 'standing' : 'lifted';
+}
+
 export interface LadderFacts {
   readonly operatorRung: { readonly kind: 'set'; readonly rung: Rung } | { readonly kind: 'default' };
   readonly latches: readonly { readonly cause: string; readonly cap: Rung }[];        // standing rows, stored caps

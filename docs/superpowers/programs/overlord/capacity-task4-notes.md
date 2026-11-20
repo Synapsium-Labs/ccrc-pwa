@@ -50,11 +50,12 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
   run takes no waiver. The pass now lives in `server/src/coord/admissionWakeLane.ts` (L4, context C5), in the block-wake
   lane's shape: `FleetWatcher.sweepAdmissionWake` hands it the store, the listing, the serialiser, the worker-facts port,
   the lane's memory and the feed sink, and the pass decides nothing itself.
-- **migration-slot.** The stack took slot 52 and the draft took 107. This PR takes 111: the next free slot by
-  position after capacity Task 3's seed row (110), which it stacks on, with `main` at 109 when it last took `main`.
-  Whoever lands second renumbers, under the coordinator's standing licence. The coord-db version pins and
-  `run-close-switch`'s replay were counted again: one more undo line, and fifty-eight replayed migrations, Task 3's
-  seed included.
+- **migration-slot.** The stack took slot 52, the draft took 107 and this PR first took 111. Door B1 (#3099) then
+  took 110 and capacity Task 2 (#3101) took 111, and Task 3's seed moved to 112, so this PR takes 113: the next free
+  slot by position after Task 3's seed, which it stacks on, with `main` at 111. Whoever lands second renumbers, under
+  the coordinator's standing licence. The coord-db version pins read 113, and `run-close-switch`'s replay was counted
+  again: one more undo line (the three admission columns), and sixty replayed migrations, 54 through 113. The comment
+  there now also names 111 and 112, the two seed rows that go with `lane_arm_settings`, which `main` had not listed.
 - **lane-count.** `LANE_SCHEDULE` gains the `admissionWake` row beside `main`'s new `blockWakes` row. `main` then added
   the `mailHold` row (mid-turn mail PR 4, #3087), and the absorb kept both, so the monotonic-clock pin goes to 56.
 - **capacity-blocks-in-the-wake-tx.** The draft marked the claimant's `capacity` blocks woken from the lane, outside
