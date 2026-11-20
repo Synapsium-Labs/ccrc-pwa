@@ -1040,7 +1040,10 @@ export async function bindRunInPlace(
   deps: InPlaceDeps, id: number, by: string, byUuid: string, branch: unknown, intents: unknown = undefined,
 ): Promise<InPlaceOutcome> {
   const { coord } = deps;
-  const markers = admitMarkerRefusal(await deps.io.readdir(deps.cfg.registryDir));
+  // The measured listing (the plain `readdir` ratchet, D-5969): an absent or unreadable registry is no answer, so it
+  // folds to `null` and refuses `paused`, failing shut as the admit step does.
+  const listing = await deps.io.readdirMeasured(deps.cfg.registryDir);
+  const markers = admitMarkerRefusal(listing.ok ? listing.entries : null);
   if (markers !== null) return markers;
   const read = coord.run(id);
   if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };

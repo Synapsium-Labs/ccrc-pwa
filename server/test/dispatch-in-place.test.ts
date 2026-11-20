@@ -353,7 +353,8 @@ describe('bindRunInPlace: the coordinator takes its own refused wave, with no fl
     writeFileSync(path.join(b.home, '.cc-sessions', MAIL_DISABLED_MARKER), '');
     expect(await bind(b, id)).toEqual({ ok: false, kind: 'refused', code: 'mail-disabled' });
     rmSync(path.join(b.home, '.cc-sessions', MAIL_DISABLED_MARKER));
-    const unlistable = { ...inPlaceDeps(b), io: { ...b.base.io, readdir: async () => null } as typeof b.base.io };
+    const unlistable = { ...inPlaceDeps(b), io: { ...b.base.io, readdir: async () => null,
+      readdirMeasured: async () => ({ ok: false as const, reason: 'unreadable' as const }) } as typeof b.base.io };
     expect(await bindRunInPlace(unlistable, id, BOSS, BOSS_UUID, 'feat/sibling')).toEqual({ ok: false, kind: 'refused', code: 'paused' });
     expect(okRun(b.coord.run(id))!.state).toBe('planned');
     expect(b.calls).toEqual([]);
