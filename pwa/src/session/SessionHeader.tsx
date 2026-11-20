@@ -14,7 +14,7 @@ import { createContext, useContext } from 'react';
 import type { ReactNode } from 'react';
 import type { FleetSession, RosterWire, RouteField, SessionStatus } from '../../../shared/api';
 import {
-  BackButton, Chip, Icon, Keycap, StatusDot, TypedLabel, cn, useNow,
+  BackButton, Chip, Icon, Keycap, RoleBadge, StatusDot, TypedLabel, cn, useNow,
 } from '@ccrc/ui';
 import { commandDoor, doorMark } from '../command/door';
 import { navigate } from '../lib/router';
@@ -27,7 +27,7 @@ import './chat.css';
 import { chipTone, metaChipTone } from './chipTones';
 import { GoalsDoor, SessionCoordination, SessionDetails } from './SessionDetails';
 import type { Coordination } from '../fleet/fleetTree';
-import type { SessionFactSet } from '../fleet/sessionFacts';
+import { COORDINATOR_BADGE, type SessionFactSet } from '../fleet/sessionFacts';
 // W2 Task S7a (D-5471): every word, chip and state below is the view's (`sessionHeaderView`), the one derivation both
 // skins' session chrome render from. This part holds the hooks (the clock, the pointer query, the flows' doors) and
 // the markup, nothing else.
@@ -124,11 +124,22 @@ export function HeaderBack({ onBack }: { onBack: () => void }): ReactNode {
 /** The title's own node, both skins'. Only a present workspace row's title types in (`TypedLabel`), because only a
  *  change to it is a rename (`view.renames`). The fallback and a main checkout's title are plain text: a swap between
  *  the fallback and the row then draws plainly (a TypedLabel mounted afresh never animates), and a main checkout
- *  mounts no TypedLabel, as before the title was the label (desktop polish T3c, D-6333). */
+ *  mounts no TypedLabel, as before the title was the label (desktop polish T3c, D-6333).
+ *
+ *  A COORDINATOR'S BADGE SITS HERE (desktop polish C51, D-8834; the coordinator's ruling of 2026-11-20 on the operator's
+ *  look at C50): on the title line, right after the name, in both skins. It is the same `RoleBadge` C50 drew in the details
+ *  row (the network icon, the accessible name "coordinator", the role title on hover), sized to the name's text (`chat.css`,
+ *  `.chat-title-role`) and on its baseline, in the title's own ink. It is a node beside the name's own, so a rename's typing
+ *  never touches it. */
 export function HeaderTitleText({ view }: { view: SessionHeaderView }): ReactNode {
-  return view.renames
-    ? <TypedLabel className="chat-title-text" text={view.title} />
-    : <span className="chat-title-text">{view.title}</span>;
+  return (
+    <>
+      {view.renames
+        ? <TypedLabel className="chat-title-text" text={view.title} />
+        : <span className="chat-title-text">{view.title}</span>}
+      {view.coordinatorRole && <RoleBadge {...COORDINATOR_BADGE} className="chat-title-role" />}
+    </>
+  );
 }
 
 /** The crumb's own node, both skins' (Refined adds its class): typed in on the rule the title follows. */

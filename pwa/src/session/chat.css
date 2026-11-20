@@ -95,6 +95,11 @@
   font-size: var(--fs-2xs);
   min-width: 0;
 }
+/* D-8834 (C51): the badge left this row, and a coordinator with no other fact to give (no run number, hold, PR or marker) now has
+   a details row with nothing in it but `SessionMeta`'s own empty `.sess-meta`. An empty flex item of `.chat-meta` still takes the
+   meta block's row gap, so without this the header would keep a gap where the badge's line stood. The rule reads "no child but an
+   empty `.sess-meta`", which an entirely empty row meets too. */
+.chat-facts:not(:has(> :not(.sess-meta:empty))) { display: none; }
 .chat-facts .sess-meta { display: contents; }
 .chat-facts .sess-meta > *::before { content: none; }
 /* D-7785 (review 1424 F3; review 1431 F1): the header's two disclosure toggles, the subagent one and the
@@ -107,14 +112,14 @@
   .chat-facts .sess-subagents { min-height: var(--tap-min); min-width: var(--tap-min); }
 }
 .chat-fact { font-family: var(--family-mono); overflow-wrap: break-word; min-width: 0; }
-/* D-8817: the role badge in the details, where the word was drawn in this row's inherited ink. The glyph is the Goals door's size:
-   `1em` of `--fs-meta`, as that door's glyph is (`.chat-coord-goals svg`, below; its `Door` glyph span is `text-meta`). The role
-   detail keeps the line the word took (`min-height: 1lh` of its own inherited line), so the header is the height it was with the
-   word, in both skins, and the glyph is centred on that line. The card's `.sess-role` rule (`align-self: flex-start`, the quiet
-   ink) is not on it. */
-.chat-fact-role { display: flex; align-items: center; min-height: 1lh; }
-.chat-fact-role [role="img"] { font-size: var(--fs-meta); }
-.chat-fact-role svg { width: 1em; height: 1em; }
+/* D-8834 (C51; C50's D-8817 drew the badge in the details row): a coordinator's role badge sits on the TITLE line, right after the
+   session's name (`HeaderTitleText`), in both skins. It is an inline box in the title's own line, so it shares the name's line
+   box and adds no line to the header, and its glyph is `1em` of the title's own font size, the size of the name's text. It
+   paints no colour and sets no size of its own: the line's ink is the title's (the primary) and its text size is the title's.
+   `vertical-align: -0.125em` is the icon rule: the glyph's bottom edge sits a little under the baseline, as the vendored icons
+   are drawn, so it reads as resting on the line. The gap is the crumb separator's. */
+.chat-title-role { vertical-align: -0.125em; margin-inline-start: var(--sp-1); }
+.chat-title-role svg { width: 1em; height: 1em; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }
 /* The header's list of recorded entries: a full-width flex item of .chat-facts, whose automatic minimum would be its
    min-content width. Its rows' words are white-space: nowrap (.proj-work-parts), so without min-width: 0 one long

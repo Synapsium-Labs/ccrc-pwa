@@ -84,6 +84,9 @@ export interface SessionHeaderView {
    *  the first fleet frame (the fallback) and for a main checkout, so a swap between the fallback and the row draws
    *  plainly rather than typing in as a rename that never happened (desktop polish T3c, D-6333). */
   renames: boolean;
+  /** The session is its project's coordinator (`facts.coordinatorRole`, the card's own reading of the row): its title line draws the
+   *  role badge right after the name (desktop polish C51, D-8834). False before the first fleet frame, when no facts are known. */
+  coordinatorRole: boolean;
   chips: HeaderChip[];
   /** The ⋯ menu's items, each with its command id: `sessionMenu`, the one reader the menu sheet renders. */
   menu: SessionMenuEntry[];
@@ -282,5 +285,5 @@ export function sessionHeaderView({
   const goals = programme !== null && programmeIsOpenable(programme.slug)
     ? { href: programmePath(programme.slug), label: `Goals: ${programme.title}`, slot }
     : null;
-  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
+  return { title, crumb, renames: workspace, coordinatorRole: facts?.coordinatorRole === true, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
 }

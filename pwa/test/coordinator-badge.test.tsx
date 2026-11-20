@@ -94,17 +94,34 @@ describe('the coordinator badge (note 2)', () => {
       expect(screen.getByRole('img', { name: 'coordinator' })).toBe(badge);
     });
 
-    it(`${skin}: the session header draws the badge and no visible "coordinator"`, () => {
+    it(`${skin}: the session header draws the badge on the title line, after the name, and not in the details row (C51)`, () => {
       act(() => setSkin(skin));
       const session = lead();
       render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: sessionFacts({ session, now: NOW }) })} />);
       const head = document.querySelector('.chat-head')!;
       const toggle = screen.queryByRole('button', { name: /details/i });
       if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
-      const badge = head.querySelector('.chat-facts [role="img"][aria-label="coordinator"]');
-      expect(badge, 'the details draw the badge').not.toBeNull();
+      const title = head.querySelector('.chat-title')!;
+      const badge = title.querySelector('[role="img"][aria-label="coordinator"]');
+      expect(badge, 'the title line draws the badge').not.toBeNull();
       expect(badge!.getAttribute('title')).toBe(COORDINATOR_ROLE_TITLE);
+      expect(badge!.querySelector('svg')).not.toBeNull();
+      const name = title.querySelector('.chat-title-text')!;
+      expect(name.compareDocumentPosition(badge!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the badge follows the name').toBeTruthy();
+      expect(head.querySelectorAll('[role="img"][aria-label="coordinator"]').length, 'one badge in the whole header').toBe(1);
+      expect(head.querySelector('.chat-facts [role="img"][aria-label="coordinator"]'), 'the details row no longer carries it').toBeNull();
+      expect(head.querySelector('.chat-fact-role'), 'no role detail is drawn').toBeNull();
       expect(visible(head)).not.toMatch(/coordinator/i);
+    });
+
+    it(`${skin}: a worker's session header draws no badge, on the title line or anywhere (C51)`, () => {
+      act(() => setSkin(skin));
+      const session = lead({ role: 'child', id: 'lane-a-project-a-still-pond', workspace: 'still-pond', name: 'still-pond' });
+      render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: sessionFacts({ session, now: NOW }) })} />);
+      const toggle = screen.queryByRole('button', { name: /details/i });
+      if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
+      expect(document.querySelector('.chat-head [role="img"][aria-label="coordinator"]')).toBeNull();
+      expect(document.querySelector('.chat-title-role')).toBeNull();
     });
   }
 
@@ -160,19 +177,31 @@ describe('the badge stylesheet rules (note 2; the contrast gates measure the pai
     });
   }
 
-  it('the header badge is the line\'s glyph size, 1em as the Goals door\'s glyph is, and the card\'s role rule does not reach it', () => {
+  it('the title-line badge is the name\'s text size, 1em, on its baseline, in the line\'s own ink; the old detail\'s rules are gone (C51)', () => {
     const chat = read('session', 'chat.css');
-    expect(values(chat, '.chat-fact-role svg', 'width')).toEqual(['1em']);
-    expect(values(chat, '.chat-fact-role svg', 'height')).toEqual(['1em']);
+    expect(values(chat, '.chat-title-role svg', 'width')).toEqual(['1em']);
+    expect(values(chat, '.chat-title-role svg', 'height')).toEqual(['1em']);
+    // No font-size and no colour of its own: the glyph follows the title's text, and the line's ink is the title's.
+    expect(values(chat, '.chat-title-role', 'font-size')).toEqual([]);
+    expect(values(chat, '.chat-title-role', 'color')).toEqual([]);
+    expect(values(chat, '.chat-title-role', 'vertical-align'), 'it shares the name\'s line box, below the baseline by the icon rule').toEqual(['-0.125em']);
+    // What only the old placement used (C50's role detail and its line) is removed, whole.
+    for (const sel of ['.chat-fact-role', '.chat-fact-role [role="img"]', '.chat-fact-role svg']) {
+      for (const prop of ['display', 'align-items', 'min-height', 'font-size', 'width', 'height']) {
+        expect(values(chat, sel, prop), `${sel} ${prop} is gone`).toEqual([]);
+      }
+    }
+    expect(chat.replace(/\/\*[\s\S]*?\*\//g, '')).not.toContain('chat-fact-role');
+    // A coordinator with no other fact has a details row of nothing but an empty `.sess-meta`: it draws no box, so the header keeps
+    // no gap where the badge's line stood.
+    expect(values(chat, '.chat-facts:not(:has(> :not(.sess-meta:empty)))', 'display')).toEqual(['none']);
+    // The header's glyph rule for the Goals door is untouched.
     expect(values(chat, '.chat-coord-goals svg', 'width')).toEqual(['1em']);
-    expect(values(chat, '.chat-fact-role [role="img"]', 'font-size')).toEqual(['var(--fs-meta)']);
-    expect(values(chat, '.chat-fact-role', 'min-height'), 'the detail keeps the line the word took').toEqual(['1lh']);
     const session = lead();
     render(<SessionHeaderHost {...headerProps({ session, status: session.status, facts: sessionFacts({ session, now: NOW }) })} />);
-    const toggle = screen.queryByRole('button', { name: /details/i });
-    if (toggle !== null && toggle.getAttribute('aria-expanded') === 'false') fireEvent.click(toggle);
-    const badge = document.querySelector('.chat-head .chat-fact-role [role="img"][aria-label="coordinator"]');
-    expect(badge, 'the details draw the badge in the role detail').not.toBeNull();
+    const badge = document.querySelector('.chat-head .chat-title [role="img"][aria-label="coordinator"]');
+    expect(badge, 'the title draws the badge').not.toBeNull();
+    expect(badge!.classList.contains('chat-title-role')).toBe(true);
     expect(badge!.classList.contains('sess-role'), 'the card\'s role rule (flex-start, the quiet ink) is not on the header badge').toBe(false);
   });
 });

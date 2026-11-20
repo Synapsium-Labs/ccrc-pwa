@@ -4428,6 +4428,63 @@ an offline coordinator's own page, opened as the real `SessionScreen`, lists the
 
 **Rollback.** A plain revert.
 
+### Task C51: the coordinator badge sits on the title line (D-8834) — now
+
+**Why.** The operator handed the coordinator a look to rule on (2026-11-20), weighing compactness and usability. C50 (#3111) put the
+coordinator badge where the word "coordinator" had stood, in the session header's details row. In the Instrument skin that leaves
+the badge alone on a line of its own under the details, at 360 and 1280 px (the C50 screenshots, `after-header-instrument-*.png`
+under `docs/design/2026-10-22-desktop-polish/c50/`): a whole line of header for one glyph, and a glyph that far from the name does
+not read as belonging to it.
+
+**The ruling (the coordinator's, 2026-11-20).** In both skins the badge sits on the title line, right after the session's name
+("project-a › billing-coord" then the badge), sized to the name's text and on its baseline. The details row no longer carries it, and
+the header loses the line the badge stood on alone. Everything else about the badge stays as C50 shipped it: `RoleBadge`, the
+network icon, the accessible name "coordinator", the role title on hover, and the ink of the line it sits on. The fleet row's role
+cell is unchanged. On a phone there is no hover, so the ruling asked whether `@ccrc/ui` already has a primitive that shows a title
+on tap, to be used for the badge if it does.
+
+**Files.** `pwa/src/session/sessionHeaderView.ts` (the view gains `coordinatorRole`, read off the facts' own `coordinatorRole`, so the
+fact still has its one reader), `pwa/src/session/SessionHeader.tsx` (`HeaderTitleText`, the title's own node in both skins, draws the
+badge after the name; it is a node beside the name's, so a rename's typing never touches it), `pwa/src/session/SessionDetails.tsx` (the
+role detail and its two imports are gone, and so is the `className` that only it passed to `Detail`), `pwa/src/session/chat.css`
+(C50's `.chat-fact-role` rules and their `min-height` are removed; `.chat-title-role` sets `vertical-align: -0.125em`, a gap, and
+`svg { width: 1em; height: 1em }`, with no size or colour of its own; and `.chat-facts:not(:has(> :not(.sess-meta:empty)))` draws no
+box, see below). Tests: `pwa/test/coordinator-badge.test.tsx` and `pwa/browser/role-fact.browser.test.ts` (the new cases),
+`pwa/test/build-and-spend.test.ts`, `pwa/test/session-line.test.tsx` and `pwa/test/role-census.test.ts` (C50's pins, re-pointed at the
+new place, none weakened). No server, wire, ccd or `@ccrc/ui` change.
+
+**Why the empty-details rule.** A coordinator with no other fact to give has nothing left in its details row but `SessionMeta`'s own
+empty `.sess-meta`. That row is a full-width item of the meta block, which sets every row apart by its row gap, so an empty one
+would keep a gap where the badge's line stood. The rule hides a row that holds nothing but that empty element. Measured: without it
+the header lost 16.5 px of the 21.5 px the badge's line cost in Instrument at 360 (the rule's mutant reds the four Instrument cases).
+
+**Phone: no primitive shows a title on tap, so none is used and none is added.** `@ccrc/ui` has `Popover` (a Radix panel that a
+trigger button opens, with a 12 rem minimum width and its own focus scope; it is a menu container), `Sheet` and `Confirm`, and no
+tooltip, hint or title-on-tap primitive (a search of `ui/src` for tooltip, hint and long-press finds none). Making the badge a
+`Popover` trigger would turn a mark into a 44 px control with a panel, which is a design decision the ruling did not make. The role
+title therefore shows on hover only, as C50 left it; the badge's accessible name is unchanged. For the operator if they want a tap
+cue: a small `@ccrc/ui` primitive for it would be its own task.
+
+**Measured.** Which cases were red at `origin/main` and why, the files run, and what a real Chrome showed (before and after
+screenshots at 360 and 1280 px, both skins, both themes, details open and closed) are in
+`docs/superpowers/programs/desktop-polish/c51.md`.
+
+**Acceptance.** A coordinator's header draws one badge inside its title line, after the name, and none in the details row; its glyph
+is the name's font size, shares the name's line box and rests on its baseline; the header is the height it is with the badge hidden;
+in Instrument, where the badge stood alone, the header loses that line (the text block loses it whole; at 1280 the header lost 2.25
+px less than the line when measured, which is the keycap column's height, inferred, not shown); a worker's header draws no badge;
+Refined's header is the height it was.
+
+- **D-8834** — `coordinator-badge-on-the-title-line`: Task C51, issued on 2026-11-20. A coordinator's role badge sits on the session
+  header's title line, right after the name, in both skins, sized to the name's text and on its baseline, and not in the details
+  row, by the coordinator's ruling of 2026-11-20 on the operator's look at C50. It amends D-8817's placement only (the badge, its
+  name, its title and its ink are D-8817's); nothing leaves the wire or the server.
+
+This section was added between Task C48's and Task C49's sections with the consent of the worker that holds the plan's claim for the
+helpers task (its mail of 2026-11-20), for this one insertion only.
+
+**Rollback.** A plain revert.
+
 ### Task C49: the session's helpers, designed (D-8794) — now
 
 **What.** A design task, and no product code. The operator, 2026-11-19: "inside the session in the right hand panel I still
