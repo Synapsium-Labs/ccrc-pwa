@@ -65,9 +65,10 @@ Every file an X5 wave shares with an X2 or X3 wave, and its order ("claim order"
 
 | File | X5 wave | Also owned by | Order |
 |---|---|---|---|
-| `server/src/server.ts` | A1 (console fence), A2 (`MASKED_GET_ROUTES`) | P1, P2, P4, R1 | After P1 and R1; claim order against P2 and P4 |
-| `server/test/box-token-census.test.ts` | A1 (`ARTIFACT_DOORS`), A2 (`DOCS_DOORS`) | P1, P2, P4, R1, R4 | After P1 and R1; claim order, the later re-counts |
-| `server/test/auth-gate.test.ts`, `server/src/auth/gate.ts` (header count) | A1, A2 | P1, P2, P4, R1 (class 9), R4 | After R1; claim order, the later re-counts |
+| `server/src/server.ts` | A1 (console fence), A2 (`MASKED_GET_ROUTES`) | P1, P2, P4, R1, R3 (R3.1's owner-door plugin) | After P1 and R1; claim order against P2, P4 and R3 |
+| `server/test/box-token-census.test.ts` | A1 (`ARTIFACT_DOORS`), A2 (`DOCS_DOORS`) | P1, P2, P4, R1, R3 (`REVIEW_DOORS`), R4 | After P1 and R1; claim order, the later re-counts |
+| `server/test/auth-gate.test.ts`, `server/src/auth/gate.ts` (header count) | A1, A2 | P1, P2, P4, R1 (class 9), R3 (`FLAG_AWARE`), R4 | After R1; claim order, the later re-counts |
+| `server/test/secret-mask.test.ts` | A1 (the `setErrorHandler` allowance), A2 (the GET inventory) | R3 (R3.1, the GET inventory) | Claim order; the later adds its rows to the earlier's |
 | `server/test/rings/fastify-l4.data.ts` and the other `rings/*.data.ts` | A1 | P1, P2, P4, R1 | After P1 and R1; claim order against P2 and P4, the later adds its rows to the earlier's |
 | `server/src/config.ts` | A1 | R1 (one path) | After R1 |
 | `shared/docsReview.ts` | A1 (grammar move) | R1, R4 | After R1; claim order against R4 |
