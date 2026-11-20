@@ -12,7 +12,7 @@ import { vi } from 'vitest';
 import { ToastHost } from '@ccrc/ui';
 import type { DelegationLeaseWire, DelegationProjectionWire, FleetSession } from '../../shared/api';
 import { SessionWorktrees } from '../src/session/SessionWorktrees';
-import { leasesStartedBy, readDelegation } from '../src/fleet/delegationWords';
+import { readDelegation } from '../src/fleet/delegationWords';
 import { worktreeSidesKey, worktreesOf } from '../src/fleet/sessionWorktrees';
 import { fleetSession } from './fleetFixture';
 import { frame, lease } from './delegationFixture';
@@ -44,9 +44,8 @@ export type CardFetch = (url: string, init?: RequestInit) => Response | Promise<
 export function cardElement(world: CardWorld): ReactElement {
   const w = readDelegation(world.frame);
   const self = world.self ?? 'coord-a';
-  const leases = leasesStartedBy(self, w);
-  const key = worktreeSidesKey(leases, self, (id) => world.sessions.find((s) => s.id === id) ?? null);
-  return <><div className="chat-facts" tabIndex={-1}><SessionWorktrees worktrees={worktreesOf(leases, key)} project="project-a" nowMs={CARD_NOW} /></div><ToastHost /></>;
+  const key = worktreeSidesKey(self, w, world.sessions);
+  return <><div className="chat-facts" tabIndex={-1}><SessionWorktrees worktrees={worktreesOf(w.leases, key)} project="project-a" nowMs={CARD_NOW} /></div><ToastHost /></>;
 }
 
 /** The card over `world`, with `fetch` answering through `opts.fetch` (by default a 500, so a test that did not expect a

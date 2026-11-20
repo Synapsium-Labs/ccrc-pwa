@@ -9,8 +9,8 @@ import {
 import * as words from '../src/fleet/delegationWords';
 import {
   ACTIVITY_WORD, ENTRIES_NOTE, LIVENESS_QUALIFIER, UNRECOGNISED_WORD, WORKSPACE_WORD,
-  WORKTREE_WORD, activitiesStartedBy, activityLine, creatorChip, delegatedChip, fromPart, inferredChip, leasesStartedBy,
-  readDelegation, unlistedToggle, worktreeLine,
+  WORKTREE_WORD, activitiesStartedBy, activityLine, creatorChip, delegatedChip, inferredChip, leasesStartedBy,
+  readDelegation, worktreeLine,
 } from '../src/fleet/delegationWords';
 import { TOOL_USE_ID, activity, frame, lease, unowned } from './delegationFixture';
 import { DELEGATION_CARRIER_STATES, LEASE_DOOR_REFUSALS } from '../../shared/api';
@@ -125,6 +125,28 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     expect(leasesStartedBy('nobody', w)).toEqual([]);
   });
 
+  it('C48 review 2864: leasesStartedBy keeps a lease whatever its liveness or group (an offline coordinator\'s page lists what it held)', () => {
+    const w = frame({ leases: [
+      lease({ leaseId: 'l-live', parentId: 'coord-a', liveness: 'live', group: 'parent' }),
+      lease({ leaseId: 'l-stale', parentId: 'coord-a', liveness: 'stale', group: 'offline-coordinator' }),
+      lease({ leaseId: 'l-ended', parentId: 'coord-a', liveness: 'ended' }),
+      lease({ leaseId: 'l-unmeasured', parentId: 'coord-a', liveness: 'unmeasured' }),
+    ] });
+    expect(leasesStartedBy('coord-a', w).map((l) => l.leaseId).sort()).toEqual(['l-ended', 'l-live', 'l-stale', 'l-unmeasured']);
+  });
+
+  it('W4-U14 (rule 7, programme wins; D-8782 review 2864 F5): a lease whose path is a listed session\'s workdir is not drawn, on any page', () => {
+    const w = frame({ leases: [
+      lease({ leaseId: 'l-ws', parentId: 'coord-a', via: 'worker-a', canonicalPath: '/work/project-a/.ws/worker-a' }),
+      lease({ leaseId: 'l-own', parentId: 'coord-a', via: 'worker-a', canonicalPath: '/work/project-a/.claude/worktrees/agent-1' }),
+    ] });
+    const workdirs = new Set(['/work/project-a', '/work/project-a/.ws/worker-a']);
+    // Positive control: with no listed workdir both are drawn, so the rule is what removes the first.
+    expect(leasesStartedBy('coord-a', w).map((l) => l.leaseId)).toEqual(['l-own', 'l-ws']);
+    expect(leasesStartedBy('coord-a', w, workdirs).map((l) => l.leaseId)).toEqual(['l-own']);
+    expect(leasesStartedBy('worker-a', w, workdirs).map((l) => l.leaseId)).toEqual(['l-own']);
+  });
+
   it('W4-U9: the worktree line names via, hands sourceProject back, marks an unmeasured workspace, titles the path', () => {
     const l = lease();
     const plain = worktreeLine(l, null, null);
@@ -185,11 +207,10 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
     };
     collect(Object.fromEntries(Object.entries(words).filter(([, v]) => typeof v !== 'function')));
     for (const liveness of DELEGATION_LIVENESS) {
-      collect(worktreeLine(lease({ liveness }), 'worker-a', 'project-b', 'coord-a'));
-      if (liveness !== 'ended') collect(activityLine(activity({ liveness }), 'coord-a'));
+      collect(worktreeLine(lease({ liveness }), 'worker-a', 'project-b'));
+      if (liveness !== 'ended') collect(activityLine(activity({ liveness })));
     }
     collect(delegatedChip([activity(), activity({ activityId: 'a2', liveness: 'stale' })]));
-    collect(unlistedToggle(3));
     expect(strings.length).toBeGreaterThan(30);
     // Spec §9's "No running claim", and §4's forbidden totals and phrases.
     for (const s of strings) expect(s, s).not.toMatch(/running|\bactive\b|recent|couldn't check|check deferred/i);
@@ -222,11 +243,8 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
       + 'last recorded hook event 2026-10-26T10:05:00.000Z');
     expect(a.title).not.toMatch(/last event/);
     expect(a.parts).toEqual(['agent', 'explore the tree', 'not confirmed']);
-    expect(activityLine(activity(), 'coord-a').parts).toEqual(['agent', 'explore the tree', 'not confirmed', 'from coord-a']);
-    expect(worktreeLine(lease({ workspace: 'unmeasured' }), 'worker-a', null, 'coord-gone').parts)
-      .toEqual(['agent worktree', 'agent-a1', 'not confirmed', 'via worker-a', 'unmeasured', 'from coord-gone']);
-    expect(fromPart('coord-a')).toBe('from coord-a');
-    expect(unlistedToggle(2)).toBe('Delegated work, session not listed (2)');
+    expect(worktreeLine(lease({ workspace: 'unmeasured' }), 'worker-a', null).parts)
+      .toEqual(['agent worktree', 'agent-a1', 'not confirmed', 'via worker-a', 'unmeasured']);
   });
 
   it('VIS-W4 (review 1424 f): a member with no string openedAt or activityId sorts first and never throws', () => {
@@ -240,12 +258,12 @@ describe('delegationWords (delegation broker wave 4, PR2)', () => {
   });
 
   it('VIS-W5 (review 1431 F3): nameAt points at the one free-text part of each line, and only there', () => {
-    const named = activityLine(activity({ displayName: 'map the tree' }), 'coord-a');
+    const named = activityLine(activity({ displayName: 'map the tree' }));
     expect(named.nameAt).toBe(1);
     expect(named.parts[named.nameAt!]).toBe('map the tree');
     expect(activityLine(activity({ displayName: null })).nameAt).toBeNull();
     expect(activityLine(activity({ displayName: '' })).nameAt).toBeNull();
-    const tree = worktreeLine(lease({ adminRecord: 'agent-x9' }), 'worker-a', null, 'coord-gone');
+    const tree = worktreeLine(lease({ adminRecord: 'agent-x9' }), 'worker-a', null);
     expect(tree.nameAt).toBe(1);
     expect(tree.parts[tree.nameAt!]).toBe('agent-x9');
     // The session header's rows carry it through.

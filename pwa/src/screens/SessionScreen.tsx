@@ -44,7 +44,7 @@ import { SessionFlows, type SessionActions } from '../session/SessionFlows';
 import { useEscapeInterrupt } from '../session/useEscapeInterrupt';
 import { liveStatus } from '../session/liveStatus';
 import { childRunContext, coordinationOf, parentIdOf } from '../fleet/fleetTree';
-import { activitiesStartedBy, leasesStartedBy, readDelegation } from '../fleet/delegationWords';
+import { activitiesStartedBy, readDelegation } from '../fleet/delegationWords';
 import { worktreeSidesKey, worktreesOf } from '../fleet/sessionWorktrees';
 import { sessionFacts } from '../fleet/sessionFacts';
 import { coordinatorPresence } from '../fleet/presence';
@@ -229,8 +229,7 @@ export function SessionScreen({
   const delegation = useFleet((s) => s.delegation);
   // D-8782: this session's worktrees, in its details. The labels each row names come from the fleet's sessions, read as ONE
   // primitive (the key), so a fleet frame that changes no label re-renders nothing here (C6, D-6438).
-  const worktreeKey = useFleet((s) => (s.delegation === null ? '[]'
-    : worktreeSidesKey(leasesStartedBy(id, readDelegation(s.delegation)), id, (sid) => s.sessions.find((x) => x.id === sid) ?? null)));
+  const worktreeKey = useFleet((s) => (s.delegation === null ? '[]' : worktreeSidesKey(id, readDelegation(s.delegation), s.sessions)));
   // D-8276: the fleet's newest Claude Code build, so the header names this session's build against it, and the newest
   // on its own lane, which is what a restart reaches.
   const claudeLatest = useFleet((s) => fleetClaudeLatest(s.sessions));
@@ -359,7 +358,7 @@ export function SessionScreen({
     coordinator: presence,
     coordinatorTitle: parentId === null || presence === null ? null : orphanGuidance(parentId, presence),
     delegated: delegation === null ? null : activitiesStartedBy(live.id, readDelegation(delegation)),
-    worktrees: delegation === null ? null : worktreesOf(leasesStartedBy(live.id, readDelegation(delegation)), worktreeKey),
+    worktrees: delegation === null ? null : worktreesOf(readDelegation(delegation).leases, worktreeKey),
     claudeLatest,
     claudeLaneLatest,
   });

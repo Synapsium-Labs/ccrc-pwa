@@ -15,9 +15,9 @@
 //
 // It reads the chrome's store (`useFleetChrome`), the one `FleetScreen` itself checks it was handed, so the cards and
 // the screen around them always describe one fleet.
-import { useCallback, useEffect, useId, useMemo, useRef, useState, useSyncExternalStore } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useSyncExternalStore } from 'react';
 import type { ReactNode } from 'react';
-import { fleetTree, unplacedActivities } from './fleetTree';
+import { fleetTree } from './fleetTree';
 import { ProjectCard } from './ProjectCard';
 import { isRunClosed } from './runWords';
 import { useFolded, useRollupPrefs } from './foldState';
@@ -25,14 +25,11 @@ import { useHoldView } from './useHoldView';
 import { useBoxClock } from './useBoxClock';
 import { cardBoxes, foldedCard } from './programmeBoxes';
 import { prunePrefs, rollupFleet, toggleChildren, toggleProject } from './rollup';
-import type { DelegationActivityWire, FleetSession } from '../../../shared/api';
+import type { FleetSession } from '../../../shared/api';
 import { useProjectedHome } from './useProjectedHome';
 import { useFleetChrome } from './FleetChrome';
 import { useFleetFlows } from './FleetFlows';
 import { acksSnapshot, subscribeAcks } from '../lib/seen';
-import { BareRow } from '@ccrc/ui';
-import { UNLISTED_WORDS, activityLine, unlistedToggle } from './delegationWords';
-import { WorkLine } from './WorkLine';
 import './fleet.css';
 
 export function FleetCards({ selectedId, onOpen }: {
@@ -82,7 +79,6 @@ export function FleetCards({ selectedId, onOpen }: {
   const tree = useMemo(
     () => fleetTree(sessions, projects.knownProjects, activeRuns, acks),
     [sessions, projects.knownProjects, activeRuns, acks]);
-  const unplaced = useMemo(() => unplacedActivities(sessions, delegation), [sessions, delegation]);
   // eslint-disable-next-line react-hooks/exhaustive-deps -- `roll.next` stands for `roll.now`: it moves only at a boundary.
   const rollup = useMemo(() => rollupFleet(tree, rollupPrefs, roll.now, selectedId), [tree, rollupPrefs, selectedId, roll.next]);
   // Rule 4's reset: a stored ▾ made in the other activity class, or an open worker line whose coordinator left, is
@@ -139,7 +135,6 @@ export function FleetCards({ selectedId, onOpen }: {
       className="fleet-list"
       ref={listRef}
       data-delegation={delegation === null ? 'unavailable' : 'measured'}
-      data-delegation-unplaced={unplaced.length > 0 ? unplaced.length : undefined}
     >
       {tree.map((g) => (
         <ProjectCard
@@ -221,40 +216,6 @@ export function FleetCards({ selectedId, onOpen }: {
           archivingReleased={archiveAll.archiving.has(g.project)}
         />
       ))}
-      {/* Delegation visibility (spec §5): entries whose session the list does not carry, after every card. Mounted only
-          with entries, so a fleet with none, an older server's included, renders what it rendered before (W4-U27) and
-          calls no hook it did not call. */}
-      {unplaced.length > 0 && <UnlistedWork entries={unplaced} />}
-    </div>
-  );
-}
-
-/** The fleet foot's region (delegation visibility, spec §5): closed by default, its open state this mount's own (no
- *  stored key, so no new storage owner). Each row names its session by raw id, since no listed session can name it.
- *  It draws what the words module spells and decides nothing. */
-function UnlistedWork({ entries }: { entries: readonly DelegationActivityWire[] }): ReactNode {
-  const [open, setOpen] = useState(false);
-  const bodyId = useId();
-  return (
-    <div className="fleet-unlisted">
-      <BareRow
-        className="proj-group-toggle"
-        aria-expanded={open}
-        aria-controls={open ? bodyId : undefined}
-        title={UNLISTED_WORDS.title}
-        onClick={() => setOpen((v) => !v)}
-      >
-        <span className="proj-card-chevron" aria-hidden="true">{open ? '▾' : '▸'}</span>
-        {unlistedToggle(entries.length)}
-      </BareRow>
-      {open && (
-        <div id={bodyId} className="fleet-unlisted-body">
-          {entries.map((a) => {
-            const line = activityLine(a, a.parentId);
-            return <WorkLine key={a.activityId} parts={line.parts} title={line.title} nameAt={line.nameAt} />;
-          })}
-        </div>
-      )}
     </div>
   );
 }

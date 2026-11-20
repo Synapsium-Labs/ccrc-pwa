@@ -21,7 +21,7 @@ import { runPath, sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
 import { WorkLine } from '../fleet/WorkLine';
-import { ENTRIES_NOTE, SessionWorktrees } from './SessionWorktrees';
+import { NOTE_CLASS, SessionWorktrees } from './SessionWorktrees';
 import { cardFacts, contextFact, COORDINATOR_ROLE_TITLE, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { openRunAt } from '../fleet/openers';
@@ -175,7 +175,7 @@ export function SessionDetails({ facts, coordination }: {
           gives (`facts.delegated.note`). Drawn only while the disclosure is open. */}
       {delegatedOpen && facts.delegated !== null && (
         <div id={delegatedId} className="sess-entries" ref={showEntries}>
-          <span className={ENTRIES_NOTE}>{facts.delegated.note}</span>
+          <span className={NOTE_CLASS}>{facts.delegated.note}</span>
           {facts.delegated.rows.map((r) => <WorkLine key={r.key} parts={r.parts} title={r.title} nameAt={r.nameAt} />)}
         </div>
       )}

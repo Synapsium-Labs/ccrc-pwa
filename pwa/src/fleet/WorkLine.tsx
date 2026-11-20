@@ -1,5 +1,5 @@
-// One line of words, each a cell, its detail in `title`: the row the fleet foot's region draws for work whose session is
-// not listed, and the session header draws for each recorded entry and each worktree (a project card draws none: D-8782).
+// One line of words, each a cell, its detail in `title`: the row the session's own page draws for each recorded entry (the
+// header's list) and each worktree (its section); a project card and the fleet list draw none (D-8782).
 // ONE spelling of that markup, so the surfaces cannot drift apart. The words are the caller's, decided by the
 // words module; this file draws them and decides nothing, `nameAt` included: the words module names the one part a
 // narrow row may cut short (D-7783), and this file only gives that part its class and the box its text is cut in.

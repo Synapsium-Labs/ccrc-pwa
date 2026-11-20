@@ -52,12 +52,11 @@
 //     stamp answers, top level, with the orphan marker; once nothing answers,
 //     the child's own project. It keeps its indicator wherever it lands.
 import {
-  boardHome, type DelegationActivityWire, type DelegationProjectionWire, type FleetSession, type RunSummary,
+  boardHome, type FleetSession, type RunSummary,
 } from '../../../shared/api';
 import type { Acks } from '../lib/seen';
 import { groupFleet, type FleetGroup } from './groupFleet';
 import { nestFleet, type FleetRow } from './nestFleet';
-import { byOpened, readDelegation } from './delegationWords';
 import { boundOpenRun, coordinatorOf, programmeWave, runCard, runHomeProject, runSentence, workerOf, type BoundSession, type ChildRunContext } from './runWords';
 import { hibernatedSince } from './hibernated';
 import { cardHues, fleetHues, type ProgHue } from './programmeBoxes';
@@ -127,19 +126,6 @@ export interface FleetTreeGroup extends FleetGroup {
   readonly abroad: readonly RunSummary[];
   readonly claimed: readonly RunSummary[];
   readonly hues: ReadonlyMap<string, ProgHue>;
-}
-
-/** Delegation visibility (spec §5): the frame's activities whose parent is not in the fleet list, in opening order (an
- *  activity carries no project of its own, so no card could hold one). THE ONE SELECTION: the fleet foot's region lists
- *  exactly these, and `data-delegation-unplaced` is their count. A parent the list carries, archived or released
- *  included, keeps its entries in its own details; the fleet list draws no row for any activity (D-8782). Empty when the
- *  projection is unavailable. */
-export function unplacedActivities(
-  sessions: readonly FleetSession[], delegation: DelegationProjectionWire | null,
-): readonly DelegationActivityWire[] {
-  if (delegation === null) return [];
-  const ids = new Set(sessions.map((s) => s.id));
-  return readDelegation(delegation).activities.filter((a) => !ids.has(a.parentId)).sort(byOpened);
 }
 
 /** The fleet as cards of nested rows. `runs` is the ACTIVE runs. The `delegation` frame is not an input: the fleet list

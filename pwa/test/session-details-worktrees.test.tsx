@@ -8,7 +8,7 @@ import userEvent from '@testing-library/user-event';
 import { ToastHost } from '@ccrc/ui';
 import { SessionDetails } from '../src/session/SessionDetails';
 import { sessionFacts } from '../src/fleet/sessionFacts';
-import { leasesStartedBy, readDelegation } from '../src/fleet/delegationWords';
+import { readDelegation } from '../src/fleet/delegationWords';
 import { worktreeSidesKey, worktreesOf } from '../src/fleet/sessionWorktrees';
 import { fleetSession } from './fleetFixture';
 import { frame, lease } from './delegationFixture';
@@ -18,9 +18,9 @@ afterEach(() => { cleanup(); vi.unstubAllGlobals(); });
 
 const coord = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a' });
 const detailsOf = (self: typeof coord, others: (typeof coord)[], w = frame({ leases: [lease({ leaseId: LEASE_ID, sourceKind: 'raw', disposition: 'retained', expiresAt: null })] })) => {
-  const leases = leasesStartedBy(self.id, readDelegation(w));
-  const key = worktreeSidesKey(leases, self.id, (id) => [self, ...others].find((s) => s.id === id) ?? null);
-  return <><SessionDetails facts={sessionFacts({ session: self, now: Date.now(), worktrees: worktreesOf(leases, key) })} coordination={null} /><ToastHost /></>;
+  const d = readDelegation(w);
+  const key = worktreeSidesKey(self.id, d, [self, ...others]);
+  return <><SessionDetails facts={sessionFacts({ session: self, now: Date.now(), worktrees: worktreesOf(d.leases, key) })} coordination={null} /><ToastHost /></>;
 };
 const open = (ui: ReturnType<typeof detailsOf>) => {
   const r = render(ui);

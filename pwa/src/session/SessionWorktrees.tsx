@@ -13,7 +13,7 @@ import {
 } from '../fleet/delegationWords';
 
 /** The note-sized heading line the details' sections share (`N delegated`'s note and this section's heading): one string, so the two cannot drift. */
-export const ENTRIES_NOTE = 'chat-fact sess-entries-note';
+export const NOTE_CLASS = 'chat-fact sess-entries-note';
 
 /** The session's worktrees, one row each, under a heading the controls hand the focus back to. Nothing when it holds none. */
 export function SessionWorktrees({ worktrees, project, nowMs }: {
@@ -24,14 +24,22 @@ export function SessionWorktrees({ worktrees, project, nowMs }: {
 }): ReactNode {
   const heading = useRef<HTMLSpanElement>(null);
   // Where the focus goes when the last row leaves while a control holds it: the section goes with its heading, so the details
-  // region that held it (`tabIndex=-1`, `SessionDetails`) takes it. Kept from the last render that had a section.
+  // region that held it (`tabIndex=-1`, `SessionDetails`) takes it. Kept from the last render that had a section. Refined
+  // draws that region as `display: contents`, which has no box and so cannot hold the focus (measured in a real Chrome,
+  // review 2864 F4): the focus then goes to the nearest ancestor that has one, made a script-focus target if it is not.
   const host = useRef<HTMLElement | null>(null);
   const keepHost = (el: HTMLElement | null): void => { if (el !== null) host.current = el.closest<HTMLElement>('.chat-facts'); };
+  const landing = (): HTMLElement | null => {
+    let el = host.current;
+    while (el !== null && getComputedStyle(el).display === 'contents') el = el.parentElement;
+    if (el !== null && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    return el;
+  };
   if (worktrees.length === 0) return null;
   const now = nowMs ?? Date.now();
   return (
     <div className="sess-worktrees" ref={keepHost}>
-      <span className={ENTRIES_NOTE} ref={heading} tabIndex={-1}>Worktrees</span>
+      <span className={NOTE_CLASS} ref={heading} tabIndex={-1}>Worktrees</span>
       {worktrees.map(({ lease: l, viaLabel, attachLabel }) => {
         const w = worktreeLine(l, viaLabel, workingOnCard({ project: l.project }, project));
         // D-6999: the chips are words, never colour alone, and nothing acts on the row but the operator's own tap (PR10). A row
@@ -43,7 +51,7 @@ export function SessionWorktrees({ worktrees, project, nowMs }: {
             {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
             {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
             {controls !== null && <WorktreeControls leaseId={l.leaseId} worktree={l.adminRecord} controls={controls}
-              offer={offerOf(l.leaseId, controls, l)} nowMs={now} getHeading={() => heading.current ?? host.current} />}
+              offer={offerOf(l.leaseId, controls, l)} nowMs={now} getHeading={() => heading.current ?? landing()} />}
           </WorkLine>
         );
       })}

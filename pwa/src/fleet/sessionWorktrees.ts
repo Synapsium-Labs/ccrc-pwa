@@ -2,7 +2,8 @@
 // (`delegationWords.ts`) is the one reader of the frame; this adds the two labels a row needs from the fleet's sessions: the
 // worker a lease is `via`, and the session an inferred lease may be attached to. Pure (L1).
 import type { DelegationLeaseWire, FleetSession } from '../../../shared/api';
-import { leaseParentOf, listedLive } from './delegationWords';
+import type { DelegationProjectionWire } from '../../../shared/api';
+import { leaseParentOf, leasesStartedBy, listedLive } from './delegationWords';
 import { sessionLabel } from './sessionLabel';
 
 /** One worktree of a session's details: the lease and the two labels its row names. `viaLabel` is the worker the lease is
@@ -31,16 +32,21 @@ export function worktreeSides(
   };
 }
 
-/** The labels as one string, for a store selector that must return a primitive (so a fleet frame that changes no label
- *  re-renders nothing, C6); `worktreesOf` reads it back. */
-export function worktreeSidesKey(
-  leases: readonly DelegationLeaseWire[], selfId: string, sessionOf: (id: string) => FleetSession | null,
-): string {
-  return JSON.stringify(leases.map((l) => { const w = worktreeSides(l, selfId, sessionOf); return [l.leaseId, w.viaLabel, w.attachLabel]; }));
+/** The session's worktrees as one string, for a store selector that must return a primitive (so a fleet frame that changes
+ *  no lease and no label re-renders nothing, C6): each lease `leasesStartedBy` selects for `selfId`, with its two labels.
+ *  `worktreesOf` reads it back. The ONE call of the selector. */
+export function worktreeSidesKey(selfId: string, w: DelegationProjectionWire, sessions: readonly FleetSession[]): string {
+  const sessionOf = (id: string): FleetSession | null => sessions.find((x) => x.id === id) ?? null;
+  const leases = leasesStartedBy(selfId, w, new Set(sessions.map((x) => x.workdir)));
+  return JSON.stringify(leases.map((l) => { const v = worktreeSides(l, selfId, sessionOf); return [l.leaseId, v.viaLabel, v.attachLabel]; }));
 }
 
-/** The session's worktrees with their labels, from the leases and `worktreeSidesKey`'s answer for the same leases. */
-export function worktreesOf(leases: readonly DelegationLeaseWire[], key: string): readonly SessionWorktree[] {
-  const sides = new Map((JSON.parse(key) as [string, string | null, string | null][]).map(([id, v, a]) => [id, { viaLabel: v, attachLabel: a }] as const));
-  return leases.map((lease) => ({ lease, ...(sides.get(lease.leaseId) ?? { viaLabel: null, attachLabel: null }) }));
+/** The session's worktrees with their labels, read back from `worktreeSidesKey`'s answer over the frame's own leases, in
+ *  the key's order. A lease the key names and the frame no longer carries is left out. */
+export function worktreesOf(frameLeases: readonly DelegationLeaseWire[], key: string): readonly SessionWorktree[] {
+  const byId = new Map(frameLeases.map((l) => [l.leaseId, l] as const));
+  return (JSON.parse(key) as [string, string | null, string | null][]).flatMap(([id, viaLabel, attachLabel]) => {
+    const lease = byId.get(id);
+    return lease === undefined ? [] : [{ lease, viaLabel, attachLabel }];
+  });
 }

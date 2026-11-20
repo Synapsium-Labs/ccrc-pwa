@@ -1,9 +1,9 @@
 // The fleet tree (D-5527): ONE pure model decides each row's CARD and its
 // PARENT, for both skins. Neutral fixture names only (public repo).
 import { describe, expect, it } from 'vitest';
-import type { DelegationProjectionWire, FleetSession, RunSummary } from '../../shared/api';
+import type { FleetSession, RunSummary } from '../../shared/api';
 import { fleetSession, DEAD_LIFECYCLE } from './fleetFixture';
-import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, unplacedActivities, workingOn } from '../src/fleet/fleetTree';
+import { cardsOf, coordinationLine, coordinationOf as coordinationOfTree, fleetTree as fleetTreeOf, workingOn } from '../src/fleet/fleetTree';
 import { withRunBinding } from './runBindingFixture';
 import { fingerprint, recording, type Recorded } from './characterise';
 import { STATE_WORD } from '../src/fleet/sessionFacts';
@@ -277,7 +277,7 @@ describe('the header title for a review run', () => {
 
 // Delegation broker wave 4, PR2 Task 2.5 put each delegation row on ONE card. The fleet list draws no delegation row (D-8782),
 // so `fleetTree` takes no frame and no card holds one; what is left of the frame here is the fleet foot's selection, the
-// activities whose parent the list does not carry (`unplacedActivities`), which nothing draws as a row of a card.
+// activities whose parent the list does not carry, which nothing draws anywhere in the fleet list.
 describe('fleetTree and the delegation frame (delegation broker wave 4, D-8782)', () => {
   const coordA = fleetSession({ id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a' });
   const mainB = fleetSession({ id: 'main-b', project: 'project-b', workspace: null, workdir: '/work/project-b' });
@@ -285,47 +285,22 @@ describe('fleetTree and the delegation frame (delegation broker wave 4, D-8782)'
   const ids = (groups: ReturnType<typeof fleetTreeOf>) => groups.map((g) => [g.project, g.rows.map((r) =>
     r.kind === 'session' ? r.session.id : r.kind)] as const);
 
-  it('W4-U36 (D-8782): an activity whose parent the fleet does not carry is unplaced (the wire gives it no project), and one whose parent it does carry is not', () => {
-    const w = frame({ activities: [activity({ activityId: 'a-gone', parentId: 'coord-gone' }), activity({ activityId: 'a-here', parentId: 'coord-a' })] });
+  it('W4-U36 (D-8782): the frame is no input of the tree: an activity whose parent the fleet carries, and one whose parent it does not, add no row and no card', () => {
     // Positive control: the cards exist and hold their sessions, so the absence of any other row is not an empty tree.
     expect(ids(fleetTreeOf([coordA, mainB], [], [], {}))).toEqual([['project-a', ['coord-a']], ['project-b', ['main-b']]]);
-    expect(unplacedActivities([coordA, mainB], w).map((a) => a.activityId)).toEqual(['a-gone']);
-    expect(unplacedActivities([coordA, mainB], null)).toEqual([]);
-    expect(unplacedActivities([coordA], frame({ activities: [activity({ parentId: 'coord-a' })] }))).toEqual([]);
+    expect(fleetTreeOf.length, 'fleetTree takes sessions, projects, runs and acks: no frame').toBe(3);
   });
 
-  // Review 1029's F2: the reader at the tree's own seam. The members arrive as the socket parses them, objects with
-  // words this build has never heard of and a field it does not know, never normalized before the selection reads them.
-  it('W4-U7b: the selection reads the frame through readDelegation: future words re-filed, every member kept, none running', () => {
-    const future = {
-      asOf: '2026-10-26T10:10:00.000Z',
-      activities: [
-        { ...activity({ activityId: 'a-group', parentId: 'coord-gone' }), group: 'future-group', futureField: 1 },
-        { ...activity({ activityId: 'a-words', parentId: 'coord-gone' }), placement: 'future-placement', liveness: 'future-liveness' },
-      ],
-      leases: [],
-      unowned: [],
-    } as unknown as DelegationProjectionWire;
-    const acts = new Map(unplacedActivities([coordA], future).map((a) => [a.activityId, a] as const));
-    expect([...acts.keys()].sort(), 'every member is kept, once').toEqual(['a-group', 'a-words']);
-    expect(acts.get('a-group')).toMatchObject({ group: 'offline-coordinator', liveness: 'live', futureField: 1 });
-    expect(acts.get('a-words')).toMatchObject({ group: 'parent', placement: 'row', liveness: 'unmeasured' });
-    // Only what the server measured live reads live: no future word becomes "running".
-    expect([...acts.values()].filter((m) => m.liveness === 'live').map((m) => m.activityId)).toEqual(['a-group']);
-  });
-
-  it('VIS-T1: the unlisted selection returns the entries in opening order; an archived or released parent keeps its own in its details, not here', () => {
+  it('VIS-T1 (D-8782): an archived or released parent keeps its activities in its details, and no row of the tree names them', () => {
     const arch = fleetSession({ id: 'coord-arch', project: 'project-a', workspace: null, archivedAt: 1_800_000_000_000 });
     const rel = fleetSession({ id: 'w-rel', project: 'project-a', workspace: 'w-rel',
       releasedFrom: { runId: 9, program: 'port-api', programTitle: null, claimedBy: 'coord-a', closedAt: 1, child: true } });
     const w = frame({ activities: [
       activity({ activityId: 'a-late', parentId: 'coord-gone', openedAt: '2026-10-26T10:03:00.000Z' }),
-      activity({ activityId: 'a-early', parentId: 'other-gone', openedAt: '2026-10-26T09:00:00.000Z' }),
       activity({ activityId: 'a-arch', parentId: 'coord-arch' }),
       activity({ activityId: 'a-rel', parentId: 'w-rel' }),
     ] });
-    expect(unplacedActivities([coordA, arch, rel], w).map((a) => a.activityId)).toEqual(['a-early', 'a-late']);
-    // D-8782: those two are no row on that card (no offline group either); the frame still names them for their parents' details.
+    // Those are no row on that card (no offline group either); the frame still names them for their parents' details.
     expect(ids(fleetTreeOf([coordA, arch, rel], [], [], {})).flatMap(([, rows]) => rows)).toEqual(['coord-a']);
     expect(activitiesStartedBy('coord-arch', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-arch']);
     expect(activitiesStartedBy('w-rel', readDelegation(w)).map((a) => a.activityId)).toEqual(['a-rel']);

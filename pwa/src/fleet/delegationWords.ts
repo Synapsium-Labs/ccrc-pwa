@@ -1,5 +1,5 @@
 // THE DELEGATION WORDS (delegation broker wave 4, spec §5.8; D-6999, D-7002; delegation visibility). L1:
-// one module for every label a delegation row, group, chip, the session header's entry list or the fleet foot's region
+// one module for every label a delegation chip, a worktree row or the session header's entry list
 // draws, so no component spells one. The server decides every word on the wire
 // (`server/src/coord/delegation-projection.ts`): liveness, the group, an activity's placement, and which worktree is
 // `inferred`. This module names those words and tolerates a word this build has never heard of.
@@ -81,24 +81,6 @@ export const WORKSPACE_WORD: Readonly<Record<DelegationLeaseWire['workspace'], s
 /** The session header's description of its entry list (spec §5). */
 export const ENTRIES_NOTE = 'Recorded entries, not a current agent count. Execution is not confirmed for any of them.';
 
-/** The fleet foot's region: entries whose session the fleet list no longer carries (spec §5). */
-export const UNLISTED_WORDS = {
-  label: 'Delegated work, session not listed',
-  title: 'recorded delegation entries whose session is not in the fleet list; not a current agent count, and execution is not confirmed',
-} as const;
-
-/** The region's toggle: its label and its count. */
-export function unlistedToggle(n: number): string {
-  return `${UNLISTED_WORDS.label} (${n})`;
-}
-
-/** The session an entry came from, on a row that is not under that session (an offline-group row, an unlisted row):
- *  its listed label, or its raw id when the fleet does not carry it. Display only: never a join key, never an
- *  ownership claim (spec §5). */
-export function fromPart(label: string): string {
-  return `from ${label}`;
-}
-
 /** A table's word for `key`, or the unrecognised word when the table has none (a newer server's word). */
 const wordOf = (table: Readonly<Record<string, string>>, key: string): string =>
   Object.hasOwn(table, key) ? table[key]! : UNRECOGNISED_WORD;
@@ -173,26 +155,24 @@ export function creatorChip(l: DelegationLeaseWire): Chip | null {
 
 /** A worktree's row. `viaLabel` is the worker the server's R9 names (already resolved to a label by the caller);
  *  `sourceProject` is `workingOnCard`'s answer for the row's own project, handed back for the caller's folder icon;
- *  `fromLabel` names the session it came from, on a row that is not under that session. An ended worktree reads
- *  `end recorded`, and its workspace word alone says whether its presence was measured. */
+ *  An ended worktree reads `end recorded`, and its workspace word alone says whether its presence was measured. */
 export function worktreeLine(
-  l: DelegationLeaseWire, viaLabel: string | null, sourceProject: string | null, fromLabel: string | null = null,
+  l: DelegationLeaseWire, viaLabel: string | null, sourceProject: string | null,
 ): WorkWords & { sourceProject: string | null } {
   const q = qualifierOf(l.liveness);
   const parts = [wordOf(WORKTREE_WORD, l.sourceKind), l.adminRecord, q.word];
   if (viaLabel !== null) parts.push(`via ${viaLabel}`);
   const ws = Object.hasOwn(WORKSPACE_WORD, l.workspace) ? WORKSPACE_WORD[l.workspace] : UNRECOGNISED_WORD;
   if (ws !== null) parts.push(ws);
-  if (fromLabel !== null) parts.push(fromPart(fromLabel));
   return { parts, title: `${l.canonicalPath}; ${q.title}`, nameAt: 1, sourceProject };
 }
 
 /** A delegated agent's or workflow's row. Its times are the hook events the broker recorded, never helper activity. */
-export function activityLine(a: DelegationActivityWire, fromLabel: string | null = null): WorkWords {
+export function activityLine(a: DelegationActivityWire): WorkWords {
   const word = wordOf(ACTIVITY_WORD, a.sourceKind);
   const q = qualifierOf(a.liveness);
   const name = a.displayName !== null && a.displayName !== '' ? [a.displayName] : [];
-  const parts = [word, ...name, q.word, ...(fromLabel === null ? [] : [fromPart(fromLabel)])];
+  const parts = [word, ...name, q.word];
   return {
     parts, nameAt: name.length > 0 ? 1 : null,
     title: `${word} ${a.upstreamId}: ${q.title}; opened ${a.openedAt}, last recorded hook event ${a.lastEventAt}`,
@@ -203,8 +183,7 @@ export function activityLine(a: DelegationActivityWire, fromLabel: string | null
  *  with no string here sorts first rather than throwing (review 1424 f). */
 const sortKey = (v: unknown): string => (typeof v === 'string' ? v : '');
 
-/** Entries in the order they opened, then by id: the one order of every list of them (`nestFleet`'s rows, the
- *  fleet foot's region, the session header's list). A malformed member sorts first and never throws. */
+/** Entries in the order they opened, then by id: the one order of every list of them (the session header's list). A malformed member sorts first and never throws. */
 export const byOpened = (a: DelegationActivityWire, b: DelegationActivityWire): number =>
   sortKey(a.openedAt).localeCompare(sortKey(b.openedAt)) || sortKey(a.activityId).localeCompare(sortKey(b.activityId));
 
@@ -239,11 +218,19 @@ export function activitiesStartedBy(id: string, w: DelegationProjectionWire): re
 /** Every worktree a session holds, whatever its liveness or group: the session's own details list them (D-8782: the fleet
  *  list draws no worktree row). The ONE reader of the frame for leases, beside `activitiesStartedBy`. A lease is the
  *  session's when it is the display parent (`parentId`, the coordinator under R9) or the worker whose lease it is (`via`);
- *  an offline coordinator's leases are the ones its own page lists. In `firstObservedAt` order. */
-export function leasesStartedBy(id: string, w: DelegationProjectionWire): readonly DelegationLeaseWire[] {
-  return w.leases.filter((l) => l.parentId === id || l.via === id)
+ *  an offline coordinator's leases are the ones its own page lists. So a lease shows on its coordinator's page AND on its
+ *  worker's, where the fleet list had drawn one row (an activity is its parent's only). `workdirs` are the listed sessions'
+ *  working directories: a lease whose path is one of them is not drawn, that session's own row being the honest one (the old
+ *  rule 7, W4-U14). A re-check beside the server's own precedence, legitimately different: the `fleet` and `delegation`
+ *  frames arrive separately, so the session can be listed before the next frame drops the lease. In `firstObservedAt` order. */
+export function leasesStartedBy(
+  id: string, w: DelegationProjectionWire, workdirs: ReadonlySet<string> = NO_WORKDIRS,
+): readonly DelegationLeaseWire[] {
+  return w.leases.filter((l) => (l.parentId === id || l.via === id) && !workdirs.has(l.canonicalPath))
     .sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId));
 }
+
+const NO_WORKDIRS: ReadonlySet<string> = new Set();
 
 // THE WORKTREE CONTROLS (delegation broker wave 5, PR10). The operator keeps a worktree, attaches an inferred one to its own
 // session, or says one is not delegated work; each row reads its disposition and the date it is kept until. O5-6 (a)
