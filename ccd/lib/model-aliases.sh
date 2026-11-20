@@ -236,9 +236,12 @@ _alias_launch_mark() {   # id wrapper class mode flags -> writes the marker iff 
   return 0
 }
 
-_alias_fill_overruled() {   # id born-epoch reading-ts -> rc 0 iff the transcript holds a /model typed in [born, reading-ts] (or an undatable one): that launch's first reading is not the alias's own resolution; rc 1 none; rc 2 the transcript cannot be named, found or read (the opposite of the readback's choice: a wrong fill can record a move, so no fill, and the next tick asks again)
+ALIAS_TPATH=""   # the transcript path `_alias_fill_overruled` last named (empty when it could not): the observe step waits on it with builtins
+_alias_fill_overruled() {   # id born-epoch reading-ts -> rc 0 iff the transcript holds a /model typed in [born, reading-ts] (or an undatable one): that launch's first reading is not the alias's own resolution; rc 1 none; rc 2 the transcript cannot be named, found or read (the opposite of the readback's choice: a wrong fill can record a move, so no fill; no transcript is no proof of no /model). Sets ALIAS_TPATH
   local IFS=$' \t\n' id="$1" born="$2" ts="$3" f m out kind at
+  ALIAS_TPATH=''
   f=$(_transcript_path "$id") || return 2
+  ALIAS_TPATH="$f"
   [[ -f "$f" && -r "$f" ]] || return 2
   m=$(_plat_mtime "$f" 2>/dev/null)
   [[ "$m" =~ ^[0-9]+$ ]] || return 2
@@ -253,7 +256,7 @@ _alias_fill_overruled() {   # id born-epoch reading-ts -> rc 0 iff the transcrip
   return 1
 }
 
-_alias_launch_fill() {   # id -> rc 0 decided (filled, or dropped as overruled), 1 judged and not filled, 2 undecided (the transcript could not be read: ask again). Fills an unfilled marker once, never rewrites a filled one.
+_alias_launch_fill() {   # id -> rc 0 decided (filled, or dropped as overruled), 1 judged and not filled, 2 undecided (the transcript could not be read: ask again, see `_alias_launch_observe`). Fills an unfilled marker once, never rewrites a filled one.
   local IFS=$' \t\n' id="$1" m born wr cls mid line rk rts rmodel ruuid cur bare
   _reg_read_to m "$id" aliaslaunch || return 1
   read -r born wr cls mid <<< "$m"
@@ -276,18 +279,30 @@ _alias_launch_fill() {   # id -> rc 0 decided (filled, or dropped as overruled),
   return 0
 }
 
-_alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always rc 0. Builtins only until a marker is unfilled, its sidecar is newer than it and the sidecar's bytes changed since this supervisor last judged them.
-  local id="$1" f="$REG/$1.aliaslaunch" sc="$REG/usage/$1.json" m body='' key
+# `_alias_launch_observe` costs, per tick and per session: no marker, a filled one or a sidecar no newer than the marker: builtins only (a test and
+# a read). Otherwise the sidecar's bytes are read with builtins and compared with the memo, `_ALIAS_JUDGED[<id>]` = `<born>:<bytes>` last judged: a
+# judged state costs that read alone, and the fill (`_usage_sidecar_read`, `_transcript_path`, `_operator_choice_read`: about 18 forks) runs once per
+# distinct sidecar. An UNDECIDED fill (rc 2: no transcript yet, or one that cannot be read) is memoed the same way, so an unprompted pane costs the
+# fill once, not every tick; the marker stays unfilled and retryable, because no transcript is no proof of no `/model`. What re-opens the question
+# with no forks: a transcript that was absent and is now a file (`_ALIAS_TWAIT[<id>]` holds the path the fill looked at, tested with `[[ -f ]]`),
+# or changed sidecar bytes. `ccd-tick-budget.test.ts` measures exactly these: the steady tick of such a pane costs the idle figure.
+_alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always rc 0 (see the cost note above)
+  local id="$1" f="$REG/$1.aliaslaunch" sc="$REG/usage/$1.json" m body='' key tp rc
   [[ -e "$f" ]] || return 0
   _reg_read_to m "$id" aliaslaunch || return 0
   [[ "$m" == *" -" ]] || return 0   # filled (or not a marker): nothing to do
   [[ -f "$sc" && "$sc" -nt "$f" ]] || return 0
   { IFS= read -r -N 4096 body < "$sc"; } 2>/dev/null || :
-  declare -gA _ALIAS_JUDGED 2>/dev/null || :   # the memo, a supervisor-global array keyed by session id: `<marker's born epoch>:<sidecar bytes>` last judged
+  declare -gA _ALIAS_JUDGED _ALIAS_TWAIT 2>/dev/null || :   # supervisor-global arrays keyed by session id: the memo above, and the transcript path an undecided fill waits on
   key="${m%% *}:$body"
-  [[ "${_ALIAS_JUDGED[$id]-}" == "$key" ]] && return 0
+  if [[ "${_ALIAS_JUDGED[$id]-}" == "$key" ]]; then
+    tp="${_ALIAS_TWAIT[$id]-}"
+    [[ -n "$tp" && -f "$tp" ]] || return 0   # judged on these bytes, and no transcript has appeared since
+  fi
   _alias_launch_fill "$id"
-  (( $? == 2 )) || _ALIAS_JUDGED["$id"]="$key"
+  rc=$?
+  _ALIAS_JUDGED["$id"]="$key"
+  if (( rc == 2 )) && [[ -n "$ALIAS_TPATH" && ! -f "$ALIAS_TPATH" ]]; then _ALIAS_TWAIT["$id"]="$ALIAS_TPATH"; else unset '_ALIAS_TWAIT[$id]'; fi
   return 0
 }
 
@@ -300,7 +315,9 @@ _alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always 
 # is recorded and the session moves at its next spawn (the coordinator's ruling on A3.0 Step 3's fallback). Nothing in the pending check
 # reads `model=`, `picked=` or `held=`: `_route_pending_word_to` compares `class` and `effort` by name only.
 # @ccd-lib:modelid
-_route_applied_put() {   # id list [keep] -> writes routeapplied; with `keep` the new file takes the old file's mtime (`touch -r`) before it is renamed, so the stamp does not move; rc 0 iff it is on disk
+# A narrow writer, legitimately different from `_reg_set` (the one writer of registry fields): only this one can carry the OLD file's mtime across the
+# rename, which is the stamp the readback judges a reading against; every write that is not a kept one is `_reg_set`'s.
+_route_applied_put() {   # id list [keep] -> writes routeapplied; with `keep` the new file takes the old file's mtime (`touch -r`) before it is renamed, so the stamp does not move, and a missing file is NOT created (rc 1); rc 0 iff it is on disk
   local id="$1" tmp __ap_keep="${3-}" f=routeapplied
   [[ -n "$__ap_keep" && -e "$REG/$id.routeapplied" ]] || { _reg_set "$id" routeapplied "$2"; return; }   # every write but a kept one is `_reg_set`'s
   _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
@@ -354,6 +371,10 @@ _alias_model_observe() {   # id -> the recording half of `_alias_observe`; alway
   return 0
 }
 
+# What `ccd-tick-budget.test.ts` measures of this step, on the real supervise loop: a session whose `model=` the run itself records on tick 1,
+# one with an unfilled marker, a newer sidecar and no transcript (the fill runs on tick 1 only), and a lane with an advance file and no aliases
+# file (never read by the tick); each costs the idle-home figure on ticks 2..N. The fork counts of a single fill are in the tests of
+# `_alias_launch_observe` (ccd-alias-launch.test.ts), not in that fixture.
 _alias_observe() {   # id -> the supervise tick's own step (never inside `_route_apply_check`, whose gate 1 returns first when nothing is pending): the launch marker's fill, then the routing record's model id; always rc 0
   _alias_launch_observe "$1"
   _alias_model_observe "$1"

@@ -254,6 +254,65 @@ describe('the observe step fills the marker once', () => {
     expect(marker(), 'the same sidecar bytes are judged again while the verdict was undecided').toBe(`${B} claude opus claude-opus-9-1`);
   });
 
+  // REVIEW 2964 F8 (the coordinator's decision, D-8858): no transcript is not proof there was no manual selection, so the marker stays
+  // unfilled and retryable; but the expensive fill is not re-run every tick while the transcript is absent. The first judgment of a
+  // sidecar's bytes finds no transcript and remembers where it was looked for; each later tick asks the filesystem with builtins
+  // (`[[ -f ]]`) and runs the fill again only when the file has appeared (or the sidecar's bytes change).
+  /** Counts the forking readers one fill uses: the sidecar reader and the transcript namer. */
+  const COUNT_FILL = `${COUNT_READS}
+    eval "_tp_real() $(declare -f _transcript_path | tail -n +2)"
+    _transcript_path() { echo x >> "$HOME/tp-count"; _tp_real "$@"; };`;
+  const tpCount = (): number => {
+    const f = path.join(h.home, 'tp-count');
+    return fs.existsSync(f) ? fs.readFileSync(f, 'utf8').split('\n').filter(Boolean).length : 0;
+  };
+
+  it('an unfilled marker with a sidecar and no transcript forks once, not every tick', () => {
+    plant(); sidecar(B + 100, 'claude-opus-9-1');   // no transcript: the pane has not been prompted
+    h.sh(`${COUNT_FILL} for _ in 1 2 3 4 5 6; do _alias_observe ${ID}; done`);
+    expect(marker(), 'undecided: still unfilled').toBe(`${B} claude opus -`);
+    expect(reads(), 'one sidecar read for six ticks').toBe(1);
+    expect(tpCount(), 'one transcript naming for six ticks').toBe(1);
+    // a changed sidecar is a new judgment, the transcript still absent: one more read, then quiet again
+    sidecar(B + 110, 'claude-opus-9-1', UUID, B + 130);
+    h.sh(`${COUNT_FILL} for _ in 1 2 3 4 5 6; do _alias_observe ${ID}; done`);
+    expect(reads()).toBe(2);
+    expect(tpCount()).toBe(2);
+    expect(marker()).toBe(`${B} claude opus -`);
+  });
+
+  it('a transcript that appears later is read and fills the marker', () => {
+    plant(); sidecar(B + 100, 'claude-opus-9-1');
+    h.sh(`${COUNT_FILL} for _ in 1 2 3; do _alias_observe ${ID}; done`);
+    expect(marker()).toBe(`${B} claude opus -`);
+    expect(reads()).toBe(1);
+    writeTranscript([turn(B + 90)]);   // the first prompt: the transcript is written, the sidecar's bytes are the same
+    h.sh(`${COUNT_FILL} for _ in 1 2 3 4; do _alias_observe ${ID}; done`);
+    expect(marker(), 'the unchanged sidecar is judged again because the transcript appeared').toBe(`${B} claude opus claude-opus-9-1`);
+    expect(reads(), 'one more read, for the fill; a filled marker reads none').toBe(2);
+  });
+
+  it('a transcript that appears later with a /model typed in the window drops the marker', () => {
+    plant(); sidecar(B + 100, 'claude-opus-9-0');
+    observe(3);
+    expect(marker()).toBe(`${B} claude opus -`);
+    writeTranscript([turn(B + 30), cmd(B + 50, 'model', 'claude-opus-9-0'), ack(B + 50, SESSION('Opus 9')), turn(B + 90)]);
+    observe(2);
+    expect(marker(), 'the manual choice is seen once the transcript exists: the first reading is not the alias\'s own').toBeNull();
+  });
+
+  it('a directory where the transcript should be is waited on like an absent one: no re-read per tick', () => {
+    plant(); sidecar(B + 100, 'claude-opus-9-1');
+    fs.mkdirSync(transcriptPath(), { recursive: true });   // a directory where the file should be: it never reads as a file
+    h.sh(`${COUNT_FILL} for _ in 1 2 3 4; do _alias_observe ${ID}; done`);
+    expect(marker()).toBe(`${B} claude opus -`);
+    expect(reads()).toBe(1);
+    fs.rmSync(transcriptPath(), { recursive: true });
+    writeTranscript([turn(B + 90)]);
+    observe();
+    expect(marker(), 'control: once it is a file it is read').toBe(`${B} claude opus claude-opus-9-1`);
+  });
+
   it('a reading before the process start does not fill', () => {
     plant(); sidecar(B - 5, 'claude-opus-9-1'); writeTranscript([turn(B + 90)]);
     observe();
@@ -327,6 +386,9 @@ describe('the observe step fills the marker once', () => {
     plant('claude-opus-9-1'); sidecar(B + 400, 'claude-opus-9-0', UUID, B + 400);
     const filled = trace();
     expect(filled.rc).toBe('0'); expect(filled.err).toBe(''); expect([...filled.pids]).toEqual([]);
+    // the control (review 2964 F11c): the same trace SEES the forks of an unfilled marker with a newer sidecar, so an empty set above is a measurement
+    plant(); sidecar(B + 100, 'claude-opus-9-1');
+    expect(trace().pids.size, 'control: the fill\'s command substitutions fork, and the trace sees them').toBeGreaterThan(0);
   });
 });
 
