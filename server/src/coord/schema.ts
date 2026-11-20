@@ -4074,6 +4074,23 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE programs ADD COLUMN flowId INTEGER;
   ALTER TABLE programs ADD COLUMN flowVersion INTEGER;
   `,
+
+  // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
+  // Flows wave 3b (plan `2026-11-20-flows-w3b.md`): the outcomes a programme's coordinator reports for an instruction or
+  // skill block of its pinned flow, each with the block the flow leads to and what the engine WOULD do there
+  // (`flows/outcome.ts#wouldSendOf`). The engine's shadow: a row is evidence, and nothing reads it to act. Inserted once,
+  // never updated. Writer: `server/src/flows/flowsStore.ts#recordFlowOutcome` alone. ONE NEW TABLE AND ITS INDEX: an
+  // older build at this `user_version` takes rule 3 and never names it. Same slot rule as 110 and 111; RE-MEASURE (it must
+  // print 111 before this entry is counted):
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE flow_outcomes (
+    id INTEGER PRIMARY KEY, program TEXT NOT NULL, flowId INTEGER NOT NULL, version INTEGER NOT NULL,
+    blockId TEXT NOT NULL, outcome TEXT NOT NULL, nextBlock TEXT NOT NULL, wouldSend TEXT NOT NULL,
+    byId TEXT NOT NULL, at INTEGER NOT NULL
+  );
+  CREATE INDEX flow_outcomes_by_program ON flow_outcomes (program, at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

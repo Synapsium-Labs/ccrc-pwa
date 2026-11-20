@@ -767,9 +767,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[107] (mail.urgentAs and mail_urgent, urgent mail, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, the gate's fence refusals, Overlord W1 gates B),
     // and MIGRATIONS[109] (flows and flow_versions, flows wave 1),
-    // and MIGRATIONS[110] (flow_settings and the programme flow pin, flows wave 2).
-    expect(COORD_SCHEMA_VERSION).toBe(111);
-    expect(MIGRATIONS.length).toBe(111);
+    // and MIGRATIONS[110] (flow_settings and the programme flow pin, flows wave 2),
+    // and MIGRATIONS[111] (flow_outcomes, flows wave 3b).
+    expect(COORD_SCHEMA_VERSION).toBe(112);
+    expect(MIGRATIONS.length).toBe(112);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -904,8 +905,8 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[106] (the drift cursors, the inbound notes and linear_inbound.retiredWhy, Linear hierarchy wave 4
     // follow-ups),
     // and MIGRATIONS[107] (mail.urgentAs, mid-turn mail PR 2),
-    // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B) and MIGRATIONS[109] (flows and flow_versions, flows wave 1) and MIGRATIONS[110] (flows wave 2); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(111);
+    // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B) and MIGRATIONS[109] (flows and flow_versions, flows wave 1) and MIGRATIONS[110] (flows wave 2) and MIGRATIONS[111] (flows wave 3b); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(112);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

@@ -68,7 +68,9 @@ export function registerFlowsRoutes(app: FastifyInstance, opts: FlowsRouteOpts):
       if (!docs.has(p.version)) docs.set(p.version, opts.coord!.readFlowVersion(id, p.version));
       const v = docs.get(p.version)!;
       const doc = v.ok && v.value !== null ? v.value.doc : null;
-      return { slug: p.slug, title: p.title, version: p.version, position: flowPositionOf(doc, p.facts) };
+      const last = opts.coord!.lastFlowOutcome(p.slug);
+      return { slug: p.slug, title: p.title, version: p.version, position: flowPositionOf(doc, p.facts),
+        ...(last === null ? {} : { lastOutcome: { blockId: last.blockId, outcome: last.outcome, nextBlock: last.nextBlock, wouldSend: last.wouldSend, at: last.at } }) };
     });
     return { programmes };
   });
