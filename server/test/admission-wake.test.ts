@@ -710,6 +710,26 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     expect(blockMail(l).map((m) => m.subject)).toEqual([`wake: call ${parked} (capacity)`]);
   });
 
+  it('capacity follow-ups (T4 F3): block wakes spend the lane\'s own wake budget, oldest first', async () => {
+    const l = await lane();
+    const ids = ['prog-a', 'prog-b', 'prog-c'].map((p, k) => parkCapacity(l, null, T0 - (3 - k) * MIN, p));
+    await l.sweep(T0);
+    expect(ids.map((id) => l.coord.callById(id)!.wokenAt !== null)).toEqual([true, true, false]);
+    expect(blockMail(l)).toHaveLength(WAKE_BURST);
+    // One slot left under the cap: the third block is woken on the next pass, inside the room.
+    l.coord.setCaps({ maxConcurrentWorkers: 1 });
+    await l.sweep(T0 + MIN);
+    expect(l.coord.callById(ids[2]!)!.wokenAt).toBe(T0 + MIN);
+  });
+
+  it('capacity follow-ups (T4 F3): block wakes never pass the room, oldest first', async () => {
+    const room = await lane();
+    room.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const two = ['prog-a', 'prog-b'].map((p, k) => parkCapacity(room, null, T0 - (2 - k) * MIN, p));
+    await room.sweep(T0);
+    expect(two.map((id) => room.coord.callById(id)!.wokenAt !== null)).toEqual([true, false]);
+  });
+
   it('capacity follow-ups (T4 F3): no room, or a pause or mail-disabled, wakes no block; room later wakes it', async () => {
     const l = await lane();
     l.coord.setCaps({ maxConcurrentWorkers: 1 });

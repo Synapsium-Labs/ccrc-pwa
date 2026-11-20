@@ -234,7 +234,8 @@ export const LANE_ARM_TEXT = {
         + 'or open on a screen, is put to sleep, and its coordinator is mailed once for that sleep. Its session ends; its '
         + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
         + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
-        + 'worker is put to sleep, because its coordinator could not be told.',
+        + 'worker is put to sleep, because its coordinator could not be told. Every waiting worker is measured on the '
+        + 'first pass after this is set Live, including one the shadow log named minutes before.',
       gate: null,
     },
     [CAP_COUNTS_WORKING_LANE]: {
@@ -246,7 +247,8 @@ export const LANE_ARM_TEXT = {
       liveNote: 'A run whose worker is waiting or asleep holds no slot under the workers cap; the slots this frees are handed '
         + 'out a few at a time, and a send-back to a live or sleeping worker, or a resume of a live one, is never refused at '
         + 'the cap. A worker '
-        + 'that wakes counts again at once.',
+        + 'that wakes counts again at once. A coordinator the cap refused is told of a freed slot only when one can be handed '
+        + 'out, so it is not told again every minute.',
       gate: null,
     },
   },
