@@ -2,27 +2,31 @@
 
 Plan: `docs/superpowers/plans/2026-11-18-overlord-approvals.md` (on `main`), §3.3, Table 8's PR 3 row and Tasks 3.1 to 3.3.
 Departures are listed by slug; the coordinator mints the numbers. Read with its two companions in this directory:
-`approvals-pr3b-packet.md` (the route hunks, not applied) and `approvals-pr3-verifier-patch.md` (the verifier's v2 rule, PR 3v,
-not applied).
+`approvals-pr3b-packet.md` (the route hunks, applied here under item 486) and `approvals-pr3-verifier-patch.md` (the verifier's
+v2 rule, PR 3v, not applied).
 
 ## Inert in this PR, and what turns it on
 
-The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 26712):
+The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 26712). Item 486 then let the route file's holder
+take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's hunks ride this PR:
 
-- **PR 3 (this PR)** is everything outside the held route file and the verifier. It is INERT: the Shadow lanes card's new
+- **PR 3 (this PR)** is everything outside the verifier. It is INERT: the Shadow lanes card's new
   `approval-park` row carries a gate (`shared/lane-arm.ts`), so Live is refused `lane-gated` at the card, and every reader
   reads the lane as not live (`laneArmLive`). The mint therefore stores `shadow`, nothing parks, no slot is reserved, no row is
   moved by the last-poll move, and no v2 record is signed. A shadow lapse records `wouldPark`. Pinned by
   `approval-park.test.ts`'s two "inert" cases (a shadow mint never parks; a shadow row's unfetched ruling is never moved) and
   by `approval-park-inert.test.ts` (the gate stands; an unchanged verifier prints nothing for a signed v2 record).
-- **PR 3b** wires the request route's `park` word (H1), the ruling read's `fetchedAt` (H2), the operator door's `approval-<n>`
-  arm (H3, with the account gate in the door's wiring) and the claimant door's deny-standing read (H4). PR 3 built and tested
-  the two functions H2 and H3 call: `Questions#approvalRulingAnswer` and `approvalParkDoor.ts#approvalOperatorArm`.
+- **The route hunks (once PR 3b), in this PR** (`approvals-pr3b-packet.md`: twelve added lines in `routes.ts`, nothing
+  removed): the request route's `park` word (H1), the ruling read's `fetchedAt` (H2, an added call to
+  `Questions#noteRulingServed`), the operator door's `approval-<n>` arm (H3, `approvalParkDoor.ts#approvalOperatorArm`, with
+  the account gate in the door's wiring: one field in `server.ts`, door B1's yes) and the claimant door's deny-standing read
+  (H4). `APPROVAL_RULED_GRACE_MS` moves from `watch.ts` to `askwindow.ts` (capacity Task 2's yes), so the route and the watcher
+  read one constant. Pinned through the real server by `approval-park-routes.test.ts`, red on each hunk's absence.
 - **PR 3v** gives the verifier its v2 rule for `operator`. Until it is on the fleet box, an operator's v2 record prints
   nothing and the menu paints (Table 3b's older-verifier row).
-- **The gate lifts** only when H1 to H4 and PR 3v are both in place (the coordinator's ruling: PR 3b's arming check refuses
-  `live` until the verifier knows v2). Then Live is the operator's, behind the card's step-up, refused while sign-in is dark,
-  and only after Task 3.2's measurement before Live is read.
+- **The gate lifts** only when PR 3v is in place (the coordinator's ruling: the arming check refuses `live` until the
+  verifier knows v2); the gate's words now name only that. Then Live is the operator's, behind the card's step-up, refused
+  while sign-in is dark, and only after Task 3.2's measurement before Live is read.
 
 ## What shipped
 
@@ -61,12 +65,13 @@ The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 2671
 ## Departures
 
 - `inert-by-the-lane-gate` (the coordinator's split): the plan's lane goes Live by the operator's arming; here it cannot, until
-  PR 3b and PR 3v, by the card's own gate mechanism (`laneArmGate`), not a new switch.
-- `route-hunks-in-pr3b`: H1 to H4 and the server's one wiring line move to PR 3b (`approvals-pr3b-packet.md`).
+  PR 3v, by the card's own gate mechanism (`laneArmGate`), not a new switch.
+- `route-hunks-by-packet` (item 486): H1 to H4, once split into PR 3b, ride this PR as the holder's agreed packet
+  (`approvals-pr3b-packet.md`), with the server's one wiring line; the route file's claim stays the holder's.
 - `verifier-in-pr3v`: Task 3.3's verifier rule and its red cases move to PR 3v (`approvals-pr3-verifier-patch.md`).
 - `signing-site-standing-optional` (mail 26692): the one signing site re-checks the deny standing when its caller read it (the
-  retry's mint always does); the claimant's door does not pass it until PR 3b's H4, and then answers exactly as before (PR 0's
-  residual, which H4 closes). A case pins each path.
+  retry's mint always does, and the claimant's door since H4); a caller that passes no read answers exactly as before (PR 0's
+  residual, which H4 closes for the door). A case pins each path.
 - `shadow-park-answer`: the decider's fifth word, `shadow-park` (a lapse that records `wouldPark`), so the sweep decides
   nothing about the shadow record.
 - `met-ruling-settles-the-key`: when a retry meets a ruling, the key's `parked` rows are staled in the same transaction, so they
@@ -87,20 +92,20 @@ The coordinator split PR 3 three ways on 2026-11-19 (mails 26690, 26692 and 2671
   that meets a ruling); a decline or a pane press keeps it, so a loop the operator answers in the pane still meets the cap.
 - `parked-reaches-the-operator`: the census counts a `parked` row as reaching the operator (Table 2a's path 4, `parked`),
   whoever rules it later; `capped` and the other words are counted in `byPark`.
-- `fetched-at-grace-param`: `approvalRulingAnswer` takes the grace; PR 3b moves `APPROVAL_RULED_GRACE_MS` to `askwindow.ts` so
-  the route and the watcher read one constant.
+- `fetched-at-as-an-added-call`: the ruling read's `fetchedAt` is `Questions#noteRulingServed`, called once after the read
+  builds its answer (so the route hunk only adds a line), taking the grace; `APPROVAL_RULED_GRACE_MS` moves to `askwindow.ts`
+  so the route and the watcher read one constant.
 - `no-capability-word`: `approval-park-v1` is not added. Nothing would read it: an older server omits `park`, which the hook
   reads as shadow (PR 0 to PR 2 dropped theirs for the same reason).
 - `park-ruling-is-not-a-pane-answer`: the console's client for the operator's ruling is `ruleParkedApproval`, beside the
   answer lifecycle, never through it: the lifecycle owns pressing a painted dialog (`rings/pwa-one-owner.test.ts`'s one
-  answer path), and a park ruling presses nothing. It posts to the same operator door, whose `approval-<n>` arm PR 3b wires.
+  answer path), and a park ruling presses nothing. It posts to the same operator door, whose `approval-<n>` arm H3 adds.
 - `parked-group-above-the-list`: the console draws the group above the programme list, so it shows when nothing else waits.
 
 ## Residuals
 
 - Task 3.2's measurement before Live (does a model retry a parked command unchanged; does the park burn a turn) is not taken:
-  the lane cannot go Live in PR 3. It belongs before the gate lifts (PR 3b's note).
-- The claimant door's deny currency is re-checked at signing only from PR 3b's H4 (PR 0's residual until then).
+  the lane cannot go Live in PR 3. It belongs before the gate lifts (PR 3v's note).
 - The operator's ruling cannot be printed until PR 3v (the menu paints), by design.
 - A parked row's push carries no outbox row; a server restart between the park and the push loses the push, as any sink push.
 
@@ -127,9 +132,15 @@ Every guard was measured red by a mutant, each file restored from a copy saved b
   in its compare-and-set); the gate ignored (the inert case); the rule door ignoring the standing read (F2's carry); a
   coordinator's deny, and a decline, not recorded on the key; the met ruling leaving the key parked; a closed run's parked row
   not staled; no prune; `fetchedAt` always recorded; the retry's brief mailed after a meet; no push at park time.
-- **An equivalent mutant, measured and recorded:** dropping only the spend's `rulingUses = 0` clause survives, because the
-  spend runs in one synchronous transaction that re-reads the park and refuses a spent ruling first. The meaningful mutant
-  (every unspent check dropped) is the one above.
+- **The route hunks and `noteRulingServed`, 6 hand mutants, all killed** (`approval-park-routes.test.ts`, and
+  `approval-park.test.ts` for the grace): the `201` without `park`; the ruling read not recording; the door answering
+  `kind-mismatch` for an approval id; `claimantDeps` without `denyStanding`; `fetchedAt` recorded whatever the grace; and
+  `fetchedAt` rewritten on every read, with the owner's row check and the store's `fetchedAt IS NULL` both dropped.
+- **Two equivalent mutants, measured and recorded:**
+  - Dropping only the spend's `rulingUses = 0` clause survives. The spend runs in one synchronous transaction that re-reads
+    the park and refuses a spent ruling first. The meaningful mutant, with every unspent check dropped, is the one above.
+  - Dropping only `noteRulingServed`'s `fetchedAt !== null` check survives. The store's write is
+    `WHERE fetchedAt IS NULL`, so each guard covers the other, and the mutant with both dropped is the one above.
 - The plan's mutant "call a press function from the new arm" has no site: the arm's core takes no press function at all
   (`OperatorApprovalRule` has none), which `approvalParkDoor.ts`'s ladder and the core's signature hold.
 

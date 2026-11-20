@@ -436,7 +436,7 @@ export interface ApprovalRaiseDeps {
   readonly liveVersionOf: (rec: SessionRecord) => Promise<string | null>;
   readonly journalDigestMismatch: (sessionId: string, now: number) => void;
   /** Approvals PR 3: the park lane's gate (`laneArmGate`, the card's own), passed only by a test that drives the lane's live
-   *  path past the gate that holds it inert until PR 3b. */
+   *  path past the gate that holds it inert until PR 3v. */
   readonly parkGate?: (lane: LaneArmLane) => string | null;
 }
 
@@ -484,8 +484,8 @@ export interface QuestionDoorAnswer { readonly status: number; readonly body: un
  *  the notice sink, the kill switches' read and the press of a digit into the child's pane (`answerAsk` over the
  *  server's one `KeyedQueue`). `coord`, `io`, `cfg` and `tmux` are the server's. */
 export type ClaimantDoorDeps = Pick<ApprovalRaiseDeps, 'coord' | 'io' | 'cfg' | 'tmux' | 'signerFor' | 'rulingsAllowedHere' | 'heldFor'> & {
-  /** Approvals PR 3 (F2's carry): the child's deny standing read AT SIGNING. Optional: absent (the claimant's door until
-   *  PR 3b's H4 passes it), the one signing site skips that re-check and behaves exactly as before (PR 0's residual). */
+  /** Approvals PR 3 (F2's carry): the child's deny standing read AT SIGNING. Optional: absent (the claimant's door passes
+   *  it since H4; a caller without it), the one signing site skips that re-check and behaves exactly as before (PR 0's residual). */
   readonly denyStanding?: ApprovalRaiseDeps['denyStanding'];
   readonly notice: NoticeSink;
   readonly approvalsKilled: () => Promise<boolean>;
@@ -2107,7 +2107,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     const held = approvalInputs.get(id);
     const again = verdict !== 'allow' || row.class === 'forbidden' ? row.class : held === undefined ? 'escalate'
       : approvalClass(held.tool, held.input, { ...(rootsForChild(rec, cfg.home) ?? { worktree: null, tmpRoot: null, scratch: null, home: cfg.home }), cwd: held.cwd });
-    // F2's carry (approvals PR 3): the deny standing read at signing, when the door's deps carry the read (PR 3b's H4);
+    // F2's carry (approvals PR 3): the deny standing read at signing, when the door's deps carry the read (H4, routes.ts);
     // absent, `unread`, and the site behaves exactly as before (PR 0's residual). Read before the synchronous part.
     let standingNow: SigningFacts['denyStandingNow'] = 'unread';
     if (verdict === 'allow' && d.denyStanding !== undefined) {

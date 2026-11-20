@@ -137,7 +137,7 @@ export const APPROVAL_PARK_CASES: readonly Case<ApprovalParkModule>[] = [
     expect(m.signingRefusal(sign({ denyStandingNow: 'history' }))).toBe('deny-not-current');
     expect(m.signingRefusal(sign({ denyStandingNow: 'none' }))).toBe('deny-not-current');
   } },
-  { name: 'sign: no standing read at signing (the claimant door until PR 3b) answers as before', run: (m) => {
+  { name: 'sign: no standing read at signing (the claimant door before H4) answers as before', run: (m) => {
     expect(m.signingRefusal(sign({ denyStandingNow: 'unread' }))).toBeNull();
     expect(m.signingRefusal(sign({ denyStandingNow: 'unread', rowDenyCurrent: false }))).toBe('deny-not-current');
   } },

@@ -4047,7 +4047,7 @@ export const MIGRATIONS: readonly string[] = [
   // key, written only through `approvalParkStore.ts` from the questions owner: the slots its `live` rows reserve at mint
   // (at most three), its retries, its first park and horizon (`state` `open` or `void`), a principal's ruling and its one
   // use (`rulingUses` 0 or 1), and the coordinator's verdicts on the key (F3). The Shadow lanes card's `approval-park` row,
-  // seeded `shadow`, gated in this build until PR 3b (`lane-arm.ts`).
+  // seeded `shadow`, gated in this build until PR 3v (`lane-arm.ts`).
   // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
   // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
   // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108 and Overlord gates B (#3076) 109 first, so

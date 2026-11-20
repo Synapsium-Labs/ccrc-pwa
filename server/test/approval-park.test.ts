@@ -1,8 +1,8 @@
 // The park over a real coordination store (approvals plan 2026-11-18, §3.3, Tasks 3.1 and 3.3; approvals PR 3): the mint's
 // word and its slot, the one write site of `parked`, the park record, the parked-aware rule door, the last-poll move, the one
 // signing site, the operator's core, the nudge, the void and the prune. The questions owner is driven directly
-// (`createQuestions`), because the request route's park word, the ruling read's `fetchedAt` and the operator door's arm are
-// wired in PR 3b; and the lane is driven live past its gate (`parkGate`), because this build holds it inert. A case named
+// (`createQuestions`); the route hunks that wire it are pinned through the server in `approval-park-routes.test.ts`. The lane
+// is driven live past its gate (`parkGate`), because this build holds it inert. A case named
 // "inert" pins that hold. Neutral fixtures only; never the live HOME.
 import { describe, it, expect, afterEach } from 'vitest';
 import { createPublicKey, verify } from 'node:crypto';
@@ -93,7 +93,7 @@ const signedRecord = (r: Rig, id: number): ApprovalRulingRecordAny => {
   return ruling.record;
 };
 
-describe('inert until PR 3b: the lane\'s gate holds it in shadow', () => {
+describe('inert until PR 3v: the lane\'s gate holds it in shadow', () => {
   it('inert: with the lane stored live but its real gate standing, the mint stores shadow and the lapse never parks', async () => {
     const r = await rig({ gateOpen: false });
     const a = await minted(r.raise());
@@ -437,7 +437,7 @@ describe('the one signing site\'s deny currency (F2\'s carry from PR 0\'s review
     expect(res).toMatchObject({ status: 409, body: { error: 'deny-not-current' } });
     expect(r.row(a.id).state).toBe('held');
   });
-  it('with no standing read passed (the claimant door until PR 3b), the door answers as today', async () => {
+  it('with no standing read passed (the claimant door before H4), the door answers as today', async () => {
     const r = await rig();
     const a = await minted(r.raise());
     expect((await r.rule(a.id, 'allow')).status).toBe(200);

@@ -113,8 +113,8 @@ export function parkRecordRefusal(
 
 /** What the one signing site's guard reads (§3.4, F11). `freshClass` is the class the row being signed for was given (the
  *  retry's own, classified again, or the in-window row's class run again over its held input); `denyStandingNow` is the
- *  child's deny standing read AT SIGNING, or `unread` when the caller passed no read (the claimant's door until PR 3b's
- *  H4: exactly today's behaviour, PR 0's recorded residual); `claimantNow` is the run's claimant as `heldFor` read it at
+ *  child's deny standing read AT SIGNING, or `unread` when the caller passed no read (exactly the
+ *  behaviour before PR 3's H4, PR 0's recorded residual; the claimant's door passes one since H4); `claimantNow` is the run's claimant as `heldFor` read it at
  *  signing, for a `coordinator` ruling; `parkDenied` is the park's record of a coordinator's deny on the key. */
 export interface SigningFacts {
   readonly authority: Exclude<ApprovalRulingAuthority, 'overlord'>;

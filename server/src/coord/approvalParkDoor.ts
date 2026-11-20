@@ -1,8 +1,8 @@
 // THE OPERATOR DOOR'S `approval-<n>` ARM (approvals plan 2026-11-18, §3.3.2, F3-a; approvals PR 3). Ring L4, context C6
 // (operator questions): the arm's front ladder after the door has parsed the id, then the questions owner's core. It lives in
 // the approvals lane's own file because the door it joins (`POST /api/questions/:id/answer`) is registered in the held route
-// file: PR 3b wires this handler into that door in place of its `kind-mismatch` answer for an `approval-<n>` id, with the
-// account gate reaching the door's wiring. Until then nothing calls it but its tests, and the park's lane stays gated.
+// file: that door's one added arm (item 486's packet, H3) hands an `approval-<n>` id to this handler before its
+// `kind-mismatch` answer, with the account gate reaching the door's wiring. The park's lane stays gated until PR 3v.
 //
 // The ladder: the account gate first, WITH ITS STEP-UP (it answers `auth-off` while sign-in is dark, as the gate's other
 // step-up doors do, and an unfresh session is asked to step up); then the body, `{kind: 'approval', verdict, reason?}`, where

@@ -1,5 +1,5 @@
-// Approvals PR 3 ships inert (the coordinator's rulings of 2026-11-19: the split into PR 3b, and the verifier's change into
-// PR 3v). Two pins hold it:
+// Approvals PR 3 ships inert (the coordinator's rulings of 2026-11-19: the verifier's change goes into PR 3v; the route
+// hunks once split into PR 3b ride this PR under item 486's packet). Two pins hold it:
 //  - the park's Shadow lanes row is GATED, so `live` is refused at the card and reads as not live everywhere, and the mint
 //    stores `shadow` (`approval-park.test.ts`'s "inert" cases pin the mint and the lapse);
 //  - the hook's ruling verifier is unchanged in PR 3, and it prints NOTHING for a v2 record, signed or not, so a v2 operator

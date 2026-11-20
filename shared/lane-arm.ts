@@ -224,10 +224,9 @@ export const LANE_ARM_TEXT = {
       liveNote: 'A child\'s permission prompt whose coordinator does not rule it in time is parked: the child is told the '
         + 'command did not run and to wait, the prompt is listed on Waiting on you, and a later ruling (its coordinator\'s, '
         + 'or yours) is met by the child\'s retry of the same command.',
-      // INERT UNTIL PR 3b (the coordinator's split, 2026-11-19): the request route's park word, the ruling read's
-      // `fetchedAt` and the operator door's approval arm live in the held route file, so Live is refused here until then.
-      gate: 'This lane goes live once the request route carries the park\'s word, the ruling read records when a ruling '
-        + 'was fetched, and the operator\'s door takes an approval; until then nothing parks.',
+      // INERT UNTIL PR 3v (the coordinator's rulings of 2026-11-19): the route hunks are in this build (item 486's
+      // packet), but the fleet box's verifier does not yet read the operator's signed ruling, so Live is refused here.
+      gate: 'This lane goes live once the fleet box\'s verifier reads a ruling signed for you; until then nothing parks.',
     },
   },
   shadowLog: (path: string): string => `Shadow record: ${path} on the fleet box. Read it before going live.`,

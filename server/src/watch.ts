@@ -49,7 +49,7 @@ import { askActions, askKey } from './askkey.js';
 // module — `watch.ts` imports `assembleFleetWithPanePids` from it — so they now live
 // where both may read them. `ASK_SWEEP_MS` below is unaffected: it is this
 // lane's poll cadence, not a window, and this file is still its only reader.
-import { ASK_SETTLE_TICKS } from './askwindow.js';
+import { APPROVAL_RULED_GRACE_MS, ASK_SETTLE_TICKS } from './askwindow.js';
 import type { SessionRecord } from './registry.js';
 import type {
   ArchivedHeld, ChildMark, ChildReclaimAttention, ChildReclaimGeneration, ChildReclaimKeptWord, CoordStatus, DeadCoordinatorAttention, Dialog, ExpiryAttention, FleetSession, HookAsk, HookAskQuestion,
@@ -612,10 +612,7 @@ function parkBoxSeen(box: string | null, parkBox: string | null): 'changed' | 's
  *  resume. */
 // `ASKS_DISABLED_MARKER` is imported from its `shared/switches.ts` row as well (D-5855).
 
-/** D-5298 (plan Task 16): how long a deferred approval push waits after every row it covers was ruled, for the hook
- *  to print the ruling and the dialog to clear, before `sweepApprovals` pushes anyway. Two hook polls (2 s each) and
- *  a sweep's slack. */
-const APPROVAL_RULED_GRACE_MS = 10_000;
+// `APPROVAL_RULED_GRACE_MS` (D-5298) lives in `askwindow.ts` since approvals PR 3: the ruling read uses it too.
 
 // `UNCHECKED_PR` was a local copy of the literal `PrKeycap.tsx` and
 // `prstate.ts` each also held — integration finding 6. One definition now, in
