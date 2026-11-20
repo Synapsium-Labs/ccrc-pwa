@@ -2210,6 +2210,24 @@ describe('the refused-text close has its own identity (review 2834 A1, A2, A6)',
     expect(mails(r)).toEqual([]);
   });
 
+  it('a refused-text close in a team no project claims: the fallback and the cancel go on, actedAt is set, no mail (review 2885 F6)', async () => {
+    // The case above has a project holding the team with no owner id; here no project holds team AAA at all, so
+    // `linearOwnerOfTeam` answers null and `mailOwnerOnce` returns on its other half.
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.db.prepare('UPDATE project_linking SET teamKey = ? WHERE project = ?').run('ZZZ', 'project-a');
+    expect(r.plan.hierarchyProjectsOf().some((p) => p.teamKey === 'AAA')).toBe(false);
+    const before = mails(r);                                        // the triage mail of the detection, when the team still had its owner
+    r.plan.setInboundState(U(12), { state: 'closed', reason: REFUSED });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    const w = writes(r);
+    expect(w.map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(String(w[0]!.input['body'])).not.toContain('AAA-99');
+    expect(rowOf(r, 12)!.actedAt).toBe(r.t.now);
+    expect(mails(r)).toEqual(before);
+  });
+
   it('a fallback answered conflict (an earlier attempt landed it) still mails once; a later pass of the same close mails nothing more', async () => {
     const r = await rig({ mode: 'public' });
     await detect(r, [node(12)]);

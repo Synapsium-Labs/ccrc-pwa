@@ -87,7 +87,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     const v = await q.raiseApproval(req(), raiseDeps(f, { denyStanding: async () => 'history' }), NOW);
-    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60 });
+    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60, park: 'shadow' });
     const r = f.coord.approvalById(1);
     expect(r.ok && r.row !== null && { state: r.row.state, cls: r.row.class, denyCurrent: r.row.denyCurrent })
       .toEqual({ state: 'held', cls: 'ordinary', denyCurrent: false });
@@ -170,7 +170,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     const rows: Array<[ApprovalRaiseRequest, ApprovalRaiseDeps, string]> = [
       [{ ...t, truncated: true }, raiseDeps(f), 'truncated'],
       [req(hookInput({ toolInput: ['rm'] as never })), raiseDeps(f), 'unparseable'],
-      [req(), raiseDeps(f, { heldFor: async () => ({ kind: 'released', parent: PARENT, runId: f!.runId, reason: 'parent-not-live' }) }), 'parent-not-live'],
+      [req(), raiseDeps(f, { heldFor: async () => ({ kind: 'released', parent: PARENT, runId: f!.runId, bindingRunId: f!.runId, reason: 'parent-not-live' }) }), 'parent-not-live'],
       [req(hookInput({ command: 'ccd ws-rm project-a-still-cove' })), raiseDeps(f), 'forbidden'],
     ];
     for (const [r, d, reason] of rows) {
@@ -187,7 +187,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     f = await standardFixture();
     const q = createQuestions({ coord: f.coord });
     const v = await q.raiseApproval(req(), raiseDeps(f), NOW);
-    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60 });
+    expect(v).toEqual<ApprovalRaiseVerdict>({ kind: 'minted', id: 1, waitS: 60, park: 'shadow' });
     expect(mailCount(f)).toBe(1);
     expect(q.approvalInput(1, NOW)).toMatchObject({ tool: 'Bash', input: { command: 'rm -rf build' }, until: NOW + 60_000 });
     expect(createQuestions({ coord: f.coord }).approvalInput(1, NOW), 'another instance holds nothing').toBeUndefined();

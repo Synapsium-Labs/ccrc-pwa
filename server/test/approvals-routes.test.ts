@@ -40,11 +40,12 @@ const ask = async (fx: Approvals, input: Record<string, unknown> = ORDINARY, id 
 };
 
 describe('POST /api/approvals — the request (spec §6.3 server steps 1 and 2)', () => {
-  it('a held request answers 201 {id, waitS}: 60 on the main thread (D-5441), mailed to the claimant', async () => {
+  it('a held request answers 201 {id, waitS, park}: 60 on the main thread (D-5441), mailed to the claimant', async () => {
     f = await standardFixture();
     const { res, id } = await ask(f);
     expect(res.statusCode).toBe(201);
-    expect(res.json()).toEqual({ id, waitS: 60 });
+    // Approvals PR 3 (H1): the park word decided at mint rides the 201; `shadow` while the park's lane is gated.
+    expect(res.json()).toEqual({ id, waitS: 60, park: 'shadow' });
     const row = rowOf(f, id);
     expect({ state: row.state, parentId: row.parentId, class: row.class, agentId: row.agentId, runId: row.runId })
       .toEqual({ state: 'held', parentId: PARENT, class: 'ordinary', agentId: '', runId: f.runId });
@@ -544,7 +545,7 @@ describe('the working directory reaches the classifier only on a trusted version
     f = await standardFixture();
     f.coord.db.prepare("UPDATE claude_builds SET cwd = 0 WHERE build = '2.1.302'").run();
     const rel = await ask(f, hookInput({ agentId: 'a0000000000000001', command: 'rm -rf build' }));
-    expect(rel.res.json()).toEqual({ id: rel.id, waitS: 180 });
+    expect(rel.res.json()).toEqual({ id: rel.id, waitS: 180, park: 'shadow' });
     expect(rowOf(f, rel.id).class).toBe('escalate');
     expect((await f.rule(rel.id, PARENT, 'allow')).json()).toMatchObject({ error: 'guard-escalate' });
     const abs = await ask(f, hookInput({ agentId: 'a0000000000000002', command: `rm -rf ${workdirOf(CHILD)}/build` }));

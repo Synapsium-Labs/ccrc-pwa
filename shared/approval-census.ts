@@ -75,6 +75,8 @@ export function approvalRouteWord(r: ApprovalRoute): string {
 export const APPROVAL_CENSUS_PATH_MAP = {
   ruled: 0, 'hook-skipped': 1, 'refused-at-mint': 2, 'released-at-mint': 3, lapsed: 4, escalate: 5,
   'envelope-erased': 6, 'not-a-child': 7, declined: 4, stale: 4, 'operator-first': 4, held: -1, unmeasured: -1,
+  // Approvals PR 3: a row parked past its window (Table 2a's path 4, now on Waiting on you rather than in a pane).
+  parked: 4,
 } as const satisfies Record<string, number>;
 export type ApprovalCensusPath = keyof typeof APPROVAL_CENSUS_PATH_MAP;
 export const APPROVAL_CENSUS_PATHS = Object.keys(APPROVAL_CENSUS_PATH_MAP) as ApprovalCensusPath[];
@@ -189,6 +191,9 @@ export interface ApprovalCensusWire {
   readonly byProgramme: ApprovalCensusCounts;
   readonly byAuthority: ApprovalCensusCounts;
   readonly byRoute: ApprovalCensusCounts;
+  /** Approvals PR 3: the minted rows by their stored park word (`live`, `shadow`, `capped`); a row minted before PR 3, or
+   *  released at mint, has none and is not counted here. ADDITIVE: an older server omits it. */
+  readonly byPark?: ApprovalCensusCounts;
   readonly readPrompts: number;
   readonly m38: {
     /** Distinct (programme, UTC day) pairs in the window on which the programme had a run open, read from the runs,

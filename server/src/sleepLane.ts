@@ -24,11 +24,11 @@ import { MAIL_DISABLED_MARKER, readSwitches, type MarkerSwitchName, type SwitchR
 import {
   RUN_DONE_POLICY, STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS,
   STOP_DONE_PARKED_STATES, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_HOLD_OFF_MS, STOP_DONE_WAITING_MEASURES_PER_PASS,
-  STOP_DONE_WAITING_STATES, waitingCaseKey,
+  STOP_DONE_WAITING_STATES, waitingCaseKey, waitingHoldsLapse,
   mailOnly, stopDoneVerdict, workerAsleepNotice, workerAsleepNoticeDue, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
-import type { SleepPolicy } from './sleep.js';
+import { mailHoldsSleep, type SleepPolicy } from './sleep.js';
 import { designationFactFrom, designationFactOf, type DesignationFact } from './roleOf.js';
 import type { LaneName } from './laneSchedule.js';
 import { runNamesSession } from './coord/runBinding.js';
@@ -257,11 +257,13 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
    *  budget of its own: past it the pass skips the class's remaining rows (`continue`) and never stops for them, so the
    *  rest of the population keeps exactly the measures of `caps.measures`. A row of the class the live read held is not
    *  measured again for `heldMs`, and one written to the lane's `shadow` line for `shadowMs`, both keyed by its case,
-   *  so a change of case clears them. Absent: no class, and the pass is as it always was. */
+   *  so a change of case clears them. `heldOf` is asked once a pass, before any row, and may answer an emptied map (the
+   *  run-done lane's, when its case's row was armed since the last pass). Absent: no class, and the pass is as it always
+   *  was. */
   readonly aside?: {
     readonly keyOf: (deps: D, f: SleepPassFacts<St>, row: FleetSession) => string | null;
     readonly measures: number;
-    readonly heldOf: (mem: M) => Map<string, number>;
+    readonly heldOf: (deps: D, mem: M) => Map<string, number>;
     readonly heldMs: number;
     readonly shadowMs: number;
   };
@@ -285,7 +287,10 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
   readonly asks: {
     readonly first: (deps: D, f: SleepPassFacts<St>, row: FleetSession, now: number) => V;
     readonly measured: (deps: D, f: SleepPassFacts<St>, row: FleetSession, rec: SessionRecord) => Promise<{ v: V; now: number }>;
-    readonly atAct: (deps: D, f: SleepPassFacts<St>, row: Row, rec: SessionRecord) => Promise<{ v: V; store: St }>;
+    /** `relisted`, where the lane has one: the same verdict asked again over the act's own listing, the read nearest
+     *  the argv (capacity follow-ups F-A), so a switch the verdict reads that was raised after the pass's listing holds
+     *  the act. A pure re-ask of the input this ask built: no read of its own. */
+    readonly atAct: (deps: D, f: SleepPassFacts<St>, row: Row, rec: SessionRecord) => Promise<{ v: V; store: St; relisted?: (names: readonly string[] | null) => V }>;
     /** A `wake` lane's (D-7541): after its call returned, on the serialiser again, is the row still this lane's target?
      *  Null while it is, else the word that says why not. Absent: nothing is asked again. */
     readonly afterAct?: (deps: D, row: Row, rec: SessionRecord) => Promise<string | null>;
@@ -382,7 +387,7 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
   let measured = 0;
   // D-8790 (review 2887 F1, F3): the lane's aside class, its own budget and its case-keyed hold-off.
   const aside = lane.aside ?? null;
-  const asideHeld = aside === null ? null : aside.heldOf(mem);
+  const asideHeld = aside === null ? null : aside.heldOf(deps, mem);
   if (asideHeld !== null) {
     const at = passNow ?? deps.now();
     for (const [k, until] of [...asideHeld]) if (until <= at) asideHeld.delete(k);
@@ -485,8 +490,8 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
     if (!fresh.ok) return { go: false, r: { kind: 'held-at-act', verdict: null } };
     // Only the roster falls back to the tick's read, when the re-read row has none.
     const again: Row = { ...fresh.row, subagents: fresh.row.subagents ?? row.subagents };
-    const { v, store } = await lane.asks.atAct(deps, f, again, rec);
-    if (!isAsleep(v)) return { go: false, r: { kind: 'held-at-act', verdict: v } };
+    const { v: first, store, relisted } = await lane.asks.atAct(deps, f, again, rec);
+    if (!isAsleep(first)) return { go: false, r: { kind: 'held-at-act', verdict: first } };
     // Never sent to a ccd that does not list the verb, asked again here where the lane says so.
     // The verb's own gate stays literal here (`verb-gate.test.ts` reads it); a `wake` lane also needs `--roll`.
     if (lane.verb === 'arms-and-asked-at-act' && !(ccdCan(port.fleetState, 'hibernate')
@@ -494,8 +499,12 @@ export async function sleepAct<D extends SleepDepsBase, M, Row extends { readonl
       return { go: false, r: { kind: 'skipped', detail: 'no-verb', by: 'verb' } };
     }
     // D-7047: the switches over a fresh listing, the read nearest the argv. No retry memory: the next pass asks again.
-    const off = switchedOffAt(lane, readSwitches(await port.listing()));
+    const names = await port.listing();
+    const off = switchedOffAt(lane, readSwitches(names));
     if (off !== null) return { go: false, r: { kind: 'switched-off', detail: off } };
+    // Capacity follow-ups F-A: the verdict asked again over that same listing, so the act decides on what it lists.
+    const v = relisted === undefined ? first : relisted(names);
+    if (!isAsleep(v)) return { go: false, r: { kind: 'held-at-act', verdict: v } };
     // D-8790: the answer's own case, read again beside the switches.
     if (lane.answerLive !== undefined && !lane.answerLive(deps, v)) return { go: false, r: { kind: 'switched-off', detail: ANSWER_IN_SHADOW } };
     return { go: true, v, store, again };
@@ -666,6 +675,8 @@ export interface StopDoneMemory {
   /** D-8790 (review 2887 F1, F3): the waiting case's hold-offs, keyed by case (`waitingCaseKey`: worker, run, state),
    *  so a change of the run's state clears them. Created on the first pass that needs it. */
   waitingHeld?: Map<string, number>;
+  /** Capacity follow-ups F-D: whether the last pass read the `working-idle-sleep` row armed; unset before the first. */
+  waitingArmed?: boolean;
   /** D-6091: the mail-only count the lane's last excluded row carried; absent until this process's first pass writes
    *  one, so a restart writes one row, zero included, and a zero reads apart from a lane that never ran. */
   mailOnly?: number;
@@ -750,7 +761,7 @@ function storeReadFor(
       // would keep a finished worker resident that long). Stopping it leaves the
       // row to the lifecycle rung, which rejects a stopped recipient's mail
       // `recipient-stopped` exactly as before the park existed.
-      mail: coord.outstandingMailFor(id).some((m) => m.parkedAt == null),
+      mail: coord.outstandingMailFor(id).some(mailHoldsSleep),
     };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
@@ -796,12 +807,12 @@ const ownRunAskerOf = (id: string, store: StopDoneStoreRead): OwnRunAsker =>
  *  built. */
 function runDoneInput(
   deps: StopDoneSweepDeps, f: SleepPassFacts<StopDoneStoreRead>, row: StopDoneRow, store: StopDoneStoreRead,
-  live: StopDoneLive, at: number,
+  live: StopDoneLive, at: number, actNames?: readonly string[] | null,
 ): StopDoneInput {
   return {
     row, heldKind: heldKindOf(row.held, deps.coord, ownRunAskerOf(row.id, store)), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
     verb: f.verb, overlord: overlordOf(f.designation, row.id), optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
-    live, now: at, graceMs: f.quietMs, mailDisabled: readSwitches(f.names)[MAIL_DISABLED_MARKER],
+    live, now: at, graceMs: f.quietMs, mailDisabled: readSwitches(actNames === undefined ? f.names : actNames)[MAIL_DISABLED_MARKER],
   };
 }
 
@@ -922,7 +933,14 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
       return s.ok && s.last !== null && isWaitingState(s.last.state) ? waitingCaseKey(row.id, s.last.runId, s.last.state) : null;
     },
     measures: STOP_DONE_WAITING_MEASURES_PER_PASS,
-    heldOf: (m) => (m.waitingHeld ??= new Map()),
+    // Capacity follow-ups F-D: the hold-offs, the shadow line's hour above all, lapse on the first pass that reads the
+    // row armed after one that read it in shadow, so a worker logged in shadow is measured at once, not an hour later.
+    heldOf: (deps, m) => {
+      const armed = workingIdleSleepLive(deps.coord);
+      if (waitingHoldsLapse(m.waitingArmed, armed)) m.waitingHeld?.clear();
+      m.waitingArmed = armed;
+      return (m.waitingHeld ??= new Map());
+    },
     heldMs: STOP_DONE_WAITING_HOLD_OFF_MS,
     shadowMs: STOP_DONE_RETRY_MS,
   },
@@ -947,7 +965,13 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
     atAct: async (deps, f, row, rec) => {
       const at = deps.now();
       const store = storeReads(deps.coord, [row.id]).get(row.id)!;
-      return { v: stopDoneVerdict(runDoneInput(deps, { ...f, designation: designationOfCoord(deps.coord) }, row, store, await runDoneLive(deps, rec), at)), store };
+      const facts = { ...f, designation: designationOfCoord(deps.coord) };
+      const live = await runDoneLive(deps, rec);
+      // F-A: the waiting case's mail-disabled hold is read again over the act's own listing (`relisted`).
+      return {
+        v: stopDoneVerdict(runDoneInput(deps, facts, row, store, live, at)), store,
+        relisted: (names) => stopDoneVerdict(runDoneInput(deps, facts, row, store, live, at, names)),
+      };
     },
   },
   notices: {
@@ -1068,7 +1092,7 @@ function storeRead(coord: HibernateSweepDeps['coord'], claimants: ReadonlySet<st
       // would keep this session resident that long). Its retry still reaches
       // the session through the due loop, and a hibernated one through the
       // ensure-wake gate first; a fresh box then differs from its park and lands.
-      mail: coord.outstandingMailFor(id).some((m) => m.parkedAt == null),
+      mail: coord.outstandingMailFor(id).some(mailHoldsSleep),
     };
   } catch (err) {
     return { ok: false, detail: errText(err) };

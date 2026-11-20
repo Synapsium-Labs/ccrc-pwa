@@ -32,7 +32,7 @@ import { rasterObjectUrl, showBytes } from './objectUrls';
  *  uncommitted asset{s}"). The provider keeps `loaders`, `queue` and `onDraftAsset` stable across renders: a new
  *  `loaders` or `queue` loads every image again. */
 export interface DocsAssetContextValue {
-  readonly loaders: Pick<DocsLoaders, 'file' | 'raster'>;
+  readonly loaders: Pick<DocsLoaders, 'file' | 'raster' | 'range'>;
   readonly queue: FetchQueue;
   readonly onDraftAsset: (count: number) => void;
   /** Export's registry of the bytes this page's images hold (spec 4.3 item 6; refinement (g)); absent or `null`: nothing
@@ -121,13 +121,24 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   }
   const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
-  if (!ip.ok) return refused(ip.why);
+  if (!ip.ok) {
+    // A draft with no fingerprint is not loaded here (the raster route needs one), but its own page reads a raster by
+    // range through its stat pin (spec 4.3), so the chip opens that page. An SVG's page offers Download alone: the same
+    // refusal, with no action.
+    if (ip.why === 'draft-unhashed') {
+      return refused('draft-unhashed', cls === 'raster' ? { kind: 'viewer', href: leafHref } : null);
+    }
+    return refused(ip.why);
+  }
   // Refinement (n): on a version page the listing's size is not checked, so ccd's class cap answers. Every other page
   // asks the one size basis the mockup planner reserves by (`mockupSizeBasis`, D-8659): a listed size is checked here.
   const basis = ctx.pageAt !== null ? null : mockupSizeBasis(e, ctx.tree, ip.pin, cls);
   const cap = DOCS_CLASS_CAP[cls];
   if (basis !== null && basis.kind === 'listed' && basis.bytes > cap) {
-    return refused('too-large', null, { size: kib(basis.bytes), cap: kib(cap) });
+    // Spec 4.3: a raster's chip keeps its sentence and opens the image's own page, which reads it by range; an SVG's page
+    // offers Download alone, so its chip has no action.
+    return refused('too-large', cls === 'raster' ? { kind: 'viewer', href: leafHref } : null,
+      { size: kib(basis.bytes), cap: kib(cap) });
   }
   return {
     kind: 'pinned', pin: ip.pin, cls, draft: ip.draft, uncommittedNotShown: ip.uncommittedNotShown, leafHref,

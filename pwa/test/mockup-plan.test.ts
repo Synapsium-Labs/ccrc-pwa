@@ -155,6 +155,13 @@ describe('planMockupAssets: the pin rule (plan Task 6 RED table)', () => {
     expect(p.rows[0]!.size).toBeNull();
   });
 
+  it('a draft page whose asset is stat-pinned (read by range) is missing:draft-unhashed, as the Markdown image is (X2 P1, review F5)', () => {
+    const ctx = draftCtx([png('i.png', 100, { draft: draftOf('modified', { fp: null, size: 5242880, mtimeNs: '1700000000000000000' }) })]);
+    const p = planMockupAssets([ref('i.png')], ctx);
+    expect(p.rows[0]!.verdict).toEqual({ v: 'missing', why: 'draft-unhashed' });
+    expect(p.rows[0]!.size).toBeNull();
+  });
+
   it('a draft page whose asset changed type is missing:draft-withheld, with no committed fallback', () => {
     const ctx = draftCtx([png('i.png', 100, { draft: draftOf('typechange', { kind: 'symlink', fp: null }) })]);
     expect(planMockupAssets([ref('i.png')], ctx).rows[0]!.verdict).toEqual({ v: 'missing', why: 'draft-withheld' });

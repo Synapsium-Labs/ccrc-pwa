@@ -101,6 +101,8 @@ export interface ApprovalCensusSourceRow {
   /** Approvals PR 0's fact: the child's deny file was the current one when the row was minted. */
   readonly denyCurrent: boolean;
   readonly commandWords: readonly string[] | null; readonly literalInRoot: boolean | null;
+  /** Approvals PR 3: the park's word stored at mint, or null. */
+  readonly parkWord: string | null;
 }
 export type ApprovalCensusSourceResult =
   | { readonly ok: true; readonly rows: readonly ApprovalCensusSourceRow[] } | { readonly ok: false; readonly detail: string };
@@ -116,7 +118,7 @@ const wordsOf = (v: unknown): readonly string[] | null | 'bad' => {
 
 export function approvalRowsForCensus(db: DatabaseSync, fromMs: number, toMs: number): ApprovalCensusSourceResult {
   const raw = stmt(db, 'SELECT a.id, a.childId, a.agentId, a.tool, a.inputRedacted, a.class, a.state, a.releaseReason, a.verdict, '
-    + 'a.answeredBy, a.askAt, a.notifyAt, a.ruledAt, a.denyCurrent, a.commandWords, a.literalInRoot, r.program AS programme '
+    + 'a.answeredBy, a.askAt, a.notifyAt, a.ruledAt, a.denyCurrent, a.commandWords, a.literalInRoot, a.parkWord, r.program AS programme '
     + 'FROM approvals a LEFT JOIN runs r ON r.id = a.runId WHERE a.askAt >= ? AND a.askAt < ? ORDER BY a.id').all(fromMs, toMs) as
     Record<string, unknown>[];
   const rows: ApprovalCensusSourceRow[] = [];
@@ -135,7 +137,7 @@ export function approvalRowsForCensus(db: DatabaseSync, fromMs: number, toMs: nu
       inputRedacted: str(x['inputRedacted']), class: str(x['class']) ?? '', state: x['state'], releaseReason: str(x['releaseReason']),
       verdict: str(x['verdict']), answeredBy: str(x['answeredBy']), askAt: x['askAt'], programme: str(x['programme']),
       notifyAt: num(x['notifyAt']), ruledAt: num(x['ruledAt']), denyCurrent: deny === 1,
-      commandWords: words, literalInRoot: lit === null ? null : lit === 1,
+      commandWords: words, literalInRoot: lit === null ? null : lit === 1, parkWord: str(x['parkWord']),
     });
   }
   return { ok: true, rows };

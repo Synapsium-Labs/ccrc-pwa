@@ -7,6 +7,7 @@
 // count until it is handed over, which is `operatorAsk`'s own rule.
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import type { ItemView } from '../../../shared/ledgers';
+import type { ParkedApprovalView } from '../../../shared/approval-park';
 import { operatorAsk } from '../fleet/rollup';
 import { capWaiting } from '../fleet/reviewCapWords';
 import { boundOpenRun, claimedRunsOf, sessionProgramme } from '../fleet/runWords';
@@ -16,12 +17,12 @@ import { boundOpenRun, claimedRunsOf, sessionProgramme } from '../fleet/runWords
 export interface NeedsYouEntry {
   readonly programme: string;
   readonly runId: number | null;
-  readonly kind: 'item' | 'question' | 'review-cap' | 'limit';
+  readonly kind: 'item' | 'question' | 'review-cap' | 'limit' | 'parked';
 }
 
 /** The kinds the `/waiting` page lists: an item, a session's question, a run whose review cap waits (its row carries the Lift
  *  cap control) and a usage-limit row (D-8123, with its own controls), so the page, its badge and every chip print the one count. */
-const LISTED_ON_WAITING: ReadonlySet<NeedsYouEntry['kind']> = new Set(['item', 'question', 'review-cap', 'limit']);
+const LISTED_ON_WAITING: ReadonlySet<NeedsYouEntry['kind']> = new Set(['item', 'question', 'review-cap', 'limit', 'parked']);
 
 /** Every OPEN run an asking session is the operator's question for: the one it is bound to as a worker, then each it claims
  *  as a coordinator. The entry names the first; the Runs badge counts them all. */
@@ -30,10 +31,13 @@ function runsOfAsk(s: FleetSession, runs: readonly RunSummary[]): RunSummary[] {
   return [...(bound === null ? [] : [bound]), ...claimedRunsOf(runs, s.id).filter((r) => r !== bound)];
 }
 
-/** The list: the open items (one being checked is the coordinator's), one question per asking session, and one entry per
- *  open run whose review cap waits. */
+/** The list: the open items (one being checked is the coordinator's), one question per asking session, one entry per
+ *  open run whose review cap waits, and one per parked approval (approvals PR 3, review 2889 F7: Waiting on you draws them,
+ *  so its door counts them), filed under NO programme: the page draws them apart, above every programme's group, so no
+ *  programme chip counts one and every chip on every screen agrees. */
 export function needsYou(
   items: readonly ItemView[], sessions: readonly FleetSession[], runs: readonly RunSummary[],
+  approvals: readonly ParkedApprovalView[] = [],
 ): readonly NeedsYouEntry[] {
   const out: NeedsYouEntry[] = [];
   for (const i of items) if (i.state === 'open') out.push({ programme: i.program, runId: i.runId, kind: 'item' });
@@ -48,6 +52,7 @@ export function needsYou(
     out.push({ programme: sessionProgramme(s, runs) ?? '', runId: null, kind: 'limit' });
   }
   for (const r of runs) if (capWaiting(r) === 'waiting') out.push({ programme: r.program, runId: r.id, kind: 'review-cap' });
+  for (const a of approvals) out.push({ programme: '', runId: a.runId, kind: 'parked' });
   return out;
 }
 

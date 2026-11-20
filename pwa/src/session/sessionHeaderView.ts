@@ -14,7 +14,7 @@ import { programmeIsOpenable, programmePath } from '../lib/routes';
 import { accountLabel } from '../lib/accounts';
 import { sessionLabel } from '../fleet/sessionLabel';
 import { hibernatedSince } from '../fleet/hibernated';
-import { contextFact, headerStatusWord } from '../fleet/sessionFacts';
+import { contextFact, headerMetaHasCells, headerStatusWord } from '../fleet/sessionFacts';
 import type { Coordination } from '../fleet/fleetTree';
 import type { SessionFactSet } from '../fleet/sessionFacts';
 import { hasPrCap } from './prCap';
@@ -84,6 +84,9 @@ export interface SessionHeaderView {
    *  the first fleet frame (the fallback) and for a main checkout, so a swap between the fallback and the row draws
    *  plainly rather than typing in as a rename that never happened (desktop polish T3c, D-6333). */
   renames: boolean;
+  /** The session is its project's coordinator (`facts.coordinatorRole`, the card's own reading of the row): its title line draws the
+   *  role badge right after the name (desktop polish C51, D-8834). False before the first fleet frame, when no facts are known. */
+  coordinatorRole: boolean;
   chips: HeaderChip[];
   /** The ⋯ menu's items, each with its command id: `sessionMenu`, the one reader the menu sheet renders. */
   menu: SessionMenuEntry[];
@@ -105,6 +108,48 @@ export interface SessionHeaderView {
  *  At a desk the door costs the header at most its own row (its height and its row's gap), and below 900 nothing
  *  (`goals-door-height.browser.test.ts`). */
 export type GoalsSlot = 'back-row' | 'coordination-line' | 'chip-row';
+
+/** The details row's own facts, each `null` when the row has none to say (`SessionDetails` draws them in this order): a main
+ *  checkout's name, the run this wave belongs to, a programme hold verbatim, the PR, an away lane, and the question it waits
+ *  on. One derivation: the row draws from it, and `detailsHaveFacts` asks it (desktop polish C51, review 2963 F3 to F6). */
+export interface DetailRows {
+  readonly name: string | null;
+  readonly runId: number | null;
+  readonly held: string | null;
+  readonly pr: number | null;
+  readonly lane: string | null;
+  readonly asks: string | null;
+}
+
+export function detailRows(facts: SessionFactSet, coordination: Coordination | null): DetailRows {
+  const s = facts.session;
+  const ctx = contextFact(facts);
+  const asking = !facts.dead && s.hookState === 'waiting' && s.askSummary !== null && s.askSummary !== '';
+  return {
+    // A main checkout's heading is its project; the name the card leads with is here.
+    name: s.workspace === null && s.name !== null ? s.name : null,
+    runId: coordination?.run?.id ?? null,
+    held: s.held !== null && ctx?.key === 'programme' ? s.held : null,
+    pr: s.pr?.number ?? null,
+    lane: facts.lane.away && facts.offPool === null && facts.lane.label !== undefined ? facts.lane.label : null,
+    asks: asking ? (s.askSummary ?? '') : null,
+  };
+}
+
+/** Whether the session's details row has anything to show: one of its own facts (`detailRows`), a cell of its meta row
+ *  (`headerMetaHasCells`), or a worktree. When it has none the header draws no row and no Details door: a door that opens
+ *  nothing goes, and the line the row would stand on is not drawn (desktop polish C51, review 2963 F3 to F6). It reaches a
+ *  worker's header as well as a coordinator's. */
+export function detailsHaveFacts(facts: SessionFactSet, coordination: Coordination | null): boolean {
+  const rows = detailRows(facts, coordination);
+  return Object.values(rows).some((v) => v !== null) || headerMetaHasCells(facts) || facts.worktrees.length > 0;
+}
+
+/** Whether the details row would have nothing to show once its worktrees were gone: the row then ends with its last worktree, and
+ *  the focus a worktree control hands back goes to the header's title, not to a region about to leave (`SessionWorktrees`). */
+export function detailsEndWithWorktrees(facts: SessionFactSet, coordination: Coordination | null): boolean {
+  return !detailsHaveFacts({ ...facts, worktrees: [] }, coordination);
+}
 
 /** The coordination line's clauses, each `null` when it has none: whose code it works on, its programme's run (a coordinator's
  *  own hold, or a child's run), and who coordinates it. One derivation: the line (`SessionCoordination`) draws it, and
@@ -282,5 +327,5 @@ export function sessionHeaderView({
   const goals = programme !== null && programmeIsOpenable(programme.slug)
     ? { href: programmePath(programme.slug), label: `Goals: ${programme.title}`, slot }
     : null;
-  return { title, crumb, renames: workspace, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
+  return { title, crumb, renames: workspace, coordinatorRole: facts?.coordinatorRole === true, chips, menu: sessionMenu(session), stop: { shown: !finePointer, enabled: busy }, goals };
 }

@@ -9,11 +9,14 @@
  */
 export function utf8Bytes(s: string): number {
   let n = 0;
-  for (const ch of s) {
-    const c = ch.codePointAt(0)!;
-    n += c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
-  }
+  for (const ch of s) n += utf8CodePointBytes(ch.codePointAt(0)!);
   return n;
+}
+
+/** The UTF-8 bytes of one code point, as `utf8Bytes` counts them: the one place the arithmetic is spelled. A caller that
+ *  cuts a string at a byte budget (the Docs reader's Markdown parts, X2 P1) walks code points with it. */
+export function utf8CodePointBytes(c: number): number {
+  return c < 0x80 ? 1 : c < 0x800 ? 2 : c < 0x10000 ? 3 : 4;
 }
 
 /** A string's UTF-8 bytes, as `TextEncoder` writes them (a lone surrogate as U+FFFD), for an L0 caller, which has no host byte API: the

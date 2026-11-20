@@ -284,7 +284,6 @@ const APP_ROLE_RULES: Readonly<Record<string, Readonly<Record<string, TypeRole>>
   },
   'chat.css': {
     '.chat-coord': META,
-    '.chat-fact-role [role="img"]': META, // the header's role badge: the Goals glyph's size (desktop polish C50)
     '.metachip-glyph': META,
     '.pr-lede': UI,
     '.pr-facts': META,
