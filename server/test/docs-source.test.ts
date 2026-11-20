@@ -27,7 +27,7 @@ import type { CcrcConfig } from '../src/config.js';
 import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from '../src/docs/ccdsource.js';
 import { LISTING_JOB, docsShowPlan } from '../src/docs/policy.js';
 import type { DocsShowAsk } from '../src/docs/ports.js';
-import type { DocPin, DocsFailureBody } from '../../shared/docs.js';
+import type { DocFilePin, DocsFailureBody } from '../../shared/docs.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
@@ -51,15 +51,15 @@ const sha256 = (b: Uint8Array): string => createHash('sha256').update(b).digest(
 const SHA = 'a'.repeat(40);
 const TEXT = '# a\n';
 const TEXT_BYTES = Buffer.from(TEXT, 'utf8');
-const COMMITTED: DocPin = { kind: 'committed', commit: SHA, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' };
+const COMMITTED: DocFilePin = { kind: 'committed', commit: SHA, servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' };
 const DRAFT_FP = sha256(TEXT_BYTES);
-const DRAFT: DocPin = { kind: 'draft', branch: 'ws/a', head: SHA, section: 'specs', path: 'a.md', fp: DRAFT_FP };
+const DRAFT: DocFilePin = { kind: 'draft', branch: 'ws/a', head: SHA, section: 'specs', path: 'a.md', fp: DRAFT_FP };
 const PLAN = docsShowPlan('a.md', undefined);
 const ASK: DocsShowAsk = { maxBytes: PLAN.maxBytes, job: PLAN.job, listedBlob: null };
 const SRC = { node: 'n', project: 'demo' };
 
 /** A valid show answer for `pin`, its size and sha256 measured over `TEXT`'s bytes, every echo matching the pin. */
-function showOk(pin: DocPin, over: Record<string, unknown> = {}): Record<string, unknown> {
+function showOk(pin: DocFilePin, over: Record<string, unknown> = {}): Record<string, unknown> {
   const common = {
     v: 1, verb: 'docs-show', ok: true, elapsedMs: 3, section: pin.section, path: pin.path,
     size: TEXT_BYTES.length, sha256: sha256(TEXT_BYTES), encoding: 'utf8', text: TEXT,
@@ -302,6 +302,34 @@ describe('check 7 and the verbatim rebuild (row 46, refinement (j))', () => {
       .toStrictEqual({ ok: false, failure, ...ctx });
   });
 
+  // A version page reads an over-cap committed file by range, pinned by the blob this answer names (X2 P1, review Q4).
+  it('a committed too-large line carries its blob to the body when the blob is a full sha (X2 P1, review Q4)', async () => {
+    for (const blob of ['ab'.repeat(20), '0f'.repeat(32)]) {
+      const ctx = { size: 5_000_000, cap: 2_097_152, blob };
+      expect(await showRaw(COMMITTED, failLine('docs-show', 'too-large', ctx)))
+        .toStrictEqual({ ok: false, failure: 'too-large', ...ctx });
+    }
+  });
+
+  it('a too-large line from an older ccd, with no blob, passes through as it always did (X2 P1, review Q4)', async () => {
+    const out = await showRaw(COMMITTED, failLine('docs-show', 'too-large', { size: 5_000_000, cap: 2_097_152 }));
+    expect(out).toStrictEqual({ ok: false, failure: 'too-large', size: 5_000_000, cap: 2_097_152 });
+    expect(Object.hasOwn(out as object, 'blob')).toBe(false);
+  });
+
+  it.each([
+    ['short', 'ab'.repeat(19)],
+    ['upper case', 'AB'.repeat(20)],
+    ['not hex', 'xy'.repeat(20)],
+    ['empty', ''],
+    ['a number', 7],
+    ['null', null],
+    ['a path-like string', '../' + 'a'.repeat(37)],
+  ] as const)('a too-large blob that is %s is dropped, never passed on (X2 P1, review Q4)', async (_label, blob) => {
+    const out = await showRaw(COMMITTED, failLine('docs-show', 'too-large', { size: 5_000_000, cap: 2_097_152, blob }));
+    expect(out).toStrictEqual({ ok: false, failure: 'too-large', size: 5_000_000, cap: 2_097_152 });
+  });
+
   it('an ok index keeps unwalked absent when ccd sent none, and 3 when it sent 3 (D-4157)', async () => {
     const index = { v: 1, verb: 'docs-index', ok: true, elapsedMs: 5, unlisted: 0, duplicates: [], projects: [] };
     const indexWith = async (stdout: string): Promise<Answer> =>
@@ -312,7 +340,7 @@ describe('check 7 and the verbatim rebuild (row 46, refinement (j))', () => {
 });
 
 describe('show: the answer and its decoded bytes (integrity, pins and size are Task 7\'s)', () => {
-  const showWith = async (pin: DocPin, answer: Record<string, unknown>): Promise<Answer> =>
+  const showWith = async (pin: DocFilePin, answer: Record<string, unknown>): Promise<Answer> =>
     ccdDocsReader({ runCcd: recorder(res({ stdout: line(answer) })).run, fleetState: READY }).show(SRC, pin, ASK);
 
   it('a committed utf8 answer carries the answer and the UTF-8 of its text', async () => {
@@ -366,13 +394,13 @@ describe('the real local runner, measured on this node (row 46, Q4)', () => {
 // ---- Task 7: check 8 (show integrity and pins), check 9 (the wire bound), the second redaction pass ----
 
 /** One show call through a recorder answering `stdout` verbatim, with `ask` (default `ASK`). */
-async function showRaw(pin: DocPin, stdout: string, ask: DocsShowAsk = ASK): Promise<Answer> {
+async function showRaw(pin: DocFilePin, stdout: string, ask: DocsShowAsk = ASK): Promise<Answer> {
   return ccdDocsReader({ runCcd: recorder(res({ stdout })).run, fleetState: READY }).show(SRC, pin, ask);
 }
 /** The body `malformed-answer {why}`. */
 const malformed = (why: string): Answer => ({ ok: false, failure: 'malformed-answer', why } as Answer);
 /** A base64 show answer for `pin`: `showOk`'s fields, with `b64` in place of `text`. */
-function b64Ok(pin: DocPin, b64: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+function b64Ok(pin: DocFilePin, b64: string, over: Record<string, unknown> = {}): Record<string, unknown> {
   const answer = showOk(pin, { encoding: 'base64', b64, ...over });
   delete answer.text;
   return answer;
@@ -381,14 +409,14 @@ const B64 = TEXT_BYTES.toString('base64'); // 'IyBhCg==': canonical, with two pa
 
 describe('check 8: show integrity, pins and onRef (row 46, spec section 2 (b))', () => {
   /** A draft pin whose fp is not the sha256 of `TEXT`'s bytes. */
-  const DRAFT_F: DocPin = { kind: 'draft', branch: 'ws/a', head: SHA, section: 'specs', path: 'a.md', fp: 'f'.repeat(64) };
+  const DRAFT_F: DocFilePin = { kind: 'draft', branch: 'ws/a', head: SHA, section: 'specs', path: 'a.md', fp: 'f'.repeat(64) };
 
   it('a canonical base64 committed answer is ok, carrying its decoded bytes', async () => {
     const answer = b64Ok(COMMITTED, B64);
     expect(await showRaw(COMMITTED, line(answer))).toEqual({ ok: true, answer, bytes: TEXT_BYTES });
   });
 
-  const ROWS: readonly (readonly [string, DocPin, Record<string, unknown>, 'integrity' | 'pin' | 'schema'])[] = [
+  const ROWS: readonly (readonly [string, DocFilePin, Record<string, unknown>, 'integrity' | 'pin' | 'schema'])[] = [
     ['a tampered sha256', COMMITTED, showOk(COMMITTED, { sha256: 'b'.repeat(64) }), 'integrity'],
     ['a size one over the bytes', COMMITTED, showOk(COMMITTED, { size: TEXT_BYTES.length + 1 }), 'integrity'],
     ['a size one under the bytes', DRAFT, showOk(DRAFT, { size: TEXT_BYTES.length - 1 }), 'integrity'],

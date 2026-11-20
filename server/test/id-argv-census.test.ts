@@ -79,6 +79,7 @@ const ID_BUILDERS = {
   // refusal is the guard for every caller.
   poolAnswer: 'no-id',
   docsIndex: 'no-id', docsTree: 'no-id', docsShowCommitted: 'no-id', docsShowDraft: 'no-id', docsFetch: 'no-id', docsLog: 'no-id',
+  docsShowRange: 'no-id',
 } as const satisfies Record<keyof typeof CCD_ARGV, 'id' | 'no-id'>;
 
 type IdBuilder = {

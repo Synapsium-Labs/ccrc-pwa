@@ -13,6 +13,18 @@ import { CCD_ARGV_SAMPLES } from './ccdArgvSamples.js';
  *  exhaustive assertion below is what stops a new route hiding behind an untested one. */
 const SAMPLES = CCD_ARGV_SAMPLES;
 
+/** The four argv shapes `docsShowRange` writes (X2 P1.2), `ccd docs-show-range`'s own token order: committed and draft,
+ *  each as a prepare and as a frame. The grant's one prefix, `['docs-show-range','--project']`, must admit every one. */
+const RANGE_SHAPES: readonly (readonly string[])[] = [
+  CCD_ARGV.docsShowRange('demo', { commit: 'a'.repeat(40) }, 'specs', 'a.md', `blob:${'d'.repeat(40)}`, 'prepare'),
+  CCD_ARGV.docsShowRange('demo', { branch: 'ws/a', head: 'b'.repeat(40) }, 'plans', 'b.md', 'stat:5:1700000000000000000',
+    'prepare'),
+  CCD_ARGV.docsShowRange('demo', { commit: 'a'.repeat(40) }, 'specs', 'a.md', `blob:${'d'.repeat(40)}`,
+    { snapshot: 'e'.repeat(32), offset: 524288, length: 524288 }),
+  CCD_ARGV.docsShowRange('demo', { branch: 'ws/a', head: 'b'.repeat(40) }, 'plans', 'b.md', `fp:${'c'.repeat(64)}`,
+    { snapshot: 'e'.repeat(32), offset: 0, length: 1 }),
+];
+
 /**
  * NO EXEMPTION SET (review finding 1, and the reason this note replaces one).
  *
@@ -407,7 +419,7 @@ describe('layer 3 — the list never drifts wider than the code', () => {
   it('docs verbs are grantable ONLY with their flag, one grant each, and both docs-show builders cross it', () => {
     const GRANTS: readonly (readonly [verb: string, flag: string])[] = [
       ['docs-index', '--all'], ['docs-tree', '--project'], ['docs-show', '--project'], ['docs-fetch', '--project'],
-      ['docs-log', '--project'],
+      ['docs-log', '--project'], ['docs-show-range', '--project'],
     ];
     for (const [verb, flag] of GRANTS) {
       expect(EXEC_WHITELIST.ccd.filter((p) => p[0] === verb), `exactly one ${verb} grant, on ${flag}`)
@@ -431,6 +443,9 @@ describe('layer 3 — the list never drifts wider than the code', () => {
     // The history verb's 8-token argv, as the builder writes it.
     expect(isExecAllowed('ccd', [...CCD_ARGV.docsLog('demo', 'a'.repeat(40), 'specs', 'a.md')])).toBe(true);
     expect(isExecAllowed('ccd', ['docs-log', '--all'])).toBe(false);
+    // The range verb's one grant reaches all four argv shapes its one builder writes (X2 P1.2).
+    expect(isExecAllowed('ccd', ['docs-show-range', '--all'])).toBe(false);
+    for (const argv of RANGE_SHAPES) expect(isExecAllowed('ccd', [...argv]), argv.join(' ')).toBe(true);
   });
 
   // The other half of the same decision, and the half a `not.toContain(
@@ -684,6 +699,9 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
                     '--section', 'plans', '--path', 'b.md', '--fingerprint', 'c'.repeat(64), '--max-bytes', '2097152'],
     docsFetch: ['docs-fetch', '--project', 'demo'],
     docsLog: ['docs-log', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs', '--path', 'a.md'],
+    // X2 P1.2: the committed prepare, 11 tokens after the verb; the other three shapes are pinned below.
+    docsShowRange: ['docs-show-range', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs', '--path', 'a.md',
+                    '--pin', `blob:${'d'.repeat(40)}`, '--prepare'],
   };
 
   it.each(Object.keys(CCD_ARGV) as (keyof typeof CCD_ARGV)[])('%s builds the exact argv, token for token', (key) => {
@@ -703,6 +721,23 @@ describe('layer 2c — exact argv, not just prefix compliance (mutation-sweep fi
       .toEqual(['docs-tree', '--project', 'demo', '--ref', 'refs/remotes/origin/main']);
     expect(CCD_ARGV.docsFetch('demo', null)).toEqual(['docs-fetch', '--project', 'demo']);
     expect(CCD_ARGV.docsFetch('demo', 'ws/a')).toEqual(['docs-fetch', '--project', 'demo', '--branch', 'ws/a']);
+  });
+
+  // X2 P1.2. The row above sees only the committed prepare; this pins the other three shapes token for token, in
+  // ccd's own order: the place (`--commit`, or `--draft-branch` then `--head`), section, path, pin, then `--prepare`
+  // or the frame's three pairs.
+  it('docsShowRange writes its four argv shapes in ccd\'s token order', () => {
+    const [committedPrepare, draftPrepare, committedFrame, draftFrame] = RANGE_SHAPES;
+    expect(committedPrepare).toEqual(['docs-show-range', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs',
+      '--path', 'a.md', '--pin', `blob:${'d'.repeat(40)}`, '--prepare']);
+    expect(draftPrepare).toEqual(['docs-show-range', '--project', 'demo', '--draft-branch', 'ws/a', '--head', 'b'.repeat(40),
+      '--section', 'plans', '--path', 'b.md', '--pin', 'stat:5:1700000000000000000', '--prepare']);
+    expect(committedFrame).toEqual(['docs-show-range', '--project', 'demo', '--commit', 'a'.repeat(40), '--section', 'specs',
+      '--path', 'a.md', '--pin', `blob:${'d'.repeat(40)}`, '--snapshot', 'e'.repeat(32), '--offset', '524288',
+      '--length', '524288']);
+    expect(draftFrame).toEqual(['docs-show-range', '--project', 'demo', '--draft-branch', 'ws/a', '--head', 'b'.repeat(40),
+      '--section', 'plans', '--path', 'b.md', '--pin', `fp:${'c'.repeat(64)}`, '--snapshot', 'e'.repeat(32), '--offset', '0',
+      '--length', '1']);
   });
 
   // CHILD-RECLAMATION WAVE 1. The exact-argv row above carries a child but no

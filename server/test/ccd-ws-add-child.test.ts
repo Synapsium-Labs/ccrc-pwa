@@ -148,7 +148,15 @@ describe('the run-id grammar is ASCII in every locale (D-2522\'s shape)', () => 
     const LEASE_NUMS = /^_dl_count_ok\(\) \{ \[\[ "\$\{1-\}" =~ \^\[1-9\]\[0-9\]\{0,9\}\$ \]\]; \}/;
     const all = ccdSource().split('\n').filter((l) => !/^\s*#/.test(l));
     expect(all.filter((l) => l.includes('[0-9]{0,9}') && LEASE_NUMS.test(l)), 'the lease verbs\' one number grammar').toHaveLength(1);
-    const code = all.filter((l) => !LEASE_NUMS.test(l));
+    // X2 P1.2: the range verb's byte counts (an offset, a length, a stat pin's size) are NOT run ids either; they have one
+    // spelling in bash, `_docs_range_count_ok`, and one in the docs helper's embedded python, `RANGE_COUNT_RE`, each set
+    // apart here by its name and pinned to exactly one line.
+    const RANGE_NUMS = [
+      /^_docs_range_count_ok\(\) \{ local LC_ALL=C; \[\[ "\$\{1-\}" =~ \^\[1-9\]\[0-9\]\{0,9\}\$ \]\]; \}$/,
+      /^RANGE_COUNT_RE = r'\[1-9\]\[0-9\]\{0,9\}'$/,
+    ];
+    for (const re of RANGE_NUMS) expect(all.filter((l) => re.test(l)), `the range verb's one count grammar: ${re}`).toHaveLength(1);
+    const code = all.filter((l) => !LEASE_NUMS.test(l) && !RANGE_NUMS.some((re) => re.test(l)));
     const spelled = code.filter((l) => l.includes('[0-9]{0,9}'));
     expect(spelled, 'the run-id pattern must be spelled exactly once in bash — in _child_runid_valid — and once in each embedded python as PR_NUM').toHaveLength(3);
     expect(spelled[0]).toBe("PR_NUM = r'[1-9][0-9]{0,9}'");

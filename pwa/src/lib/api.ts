@@ -35,6 +35,8 @@ import {
   declaredRaster, docsAnswerFromError, readDocsEnvelope, readDocsRaster, type DocsAnswer, type DocsLoaders,
   type DocsHistoryLoader,
 } from '../docs/failures';
+import type { DocsRangeFrameResponse, DocsRangePrepareResponse } from '../../../shared/docs';
+import type { RangeLoader } from '../docs/range/readRange';
 import type { ClaudeRollTargets } from '../../../shared/claudeVersion';
 import type { PlainAutoMemoryChoice, PlainAutoMemoryView } from '../../../shared/plainAutoMemory';
 import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
@@ -1207,11 +1209,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
      * never rejects for a server answer (`docs/failures.ts`): it rejects only when the caller's signal aborts, or for
      * a defect. `file` and `raster` refuse each other's paths by throwing `wrong-representation` before any request.
      */
-    docs: ((): DocsLoaders & DocsHistoryLoader => {
+    docs: ((): DocsLoaders & DocsHistoryLoader & { readonly range: RangeLoader } => {
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
-      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 20 s, after a
+      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 30 s, after a
       // read lane's wait of at most 10 s).
       const unlimited: ReadOpts = { timeoutMs: null };
       const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {
@@ -1249,6 +1251,21 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
           body: JSON.stringify({ ref: body.ref, reason: body.reason }),
         }),
         history: (project, ask) => read<DocsHistoryResponse>(docsApi.history(project, ask), ['log'], { headers: marker }),
+        // X2 P1.3: the range read's loader (`docs/range/readRange.ts`'s `RangeLoader`), beside `DocsLoaders` and not in it,
+        // as `history` is: each call resolves the answer's inner value (`prepared`, `frame`), with the same union.
+        range: {
+          prepare: async (target, signal) => {
+            const got = await read<DocsRangePrepareResponse>(
+              docsApi.rangePrepare(target.project, target.pin, target.range), ['prepared'], { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.prepared } : got;
+          },
+          frame: async (target, snapshot, offset, length, signal) => {
+            const got = await read<DocsRangeFrameResponse>(
+              docsApi.rangeFrame(target.project, target.pin, target.range, snapshot, offset, length), ['frame'],
+              { headers: marker, signal });
+            return got.s === 'ok' ? { s: 'ok', value: got.value.frame } : got;
+          },
+        },
       };
     })(),
     /** `POST /api/leases/:lease/operator-retain` (delegation broker wave 5, PR8; PR10's "Keep worktree"): the operator keeps a

@@ -1129,10 +1129,15 @@ describe('D-5242: the wake budget and the live act have one home each (Task 17b)
   ])('%s is declared once, in %s', (c, home) => {
     expect(ALL.filter((f) => decl(c).test(stallCode(f))).map(rel), c).toEqual([home]);
   });
-  it('wakeAdmit is defined once and applied by the watcher alone: one window for the server', () => {
+  // Each wake window has one owner (review 2907 F4): the watcher's process wake applies `wakeAdmit`, and the admission wake's
+  // own window (D-6095) is applied through `wakeAdmitMany` by its decider alone, so a third window is a red here.
+  it('wakeAdmit and wakeAdmitMany are defined once, and each window is applied by its one owner', () => {
     expect(ALL.filter((f) => /\bexport function wakeAdmit\b/.test(stallCode(f))).map(rel)).toEqual(['server/src/coord/wakeBudget.ts']);
+    expect(ALL.filter((f) => /\bexport function wakeAdmitMany\b/.test(stallCode(f))).map(rel)).toEqual(['server/src/coord/wakeBudget.ts']);
     expect(ALL.filter((f) => /\bwakeAdmit\(/.test(stallCode(f)) && !/\bexport function wakeAdmit\b/.test(stallCode(f))).map(rel))
       .toEqual(['server/src/watch.ts']);
+    expect(ALL.filter((f) => /\bwakeAdmitMany\(/.test(stallCode(f)) && !/\bexport function wakeAdmitMany\b/.test(stallCode(f))).map(rel))
+      .toEqual(['server/src/coord/admissionWake.ts']);
   });
   it('the lanes\' actor words are code-line literals in their definers alone', () => {
     for (const [word, home] of [['sweep:hibernate', 'server/src/coord/hibernate.ts'], ['sweep:stop-done', 'server/src/stopDone.ts'], ['sweep:deps-shed', 'server/src/depsShed.ts']] as const) {

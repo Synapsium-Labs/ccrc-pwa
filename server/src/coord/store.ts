@@ -994,10 +994,13 @@ export type StallObservation =
   | { recorded: true; eventId: number }
   | { recorded: false; why: StallWriteMiss };
 
-/** The state predicate of the observation writer: a closed union of exactly two members. `active` is the stall lane's
+/** The state predicate of the observation writer: a closed union of three members. `active` is the stall lane's
  *  (a run not idle and not terminal); `episode` is the checks lane's (a run waiting at `merging` whose current episode
- *  is `episode`, PR landing in ccrc stage 1). */
-export type ObservationPredicate = { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number };
+ *  is `episode`, PR landing in ccrc stage 1); `admission` is the admission wake's (D-6095: a run still waiting for the
+ *  cap in an idle state, with a claimant, whose newest refusal is still `refusedAt`). */
+export type ObservationPredicate =
+  | { readonly kind: 'active' } | { readonly kind: 'episode'; readonly episode: number }
+  | { readonly kind: 'admission'; readonly refusedAt: number };
 
 /** `delegationRunStamps`' answer: every stamp, or the one reason none is given (all-or-failure). */
 export type DelegationRunStampsResult =
@@ -3058,6 +3061,7 @@ export class CoordStore {
     ).run(runId, now, from, to, causedBy, detail ?? null);
     this.settleEndRequests(runId, from, to, causedBy, detail, now);
     planStore.onRunAdvancedInTx(this.db, runId, from, to, now);   // D-8181: the run's ticket and epic follow it, in this transaction
+    this.clearAdmissionWait(runId);   // D-6095: any move ends the wait for the cap
     return { ok: true as const, from, to };
   }
 
@@ -3165,10 +3169,17 @@ export class CoordStore {
       ? this.db.prepare(
         `SELECT state FROM runs WHERE id = ? AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
       ).get(runId) as { state: string } | undefined
-      : this.db.prepare(
-        "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
-        "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
-      ).get(runId, runId, when.episode) as { state: string } | undefined;
+      : when.kind === 'admission'
+        // D-6095: the admission waiters' own predicate (`admissionWaiters`), narrowed to the refusal being woken, so a run
+        // that moved, was refused again or lost its claimant since the lane read it is `run-gone` and gets no mail.
+        ? this.db.prepare(
+          `SELECT state FROM runs WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL} AND admissionWaitSince IS NOT NULL ` +
+          "AND lastRefusedAt = ? AND claimedBy <> ''",
+        ).get(runId, when.refusedAt) as { state: string } | undefined
+        : this.db.prepare(
+          "SELECT state FROM runs WHERE id = ? AND state = 'merging' AND " +
+          "(SELECT MAX(id) FROM run_events WHERE runId = ? AND toState = 'merging' AND fromState <> 'merging') = ?",
+        ).get(runId, runId, when.episode) as { state: string } | undefined;
     if (run === undefined) return { recorded: false, why: 'run-gone' };
     const seen = this.db.prepare('SELECT 1 AS x FROM run_events WHERE runId = ? AND detail = ? LIMIT 1').get(runId, detail);
     if (seen !== undefined) return { recorded: false, why: 'duplicate' };
@@ -6223,6 +6234,45 @@ export class CoordStore {
     return this.db.prepare(
       `SELECT id AS runId, sessionId FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL} ORDER BY id`,
     ).all() as unknown as CapsCountedRun[];
+  }
+
+  // ── the admission wait (D-6095) ───────────────────────────────────────────
+
+  /** A refusal by the concurrency cap, stamped on the run (inside the coordination serialiser): `admissionWaitSince` keeps
+   *  the OLDEST refusal (set only while null), `lastRefusedAt` always moves to `at`. Only a run still waiting (`planned`,
+   *  or parked in another idle state) takes a stamp. */
+  stampAdmissionWait(runId: number, at: number): void {
+    this.db.prepare(
+      `UPDATE runs SET admissionWaitSince = COALESCE(admissionWaitSince, ?), lastRefusedAt = ? WHERE id = ? AND state IN ${IDLE_RUN_STATES_SQL}`,
+    ).run(at, at, runId);
+  }
+
+  /** The `admissionWake` lane's mail for the run's newest refusal went out (or was already out): the only writer of
+   *  `admissionWokenAt`. A run with no stamp is left alone. */
+  markAdmissionWoken(runId: number, at: number): boolean {
+    const r = this.db.prepare('UPDATE runs SET admissionWokenAt = ? WHERE id = ? AND admissionWaitSince IS NOT NULL').run(at, runId);
+    return Number(r.changes) === 1;
+  }
+
+  /** All three columns to NULL. Called by `advanceInner` for every state move, so a dispatch, a send-back that proceeds, a
+   *  close and an abandon each end the wait. */
+  clearAdmissionWait(runId: number): void {
+    this.db.prepare(
+      'UPDATE runs SET admissionWaitSince = NULL, lastRefusedAt = NULL, admissionWokenAt = NULL WHERE id = ? AND admissionWaitSince IS NOT NULL',
+    ).run(runId);
+  }
+
+  /** The runs waiting on the cap, oldest refusal first: stamped, still `planned` or parked in an idle state (`sendBack`: a
+   *  refused send-back, not a refused dispatch), with a claimant, and ELIGIBLE: never woken, or refused again since the
+   *  wake (`lastRefusedAt` newer than `admissionWokenAt`). */
+  admissionWaiters(): { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; sendBack: boolean }[] {
+    const rows = this.db.prepare(
+      `SELECT id AS runId, program, claimedBy, admissionWaitSince AS since, lastRefusedAt, state FROM runs
+       WHERE admissionWaitSince IS NOT NULL AND lastRefusedAt IS NOT NULL AND state IN ${IDLE_RUN_STATES_SQL}
+         AND claimedBy <> '' AND (admissionWokenAt IS NULL OR admissionWokenAt < lastRefusedAt)
+       ORDER BY admissionWaitSince, id`,
+    ).all() as { runId: number; program: string; claimedBy: string; since: number; lastRefusedAt: number; state: string }[];
+    return rows.map((r) => ({ runId: r.runId, program: r.program, claimedBy: r.claimedBy, since: r.since, lastRefusedAt: r.lastRefusedAt, sendBack: r.state !== 'planned' }));
   }
 
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────

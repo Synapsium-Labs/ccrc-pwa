@@ -162,8 +162,7 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
 the lane's seed row, at slot 114, the coordinator's: urgent mail (#3073) took 108, Overlord gates B (#3076) 109, door
 process B1 (#3099) 110, the waiting workers' sleep (#3101) 111 and the dispatch cap's switch (#3103) 112, each absorbed from
 main (the last three in the review fix round, the last after the coordinator ruled that #3103 keeps 112). Capacity Task 4
-(#3117) holds 113 in the merge queue, and the coordinator gave the park 114 before it merged: entry 113 is a no-op holding
-Task 4's place until the next absorb of main replaces it with Task 4's own, so this branch never lands with the no-op. The Shadow lanes
+(#3117) took 113, so the park is 114, absorbed from main after Task 4 merged. The Shadow lanes
 card lists the park's row before the sleep lane's, as their worker and I agreed, and the cap's switch last.
 
 ## Mutation measurements
@@ -253,7 +252,7 @@ then green, and each guard has its mutant above.
 The holders of the files touched agreed first: linear-hierarchy wave 8 (shared/api.ts, store.ts), the docs reader's P1 (the
 console's client), capacity Task 4 (the single-definition file) and door process B1 (the floors file). Door B1's #3099 took
 migration slot 110, the waiting workers' sleep (#3101) 111 and the dispatch cap's switch (#3103) 112, so the park moved to
-114, past capacity Task 4's 113 (#3117, still queued; additive conflicts, absorbed). The fast run on the first fix-round tip refused one raise-suite fixture of heldFor that
+114, past capacity Task 4's 113 (#3117; additive conflicts, absorbed). The fast run on the first fix-round tip refused one raise-suite fixture of heldFor that
 lacked bindingRunId, outside the narrow typecheck configs used here (the full one is killed by the test slice's memory cap);
 fixed in the same round.
 

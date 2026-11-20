@@ -18,7 +18,7 @@ import { utf8ByteLength } from '../src/lib/markdownGuard';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
-import { entry, fileResponse, pageAt, treeOk, treeResponse } from './docsFixtures';
+import { NO_RANGE_VISIT, entry, fileResponse, pageAt, treeOk, treeResponse } from './docsFixtures';
 import { withSyncHighlight } from './highlightTestStore';
 
 const LINK: Omit<DocLinkContextValue, 'urls'> = {
@@ -86,12 +86,12 @@ describe("what a leaf's body shows, published for Export (spec 4.10, 4.17; M4.EX
     const page = pageAt(`/docs/demo/specs/${path}`);
     if (page.kind !== 'path') throw new Error('fixture: not a leaf');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture: opens nothing');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: opens nothing');
     const r = fileResponse('{"a":1}\n');
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 },
       file: { s: 'ok', pin, answer: { ...r, contentClass: 'text', show: { ...r.show, path } }, receivedAt: 0 },
-      freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null, retryTree: vi.fn(), retryFile: vi.fn(),
+      freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null, ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(),
       refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     const { seen } = recording(withSyncHighlight(<DocsLeaf visit={visit} tree={tree} page={page} parser={parser} />));

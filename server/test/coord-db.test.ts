@@ -769,7 +769,7 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1),
     // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, waiting workers sleep, D-8790),
     // and MIGRATIONS[111] (the cap-counts-working lane-arm row, the dispatch cap counts only working workers, D-8792),
-    // and MIGRATIONS[112] (a no-op holding capacity Task 4's slot, #3117, until it merges),
+    // and MIGRATIONS[112] (runs.admissionWaitSince, lastRefusedAt and admissionWokenAt, the admission wait, D-6095),
     // and MIGRATIONS[113] (approval_parks, four approvals columns and the approval-park lane row, approvals PR 3).
     expect(COORD_SCHEMA_VERSION).toBe(114);
     expect(MIGRATIONS.length).toBe(114);
@@ -911,7 +911,7 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, Overlord W1 door process B1),
     // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, D-8790),
     // and MIGRATIONS[111] (the cap-counts-working lane-arm row, D-8792),
-    // and MIGRATIONS[112] (capacity Task 4's held slot, #3117),
+    // and MIGRATIONS[112] (the admission wait columns, D-6095),
     // and MIGRATIONS[113] (approval_parks, approvals PR 3); the migration above is still entry 11.
     expect(COORD_SCHEMA_VERSION).toBe(114);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
