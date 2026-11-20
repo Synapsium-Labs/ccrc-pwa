@@ -627,10 +627,10 @@ export interface Questions {
    *  It records the ruling on the row's park as authority `operator` and nudges the child; it calls no press function and
    *  signs nothing (the retry's mint signs it, through the one signing site). */
   operatorRuleApproval(q: OperatorApprovalRule): QuestionDoorAnswer;
-  /** Approvals PR 3 (F8-c), for the hook's ruling read: the row's answer (its state, and the signed ruling once it is
-   *  `allowed` or `denied`), recording `fetchedAt` the first time it serves a ruling at least `graceMs` before the record's
-   *  `expiresAt`. A `parked` row answers its state and no ruling, which the hook's `parked` arm reads. */
-  approvalRulingAnswer(row: ApprovalRow, now: number, graceMs: number): ApprovalRulingAnswer;
+  /** Approvals PR 3 (F8-c), called by the hook's ruling read beside the answer it builds: records `fetchedAt` the first time
+   *  the read serves the row's ruling at least `graceMs` before the record's `expiresAt`, and nothing otherwise. A `parked`
+   *  row has no ruling to serve (the hook's `parked` arm reads its state). */
+  noteRulingServed(row: ApprovalRow, now: number, graceMs: number): void;
   /** Approvals PR 3 (§3.3.2): the parked rows Waiting on you lists, or null when they could not be read. */
   parkedApprovals(now: number): ParkedApprovalView[] | null;
   /** W3 Q3f (D-7030): THE CLAIMANT'S HAND-OVER, behind `POST /api/questions/<ask|approval>-<n>/release` and the two old
@@ -937,18 +937,19 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     return out ?? sent(200, { ok: true, state: 'parked', recorded: q.verdict });
   };
 
-  /** The hook's ruling read's answer (F8-c): `fetchedAt` is recorded the first time a ruling is served at least `graceMs`
-   *  before its record's `expiresAt`; a record that cannot be read is served as stored and records nothing. */
-  const approvalRulingAnswer = (row: ApprovalRow, now: number, graceMs: number): ApprovalRulingAnswer => {
-    if ((row.state !== 'allowed' && row.state !== 'denied') || row.ruling === null) return { state: row.state };
-    const ruling = JSON.parse(row.ruling) as NonNullable<ApprovalRulingAnswer['ruling']>;
-    const expiresAt = typeof ruling?.record?.expiresAt === 'number' ? ruling.record.expiresAt : null;
-    if (row.fetchedAt === null && expiresAt !== null && fetchedAtRecordable(now, expiresAt, graceMs)) {
-      try { deps.coord?.markApprovalFetched(row.id, now); } catch (err) {
-        console.warn(`ccrc-server: fetchedAt for approval ${row.id} was not recorded (${err instanceof Error ? err.message : String(err)})`);
-      }
+  /** The ruling read's `fetchedAt` (F8-c): recorded the first time a ruling is served at least `graceMs` before its record's
+   *  `expiresAt`; a record that cannot be read records nothing, and a failed write is warned, never turned into a refusal. */
+  const noteRulingServed = (row: ApprovalRow, now: number, graceMs: number): void => {
+    if ((row.state !== 'allowed' && row.state !== 'denied') || row.ruling === null || row.fetchedAt !== null) return;
+    let expiresAt: number | null = null;
+    try {
+      const ruling = JSON.parse(row.ruling) as NonNullable<ApprovalRulingAnswer['ruling']>;
+      expiresAt = typeof ruling?.record?.expiresAt === 'number' ? ruling.record.expiresAt : null;
+    } catch { expiresAt = null; }
+    if (expiresAt === null || !fetchedAtRecordable(now, expiresAt, graceMs)) return;
+    try { deps.coord?.markApprovalFetched(row.id, now); } catch (err) {
+      console.warn(`ccrc-server: fetchedAt for approval ${row.id} was not recorded (${err instanceof Error ? err.message : String(err)})`);
     }
-    return { state: row.state, ruling };
   };
 
   /** The parked rows Waiting on you lists (§3.3.2): `parkedApprovalsFor` over this instance's store. */
@@ -2322,7 +2323,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
     noteAsksSwitch: (disabled) => { asksDisabled = disabled; },
     lapseAsks, lapseApprovals, prune, released, askSettled, answeredLate, approvalReleased, approvalRuled, currentAskOf,
     observeCensus, sweepCensus, pushSourceOf, censusSources,
-    answer, rule, release, operatorRuleApproval, approvalRulingAnswer, parkedApprovals,
+    answer, rule, release, operatorRuleApproval, noteRulingServed, parkedApprovals,
     [TEST_VIEW]: testView,
   };
   return questions;

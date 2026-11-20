@@ -182,11 +182,12 @@ describe('the state: one write site, the vocabularies, the readers (F8-a, F4, F9
     r.lapse(at + APPROVAL_PARK_HORIZON_MS);
     expect(r.row(a.id).state).toBe('stale');
   });
-  it('the ruling read answers a parked row its state and no ruling', async () => {
+  it('a parked row has no ruling to serve: noting it served records nothing', async () => {
     const r = await rig();
     const a = await minted(r.raise());
     r.lapse(pastWindow(r, a.id));
-    expect(r.q.approvalRulingAnswer(r.row(a.id), Date.now(), GRACE)).toEqual({ state: 'parked' });
+    r.q.noteRulingServed(r.row(a.id), Date.now(), GRACE);
+    expect(r.row(a.id)).toMatchObject({ state: 'parked', ruling: null, fetchedAt: null });
   });
   it('a pane press marks a parked row operator and voids its park; a later ruling on it is refused (F4)', async () => {
     const r = await rig();
@@ -399,9 +400,9 @@ describe('the last poll (F8-c, F2)', () => {
     const a = await minted(r.raise());
     await r.rule(a.id, 'allow');
     const exp = r.row(a.id).notifyAt;
-    r.q.approvalRulingAnswer(r.row(a.id), exp - GRACE + 1, GRACE);
+    r.q.noteRulingServed(r.row(a.id), exp - GRACE + 1, GRACE);
     expect(r.row(a.id).fetchedAt).toBeNull();
-    r.q.approvalRulingAnswer(r.row(a.id), exp - GRACE, GRACE);
+    r.q.noteRulingServed(r.row(a.id), exp - GRACE, GRACE);
     expect(r.row(a.id).fetchedAt).toBe(exp - GRACE);
   });
   it('an allowed row the hook never fetched, minted live, moves onto the park; the child is nudged; the retry meets it', async () => {
@@ -419,7 +420,7 @@ describe('the last poll (F8-c, F2)', () => {
     const r = await rig();
     const a = await minted(r.raise());
     await r.rule(a.id, 'allow');
-    r.q.approvalRulingAnswer(r.row(a.id), Date.now(), GRACE);
+    r.q.noteRulingServed(r.row(a.id), Date.now(), GRACE);
     const b = await minted(r.raise());
     await r.rule(b.id, 'allow');
     r.f.coord.db.prepare('UPDATE approvals SET parkWord = NULL WHERE id = ?').run(b.id);
