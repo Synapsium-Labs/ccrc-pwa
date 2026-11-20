@@ -77,7 +77,7 @@ Review run 2860 read the branch at `a2a439fcf`, closed 23 of the 26 round-1 ids,
 | M4, M5 | The sibling-import rule and the scope read's query; the DDNS start degrades; one rule for ART-L10; the golden test's Sec-Fetch sets are Chromium's |
 | Residues | The log block writes `level INFO`; a draft page above 4 MiB is refused `draft-too-large` |
 
-Mutation rows now run MX5.1 to MX5.89.
+Mutation rows now run MX5.1 to MX5.92. The adversarial pass ran again over this round's diff before the wave-done: one Opus (high) read found 3 important and 5 minor defects and no security regression, all fixed in this round. The important three: the launch sheet on a page the console never loaded has no pre-scan, so it offers no outside host and says so; the scope read's malformed-query answer is the docs parser's own failure shape, and the mint checks its body with the same parsers; and the doctor table's test is `ccrc-doctor-core.test.ts`.
 
 ## Measured, and how
 
