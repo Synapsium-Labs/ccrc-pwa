@@ -803,7 +803,7 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
   return {
     agents,
     omitted: running.evicted + others.evicted + finals.evicted,
-    unmeasured: left === 0 ? null : usable === null ? (i.roster as { why: RosterUnusable }).why : { why: 'unseen', helpers: left },
+    unmeasured: left === 0 ? null : i.roster.kind === 'unusable' ? i.roster.why : { why: 'unseen', helpers: left },
     known: ids.size,
     memory: {
       listed: usable === null ? null : listedIds,

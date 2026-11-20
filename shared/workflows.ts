@@ -107,12 +107,15 @@ export const WORKFLOW_CONTROL_ACTS: readonly WorkflowControlAct[] =
 export type AgentHelperState =
   | 'launched' | 'running' | 'done' | 'failed' | 'stopped' | 'finished' | 'unlisted' | 'gone' | 'unmeasured';
 
-/** The runtime list derives from this record, which also says which states are final (D-6048's idiom). */
-const AGENT_HELPER_STATE_FINAL: Record<AgentHelperState, boolean> = {
-  launched: false, running: false, done: true, failed: true, stopped: true, finished: true, unlisted: false, gone: false, unmeasured: false,
+/** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
+const AGENT_HELPER_STATE_MAP: Record<AgentHelperState, true> = {
+  launched: true, running: true, done: true, failed: true, stopped: true, finished: true, unlisted: true, gone: true, unmeasured: true,
 };
-export const AGENT_HELPER_STATES: readonly AgentHelperState[] = Object.keys(AGENT_HELPER_STATE_FINAL) as AgentHelperState[];
-export const isFinalHelperState = (s: AgentHelperState): boolean => AGENT_HELPER_STATE_FINAL[s];
+export const AGENT_HELPER_STATES: readonly AgentHelperState[] = Object.keys(AGENT_HELPER_STATE_MAP) as AgentHelperState[];
+
+/** The final states: an end was measured. Every other state claims none. */
+const FINAL_AGENT_HELPER_STATES: Partial<Record<AgentHelperState, true>> = { done: true, failed: true, stopped: true, finished: true };
+export const isFinalHelperState = (s: AgentHelperState): boolean => FINAL_AGENT_HELPER_STATES[s] === true;
 
 /** The words a row says. `unmeasured` has none: a state left out is never drawn. */
 export const AGENT_HELPER_STATE_WORDS: Record<AgentHelperState, string | null> = {
