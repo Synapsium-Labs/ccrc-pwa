@@ -324,3 +324,30 @@ The review found 8 important findings (F1 to F8) and 6 minor ones (A1 to A6). Th
 - **A6:** Figure 2 now pushes the place, then requests full screen.
 - **The adversarial pass on the changed sections (Opus, high):** 4 important and 6 minor findings, all fixed in one commit. Among them: `baseIdx` and `route` in the decider, `close-overlay` only on the crossing pop, a bounded bottom band, no offer under a closing dialog, a live region inside the container, and a repeated share that counts for nothing.
 - New mutation rows: X6.35 to X6.51. No test, typecheck or install ran: docs only.
+
+### Fix round 2 (review run 2947 at `8524e7aba`, 2026-11-20)
+
+The review found 4 important findings (F1 to F4) and 8 minor ones (A-a to A-h). The coordinator ruled F2 and F3 and directed the rest. Each important finding has its own commit, and F2's XR2 mutation row has a second one. A-a and A-b share one commit, being one history rule; A-d has its own; A-c and A-e to A-h share one text commit.
+
+- **F1:** `releaseAsPage` keeps `aria-hidden` only while an open dialog (`[role=dialog][data-state=open]`) holds the node, so leaving during a sheet's exit animation announces the console at once.
+- **F2, the coordinator's ruling, Kindle-like both ways:**
+  - a tap anywhere outside the overlay hides it, through a clear ccrc layer over the reading area;
+  - a second tap on the menu control hides it, and there is no timeout;
+  - Exit sits at the strip's right end, never where the menu control was;
+  - the frame's Aa corner stays clear, and in XR1 the window's blur hides the overlay when the Aa takes focus;
+  - XR2 does the same in landscape.
+- **F3, the coordinator's ruling:** reader mode reads in the default layout, and the reader's own layout returns on exit. `READER_LAYOUT_RULE` is set by XR1.1 Step 0's measurement, and later by device row FS-9; under `'default-only'`, no action is drawn outside the default layout, and Page details carries the sentence. LX6, AR-X6 and the acceptance row name the default layout. Decision R21.
+- **F4:** XR2.1 Step 0 adopts a re-pinned release with every per-release step, updates `reader-pin.test.ts` and `reader-assets.test.ts`, and re-takes `frame-cost`'s BASE before LX6's growth is judged.
+- **A-a and A-b:**
+  - a crossing while reader mode is off is consumed only while `exitPending` marks the exit that just happened;
+  - ccrc never stands on a dead reader entry (`leave-dead-reader`, and a check at the host's registration after a reload);
+  - `decidePop` takes `(popped, tab, readerOn)`.
+- **A-d:** a figure's full screen counts as activity, and from XR2 the frame's `active` act, paced once a minute on its own window, does too. The idle timer is named.
+- **A-c, and A-e to A-h:**
+  - D-8831's wording on the fill path;
+  - Mockup 1, and the overlay's word;
+  - the modal-layer rows in `pwa/test/sheet-trap-hide.test.tsx`;
+  - X2's P6 before P5;
+  - the commit-per-finding wording.
+- **The adversarial pass on the changed sections (Opus, high):** 8 important and 9 minor findings, all fixed in one commit. Among them: the §4.2 table, the blur in XR1 only, `active` on its own window, every mount planned in `default` while on, the fallback off the one bar, `leave-dead-reader` and `exitPending`, and FS-10.
+- New mutation rows: X6.52 to X6.71. No test, typecheck or install ran: docs only.
