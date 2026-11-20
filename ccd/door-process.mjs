@@ -135,6 +135,20 @@ export const DOOR_TOOLS = Object.freeze([
     input: object({ id: { type: 'integer', minimum: 1 } }, ['id']),
     argv: (i) => { need(isId(i.id), 'id is a timer id'); return ['timer', 'cancel', String(i.id)]; },
   },
+  {
+    // D-8809: the Overlord's confirm of one current team candidate for a project with no Linear key, a call made in the
+    // operator's name. Fenced like the note door; the gate allows it at the full rung only.
+    name: 'link_team', verb: 'linking.confirm', class: 'operate', fenced: true, reader: false,
+    description: "Link a project to one of its current Linear team candidates, as a call made in the operator's name (full rung only).",
+    input: object({ project: { type: 'string' }, team: { type: 'string' }, workspace: { type: ['string', 'null'] } }, ['project', 'team', 'workspace']),
+    argv: (i) => {
+      need(typeof i.project === 'string' && i.project.length > 0, 'project is a project name');
+      need(typeof i.team === 'string' && /^[A-Za-z][A-Za-z0-9_]{0,15}$/.test(i.team), 'team is a Linear team key');
+      need(i.workspace === null || (typeof i.workspace === 'string' && i.workspace.length > 0), "workspace is the candidate's workspace id, or null");
+      return ['linking', 'confirm', '--json', '-'];
+    },
+    body: (i) => ({ project: i.project, team: i.team, workspace: i.workspace }),
+  },
 ].map((r) => Object.freeze(r)));
 
 /** The doors this table serves that the `ccrc-overlord` skill's table does not name (ruled, F26), each with its reason; the
@@ -142,6 +156,7 @@ export const DOOR_TOOLS = Object.freeze([
 export const DOOR_ONLY_TOOLS = Object.freeze({
   probe: "starting.md's door table has no row for reading a probe round; the first line sends the Overlord to it",
   note_handover: "starting.md's door table has no row for the handover note, which the renewal asks for",
+  link_team: "starting.md's door table has no row for the Overlord's team link yet (D-8809); the skill's owner adds it",
 });
 
 /** Does `v` name an attribution field as a key, at any depth? */

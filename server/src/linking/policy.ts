@@ -2,8 +2,11 @@
 // else. A private repository carries the ticket id; a public or unmeasured one never does.
 import { LINEAR_TEAM_KEY_SHAPE, isLinearUuid } from '../../../shared/linear.js';
 import { WS_SLUG_MAX, fitSlug, slugifyWords } from '../../../shared/slug.js';
-import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamSuggestionBody } from '../../../shared/linking.js';
-import { TEAM_SUGGESTION_WHY_MAX } from '../../../shared/linking.js';
+import type {
+  LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamCandidateWire, TeamConfirmBody, TeamSuggestionBody,
+} from '../../../shared/linking.js';
+import { TEAM_SUGGESTION_WHY_MAX, teamEvidenceClause } from '../../../shared/linking.js';
+import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX } from '../coord/coordCalls.js';
 import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
 
@@ -100,6 +103,54 @@ export function parseTeamSuggestion(body: unknown): { ok: true; value: TeamSugge
   const value: TeamSuggestionBody = { byId, byUuid, project, team: team.toUpperCase(), why };
   if ('workspace' in o) value.workspace = o['workspace'] as string;
   return { ok: true, value };
+}
+
+const CONFIRM_KEYS: readonly string[] = ['byId', 'byUuid', 'project', 'team', 'workspace'];
+
+/** D-8809: the Overlord's confirm body, closed: `byId`, `byUuid`, `project` (`isWsProject`), `team` (the Linear key shape,
+ *  uppercased) and `workspace` (a slot id, `isLinearUuid`, or null for a candidate stored without one; required). A refusal names
+ *  the field (`body` for the shape as a whole), as `parseTeamSuggestion`'s does. */
+export function parseTeamConfirm(body: unknown): { ok: true; value: TeamConfirmBody } | { ok: false; field: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return { ok: false, field: 'body' };
+  const o = body as Record<string, unknown>;
+  if (Object.keys(o).some((k) => !CONFIRM_KEYS.includes(k))) return { ok: false, field: 'body' };
+  const { byId, byUuid, project, team, workspace } = o;
+  if (typeof byId !== 'string' || !IDENTITY_RE.test(byId)) return { ok: false, field: 'byId' };
+  if (typeof byUuid !== 'string' || !IDENTITY_RE.test(byUuid)) return { ok: false, field: 'byUuid' };
+  if (typeof project !== 'string' || !isWsProject(project)) return { ok: false, field: 'project' };
+  if (typeof team !== 'string' || !LINEAR_TEAM_KEY_SHAPE.test(team.toUpperCase())) return { ok: false, field: 'team' };
+  if (workspace !== null && !isLinearUuid(workspace)) return { ok: false, field: 'workspace' };
+  return { ok: true, value: { byId, byUuid, project, team: team.toUpperCase(), workspace: workspace as string | null } };
+}
+
+/** D-8809: the current candidate a confirm names, matched by key and workspace (a candidate stored without a workspace is named
+ *  by null, and only by null), or null when the pair is none of them. */
+export function confirmedCandidate(candidates: readonly TeamCandidateWire[], team: string, workspace: string | null): TeamCandidateWire | null {
+  return candidates.find((c) => c.key === team && (c.workspaceId ?? null) === workspace) ?? null;
+}
+
+/** One line of at most `max` characters: whitespace runs folded, a longer text cut with an ellipsis. */
+const oneLine = (text: string, max: number): string => {
+  const t = text.replace(/\s+/g, ' ').trim();
+  return t.length <= max ? t : `${t.slice(0, max - 1)}…`;
+};
+/** A candidate as the call names it: the team's NAME and its workspace's display NAME, never a key. */
+const teamPhrase = (c: TeamCandidateWire): string => oneLine(c.workspaceId === undefined ? c.name
+  : `${c.name} in ${c.workspaceName ?? 'a workspace whose name is unknown'}`, CALL_OPTION_MAX);
+
+/** D-8809: the call body of the Overlord's link, in the call record's own shape (`callBodyOf` reads it as the call route reads a
+ *  coordinator's): a big, reversible call naming the project, the team and workspace by name, and the candidate's evidence
+ *  (`teamEvidenceClause`), never a team key. The options are the project's current candidates (each once, the chosen one first)
+ *  and leaving it unlinked. */
+export function overlordLinkCallBody(project: string, chosen: TeamCandidateWire, candidates: readonly TeamCandidateWire[]): Record<string, unknown> {
+  const pick = teamPhrase(chosen);
+  const others = [...new Set(candidates.map(teamPhrase))].filter((p) => p !== pick).slice(0, CALL_OPTIONS_MAX - 2);
+  return {
+    class: 'big', reversible: true,
+    question: oneLine(`Which Linear team does ${project} link to?`, CALL_TEXT_MAX),
+    options: [pick, ...others, oneLine(`Leave ${project} unlinked`, CALL_OPTION_MAX)], chosen: pick,
+    why: oneLine(`The Overlord linked it on its evidence: ${teamEvidenceClause(chosen.evidence)}.`, CALL_WHY_MAX),
+  };
 }
 
 /** D-8808: the workspace a write stores beside the key. `holds` answers whether a workspace has a team key (`unmeasured`: the

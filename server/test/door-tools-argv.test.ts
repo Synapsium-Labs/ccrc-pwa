@@ -131,6 +131,18 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
     expect(cmdline()).not.toContain('quoted');
   });
 
+  it('link_team: POST /api/linking/confirm with the project, team and workspace, and the pair (D-8809)', async () => {
+    const input = { project: 'project-a', team: 'AAA', workspace: null };
+    const r = await door('link_team', input);
+    expect(r.status, r.stderr).toBe(0);
+    expect(JSON.parse(arrived('linking.confirm').body)).toEqual({ ...input, ...PAIR });
+  });
+
+  it('link_team: an input outside its shape is refused before anything runs', () => {
+    expect(() => row('link_team').argv({ project: 'project-a', team: 'not a key', workspace: null }, ID)).toThrow('team is a Linear team key');
+    expect(() => row('link_team').argv({ project: 'project-a', team: 'AAA' }, ID)).toThrow("workspace is the candidate's workspace id, or null");
+  });
+
   it('note_add: POST to the notes route with the note and the pair', async () => {
     const input = { key: { kind: 'run', id: 12 }, kind: 'thread', waitsOn: 'a review', next: 'merge' };
     const r = await door('note_add', input);
@@ -186,7 +198,7 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
   });
 
   it('covers every row of the table', () => {
-    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel'];
+    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team'];
     expect(ROWS.map((r) => r.name)).toEqual(covered);
   });
 });

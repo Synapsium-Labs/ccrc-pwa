@@ -42,8 +42,9 @@ const keysOf = (v: unknown): string[] => {
 };
 
 describe('DOOR_TOOLS', () => {
-  it('has ten uniquely named rows', () => {
-    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel']);
+  it('has eleven uniquely named rows', () => {
+    // D-8809: `link_team`, the Overlord's confirm of a team candidate.
+    expect(ROWS.map((r) => r.name)).toEqual(['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team']);
   });
 
   it('every row\'s verb is a key of ccrc-api\'s ROUTES', () => {

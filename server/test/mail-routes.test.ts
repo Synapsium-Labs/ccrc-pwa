@@ -12,6 +12,7 @@ import { isOverlordRefusal, isReviewRoundsRefusal } from '../../shared/refusal.j
 import { isOtherLaneKebab } from '../src/coord/otherLanes.js';
 import { MAIL_REJECT_CODES, RUN_REFUSE_CODES, ASK_REFUSE_CODES, isRunRefuseCode, isLifecycleGapReason, isClaimRefuseCode, isSessionLifecycle, isReclaimRefuseCode, isAskRefuseCode, isRunRouteRefuseCode, isSetAccountPoolsRefuseCode, isUpdateStoreRefuseCode, isCollectLaneRefusal, isTestboxAdminRouteRefusal } from '../../shared/api.js';
 import { isPlanKebab } from '../../shared/plan.js';
+import { isLinkingRefusal } from '../../shared/linking.js';
 import { isLinearActionVerb } from '../../shared/ledgers.js';
 import { buildServer } from '../src/server.js';
 import type { Deps } from '../src/server.js';
@@ -935,6 +936,10 @@ describe('the rejection table is total, in both directions', () => {
         || isRunRefuseCode(tok)
         // LINEAR HIERARCHY WAVE 2 (D-8181) — the plan's words, admitted through their exported guard (`shared/plan.ts`).
         || isPlanKebab(tok)
+        // LINEAR HIERARCHY WAVE 8 (D-8808, D-8809) — `coord/linkingStore.ts` answers the linking routes' refusals by name
+        // (`'team-set'`, `'no-project'`), which the route sends as its `error`. Admitted through L0's guard over
+        // `LINKING_REFUSALS`, never NOT_CODES.
+        || isLinkingRefusal(tok)
         // THE HIERARCHY ITEMS' VERBS (D-8182, D-8183): `coord/hierarchyRoutes.ts`'s item-act `switch` names an action's verb as a
         // literal (`'linear-drift'`, `'linear-owner'`). A verb rides an operator item's `action`, never a `refused` or `reject.code`.
         // Admitted through L0's guard, derived from `LINEAR_ACTION_VERB_MAP`, never NOT_CODES.
@@ -1290,7 +1295,7 @@ describe('the rejection table is total, in both directions', () => {
         // not reached its condition as literals. They decide a parked thread's wake on the block-wake lane, never a `refused`
         // or `reject.code`. Admitted through the exported guard, derived from `BLOCK_WAKE_VERDICTS`, `BLOCK_WAKE_FACT_WORDS` and `CALL_WAKES`.
         || isBlockWakeKebab(tok),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word or block-wake word`).toBe(true);
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word, linking refusal or block-wake word`).toBe(true);
     }
   });
 });

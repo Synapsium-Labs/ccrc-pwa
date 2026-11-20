@@ -4,9 +4,10 @@ import { describe, it, expect } from 'vitest';
 import {
   withoutTrackerIds, slugForTicket,
   VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue, workspaceAfterWrite,
+  parseTeamConfirm, confirmedCandidate, overlordLinkCallBody,
 } from '../src/linking/policy.js';
 import { WS_SLUG_MAX } from '../../shared/slug.js';
-import type { ProjectLinkingWire } from '../../shared/linking.js';
+import type { ProjectLinkingWire, TeamCandidateWire } from '../../shared/linking.js';
 
 type Measured = ProjectLinkingWire['measured'];
 const measured = (visibility: 'public' | 'private' | 'internal'): Measured =>
@@ -192,5 +193,51 @@ describe('workspaceAfterWrite', () => {
       .toEqual({ ok: true, workspace: null });
     expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: () => 'unmeasured' }))
       .toEqual({ ok: true, workspace: null });
+  });
+});
+
+// D-8809 (Task 8.5): the Overlord's confirm, its body, its candidate and its call's words, all pure.
+describe('parseTeamConfirm, confirmedCandidate and overlordLinkCallBody (D-8809)', () => {
+  const WS_A = '00000000-0000-4000-8000-0000000000a1';
+  const OK = { byId: 'lane-a', byUuid: 'u-1', project: 'project-a', team: 'aaa', workspace: WS_A };
+  const A: TeamCandidateWire = { key: 'AAA', name: 'Alpha Team', evidence: { kind: 'ticket-ids', ids: 9, of: 10 }, workspaceId: WS_A, workspaceName: 'Workspace A' };
+  const B: TeamCandidateWire = { key: 'BBB', name: 'Beta Team', evidence: { kind: 'suggested', by: 'lane-c', why: 'the branches say so' } };
+  it('reads the closed body, uppercasing the team; workspace is required, a uuid or null', () => {
+    expect(parseTeamConfirm(OK)).toEqual({ ok: true, value: { ...OK, team: 'AAA' } });
+    expect(parseTeamConfirm({ ...OK, workspace: null })).toEqual({ ok: true, value: { ...OK, team: 'AAA', workspace: null } });
+    const { workspace: _w, ...noWorkspace } = OK;
+    for (const [body, field] of [[noWorkspace, 'workspace'], [{ ...OK, workspace: 'ws-a' }, 'workspace'], [{ ...OK, extra: 1 }, 'body'],
+      [[], 'body'], [{ ...OK, team: 'a b' }, 'team'], [{ ...OK, project: '../x' }, 'project'], [{ ...OK, byId: '' }, 'byId'],
+      [{ ...OK, byUuid: 'x y' }, 'byUuid']] as const) {
+      expect(parseTeamConfirm(body), JSON.stringify(body)).toEqual({ ok: false, field });
+    }
+  });
+  it('a candidate is named by its key and workspace; one stored without a workspace only by null', () => {
+    expect(confirmedCandidate([A, B], 'AAA', WS_A)).toBe(A);
+    expect(confirmedCandidate([A, B], 'AAA', null)).toBeNull();
+    expect(confirmedCandidate([A, B], 'BBB', null)).toBe(B);
+    expect(confirmedCandidate([A, B], 'BBB', WS_A)).toBeNull();
+    expect(confirmedCandidate([], 'AAA', WS_A)).toBeNull();
+  });
+  it('the call names the project, the teams and the workspace by name and the evidence, never a key', () => {
+    const body = overlordLinkCallBody('project-a', A, [A, B, A]);
+    expect(body).toEqual({
+      class: 'big', reversible: true, question: 'Which Linear team does project-a link to?',
+      options: ['Alpha Team in Workspace A', 'Beta Team', 'Leave project-a unlinked'], chosen: 'Alpha Team in Workspace A',
+      why: "The Overlord linked it on its evidence: 9 of 10 ticket ids in its branches, pull requests and commits use this team's key.",
+    });
+    expect(JSON.stringify(body)).not.toMatch(/\bAAA\b|\bBBB\b/);
+    expect(overlordLinkCallBody('project-a', B, [B]).why).toBe('The Overlord linked it on its evidence: suggested by lane-c: the branches say so.');
+    const unnamed = overlordLinkCallBody('project-a', { ...A, workspaceName: null }, [A]);
+    expect(unnamed.chosen).toBe('Alpha Team in a workspace whose name is unknown');
+  });
+  it('each text stays within the call record\'s bounds, cut on one line', () => {
+    const long = { ...B, name: `Team\n${'x'.repeat(400)}`, evidence: { kind: 'suggested' as const, by: 'lane-c', why: 'y'.repeat(280) } };
+    const body = overlordLinkCallBody('project-a', long, [long]) as { chosen: string; why: string; options: string[] };
+    expect(body.chosen.length).toBeLessThanOrEqual(300);
+    expect(body.chosen).not.toMatch(/\n/);
+    expect(body.why.length).toBeLessThanOrEqual(300);
+    expect(body.why.endsWith('…')).toBe(true);
+    expect(body.options).toHaveLength(2);
   });
 });

@@ -138,6 +138,9 @@ export const LINKING_REFUSALS = ['bad-team-key', 'bad-override', 'no-project', '
   'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public', 'template-failed', 'override-private-public', 'team-unknown',
   'team-set'] as const;
 export type LinkingRefusal = (typeof LINKING_REFUSALS)[number];
+/** Whether a word is one of the linking routes' refusals: the guard the coordination kebab census admits them through
+ *  (`mail-routes.test.ts`), so a store in `server/src/coord` may answer one by name (D-8809). */
+export const isLinkingRefusal = (w: unknown): w is LinkingRefusal => typeof w === 'string' && (LINKING_REFUSALS as readonly string[]).includes(w);
 
 /** Where a repository's pull request template lives. */
 export const LINKING_TEMPLATE_PATH = '.github/pull_request_template.md';
