@@ -622,7 +622,7 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // mint promise and by nothing else (that is what `undiverge` had to strip
     // for them to land in this set at all).
     expect(diverged[0]).toMatch(/die "bad value for \$f /);
-    expect(diverged[1]).toMatch(/die "class haiku takes no effort level/);
+    expect(diverged[1]).toMatch(/die "\$subj takes no effort level/);   // A3.3: the subject is the model when the lane's data decided, `class haiku` when the standing rule did
     for (const l of diverged) expect(l).toContain(MINT_PROMISE);
   });
 
@@ -642,11 +642,12 @@ describe('_route_argv_check IS cmd_route\'s validator, measured against the ship
     // `_route_argv_class` reads the FIRST `class=` and picks the LANE while the
     // write loop's LAST one wins the RECORD — so a repeat is two answers to one
     // question. The signature line moved with it (`seen=""`), which is why the
-    // count is five rather than four plus one. SIX since the Overlord W1's pool set: the refusal of `poolset` and
+    // count is five rather than four plus one. SEVEN since the model-class arm's A3.3 (the optional first `lane=` pair, a caller's chosen lane, argv-only because `cmd_route` reads its lane off the record); SIX since the Overlord W1's pool set: the refusal of `poolset` and
     // `acctorder` on a mint's `--route` (open question 10), argv-only because `cmd_route` is the set's one writer; the same
     // line refuses `mailhold` (mid-turn mail plan Task 3.2), whose one writer is the projection lane through `cmd_route`.
     expect(only).toEqual([
-      `local kv f v rc cls="" eff="" seen=""`,
+      `local kv f v rc cls="" eff="" seen="" lane="" subj`,
+      `[[ "\${1-}" == lane=* ]] && { lane="\${1#lane=}"; shift; }   # the optional FIRST pair, a caller's chosen lane: never a route field`,
       `for kv in "$@"; do`,
       `[[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"`,
       `[[ "$f" == poolset || "$f" == acctorder || "$f" == mailhold ]] && die "'$f' is written only by ccd route --session; nothing was touched"`,

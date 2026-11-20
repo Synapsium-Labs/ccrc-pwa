@@ -7818,7 +7818,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # floor, the placement read, the lock, the worktree and the row. A bad
   # `--route` value is an argv a coordinator composed; this verb refuses it with
   # the box exactly as it found it (spec §5.3).
-  (( ${#lc_route[@]} )) && _route_argv_check "${lc_route[@]}"
+  (( ${#lc_route[@]} )) && _route_argv_check ${lc_wrapper:+"lane=$lc_wrapper"} "${lc_route[@]}"   # the lane, when --wrapper chose one (A3.3)
   (( lc_gc )) && ! _child_runid_valid "$lc_child" && die "--child needs a run id (a positive integer), got: $lc_child"
   # `--base` IS A CHILD'S ONLY, and 40 or 64 lowercase hex: the SHAPE of a full id of either object format. Which length
   # this repository's ids have, and that the value names a commit object itself, are asked of git below. The class is
@@ -10153,7 +10153,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # the log and the journal, never its bytes — the file is writable by any
   # session on the box and a multi-line value would forge log lines.
   local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--apply] [--actor <text>] [--reason <text>]"
-  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert now tries=0
+  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert now tries=0 lane subj
   local -a sets=()
   while (( $# )); do
     case "$1" in
@@ -10226,8 +10226,9 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   done
   # `auto` types nothing (spec §5.1: it is the ABSENT-equivalent), so
   # haiku+auto is not the refused pair — only haiku+a LEVEL is (controller
-  # ruling S1-R5).
-  [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class"
+  # ruling S1-R5). WHICH classes take none is the lane's data first, the haiku rule where the files cannot say (A3.3).
+  _reg_read_to lane "$id" wrapper
+  [[ -n "$eff" && "$eff" != auto ]] && _class_effort_barred_to subj "$lane" "$cls" && die "$subj takes no effort level — set effort=auto or pick another class"
   # THE STAMP FIRST, AND IT IS STILL BEFORE EVERY SIDE EFFECT THAT MATTERS: the
   # last `die` is above this line, so a refused call leaves the record — and the
   # stamp — exactly as it found them. What this writes is what the LAST SETTLE
@@ -22485,7 +22486,8 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
   # the worktree, the branch, the registry row and the pane — so a coordinator
   # that composed a bad argv gets a refusal and an untouched box, never a
   # half-made workspace nobody asked for.
-  local kv f v rc cls="" eff="" seen=""
+  local kv f v rc cls="" eff="" seen="" lane="" subj
+  [[ "${1-}" == lane=* ]] && { lane="${1#lane=}"; shift; }   # the optional FIRST pair, a caller's chosen lane: never a route field
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"
     f="${kv%%=*}"; v="${kv#*=}"
@@ -22524,7 +22526,7 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
   done
   # `auto` types nothing and is the ABSENT-equivalent (controller ruling S1-R5),
   # so haiku+auto is not the refused pair — only haiku+a LEVEL is.
-  [[ "$cls" == haiku && -n "$eff" && "$eff" != auto ]] && die "class haiku takes no effort level — set effort=auto or pick another class; nothing was touched"
+  [[ -n "$eff" && "$eff" != auto ]] && _class_effort_barred_to subj "$lane" "$cls" && die "$subj takes no effort level — set effort=auto or pick another class; nothing was touched"
   return 0
 }
 
@@ -22580,13 +22582,13 @@ _route_seed_default() {   # id wrapper [k=v...] — the coordinator row for an O
   _route_any "$1" && return 0
   # D-8142: the argv is laid OVER the row, never instead of it. A field the argv names is not seeded first, so the
   # journal never shows a value the operator did not want (`class: ∅ -> sonnet`, never `opus -> sonnet`).
-  local id="$1" named=" " kv pair f
+  local id="$1" w="$2" named=" " kv pair f bsub
   local -a seed=()
   shift 2
   for kv in "$@"; do named+="${kv%%=*} "; done
   # A haiku class takes no effort level (the pair `_route_argv_check` and `cmd_route` refuse), so an argv that names
   # `class=haiku` and no effort must not have the row's effort laid under it: effort stays unset, the absent-equivalent.
-  [[ "$(_route_argv_class "$@")" == haiku ]] && named+="effort "
+  _class_effort_barred_to bsub "$w" "$(_route_argv_class "$@")" && named+="effort "
   # shellcheck disable=SC2086
   for pair in $ROUTE_COORDINATOR_ROW; do
     f="${pair%%=*}"
@@ -22693,9 +22695,9 @@ _route_unread_note() {   # id field — journal a field whose FILE is on disk bu
   echo "$(date '+%F %T') route-unmeasured $id: field $f is present but could not be read — treated as absent; a box default this field would suppress stays suppressed" >> "$REG/swap.log"
   return 0
 }
-_route_pair_note() {   # id — the haiku+effort PAIR: both values are valid, the pairing is not
+_route_pair_note() {   # id [subject] — the class+effort PAIR: both values are valid, the pairing is not; the subject is `class haiku` unless the lane's data named the model
   _route_note_floored "$1" routenotepair && return 0
-  echo "$(date '+%F %T') route-refuse $1: class haiku takes no effort level — the effort field is ignored" >> "$REG/swap.log"
+  echo "$(date '+%F %T') route-refuse $1: ${2:-class haiku} takes no effort level — the effort field is ignored" >> "$REG/swap.log"
   return 0
 }
 _route_get() {   # id field -> stdout the VALIDATED value, or nothing. Always 0.
@@ -22736,6 +22738,7 @@ _route_peek_to() {   # var id field -> var = the VALIDATED value, or empty (prin
   _route_valid "$f" "$v" && printf -v "$__rp_out" '%s' "$v"
   return 0
 }
+# @ccd-lib:efforts — the effort-level rule's one decision, `_class_takes_no_effort` and `_class_effort_barred_to` (A3.3, D-8750), lives in ccd/lib/model-aliases.sh; the five haiku sites call it
 _route_effort_for_to() {   # var id class [quiet] -> var = the effort to apply (printing form `_route_effort_for`: the tick-diet block, D-4963). Haiku 4.5 takes no effort
   # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
   # refused here with its own note and nothing is typed. `auto` is spec
@@ -22756,12 +22759,12 @@ _route_effort_for_to() {   # var id class [quiet] -> var = the effort to apply (
   # every live session. A tick may not write, and this used to: a haiku+level
   # record left a `routenotepair` floor marker and a `route-refuse` line the
   # first time the applier's own gate looked at it.
-  local __ref_out="$1"; shift; local id="$1" cls="$2" quiet="${3:-}" e; printf -v "$__ref_out" ''
+  local __ref_out="$1"; shift; local id="$1" cls="$2" quiet="${3:-}" e lane subj; printf -v "$__ref_out" ''
   if [[ "$quiet" == quiet ]]; then _route_peek_to e "$id" effort; else e=$(_route_get "$id" effort); fi
-  if [[ "$cls" == haiku && "$e" == auto ]]; then
-    e=""
-  elif [[ "$cls" == haiku && -n "$e" ]]; then
-    [[ "$quiet" == quiet ]] || _route_pair_note "$id"
+  # A3.3: a class takes none when its lane's data says so, the haiku rule where it cannot; cached facts and one registry read, no fork.
+  _reg_read_to lane "$id" wrapper
+  if [[ -n "$e" ]] && _class_effort_barred_to subj "$lane" "$cls"; then
+    [[ "$e" == auto || "$quiet" == quiet ]] || _route_pair_note "$id" "$subj"
     e=""
   fi
   printf -v "$__ref_out" '%s' "$e"
@@ -26742,7 +26745,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # single job, and the callers decide when. Writes nothing to STDOUT either:
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
-  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag resenv
+  local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag resenv bsub
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -27095,7 +27098,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # form, which Claude Code 2.1.321 saves as the ACCOUNT's default for new sessions (`modelSettings.<model>.effortLevel`
   # in the config dir's user settings); `--effort` is session-only. Haiku takes no effort level, so it gets none. Deliberately NOT a top-level `effortLevel` in
   # `--settings`: that applies to every model. A present effort file (any value, `auto` included) already decided above.
-  [[ -n "$SPAWN_EFFORT" && ! -e "$REG/$id.effort" && "${rclass:-}" != haiku ]] && { _is_anthropic_backend "$wrapper" || _is_codex_backend "$wrapper"; } \
+  [[ -n "$SPAWN_EFFORT" && ! -e "$REG/$id.effort" ]] && ! _class_effort_barred_to bsub "$wrapper" "${rclass:-}" && { _is_anthropic_backend "$wrapper" || _is_codex_backend "$wrapper"; } \
     && routeflags="${routeflags:+$routeflags }--effort $SPAWN_EFFORT"
   # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
   # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
@@ -27971,7 +27974,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
                          # variable error under `set -u`, as in cmd_swap.
   # BEFORE ANY WRITE, and before the two forms diverge: a bad value must leave
   # the registry exactly as it found it whichever form was typed (spec §5.3).
-  (( ${#route[@]} )) && _route_argv_check "${route[@]}"
+  (( ${#route[@]} )) && _route_argv_check ${args[1]+"lane=${args[0]}"} "${route[@]}"   # the wrapper of the two-positional form, when there is one (A3.3)
   local id wrapper="" project="" workdir=""
   if [[ $# -ge 2 ]]; then
     wrapper="$1"; project="$2"; workdir="${3:-}"

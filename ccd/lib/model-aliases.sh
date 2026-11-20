@@ -110,6 +110,14 @@ _ma_answer_to() {   # var mode wrapper class file-a file-b -> var = the answer l
   if [[ " $__ma_cl" != *" $4 "* ]]; then printf -v "$1" '%s' 'invalid class'; return 0; fi
   declare -gA _MA_KEY _MA_ANS 2>/dev/null || :
   _ma_file_to __ma_a "$5"; _ma_file_to __ma_b "$6"
+  # A file that is no regular, readable file decides the answer without jq (the same words the jq program gives): the supervise tick asks
+  # from `_route_effort_for_to` on every box, most of which have no model files yet, and an unread file must cost no fork (every TICK_BUDGET).
+  if [[ "$2" == codex ]]; then
+    [[ "${__ma_a%%:*}" == ok && "${__ma_b%%:*}" == ok ]] || { printf -v "$1" '%s' unknown; return 0; }
+  elif [[ "${__ma_a%%:*}" != ok ]]; then
+    if [[ "${__ma_a%%:*}" == absent ]]; then printf -v "$1" '%s' absent; else printf -v "$1" '%s' 'unreadable aliases'; fi
+    return 0
+  fi
   __ma_key="${#__ma_a}:$__ma_a:$__ma_b"
   if [[ "${_MA_KEY[$__ma_ck]-}" != "$__ma_key" || -z "${_MA_ANS[$__ma_ck:$4]+set}" ]]; then
     __ma_out="$(jq -n -r --arg mode "$2" --arg as "${__ma_a%%:*}" --arg at "${__ma_a#*:}" --arg bs "${__ma_b%%:*}" --arg bt "${__ma_b#*:}" \
@@ -140,6 +148,38 @@ _lane_class_efforts_to() {   # var wrapper class -> var = the class's effort lev
   else
     printf -v "$1" '%s' unknown
   fi
+  return 0
+}
+
+# THE EFFORT-LEVEL RULE FROM DATA (plan Task A3.3, D-8750): a class takes no effort level when its model lists none. `_class_takes_no_effort`
+# asks the lane's files; the standing haiku rule (class `haiku` takes none) answers wherever the files cannot say, so a lane with no file, an
+# unreadable or invalid one, a row with no effort field, a Codex catalogue's empty list or no lane at all behaves exactly as ccd did before. On a
+# Codex lane the reader answers `-` for an empty list, never `none`, so rc 0 never arises there and data only ever RELAXES the rule.
+# @ccd-lib:efforts
+_class_takes_no_effort() {   # wrapper class -> rc 0 the class's model says it takes no effort level (`none`), rc 1 it lists levels, rc 2 the files cannot say (`-`, `unknown`, an invalid answer, an empty class or no lane); reads cached facts only
+  local __ne_e
+  [[ -n "${2-}" ]] || return 2
+  _lane_class_efforts_to __ne_e "$1" "$2"
+  case "$__ne_e" in
+    none) return 0 ;;
+    -|unknown|'') return 2 ;;
+    *[!A-Za-z0-9._,-]*) return 2 ;;   # an `invalid ...` or `absent` answer carries a space: it is no list of levels
+    *) return 1 ;;
+  esac
+}
+
+_class_effort_barred_to() {   # var wrapper class -> rc 0 the class takes no effort level, rc 1 it takes one. var (when not empty) = what to name in a refusal: `model <id>` when the lane's data decided, `class <class>` when the standing haiku rule did, empty on rc 1. The one decision all five sites of ccd share
+  local __eb_w="$2" __eb_c="${3-}" __eb_ans __eb_a __eb_id
+  [[ -z "$1" ]] || printf -v "$1" ''
+  _class_takes_no_effort "$__eb_w" "$__eb_c"
+  case $? in
+    0) _alias_facts_to __eb_ans "$__eb_w" "$__eb_c"
+       read -r __eb_a __eb_id _ <<< "$__eb_ans"
+       if [[ "$__eb_a" == facts && "$__eb_id" != - ]]; then __eb_id="model $__eb_id"; else __eb_id="class $__eb_c"; fi ;;
+    1) return 1 ;;
+    *) [[ "$__eb_c" == haiku ]] || return 1; __eb_id="class haiku" ;;
+  esac
+  [[ -z "$1" ]] || printf -v "$1" '%s' "$__eb_id"
   return 0
 }
 

@@ -137,7 +137,9 @@ _route_apply_now -> _reg_get
 _route_apply_pending -> _route_any
 _route_apply_seed -> _reg_set
 _route_apply_seed -> _route_peek
+_route_argv_check -> _class_effort_barred_to
 _route_compact_settling -> _reg_get
+_route_effort_for_to -> _class_effort_barred_to
 _route_escape -> _tmux_t
 _route_escape -> _tmx
 _route_holddown_holds -> _role_long_lived
@@ -160,6 +162,7 @@ _route_readback_transcript -> _reg_get
 _route_readback_transcript -> _reg_set
 _route_reject_note -> _route_note_floored
 _route_retry_ok -> _reg_get
+_route_seed_default -> _class_effort_barred_to
 _route_try_bump -> _reg_get
 _route_try_bump -> _reg_set
 _route_type_effort -> _tmux_t
@@ -196,6 +199,7 @@ _spawn_start -> _child_spawn_compose
 _spawn_start -> _child_tmpdir
 _spawn_start -> _ci_resume_follow
 _spawn_start -> _class_below
+_spawn_start -> _class_effort_barred_to
 _spawn_start -> _compact_lock_acquire
 _spawn_start -> _compact_lock_release
 _spawn_start -> _delegation_spool_dir
@@ -479,6 +483,7 @@ cmd_pr_open -> _reg_get
 cmd_pr_state -> _reg_get
 cmd_pr_train_prove -> _reg_get
 cmd_project_pool -> _ws_project_valid
+cmd_route -> _class_effort_barred_to
 cmd_route -> _idle_for_keystroke
 cmd_route -> _pane_for_keystroke
 cmd_route -> _route_applied_set
