@@ -118,7 +118,7 @@ After the shared types took the `Record<X, true>` map idiom (`wire-totality` ask
 never share one);
 `P-array-line` and `P-launch-array-result` (the array tests were redundant with `type !== 'user'` and the `agentId` test:
 removed from the code);
-`P-notice-includes` (equivalent: the prefix test is a prefilter, and `parseTaskNotification` refuses what it passes).
+`P-notice-includes` (called equivalent here: "the prefix test is a prefilter, and `parseTaskNotification` refuses what it passes". NOT TRUE, corrected by H1b (D-8862) after review 2978 F2: a content that opens with a sibling tag block before the notification is refused by the prefix and read without it, because `parseTaskNotification` takes the notification wherever it sits; `helper-facts.test.ts` now pins it, and the mutant is killed).
 
 ### `server/src/workflows/model.ts`: 106 mutants, 106 killed
 
@@ -309,7 +309,7 @@ removed from the code);
 
 ### Fix round 1 (review 2961): every branch mutated again at the new tip
 
-The first round's list was translated to the new text where a branch moved (23 mutants of the 172 had no text left: 9 of the decision's witness mutants are superseded by the `R1-seen-*` mutants of `seenDrops`, 6 were rewritten, the 4 id-rule mutants of `shared/workflows.ts` moved to the id rule's own file, 4 of the parser's were rewritten or superseded), and a mutant of every new branch was added. **Measured**: 249 mutants run, 244 killed, 5 survived and are equivalent (each named in its row); the infra log was never written. Seven first-time survivors each got a case and were killed on a second run (named in their rows).
+The first round's list was translated to the new text where a branch moved (23 mutants of the 172 had no text left: 9 of the decision's witness mutants are superseded by the `R1-seen-*` mutants of `seenDrops`, 6 were rewritten, the 4 id-rule mutants of `shared/workflows.ts` moved to the id rule's own file, 4 of the parser's were rewritten or superseded), and a mutant of every new branch was added. **Measured**: 249 mutants run, 244 killed, 5 survived, called equivalent (each named in its row; H1b corrected one of the five, `R1-p-notice-no-tag-check`, which a sibling-first envelope kills: review 2978 F2, so 244 killed, 4 equivalent and 1 missed case at that tip); the infra log was never written. Seven first-time survivors each got a case and were killed on a second run (named in their rows).
 
 #### `server/src/workflows/model.ts`: 161 mutants, 158 killed, 3 equivalent
 
@@ -477,7 +477,7 @@ The first round's list was translated to the new text where a branch moved (23 m
 | `R1-memory-noend-unfiltered` | `...[...shownNoEnd].filter((id) => shown.has(id))` | `...shownNoEnd` | killed |
 | `R1-memory-noend-prev-dropped` | `noEndShown: boundedSet([...prev.noEndShown, ...[...shownNoEnd].filter((…` | `noEndShown: boundedSet([...shownNoEnd].filter((id) => shown.has(id))),` | killed |
 
-#### `server/src/transcript/parse.ts`: 52 mutants, 50 killed, 2 equivalent
+#### `server/src/transcript/parse.ts`: 52 mutants, 50 killed, 2 survived (1 equivalent; 1 a missed case, `R1-p-notice-no-tag-check`, corrected by H1b after review 2978 F2)
 
 | Mutant | Original | Mutated to | Result |
 |---|---|---|---|
@@ -529,7 +529,7 @@ The first round's list was translated to the new text where a branch moved (23 m
 | `R1-p-duration-neg` | `Number.isFinite(t.totalDurationMs) && t.totalDurationMs >= 0 ?` | `Number.isFinite(t.totalDurationMs) ?` | killed |
 | `R1-p-duration-zero` | `Number.isFinite(t.totalDurationMs) && t.totalDurationMs >= 0 ?` | `Number.isFinite(t.totalDurationMs) && t.totalDurationMs > 0 ?` | killed |
 | `R1-p-notice-content-type` | `if (typeof content !== 'string' \|\| !content.trimStart()` | `if (!content \|\| !content.trimStart()` | killed |
-| `R1-p-notice-no-tag-check` | `\|\| !content.trimStart().startsWith('<task-notification>')) return null;` | `) return null;` | survived: equivalent: the prefix test is a prefilter, `parseTaskNotification` refuses what it passes |
+| `R1-p-notice-no-tag-check` | `\|\| !content.trimStart().startsWith('<task-notification>')) return null;` | `) return null;` | survived; NOT equivalent (corrected by H1b, D-8862, after review 2978 F2): a sibling tag block before the notification is refused with the prefix and read without it; H1b's case in `helper-facts.test.ts` kills it |
 | `R1-p-summary-mask-dropped` | `const line = SHAPE_MASK.maskDeep(n.summary ?? '').split('\n')[0]!.trim(…` | `const line = (n.summary ?? '').split('\n')[0]!.trim();` | survived: equivalent: `maskedCut` masks the line again, and no input tells the two orders apart |
 | `R1-p-at-ignored` | `const at = timeOf(r.timestamp);` | `const at = null;` | killed |
 | `R1-p-at-attachment` | `const at = timeOf(r.timestamp);` | `const at = timeOf((r.attachment as { timestamp?: unknown } \| undefined)…` | killed |

@@ -20,6 +20,8 @@ import {
   emptyHelperMemory,
   frameDue,
   helpersFrame,
+  lastLineTime,
+  parseHelperMeta,
   rosterInputOf,
   workflowsFrame,
   type AgentArm,
@@ -203,5 +205,34 @@ describe('a worst-case Agent row\'s serialised size, pinned where the frame is b
     const rows = HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX;
     expect(rows).toBe(84);
     expect(rows * rowBytes(worst('€'))).toBeLessThan(140 * 1024);
+  });
+});
+
+describe('the reads\' two small parsers (cases added after the first mutation round)', () => {
+  it('parseHelperMeta: `finished` is true only when the file says `true`; a truthy other value is not an end', () => {
+    expect(parseHelperMeta(JSON.stringify({ finished: true }))?.finished).toBe(true);
+    for (const v of [1, 'true', 'yes', {}, null]) expect(parseHelperMeta(JSON.stringify({ finished: v }))?.finished).toBe(false);
+  });
+
+  it('parseHelperMeta: an array or a scalar is not a meta; an empty string field is not measured (null)', () => {
+    expect(parseHelperMeta('[{"agentType":"Explore"}]')).toBeNull();
+    expect(parseHelperMeta('"x"')).toBeNull();
+    expect(parseHelperMeta('not json')).toBeNull();
+    expect(parseHelperMeta(JSON.stringify({ agentType: '', description: '', model: '', effort: '' })))
+      .toEqual({ agentType: null, description: null, model: null, effort: null, finished: false });
+    expect(parseHelperMeta(JSON.stringify({ agentType: 'Explore', description: 'd', model: 'm', effort: 'high' })))
+      .toEqual({ agentType: 'Explore', description: 'd', model: 'm', effort: 'high', finished: false });
+  });
+
+  it('lastLineTime: the NEWEST line with a readable timestamp; an unreadable timestamp after it is skipped, not returned', () => {
+    const text = [
+      JSON.stringify({ type: 'user', timestamp: '2026-11-20T10:00:00.000Z' }),
+      JSON.stringify({ type: 'user', timestamp: '2026-11-20T10:05:00.000Z' }),
+      JSON.stringify({ type: 'progress', timestamp: 'not a time' }),
+      '{"partial": "a tail cut mid-line, "timestamp"',
+    ].join('\n');
+    expect(lastLineTime(text)).toBe(Date.parse('2026-11-20T10:05:00.000Z'));
+    expect(lastLineTime(JSON.stringify({ timestamp: 'never' }))).toBeNull();
+    expect(lastLineTime('')).toBeNull();
   });
 });
