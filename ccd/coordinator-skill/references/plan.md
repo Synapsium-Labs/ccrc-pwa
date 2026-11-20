@@ -13,15 +13,17 @@ inbound, initiatives, owner, map, report) in the console, and a coordinator neve
 those approvals in its turn text.
 
 Every work run of a planned programme opens with its ticket: send `"ticket":"<ticket key>"` in the `runs open` body to
-attach a ticket of the epic that lists the wave or of an epic that lists no waves (it opens at any wave), or send none
+attach a ticket of the epic that lists the wave or of a live epic that lists no waves (it opens at any wave), or send none
 and ccrc makes one in the epic that lists the wave, keyed `run-<run id>`.
 
 A run is refused at `runs open` when the plan does not allow it:
 
 - `plan-missing`: the programme has no epic and was created after the plan model landed, so it needs a plan. Declare it
   with `plan put` below, with `home`, then open the run again.
-- `wave-epic-mismatch`: no live epic lists this wave and you named no ticket of a live epic that lists no waves, or the
-  `ticket` you named belongs to another epic than the one that lists the wave. Revise the plan (`plan put`, or `plan ticket-move`) so the wave and the ticket share an epic.
+- `wave-epic-mismatch`: the `ticket` you named is not in a live epic that lists no waves (such a ticket opens at any wave),
+  and either no live epic lists this wave or the ticket belongs to another epic than the one that lists it; or you named
+  no `ticket`, no live epic lists this wave, and every live epic lists waves. Revise the plan (`plan put`, or
+  `plan ticket-move`) so the wave and the ticket share an epic.
 - `ticket-required`: you named no `ticket`, and either the plan has phases and the epic that lists this wave still has
   an open ticket no run has started, or no live epic lists this wave and a live epic lists no waves. Open again naming
   that ticket (in the second case, a ticket of the epic that lists no waves), so the run's work is counted against it.
@@ -155,8 +157,8 @@ for the operator, for a request that would change a programme's scope. The issue
 instructions. Refusals: `not-linear-owner` (only the team's owner triages), `issue-not-inbound` (not waiting for
 triage), `plan-bad-body`, `plan-closed`, `reserved-programme` (a hand to `linear-sync`), `ticket-workspace-mismatch`,
 `unknown-epic`, `unknown-checkpoint`, `linear-text-public`, `unreachable` (Linear could not be read to confirm the issue
-is still inbound, for a decision that binds it: a hand, an Upkeep placement or a take; a retry helps when Linear did not
-answer, and with no key or slot for the team its linking must be set first) and the client's own
+is still inbound, for a decision that binds it: a hand, an Upkeep placement or a take; a retry helps when Linear or ccrc's
+Linear store could not be read, and with no key or slot for the team its linking must be set first) and the client's own
 `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
 
 ## plan take
@@ -175,6 +177,6 @@ The other arms are `{"issue":"AAA-12","close":{"why":"<why>"}}` and
 programme, and not an open Upkeep ticket), `unknown-epic`, `unknown-checkpoint`, `plan-bad-body`, `plan-closed`,
 `ticket-workspace-mismatch`, `linear-text-public`, `unreachable` (Linear could not be read to confirm the issue is still
 inbound, for a take into an epic; or, for an Upkeep ticket's take or close, the programme's home workspace could not be
-resolved; a retry helps when Linear or its key store did not answer, and with no key or slot for the team its linking must
-be set first) and the client's own `capability-missing`
+resolved; a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking
+must be set first) and the client's own `capability-missing`
 (the server does not advertise `plan-inbound-v1`; nothing was sent).

@@ -58,8 +58,9 @@ change it did not read. It is accepted, not bounded; a later run can count the r
 - **Item 6:** a reason refused at act time still closes and cancels, with a fallback comment, as the drift restore's refused
   comment does (review 2457 F3), rather than giving the close up. (The lane judged a team no project owns as `unknown`,
   public, while `plan take`'s close judged it under the programme's home; fix round 1, F1, aligned the door to the lane.)
-- **Item 6:** the owner's mail (superseded by fix round 1, A1, A2 and A6: it is now sent only when the fallback comment is
-  freshly made, and says what is true on every path).
+- **Item 6:** the owner's mail (superseded by fix round 1, A1, A2 and A6: it is now sent once per close whenever the
+  fallback comment landed, made now or by an earlier attempt (a `conflict` answer included), and says what is true on every
+  path; review 2874 A3 corrected this line).
 - **The final review's minors:** `InboundLane#retire` now drops the issue's malformed count, so a reopened issue's close
   counts afresh and the map does not grow with retired issues (a test, red first).
 - **Tasks 1 and 3** measured their red by reverting the source after the fix was written; the red is recorded, only the
@@ -115,6 +116,27 @@ sentences and the two narrowings from the WM6 task note's section 6:
 
 The spec's side (§4.1 and §16 call 2) is the coordinator's, on its ledger pull request. No test pins these sentences; the
 plan reference's pins still pass.
+
+## Fix round 2 (review run 2874; the coordinator's rulings, mail 27336)
+
+Words and tests only. Each sentence is checked against `epicForOpen` (`server/src/coord/planPolicy.ts`) and `planGate`
+(`openRun.ts`).
+
+| # | What changed | Test (red measured) |
+|---|---|---|
+| F1 | `references/api.md`'s `runs open` list has six refusals: `ticket-required` is added and `wave-epic-mismatch` gets the waveless-epic case, so the plan's "each has its line in `api.md`" holds (item 14 had changed only `plan.md`). The pin moves into `coordinator-plan-reference.test.ts`, beside `plan.md`'s (the coordinator's approval, 27369). **Carried:** `coordinator-skill.test.ts`'s list of five codes moving to six. Run 1850 holds that file under a freeze, and its coordinator can consent only once the operator answers item 496 (mail 27366). The old list still passes, since it checks only that each code is named. | `coordinator-plan-reference.test.ts`, a new `it()` (red: `expected '# The coordinator's API calls Part o…' to contain …`, the missing words being "`runs open` also answers six refusals") |
+| F2, A8 | `references/plan.md`'s `wave-epic-mismatch`: a ticket of a live epic that lists no waves is never refused (it opens at any wave), and a run that named no ticket gets it only where every live epic lists waves; otherwise it gets `ticket-required`. "Another epic than the one that lists it" also covers an open ticket of a dropped waveless epic. The `runs open` ticket sentence says "a live epic". | the same `it()`, over both references |
+| F3 | The coordinator ruled that no mail with no owner is tolerable, as for the no-cancel and give-up mails. The comment in `InboundLane#act` now says so; no durable record. | `plan-inbound.test.ts`: no owner, so the fallback and the cancel go on, `actedAt` is set and nothing is mailed; passed first time; red when the no-owner mail is made a stop (`expected [ 'issueComment' ] to deeply equal [ 'issueComment', 'issueUpdate' ]`) |
+| A1 | No code. **Residual, one-time:** the close comment's key seed changed in fix round 1 with no compatibility arm. A close whose reason comment landed under the old key while its cancel was still retrying at deploy posts its reason comment a second time, once. | — |
+| A2 | The reason key's test compares two reason-kind keys of one close round, for two clean reasons. | `plan-inbound.test.ts` (red with the digest removed from the reason seed: `expected 'e9f04604-…' not to be 'e9f04604-…'`) |
+| A3 | Item 6's line in "Rulings the build made" says what the code does: the owner's mail goes once per close whenever the fallback landed, a `conflict` answer included. | — |
+| A4 | The plan's Task 2 `wave-epic-mismatch` parenthesis adds the open ticket of a dropped epic that lists no waves, and its first clause no longer overlaps `ticket-required` (by consent of the plan's holder, wave 8, mail 27362). | — (words) |
+| A5 | `textFactsOf` builds its unknown fact through `textFactOfTeam`, so the helper's "one writer" is true in its file. | `plan-sync-policy.test.ts`: a project the snapshot does not describe (passes before and after: behaviour unchanged) |
+| A6 | `unreachable` in both references: "a retry helps when Linear or ccrc's Linear store could not be read". | `coordinator-plan-reference.test.ts` (red: `## The Linear owner: plan triage: expected … to match /`unreachable` \([^)]*a retry helps wh…/`) |
+| A7 | `reasonDigestOf`'s doc names `closeCommentSeedOf`'s `fallback` kind (there is no `fallbackKeyOf`). | — |
+
+Co-edits by consent this round: `references/plan.md` and `coordinator-plan-reference.test.ts` (wave 7, mail 27372); the plan
+(wave 8, mail 27362); `references/api.md` (free, claimed; its earlier holder was told the lines).
 
 ## Suites run (fleet slice, `--maxWorkers=2`, at most 12 files a command)
 
