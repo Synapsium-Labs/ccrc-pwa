@@ -498,13 +498,14 @@ export const DELEGATION_MODEL_REFUSALS: Readonly<Record<DelegationModelRefusal, 
 
 /** Every kebab word this file spells, for `mail-routes.test.ts`'s scan of `server/src/coord`: the model's refusals, the journal
  *  entry kinds, the pruning hold reasons, the intent route's one answer of its own, and words that belong to `shared/api.ts` (`bash-worktree`, a source kind,
- *  `not-due`, a cleanup state, and the intent sources the `adopt` fold names, D-7973), read from there and never re-spelled. Derived from tables, never a list, so a word added to a
+ *  `not-due`, a cleanup state, and the intent sources the `adopt` fold names, D-7973), read from there and never re-spelled, and the end
+ *  bases (`task-report`, `backfill-unmeasured`, D-8830), which `delegation-end-basis.ts` spells too. Derived from tables, never a list, so a word added to a
  *  union is admitted and a typo is not. None is a mail rejection or a run refusal. */
 export function isDelegationModelKebab(v: string): boolean {
   const own = (o: object): boolean => Object.prototype.hasOwnProperty.call(o, v);
   return own(DELEGATION_MODEL_REFUSALS) || own(DELEGATION_JOURNAL_ENTRY_KINDS) || own(DELEGATION_PRUNING_HOLD_REASONS) || own(COORDINATOR_INTENT_REFUSALS)
     || (DELEGATION_ACTIVITY_SOURCE_KINDS as readonly string[]).includes(v) || (DELEGATION_CLEANUP_STATES as readonly string[]).includes(v)
-    || (DELEGATION_INTENT_SOURCES as readonly string[]).includes(v) || isDelegationHealthKebab(v);
+    || (DELEGATION_INTENT_SOURCES as readonly string[]).includes(v) || isDelegationHealthKebab(v) || (DELEGATION_END_BASES as readonly string[]).includes(v);
 }
 
 // ── Canonical JSON (RFC 8785 over the plan's closed domain) ──────────────────────────────────────────────────────────
