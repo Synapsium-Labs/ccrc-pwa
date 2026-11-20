@@ -11,7 +11,7 @@ import { itemPath } from '../src/ledgers/ledgerWords';
 import { api } from '../src/lib/api';
 import { upkeepPath } from '../src/lib/routes';
 import { ApiError } from '../src/lib/apiError';
-import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
+import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT, linkingErrorText } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
 import { candidateLabel, candidateWhy, evidenceWords, linkingRowsOf, teamLinkLine } from '../src/fleet/linkingWords';
@@ -140,18 +140,19 @@ describe('the card', () => {
     expect(sentence.textContent).not.toContain('push failed');
   });
 
-  it('the write route\'s own words (write-failed, bad-request) are sentences, not bare words', async () => {
-    for (const word of ['write-failed', 'bad-request']) {
-      cleanup();
-      await mount([row('project-a', wire({ teamKey: 'KEY' }))]);
-      vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: word, detail: 'box text that must not show' }));
-      fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
-      const sentence = await within(rowOf('project-a')).findByRole('status');
-      expect(sentence.textContent, word).toBe(LINKING_ROUTE_TEXT[word as 'write-failed' | 'bad-request']);
-      expect(sentence.textContent).not.toBe(word);
-      expect(sentence.textContent).not.toContain('box text');
-      vi.restoreAllMocks();
-    }
+  it('bad-request is a sentence, not a bare word; write-failed is a 503 the card reads as unconfirmed, never "Nothing was changed" (D-8186 A6)', async () => {
+    await mount([row('project-a', wire({ teamKey: 'KEY' }))]);
+    vi.spyOn(api, 'saveLinking').mockRejectedValueOnce(new ApiError(400, { ok: false, error: 'bad-request', detail: 'box text that must not show' }));
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    const sentence = await within(rowOf('project-a')).findByRole('status');
+    expect(sentence.textContent).toBe(LINKING_ROUTE_TEXT['bad-request']);
+    expect(sentence.textContent).not.toContain('box text');
+    // The pair the server sends: `write-failed` is a 503 from a catch block, so the write may have landed.
+    vi.spyOn(api, 'saveLinking').mockRejectedValueOnce(new ApiError(503, { ok: false, error: 'write-failed', detail: 'box text that must not show' }));
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed);
+    expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
+    expect(document.body.textContent).not.toContain('box text');
   });
 
   it('a project with no linking cell renders nothing', async () => {
@@ -287,13 +288,48 @@ describe('the hierarchy settings', () => {
     expect(within(rowOf('project-b')).queryByRole('link', { name: HIERARCHY_TEXT.upkeep })).toBeNull();
   });
 
-  it('a refusal shows its fixed sentence', async () => {
+  it('a 503 write-failed on a hierarchy write is unconfirmed, and its sentence never says nothing was changed (D-8186 A6)', async () => {
     await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
     await within(rowOf('project-a')).findByText('Default: coord-a (live)');
-    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(400, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'disk path /x' }));
     fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
-    expect(await within(rowOf('project-a')).findByText(LINKING_ROUTE_TEXT['write-failed'])).toBeInTheDocument();
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(LINKING_ROUTE_TEXT['write-failed'])).toBeNull();
     expect(document.body.textContent).not.toContain('disk path');
+  });
+
+  it('a 503 unavailable on a hierarchy write is a refusal (nothing was written): its fixed sentence, and the row is not locked (D-8186 A7)', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const err = new ApiError(503, { ok: false, error: 'unavailable', detail: 'disk path /x' });
+    vi.spyOn(api, 'saveHierarchy').mockRejectedValue(err);
+    fireEvent.change(ownerSelect('project-a'), { target: { value: 'coord-b' } });
+    expect(await within(rowOf('project-a')).findByText(linkingErrorText(err))).toBeInTheDocument();
+    expect(within(rowOf('project-a')).queryByText(HIERARCHY_TEXT.unconfirmed)).toBeNull();
+    expect(api.hierarchy).toHaveBeenCalledTimes(1);
+    expect(ownerSelect('project-a')).not.toBeDisabled();
+    expect(document.body.textContent).not.toContain('disk path');
+  });
+
+  it('an unknown-outcome linking write locks the row until the project list is read again (D-8186 A1)', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const list = vi.mocked(api.projects);
+    expect(list).toHaveBeenCalledTimes(1);
+    let land!: (r: { roots: string[]; projects: ProjectRow[] }) => void;
+    list.mockImplementation(() => new Promise((resolve) => { land = resolve; }));
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed' }));
+    fireEvent.change(keyField('project-a'), { target: { value: 'BBB' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed);
+    await waitFor(() => expect(list).toHaveBeenCalledTimes(2));
+    expect(keyField('project-a')).toBeDisabled();
+    expect(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save })).toBeDisabled();
+    expect(overrideSelect('project-a')).toBeDisabled();
+    await act(async () => { land({ roots: ['/w'], projects: [row('project-a', wire({ teamKey: 'BBB' }))] }); });
+    await waitFor(() => expect(keyField('project-a')).not.toBeDisabled());
+    expect(keyField('project-a').value).toBe('BBB');
+    expect(overrideSelect('project-a')).not.toBeDisabled();
   });
 
   it('M1: a hierarchy write, a team-key write and owner-for-all whose outcome is unknown never say nothing was changed', async () => {

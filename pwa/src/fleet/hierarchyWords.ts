@@ -27,7 +27,13 @@ export const HIERARCHY_TEXT = {
 } as const;
 
 /** The sentence under a hierarchy-card write that failed: the unconfirmed one when the write may have landed, else the refusal's fixed sentence. */
-export const hierarchyWriteText = (err: unknown): string => (writeOutcomeUnknown(err) ? HIERARCHY_TEXT.unconfirmed : linkingErrorText(err));
+/** A hierarchy or linking write whose outcome is unknown. Those routes answer 503 `unavailable` BEFORE any write (no plan store,
+ *  no coordination store), so that pair is a refusal, never unknown (D-8186, review run 2491 A7); every other 5xx and a missing
+ *  answer may follow a commit. */
+export const hierarchyOutcomeUnknown = (err: unknown): boolean =>
+  writeOutcomeUnknown(err) && !(err instanceof ApiError && err.status === 503 && (err.body as { error?: unknown } | null)?.error === 'unavailable');
+/** The sentence for a failed hierarchy or linking write: the unconfirmed line when its outcome is unknown, else the word's sentence. */
+export const hierarchyWriteText = (err: unknown): string => (hierarchyOutcomeUnknown(err) ? HIERARCHY_TEXT.unconfirmed : linkingErrorText(err));
 
 /** The ONE reader of "the hierarchy route is absent": an older server answers the read with a 404, which is not a failed read. The
  *  linking card and the add-project sheet both draw no hierarchy controls and say nothing for it. */

@@ -22,7 +22,7 @@ import path from 'node:path';
 import { readdirSync, readFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
-import { chromium, type Browser } from 'playwright-core';
+import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
 import type { MapEntry } from '../../shared/plan';
 import { MAP_CLASSES } from '../../shared/plan';
@@ -165,22 +165,33 @@ function stylesheets(root: string): string[] {
   return [...new Set([...linked, ...all])];
 }
 
-/** A stand-in for the shell's phone bar, in the shell's own classes (shell.css: fixed at the foot, and `:root:has(.shell-phone-nav)`
- *  publishes `--phone-bar-h` from it), so the stuck act bar is measured against the real rule; the doors are plain buttons. */
+/** A stand-in for the shell's phone bar, in the shell's own classes (shell.css: fixed at the foot, `:root:has(.shell-phone-nav)`
+ *  publishes `--phone-bar-h` from it, and `.app-shell:has(> .shell-phone-nav)` lifts `--safe-bottom` above it), so the stuck act
+ *  bar is measured against the real rule; the doors are plain buttons. */
 const PHONE_BAR = `<nav class="shell-phone-nav" aria-label="Navigation"><div class="phone-bar">${
   ['Fleet', 'Waiting', 'Inbox', 'Runs', 'Accounts', 'Docs', 'Search'].map((w) => `<button type="button" class="phone-bar-door">${w}</button>`).join('')}</div></nav>`;
+
+/** A phone's home indicator, emulated through the DevTools protocol before the page loads, so `env(safe-area-inset-bottom)` is
+ *  not 0 (headless Chrome answers 0 otherwise, and a bar stuck at the bar's height alone then passes; D-8186, review run 2491
+ *  F1). A Chrome without the command rejects it, and the case goes red, never measures at zero. */
+const HOME_INDICATOR = 34;
+async function emulateInset(ctx: BrowserContext, page: Page): Promise<void> {
+  const cdp = await ctx.newCDPSession(page);
+  await cdp.send('Emulation.setSafeAreaInsetsOverride', { insets: { bottom: HOME_INDICATOR } });
+}
 
 async function openBody(v: AppView, verb: 'linear-map' | 'linear-report') {
   const sheets = stylesheets(dist!);
   const phone = v.width < 900;
   const ctx = await browser!.newContext({ viewport: { width: v.width, height: phone ? 844 : 900 }, hasTouch: phone });
   const page = await ctx.newPage();
+  if (phone) await emulateInset(ctx, page);
   // A page of the build's own origin, so its fonts and sheets load as the app's do; its document is then replaced.
   await page.goto(`${server!.origin}${sheets[0]}`);
   const themeAttr = v.theme === PHOSPHOR ? '' : ` data-theme="${v.theme}"`;
   await page.setContent(`<!doctype html><html lang="en" data-skin="${v.skin}"${themeAttr}><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"><style>@layer properties, theme, base, components, utilities;</style>
-${sheets.map((h) => `<link rel="stylesheet" href="${server!.origin}${h}">`).join('')}</head><body><div id="root">${pageOf(verb, v.width)}</div>${phone ? PHONE_BAR : ''}</body></html>`,
+${sheets.map((h) => `<link rel="stylesheet" href="${server!.origin}${h}">`).join('')}</head><body><div class="app-shell"><div id="root">${pageOf(verb, v.width)}</div>${phone ? PHONE_BAR : ''}</div></body></html>`,
   { waitUntil: 'load' });
   await page.evaluate(async () => { await document.fonts.ready; });
   return { ctx, page };
@@ -275,6 +286,7 @@ describe('the act bar clears the phone bar in the real shell', () => {
     it(`a map item's page, scrolled to its end, at ${named(v)}`, async () => {
       const opened = await openApp(browser!, v, withItems([SHELL_ITEM]));
       try {
+        await emulateInset(opened.ctx, opened.page);
         await opened.page.goto(`${server!.origin}/waiting/6`);
         await opened.page.waitForSelector('.wi .wi-act [data-linear="linear-map"]', { timeout: 20_000 });
         await opened.page.evaluate(async () => { await document.fonts.ready; });
