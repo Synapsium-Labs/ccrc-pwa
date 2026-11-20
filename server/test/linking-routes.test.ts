@@ -403,15 +403,35 @@ describe('POST /api/linking/suggest', () => {
       key: 'BBB', name: 'Team BBB', evidence: { kind: 'suggested', by: ME.byId, why: 'the branches name this team' },
       workspaceId: WS_B, workspaceName: 'Workspace ws-b',
     }]);
-    expect(res.json().linking).toEqual(row);
+    // The answer is the caller's own suggestion and nothing else about the project, even when the row holds more.
+    expect(res.json()).toEqual({ ok: true, project: 'project-a', suggestion: {
+      key: 'BBB', workspaceId: WS_B, workspaceName: 'Workspace ws-b', teamName: 'Team BBB', why: 'the branches name this team', at: expect.any(Number),
+    } });
+    expect(res.body).not.toMatch(/owner\/repo|override|visibility|teamCandidates|measured/);
     // The real team-link pass over this project, with no decisive evidence, leaves the key null and the suggestion in place.
     const store = await readLinearStore(path.join(home, '.ccrc'));
     const lane = new VisibilityLane(() => ({ coord: coord!, runCcd: async () => { throw new Error('no ccd'); }, fleetState: undefined, cfg: { ccrcDir: path.join(home, '.ccrc') } }), async () => store);
-    await lane.linkTeams(['project-a'], 1000, { tally: () => new Map(), slug: () => null });
+    expect(store.kind, 'the pass needs a listed Linear store to run').toBe('listed');
+    await lane.linkTeams(['project-a'], 1000, { tally: () => new Map([['AAA', 1]]), slug: () => null });
     const after = coord!.linkingOf('project-a');
     expect(after.teamKey).toBeNull();
     expect(after.teamLink).toBeNull();
-    expect(after.teamCandidates!.map((c) => c.evidence.kind)).toContain('suggested');
+    // The pass ran (it offered its own candidate from one ticket id, too few to link) and left the suggestion beside it.
+    const kinds = after.teamCandidates!.map((c) => c.evidence.kind);
+    expect(kinds).toContain('ticket-ids');
+    expect(kinds[kinds.length - 1]).toBe('suggested');
+  });
+
+  it('the answer carries nothing of the row: no slug, override, visibility or other candidates', async () => {
+    app = await boot();
+    coord!.setLinking('project-b', { teamKey: null, override: 'public' }, 'd', 1);
+    coord!.recordLinkingReading('project-a', { state: 'measured', visibility: 'public', slug: 'owner/secret-repo', template: 'absent', at: 2 });
+    coord!.recordTeamCandidates('project-a', [{ key: 'AAA', name: 'Team AAA', evidence: { kind: 'name-match', matched: 'repo', on: 'key' } }]);
+    const res = await suggest(app, ok());
+    expect(res.statusCode, res.body).toBe(200);
+    expect(Object.keys(res.json()).sort()).toEqual(['ok', 'project', 'suggestion']);
+    expect(Object.keys(res.json().suggestion).sort()).toEqual(['at', 'key', 'teamName', 'why', 'workspaceId', 'workspaceName']);
+    expect(res.body).not.toMatch(/secret-repo|public|name-match|AAA/);
   });
 
   it('a resend replaces it, and two sessions\' suggestions both show', async () => {

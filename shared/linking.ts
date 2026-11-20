@@ -55,7 +55,7 @@ export interface TeamCandidateWire {
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
-/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the three shapes. */
+/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the four shapes. */
 export function isTeamEvidence(v: unknown): v is TeamEvidence {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const o = v as Record<string, unknown>;
@@ -91,6 +91,13 @@ export interface LinkingShowAnswer extends ProjectLinkingWire { ok: true; projec
 /** `POST /api/linking/suggest` (D-8808): a session's suggestion of a team for its project. Closed: exactly these keys
  *  (`workspace` optional). Never a link; the reason is shown in the console only. */
 export interface TeamSuggestionBody { byId: string; byUuid: string; project: string; team: string; workspace?: string; why: string }
+
+/** `POST /api/linking/suggest`'s 200 (D-8808): the caller's own stored suggestion and nothing else about the project, so the door
+ *  is no way round `GET /api/linking`'s own-project rule. */
+export interface TeamSuggestionAnswer {
+  ok: true; project: string;
+  suggestion: { key: string; workspaceId: string | null; workspaceName: string | null; teamName: string; why: string; at: number };
+}
 
 /** `POST /api/projects/:project/linking`: the operator's write. */
 export interface LinkingWriteBody {

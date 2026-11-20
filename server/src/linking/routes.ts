@@ -2,7 +2,7 @@
 // `coord/linkingStore.ts` is the table. Task 2 registers the operator's write; the session's read and the template
 // pull request join it in this file. Task 3 adds the session's read, `GET /api/linking`; Task 5 the template pull request.
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
-import type { LinkingShowAnswer } from '../../../shared/linking.js';
+import type { LinkingShowAnswer, TeamSuggestionAnswer } from '../../../shared/linking.js';
 import type { AttributionRead } from '../coord/openRun.js';
 import type { CoordStore } from '../coord/store.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from '../coord/token.js';
@@ -134,7 +134,8 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
    * A box-token machine lane (an `auth/gate.ts` EXEMPT entry): the token first (never the cookie), then the body's shape, then the
    * registry's attribution, then the store, then the row (`team-set` when it has a key), then the pair (a Linear store that
    * cannot be read is `unavailable`, never `team-unknown`), then the reason as PUBLIC text (the console may be mirrored), then
-   * the write, which itself refuses a row that got a key in the meantime. The 200 is the project's row read back.
+   * the write, which itself refuses a row that got a key in the meantime. The 200 is the caller's own stored suggestion only,
+   * never the project's row (`GET /api/linking` lets a session read only its own project's).
    */
   app.post('/api/linking/suggest', {
     config: { rateLimit: { max: 1200, timeWindow: '1 minute' } },
@@ -165,13 +166,15 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     const text = suggestionReasonVerdict(s.why, routableTeams(store).map((t) => t.key), opts.privateTrackerKeys ?? []);
     if (!text.ok) return refuseRoute(reply, text.word, { detail: text.class });
     try {
-      const wrote = coord.recordTeamSuggestion(s.project, {
-        by: s.byId, key: s.team, workspaceId: s.workspace === undefined ? null : first.workspaceId,
+      const stored = {
+        key: s.team, workspaceId: s.workspace === undefined ? null : first.workspaceId,
         workspaceName: s.workspace === undefined ? null : first.workspaceName, teamName: first.name, why: s.why, at: now(),
-      });
+      };
+      const wrote = coord.recordTeamSuggestion(s.project, { by: s.byId, ...stored });
       if (wrote === 'no-project') return refuseRoute(reply, 'no-project');
       if (wrote === 'team-set') return refuseRoute(reply, 'team-set');
-      return { ok: true, linking: coord.linkingOf(s.project) };
+      const answer: TeamSuggestionAnswer = { ok: true, project: s.project, suggestion: stored };
+      return answer;
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
     }
