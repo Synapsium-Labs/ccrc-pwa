@@ -546,16 +546,16 @@ revert: nothing mounts the card yet.
 | 360, 390 | Goals, Work, Waiting on you, Runs |
 | 1280, 1470, 1920 | Left: Goals, Work. Right: Waiting on you, Runs |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the Work card sits below Goals`, `Waiting on you heads the right
+- [x] **Step 1: Write the failing tests** — jsdom: `the Work card sits below Goals`, `Waiting on you heads the right
   column`, `a run moving re-reads the plan`, `an answer with no work draws no card`, `a failed read keeps the last
   view`, `a failed first read says the work could not be read`; browser: the table above in both skins and both themes,
   no sideways scroll, no clipped phase title or epic tag.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** (red taken after the code, D-8823 `step-2-red-after-the-code`) —
   `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/programme-screen.test.tsx`,
   then `cd pwa && ~/.local/bin/ccrc test -- npm run test:browser -- programme-page.browser.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, both commands again, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
-- [ ] **Step 5: Commit** — `feat(console): the programme page shows its work below Goals`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, both commands again, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
+- [x] **Step 5: Commit** — `feat(console): the programme page shows its work below Goals`.
 
 **Acceptance.** On the live console, one programme with a stored plan and one without each match `plan show` and the
 runs list. **Rollback.** A plain revert; the server field stays and is unread.
@@ -834,6 +834,41 @@ Task WM3 departs under its own number:
   `carriedOut` in `WorkPhaseView`.
   The task note (`docs/superpowers/programs/desktop-polish/wm3.md`) gives each case, the mutants, the test runs and what was seen
   at 360 and 1280.
+
+Task WM4 departs under its own number:
+
+- **D-8823** — `work-map-wm4-build`: Task WM4 (desktop polish run 2903), issued on 2026-11-20. The programme page mounts WM3's card below Goals and
+  Waiting on you heads the right column. The build departs from the plan's text in these ways, each named by slug: `page-decides-in-l1`, the page's
+  decisions about an answer (a view, an absent `work`, an unreadable `work`, a failed read; what the last view and its time do on each; the key that
+  moves a re-read) are `pwa/src/ledgers/workRead.ts` (L1, pure), the page's state is the hook `useWorkRead.ts` (L4), and `ProgrammeScreen.tsx` only
+  mounts it, where the plan names `ProgrammeScreen.tsx` alone; `failed-read-arm`, the card's one `work` prop gains a third arm,
+  `{ readFailed: string; last? }`, because the page's failed read speaks in the refusal's own word, which the server's `{ unreadable }` has no place
+  for (D-8806 `unreadable-carries-the-last-view` made the card's prop type its own; this widens the same type), and `WorkCardAnswer` moves from
+  `WorkCard.tsx` to `workMapWords.ts` so the page's decider reads it without importing a component; `first-read-draws-nothing`, while the first read is
+  pending the page draws no card and no "Reading" line, because an older server draws no card and a card that came and went would shift the column;
+  `not-ok-is-failed`, an answer that is not `ok`, or whose `work` is neither a view nor `{ unreadable }`, reads as a failed read ("unreadable answer"
+  when it has no `error` word); `work-card-in-pv-card`, the page seats the card in a `.pv-card` like Goals, because the card paints its own ground and
+  has no border or padding (seen in the first look at the page in Chrome: its heading sat flush with the column's edge); `pv-side-column`, the right
+  column is a new `.pv-side` holding Waiting on you then Runs, beside `.pv-main` holding Goals then Work, one grid order, so a phone reads Goals, Work,
+  Waiting on you, Runs with no second layout; `card-width-steps`, the card's one container step at 34rem (D-8806 `layout-by-the-cards-width`) is two,
+  26rem with a 6.75rem status track and a 10rem facts track, and 40rem with the 7.5rem and 14rem tracks, because the left column measured in Chrome is a
+  451px card at a 1280 window and 532px at 1470, so the plan's "1280 and up: one row" held at 1920 only (the first run of the new browser file was red
+  at 1280 and 1470 at 34rem, green after); `browser-file-exists`, the plan says Create `pwa/browser/programme-page.browser.test.ts`, but that file exists
+  (the Runs section and Resume at every width, D-8075), so its columns pin is updated to the new order and the Work card's cases are the new
+  `pwa/browser/programme-work-page.browser.test.ts`; the three other browser fixtures that open the programme page (`run-tally`, `phone-bar`,
+  `one-waiting-page`) answer its plan read, as a server does, so the page does not draw a failed read in them; `phase-line-writes-every-apart-group`, review
+  2891 F5: the headline's and the phase line's apart counts are one function over `WORK_APART_GROUPS` less `dropped`, keyed so a group added there is a
+  compile error, so the phase line now also writes "· N failed" (a count that is zero in a phase today, `failed` being the no-plan fallback's alone);
+  `kicker-left`, the page head's "Programme" kicker is left as it is: no programme icon sits beside it, the operator's note asks to drop the word
+  where it sits beside the icon, and the coordinator-badge task does not edit that file (inferred from its branch); `step-2-red-after-the-code`, Step 2 is
+  ticked, though the red was taken after the code was written, not before: the jsdom cases were written first and run only once the page was built, then
+  run against the old `ProgrammeScreen.tsx` (17 of 89 red), and the browser file's red is its first run at 34rem (1280 and 1470 red). Edits under
+  another's claim: `pwa/src/lib/api.ts`, claim 5826 (the Docs reader's range wave, run 2743), with that
+  worker's consent by mail on 2026-11-20 for the `plan(slug)` lines only (its return type gains `work?: WorkAnswer`); the plan itself, whose
+  holder at the start (WM3's worker, claim 5806) had no session left to answer (mail refused `unknown-recipient`) and whose claim lapsed from the
+  list before this task edited it, then this task's own claim 5899.
+  The task note (`docs/superpowers/programs/desktop-polish/wm4.md`) gives each case, the mutants, the test runs, what was seen in Chrome and the
+  carries from review 2891.
 
 ## Where things stand
 
