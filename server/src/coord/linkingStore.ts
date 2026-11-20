@@ -14,6 +14,8 @@ import { isTeamCandidate, isTeamEvidence } from '../../../shared/linking.js';
 import { isLinearTeamKey } from '../../../shared/linear.js';
 import { linkingMode } from '../linking/policy.js';
 import { teamSourceAfterWrite } from '../linking/teamLink.js';
+import { insertCall } from './coordCallsStore.js';
+import type { NewCall } from './coordCalls.js';
 import { tx } from './tx.js';
 
 interface Row {
@@ -23,10 +25,11 @@ interface Row {
   initiatives: string; linearOwner: string | null; ownsTeam: number;
   setAt: number | null; teamSource: string | null; teamName: string | null; teamEvidence: string | null;
   teamAt: number | null; teamCandidates: string | null; teamWorkspace: string | null; teamSuggestions: string | null;
+  teamCallId: number | null;
 }
 
 const COLUMNS = 'project, teamKey, override, visibility, slug, template, failReason, measuredAt, initiatives, linearOwner, ownsTeam, '
-  + 'setAt, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace, teamSuggestions';
+  + 'setAt, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace, teamSuggestions, teamCallId';
 
 /** A project with no row: no key, no override, nothing measured. */
 export const UNSET_LINKING: ProjectLinkingWire = Object.freeze({
@@ -40,21 +43,36 @@ const jsonOf = (text: string | null): unknown => {
   try { return JSON.parse(text) as unknown; } catch { return undefined; }
 };
 
-/** The key's source as stored: one of the two words, or null (no one decided since migration 64, or a value out of
- *  the vocabulary). */
-const sourceOf = (v: string | null): TeamLinkSource | null => (v === 'manual' || v === 'auto' ? v : null);
+// @anchor link-source-of
+/** THE ONE READER of a row's link source (D-8809, option B): every reader of `teamSource` and `teamCallId` goes through it
+ *  (`single-definition/team-link-source.test.ts` holds that). Migration 64's CHECK on `teamSource` (`manual`, `auto`) cannot
+ *  widen without a table rebuild, so the Overlord's link is stored as `auto` with the call that recorded it in `teamCallId`.
+ *  null: no one decided since migration 64, or a word out of the vocabulary. */
+export function linkSourceOf(teamSource: string | null, teamCallId: number | null): TeamLinkSource | null {
+  if (teamSource === 'manual') return 'manual';
+  if (teamSource === 'auto') return teamCallId === null ? 'auto' : 'overlord';
+  return null;
+}
+
+/** The stored word for a derived source: the Overlord's link is stored as `auto` (its call id written beside it). */
+const storedWordOf = (s: TeamLinkSource | null): 'manual' | 'auto' | null => (s === 'overlord' ? 'auto' : s);
 
 /** Who set the key (D-8405). No key: null, unless the operator cleared it (`manual`: the pass then never links it).
- *  `auto` with its team and evidence intact: the pass's link. Anything else with a key is the operator's: before
- *  migration 64 the operator was the key's only writer. */
+ *  `auto` with its team and evidence intact: the pass's link; `overlord` the same plus its call (D-8809: the source comes
+ *  from `linkSourceOf`, because the store keeps the Overlord's link as `auto` beside the call's id). Anything else with a key
+ *  is the operator's: before migration 64 the operator was the key's only writer. */
 function teamLinkOf(row: Row | undefined): TeamLinkWire | null {
   if (row === undefined) return null;
-  if (row.teamKey === null) return row.teamSource === 'manual' ? { source: 'manual', at: row.teamAt } : null;
+  const source = linkSourceOf(row.teamSource, row.teamCallId);
+  if (row.teamKey === null) return source === 'manual' ? { source: 'manual', at: row.teamAt } : null;
   const evidence = jsonOf(row.teamEvidence);
-  if (row.teamSource === 'auto' && row.teamName !== null && row.teamAt !== null && isTeamEvidence(evidence)) {
-    return { source: 'auto', teamName: row.teamName, evidence, at: row.teamAt };
+  if (row.teamName !== null && row.teamAt !== null && isTeamEvidence(evidence)) {
+    if (source === 'auto') return { source, teamName: row.teamName, evidence, at: row.teamAt };
+    if (source === 'overlord' && row.teamCallId !== null) {
+      return { source, teamName: row.teamName, evidence, at: row.teamAt, callId: row.teamCallId };
+    }
   }
-  return { source: 'manual', at: row.teamSource === 'manual' ? row.teamAt : row.setAt };
+  return { source: 'manual', at: source === 'manual' ? row.teamAt : row.setAt };
 }
 
 /** The stored candidates, each through its guard; a cell that does not parse reads as none. */
@@ -124,9 +142,9 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
  *  always passes the decided one. Read and written in one transaction. */
 export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBody, by: string, at: number): void {
   tx(db, () => {
-    const before = db.prepare('SELECT teamKey, teamSource FROM project_linking WHERE project = ?').get(project) as
-      { teamKey: string | null; teamSource: string | null } | undefined;
-    const prior = { teamKey: before?.teamKey ?? null, source: sourceOf(before?.teamSource ?? null) };
+    const before = db.prepare('SELECT teamKey, teamSource, teamCallId FROM project_linking WHERE project = ?').get(project) as
+      { teamKey: string | null; teamSource: string | null; teamCallId: number | null } | undefined;
+    const prior = { teamKey: before?.teamKey ?? null, source: linkSourceOf(before?.teamSource ?? null, before?.teamCallId ?? null) };
     const keyChanged = w.teamKey !== prior.teamKey;
     db.prepare(
       'INSERT INTO project_linking (project, teamKey, override, setBy, setAt, teamSource, teamAt, teamWorkspace) VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
@@ -134,25 +152,55 @@ export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBod
       + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource'
       + (w.workspace !== undefined ? ', teamWorkspace = excluded.teamWorkspace' : '')
       + (w.teamKey !== null ? ', teamSuggestions = NULL' : '')
-      + (keyChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt' : ''),
-    ).run(project, w.teamKey, w.override, by, at, teamSourceAfterWrite(prior, w.teamKey), keyChanged ? at : null, w.workspace ?? null);
+      + (keyChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt, teamCallId = NULL' : ''),
+    ).run(project, w.teamKey, w.override, by, at, storedWordOf(teamSourceAfterWrite(prior, w.teamKey)), keyChanged ? at : null, w.workspace ?? null);
   });
 }
 
-/** D-8405: the automatic pass links `key` for a project, with its team's name and the evidence. Written only where no
- *  key is stored and the operator has not decided (`teamSource` is not `manual`), in the same statement, so an operator's
- *  write that lands first always wins. True when the row was written. */
-export function linkTeamAuto(
-  db: DatabaseSync, project: string, link: { key: string; name: string; evidence: TeamEvidence; workspace?: string | null }, at: number,
-): boolean {
+/** A team link a writer stores: the team's key and name, the evidence and the workspace it lives in. */
+export interface TeamLinkWrite { key: string; name: string; evidence: TeamEvidence; workspace?: string | null }
+
+/** THE ONE STATEMENT that links a team without the operator (D-8405, D-8809): the pass's link (`callId` null) and the
+ *  Overlord's (the call that recorded it). Written only where no key is stored and the operator has not decided
+ *  (`teamSource` is not `manual`), in the same statement, so an operator's write that lands first always wins. Both are
+ *  stored as `auto`; `linkSourceOf` tells them apart by the call id. True when the row was written. */
+function writeTeamLink(db: DatabaseSync, project: string, link: TeamLinkWrite, callId: number | null, at: number): boolean {
   const res = db.prepare(
-    'INSERT INTO project_linking (project, teamKey, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace) '
-    + "VALUES (?, ?, 'auto', ?, ?, ?, NULL, ?) "
+    'INSERT INTO project_linking (project, teamKey, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace, teamCallId) '
+    + "VALUES (?, ?, 'auto', ?, ?, ?, NULL, ?, ?) "
     + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, teamSource = excluded.teamSource, '
-    + 'teamName = excluded.teamName, teamEvidence = excluded.teamEvidence, teamAt = excluded.teamAt, teamCandidates = NULL, teamWorkspace = excluded.teamWorkspace, teamSuggestions = NULL '
+    + 'teamName = excluded.teamName, teamEvidence = excluded.teamEvidence, teamAt = excluded.teamAt, teamCandidates = NULL, teamWorkspace = excluded.teamWorkspace, teamSuggestions = NULL, '
+    + 'teamCallId = excluded.teamCallId '
     + "WHERE project_linking.teamKey IS NULL AND project_linking.teamSource IS NOT 'manual'",
-  ).run(project, link.key, link.name, JSON.stringify(link.evidence), at, link.workspace ?? null);
+  ).run(project, link.key, link.name, JSON.stringify(link.evidence), at, link.workspace ?? null, callId);
   return Number(res.changes) > 0;
+}
+
+/** D-8405: the automatic pass links `key` for a project, with its team's name and the evidence (`writeTeamLink`'s rule). */
+export function linkTeamAuto(db: DatabaseSync, project: string, link: TeamLinkWrite, at: number): boolean {
+  return writeTeamLink(db, project, link, null, at);
+}
+
+/** Thrown inside the transaction to roll the call back when the link's rule refuses. */
+class LinkRefused extends Error {}
+
+/** D-8809: the Overlord confirms one candidate, as a call made in the operator's name. The call first (the store's one
+ *  INSERT, `insertCall`), then the link with its id under `writeTeamLink`'s rule, in ONE transaction: a link the rule refuses
+ *  (a key stored, or the operator decided, meanwhile) rolls the call back. The call's id, or null when refused. */
+export function linkTeamOverlord(
+  db: DatabaseSync, project: string, link: TeamLinkWrite,
+  call: { program: string; madeBy: string; call: NewCall; build: string | null }, at: number,
+): number | null {
+  try {
+    return tx(db, () => {
+      const callId = insertCall(db, call.program, call.madeBy, call.call, call.build, at);
+      if (!writeTeamLink(db, project, link, callId, at)) throw new LinkRefused();
+      return callId;
+    });
+  } catch (err) {
+    if (err instanceof LinkRefused) return null;
+    throw err;
+  }
 }
 
 /** D-8405: the pass's candidates for a project (none: NULL). Written only when they differ from what is stored, so a

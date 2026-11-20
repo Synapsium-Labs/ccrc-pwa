@@ -9,7 +9,7 @@ import { isLinearTeamKey } from '../../shared/linear.js';
 describe('the team-link vocabulary (pinned across its move)', () => {
   it('lists the evidence kinds and link sources', () => {
     expect([...TEAM_EVIDENCE_KINDS]).toEqual(['ticket-ids', 'name-match', 'pr-attachments', 'suggested']);
-    expect([...TEAM_LINK_SOURCES]).toEqual(['manual', 'auto']);
+    expect([...TEAM_LINK_SOURCES]).toEqual(['manual', 'auto', 'overlord']);   // D-8809: the Overlord's link, on the wire
   });
 
   it('isTeamEvidence accepts the two exact shapes', () => {

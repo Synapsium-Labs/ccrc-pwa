@@ -32,20 +32,35 @@ export type TeamEvidenceKind = TeamEvidence['kind'];
 /** D-6048 (ARCH-12): the runtime list, derived from the type. */
 const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true, 'pr-attachments': true, suggested: true };
 
+/** D-8809: what the evidence was, as a clause that names no team key (the call it goes into reaches the operator's console,
+ *  which may be mirrored): "9 of 10 ticket ids in its branches, pull requests and commits use this team's key". */
+export function teamEvidenceClause(e: TeamEvidence): string {
+  switch (e.kind) {
+    case 'ticket-ids': return `${e.ids} of ${e.of} ticket ids in its branches, pull requests and commits use this team's key`;
+    case 'name-match': return `the ${e.matched === 'project' ? 'project' : 'repository'} name matches this team's ${e.on === 'name' ? 'name' : 'key'}`;
+    case 'pr-attachments': return `${e.ids} of ${e.of} issues attached to this repository's merged pull requests are this team's`;
+    case 'suggested': return `suggested by ${e.by}: ${e.why}`;
+    default: { const never: never = e; return never; }
+  }
+}
+
 /** D-8808: the longest reason a suggestion carries. */
 export const TEAM_SUGGESTION_WHY_MAX = 280;
 export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
 
-/** D-8405: who set a project's team key. */
-export type TeamLinkSource = 'manual' | 'auto';
+/** D-8405: who set a project's team key. D-8809: `overlord`, the Overlord confirmed one candidate as a call made in the
+ *  operator's name (on the wire only: the store keeps it as `auto` beside the call's id, read by one function). */
+export type TeamLinkSource = 'manual' | 'auto' | 'overlord';
 /** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_LINK_SOURCE_MAP: Record<TeamLinkSource, true> = { manual: true, auto: true };
+const TEAM_LINK_SOURCE_MAP: Record<TeamLinkSource, true> = { manual: true, auto: true, overlord: true };
 export const TEAM_LINK_SOURCES: readonly TeamLinkSource[] = Object.keys(TEAM_LINK_SOURCE_MAP) as TeamLinkSource[];
 
 /** D-8405: a project's team key and who set it. `at` is when (null for a key stored before anyone recorded it). */
 export type TeamLinkWire =
   | { source: 'manual'; at: number | null }
-  | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number };
+  | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number }
+  /** D-8809: the Overlord's link; `callId` is the call ("calls made for you") that recorded it. */
+  | { source: 'overlord'; teamName: string; evidence: TeamEvidence; at: number; callId: number };
 
 /** D-8405: one team the automatic pass offers for a project, with the evidence that names it. D-8808: and the workspace
  *  it lives in (absent on a candidate an older build stored; `workspaceName` null when the workspace's name is unknown). */
@@ -97,6 +112,18 @@ export interface TeamSuggestionBody { byId: string; byUuid: string; project: str
 export interface TeamSuggestionAnswer {
   ok: true; project: string;
   suggestion: { key: string; workspaceId: string | null; workspaceName: string | null; teamName: string; why: string; at: number };
+}
+
+/** `POST /api/linking/confirm` (D-8809): the Overlord confirms one of a project's current team candidates. Closed: exactly these
+ *  keys; `workspace` is the candidate's workspace id, null only for a candidate stored without one. */
+export interface TeamConfirmBody { byId: string; byUuid: string; project: string; team: string; workspace: string | null }
+
+/** `POST /api/linking/confirm`'s 200 (D-8809): the link it wrote and the call that records it, and nothing else about the
+ *  project (Task 8.4's rule: a machine lane never reveals a project's slug, override, visibility or other candidates). */
+export interface TeamConfirmAnswer {
+  ok: true; project: string;
+  link: { key: string; teamName: string; workspaceId: string | null; workspaceName: string | null; evidence: TeamEvidence };
+  callId: number;
 }
 
 /** `POST /api/projects/:project/linking`: the operator's write. */

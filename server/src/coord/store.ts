@@ -27,7 +27,7 @@ import type { LandingAuthorityCommand, LandingAuthorityWrite, LandingJournalRepl
 import type { LandingJournalPort, LandingJournalSnapshot } from './landingJournalPort.js';
 import { redactCommand } from './redact.js';
 import { REVIEW_CAP_SUMMARY_MAX, cutWhole, reviewCapRefuses, reviewCapStatus } from './reviewcap.js';
-import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
+import { linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamCandidates, recordTeamSuggestion, setLinking } from './linkingStore.js';
 import * as builds from './claudeBuildsStore.js';
 import type { BuildCaptureResult, BuildCaptureTry, ClaudeBuildRecord } from '../../../shared/claudeBuildTrust.js';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
@@ -5662,6 +5662,9 @@ export class CoordStore {
   linkTeamAuto(project: string, link: Parameters<typeof linkTeamAuto>[2], at: number): boolean {
     return linkTeamAuto(this.db, project, link, at);
   }
+
+  /** D-8809: the Overlord's link and the call that records it, in one transaction: the call's id, or null when refused. */
+  linkTeamOverlord(project: string, link: Parameters<typeof linkTeamOverlord>[2], call: Parameters<typeof linkTeamOverlord>[3], at: number): number | null { return linkTeamOverlord(this.db, project, link, call, at); }
 
   /** D-8808: a coordinator's suggested team for a project with no key: written, `team-set` or `no-project`. */
   recordTeamSuggestion(project: string, s: Parameters<typeof recordTeamSuggestion>[2]): ReturnType<typeof recordTeamSuggestion> { return recordTeamSuggestion(this.db, project, s); }

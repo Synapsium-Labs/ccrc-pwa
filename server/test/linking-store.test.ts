@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
-import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamSuggestion, setLinking } from '../src/coord/linkingStore.js';
+import { linkSourceOf, linkTeamAuto, linkTeamOverlord, linkingAll, linkingOf, recordReading, recordTeamSuggestion, setLinking } from '../src/coord/linkingStore.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let dir: string;
@@ -158,5 +158,60 @@ describe('project_linking.teamSuggestions', () => {
     recordTeamSuggestion(db, 'project-a', S);
     expect(linkTeamAuto(db, 'project-a', { key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } }, 9)).toBe(true);
     expect(cell('project-a')).toEqual({ teamSuggestions: null });
+  });
+});
+
+// Linear hierarchy wave 8, D-8809 (Task 8.5): the Overlord's link, stored as teamSource 'auto' plus the call's id (migration 64's
+// CHECK cannot widen without a table rebuild), its source derived by ONE reader, `linkSourceOf`.
+describe('project_linking.teamCallId (the Overlord link)', () => {
+  const EV = { kind: 'name-match', matched: 'project', on: 'name' } as const;
+  const LINK = { key: 'AAA', name: 'Alpha', evidence: EV, workspace: 'ws-a' };
+  const CALL = { program: 'linear-sync', madeBy: 'lane-a', build: null, call: {
+    class: 'big' as const, runId: null, question: 'q', options: ['a', 'b'], chosen: 'a', why: 'w', reversible: true, wakeOn: null } };
+  const stored = (p: string) => db.prepare('SELECT teamSource, teamCallId FROM project_linking WHERE project = ?').get(p);
+  const calls = (): number => (db.prepare('SELECT COUNT(*) AS n FROM coordinator_calls').get() as { n: number }).n;
+  it('linkSourceOf is the one reader: manual, auto, the overlord when a call id stands beside auto, else null', () => {
+    expect(linkSourceOf('manual', null)).toBe('manual');
+    expect(linkSourceOf('manual', 7)).toBe('manual');
+    expect(linkSourceOf('auto', null)).toBe('auto');
+    expect(linkSourceOf('auto', 7)).toBe('overlord');
+    expect(linkSourceOf(null, 7)).toBeNull();
+    expect(linkSourceOf('other', null)).toBeNull();
+  });
+  it('links with the call in one transaction: stored auto plus the call id, the wire says overlord', () => {
+    recordReading(db, 'project-a', MEASURED);
+    const id = linkTeamOverlord(db, 'project-a', LINK, CALL, 100);
+    expect(typeof id).toBe('number');
+    expect({ ...stored('project-a') }).toEqual({ teamSource: 'auto', teamCallId: id });
+    expect(linkingOf(db, 'project-a')).toMatchObject({
+      teamKey: 'AAA', teamWorkspace: 'ws-a', teamCandidates: [],
+      teamLink: { source: 'overlord', teamName: 'Alpha', evidence: EV, at: 100, callId: id },
+    });
+    expect(calls()).toBe(1);
+  });
+  it('the same rule as the automatic link: a key or the operator\'s decision refuses, and the call rolls back', () => {
+    setLinking(db, 'project-a', { teamKey: 'BBB', override: null }, 'd', 1);
+    setLinking(db, 'project-b', { teamKey: 'BBB', override: null }, 'd', 1);
+    setLinking(db, 'project-b', { teamKey: null, override: null }, 'd', 2);
+    expect(linkTeamOverlord(db, 'project-a', LINK, CALL, 100)).toBeNull();
+    expect(linkTeamOverlord(db, 'project-b', LINK, CALL, 100)).toBeNull();
+    expect(calls()).toBe(0);
+    expect(linkingOf(db, 'project-a').teamKey).toBe('BBB');
+    expect(linkingOf(db, 'project-b')).toMatchObject({ teamKey: null, teamLink: { source: 'manual' } });
+  });
+  it('the operator\'s write overturns it: the key becomes manual and the call id is cleared', () => {
+    const id = linkTeamOverlord(db, 'project-a', LINK, CALL, 100)!;
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: 'private' }, 'd', 150);
+    expect(linkingOf(db, 'project-a').teamLink).toMatchObject({ source: 'overlord', callId: id });
+    setLinking(db, 'project-a', { teamKey: 'BBB', override: null }, 'd', 200);
+    expect({ ...stored('project-a') }).toEqual({ teamSource: 'manual', teamCallId: null });
+    expect(linkingOf(db, 'project-a').teamLink).toEqual({ source: 'manual', at: 200 });
+  });
+  it('the automatic link writes no call id, even over a stale one', () => {
+    recordReading(db, 'project-a', MEASURED);
+    db.prepare('UPDATE project_linking SET teamCallId = 9 WHERE project = ?').run('project-a');
+    expect(linkTeamAuto(db, 'project-a', LINK, 100)).toBe(true);
+    expect({ ...stored('project-a') }).toEqual({ teamSource: 'auto', teamCallId: null });
+    expect(linkingOf(db, 'project-a').teamLink).toEqual({ source: 'auto', teamName: 'Alpha', evidence: EV, at: 100 });
   });
 });
