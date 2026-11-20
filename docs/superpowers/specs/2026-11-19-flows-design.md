@@ -30,8 +30,8 @@ to be programmatically managed, to be able to install plugins in the future and 
 - **A flow is a graph** — branches and loops, drag-and-drop editing, an editable prompt on every block — not a line of stages.
 - **A step is an instruction or a gate, set per block.** A gate is checked by the server from a closed catalogue.
 - **The server runs the flow** (approach A below), not generated skills and not a session-side engine.
-- **The editor's look** is the mockup approved 2026-11-18, kept beside this file (`2026-11-19-flows-design/mockup.html`,
-  rendered to `desktop.png`; not product code): desk tab "Flows" (palette, canvas in a well, inspector of Section cards),
+- **The editor's look** is the mockup approved 2026-11-18, kept in [`docs/design/2026-11-19-flows-design/mockup.html`](../../design/2026-11-19-flows-design/mockup.html)
+  (rendered to [`desktop.png`](../../design/2026-11-19-flows-design/desktop.png); not product code): desk tab "Flows" (palette, canvas in a well, inspector of Section cards),
   phone outline with lock marks and live counts, built on `@ccrc/ui`. Its diagram predates §4's wave skeleton; §4 governs.
 - Instruction to the builder: implement it, acting as architect and principal engineer, challenging as it goes (§11).
 
