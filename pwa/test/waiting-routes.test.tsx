@@ -14,6 +14,8 @@ import { SAVED_ROWS_WORD, itemPath } from '../src/ledgers/ledgerWords';
 import { run as runFixture } from './rollupFixture';
 import { fleetSession } from './fleetFixture';
 import { MIN, NOW, itemView, runRow, waitingView } from './ledgersFixture';
+import type { MigrationView } from '../../shared/plan';
+import { MIGRATION_BODY_TEXT } from '../src/ledgers/migrationWords';
 
 const makeSocket = (): WebSocket => ({ close() {}, set onopen(_v: unknown) {}, set onmessage(_v: unknown) {}, set onclose(_v: unknown) {}, set onerror(_v: unknown) {} }) as unknown as WebSocket;
 const mk = () => createFleetStore({ makeSocket });
@@ -236,6 +238,65 @@ describe('the routes\' own paths', () => {
     const row = ROUTES.find((r) => r.id === 'waiting')!;
     expect(matchRoute(row.path!)?.route.id).toBe('waiting');
     expect(itemPath(1).startsWith(`${row.path}/`)).toBe(true);
+  });
+
+  // The map and report items read their migration (D-8186, D-8737's handover): the page hands `ItemView` the body.
+  const migrationView = (over: Partial<MigrationView> = {}): MigrationView => ({
+    ok: true, id: 3, team: 'AAA', state: 'proposed' as MigrationView['state'], counts: { created: 1, moved: 2, closed: 0, left: 0, skipped: 0 },
+    entries: [{ issue: '00000000-0000-4000-8000-000000000001', identifier: 'AAA-1', class: 'leaf' }],
+    structure: [{ programme: 'prog-a', title: 'Programme A', backlog: false, declared: true, epics: [{ key: 'e-1', title: 'First epic', checkpoints: [] }] }],
+    report: null, ...over,
+  });
+
+  it('a map item reads its migration and draws the body, with its controls', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 21, action: { verb: 'linear-map', migrationId: 3 } })] }) }));
+    const read = vi.spyOn(api, 'migration').mockResolvedValue(migrationView());
+    render(<ItemRoute id={21} store={store} />);
+    await waitFor(() => expect(document.querySelector('[data-migration-structure]')).not.toBeNull());
+    expect(read).toHaveBeenCalledWith(3);
+    expect(document.querySelector('[data-migration-counts]')).not.toBeNull();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('a report item draws the report\'s lists', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 22, action: { verb: 'linear-report', migrationId: 4 } })] }) }));
+    vi.spyOn(api, 'migration').mockResolvedValue(migrationView({ id: 4, report: { skipped: ['AAA-5'], waiting: [], movedSince: [], milestonesLeft: [] } }));
+    render(<ItemRoute id={22} store={store} />);
+    await waitFor(() => expect(document.querySelector('[data-report-list="skipped"]')).not.toBeNull());
+  });
+
+  it('a failed read draws no body and no alert: the item keeps its why, how and controls, with a quiet note', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 23, why: 'A team awaits its map.', action: { verb: 'linear-map', migrationId: 3 } })] }) }));
+    const read = vi.spyOn(api, 'migration').mockRejectedValue(new ApiError(404, { ok: false, error: 'not-found' }));
+    render(<ItemRoute id={23} store={store} />);
+    await screen.findByText(MIGRATION_BODY_TEXT.unread);
+    expect(read).toHaveBeenCalledTimes(1);
+    expect(document.querySelector('[data-migration-counts]')).toBeNull();
+    expect(screen.getByText('A team awaits its map.')).toBeTruthy();
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+    expect(screen.queryByRole('alert')).toBeNull();
+  });
+
+  it('an answer that is not a migration (no counts or entries) is a failed read, never a crash', async () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 26, action: { verb: 'linear-map', migrationId: 3 } })] }) }));
+    vi.spyOn(api, 'migration').mockResolvedValue({} as never);
+    render(<ItemRoute id={26} store={store} />);
+    await screen.findByText(MIGRATION_BODY_TEXT.unread);
+    expect(screen.getByRole('button', { name: 'Approve' })).toBeTruthy();
+  });
+
+  it('an item of another kind reads no migration', () => {
+    const store = mk();
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 24 }), itemView({ id: 25, action: { verb: 'linear-drift', bindingId: 8 } })] }) }));
+    const read = vi.spyOn(api, 'migration');
+    const view = render(<ItemRoute id={24} store={store} />);
+    view.unmount();
+    render(<ItemRoute id={25} store={store} />);
+    expect(read).not.toHaveBeenCalled();
   });
 
   it('ItemRouteAt opens the item its parameter names, and says so for one that names none', () => {

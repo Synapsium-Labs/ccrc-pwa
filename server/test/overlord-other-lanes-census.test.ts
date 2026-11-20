@@ -198,7 +198,7 @@ describe('5. the Linear and plan lanes', () => {
 
   it('the plan-door rows are exactly the write doors planRoutes.ts registers, each its own key through door', () => {
     const writes = keysOf(PLAN_SRC).filter((k) => !/^(GET|HEAD) /.test(k)).sort();
-    expect(writes).toEqual(rowsVia('plan-door').map((k) => OTHER_LANES[k].route).sort());
+    expect(writes).toEqual([...rowsVia('plan-door'), ...rowsVia('plan-map')].map((k) => OTHER_LANES[k].route).sort());
     // A programme door goes through `door`; the Linear hierarchy's team-keyed triage door (wave 4, #2982) through `teamDoor`,
     // which asks the same check (below). Either way: one door, with its own lane key.
     for (const lane of rowsVia('plan-door')) {
@@ -206,6 +206,15 @@ describe('5. the Linear and plan lanes', () => {
       expect(count(body, 'door(') + count(body, 'teamDoor('), lane).toBe(1);
       expect(count(body, `door('${lane}', `) + count(body, `teamDoor('${lane}', `), lane).toBe(1);
     }
+  });
+
+  it('the migration map\'s door (D-8186) asks refuseOtherLane once with its own key, after attribution, before its Linear read and serial', () => {
+    expect(rowsVia('plan-map')).toEqual(['planMap']);
+    const body = handlerBody(PLAN_SRC, OTHER_LANES.planMap.route);
+    expect(count(body, "refuseOtherLane(reply, 'planMap', who.id, opts.otherLaneReads)")).toBe(1);
+    expect(before(body, 'callerOf(req, reply)', 'refuseOtherLane(')).toBe(true);
+    expect(before(body, 'refuseOtherLane(', 'migration.readOpen(')).toBe(true);
+    expect(before(body, 'refuseOtherLane(', 'opts.serial(')).toBe(true);
   });
 
   it('door asks refuseOtherLane once, after attribution, before the reserved programme, the store read and serial', () => {

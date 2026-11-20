@@ -116,7 +116,7 @@ interface RowMeasure {
   extras: Box[];
 }
 /** D-8184: one row's hierarchy cell: where it sits, its owner select, and its parts. */
-interface HierMeasure { cell: Box; owner: Box; parts: Box[]; owning: boolean; stateKids: Box[] }
+interface HierMeasure { cell: Box; owner: Box; parts: Box[]; owning: boolean; stateKids: Box[]; reshape: Box | null; reshapeText: string }
 /** D-8184: the card's all-projects act: its box, label, select and button. */
 interface AllMeasure { box: Box; label: Box; select: Box; button: Box }
 interface Measured {
@@ -168,6 +168,8 @@ const measure = (el: Element): Measured => {
       parts: [...cell.querySelectorAll('.linking-owner, .linking-toggles, .linking-state')].map(box),
       owning: cell.querySelectorAll('[role="checkbox"]').length === 2,
       stateKids: [...cell.querySelectorAll('.linking-state > *')].map(box),
+      reshape: cell.querySelector('.linking-reshape') === null ? null : box(one(cell, '.linking-reshape')),
+      reshapeText: cell.querySelector('.linking-reshape')?.textContent ?? '',
     };
   }
   const allEl = one(el, '[data-linking-all]');
@@ -303,6 +305,20 @@ describe('Settings › Security › Project linking, per width, skin and theme (
                 expect(Math.abs(state.top - toggles.top), `${at}: ${r.name}'s second line at ${cardWidth}px`).toBeLessThan(1);
                 expect(toggles.top, `${at}: ${r.name}'s toggles are not under the owner select`).toBeGreaterThanOrEqual(owner.bottom - 0.5);
               }
+            }
+            // D-8186: Reshape in Linear draws for the two projects that are not migrated and carry a team key (project-c, project-d), whole
+            // inside the state cell and the row, its words not cut; on a phone it is as wide as the cell.
+            expect(Object.entries(m.hier).filter(([, h]) => h.reshape !== null).map(([n]) => n), `${at}: Reshape in Linear`).toEqual(['project-c', 'project-d']);
+            for (const [n, h] of Object.entries(m.hier)) {
+              if (h.reshape === null) continue;
+              const r = m.rows.find((x) => x.name === n)!;
+              const state = h.parts[2]!;
+              expect(h.reshapeText, `${at}: ${n}'s Reshape words`).toBe(HIERARCHY_TEXT.reshape);
+              expect(h.reshape.left, `${at}: ${n}'s Reshape starts left of its cell`).toBeGreaterThanOrEqual(state.left - 0.5);
+              expect(h.reshape.right, `${at}: ${n}'s Reshape runs past its cell`).toBeLessThanOrEqual(state.right + 0.5);
+              expect(h.reshape.right, `${at}: ${n}'s Reshape runs past its row`).toBeLessThanOrEqual(r.row.right + 0.5);
+              expect(h.reshape.height, `${at}: ${n}'s Reshape has no height`).toBeGreaterThan(0);
+              if (cardWidth < 480) expect(h.reshape.width, `${at}: ${n}'s Reshape is not full width`).toBeGreaterThan(state.width - 2);
             }
             // The all-projects act sits at the card's end, under every row, and wraps nothing past the card.
             const { all } = m;

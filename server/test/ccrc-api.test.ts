@@ -282,6 +282,7 @@ describe('the closed route table', () => {
     // The inbound path's two (D-8183): `take` by programme slug, `triage` by Linear team key; both carry the pane's identity in the query.
     [['plan', 'take', 'prog-a'], 'POST', '/api/programmes/prog-a/plan/take'],
     [['plan', 'triage', 'AAA'], 'POST', '/api/teams/AAA/plan/triage'],
+    [['plan', 'map-propose', 'AAA'], 'POST', '/api/teams/AAA/plan/map'],
     // The timers (Overlord W1a, the timers piece): parsed whole by `parse_timer`, every one fills the pane's pair, so each runs in a pane.
     [['timer', 'set', '2h', 'check the checks'], 'POST', '/api/timers'],
     [['timer', 'list'], 'GET', '/api/timers'],
@@ -347,9 +348,10 @@ describe('the closed route table', () => {
     // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
     // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
     // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1);
-    // ninety-two since `sessions.report` (Overlord W1 door process B1); ninety-three since `linking.suggest` (D-8808);
-    // ninety-four since `linking.confirm` (D-8809).
-    expect(keys).toHaveLength(94);
+    // ninety-two since `sessions.report` (Overlord W1 door process B1).
+    // Ninety-three since `plan.map-propose` (the per-team migration, D-8186); ninety-four since `linking.suggest` (D-8808);
+    // ninety-five since `linking.confirm` (D-8809).
+    expect(keys).toHaveLength(95);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -364,7 +366,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four', 95: 'ninety-five',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -539,7 +541,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
       ['plan', 'phase-ref', 'prog-a', '--json', '-'], ['plan', 'ticket-done', 'prog-a', '--json', '-'],
-      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'],
+      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'], ['plan', 'map-propose', 'AAA', '--json', '-'],
       ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'report', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
@@ -1987,7 +1989,7 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'));
     plantPane('demo-ws');
     for (const args of [['plan', 'show', 'prog-a'], ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
-      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-']]) {
+      ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'], ['plan', 'map-propose', 'AAA', '--json', '-']]) {
       const r = await run(args, '{}', { TMUX_PANE: '%7' });
       expect([r.status, (JSON.parse(r.stdout) as { error: string }).error], args.join(' ')).toEqual([2, 'no-plan-door']);
     }

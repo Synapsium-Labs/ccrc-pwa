@@ -286,10 +286,12 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   'ninety-two',
   // Overlord W1 door process B1: POST /api/sessions/:id/report, the hook's report door, a box-token lane in the continuity file: ninety-three machine lanes in all.
   'ninety-three',
-  // D-8808: POST /api/linking/suggest, a coordinator's suggestion of a team, a box-token lane in the linking file: ninety-four machine lanes in all.
+  // D-8186: POST /api/teams/:team/plan/map (`plan map-propose`), the per-team migration's map, a box-token lane in the plan file: ninety-four machine lanes in all.
   'ninety-four',
-  // D-8809: POST /api/linking/confirm, the Overlord's confirm of a team candidate, a box-token lane in the linking file: ninety-five machine lanes in all.
-  'ninety-five'];
+  // D-8808: POST /api/linking/suggest, a coordinator's suggestion of a team, a box-token lane in the linking file: ninety-five machine lanes in all.
+  'ninety-five',
+  // D-8809: POST /api/linking/confirm, the Overlord's confirm of a team candidate, a box-token lane in the linking file: ninety-six machine lanes in all.
+  'ninety-six'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`

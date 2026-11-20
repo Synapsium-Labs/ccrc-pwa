@@ -4121,14 +4121,35 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 114: user_version 113 -> 114 ──────────────────────────────────────────
-  // The project row names its Linear workspace (Linear hierarchy wave 8, D-8808, plan Task 8.1): `project_linking.teamWorkspace`
-  // is the slot id (a workspace id) the row's team key resolves in, so a key two connected workspaces share never answers
-  // `team-ambiguous` for the project. NULL: none set, the key resolves as before. ONE COLUMN, nullable, no default, nothing
-  // else: an older build opening a file at this `user_version` takes rule 3 and never names the column. Wave 8's later task
-  // (8.4) adds its columns to THIS entry. This is the next free slot by position on `main`: door B1 took 110, the waiting
-  // workers' sleep 111, the cap-counts-working seed 112 and the admission wait 113 first, so this entry moved up to 114;
-  // whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the slot before the PR and before
-  // merge (it must print 113, the count before this entry):
+  // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186, D-8800), four nullable columns on
+  // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
+  // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
+  // lists beyond the move rows, as JSON (issues skipped as changed, issues of a live programme still waiting, and after put back
+  // the issues that moved since and the milestones left under their canceled project); `putBackAskedAt`, when the operator asked
+  // for put back (the migration lane runs it, never the act); `reportDoneAt`, when the operator closed the report (the next team
+  // may start only then, §10.2). One writer, `planStore.ts#setMigration`. FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build
+  // opening a file at this `user_version` takes rule 3 and never names them. The slot is the next free one by position: the
+  // admission wait's columns (113) are the last on main, so this is 114, renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 113 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE linear_migrations ADD COLUMN project TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN report TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN putBackAskedAt INTEGER;
+  ALTER TABLE linear_migrations ADD COLUMN reportDoneAt INTEGER;
+  `,
+
+  // ── 115: user_version 114 -> 115 ──────────────────────────────────────────
+  // The project row names its Linear workspace and carries two linking facts (Linear hierarchy wave 8, D-8808 and D-8809,
+  // plan Tasks 8.1, 8.4 and 8.5), three columns on `project_linking`: `teamWorkspace` is the slot id (a workspace id) the
+  // row's team key resolves in, so a key two connected workspaces share never answers `team-ambiguous` for the project (NULL:
+  // none set, the key resolves as before); `teamSuggestions` holds the coordinators' suggestions; `teamCallId` names the call
+  // that recorded the Overlord's link. THREE NULLABLE COLUMNS, no default, nothing else: an older build opening a file at this
+  // `user_version` takes rule 3 and never names them. This is the next free slot by position on `main`: door B1 took 110, the
+  // waiting workers' sleep 111, the cap-counts-working seed 112, the admission wait 113 and wave 7's per-team migration 114
+  // first, so this entry moved up to 115; whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the
+  // slot before the PR and before merge (it must print 114, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

@@ -261,6 +261,21 @@ export function parsePlanTicketMove(body: unknown):
   return { ok: true, move: out };
 }
 
+/** Wave 6 review round 3 F4, carried to wave 7 (design §12, D-8186): a worker's follow-up ticket (`plan ticket-add` filed by
+ *  anyone but the programme's coordinator, stored with source `worker`) is told to that coordinator once, by mail naming the
+ *  ticket's key, title and epic, and that it may move or drop it. The coordinator's own ticket-add, or a programme with no
+ *  coordinator, tells nobody: null. One mail per ticket, since a ticket key is added once. */
+export function followUpTicketMail(t: { slug: string; key: string; title: string; epic: string; caller: string; owner: string | null }):
+  { to: string; subject: string; body: string } | null {
+  if (t.owner === null || t.caller === t.owner) return null;
+  return {
+    to: t.owner,
+    subject: `follow-up ticket ${t.key} filed in ${t.slug}`,
+    body: `${t.caller} filed a follow-up ticket in your plan of ${t.slug}: ${t.key}, "${t.title}", in epic ${t.epic}. It is yours `
+      + `to keep, move to another epic or checkpoint, or drop with a reason (\`plan ticket-move\`).`,
+  };
+}
+
 /** `plan phase-ref`: `{ op: 'add' | 'remove', phase, ref: { kind, key } }` or `{ op: 'carry', from, to, ticket }` (D17). The
  *  caller's identity rides the query, so a body naming `byId` or `byUuid` is refused as an unknown field. */
 export function parsePlanPhaseRef(body: unknown): { ok: true; move: PlanPhaseRefMoveBody } | VerbBad {

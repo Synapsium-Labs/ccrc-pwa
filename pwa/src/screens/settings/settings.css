@@ -375,6 +375,8 @@
 .linking-hier { display: grid; gap: calc(var(--pad-card) / 2); min-width: 0; }
 .linking-hier .opt { min-width: 0; }
 .linking-state { align-content: start; }
+/* D-8186: "Reshape in Linear" fills its cell on a phone and sits inline, at its own width, from a laptop's card up (Task 5.1's table). */
+.linking-reshape { width: 100%; max-width: 100%; }
 .linking-all { display: grid; gap: calc(var(--pad-card) / 2); margin-top: var(--pad-card); padding-top: var(--pad-card); border-top: 1px solid var(--edge-subtle); min-width: 0; }
 .linking-all select, .linking-all button { width: 100%; max-width: 100%; }
 .linking-all p { margin: 0; overflow-wrap: anywhere; }
@@ -397,6 +399,7 @@
 }
 @container (min-width: 760px) {
   .linking-row { grid-template-columns: minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 1fr); }
+  .linking-reshape { width: auto; justify-self: start; }
   .linking-template { grid-column: auto; }
   .linking-hier { grid-column: 1 / -1; }
 }
