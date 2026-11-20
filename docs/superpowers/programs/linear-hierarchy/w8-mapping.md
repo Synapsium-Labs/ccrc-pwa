@@ -19,16 +19,19 @@ records what the wave built and every departure, for the coordinator to fold int
 
 The plan's "Deviations found" carries both entries in full. In short:
 
-- **Storage.** One migration (slot 115 after the absorbs of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
+- **Storage.** One migration (slot 116 after the absorbs of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
   stored as `teamSource` `auto` plus `teamCallId`, because migration 64's CHECK admits only `manual` and `auto`. Exactly one
-  function, `linkSourceOf`, derives the wire's `overlord` source, and a single-definition test fails on any other read
-  (the coordinator's condition, mail of 2026-11-20).
+  function, `linkSourceOf`, derives the wire's `overlord` source. `single-definition/team-link-source.test.ts` fails when
+  a file of `shared/` or `server/src` other than `linkingStore.ts` names `teamCallId`, or when code outside `linkSourceOf`
+  (and the migration's CHECK) compares `teamSource` to `'auto'` in one of the shapes it lists (=, <>, IN, IS, CASE, a
+  switch case); an alias or a word built at run time is out of its reach (the coordinator's condition, mail of
+  2026-11-20; review 2997 A2).
 - **The write body's workspace (fix round 1, F4 and F2).** A key's workspace is set in the same write (spec §3.1.1). A named
-  workspace must hold the key (`team-unknown`). With none named (absent or null), an absent one keeps the stored workspace
-  while it holds the key; otherwise the one connected workspace that holds the key is stored, a key two hold is refused
+  workspace must hold the key (`team-unknown`). With none named (absent or null), the stored key sent back keeps the stored workspace
+  without reading the store (review 2997 A5); otherwise the one connected workspace that holds the key is stored, a key two hold is refused
   `team-ambiguous` (the card points at its picker), and a key none holds is stored with none. An unreadable Linear store is
   `unavailable`, never `team-unknown` and never stored as none. A cleared key, and the stored key sent back with no workspace
-  named, read no store (`writeReadsStore`). A row stored with no workspace (before migration 115) whose key one connected
+  named, read no store (`writeReadsStore`). A row stored with no workspace (before this wave's migration) whose key one connected
   workspace holds already resolves there, so Save of the unchanged key, with that workspace or none, keeps the stored none: the
   source, team name, evidence and time stay (the coordinator's ruling: no change of source). Another key or a workspace among
   two holders is still the operator's decision.
@@ -52,7 +55,8 @@ The plan's "Deviations found" carries both entries in full. In short:
   - The call names the team and the workspace by display name, never by key. A suggestion's evidence reads "suggested by a
     coordinator, with the reason "…"" (fix round 1, F6): a call may be mirrored, so it names no session; the session stays on
     the card.
-- **Final review fixes.** The team owner is decided in the inbound issue's workspace at every plan-routes site, at all four
+- **Final review fixes.** The team owner is decided in the inbound issue's workspace at every plan-routes site except the plan-map route (wave 7's
+  migration lane and that route resolve by key alone until follow-up `w8-migration-workspace`, review 2997 F1), at all four
   key lookups of the inbound lane (fix round 1, F1: the close comment's public-text re-check was the fourth; D-8808 said
   three) and in `linearOwnerOfProject`; the suggest door and the confirm re-check the pair against the live Linear store and refuse
   `team-ambiguous` for a shared key with no workspace; a workspace-only change makes the link the operator's.
@@ -68,6 +72,8 @@ The plan's "Deviations found" carries both entries in full. In short:
 
 ## Carried (follow-up tickets in the `mapping` epic)
 
+- `w8-migration-workspace`: after this PR and #3137 land, every team lookup of the migration lane and the plan-map route
+  goes through `routeProjectTeam`, with shared-key tests; no team's migration starts before it (review 2997 F1, F2).
 - `w8-attached-wire`: wire `readAttachedIssues` and the merged pull request URLs into the lane after the operator's go for one
   live capture; update `linking-attached-off.test.ts` deliberately in that commit.
 - `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,

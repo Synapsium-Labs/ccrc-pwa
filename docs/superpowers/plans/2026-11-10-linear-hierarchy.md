@@ -436,10 +436,12 @@ number from `POST /api/ledger/deviations`.
   `shared/linking.ts` first, as a move commit with characterization pins; `shared/api.ts` gains one type-only import line
   for `ProjectLinkingWire` (the L0 import pins move with it). The row's workspace is `project_linking.teamWorkspace`, in the
   wave's one migration with `teamSuggestions` and `teamCallId`. The operator's write body's `workspace` is optional:
-  a named one must hold the key (`team-unknown`); with none named, a new key reads the Linear store, stores the one
-  workspace that holds it, and is refused `team-ambiguous` when two do and `unavailable` when the store cannot be read, so
-  a key is never stored without its workspace; null clears it. Saving the unchanged key keeps whoever set it, a row
-  written before the migration (no workspace) included (review 2971 F2, F4). One resolver, `routeProjectTeam`, serves the plan
+  a named one must hold the key (`team-unknown`). With none named (absent or null), a key reads the Linear store: the one
+  connected workspace that holds it is stored, two holders are refused `team-ambiguous`, an unreadable store is
+  `unavailable`, and a key no connected workspace holds is stored with none. A cleared key reads no store. Saving the
+  unchanged key with no workspace named keeps the stored workspace, a row written before this wave's migration keeping its
+  none, without reading the store: nothing new is stored, and a later use resolves the key and refuses `team-ambiguous`
+  if two workspaces hold it. Saving the unchanged key keeps whoever set it (review 2971 F2, F4; review 2997 F3, A5). One resolver, `routeProjectTeam`, serves the plan
   sync, the plan routes and the linking routes; the Linear proxy is unchanged, because it does not know the caller's
   project. The inbound owner rule takes the issue's workspace at all four of its key lookups (review 2971 F1). Task 8.3's read
   (`attachmentsForUrl`) has a constructed fixture (its schema is an assumption until the live capture), reads under its own
@@ -454,11 +456,14 @@ number from `POST /api/ledger/deviations`.
   project ownership: a coordinator suggests for any keyless project its programme files into, and the console shows who
   suggested; the Overlord's call says only "suggested by a coordinator" (review 2971 F6, F7). The README's
   machine-lane count word moves (ninety-six after the absorbs) under the packet terms of the run that holds README.md. The wave's one
-  migration took slot 115 after the absorbs of main (wave 7 took 114). One bend of the rings rule is stated
+  migration took slot 116 after the absorbs of main (wave 7 took 114, the approvals park 115). One bend of the rings rule is stated
   here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
   preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
   another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
-  it into the policy. Follow-ups this wave leaves: `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
+  it into the policy. The migration lane (wave 7's code) and the plan-map route still resolve a team by its key alone; the
+  follow-up `w8-migration-workspace` makes them go through `routeProjectTeam` after this wave and #3137 land, and no
+  team's migration starts before it (review 2997 F1, F2). Follow-ups this wave leaves: `w8-migration-workspace`,
+  `w8-attached-wire`, `w8-skill-section` (Task 8.6's skill step, which the
   review judge's rules-mixed rule moved to a PR of its own), `w8-call-anchor`, `w8-overlord-skill` and `w8-triage-l1`;
   `w8-write-ambiguous` was built in the review's fix round and dropped. Record: the wave 8 note.
 - **D-8809 (2026-11-20)** — overlord-link-team: the Overlord's confirm (Task 8.5) runs the Overlord gate through one new
