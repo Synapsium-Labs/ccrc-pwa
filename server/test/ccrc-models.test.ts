@@ -1287,12 +1287,18 @@ describe('ccrc models <id> hold, release and revert (auto-advance spec §2.7, D1
     expect(oneObject(run(['models', ID, verb, 'opus', 'extra']))['error']).toBe('unknown-argument');
   });
 
-  it('an Anthropic lane refuses all three', () => {
-    for (const verb of ['hold', 'release', 'revert']) {
-      const r = run(['models', ROSTER.accounts[1]!.id, verb, 'opus']);
-      expect(r.code, verb).toBe(1);
-      expect(oneObject(r)['error']).toBe('anthropic-lane');
-    }
+  // Model-class Anthropic arm A2.3: an Anthropic lane has its own path for the three (no `anthropic-lane` refusal). Until
+  // ccd applies a held id at launch (Task A3.4), hold and revert refuse at that path's door, writing nothing (D-8820);
+  // release stays open, and with nothing held it has nothing to do.
+  it('an Anthropic lane takes its own path: hold and revert refuse alias-hold-not-applied, release has nothing to do', () => {
+    const verb = (v: string): { code: number; body: Record<string, unknown> } => {
+      const r = run(['models', ROSTER.accounts[1]!.id, v, 'opus']);
+      return { code: r.code, body: oneObject(r) };
+    };
+    expect(verb('hold')).toMatchObject({ code: 1, body: { error: 'alias-hold-not-applied' } });
+    expect(verb('revert')).toMatchObject({ code: 1, body: { error: 'alias-hold-not-applied' } });
+    expect(fs.existsSync(join(home, '.ccrc', 'models', `${ROSTER.accounts[1]!.id}.advance.json`))).toBe(false);
+    expect(verb('release')).toMatchObject({ code: 0, body: { ok: true, changed: false } });
   });
 
   it('show names a held class in its summary, with the act and the time', () => {
@@ -1691,7 +1697,9 @@ describe.skipIf(pythonOrSkip() === null)('each codex lane\'s probe reads its OWN
       expect(run(['models', id, 'init', 'codex']).code).toBe(0);
     }
     const r = run(['models', 'refresh', '--all'], { CHATGPT_TOKEN_DIR: poisonedDir(), CCRC_CODEX_PYTHON: poison });
-    expect(rowsOf(r).map((x) => [x['id'], x['ok']])).toEqual([['codex-a', true], ['codex-b', true]]);
+    // The two Anthropic rows of the roster come after the Codex rows (D-8751; their step runs after the Codex steps).
+    expect(rowsOf(r).map((x) => [x['id'], x['ok']]))
+      .toEqual([['codex-a', true], ['codex-b', true], ['claude', true], ['claude-a', true]]);
     expect(r.code, 'refresh --all').toBe(0);
     const calls = probeRuntimeCalls(pr.rec);
     expect(calls.map((c) => c.env['CHATGPT_TOKEN_DIR']).sort())
@@ -2085,15 +2093,18 @@ describe('ccrc models refresh', () => {
     run(['models', 'router', 'init', 'openrouter']);
     const r = refreshFaked('--all');
     const refreshed = oneObject(r)['refreshed'] as { id: string }[];
-    expect(refreshed.map((x) => x.id)).toEqual(['router', 'codex-a']);
+    // The Anthropic lanes follow the Codex rows (D-8751): their step has no probe and runs after the Codex steps.
+    expect(refreshed.map((x) => x.id)).toEqual(['router', 'codex-a', 'claude', 'claude-a']);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude-a.json'))).toBe(false);
     expect(fs.existsSync(join(home, '.ccrc', 'models', 'claude.json'))).toBe(false);
   });
 
-  it('--all with NO registries anywhere is an empty, successful run', () => {
+  it('--all with NO registries anywhere is a successful run of the Anthropic lanes\' aliases step alone (D-8751)', () => {
+    // This harness runs with the advance budget at 0, so each Anthropic lane's step is deferred, not failed.
     const r = run(['models', 'refresh', '--all']);
     expect(r.code).toBe(0);
-    expect(oneObject(r)['refreshed']).toEqual([]);
+    expect(oneObject(r)['refreshed']).toEqual(['claude', 'claude-a'].map((id) => (
+      { id, ok: true, aliases: { ok: false, error: 'budget-deferred', moved: [] } })));
   });
 
   it('--all exits 1 when any lane failed, and still reports the ones that worked', async () => {
@@ -2125,7 +2136,7 @@ describe('ccrc models refresh', () => {
     const b = oneObject(r);
     expect(b['ok']).toBe(false);
     const rows = b['refreshed'] as { id: string; ok: boolean; reason?: string; litellm?: string }[];
-    expect(rows).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
+    expect(rows.filter((x) => x.id === 'codex-a')).toEqual([{ id: 'codex-a', ok: false, reason: expect.any(String) }]);
     expect(rows[0]!.reason!.length).toBeGreaterThan(0);
     // The probe's own effect stands (§6.1 amendment: a failed materialise
     // does not undo a successful catalogue fetch) — only the derived files
@@ -2148,10 +2159,14 @@ describe('ccrc models refresh', () => {
     expect(String(oneObject(r)['detail'])).toMatch(/init/);
   });
 
-  it('refuses an anthropic lane by name — there is nothing to probe (§5)', () => {
+  it('an anthropic lane named on its own runs its aliases step, never a probe (§5, D-8751)', () => {
+    // Before D-8751 this was refused `no-such-lane`: there is no registry to probe. The lane's own step runs instead
+    // (budget 0 in this harness defers it, so the row says so and nothing is written).
     const r = run(['models', 'refresh', 'claude-a']);
-    expect(r.code).toBe(1);
-    expect(String(oneObject(r)['detail'])).toMatch(/Claude Code's own defaults/);
+    expect(r.code).toBe(0);
+    expect(oneObject(r)['refreshed']).toEqual([
+      { id: 'claude-a', ok: true, aliases: { ok: false, error: 'budget-deferred', moved: [] } }]);
+    expect(laneCalls()).toEqual([]);
   });
 
   it('passes a compatible lane\'s baseUrl to the probe', () => {
