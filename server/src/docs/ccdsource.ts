@@ -32,13 +32,14 @@ import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
   DOCS_CCD_FAILURES, docsRefText, redactDocsText,
-  type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
+  type DocFilePin, type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
   type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
-  docsRangePinText, type DocsRangeFrameOk, type DocsRangePreparedOk,
+  DOCS_RANGE_MAX_BYTES, docsRangePinText, type DocsRangeFrameOk, type DocsRangePin, type DocsRangePreparedOk,
 } from '../../../shared/docs.js';
 import {
-  DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, RANGE_PREPARE_JOB, rangeFrameJob, type DocsJob, type DocsRangeFrameAsk,
+  DOCS_SECTION_GATED, HISTORY_JOB, LISTING_JOB, RANGE_PREPARE_JOB, docsRangeAnswerShape, rangeFrameJob, type DocsJob,
+  type DocsRangeFrameAsk,
   type DocsRangeTarget,
 } from './policy.js';
 import type {
@@ -79,7 +80,7 @@ const ON_REF_WORDS: Readonly<Record<NonNullable<DocsShowOk['onRef']>, true>> =
 type DocsReadCall =
   | { verb: 'docs-index' }
   | { verb: 'docs-tree'; project: string; ref: DocsRefSpec | null }
-  | { verb: 'docs-show'; project: string; pin: DocPin; ask: DocsShowAsk }
+  | { verb: 'docs-show'; project: string; pin: DocFilePin; ask: DocsShowAsk }
   | { verb: 'docs-log'; project: string; log: DocsLogAsk }
   | { verb: 'docs-show-range'; project: string; target: DocsRangeTarget; frame: DocsRangeFrameAsk | null };
 
@@ -310,18 +311,45 @@ function checkShow(ans: DocsShowOk, pin: DocPin, ask: DocsShowAsk): { ok: true; 
 }
 
 /**
- * A range frame held to its ask (the range analogue of check 8), in this order, the first fault winning, each
- * `malformed-answer`: the frame echoes the snapshot and offset it was asked for (`{why:'pin'}`); its `bytesB64` is
- * canonical base64 (it re-encodes to exactly itself, so no stray character, padding or bits ride along) holding at most the
- * asked length, and its sha256 is `digest` (`{why:'integrity'}`). The browser checks the same digest again on its side;
- * this is the server's own, so a broken ccd is named here and not by every client.
+ * The shape check both range checks run first (`docsRangeAnswerShape`, L1), so a field of the wrong type answers its own
+ * word (`schema`) and never `pin` or `integrity` for a comparison it should not have reached. A shape fault is NOT
+ * answered here: it is handed on as it is, and the route, which believes an answer only after the same check, answers
+ * and logs it, as it does for the tree and the log. `null` is "shape holds", so the checks after it read typed fields.
+ */
+function rangeShapeFault(step: 'prepare' | 'frame', ans: unknown): DocsFailureBody | null {
+  const shape = docsRangeAnswerShape(step, ans);
+  return shape.ok ? null : shape;
+}
+
+/**
+ * A range frame held to its ask (the range analogue of check 8), after its shape (`rangeShapeFault`), in this order,
+ * the first fault winning, each `malformed-answer`: the frame echoes the snapshot and offset it was asked for
+ * (`{why:'pin'}`); its `bytesB64` is canonical base64 (it re-encodes to exactly itself, so no stray character, padding
+ * or bits ride along) holding EXACTLY the asked length (ccd's contract is exact, so a short frame is a broken ccd, not a
+ * short file), its sha256 is `digest`, and `total` is at most `DOCS_RANGE_MAX_BYTES` and at least the end of the asked
+ * range (`{why:'integrity'}`). The browser checks the same digest again on its side; this is the server's own, so a
+ * broken ccd is named here and not by every client.
  */
 function checkRangeFrame(ans: DocsRangeFrameOk, ask: DocsRangeFrameAsk): DocsRangeFrameOk | DocsFailureBody {
-  if (typeof ans.bytesB64 !== 'string') return showFault('schema');
+  if (rangeShapeFault('frame', ans) !== null) return ans;
   if (ans.snapshot !== ask.snapshot || ans.offset !== ask.offset) return showFault('pin');
   const bytes = Buffer.from(ans.bytesB64, 'base64');
-  if (bytes.toString('base64') !== ans.bytesB64 || bytes.length > ask.length) return showFault('integrity');
+  if (bytes.toString('base64') !== ans.bytesB64 || bytes.length !== ask.length) return showFault('integrity');
   if (createHash('sha256').update(bytes).digest('hex') !== ans.digest) return showFault('integrity');
+  if (ans.total > DOCS_RANGE_MAX_BYTES || ans.total < ask.offset + ask.length) return showFault('integrity');
+  return ans;
+}
+
+/**
+ * A range prepare held to the pin it was sent (after its shape, `rangeShapeFault`): an `fp` pin names the file's sha256,
+ * so the answer's `digest` is that fingerprint; a `stat` pin names its size, so the answer's `size` is that size; a
+ * `blob` pin names neither (a git blob id is not the file's sha256, and the size is not in it). Any other answer is
+ * `malformed-answer {why:'pin'}`, the word a show answer that is not the pin it was asked for gets.
+ */
+function checkRangePrepared(ans: DocsRangePreparedOk, pin: DocsRangePin): DocsRangePreparedOk | DocsFailureBody {
+  if (rangeShapeFault('prepare', ans) !== null) return ans;
+  if (pin.kind === 'fp' && ans.digest !== pin.sha) return showFault('pin');
+  if (pin.kind === 'stat' && ans.size !== pin.size) return showFault('pin');
   return ans;
 }
 
@@ -395,7 +423,10 @@ export function ccdDocsReader(deps: CcdDocsDeps): DocsReader {
     range: {
       prepare: async (src, target): Promise<DocsRangePrepareRead> => settle(
         await readDocs(deps, { verb: 'docs-show-range', project: src.project, target, frame: null }), 'docs-show-range',
-        RANGE_PREPARE_JOB, (line) => ({ ok: true, answer: line as unknown as DocsRangePreparedOk })),
+        RANGE_PREPARE_JOB, (line) => {
+          const checked = checkRangePrepared(line as unknown as DocsRangePreparedOk, target.pin);
+          return checked.ok ? { ok: true, answer: checked } : checked;
+        }),
       frame: async (src, target, frame): Promise<DocsRangeFrameRead> => settle(
         await readDocs(deps, { verb: 'docs-show-range', project: src.project, target, frame }), 'docs-show-range',
         rangeFrameJob(frame.length), (line) => {

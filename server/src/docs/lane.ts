@@ -12,7 +12,7 @@
 // not started.
 import type { DocsFailureBody } from '../../../shared/docs.js';
 import {
-  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, laneOverflow,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, lanePrepare, laneOverflow,
   type DocsJob, type DocsLaneName, type LaneLoad,
 } from './policy.js';
 
@@ -76,7 +76,7 @@ interface ReadWaiter {
  * queued job leaving, since the job behind it may now admit.
  */
 export function docsReadLane(): DocsReadLane {
-  const load: LaneLoad = { execs: 0, bytes: 0, large: 0 };
+  const load: LaneLoad = { execs: 0, bytes: 0, large: 0, prepares: 0 };
   const queue: ReadWaiter[] = [];
   let closed = false;
 
@@ -109,6 +109,7 @@ export function docsReadLane(): DocsReadLane {
     load.execs -= 1;
     load.bytes -= job.wire;
     if (laneLarge(job)) load.large -= 1;
+    if (lanePrepare(job)) load.prepares -= 1;
     pump();
   };
 
@@ -116,6 +117,7 @@ export function docsReadLane(): DocsReadLane {
     load.execs += 1;
     load.bytes += job.wire;
     if (laneLarge(job)) load.large += 1;
+    if (lanePrepare(job)) load.prepares += 1;
     try {
       return { kind: 'ran', value: await exec() };
     } finally {

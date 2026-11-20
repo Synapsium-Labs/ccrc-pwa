@@ -33,7 +33,7 @@ import {
   DOCS_REFUSAL_LOG_MS, LISTING_JOB, parseDocsApiQuery, refreshDue,
 } from '../src/docs/policy.js';
 import {
-  DOCS_RANGE_FRAME_BYTES, DOCS_RESPONSE_HEADERS, docsApi, type DocPin, type DocsFailureBody, type DocsFailure,
+  DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, DOCS_RESPONSE_HEADERS, docsApi, type DocPin, type DocsFailureBody, type DocsFailure,
   type DocsFetchOk, type DocsRangeFrame, type DocsRangePin,
 } from '../../shared/docs.js';
 import {
@@ -1051,10 +1051,10 @@ describe('T7: the index micro-cache is dropped by a refresh, when its fetch sett
 /** The passphrase and the fast scrypt parameters of an armed fixture (`update-routes.test.ts`'s pair). */
 const REAL_PASSPHRASE = 'correct horse battery staple';
 const REAL_FAST_PARAMS: ScryptParams = { n: 1024, r: 8, p: 1, keylen: 32 };
-/** The five docs routes as `METHOD path` keys (section 3.4; the history route, rich-docs spec G4). */
+/** The six docs routes as `METHOD path` keys (section 3.4; the history route, rich-docs spec G4; the range route, X2 P1). */
 const DOCS_KEYS = [
   'GET /api/docs/projects', 'GET /api/docs/:project/tree', 'GET /api/docs/:project/file',
-  'GET /api/docs/:project/history', 'POST /api/docs/:project/refresh',
+  'GET /api/docs/:project/history', 'GET /api/docs/:project/range', 'POST /api/docs/:project/refresh',
 ] as const;
 /** The bytes every fixture show answers, and the two pins the corpus reads them through, as `docsApi` writes them. */
 const REAL_MD = new TextEncoder().encode('# a\n');
@@ -1078,7 +1078,7 @@ function realOk(stdout: string): ExecResult {
   return { ran: true, code: 0, stdout, stderr: '', killed: false, signal: null };
 }
 
-/** The fixture fleet: ok answers for the five docs verbs (a show answers the pin its argv names, a log the commit, section
+/** The fixture fleet: ok answers for the docs verbs but the range verb, which the range cases script (a show answers the pin its argv names, a log the commit, section
  *  and path its argv names); any other ccd argv exits 1 with nothing on stdout. */
 function realAnswer(args: string[]): ExecResult {
   if (args[0] === 'docs-index') return realOk(line(indexOk()));
@@ -1135,6 +1135,7 @@ function eachDocsRoute(app: FastifyInstance, headers: Record<string, string> = {
     app.inject({ method: 'GET', url: docsApi.tree('demo', null), headers }),
     app.inject({ method: 'GET', url: docsApi.file('demo', REAL_COMMITTED), headers }),
     app.inject({ method: 'GET', url: docsApi.history('demo', REAL_LOG_ASK), headers }),
+    app.inject({ method: 'GET', url: docsApi.rangePrepare('demo', REAL_COMMITTED, { kind: 'blob', sha: 'b'.repeat(40) }), headers }),
     app.inject({ method: 'POST', url: docsApi.refresh('demo'), headers }),
   ];
 }
@@ -1205,7 +1206,7 @@ describe('T9: row 49 — GET never fetches, on the real server (section 2 (g), t
 });
 
 describe('T9: row 50 — the refresh is gated (section 2 (j) row 50, section 3.4)', () => {
-  it('armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the four keys is EXEMPT', async () => {
+  it('armed: no session 401; a foreign Origin 403; the session with no Origin 200; none of the six docs keys is EXEMPT', async () => {
     const { app, deps, ccd } = await realServer({ auth: true });
     deps.fleetState = readyFleet();
     const post = (headers: Record<string, string>) => app.inject({
@@ -1860,6 +1861,73 @@ describe('X2 P1.3: GET /api/docs/:project/range', () => {
     expect(warn).not.toHaveBeenCalled();
   });
 
+  it('a frame answer is held to its asked length exactly, and to a total within the ceiling and past its own end', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const short = Buffer.alloc(5, 7);
+    const cases: readonly (readonly [string, Record<string, unknown>, string])[] = [
+      ['fewer bytes than asked, correctly hashed', { bytesB64: short.toString('base64'), digest: sha256Hex(short) }, 'integrity'],
+      ['a total past the range ceiling', { total: DOCS_RANGE_MAX_BYTES + 1 }, 'integrity'],
+      ['a total short of offset plus length', { total: 9 }, 'integrity'],
+    ];
+    for (const [what, over, why] of cases) {
+      const bad = (argv: string[]): CcdResult => okRes(line({ ...JSON.parse(ccd(argv).stdout), ...over }));
+      const rec = scripted(bad);
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: frameUrl(0, 10), headers: PWA_HEADERS });
+      expect(res.statusCode, what).toBe(502);
+      expect(res.json(), what).toStrictEqual({ ok: false, failure: 'malformed-answer', why });
+    }
+    // The controls: exactly the asked length, and a total at the ceiling, are believed.
+    const exact = scripted((argv) => okRes(line({ ...JSON.parse(ccd(argv).stdout), total: DOCS_RANGE_MAX_BYTES })));
+    const { app } = await open({ run: exact.run, verbs: RANGE_VERBS });
+    expect((await app.inject({ url: frameUrl(0, 10), headers: PWA_HEADERS })).statusCode).toBe(200);
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('each field is type-checked before it is compared: a non-string digest or snapshot is its own schema word, not integrity or pin', async () => {
+    const cases: readonly (readonly [string, Record<string, unknown>])[] = [
+      ['a numeric digest', { digest: 5 }], ['a null digest', { digest: null }], ['a numeric snapshot', { snapshot: 5 }],
+      ['an array snapshot', { snapshot: [SNAP] }], ['a string offset', { offset: '0' }],
+    ];
+    for (const [what, over] of cases) {
+      const rec = scripted((argv) => okRes(line({ ...JSON.parse(ccd(argv).stdout), ...over })));
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: frameUrl(0, 10), headers: PWA_HEADERS });
+      expect(res.statusCode, what).toBe(502);
+      expect(res.json(), what).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    }
+  });
+
+  it('a prepare answer is held to the pin it was sent: an fp pin to its digest, a stat pin to its size, else malformed-answer pin', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const other = 'd'.repeat(64);
+    const cases: readonly (readonly [string, DocsRangePin, Record<string, unknown>, number])[] = [
+      ['an fp pin and another digest', { kind: 'fp', sha: FP }, { digest: other }, 502],
+      ['an fp pin and its own digest', { kind: 'fp', sha: FP }, { digest: FP }, 200],
+      ['a stat pin and another size', STAT, { size: FILE.length + 1 }, 502],
+      ['a stat pin and its own size', STAT, {}, 200],
+      ['a blob pin names no digest or size, so any is believed', BLOB, { digest: other, size: 5 }, 200],
+    ];
+    for (const [what, pin, over, status] of cases) {
+      const rec = scripted((argv) => okRes(line({ ...JSON.parse(ccd(argv).stdout), ...over })));
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: prepareUrl(pin.kind === 'blob' ? COMMITTED_PIN : DRAFT_PIN, pin), headers: PWA_HEADERS });
+      expect(res.statusCode, `${what}: ${res.body}`).toBe(status);
+      if (status === 502) expect(res.json(), what).toStrictEqual({ ok: false, failure: 'malformed-answer', why: 'pin' });
+    }
+    expect(warn).not.toHaveBeenCalled();
+  });
+
+  it('a prepare answer of the wrong type is its schema word before the pin is compared', async () => {
+    for (const [pin, over] of [[{ kind: 'fp', sha: FP }, { digest: 5 }], [STAT, { size: '5' }]] as const) {
+      const rec = scripted((argv) => okRes(line({ ...JSON.parse(ccd(argv).stdout), ...over })));
+      const { app } = await open({ run: rec.run, verbs: RANGE_VERBS });
+      const res = await app.inject({ url: prepareUrl(DRAFT_PIN, pin), headers: PWA_HEADERS });
+      expect(res.statusCode, JSON.stringify(over)).toBe(502);
+      expect(res.json(), JSON.stringify(over)).toMatchObject({ ok: false, failure: 'malformed-answer', why: 'schema' });
+    }
+  });
+
   it('a prepare answer that fails its shape is a 502 malformed-answer, logged', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     for (const over of [{ size: 67108865 }, { snapshot: 'nope' }, { digest: 'x' }, { size: -1 }]) {
@@ -1879,8 +1947,15 @@ describe('X2 P1.3: GET /api/docs/:project/range', () => {
     const both = Promise.all([1, 2].map(() => app.inject({ url: frameUrl(0, 10), headers: PWA_HEADERS })));
     await until(() => rec.calls.length === 1, 'the one docs-show-range exec');
     for (let turn = 0; turn < 50; turn++) await new Promise<void>((resolve) => setImmediate(resolve));
-    b.release(0, ccd(rec.calls[0]!));
-    expect((await both).map((r) => r.statusCode)).toEqual([200, 200]);
-    expect(rec.calls).toHaveLength(1);
+    // Release EVERY exec that started, each turn, until both answers are in (releasing a settled one is a no-op), so a
+    // second exec (the failure under test) ends in a red message below, never a wait on an exec nobody releases.
+    let answered: number[] | null = null;
+    void both.then((rs) => { answered = rs.map((r) => r.statusCode); });
+    for (let turn = 0; turn < 200 && answered === null; turn++) {
+      for (let i = 0; i < b.started(); i++) b.release(i, ccd(rec.calls[i]!));
+      await new Promise<void>((resolve) => setImmediate(resolve));
+    }
+    expect(rec.calls, 'a second identical frame ran its own exec').toHaveLength(1);
+    expect(answered, 'both identical frames answered').toEqual([200, 200]);
   });
 });

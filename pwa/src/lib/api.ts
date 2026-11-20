@@ -1203,7 +1203,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       const marker = { [DOCS_REQUEST_HEADER]: DOCS_REQUEST_HEADER_VALUE };
       // NO TIME LIMIT on the docs reads (`timeoutMs: null`, console speed C1): a loader never rejects for a server
       // answer, and its slot vocabulary (`docs/failures.ts`) has no word for "slow", so a timeout would leave a screen
-      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 20 s, after a
+      // waiting on a promise its reader never catches. The server bounds them (ccd's docs verbs, 15 to 30 s, after a
       // read lane's wait of at most 10 s).
       const unlimited: ReadOpts = { timeoutMs: null };
       const read = async <T>(path: string, fields: readonly string[], init: RequestInit): Promise<DocsAnswer<T>> => {

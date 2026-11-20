@@ -32,7 +32,10 @@ export type TreeSlot =
  *  - `none`: no file request is due here: the tree slot is not `ok`, the page is not a leaf of this tree, `pinFor`
  *    answered null, or the leaf is a raster (`DocImage` loads its bytes through `loaders.raster`) or of class `other`
  *    within its cap (spec 4.4: "No preview" and Download, which reads the bytes itself when tapped).
- *  - `too-large`: the listed size is over `DOCS_CLASS_CAP` for the path's class; nothing was requested (spec 4.4).
+ *  - `too-large`: the listed size is over `DOCS_CLASS_CAP` for the path's class; nothing was requested (spec 4.4). The
+ *    leaf reads it by range up to `DOCS_RANGE_MAX_BYTES` (X2 P1, spec 4.3).
+ *  - `stat-pinned`: a draft the listing could not fingerprint (X2 P1, spec 4.3): the file route cannot read it, so
+ *    nothing was requested; the leaf reads it by range, whatever its size.
  *  - `changing`: a read answered a word that means the listing moved (`DOCS_RELIST_WORDS`) after the one automatic
  *    re-list was spent; the page offers Retry.
  *  - `ok`: `pin` is the OPENED pin. After a re-list it can be older than `pinFor`'s answer only while the new pin's
@@ -43,6 +46,7 @@ export type FileSlot =
   | { s: 'ok'; pin: DocPin; answer: DocsFileResponse; receivedAt: number }
   | { s: 'failed'; pin: DocPin; body: DocsFailureBody }
   | { s: 'too-large'; pin: DocPin; size: number; cap: number }
+  | { s: 'stat-pinned'; pin: DocPin; size: number }
   | { s: 'changing'; pin: DocPin; word: DocsFailure }
   | (DocsClientSlot & { pin: DocPin });
 
@@ -84,7 +88,10 @@ function findEntry(tree: DocsTreeOk, section: DocPin['section'], path: string): 
  *  is not committed in `tree` falls back to the exact commit. A draft is keyed by every field of its pin, and the
  *  body of a version page (`version`) by its pin's commit, which the listing's moving cannot change. */
 export function fileKey(pin: DocPin, tree: DocsTreeOk, version: boolean): string {
-  if (pin.kind === 'draft') return ['draft', pin.branch, pin.head, pin.section, pin.path, pin.fp].join(NUL);
+  if (pin.kind === 'draft') {
+    const bytes = pin.fp === null ? 'stat:' + String(pin.stat.size) + ':' + pin.stat.mtimeNs : pin.fp;
+    return ['draft', pin.branch, pin.head, pin.section, pin.path, bytes].join(NUL);
+  }
   // A version page's body is keyed by its pin's commit: the listing's blob is the tip's, and the listing can move under it.
   if (version) return ['commit', pin.commit, pin.section, pin.path].join(NUL);
   const blob = findEntry(tree, pin.section, pin.path)?.committed?.blob;
@@ -118,11 +125,16 @@ export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocPin | null 
   if (page.view === 'committed') return view.offersCommitted ? committed : null;
   const drafts = tree.drafts;
   const fp = entry.draft?.fp;
-  // entryView opens a draft only for an admitted holder's regular file with a fingerprint.
-  if (drafts.state !== 'holder' || fp === undefined || fp === null) {
-    throw new Error('pinFor: a draft opened with no holder or fingerprint');
+  // entryView opens a draft only for an admitted holder's regular file, with a fingerprint or (X2 P1) a stat pin.
+  if (drafts.state !== 'holder' || fp === undefined) {
+    throw new Error('pinFor: a draft opened with no holder');
   }
-  return { kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: page.section, path: page.path, fp };
+  const where = { kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: page.section, path: page.path } as const;
+  if (fp !== null) return { ...where, fp };
+  // X2 P1 (spec 4.3): a draft the listing could not fingerprint is pinned by its size and modified time until its
+  // prepare answers; never a throw (the carry from X2's review): the leaf reads it by range.
+  if (view.pin?.kind === 'stat') return { ...where, fp: null, stat: { size: view.pin.size, mtimeNs: view.pin.mtimeNs } };
+  throw new Error('pinFor: a draft opened with neither a fingerprint nor a stat pin');
 }
 
 /** One visit, as the Docs views read it. */
@@ -158,11 +170,12 @@ type Target = { readonly project: string; readonly ref: DocsRefSpec | null };
 /** `relistAfter`: null = the read waits for no re-list; a number = it does, and is the request number in force when the
  *  word landed, so only a GET numbered above it (one that STARTED after the word) can release it. */
 type FileEntry = {
-  slot: Exclude<FileSlot, { s: 'none' } | { s: 'too-large' }>; treeKey: string; relistAfter: number | null;
+  slot: Exclude<FileSlot, { s: 'none' } | { s: 'too-large' } | { s: 'stat-pinned' }>; treeKey: string; relistAfter: number | null;
 };
 type Wanted =
   | { kind: 'none' }
   | { kind: 'too-large'; slot: FileSlot }
+  | { kind: 'stat-pinned'; slot: FileSlot }
   | { kind: 'read'; target: Target; tKey: string; fKey: string; leaf: string; pin: DocPin; version: boolean };
 
 interface Store {
@@ -216,7 +229,14 @@ export function samePin(a: DocPin, b: DocPin): boolean {
     return a.commit === b.commit && a.servedRef === b.servedRef && a.section === b.section && a.path === b.path;
   }
   if (a.kind === 'draft' && b.kind === 'draft') {
-    return a.branch === b.branch && a.head === b.head && a.section === b.section && a.path === b.path && a.fp === b.fp;
+    const place = a.branch === b.branch && a.head === b.head && a.section === b.section && a.path === b.path;
+    // X2 P1: a stat-pinned draft's listing pin (`fp: null`) is the same bytes as the pin it opened at, which carries the
+    // snapshot's digest as `fp` and the same stat; two pins that both name a digest compare by it.
+    if (a.fp === null || b.fp === null) {
+      return place && a.stat !== undefined && b.stat !== undefined
+        && a.stat.size === b.stat.size && a.stat.mtimeNs === b.stat.mtimeNs;
+    }
+    return place && a.fp === b.fp;
   }
   return false;
 }
@@ -231,6 +251,7 @@ function wantedFile(slot: TreeSlot | null, page: DocsPageLocation | null, target
   const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry?.draft?.size : entry?.committed?.size;
   const cap = DOCS_CLASS_CAP[contentClass(page.path)];
   if (typeof size === 'number' && size > cap) return { kind: 'too-large', slot: { s: 'too-large', pin, size, cap } };
+  if (pin.kind === 'draft' && pin.fp === null) return { kind: 'stat-pinned', slot: { s: 'stat-pinned', pin, size: pin.stat.size } };
   if (contentClass(page.path) === 'other') return { kind: 'none' };
   const tKey = treeKey(target.project, target.ref);
   const leaf = [tKey, page.section, page.path, page.view, page.at ?? ''].join(NUL);
@@ -638,7 +659,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   let file: FileSlot = { s: 'none' };
   let updatedTo: string | null = null;
-  if (wanted.kind === 'too-large') file = wanted.slot;
+  if (wanted.kind === 'too-large' || wanted.kind === 'stat-pinned') file = wanted.slot;
   if (wanted.kind === 'read') {
     updatedTo = st.updatedTo.get(wanted.leaf) ?? null;
     const e = st.files.get(wanted.fKey);

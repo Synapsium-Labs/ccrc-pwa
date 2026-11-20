@@ -156,6 +156,17 @@ describe('docs-show-range: one deadline bounds the whole verb, and the runner bu
     expect(sumS, 'the agent may kill ccd before a range prepare ends on its own deadline').toBeLessThan(runnerMs('docs-show-range') / 1000);
   });
 
+  // The real sequential worst case: the verb's deadline fires, the helper waits RANGE_ABORT_LOCK_WAIT_S to give the
+  // prepare's place back, the redactor still runs (REDACT_BUDGET_MS, outside the deadline), the kill grace passes, and the
+  // agent keeps its own 5 s: 20 + 2 + 1 + 0.9 + 5 = 28.9 s against 30 s. A 2.5 s abort wait would make it 30.4 s and red.
+  it('docs-show-range: helper deadline + KILL_GRACE_S + RANGE_ABORT_LOCK_WAIT_S + REDACT_BUDGET_MS + 5 s < the runner budget, strictly', () => {
+    const helper = helperSrc();
+    const sumS = helperDeadlinesIn(helper)['docs-show-range'] + pyIntIn(helper, 'KILL_GRACE_S')
+      + pyIntIn(helper, 'RANGE_ABORT_LOCK_WAIT_S') + pyIntIn(helper, 'REDACT_BUDGET_MS') / 1000 + HEADROOM_S;
+    expect(sumS, 'the agent may kill ccd while a range prepare gives its place back or its redactor runs')
+      .toBeLessThan(runnerMs('docs-show-range') / 1000);
+  });
+
   it('the verb builds its one Deadline from its HELPER_DEADLINE_S row and hands it to the cache, and the lock wait and the copy read it', () => {
     const src = helperSrc();
     expect(src).toContain("dl = Deadline(HELPER_DEADLINE_S['docs-show-range'])");

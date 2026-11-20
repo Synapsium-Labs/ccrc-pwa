@@ -272,6 +272,35 @@ export function kib(bytes: number): string {
   return `${Math.ceil(bytes / 1024)} KiB`;
 }
 
+/** A byte count in MiB, a whole number when it is one, else to one decimal rounded up (X2 P1: the range read's sizes,
+ *  so "64 MiB" reads as the ceiling it is and a file one byte over it never reads as the ceiling). */
+export function mib(bytes: number): string {
+  const whole = bytes / 1048576;
+  return Number.isInteger(whole) ? `${whole} MiB` : `${(Math.ceil(whole * 10) / 10).toFixed(1)} MiB`;
+}
+
+/** The words of a range read and of Markdown in parts (X2 P1, spec 4.3). */
+export const DOCS_RANGE_TEXT = {
+  reading: 'Reading {done} of {total}…',
+  cancel: 'Cancel',
+  cancelled: 'Reading stopped. Nothing was kept.',
+  readAgain: 'Read it',
+  overCeiling: 'This file is {size}; Docs reads files up to {cap}.',
+  noDigest: 'Docs can read this file only over a secure connection (HTTPS): it checks every part it reads, and this page cannot.',
+  mismatch: 'Docs stopped reading this file: a part it received was not the one it asked for.',
+  imageNoHeader: 'Docs could not read this image’s size from its header, so it does not show it here; Download it instead.',
+  imageSide: 'This image is {w} × {h} pixels; Docs shows images up to {side} pixels a side here. Download it instead.',
+  imagePixels: 'This image is {w} × {h} pixels; Docs shows images up to {px} megapixels here. Download it instead.',
+  imageMismatch: 'This file is not the image type its name says, so Docs does not show it.',
+  downloadOnly: 'This file is {size}; Docs offers it as a Download.',
+  partBar: 'Part {k} of {n}',
+  partPrevious: 'Previous part',
+  partNext: 'Next part',
+  partContinued: 'This part continues the one before it.',
+  partPreparing: 'Preparing the parts of this document ({k} of {n})…',
+  fragmentUnknown: 'The place this link names may be in a part Docs could not prepare, so the first part is shown.',
+} as const;
+
 /** A commit's short form: its first 8 hex characters, everywhere (refinement (s)). */
 export function shortCommit(sha: string): string {
   return sha.slice(0, 8);

@@ -16,7 +16,7 @@ import {
   DOCS_RESPONSE_HEADERS, DOCS_RETRY_FLOOR_MS, DOCS_STALE_MS, contentClass, docsRangePinText, docsRefText, isDocsBareRef, isDocsCommit,
   isDocsFingerprint, isDocsProject, isDocsQualifiedRef, isDocsRangeSnapshot, isDocsRelPath, isDocsSection,
   parseDocsRangeCount, parseDocsRangePinText, parseDocsRef, redactDocsText, sniffRaster,
-  type DocContentClass, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
+  type DocContentClass, type DocFilePin, type DocPin, type DocSectionSlug, type DocsEntry, type DocsFailure, type DocsFailureBody,
   type DocsFetchOk, type DocsFileResponse, type DocsLogAsk, type DocsRangePin, type DocsRefreshFetch,
   type DocsRefreshResponse, type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsTreeResponse, type DocsVerb, type RasterMime, type RasterType,
@@ -222,7 +222,7 @@ export interface DocsRangeQuery { target: DocsRangeTarget; frame: DocsRangeFrame
 export type DocsApiRequest =
   | { route: 'projects' }
   | { route: 'tree'; ref: DocsRefSpec | null }
-  | { route: 'file'; pin: DocPin }
+  | { route: 'file'; pin: DocFilePin }
   | { route: 'history'; ask: DocsLogAsk }
   | { route: 'range'; query: DocsRangeQuery };
 
@@ -296,7 +296,7 @@ function parsePinPlace(query: Readonly<Record<string, unknown>>):
  * - draft: `branch` (bad-ref; BARE only), `head` (bad-commit), `section`, `path`, `fp` (bad-fingerprint).
  * The pin is assembled only after every value passed.
  */
-function parseFilePin(query: Readonly<Record<string, unknown>>): { ok: true; pin: DocPin } | DocsFailureBody {
+function parseFilePin(query: Readonly<Record<string, unknown>>): { ok: true; pin: DocFilePin } | DocsFailureBody {
   const pinKeys = DOCS_PIN_KEYS.filter((k) => Object.hasOwn(query, k));
   const committed = sameKeys(pinKeys, COMMITTED_PIN_KEYS);
   if ((!committed && !sameKeys(pinKeys, DRAFT_PIN_KEYS)) ||
@@ -512,18 +512,24 @@ export const DOCS_LANE_MAX_WAIT_MS = 10000;
 
 /** One read job's estimate: `raw`, the most content bytes its answer can carry; `wire`, the most framed bytes the
  *  answer line can take on the link. */
-export interface DocsJob { raw: number; wire: number }
+export interface DocsJob { raw: number; wire: number; prepare?: true }
 
-/** A read lane's load at the moment its head job is considered: execs in flight, their summed `wire` estimates, and
- *  how many of them are large (`raw` over `DOCS_LANE_LARGE_RAW`). The lane keeps the counters; this only reads them. */
-export interface LaneLoad { execs: number; bytes: number; large: number }
+/** A read lane's load at the moment its head job is considered: execs in flight, their summed `wire` estimates, how
+ *  many of them are large (`raw` over `DOCS_LANE_LARGE_RAW`) and how many are range prepares (`job.prepare`). The lane
+ *  keeps the counters; this only reads them. */
+export interface LaneLoad { execs: number; bytes: number; large: number; prepares: number }
 
 /**
- * Whether the read lane admits `job` now (section 6.3), its four clauses in order, the first that answers winning:
+ * Whether the read lane admits `job` now (section 6.3), its five clauses in order, the first that answers winning:
  * 1. an idle lane always admits one job, so a job larger than the budget still runs, alone;
  * 2. `DOCS_LANE_EXECS` execs in flight refuse;
  * 3. the summed wire estimate past `DOCS_LANE_BYTES` refuses (exactly at it admits);
- * 4. a second answer over `DOCS_LANE_LARGE_RAW` refuses (exactly at it is not large).
+ * 4. a second answer over `DOCS_LANE_LARGE_RAW` refuses (exactly at it is not large);
+ * 5. a second range prepare refuses (`job.prepare`). A prepare holds its exec for as long as ccd copies and hashes the
+ *    snapshot: measured worst case about 23 s (ccd's 20 s helper deadline, its 2 s kill grace and its 1 s abort lock
+ *    wait), against a 10 s queue wait (`DOCS_LANE_MAX_WAIT_MS`). Two of them would hold BOTH execs for that long and
+ *    every tree, file read and image would answer `docs-busy`; so the lane keeps one exec free of prepares, the way
+ *    clause 4 keeps big shows to one. One predicate and one counter, no second lane mechanism.
  * A refusal here is "not yet", never `docs-busy`: the lane keeps the job at the head of its FIFO (W3).
  */
 export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
@@ -531,6 +537,7 @@ export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
   if (load.execs >= DOCS_LANE_EXECS) return false;
   if (load.bytes + job.wire > DOCS_LANE_BYTES) return false;
   if (laneLarge(job) && load.large > 0) return false;
+  if (lanePrepare(job) && load.prepares > 0) return false;
   return true;
 }
 
@@ -561,8 +568,8 @@ export const HISTORY_JOB: Readonly<DocsJob> =
 
 /** The estimate of every range prepare: it carries no file bytes, only the snapshot's id, size and digest, so no content
  *  (`raw` 0) and one envelope's reserve on the wire. It still holds a lane exec for as long as ccd copies and hashes
- *  (up to ccd's own 20 s). Frozen, as above. */
-export const RANGE_PREPARE_JOB: Readonly<DocsJob> = Object.freeze({ raw: 0, wire: DOCS_ENVELOPE_RESERVE });
+ *  (up to about 23 s), so it carries the `prepare` mark that `laneAdmit` keeps to one exec. Frozen, as above. */
+export const RANGE_PREPARE_JOB: Readonly<DocsJob> = Object.freeze({ raw: 0, wire: DOCS_ENVELOPE_RESERVE, prepare: true });
 
 /** The estimate of one range frame of `length` raw bytes: those bytes, and their base64 framing (`showWire`). `length`
  *  is the frame's asked length, which `docsRangePlan` has held to `DOCS_RANGE_FRAME_BYTES`, so a frame is never large. */
@@ -859,7 +866,7 @@ export function docsTreeFlightKey(node: string, project: string, ref: DocsRefSpe
 }
 
 /** A show flight (section 6.4): the pin's kind and every pin field in `docsApi`'s order, then `--max-bytes`. */
-export function docsShowFlightKey(node: string, project: string, pin: DocPin, maxBytes: number): string {
+export function docsShowFlightKey(node: string, project: string, pin: DocFilePin, maxBytes: number): string {
   const fields = pin.kind === 'committed'
     ? [pin.kind, pin.commit, pin.servedRef, pin.section, pin.path]
     : [pin.kind, pin.branch, pin.head, pin.section, pin.path, pin.fp];
@@ -1344,6 +1351,15 @@ export function docsStoredShow(answer: DocsShowOk, bytes: Uint8Array): DocsStore
  */
 export function laneLarge(job: DocsJob): boolean {
   return job.raw > DOCS_LANE_LARGE_RAW;
+}
+
+/**
+ * Whether `job` is a range prepare (the mark `RANGE_PREPARE_JOB` carries). THE one prepare predicate: `laneAdmit`'s
+ * fifth clause refuses a second prepare with it, and the read lane counts a started and a finished job in
+ * `LaneLoad.prepares` with it.
+ */
+export function lanePrepare(job: DocsJob): boolean {
+  return job.prepare === true;
 }
 
 /**

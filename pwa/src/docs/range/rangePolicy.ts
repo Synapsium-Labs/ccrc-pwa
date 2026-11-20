@@ -3,7 +3,7 @@
 // decode. No I/O, no timers, no DOM: the loader and the views act on these answers.
 import {
   DOCS_CLASS_CAP, DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES,
-  type DocContentClass, type DocsRangePin,
+  type DocContentClass, type DocPin, type DocsEntry, type DocsRangePin,
 } from '../../../../shared/docs';
 
 /** How a leaf's bytes are read (spec 4.3).
@@ -15,6 +15,15 @@ export function rangeVerdict(size: number, cls: DocContentClass, pin: DocsRangeP
   if (!Number.isSafeInteger(size) || size < 0 || size > DOCS_RANGE_MAX_BYTES) return 'over-ceiling';
   if (pin === 'stat') return 'range';
   return size > DOCS_CLASS_CAP[cls] ? 'range' : 'show';
+}
+
+/** The range pin of the bytes a leaf's page pin names (spec 4.3): a committed pin reads the entry's committed blob, a
+ *  draft pin its fingerprint, or, with none yet, its stat. `null` when the pin names nothing the entry holds (a committed
+ *  pin over an entry with no committed blob). The page pin, not the row's `entryView` pin, decides, because a draft
+ *  row's `view=committed` page opens the committed side. */
+export function rangePinOf(pin: DocPin, entry: DocsEntry): DocsRangePin | null {
+  if (pin.kind === 'committed') return entry.committed === null ? null : { kind: 'blob', sha: entry.committed.blob };
+  return pin.fp === null ? { kind: 'stat', size: pin.stat.size, mtimeNs: pin.stat.mtimeNs } : { kind: 'fp', sha: pin.fp };
 }
 
 /** Whether an image may be decoded for its own page, from the dimensions `imageHeaderDims` read (each at least 1):

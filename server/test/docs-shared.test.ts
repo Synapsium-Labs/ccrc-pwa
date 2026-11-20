@@ -925,46 +925,55 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
   const fileSide = (c: Case): boolean => c.committed === 'file' || c.committed === 'exec';
   const kindOf = (c: Case): docsH.EntryView['committedKind'] => (c.committed === 'none' ? null : c.committed);
   const sideOpens = (c: Case): docsH.EntryView['opens'] => (fileSide(c) ? 'committed' : 'none');
+  // X2 P1: the pin the opened bytes are read by. The matrix's entries carry no `mtimeNs`, so a draft with `fp: null`
+  // stays withheld (row 8), as an older ccd's does; the stat pin is pinned by its own cases below.
+  const BLOB_PIN: docsH.DocsRangePin = { kind: 'blob', sha: 'b'.repeat(40) };
+  const FP_PIN: docsH.DocsRangePin = { kind: 'fp', sha: 'f'.repeat(64) };
+  const sidePin = (c: Case): docsH.DocsRangePin | null => (fileSide(c) ? BLOB_PIN : null);
   const notDelTc = (d: NonNullable<Case['draft']>): boolean => d.state !== 'deleted' && d.state !== 'typechange';
   const withheldRow = (c: Case, why: docsH.WithheldReason): docsH.EntryView => ({
     listed: c.committed !== 'none' || has(c, (d) => d.state === 'added' || d.state === 'untracked'),
-    opens: sideOpens(c), badge: 'withheld', withheld: why, offersCommitted: false, committedKind: kindOf(c),
+    opens: sideOpens(c), badge: 'withheld', withheld: why, offersCommitted: false, committedKind: kindOf(c), pin: sidePin(c),
   });
   const ROWS: readonly { row: string; when: (c: Case) => boolean; view: (c: Case) => docsH.EntryView }[] = [
     {
       row: '1 no overlay, committed file/exec',
       when: (c) => !overlay(c) && fileSide(c),
-      view: (c) => ({ listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c) }),
+      view: (c) => ({
+        listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c), pin: BLOB_PIN,
+      }),
     },
     {
       row: '2 no overlay, committed symlink/submodule',
       when: (c) => !overlay(c) && (c.committed === 'symlink' || c.committed === 'submodule'),
-      view: (c) => ({ listed: true, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c) }),
+      view: (c) => ({ listed: true, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: kindOf(c), pin: null }),
     },
     {
       row: '3 no overlay, no committed entry',
       when: (c) => !overlay(c) && c.committed === 'none',
-      view: () => ({ listed: false, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: null }),
+      view: () => ({ listed: false, opens: 'none', badge: null, withheld: null, offersCommitted: false, committedKind: null, pin: null }),
     },
     {
       row: '4 overlay, modified/conflicted, file with fp',
       when: (c) => overlay(c) && has(c, (d) => (d.state === 'modified' || d.state === 'conflicted') && d.kind === 'file' && d.fp),
       view: (c) => ({
         listed: true, opens: 'draft', badge: c.draft?.state === 'conflicted' ? 'conflicted' : 'modified', withheld: null,
-        offersCommitted: fileSide(c), committedKind: kindOf(c),
+        offersCommitted: fileSide(c), committedKind: kindOf(c), pin: FP_PIN,
       }),
     },
     {
       row: '5 overlay, added/untracked, file with fp',
       when: (c) => overlay(c) && has(c, (d) => (d.state === 'added' || d.state === 'untracked') && d.kind === 'file' && d.fp),
-      view: (c) => ({ listed: true, opens: 'draft', badge: 'new', withheld: null, offersCommitted: fileSide(c), committedKind: kindOf(c) }),
+      view: (c) => ({
+        listed: true, opens: 'draft', badge: 'new', withheld: null, offersCommitted: fileSide(c), committedKind: kindOf(c), pin: FP_PIN,
+      }),
     },
     {
       row: '6 overlay, deleted',
       when: (c) => overlay(c) && has(c, (d) => d.state === 'deleted'),
       view: (c) => ({
         listed: c.committed !== 'none', opens: sideOpens(c), badge: 'deleted', withheld: null, offersCommitted: false,
-        committedKind: kindOf(c),
+        committedKind: kindOf(c), pin: sidePin(c),
       }),
     },
     {
@@ -972,7 +981,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       when: (c) => overlay(c) && has(c, (d) => d.state === 'typechange'),
       view: (c) => ({
         listed: c.committed !== 'none', opens: sideOpens(c), badge: 'typechange', withheld: null, offersCommitted: false,
-        committedKind: kindOf(c),
+        committedKind: kindOf(c), pin: sidePin(c),
       }),
     },
     {
@@ -991,7 +1000,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       view: (c) => withheldRow(c, 'not-a-file'),
     },
   ];
-  const VIEW_KEYS = ['listed', 'opens', 'badge', 'withheld', 'offersCommitted', 'committedKind'] as const;
+  const VIEW_KEYS = ['listed', 'opens', 'badge', 'withheld', 'offersCommitted', 'committedKind', 'pin'] as const;
 
   describe('the entryView matrix against the spec 4.6 oracle (row 53, L0 half)', () => {
     it('generates the whole matrix: 109 drafts x 8 drafts facts x 2 modes x 5 committed sides', () => {
@@ -1021,7 +1030,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
         if (row === undefined) { wrong.push(`${label(c)}: no oracle row`); continue; }
         const want = row.view(c);
         const got = docsH.entryView(entryOf(c), factsOf(c), c.mode);
-        const fields = VIEW_KEYS.filter((k) => got[k] !== want[k]);
+        const fields = VIEW_KEYS.filter((k) => JSON.stringify(got[k]) !== JSON.stringify(want[k]));
         const keys = Object.keys(got).sort().join(',');
         if (fields.length > 0 || keys !== [...VIEW_KEYS].sort().join(',')) {
           wrong.push(`${label(c)} [${row.row}]: got ${JSON.stringify(got)}, want ${JSON.stringify(want)}`);
@@ -1043,12 +1052,14 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     it('a deleted draft with kind absent and fp null is badge deleted, not withheld', () => {
       expect(docsH.entryView(at(FILE, d('deleted', 'absent', null)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'committed', badge: 'deleted', withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
     });
 
     it('a typechange to a symlink is badge typechange, not withheld; the committed bytes open', () => {
       expect(docsH.entryView(at(FILE, d('typechange', 'symlink', null)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'committed', badge: 'typechange', withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
     });
 
@@ -1058,6 +1069,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
       });
       expect(docsH.entryView(at(null, d('untracked', 'file', null)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'none', badge: 'withheld', withheld: 'too-large', offersCommitted: false, committedKind: null,
+        pin: null,
       });
     });
 
@@ -1077,6 +1089,7 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     it('the default view never overlays, even over a trusted holder at the served commit', () => {
       expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(true), 'default')).toEqual({
         listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
       expect(docsH.entryView(at(null, d('untracked', 'file', FP)), holder(true), 'default').listed).toBe(false);
     });
@@ -1084,12 +1097,14 @@ describe('docs section H: entryView, admitDraft and githubBlobUrl', () => {
     it('baseEqual false never overlays, even in a ref view', () => {
       expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(false), 'ref')).toEqual({
         listed: true, opens: 'committed', badge: null, withheld: null, offersCommitted: false, committedKind: 'file',
+        pin: { kind: 'blob', sha: 'b'.repeat(40) },
       });
     });
 
     it('a modified file with an fp opens the draft and offers the committed version; an exec does too', () => {
       expect(docsH.entryView(at(FILE, d('modified', 'file', FP)), holder(true), 'ref')).toEqual({
         listed: true, opens: 'draft', badge: 'modified', withheld: null, offersCommitted: true, committedKind: 'file',
+        pin: { kind: 'fp', sha: FP },
       });
       const exec: Entry['committed'] = { kind: 'exec', blob: 'b'.repeat(40), size: 10 };
       expect(docsH.entryView(at(exec, d('conflicted', 'file', FP)), holder(true), 'ref')).toMatchObject({
@@ -1721,5 +1736,45 @@ describe('X2 P1: the range ceilings, the stat pin and the range wire types', () 
       state: 'modified', kind: 'file', size: 5242880, fp: null, trust: 'status', mtimeNs: '1795125141216123456',
     };
     expect(JSON.parse(JSON.stringify({ prepared, frame, pins, draft }))).toEqual({ prepared, frame, pins, draft });
+  });
+
+  // X2 P1 Task P1.5 (spec 4.3, "The overlay cap"): a draft above the hash ceiling opens through its snapshot.
+  const MTIME = '1795125141216123456';
+  const HOLDER: docsR.DraftsFacts = {
+    state: 'holder', branch: 'ws/a', worktree: { path: '/srv/worktrees/demo-a', head: 'c'.repeat(40), class: 'workspace' },
+    baseEqual: true, base: null, caveats: [], opaque: [],
+  };
+  const bigDraft = (size: number, mtimeNs: string | undefined, state: 'modified' | 'untracked' = 'modified'): docsR.DocsEntry => ({
+    section: 'specs', path: '2026-01-01-big.md',
+    committed: state === 'untracked' ? null : { kind: 'file', blob: 'b'.repeat(40), size: 1000 },
+    draft: { state, kind: 'file', size, fp: null, trust: 'status', ...(mtimeNs === undefined ? {} : { mtimeNs }) },
+  });
+
+  it('entryView: a 5 MiB draft opens through its snapshot', () => {
+    expect(docsR.entryView(bigDraft(5242880, MTIME), HOLDER, 'ref')).toEqual({
+      listed: true, opens: 'draft', badge: 'modified', withheld: null, offersCommitted: true, committedKind: 'file',
+      pin: { kind: 'stat', size: 5242880, mtimeNs: MTIME },
+    });
+    expect(docsR.entryView(bigDraft(docsR.DOCS_RANGE_MAX_BYTES, MTIME, 'untracked'), HOLDER, 'ref')).toMatchObject({
+      opens: 'draft', badge: 'new', pin: { kind: 'stat', size: docsR.DOCS_RANGE_MAX_BYTES, mtimeNs: MTIME },
+    });
+  });
+
+  it('entryView: a 65 MiB draft stays withheld too-large', () => {
+    expect(docsR.entryView(bigDraft(docsR.DOCS_RANGE_MAX_BYTES + 1, MTIME), HOLDER, 'ref')).toEqual({
+      listed: true, opens: 'committed', badge: 'withheld', withheld: 'too-large', offersCommitted: false, committedKind: 'file',
+      pin: { kind: 'blob', sha: 'b'.repeat(40) },
+    });
+    expect(docsR.entryView(bigDraft(68157440, MTIME, 'untracked'), HOLDER, 'ref')).toMatchObject({ opens: 'none', withheld: 'too-large', pin: null });
+  });
+
+  it('entryView: a draft without mtimeNs stays withheld (an older ccd)', () => {
+    for (const m of [undefined, '', '-1', 'x']) {
+      expect(docsR.entryView(bigDraft(5242880, m), HOLDER, 'ref'), String(m)).toMatchObject({ badge: 'withheld', withheld: 'too-large' });
+    }
+  });
+
+  it('entryView: the default view never opens a stat-pinned draft', () => {
+    expect(docsR.entryView(bigDraft(5242880, MTIME), HOLDER, 'default')).toMatchObject({ opens: 'committed', badge: null, pin: { kind: 'blob' } });
   });
 });

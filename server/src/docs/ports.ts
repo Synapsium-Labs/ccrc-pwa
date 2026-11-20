@@ -12,7 +12,7 @@
 // The failure arm is the whole `DocsFailureBody`, not a narrower per-operation union (refinement (d)): ccd's per-verb
 // word set is not a checked contract, so a narrower static type would claim what the adapter cannot measure.
 import type {
-  DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRangeFrameOk, DocsRangePreparedOk,
+  DocFilePin, DocPin, DocsFailureBody, DocsFetchOk, DocsIndexOk, DocsLogAsk, DocsLogOk, DocsRangeFrameOk, DocsRangePreparedOk,
   DocsRefSpec, DocsShowOk, DocsTreeOk,
 } from '../../../shared/docs.js';
 import type { DocsJob, DocsRangeFrameAsk, DocsRangeTarget } from './policy.js';
@@ -75,7 +75,7 @@ export interface DocsReader {
    *  origin-default chain), sent as no `--ref` at all. */
   tree(src: DocsSourceId, ref: DocsRefSpec | null): Promise<DocsTreeRead>;
   /** One file at a pin from a tree answer: a committed pin, or a draft pin; `ask` carries the server's facts. */
-  show(src: DocsSourceId, pin: DocPin, ask: DocsShowAsk): Promise<DocsShowRead>;
+  show(src: DocsSourceId, pin: DocFilePin, ask: DocsShowAsk): Promise<DocsShowRead>;
   /** One doc's history from `ask.commit` back (rich-docs spec G4); `ask` is what L1's history parser admitted. */
   log(src: DocsSourceId, ask: DocsLogAsk): Promise<DocsLogRead>;
   /** One file in frames (X2 spec 4.3), for a file above what `show` carries. */

@@ -1,6 +1,6 @@
 // The native Docs reader's HTTP routes (design 2026-10-01, section 3.4, section 3.6, section 6.3-6.5; W3 refinements
 // (c), (i), (j), (k) and (l)): L4. `composeDocs` builds one node's reader, fetcher, lanes and caches, once per call
-// (never at module scope); `registerDocsReadRoutes` registers the four reads on the docs plugin's own instance, and
+// (never at module scope); `registerDocsReadRoutes` registers the five reads on the docs plugin's own instance, and
 // Task 7's `registerDocsRefreshRoute` the refresh. The read registration never receives a fetcher (section 2 (g)'s
 // wall 1): its signature takes readers and lanes only. The history read has no cache of its own (rich-docs spec G4):
 // it joins a single flight and books the read lane on every request.

@@ -26,6 +26,17 @@ export function partText(text: string, p: MdPart): string {
   return (p.reopen ?? '') + text.slice(p.start, p.end) + (p.close ?? '');
 }
 
+/** Which part a fragment opens (spec 4.3): the first part whose heading ids hold it, as the whole document would name
+ *  the first. `ids[k]` is part k's ids from the pre-pass render, or `null` when the budget refused that part (its ids
+ *  stay unknown). A fragment no known part holds opens part 0; `note` says whether a part with unknown ids might hold it,
+ *  so the page can say why it opened the first part. */
+export function partForFragment(ids: readonly (ReadonlySet<string> | null)[], fragment: string): { part: number; note: boolean } {
+  for (let k = 0; k < ids.length; k += 1) {
+    if (ids[k]?.has(fragment) === true) return { part: k, note: false };
+  }
+  return { part: 0, note: ids.some((s) => s === null) };
+}
+
 const HEADING_RE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
 const BLANK_RE = /^[ \t]*$/;
 const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;

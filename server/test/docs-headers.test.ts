@@ -821,7 +821,7 @@ async function listeningRecording(auth: boolean):
 /** Nothing of the docs machinery was touched: the node's read and fetch lanes idle, no flight, and every cache empty. */
 function expectDocsUntouched(docs: DocsComposition, label: string): void {
   const at = nodeLanes(docs);
-  expect(at.read.load(), `${label}: read lane`).toStrictEqual({ execs: 0, bytes: 0, large: 0, queued: 0 });
+  expect(at.read.load(), `${label}: read lane`).toStrictEqual({ execs: 0, bytes: 0, large: 0, prepares: 0, queued: 0 });
   expect(at.fetch.load(), `${label}: fetch lane`).toStrictEqual({ running: 0, queued: 0 });
   expect(at.flights.size(), `${label}: flights`).toBe(0);
   expect(at.caches.blobs.size(), `${label}: blob cache entries`).toBe(0);

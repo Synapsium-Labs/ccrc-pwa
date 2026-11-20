@@ -8,7 +8,17 @@
 import { useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
-import { contentClass, docsApi, entryView, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk } from '../../../shared/docs';
+import {
+  DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
+  type DocsTreeOk,
+} from '../../../shared/docs';
+import { utf8Bytes } from '../../../shared/utf8';
+import { api } from '../lib/api';
+import { DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
+import { MarkdownParts } from './range/MarkdownParts';
+import { RangeImage, RangeLeaf, type RangeBytes } from './range/RangeLeaf';
+import { rangePinOf } from './range/rangePolicy';
+import type { RangeLoader } from './range/readRange';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
 import { useDocsHighlightStore } from '../lib/highlighterContext';
@@ -243,12 +253,75 @@ function MarkdownBody(p: {
   if (p.reader === null) {
     return <DocMarkdown key={p.bodyKey} text={src.text} pinKey={p.bodyKey} parser={p.parser} link={p.link} />;
   }
+  // X2 P1 (spec 4.3, the render-gate carry): above the render gate the text is read in parts no larger than the gate,
+  // each its own rich mount; the reader frame itself is unchanged (it meets no part above its gate).
+  if (utf8Bytes(src.text) > DOCS_RENDER_GATE_BYTES) {
+    const reader = p.reader;
+    return (
+      <MarkdownParts
+        key={p.bodyKey} text={src.text} pre={reader.render} fragment={p.pendingFragment}
+        renderPart={(part) => {
+          const show: DocsShowOk = { ...p.show, encoding: 'utf8', text: part.text, size: utf8Bytes(part.text) };
+          const key = p.bodyKey + '\u0000part:' + String(part.index);
+          return (
+            <ReaderFrame
+              key={key + '\u0000' + (p.only ?? '')} show={show} bodyKey={key} link={p.link} parser={p.parser}
+              reader={reader} opened={{ pin: p.pin, page: p.page, only: p.only }}
+              pendingFragment={part.fragment} onFragmentConsumed={p.onFragmentConsumed}
+            />
+          );
+        }}
+      />
+    );
+  }
   return (
     <ReaderFrame
       // A new day filter on the same URL is a new body, which seeds it (M8.22); `bodyKey` itself is the bytes' identity.
       key={p.bodyKey + '\u0000' + (p.only ?? '')} show={p.show} bodyKey={p.bodyKey} link={p.link} parser={p.parser}
       reader={p.reader} opened={{ pin: p.pin, page: p.page, only: p.only }}
       pendingFragment={p.pendingFragment} onFragmentConsumed={p.onFragmentConsumed}
+    />
+  );
+}
+
+/** The opened pin of bytes read by range (spec 4.3, "Where the time comes from, and where the pin lives"): a draft the
+ *  listing could not fingerprint takes the snapshot's digest as its `fp`, the sha256 of the bytes the page shows, and
+ *  keeps its stat, so `samePin` holds it equal to the listing's pin and every reader of `fp` reads the bytes' digest. */
+export function openedRangePin(pin: DocPin, digest: string): DocPin {
+  return pin.kind === 'draft' && pin.fp === null ? { ...pin, fp: digest, stat: pin.stat } : pin;
+}
+
+/** A Markdown leaf read by range (spec 4.3): its bytes as a docs-show answer of their own (text, size and digest), under
+ *  the opened pin, through the same Markdown body, which shows it in parts. */
+function RangeMarkdown(p: {
+  readonly read: RangeBytes; readonly entry: DocsEntry; readonly pin: DocPin; readonly page: Leaf; readonly link: LinkBase;
+  readonly parser: MarkdownParser; readonly reader: ReaderDeps | null; readonly only: string | null;
+  readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
+}): ReactNode {
+  const opened = useMemo(() => openedRangePin(p.pin, p.read.digest), [p.pin, p.read.digest]);
+  const show = useMemo<DocsShowOk>(() => {
+    let text: string | null = null;
+    try {
+      text = new TextDecoder('utf-8', { fatal: true }).decode(p.read.bytes);
+    } catch {
+      text = null;
+    }
+    const base = {
+      v: 1 as const, verb: 'docs-show' as const, ok: true as const, elapsedMs: 0, section: p.entry.section, path: p.entry.path,
+      size: p.read.bytes.length, sha256: p.read.digest,
+    };
+    const body = text === null
+      ? { encoding: 'base64' as const, b64: '' }
+      : { encoding: 'utf8' as const, text };
+    return opened.kind === 'draft'
+      ? { ...base, ...body, source: 'draft', branch: opened.branch, head: opened.head, fp: p.read.digest }
+      : { ...base, ...body, source: 'committed', commit: opened.commit, blob: p.entry.committed?.blob, onRef: 'unmeasured' };
+  }, [p.read, p.entry, opened]);
+  const bodyKey = ['range', p.page.project, p.entry.section, p.entry.path, p.read.digest].join('\u0000');
+  return (
+    <MarkdownBody
+      show={show} bodyKey={bodyKey} link={p.link} parser={p.parser} pin={opened} page={p.page} only={p.only}
+      reader={p.reader} pendingFragment={p.pendingFragment} onFragmentConsumed={p.onFragmentConsumed}
     />
   );
 }
@@ -262,9 +335,13 @@ export function DocsLeaf(p: {
   /** Where the leaf's own raster image reports the pin it settled at (Share waits for it, spec 4.16); absent or `null`,
    *  nothing listens. */
   readonly onLeafImage?: ((pin: DocPin | null) => void) | null;
+  /** The range read's loader (X2 P1); absent, `api.docs.range`. */
+  readonly rangeLoader?: RangeLoader;
 }): ReactNode {
   const { visit, tree, page, parser } = p;
   const reader = p.reader ?? null;
+  const assets = useContext(DocsAssetContext);
+  const rangeLoader = p.rangeLoader ?? assets?.loaders.range ?? api.docs.range;
   // The day filter of the history entry the page stands on (never in the URL): it follows back and forward.
   const only = useReaderOnly();
   const root = useRef<HTMLDivElement | null>(null);
@@ -293,12 +370,40 @@ export function DocsLeaf(p: {
   } else {
     const download = <DownloadButton project={page.project} pin={pin} name={name} />;
     const file = visit.file;
-    if (cls === 'raster') {
+    const listedSize = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
+    const rasterByRange = cls === 'raster'
+      && ((pin.kind === 'draft' && pin.fp === null) || (typeof listedSize === 'number' && listedSize > DOCS_MAX_IMAGE_BYTES));
+    if (cls === 'raster' && rasterByRange) {
+      // X2 P1 (spec 4.3): an image above its class cap, or a draft image with no fingerprint, is shown on its own page
+      // from bytes read by range, after its header's dimensions pass the image-view ceilings.
+      const range = rangePinOf(pin, entry);
+      body = range === null || typeof listedSize !== 'number'
+        ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
+        : (
+          <RangeLeaf target={{ project: page.project, pin, range, size: listedSize }} cls={cls} name={name} loader={rangeLoader}>
+            {(read) => <RangeImage bytes={read.bytes} path={page.path} name={name} />}
+          </RangeLeaf>
+        );
+    } else if (cls === 'raster') {
       body = <><RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} /><div className="docs-leaf-actions">{download}</div></>;
-    } else if (file.s === 'too-large') {
-      const sentence = <DocsFailureView answer={{ s: 'failed', body: { ok: false, failure: 'too-large', size: file.size, cap: file.cap } }} />;
-      // An HTML mockup over its class cap is download-only (base 5.6.2): its sentence, and the bytes through Download.
-      body = cls === 'html' ? <>{sentence}<div className="docs-leaf-actions">{download}</div></> : sentence;
+    } else if (file.s === 'too-large' || file.s === 'stat-pinned') {
+      // X2 P1 (spec 4.3): above the class cap, or a draft with no fingerprint, the file is read by range up to the range
+      // ceiling: Markdown is shown in parts; every other class is offered as a Download read the same way.
+      const range = rangePinOf(file.pin, entry);
+      body = range === null
+        ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
+        : (
+          <RangeLeaf target={{ project: page.project, pin: file.pin, range, size: file.size }} cls={cls} name={name} loader={rangeLoader}>
+            {cls === 'markdown'
+              ? (read) => (
+                <RangeMarkdown
+                  read={read} entry={entry} pin={file.pin} page={page} link={link} parser={parser} reader={reader} only={only}
+                  pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
+                />
+              )
+              : undefined}
+          </RangeLeaf>
+        );
     } else if (cls === 'other') {
       const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
       body = (

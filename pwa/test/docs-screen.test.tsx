@@ -24,6 +24,7 @@ import { DOCS_FAILURE_SENTENCE, DOCS_HEAD_TEXT, DOCS_PAGE_INVALID_SENTENCE, EXPO
 import { clearAuthLost, raiseAuthLost } from '../src/lib/auth';
 import { DOCS_RENDER_GATE_BYTES, HIGHLIGHT_PAGE_WORKER_MS } from '../src/lib/markdownLimits';
 import type { DocsFileAnswer, DocsLoaders, DocsRasterAnswer } from '../src/docs/failures';
+import type { RangeLoader } from '../src/docs/range/readRange';
 import { parseMarkdown, type ParseOutcome } from '../src/lib/markdownParse';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import type { Highlighter } from '../src/lib/highlightProtocol';
@@ -63,6 +64,17 @@ const pngBytes = (): Uint8Array<ArrayBuffer> => new Uint8Array([...DOCS_RASTER_T
 const okPng = (): DocsRasterAnswer => ({ s: 'ok', value: { bytes: pngBytes(), mime: 'image/png' } });
 
 /** Loaders whose `file` answers by path (an unknown path answers `absent-path`). */
+/** X2 P1: `f` with a range loader whose prepare never answers, so a leaf read by range stays at "Reading…"; `calls`
+ *  names each prepare's path. */
+function withHeldRange(f: FakeLoaders): FakeLoaders & { readonly rangeCalls: string[] } {
+  const rangeCalls: string[] = [];
+  const range: RangeLoader = {
+    prepare: (target) => { rangeCalls.push(target.pin.path); return new Promise(() => undefined); },
+    frame: () => new Promise(() => undefined),
+  };
+  return { ...f, loaders: { ...f.loaders, range }, rangeCalls };
+}
+
 function byPath(tree: DocsTreeOk, files: Readonly<Record<string, DocsFileAnswer>>): FakeLoaders {
   const f = fakeLoaders({ tree: okTree(tree) });
   f.file.mockImplementation(async (_project: string, pin: DocPin) => files[pin.path] ?? failedAnswer('absent-path'));
@@ -700,17 +712,18 @@ describe('the leaf by content class (M5.3, leaf-routing half)', () => {
     expect(blob.type).toBe('application/octet-stream');
   });
 
-  it('a listed size over DOCS_CLASS_CAP is the too-large sentence with zero file requests (spec 4.4, 6.1)', async () => {
+  it('a listed size over DOCS_CLASS_CAP is read by range, with zero file requests (spec 4.4, 6.1; X2 P1, spec 4.3)', async () => {
     const big = DOCS_CLASS_CAP.markdown + 1;
-    const f = byPath(treeOk({ entries: [
+    const f = withHeldRange(byPath(treeOk({ entries: [
       entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: big } }),
       entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } }),
-    ] }), {});
+    ] }), {}));
     open('/docs/demo/specs/a.md', f);
-    expect(await screen.findByText('This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB.')).toBeInTheDocument();
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(f.file).not.toHaveBeenCalled();
     act(() => { navigate('/docs/demo/specs/p.png'); });
-    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    await waitFor(() => expect(f.rangeCalls).toEqual(['a.md', 'p.png']));
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(f.raster).not.toHaveBeenCalled();
   });
 
@@ -1908,15 +1921,15 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     expect(document.querySelector('.docs-export')).toBeNull();
     cleanup();
     const big = treeOk({ entries: [entry('specs', 'a.md', { committed: { kind: 'file', blob: '1'.repeat(40), size: DOCS_CLASS_CAP.markdown + 1 } })] });
-    open('/docs/demo/specs/a.md', byPath(big, {}));
-    expect(await screen.findByText(/^This file is 2049 KiB; Docs shows files of this kind up to 2048 KiB/)).toBeInTheDocument();
+    open('/docs/demo/specs/a.md', withHeldRange(byPath(big, {})));
+    expect(await screen.findByText(/^Reading 0 MiB of 2\.1 MiB/)).toBeInTheDocument();
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 
   it('a raster listed over its cap offers no Export', async () => {
     const tree = treeOk({ entries: [entry('specs', 'p.png', { committed: { kind: 'file', blob: '2'.repeat(40), size: DOCS_CLASS_CAP.raster + 1 } })] });
-    open('/docs/demo/specs/p.png', byPath(tree, {}));
-    expect(await screen.findByText('Image not loaded: it is 2049 KiB; Docs shows images up to 2048 KiB')).toBeInTheDocument();
+    open('/docs/demo/specs/p.png', withHeldRange(byPath(tree, {})));
+    expect(await screen.findByText('Reading 0 MiB of 2.1 MiB…')).toBeInTheDocument();
     expect(document.querySelector('.docs-export')).toBeNull();
   });
 });

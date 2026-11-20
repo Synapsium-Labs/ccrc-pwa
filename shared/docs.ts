@@ -1067,6 +1067,10 @@ export interface EntryView {
   withheld: WithheldReason | null;
   offersCommitted: boolean;
   committedKind: 'file' | 'exec' | 'symlink' | 'submodule' | null;
+  /** X2 P1 (spec 4.3, "Where the time comes from, and where the pin lives"): what a range read of the bytes `opens`
+   *  names is pinned to: the committed blob, the draft's fingerprint, or, for a draft the listing could not fingerprint,
+   *  its stat pin; `null` iff `opens` is `'none'`. */
+  pin: DocsRangePin | null;
 }
 
 /** Whether `e`'s draft may overlay at all: exactly one trusted holder whose HEAD is the served commit
@@ -1086,7 +1090,8 @@ export function admitDraft(e: DocsEntry, d: DraftsFacts): boolean {
  *   2. `typechange`: badge typechange. The draft is never read. This comes before the withheld rule, so a type
  *      change to a symlink is a typechange, not "not a file".
  *   3. a regular file with an `fp`: the draft opens. Badge `new` for added or untracked, else the state itself
- *      (modified, conflicted).
+ *      (modified, conflicted). X2 P1: so does a regular file with `fp: null` whose size is at most
+ *      `DOCS_RANGE_MAX_BYTES` and whose `mtimeNs` `statPin` reads, through its stat pin (read by range, spec 4.3).
  *   4. withheld: a file with `fp: null` is too-large, `kind: 'unreadable'` is unreadable, and every other kind is
  *      not-a-file. Listed iff it is committed or new (added, untracked).
  *  In 1, 2 and 4 the committed side opens: a committed file or exec opens committed, and a committed symlink, a
@@ -1095,9 +1100,14 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
   const committedKind = e.committed === null ? null : e.committed.kind;
   const committedIsFile = committedKind === 'file' || committedKind === 'exec';
   const committedSide: EntryView['opens'] = committedIsFile ? 'committed' : 'none';
+  const committedPin: DocsRangePin | null =
+    committedIsFile && e.committed !== null ? { kind: 'blob', sha: e.committed.blob } : null;
   const view = (listed: boolean, opens: EntryView['opens'], badge: EntryBadge | null,
-    withheld: WithheldReason | null): EntryView =>
-    ({ listed, opens, badge, withheld, offersCommitted: opens === 'draft' && committedIsFile, committedKind });
+    withheld: WithheldReason | null, draftPin: DocsRangePin | null = null): EntryView =>
+    ({
+      listed, opens, badge, withheld, offersCommitted: opens === 'draft' && committedIsFile, committedKind,
+      pin: opens === 'committed' ? committedPin : opens === 'draft' ? draftPin : null,
+    });
   const draft = e.draft;
   if (mode !== 'ref' || draft === null || !admitDraft(e, d)) {
     return view(committedKind !== null, committedSide, null, null);
@@ -1106,8 +1116,16 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
     return view(committedKind !== null, committedSide, draft.state, null);
   }
   const isNew = draft.state === 'added' || draft.state === 'untracked';
+  const badge: EntryBadge = isNew ? 'new' : draft.state === 'conflicted' ? 'conflicted' : 'modified';
   if (draft.kind === 'file' && draft.fp !== null) {
-    return view(true, 'draft', isNew ? 'new' : draft.state === 'conflicted' ? 'conflicted' : 'modified', null);
+    return view(true, 'draft', badge, null, { kind: 'fp', sha: draft.fp });
+  }
+  // X2 P1 (spec 4.3, "The overlay cap"): a regular file the listing could not fingerprint (above the hash ceiling, or
+  // past the listing's hash budget) opens through its snapshot, pinned by its size and modified time, up to the range
+  // ceiling. Without a readable `mtimeNs` (an older ccd) or above the ceiling it stays withheld `too-large`.
+  if (draft.kind === 'file' && draft.size !== null && draft.size <= DOCS_RANGE_MAX_BYTES) {
+    const stat = statPin(draft.size, draft.mtimeNs);
+    if (stat !== null) return view(true, 'draft', badge, null, stat);
   }
   const withheld: WithheldReason =
     draft.kind === 'file' ? 'too-large' : draft.kind === 'unreadable' ? 'unreadable' : 'not-a-file';
@@ -1462,7 +1480,21 @@ export function docsPageUrl(loc: DocsPageLocation): string {
  *  draft pin is the draft branch, the holder's HEAD and the draft's fingerprint. Neither is ever a page URL. */
 export type DocPin =
   | { kind: 'committed'; commit: string; servedRef: string; section: DocSectionSlug; path: string }
-  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string };
+  | DocDraftPin;
+
+/** A draft page's pin (X2 P1, spec 4.3). Its bytes are named by `fp`, the sha256 of what the page shows. A draft the
+ *  listing could not fingerprint is read by range: until its prepare answers, its pin carries `fp: null` and the
+ *  listing's `stat`, and the opened pin then carries the snapshot's digest as `fp` and the same `stat`. `samePin` holds
+ *  the two equal; every reader of `fp` as bytes reads an opened pin. */
+/** The pin the file route reads (`docs-show`): a committed pin, or a draft pin with its fingerprint. A stat-pinned draft
+ *  is never one: it is read by range alone. */
+export type DocFilePin = Exclude<DocPin, { fp: null }>;
+
+export type DocDraftPin =
+  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string;
+    stat?: { size: number; mtimeNs: string } }
+  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: null;
+    stat: { size: number; mtimeNs: string } };
 
 /** `/api/docs/<project>`: the project segment through encodeURIComponent. */
 function apiProjectPath(project: string): string {
@@ -1490,10 +1522,13 @@ export const docsApi = {
   projects: (): string => DOCS_API_PREFIX + '/projects',
   tree: (project: string, ref: DocsRefSpec | null): string =>
     apiProjectPath(project) + '/tree' + (ref === null ? '' : apiQuery([['ref', docsRefText(ref)]])),
+  // A stat-pinned draft before its prepare (`fp: null`, X2 P1) is named by its stat in place of `fp`, so the URL stays a
+  // distinct key; the file route knows no `stat` key and refuses it, since such a draft is read by range only.
   file: (project: string, pin: DocPin): string =>
     apiProjectPath(project) + '/file' + apiQuery(pin.kind === 'committed'
       ? [['commit', pin.commit], ['servedRef', pin.servedRef], ['section', pin.section], ['path', pin.path]]
-      : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path], ['fp', pin.fp]]),
+      : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path],
+        pin.fp === null ? ['stat', String(pin.stat.size) + ':' + pin.stat.mtimeNs] : ['fp', pin.fp]]),
   refresh: (project: string): string => apiProjectPath(project) + '/refresh',
   /** One doc's history (rich-docs spec G4): commit, section, path, in ccd's argv order. */
   history: (project: string, ask: DocsLogAsk): string => apiProjectPath(project) + '/history'

@@ -6,7 +6,11 @@
 import { describe, expect, it } from 'vitest';
 import { utf8Bytes } from '../../shared/utf8';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
-import { partText, splitMarkdownParts, type MdPart } from '../src/docs/range/mdParts';
+import { partForFragment, partText, splitMarkdownParts, type MdPart } from '../src/docs/range/mdParts';
+import { fileKey, pinFor, samePin } from '../src/docs/useDocsVisit';
+import { pageOpensDraft } from '../src/docs/docsLinks';
+import type { DocPin } from '../../shared/docs';
+import { draftOf, entry, holder, pageAt, treeOk } from './docsFixtures';
 
 const GATE = DOCS_RENDER_GATE_BYTES;
 
@@ -169,5 +173,69 @@ describe('splitMarkdownParts', () => {
       expect(code >= 0xdc00 && code <= 0xdfff, 'a part never starts on a low surrogate').toBe(false);
     }
     expect(utf8Bytes(partText(t, parts[0]!))).toBe(GATE);
+  });
+});
+
+describe('partForFragment', () => {
+  const ids = (...xs: string[]): Set<string> => new Set(xs);
+  it('md parts: a link into part 3 opens part 3', () => {
+    expect(partForFragment([ids('a'), ids('b'), ids('c', 'd')], 'd')).toEqual({ part: 2, note: false });
+  });
+  it('a fragment held by two parts opens the first, as the whole document names it', () => {
+    expect(partForFragment([ids('x'), ids('dup'), ids('dup')], 'dup')).toEqual({ part: 1, note: false });
+  });
+  it('md parts: a part the budget refuses keeps its ids unknown and opens part 1 with a note', () => {
+    expect(partForFragment([ids('a'), null, ids('c')], 'gone')).toEqual({ part: 0, note: true });
+    expect(partForFragment([ids('a'), null, ids('c')], 'c'), 'a known part still opens').toEqual({ part: 2, note: false });
+  });
+  it('a fragment no part holds, every part known, opens part 1 with no note', () => {
+    expect(partForFragment([ids('a'), ids('b')], 'zzz')).toEqual({ part: 0, note: false });
+  });
+});
+
+// ---- The page pin of a stat-pinned draft (spec 4.3; the carry from X2's review: pinFor must not throw) -------------
+
+describe('the page pin of a draft read through its snapshot', () => {
+  const MTIME = '1795125141216123456';
+  const bigDraft = treeOk({
+    entries: [entry('specs', 'big.md', { draft: draftOf('modified', { size: 5242880, fp: null, mtimeNs: MTIME }) })],
+    drafts: holder(),
+  });
+  const page = pageAt('/docs/demo/specs/big.md?ref=main');
+  if (page.kind !== 'path') throw new Error('fixture: not a leaf');
+
+  it('pinFor: a stat-pinned draft between the listing and the prepare does not throw', () => {
+    expect(pinFor(bigDraft, page)).toEqual({
+      kind: 'draft', branch: 'main', head: 'a'.repeat(40), section: 'specs', path: 'big.md', fp: null,
+      stat: { size: 5242880, mtimeNs: MTIME },
+    });
+  });
+
+  it('pinFor: an older ccd\'s draft with no mtimeNs opens nothing (withheld), and still does not throw', () => {
+    const old = treeOk({ entries: [entry('specs', 'big.md', { draft: draftOf('modified', { size: 5242880, fp: null }) })], drafts: holder() });
+    // The committed side opens instead: the draft stays withheld too-large, as before.
+    expect(pinFor(old, page)).toMatchObject({ kind: 'committed' });
+  });
+
+  it('samePin: a stat-pinned listing pin equals the opened pin with the same stat and any digest', () => {
+    const listed = pinFor(bigDraft, page)!;
+    if (listed.kind !== 'draft') throw new Error('not a draft pin');
+    const opened: DocPin = { ...listed, fp: 'd'.repeat(64), stat: { size: 5242880, mtimeNs: MTIME } };
+    expect(samePin(listed, opened)).toBe(true);
+    expect(samePin(opened, listed)).toBe(true);
+    expect(samePin(listed, { ...opened, stat: { size: 5242880, mtimeNs: '1' } }), 'another time').toBe(false);
+    expect(samePin(listed, { ...opened, head: 'b'.repeat(40) }), 'another head').toBe(false);
+    const fpOnly: DocPin = { kind: 'draft', branch: 'main', head: 'a'.repeat(40), section: 'specs', path: 'big.md', fp: 'd'.repeat(64) };
+    expect(samePin(listed, fpOnly), 'a pin with no stat is never the stat-pinned one').toBe(false);
+    expect(samePin(opened, fpOnly), 'two digests compare by the digest').toBe(true);
+  });
+
+  it('fileKey: a stat-pinned draft is keyed by its stat, never as a fingerprint', () => {
+    const listed = pinFor(bigDraft, page)!;
+    expect(fileKey(listed, bigDraft, false)).toContain('stat:5242880:' + MTIME);
+  });
+
+  it('docsLinks: a stat-pinned draft page is a draft page', () => {
+    expect(pageOpensDraft(bigDraft, page)).toBe(true);
   });
 });

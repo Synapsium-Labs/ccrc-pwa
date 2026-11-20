@@ -234,7 +234,7 @@ export function passThroughLane(): DocsReadLane {
     async run<T>(_job: DocsJob, _signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
       return { kind: 'ran', value: await exec() };
     },
-    load: () => ({ execs: 0, bytes: 0, large: 0, queued: 0 }),
+    load: () => ({ execs: 0, bytes: 0, large: 0, prepares: 0, queued: 0 }),
     close: () => undefined,
   };
 }

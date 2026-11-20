@@ -32,7 +32,7 @@ import { rasterObjectUrl, showBytes } from './objectUrls';
  *  uncommitted asset{s}"). The provider keeps `loaders`, `queue` and `onDraftAsset` stable across renders: a new
  *  `loaders` or `queue` loads every image again. */
 export interface DocsAssetContextValue {
-  readonly loaders: Pick<DocsLoaders, 'file' | 'raster'>;
+  readonly loaders: Pick<DocsLoaders, 'file' | 'raster' | 'range'>;
   readonly queue: FetchQueue;
   readonly onDraftAsset: (count: number) => void;
   /** Export's registry of the bytes this page's images hold (spec 4.3 item 6; refinement (g)); absent or `null`: nothing

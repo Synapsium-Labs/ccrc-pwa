@@ -620,9 +620,9 @@ describe('the read-lane constants (refinement (l), section 6.3)', () => {
   });
 });
 
-describe("laneAdmit (M6.1): section 6.3's four clauses, in order", () => {
-  const load = (execs: number, bytes: number, large: number): LaneLoad => ({ execs, bytes, large });
-  const job = (raw: number, wire: number): DocsJob => ({ raw, wire });
+describe("laneAdmit (M6.1): section 6.3's five clauses, in order", () => {
+  const load = (execs: number, bytes: number, large: number, prepares = 0): LaneLoad => ({ execs, bytes, large, prepares });
+  const job = (raw: number, wire: number, prepare?: true): DocsJob => (prepare === undefined ? { raw, wire } : { raw, wire, prepare });
 
   it.each([
     ['an idle lane admits one job over the byte budget and over the large threshold', load(0, 0, 0),
@@ -635,6 +635,10 @@ describe("laneAdmit (M6.1): section 6.3's four clauses, in order", () => {
     ['a second answer over 1 MiB refuses', load(1, 0, 1), job(1048577, 1463640), false],
     ['an answer of exactly 1 MiB beside a large one admits (over, not at)', load(1, 0, 1), job(1048576, 1463640), true],
     ['a large answer with no large one running admits', load(1, 0, 0), job(1048577, 1463640), true],
+    ['a second range prepare refuses, though an exec is free', load(1, 65536, 0, 1), job(0, 65536, true), false],
+    ['a prepare beside an ordinary job admits', load(1, 65540, 0, 0), job(0, 65536, true), true],
+    ['an ordinary job beside a running prepare admits', load(1, 65536, 0, 1), job(1, 65540), true],
+    ['an idle lane admits a prepare (clause 1 comes first)', load(0, 0, 0, 0), job(0, 65536, true), true],
   ] as const)('%s', (_what, l, j, want) => {
     expect(laneAdmit(l, j)).toBe(want);
   });
@@ -2086,7 +2090,7 @@ describe('X2 P1.3: the range plan, query and gate', () => {
   });
 
   it('the jobs: a prepare carries no content, a frame its own length framed as base64', () => {
-    expect(RANGE_PREPARE_JOB).toStrictEqual({ raw: 0, wire: DOCS_ENVELOPE_RESERVE });
+    expect(RANGE_PREPARE_JOB).toStrictEqual({ raw: 0, wire: DOCS_ENVELOPE_RESERVE, prepare: true });
     expect(Object.isFrozen(RANGE_PREPARE_JOB)).toBe(true);
     expect(rangeFrameJob(DOCS_RANGE_FRAME_BYTES)).toStrictEqual({ raw: 524288, wire: showWire(524288) });
     expect(docsRangePlan({ target: committed(), frame: null })).toMatchObject({ job: RANGE_PREPARE_JOB });

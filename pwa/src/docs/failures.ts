@@ -16,6 +16,7 @@ import {
 } from '../../../shared/docs';
 // A type-only import, erased at build time: lib/api.ts imports this module, so a value import back would be a cycle.
 import type { ApiError } from '../lib/api';
+import type { RangeLoader } from './range/readRange';
 
 /** What a loader answers when the server did not answer a page or a docs word (spec 4.3, 4.7):
  *  - `auth`: a 401; `request` has already raised the login overlay when the body named a verdict.
@@ -67,6 +68,9 @@ export interface DocsLoaders {
   file(project: string, pin: DocPin, signal?: AbortSignal): Promise<DocsFileAnswer>;
   raster(project: string, pin: DocPin, signal?: AbortSignal): Promise<DocsRasterAnswer>;
   refresh(project: string, body: { ref: string | null; reason: 'auto' | 'manual' }): Promise<DocsRefreshLoaderAnswer>;
+  /** X2 P1: the range read of a file above its class cap or a draft with no fingerprint (spec 4.3); absent, the leaf
+   *  reads through `api.docs.range`. Optional, so no loader written before it changes. */
+  readonly range?: RangeLoader;
 }
 
 /** Whether `w` is a word this build knows. An unknown word is kept whole and rendered as unknown, never folded. */
