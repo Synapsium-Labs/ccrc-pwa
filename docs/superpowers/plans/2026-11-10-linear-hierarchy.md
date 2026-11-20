@@ -340,6 +340,47 @@ number from `POST /api/ledger/deviations`.
   Upkeep binding, or for a programme with no coordinator, now mails the home project's Linear owner, with no programme, in
   the same transaction as the settle; with no usable owner (none named, or gone) it is refused `no-linear-owner`. Record: the
   wave 4 follow-ups note.
+- **D-8795 (2026-11-20)** — migration-policy-interfaces: Task 7.1's deciders take the facts they cannot read, and stay pure.
+  `checkMap` takes a fourth argument, `ctx { home; teamOf(project); upkeepKeys }`: a map-declared epic with no project is the
+  home project's, a leaf whose epic's project is in another team is `plan-bad-body` (`leaf-other-team`), one whose epic's project
+  has no team key is `plan-bad-body` with its own detail (`leaf-no-team`), and an upkeep ticket key is checked against the
+  Upkeep epic's keys. A target that does not exist is `plan-bad-body` (`unknown-target`). `applySteps` takes a fourth argument,
+  `afterOf(entry)`, so the after-state comes from the sync's one builder (Task 7.3), never a copy; a null after waits. A move's
+  `after.expect` holds the issue's fields in a re-read's terms (state type, team key, ids, texts), and `reconcileMove` and
+  `putBackSteps` compare only the fields it lists, by key and type: a field the re-read cannot measure is never a match, and an
+  `expect` that lists none proves nothing. A milestone the migration created is put back by no write (Linear's milestone has no
+  status, D-8407): it stays in Linear under its canceled project, and `putBackSteps` lists it (`left`) for the report. An epic
+  the map declares must sit in a project of the map's own team (`epic-other-team`), so a team's Linear owner never creates
+  projects in another team (a security review of the wave's commits).
+  Record: `docs/superpowers/programs/linear-hierarchy/w7-migration.md` (the coordinator's ruling, mail of 2026-11-20).
+- **D-8796 (2026-11-20)** — migration-through-the-sync: every write the migration makes to an issue it adopts, and every object
+  its map's structure creates, goes through the plan sync's own passes (D-8179's one writer per Linear object). A leaf or upkeep
+  issue is re-read inside its key's flight; a changed one is skipped, listed and never adopted; otherwise ONE transaction adopts
+  it (`adoptIssueAsTicketInTx`: the ticket and a binding bound to the issue with the adopted fingerprint) and writes its move row,
+  whose `after.expect` is the sync's planned owned fields for that binding (`PlanSync#plannedOwnedNow`), and the key's pass sends
+  the one update. So adoption precedes the write but is atomic with the move row (Task 7.3 said "only after the write"), and its
+  second guard holds by construction: a listed issue has no binding until its move row exists. A crash leaves a row with no
+  `appliedAt` that `reconcileMove` settles on a later tick. The structure a map declares is inserted with its move rows
+  (`before` null, no Linear id) in one transaction (`declareMapStructure`), the key's pass creates and binds the objects, and the
+  rows take their Linear ids from the bindings. The issues it closes (a replaced level, finished, superseded, stale) are not
+  adopted, and it writes them itself through `runCcrcOp`, each move row before its write. The sync charges a step for an object a
+  migration still writes to lane `migration` and journals it with pass `migration` (`planStore.ts#migratingLocals`), and an
+  apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map never spends the sync's own share (§10.6). A
+  live programme's part, its adoptions included, waits for no run in `ACTIVE_RUN_STATES`. A migration reads `applied` only
+  when every move row is applied or its issue skipped and listed. An adopted issue a person changes before the sync's write is
+  put aside: its ticket dropped "put back", so the sync never writes over the change, and it is listed as skipped. The
+  project's Upkeep epic, shared with the inbound path, is no object of the migration's: it has no move row and put back leaves
+  it. Put back is asked by the report's act (`putBackAskedAt`) and run by the migration lane, a few issues a tick, its records
+  dropped "put back" with `putBackAt` before its writes; a programme whose initiative it created has its plan end recorded
+  `abandoned` "put back" and the initiative canceled in its key's flight (with every epic put back, the sync sends the
+  initiative nothing more). A done programme's initiative
+  reads what the sync derives from its plan (active while its placed tickets are open), not a forced Completed; the report says
+  so. Record: the wave 7 note (the coordinator's ruling, mail of 2026-11-20).
+- **D-8797 (2026-11-20)** — upkeep-link-with-key: the project row's Upkeep link shows whenever the project has a team key, and
+  the inbound count beside it only when issues wait, departing from Task 5.1's "the Upkeep link when inbound issues wait": the
+  Upkeep page is the only way into a project's Upkeep epic and its refused closes, which outlive the waiting count. Wave 5
+  built it so (review run 2491 A5); `project-linking-card.test.tsx` pins both halves. Record: the wave 7 note (the
+  coordinator's ruling, mail of 2026-11-20).
 
 ## Global Constraints
 
