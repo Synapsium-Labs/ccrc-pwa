@@ -10,7 +10,7 @@
 // WORD and no model id, in code or prose: the classes come from `CLASSES`, the family of an id from `familyClassOf`,
 // and every id from data.
 import { CLASSES, MODEL_ID_RE, familyClassOf } from './models.mjs';
-import { compareVersions, isoSeconds } from './model-advance.mjs';
+import { BEHIND_AFTER_MS, compareVersions, isoSeconds } from './model-advance.mjs';
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v.length > 0;
@@ -379,4 +379,41 @@ export function parseAliases(input) {
 /** The file's bytes: 2-space JSON and a trailing newline, the shape every hand-editable ccrc file has. */
 export function serializeAliases(a) {
   return `${JSON.stringify(a, null, 2)}\n`;
+}
+
+// ── A SESSION BEHIND ITS CLASS'S ALIAS (Task A2.5) ──────────────────────────────────────────────────────────────────
+
+/** `(session, cls, adv, lane, nowMs) => AliasBehind | null`: whether ONE running session of an Anthropic lane is still on
+ *  a model its class has left (the Anthropic arm of `sessionBehind`, `shared/model-advance.mjs`, which needs a registry
+ *  this lane has none of). Pure: it reads no file and no clock. `session.cls` is the class word of the session's routing
+ *  record (the class ccd composed and served); `cls` is that class's row of the aliases file, `adv` its advance entry and
+ *  `lane` the whole aliases file. Behind means ALL of:
+ *   1. the session has a class (`session.cls` a class, and `cls` its row);
+ *   2. the class's expected id: the hold's `model` while a hold stands, whatever `unobserved` says; else the aliases `id`,
+ *      none when `id` is null or `unlaunchable` is set;
+ *   3. the session's model, through `bareModelId`, is not that id;
+ *   4. that model belongs to the session's own class (`familyClassOf`) and is no other class's current or held id: a
+ *      session whose operator picked another class by hand is not behind;
+ *   5. with a turn marker (`turnAtMs`), the render came strictly after the turn began; with none, the turn is the render;
+ *   6. the move, `movedAt` (the hold's `at` while held, else the later of the class's `idSince` and its `releasedAt`), is
+ *      at least `BEHIND_AFTER_MS` before `nowMs`, and the turn began strictly after it.
+ *  Every time test is written as a comparison that HOLDS for evidence, negated, so a NaN fails it. */
+export function aliasSessionBehind(session, cls, adv, lane, nowMs) {
+  if (session.cls === null || cls === null) return null;
+  const held = adv.hold !== null && adv.hold !== undefined;
+  if (held && typeof adv.hold.model !== 'string') return null;
+  const to = held ? adv.hold.model : (cls.unlaunchable !== null ? null : cls.id);
+  if (to === null) return null;
+  const from = bareModelId(session.model);
+  if (from === to || familyClassOf(from) !== session.cls) return null;
+  for (const c of CLASSES) {
+    const other = lane.classes[c];
+    if (c !== session.cls && (other.id === from || (other.heldRow !== null && other.heldRow.id === from))) return null;
+  }
+  if (session.turnAtMs !== null && !(session.renderMs > session.turnAtMs)) return null;
+  const turnMs = session.turnAtMs ?? session.renderMs;
+  const since = held ? adv.hold.at : [cls.idSince, adv.releasedAt].filter(isAt).sort().pop();
+  const movedMs = Date.parse(since);
+  if (!(movedMs <= nowMs - BEHIND_AFTER_MS) || !(turnMs > movedMs)) return null;
+  return { class: session.cls, from, to, movedAt: since, turnAt: isoSeconds(turnMs), renderAt: isoSeconds(session.renderMs) };
 }

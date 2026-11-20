@@ -20,6 +20,7 @@ import { spawnSyncGroup } from './spawnGroup.js';
 import { ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster } from './fixtures/advanceCases.js';
+import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -208,7 +209,7 @@ describe('model-advance-held-back', () => {
     plantLane(h, { registry: MOVED_REGISTRY, advance: stepAdvance({ opus: {
       previous: { model: 'model-5.6-gamma', effort: 'max' }, history: [failed(), { ...MOVE, at: '2026-10-22T13:05:10Z' }] } }) });
     const p = check(h, 'model-advance-held-back');
-    expect(p.out).toBe('PASS model-advance-held-back: 1 lane(s) with a model registry: no class is held back by a '
+    expect(p.out).toBe('PASS model-advance-held-back: 1 lane(s) with a model registry or an aliases file: no class is held back by a '
       + 'failed canary or move\n');
     expect(p.code).toBe(0);
   });
@@ -265,7 +266,7 @@ describe('model-held-behind', () => {
       + '  remedy: \'ccrc models lane-a release opus\' lets the next hourly refresh advance it, canary first\n');
     expect(r.code).toBe(2);
     plantLane(h, { advance: stepAdvance() });
-    expect(check(h, 'model-held-behind').out).toBe('PASS model-held-behind: 1 lane(s) with a model registry: no held '
+    expect(check(h, 'model-held-behind').out).toBe('PASS model-held-behind: 1 lane(s) with a model registry or an aliases file: no held '
       + 'class has a newer model in its family\n');
   });
 
@@ -301,7 +302,7 @@ describe('model-sessions-behind', () => {
     expect(r.out).toBe(`${BEHIND_DEMO}\n${RELAUNCH}\n`);
     expect(r.code).toBe(2);
     plantSession(h, { model: 'model-6.1-gamma' });
-    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry: no '
+    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry or an aliases file: no '
       + 'running session is still on a model a move replaced 24 h or more ago\n');
   });
 
@@ -337,7 +338,7 @@ describe('model-sessions-behind', () => {
     const h = box();
     plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
     plantSession(h, { svc });
-    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry: no '
+    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry or an aliases file: no '
       + `running session is still on a model a move replaced 24 h or more ago${tail}\n`);
   });
 
@@ -346,7 +347,7 @@ describe('model-sessions-behind', () => {
     plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
     plantSession(h, { sidecar: false });
     expect(spawnSync('mkfifo', [join(h, '.cc-sessions', 'lane-a-x.wrapper')]).status).toBe(0);
-    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry: no '
+    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry or an aliases file: no '
       + 'running session is still on a model a move replaced 24 h or more ago; 2 session(s) could not be measured '
       + '(sidecar-absent 1, wrapper-unreadable 1)\n');
     expect(asked(h)).toEqual([]);
@@ -421,7 +422,7 @@ describe('model-advance-blocked', () => {
     expect(r.code).toBe(2);
     plantLane(h);
     plantLane(h, { id: 'lane-b', registry: null, catalogue: null, advance: null });
-    expect(check(h, 'model-advance-blocked').out).toBe('PASS model-advance-blocked: 1 lane(s) with a model registry: '
+    expect(check(h, 'model-advance-blocked').out).toBe('PASS model-advance-blocked: 1 lane(s) with a model registry or an aliases file: '
       + 'nothing blocks an advance\n');
   });
 
@@ -478,7 +479,7 @@ describe('the four checks SKIP when there is nothing to measure', () => {
 
   it.each([...CHECKS])('%s SKIPs on a box where no lane has a model registry', (name) => {
     const r = check(box(), name);
-    expect(r.out).toBe(`SKIP ${name}: no lane on this box has a model registry, so no class can advance\n`);
+    expect(r.out).toBe(`SKIP ${name}: no lane on this box has a model registry or an aliases file, so no class can advance\n`);
     expect(r.code).toBe(3);
   });
 
@@ -547,5 +548,513 @@ describe('the four checks SKIP when there is nothing to measure', () => {
       + 'no lane\'s advance state was read\n');
     expect(r.code).toBe(3);
     expect(r.ms).toBeLessThan(15_000);
+  });
+});
+
+// ── an Anthropic lane (model-class Anthropic arm A2.5; D-8744, D-8747) ───────────────────────────────────────────────
+// The fixture roster's `lane-c` is a generated, `telemetry: anthropic` lane. Its aliases file and advance file are
+// written by the REAL `aliases-refresh`, `hold`, `release` and `revert` ops from a copy of the synthetic catalogue-cache
+// fixture, never by hand (the few cases that edit the file say so), and a session's files by `plantAnthropicSession`.
+// Times are whole seconds and every one is before NOW, so a cache is never stale unless a case makes it so.
+describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
+  const AL = 'lane-c';
+  const ASUFFIX = '.claude-lane-c';
+  const ASID = 'lane-c-demo';
+  const X0 = 'claude-opus-9-0';
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const S1 = 'claude-sonnet-9-1';
+  const S2 = 'claude-sonnet-9-2';
+  const C1 = '2026-10-18T00:00:00Z';
+  const T0 = '2026-10-18T06:00:00Z';
+  const H1 = '2026-10-18T12:00:00Z';
+  const C2 = '2026-10-19T00:00:00Z';
+  const T1 = '2026-10-19T06:00:00Z';
+  const R1 = '2026-10-20T00:00:00Z';
+  const FIXTURE = JSON.parse(fs.readFileSync(join(here, 'fixtures', 'model-catalog', 'tok-fixture-cc.json'), 'utf8')) as
+    { fetchedAt: number; staleAt: number; catalog: { config: { provider_alias_targets: Record<string, { default: string }> } } };
+  const OP = join(REPO, 'deploy', 'models-op.mjs');
+  const reg = (h: string): string => join(h, '.cc-sessions');
+  const aliasesPath = (h: string): string => join(h, '.ccrc', 'models', `${AL}.aliases.json`);
+  const advancePath = (h: string): string => join(h, '.ccrc', 'models', `${AL}.advance.json`);
+
+  /** The model op itself, with `now` as its clock; every call is asked to end 0. */
+  function aop(h: string, now: string, verb: string, cls = 'opus'): Json {
+    const argv = [OP, verb, '--file', join(h, '.ccrc', 'accounts.json'), '--id', AL,
+      ...(verb === 'aliases-refresh' ? ['--reg', reg(h)] : ['--class', cls])];
+    const r = spawnSyncGroup(process.execPath, argv, { env: { ...process.env, HOME: h, CCRC_MODELS_NOW: now }, encoding: 'utf8', timeout: 20_000 });
+    expect(r.status, `${verb}: ${r.stdout}${r.stderr}`).toBe(0);
+    return JSON.parse((r.stdout ?? '').split('\n')[0]!) as Json;
+  }
+  /** `advance-health`'s answer, as the doctor asks for it. */
+  function health(h: string, now = NOW): { lanes: Json[]; body: Json } {
+    const r = spawnSyncGroup(process.execPath, [OP, 'advance-health', '--file', join(h, '.ccrc', 'accounts.json'), '--reg', reg(h),
+      '--lock-template', join(h, '.ccrc', 'locks', 'models-{id}.lock')],
+    { env: { ...process.env, HOME: h, CCRC_MODELS_NOW: now }, encoding: 'utf8', timeout: 20_000 });
+    expect(r.status, `${r.stdout}${r.stderr}`).toBe(0);
+    const body = JSON.parse((r.stdout ?? '').split('\n')[0]!) as Json;
+    return { lanes: body['lanes'] as Json[], body };
+  }
+  const laneOf = (h: string, id = AL, now = NOW): Json => health(h, now).lanes.find((l) => l['id'] === id)!;
+  const causes = (lane: Json): string[] => (lane['blocked'] as { cause: string }[]).map((b) => b.cause);
+
+  const plantBuild = (h: string, version: string): void => {
+    fs.mkdirSync(join(h, ASUFFIX), { recursive: true });
+    fs.writeFileSync(join(h, ASUFFIX, '.last-update-result.json'), `${JSON.stringify({ version_to: version })}\n`);
+  };
+  /** The synthetic cache fixture, fetched at `fetchedAt`, with these classes' alias targets replaced. */
+  const plantCache = (h: string, fetchedAt: string, targets: Record<string, string>): void => {
+    const j = structuredClone(FIXTURE);
+    j.fetchedAt = Date.parse(fetchedAt);
+    j.staleAt = j.fetchedAt + 3_600_000;
+    for (const [c, id] of Object.entries(targets)) j.catalog.config.provider_alias_targets[c]!.default = id;
+    fs.mkdirSync(join(h, ASUFFIX, 'cache', 'model-catalog'), { recursive: true });
+    fs.writeFileSync(join(h, ASUFFIX, 'cache', 'model-catalog', 'cache-fixture.json'), `${JSON.stringify(j)}\n`);
+  };
+  /** opus X1 then X2 (sonnet S1 then S2): one move at T1, so each class's id is days old and its `idSince` is T1. */
+  function moved(h: string): void {
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1, sonnet: S1 });
+    aop(h, T0, 'aliases-refresh');
+    plantCache(h, C2, { opus: X2, sonnet: S2 });
+    aop(h, T1, 'aliases-refresh');
+  }
+  /** opus held on X1 at H1, then its alias moves on to X2 on evidence newer than the hold: held behind. */
+  function heldStale(h: string): void {
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    aop(h, T0, 'aliases-refresh');
+    aop(h, H1, 'hold');
+    plantCache(h, C2, { opus: X2 });
+    aop(h, T1, 'aliases-refresh');
+  }
+  /** moved, then reverted at R1: held on X1 by a revert, and its evidence (C2) is older than the hold, so unobserved
+   *  once the next hourly refresh has read the hold (the revert itself rewrites no aliases file). */
+  function reverted(h: string): void {
+    moved(h);
+    aop(h, R1, 'revert');
+    aop(h, '2026-10-20T01:00:00Z', 'aliases-refresh');
+  }
+  const editAliases = (h: string, f: (a: { classes: Record<string, Json> }) => void): void => {
+    const a = JSON.parse(fs.readFileSync(aliasesPath(h), 'utf8')) as { classes: Record<string, Json> };
+    f(a);
+    fs.writeFileSync(aliasesPath(h), `${JSON.stringify(a, null, 2)}\n`);
+  };
+  /** A stub ccd whose `caps` lists these words, one per line. */
+  const stubCcd = (h: string, words: string[]): void => {
+    fs.mkdirSync(join(h, '.local', 'bin'), { recursive: true });
+    fs.writeFileSync(join(h, '.local', 'bin', 'ccd'), `#!/bin/sh\nif [ "$1" = caps ]; then printf '%s\\n' ${words.map((w) => `'${w}'`).join(' ')}; fi\n`,
+      { mode: 0o755 });
+  };
+  const capable = (h: string): void => stubCcd(h, ['caps', 'alias-launch-v1']);
+
+  /** One Anthropic session's registry files. `routeapplied`: the words of `<sid>.routeapplied` (default class opus), `'absent'`
+   *  (never routed) or `'dir'` (unreadable). `marker`: a turn time in ms, `'absent'` or `'bad'`. `sidecar`: `'absent'`, `'bad'`, or the
+   *  default render of `model` at RENDER (`ts` in seconds overrides). */
+  function plantAnthropicSession(h: string, o: { sid?: string; model?: string; routeapplied?: string; marker?: number | 'absent' | 'bad';
+    sidecar?: 'absent' | 'bad'; ts?: number } = {}): void {
+    const sid = o.sid ?? ASID;
+    const r = reg(h);
+    fs.mkdirSync(join(r, 'usage'), { recursive: true });
+    fs.writeFileSync(join(r, `${sid}.wrapper`), AL);
+    for (const f of [`${sid}.routeapplied`, `${sid}.turn.json`, join('usage', `${sid}.json`)]) fs.rmSync(join(r, f), { recursive: true, force: true });
+    const ra = o.routeapplied ?? 'class=opus effort=high';
+    if (ra === 'dir') fs.mkdirSync(join(r, `${sid}.routeapplied`), { recursive: true });
+    else if (ra !== 'absent') fs.writeFileSync(join(r, `${sid}.routeapplied`), `${ra}\n`);
+    const turnAt = o.marker === undefined ? Date.parse(TURN) : o.marker;
+    if (turnAt === 'bad') fs.writeFileSync(join(r, `${sid}.turn.json`), 'not json\n');
+    else if (turnAt !== 'absent') {
+      fs.writeFileSync(join(r, `${sid}.turn.json`), `${JSON.stringify({ v: 1, sessionId: `uuid-${sid}`, state: 'done', event: 'Stop',
+        at: turnAt + 30_000, turnAt, stopAt: turnAt + 30_000, bg: -1, bgKinds: '', bgIds: '', err: null, restartAt: null, lostBg: 0,
+        lostKinds: '', lostIds: '' })}\n`);
+    }
+    if (o.sidecar === 'bad') fs.writeFileSync(join(r, 'usage', `${sid}.json`), 'not json\n');
+    else if (o.sidecar !== 'absent') {
+      fs.writeFileSync(join(r, 'usage', `${sid}.json`), `${JSON.stringify({ ts: o.ts ?? Date.parse(RENDER) / 1000, uuid: `uuid-${sid}`,
+        account: AL, model: o.model ?? X1, effort: 'low', ctxPct: 12, cost: 0.1, agent: null })}\n`);
+    }
+    fs.mkdirSync(join(h, 'svc'), { recursive: true });
+    fs.writeFileSync(join(h, 'svc', `claude-session@${sid}.service`), 'active\n');
+  }
+  const behindOf = (h: string, now = NOW): Json[] => laneOf(h, AL, now)['sessionsBehind'] as Json[];
+  const unmeasuredOf = (h: string): Json[] => laneOf(h)['sessionsUnmeasured'] as Json[];
+  const ROW_X1 = { session: ASID, class: 'opus', from: X1, to: X2, movedAt: T1, turnAt: TURN, renderAt: RENDER };
+
+  // ── the answer's own shape ──
+  it('every lane row carries anthropic, a Codex row false and an Anthropic row true, in roster order beside it', () => {
+    const h = box();
+    plantLane(h);
+    moved(h);
+    const { lanes } = health(h);
+    expect(lanes.map((l) => [l['id'], l['anthropic']])).toEqual([['lane-a', false], [AL, true]]);
+    expect(laneOf(h)).toMatchObject({ id: AL, anthropic: true, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] });
+  });
+
+  it('an Anthropic lane with no aliases file and no advance file is not in the population, and an advance file alone is, with no finding', () => {
+    const h = box();
+    plantLane(h);
+    expect(health(h).lanes.map((l) => l['id'])).toEqual(['lane-a']);
+    fs.mkdirSync(join(h, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(advancePath(h), serializeAdvance(seedAnthropicAdvance()));
+    plantAnthropicSession(h);
+    expect(laneOf(h)).toMatchObject({ anthropic: true, blocked: [], heldBehind: [], sessionsBehind: [], sessionsUnmeasured: [] });
+    fs.rmSync(advancePath(h));
+    expect(health(h).lanes.map((l) => l['id'])).toEqual(['lane-a']);
+  });
+
+  it('an absent aliases file is no finding even with a standing advance file and a session', () => {
+    const h = box();
+    fs.mkdirSync(join(h, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(advancePath(h), serializeAdvance(seedAnthropicAdvance()));
+    plantAnthropicSession(h);
+    capable(h);
+    expect(check(h, 'model-advance-blocked').out).toBe('PASS model-advance-blocked: 1 lane(s) with a model registry or an aliases file: '
+      + 'nothing blocks an advance\n');
+  });
+
+  // ── the four causes, firing and clearing ──
+  it('alias-source-absent fires on a lane no source reaches, prints its remedy once ccd marks launches, and clears with a cache', () => {
+    const h = box();
+    aop(h, T0, 'aliases-refresh');
+    capable(h);
+    const r = check(h, 'model-advance-blocked');
+    expect(r.out).toContain('WARN model-advance-blocked: lane-c: alias-source-absent (');
+    expect(r.out).toContain('\n  remedy: per cause: alias source — start one session on this lane through ccd, or sign it in so Claude Code writes a catalogue\n');
+    expect(r.code).toBe(2);
+    expect(causes(laneOf(h))).toEqual(['alias-source-absent']);
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    aop(h, T1, 'aliases-refresh');
+    expect(causes(laneOf(h))).toEqual([]);
+    expect(check(h, 'model-advance-blocked').out).toContain('PASS model-advance-blocked: 1 lane(s)');
+  });
+
+  it('alias-cache-stale fires when a refresh read a cache a week old, and clears when the cache is fetched again', () => {
+    const h = box();
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    aop(h, '2026-10-26T06:00:00Z', 'aliases-refresh');
+    const r = check(h, 'model-advance-blocked', { CCRC_MODELS_NOW: '2026-10-26T07:00:00Z' });
+    expect(r.out).toContain('WARN model-advance-blocked: lane-c: alias-cache-stale (');
+    expect(r.out).toContain('\n  remedy: per cause: alias cache — the next session Claude Code starts on this lane refreshes it\n');
+    expect(causes(laneOf(h, AL, '2026-10-26T07:00:00Z'))).toEqual(['alias-cache-stale']);
+    plantCache(h, '2026-10-26T06:30:00Z', { opus: X1 });
+    aop(h, '2026-10-26T06:45:00Z', 'aliases-refresh');
+    expect(causes(laneOf(h, AL, '2026-10-26T07:00:00Z'))).toEqual([]);
+  });
+
+  it('aliases-file-unreadable fires on a file nobody can read, and clears once it is moved aside and the refresh starts it again', () => {
+    const h = box();
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    fs.mkdirSync(join(h, '.ccrc', 'models'), { recursive: true });
+    fs.mkdirSync(aliasesPath(h));
+    const r = check(h, 'model-advance-blocked');
+    expect(r.out).toContain('WARN model-advance-blocked: lane-c: aliases-file-unreadable (');
+    expect(r.out).toContain('\n  remedy: per cause: aliases file — the refresh will not write over it: read it, then move it aside, and the next hourly refresh starts it again\n');
+    expect(causes(laneOf(h))).toEqual(['aliases-file-unreadable']);
+    fs.rmdirSync(aliasesPath(h));
+    aop(h, T0, 'aliases-refresh');
+    expect(causes(laneOf(h))).toEqual([]);
+  });
+
+  it('aliases-file-invalid fires on a file this build does not read, and clears the same way', () => {
+    const h = box();
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    fs.mkdirSync(join(h, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(aliasesPath(h), `${JSON.stringify({ v: 2 })}\n`);
+    expect(check(h, 'model-advance-blocked').out).toContain('WARN model-advance-blocked: lane-c: aliases-file-invalid (');
+    expect(causes(laneOf(h))).toEqual(['aliases-file-invalid']);
+    fs.rmSync(aliasesPath(h));
+    aop(h, T0, 'aliases-refresh');
+    expect(causes(laneOf(h))).toEqual([]);
+  });
+
+  it('an Anthropic lane never says lane-not-codex-kind, and its lock and advance file are read as a registry lane\'s are', () => {
+    const h = box();
+    moved(h);
+    expect(causes(laneOf(h))).not.toContain('lane-not-codex-kind');
+    fs.writeFileSync(advancePath(h), '{"v": 9}\n');
+    fs.mkdirSync(join(h, '.ccrc', 'locks'), { recursive: true });
+    fs.symlinkSync(join(h, 'nowhere'), join(h, '.ccrc', 'locks', `models-${AL}.lock`));
+    expect(causes(laneOf(h))).toEqual(['lock-unwritable', 'advance-file-invalid']);
+  });
+
+  it('no source is a note before alias-launch-v1, and a WARN once ccd lists it', () => {
+    const h = box();
+    aop(h, T0, 'aliases-refresh');
+    stubCcd(h, ['caps']);
+    const note = check(h, 'model-advance-blocked');
+    expect(note.out).toBe('PASS model-advance-blocked: 1 lane(s) with a model registry or an aliases file: nothing blocks an advance; '
+      + 'no source until ccd marks alias launches (lane-c)\n');
+    expect(note.code).toBe(0);
+    fs.rmSync(join(h, '.local'), { recursive: true });
+    expect(check(h, 'model-advance-blocked').out).toContain('PASS model-advance-blocked');
+    capable(h);
+    const warn = check(h, 'model-advance-blocked');
+    expect(warn.out).toContain('WARN model-advance-blocked: lane-c: alias-source-absent (');
+    expect(warn.code).toBe(2);
+  });
+
+  it('the note names only the source cause: a stale cache or a file cause still WARNs before alias-launch-v1', () => {
+    const h = box();
+    fs.mkdirSync(join(h, '.ccrc', 'models'), { recursive: true });
+    fs.writeFileSync(aliasesPath(h), `${JSON.stringify({ v: 2 })}\n`);
+    stubCcd(h, ['caps']);
+    expect(check(h, 'model-advance-blocked').out).toContain('WARN model-advance-blocked: lane-c: aliases-file-invalid (');
+  });
+
+  // ── held behind ──
+  it('held behind on an Anthropic lane carries the five fields, and the row is the exact one the check reads', () => {
+    const h = box();
+    heldStale(h);
+    expect(laneOf(h)['heldBehind']).toEqual([{ class: 'opus', hold: { at: H1, by: 'hand' }, reason: 'newer', pin: X1, newer: X2 }]);
+    expect(laneOf(h)['heldBack']).toEqual([]);
+  });
+
+  it('an Anthropic held-behind row prints the release wording, no canary, and a Codex row beside it keeps its own', () => {
+    const h = box();
+    plantLane(h, { advance: stepAdvance({ opus: { hold: HOLD } }) });
+    heldStale(h);
+    const r = check(h, 'model-held-behind');
+    const lines = r.out.split('\n');
+    expect(lines[0]).toBe(`WARN model-held-behind: lane-a opus is held (2026-10-22T08:00Z, by hand) while model-6.1-gamma is newer in its family`);
+    expect(lines[1]).toBe('  remedy: \'ccrc models lane-a release opus\' lets the next hourly refresh advance it, canary first');
+    expect(lines[2]).toBe(`WARN model-held-behind: lane-c opus is held (2026-10-18T12:00Z, by hand) while ${X2} is newer in its family`);
+    expect(lines[3]).toBe('  remedy: release the hold from the lane\'s Models sheet (or with \'ccrc models lane-c release <class>\': opus), and the '
+      + 'class follows its alias: its sessions launch on the alias\'s current id from their next launch. Leaving the hold in place keeps the '
+      + 'held id, and this warning');
+    expect(lines[3]).not.toContain('canary');
+    expect(r.code).toBe(2);
+  });
+
+  it('a null id is never held behind', () => {
+    const h = box();
+    heldStale(h);
+    editAliases(h, (a) => { Object.assign(a.classes['opus']!, { id: null }); });
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+  });
+
+  it('an unobserved class is never held behind', () => {
+    const h = box();
+    reverted(h);
+    const a = JSON.parse(fs.readFileSync(aliasesPath(h), 'utf8')) as { classes: Record<string, Json> };
+    expect(a.classes['opus']).toMatchObject({ id: X2, unobserved: true });
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+  });
+
+  // ── sessions behind ──
+  it('a session on the id an alias moved off is named behind, from the move and with the evidence, and not behind on the new one', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h);
+    expect(behindOf(h)).toEqual([ROW_X1]);
+    plantAnthropicSession(h, { model: X2 });
+    expect(behindOf(h)).toEqual([]);
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('a held session is not behind: it runs hold.model, and the class is unobserved', () => {
+    const h = box();
+    reverted(h);
+    plantAnthropicSession(h, { model: X1 });
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it('a session still on the newer id after a revert is named behind, to the held id, from the hold', () => {
+    const h = box();
+    reverted(h);
+    plantAnthropicSession(h, { model: X2 });
+    expect(behindOf(h)).toEqual([{ ...ROW_X1, from: X2, to: X1, movedAt: R1 }]);
+  });
+
+  it('a null id names no session behind', () => {
+    const h = box();
+    moved(h);
+    editAliases(h, (a) => { Object.assign(a.classes['opus']!, { id: null }); });
+    plantAnthropicSession(h);
+    expect(behindOf(h)).toEqual([]);
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('an unlaunchable id names no session behind', () => {
+    const h = box();
+    moved(h);
+    plantBuild(h, '9.1.0');
+    aop(h, '2026-10-19T12:00:00Z', 'aliases-refresh');
+    const a = JSON.parse(fs.readFileSync(aliasesPath(h), 'utf8')) as { classes: Record<string, Json> };
+    expect(a.classes['opus']).toMatchObject({ id: X2, unlaunchable: { needs: '9.2.0' } });
+    plantAnthropicSession(h);
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it.each([
+    ['default', 'class=default effort=high'],
+    ['no class word', 'effort=high'],
+  ])('a session whose routing record has %s is read and never behind', (_n, routeapplied) => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { routeapplied });
+    expect(behindOf(h)).toEqual([]);
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('a degraded session is judged by its served class', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { routeapplied: 'class=sonnet effort=low', model: S1 });
+    expect(behindOf(h)).toEqual([{ ...ROW_X1, class: 'sonnet', from: S1, to: S2 }]);
+  });
+
+  it('a session on another class\'s model is not behind', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { routeapplied: 'class=sonnet effort=low', model: X1 });
+    expect(behindOf(h)).toEqual([]);
+    plantAnthropicSession(h, { routeapplied: 'class=opus effort=low', model: S2 });
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it('a session on the id another class now names is not behind', () => {
+    const h = box();
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    aop(h, T0, 'aliases-refresh');
+    plantCache(h, C2, { opus: X2, haiku: X1 });
+    aop(h, T1, 'aliases-refresh');
+    plantAnthropicSession(h);
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it('a render before its turn is not behind', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { marker: Date.parse(RENDER) + 60_000 });
+    expect(behindOf(h)).toEqual([]);
+    plantAnthropicSession(h, { marker: Date.parse(RENDER) });
+    expect(behindOf(h)).toEqual([]);
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('with no turn marker the turn is the reading', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { marker: 'absent' });
+    expect(behindOf(h)).toEqual([{ ...ROW_X1, turnAt: RENDER }]);
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('a 1M-context session on the current id is not behind, and one on the old id is named by its bare id', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { model: `${X2}[1m]` });
+    expect(behindOf(h)).toEqual([]);
+    plantAnthropicSession(h, { model: `${X1}[1m]` });
+    expect(behindOf(h)).toEqual([ROW_X1]);
+  });
+
+  it('the day counts from the release: a session is behind a released class only a day after the release', () => {
+    const h = box();
+    moved(h);
+    aop(h, '2026-10-21T00:00:00Z', 'hold');
+    aop(h, '2026-10-22T08:00:00Z', 'release');
+    plantAnthropicSession(h);
+    expect(behindOf(h)).toEqual([{ ...ROW_X1, movedAt: '2026-10-22T08:00:00Z' }]);
+    expect(behindOf(h, '2026-10-22T20:00:00Z')).toEqual([]);
+  });
+
+  it('the day counts from a first id', () => {
+    const h = box();
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    aop(h, T0, 'aliases-refresh');
+    plantAnthropicSession(h, { model: X0 });
+    expect(behindOf(h)).toEqual([{ ...ROW_X1, from: X0, to: X1, movedAt: T0 }]);
+    expect(behindOf(h, '2026-10-18T20:00:00Z')).toEqual([]);
+  });
+
+  it('an Anthropic row beside a Codex row does not SKIP: the check WARNs naming both lanes', () => {
+    const h = box();
+    plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
+    plantSession(h);
+    moved(h);
+    plantAnthropicSession(h);
+    const lanes = health(h).lanes;
+    expect(lanes.map((l) => [l['id'], (l['sessionsBehind'] as Json[]).length])).toEqual([['lane-a', 1], [AL, 1]]);
+    const r = check(h, 'model-sessions-behind');
+    expect(r.out.startsWith('SKIP')).toBe(false);
+    const warns = r.out.split('\n').filter((l) => l.startsWith('WARN'));
+    expect(warns).toEqual([
+      'WARN model-sessions-behind: lane-a session lane-a-demo last replied on model-5.6-gamma at 2026-10-22T09:12Z, in a turn begun '
+      + '2026-10-22T09:11Z, after opus moved to model-6.1-gamma 42 h ago',
+      `WARN model-sessions-behind: lane-c session lane-c-demo last replied on ${X1} at 2026-10-22T09:12Z, in a turn begun `
+      + `2026-10-22T09:11Z, after opus moved to ${X2} 99 h ago`,
+    ]);
+    expect(r.code).toBe(2);
+  });
+
+  // ── sessions unmeasured ──
+  it('a never-routed session is neither behind nor unmeasured', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { routeapplied: 'absent' });
+    expect(behindOf(h)).toEqual([]);
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('a routing record nobody can read is route-record-unreadable', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { routeapplied: 'dir' });
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: 'route-record-unreadable' }]);
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it('a sidecar that is absent or unreadable is sidecar-absent or sidecar-unreadable', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { sidecar: 'absent' });
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: 'sidecar-absent' }]);
+    plantAnthropicSession(h, { sidecar: 'bad' });
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: 'sidecar-unreadable' }]);
+  });
+
+  it('a turn marker that cannot be read is marker-unreadable, and an absent one is no failure', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { marker: 'bad' });
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: 'marker-unreadable' }]);
+    plantAnthropicSession(h, { marker: 'absent' });
+    expect(unmeasuredOf(h)).toEqual([]);
+  });
+
+  it('a routing record is read first: its word wins over a missing sidecar', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { routeapplied: 'dir', sidecar: 'absent', marker: 'bad' });
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: 'route-record-unreadable' }]);
+  });
+
+  it.each([
+    ['aliases-file-unreadable', (h: string): void => { fs.mkdirSync(aliasesPath(h)); }],
+    ['aliases-file-invalid', (h: string): void => { fs.writeFileSync(aliasesPath(h), '{"v": 2}\n'); }],
+  ])('when the aliases file cannot be read every session of the lane is named, as %s', (word, spoil) => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h);
+    plantAnthropicSession(h, { sid: 'lane-c-two', routeapplied: 'absent' });
+    fs.rmSync(aliasesPath(h));
+    spoil(h);
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: word }, { session: 'lane-c-two', why: word }]);
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it('the PASS and the WARN carry the unmeasured count of an Anthropic lane\'s sessions', () => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h, { sidecar: 'bad' });
+    expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry or an aliases file: no '
+      + 'running session is still on a model a move replaced 24 h or more ago; 1 session(s) could not be measured (sidecar-unreadable 1)\n');
   });
 });

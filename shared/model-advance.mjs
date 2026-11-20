@@ -548,7 +548,7 @@ const EPOCH_MS_MAX = 8.64e15;
 /** A usage sidecar's `ts` is whole SECONDS (the status line writes `date +%s`). A value past this is not seconds
  *  (thirteen digits of milliseconds, say) and is never compared, so a writer that slipped into milliseconds can never
  *  make a render look newer than every turn. 99999999999 s is in the year 5138. */
-const SIDECAR_TS_MAX_S = 99_999_999_999;
+export const SIDECAR_TS_MAX_S = 99_999_999_999;
 const isEpochMs = (v) => Number.isInteger(v) && v >= 0 && v <= EPOCH_MS_MAX;
 
 /** `(ms) => 'YYYY-MM-DDTHH:MM:SSZ' | null`: an epoch in ms in the advance file's own time form, cut to whole

@@ -82,11 +82,12 @@ import {
 import { SUGGESTED_SUBAGENT_CLASS, suggestedClasses, suggestedModelMap } from '../shared/model-suggest.mjs';
 import {
   AdvanceInvalid, REASON_MAX, backfillAdvance, canaryEffort, chooseCandidate, clientWindowNotice, familyOf, heldBackOf,
-  isoSeconds, parseAdvance, reconcilePending, recordFailure, recordMove, resolveEffort, seedAnthropicAdvance,
-  sessionBehind, unmeasuredMoveNotice, unmeasuredMoves,
+  SIDECAR_TS_MAX_S, isoSeconds, parseAdvance, reconcilePending, recordFailure, recordMove, resolveEffort,
+  seedAnthropicAdvance, sessionBehind, unmeasuredMoveNotice, unmeasuredMoves,
 } from '../shared/model-advance.mjs';
 import {
-  AliasesInvalid, bareModelId, parseAliases, parseCatalogueCache, resolveAliases, rowLaunchable,
+  AliasesInvalid, aliasSessionBehind, aliasesSourceCause, bareModelId, parseAliases, parseCatalogueCache, resolveAliases,
+  rowLaunchable,
 } from '../shared/model-aliases.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
@@ -2188,6 +2189,126 @@ function sessionsBehindOf(id, ctx, advance, registry) {
   return { behind, unmeasured };
 }
 
+/** The class word of one session's routing record (`$REG/<sid>.routeapplied`, ccd's `field=value` word list: the class
+ *  ccd composed and served, a degrade included), size-capped like every session file. Three answers, never folded:
+ *  `{absent: true}` (a never-routed session, outside the check), `{why: 'route-record-unreadable'}`, and `{cls}`, a
+ *  class or null (no `class=` word, `default`, or a word that is none of the four). */
+function routeClassOf(reg, session) {
+  let raw;
+  try {
+    raw = readSessionFile(path.join(reg, `${session}.routeapplied`), SESSION_FILE_MAX_BYTES);
+  } catch (e) {
+    return e.code === 'ENOENT' ? { absent: true } : { why: 'route-record-unreadable' };
+  }
+  const word = raw.split(/\s+/).find((w) => w.startsWith('class='));
+  const cls = word === undefined ? null : word.slice('class='.length);
+  return { cls: CLASSES.includes(cls) ? cls : null };
+}
+
+/** One Anthropic session's evidence as `aliasSessionBehind` takes it, or null when its files do not say a main-loop
+ *  render of a turn (`sessionBehind`'s own input checks: a sidecar `ts` in whole seconds, no `agent`, a model; and, with a
+ *  turn marker, a `sessionId` equal to the sidecar's `uuid` and a `turnAt` that is an epoch). No marker is no failure:
+ *  `turnAtMs` is null and the turn is the reading. */
+function anthropicSessionOf(cls, usage, turn) {
+  const { ts, uuid, model, agent } = usage;
+  if (!Number.isInteger(ts) || ts > SIDECAR_TS_MAX_S || (agent !== undefined && agent !== null)) return null;
+  if (typeof model !== 'string' || model === '') return null;
+  if (turn !== null && (typeof turn.sessionId !== 'string' || turn.sessionId === '' || uuid !== turn.sessionId
+    || isoSeconds(turn.turnAt) === null)) return null;
+  return { cls, model, renderMs: ts * 1000, turnAtMs: turn === null ? null : turn.turnAt };
+}
+
+/** The Anthropic lane's sessions behind their class's alias (`aliasSessionBehind`), and those it could not judge, by the
+ *  first file that failed, in this order: the routing record, the usage sidecar, the turn marker when it stands. A session
+ *  with no routing record was never routed and is outside the check; one whose record names no class, or `default`, is read
+ *  and not behind. */
+function anthropicSessionsBehindOf(id, ctx, advance, aliases) {
+  const behind = [];
+  const unmeasured = [];
+  for (const session of ctx.sessions.byLane.get(id) ?? []) {
+    const route = routeClassOf(ctx.reg, session);
+    if (route.absent === true || (route.why === undefined && route.cls === null)) continue;
+    if (route.why !== undefined) {
+      unmeasured.push({ session, why: route.why });
+      continue;
+    }
+    const usage = readSessionJson(path.join(ctx.reg, 'usage', `${session}.json`));
+    if (usage.why !== undefined) {
+      unmeasured.push({ session, why: usage.why === 'absent' ? 'sidecar-absent' : 'sidecar-unreadable' });
+      continue;
+    }
+    const turn = readSessionJson(path.join(ctx.reg, `${session}.turn.json`));
+    if (turn.why === 'unreadable') {
+      unmeasured.push({ session, why: 'marker-unreadable' });
+      continue;
+    }
+    const s = anthropicSessionOf(route.cls, usage.value, turn.why === 'absent' ? null : turn.value);
+    if (s === null) continue;
+    const b = aliasSessionBehind(s, aliases.classes[route.cls], advance.classes[route.cls], aliases, ctx.nowMs);
+    if (b !== null) behind.push({ session, ...b });
+  }
+  return { behind, unmeasured };
+}
+
+/** The sentence `model-advance-blocked` prints for an aliases file's source cause. */
+function aliasCauseDetail(a, cause) {
+  if (cause === 'alias-source-absent') {
+    const c = a.cache;
+    const why = c.none === 'absent' ? "the lane's home has no catalogue cache"
+      : c.none === 'unreadable' ? "the lane's catalogue cache could not be read"
+        : c.none === 'invalid' ? "the lane's catalogue cache files are not in a form this build reads"
+          : `the newest catalogue cache (fetched ${c.fetchedAt}) names no model this lane's build can launch`;
+    return `no class has a model id: ${why}, and no alias launch has reported one`;
+  }
+  return a.cache.format === 'older'
+    ? 'the lane\'s newest catalogue cache is in an older format, which names no alias target'
+    : `the lane's newest catalogue cache was fetched ${a.cache.fetchedAt}, more than 7 days before the last refresh`;
+}
+
+/** One Anthropic lane's findings (Task A2.5), or null for a lane with neither an aliases file nor an advance file (not in
+ *  the population, as a registry lane with no registry file is not). The order of `blocked` is the lock, the advance
+ *  file, then the aliases file. An ABSENT aliases file is no finding (the first hourly refresh writes it) and no session
+ *  is read; an unreadable or invalid one is a finding and names every session of the lane unmeasured with its word. There
+ *  is no canary, so `heldBack` is always empty. `heldBehind` names a held class whose observed aliases id is not
+ *  `hold.model`; `sessionsBehind` and `sessionsUnmeasured` are `anthropicSessionsBehindOf`'s, judged against the advance
+ *  file's holds and releases (none when the advance file is absent). */
+function anthropicLaneHealth(acc, ctx) {
+  const id = acc.id;
+  const al = readAliases(id);
+  const rd = readAdvance(id);
+  if (al.err === undefined && al.aliases === null && rd.err === undefined && rd.advance === null) return null;
+  const lane = { id, anthropic: true, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const block = (cause, detail) => { lane.blocked.push({ class: null, cause, detail }); };
+  const sessions = ctx.sessions.byLane.get(id) ?? [];
+  const lockWhy = lockUnwritable(ctx.lockTemplate.replace('{id}', id));
+  if (lockWhy !== null) block('lock-unwritable', lockWhy);
+  if (rd.err !== undefined) block(rd.err[0], rd.err[1]);
+  if (al.err !== undefined) {
+    block(al.err[0], al.err[1]);
+    lane.sessionsUnmeasured = sessions.map((session) => ({ session, why: al.err[0] }));
+    return lane;
+  }
+  const aliases = al.aliases;
+  if (aliases === null) return lane;
+  const cause = aliasesSourceCause(aliases);
+  if (cause !== null) block(cause, aliasCauseDetail(aliases, cause));
+  if (rd.err !== undefined) {
+    lane.sessionsUnmeasured = sessions.map((session) => ({ session, why: 'advance-file-unreadable' }));
+    return lane;
+  }
+  const adv = rd.advance ?? seedAnthropicAdvance();
+  for (const cls of CLASSES) {
+    const hold = adv.classes[cls].hold;
+    const row = aliases.classes[cls];
+    if (hold === null || typeof hold.model !== 'string' || row.unobserved || row.id === null || row.id === hold.model) continue;
+    lane.heldBehind.push({ class: cls, hold: { at: hold.at, by: hold.by }, reason: 'newer', pin: hold.model, newer: row.id });
+  }
+  const s = anthropicSessionsBehindOf(id, ctx, adv, aliases);
+  lane.sessionsBehind = s.behind;
+  lane.sessionsUnmeasured = s.unmeasured;
+  return lane;
+}
+
 /** One lane's findings, or null for a lane with no registry FILE (not in the population). The order of `blocked`
  *  is fixed: the lock, the advance file, then the registry, the lane's kind or the catalogue, then each class in
  *  `CLASSES` order, then the windows file.
@@ -2213,7 +2334,7 @@ function laneHealth(acc, ctx) {
   const cat = readCatalogue(id);
   const reg = readRegistry(id, cat.err !== undefined ? null : cat.catalogue);
   if (reg.err === undefined && reg.invalid === undefined && reg.registry === null) return null;
-  const lane = { id, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const lane = { id, anthropic: false, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
   const block = (cls, cause, detail) => { lane.blocked.push({ class: cls, cause, detail }); };
   const lockWhy = lockUnwritable(ctx.lockTemplate.replace('{id}', id));
   if (lockWhy !== null) block(null, 'lock-unwritable', lockWhy);
@@ -2280,8 +2401,9 @@ function laneHealth(acc, ctx) {
 }
 
 /** `advance-health` (auto-advance spec §2.8; plan W3 Task 14): box-wide and READ-ONLY. Every roster row a registry
- *  can sit on (`canCarryRegistry`) whose registry FILE exists, readable or not, in roster order; a row with none is
- *  not in the population. `--reg` is the session registry and `--lock-template` the lane-files lock path with `{id}`
+ *  can sit on (`canCarryRegistry`) whose registry FILE exists, readable or not, and every Anthropic row
+ *  (`isAnthropicLane`) with an aliases file or an advance file, in roster order; a row with none is not in the
+ *  population. Every lane row carries `anthropic`, the one fact of the lane's kind. `--reg` is the session registry and `--lock-template` the lane-files lock path with `{id}`
  *  in place of the lane, both from `ccd/ccrc` (`$_SVC_REG`, `_models_lock_path '{id}'`), so this file spells neither
  *  (D-5219). Each is checked after the roster read (`main` reads the roster before it
  *  dispatches any op, so with no roster the answer is the roster's own word) and before any lane file or session
@@ -2302,8 +2424,8 @@ function advanceHealthOp(a, json) {
   const ctx = { nowMs, reg: a.reg, sessions, lockTemplate: tpl };
   const lanes = [];
   for (const acc of (json.accounts ?? [])) {
-    if (!isObj(acc) || !canCarryRegistry(acc) || typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id)) continue;
-    const lane = laneHealth(acc, ctx);
+    if (!isObj(acc) || typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id)) continue;
+    const lane = isAnthropicLane(acc) ? anthropicLaneHealth(acc, ctx) : canCarryRegistry(acc) ? laneHealth(acc, ctx) : null;
     if (lane !== null) lanes.push(lane);
   }
   out({ ok: true, op: 'advance-health', now: at, sessions: sessions.state, sessionsUnmeasured: sessions.unlaned, lanes });

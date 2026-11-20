@@ -144,6 +144,8 @@ export declare function unmeasuredMoveNotice(lane: string, m: UnmeasuredMove, to
 export declare function clientWindowNotice(lane: string, registry: Registry, stale: boolean, room: { tokens: number | null; source: 'measured' | 'provider' | 'client' | null; model: string | null } | null): string | null;
 // ── sessions behind a move (plan W3 Task 14) ──
 export declare const BEHIND_AFTER_MS: 86400000;
+/** The largest usage-sidecar `ts`, in whole seconds, that is still a time in seconds (a larger one is milliseconds). */
+export declare const SIDECAR_TS_MAX_S: 99999999999;
 export declare function isoSeconds(ms: number): string | null;
 /** One session still on a model a move replaced: the class whose history holds the move, the model it replaced and
  *  what replaced it (null: the class was emptied), the move's time, and the evidence (the turn and the render). */

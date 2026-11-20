@@ -5031,7 +5031,8 @@ describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
     const r = health();
     expect(r.code, r.stdout + r.stderr).toBe(0);
     expect(r.body).toEqual({ ok: true, op: 'advance-health', now: H_NOW, sessions: 'absent', sessionsUnmeasured: [],
-      lanes: [{ id: 'lane-a', heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] }] });
+      lanes: [{ id: 'lane-a', anthropic: false, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [],
+        sessionsUnmeasured: [] }] });
     plantH({ id: 'lane-b' });
     expect((health().body['lanes'] as Record<string, unknown>[]).map((l) => l['id'])).toEqual(['lane-a', 'lane-b']);
   });
@@ -5086,8 +5087,8 @@ describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
     const s = op('show', '--file', rosterPath(), '--id', 'lane-a');
     expect(s.code, s.stdout + s.stderr).toBe(0);
     expect(s.body['windowNotices'] as unknown[]).toHaveLength(1);
-    expect(laneH(health())).toEqual({ id: 'lane-a', heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [],
-      sessionsUnmeasured: [] });
+    expect(laneH(health())).toEqual({ id: 'lane-a', anthropic: false, heldBack: [], heldBehind: [], blocked: [],
+      sessionsBehind: [], sessionsUnmeasured: [] });
   });
 
   it('an empty class held by a revert is behind the newest model of its stored family', () => {

@@ -1,6 +1,7 @@
 // shared/model-aliases.d.mts — hand-written, in `shared/model-advance.d.mts`'s shape: the `.mjs` beside it is what
 // runs, and this is what lets a TypeScript caller import it with types. Like the `.mjs`, it spells no class word.
 import type { ModelClass } from './models.js';
+import type { ClassAdvance } from './model-advance.mjs';
 
 /** One catalogue row. `efforts` is `null` when the row carries no effort field and `[]` only when the row says the
  *  model takes none (D-8750): the two are never folded. */
@@ -99,3 +100,14 @@ export declare function aliasesSourceCause(a: Aliases): AliasSourceCause | null;
 /** Whether a build of `laneVersion` can launch `row` (null: a target with no row, which names no minimum): a row naming
  *  a minimum is not launchable when the build is unreadable (`null`) or below it. */
 export declare function rowLaunchable(row: AliasRow | null, laneVersion: string | null): boolean;
+
+// ── a session behind its class's alias (Task A2.5) ──
+/** One running session's evidence: the class its routing record served (null: none, or `default`), the model its status
+ *  line last rendered, the render's time and the turn marker's `turnAt` (null when the session has no marker), both in
+ *  epoch milliseconds. */
+export interface AliasSession { cls: ModelClass | null; model: string; renderMs: number; turnAtMs: number | null }
+/** The exact fields `model-sessions-behind` reads; none is ever null. */
+export interface AliasBehind { class: ModelClass; from: string; to: string; movedAt: string; turnAt: string; renderAt: string }
+export declare function aliasSessionBehind(
+  session: AliasSession, cls: AliasClass | null, adv: ClassAdvance, lane: Aliases, nowMs: number,
+): AliasBehind | null;
