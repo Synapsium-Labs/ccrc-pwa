@@ -13466,10 +13466,7 @@ export interface ApprovalRulingRecordV1 {
 /** Record v2 (approvals plan 2026-11-18, §3.6, PR 3): v1's ten fields and three more, `authority`, `denyCurrent` (the
  *  child's deny rules were the box's current ones when the server signed) and `family`. Signed over all thirteen. */
 export interface ApprovalRulingRecordV2 extends Omit<ApprovalRulingRecordV1, 'v'> {
-  readonly v: 2;
-  readonly authority: ApprovalRulingAuthority;
-  readonly denyCurrent: boolean;
-  readonly family: ApprovalRulingFamily;
+  readonly v: 2; readonly authority: ApprovalRulingAuthority; readonly denyCurrent: boolean; readonly family: ApprovalRulingFamily;
 }
 /** Either record: what the one signing site signs and the ruling read serves. The name is the union (approvals PR 3), so
  *  the signer (`approvalsign.ts`), which signs whatever record it is handed, is unchanged: the signing path stays outside
@@ -13480,14 +13477,12 @@ export type ApprovalRulingRecord = ApprovalRulingRecordV1 | ApprovalRulingRecord
  *  those, in canonical form. `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented
  *  second copy of v1's bytes, held equal by `approval-verify.test.ts` (v2's copy is PR 3v's). */
 export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
-  const v1 = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
+  const fields: Record<string, unknown> = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
     nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt };
-  if (r.v !== 2) return canonicalJson(v1);
   // A v2 record's three fields, each only when present: a record that says `v: 2` without them (an older or a forged one)
   // keeps v1's bytes, which no verifier accepts as v2.
-  const v2: Record<string, unknown> = { ...v1 };
-  for (const k of ['authority', 'denyCurrent', 'family'] as const) if (r[k] !== undefined) v2[k] = r[k];
-  return canonicalJson(v2);
+  if (r.v === 2) for (const k of ['authority', 'denyCurrent', 'family'] as const) if (r[k] !== undefined) fields[k] = r[k];
+  return canonicalJson(fields);
 }
 
 /** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
