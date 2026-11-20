@@ -11,7 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { PLAN_REFUSALS } from '../../shared/plan.js';
 import { parsePlanTake, parsePlanTriage } from '../src/coord/planPolicy.js';
 import { clientRoutes } from './ccrcApiTable.js';
-import { parsePlanPhaseRef, parsePlanPut, parsePlanTicketDone } from '../src/coord/planPolicy.js';
+import { parsePlanTicketMove } from '../src/coord/planPolicy.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -127,21 +127,63 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('its "Keep the plan" examples (plan put with phases, phase-ref, ticket-done) parse as the routes parse them (programme work map WM5)', () => {
+  /** The "Keep the plan" section (programme work map WM5, D-8844), from its heading to the next one, whitespace flattened. */
+  const keepThePlan = (): string => {
     const text = plan();
-    const section = text.slice(text.indexOf('\n## Keep the plan'));
-    expect(section.length).toBeGreaterThan(1);
-    const bodyOf = (verb: string): unknown => {
-      const m = new RegExp(`"\\$API" plan ${verb} <slug> --json - <<JSON\\n([\\s\\S]*?)\\n\\s*JSON`).exec(section);
-      expect(m, `no ${verb} example`).not.toBeNull();
-      return JSON.parse(m![1]!) as unknown;
-    };
-    expect(parsePlanPut(bodyOf('put')).ok, 'plan put').toBe(true);
-    expect(parsePlanPhaseRef(bodyOf('phase-ref')).ok, 'plan phase-ref carry').toBe(true);
-    expect(parsePlanTicketDone(bodyOf('ticket-done')).ok, 'plan ticket-done').toBe(true);
-    const inline = [...section.matchAll(/`(\{"op":"add"[^`]+\})`/g)].map((m) => JSON.parse(m[1]!) as unknown);
-    expect(inline).toHaveLength(1);
-    expect(parsePlanPhaseRef(inline[0]).ok, 'plan phase-ref add').toBe(true);
+    const at = text.indexOf('\n## Keep the plan: the programme page shows what remains\n');
+    expect(at, 'no "Keep the plan" section').toBeGreaterThanOrEqual(0);
+    const next = text.indexOf('\n## ', at + 1);
+    return flat(text.slice(at, next === -1 ? undefined : next));
+  };
+
+  it('its "Keep the plan" section runs the three verbs and names, inside the section, each refusal it documents (review 2975 F6)', () => {
+    const section = keepThePlan();
+    for (const verb of ['put', 'ticket-add', 'phase-ref', 'ticket-done']) {
+      expect(section, `the section does not run plan ${verb}`).toContain(`"$API" plan ${verb} <slug> --json - <<JSON`);
+    }
+    for (const word of ['unknown-ref', 'bad-carry', 'evidence-unverified', 'ticket-required', 'ticket-unavailable', 'dropped-needs-reason',
+      'plan-runs-open', 'plan-bad-body', 'unknown-ticket', 'not-plan-owner', 'plan-closed']) {
+      expect(section, `the section does not name ${word}`).toContain(`\`${word}\``);
+    }
+    // each of the three words has its own recovery bullet, in the section
+    expect(section).toContain('- `unknown-ref`: the phase, epic or ticket the body names is not in the plan;');
+    expect(section).toContain('- `bad-carry`: the carry cannot stand.');
+    expect(section).toContain('- `evidence-unverified`: the evidence does not hold, and the ticket stays open (the detail names which condition).');
+    // the two capability sentences, which only the section carries
+    expect(section).toContain('`capability-missing` (the server does not advertise `plan-phases-v1`; nothing was sent)');
+    expect(section).toContain('`capability-missing` (the server does not advertise `plan-ticket-done-v1`; no ticket was changed)');
+  });
+
+  it('its "Keep the plan" section says what a put restates, the one thing a coordinator gets wrong (review 2975 F1)', () => {
+    const section = keepThePlan();
+    expect(section).toContain('**A put restates what it keeps.** Every live epic is restated, with its open checkpoints and the tickets you name; '
+      + 'a phase takes only an epic or ticket of the epics that put restates; every live phase is restated. One you leave out is refused '
+      + '`dropped-needs-reason`');
+    expect(section).toContain('The examples in this section run in order, on one plan');
+  });
+
+  it('its "Keep the plan" recoveries are written for the dropped, the carry and the evidence the code refuses (review 2975 F3, F4, F5)', () => {
+    const section = keepThePlan();
+    // F3: a dropped object is never declared again; a carry through a dropped phase is bad-carry
+    expect(section).toContain('A dropped phase, epic or ticket is never declared again: name a live object, or a new key.');
+    expect(section).toContain('(A carry to or from a dropped phase is `bad-carry`, below, not this.)');
+    // F4: ticket-required reads plan show, needs an open ticket with no run attached that is not an auto ticket, and also refuses a plan with no phases
+    expect(section).toContain('read `plan show` for the epic\'s open tickets');
+    expect(section).toContain('an open ticket with no run attached that is not an auto ticket');
+    expect(section).toContain('A ticket a planned run already holds is refused `ticket-unavailable`: name another ticket.');
+    expect(section).toContain('except where no live epic lists the run\'s wave and a live epic lists no waves: that is also `ticket-required` (phased or not)');
+    // F5: done only when the run ends done; a malformed body is plan-bad-body; the back-fill is one ticket per past run
+    expect(section).toContain('it is recorded done when that run ends `done`, and a run that ends `failed` puts the ticket back to open with no run');
+    expect(section).toContain('or the body is malformed: two evidence keys, a number that is not a positive integer, an unknown field');
+    expect(section).toContain('the landing line\'s ties of runs to pull requests could not be read; another ticket stores evidence that reads as neither kind');
+    expect(section).toContain('**One ticket per past run:** where one past run did several tasks, declare one ticket for it, and drop each extra ticket with `plan ticket-move`');
+  });
+
+  it('the drop body its back-fill line gives parses as `plan ticket-move` parses it (review 2975 F5)', () => {
+    const m = /`\{"ticket":"<key>","drop":\{"why":"<why>"\}\}`/.exec(keepThePlan());
+    expect(m, 'the back-fill line gives no drop body').not.toBeNull();
+    const body = JSON.parse(m![0].slice(1, -1).replace('<key>', 'w1-2').replace('<why>', 'cut from scope')) as unknown;
+    expect(parsePlanTicketMove(body).ok).toBe(true);
   });
 
   it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3)', () => {

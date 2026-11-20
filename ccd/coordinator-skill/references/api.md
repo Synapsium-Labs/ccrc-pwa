@@ -91,11 +91,11 @@ response said. The refusals you will actually meet are
   with no ticket; and at a wave a live epic lists, a named ticket that is unavailable
   (below) answers `ticket-unavailable` first.
 - `ticket-required`: no `ticket` was named, and either the plan has phases and the epic
-  that lists this wave still has an open ticket no run has started, or no live epic
-  lists this wave and a live epic lists no waves. Open again naming that ticket (in the
+  that lists this wave still has an open ticket with no run attached that is not an auto
+  ticket, or no live epic lists this wave and a live epic lists no waves. Open again naming that ticket (in the
   second case, a ticket of the epic that lists no waves).
 - `ticket-unavailable`: the ticket is done, dropped, started by another run, or an
-  Upkeep ticket. Name another, or open with none.
+  Upkeep ticket. Name another, or open with none unless `ticket-required` refuses that.
 - `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
 - `reserved-programme`: `linear-sync` is ccrc's own. Use your programme's slug.
 
