@@ -1,8 +1,10 @@
 // The programme page's Runs section and its head's Resume at every width (the runs rebuild, Task 19, D-8075; spec 2026-11-04
 // §8.5, §9.5, o8), in a real Chrome over the production build: 360, 390, 1280, 1470 and 1920 wide, both skins, both themes.
 // jsdom cannot lay a column out, so what the page FITS is measured here: no sideways page scroll, no row wider than its box,
-// Resume and the closed-waves fold at the tap floor, and the columns of o8: under 900 everything stacks (Goals, Waiting on you,
-// then Runs); from 900 Goals and Waiting on you share the first column and Runs is the other. Names are neutral.
+// Resume and the closed-waves fold at the tap floor, and the columns of o8, as WM4 amended them (D-8823): under 900 everything
+// stacks (Goals, Work, Waiting on you, then Runs); from 900 Goals and Work share the first column, and Waiting on you heads the
+// other, above Runs. This fixture's plan answers no work, so no Work card is drawn; `programme-work-page.browser.test.ts` draws it
+// and measures it. Names are neutral.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts browser/programme-page.browser.test.ts
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
@@ -59,6 +61,7 @@ const FIXTURE: AppFixture = {
     },
     '/api/runs/find': { ok: true, exact: null, runs: CLOSED, reviewsOf: [], next: null },
     '/api/programmes/prog-a/goals': { ok: true, goals: { program: 'prog-a', specPath: null, inShort: null, inShortAt: null, modifications: [] } },
+    '/api/programmes/prog-a/plan': { ok: true, plan: { program: 'prog-a', planned: false, initiatives: [], epics: [], doneWhen: [] } },
     '/api/programmes/prog-a/secrets': { ok: true, program: 'prog-a', slots: [] },
   },
   fleetFrames: [
@@ -111,11 +114,11 @@ for (const width of WIDTHS) {
                 const r = el.getBoundingClientRect();
                 return { text: el.textContent ?? '', quiet: el.dataset['quiet'], inside: r.left >= row.left - 1 && r.right <= row.right + 1 };
               });
-              const goals = box('.pv-main > .pv-card'), waiting = box('.pv-main section[aria-label="Waiting on you"]'), runs = box('[data-testid="programme-runs"]');
+              const goals = box('.pv-main > .pv-card'), waiting = box('.pv-side > section[aria-label="Waiting on you"]'), runs = box('[data-testid="programme-runs"]');
               return {
                 tap, vw: innerWidth, page: document.documentElement.scrollWidth - document.documentElement.clientWidth, rows,
                 resume: box('[data-testid="programme-facts"] .pv-resume').height, fold: box('[data-fold="closed"] .programme-fold-toggle').height,
-                goals: { l: goals.left, r: goals.right, b: goals.bottom }, waiting: { l: waiting.left, t: waiting.top, b: waiting.bottom },
+                goals: { l: goals.left, r: goals.right, t: goals.top, b: goals.bottom }, waiting: { l: waiting.left, r: waiting.right, t: waiting.top, b: waiting.bottom },
                 runs: { l: runs.left, r: runs.right, t: runs.top },
                 rowCount: rows.length, seen,
               };
@@ -132,13 +135,15 @@ for (const width of WIDTHS) {
             for (const x of m.seen) expect(x.inside, `${x.text} inside its row`).toBe(true);
             expect(m.resume, 'Resume at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
             expect(m.fold, 'the closed waves fold at the tap floor').toBeGreaterThanOrEqual(m.tap - 1);
-            expect(m.waiting.t, 'Waiting on you sits under Goals').toBeGreaterThanOrEqual(m.goals.b - 1);
-            expect(Math.abs(m.waiting.l - m.goals.l), 'in the same column').toBeLessThanOrEqual(1);
+            // Runs sits under Waiting on you in one column, always: the right column from 900, the stack below it.
+            expect(Math.abs(m.runs.l - m.waiting.l), 'Runs is in Waiting on you\'s column').toBeLessThanOrEqual(1);
+            expect(m.runs.t, 'Runs sits under Waiting on you').toBeGreaterThanOrEqual(m.waiting.b - 1);
             if (width > 900) {
-              expect(m.runs.l, 'Runs is the other column').toBeGreaterThanOrEqual(m.goals.r - 1);
-              expect(m.runs.t, 'beside Goals, not under it').toBeLessThan(m.goals.b);
+              expect(m.waiting.l, 'Waiting on you is the other column').toBeGreaterThanOrEqual(m.goals.r - 1);
+              expect(Math.abs(m.waiting.t - m.goals.t), 'Waiting on you heads its column, level with Goals').toBeLessThanOrEqual(1);
             } else {
-              expect(m.runs.t, 'Runs stacks after Waiting on you').toBeGreaterThanOrEqual(m.waiting.b - 1);
+              expect(m.waiting.t, 'Waiting on you stacks after Goals').toBeGreaterThanOrEqual(m.goals.b - 1);
+              expect(Math.abs(m.waiting.l - m.goals.l), 'in the same column').toBeLessThanOrEqual(1);
             }
             expect(errors.filter((e) => !e.includes('Transition was skipped'))).toEqual([]);
           } finally {

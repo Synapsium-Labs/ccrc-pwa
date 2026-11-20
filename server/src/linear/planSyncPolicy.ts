@@ -50,6 +50,9 @@ export interface SyncSnapshot {
    *  measured repository): the issue is linked to it unless the branch already carries the issue's identifier, in which
    *  case Linear's own GitHub integration links it. Absent: no PR is known. */
   ticketPrs?: Record<number, { url: string; number: number; branch: string | null }>;
+  /** The tickets put back under an epic that stays (`putBackTicketsOf`, wave 3 F3/F5 carried to wave 7, D-8186): the snapshot
+   *  leaves the tickets out, but a bound one's issue may still sit in the epic's project, so its held team stays on it. */
+  putBackTickets?: { epicId: number; ticketId: number }[];
 }
 
 export type SkipWhy = 'initiatives-off' | 'no-team-key' | 'status-missing' | 'workspace-mismatch' | 'ticket-workspace-mismatch' | 'text-public';
@@ -87,6 +90,11 @@ export function withoutPutBack(plan: StoredPlan): StoredPlan {
       ...e, checkpoints: e.checkpoints.filter((c) => c.putBackAt === null), tickets: e.tickets.filter((t) => t.putBackAt === null),
     })),
   };
+}
+
+/** The tickets `withoutPutBack` leaves out under an epic it keeps, by their epic's id (wave 3 F3/F5, carried to wave 7, D-8186). */
+export function putBackTicketsOf(plan: StoredPlan): { epicId: number; ticketId: number }[] {
+  return plan.epics.filter((e) => e.putBackAt === null).flatMap((e) => e.tickets.filter((t) => t.putBackAt !== null).map((t) => ({ epicId: e.id, ticketId: t.id })));
 }
 
 // ── Fingerprints and ids ──
@@ -473,15 +481,20 @@ export function planSyncSteps(s: SyncSnapshot, opts: { force?: ReadonlyMap<numbe
     // F3 (Review Focus 3): a ticket bound here keeps the team its issue sits in on the project, whatever its project key does
     // now: cleared or moved to another workspace (the issue is not moved), and (M2) re-keyed inside this workspace until the
     // move binds, so the project gains the new team first and drops the old one only after the issue left it.
+    // Wave 3 F3/F5, carried to wave 7 (D-8186): a ticket put back keeps its held team too, as its issue may still sit in the
+    // project; a `retired` binding (an issue the migration set aside, review 2892 F5) holds none.
+    const heldTeam = (ticketId: number): string[] => {
+      const tb = bindingOf('ticket', ticketId, wsId);
+      const held = tb === undefined || tb.state === 'retired' || tb.linearId === null || tb.teamKey === null ? undefined
+        : pl.ws.teams.find((k) => k.key.toLowerCase() === tb.teamKey!.toLowerCase());
+      return held === undefined ? [] : [held.id];
+    };
     const teamIds = [...new Set([pl.teamId, ...e.tickets.flatMap((t) => {
       if (effTicket(eff, t).state === 'dropped') return [];
       const tp = placeOf(t.project);
       const planned = tp.ok && tp.workspaceId === wsId ? [tp.teamId] : [];
-      const tb = bindingOf('ticket', t.id, wsId);
-      const held = tb === undefined || tb.linearId === null || tb.teamKey === null ? undefined
-        : pl.ws.teams.find((k) => k.key.toLowerCase() === tb.teamKey!.toLowerCase());
-      return held === undefined ? planned : [...planned, held.id];
-    })])].sort();
+      return [...planned, ...heldTeam(t.id)];
+    }), ...(s.putBackTickets ?? []).filter((x) => x.epicId === e.id).flatMap((x) => heldTeam(x.ticketId))])].sort();
     const pBody = projectBody({ ...e, state: eff.state, droppedWhy: eff.why }, prog?.title ?? '', off && prog !== null);
     const planned = { name: fitProjectName(e.title), description: fitLinearDescription(pBody), statusId: pStatus, teamIds, initiativeId };
     const plannedTeamKeys = planned.teamIds.flatMap((id) => { const t = pl.ws.teams.find((k) => k.id === id); return t === undefined ? [] : [t.key]; });

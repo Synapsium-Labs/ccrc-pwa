@@ -51,7 +51,7 @@ import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from
 import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, directoryMissed, directoryWaitVerdict, dispatchWaitVerdict, nextDirectoryStreak, probeEpisodeText, probeRecheckDue, probeWaitsVerdict, initiativesItemInput, initiativesItemVerdicts, initiativesItemsToSettle, issueReadVerdict, planSyncSteps, requeueVerdict, type PlannedOwned,
-  withoutPutBack, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
+  withoutPutBack, putBackTicketsOf, textFactsOf, textRefusalOf, type AdoptionAsk, type DeferCause, type Deferral, type DirectoryStreak, type FillLook, type AdoptionKind, type AdoptionNode, type IssueRead, type Local, type RequeueVerdict, type SyncSnapshot, type SyncStep,
 } from './planSyncPolicy.js';
 
 /** A due row is taken once its `dueAt` is this old: the plan routes mark a programme due at the write time, and a burst of
@@ -96,6 +96,9 @@ export interface RestoreOutcome { bindingId: number; outcome: 'restored' | 'moot
 export interface PlanSyncDeps {
   /** For the mail and for `goalsFor`, `linkingOf` and `programs()` only: every plan read and write goes through `plan`. */
   coord: CoordStore;
+  /** D-8796: the objects an approved or applying migration still writes, as `<bindingKind>:<localId>` (`planStore.ts#migratingLocals`);
+   *  their steps go on lane `migration`. Absent (a test, a script): none. */
+  migrating?: () => ReadonlySet<string>;
   plan: PlanStorePort;
   ccrcDir: string;
   /** The Linear store as the routes read it: where each workspace's slot, its key digest and its team ids live. */
@@ -122,7 +125,9 @@ export interface SlotInfo { ref: LinearSlotRef; digest: string; teams: { id: str
 /** The drift pass's restore pass, taken from the list (never spelled beside `'plan-sync'`: the list is policy.ts's alone). */
 export type RestorePass = Extract<CcrcPass, `${string}restore`>;
 /** Which of ccrc's passes a send belongs to: the sync's own, or the restore's (D-8183: a restore's calls are journaled `drift-restore`). */
-type SendPass = 'plan-sync' | RestorePass;
+type SendPass = 'plan-sync' | 'migration' | RestorePass;
+/** D-8796 (condition 1, spec §10.6): a send's rate lane follows its pass, so a migration's writes never spend the sync's share. */
+const laneOf = (pass: SendPass): 'sync' | 'migration' => (pass === 'migration' ? 'migration' : 'sync');
 /** `next`: go on; `defer`: the pass ends and its programme row is deferred; `held`: the step's workspace is held for this
  *  programme (D-8183) and the pass goes on with the steps in other workspaces. */
 type Flow = 'next' | 'defer' | 'held';
@@ -310,6 +315,15 @@ export class PlanSync {
     return built === null ? null : { bindings: built.snap.bindings, owned: planSyncSteps(built.snap).owned };
   }
 
+  /** D-8796 (D-8186, Task 7.3): what the sync plans for ONE binding's owned fields, from the very snapshot and deciders a pass
+   *  sends by, computed synchronously from a store the caller has read, so the migration takes it inside the transaction that
+   *  adopts the issue and writes its move row (its after-state is then the sync's by construction). Read-only, as `plannedOwned`:
+   *  no episode advances and no fill is asked. Null: the key has no snapshot, or the plan places nothing for that binding now. */
+  plannedOwnedNow(key: string, store: LinearStoreRead, bindingId: number): PlannedOwned | null {
+    const built = this.snapshot(key, store, true);
+    return built === null ? null : planSyncSteps(built.snap).owned.find((o) => o.bindingId === bindingId) ?? null;
+  }
+
   /** The drift pass's restore (D-8183, §7.2): it puts the named bindings' planned fields back, in the key's flight, so it runs
    *  after any pass in flight and never between two of its steps. It RE-READS THE PLAN INSIDE THE FLIGHT: a target whose
    *  binding is gone, no longer `bound`, or whose fingerprint is no longer the one the drift pass read (`seen`) is `moot`,
@@ -472,8 +486,10 @@ export class PlanSync {
   private ticketOfRun(runId: number): { run: NonNullable<Extract<ReturnType<CoordStore['run']>, { ok: true }>['run']>; ticket: TicketRow } | null {
     const read = this.deps.coord.run(runId);
     if (!read.ok || read.run === null) return null;
-    const ticket = this.deps.plan.planOf(read.run.program).epics.flatMap((e) => e.tickets).find((t) => t.runId === runId);
-    return ticket === undefined ? null : { run: read.run, ticket };
+    // The store's one reader of a run's ticket (review 2892 F9): a ticket put back is not the run's (wave 3 A5, carried to wave 7).
+    const own = this.deps.plan.ticketOfRun(runId);
+    const ticket = own === null || own.ticketId === null ? null : this.deps.plan.ticketById(own.ticketId);
+    return ticket === null ? null : { run: read.run, ticket };
   }
 
   // ── One pass ──
@@ -537,7 +553,8 @@ export class PlanSync {
         } else if (held.length > 0) this.deferUntil(slug, held[0]!.until, held[0]!.why);   // the earliest workspace hold (D-8702)
         return 'deferred';                                   // not configured: the due row stays for the next tick
       }
-      const flow = await this.execute(slug, runnable[0]!, built, deadlineAt, 'plan-sync');
+      const step = runnable[0]!;
+      const flow = await this.execute(slug, step, built, deadlineAt, this.chargeOf(step));
       if (flow === 'defer') return 'deferred';          // `held`: that workspace is out of this pass, the others go on
     }
   }
@@ -561,7 +578,8 @@ export class PlanSync {
     const found = upkeep ? undefined : coord.programs().find((p) => p.slug === slug);
     const prog = rowid === null || found === undefined ? null : { rowid, row: found };
     if (!upkeep && prog === null) return null;
-    const stored = withoutPutBack(upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug));   // Task 3.1: a record Put back dropped is never in the snapshot
+    const raw = upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug);
+    const stored = withoutPutBack(raw);   // Task 3.1: a record Put back dropped is never in the snapshot
     if (upkeep && stored.epics.length === 0) return null;
     const bindings = plan.bindingsOf(slug);
     const planEnd = upkeep ? null : plan.planEndOf(slug);
@@ -614,7 +632,7 @@ export class PlanSync {
         end: outcome === null ? null : { outcome, why: planEnd?.why ?? null, at: planEnd?.at ?? this.deps.now() },
         doneWhen: planViewOf(stored, goals.doneWhen ?? [], bindings).doneWhen, paused: prog.row.state === 'paused',
       },
-      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs,
+      plan: stored, bindings, workspaces, projects, privateTrackerKeys: [...this.deps.privateTrackerKeys], ticketPrs, putBackTickets: putBackTicketsOf(raw),
     };
     return { snap, slots, waiting, unread };
   }
@@ -703,7 +721,7 @@ export class PlanSync {
       send = verdict === 'state-held' ? withoutState(step) : step;
       if (step.comment !== undefined) {
         const c = await this.deps.call({
-          op: 'issueComment', pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
+          op: 'issueComment', pass, lane: laneOf(pass), slot: slot.ref, workspaceId: step.workspaceId, teamKey: currentTeam,
           target: b.identifier ?? b.linearId, fields: ['body'], input: { requestId: step.comment.requestId, issueId: b.linearId, body: step.comment.body },
         });
         // C13: a `conflict` answer is a comment made already (same id): done, like an ok.
@@ -940,16 +958,22 @@ export class PlanSync {
     return this.deps.plan.bindingsOf(slug).find((b) => b.id === id) ?? null;
   }
 
+  /** D-8796 (condition 1): a step for an object a migration adopted or declared, while its move row is not applied, is charged
+   *  to lane `migration` and journalled with pass `migration`; every other step is the sync's own. */
+  private chargeOf(step: SyncStep): SendPass {
+    return step.kind !== 'skip' && (this.deps.migrating?.().has(`${step.local.kind}:${step.local.id}`) ?? false) ? 'migration' : 'plan-sync';
+  }
+
   private askOf(step: Exclude<SyncStep, { kind: 'skip' }>, slot: SlotInfo, b: BindingRow | null, pass: SendPass): CcrcOpAsk {
     const target = step.kind === 'create' ? null : step.op === 'issueUpdate' || step.op === 'issueLink' ? (b?.identifier ?? b?.linearId ?? null) : (b?.linearId ?? null);
     return {
-      op: step.op, pass, lane: 'sync', slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
+      op: step.op, pass, lane: laneOf(pass), slot: slot.ref, workspaceId: step.workspaceId, teamKey: step.teamKey, target, fields: step.fields, input: step.input,
       ...(step.teamKeys === undefined ? {} : { teamKeys: step.teamKeys }),
     };
   }
 
   private readAsk(op: CcrcOpAsk['op'], s: Subject, teamKey: string | null, input: CcrcOpAsk['input']): CcrcOpAsk {
-    return { op, pass: s.pass, lane: 'sync', slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
+    return { op, pass: s.pass, lane: laneOf(s.pass), slot: s.slot.ref, workspaceId: s.workspaceId, teamKey, target: null, fields: [], input };
   }
 
   /** The binding is failed with the word, and the coordinator is told once per object and word. */
@@ -1084,6 +1108,7 @@ export function planSyncFor(o: {
       await (slot.source === 'legacy' ? markLinearRejected(o.ccrcDir, digest, now) : markLinearSlotRejected(o.ccrcDir, slot.id, digest, now));
     },
     now: Date.now, privateTrackerKeys: o.privateTrackerKeys, prOfRun: prOfRunFrom(o.coord, o.currentFleet ?? (() => null)),
+    migrating: () => o.plan.migratingLocals(),
     upkeepOwnerOf: (project) => linearOwnerOfProject(project, o.plan.hierarchyProjectsOf(), {
       latestProgrammeCoordinator: (p) => o.plan.latestProgrammeCoordinator(p), presence: o.presenceOf,
     }).id,

@@ -39,7 +39,7 @@ import {
   type SecretSaveAnswer, type SecretUnmasked, SECRET_TAIL_MIN,
 } from '../../../shared/ledgers';
 import type { AuthStatus, FleetSession, RunSummary } from '../../../shared/api';
-import type { MapCounts, MapEntry } from '../../../shared/plan';
+import type { MapCounts, MapEntry, MigrationView } from '../../../shared/plan';
 import type { ProgHue } from '../fleet/programmeBoxes';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
 import { useStepUp, type StepUpDeps } from '../accounts/useStepUp';
@@ -102,9 +102,9 @@ export interface ItemViewProps {
   /** The page of an item a reference in the text names ("item 12"), or null for a number that is no item (D-8194). Absent, every
    *  reference stays text. The route decides; this file names no route. */
   readonly itemHref?: (id: number) => string | null;
-  /** A map approval's or migration report's body (counts and entries; D-8737). Absent, such an item draws its why and how with
-   *  its controls; the read that hands it comes with the migration (wave 7). */
-  readonly migration?: { readonly counts: MapCounts; readonly entries: readonly MapEntry[] };
+  /** A map approval's or migration report's body (D-8737, D-8186): counts, entries, each programme's epics and checkpoints, and the
+   *  report's lists. `ItemRoute` reads it from `GET /api/migrations/:id`. Absent, such an item draws its why and how with its controls. */
+  readonly migration?: { readonly counts: MapCounts; readonly entries: readonly MapEntry[]; readonly structure?: MigrationView['structure']; readonly report?: MigrationView['report'] };
 }
 
 /** Sends a secret item's value to its own route (`api.saveItemSecret`): the slot's state comes back, never the value. */
@@ -567,7 +567,8 @@ export function ItemView({ item, onTick, onDismiss, programmeLive, now, programm
             </section>
           )}
           {migration !== undefined && (item.action?.verb === 'linear-map' || item.action?.verb === 'linear-report') && (
-            <MigrationBody kind={item.action.verb === 'linear-map' ? 'map' : 'report'} counts={migration.counts} entries={migration.entries} />
+            <MigrationBody kind={item.action.verb === 'linear-map' ? 'map' : 'report'} counts={migration.counts} entries={migration.entries}
+                           {...(migration.structure === undefined ? {} : { structure: migration.structure })} {...(migration.report === undefined ? {} : { report: migration.report })} />
           )}
           <section>
             <h3 className="wi-h">History</h3>

@@ -2,7 +2,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   PLAN_REFUSALS, isPlanKebab, isPlanKey, PLAN_BOUNDS, EPIC_STATES, TICKET_STATES, HIERARCHY_STATES, PHASE_REF_KINDS, PHASE_REF_OPS,
-  LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE, INBOUND_STATES,
+  LINEAR_SYNC_PROGRAMME, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE, INBOUND_STATES, MAP_CLASSES,
 } from '../../shared/plan.js';
 import { REFUSAL_STATUS, ROUTE_REFUSALS, RUN_REFUSAL_STATUS } from '../../shared/refusal.js';
 import { RUN_REFUSE_CODES, isRunRefuseCode, SERVER_CAPS } from '../../shared/api.js';
@@ -28,6 +28,8 @@ describe('the plan vocabulary (D-8181)', () => {
       ...PHASE_REF_KINDS, ...PHASE_REF_OPS]) {
       expect(isPlanKebab(w), w).toBe(true);
     }
+    // D-8186, Task 7.1: the migration map's classes.
+    for (const w of MAP_CLASSES) expect(isPlanKebab(w), w).toBe(true);
     expect(isPlanKebab('run-unreadable')).toBe(false);
     expect(isPlanKebab('plan-bogus')).toBe(false);
   });

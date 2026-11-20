@@ -9,7 +9,7 @@ import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
 import { ITEM_DOOR_WORDS } from '../src/ledgers/ItemActs';
 import { LINEAR_GROUP_WORDS, LINEAR_ITEM_TEXT } from '../src/ledgers/migrationWords';
-import { LEDGER_REFUSAL_TEXT, LINEAR_ITEM_REFUSAL_TEXT, linearItemErrorText } from '../src/lib/refusalWords';
+import { LEDGER_REFUSAL_TEXT, LINEAR_ITEM_REFUSAL_TEXT, MIGRATE_REFUSAL_TEXT, linearItemErrorText } from '../src/lib/refusalWords';
 import { ItemView } from '../src/ledgers/ItemView';
 import { LinearItemControls } from '../src/ledgers/LinearItemControls';
 import { MigrationBody } from '../src/ledgers/MigrationBody';
@@ -116,6 +116,31 @@ describe('the hierarchy items\' controls', () => {
     expect(onActed).not.toHaveBeenCalled();
   });
 
+  it('Return is never sent with a blank note, and every refusal of the map and report acts is a fixed sentence (D-8186)', async () => {
+    const call = sent();
+    controls({ verb: 'linear-map', migrationId: 3 });
+    fireEvent.change(screen.getByRole('textbox', { name: /note/i }), { target: { value: '   ' } });
+    click('Return');
+    expect(call).not.toHaveBeenCalled();
+    cleanup();
+    const words: [string, number, string][] = [
+      ['migration-in-flight', 409, LINEAR_ITEM_REFUSAL_TEXT['migration-in-flight']],
+      ['not-open', 409, LEDGER_REFUSAL_TEXT['not-open']],
+      ['item-act-mismatch', 409, 'That item does not take this action, so nothing was changed. Reload the item and choose again.'],
+      ['not-found', 404, LINEAR_ITEM_REFUSAL_TEXT['not-found']],
+    ];
+    for (const [error, status, sentence] of words) {
+      vi.spyOn(api, 'linearItemAct').mockRejectedValue(new ApiError(status, { ok: false, error, detail: 'box text that must not show' }));
+      controls({ verb: 'linear-report', migrationId: 3 });
+      click('Done');
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent, error).toBe(sentence);
+      expect(document.body.textContent).not.toContain('box text');
+      cleanup();
+      vi.restoreAllMocks();
+    }
+  });
+
   it('Name offers the live coordinators and sends {act:"name", owner} after its confirm', async () => {
     vi.spyOn(api, 'hierarchy').mockResolvedValue({ ok: true, projects: [], coordinators: [{ id: 'coord-a', live: true }, { id: 'coord-b', live: false }] });
     const call = sent();
@@ -157,6 +182,17 @@ describe('the hierarchy items\' controls', () => {
       expect(group.getAttribute('aria-label')).not.toBe(verb);
       cleanup();
     }
+  });
+
+  it('migration-in-flight says what it means at each door (review 2892 A3)', () => {
+    // On an item act it is put back after the team's next migration started: refused for good, so no "try again".
+    const putBack = LINEAR_ITEM_REFUSAL_TEXT['migration-in-flight'];
+    expect(putBack).toContain('can no longer be put back');
+    expect(putBack).not.toMatch(/try again/iu);
+    // On Reshape in Linear it is another team's open migration (one team at a time) or this team migrated already.
+    const start = MIGRATE_REFUSAL_TEXT['migration-in-flight'];
+    expect(start).toContain('one team at a time');
+    expect(start).toContain('already migrated');
   });
 
   it.each([

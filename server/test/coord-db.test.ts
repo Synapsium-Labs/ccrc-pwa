@@ -769,10 +769,12 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1),
     // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, waiting workers sleep, D-8790),
     // and MIGRATIONS[111] (the cap-counts-working lane-arm row, the dispatch cap counts only working workers, D-8792),
-    // and MIGRATIONS[112] (runs.admissionWaitSince, lastRefusedAt and admissionWokenAt, the admission wait, D-6095).
-    // and MIGRATIONS[113] (runs.inPlace, the in-place bind, D-6096).
-    expect(COORD_SCHEMA_VERSION).toBe(114);
-    expect(MIGRATIONS.length).toBe(114);
+    // and MIGRATIONS[112] (runs.admissionWaitSince, lastRefusedAt and admissionWokenAt, the admission wait, D-6095),
+    // and MIGRATIONS[113] (linear_migrations.project, report, putBackAskedAt and reportDoneAt, the per-team migration, Linear
+    // hierarchy wave 7, D-8186),
+    // and MIGRATIONS[114] (runs.inPlace, the in-place bind, D-6096).
+    expect(COORD_SCHEMA_VERSION).toBe(115);
+    expect(MIGRATIONS.length).toBe(115);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -912,8 +914,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, D-8790),
     // and MIGRATIONS[111] (the cap-counts-working lane-arm row, D-8792),
     // and MIGRATIONS[112] (the admission wait columns, D-6095),
-    // and MIGRATIONS[113] (runs.inPlace, D-6096); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(114);
+    // and MIGRATIONS[113] (the per-team migration's columns, Linear hierarchy wave 7),
+    // and MIGRATIONS[114] (runs.inPlace, D-6096); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(115);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();

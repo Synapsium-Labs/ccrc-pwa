@@ -3,7 +3,7 @@
 // refusal says are `refusalWords.ts`'s (`linkingErrorText`); the box's own text never reaches the screen.
 import type { HierarchyProjectRow } from '../../../shared/plan';
 import { ApiError, writeOutcomeUnknown } from '../lib/apiError';
-import { linkingErrorText } from '../lib/refusalWords';
+import { linkingErrorText, migrateRefusalText, refusalText } from '../lib/refusalWords';
 import { isPlaceableInstant, releaseDate } from '../lib/format';
 
 /** The labels. Short words only. */
@@ -22,12 +22,39 @@ export const HIERARCHY_TEXT = {
   unreadable: 'The hierarchy settings could not be read. Reload this page to try again.',
   rereadFailed: 'The hierarchy settings could not be read again. What is shown may be out of date, and a row you changed stays locked until they are read again.',
   readAgain: 'Read again',
+  reshape: 'Reshape in Linear',
+  reshapeConfirm: 'Ask for the map',
+  reshapeAsked: "Asked the team's Linear owner for the map. It waits for you as an item; nothing changes in Linear until you approve it.",
   /** A write whose outcome is unknown (no answer, or a 5xx that can follow a commit): the generic refusal says "Nothing was changed", which may be false. */
   unconfirmed: 'The server could not confirm that it saved this. The settings are read again before you can change them.',
 } as const;
 
 /** The sentence under a hierarchy-card write that failed: the unconfirmed one when the write may have landed, else the refusal's fixed sentence. */
-export const hierarchyWriteText = (err: unknown): string => (writeOutcomeUnknown(err) ? HIERARCHY_TEXT.unconfirmed : linkingErrorText(err));
+/** A hierarchy or linking write whose outcome is unknown. Those routes answer 503 `unavailable` BEFORE any write (no plan store,
+ *  no coordination store), so that pair is a refusal, never unknown (D-8186, review run 2491 A7); every other 5xx and a missing
+ *  answer may follow a commit. */
+export const hierarchyOutcomeUnknown = (err: unknown): boolean =>
+  writeOutcomeUnknown(err) && !(err instanceof ApiError && err.status === 503 && refusalText(err, REFUSED_BEFORE_WRITE) !== null);
+/** The 503 word those routes answer before any write, read through `refusalText` (ARCH-13b), never compared as a literal. */
+const REFUSED_BEFORE_WRITE: Readonly<Record<'unavailable', string>> = {
+  unavailable: 'The box could not reach its stores, so nothing was changed.',
+};
+/** The sentence for a failed hierarchy or linking write: the unconfirmed line when its outcome is unknown, else the word's sentence. */
+export const hierarchyWriteText = (err: unknown): string => (hierarchyOutcomeUnknown(err) ? HIERARCHY_TEXT.unconfirmed : linkingErrorText(err));
+
+/** The sentence for a failed migrate: its own refusals first (`unreachable` is a 503 that wrote nothing, so it is never "unconfirmed"),
+ *  then the unconfirmed line when the outcome is unknown, else the word's sentence. */
+export const migrateWriteText = (err: unknown): string => migrateRefusalText(err) ?? hierarchyWriteText(err);
+/** Whether a failed migrate may have started one: anything but the refusals that wrote nothing. */
+export const migrateOutcomeUnknown = (err: unknown): boolean => migrateRefusalText(err) === null && hierarchyOutcomeUnknown(err);
+
+/** The Reshape control's rule: a project with a team key that is not migrated or was put back (design §11.1). */
+export const reshapeOffered = (row: Pick<HierarchyProjectRow, 'state' | 'teamKey'>): boolean =>
+  row.teamKey !== null && (row.state === 'not-migrated' || row.state === 'put-back');
+/** The confirm's title and its sentence: nothing changes in Linear until the operator approves the map the team's owner proposes. */
+export const reshapeTitle = (team: string): string => `Reshape team ${team} in Linear?`;
+export const reshapeConsequence = (team: string): string =>
+  `The Linear owner of team ${team} is asked to propose a map of how its issues fit the plan. Nothing changes in Linear until you approve that map.`;
 
 /** The ONE reader of "the hierarchy route is absent": an older server answers the read with a 404, which is not a failed read. The
  *  linking card and the add-project sheet both draw no hierarchy controls and say nothing for it. */

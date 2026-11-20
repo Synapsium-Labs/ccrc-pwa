@@ -13,7 +13,7 @@ import { designationFactFrom, designationFactOf } from '../roleOf.js';
 
 /** How a lane reaches the check. The census (`overlord-other-lanes-census.test.ts`) reads this column. */
 export type OtherLaneVia =
-  | 'attribution' | 'ingress' | 'landing-write' | 'linear-proxy' | 'plan-door' | 'open-run-gate' | 'reclaim-heir';
+  | 'attribution' | 'ingress' | 'landing-write' | 'linear-proxy' | 'plan-door' | 'plan-map' | 'open-run-gate' | 'reclaim-heir';
 
 const DOORS = 'overlord-uses-its-doors' as const;
 const CLAIMANT = 'overlord-not-a-coordinator' as const;
@@ -43,6 +43,9 @@ export const OTHER_LANES = {
   planClose: { route: 'POST /api/programmes/:slug/plan/close', word: DOORS, via: 'plan-door' },
   planTake: { route: 'POST /api/programmes/:slug/plan/take', word: DOORS, via: 'plan-door' },
   planTriage: { route: 'POST /api/teams/:team/plan/triage', word: DOORS, via: 'plan-door' },
+  // D-8186: the migration map's door reads the team's open issues before the mutex, so it asks the check itself (not through
+  // `door`): after attribution, before that read and `serial` (the census's `plan-map` case).
+  planMap: { route: 'POST /api/teams/:team/plan/map', word: DOORS, via: 'plan-map' },
   runOpen: { route: 'POST /api/runs', word: CLAIMANT, via: 'open-run-gate' },
   runReclaim: { route: 'POST /api/runs/:id/reclaim', word: CLAIMANT, via: 'reclaim-heir' },
 } as const satisfies Record<string, { route: string; word: OverlordRefusal; via: OtherLaneVia }>;
@@ -74,7 +77,7 @@ export const OVERLORD_PROFILE: FleetRole = 'overlord';
 /** The kebab words this file spells that are no wire refusal: the `via` column, the verdict's and the profile read's
  *  own kinds. The mail-routes kebab census admits them through `isOtherLaneKebab`; the refusal words are
  *  `OVERLORD_REFUSALS`' and admitted there. */
-export const OTHER_LANE_KEBABS = ['landing-write', 'linear-proxy', 'plan-door', 'open-run-gate', 'reclaim-heir',
+export const OTHER_LANE_KEBABS = ['landing-write', 'linear-proxy', 'plan-door', 'plan-map', 'open-run-gate', 'reclaim-heir',
   'pass-unmeasured', 'not-read'] as const;
 export const isOtherLaneKebab = (w: string): boolean => (OTHER_LANE_KEBABS as readonly string[]).includes(w);
 
