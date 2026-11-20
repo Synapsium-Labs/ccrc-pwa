@@ -74,6 +74,7 @@ disk was slow that day. **Measured**.
 | `topology-clean`, `deviation-refs` (after `git fetch origin main`) | 61 and 34 passed (load 16 to 17) |
 | `tsc --noEmit` for `server` (src and shared), `pwa`, and `server/test/tsconfig.tests.json` (the whole test tree) | clean (the test tree's check needed `agent`'s dependencies installed in this worktree first) |
 | `pwa`: `stores`, `highlight-store`, `store-unsubscribe`, `waiting-store`, `session-store-helpers`, and every test file that imports `stores/session` or `shared/workflows` (48 files) | all passed: 52 test files (load 8 to 10) |
+| CI's fast run at the first push (`2855d929ce`) | `server 6/12` red, for real: `collect-lane-l0.test.ts` pins `shared/api.ts`'s import lines verbatim, and this task's consented edit of the workflows import changed one; `peers-claims-l0.test.ts` pins the same line. Neither was in this task's local list (they read `shared/api.ts` as text and import none of the changed modules). Both pins now carry the new line: 8 and 19 passed (load 12) |
 | A merge probe against `origin/main` at `c5cb8538d7` | clean (`git merge-tree` exit 0): no absorption licensed |
 
 The private-name scan (the canonical matcher plus the operator's local list) over the tracked tree and over the PR body prints
