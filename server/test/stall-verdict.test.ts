@@ -4,7 +4,7 @@
 // dispatch time, a mail id or time the census does not give) is marked `chosen` where it is defined.
 import { describe, it, expect } from 'vitest';
 import {
-  stallVerdict, stallFacts, stallSubjects, isStallKebab, stallQuietMs,
+  stallVerdict, stallFacts, stallSubjects, stallCoordinatorSubjects, isStallKebab, stallQuietMs,
   STALL_QUIET_MS, STALL_ESCALATE_MS, STALL_OPERATOR_MS, LIMIT_HOLD_CAP_MS, AUTO_CONTINUE_RECENT_MS,
   COORD_BALL_CAP_MS, ASK_DIALOG_SLACK_MS,
   STALL_CHECK_PREFIX, STALL_REPLY_PREFIX, STALL_REPLY_WAITING_PREFIX, STALL_REPORT_PREFIX, STALL_WAIT_PREFIX,
@@ -520,6 +520,14 @@ describe('golden fixtures (spec §1 measured times)', () => {
     expect(v({ notices: [notice('live', 'quiet', 1, lastOn29, R1)], coordinator: 'alive' }, R1 + H)).toEqual(r2(lastOn29, COORD));
     const wait29 = mailRow(2902, lastOn29 + 30 * MIN, 'demo-old-coord', WORKER, 'status', `${STALL_WAIT_PREFIX} rebase run 29 first`, 29);
     expect(v({ mail: [own29, wait29] }, lastOn29 + 3 * H)).toEqual(NONE);
+  });
+
+  it('an in-place run is no worker subject: its session is its claimant and stays a coordinator subject (D-8126)', () => {
+    const inPlace = runRow({ id: 41, sessionId: COORD, claimedBy: COORD, dispatchedAt: null, inPlace: true });
+    const other = runRow({ id: 42, sessionId: 'demo-other-worker', claimedBy: COORD });
+    expect(stallSubjects([inPlace, other]).map((x) => x.primary.id)).toEqual([42]);
+    expect(stallSubjects([inPlace])).toEqual([]);
+    expect(stallCoordinatorSubjects([inPlace, other]).map((c) => [c.sessionId, c.runs.map((r) => r.id)])).toEqual([[COORD, [41, 42]]]);
   });
 
   it('a declared-idle legit wait: a question holds the watch through the 28.7 h legit maximum, and coord-ball fires once at 30 h', () => {
