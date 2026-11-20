@@ -4,16 +4,13 @@
 // both unlisted. `unownedWork` (`delegationWords.ts`, L1) decides every row, count and word; this draws what it says, and its
 // acts are `WorktreeControls`' (the same two doors and the same asking first as the session's own worktree rows). It draws
 // no liveness word and no bare `unmeasured`, and no `title`: a phone shows none (§4.4). With nothing to draw it draws nothing.
-import { useRef } from 'react';
+import { useEffect, useRef } from 'react';
 import type { ReactNode } from 'react';
 import { Section } from '@ccrc/ui';
-import type { DelegationProjectionWire, FleetSession } from '../../../shared/api';
-import { offerOf, presenceWord, unownedWork, type WorktreeControl } from './delegationWords';
+import type { DelegationProjectionWire } from '../../../shared/api';
+import { offerOf, presenceWord, unownedWork, UNOWNED_WORDS, type ListedSession, type WorktreeControl } from './delegationWords';
 import { WorktreeControls } from './WorktreeControls';
 import './archiveUnownedWork.css';
-
-export const UNOWNED_TITLE = 'Work no session owns';
-export const UNOWNED_PURPOSE = 'Delegated worktrees the broker could not give one owner, and worktrees whose two sessions are both gone.';
 
 /** One row, whichever kind: where it is, one line of words, and the acts the words module gave it. */
 function UnownedRow({ kind, project, where, meta, act, offer, nowMs, getHeading }: {
@@ -46,26 +43,39 @@ function Group({ title, count, children }: { title: string; count: number; child
 
 export function ArchiveUnownedWork({ delegation, sessions, nowMs }: {
   delegation: DelegationProjectionWire | null;
-  sessions: readonly FleetSession[];
+  sessions: readonly ListedSession[];
   /** The clock, for the attempt's age and a held worktree's date; the screen's now by default. */
   nowMs?: number;
 }): ReactNode {
   const heading = useRef<HTMLSpanElement>(null);
+  // Where the focus goes when the last row leaves while a control holds it: the section goes with its heading, so the page's
+  // body takes it (as the session page's worktree section hands it to its details region, review 2864 F4). Kept from the last
+  // commit that had a section; a script-focus target, as the page body has no tabindex of its own.
+  const host = useRef<HTMLElement | null>(null);
+  useEffect(() => {
+    const el = heading.current;
+    if (el !== null) host.current = el.closest<HTMLElement>('[data-page-body]');
+  });
+  const restFocusAt = (): HTMLElement | null => {
+    const el = host.current;
+    if (el !== null && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
+    return el;
+  };
   const now = nowMs ?? Date.now();
   const work = unownedWork(delegation, sessions, now);
   if (work.total === 0) return null;
   const presence = presenceWord(work.unmeasured);
-  // Where the focus goes when the row that held it leaves: the section's own heading.
-  const getHeading = (): HTMLElement | null => heading.current;
+  // Where the focus goes when the row that held it leaves: the section's own heading, else the page's body.
+  const getHeading = (): HTMLElement | null => heading.current ?? restFocusAt();
   return (
     <Section
       title={<span ref={heading} tabIndex={-1}>
-        {UNOWNED_TITLE}{' '}<span className="archive-unowned-count">{work.total}</span>
+        {UNOWNED_WORDS.title}{' '}<span className="archive-unowned-count">{work.total}</span>
         {presence !== null && <>{' '}<span className="archive-unowned-count">· {presence}</span></>}
       </span>}
-      purpose={UNOWNED_PURPOSE}>
+      purpose={UNOWNED_WORDS.purpose}>
       {work.trees.length > 0 && (
-        <Group title="No single owner" count={work.trees.length}>
+        <Group title={UNOWNED_WORDS.trees} count={work.trees.length}>
           {work.trees.map((r) => (
             <UnownedRow key={r.key} kind="tree" project={r.project} where={r.where} meta={r.meta}
               act={r.act === null ? null : { leaseId: r.act.leaseId, worktree: r.worktree, controls: r.act.controls }}
@@ -74,7 +84,7 @@ export function ArchiveUnownedWork({ delegation, sessions, nowMs }: {
         </Group>
       )}
       {work.leases.length > 0 && (
-        <Group title="Neither session listed" count={work.leases.length}>
+        <Group title={UNOWNED_WORDS.leases} count={work.leases.length}>
           {work.leases.map((r) => (
             <UnownedRow key={r.key} kind="lease" project={r.project} where={r.where} meta={r.state}
               act={r.controls === null ? null : { leaseId: r.lease.leaseId, worktree: r.worktree, controls: r.controls }}

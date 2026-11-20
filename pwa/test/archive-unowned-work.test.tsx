@@ -70,7 +70,9 @@ describe('H4: the section and its two subheads', () => {
     draw(frame({ unowned: [unowned()], leases: [orphanLease()] }));
     const s = section();
     expect(within(s).getByRole('heading', { name: new RegExp(SECTION) })).toBeTruthy();
-    expect(s.textContent).toContain('Delegated worktrees the broker could not give one owner, and worktrees whose two sessions are both gone.');
+    // Review 2966 F1: the note says what the second subhead holds, in its words (an archived session is unlisted, not gone).
+    expect(s.textContent).toContain('Delegated worktrees the broker could not give one owner, and worktrees neither of whose sessions is listed.');
+    expect(s.textContent).not.toMatch(/both gone/);
     expect(within(s).getByText('No single owner')).toBeTruthy();
     expect(within(s).getByText('Neither session listed')).toBeTruthy();
     // review 2900 minor: an archived session is unlisted, not gone, so the subhead never says "gone".
@@ -254,6 +256,81 @@ describe('H4: a worktree whose parent and worker are both unlisted', () => {
   });
 });
 
+describe('H4 fix round 1 (review 2966): "listed" is the fleet list\'s own fold rule, and a lease with a session row is not drawn', () => {
+  /** A merged workspace the `Cleanup` chip files: a top-level row of the fleet list's live part, so LISTED. */
+  const CLEANUP = fleetSession({
+    id: 'coord-clean', project: 'project-a', workspace: 'coord-clean', status: 'dead', lifecycle: DEAD_LIFECYCLE, bucket: 'cleanup',
+    branch: 'ws/coord-clean', archivedAt: 1785300123, archivedBytes: 1000, workdir: '/w/clean',
+  });
+  /** A stopped main checkout: the fleet list files it in the Archived fold (`inArchivedFold`), so UNLISTED. */
+  const STOPPED_MAIN = fleetSession({
+    id: 'main-stopped', project: 'project-a', workspace: null, status: 'dead', bucket: 'dead', lifecycle: 'stopped',
+    stoppedBy: { at: 1785300000000, surface: 'agent' }, hibernatedAt: null, workdir: '/w/stopped',
+  });
+  /** A hibernated main checkout (asleep, not stopped for good): it stays a row of the live part, so LISTED. */
+  const HIBERNATED_MAIN = fleetSession({
+    id: 'main-asleep', project: 'project-a', workspace: null, status: 'dead', bucket: 'dead', lifecycle: 'stopped',
+    stoppedBy: { at: 1785300000000, surface: 'agent' }, hibernatedAt: 1785300000000, workdir: '/w/asleep',
+  });
+
+  it('F2: a cleanup session is a row of the fleet list, so a lease it started is not drawn here', () => {
+    draw(frame({ leases: [orphanLease({ adminRecord: 'cleanup-parent', parentId: 'coord-clean', via: null })] }), [LISTED, CLEANUP]);
+    expect(screen.queryByRole('region', { name: SECTION_RE })).toBeNull();
+  });
+
+  it('F2: a stopped main checkout is in the Archived fold, so its lease is drawn here; a hibernated one stays listed', () => {
+    draw(frame({ leases: [
+      orphanLease({ leaseId: LEASE, adminRecord: 'stopped-parent', parentId: 'main-stopped', via: null }),
+      orphanLease({ leaseId: LEASE_2, adminRecord: 'asleep-parent', parentId: 'main-asleep', via: null }),
+    ] }), [LISTED, STOPPED_MAIN, HIBERNATED_MAIN]);
+    expect(rowOf('stopped-parent')).toBeTruthy();
+    expect(section().textContent).not.toContain('asleep-parent');
+  });
+
+  it('F2: the words say the same: listed is not being in the Archived fold', () => {
+    const w = frame({ leases: [
+      orphanLease({ leaseId: 'a', parentId: 'coord-clean', via: null }),
+      orphanLease({ leaseId: 'b', parentId: 'main-stopped', via: null }),
+      orphanLease({ leaseId: 'c', parentId: 'coord-gone', via: null }),
+      orphanLease({ leaseId: 'd', parentId: 'main-asleep', via: null }),
+    ] });
+    expect(words.unlistedLeases(w, [LISTED, CLEANUP, STOPPED_MAIN, ARCHIVED, HIBERNATED_MAIN]).map((l) => l.leaseId)).toEqual(['b', 'c']);
+  });
+
+  it('F4: a lease whose path is a fleet session\'s working directory is not drawn: that session\'s own row is the honest one', () => {
+    const AT = fleetSession({ id: 'at-path', project: 'project-a', workspace: 'at-path', workdir: '/work/project-a/.claude/worktrees/agent-at' });
+    draw(frame({ leases: [
+      orphanLease({ leaseId: LEASE, adminRecord: 'agent-at' }),
+      orphanLease({ leaseId: LEASE_2, adminRecord: 'agent-elsewhere' }),
+    ] }), [LISTED, AT]);
+    expect(section().textContent).not.toContain('agent-at');
+    expect(rowOf('agent-elsewhere')).toBeTruthy();
+    // The one rule the session pages apply (`leasesStartedBy`): the section and the pages cannot disagree.
+    const w = frame({ leases: [orphanLease({ leaseId: LEASE, adminRecord: 'agent-at', parentId: 'coord-a', via: null })] });
+    expect(words.leasesStartedBy('coord-a', w, new Set([AT.workdir]))).toEqual([]);
+    expect(words.unlistedLeases(frame({ leases: [orphanLease({ leaseId: LEASE, adminRecord: 'agent-at' })] }), [AT]).map((l) => l.leaseId)).toEqual([]);
+  });
+
+  it('F3: the last row leaving while a control holds the focus hands it to the page\'s body; one of two leaving, to the heading', async () => {
+    stubFetch();
+    const two = frame({ leases: [orphanLease({ leaseId: LEASE, adminRecord: 'agent-a1' }), orphanLease({ leaseId: LEASE_2, adminRecord: 'agent-a2' })] });
+    const { container, rerender } = draw(two);
+    const page = (c: HTMLElement): HTMLElement | null => c.querySelector<HTMLElement>('[data-page-body]');
+    const next = (d: DelegationProjectionWire): void => rerender(
+      <><ArchiveScreen sessions={[LISTED]} delegation={d} nowMs={NOW} onOpen={() => {}} /><ToastHost /></>);
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a1)' }));
+    expect(document.activeElement?.closest('[data-unowned-row]'), 'CONTROL: the act holds the focus in its row').toBeTruthy();
+    // One of two leaves: the section's heading takes the focus.
+    next(frame({ leases: [orphanLease({ leaseId: LEASE_2, adminRecord: 'agent-a2' })] }));
+    expect(document.activeElement).toBe(section().querySelector('h2 > span'));
+    // The last leaves while its control holds the focus: the section is gone, the page body takes it.
+    await userEvent.click(screen.getByRole('button', { name: 'Keep worktree (agent-a2)' }));
+    next(frame({ leases: [] }));
+    expect(screen.queryByRole('region', { name: SECTION_RE })).toBeNull();
+    expect(document.activeElement).toBe(page(container));
+  });
+});
+
 describe('H4: no liveness word and no bare "unmeasured", ever', () => {
   const LIVENESS_WORDS = /not confirmed|stop not seen|session asleep|end recorded|unmeasured|unrecognised|\blive\b|running/i;
 
@@ -323,14 +400,16 @@ describe('H4: the words (delegationWords.ts, L1)', () => {
     expect(words.unownedControls(unowned({ leaseId: 5 as never }))).toBeNull();
   });
 
-  it('unlistedLeases keeps a lease only when neither of its sessions is listed live, in the order the leases opened', () => {
+  it('unlistedLeases keeps a lease only when neither of its sessions is listed, in the order the leases opened', () => {
     const w = frame({ leases: [
       orphanLease({ leaseId: 'b', firstObservedAt: '2026-10-26T11:00:00.000Z' }),
       orphanLease({ leaseId: 'a', firstObservedAt: '2026-10-26T10:00:00.000Z' }),
       orphanLease({ leaseId: 'c', parentId: 'coord-a' }),
+      orphanLease({ leaseId: 'd', parentId: 'coord-gone', via: null, firstObservedAt: '2026-10-26T12:00:00.000Z' }),
     ] });
-    expect(words.unlistedLeases(w, [LISTED]).map((l) => l.leaseId)).toEqual(['a', 'b']);
-    expect(words.unlistedLeases(w, [LISTED, ARCHIVED]).map((l) => l.leaseId)).toEqual(['a', 'b']);
+    expect(words.unlistedLeases(w, [LISTED]).map((l) => l.leaseId)).toEqual(['a', 'b', 'd']);
+    // An archived session is unlisted, not gone: the lease it started stays in the section (review 2966 M3: it did not, here).
+    expect(words.unlistedLeases(w, [LISTED, ARCHIVED]).map((l) => l.leaseId)).toEqual(['a', 'b', 'd']);
   });
 
   it('presenceWord counts trees, in one sentence, and says nothing for none', () => {

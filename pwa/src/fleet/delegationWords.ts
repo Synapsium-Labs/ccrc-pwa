@@ -20,9 +20,9 @@
 // import from here: a cycle).
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, delegationLeaseDispositionOf,
-  delegationLeaseExpiresAtOf, isArchivedRow, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal,
+  delegationLeaseExpiresAtOf, inArchivedFold, isArchivedRow, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal,
   type SessionBucket, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
-  type DelegationProjectionWire, type DelegationUnownedWire,
+  type DelegationProjectionWire, type DelegationUnownedWire, type FleetSession,
 } from '../../../shared/api';
 import { elapsedShort } from '@ccrc/ui';
 import { isRecord } from '../lib/wire';
@@ -228,11 +228,18 @@ export function activitiesStartedBy(id: string, w: DelegationProjectionWire): re
 export function leasesStartedBy(
   id: string, w: DelegationProjectionWire, workdirs: ReadonlySet<string> = NO_WORKDIRS,
 ): readonly DelegationLeaseWire[] {
-  return w.leases.filter((l) => (l.parentId === id || l.via === id) && !workdirs.has(l.canonicalPath))
+  return w.leases.filter((l) => (l.parentId === id || l.via === id) && !atASessionWorkdir(l, workdirs))
     .sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId));
 }
 
 const NO_WORKDIRS: ReadonlySet<string> = new Set();
+
+/** The old rule 7 (W4-U14), the one reader of it: a lease whose path is a listed session's working directory is not drawn
+ *  as a worktree, that session's own row being the honest one. `leasesStartedBy` (the session pages) and `unlistedLeases`
+ *  (the Archive's section) both ask it, so the two cannot disagree about which leases exist. */
+export function atASessionWorkdir(l: DelegationLeaseWire, workdirs: ReadonlySet<string>): boolean {
+  return workdirs.has(l.canonicalPath);
+}
 
 // THE WORKTREE CONTROLS (delegation broker wave 5, PR10). The operator keeps a worktree, attaches an inferred one to its own
 // session, or says one is not delegated work; each row reads its disposition and the date it is kept until. O5-6 (a)
@@ -450,16 +457,36 @@ export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: s
   return leaseId === null ? null : { leaseId, controls: [{ act: 'foreign' }] };
 }
 
-/** The leases whose parent AND worker are both unlisted: neither is a session the fleet list carries live (`listedLive`: an
- *  archived session is unlisted, not gone). Either side listed gives the lease a session page (`leasesStartedBy`), so it is
- *  not drawn here. In `firstObservedAt` order. */
-export function unlistedLeases(
-  w: DelegationProjectionWire, sessions: readonly { readonly id: string; readonly bucket: SessionBucket }[],
-): readonly DelegationLeaseWire[] {
-  const listed = new Set(sessions.filter((s) => listedLive(s)).map((s) => s.id));
-  return w.leases.filter((l) => !listed.has(l.parentId) && (l.via === null || !listed.has(l.via)))
+/** The session fields "listed" reads: the fleet list's own fold (`inArchivedFold`) and the working directory. */
+export type ListedSession = Pick<FleetSession, 'id' | 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt' | 'workdir'>;
+
+/** Whether the fleet list carries a session as a row of its live part: not in the Archived fold, by the fold's own
+ *  predicate (`inArchivedFold`, never a copy of it). So a cleanup session, which the fleet list keeps at its top level, is
+ *  listed; an archived workspace and a stopped main checkout, which it folds, are unlisted (an archived session is unlisted,
+ *  not gone). Legitimately different from `listedLive`, which answers whether Attach may offer a session (the door refuses
+ *  only a session whose registry row is absent). */
+export function listedOnFleet(s: Pick<ListedSession, 'bucket' | 'workspace' | 'status' | 'stoppedBy' | 'hibernatedAt'> | null | undefined): boolean {
+  return s !== null && s !== undefined && !inArchivedFold(s);
+}
+
+/** The leases whose parent AND worker are both unlisted (`listedOnFleet`), drawn nowhere else: either side listed gives the
+ *  lease a session page (`leasesStartedBy`), and a lease at a listed session's working directory is that session's own row
+ *  (`atASessionWorkdir`, the same rule the session pages apply). In `firstObservedAt` order. */
+export function unlistedLeases(w: DelegationProjectionWire, sessions: readonly ListedSession[]): readonly DelegationLeaseWire[] {
+  const listed = new Set(sessions.filter((s) => listedOnFleet(s)).map((s) => s.id));
+  const workdirs = new Set(sessions.map((s) => s.workdir));
+  return w.leases.filter((l) => !listed.has(l.parentId) && (l.via === null || !listed.has(l.via)) && !atASessionWorkdir(l, workdirs))
     .sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId));
 }
+
+/** The section's own words, one place (L1) for the title, the note under it and the two subheads. The note says what the
+ *  section holds in the subhead's words: an archived session is unlisted, not gone (review 2966 F1). */
+export const UNOWNED_WORDS = {
+  title: 'Work no session owns',
+  purpose: 'Delegated worktrees the broker could not give one owner, and worktrees neither of whose sessions is listed.',
+  trees: 'No single owner',
+  leases: 'Neither session listed',
+} as const;
 
 /** The head's one sentence for trees whose presence on disk the wire did not measure; null for none. */
 export function presenceWord(n: number): string | null {
@@ -516,7 +543,7 @@ const attemptTime = (u: DelegationUnownedWire): number => {
 /** What the Archive's section draws, from the frame as it arrived (`readDelegation` re-files an unknown word) and the fleet's
  *  sessions. An unavailable frame (null) holds no unowned work to draw. Unowned trees newest attempt first. */
 export function unownedWork(
-  frame: DelegationProjectionWire | null, sessions: readonly { readonly id: string; readonly bucket: SessionBucket }[], now: number,
+  frame: DelegationProjectionWire | null, sessions: readonly ListedSession[], now: number,
 ): UnownedWork {
   if (frame === null) return { trees: [], leases: [], total: 0, unmeasured: 0 };
   const w = readDelegation(frame);
@@ -536,4 +563,18 @@ export function unownedWork(
   const unmeasured = w.unowned.filter((u) => u.workspace === 'unmeasured').length
     + leases.filter((r) => r.lease.workspace === 'unmeasured').length;
   return { trees, leases, total: trees.length + leases.length, unmeasured };
+}
+
+/** How many rows the Archive's section would draw: what the fleet foot's Archived row asks. The clock only feeds the rows'
+ *  words, never their number. */
+export function unownedTotal(frame: DelegationProjectionWire | null, sessions: readonly ListedSession[]): number {
+  return unownedWork(frame, sessions, 0).total;
+}
+
+/** The fleet foot's one Archived row (review 2966 F5): the same row and the same door (`/archive`) say what is there. The
+ *  archived half is the words the row always had (`archived`, null for none); the unowned half is the section's own title
+ *  and its count. Null when there is nothing of either. */
+export function archiveDoorWord(archived: string | null, unowned: number): string | null {
+  const parts = [archived, unowned > 0 ? `${UNOWNED_WORDS.title} · ${unowned}` : null].filter((p): p is string => p !== null);
+  return parts.length === 0 ? null : parts.join(' · ');
 }

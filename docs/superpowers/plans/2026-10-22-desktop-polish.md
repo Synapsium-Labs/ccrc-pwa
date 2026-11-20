@@ -4466,8 +4466,10 @@ it`) and the attempt's age (`tried 3 days ago`), and offers Not delegated only w
 resolve door. A worktree row says the project, the path and its disposition word, and offers what `worktreeControls` gives (Keep
 worktree and Not delegated in the states that offer them; never Attach to…, which needs a listed parent). No row carries a liveness word,
 a `title` or the bare word `unmeasured`: where presence on disk was not measured the head says it once (`presence on disk not measured for
-1 tree`). The note under the title says what the section holds. With nothing of either kind the section draws nothing, and the fleet list
-gains nothing.
+1 tree`). The note under the title says what the section holds, in the subhead's words (worktrees neither of whose sessions is listed). With
+nothing of either kind the section draws nothing, and the fleet list gains nothing but one thing, added in review's fix round 1: the
+fleet foot's existing Archived row is also the door to this section, so it draws when there is work no session owns even with nothing
+archived, and its words say what is there (`foot-row-is-the-door`).
 
 **Files.** New: `pwa/src/fleet/ArchiveUnownedWork.tsx` (L4, C4: the section, one row view and one group view), `pwa/src/fleet/archiveUnownedWork.css`
 (a new stylesheet: `fleet.css` is capped), `pwa/test/archive-unowned-work.test.tsx`, `pwa/browser/archive-unowned.browser.test.ts`. Edited:
@@ -4475,7 +4477,8 @@ gains nothing.
 `presenceWord`, `triedWord` and `unownedWork`, which decides every row, count and word), `pwa/src/screens/ArchiveScreen.tsx` (takes the frame
 and a clock), `pwa/src/app.tsx` (the `/archive` route reads the frame from the store), `pwa/design/audit.mjs` (four grounds),
 `pwa/test/contrast.test.ts` (one line in the app's stylesheet list, with the consent of the worker holding that file's claim, 2026-11-20),
-`pwa/test/app.test.tsx` (one route case), and the two census lists that name the files allowed to name the broker
+`pwa/test/app.test.tsx` (one route case), `pwa/src/screens/FleetScreen.tsx` (the foot row, fix round 1) and `pwa/test/fleet-screen.test.tsx` (its
+cases), and the two census lists that name the files allowed to name the broker
 (`server/test/delegation-wave3.integration.test.ts` and its mirror in `server/test/fleet-health.test.ts`). Nothing on the wire or the
 server changes.
 
@@ -4483,8 +4486,10 @@ server changes.
 `docs/superpowers/programs/desktop-polish/h4.md`.
 
 **Acceptance.** An Archive screen over a frame with an unowned tree, a hidden lease and a worktree of two unlisted sessions draws the
-section with each row's words and acts as above; an archived session counts as unlisted; one listed session gives a lease a page and takes
-it out of the section; no row draws a liveness word, a title or `unmeasured`; the presence sentence is in the head once; a frame with
+section with each row's words and acts as above; an archived session and a stopped main checkout count as unlisted (the fleet list's own
+Archived fold) and a cleanup session as listed; one listed session, or a session whose working directory is the lease's path, gives a lease
+a page and takes it out of the section; the last row leaving while its control holds the focus hands it to the page's body; the fleet
+foot's Archived row also draws for work no session owns (alone, or beside the archived half); no row draws a liveness word, a title or `unmeasured`; the presence sentence is in the head once; a frame with
 none of either kind, or no frame, draws no section; each act posts to its existing door (Not delegated to `POST /api/leases/:lease/resolve`
 with `{action:'foreign'}` after a confirm, Keep worktree to `operator-retain`).
 
@@ -4492,11 +4497,20 @@ with `{action:'foreign'}` after a confirm, Keep worktree to `operator-retain`).
   owns, as spec §6 and Table 8 say, with these departures from the spec, each named by slug and each a spec correction for the
   coordinator to fold:
   - `neither-session-listed`: the second subhead reads "Neither session listed", not "Both sessions gone" (spec §6, Table 8, Figure 6 and
-    its mockup). An archived session is unlisted, not gone (review 2900's minor).
-  - `unlisted-means-not-listed-live`: "neither session is a row of the fleet list" is decided by `listedLive` (a row of the store that is
-    not an archived row), the one reader of that fact, so a lease whose coordinator is an archived row is drawn here as well as on that
-    row's own page (C48's SW-S2). The spec's "row of the fleet list" read as "present in the store" would have left such a lease with
-    its archived page as its only home.
+    its mockup), and the note under the title follows it: "Delegated worktrees the broker could not give one owner, and worktrees neither
+    of whose sessions is listed." (review 2966 F1). An archived session is unlisted, not gone (review 2900's minor).
+  - `unlisted-means-in-the-archived-fold` (was `unlisted-means-not-listed-live`; corrected in fix round 1, review 2966 F2): "neither
+    session is listed" is decided by the fleet list's own fold rule, `inArchivedFold` (`listedOnFleet`, which calls it and never copies
+    it): a session is listed unless the fleet list folds it into Archived. So a lease whose coordinator is an archived workspace or a
+    stopped main checkout is drawn here as well as on that row's own page (C48's SW-S2), and a lease whose session is a cleanup row, which
+    the fleet list keeps at its top level, is not. The spec's "row of the fleet list" read as "present in the store" would have left
+    such a lease with its archived page as its only home. And the session pages' own workdir rule (`atASessionWorkdir`, one reader
+    beside `leasesStartedBy`) applies here too: a lease whose path is a fleet session's working directory is that session's own row and
+    is not drawn (review 2966 F4).
+  - `foot-row-is-the-door` (fix round 1, review 2966 F5, the coordinator's ruling): the spec gives the fleet list nothing and names the
+    foot's Archived row as the section's door, but that row drew only when something was archived. It now draws when either half has
+    something (`archiveDoorWord`, L1): `Archived on disk · 2 · 2.3 GB`, `Work no session owns · 2`, or both joined by ` · `. The same row,
+    the same door (`/archive`), no new row or control.
   - `disposition-word-with-its-date`: the worktree row's disposition is `worktreeStateParts`' words, the one owner of them, which carry the
     held-until date for an adopted or retained tree (`worktree kept until 17 Nov`); spec §4.4 lists `worktree kept` without it.
   - `age-in-whole-words`: the attempt's age is `elapsedShort`'s ladder (the one shared ladder) in whole words: `tried 5 minutes ago`,
@@ -4504,7 +4518,8 @@ with `{action:'foreign'}` after a confirm, Keep worktree to `operator-retain`).
   - `section-above-archived-and-alone`: the section sits above the archived workspaces and draws when nothing is archived, with the
     "Nothing is archived." line kept below it (the spec is silent on an empty archive). Unowned trees list the newest attempt first.
   - `words-in-delegation-words`: the words and the selection live in `delegationWords.ts`, the existing L1 owner of every delegation
-    label, not in a new file; spec Table 12 names only the component.
+    label, not in a new file (spec Table 12 names only the component): the section's title, its note and its two subheads
+    (`UNOWNED_WORDS`) too, and the foot row's sentence (`archiveDoorWord`).
   - `no-title-attributes`: no row carries a `title`, so no word hides in a tooltip a phone never shows (the spec's §4.4 says no liveness word;
     it does not mention titles).
   - `presence-in-the-head-title`: the head's title carries the count of both kinds and the presence sentence, as the mockup draws it, so

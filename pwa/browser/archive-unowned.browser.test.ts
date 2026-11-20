@@ -7,7 +7,7 @@
 // The fixture is the Archive with both kinds of row: two unowned trees (one with a hidden lease, so it offers Not delegated,
 // and one with no lease and no path, so it offers nothing and shows its admin record) and two worktrees whose parent and
 // worker are both unlisted (one kept, one inferred), beside two archived workspaces. When `H4_SHOTS` names a directory, each
-// case also saves its page as a PNG there (the task note's screenshots); nothing is written otherwise.
+// case also saves its page as a PNG there (the task note's screenshots, taken in a window tall enough to hold the page); nothing is written otherwise.
 //
 //   CCRC_CHROME=<a Chrome or Chromium binary> ./node_modules/.bin/vitest run --config vitest.browser.config.ts --maxWorkers=1 browser/archive-unowned.browser.test.ts
 import { mkdirSync } from 'node:fs';
@@ -134,8 +134,64 @@ describe('Archive: Work no session owns, in a real Chrome', () => {
             const shots = process.env['H4_SHOTS'];
             if (shots !== undefined && shots !== '') {
               mkdirSync(shots, { recursive: true });
+              // The page scrolls in an inner container, so a full-page capture of a short window shows the bottom bar over the
+              // list (review 2966 M5): a window tall enough to hold the whole page shows it as the operator would scroll to it.
+              await opened.page.setViewportSize({ width, height: 2000 });
+              await opened.page.waitForTimeout(300);
               await opened.page.screenshot({ path: path.join(shots, `archive-unowned-${width}-${skin}-${theme}.png`), fullPage: true });
             }
+          } finally {
+            await opened.ctx.close();
+          }
+        }, 90_000);
+      }
+    }
+  }
+});
+
+// The fleet foot's Archived row is the door to the section when nothing is archived (review 2966 F5): the same row, at the
+// tap floor, drawn inside the column, and it goes to /archive.
+const DOOR_FIXTURE: AppFixture = {
+  ...FIXTURE,
+  fleetFrames: [
+    { type: 'fleet', sessions: [SESSIONS[0]!] },
+    { type: 'delegation', delegation: DELEGATION },
+  ],
+};
+
+describe('Fleet foot: the Archived row is the door to work no session owns, with nothing archived', () => {
+  for (const skin of SKINS) {
+    for (const theme of THEMES) {
+      for (const width of WIDTHS) {
+        it(`${skin} ${theme} at ${width}px: one row, at least --tap-min, inside the page, to /archive`, async () => {
+          const opened = await openApp(browser!, { skin, theme, width }, DOOR_FIXTURE);
+          try {
+            await opened.page.goto(`${server!.origin}/`);
+            await opened.page.waitForSelector('.fleet-archived-row', { timeout: 20_000 });
+            await opened.page.evaluate(async () => { await document.fonts.ready; });
+            await opened.page.waitForTimeout(400);
+            const m = await opened.page.evaluate(() => {
+              const floor = parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--tap-min'));
+              const rows = [...document.querySelectorAll<HTMLElement>('.fleet-archived-row')];
+              const r = rows[0]!.getBoundingClientRect();
+              return { count: rows.length, text: rows[0]!.textContent ?? '', height: r.height, floor, right: r.right, vw: window.innerWidth,
+                sideways: document.documentElement.scrollWidth > window.innerWidth + 0.5 };
+            });
+            expect(m.count, 'one row, not two').toBe(1);
+            expect(m.text).toBe('Work no session owns · 4');
+            expect(m.height).toBeGreaterThanOrEqual(m.floor - 0.5);
+            expect(m.right).toBeLessThanOrEqual(m.vw + 0.5);
+            expect(m.sideways, 'the page scrolls sideways').toBe(false);
+            const shots = process.env['H4_SHOTS'];
+            if (shots !== undefined && shots !== '') {
+              await opened.page.setViewportSize({ width, height: 1400 });
+              await opened.page.waitForTimeout(300);
+              await opened.page.screenshot({ path: path.join(shots, `fleet-door-${width}-${skin}-${theme}.png`), fullPage: true });
+            }
+            await opened.page.click('.fleet-archived-row');
+            await opened.page.waitForURL(/\/archive$/, { timeout: 10_000 });
+            await opened.page.waitForSelector('[data-unowned-row]', { timeout: 20_000 });
+            expect(opened.errors, 'uncaught page errors').toEqual([]);
           } finally {
             await opened.ctx.close();
           }
