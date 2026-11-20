@@ -365,8 +365,10 @@ The estimates for screen pages and true pages are judgement, sized against modul
 
 ### 5.3 A turn
 
-- **Forward.** The frame finds the first line not wholly visible at the bottom of the viewport: a caret position at the bottom edge (`caretPositionFromPoint`, or `caretRangeFromPoint` where only that exists), its line box, its top. It scrolls instantly so that this line's top meets the top of the reading area. A line is never cut.
-- **Back.** The mirror: the first wholly visible line at the top becomes the first line below the bottom edge, then the new top is snapped to a whole line.
+- **Forward.** The frame finds the first line not wholly visible at the bottom of the viewport: a caret position at the bottom edge (`caretPositionFromPoint`, or `caretRangeFromPoint` where only that exists), its line box, its top. It scrolls instantly so that this line's top meets the top of the reading area.
+- **The top of the reading area is below anything pinned there.** It is the lowest bottom edge among the elements stuck at the top at that moment, or the viewport's top when none is. An element counts when its computed `position` is `sticky` or `fixed`, it overlaps the text column, and its top sits at its own sticky offset: a table's head, a card's head, a figure's tools. The frame measures them again after the scroll and corrects the target once, because a table's head pins only when the table reaches the top. So in a table taller than the screen, each turn lands the next row just below the pinned head, never under it.
+- **The bottom edge.** After a turn, the frame covers the line the bottom edge cuts with a band of the reader's ground, from that line's top to the bottom, until the next scroll. That line is the first one the next turn shows. So no line shows cut at either edge.
+- **Back.** The mirror: the first wholly visible line below the pinned top becomes the first line below the bottom edge, then the new top is snapped to a whole line below whatever is pinned.
 - **Blocks that are not lines.** An image, a drawn figure, a table row or a block of code met at the edge: if it starts in the lower two thirds of the screen, the turn aligns its top; if it is taller than the screen, the turn moves one screen less one line height, so you keep one line of context.
 - **Always forward.** A turn moves at least a third of a screen; otherwise it moves one screen less two line heights. So no layout can trap a turn.
 - **No animation.** A turn is an instant jump, with no smooth scroll, so it reads as a page, not as scrolling. With reduced motion it is the same: nothing moves either way.
@@ -415,7 +417,7 @@ flowchart TB
 | Mermaid, drawn, taller than a screen | Stepped through, one screen less one line per turn; the figure's own Full screen tool shows it whole |
 | Images | Unscaled, as today; a tall one is stepped through |
 | Tables wider than the screen | Keep their own horizontal scroll; a swipe inside scrolls the table, never turns |
-| Tables taller than a screen | Stepped through; the sticky header stays sticky, because the frame still scrolls |
+| Tables taller than a screen | Stepped through. The sticky head stays pinned, because the frame still scrolls, and each turn lands the next row just below it, never under it (§5.3) |
 | Code | Its own horizontal scroll, as tables |
 | Footnotes, folds, cards | Unchanged; a fold opened mid-page changes nothing until the next turn |
 
