@@ -605,6 +605,34 @@ describe('docs-show-range (X2 P1.2)', () => {
     expect(run(draftArgs(commit, 'c.bin', pin, frameTail(csnap, 0, 10)))).toMatchObject({ ok: false, failure: 'snapshot-gone' });
   });
 
+  it('range: a frame naming another project refuses snapshot-gone', () => {
+    const { main, wt, head } = holder();
+    // A second project that holds the SAME commit: a copy of the first fixture repository, registered under the projects
+    // root as `other`, so the project is the only field that tells the two requests apart (commit, branch, head, section,
+    // path and pin are all identical).
+    fs.cpSync(main, path.join(h.home, 'projects', 'other'), { recursive: true });
+    expect(h.git(path.join(h.home, 'projects', 'other'), 'rev-parse', 'HEAD')).toBe(head);
+    const inProject = (args: string[], project: string): string[] =>
+      args.map((a, i) => (args[i - 1] === '--project' ? project : a));
+    const p = writeDraft(wt, 'd.bin', bytesOf(2000));
+    const dpin = statPinOf(p);
+    const cpin = `blob:${h.git(main, 'rev-parse', `${head}:${SPECS}/a.md`)}`;
+    const csnap = String(run(committedArgs(head, 'specs', 'a.md', cpin, ['--prepare']))['snapshot']);
+    const dsnap = String(run(draftArgs(head, 'd.bin', dpin, ['--prepare']))['snapshot']);
+    const committedFrame = (project: string): Answer =>
+      run(inProject(committedArgs(head, 'specs', 'a.md', cpin, frameTail(csnap, 0, 4)), project));
+    const draftFrame = (project: string): Answer =>
+      run(inProject(draftArgs(head, 'd.bin', dpin, frameTail(dsnap, 0, 4)), project));
+    // CONTROL: each snapshot reads for the project it was prepared for.
+    expect(committedFrame('demo')).toMatchObject({ ok: true, snapshot: csnap });
+    expect(draftFrame('demo')).toMatchObject({ ok: true, snapshot: dsnap });
+    // CONTROL: the second project is a real one, and prepares the same doc under a snapshot of its own.
+    expect(run(inProject(committedArgs(head, 'specs', 'a.md', cpin, ['--prepare']), 'other'))).toMatchObject({ ok: true });
+    // Another project, the same commit (or branch and head), section, path and pin: refused.
+    expect(committedFrame('other')).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+    expect(draftFrame('other')).toMatchObject({ ok: false, failure: 'snapshot-gone' });
+  });
+
   it('range: a snapshot rewritten in place at its own size answers snapshot-gone at its next frame', () => {
     const blob = bytesOf(600_000);
     const c = committed({ [`${SPECS}/a.bin`]: blob });
