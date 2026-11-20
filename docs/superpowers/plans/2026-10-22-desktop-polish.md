@@ -4366,52 +4366,65 @@ too. A scope change the same day, "Yeah I want them out too", took the worktree 
 fleet list draws no delegation row at all. The coordinator then ruled that worktrees MOVE rather than vanish: a session's own
 details gain its worktrees with the same three controls; unowned work has no session to live under and gets no new home.
 
-**Files.** `pwa/src/fleet/nestFleet.ts` (the `activity`, `lease`, `unowned` and `delegation-group` row kinds are removed with
-`delegationPass`, `CardDelegation` and rules 6 to 11; `nestFleet(sessions, runs)` takes no delegation input), `fleetTree.ts`
-(`delegationSlices` and the `delegation` argument are removed; `unplacedActivities` is unchanged), `rollup.ts` (the fold
+**Files.** Source, `pwa/src/fleet/`: `nestFleet.ts` (the `activity`, `lease`, `unowned` and `delegation-group` row kinds are
+removed with `delegationPass`, `CardDelegation` and rules 6 to 11; `nestFleet(sessions, runs)` takes no delegation input),
+`fleetTree.ts` (`delegationSlices`, the `delegation` argument and `unplacedActivities` are removed), `rollup.ts` (the fold
 counts workers only; `SummaryPart` is a counted part; `isWorker`, `delegatedWords` and the bare-word arm are removed),
-`programmeBoxes.ts` (the footer names workers only), `delegationWords.ts` (the worktree, unowned, group and control words, the
-inferred chips and `delegationParts` are removed; `activityLine`, `delegatedChip`, `activitiesStartedBy`, `readDelegation` and the
-region's words stay), `ProjectCard.tsx` (`WorktreeControls`, the row arms, the group toggles and the `offlineOpen` and
-`unownedOpen` props are removed), `FleetCards.tsx` (the group keys), `WorkLine.tsx` (the `children` tail), `fleet.css` (the
-`.proj-work-chip` and `.proj-work-controls` rules and the wrapped-line bracket rule) and `design/audit.mjs` (their two entries).
-Tests: the `nestFleet`, `fleetTree`, `rollup`, `delegation-words`, `project-card`, `fleet-rollup-render`, `fleet-screen`,
-`fleet-css` and `role-census` cases that held a delegation row are rewritten to say there is none, each with a positive
-control; `worktree-confirm-close` and `leaseCardFixture` go with the controls they drove; the real-Chrome `delegation-rows`
-fixture keeps its activities, worktrees and unowned tree in the frame to show none is drawn. The two delegation specs carry a
-dated amendment each. Nothing leaves the wire or the server. The worktree rows MOVED: `leasesStartedBy` (beside
-`activitiesStartedBy`, the one reader of the frame for leases) and `sessionWorktrees.ts` (the two labels a row names) feed
-`SessionScreen`, `sessionFacts` carries `worktrees`, and the new `session/SessionWorktrees.tsx` draws the rows under the
-details with `fleet/WorktreeControls.tsx`, the controls' view lifted out of `ProjectCard` unchanged but for the focus heading.
-`delegationWords.ts` keeps the worktree and control words, the chips and the doors' sentences; `fleet.css`, `design/audit.mjs`
-and `WorkLine`'s tail keep what the rows use. `pwa/src/lib/api.ts` is untouched: `operatorRetainLease` and `resolveLease`
-keep their caller.
+`programmeBoxes.ts` (the footer names workers only), `delegationWords.ts` (the group, unowned and fold words,
+`delegationParts`, the foot region's words and the `from` label are removed; `leasesStartedBy` is added; the worktree, control,
+chip and refusal words, `activityLine`, `delegatedChip`, `activitiesStartedBy` and `readDelegation` stay), `ProjectCard.tsx`
+(`WorktreeControls`, the row arms, the group toggles and the `offlineOpen` and `unownedOpen` props are removed), `FleetCards.tsx`
+(the group keys, the foot region and its `data-delegation-unplaced` mark; `data-delegation` stays), `fleet.css` (the foot
+region's one rule), `WorkLine.tsx` (a comment only), `design/audit.mjs` (one reason text), `sessionFacts.ts` (the fact set
+carries `worktrees`); new: `fleet/WorktreeControls.tsx` (the controls' view, lifted out of `ProjectCard` unchanged but for the
+focus heading), `fleet/sessionWorktrees.ts` (the two labels a row names, read as one primitive key) and
+`session/SessionWorktrees.tsx` (the details' section). `session/SessionDetails.tsx` draws the section, `screens/SessionScreen.tsx`
+reads the leases, and `session/chat.css` and `skins/refined/refined.css` carry the section's layout (review 2864 F6). Tests: the
+`nestFleet`, `fleetTree`, `rollup`, `delegation-words`, `project-card`, `fleet-rollup-render`, `fleet-screen`, `fleet-css`,
+`run-binding-readers`, `w7-run-binding-table` and `programme-box` cases that held a delegation row or the foot region are
+rewritten to say there is none, each with a positive control; `leaseCardFixture` renders the section; the controls' cases of
+`project-card` moved to `session-worktrees.test.tsx`, with `session-details-worktrees.test.tsx` and `session-screen-worktrees.test.tsx`
+(the real `SessionScreen`) beside it; the real-Chrome `delegation-rows` file keeps activities, worktrees, an unowned tree and an
+unlisted activity in the frame to show none is drawn on the list, and measures the section and the controls' real sheet on the
+session page. The two server census tests that list the files allowed to name the broker (`delegation-wave3.integration` and its
+mirror in `fleet-health`) name the three new files. `fleet-css`, `role-census`, `worktree-confirm-close`, `fleet.css`'s chip and
+controls rules and `design/audit.mjs`'s entries are as at `main` (the controls and chips are still drawn, now in the details).
+The two delegation specs carry a dated amendment each. Nothing leaves the wire or the server. `pwa/src/lib/api.ts` is untouched:
+`operatorRetainLease` and `resolveLease` keep their caller.
 
 **What stays.** Session rows, spawn rows and the programme tree; the session's own details, whose `N delegated` disclosure and
 list still carry every activity with its condition word and title, and, since the move, its worktrees with their three
-controls; the fleet foot's region of activities whose parent is not
-listed (`unplacedActivities`), which the ruling did not name; and the Settings switch for keeping a finished delegated
-worktree. **Unowned work has no place in the PWA after this change**, and neither does its Not delegated door, until a
-follow-up gives them one (Settings' "Worktrees left behind" card lists only what the lane's last pass kept); the coordinator
-raises that follow-up.
+controls; and the Settings switch for keeping a finished delegated worktree. A lease shows on its coordinator's page AND on its
+via-worker's (the fleet list drew it once); a lease whose path is a listed session's workdir is not drawn (the old rule 7, kept
+in `leasesStartedBy` as a re-check beside the server's own precedence). **Unowned work, activities whose session the list does
+not carry, and leases with no listed session have no place in the PWA after this change**, nor does the unowned tree's Not
+delegated door: the fleet foot's "Delegated work, session not listed" region went too (review 2864 F1), because it was a
+delegation group header with delegation rows. They get a home in the Archive section that C49's helpers-panel design builds, and
+until then nowhere (Settings' "Worktrees left behind" card lists only what the lane's last pass kept); the coordinator raises
+that follow-up.
 
 **Measured.** Which new cases were red at `main`, the files run and what was seen in a real browser are in
 `docs/superpowers/programs/desktop-polish/c48.md`.
 
 **Acceptance.** For a card whose session has an agent, a workflow, a worktree and an unowned tree, the fleet list draws the
 session row and nothing of the others, in text, titles or accessible names; an offline coordinator's work draws no group
-header and no row; the session's details still list both activities and now list the worktree with its three controls,
-each posting what the fleet-list row posted at `main`; an offline coordinator's own page lists its worktrees.
+header and no row; an activity whose session the list does not carry draws no foot group and no row; the session's details still
+list both activities and now list the worktree with its three controls, each posting what the fleet-list row posted at `main`;
+an offline coordinator's own page, opened as the real `SessionScreen`, lists the worktrees it held with their controls.
 
 - **D-8782** — `fleet-list-drops-delegation-rows`: Task C48, issued on 2026-11-19. The fleet list draws no delegation row: not
-  a session's subagent or workflow, not a worktree, not an unowned tree, and no group header for them. No row kind of
-  `delegationPass` survives, so its row kinds, its card slice, its view, its words, its controls and the rollup arms only they
-  used are removed, and a fold line and a programme box's footer name workers only. This supersedes the delegation broker's
-  wave 4 rule (§5.8, rules 6 to 11) for the fleet list, and the operator's first reading of this task (rows for worktrees
-  and unowned work stay); the session's own details keep every activity and gain its worktrees with their controls (the
-  worktree rows move, they are not dropped); **unowned work and its Not delegated door have no place in the PWA after this
-  change, until a follow-up gives them one** (the operator's ruling and scope change of 2026-11-19, and the coordinator's
-  ruling on the move).
+  a session's subagent or workflow, not a worktree, not an unowned tree, not the foot's region of activities whose session is
+  listed nowhere, and no group header for any of them. No row kind of `delegationPass` survives, so its row kinds, its card
+  slice, its view, its words, its controls and the rollup arms only they used are removed, and a fold line and a programme
+  box's footer name workers only. This supersedes the delegation broker's wave 4 rule (§5.8, rules 6 to 11) for the fleet
+  list, and the operator's first reading of this task (rows for worktrees and unowned work stay); the session's own details keep
+  every activity and gain its worktrees with their controls (the worktree rows move, they are not dropped; one lease shows on
+  its coordinator's page and its via-worker's; the old rule 7 is kept in `leasesStartedBy`; the old `via` swap to the parent
+  when the parent sat at depth 1 is not carried, since the lease shows on that worker's own page). **Unowned work, activities
+  whose session is not listed, and leases with no listed session (their parent and worker both absent from the fleet store, so
+  no session page opens for them) have no place in the PWA after this change, and neither does the unowned tree's Not delegated
+  door; they get a home in the Archive section C49 designs** (the operator's ruling and scope change of 2026-11-19, the
+  coordinator's rulings on the move and, in fix round 1, on the foot region and the vanished lease).
 
 **Rollback.** A plain revert.
 
