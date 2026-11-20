@@ -193,6 +193,10 @@ export const RUN_UNTOLD_SWEEP_MS = 60_000;
 /** The run-close lane's pass (D-8077, rows E1 and E1r): a minute, the dead-coordinator lane's own sibling cadence. DERIVED from
  *  it by reference (`CHILD_RECLAIM_SWEEP_MS`), never a second literal: R7's budget is "per pass" and a pass is that throttle. */
 export const RUN_CLOSE_SWEEP_MS = CHILD_RECLAIM_SWEEP_MS;
+/** The admission wake's lane (D-6095): a coordinator the concurrency cap refused is mailed when the cap has room, at most
+ *  `WAKE_BURST` a window. Its cadence IS the wake budget's window (`WAKE_WINDOW_MS`, `coord/wakeBudget.ts`), declared here for
+ *  the reason `STOP_DONE_SWEEP_MS` is (the L0 table imports no L1 file); `admission-wake.test.ts` pins the two equal. */
+export const ADMISSION_WAKE_SWEEP_MS = 60_000;
 
 /** Which clock a throttle reads: the watcher's monotonic clock (`Deps.monotonicMs`) or the wall clock (`Date.now()`). */
 export type LaneClock = 'mono' | 'wall';
@@ -205,7 +209,7 @@ export type LaneFlight = 'skip' | 'join' | 'join-rerun' | 'none';
 export type LaneName =
   | 'caps' | 'catalogue' | 'inventory' | 'landingChecks' | 'landingRadar' | 'landed' | 'serverCaps'
   | 'tasks' | 'usage' | 'pr' | 'names' | 'divergences' | 'lifecycle' | 'readiness' | 'ledgerReconcile' | 'ledgerFloor' | 'drift'
-  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'idleNudge' | 'mail' | 'mailHold' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
+  | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'admissionWake' | 'idleNudge' | 'mail' | 'mailHold' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
   | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors' | 'skillInstall';
@@ -288,6 +292,10 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
     name: 'blockWakes', cadenceMs: STALL_SWEEP_MS, clock: 'mono', flight: 'skip', warnKey: null,
     derivedFrom: { name: 'STALL_SWEEP_MS', reason: 'a block wake needs no finer beat than the sweep it was split from' },
   },
+  // The admission wake (D-6095): mails refused coordinators when the cap has room. One pass at a time; it catches its own
+  // failure with its own sentence, so no warnKey. Its beat is the wake budget's window (pinned equal in admission-wake.test.ts):
+  // the lane wakes at most WAKE_BURST coordinators a window, so a finer beat buys nothing.
+  { name: 'admissionWake', cadenceMs: ADMISSION_WAKE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'idleNudge', cadenceMs: IDLE_NUDGE_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'skip', warnKey: null },
   { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   // The mailhold projection (mid-turn mail spec §3.4, plan Task 4.3; `coord/mailHoldLane.ts`): one pass at a time at the mail

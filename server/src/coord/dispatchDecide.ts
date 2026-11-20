@@ -246,6 +246,19 @@ export function capShadowLine(
     + `armed, ${left.length} left out would free a slot (${left.join(', ')})`;
 }
 
+/**
+ * D-6095 (re-grounded on D-8792): how many concurrency slots are free in a cap reading, for the `admissionWake` lane's
+ * room check. The rows that hold slots are `capsMeasured`'s own: all of `usage.running` unless the reading is ARMED
+ * (`usage.workingOnly`, the `cap-counts-working` row), when the `waiting` rows it measured are left out. In shadow the
+ * waiting rows still hold their slots, so the wake fires only on a slot the armed reading frees or a slot freed the
+ * ordinary way. Never negative. It reads no freed-slot admit: a room check consumes nothing, and the dispatch the mail
+ * prompts still passes `capRefusalOf` at its own door.
+ */
+export function capsRoomOf(c: CapsReading): number {
+  const holding = c.usage.workingOnly === true ? c.usage.running - (c.usage.waiting ?? 0) : c.usage.running;
+  return Math.max(0, c.caps.maxConcurrentWorkers - holding);
+}
+
 /** D-8792, shadow (review 2875 F7): the journal line for a send-back the cap refused that arming would admit as a free
  *  resume (`sendBackCapPlan` answers `free`), naming the worker's state. Same prefix as `capShadowLine`. */
 export function capShadowResumeLine(start: string, over: { limit: number; running: number }, f: WorkerFacts): string {
