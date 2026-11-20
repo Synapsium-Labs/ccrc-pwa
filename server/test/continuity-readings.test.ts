@@ -55,7 +55,7 @@ describe('ladderConditionInputs: off-model', () => {
   const gen = (model: string | null) => ({ identity: 'overlord', sessionId: 'lane-a', state: 'active', shadowState: null, walk: null, model, startId: 1, startReportedAt: START }) as unknown as GenRow;
   const make = (o: { designation?: DesignationRead; model?: string | null; gens?: 'none' | 'throw' }) => {
     const db = new DatabaseSync(':memory:');
-    db.exec('CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT, agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);');
+    db.exec('CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT, agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);');
     // The generation's start row: received by the server at START (the hook stamped it START as well, unless a case moves it).
     db.exec(`CREATE TABLE continuity_starts (id INTEGER PRIMARY KEY, receivedAt INTEGER NOT NULL); INSERT INTO continuity_starts VALUES (1, ${START});`);
     const coord = {

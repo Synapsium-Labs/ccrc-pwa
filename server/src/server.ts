@@ -2248,6 +2248,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
     pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
+      stateOf: (m) => deps.operatorModel?.messageStateOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
       pickUp: (m, at) => deps.operatorModel?.moveMessage(m, 'pick-up', 'hook', at) ?? { ok: false, error: 'not-open', detail: 'no private store' } },
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),

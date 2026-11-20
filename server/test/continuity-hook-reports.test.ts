@@ -64,7 +64,7 @@ describe('hookReportOf', () => {
 
 const mem = (): DatabaseSync => {
   const db = new DatabaseSync(':memory:');
-  db.exec(`CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT, agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);`);
+  db.exec(`CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT, agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);`);
   return db;
 };
 const rep = (b: Record<string, unknown>): HookReport => {

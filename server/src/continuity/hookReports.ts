@@ -112,7 +112,12 @@ export interface OffModelInput {
  *  sidecar's class differs. A STALE or ABSENT sidecar is not evidence either way: it neither makes the answer true nor
  *  unmeasured on its own. Unmeasured when nothing measured says true and the start class is unknown, the switches could not
  *  be read, or a reported switch names no known class. A measured difference outranks an unmeasured input: the answer then
- *  is true, as `any ... differs` reads. */
+ *  is true, as `any ... differs` reads.
+ *  WHAT IT CANNOT SEE (review 2870 F3, the coordinator's ruling): off-model sees only the start's class, reported switches and a
+ *  fresh sidecar. Nothing sends a `model-switch` report until door process B2, so in W1 the switch list is always empty, and a
+ *  switch made while the sidecar is stale (30 minutes) or absent goes unseen until the next start report: the answer stays
+ *  false and the condition `lifted`. Reading a stale sidecar as unmeasured instead would brake the Overlord in routine idle
+ *  time, so it is not done (slug `off-model-sees-reported-switches-and-a-fresh-sidecar`). */
 export function offModelOf({ designatedClass, startClass, switches, sidecarClass }: OffModelInput): Read<boolean> {
   let unmeasuredWhy: string | undefined;
   if (startClass !== null && startClass !== designatedClass) return { ok: true, value: true };

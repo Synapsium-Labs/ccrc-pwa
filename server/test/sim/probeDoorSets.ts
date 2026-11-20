@@ -2,6 +2,7 @@
 // w1a-probes.md, Tasks 4 to 6). As in `probeSets.ts`, each decider's cases are written ONCE here, as suite cases over a
 // module: `continuity-probe-door.test.ts` and `continuity-probe-schedule.test.ts` run them against the real modules, and
 // `mutation-floors.test.ts` runs them against each textual mutant (D-8217's every-run floors).
+import { readFileSync, readdirSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { expect } from 'vitest';
@@ -14,6 +15,12 @@ import type { MutantSet, SuiteCase } from './mutate.js';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../../..');
 
 export type ProbeDoorModule = typeof import('../../src/continuity/probeDoor.js');
+/** Every `.ts` file under `dir`, for the ledger writer pin (`READ_LEDGER_WRITTEN`). */
+function srcFiles(dir: string): string[] {
+  return readdirSync(dir, { withFileTypes: true, recursive: true })
+    .filter((e) => e.isFile() && e.name.endsWith('.ts'))
+    .map((e) => path.join(e.parentPath, e.name));
+}
 export type ProbeScheduleModule = typeof import('../../src/continuity/probeSchedule.js');
 export type CardModule = typeof import('../../src/continuity/card.js');
 export type CompactionsModule = typeof import('../../src/continuity/compactions.js');
@@ -197,16 +204,33 @@ export function bookOfCases(m: ProbeDoorModule): Record<string, SuiteCase> {
       expect(m.BOOK_STATES_RECORDED).toContain('closed');
       expect([...m.BOOK_STATES_RECORDED].sort()).toEqual([...BOOK_STATES].sort());
     },
-    'ledgerFactsOf: covered only for the designated session, its reads as the port counted them': () => {
+    'ledgerFactsOf, once a read door writes the ledger: covered only for the designated session, its reads as the port counted them': () => {
       const live = { kind: 'row' as const, live: 'lane-a', pending: null, pendingKind: null, term: 1 };
       const counted = (n: number) => ({ kind: 'measured' as const, value: n });
-      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', reads: counted(2) })).toEqual(led(true, 2));
-      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', reads: counted(0) })).toEqual(led(true, 0));
-      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-b', reads: counted(2) })).toEqual(led(false, 0));
-      expect(m.ledgerFactsOf({ designation: { kind: 'none' }, callerId: 'lane-a', reads: counted(0) })).toEqual(led(false, 0));
-      expect(m.ledgerFactsOf({ designation: 'unmeasured', callerId: 'lane-a', reads: counted(0) }).ok).toBe(false);
-      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', reads: { kind: 'unmeasured', why: 'x' } }).ok).toBe(false);
-      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', reads: null }).ok).toBe(false);
+      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: true, reads: counted(2) })).toEqual(led(true, 2));
+      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: true, reads: counted(0) })).toEqual(led(true, 0));
+      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-b', ledgerWritten: true, reads: counted(2) })).toEqual(led(false, 0));
+      expect(m.ledgerFactsOf({ designation: { kind: 'none' }, callerId: 'lane-a', ledgerWritten: true, reads: counted(0) })).toEqual(led(false, 0));
+      expect(m.ledgerFactsOf({ designation: 'unmeasured', callerId: 'lane-a', ledgerWritten: true, reads: counted(0) }).ok).toBe(false);
+      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: true, reads: { kind: 'unmeasured', why: 'x' } }).ok).toBe(false);
+      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: true, reads: null }).ok).toBe(false);
+    },
+    'ledgerFactsOf with no ledger writer (review 2870 F1): the designated session is not covered, so its probe with no card or notes read is unmeasured, never closed': () => {
+      const live = { kind: 'row' as const, live: 'lane-a', pending: null, pendingKind: null, term: 1 };
+      const facts = m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: false, reads: { kind: 'measured', value: 0 } });
+      expect(facts).toEqual(led(false, 0));
+      expect(m.bookOf(noRead, 1000, facts)).toBe('unmeasured');
+      expect(m.bookOf({ kind: 'read', at: 999 }, 1000, facts)).toBe('unmeasured');
+      expect(m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: false, reads: null })).toEqual(led(false, 0));
+      expect(m.ledgerFactsOf({ designation: 'unmeasured', callerId: 'lane-a', ledgerWritten: false, reads: null }).ok).toBe(false);
+      expect(m.bookOf(noRead, 1000, m.ledgerFactsOf({ designation: live, callerId: 'lane-a', ledgerWritten: m.READ_LEDGER_WRITTEN, reads: { kind: 'measured', value: 0 } })))
+        .toBe(m.READ_LEDGER_WRITTEN ? 'closed' : 'unmeasured');
+    },
+    'READ_LEDGER_WRITTEN is true exactly when server/src calls recordRead, the read ledger\'s one writer': () => {
+      const callers = srcFiles(path.join(ROOT, 'server/src'))
+        .filter((f) => !f.endsWith(path.join('operatorModel', 'store.ts')))
+        .filter((f) => /\.recordRead\(/.test(readFileSync(f, 'utf8')));
+      expect(m.READ_LEDGER_WRITTEN, `recordRead callers: ${callers.join(', ') || 'none'}`).toBe(callers.length > 0);
     },
   };
 }
@@ -973,6 +997,8 @@ const BOOK_OF_SET: MutantSet<ProbeDoorModule> = {
     { id: 'B10 a card or notes read that could not be measured read as none', old: "if (ledger.value.covered && last.kind === 'read') return 'closed';", new: "if (ledger.value.covered) return 'closed';" },
     { id: 'L1 an unreadable designation read as uncovered', old: "  if (i.designation === 'unmeasured') return { ok: false, detail: 'the designation could not be read' };\n", new: '' },
     { id: 'L2 every session covered', old: "  if (identityOf(i.callerId, i.designation) !== 'overlord') return { ok: true, value: { covered: false, reads: 0 } };\n", new: '' },
+    { id: 'L5 no ledger writer still covers', old: "  if (!i.ledgerWritten) return { ok: true, value: { covered: false, reads: 0 } };\n", new: '' },
+    { id: 'L6 the build claims a ledger writer', old: 'export const READ_LEDGER_WRITTEN = false;', new: 'export const READ_LEDGER_WRITTEN = true;' },
     { id: 'L3 a count never asked read as zero', old: "if (i.reads === null) return { ok: false, detail: 'the read ledger was not asked' };", new: "if (i.reads === null) return { ok: true, value: { covered: true, reads: 0 } };" },
     { id: 'L4 an unreadable count read as zero', old: "return i.reads.kind === 'measured' ? { ok: true, value: { covered: true, reads: i.reads.value } } : { ok: false, detail: i.reads.why };", new: "return { ok: true, value: { covered: true, reads: i.reads.kind === 'measured' ? i.reads.value : 0 } };" },
   ],

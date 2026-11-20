@@ -23,7 +23,8 @@ const NOW = 1_800_000_000_000;
 const BODY = 'lane-a-overlord';
 const COORDINATOR = 'lane-a-project-a';
 const INC = 'inc-1';
-/** The binding the L5 composition gives the witness port until door process B lands: it refuses, never passes. */
+/** A refusing witness port, the shape of the stub the L5 composition held before door process B1 bound
+ *  `continuity/witnessPorts.ts` (which `server-caps.test.ts` pins): it refuses, never passes. */
 const DEFAULT_WITNESS: WitnessVerdict = { kind: 'unmeasured', why: 'the witness report is not built' };
 const WITNESSED: WitnessVerdict = { kind: 'witnessed', witnessId: 7 };
 const DESIGNATED = {

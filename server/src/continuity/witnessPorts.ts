@@ -91,7 +91,10 @@ export function witnessPorts(deps: WitnessPortDeps): Pick<OverlordGateDeps, 'wit
       const w = recordWitnessCheck(coord.db, { sessionId: check.sessionId, generationId: check.generationId, outcome: check.outcome,
         witnessId: check.witnessId, why: check.why, at: check.at });
       if (!w.ok) {
-        if (w.error === 'write-failed') console.warn('ccrc-server: a witness check could not be recorded');
+        // Fixed text, never the key. `refused` is the UNIQUE spend column catching a second use: unreachable but through a bug,
+        // since the verdict and the spend run in one synchronous section (review 2870 F7).
+        console.warn(w.error === 'write-failed' ? 'ccrc-server: a witness check could not be recorded'
+          : 'ccrc-server: a witness check was refused: that witness was already spent');
         return false;
       }
       if (check.outcome === 'unwitnessed') latch(coord, check.sessionId, check.at, check.actor);

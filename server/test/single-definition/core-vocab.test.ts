@@ -1106,9 +1106,9 @@ describe('the Overlord gate words have one home (W1 gates B, Task 6)', () => {
       'server/src/retire.ts',
     ]);
   });
-  it("'unwitnessed' is held by the gate and by door process B's four files that name its verdict arm and its recorded outcome (hookReports.ts answers the gate's WitnessVerdict; hookReportStore.ts keeps the row's outcome; witnessPorts.ts acts on it; none refuses a route)", async () => {
+  it("'unwitnessed' is held by the gate and by door process B's two files that name its verdict arm and its recorded outcome (hookReports.ts answers the gate's WitnessVerdict; witnessPorts.ts acts on it; hookReportStore.ts imports the gate's outcome type, review 2870 F10; none refuses a route)", async () => {
     expect(await holders('unwitnessed')).toEqual([
-      'server/src/continuity/hookReportStore.ts', 'server/src/continuity/hookReports.ts', 'server/src/continuity/witnessPorts.ts', GATE,
+      'server/src/continuity/hookReports.ts', 'server/src/continuity/witnessPorts.ts', GATE,
     ]);
   });
   it('CONTROL: a planted refuseRoute(reply, gate word) in another file is red, in each word', async () => {

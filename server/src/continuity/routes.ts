@@ -36,7 +36,7 @@ import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
 import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
-import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
+import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
 import {
@@ -51,13 +51,16 @@ import { actKeyClaimVerdict } from './actKey.js';
 import { actKeyByNonce, issueActKey, noteRefusedClaim } from './actKeyStore.js';
 import type { GateClaim, GateRun } from '../coord/overlordGateRun.js';
 import type { StoreRead, StoreWrite } from '../operatorModel/store.js';
+import type { MessageState } from '../../../shared/operatorMessages.js';
 import { hookReportOf } from './hookReports.js';
 import { insertHookReport } from './hookReportStore.js';
 
 /** The report door's port into the private store (C11), declared by its consumer: the composition root builds it from the
- *  store's `messageSessionOf` and `moveMessage(id, 'pick-up', 'hook', at)`. No C3 file imports the store itself. */
+ *  store's `messageSessionOf`, `messageStateOf` and `moveMessage(id, 'pick-up', 'hook', at)`. No C3 file imports the store
+ *  itself. `stateOf` is asked only after a refused move, to tell a repeat pick-up from a real refusal. */
 export interface MessagePickUp {
   sessionOf(id: number): StoreRead<{ readonly sessionId: string } | 'absent'>;
+  stateOf(id: number): StoreRead<MessageState | 'absent'>;
   pickUp(id: number, at: number): StoreWrite<{ readonly changed: boolean }>;
 }
 
@@ -411,7 +414,13 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       if (owner.value === 'absent') return refuseRoute(reply, 'unknown-message', { detail: 'no operator message on record has that id' });
       if (owner.value.sessionId !== id) return refuseRoute(reply, 'not-owner', { detail: 'that message is not this session\'s' });
       const moved = port.pickUp(report.messageId, deps.wall());
-      if (!moved.ok) return refuseRoute(reply, 'unmeasured', { detail: 'the message could not be moved to picked up' });
+      if (!moved.ok) {
+        // The move table has no pick-up from `picked-up` (`MESSAGE_MOVES`), so the store refuses a repeat report of a message
+        // the hook already reported: that is the contract's 200 `changed:false`, not a failure (review 2870 F5).
+        const now = moved.error === 'refused' ? port.stateOf(report.messageId) : null;
+        if (now?.kind === 'measured' && now.value === 'picked-up') return reply.code(200).send({ ok: true, changed: false });
+        return refuseRoute(reply, 'unmeasured', { detail: 'the message could not be moved to picked up' });
+      }
       return reply.code(200).send({ ok: true, changed: moved.value.changed });
     }
     const coord = deps.coord;
@@ -1091,7 +1100,7 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const last = coord.lastContinuityRead(id);
     const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
     const answeredAt = deps.wall();
-    const ledger = ledgerFactsOf({ designation: designationReadOf(coord), callerId: id, reads: deps.operatorModel?.()?.readsBetween?.(LEDGER_SESSION_CALLERS, first.askedAt, answeredAt) ?? null });
+    const ledger = ledgerFactsOf({ designation: designationReadOf(coord), callerId: id, ledgerWritten: READ_LEDGER_WRITTEN, reads: deps.operatorModel?.()?.readsBetween?.(LEDGER_SESSION_CALLERS, first.askedAt, answeredAt) ?? null });
     const book = bookOf(lastRead, first.askedAt, ledger);
     // `answerRound` compares and sets on every question being unanswered: a round answered already is refused there.
     const w = coord.answerRound(roundId, id, graded, book, answeredAt);

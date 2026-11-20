@@ -105,9 +105,11 @@ export function gradeAnswers(rows: readonly StoredQuestion[], answers: ReadonlyM
 export type LastRead = { readonly kind: 'read'; readonly at: number | null } | { readonly kind: 'unmeasured' };
 
 /** The server's read ledger as closed-book reads it for one session (plan `w1-door-process.md` Task 9, ruled F10): whether
- *  the ledger covers the session, and how many of its lines fall between the ask and the answer. `covered` is true for the
- *  designated session only, since every read it makes goes through an Overlord read door and each such door writes a ledger
- *  line; a coordinator, a worker and a plain session are not covered (slug `closed-book-reads-the-ledger`). */
+ *  the ledger covers the session, and how many of its lines fall between the ask and the answer. The plan's rule makes the
+ *  designated session `covered`, on the premise that every read it makes goes through an Overlord read door that writes a
+ *  ledger line. That premise holds only once such a door writes one: until then `covered` is false for every session, so no
+ *  spot probe answers `closed` from card and notes stamps alone (`READ_LEDGER_WRITTEN`). A coordinator, a worker and a plain
+ *  session are never covered (slugs `closed-book-reads-the-ledger`, `closed-book-waits-for-a-ledger-writer`). */
 export type LedgerFacts = Read<{ readonly covered: boolean; readonly reads: number }>;
 
 /** The port this door declares for the count (L2, declared by its consumer, built from the private store at composition; no
@@ -117,16 +119,25 @@ export interface ReadLedgerCount {
   readsBetween(callers: readonly ReadCaller[], from: number, to: number):
     { readonly kind: 'measured'; readonly value: number } | { readonly kind: 'unmeasured'; readonly why: string };
 }
+/** Whether any read door in this build writes the read ledger (`recordRead`, the private store's one writer of it). False in
+ *  W1: nothing in `server/src` calls `recordRead`, so a designated session's reads leave no line and a ledger count of 0 proves
+ *  nothing. While it is false the designated session is not `covered`, and its spot probes answer `unmeasured`, never `closed`:
+ *  a `closed` would reach `closedSpotProbes` and through it `fittedCeilingOf` and the soft-ceiling trigger as evidence nobody
+ *  measured (review 2870 F1, the coordinator's ruling). `probeDoorSets.ts` holds it equal to whether `server/src` has a
+ *  `recordRead` caller, so the change that adds the first writer turns it true, and the plan's rule then applies unchanged. */
+export const READ_LEDGER_WRITTEN = false;
 /** The ledger's caller words that are the designated session's own reads: itself and the readers it starts. */
 export const LEDGER_SESSION_CALLERS: readonly ReadCaller[] = ['overlord', 'reader'];
 
 /** Who the ledger covers, and what its count was (`ReadLedgerCount`'s answer, or `null` when it was not asked). Covered only
- *  for the designated session (`identityOf` names it `overlord`); an unreadable designation or count is unmeasured. For a
- *  session the ledger does not cover, the ledger attributes nothing to it, so `reads` is 0 by construction and `covered: false`
- *  is what keeps `bookOf` from answering `closed`. */
-export function ledgerFactsOf(i: { designation: DesignationFact | 'unmeasured'; callerId: string; reads: ReturnType<ReadLedgerCount['readsBetween']> | null }): LedgerFacts {
+ *  for the designated session (`identityOf` names it `overlord`), and only while a read door writes the ledger
+ *  (`ledgerWritten`, `READ_LEDGER_WRITTEN` at the route); an unreadable designation or count is unmeasured. For a session the
+ *  ledger does not cover, the ledger attributes nothing to it, so `reads` is 0 by construction and `covered: false` is what
+ *  keeps `bookOf` from answering `closed`. */
+export function ledgerFactsOf(i: { designation: DesignationFact | 'unmeasured'; callerId: string; ledgerWritten: boolean; reads: ReturnType<ReadLedgerCount['readsBetween']> | null }): LedgerFacts {
   if (i.designation === 'unmeasured') return { ok: false, detail: 'the designation could not be read' };
   if (identityOf(i.callerId, i.designation) !== 'overlord') return { ok: true, value: { covered: false, reads: 0 } };
+  if (!i.ledgerWritten) return { ok: true, value: { covered: false, reads: 0 } };
   if (i.reads === null) return { ok: false, detail: 'the read ledger was not asked' };
   return i.reads.kind === 'measured' ? { ok: true, value: { covered: true, reads: i.reads.value } } : { ok: false, detail: i.reads.why };
 }

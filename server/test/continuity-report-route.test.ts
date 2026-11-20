@@ -1,7 +1,7 @@
 // Overlord W1 door process B1 (plan `w1-door-process.md` Task 7): `POST /api/sessions/:id/report`, the session hook's one
 // door. The refusals in order (token, sender, shape, attribution), each stored kind's row, `picked-up` through a fake private
-// store (moved, another session's, absent, already past picked up, unmeasured), a failed write, and the keep: rows past it are
-// gone after the next insert. Fixture HOMEs only.
+// store (moved, another session's, absent, already past picked up, unmeasured) and through the real one (a repeat report),
+// a failed write, and the keep: rows past it are gone after the next insert. Fixture HOMEs only.
 import { describe, it, expect, afterEach, beforeEach, vi } from 'vitest';
 import type { FastifyInstance } from 'fastify';
 import type { CoordStore } from '../src/coord/store.js';
@@ -10,6 +10,10 @@ import { ID_GATE_TOKEN, appFor, recorder, seedRow } from './idGateFixture.js';
 import { FAKE_T0 } from './fakeTime.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 import { REPORT_KEEP_MS, WITNESS_KEEP_MS } from '../../shared/continuity-reports.js';
+import { OperatorModelStore as RealOperatorModelStore, type PrivacyIssuer } from '../src/operatorModel/store.js';
+import { defaultOperatorModelDbPath, openOperatorModelDb } from '../src/operatorModel/db.js';
+import { attributionIdentity } from '../src/auth/attributionIdentity.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 
 const ID = 'lane-a-project-a';
 const UUID = '11111111-2222-3333-4444-555555555555';
@@ -44,6 +48,7 @@ const operatorModel = {
     const o = fake.owners[m];
     return { kind: 'measured', value: o === undefined ? 'absent' : { sessionId: o } };
   },
+  messageStateOf: () => ({ kind: 'measured', value: 'recorded' }),
   moveMessage: (m: number, e: string, a: string, at: number) => {
     fake.moves.push([m, e, a, at]);
     return fake.fail ? { ok: false, error: 'write-failed', detail: 'x' } : { ok: true, value: { changed: fake.changed, state: 'picked-up' } };
@@ -184,6 +189,27 @@ describe('POST /api/sessions/:id/report: picked-up moves the operator message', 
     fake.fail = true;
     const res = await report(app, { kind: 'picked-up', messageId: 7 });
     expect([res.statusCode, err(res)]).toEqual([502, 'unmeasured']);
+  });
+  it('the real private store: a repeat report of a message already picked up is 200 changed:false, never 502 (review 2870 F5)', async () => {
+    const db = openOperatorModelDb(defaultOperatorModelDbPath(mkTmp('ccrc-report-route-pm-')));
+    let issued = 0;
+    const journal: PrivacyIssuer = { kind: 'ready', issue: (highest) => { issued = Math.max(highest ?? 0, issued) + 1; return { ok: true, id: issued }; } };
+    const store = new RealOperatorModelStore(db, journal);
+    const actor = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
+      .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
+    const rec = store.recordMessage({ at: 1_000, sessionId: ID, term: 1, actor, text: 'hello', mark: false, composedKey: null });
+    if (!rec.ok) throw new Error('message not recorded');
+    try {
+      const r = await appFor(home, recorder().run, { operatorModel: store });
+      app = r.app; coord = r.coord;
+      await app.ready();
+      const first = await report(app, { kind: 'picked-up', messageId: rec.value.id });
+      expect([first.statusCode, first.json()]).toEqual([200, { ok: true, changed: true }]);
+      expect(store.messageStateOf(rec.value.id)).toEqual({ kind: 'measured', value: 'picked-up' });
+      const again = await report(app, { kind: 'picked-up', messageId: rec.value.id });
+      expect([again.statusCode, again.json()]).toEqual([200, { ok: true, changed: false }]);
+      expect(store.messageStateOf(rec.value.id)).toEqual({ kind: 'measured', value: 'picked-up' });
+    } finally { db.close(); }
   });
   it('a server without the private store answers 502 unmeasured for picked-up only (the port is always built; its store may be absent)', async () => {
     const r = await appFor(home, recorder().run);

@@ -7,10 +7,11 @@
 //   - a session that is not the Overlord is served as before (`hook`): the same answers `start-doors-characterization.test.ts` pins;
 //   - the bound id with another incarnation (or none) is refused 403 `not-the-overlord` at each of the six, read and write;
 //   - with the designation unmeasured, every caller, a coordinator included, is refused 503 `unavailable` at each of the six;
-//   - the bound Overlord with its own incarnation, on a server without `continuity-v1` (what `SERVER_CAPS` holds today): 501
-//     `capability-missing` at step 2, at each of the six;
-//   - with `continuity-v1` forced into the server's words (this file mocks `shared/api.ts`'s `SERVER_CAPS` for the one array the
-//     server reads per call; no source changes): a live generation of an older term at a write row is 409 `stale-designation`, a
+//   - the bound Overlord with its own incarnation, on a server without `continuity-v1` (taken out of the server's words here; the
+//     real `SERVER_CAPS` holds it since door process B1, which `server-caps.test.ts` pins): 501 `capability-missing` at step 2,
+//     at each of the six;
+//   - with `continuity-v1` among the server's words (this file mocks `shared/api.ts`'s `SERVER_CAPS` for the one array the
+//     server reads per call, and puts the word back; no source changes): a live generation of an older term at a write row is 409 `stale-designation`, a
 //     read row passes, and an attributed card read with no act key records no `continuity_card_reads` row;
 //   - on every refusal, at `hook` rows too, the five continuity tables keep their row counts.
 //
@@ -238,7 +239,7 @@ describe('the bound Overlord with its own incarnation, on a server without conti
   beforeAll(async () => { withWord(false); r = await rig('ccrc-gate-doors-caps-'); });
   afterAll(async () => { await close(r); removeTmpFixtures(); });
 
-  it('SERVER_CAPS lacks continuity-v1 today (this suite\'s premise; the day it holds the word these cases move to the next describe)', () => {
+  it('the server\'s words lack continuity-v1 here (this describe takes it out of the mocked array; the real SERVER_CAPS holds it since door process B1)', () => {
     expect(CAPS).not.toContain(WORD);
   });
   for (const d of DOORS) {
@@ -251,7 +252,7 @@ describe('the bound Overlord with its own incarnation, on a server without conti
   }
 });
 
-describe('with continuity-v1 among the server\'s words (forced here)', () => {
+describe('with continuity-v1 among the server\'s words (as the real SERVER_CAPS holds it since door process B1)', () => {
   let r: Rig;
   let reports = 0;
   beforeAll(async () => { withWord(true); r = await rig('ccrc-gate-doors-live-'); });

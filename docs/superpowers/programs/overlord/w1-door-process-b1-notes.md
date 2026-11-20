@@ -77,8 +77,9 @@ is taken here.
   identity adapter minted, and the server has none of its own (`actorOf('ccrc server', '')` is refused). So `WitnessCheck`
   carries the attributed caller's actor and the latch row's `raisedBy` names the designated session whose writes were counted;
   its detail names the count. A follow-up: a server-brake actor kind for latches the server raises.
-- **`core-vocab-four-holders`**: `unwitnessed` is spelled by the gate, `hookReports.ts`, `hookReportStore.ts` and
-  `witnessPorts.ts` (the recorded outcome), and the core-vocab pin lists the four.
+- **`core-vocab-three-holders`** (was `core-vocab-four-holders`): `unwitnessed` is spelled by the gate, `hookReports.ts` and
+  `witnessPorts.ts` (the recorded outcome), and the core-vocab pin lists the three. `hookReportStore.ts` spelled it too until
+  review 2870 F10 had it import the gate's `WitnessRecord['outcome']`.
 - **`report-door-not-an-overlord-row`**: the report door is a fleet-wide box-token lane, not an Overlord door, so it joins
   `overlordDoors.ts#NOT_OVERLORD_DOORS`, as the start report does.
 - **`witness-test-shared-db`**: `continuity-witness.test.ts` shares one fixture `coord.db` and drops tables by renaming them; a
@@ -91,13 +92,30 @@ is taken here.
   holders in `token-shared.test.ts` as the nineteenth separate quantity, by the coordinator's ruling (2026-11-20, run 2832).
 - **`pickup-owner-check-is-not-a-binding`**: the report door's picked-up arm compares a message's addressee with the
   reporting session. No run is read, so `runSessionCensus.ts`'s `NOT_BINDING_SITES` names it. That file was held by the
-  capacity Task 1 worker, who consented to the one additive row.
+  capacity Task 1 worker, who consented to the one additive row. The comparison stays inline in the route, as in six other
+  arms of the same file: it maps a union to a status and decides nothing a pure decider would add to (review 2870 F5).
+- **`closed-book-waits-for-a-ledger-writer`** (review 2870 F1, the coordinator's ruling): the plan makes the designated
+  session `covered`, on the premise that each of its reads writes a ledger line. Nothing writes one in W1, so
+  `READ_LEDGER_WRITTEN` (`probeDoor.ts`) is false and `ledgerFactsOf` covers no session: a spot probe answers `unmeasured`,
+  never `closed`. A `closed` from card and notes stamps alone would reach `closedSpotProbes` (`continuityStore.ts`) and through
+  it `fittedCeilingOf` (`renewalReadingsWiring.ts`) and the soft-ceiling trigger as evidence nobody measured.
+  `probeDoorSets.ts` holds the flag equal to whether `server/src` calls `recordRead`, so the change that adds the first writer
+  turns it true, and the plan's rule then applies unchanged.
+- **`off-model-sees-reported-switches-and-a-fresh-sidecar`** (review 2870 F3, the coordinator's ruling): off-model sees the
+  start's class, reported switches and a fresh sidecar only. Nothing sends a `model-switch` report until B2, so a switch made
+  while the sidecar is stale (30 minutes) or absent goes unseen until the next start report, and the condition stays `lifted`.
+  Reading a stale sidecar as `unmeasured` would brake the Overlord in routine idle time.
+- **`repeat-pickup-is-a-no-op`** (review 2870 F5): `MESSAGE_MOVES` has no pick-up from `picked-up`, so the store refuses a
+  repeat report. The report door asks the message's state after a refused move (`MessagePickUp.stateOf`, the store's
+  `messageStateOf`) and answers 200 `changed:false` when it is already `picked-up`, as its contract says.
+- **`hook-report-ids-autoincrement`** (review 2870 F2): `continuity_hook_reports.id` is `AUTOINCREMENT`, so a pruned witness's
+  id is never handed to a new witness, whose check would otherwise read `used`.
 
 ## Residuals
 
 - **`closed-book-reads-the-ledger`**: nothing in `server/src` writes the read ledger in W1 (`recordRead` has no caller), so
-  `reads` is 0 until board and history B's read doors write it. Until then a covered, measured session with no card or notes
-  read between ask and answer answers `closed`. The timer list door is not a ledger reader either.
+  `reads` is 0 until board and history B's read doors write it. Until then no session is covered, and every spot probe
+  answers `unmeasured` (`closed-book-waits-for-a-ledger-writer`). The timer list door is not a ledger reader either.
 - **`closed-book-route-wiring-untested-end-to-end`**: the designated session's probe answer passes gates B's fence, which no
   fixture can present, so the probe route's ledger wiring (three lines) is covered by `bookOf`, `ledgerFactsOf` and the store's
   `readsBetween`, not by a route case.
@@ -120,13 +138,20 @@ is taken here.
 - The Overlord's urgent mail through the door's mail act.
 - A server-brake actor kind, so a latch the server raises names the server (`latch-raised-under-the-callers-actor`).
 - The live restart measurement and Task 7's live key check, on the test box once it is up.
+- B2 sends `model-switch` (the coordinator carries it into B2's brief; `off-model-sees-reported-switches-and-a-fresh-sidecar`).
+- Review 2870 F6: the door process runs every call through one serial chain with no bound on the queue wait, so a fenced call
+  queued behind several slow ones reaches the server past the 120 s witness window and is refused `stale` (fails closed, and
+  counts toward the latch). Follow-up: stamp the receipt before the queue and refuse locally past the window less a margin.
+- Review 2870 F8: the prune on every report insert scans the table (the one index leads with `sessionId`, and an index on
+  `receivedAt` does not serve the `CASE`), and a session's rows are bounded by age only. Follow-up: two prune statements with
+  two indexes, and a per-session row cap.
 
 ## For the coordinator
 
 - **README** (item 486, the operator's yes): run 1850's holder consented (mail 27083) to this PR's two additive hunks, built
   against `main` at 963286cc9: the auth paragraph's machine-lane count word, ninety-two to ninety-three, and the continuity
   doors sentence naming the report door. Run 1850 keeps its claim on README.md; the consent covers this packet only.
-- **Migration**: 110 by position on this branch; approvals PR 3 builds on 110, so this becomes 111 at the absorb.
+- **Migration**: 110 by position on this branch. Approvals PR 3, capacity Task 3 and Linear hierarchy wave 7 also sit at 110; whoever lands second renumbers.
 
 ## Measurements
 
@@ -160,3 +185,21 @@ is taken here.
 
   All six were fixed in one round, and each suite passes alone. The tests-inclusive check passes over B1's test files in a
   narrowed project. `storybook-a11y` failed on the runner's apt install, which this change cannot reach.
+- **Review 2870's fix round:**
+  - Each new case was measured red first:
+    - F1's no-writer case, by its two mutants (L5 and L6 in `probeDoorSets.ts`, both killed);
+    - F2's id-reuse case, against the old DDL (the new witness took id 1 and read `used`);
+    - F4's wiring pin, by two hand mutations of `server.ts` (the spread removed, and a stub `witness` bound beside it);
+    - F5's real-store case, with the route's repeat arm removed;
+    - F7's warning assertion.
+
+    Every hand mutation was restored from a saved copy, and the hashes were checked equal.
+  - Re-run one file at a time:
+    - green: the Task 7 and 9 suites, `server-caps`, `continuity-notes-route`, `operator-model-store`, `token-shared`,
+      `run-session-census`, `writers-map`, `citations`, `anchors` and `dtbd`;
+    - `growth-check` armed is 97/97;
+    - the probe door, hook report and ladder mutant sets pass;
+    - the server's type check is clean, and the tests-inclusive type check passes over the touched test files in a narrowed
+      project.
+  - At load 17 to 24, `start-doors-characterization` and `run-close-switch` failed only as vitest timeouts at 20 s, on a
+    different case each run (1, 2 and 1 for the first; 3 and then 6 for the second). CI is the arbiter.

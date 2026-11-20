@@ -17,7 +17,7 @@
 # The SIXTH (Overlord W1 door process B1): the hook's reports, a session with a door's side sends through `_hook_door_report`
 # (`ccrc-api sessions report`), each one `_hook_timeout` of REPORT_TIMEOUT_S (3 s) inside the same budget, on every PreToolUse of a door tool (the
 # witness, after every deny arm), SubagentStart, SubagentStop, a quiet Stop and a UserPromptSubmit carrying a nudge line: fail-open, spooled and
-# retried never, and no hookstate write. A PreToolUse of any other tool pays nothing for it.
+# retried never, and no hookstate write. A PreToolUse of any other tool sends nothing (a session with a door still runs the arm's one jq).
 # The THIRD, FOURTH and FIFTH share ONE network budget per invocation (`_hook_net_bound`, HOOK_NET_BUDGET_MS, 8 s, the
 # worst case before the anchor), and a read that runs out its bound stops every later one in the invocation. Every OTHER event — every
 # PreToolUse, PostToolUse and Stop, which is where the hot path actually is —

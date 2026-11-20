@@ -241,11 +241,28 @@ describe('the recorder', () => {
     const id = witnessRow(r.s, NOW - 1000);
     const used: WitnessCheck = { sessionId: SESSION, generationId: r.g, door: 'notes-write', outcome: 'used', witnessId: id, why: null, at: NOW, actor: caller.actor };
     expect(r.ports.recordWitness(used)).toBe(true);
+    const warned = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
     expect(r.ports.recordWitness(used)).toBe(false);   // the witness is already used: refused, not spent twice
+    expect(warned.mock.calls).toEqual([['ccrc-server: a witness check was refused: that witness was already spent']]);
+    warned.mockRestore();
     expect(unw(r)).toBe(true);
     expect(checkRows(r.s)).toEqual([
       { witnessId: id, outcome: 'used', why: null, at: NOW }, { witnessId: null, outcome: 'unwitnessed', why: 'none', at: NOW },
     ]);
+  });
+  it('a spent witness\'s id is never reused after the prune: the next witness reads witnessed, never used (review 2870 F2)', () => {
+    const r = rig();
+    const first = witnessRow(r.s, NOW);
+    const used: WitnessCheck = { sessionId: SESSION, generationId: r.g, door: 'notes-write', outcome: 'used', witnessId: first, why: null, at: NOW, actor: caller.actor };
+    expect(r.ports.recordWitness(used)).toBe(true);
+    // Eight quiet days: the next report's prune deletes the spent witness (kept 24 h) before its own insert, and the `used`
+    // check (kept 7 days, pruned only when the next check is written) still names the old id.
+    r.clock.now = NOW + 8 * DAY;
+    const next = witnessRow(r.s, r.clock.now);
+    expect(r.s.db.prepare('SELECT COUNT(*) AS n FROM continuity_hook_reports WHERE receivedAt = ?').get(NOW)).toEqual({ n: 0 });   // pruned
+    expect(next).not.toBe(first);
+    expect(usedWitnesses(r.s.db, [next])).toEqual({ ok: true, value: new Set() });
+    expect(r.ports.witness(SESSION, r.g, KEY)).toEqual({ kind: 'witnessed', witnessId: next });
   });
   it('answers false when the write failed', () => {
     const r = rig();

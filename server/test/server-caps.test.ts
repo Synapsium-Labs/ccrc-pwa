@@ -21,6 +21,21 @@ const AT = 1_790_000_000;
 
 afterEach(() => { vi.useRealTimers(); });
 
+describe('continuity-v1 (Overlord W1 door process B1; review 2870 F4)', () => {
+  // The real SERVER_CAPS, unmocked: from this build the designated Overlord's start doors pass step 2. Gates B's R1 lets the
+  // word stand only beside the bound witness, so the pin below holds the gate runner to `witnessPorts`' two ports: deleting the
+  // spread, or binding `witness`/`recordWitness` beside it (the old stub port), reds here.
+  it('is advertised, and the gate runner takes its witness and recorder from witnessPorts alone', () => {
+    expect(SERVER_CAPS).toContain('continuity-v1');
+    const src = readFileSync(path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/server.ts'), 'utf8');
+    const from = src.indexOf('const gate = overlordGateRun({');
+    expect(from).toBeGreaterThan(-1);
+    const call = src.slice(from, src.indexOf('\n  });', from));
+    expect(call.match(/\.\.\.witnessPorts\(\{/g) ?? []).toHaveLength(1);
+    expect(call).not.toMatch(/\b(witness|recordWitness)\s*:/);
+  });
+});
+
 describe('review-rounds-v1 (D-8125)', () => {
   it('is advertised, and the word matches the file grammar', () => {
     expect(SERVER_CAPS).toContain('review-rounds-v1');

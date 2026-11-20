@@ -9,6 +9,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import {
   REPORT_KEEP_MS, WITNESS_KEEP_MS, isModelSwitchHow, type HookReport, type ModelSwitchHow,
 } from '../../../shared/continuity-reports.js';
+import type { WitnessRecord } from '../coord/overlordGate.js';
 
 /** A write's answer: the row's value, or why not. Never a throw. */
 export type HookStoreWrite<T> = { readonly ok: true; readonly value: T } | { readonly ok: false; readonly error: 'write-failed'; readonly detail: string };
@@ -128,7 +129,7 @@ export function modelSwitchesSince(db: DatabaseSync, sessionId: string, since: n
 
 /** One witness check, as the table keeps it. */
 export interface WitnessCheckInput {
-  readonly sessionId: string; readonly generationId: number; readonly outcome: 'used' | 'unwitnessed';
+  readonly sessionId: string; readonly generationId: number; readonly outcome: WitnessRecord['outcome'];
   readonly witnessId: number | null; readonly why: string | null; readonly at: number;
 }
 /** `refused`: the witness was already used (the UNIQUE column). `write-failed`: anything else. */
