@@ -18,9 +18,12 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
   two added lines needs no new packet. The route-level case is in `admission-wake.test.ts`, because the holder
   declined `run-routes.test.ts`.
 - **dispatch-feed-row-dropped.** The draft wrote a record-only feed row from the dispatch route for every cap refusal.
-  That would need a third `routes.ts` hunk. The dispatch refusal keeps its stamp and its journal line, both written
-  inside `dispatchRun`. The console learns of the wait from the lane's `admission woken` feed row when the wake is
-  sent. The coordinator ruled this (run 2842, the routes ruling).
+  That would need a third `routes.ts` hunk. No refusal writes a feed row, the dispatch's or the send-back's: each keeps
+  its stamp and its journal line (the dispatch's inside `dispatchRun`, the send-back's through `waitOnSendBackRefusal`).
+  The console learns of the wait from the lane's `admission woken` feed row when the wake is sent. The coordinator ruled
+  this (run 2842, the routes ruling) and, on review 2907's F2, amended W1-4's exit gate to read: "every refusal (dispatch
+  and send-back) is a journal line; every wake is a journal line and a feed row". The plan text and D-6095's wording are
+  left as they are here; the coordinator carries that amendment into W1-4b.
 - **capwaitof-in-admissionwake.** The draft put `capWaitOf`, the pure check that says whether a refusal is the cap's,
   in `server/src/coord/advance.ts`. That file is held under the same freeze, and its holder declined the edit. It is
   in `server/src/coord/admissionWake.ts` (L1) instead, with its test in `admission-wake.test.ts`, as are the draft's
@@ -57,12 +60,14 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
 - **capacity-blocks-in-the-wake-tx.** The draft marked the claimant's `capacity` blocks woken from the lane, outside
   the mail's write. `main` now has the block-wake lane (D-8126 A6), which leaves `capacity` to this lane, and its rule is
   that a block is never woken without its mail. `queueAdmissionWake` therefore marks those blocks in the same
-  transaction as the mail (`markBlockWoken`, the one writer of `wokenAt`).
+  transaction as the mail (`markBlockWoken`, the one writer of `wokenAt`), on the recorded arm only: a duplicate sends
+  no mail, so it wakes no block (review 2907 F7). It still re-marks the run's own woken stamp, so a waiter whose wake is
+  already recorded leaves the eligible list and does not spend the wake budget on every pass.
 
 ## Mutants
 
-Each guard was mutated by hand, one at a time, and the admission-wake suite run against it; all 15 are killed by an
-assertion, none by a timeout.
+Each guard was mutated by hand, one at a time, and the admission-wake suite run against it; all 17 are killed by an
+assertion, none by a timeout. M15 and M16 were added in fix round 1 (review 2907).
 
 | Mutant | Guard | Result |
 |---|---|---|
@@ -70,7 +75,7 @@ assertion, none by a timeout.
 | M2 | the stamp keeps the oldest wait | 2 failed |
 | M3 | a waiter refused again after its wake is eligible | 3 failed |
 | M4 | the observation needs the same refusal | 3 failed |
-| M5 | a duplicate re-marks the woken stamp and the blocks | 2 failed |
+| M5 | a duplicate re-marks the woken stamp | 2 failed |
 | M6 | in shadow a waiting worker holds its slot | 1 failed (the room cases, added for it) |
 | M6b | armed, a waiting worker frees its slot | 1 failed |
 | M7 | the pause and mail-disabled markers stop the pass | 1 failed |
@@ -81,6 +86,8 @@ assertion, none by a timeout.
 | M12 | no more wakes than the budget admits | 1 failed |
 | M13 | the observation key is the refusal | 3 failed |
 | M14 | the advance route calls the send-back half | 1 failed |
+| M15 | a duplicate wakes no block (review 2907 F7) | 1 failed: the block's `wokenAt` |
+| M16 | `wakeAdmitMany` has one caller (review 2907 F4) | 1 failed: the window pin |
 
 ## Follow-ups
 
@@ -89,6 +96,35 @@ assertion, none by a timeout.
   directory's path as text. The other was a note append whose text named the path. The coordinator has recorded both
   as one hook follow-up.
 - **wake-tx-into-rundefstx.** Fold `admissionWakeTx.ts` into `rundefsTx.ts` when that file's freeze ends.
+
+### Carried from review 2907 (no edit in this PR)
+
+- **F3, to W1-5.** A `capacity` block is woken only inside a wake. A block recorded after its run's wake, or by a
+  coordinator with no eligible waiter, stays live until its 24-hour lapse, and while it is live the coord-ball rung is
+  silent for that coordinator. One wake also wakes every `capacity` block of the claimant, not only the woken run's.
+  W1-5 wakes a block at record time when room exists and scopes the block wake to the woken run.
+- **F5, to the arming card.** Armed only: `capsRoomOf` counts a slot the worker readings free as room, but the dispatch
+  door hands it out only when the freed-slot window admits it. If the window refuses, the coordinator is refused again,
+  re-stamped and woken again on the next pass: a repeated room mail, bounded by the wake budget, with no back-off.
+- **F6.** A queued wake mail is cancelled only by a run close. A dispatch or send-back the coordinator made itself leaves
+  it to be delivered; acting on it meets `bad-transition` before any fleet act.
+- **A-N2.** Eligibility is a strict `admissionWokenAt < lastRefusedAt` on wall-clock times, so a refusal in the same
+  millisecond as the wake, or after a backwards clock step, waits for a later refusal.
+- **A-N3, A-N9.** The wake budget and the programme's served time are spent for each chosen waiter even when its write
+  then answers `run-gone` or throws; `memory.served` is never pruned.
+- **feed-row-project.** The `admission woken` feed row's `project` is empty, so it is not decorated with its project
+  when several are active.
+- **A-N6, A-N7.** The pause and mail-disabled markers come from the tick's listing and are not re-read inside the
+  serialiser (as in the block-wake lane). The lane does not hold on `stall-watch-disabled`, which holds every other block
+  wake, so `capacity` blocks are the one kind woken while it stands.
+- **B-N1.** Small decisions outside L1: the hold rule inline in the lane, the inline cap-refusal test in `dispatchRun`
+  beside `capWaitOf` (with `halt.limit ?? 0`), `sendBack: state !== 'planned'` in the store, and the `wakeOn ===
+  'capacity'` filter in the transaction.
+- **B-N2.** The waiter predicate is written twice in SQL (`admissionWaiters` and the observation's `admission` arm); only
+  that arm's `lastRefusedAt = ?` condition is pinned by a test.
+- **B-N4.** `admissionWakeTx.ts` declares L3 beside a model file that declares nothing.
+- **B-N6.** The lane-schedule test's table of coordination lanes does not list `admissionWake`; its row is pinned in
+  `admission-wake.test.ts`.
 
 ## Not started
 

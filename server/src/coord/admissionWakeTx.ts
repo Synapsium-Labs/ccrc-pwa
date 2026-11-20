@@ -4,7 +4,7 @@
 // re-sends, and a refused write leaves nothing behind. The claimant's `capacity` blocks are woken in it too. Not `queueSystemMail`: its dedupe asks only for an OUTSTANDING mail,
 // so a wake the coordinator already acked would be sent again. It lives beside `rundefsTx.ts` rather than in it because that
 // file is held under a freeze while this lands (capacity-task4-notes.md, slug wake-tx-own-file); its one caller is the
-// `admissionWake` lane (`watch.ts#sweepAdmissionWake`).
+// `admissionWake` lane's pass (`admissionWakeLane.ts#wakeOne`).
 import { tx } from './tx.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { admissionWakeDetail, admissionWakeMail, type AdmissionWaiter } from './admissionWake.js';
@@ -21,12 +21,10 @@ export function queueAdmissionWake(coord: WatcherCoordPort, w: AdmissionWaiter, 
   return tx(coord.db, (): AdmissionWakeQueued => {
     const seen = coord.insertObservation(w.runId, admissionWakeDetail(w), at, { kind: 'admission', refusedAt: w.lastRefusedAt });
     if (!seen.recorded) {
-      // A duplicate is a wake already sent for this very refusal: the stamp is made true (idempotent) so the run leaves the
-      // eligible list, and no second mail goes out.
-      if (seen.why === 'duplicate') {
-        coord.markAdmissionWoken(w.runId, at);
-        wakeCapacityBlocks(coord, w.claimedBy, at);
-      }
+      // A duplicate is a wake already sent for this very refusal: the run's own woken stamp is made true (idempotent) so it
+      // leaves the eligible list and stops spending the wake budget, and no second mail goes out. It wakes no block: a block
+      // is woken only beside a mail of its own, on the recorded arm below (review 2907 F7).
+      if (seen.why === 'duplicate') coord.markAdmissionWoken(w.runId, at);
       return { queued: false, why: seen.why };
     }
     const words = admissionWakeMail(w);

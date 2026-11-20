@@ -27,6 +27,16 @@ import { NotifyLog } from '../src/notifylog.js';
 import { quietAtTestEnd } from './laneQuiet.js';
 import { mkTmp } from './tmpHelpers.js';
 
+/** One run's admission stamp and claimant, read from its three columns (the test's own read; the store has no reader of
+ *  them besides the waiter list). Null for an unknown run. */
+type Stamp = { since: number | null; lastRefusedAt: number | null; wokenAt: number | null; claimedBy: string | null; program: string };
+function stampOf(coord: CoordStore, runId: number): Stamp | null {
+  const r = coord.db.prepare(
+    'SELECT admissionWaitSince AS since, lastRefusedAt, admissionWokenAt AS wokenAt, claimedBy, program FROM runs WHERE id = ?',
+  ).get(runId) as Stamp | undefined;
+  return r === undefined ? null : { since: r.since, lastRefusedAt: r.lastRefusedAt, wokenAt: r.wokenAt, claimedBy: r.claimedBy, program: r.program };
+}
+
 const PROJECT = 'demo';
 const WORKER = 'demo-quiet-basin';
 
@@ -81,8 +91,8 @@ describe('a cap-refused dispatch is stamped and journalled (D-6095)', () => {
     const run = f.coord.run(id);
     expect(run.ok && run.run !== null && run.run.state).toBe('planned');
     expect(f.coord.runEvents(id).map((e) => e.detail)).toEqual(['admission-refused:cap-concurrency limit=1 running=1']);
-    expect(f.coord.admissionStampOf(id)).toMatchObject({ claimedBy: 'coord-a' });
-    expect(f.coord.admissionStampOf(id)!.since).not.toBeNull();
+    expect(stampOf(f.coord, id)).toMatchObject({ claimedBy: 'coord-a' });
+    expect(stampOf(f.coord, id)!.since).not.toBeNull();
     expect(mailCount(f.coord)).toBe(0);
   });
 
@@ -94,7 +104,7 @@ describe('a cap-refused dispatch is stamped and journalled (D-6095)', () => {
     writeFileSync(path.join(f.home, '.cc-sessions', 'coordinator-paused'), '');
     const out = await dispatchRun(f.deps, id, 'go', undefined);
     expect(!out.ok && out.kind === 'refused' && out.code === 'paused').toBe(true);
-    expect(f.coord.admissionStampOf(id)!.since).toBeNull();
+    expect(stampOf(f.coord, id)!.since).toBeNull();
   });
 
   it('a dispatch that proceeds clears the stamp', async () => {
@@ -103,11 +113,11 @@ describe('a cap-refused dispatch is stamped and journalled (D-6095)', () => {
     const blocker = f.holder('other');
     const id = f.planned('prog-a', 'coord-a');
     expect(capRefused(await dispatchRun(f.deps, id, 'go', undefined))).toBe(true);
-    expect(f.coord.admissionStampOf(id)!.since).not.toBeNull();
+    expect(stampOf(f.coord, id)!.since).not.toBeNull();
     expect(f.coord.advance(blocker, 'working', 'test').ok).toBe(true);
     expect(f.coord.advance(blocker, 'awaiting-review', 'test').ok).toBe(true);   // the slot is free
     expect(await dispatchRun(f.deps, id, 'go', undefined)).toMatchObject({ ok: true });
-    expect(f.coord.admissionStampOf(id)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
+    expect(stampOf(f.coord, id)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
   });
 });
 
@@ -135,7 +145,7 @@ describe('the stamp (store)', () => {
     const id = open(f, 'prog-a', 'coord-a');
     f.coord.stampAdmissionWait(id, 1_000);
     f.coord.stampAdmissionWait(id, 5_000);
-    expect(f.coord.admissionStampOf(id)).toEqual({ since: 1_000, lastRefusedAt: 5_000, wokenAt: null, claimedBy: 'coord-a', program: 'prog-a' });
+    expect(stampOf(f.coord, id)).toEqual({ since: 1_000, lastRefusedAt: 5_000, wokenAt: null, claimedBy: 'coord-a', program: 'prog-a' });
   });
 
   it('a woken waiter is skipped until it is refused again', () => {
@@ -159,8 +169,8 @@ describe('the stamp (store)', () => {
     expect(f.coord.advance(a, 'dispatched', 'test').ok).toBe(true);
     expect(f.coord.advance(b, 'failed', 'operator', 'abandon:x').ok).toBe(true);
     expect(f.coord.admissionWaiters()).toEqual([]);
-    expect(f.coord.admissionStampOf(a)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
-    expect(f.coord.admissionStampOf(b)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
+    expect(stampOf(f.coord, a)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
+    expect(stampOf(f.coord, b)).toMatchObject({ since: null, lastRefusedAt: null, wokenAt: null });
   });
 
   it('a send-back waiter is a run parked in an idle state; the cleared stamp of a send-back that proceeds is gone', () => {
@@ -192,21 +202,28 @@ describe('the wake\'s one write: queueAdmissionWake (the stall-notice pattern)',
     const q = queueAdmissionWake(f.coord, w, 2_000);
     expect(q.queued).toBe(true);
     expect(mails(f)).toBe(1);
-    expect(f.coord.admissionStampOf(w.runId)!.wokenAt).toBe(2_000);
+    expect(stampOf(f.coord, w.runId)!.wokenAt).toBe(2_000);
     expect(f.coord.runEvents(w.runId).map((e) => e.detail)).toContain(admissionWakeDetail(w));
     const m = f.coord.db.prepare("SELECT runId, toId, fromId FROM mail WHERE subject LIKE 'capacity:%'").get() as { runId: number; toId: string; fromId: string };
     expect(m).toEqual({ runId: w.runId, toId: 'coord-a', fromId: 'operator' });
   });
 
-  it('the same refusal twice: the second write is a duplicate, sends nothing, and re-marks the stamp', () => {
+  it('the same refusal twice: the second write is a duplicate, sends nothing, re-marks the stamp and wakes no block', () => {
     const f = fixture();
     const w = waiter(f, 1_000);
     queueAdmissionWake(f.coord, w, 2_000);
     f.coord.db.prepare("UPDATE mail_deliveries SET state = 'acked'").run();   // read: an outstanding-only check would send again
     f.coord.db.prepare('UPDATE runs SET admissionWokenAt = NULL WHERE id = ?').run(w.runId);
+    // A capacity block recorded after the first wake: the duplicate sends no mail, so it must not wake the block (review
+    // 2907 F7; D-8126 A6: a block is never woken without its own mail).
+    const late = f.coord.insertCall('prog-a', 'coord-a', {
+      class: 'block', runId: null, question: null, options: null, chosen: 'waiting for a slot', why: 'w', reversible: true,
+      wakeOn: 'capacity' as never,
+    }, 'b-late', 2_500);
     expect(queueAdmissionWake(f.coord, w, 3_000)).toEqual({ queued: false, why: 'duplicate' });
     expect(mails(f)).toBe(1);
-    expect(f.coord.admissionStampOf(w.runId)!.wokenAt).toBe(3_000);
+    expect(stampOf(f.coord, w.runId)!.wokenAt).toBe(3_000);
+    expect(f.coord.callById(late)!.wokenAt).toBeNull();
   });
 
   it('a run refused again since the read is run-gone: nothing is written, the newer refusal is woken on its own', () => {
@@ -215,7 +232,7 @@ describe('the wake\'s one write: queueAdmissionWake (the stall-notice pattern)',
     f.coord.stampAdmissionWait(w.runId, 1_500);
     expect(queueAdmissionWake(f.coord, w, 2_000)).toEqual({ queued: false, why: 'run-gone' });
     expect(mails(f)).toBe(0);
-    expect(f.coord.admissionStampOf(w.runId)!.wokenAt).toBeNull();
+    expect(stampOf(f.coord, w.runId)!.wokenAt).toBeNull();
     expect(f.coord.runEvents(w.runId).map((e) => e.detail)).not.toContain(admissionWakeDetail(w));
   });
 
@@ -245,10 +262,10 @@ describe('waitOnSendBackRefusal: the send-back door\'s half (held routes hunk\'s
     if (!('id' in o)) throw new Error('fixture openRun refused');
     waitOnSendBackRefusal(f.coord, o.id, { ok: true });
     waitOnSendBackRefusal(f.coord, o.id, { ok: false, refusal: { reject: { code: 'unknown-run' } } });
-    expect(f.coord.admissionStampOf(o.id)!.since).toBeNull();
+    expect(stampOf(f.coord, o.id)!.since).toBeNull();
     expect(f.coord.runEvents(o.id)).toEqual([]);
     waitOnSendBackRefusal(f.coord, o.id, { ok: false, refusal: { reject: { code: 'cap-concurrency', limit: 2, running: 2 } } });
-    expect(f.coord.admissionStampOf(o.id)!.since).not.toBeNull();
+    expect(stampOf(f.coord, o.id)!.since).not.toBeNull();
     expect(f.coord.runEvents(o.id).map((e) => e.detail)).toEqual(['admission-refused:cap-concurrency limit=2 running=2']);
   });
 });
@@ -272,7 +289,7 @@ describe('the advance route: a send-back the cap refused waits (the consented ro
       expect(res.json()).toMatchObject({ ok: false, reject: { code: 'cap-concurrency', limit: 1, running: 1 } });
       const run2 = f.coord.run(o.id);
       expect(run2.ok && run2.run !== null && run2.run.state).toBe('awaiting-review');
-      expect(f.coord.admissionStampOf(o.id)!.since).not.toBeNull();
+      expect(stampOf(f.coord, o.id)!.since).not.toBeNull();
       expect(f.coord.runEvents(o.id).map((e) => e.detail)).toContain('admission-refused:cap-concurrency limit=1 running=1');
       expect(f.coord.admissionWaiters().map((w) => ({ runId: w.runId, sendBack: w.sendBack }))).toEqual([{ runId: o.id, sendBack: true }]);
     } finally {
@@ -411,9 +428,9 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     const id = l.refused('prog-a', 'coord-a', T0 - MIN);
     await l.sweep(T0);
     expect(l.wakeMail()).toMatchObject([{ toId: 'coord-a', fromId: 'operator', subject: `capacity: room for run ${id}` }]);
-    expect(l.coord.admissionStampOf(id)!.wokenAt).toBe(T0);
+    expect(stampOf(l.coord, id)!.wokenAt).toBe(T0);
     expect(l.coord.runEvents(id).map((e) => e.detail)).toContainEqual(expect.stringMatching(/^admission-woken:/));
-    const stamp = l.coord.admissionStampOf(id)!;
+    const stamp = stampOf(l.coord, id)!;
     expect(l.coord.hasNotice('coord', 'coord-a', `admission-wake:${id}:${stamp.lastRefusedAt}`)).toBe(true);
   });
 
@@ -490,7 +507,7 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     const again = await lane({ from: l });
     await again.sweep(T0 + MIN);
     expect(again.wakeMail()).toHaveLength(1);
-    expect(again.coord.admissionStampOf(id)!.wokenAt).toBe(T0 + MIN);   // the duplicate re-marks the stamp
+    expect(stampOf(again.coord, id)!.wokenAt).toBe(T0 + MIN);   // the duplicate re-marks the stamp
   });
 
   it('two programmes waiting are served alternately, and a third wake inside one window waits for the next', async () => {

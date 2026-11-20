@@ -6241,14 +6241,6 @@ export class CoordStore {
     ).run(runId);
   }
 
-  /** One run's stamp, with who claims it, for a refusal's feed row and the tests; null for an unknown run. */
-  admissionStampOf(runId: number): { since: number | null; lastRefusedAt: number | null; wokenAt: number | null; claimedBy: string | null; program: string } | null {
-    const r = this.db.prepare(
-      'SELECT admissionWaitSince AS since, lastRefusedAt, admissionWokenAt AS wokenAt, claimedBy, program FROM runs WHERE id = ?',
-    ).get(runId) as { since: number | null; lastRefusedAt: number | null; wokenAt: number | null; claimedBy: string | null; program: string } | undefined;
-    return r === undefined ? null : { since: r.since, lastRefusedAt: r.lastRefusedAt, wokenAt: r.wokenAt, claimedBy: r.claimedBy, program: r.program };
-  }
-
   /** The runs waiting on the cap, oldest refusal first: stamped, still `planned` or parked in an idle state (`sendBack`: a
    *  refused send-back, not a refused dispatch), with a claimant, and ELIGIBLE: never woken, or refused again since the
    *  wake (`lastRefusedAt` newer than `admissionWokenAt`). */
