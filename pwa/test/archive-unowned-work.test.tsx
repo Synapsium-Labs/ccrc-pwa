@@ -141,6 +141,13 @@ describe('H4: an unowned tree', () => {
     expect(rowOf('a-bad').textContent).not.toMatch(/tried/);
   });
 
+  it('re-files a workspace word this build cannot name as not measured, and leaves a non-object member out, as the frame reader does', () => {
+    draw(frame({ unowned: [unowned({ workspace: 'a-word-from-a-newer-server' as never }), null as never] }));
+    expect(rowOf('agent-u1')).toBeTruthy();
+    expect(section().textContent).toContain('presence on disk not measured for 1 tree');
+    expect(section().textContent).not.toMatch(/a-word-from-a-newer-server|unrecognised/);
+  });
+
   it('lists the newest attempt first, an unreadable time last, and equal times by admin record', () => {
     const at = (d: number): string => new Date(NOW - d * 86_400_000).toISOString();
     draw(frame({ unowned: [
