@@ -373,8 +373,12 @@ describe.skipIf(!HAS_KEYGEN)('ccrc testbox-admin preflight (D-8166, TC4)', () =>
     const bin = join(dir, 'bin'); mkdirSync(bin);
     writeFileSync(join(bin, 'findmnt'), '#!/bin/sh\nfor a; do last=$a; done; printf %s "$last"\n', { mode: 0o755 });
     writeFileSync(join(bin, 'xfs_info'), '#!/bin/sh\nprintf %s "$1"\n', { mode: 0o755 });
+    // run as a script file, so the root arrives as $1 exactly as in the shipped `sh -c '…' sh "$root"`, and no command
+    // string is assembled here
+    const script = join(dir, 'probe.sh');
+    writeFileSync(script, body + '\n');
     const ask = (root: string): string =>
-      spawnSync('sh', ['-c', body, 'sh', root], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH ?? ''}` } }).stdout;
+      spawnSync('sh', [script, root], { encoding: 'utf8', env: { PATH: `${bin}:${process.env.PATH ?? ''}` } }).stdout;
     const root = join(dir, 'root'); mkdirSync(root);
     expect(ask(root), 'an existing root is read itself, not its parent').toBe(root);
     expect(ask(join(dir, 'missing', 'deeper')), 'a missing root answers its nearest existing ancestor').toBe(dir);
