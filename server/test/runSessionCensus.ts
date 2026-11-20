@@ -215,6 +215,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "lastRunBySession's open-worker set, part of the counted last-closed reader: its own query, not a caller's decision" },
   { file: 'server/src/coord/store.ts', text: '`SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`',
     why: "lastRunBySession's parked-worker set, part of the counted last-closed reader: its own query, not a caller's decision" },
+  { file: 'server/src/coord/store.ts', text: "`SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +'",
+    why: "lastRunBySession's other-open-worker set (D-8790), part of the counted last-closed reader: its own query, not a caller's decision" },
   { file: 'server/src/coord/store.ts', text: "`SELECT ${MAIL_ROW_COLUMNS} FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ` +'JOIN runs rr ON rr.id = m.runId ' ",
     why: "mail of a PROGRAM, joined to its runs by the mail's run id: the detector reads the templated WHERE, and no session or claimant is asked" },
   { file: 'server/src/coord/store.ts', text: 'c.heldBy === input.sessionId',
@@ -265,6 +267,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
   { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',
     why: "the live process file's conversation id against the one before the /clear, until it rotates (Overlord W2 forecasts B, F3): Claude Code's conversation, no run is read" },
+  { file: 'server/src/continuity/routes.ts', text: 'owner.value.sessionId !== id',
+    why: "the private store's addressee of an operator message against the session reporting it picked up (Overlord W1 door process B1, the report door's picked-up arm): a message's recipient, no run is read" },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
@@ -335,6 +339,8 @@ export const RUN_NAMES_SESSION_CALLERS: readonly NamesSessionCaller[] = [
     why: 'the minting run is ONE run with no series in hand: childBirthOf asks only whether it names the session before it places a birth' },
   { file: 'server/src/childReclaimSweep.ts', count: 2,
     why: 'a hold candidate and a minting run are single runs with no series in hand: the sweep asks only whether the run names the session' },
+  { file: 'server/src/sleepLane.ts', count: 1,
+    why: 'the run a hold names is ONE run with no series in hand: heldKindOf asks only whether that run names this session (run-own)' },
 ];
 
 const HELPER = 'runNamesSession';

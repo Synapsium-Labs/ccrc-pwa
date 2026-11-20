@@ -329,7 +329,11 @@ number from `POST /api/ledger/deviations`.
   it `issue-not-inbound`, and a raised row's open item settles (review run 2427 F1, round 5 F2). A stored row whose issue
   moved out of a managed team is retired too, with its own cause, `moved-out` (review run 2457 F4, D-8733's "inbound counts
   only issues now in a managed team"): take, triage and the close re-read the issue by id before acting and refuse it
-  `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. The retire
+  `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. When the
+  doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused), a decision that binds the issue
+  (a take into an epic, an Upkeep placement, a hand) is refused `unreachable` (503, the Linear read's existing word: a retry
+  helps), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
   `waiting` and its owner is mailed once more, under a subject carrying the reopen's time. Record: the wave 4 follow-ups note.
@@ -803,7 +807,9 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
   - Wire: `PlanPutBody { home?: string; title?: string; epics: PlanEpicBody[] }` (`home` is the programme's home
     project, required when the programme has no row yet and refused `plan-bad-body` when it differs from a stored
     one; `title` names a new programme, default from its slug);
-    `PlanCloseBody { outcome: 'done' | 'abandoned'; why?: string }` (`why` required for `abandoned`); `PlanEpicBody { key; title; summary; project?; waves: number[]; checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string }`;
+    `PlanCloseBody { outcome: 'done' | 'abandoned'; why?: string }` (`why` required for `abandoned`); `PlanEpicBody { key; title; summary; project?; waves?: number[]; checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string }`
+    (`waves` optional since programme work map WM6, D-8780: an absent `waves` keeps a stored epic's range and a new epic
+    lists none, an explicit `[]` clears it; the stored row's `waves` stays `number[]`);
     `PlanCheckpointBody { key; title; kind: CheckpointKind; proves?: number[]; itemId?: number }` (`itemId` only on an
     `operator-act` checkpoint: the operator item whose `done` marks it met, §4.1);
     `PlanTicketBody { key; kind: TicketKind; title; body?: string; project?: string; checkpoint?: string }`;
@@ -1155,8 +1161,12 @@ every file found. The fix:
   `OpenRunTicket = { kind: 'existing'; id: number; epicId: number; reproject: string | null } | { kind: 'new'; epicId: number; project: string; title: string }`.
   Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-closed` (the plan reads `ended`: `runs open`
   after `plan close`, which the sync would otherwise answer by closing the initiative under a live run);
-  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave, or the named
-  ticket's epic is not the wave's); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
+  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave, and the run names a
+  ticket that is not of a live epic that lists no waves, or names none in a plan where every live epic lists waves; or the
+  named ticket's epic lists waves and is not the wave's; or the named ticket is an open ticket of a dropped epic that lists no
+  waves, which only live epics take); `ticket-required`
+  (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
+  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
   or an Upkeep ticket). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
   run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
   project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the

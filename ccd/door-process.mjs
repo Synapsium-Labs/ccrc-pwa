@@ -22,8 +22,9 @@
 // most one claim is in flight and writes reach the server in counter order. The counter rises by one before each fenced send and
 // is never reused, even after a send that got no answer.
 //
-// Node built-ins only: `node:child_process`, `node:fs`, `node:path` and `node:url` (B1's witness key adds `node:crypto`).
+// Node built-ins only: `node:child_process`, `node:crypto`, `node:fs`, `node:path` and `node:url` (`node:crypto` is B1's witness key).
 import { execFile } from 'node:child_process';
+import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -41,6 +42,8 @@ export const CALL_TIMEOUT_MS = 35_000;
 export const MAX_LINE_BYTES = 1024 * 1024;
 /** The protocol versions `initialize` agrees to; any other request is answered with the first (review 2735 F7). */
 export const PROTOCOL_VERSIONS = Object.freeze(['2025-06-18', '2025-03-26', '2024-11-05']);
+/** A door tool's full name as the session hook sees it (`DOOR_TOOL_PREFIX` in shared/continuity-reports.ts, held equal by door-tools.test.ts). */
+export const DOOR_TOOL_PREFIX = 'mcp__door__';
 /** No tool input names an attribution field: the client fills the pane's pair itself. */
 export const ATTRIBUTION_FIELDS = Object.freeze(['fromId', 'fromUuid', 'byId', 'byUuid']);
 
@@ -63,7 +66,7 @@ const need = (ok, why) => { if (!ok) throw new InputRefused(why); };
  *  `argv(input, self)` the row's one argv builder (ruled, F3) and `body(input)` what goes on the client's stdin, if anything.
  *  `fenced` calls carry the act key, the generation and the counter; `card` is the one `view` row fenced, because the page that
  *  completes a full read is a write (gates B's `card-record`, F9) and this process cannot tell which page that is. */
-export const DOOR_TOOLS = Object.freeze([
+const BASE_TOOLS = [
   {
     name: 'card', verb: 'sessions.card', class: 'view', fenced: true, reader: false,
     description: 'Read your card, one page per call. Page 1 names the card hash and the page count; read every page in turn, naming the hash.',
@@ -152,11 +155,40 @@ export const DOOR_TOOLS = Object.freeze([
     },
     body: (i) => ({ project: i.project, team: i.team, workspace: i.workspace }),
   },
-].map((r) => Object.freeze(r)));
+];
+
+/** THE READ TOOL (plan Task 7 "The read tool", question 9): the one door a reader (a subagent, whose only tool is `mcp__door__read`)
+ *  may use. `door` is an enum of the rows marked `reader: true`, and the call runs THAT row's argv builder and body, so it never
+ *  serves a row without the mark. It has no verb of its own. No row is marked in B1 (board and history B add theirs), so until then
+ *  the enum is empty and every call answers that no door is readable yet. */
+export function readToolOver(rows) {
+  const names = rows.filter((r) => r.reader === true).map((r) => r.name);
+  const readerOf = (i) => {
+    need(typeof i.door === 'string', 'door is the name of a readable door');
+    const row = rows.find((r) => r.reader === true && r.name === i.door);
+    need(row !== undefined, names.length === 0 ? 'no door is readable yet' : 'door is not a readable door');
+    need(row.fenced === false && row.class === 'view', 'a readable door is an unfenced view');
+    need(i.args === undefined || (i.args !== null && typeof i.args === 'object' && !Array.isArray(i.args)), 'args is an object');
+    return row;
+  };
+  return {
+    name: 'read', verb: null, class: 'view', fenced: false, reader: false,
+    description: names.length === 0 ? 'Read one of the doors a reader may read. No door is readable yet.'
+      : `Read one of the doors a reader may read: ${names.join(', ')}.`,
+    input: object({
+      door: names.length === 0 ? { type: 'string', description: 'No door is readable yet.' } : { type: 'string', enum: names },
+      args: { type: 'object', description: "The chosen door's own input." },
+    }, ['door']),
+    argv: (i, self) => readerOf(i).argv(i.args ?? {}, self),
+    body: (i) => { const r = readerOf(i); return r.body ? r.body(i.args ?? {}) : undefined; },
+  };
+}
+export const DOOR_TOOLS = Object.freeze([...BASE_TOOLS, readToolOver(BASE_TOOLS)].map((r) => Object.freeze(r)));
 
 /** The doors this table serves that the `ccrc-overlord` skill's table does not name (ruled, F26), each with its reason; the
  *  index passes both to the skill's owner. */
 export const DOOR_ONLY_TOOLS = Object.freeze({
+  read: "starting.md's door table is the Overlord's; the read tool is the readers' one door, and the Overlord itself never calls it",
   probe: "starting.md's door table has no row for reading a probe round; the first line sends the Overlord to it",
   note_handover: "starting.md's door table has no row for the handover note, which the renewal asks for",
   link_team: "starting.md's door table has no row for the Overlord's team link yet (D-8809); the skill's owner adds it",
@@ -181,6 +213,24 @@ function runClient(api, argv, env, stdin) {
 
 const parseJson = (s) => { try { return JSON.parse(s); } catch { return undefined; } };
 
+/** THE WITNESS KEY (plan question 6, slug `witness-key-is-the-call-digest`): the sha256, as 64 lowercase hex, of the tool's full
+ *  name, one newline, and the arguments printed by `jq -cS` with the trailing newline removed (`{}` for absent). The session hook
+ *  computes the same from the `PreToolUse` payload's `tool_input`, so the two agree for large integers, floats, unicode escapes
+ *  and key order because the SAME jq canonicalises both. jq runs as a child with the input on its STDIN, never its argv; a jq that
+ *  cannot run gives `null` and the call goes without a key (the gate reads it as unwitnessed). `name` is the row's own name. */
+export function witnessKeyOf(name, input, env = process.env) {
+  return new Promise((resolve) => {
+    const child = execFile('jq', ['-cS', '.'], { env, timeout: 10_000, maxBuffer: 4 * 1024 * 1024, encoding: 'utf8' }, (err, stdout) => {
+      if (err) { resolve(null); return; }
+      const canon = String(stdout).replace(/\n$/, '');
+      const key = createHash('sha256').update(`${DOOR_TOOL_PREFIX}${name}\n${canon}`).digest('hex');
+      resolve(HEX64.test(key) && canon !== '' ? key : null);
+    });
+    child.stdin?.on('error', () => {});
+    child.stdin?.end(JSON.stringify(input ?? {}));
+  });
+}
+
 /** The door: its state and its one chain. `opts`: `api` (the client's path), `self` (this session's id), `nonce`, `dir` (the
  *  delta cache's directory, or none), `env` (the children's base environment, the nonce already gone), `now` and `log`
  *  (a fixed line to stderr; never a value this process holds). */
@@ -195,7 +245,7 @@ export function createDoor(opts) {
   /** A child's environment: the base with no nonce and no fence variable, then only the fence this call carries. */
   const childEnv = (extra) => {
     const e = { ...env };
-    delete e.CCRC_DOOR_NONCE; delete e.CCRC_ACT_KEY; delete e.CCRC_ACT_GENERATION; delete e.CCRC_ACT_COUNTER;
+    delete e.CCRC_DOOR_NONCE; delete e.CCRC_ACT_KEY; delete e.CCRC_ACT_GENERATION; delete e.CCRC_ACT_COUNTER; delete e.CCRC_WITNESS_KEY;
     return { ...e, ...extra };
   };
 
@@ -287,11 +337,13 @@ export function createDoor(opts) {
       const body = row.body ? JSON.stringify(row.body(i)) : '';
       let extra = {};
       if (row.fenced) {
+        const wk = await witnessKeyOf(row.name, input, childEnv({}));   // the call's digest, for the hook's witness to match (B1)
+        if (wk !== null) extra = { CCRC_WITNESS_KEY: wk };
         await claim();
         if (st.refused) return NOT_THIS_SESSION;
         if (st.key !== null) {
           st.counter += 1;   // before the send, never reused (F7)
-          extra = { CCRC_ACT_KEY: st.key, CCRC_ACT_GENERATION: String(st.generation), CCRC_ACT_COUNTER: String(st.counter) };
+          extra = { ...extra, CCRC_ACT_KEY: st.key, CCRC_ACT_GENERATION: String(st.generation), CCRC_ACT_COUNTER: String(st.counter) };
         }
       }
       const r = await runClient(api, argv, childEnv(extra), body);

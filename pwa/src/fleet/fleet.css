@@ -257,11 +257,6 @@
      around this list already reserves that, so the bar's height is reserved once (desktop-polish PL10, review 1466 F19). */
   padding-bottom: calc(max(56px, var(--phone-nav-h)) + var(--sp-6) + env(safe-area-inset-bottom, 0px));
 }
-/* The fleet foot's region of work whose session is not listed: a grid item of .fleet-list, like .proj-card, so it
-   takes the card's floor. A grid item's automatic minimum is its min-content width, and its rows' words are
-   white-space: nowrap (.proj-work-parts), so without this one long row widens the list's one track and scrolls the
-   pane sideways. */
-.fleet-unlisted { min-width: 0; }
 /* Offline / cold-start hydration used to fade the whole card list here:
      .fleet[data-conn='down'] .fleet-list,
      .fleet[data-conn='connecting'] .fleet-list:not([data-loading='true'])
@@ -1589,17 +1584,16 @@
   white-space: nowrap;
 }
 
-/* D-5301 made the quiet `coordinator` badge; D-5545 moved it to the header; D-8142 puts the word back on the card as
-   one plain cell, FIRST on the context line (`.sess-meta--context`, SessionMeta.tsx). Mono and secondary ink, the
-   meta line's own size, so it reads as one legible fact beside the context. `flex: none` and `nowrap` keep the word
-   whole (the context beside it shortens or wraps instead), and `align-self: flex-start` keeps it on the context's
-   first line when a branch beside it takes two at the desk (D-6332). */
+/* D-5301 made the quiet `coordinator` badge; D-5545 moved it to the header; D-8142 put the word back on the card as one
+   plain cell, FIRST on the context line (`.sess-meta--context`, SessionMeta.tsx); D-8817 (the operator's note of
+   2026-11-19) draws it as a BADGE, `RoleBadge` in @ccrc/ui, and no longer writes the word. The picture strokes in
+   `currentColor`, so this rule is its colour: the quiet secondary ink, as the word was, and inside a programme box the
+   programme's hue (programmeBox.css, which names its ground). `flex: none` keeps it whole (the context beside it shortens or wraps instead), and `align-self: flex-start`
+   keeps it on the context's first line when a branch beside it takes two at the desk (D-6332). */
 .sess-role {
   flex: none;
   align-self: flex-start;
-  font-family: var(--family-mono);
   color: var(--ink-secondary);
-  white-space: nowrap;
 }
 
 /* A strand is deliberately louder than the neighbouring durable markers.

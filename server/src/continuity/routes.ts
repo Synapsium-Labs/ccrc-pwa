@@ -36,7 +36,7 @@ import { renewDoorVerdict, renewalModeOf, type RenewDoorFacts } from './renewNow
 import type { NoticeSink } from '../notice.js';
 import { designationReadOf, liveGenerationOf } from './liveGeneration.js';
 import { noteKeyReader, type NoteKeysMessages } from './noteKeys.js';
-import { PROBE_ANSWER_MAX_CHARS, bookOf, gradeAnswers, maskedQuestion, probePages, type LastRead } from './probeDoor.js';
+import { LEDGER_SESSION_CALLERS, PROBE_ANSWER_MAX_CHARS, READ_LEDGER_WRITTEN, bookOf, gradeAnswers, ledgerFactsOf, maskedQuestion, probePages, type LastRead, type ReadLedgerCount } from './probeDoor.js';
 import { roundVerdict } from './probes.js';
 import { REPORT_ID_RE, startLoadsOf } from './startLoads.js';
 import {
@@ -50,6 +50,19 @@ import { NONCE_SHA256_SHAPE, claimWhyText } from '../../../shared/continuity-doo
 import { actKeyClaimVerdict } from './actKey.js';
 import { actKeyByNonce, issueActKey, noteRefusedClaim } from './actKeyStore.js';
 import type { GateClaim, GateRun } from '../coord/overlordGateRun.js';
+import type { StoreRead, StoreWrite } from '../operatorModel/store.js';
+import type { MessageState } from '../../../shared/operatorMessages.js';
+import { hookReportOf } from './hookReports.js';
+import { insertHookReport } from './hookReportStore.js';
+
+/** The report door's port into the private store (C11), declared by its consumer: the composition root builds it from the
+ *  store's `messageSessionOf`, `messageStateOf` and `moveMessage(id, 'pick-up', 'hook', at)`. No C3 file imports the store
+ *  itself. `stateOf` is asked only after a refused move, to tell a repeat pick-up from a real refusal. */
+export interface MessagePickUp {
+  sessionOf(id: number): StoreRead<{ readonly sessionId: string } | 'absent'>;
+  stateOf(id: number): StoreRead<MessageState | 'absent'>;
+  pickUp(id: number, at: number): StoreWrite<{ readonly changed: boolean }>;
+}
 
 export interface ContinuityRouteDeps {
   /** The coordination store, or undefined on a server without one (a test, a script): the report answers `unavailable`. */
@@ -63,6 +76,9 @@ export interface ContinuityRouteDeps {
   /** The server's entropy (`deps.time.entropy`): the act key the claim door mints, 32 bytes as hex. Absent on a server built
    *  without one (a test of another door): the claim door answers `unavailable`, as for an absent store. */
   entropy?: Pick<Entropy, 'hex'>;
+  /** The report door's `picked-up` port. Absent (a server built without the private store, a test of another door): that kind
+   *  answers `unavailable`; every other kind is the table's. */
+  pickUp?: MessagePickUp;
   /** The timer read's sender check: `attributionVerdict` over the registry, on the query's `byUuid`. */
   attributeReader: (id: string, uuid: string) => Promise<AttributionRead>;
   /** THE ONE GATE (Overlord W1 gates B, §11.2; `coord/overlordGateRun.ts`): the six start doors and the card's recording page
@@ -75,7 +91,7 @@ export interface ContinuityRouteDeps {
   cardRegistry: Omit<CardFactsDeps, 'coord'>;
   /** The private store's text-free message read, for a `miss` note's key (`NoteKeysMessages`), resolved per request. Absent, or
    *  null while the store is not open: a `message` key then reads `unmeasured` and the door refuses `unmeasured`. */
-  operatorModel?: () => NoteKeysMessages | null | undefined;
+  operatorModel?: () => (NoteKeysMessages & Partial<ReadLedgerCount>) | null | undefined;
   /** The setter's stamp: `incarnationOf`'s two agreeing reads of `$REG/<id>.generation`. NOT `cardRegistry.incarnation`, its
    *  single read (slug setter-stamp-is-a-double-read): the stamp keys a timer whose mismatch later cancels it, irreversibly,
    *  so a file that changes between the reads answers `unmeasured` and the set refuses `timer-unmeasured`, where the card's
@@ -359,6 +375,59 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
       : refuseRoute(reply, 'write-failed', { detail: 'continuity_act_keys could not be written' });
     console.warn(`ccrc-server: act-key: issued to ${id} for generation ${v.n}`);
     return reply.code(200).send({ ok: true, generation: v.n, key });
+  });
+
+  /**
+   * `POST /api/sessions/:id/report` (Overlord W1 door process B1; spec §3.6 H1, Table 11.1e "The hook's reports"): the session
+   * hook's one door, one kind a body. A box-token machine lane, an `auth/gate.ts` EXEMPT entry, modelled on the act-key door:
+   * the token first, then the path's session is the sender (`not-owner`), then `fromUuid`'s shape and `hookReportOf` (400
+   * `bad-request`, the field in `detail`), then the registry's attribution of `fromUuid`. A `picked-up` report asks the port
+   * who owns the message (`absent` 404 `unknown-message`, another session's 403 `not-owner`, unmeasured 502) and then moves it,
+   * answering 200 `{ ok, changed }`: a message already past picked up is `changed: false`, never a refusal. Every other kind is
+   * one `insertHookReport` row, 200 `{ ok, id }`. A failed write is 502 `unmeasured`. The witness key is a call digest of a
+   * tool's input, so no line this door logs names one.
+   */
+  app.post('/api/sessions/:id/report', {
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(deps.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/sessions/:id/report');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const { id } = req.params as { id: string };
+    const b = (typeof req.body === 'object' && req.body !== null ? req.body : {}) as Record<string, unknown>;
+    if (b['fromId'] !== id) return refuseRoute(reply, 'not-owner', { detail: 'fromId must be the session the path names' });
+    const uuid = b['fromUuid'];
+    if (!IDENTITY_RE.test(id) || typeof uuid !== 'string' || !IDENTITY_RE.test(uuid)) {
+      return refuseRoute(reply, 'bad-request', { detail: 'fromId and fromUuid' });
+    }
+    const v = hookReportOf(b);
+    if (!v.ok) return refuseRoute(reply, 'bad-request', { detail: v.field });
+    const attributed = await deps.attribute(id, uuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    const report = v.report;
+    if (report.kind === 'picked-up') {
+      const port = deps.pickUp;
+      if (port === undefined) return refuseRoute(reply, 'unavailable');
+      const owner = port.sessionOf(report.messageId);
+      if (owner.kind !== 'measured') return refuseRoute(reply, 'unmeasured', { detail: 'the private store could not say whose message that is' });
+      if (owner.value === 'absent') return refuseRoute(reply, 'unknown-message', { detail: 'no operator message on record has that id' });
+      if (owner.value.sessionId !== id) return refuseRoute(reply, 'not-owner', { detail: 'that message is not this session\'s' });
+      const moved = port.pickUp(report.messageId, deps.wall());
+      if (!moved.ok) {
+        // The move table has no pick-up from `picked-up` (`MESSAGE_MOVES`), so the store refuses a repeat report of a message
+        // the hook already reported: that is the contract's 200 `changed:false`, not a failure (review 2870 F5).
+        const now = moved.error === 'refused' ? port.stateOf(report.messageId) : null;
+        if (now?.kind === 'measured' && now.value === 'picked-up') return reply.code(200).send({ ok: true, changed: false });
+        return refuseRoute(reply, 'unmeasured', { detail: 'the message could not be moved to picked up' });
+      }
+      return reply.code(200).send({ ok: true, changed: moved.value.changed });
+    }
+    const coord = deps.coord;
+    if (coord === undefined) return refuseRoute(reply, 'unavailable');
+    const stored = insertHookReport(coord.db, id, report, deps.wall());
+    if (!stored.ok) return refuseRoute(reply, 'unmeasured', { detail: 'continuity_hook_reports could not be written' });
+    return reply.code(200).send({ ok: true, id: stored.value.id });
   });
 
   /** A card or notes read served: the probe door marks an answer after it `open` (closed-book, Review Focus 3). A stamp that
@@ -986,8 +1055,8 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
   /**
    * `POST /api/sessions/:id/probe { byId, byUuid, roundId, answers: [{ id, answer }] }`: answer every question of one open
    * round of the caller's live generation, in one call. Each answer is graded closed-form (`gradeAnswers`: against the
-   * masked question when it carries a placeholder, the stored one otherwise; a question left out fails), the book state is `open` after a card or notes read since the round was asked and `unmeasured`
-   * otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
+   * masked question when it carries a placeholder, the stored one otherwise; a question left out fails), the book state is `open` after a card or notes read since the round was asked, or a ledger line of the designated session
+   * in that span, `closed` for it with neither, and `unmeasured` otherwise (`bookOf`), and the round's verdict is `roundVerdict`'s. `200 { ok, roundId, verdict, grades: [{ id, grade }],
    * book }`; what a question expected is never answered. `probe-none-open` 409 when no round of the caller's live generation
    * carries the id (another session's round, and one left open by an earlier generation, are invisible, as on the GET), `probe-closed` 409 when it was answered already, `bad-request` 400 for an answer
    * id the round does not ask, a repeated id, or an answer over `PROBE_ANSWER_MAX_CHARS`. The answer is stored masked.
@@ -1030,9 +1099,11 @@ export function registerContinuityRoutes(app: FastifyInstance, deps: ContinuityR
     const graded = gradeAnswers(round.rows, answers, mask);
     const last = coord.lastContinuityRead(id);
     const lastRead: LastRead = last.ok ? { kind: 'read', at: last.at } : { kind: 'unmeasured' };
-    const book = bookOf(lastRead, first.askedAt);
+    const answeredAt = deps.wall();
+    const ledger = ledgerFactsOf({ designation: designationReadOf(coord), callerId: id, ledgerWritten: READ_LEDGER_WRITTEN, reads: deps.operatorModel?.()?.readsBetween?.(LEDGER_SESSION_CALLERS, first.askedAt, answeredAt) ?? null });
+    const book = bookOf(lastRead, first.askedAt, ledger);
     // `answerRound` compares and sets on every question being unanswered: a round answered already is refused there.
-    const w = coord.answerRound(roundId, id, graded, book, deps.wall());
+    const w = coord.answerRound(roundId, id, graded, book, answeredAt);
     if (!w.ok) {
       return w.kind === 'closed' ? refuseRoute(reply, PROBE_REFUSALS.closed, { detail: `round ${roundId} was answered or closed already` })
         : refuseRoute(reply, 'write-failed', { detail: 'continuity_probes could not be written' });

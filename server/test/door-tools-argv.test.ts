@@ -9,7 +9,7 @@ import type { AddressInfo } from 'node:net';
 import fs from 'node:fs';
 import path from 'node:path';
 import { DOOR_TOOLS } from '../../ccd/door-process.mjs';
-import { ACT_COUNTER_HEADER, ACT_GENERATION_HEADER, ACT_KEY_HEADER } from '../../shared/continuity-door.js';
+import { ACT_COUNTER_HEADER, ACT_GENERATION_HEADER, ACT_KEY_HEADER, WITNESS_KEY_HEADER } from '../../shared/continuity-door.js';
 import { harnessBin } from './ccdWsHelpers.js';
 import { runClient, writeClientHome, type Run } from './ccrcApiClient.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -30,7 +30,7 @@ const REAL_SH = onPath('sh');
 /** A recording stub's first lines (review 2756 F4): it marks that it ran in a file of its own, and appends the NAMES, never
  *  the values, of every FENCE_ or CCRC_ACT_ variable it inherited. */
 const RECORD = (name: string): string[] => [
-  '#!/bin/bash', `: > "$HOME/ran.${name}"`, 'compgen -e | grep -E \'^(FENCE_|CCRC_ACT_)\' >> "$HOME/fence.seen" || true',
+  '#!/bin/bash', `: > "$HOME/ran.${name}"`, 'compgen -e | grep -E \'^(FENCE_|CCRC_ACT_|WITNESS_KEY|CCRC_WITNESS_)\' >> "$HOME/fence.seen" || true',
 ];
 
 let home: string;
@@ -197,8 +197,15 @@ describe('every DOOR_TOOLS row, through the real ccrc-api, reaches its route', (
     expect(JSON.parse(s.body)).toEqual({ fromId: ID, fromUuid: UUID });
   });
 
+  it('read: with no row marked a reader, every input is refused by the row\'s own argv builder, so nothing is run or sent', () => {
+    for (const input of [{ door: 'card' }, { door: 'note_list', args: {} }, { door: 'messages' }, {}, { door: 5 }]) {
+      expect(() => row('read').argv(input, ID), JSON.stringify(input)).toThrow(/no door is readable yet|door is the name/);
+    }
+    expect(seen).toEqual([]);
+  });
+
   it('covers every row of the table', () => {
-    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team'];
+    const covered = ['card', 'probe', 'probe_answer', 'note_add', 'note_close', 'note_list', 'note_handover', 'timer_set', 'timer_list', 'timer_cancel', 'link_team', 'read'];
     expect(ROWS.map((r) => r.name)).toEqual(covered);
   });
 });
@@ -279,5 +286,58 @@ describe('the fence rides curl\'s stdin config', () => {
     expect(stdin().toLowerCase()).not.toContain('x-ccrc-act');
     expect(cmdline().toLowerCase()).not.toContain('x-ccrc-act');
     expect([seen[0]!.headers['x-ccrc-act-key'], seen[0]!.headers['x-ccrc-act-generation'], seen[0]!.headers['x-ccrc-act-counter']]).toEqual([undefined, undefined, undefined]);
+  });
+});
+
+describe('the witness key rides curl\'s stdin config too (Overlord W1 door process B1; plan question 6)', () => {
+  const WIT = '0123456789abcdef'.repeat(4);
+  const FENCE = { CCRC_ACT_KEY: KEY, CCRC_ACT_GENERATION: '3', CCRC_ACT_COUNTER: '12' };
+  const fenceSeen = (): string => { const f = path.join(home, 'fence.seen'); return fs.existsSync(f) ? fs.readFileSync(f, 'utf8') : ''; };
+
+  it('64 lowercase hex adds one header line on the stdin config, never the argv, and it reaches the server', async () => {
+    const r = await door('note_close', { revises: 5 }, { ...FENCE, CCRC_WITNESS_KEY: WIT });
+    expect(r.status, r.stderr).toBe(0);
+    expect(stdin()).toContain(`header = "${WITNESS_KEY_HEADER}: ${WIT}"`);
+    expect(cmdline()).not.toContain(WIT);
+    expect(cmdline().toLowerCase()).not.toContain('witness');
+    expect(seen[0]!.headers[WITNESS_KEY_HEADER]).toBe(WIT);
+  });
+
+  it('the header stands alone: it does not need the fence, and the fence does not need it', async () => {
+    const a = await door('timer_list', {}, { CCRC_WITNESS_KEY: WIT });
+    expect(a.status, a.stderr).toBe(0);
+    expect(seen[0]!.headers[WITNESS_KEY_HEADER]).toBe(WIT);
+    expect(seen[0]!.headers[ACT_KEY_HEADER]).toBeUndefined();
+    seen.length = 0;
+    const b = await door('note_close', { revises: 5 }, FENCE);
+    expect(b.status, b.stderr).toBe(0);
+    expect(seen[0]!.headers[WITNESS_KEY_HEADER]).toBeUndefined();
+    expect(stdin().toLowerCase()).not.toContain('witness');
+  });
+
+  it.each([
+    ['63 hex digits', WIT.slice(1)], ['65 hex digits', `${WIT}0`], ['uppercase', WIT.toUpperCase()], ['a non-hex digit', `${WIT.slice(1)}g`],
+    ['empty', ''], ['a quote and a header line', `${WIT}"\nx-evil: 1`], ['spaces', ` ${WIT} `],
+  ])('%s adds none', async (_w, bad) => {
+    const r = await door('note_close', { revises: 5 }, { ...FENCE, CCRC_WITNESS_KEY: bad });
+    expect(r.status, r.stderr).toBe(0);
+    expect(stdin().toLowerCase()).not.toContain('witness');
+    expect(stdin().toLowerCase()).not.toContain('x-evil');
+    expect(cmdline().toLowerCase()).not.toContain('witness');
+    expect(seen[0]!.headers[WITNESS_KEY_HEADER]).toBeUndefined();
+  });
+
+  it('no child of the client inherits it: tmux, jq and curl see no WITNESS_KEY name', async () => {
+    const r = await door('timer_set', { after: '90m', note: 'n' }, { ...FENCE, CCRC_WITNESS_KEY: WIT });
+    expect(r.status, r.stderr).toBe(0);
+    expect(stdin()).toContain(`${WITNESS_KEY_HEADER}: ${WIT}`);
+    for (const n of ['tmux', 'jq', 'curl']) expect(fs.existsSync(path.join(home, `ran.${n}`)), n).toBe(true);
+    // The recording stubs list the NAMES of every inherited FENCE_/CCRC_ACT_ variable; this one asks for the witness names the same way.
+    expect(fenceSeen()).toBe('');
+  });
+
+  it('the client\'s header name is shared/continuity-door.ts\'s', () => {
+    const text = fs.readFileSync(path.join(ROOT, 'ccd/ccrc-api'), 'utf8');
+    expect(new RegExp("^WITNESS_KEY_HEADER='([^']+)'$", 'm').exec(text)?.[1]).toBe(WITNESS_KEY_HEADER);
   });
 });

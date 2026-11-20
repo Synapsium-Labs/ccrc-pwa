@@ -3971,8 +3971,9 @@ export const MIGRATIONS: readonly string[] = [
   // cursor to go on from, `newest` the newest `updatedAt` the sweep has read so far, and `startedAt` when it began (ccrc's clock:
   // a finished sweep never moves the watermark past its start less a margin, so a change made while it walked is read again). A
   // row is the sweep in progress; a finished sweep deletes it. `linear_inbound_notes`: what the owner's next mail about a `waiting`
-  // inbound issue must say beyond the first mail, one row per issue, kept until the inbound lane mails it to a live owner, in the
-  // same transaction that deletes it: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
+  // inbound issue must say beyond the first mail, one row per issue, kept while its row is `waiting`: the inbound lane deletes it in
+  // the transaction that mails it to a live owner, and any other move of the row out of `waiting` (a triage, a take, a retire)
+  // deletes it in that move's own transaction: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
   // Linear owner (review 2443 A3; `program` the returning programme, `note` its note, masked as the return mail carries it), and
   // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
   // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this
@@ -4039,13 +4040,53 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The session hook's reports and the witness checks (Overlord W1 door process B1, plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-door-process.md` Task 7). `continuity_hook_reports`: what the hook says
+  // its session did (a door tool call's witness, a reader's start and stop, a quiet turn's end clearing the readers, a model
+  // switch), one row a report; `receivedAt` is the server's clock and the one every window reads, `at` the hook's own. One
+  // writer, `hookReportStore.ts#insertHookReport`, which prunes its own rows past their keep (witness 24 h, the rest 7 days) in
+  // the same transaction. `picked-up` is never a row: it moves the operator's message. Its id is AUTOINCREMENT, so a pruned
+  // witness's id is never handed to a new one, whose check would then read `used` (review 2870 F2). `continuity_witness_checks`:
+  // gates B's check of a witness (Task 9), written by `recordWitnessCheck`; its `witnessId` is UNIQUE so a witness is used once.
+  // TWO NEW TABLES AND ONE INDEX, nothing else: an older build opening a file at this `user_version` takes rule 3 and never names
+  // them. The slot is the next free one by position (after 109); whoever lands second renumbers (the standing license).
+  `
+  CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT,
+    agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);
+  CREATE INDEX continuity_hook_reports_by_key ON continuity_hook_reports (sessionId, kind, key, receivedAt);
+  CREATE TABLE continuity_witness_checks (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, generationId INTEGER NOT NULL, witnessKey TEXT,
+    witnessId INTEGER UNIQUE, outcome TEXT NOT NULL, why TEXT, at INTEGER NOT NULL);
+  `,
+
+  // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
+  // The waiting workers' sleep (waiting workers spec 2026-11-19, Part 2; D-8790): the seed row `working-idle-sleep` =
+  // `shadow` adds the case's switch to the Shadow lanes card. Shadow, the run-done sleep lane logs a dispatched worker on a
+  // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
+  //
+  // ONE SEED ROW, nothing else, and `OR IGNORE`: a file that already carries the row (a database rolled back below this
+  // entry with its rows kept, as a test rebuilds one) keeps the stored choice and migrates, where a plain INSERT would
+  // refuse to start on the lane's primary key. An older build opening a file at this entry's version takes rule 3 (it
+  // warns, reads as-is and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; door B1 took 110 first, so this entry moved up to
+  // 111; approvals PR 3 builds on the slots after 110 too, so whoever lands second moves up. RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  `,
+
+  // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
   // The project row names its Linear workspace (Linear hierarchy wave 8, D-8808, plan Task 8.1): `project_linking.teamWorkspace`
   // is the slot id (a workspace id) the row's team key resolves in, so a key two connected workspaces share never answers
   // `team-ambiguous` for the project. NULL: none set, the key resolves as before. ONE COLUMN, nullable, no default, nothing
   // else: an older build opening a file at this `user_version` takes rule 3 and never names the column. Wave 8's later task
-  // (8.4) adds its columns to THIS entry. Re-measure the slot with
-  // `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`; other branches hold 110 and
-  // 111, so whoever lands second renumbers (the coordinator's standing license).
+  // (8.4) adds its columns to THIS entry. This is the next free slot by position on `main`: door B1 took 110 and the waiting
+  // workers' sleep 111 first, so this entry moved up to 112; whoever lands second renumbers (the coordinator's standing
+  // license). RE-MEASURE the slot before the PR and before merge (it must print 111, the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
   ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
   -- Task 8.4: the coordinators' suggestions, a JSON array, one element per suggesting session; NULL: none. A candidate

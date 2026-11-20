@@ -110,7 +110,7 @@ async function rig(over: { rung?: Rung; card?: 'current' | 'none'; linear?: Line
     actKey: (g, k) => actKeyFact(s.db, g, k),
     counter: (g, c) => advanceCounterGuarded(s.db, g, c),
     witness: () => ({ kind: 'witnessed', witnessId: 7 }),
-    recordWitness: () => {},
+    recordWitness: () => true,
     recordFenceRefusal: (r) => { recordFenceRefusal(s.db, r); },
     serverWords: () => ['overlord-v1'],
     now: () => NOW,

@@ -48,6 +48,7 @@ import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './unmeasuredWords';
 import { delegatedChip, type DelegatedSummary } from './delegationWords';
+import type { SessionWorktree } from './sessionWorktrees';
 import { claudeBuildOf, type ClaudeBuildFact } from '../../../shared/claudeVersion';
 import { behindFact, buildText } from './buildWords';
 
@@ -134,6 +135,8 @@ export interface FactInput {
   readonly coordinatorTitle?: string | null;
   /** The delegation entries this session started: every one (`activitiesStartedBy`), for the header. The card takes none (D-8771). Absent or `null` = none known. */
   readonly delegated?: readonly DelegationActivityWire[] | null;
+  /** The session's worktrees, for the header's details (`worktreesOf`, D-8782: the fleet list draws none). Absent or `null` = none known. */
+  readonly worktrees?: readonly SessionWorktree[] | null;
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
    *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
   readonly claudeLatest?: string | null;
@@ -188,6 +191,8 @@ export interface SessionFactSet {
   /** The session's recorded delegation entries as the header's disclosure and list (`delegatedChip`): every entry it is
    *  handed, of every liveness, on a live row and a dead one alike (D-7781); `null` when handed none. */
   readonly delegated: DelegatedSummary | null;
+  /** The session's worktrees (D-8782): drawn in the header's details with their controls, never on the card. Empty when none. */
+  readonly worktrees: readonly SessionWorktree[];
   /** D-8276: the session's Claude Code build against the fleet's newest (`claudeBuildOf`). */
   readonly build: ClaudeBuildFact;
 }
@@ -237,17 +242,26 @@ export function coordinatorRole(session: FleetSession): boolean {
   return role === 'coordinator';
 }
 
-/** The word the header and the session details say for a coordinator, and the palette's session entries too. */
+/** The word a coordinator is called: the badge's accessible name (D-8817), and the palette's session entries' text, which
+ *  the operator types to search. No row or header draws it as visible text any more. */
 export const COORDINATOR_WORD = 'coordinator';
 
-/** THE role fact: the card's (D-8142) and the header's one object, so the word and its title have one home. */
-/** The role's hover title, written once: the card's role cell and the header's role detail both read it. */
+/** The role's hover title, written once: the card's role badge and the header's read it. */
 export const COORDINATOR_ROLE_TITLE = 'this session is its project\'s coordinator';
+
+/** THE coordinator badge (the operator's note of 2026-11-19, D-8817), spelt once: the icon, the accessible name and the
+ *  hover title `RoleBadge` (`@ccrc/ui`) draws, which the card's role cell and the header's role detail both spread. */
+export const COORDINATOR_BADGE = { icon: 'network', label: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE } as const;
+
+/** The role fact: the card's (D-8142) and the header's one object. It is the name and title the badge carries (the same two
+ *  constants as `COORDINATOR_BADGE`), as a `Fact`, for the one place that asks whether a card has a role cell. */
 const ROLE_FACT: Fact = { key: 'role', text: COORDINATOR_WORD, title: COORDINATOR_ROLE_TITLE };
 
-/** The width the card's role cell takes on the context line: the word and its middot separator (D-8142). A branch
- *  beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. */
-export const ROLE_CELL_CHARS = COORDINATOR_WORD.length + ' · '.length;
+/** The width the card's role cell takes on the context line, in characters of the meta line's mono face (D-8142, D-8817):
+ *  the badge's 16px icon, 2.2 characters at the meta line's `--fs-xs` (12px), rounded up to 3, and its middot separator. A
+ *  branch beside it shortens to `NAME_BUDGET` less this, so the one line holds both whole. The cell was 11 characters and
+ *  the separator (14) when it drew the word. */
+export const ROLE_CELL_CHARS = 3 + ' · '.length;
 
 /** D-8771: the words `backgroundWords` puts after its count (`in background`), TAKEN FROM ITS OWN OUTPUT, so the words are
  *  spelt once, in `shared/api.ts`: a reword there reaches the card's uncounted form and the allowance below together. */
@@ -263,7 +277,7 @@ function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: str
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null, delegated = null, claudeLatest = null, claudeLaneLatest = null,
+    coordinatorTitle = null, delegated = null, worktrees = null, claudeLatest = null, claudeLaneLatest = null,
   } = input;
   const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
@@ -372,6 +386,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
     // D-7781: no dead shortcut. A dead worker's entries stay in its header's disclosure (the fleet list's row has none, D-8771).
     delegated: delegatedChip(delegated ?? []),
+    worktrees: worktrees ?? [],
     build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
 }

@@ -50,6 +50,7 @@ describe('Build 4 — one MarkerState, one coordinator-paused literal', () => {
       'server/src/coord/dispatch.ts',   // the refusal CODE (the outcome union's member)
       'server/src/coord/dispatchDecide.ts', // the refusal CODE, decided (ARCH-22, #553)
       'server/src/coord/stall.ts',      // the hold named for the marker it honours
+      'server/src/stopDone.ts',         // run-done's hold word for the waiting case under that marker (D-8791); `sleep.ts` holds it by the constant
       'shared/api.ts',                  // the refusal-code vocabulary
       'shared/switches.ts',             // the marker literal (its one definition, D-5855)
     ]);

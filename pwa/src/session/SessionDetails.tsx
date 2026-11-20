@@ -15,21 +15,22 @@
 // coordination row, so the header stays short until it is asked.
 import { useCallback, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Door, Icon, elapsedShort } from '@ccrc/ui';
+import { Door, Icon, RoleBadge, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import { runPath, sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
 import { WorkLine } from '../fleet/WorkLine';
-import { cardFacts, contextFact, COORDINATOR_ROLE_TITLE, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
+import { NOTE_CLASS, SessionWorktrees } from './SessionWorktrees';
+import { cardFacts, contextFact, COORDINATOR_BADGE, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { openRunAt } from '../fleet/openers';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
 import { coordinationClauses } from './sessionHeaderView';
 
 /** A plain detail — one fact in words, its tooltip when it has one. */
-function Detail({ children, title }: { children: ReactNode; title?: string }): ReactNode {
-  return <span className="chat-fact" title={title}>{children}</span>;
+function Detail({ children, title, className }: { children: ReactNode; title?: string; className?: string }): ReactNode {
+  return <span className={className === undefined ? 'chat-fact' : `chat-fact ${className}`} title={title}>{children}</span>;
 }
 
 /** One clause of the coordination row that opens somewhere — the run board, or the coordinator's session. */
@@ -139,11 +140,11 @@ export function SessionDetails({ facts, coordination }: {
   const asking = !facts.dead && s.hookState === 'waiting' && s.askSummary !== null && s.askSummary !== '';
   const subagents = facts.subagents ?? [];
   const details = (
-    <div className="chat-facts" id={detailsId}>
+    <div className="chat-facts" id={detailsId} tabIndex={-1}>
       {/* A main checkout's heading is its project; the name the card leads with is here. */}
       {s.workspace === null && s.name !== null && <Detail title="this session's name">{s.name}</Detail>}
       {runId !== null && <Detail title="the run this wave belongs to — the run board names it">{`run #${runId}`}</Detail>}
-      {facts.coordinatorRole && <Detail title={COORDINATOR_ROLE_TITLE}>{COORDINATOR_WORD}</Detail>}
+      {facts.coordinatorRole && <Detail className="chat-fact-role"><RoleBadge {...COORDINATOR_BADGE} /></Detail>}
       {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{heldWords(s.held)}</Detail>}
       {s.pr?.number != null && <Detail>{`PR #${s.pr.number}`}</Detail>}
       {facts.lane.away && facts.offPool === null && facts.lane.label !== undefined && <Detail>{facts.lane.label}</Detail>}
@@ -174,10 +175,12 @@ export function SessionDetails({ facts, coordination }: {
           gives (`facts.delegated.note`). Drawn only while the disclosure is open. */}
       {delegatedOpen && facts.delegated !== null && (
         <div id={delegatedId} className="sess-entries" ref={showEntries}>
-          <span className="chat-fact sess-entries-note">{facts.delegated.note}</span>
+          <span className={NOTE_CLASS}>{facts.delegated.note}</span>
           {facts.delegated.rows.map((r) => <WorkLine key={r.key} parts={r.parts} title={r.title} nameAt={r.nameAt} />)}
         </div>
       )}
+      {/* The worktrees this session holds, each with its controls (D-8782: they moved here from the fleet list). */}
+      <SessionWorktrees worktrees={facts.worktrees} project={s.project} />
     </div>
   );
 

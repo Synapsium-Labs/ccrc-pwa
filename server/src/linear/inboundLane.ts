@@ -8,8 +8,8 @@
  * issue whose team's Linear owner is live or unmeasured is mailed to it, once, with the reporter's text only inside the untrusted
  * block; with no owner, or a gone one (dead or absent), it stays `waiting` and the project raises ONE *Name a Linear owner* item,
  * which settles itself in the beat that finds the owner live. A `raised` issue whose operator item is answered or closed comes back
- * to the owner as a mail, and the item settles. `act` makes the Linear writes of a `closed` issue (one comment with the reason,
- * then the cancel), in the issue's own flight, and records `actedAt` only after both landed.
+ * to the owner as a mail, and the item settles. `act` makes the Linear writes of a `closed` issue (one comment, with the reason or,
+ * when the reason fails the public-text check at act time, a fallback with no text, then the cancel), in the issue's own flight, and records `actedAt` only after both landed.
  *
  * THE ROUTES CALL NO LINEAR. `plan triage` and `plan take` only write the store; the one place that writes an inbound issue in
  * Linear is `act` below, under the pass `inbound`.
@@ -18,17 +18,17 @@ import type { CoordStore } from '../coord/store.js';
 import type { InboundRow, PlanStorePort } from '../coord/planStore.js';
 import { insertSystemMailTx } from '../coord/rundefsTx.js';
 import { tx } from '../coord/tx.js';
-import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam } from '../coord/planPolicy.js';
+import { ccrcIssueIds, linearOwnerOfProject, linearOwnerOfTeam, teamOwnerProject } from '../coord/planPolicy.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
 import { isInbound } from './driftPolicy.js';
 import {
-  answeredMail, closeCommentBody, closeRefusedMail, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
+  answeredMail, closeCommentBody, closeRefusedCommentBody, closeRefusedMail, closeTextRefusedMail, closeCommentSeedOf, closeIdOf, givenUpReason, inboundActVerdict, inboundHeld, inboundNoteMail, inboundRecheckDue, inboundRecheckStops, inboundRecheckOf, inboundRetireVerdict,
   keyWaitMail, noCancelMail, ownerItemInput, type InboundHold, type InboundRecheck, type RetireWhy,
 } from './inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from './journal.js';
 import { statusOfType } from './ops.js';
+import { textFactOfTeam, textRefusalOf, uuidOf } from './planSyncPolicy.js';
 import { PLAN_SYNC_BACKOFF_MS, slotsOf, type SlotInfo } from './planSync.js';
-import { uuidOf } from './planSyncPolicy.js';
 import type { DriftPassDeps } from './driftPass.js';
 import type { LinearStoreRead } from './store.js';
 
@@ -103,6 +103,7 @@ export class InboundLane {
    *  item is left asking about an issue that is gone. Writes nothing of the issue that was read: only the state and the cause. */
   private retire(row: InboundRow, why: RetireWhy, now: number): void {
     const { coord, plan } = this.deps;
+    this.malformed.delete(row.linearId);   // a reopened issue's next close counts its own answers; the map never grows with retired issues
     const item = row.state === 'raised' && row.itemId !== null ? coord.itemById(row.itemId) : null;
     if (item !== null && (item.state === 'open' || item.state === 'checking')) {
       coord.moveItemWithMail(item.id, 'settle', 'ccrc', { note: 'The issue is no longer inbound in Linear.' }, now, { programmeHasOpenRun: false }, () => plan.retireInboundInTx(row.linearId, why));
@@ -213,7 +214,7 @@ export class InboundLane {
   private mailOwner(row: InboundRow, ownerId: string, now: number): void {
     const { coord, plan } = this.deps;
     // the mail is picked by the row's note (D-8734, D-8735): a reopen or a stored return is mailed under a subject carrying its
-    // time, so the first mail's dedupe never eats it; the note is deleted in the transaction that mails it
+    // time, so the first mail's dedupe never eats it; the note is deleted in the transaction that mails it (`setInboundState` deletes it with the move to `mailed`)
     const note = plan.inboundNoteOf(row.linearId);
     const m = inboundNoteMail(row, note);
     tx(coord.db, () => {
@@ -221,7 +222,6 @@ export class InboundLane {
         insertSystemMailTx(coord, null, { fromId: 'operator', toId: ownerId, runId: null, kind: 'question', subject: m.subject, body: m.body });
       }
       plan.setInboundState(row.linearId, { state: 'mailed', mailedTo: ownerId, mailedAt: now });
-      if (note !== null) plan.clearInboundNote(row.linearId);
     });
   }
 
@@ -261,7 +261,7 @@ export class InboundLane {
 
   // ── A closed issue's Linear writes ──
 
-  /** For each `closed` issue not yet acted: one comment with the reason, then the cancel, inside the issue's own flight; the row
+  /** For each `closed` issue not yet acted: one comment (the reason, or a fallback with no text when the reason fails the public-text check now), then the cancel, inside the issue's own flight; the row
    *  is `actedAt` only after both are ok (a comment answered `conflict` is one made already). A directory not yet read waits
    *  without a word; a team with no `canceled` status mails the owner once and leaves the row. */
   private async act(): Promise<void> {
@@ -285,12 +285,21 @@ export class InboundLane {
         const seen = await this.readById(fresh, slot);
         if (seen.kind === 'retire') { this.retire(fresh, seen.why, this.deps.now()); return; }
         if (seen.kind === 'unmeasured') { if (seen.word !== null) this.refused(fresh, { word: seen.word }, slot); return; }
+        const refusal = this.textRefusal(fresh);
+        const closeId = closeIdOf(fresh);
+        const kind = refusal === null ? 'reason' : 'fallback';
         const base = { pass: 'inbound', lane: 'sync', slot: slot.ref, workspaceId: row.workspaceId, teamKey: row.teamKey, target: row.identifier } as const;
         const comment = await this.deps.call({
           ...base, op: 'issueComment', fields: ['body'],
-          input: { requestId: uuidOf(`inbound:${row.linearId}:comment`), issueId: row.linearId, body: closeCommentBody(fresh.reason ?? '') },
+          input: { requestId: uuidOf(closeCommentSeedOf(row.linearId, kind, fresh)), issueId: row.linearId, body: refusal === null ? closeCommentBody(fresh.reason ?? '') : closeRefusedCommentBody() },
         });
-        if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) { this.refused(fresh, comment, slot); return; }
+        const conflict = !comment.ok && comment.word === 'linear-invalid' && comment.detail === 'conflict';
+        if (!comment.ok && !conflict) { this.refused(fresh, comment, slot); return; }
+        // the owner is told once per close (the subject is keyed per close) whenever the fallback comment landed, made now or by an
+        // earlier attempt, so a lost answer never loses the mail, and an owner whose session is gone is still mailed; before the
+        // cancel. A team with no Linear owner at all has no addressee: no mail, and the close and cancel go on (review 2874 F3,
+        // the coordinator's ruling: as for the no-cancel and give-up mails; the fallback comment is already on the issue)
+        if (refusal !== null) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal, closeId));
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
         if (!update.ok) { this.refused(fresh, update, slot); return; }
         plan.setInboundState(row.linearId, { actedAt: this.deps.now() });
@@ -298,6 +307,16 @@ export class InboundLane {
         this.malformed.delete(row.linearId);
       });
     }
+  }
+
+  /** Spec §6.1, re-run before the close comment is sent: the facts (the project that owns the team, its linking mode, the installer's
+   *  private tracker keys) may have changed since the close was decided. `textRefusalOf` is the one check; a team no project claims is
+   *  judged as `unknown`, public, with the row's team key. The class that refused it, or null. */
+  private textRefusal(row: InboundRow): string | null {
+    const { coord, plan, planSync } = this.deps;
+    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf());
+    const fact = textFactOfTeam(project === null ? null : coord.linkingOf(project), row.teamKey);
+    return textRefusalOf([row.reason ?? ''], [fact], planSync.privateKeys());
   }
 
   /** A refused close write, as `inboundActVerdict` rules. A retry word holds the workspace on the plan sync's failure-hold

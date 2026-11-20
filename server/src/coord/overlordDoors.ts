@@ -96,6 +96,7 @@ export const NOT_OVERLORD_DOORS: Readonly<Record<string, { readonly file: string
   'POST /api/sessions/:id/start': { file: CONTINUITY, why: "the hook's SessionStart report: a box-token machine lane in the hook's group" },
   'POST /api/sessions/:id/start/loads': { file: CONTINUITY, why: "the hook's report of what a start loaded: the hook's group, box token" },
   'POST /api/sessions/:id/act-key': { file: CONTINUITY, why: "the door process's one claim of its act key: a box-token machine lane, before any fence (W1 door process A1)" },
+  'POST /api/sessions/:id/report': { file: CONTINUITY, why: "the hook's report door (witness, reader and model-switch reports): a box-token machine lane in the hook's group (W1 door process B1)" },
   'POST /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'GET /api/timers': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },
   'POST /api/timers/:id/cancel': { file: CONTINUITY, why: "a timer door of the Overlord timers piece's, until it adds its row (word timers-v1)" },

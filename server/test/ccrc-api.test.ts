@@ -254,6 +254,7 @@ describe('the closed route table', () => {
     [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
     [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
     [['sessions', 'act-key', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/act-key'],
+    [['sessions', 'report', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/report'],
     [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
     // The replay quiz's record (Overlord W1a quiz record): the operator's `ccrc quiz-record` posts its body through this row.
     [['quiz', 'record'], 'POST', '/api/continuity/quiz-runs'],
@@ -346,8 +347,9 @@ describe('the closed route table', () => {
     // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
     // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
     // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1);
-    // ninety-two since `linking.suggest` (D-8808); ninety-three since `linking.confirm` (D-8809).
-    expect(keys).toHaveLength(93);
+    // ninety-two since `sessions.report` (Overlord W1 door process B1); ninety-three since `linking.suggest` (D-8808);
+    // ninety-four since `linking.confirm` (D-8809).
+    expect(keys).toHaveLength(94);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -362,7 +364,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two', 93: 'ninety-three', 94: 'ninety-four',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -538,7 +540,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
       ['plan', 'phase-ref', 'prog-a', '--json', '-'], ['plan', 'ticket-done', 'prog-a', '--json', '-'],
       ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'],
-      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'report', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],

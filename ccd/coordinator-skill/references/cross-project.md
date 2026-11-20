@@ -39,7 +39,8 @@ is refused `project-mismatch` with `by:` your project and a `detail` that says
 so, so wave 3 into the same target as wave 2 opens without `sessionId` too.
 Where you sit never refuses an open; who you are still does (`claimedByUuid`,
 below), and so does a registry row of yours that records no project
-(`project-mismatch` with a `detail` and no `by` — stop and report).
+(`project-mismatch` with a `detail` and no `by`: open the wave without `sessionId`
+and record the registry fault as a routine call).
 
 **Your children's questions come to you wherever you sit** (the operator's
 ruling of 2026-10-18, D-5530). A child's question — and, once approvals ship,

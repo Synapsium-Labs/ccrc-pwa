@@ -745,11 +745,13 @@ describe('the scanner is looking at something', () => {
     // 284 since the programme work map WM1, merged after the census read, in `coord/planRoutes.ts`: `POST
     // /api/programmes/:slug/plan/tickets/done` (`plan ticket-done`), a box-token machine lane IN EXEMPT like its plan siblings:
     // the HTTP half 280 -> 281, the gated count stays 180 (281 - 101), the exempt-HTTP count 100 -> 101.
-    // 285 since D-8808's `POST /api/linking/suggest` (`linking/routes.ts`), a box-token machine lane IN EXEMPT beside `GET /api/linking`: the
-    // HTTP half 281 -> 282, the gated count stays 180 (282 - 102), the exempt-HTTP count 101 -> 102.
-    // 286 since D-8809's `POST /api/linking/confirm` (`linking/routes.ts`), the Overlord's confirm, a box-token machine lane IN EXEMPT beside
-    // the suggest door: the HTTP half 282 -> 283, the gated count stays 180 (283 - 103), the exempt-HTTP count 102 -> 103.
-    expect(ROUTES.length).toBe(286);
+    // 285 since the hook's report door (Overlord W1 door process B1), in `continuity/routes.ts`: `POST /api/sessions/:id/report`, one
+    // box-token machine lane IN EXEMPT: the HTTP half 281 -> 282, the gated count stays 180, the exempt-HTTP count 101 -> 102.
+    // 286 since D-8808's `POST /api/linking/suggest` (`linking/routes.ts`), a box-token machine lane IN EXEMPT beside `GET /api/linking`: the
+    // HTTP half 282 -> 283, the gated count stays 180 (283 - 103), the exempt-HTTP count 102 -> 103.
+    // 287 since D-8809's `POST /api/linking/confirm` (`linking/routes.ts`), the Overlord's confirm, a box-token machine lane IN EXEMPT beside
+    // the suggest door: the HTTP half 283 -> 284, the gated count stays 180 (284 - 104), the exempt-HTTP count 103 -> 104.
+    expect(ROUTES.length).toBe(287);
     expect(scanRoutes('laneModelsRoutes.ts').length).toBe(1);
     expect(scanRoutes('coord/approvalCensusRoutes.ts').length).toBe(1);
     expect(scanRoutes('testboxAdmin.ts').length).toBe(2);
@@ -934,7 +936,7 @@ describe('the scanner is COMPLETE — measured against Fastify\'s own route tabl
     const w = await openApp(); app = w.app;
     const real = realRouteTable(app);
     expect([...real].filter((r) => r.startsWith('UNPARSED'))).toEqual([]);
-    // 286 scanned + the static wildcard when the bundle is built.
+    // 287 scanned + the static wildcard when the bundle is built.
     // (59 stood here across several waves; the account-pools merge is where
     // it was finally re-measured, not where it went stale.)
     expect(real.size).toBe(ROUTES.length + (HAS_PWA ? 1 : 0));
@@ -1120,6 +1122,7 @@ describe('EXEMPT is complete in both directions', () => {
       'POST /api/sessions/:id/handover',
       'POST /api/sessions/:id/notes',
       'POST /api/sessions/:id/probe',
+      'POST /api/sessions/:id/report',
       'POST /api/sessions/:id/start',
       'POST /api/sessions/:id/start/loads',
       'POST /api/teams/:team/plan/triage',
@@ -1154,7 +1157,7 @@ describe('EXEMPT is complete in both directions', () => {
     expect([...EXEMPT_BUT_AUTHENTICATED].sort()).toEqual([...EXEMPT_BUT_AUTHENTICATED_DERIVED].sort());
   });
 
-  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-four with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
+  it('the thirty-nine box-token lanes in EXEMPT are those coord routes, and ninety-five with notify, pools/epoch, updates/intent, the Linear proxy, the ledgers, the linking lanes, the call record, the remaining-work door, the plan lanes, the start report, the loads report, the act-key claim, the report door, the card door, the note door, the timer doors, the probe door and the quiz record door', () => {
     // ORDER-PINNED TITLE. `box-token-census.test.ts` reads the number words in the
     // line above IN SEQUENCE — lanes first, total second — so rewording the title
     // the other way round is a red suite until that expectation moves with it
@@ -1692,7 +1695,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
   });
 
   it('the gate changes the status of EXACTLY the gated routes, and of nothing else', async () => {
-    // THE PROPERTY, in one loop over all 283 HTTP routes, with THREE probes each:
+    // THE PROPERTY, in one loop over all 284 HTTP routes, with THREE probes each:
     // dark, armed-anonymous, and armed-with-a-live-session. Comparing dark
     // against AUTHENTICATED is what makes this a real status assertion for the
     // gated routes too (review R1) — the earlier version asserted only
@@ -1756,7 +1759,7 @@ describe('with CCRC_AUTH off — the shipped default', () => {
           }
 
           // 3. Armed WITH a live session: identical to dark, for every route that
-          //    is not itself flag-aware — the assertion that covers all 283 HTTP routes, not the 103 exempt.
+          //    is not itself flag-aware — the assertion that covers all 284 HTTP routes, not the 104 exempt.
           //    (Both counts are derived and checked against this very sentence at the
           //    bottom of this file. They read fifty-five and fifteen for several builds
           //    after the tree had grown past both — D-1223.)

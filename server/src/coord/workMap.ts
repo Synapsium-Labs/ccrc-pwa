@@ -5,7 +5,7 @@
 // read (`planRoutes.ts`, L4) gathers the facts, calls both, and serves the view as `work` beside `plan`.
 import type { RunKind, RunState, RunSummary } from '../../../shared/api.js';
 import {
-  WORK_GROUPS,
+  WORK_COUNTED_GROUPS, WORK_GROUPS,
   type EpicView, type PhaseView, type PlanView, type TicketDoneEvidence, type TicketView, type WorkGroup, type WorkItemView,
   type WorkMapView, type WorkPhaseView, type WorkStatus, type WorkEpicView,
 } from '../../../shared/plan.js';
@@ -17,8 +17,9 @@ export const WORK_STATUS_GROUP: Readonly<Record<WorkStatus, WorkGroup>> = {
   'waiting-on-you': 'waiting-on-you', stuck: 'held', blocked: 'held', working: 'in-progress', 'state-unknown': 'in-progress',
   'in-review': 'in-progress', merging: 'in-progress', queued: 'in-progress', 'not-started': 'not-started', failed: 'failed',
 };
-/** The groups a headline's or a chip's "N of M" counts: closed, left open, dropped and failed count apart (F4). */
-const COUNTED: ReadonlySet<WorkGroup> = new Set(['done', 'in-progress', 'waiting-on-you', 'held', 'not-started']);
+/** The groups a headline's or a chip's "N of M" counts: closed, left open, dropped and failed count apart (F4). Spelt once, in
+ *  `shared/plan.ts`, which the Work card reads too (review 2873 F3). */
+const COUNTED: ReadonlySet<WorkGroup> = new Set(WORK_COUNTED_GROUPS);
 
 /** One stored piece of done evidence's verdict on this read. */
 export type EvidenceVerdict = { holds: true } | { holds: false; reason: string };
@@ -236,6 +237,7 @@ export function workMapOf(input: WorkMapInput): WorkMapView {
     const keys = order.filter((k) => set.has(k) && shown(k));
     const pc = zeroCounts();
     let carried = 0;
+    const carriedOut: string[] = [];
     const times: (number | null)[] = [];
     let own = 0;
     let ownDone = 0;
@@ -243,7 +245,7 @@ export function workMapOf(input: WorkMapInput): WorkMapView {
       const item = byKey.get(k)!;
       if (item.status === 'closed') { pc.closed += 1; continue; }                 // closed, counted apart
       const out = carryOut(p, k);
-      if (out !== null) { carried += 1; times.push(out.at); continue; }           // carried out
+      if (out !== null) { carried += 1; carriedOut.push(k); times.push(out.at); continue; }   // carried out
       pc[item.group] += 1;                                                       // done, left open, or outstanding
       own += 1;   // a left-open ticket is counted apart, but it keeps its phase from finishing (§3.1)
       if (item.group === 'done') { ownDone += 1; times.push(item.doneAt); }
@@ -253,7 +255,7 @@ export function workMapOf(input: WorkMapInput): WorkMapView {
     const finish: WorkPhaseView['finish'] = !finished ? null
       : times.some((x) => x === null) ? { at: 'unknown' } : { at: Math.max(...(times as number[])) };
     return {
-      key: p.key, number: numbers.get(p.key)!, title: p.title, summary: p.summary, finish, counts: pc, carried,
+      key: p.key, number: numbers.get(p.key)!, title: p.title, summary: p.summary, finish, counts: pc, carried, carriedOut,
       wholeEpics: p.refs.filter((r) => r.kind === 'epic' && ticketsOfEpic.has(r.key)).map((r) => r.key), items: keys,
     };
   });

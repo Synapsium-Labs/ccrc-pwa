@@ -18,7 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, QuickConfirm, Section, Skeleton } from '@ccrc/ui';
 import {
-  ANCHOR_SLOT_LANE, CONTINUITY_LANE, LANE_ARM_TEXT, LAUNCH_PROFILE_LANE, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG,
+  ANCHOR_SLOT_LANE, CONTINUITY_LANE, LANE_ARM_TEXT, LAUNCH_PROFILE_LANE, ROSTER_CARD_LANE, ROSTER_CARD_SHADOW_LOG, WORKING_IDLE_SLEEP_LANE,
   type LaneArmChoice, type LaneArmConfirmRequired, type LaneArmLane, type LaneArmQuizView, type LaneArmRefusal, type LaneArmRequest, type LaneArmRowView,
 } from '../../../shared/lane-arm';
 import { ConfirmItsYou } from '../accounts/ConfirmItsYou';
@@ -46,6 +46,7 @@ const SHADOW_LOG: Readonly<Record<LaneArmLane, string | null>> = {
   [CONTINUITY_LANE]: null,
   [LAUNCH_PROFILE_LANE]: null,
   [ANCHOR_SLOT_LANE]: null,
+  [WORKING_IDLE_SLEEP_LANE]: null,
 };
 
 /** The hook is told the session's step-up is fresh until an act proves otherwise (the secret door's rule, `ItemView`). */

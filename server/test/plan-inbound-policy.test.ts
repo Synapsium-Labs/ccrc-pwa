@@ -1,7 +1,8 @@
 // Review 2457 F2, F4 (D-8733, D-8735): the pure deciders of the inbound re-read and the take door's choice. L1, no I/O.
 import { describe, expect, it } from 'vitest';
 import {
-  INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict,
+  INBOUND_RECHECK_MAX_PER_PASS, INBOUND_RECHECK_MS, inboundDoorVerdict, inboundRecheckDue, inboundRecheckOf, inboundRecheckStops, inboundReopenedMail, inboundRetireVerdict, upkeepLookupOf,
+  closeRefusedCommentBody, closeTextRefusedMail, closeIdOf, closeTimeOf, reasonDigestOf, closeCommentSeedOf,
 } from '../src/linear/inboundPolicy.js';
 import { handedRowOf } from '../src/coord/planPolicy.js';
 import { RETIRE_WHYS, inboundRetirable, retireWhyOf } from '../src/linear/inboundRetire.js';
@@ -104,8 +105,11 @@ describe('inboundRecheckStops (review 2524 F2)', () => {
       expect(inboundRecheckStops(w), String(w)).toBe(true);
     }
   });
-  it('an answer about one row does not: malformed, linear-forbidden, linear-invalid, not-found', () => {
-    for (const w of ['malformed', 'linear-forbidden', 'linear-invalid', 'not-found']) expect(inboundRecheckStops(w), w).toBe(false);
+  it('an answer about one row does not: malformed, linear-forbidden, linear-invalid', () => {
+    for (const w of ['malformed', 'linear-forbidden', 'linear-invalid']) expect(inboundRecheckStops(w), w).toBe(false);
+  });
+  it('not-found is not a walk word (review 2571 F9): the by-id read retires it moved-out, and asked anyway it stops, the safe side', () => {
+    expect(inboundRecheckStops('not-found')).toBe(true);
   });
   it('a word nobody classified stops the walk (the safe side)', () => expect(inboundRecheckStops('some-new-word')).toBe(true));
 });
@@ -119,5 +123,62 @@ describe('inboundReopenedMail names the retire cause (review 2524 A4)', () => {
     expect(sentence('moved-out')).toBe('The issue AAA-12 left the managed Linear teams and is back in one, so it waits for your triage once more.');
     expect(sentence('ccrc-own')).toBe('The issue AAA-12 was ccrc\'s own issue and now reads as inbound in Linear, so it waits for your triage once more.');
     expect(sentence(null)).toBe('The issue AAA-12 was retired earlier and is open again in Linear, so it waits for your triage once more.');
+  });
+});
+
+describe('upkeepLookupOf (review 2571 F10)', () => {
+  it('a measured home workspace is the only place the lookup is made', () => {
+    expect(upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: 'ws-a' })).toEqual({ kind: 'lookup', workspace: 'ws-a' });
+  });
+  it('no home, or a home with no team key, is issue-not-inbound', () => {
+    expect(upkeepLookupOf({ home: null, homeTeamKey: null, homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'issue-not-inbound' });
+    expect(upkeepLookupOf({ home: 'project-x', homeTeamKey: null, homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'issue-not-inbound' });
+  });
+  it('a home with a team key whose workspace could not be resolved is unreachable', () => {
+    expect(upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: null })).toMatchObject({ kind: 'refuse', word: 'unreachable' });
+  });
+  it('its detail names both causes: a failed read a retry helps, and a team no slot routes, which it does not (review 2834 A4)', () => {
+    const v = upkeepLookupOf({ home: 'project-a', homeTeamKey: 'AAA', homeWorkspace: null });
+    expect(v.kind === 'refuse' ? v.detail : '').toMatch(/could not be read \(a retry helps\).*no slot routes.*retry does not help/);
+  });
+});
+
+describe('the close builders for a reason that failed the public-text check (final review minor 4)', () => {
+  const sample = { identifier: 'AAA-12', teamKey: 'AAA', title: 'distinctive-title-zq', body: 'distinctive-body-zq' };
+  it('the comment carries no reason text and carries ccrc\'s provenance', () => {
+    const body = closeRefusedCommentBody();
+    expect(body).toContain('Closed by ccrc');
+    expect(body).toMatch(/ccrc/i);
+    expect(body).not.toContain('Closed: ');
+  });
+  it('the mail names the identifier, team key and class, and echoes neither title nor body', () => {
+    const m = closeTextRefusedMail(sample, 'some-class', 'abc-1');
+    expect(m.subject).toContain('AAA-12');
+    expect(m.body).toContain('AAA-12');
+    expect(m.body).toContain('team AAA');
+    expect(m.body).toContain('some-class');
+    expect(m.body).not.toContain('You closed');
+    for (const text of [m.subject, m.body]) { expect(text).not.toContain('distinctive-title-zq'); expect(text).not.toContain('distinctive-body-zq'); }
+  });
+});
+
+describe('the close identity (review 2834 A1, A2)', () => {
+  const row = (reason: string | null, mailedAt: number | null, seenAt = 5) => ({ reason, mailedAt, seenAt });
+  it('the time is mailedAt, else seenAt; the digest is 12 hex of the reason; the id joins them', () => {
+    expect(closeTimeOf(row('r', 9))).toBe(9);
+    expect(closeTimeOf(row('r', null))).toBe(5);
+    expect(reasonDigestOf('r')).toMatch(/^[0-9a-f]{12}$/);
+    expect(reasonDigestOf('r')).not.toBe(reasonDigestOf('s'));
+    expect(reasonDigestOf(null)).toBe(reasonDigestOf(''));
+    expect(closeIdOf(row('r', 9))).toBe(`${reasonDigestOf('r')}-9`);
+    expect(closeIdOf(row('r', 9))).not.toBe(closeIdOf(row('r', 10)));   // the same reason, a mail between: tells apart
+    expect(closeIdOf(row('r', 9))).not.toBe(closeIdOf(row('s', 9)));    // another reason: tells apart
+  });
+  it('the fallback seed carries nothing of the reason; the reason seed does', () => {
+    expect(closeCommentSeedOf('L', 'fallback', row('one', 9))).toBe(closeCommentSeedOf('L', 'fallback', row('two', 9)));
+    expect(closeCommentSeedOf('L', 'fallback', row('one', 9))).not.toBe(closeCommentSeedOf('L', 'fallback', row('one', 10)));
+    expect(closeCommentSeedOf('L', 'fallback', row('one', 9))).not.toContain(reasonDigestOf('one'));
+    expect(closeCommentSeedOf('L', 'reason', row('one', 9))).not.toBe(closeCommentSeedOf('L', 'reason', row('two', 9)));
+    expect(closeCommentSeedOf('L', 'reason', row('one', 9))).not.toBe(closeCommentSeedOf('L', 'fallback', row('one', 9)));
   });
 });

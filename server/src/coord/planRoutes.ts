@@ -12,7 +12,7 @@
 import type { FastifyInstance, FastifyReply, FastifyRequest } from 'fastify';
 import type { GateDecision } from '../auth/gate.js';
 import { linearEgressText } from '../linear/ops.js';
-import { handedMail, inboundDoorVerdict, raisedItemInput, returnedMail, type InboundRecheck } from '../linear/inboundPolicy.js';
+import { handedMail, inboundDoorVerdict, raisedItemInput, returnedMail, upkeepLookupOf, type InboundRecheck } from '../linear/inboundPolicy.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { isLinearTeamKey } from '../../../shared/linear.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
@@ -26,6 +26,7 @@ import {
 } from '../../../shared/plan.js';
 import { programmeNameFromSlug } from '../../../shared/api.js';
 import { publicTextVerdict } from '../linking/policy.js';
+import { textFactOfTeam } from '../linear/planSyncPolicy.js';
 import { MAIL_TOKEN_HEADER, checkMailToken, type BoxTokenHolder } from './token.js';
 import type { AttributionRead } from './openRun.js';
 import { evidenceLinksOf } from './planRunFacts.js';
@@ -75,7 +76,8 @@ export interface PlanRouteOpts {
   runVerdicts?: Pick<RunVerdicts, 'all'>;
   /** The by-id re-read of a stored inbound row's issue (review 2457 F4, D-8733): the lane's, through the one rate service. `plan take`
    *  and `plan triage` ask it BEFORE they act (outside the run writers' mutex), so an issue that left the managed teams is never
-   *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable`. */
+   *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable` for a decision that binds the
+   *  issue only (a take into an epic, an Upkeep placement, a hand; `inboundDoorVerdict`): a close, a raise or a return goes on. */
   inboundRecheck?: (row: InboundRow) => Promise<InboundRecheck>;
 }
 
@@ -297,7 +299,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       if (text === undefined || text === '') continue;
       // no project to read a linking mode from (round 5 A5): the mode is `unknown`, which design §6.1 treats as public; the
       // issue's own team key stands for the project's
-      const l = project === null ? { teamKey: issueTeam ?? null, mode: 'unknown' as const } : coord.linkingOf(project);
+      const l = textFactOfTeam(project === null ? null : coord.linkingOf(project), issueTeam ?? null);
       const v = publicTextVerdict(text, l.teamKey, l.mode, opts.privateTrackerKeys);
       if (!v.ok) return { refuse: v.word, detail: v.ids === undefined ? v.class : `${v.class}: ${v.ids.join(', ')}` };
     }
@@ -326,7 +328,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
   };
 
   /** The by-id re-read of each row a door may act on (`inboundRetirable` rows only), keyed by the row's issue id. A reader that is absent
-   *  or throws answers `unmeasured`: the door then refuses (`inboundDoorVerdict`), so no row is acted on unseen. */
+   *  or throws answers `unmeasured`: the door then refuses a decision that binds the issue (`inboundDoorVerdict`), so no row is bound
+   *  unseen; a close, a raise or a return goes on, and the lane's close re-reads before it writes in Linear. */
   const recheckRows = async (rows: readonly InboundRow[]): Promise<Map<string, InboundRecheck>> => {
     const out = new Map<string, InboundRecheck>();
     for (const row of rows) {
@@ -808,7 +811,15 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       const left = recheckRefusal(plan, handed, rechecks, 'epic' in t);
       if (left !== null) return left;
     }
-    const parked = handed === null ? plan.upkeepTicketByIdentifier(homeWorkspace, t.issue) : null;
+    // no handed row, a take into an epic or a close: the Upkeep ticket is looked up in the measured home workspace only (review 2571 F10)
+    let lookupIn: string | null = homeWorkspace;   // a return keeps its current path
+    if (handed === null && ('epic' in t || 'close' in t)) {
+      const home = coord.programHome(slug);
+      const where = upkeepLookupOf({ home, homeTeamKey: home === null ? null : coord.linkingOf(home).teamKey, homeWorkspace });
+      if (where.kind === 'refuse') return { refuse: where.word, detail: where.detail };
+      lookupIn = where.workspace;
+    }
+    const parked = handed === null ? plan.upkeepTicketByIdentifier(lookupIn, t.issue) : null;
     const upkeep = parked !== null && parked.state === 'open' ? parked : null;
     if (handed === null && upkeep === null) return { refuse: 'issue-not-inbound', detail: `${t.issue} was not handed to ${slug} and is not an Upkeep ticket` };
     const ok = (): { ok: true; plan: PlanView } => ({ ok: true, plan: viewOf(plan, coord, slug) });
@@ -831,8 +842,8 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     }
     if ('close' in t) {
       // a handed issue's project is its team's owning project in the issue's own workspace (D-8808, final review I1)
-      const project = upkeep !== null ? upkeep.project : teamOwnerProject(handed!.teamKey, plan.hierarchyProjectsOf(), handed!.workspaceId) ?? coord.programHome(slug);
-      // no project at all is judged as a public one (round 5 A5): the check is never skipped
+      const project = upkeep !== null ? upkeep.project : teamOwnerProject(handed!.teamKey, plan.hierarchyProjectsOf(), handed!.workspaceId);
+      // a handed row's team that no project claims is judged as unknown, public (round 5 A5, review 2834 F1): never the programme home's mode
       const unfit = textRefusal(coord, [[project, t.close.why, handed?.teamKey]]);
       if (unfit !== null) return unfit;
       if (handed !== null) plan.setInboundState(handed.linearId, { state: 'closed', reason: mask(t.close.why) });

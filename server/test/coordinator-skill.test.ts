@@ -160,6 +160,9 @@ const CONTRACT = [
   // Programme ledgers PL7 (D-7715), operator-approved text. Its two apostrophes are straight, in `operator's` and `spec's`; its two
   // double quotes are escaped here and typed straight in SKILL.md.
   "The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and a `decide` item names the option this session recommends and why it beats each alternative, a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own \"Waiting on you\" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.",
+  // Coordinator autonomy default, clause 21 (D-8126; the operator approved these words 2026-11-09). Its one apostrophe is
+  // straight, in `programme's`; it names the SAFETY rule class, never a destructive verb, and the client verbs, never a route.
+  "This session decides by default and keeps going. It stops a thread of work only for a decision or act only the operator can make — an irreversible or outward-facing act (a SAFETY-listed destructive or live-box act, publishing, messaging people), spend beyond plan (usage credits, paid services, new accounts), a change to the programme's goals, scope or definition of done, or credentials and access — or when it is physically blocked after its self-healing has been tried: no account has room, the box is out of disk or memory after its own cleanup and the memory gate, an external service is down after retries with backoff, or a repository or tool is beyond its rights. Before asking the operator anything else, it reads the programme's goals and definition of done (`ccrc-api goals show <slug>`, the ledger, the spec), decides, records the call with `ccrc-api calls record` — a design-level call as `big`, which the operator sees and may overturn, every other call as `routine` — and continues in the same turn. A parked thread never parks the programme: it raises the item and works every unblocked thread, and ends its turn only when none is left or its children hold the work. It never opens an AskUserQuestion dialog on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.",
 ];
 
 describe('the coordinator skill: its contract', () => {
@@ -233,7 +236,7 @@ describe('the coordinator skill: its contract', () => {
    *  corpus spells out in prose three times (SKILL.md, README.md, CLAUDE.md). */
   const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine',
     'ten', 'eleven', 'twelve', 'thirteen', 'fourteen', 'fifteen', 'sixteen', 'seventeen',
-    'eighteen', 'nineteen', 'twenty'];
+    'eighteen', 'nineteen', 'twenty', 'twenty-one'];
   const COUNT_WORD = WORDS[CONTRACT.length];
 
   it('numbers exactly as many clauses as the CONTRACT pins, 1..N with no gaps', () => {
@@ -258,7 +261,7 @@ describe('the coordinator skill: its contract', () => {
     // wrong word named rather than with a missing string. The filter against
     // WORDS is what keeps a stray "protocol sentences" (SKILL.md's own clause
     // 5 discussion) from counting as a hit.
-    const stated = [...skill.matchAll(/\b([a-z]+) (?:clauses|lines|sentences)\b/g)]
+    const stated = [...skill.matchAll(/\b([a-z]+(?:-[a-z]+)?) (?:clauses|lines|sentences)\b/g)]
       .map((m) => m[1]!).filter((w) => WORDS.includes(w));
     expect(stated.length, 'SKILL.md no longer states its own clause count in prose')
       .toBeGreaterThanOrEqual(1);
@@ -274,7 +277,7 @@ describe('the coordinator skill: its contract', () => {
       const text = readFileSync(path.join(root, rel), 'utf8');
       let hits = 0;
       for (let i = text.indexOf(marker); i >= 0; i = text.indexOf(marker, i + 1)) {
-        const m = /\b([a-z]+)\s+clauses\b/.exec(text.slice(i, i + 160));
+        const m = /\b([a-z]+(?:-[a-z]+)?)\s+clauses\b/.exec(text.slice(i, i + 160));
         expect(m, `${rel} names ${marker} without stating how many clauses it has`).not.toBeNull();
         expect(m![1], `${rel} says ${m![1]} clauses where the CONTRACT pins ${CONTRACT.length}`)
           .toBe(COUNT_WORD);
@@ -648,7 +651,7 @@ describe('the coordinator skill: clause 17, coordinator intent', () => {
   const CLAUSE_17 = CONTRACT[16]!;
 
   it('is the seventeenth clause, and SKILL.md numbers it so', () => {
-    expect(CONTRACT).toHaveLength(20);
+    expect(CONTRACT).toHaveLength(21);
     expect(CLAUSE_17.startsWith('Before delegating, declare coordinator intent for this session with ')).toBe(true);
     expect(skill).toContain(`\n17. ${CLAUSE_17}\n`);
   });
