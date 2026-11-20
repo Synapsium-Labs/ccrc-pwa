@@ -168,7 +168,7 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   // needs a ccd-side bound and is not this row's job.
   swap: 300_000,
   // The Docs verbs (spec 2026-10-01 section 2 (a), Budgets). ccd's python helper bounds each one itself: a
-  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s, log 10 s), at which it
+  // whole-verb deadline (`HELPER_DEADLINE_S` in ccd/ccd: index 12 s, tree 12 s, show 7 s, fetch 45 s, log 10 s, show-range 20 s), at which it
   // sends SIGTERM to every git process group it started and SIGKILL `KILL_GRACE_S` (2 s) later. Each budget below
   // is strictly greater than that deadline + the 2 s grace + 5 s; `docs-budget.test.ts` reads both sides from
   // source and holds the inequality, and docs-show's margin is the thinnest (exactly 1 s).
@@ -187,6 +187,12 @@ const CCD_VERB_TIMEOUT_MS: Record<string, number> = {
   'docs-fetch': 60_000,
   // docs-log (rich-docs spec G4, W5b): helper deadline 10 s, so 10 + 2 + the redactor's 0.9 + 5 = 17.9 s < 20 s.
   'docs-log': 20_000,
+  // docs-show-range (X2 P1.2, P1.3): a `HELPER_DEADLINE_S` row of 20 s, and one Deadline over the whole verb (its git
+  // calls, its lock waits and its copy), so a prepare that runs it out gives its place back within
+  // `RANGE_ABORT_LOCK_WAIT_S` (1 s). The sequential worst case is 20 + the 2 s grace + 1 s + the redactor's 0.9 + 5 =
+  // 28.9 s < 30 s, so the agent never kills ccd before its own deadline fires; `docs-budget.test.ts` holds the
+  // inequality from source.
+  'docs-show-range': 30_000,
 };
 
 /** The deps-shed SHADOW's own, shorter row (D-7278): `ws-shed-deps … --dry-run` runs every rung and removes nothing, so

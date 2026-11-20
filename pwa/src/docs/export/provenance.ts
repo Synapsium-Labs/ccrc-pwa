@@ -117,7 +117,9 @@ export function exportProvenance(p: ProvenanceInput): ExportProvenance {
   }
   const banner = pin.kind === 'draft'
     ? fillSentence(EXPORT_TEXT.banner, {
-      label, branch: pin.branch, commit, served: ref.served, fp: pin.fp.slice(0, 12), time: iso(p.readAt),
+      // An opened pin always carries its bytes' sha256 (a stat-pinned draft's is its snapshot digest, X2 P1); a pin with
+      // `fp: null` names bytes not yet read, so it names no fingerprint here rather than a guessed one.
+      label, branch: pin.branch, commit, served: ref.served, fp: pin.fp === null ? '' : pin.fp.slice(0, 12), time: iso(p.readAt),
     })
     : null;
   return { commit, draft: pin.kind === 'draft', facts, notes, metas, banner };
