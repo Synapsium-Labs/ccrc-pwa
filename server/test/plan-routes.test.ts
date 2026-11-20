@@ -211,6 +211,21 @@ describe('plan tickets and epics', () => {
     expect(view(own).epics[0]!.tickets[0]).toMatchObject({ key: 'f1', source: 'worker' });
   });
 
+  it('a worker\'s follow-up mails the programme\'s coordinator once; the coordinator\'s own ticket-add mails nobody (D-8186, carry 5)', async () => {
+    await put(FIRST);
+    const e1 = plan.planOf('prog-a').epics[0]!.id;
+    runs['worker-1'] = { program: 'prog-a', epicId: e1 };
+    const mails = () => coord.db.prepare("SELECT toId, subject, body FROM mail WHERE subject LIKE 'follow-up ticket %'").all() as { toId: string; subject: string; body: string }[];
+    expect((await send('/api/programmes/prog-a/plan/tickets', { epic: 'e1', key: 't1', kind: 'task', title: 'Do it' })).statusCode).toBe(200);
+    expect(mails()).toEqual([]);
+    expect((await send('/api/programmes/prog-a/plan/tickets', { epic: 'e1', key: 'f1', kind: 'follow-up', title: 'later' }, 'worker-1')).statusCode).toBe(200);
+    const sent = mails();
+    expect(sent.map((m) => [m.toId, m.subject])).toEqual([['coord-a', 'follow-up ticket f1 filed in prog-a']]);
+    expect(sent[0]!.body).toContain('worker-1 filed a follow-up ticket');
+    expect(sent[0]!.body).toContain('f1, "later", in epic e1');
+    expect(sent[0]!.body).toContain('plan ticket-move');
+  });
+
   it('ticket-move moves an open ticket to another epic, and with drop and no why is dropped-needs-reason', async () => {
     await put({ home: 'project-a', epics: [epic('e1', [1], { tickets: [{ key: 't1', kind: 'work', title: 't' }] }), epic('e2', [2])] });
     const none = await send('/api/programmes/prog-a/plan/tickets/move', { ticket: 't1', drop: {} });

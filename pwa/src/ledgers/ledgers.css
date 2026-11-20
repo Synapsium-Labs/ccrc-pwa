@@ -490,8 +490,9 @@
   .wm-table { display: table; }
 }
 @media (max-width: 899.98px) {
-  /* Stuck above the phone bar (`--phone-bar-h`, shell.css, on the root only while the bar is mounted), never under it. */
-  .wi-act[data-sticky='foot'] { position: sticky; bottom: var(--phone-bar-h, 0px); z-index: var(--z-header); }
+  /* Stuck above the phone bar and the safe-area inset (`--safe-bottom`, shell.css: the inset plus the bar while it is mounted,
+     the inset alone without it), never under either (D-8186, wave 5's review run 2491 F1). */
+  .wi-act[data-sticky='foot'] { position: sticky; bottom: var(--safe-bottom, 0px); z-index: var(--z-header); }
 }
 
 /* Calls made for you (D-8126): a collapsed group below a programme's rows. Seen is a plain button on each call, a refusal is said

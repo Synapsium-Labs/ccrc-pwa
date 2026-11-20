@@ -351,6 +351,86 @@ number from `POST /api/ledger/deviations`.
   Upkeep binding, or for a programme with no coordinator, now mails the home project's Linear owner, with no programme, in
   the same transaction as the settle; with no usable owner (none named, or gone) it is refused `no-linear-owner`. Record: the
   wave 4 follow-ups note.
+- **D-8795 (2026-11-20)** — migration-policy-interfaces: Task 7.1's deciders take the facts they cannot read, and stay pure.
+  `checkMap` takes a fourth argument, `ctx { home; teamOf(project); upkeepKeys }`: a map-declared epic with no project is the
+  home project's, a leaf whose epic's project is in another team is `plan-bad-body` (`leaf-other-team`), one whose epic's project
+  has no team key is `plan-bad-body` with its own detail (`leaf-no-team`), and an upkeep ticket key is checked against the
+  Upkeep epic's keys. A target that does not exist is `plan-bad-body` (`unknown-target`). `applySteps` takes a fourth argument,
+  `afterOf(entry)`, so the after-state comes from the sync's one builder (Task 7.3), never a copy; a null after waits. A move's
+  `after.expect` holds the issue's fields in a re-read's terms (state type, team key, ids, texts), and `reconcileMove` and
+  `putBackSteps` compare only the fields it lists, by key and type: a field the re-read cannot measure is never a match, and an
+  `expect` that lists none proves nothing. A milestone the migration created is put back by no write (Linear's milestone has no
+  status, D-8407): it stays in Linear under its canceled project, and `putBackSteps` lists it (`left`) for the report. An epic
+  the map declares must sit in a project of the map's own team (`epic-other-team`), so a team's Linear owner never creates
+  projects in another team (a security review of the wave's commits).
+  Record: `docs/superpowers/programs/linear-hierarchy/w7-migration.md` (the coordinator's ruling, mail of 2026-11-20).
+- **D-8796 (2026-11-20)** — migration-through-the-sync: every write the migration makes to an issue it adopts, and every object
+  its map's structure creates, goes through the plan sync's own passes (D-8179's one writer per Linear object). A leaf or upkeep
+  issue is re-read inside its key's flight; a changed one is skipped, listed and never adopted; otherwise ONE transaction adopts
+  it (`adoptIssueAsTicketInTx`: the ticket and a binding bound to the issue with the adopted fingerprint) and writes its move row,
+  whose `after.expect` is the sync's planned owned fields for that binding (`PlanSync#plannedOwnedNow`), and the key's pass sends
+  the one update. So adoption precedes the write but is atomic with the move row (Task 7.3 said "only after the write"), and its
+  second guard holds by construction: a listed issue has no binding until its move row exists. A crash leaves a row with no
+  `appliedAt` that `reconcileMove` settles on a later tick. The structure a map declares is inserted with its move rows
+  (`before` null, no Linear id) in one transaction (`declareMapStructure`), the key's pass creates and binds the objects, and the
+  rows take their Linear ids from the bindings. The issues it closes (a replaced level, finished, superseded, stale) are not
+  adopted, and it writes them itself through `runCcrcOp`, each move row before its write. The sync charges a step for an object a
+  migration still writes to lane `migration` and journals it with pass `migration` (`planStore.ts#migratingLocals`), and an
+  apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map never spends the sync's own share (§10.6). A
+  live programme's part, its adoptions included, waits for no run in `ACTIVE_RUN_STATES`. A migration reads `applied` only
+  when every move row is applied or its issue skipped and listed. An adopted issue a person changes before the sync's write is
+  put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
+  (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
+  listed as skipped (fix round 1, review 2892 F5). The migration's own issue reads and writes of an apply tick count against
+  `MIGRATION_CALLS_PER_TICK` besides the write cap, and a rate refusal of any of them rests the lane. The plan sync's own two
+  passes on lane `migration` are not counted there: step 1's structure pass (only until the plan's objects exist, bounded by its
+  pass deadline) and the Upkeep epic's pass. They stay bounded by the writes cap, the lane and the one rate service (review 2892
+  A7, narrowed by the coordinator's ruling on review 2918 F3). A step that cannot be placed now (its epic's or the Upkeep epic's
+  Linear project not created yet) spends none of the tick's issue reads and writes and is listed as waiting with its reason
+  (review 2892 F3); a replaced level whose placed ticket has not settled waits the same way and then closes related to it, as
+  Task 7.3 says (review 2918 F2). The
+  project's Upkeep epic, shared with the inbound path, is no object of the migration's: it has no move row and put back leaves
+  it. Put back is asked by the report's act (`putBackAskedAt`) and run by the migration lane, a few issues a tick, its records
+  dropped "put back" with `putBackAt` before its writes; a programme whose initiative it created has its plan end recorded
+  `abandoned` "put back" and the initiative canceled in its key's flight (with every epic put back, the sync sends the
+  initiative nothing more). A done programme's initiative
+  reads what the sync derives from its plan (active while its placed tickets are open), not a forced Completed; the report says
+  so. Record: the wave 7 note (the coordinator's ruling, mail of 2026-11-20).
+- **D-8797 (2026-11-20)** — upkeep-link-with-key: the project row's Upkeep link shows whenever the project has a team key, and
+  the inbound count beside it only when issues wait, departing from Task 5.1's "the Upkeep link when inbound issues wait": the
+  Upkeep page is the only way into a project's Upkeep epic and its refused closes, which outlive the waiting count. Wave 5
+  built it so (review run 2491 A5); `project-linking-card.test.tsx` pins both halves. Record: the wave 7 note (the
+  coordinator's ruling, mail of 2026-11-20).
+- **D-8798 (2026-11-20)** — apply-plan-required-scope: when a team's migration is applied, `planRequired` is set for the
+  programmes its map names and for the team's programmes that have declared a plan, not for every programme homed in the team
+  (Task 7.3 said "the team's programmes"). A live programme the map does not name and whose coordinator has declared no plan is
+  left alone: forcing it would refuse that coordinator's next run open `plan-missing` in the middle of its work, with no word to
+  it. `migration-apply.test.ts` pins both halves. Record: the wave 7 note (the coordinator's ruling on review 2892 F8, mail of
+  2026-11-20).
+- **D-8799 (2026-11-20)** — map-item-settles-on-approve: the map's `decide` item settles when the operator approves it, with a
+  note that the report follows, not when the migration reaches `applied` (Task 7.4); the report item, raised on `applied`, carries
+  the result and its Put back. An item left open across a long apply would read as still waiting on the operator. Record: the
+  wave 7 note (the coordinator's ruling on review 2892 A5, mail of 2026-11-20).
+- **D-8800 (2026-11-20)** — migration-columns: a third schema migration for this programme (the Global Constraints name two),
+  four nullable columns on `linear_migrations`: `project` (the ccrc project whose team is reshaped), `report` (the report's
+  lists as JSON), `putBackAskedAt` (the operator's Put back, run by the lane) and `reportDoneAt` (the report closed; the next team
+  may start only then, §10.2). Its slot is 114 on this branch (`main` took 110 to 113 first) and is renumbered at landing if
+  another migration lands first. One writer, `planStore.ts#setMigration`. Record: the wave 7 note (the coordinator's ruling on review
+  2892 A5, mail of 2026-11-20).
+- **D-8801 (2026-11-20)** — finished-evidence: a map's `finished` entry carries its evidence as `target.pr` (`<owner>/<repo>#<n>`)
+  or, with no pull request, a one-line `target.reason` (at most `FINISHED_REASON_MAX_CHARS`), or `checkMap` refuses the map
+  `plan-bad-body` `finished-needs-evidence:<id>`. Spec §10 and Task 7.3 name the merged pull request as the evidence. `target.pr`
+  and `target.reason` are new members of `MapEntry.target` beyond Task 7.1's interface, and `checkMap` checks the pull request's
+  shape only: L1 cannot ask GitHub whether it exists or merged. The close's comment names the evidence through the public-text
+  check (`migrationPolicy.ts#finishedComment`): a private team's names the pull request in full, a public or unmeasured team's
+  names one outside the project's own measured repository as "a pull request", and a text that fails the check falls back to
+  the bare sentence. Record: the wave 7 note (the coordinator's rulings on review 2892 F7 and review 2918 F4, mails of
+  2026-11-20).
+- **D-8802 (2026-11-20)** — plan-by-follows-the-last-put: a coordinator's first plan write after a migration's map declared the
+  plan rewrites `planBy` and `planAt` (the stored `planBy` is the migration's, `MIGRATION_PLAN_BY`, and the writer is someone
+  else), where Task 2.2 says `applyPlanChanges` sets them on the first call only. Put back reads `planBy` and ends only a plan
+  that is still the map's, so a programme its coordinator has since taken over keeps its plan and its initiative. Record: the
+  wave 7 note (the coordinator's rulings on review 2892 F1 and review 2918 F4, mails of 2026-11-20).
 
 ## Global Constraints
 

@@ -815,6 +815,24 @@ describe('D-8707: a project write carries every team it puts the project in', ()
   });
 });
 
+describe('review 2918 F5 (2): the pass hands its snapshot the tickets put back (wave 3 F3/F5, carried to wave 7)', () => {
+  it("a bound ticket put back keeps its team on its epic's project through the sync's own pass", async () => {
+    const r = await rig();
+    await seedSlot(r.ccrcDir, 'a', { teams: [...WS.a.teams, { id: 'aaaaaaaa-2222-4000-8000-00000000000a', key: 'CCC', name: 'Team C' }] });
+    r.dir.entries = { ...DIRECTORY, states: [...DIRECTORY.states, ...DIRECTORY.states.map((x, i) => ({ ...x, id: U(60 + i), teamKey: 'CCC' }))] };
+    r.db.prepare('INSERT INTO project_linking (project, teamKey, override) VALUES (?, ?, ?)').run('project-c', 'CCC', 'private');
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [tk('t2', { project: 'project-c' })], update: [], drop: [] } }), OWNER, T, null);
+    await r.sync.tick(afterDebounce(r));
+    const t2 = r.plan.planOf(SLUG).epics[0]!.tickets.find((t) => t.key === 't2')!;
+    expect(r.plan.bindingOf('ticket', t2.id, WS.a.id)?.state).toBe('bound');
+    // put back, its binding kept (the issue still sits in team CCC): the project keeps CCC
+    r.db.prepare('UPDATE plan_tickets SET putBackAt = ? WHERE id = ?').run(r.t.now, t2.id);
+    applyPlanChanges(r.db, SLUG, changes({ epics: { insert: [], update: [{ id: r.plan.planOf(SLUG).epics[0]!.id, title: 'Renamed epic' }], drop: [] } }), OWNER, r.t.now, null);
+    await r.sync.tick(r.t.now + PLAN_SYNC_DEBOUNCE_MS + 1);
+    expect(r.asks.filter((a) => a.op === 'projectUpdate').map((a) => a.teamKeys)).toEqual([['AAA', 'CCC']]);
+  });
+});
+
 describe('a failed binding is not terminal', () => {
   it('returns to pending when a plan put changes its inputs', async () => {
     const r = await rig({ mode: 'public', epicTitle: 'Fix AAA-123 now' });

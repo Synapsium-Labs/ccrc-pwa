@@ -168,6 +168,36 @@ retry helps until one of its teams is managed again; and when Linear answered ab
 forbidden or invalid or answering outside its grammar, a retry gets the same answer until that issue changes in Linear)
 and the client's own `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
 
+## The Linear owner: plan map-propose
+
+When the operator starts a team's migration (its project row's "Reshape in Linear"), the team's Linear owner gets a mail
+`linear migration <n>: propose the map for team <TEAM>`. Read the team's open issues (`"$API" linear search`, or the
+issue reads), then place every open issue once, with its Linear id and identifier and one class: `leaf` (a ticket in a
+programme's epic: `target` names `programme` and `epic`, and optionally `checkpoint`, `ticketKey` and `kind`), `upkeep`
+(a ticket in the project's Upkeep epic), `programme`, `epic` or `checkpoint` (an issue that stood for that level: it is
+closed, related to the first ticket placed under it), `finished` (closed as done with its evidence: `target.pr` names the
+merged pull request as `<owner>/<repo>#<number>`, or, when there is none, `target.reason` says why in one line),
+`superseded` (`target.successor` names the issue that replaced it: one on this map, or one ccrc's plan already holds),
+`stale` (closed because the operator approves it on the map) or `unclear` (left where it is):
+
+```bash
+"$API" plan map-propose <TEAM> --json - <<JSON
+{"entries":[{"issue":"<issue id>","identifier":"AAA-12","class":"leaf","target":{"programme":"<slug>","epic":"w1-capture"}},{"issue":"<issue id>","identifier":"AAA-13","class":"upkeep"},{"issue":"<issue id>","identifier":"AAA-14","class":"finished","target":{"pr":"<owner>/<repo>#<number>"}}]}
+JSON
+```
+
+A live programme declares its own plan first (its coordinator is mailed to `plan put` it); the map places issues onto
+those keys and never rewrites a plan. Only for a programme with no plan and no run that is not finished may the map
+declare structure: `"epics":[{"programme":"<slug>","epics":[...]}]` for a done programme that still owns open issues,
+or `"backlog":[{"slug":"<new slug>","title":"<title>","epics":[...]}]` for a new paused programme, each epic as in
+`plan put`. The operator approves the map in the console (or returns it with a note, mailed to you); nothing changes in
+Linear before that. Issues the apply skipped because they changed reach you again as one follow-up map; one you have since
+taken through inbound is held, and stays off it (listing it is `map-incomplete`). Refusals:
+`not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing, listed twice, or not
+open), `map-rewrites-plan` (structure for a programme that has a plan or a live run), and `plan-bad-body` (a target
+that does not exist, a successor that does not exist, a finished issue with no evidence, a leaf whose epic is in another
+team, a ticket key already used, or no migration waiting for a map).
+
 ## plan take
 
 A coordinator handed an issue (mail `Linear inbound: <REF> handed to <slug>`), or taking an Upkeep ticket, takes it into

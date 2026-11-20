@@ -108,6 +108,8 @@ export function useProjectAddForm({ active, add, adding, onAdded, linking = fals
     setTemplate(false);
     setOwner('');
     setInitiatives(true);
+    // The sheet stays mounted: a second opening must not draw the last read's coordinators while its own read is pending (D-8186 A3).
+    setCoordinators('pending');
   }, [active]);
 
   const plan = formVerdict(form);

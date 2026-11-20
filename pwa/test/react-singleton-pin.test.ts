@@ -24,6 +24,12 @@ describe('the React singleton is one module, read by both configs', () => {
     expect([...REACT_SINGLETON.dedupe]).toEqual(Object.keys(REACT_SINGLETON.alias).sort((a, b) => REACT_SINGLETON.dedupe.indexOf(a as never) - REACT_SINGLETON.dedupe.indexOf(b as never)));
     expect(Object.keys(REACT_SINGLETON.alias).indexOf('react-dom')).toBeLessThan(Object.keys(REACT_SINGLETON.alias).indexOf('react'));
   });
+  it('every package in dedupe is covered by `inline`, by name or by a pattern (D-8186 A2)', () => {
+    const covered = (pkg: string): boolean => REACT_SINGLETON.inline.some((i) => (typeof i === 'string' ? i === pkg : i.test(`node_modules/${pkg}/`)));
+    // `react` and `react-dom` are the singleton itself, which node resolves from pwa's own tree; `@ccrc/ui` is the source that imports them.
+    const uncovered = REACT_SINGLETON.dedupe.filter((d) => d !== 'react' && d !== 'react-dom' && !covered(d));
+    expect(uncovered).toEqual([]);
+  });
   it('vite.config.ts resolves to the module\'s lists (its own `@` alias beside them)', () => {
     expect(hermetic.resolve?.dedupe).toEqual([...REACT_SINGLETON.dedupe]);
     expect(hermeticAlias).toEqual({ ...REACT_SINGLETON.alias });
