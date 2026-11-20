@@ -763,7 +763,7 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
   const entries = usable?.entries ?? [];
   const listedIds = rosterIds(entries);
   const entryById = new Map<string, (typeof entries)[number]>();
-  for (const e of entries) if (isHelperId(e.id) && !entryById.has(e.id)) entryById.set(e.id, e);
+  for (const e of entries) if (isHelperId(e.id)) entryById.set(e.id, e);
   const listedFull = entries.length >= HELPER_LISTED_MAX;
 
   // Which ids are Agent helpers. A launch result names one (positive evidence); else its meta sits at the Agent path with
@@ -784,7 +784,7 @@ export function decideAgentHelpers(i: AgentArmInput): AgentArm {
   const droppedNow = new Set<string>();
   /** Whether the roster lists `id` with a start later than the time `endAt` a final fact gave: it runs again. */
   const continuedAfter = (id: string, endAt: number | null): boolean => {
-    const start = usable === null || i.proc.kind === 'gone' ? null : entryById.get(id)?.startedAt ?? null;
+    const start = i.proc.kind === 'gone' ? null : entryById.get(id)?.startedAt ?? null; // an unusable roster has no entries
     return endAt !== null && start !== null && start > endAt;
   };
 

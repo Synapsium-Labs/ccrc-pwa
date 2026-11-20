@@ -388,6 +388,20 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       expect(stateOf(noStart, 'a2')).toBe('unlisted');
     });
 
+    it('a previous reading that did not measure the process start forbids nothing when the next one does', () => {
+      const one = read(['a1', 'a2'], { proc: { kind: 'unmeasured' } });
+      const two = later(one, ['a1'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 1_000 } });
+      expect(stateOf(two, 'a2')).toBe('unlisted');
+    });
+
+    it('after a restart the memory holds the NEW process start, so a later drop under it is seen', () => {
+      const one = read(['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 3_600_000 } });
+      const restarted = later(one, ['a1', 'a2'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 1_000 } });
+      expect(restarted.memory.procStartedAt).toBe(NOW - 1_000);
+      const dropped = later(restarted, ['a1'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 1_000 } });
+      expect(stateOf(dropped, 'a2')).toBe('unlisted');
+    });
+
     it('the process start is carried across a reading that does not measure it live, so a restart seen only afterwards still vetoes (review 2961 F11)', () => {
       const t1 = NOW - 3_600_000;
       const one = read(['a1', 'a2'], { proc: { kind: 'live', startedAt: t1 } });
@@ -902,6 +916,11 @@ describe('contracts the first mutation round left unpinned (review 2961 F4)', ()
     expect(row(arm, A).description).toBe(`${'a'.repeat(198)}\u{1F600}`);
     const half = run({ roster: usable([A]), metas: { [A]: meta({ description: `${'a'.repeat(199)}\u{1F600}tail` }) } });
     expect(row(half, A).description).toBe('a'.repeat(199));
+    // the two ends of the high-surrogate range: U+10000 starts with 0xD800, U+10FFFF with 0xDBFF
+    for (const edge of ['\u{10000}', '\u{10FFFF}']) {
+      const cutAtEdge = run({ roster: usable([A]), metas: { [A]: meta({ description: `${'a'.repeat(199)}${edge}tail` }) } });
+      expect(row(cutAtEdge, A).description).toBe('a'.repeat(199));
+    }
   });
 
   it('running rows are ordered by start (oldest first), then by id', () => {
@@ -984,6 +1003,14 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     expect(foldHelperFacts(new Map(), [by('killed'), by('failed')]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
     expect(foldHelperFacts(new Map(), [by('failed'), by('killed')]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
   });
+  it('two ends of one outcome at one time: the newer read stands', () => {
+    const at = NOW - MIN;
+    const older = fact({ status: 'completed', at, summary: 'older' });
+    const newer = fact({ status: 'completed', at, summary: 'newer' });
+    expect(foldHelperFacts(new Map(), [older, newer]).get('a1')!.end).toMatchObject({ summary: 'newer' });
+    expect(foldHelperFacts(new Map(), [newer, older]).get('a1')!.end).toMatchObject({ summary: 'older' });
+  });
+
   it('a notification seen in both of its record shapes is one fact twice: it folds to one end', () => {
     const seen = fact({ status: 'failed', at: NOW - MIN, summary: 'x' });
     const folded = foldHelperFacts(new Map(), [seen, { ...seen }]);
