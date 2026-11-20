@@ -3,7 +3,7 @@
 // `noteKeyFact` (L1). Fixture HOMEs only (`mkTmp`); neutral names.
 import { afterEach, describe, expect, expectTypeOf, it } from 'vitest';
 import { DatabaseSync } from 'node:sqlite';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { CoordStore } from '../src/coord/store.js';
 import { noteKeyReader, type NoteKeysMessages } from '../src/continuity/noteKeys.js';
@@ -29,7 +29,7 @@ function store(): { store: OperatorModelStore; db: DatabaseSync } {
   return { store: new OperatorModelStore(db, issuer()), db };
 }
 const ACTOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('Fixture browser', 'abcdef0123456789'));
+  .operator(gateActorOf('Fixture browser', 'abcdef0123456789'));
 function record(s: OperatorModelStore): number {
   const r = s.recordMessage({ at: 1_000, sessionId: OVERLORD, term: 1, actor: ACTOR, text: 'the radar is red', mark: false, composedKey: null });
   if (!r.ok) throw new Error(`${r.error}: ${r.detail}`);

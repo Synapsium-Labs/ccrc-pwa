@@ -17,6 +17,10 @@ export const ACT_KEY_HEADER = 'x-ccrc-act-key';
 export const ACT_COUNTER_HEADER = 'x-ccrc-act-counter';
 /** The generation the key was issued for (`ActKeyClaimAnswer.generation`). */
 export const ACT_GENERATION_HEADER = 'x-ccrc-act-generation';
+/** The witness key (door process F20): the hook's report of the tool call this write answers, which the gate's step 7a
+ *  looks up (door process B binds the lookup; gates B reads the header). A missing one reads `none`. It is not the
+ *  operation key (`x-ccrc-op-key`, W2's), which is a header of its own. */
+export const WITNESS_KEY_HEADER = 'x-ccrc-witness-key';
 
 /** A launch nonce's sha256, as the start report carries it and the claim door hashes the nonce: 64 lowercase hex. The nonce
  *  itself is the same shape (32 random bytes as hex), and the hash is taken over that 64-character hex TEXT as UTF-8, with

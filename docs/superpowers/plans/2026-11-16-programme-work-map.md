@@ -426,7 +426,7 @@ The builder may rename fields; the shape is the spec's.
   throws, it answers `work: { unreadable: <word> }` and still serves `plan`. When the plan read itself throws, it
   refuses as any read does, with no `plan` and no `work`; the page (WM4) keeps its last view (F15).
 
-- [ ] **Step 1: Write the failing tests** — `work-map.test.ts`: one case per row of the spec's Tables 6 and 6a, plus
+- [x] **Step 1: Write the failing tests** — `work-map.test.ts`: one case per row of the spec's Tables 6 and 6a, plus
   `an open item on the run beats a stuck verdict`, `stuck beats working`, `verdicts not read skips stuck and blocked
   and says so`, `a run in state unknown reads state-unknown`, `evidence that no longer holds reads done-unverified with
   its reason`, `a dropped ticket is in no total`, `a failed run's ticket reads not-started with lastFailedRunId`, `a
@@ -451,10 +451,14 @@ The builder may rename fields; the shape is the spec's.
   plan`, `a failing read answers work unreadable and still serves plan`. `plan.test.ts`: both lists spelled once.
 - [ ] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/work-map.test.ts`.
-- [ ] **Step 3: Implement** the vocabulary, `workMapOf`, the store read, the wiring and the route's field.
-- [ ] **Step 4: Run to pass**, then
+  Not run before Step 3 (D-8779 `tests-beside-the-decider`): the cases and the decider were written in one sitting.
+  Measured after the fact by review 2795's tests lens, at `main` with the task's tests: the work-map suite cannot import
+  a `workMap.ts` that does not exist, and the five new `plan-routes.test.ts` cases red while its 34 older cases stay
+  green. Each row's red is measured by its mutant instead (the task note, §4).
+- [x] **Step 3: Implement** the vocabulary, `workMapOf`, the store read, the wiring and the route's field.
+- [x] **Step 4: Run to pass**, then
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-routes.test.ts test/single-definition/plan.test.ts test/sim/mutation-floors.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the programme's work map, decided once and served on the plan read`.
+- [x] **Step 5: Commit** — `feat(plan): the programme's work map, decided once and served on the plan read`.
 
 **Acceptance.** Every row of Tables 6 and 6a has a case that reds when the row is deleted (measured with
 `mutation-run.py`). `typecheck-tests`, `single-definition` and `rings` pass. **Rollback.** A plain revert: nothing reads
@@ -710,6 +714,44 @@ Task WM1 departs under its own number:
   `ticket-required` to `references/plan.md` is done already, by #3001. The task
   note (`docs/superpowers/programs/desktop-polish/wm1.md`) gives the migration slot, each row and what reds it, and the
   mutants.
+
+Task WM2 departs under its own number:
+
+- **D-8779** — `work-map-wm2-build`: Task WM2 (desktop polish run 2779), issued on 2026-11-19. The work map is decided once,
+  by `workMapOf` in `server/src/coord/workMap.ts` (L1), and served as `work` beside `plan` on the plan read; it needs no
+  migration. The build departs from the plan's text in these ways, each named by slug: `closed-reads-nothing-yet`, the
+  hierarchy's close with a reason (its Task 4.3) stores a close only as the drop of an Upkeep ticket, so the decider takes
+  the close as an input map that Table 6 row 2 reads and its cases pin, and the route passes it empty until that task
+  stores a programme ticket's close; `evidence-and-verdicts-decided-in-l1`, the route only gathers, so the read side of
+  WM1's evidence rule is a second pure decider, `doneEvidenceVerdict`, and "the reader is empty" is a third,
+  `verdictsReadOf`, both in `workMap.ts`; `last-move-from-the-run`, `lastMoveAt` comes from the run, stamped by
+  `withLastMoves`, not from the verdicts map, so a reader not read yet keeps every row's last move;
+  `dropped-tickets-are-items`, the top-level `items` list every ticket once, a dropped one with status `dropped` counted in
+  `counts.dropped`, while no phase, epic, `notInPhase` or "N of M" holds it; `declared-reads-planBy`, "declared" reads
+  `planBy`, which the plan store writes in one statement with `planAt`; `run-row-title-nullable`, a run row's title is
+  null when its run title is missing or repeats the programme's, and the fallback's `waves` is null with no work run;
+  `held-by-an-unread-run`, a ticket held by a run the run read did not return reads `state-unknown`; `unreadable-words`,
+  `work.unreadable` is `run-unreadable` (the store's word) or `read-failed` (a read that throws), while a landing line that
+  cannot be read makes only that ticket's evidence fail; `dropped-epic-while-it-holds-a-ticket`, a dropped epic stays on
+  the strip while it holds a ticket not dropped, so the strip adds up to the headline (F3); `not-in-phase-only-when-phased`,
+  `notInPhase` is empty for a plan with no phase; `three-floor-keys`, three `MUTANT_SETS` keys and floors, one per decider
+  in `workMap.ts`; and `tests-beside-the-decider`, the cases and the decider were written together, so each row's red is
+  measured by its mutant rather than by a run before the decider existed (Step 2 is left unticked for it). Four edits under
+  other claims, each with the holder's consent by mail before the edit: one read in `server/src/coord/store.ts`
+  (`programmeWorkRuns`, claim 5529, consent 2026-11-19); the import, the spread line and the three floor rows in
+  `server/test/sim/mutation-floors.test.ts` and `.json` (claim 5529, the same consent); the `runVerdicts` wiring property in
+  `server/src/server.ts` (claim 5558, consent 2026-11-19); and, after CI's first fast run, the plan doors' inline snapshot in
+  `server/test/overlord-other-lanes-pin.test.ts` (claim 5572, consent 2026-11-19), which records the whole plan read. That
+  run also asked `isPlanKebab` to admit the map's words (`map-words-are-plan-words`: the map's sources and verdict
+  reads are lists in `shared/plan.ts` too, with `read-failed`, never the store's `run-unreadable`) and the WM0 characterization to set `work` aside
+  (`characterization-reads-plan-only`). Review 2795's fix round adds three: `fold-by-the-held-ticket`, a `{ runId }` folds
+  in the auto ticket its run holds (`runs.ticketId`, as `ticketDoneVerdict` compares it), so an auto ticket the orphan arm
+  handed to a wave's next run under its first key folds too (review 2795 F1); `pr-evidence-folds-its-carrier`, a declared
+  ticket done by `{ pr }` evidence folds in the auto ticket of each run the landing line ties to that pull request, read
+  through `evidenceLinksOf` (planRunFacts.ts) and handed in by the route, so the work counts once (review 2795 F2); and
+  `last-move-unmeasured-is-absent`, an item whose run's last move could not be read carries no `lastMoveAt`, as
+  `withLastMoves` leaves it, while null means no move (review 2795 F3). The task note
+  (`docs/superpowers/programs/desktop-polish/wm2.md`) gives each row and what reds it, the mutants and the test runs.
 
 ## Where things stand
 

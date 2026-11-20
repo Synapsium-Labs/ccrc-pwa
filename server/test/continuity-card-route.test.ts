@@ -14,6 +14,7 @@ import { CoordStore } from '../src/coord/store.js';
 import type { DesignationRead, DesignationView } from '../../shared/overlord-designation.js';
 import { MASKED_GET_ROUTES } from '../src/server.js';
 import { registerContinuityRoutes, type ContinuityRouteDeps } from '../src/continuity/routes.js';
+import { hookGate, passGate } from './overlordGateFixture.js';
 import { SECRET_MASK } from '../../shared/api.js';
 import { CARD_NOTHING_LINE } from '../src/continuity/card.js';
 import { ANCHOR_CARD_MAX_CHARS, ANCHOR_PROMPT_MAX_CHARS, CARD_PAGE_CHARS, TOOL_RESULT_CUT_BYTES } from '../../shared/continuity-card.js';
@@ -262,7 +263,7 @@ describe('GET /api/sessions/:id/card: masking, the memo and the serve order (rev
     const a = Fastify({ logger: false });
     registerContinuityRoutes(a, {
       coord, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => time.ports.clock.wall(),
-      attributeReader: async () => ({ ok: true }),
+      attributeReader: async () => ({ ok: true }), gate: hookGate(async () => ({ ok: true })),
       cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false },
       setterStamp: async () => ({ kind: 'unmeasured', reason: 'absent' }),
       ...over,
@@ -468,9 +469,25 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
       if (!m.ok) throw new Error(m.kind);
     };
     const first = async (): Promise<string> => ((await anchor(app!)).json() as { text: string }).text.split('\n')[1]!;
+    // Gates B: the designated session's anchor is served only past the gate, which no fixture here can pass (its incarnation,
+    // `continuity-v1`). These cases test what the card door reads AFTER a pass, so the door is built with a gate that passes;
+    // the gate's own answers (a refusal of the bound id with another incarnation, `unavailable` while the designation is
+    // unmeasured) are held by `overlord-gate-doors.test.ts`.
+    const openPassing = async (): Promise<FastifyInstance> => {
+      coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
+      const a = Fastify({ logger: false });
+      registerContinuityRoutes(a, {
+        coord, mailToken: () => ID_GATE_TOKEN, attribute: async () => ({ ok: true }), wall: () => time.ports.clock.wall(),
+        attributeReader: async () => ({ ok: true }), gate: passGate(),
+        cardRegistry: { childMark: async () => ({ kind: 'none' }), incarnation: async () => ({ kind: 'absent' }), declaredIntent: () => false },
+        setterStamp: async () => ({ kind: 'unmeasured', reason: 'absent' }),
+      });
+      await a.ready();
+      return a;
+    };
 
     it('a restart of the Overlord: the bound session\'s anchor names its overlord generation (term 5, generation 1)', async () => {
-      app = await open();
+      app = await openPassing();
       arm();
       coord!.designationRead = () => boundAs(ID);
       mintOverlord();
@@ -484,7 +501,7 @@ describe('GET /api/sessions/:id/card?part=anchor: the card\'s short part, for th
       expect(await first()).toBe('term none · generation none (this start not yet reported)');
     });
     it('an unmeasured designation reads the generation canary unmeasured, never none', async () => {
-      app = await open();
+      app = await openPassing();
       arm();
       mintOverlord();
       coord!.designationRead = () => ({ kind: 'unmeasured', why: 'x' });

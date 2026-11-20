@@ -249,5 +249,12 @@
   "server/src/coord/planPolicy.ts#parsePlanTicketDone": 1,
   "server/src/coord/planPolicy.ts#ticketDoneVerdict": 1,
   "server/src/coord/planPolicy.ts#landedFactOf": 1,
-  "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1
+  "server/src/coord/workMap.ts#workMapOf": 1,
+  "server/src/coord/workMap.ts#doneEvidenceVerdict": 1,
+  "server/src/coord/workMap.ts#verdictsReadOf": 1,
+  "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1,
+  "server/src/coord/overlordGate.ts#callerStandingOf": 1,
+  "server/src/coord/overlordGate.ts#fenceVerdict": 1,
+  "server/src/coord/overlordGate.ts#counterVerdict": 1,
+  "server/src/coord/overlordGate.ts#overlordGate": 1
 }

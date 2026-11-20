@@ -6,8 +6,8 @@ import { readFileSync } from 'node:fs';
 import { localIO, type FleetIO } from '../src/io.js';
 import { attributionVerdict } from '../src/coord/attribution.js';
 import { incarnationOf } from '../src/coord/delegationLeaseDoor.js';
-import { actorOf } from '../src/accounts/audit.js';
-import { attributionIdentity, isRecordedActor } from '../src/auth/attributionIdentity.js';
+import { actorOf, gateActorOf, isGateActor, isMintedActor } from '../src/accounts/audit.js';
+import { attributionIdentity, consoleSubject, isRecordedActor } from '../src/auth/attributionIdentity.js';
 import { parseSource } from './scan/parse.js';
 import { countingIO, fixtureConfig, type FakeRegistry } from './registryCountingIO.js';
 
@@ -82,12 +82,43 @@ describe('incarnation', () => {
 describe('operator', () => {
   const id = identityOver(countingIO(registry()).io);
   it('a gate-minted actor answers an operator actor with the stored text', () => {
-    const a = id.operator(actorOf('device-a', 'abcdef0123456789'));
+    const a = id.operator(gateActorOf('device-a', 'abcdef0123456789'));
     expect({ ...a }).toEqual({ kind: 'operator', subject: 'device-a abcdef01', issuer: 'account-gate', strength: 'operator' });
   });
   it('a look-alike with the same text throws', () => {
     const fake = { label: 'device-a', idHash8: 'abcdef01', toString: () => 'device-a abcdef01' };
     expect(() => id.operator(fake)).toThrow();
+  });
+  // Gates B, carry of gates A review F4: only the account gate's own mint is an operator, never another actorOf actor.
+  it("an actorOf actor the account gate did not mint throws, the server's own among them", () => {
+    for (const a of [actorOf('ccrc server', ''), actorOf('device-a', 'abcdef0123456789')]) {
+      expect(isMintedActor(a)).toBe(true);
+      expect(isGateActor(a)).toBe(false);
+      expect(() => id.operator(a)).toThrow(/account gate/);
+    }
+  });
+  it('a gate-minted actor is a minted actor too, so every audit writer takes it as before', () => {
+    const g = gateActorOf('device-a', 'abcdef0123456789');
+    expect([isMintedActor(g), isGateActor(g), String(g)]).toEqual([true, true, 'device-a abcdef01']);
+  });
+});
+
+// Gates B, ladder review F4 and F5 (ask 563): one mapping of a console answer to a row's text, over answers the port made.
+describe('consoleSubject', () => {
+  const id = identityOver(countingIO(registry()).io);
+  it('maps each answer the port made: dark, no device, signed in', () => {
+    expect(consoleSubject(id.console(false, 'device-a'))).toBe('flag-off');
+    expect(consoleSubject(id.console(true, null))).toBe('unmeasured');
+    expect(consoleSubject(id.console(true, 'device-a'))).toBe('device:device-a');
+  });
+  it('a hand-built answer of any kind, and an unknown kind, map to null: every caller refuses it', () => {
+    const signed = id.console(true, 'device-a');
+    for (const fake of [{ kind: 'dark' }, { kind: 'device-unmeasured' }, { ...signed }, { kind: 'signed-in', actor: { kind: 'operator', subject: 'device:x', issuer: 'session-cookie', strength: 'operator' } }, { kind: 'other' }, null, 'dark']) {
+      expect(consoleSubject(fake), JSON.stringify(fake)).toBeNull();
+    }
+  });
+  it('each console answer is frozen', () => {
+    for (const c of [id.console(false, null), id.console(true, null), id.console(true, 'device-a')]) expect(Object.isFrozen(c)).toBe(true);
   });
 });
 
@@ -110,7 +141,7 @@ describe('isRecordedActor and the freeze', () => {
   it('is true for each minted actor, false for a structurally equal literal, and each minted actor is frozen', async () => {
     const id = identityOver(countingIO(registry()).io);
     const s = await id.session(SENDER, UUID, 'byUuid');
-    const o = id.operator(actorOf('device-a', 'abcdef0123456789'));
+    const o = id.operator(gateActorOf('device-a', 'abcdef0123456789'));
     const c = id.console(true, 'device-a');
     const minted = [s.ok ? s.actor : null, o, c.kind === 'signed-in' ? c.actor : null];
     for (const a of minted) {

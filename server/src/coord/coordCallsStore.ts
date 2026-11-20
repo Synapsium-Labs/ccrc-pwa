@@ -6,11 +6,12 @@
 //   * `insertCall`        the only INSERT (every column but the four below);
 //   * `markCallSeen`      the only writer of `seenAt`;
 //   * `overturnCallTx`    the only writer of `overturnedAt` and `overturnNote`, inside `correctWithMail`'s transaction;
-//   * `markBlockWoken`    the only writer of `wokenAt`.
+//   * `markBlockWoken`    the only writer of `wokenAt`, alone or inside `wakeBlockTx`'s transaction.
 // The pure rules (`isLiveBlock`, `callIsForOperator`, `callClearedAt`, `blockExpiresAt`) are `coordCalls.ts`'s.
 import type { DatabaseSync } from 'node:sqlite';
 import type { CallWake, CoordCallClass } from '../../../shared/api.js';
 import { CLEARED_WINDOW_MS } from '../../../shared/ledgers.js';
+import { tx } from './tx.js';
 import { blockExpiresAt, callClearedAt, callIsForOperator, isLiveBlock, parseWake, type CallRow, type NewCall } from './coordCalls.js';
 
 const CALL_COLS =
@@ -105,6 +106,24 @@ export function liveBlocksOf(db: DatabaseSync, madeBy: string, now: number): Cal
   ).all(madeBy, now) as unknown as CallRowRaw[]).map(callRowOf).filter((r) => isLiveBlock(r, now));
 }
 
+/** The blocks the wake lanes judge for `madeBy` (P7): every unwoken block whose condition has not lapsed, and every unwoken
+ *  `time:` block however long ago its time passed (it lapses AT its time, and the wake is what it waits for). A lapsed
+ *  condition block is not read: it is no longer a wake, and `coord-ball` may fire for the coordinator again. */
+export function blocksToWake(db: DatabaseSync, madeBy: string, now: number): CallRow[] {
+  return (db.prepare(
+    `SELECT ${CALL_COLS} FROM coordinator_calls WHERE madeBy = ? AND class = 'block' AND wokenAt IS NULL ` +
+    "AND (wakeOn LIKE 'time:%' OR expiresAt > ?) ORDER BY at, id",
+  ).all(madeBy, now) as unknown as CallRowRaw[]).map(callRowOf);
+}
+
+/** Every coordinator with a block the wake lane still judges (the same rows `blocksToWake` reads), run-holding or not. */
+export function blockClaimants(db: DatabaseSync, now: number): string[] {
+  return (db.prepare(
+    "SELECT DISTINCT madeBy FROM coordinator_calls WHERE class = 'block' AND wokenAt IS NULL " +
+    "AND (wakeOn LIKE 'time:%' OR expiresAt > ?) ORDER BY madeBy",
+  ).all(now) as unknown as Array<{ madeBy: string }>).map((r) => r.madeBy);
+}
+
 /** The operator's Seen. THE ONLY WRITER of `seenAt`. */
 export function markCallSeen(db: DatabaseSync, id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' {
   const row = callById(db, id);
@@ -125,4 +144,15 @@ export function overturnCallTx(db: DatabaseSync, id: number, note: string, now: 
 export function markBlockWoken(db: DatabaseSync, id: number, now: number): boolean {
   const r = db.prepare("UPDATE coordinator_calls SET wokenAt = ? WHERE id = ? AND class = 'block' AND wokenAt IS NULL").run(now, id);
   return Number(r.changes) === 1;
+}
+
+/** A block's wake and what it sends, in ONE transaction (D-8126 A6, review 2817 R2): `markBlockWoken`'s compare-and-set,
+ *  then `onWoken` (the wake mail's insert, which opens no transaction of its own) only when this call won it. A throw in
+ *  `onWoken` rolls the mark back, so the row stays unwoken for the next pass. True when this call woke the row. */
+export function wakeBlockTx(db: DatabaseSync, id: number, now: number, onWoken: () => void): boolean {
+  return tx(db, () => {
+    if (!markBlockWoken(db, id, now)) return false;
+    onWoken();
+    return true;
+  });
 }

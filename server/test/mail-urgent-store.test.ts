@@ -43,7 +43,8 @@ describe('mail.urgentAs (plan Task 2.2)', () => {
 
   it('a database at the previous version gains the column, null on every old row, and the partial index', () => {
     expect(SLOT, 'no MIGRATIONS entry adds mail.urgentAs').toBeGreaterThan(0);
-    expect(SLOT).toBe(COORD_SCHEMA_VERSION);
+    // Its own slot, pinned by number as plan-ticket-done pins 106: a later migration follows it (Overlord W1 gates B took 109).
+    expect(SLOT).toBe(108);
     const p = dbPathIn(mkTmp('ccrc-urgent-mig-'));
     mkdirSync(path.dirname(p), { recursive: true });
     const raw = new DatabaseSync(p);

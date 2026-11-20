@@ -13,7 +13,7 @@ import { CoordStore } from '../src/coord/store.js';
 import {
   bindPendingGeneration, designatePending, goLive, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import type { ChildMark } from '../../shared/api.js';
 import { testDeps } from './helpers.js';
@@ -73,7 +73,7 @@ const writeUrgent = (c: CoordStore, fromId: string, toId: string, runId: number 
 const designateOverlord = (r: Rig): void => {
   const journal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
   const operator = attributionIdentity({ attribute: async () => ({ ok: true }),
-    incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }).operator(actorOf('operator-a', '0123456789abcdef'));
+    incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) }).operator(gateActorOf('operator-a', '0123456789abcdef'));
   const gen = '11111111-2222-3333-4444-555555555555';
   expect(designatePending(r.coord.db, journal, { sessionId: OVERLORD, deadlineAt: NOW + 60_000, model: 'opus',
     accountPools: { pools: ['pool-a'], untagged: false }, actor: operator, at: NOW, opKey: 'op-live' }).ok).toBe(true);
