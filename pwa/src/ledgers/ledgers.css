@@ -506,3 +506,96 @@
 .wl-overturn-option[data-chosen='true'] { font-weight: 600; }
 .wl-overturn-note { width: 100%; box-sizing: border-box; min-width: 0; min-height: calc(var(--tap-min) * 2); }
 .wl-overturn-error { margin: 0; font-size: var(--fs-meta); border-left: 2px solid var(--status-dead); padding-left: var(--sp-2); overflow-wrap: anywhere; }
+
+/* The Work card (`WorkCard`; programme work map WM3, D-8806; spec 2026-11-16 §5). Tokens only: the card paints its own ground
+   (`--bg-surface` under `--ink-primary`, as Goals does) and each row, chip and checkpoint states its own ground beside its ink,
+   so the contrast audit measures every pair in every palette through this stylesheet. A status is a WORD in the row's first
+   cell, and the stripe on the row's left edge and the bar's segments are non-text marks that repeat it, so no status is read
+   out of colour alone. Layout follows the plan's table, by the CARD's own width (a container query, so the page may put it in
+   either column): one column up to a phone, where a row stacks status, title with its tag, then facts and the strip wraps; one
+   row from the card's wide layout, where the tag wraps under the title before the facts do. Every width holds with no
+   horizontal scroll: the tracks are `minmax(0, 1fr)` and the words wrap anywhere. */
+.wk-card { container: work / inline-size; display: grid; gap: var(--sp-2); min-width: 0; overflow-wrap: anywhere; background: var(--bg-surface); color: var(--ink-primary); }
+.wk-card .wk-heading { margin: 0; font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--ink-secondary); }
+.wk-card .wk-headline { margin: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); overflow-wrap: anywhere; }
+.wk-card .wk-outstanding,
+.wk-card .wk-source,
+.wk-card .wk-note,
+.wk-card .wk-before { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wk-card .wk-unreadable { color: var(--status-dead-text); background: var(--status-dead-tint-solid); padding: var(--sp-1) var(--sp-2); border-radius: var(--r-md); border-left: 2px solid var(--status-dead); }
+
+/* The bar: one segment per outstanding group, widths by count. */
+.wk-card .wk-bar { display: flex; gap: 2px; height: 8px; border-radius: var(--r-full); overflow: hidden; background: var(--bg-raised); }
+.wk-card .wk-seg { flex-basis: 0; min-width: 4px; background: var(--edge-strong); }
+.wk-card .wk-seg[data-group='done'] { background: var(--status-done); }
+.wk-card .wk-seg[data-group='in-progress'] { background: var(--status-busy); }
+.wk-card .wk-seg[data-group='waiting-on-you'] { background: var(--status-attention); }
+.wk-card .wk-seg[data-group='held'],
+.wk-card .wk-seg[data-group='left-open'] { background: var(--status-dead); }
+
+/* The epic strip and the open epic's checkpoints. */
+.wk-card .wk-strip { display: flex; flex-wrap: wrap; gap: var(--sp-1); list-style: none; margin: 0; padding: 0; }
+.wk-card .wk-chip { height: auto; min-height: var(--tap-min); flex-wrap: wrap; justify-content: flex-start; gap: 2px var(--sp-2); text-align: left; overflow-wrap: anywhere; border: 1px solid var(--edge-subtle); background: var(--bg-raised); color: var(--ink-primary); }
+.wk-card .wk-chip[aria-pressed='true'] { background: var(--accent-tint); color: var(--ink-primary); border-color: var(--accent); font-weight: var(--weight-medium); }
+.wk-card .wk-chip-figures { font: var(--fs-xs) var(--family-mono); color: inherit; }
+.wk-card .wk-cps { display: grid; gap: var(--sp-1); padding: var(--sp-2); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-primary); min-width: 0; }
+.wk-card .wk-cp-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); }
+.wk-card .wk-cp { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); align-items: baseline; min-width: 0; }
+.wk-card .wk-cp-title { overflow-wrap: anywhere; }
+.wk-card .wk-cp-facts { font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wk-card .wk-cp-links { display: flex; flex-wrap: wrap; gap: var(--sp-1) var(--sp-3); margin: 0; font-size: var(--fs-meta); }
+
+/* A phase, an epic group and the not-in-a-phase group: a heading line, its summary, its rows. */
+.wk-card .wk-phase,
+.wk-card .wk-nophase { display: grid; gap: var(--sp-1); min-width: 0; border-top: 1px solid var(--edge-subtle); padding-top: var(--sp-2); }
+.wk-card .wk-phase-head { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); align-items: baseline; margin: 0; font-size: var(--fs-base); font-weight: var(--weight-medium); color: var(--ink-primary); cursor: default; }
+.wk-card summary.wk-phase-head { cursor: pointer; min-height: var(--tap-min); align-items: center; }
+.wk-card .wk-phase-title { overflow-wrap: anywhere; }
+.wk-card .wk-phase-line { font: var(--fs-xs) var(--family-mono); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wk-card .wk-summary,
+.wk-card .wk-whole { margin: 0; font-size: var(--fs-meta); color: var(--ink-secondary); overflow-wrap: anywhere; }
+
+/* A ticket row. Phone: status, title with its tag, facts, stacked. Wide card: the three on one row, the tag wrapping under the
+   title before the facts wrap. */
+.wk-card .wk-rows { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.wk-card .wk-row { display: grid; grid-template-columns: minmax(0, 1fr); gap: 2px var(--sp-2); min-width: 0; padding: var(--sp-1) var(--sp-2); border: 1px solid var(--edge-subtle); border-left: 4px solid var(--edge-strong); border-radius: var(--r-md); background: var(--bg-raised); color: var(--ink-primary); }
+.wk-card .wk-row[data-status='done'] { border-left-color: var(--status-done); }
+.wk-card .wk-row[data-status='working'],
+.wk-card .wk-row[data-status='in-review'],
+.wk-card .wk-row[data-status='merging'],
+.wk-card .wk-row[data-status='queued'],
+.wk-card .wk-row[data-status='state-unknown'] { border-left-color: var(--status-busy); }
+.wk-card .wk-row[data-status='waiting-on-you'] { border-left-color: var(--status-attention); }
+.wk-card .wk-row[data-status='stuck'],
+.wk-card .wk-row[data-status='blocked'],
+.wk-card .wk-row[data-status='done-unverified'],
+.wk-card .wk-row[data-status='failed'],
+.wk-card .wk-row[data-status='left-open'] { border-left-color: var(--status-dead); }
+.wk-card .wk-status { font: var(--weight-medium) var(--fs-xs) / 1.6 var(--family-mono); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wk-card .wk-what { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); align-items: baseline; min-width: 0; overflow-wrap: anywhere; }
+.wk-card .wk-ticket-title { min-width: 0; overflow-wrap: anywhere; color: var(--ink-primary); }
+.wk-card .wk-epic { font: var(--fs-2xs) / 1.6 var(--family-mono); padding: 0 var(--sp-1); border-radius: var(--r-sm); background: var(--bg-surface); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wk-card .wk-facts { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); min-width: 0; font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
+.wk-card .wk-fact { min-width: 0; overflow-wrap: anywhere; }
+@container work (min-width: 34rem) {
+  .wk-card .wk-row { grid-template-columns: 7.5rem minmax(0, 1fr) minmax(0, 14rem); align-items: start; }
+  .wk-card .wk-facts { justify-content: flex-end; text-align: right; }
+}
+
+/* A folded group: done tickets under a phase, the Done when line. The summary is a tap target at the floor. */
+.wk-card .wk-done > summary,
+.wk-card .wk-donewhen > summary { display: flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); font-size: var(--fs-meta); color: var(--ink-secondary); cursor: pointer; }
+.wk-card .wk-done,
+.wk-card .wk-donewhen { min-width: 0; }
+/* A folded phase is a <details>: a grid container draws the closed body's gap, so it stays a block and spaces its children by hand. */
+.wk-card details.wk-phase { display: block; }
+.wk-card details.wk-phase > * + * { margin-top: var(--sp-1); }
+/* The fold's chevron: a summary drawn as a flex row loses the browser's marker, so it is drawn here, in the summary's own ink. */
+.wk-card summary { list-style: none; }
+.wk-card summary::-webkit-details-marker { display: none; }
+.wk-card summary::before { content: '\25B8'; flex: none; font-size: var(--fs-xs); }
+.wk-card details[open] > summary::before { content: '\25BE'; }
+.wk-card .wk-done > .wk-rows { padding-top: var(--sp-1); }
+.wk-card .wk-donewhen-list { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); font-size: var(--fs-meta); color: var(--ink-primary); }
+.wk-card .wk-proved { font: var(--fs-xs) var(--family-mono); color: var(--ink-secondary); }
+.wk-card .wk-initiatives { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); font-size: var(--fs-meta); color: var(--ink-secondary); }
