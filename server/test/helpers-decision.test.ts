@@ -1,4 +1,4 @@
-// Session helpers H1a: the pure decision of an Agent helper's state (spec 2026-11-19 §3.2, Figure 2), the
+// Session helpers H1a (D-8829): the pure decision of an Agent helper's state (spec 2026-11-19 §3.2, Figure 2), the
 // exclusion of workflow agents from the Agent rows, the keep of a finished helper, the frame gate, and every bound
 // of the Agent arm (review 2900 F9). Pure: every input is a value, no fs, no clock, no timer.
 //
@@ -76,6 +76,13 @@ const run = (s: Setup = {}): AgentArm =>
   });
 const stateOf = (arm: AgentArm, id: string): AgentHelperState | undefined => arm.agents.find((a) => a.id === id)?.state;
 const row = (arm: AgentArm, id: string) => arm.agents.find((a) => a.id === id)!;
+
+describe('the bounds, pinned to the spec\'s numbers', () => {
+  it('each is the value the spec and the review rulings name', () => {
+    expect([HELPER_LISTED_MAX, HELPER_NONFINAL_MAX, HELPER_KEPT_MAX, HELPER_FINISHED_KEEP_MS]).toEqual([32, 32, 20, 600_000]);
+    expect([HELPER_DESCRIPTION_MAX, HELPER_LABEL_MAX, HELPER_SUMMARY_MAX_BYTES, HELPER_FACTS_MAX, WORKFLOW_KEPT_AGENTS_MAX]).toEqual([200, 64, 200, 256, 40]);
+  });
+});
 
 describe('the states and their words (shared, L0)', () => {
   it('the runtime list derives from the type: the nine states, in one place', () => {
@@ -174,6 +181,20 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       const arm = run(base({ roster: { kind: 'unusable', why } }));
       expect(stateOf(arm, A)).toBe('unmeasured');
       expect(arm.unmeasured).toEqual(why);
+    });
+  });
+
+  describe('an unusable roster decides nothing else (it is asked before any claim a roster could make)', () => {
+    it('a launch result with a time, an unusable roster: left out, never "launched" and never an error', () => {
+      const arm = run(base({ roster: { kind: 'unusable', why: { why: 'absent' } }, facts: { [A]: facts({ launch: asyncLaunch(NOW) }) } }));
+      expect(stateOf(arm, A)).toBe('unmeasured');
+    });
+    it('a drop seen earlier is not repeated on a reading whose roster cannot be used', () => {
+      const one = run(base({ roster: usable([A, 'a2']), metas: { [A]: meta(), a2: meta() } }));
+      const two = run({ roster: usable(['a2']), metas: { [A]: meta(), a2: meta() }, memory: one.memory });
+      expect(stateOf(two, A)).toBe('unlisted');
+      const three = run({ roster: { kind: 'unusable', why: { why: 'unreadable' } }, metas: { [A]: meta(), a2: meta() }, memory: two.memory });
+      expect(stateOf(three, A)).toBe('unmeasured');
     });
   });
 
@@ -335,6 +356,22 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       expect(stateOf(after, 'a1')).toBe('unmeasured');
     });
 
+    it('a helper the reader never saw listed is not "dropped" by a roster that merely lacks it', () => {
+      const one = read(['a1', 'a2']);
+      const two = later(one, ['a2'], ['a1', 'a2', 'a3']);
+      expect(stateOf(two, 'a1')).toBe('unlisted');
+      expect(stateOf(two, 'a3')).toBe('unmeasured');
+      expect(two.unmeasured).toEqual({ why: 'unseen', helpers: 1 });
+    });
+
+    it('a dropped id that came back and then vanished with no survivor is not called dropped on the strength of the old drop', () => {
+      const one = read(['a1', 'a2']);
+      const two = later(one, ['a2'], ['a1', 'a2']);
+      const back = later(two, ['a1', 'a2'], ['a1', 'a2']);
+      const reset = later(back, ['z1'], ['a1', 'a2', 'z1']);
+      expect(stateOf(reset, 'a1')).toBe('unmeasured');
+    });
+
     it('a roster entry with no id counts toward room and never matches a helper', () => {
       const one = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a1', 'a2', null]) });
       const two = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a2', null]), memory: one.memory });
@@ -377,6 +414,12 @@ describe('the exclusion of workflow agents from the Agent rows', () => {
 
   it('a notification alone (a task id no Agent launch named, such as a workflow\'s) never makes a row', () => {
     expect(run({ facts: { w9: facts({ end: end('done', NOW - MIN) }) } }).agents).toEqual([]);
+  });
+
+  it('known counts every Agent helper id, including a finished one that has aged out of the keep', () => {
+    const arm = run({ metas: { a1: meta(), a2: meta() }, facts: { a1: facts({ end: end('done', NOW - 30 * MIN) }) }, roster: usable(['a2']) });
+    expect(arm.agents.map((a) => a.id)).toEqual(['a2']);
+    expect(arm.known).toBe(2);
   });
 
   it('an excluded id still counts as a listing, so it is room taken on the roster', () => {
@@ -523,6 +566,14 @@ describe('the order of the rows', () => {
   });
 });
 
+describe('the order of rows, continued', () => {
+  it('a state left out sits above a row that is no longer listed, and launched above both', () => {
+    const one = run({ roster: usable(['a1', 'a2']), metas: { a1: meta(), a2: meta(), a3: meta(), a4: meta() } });
+    const two = run({ roster: usable(['a2']), metas: { a1: meta(), a2: meta(), a3: meta(), a4: meta() }, memory: one.memory, facts: { a4: facts({ launch: asyncLaunch(ROSTER_AT + 1) }) } });
+    expect(two.agents.map((a) => [a.id, a.state])).toEqual([['a2', 'running'], ['a4', 'launched'], ['a3', 'unmeasured'], ['a1', 'unlisted']]);
+  });
+});
+
 describe('every bound of the Agent arm (review 2900 F9)', () => {
   it('the description is cut to HELPER_DESCRIPTION_MAX characters', () => {
     const r = row(run({ roster: usable(['a1']), metas: { a1: meta({ description: 'd'.repeat(HELPER_DESCRIPTION_MAX + 500) }) } }), 'a1');
@@ -531,6 +582,10 @@ describe('every bound of the Agent arm (review 2900 F9)', () => {
   it('a description at the cap is whole', () => {
     const r = row(run({ roster: usable(['a1']), metas: { a1: meta({ description: 'd'.repeat(HELPER_DESCRIPTION_MAX) }) } }), 'a1');
     expect(r.description!.length).toBe(HELPER_DESCRIPTION_MAX);
+  });
+  it('a description cut inside a surrogate pair drops the half pair rather than keep half a character', () => {
+    const r = row(run({ roster: usable(['a1']), metas: { a1: meta({ description: 'x'.repeat(HELPER_DESCRIPTION_MAX - 1) + '😀' }) } }), 'a1');
+    expect(r.description).toBe('x'.repeat(HELPER_DESCRIPTION_MAX - 1));
   });
   it('the agent type, model and effort are each cut to HELPER_LABEL_MAX characters', () => {
     const long = 'x'.repeat(HELPER_LABEL_MAX + 40);
@@ -554,6 +609,36 @@ describe('every bound of the Agent arm (review 2900 F9)', () => {
     expect(running.map((a) => a.id)).not.toContain('r00');
     expect(running.map((a) => a.id)).toContain(`r${n - 1}`);
     expect(arm.omitted).toBe(8);
+  });
+
+  it('an unknown start is the OLDEST: over the cap it is the first evicted', () => {
+    const ids = Array.from({ length: HELPER_LISTED_MAX + 1 }, (_, i) => `r${String(i).padStart(2, '0')}`);
+    const arm = run({
+      roster: { kind: 'usable', at: ROSTER_AT, entries: ids.map((id, i) => ({ id, name: 'Explore', startedAt: i === 5 ? null : NOW - 500_000 + i })) },
+      metas: Object.fromEntries(ids.map((i) => [i, meta()])),
+    });
+    expect(arm.agents.map((a) => a.id)).not.toContain('r05');
+    expect(arm.agents.map((a) => a.id)).toContain('r00');
+  });
+
+  it('the memory a reading hands back is bounded: the drops and the no-end rows remembered stay within HELPER_FACTS_MAX', () => {
+    let memory = emptyHelperMemory();
+    for (let round = 0; round < 15; round++) {
+      const ids = Array.from({ length: 20 }, (_, i) => `n${round}x${i}`);
+      memory = run({
+        metas: Object.fromEntries(ids.map((i) => [i, meta()])),
+        facts: Object.fromEntries(ids.map((i) => [i, facts({ end: end('done', null) })])),
+        memory,
+      }).memory;
+    }
+    expect(memory.noEndShown.size).toBe(HELPER_FACTS_MAX);
+    // the drops: each reading lists a new id and drops the last, with one survivor to witness it
+    let drops = emptyHelperMemory();
+    const all = Array.from({ length: HELPER_FACTS_MAX + 40 }, (_, i) => `d${i}`);
+    const metas = Object.fromEntries(all.map((i) => [i, meta()]));
+    drops = run({ metas, roster: usable(['keep', 'd0']), memory: drops }).memory;
+    for (let i = 1; i < all.length; i++) drops = run({ metas, roster: usable(['keep', `d${i}`]), memory: drops }).memory;
+    expect(drops.dropped.size).toBe(HELPER_FACTS_MAX);
   });
 
   it('non-final rows that are not listed (launched, no longer listed, session ended, state left out): at most HELPER_NONFINAL_MAX together', () => {
@@ -660,7 +745,7 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     expect(m.get('a1')).toEqual({ launch: { at: NOW - MIN, model: 'm', async: true, durationMs: null }, end: null });
   });
   it('a completed launch is a foreground launch AND its end', () => {
-    const m = foldHelperFacts(new Map(), [fact({ source: 'launch', status: 'completed', at: NOW - MIN, durationMs: 5, report: 'rep' })]);
+    const m = foldHelperFacts(new Map(), [fact({ source: 'launch', status: 'completed', at: NOW - MIN, durationMs: 5, summary: null, report: 'rep' })]);
     expect(m.get('a1')).toEqual({
       launch: { at: NOW - MIN, model: null, async: false, durationMs: 5 },
       end: { outcome: 'done', at: NOW - MIN, summary: null, hasReport: true, from: 'launch' },
@@ -694,6 +779,28 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     const untimed = fact({ status: 'completed', at: null });
     expect(foldHelperFacts(new Map(), [timed, untimed]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
     expect(foldHelperFacts(new Map(), [untimed, timed]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
+  });
+  it('the least recently touched id is evicted first: a fact for an old id keeps it', () => {
+    const many: HelperFact[] = Array.from({ length: HELPER_FACTS_MAX }, (_, i) => fact({ id: `t${i}` }));
+    const full = foldHelperFacts(new Map(), many);
+    const touched = foldHelperFacts(full, [fact({ id: 't0' }), fact({ id: 'extra' })]);
+    expect(touched.size).toBe(HELPER_FACTS_MAX);
+    expect(touched.has('t0')).toBe(true);
+    expect(touched.has('t1')).toBe(false);
+  });
+  it('two launch results of one id keep the earlier time, whatever the order read, and one with a time beats one with none', () => {
+    const early = fact({ source: 'launch', status: 'async_launched', at: NOW - 5 * MIN, model: 'm1' });
+    const late = fact({ source: 'launch', status: 'async_launched', at: NOW - MIN, model: 'm2' });
+    const untimed = fact({ source: 'launch', status: 'async_launched', at: null, model: 'm3' });
+    for (const order of [[early, late], [late, early]]) expect(foldHelperFacts(new Map(), order).get('a1')!.launch).toMatchObject({ at: NOW - 5 * MIN });
+    for (const order of [[untimed, early], [early, untimed]]) expect(foldHelperFacts(new Map(), order).get('a1')!.launch).toMatchObject({ at: NOW - 5 * MIN });
+    expect(foldHelperFacts(new Map(), [untimed, fact({ source: 'launch', status: 'async_launched', at: null, model: 'm4' })]).get('a1')!.launch).toMatchObject({ model: 'm3' });
+  });
+  it('a notification alone is no launch: the id has an end and no launch, so it is never an Agent row', () => {
+    expect(foldHelperFacts(new Map(), [fact({})]).get('a1')!.launch).toBeNull();
+  });
+  it('an async launch alone has no end', () => {
+    expect(foldHelperFacts(new Map(), [fact({ source: 'launch', status: 'async_launched', at: NOW })]).get('a1')!.end).toBeNull();
   });
   it('the input map is not mutated', () => {
     const prev = new Map<string, HelperIdFacts>();

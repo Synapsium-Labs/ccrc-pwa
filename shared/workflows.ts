@@ -89,3 +89,100 @@ const WORKFLOW_CONTROL_ACT_MAP: Record<WorkflowControlAct, true> = {
 };
 export const WORKFLOW_CONTROL_ACTS: readonly WorkflowControlAct[] =
   Object.keys(WORKFLOW_CONTROL_ACT_MAP) as WorkflowControlAct[];
+
+// ---------------------------------------------------------------------------
+// Session helpers (desktop polish C49, H1a, D-8829): the Agent arm of the same
+// frame. An Agent helper's state is DECIDED in `server/src/workflows/model.ts`
+// (`decideAgentHelpers`, spec 2026-11-19-session-helpers-design §3.2, Figure 2)
+// from measured facts only; these are the types and bounds that decision and
+// the wire share. Wire types live HERE, not in `shared/api.ts`, which is near
+// its growth cap. Nothing is ever inferred to be running, and dropping off the
+// hook's roster is never called an end.
+
+/** Where an Agent helper stands. `done`, `failed`, `stopped` and `finished` are
+ *  final; `unlisted` ("no longer listed") and `gone` ("session ended") claim no
+ *  end and never enter the finished fold; `unmeasured` is the state LEFT OUT:
+ *  the row says nothing about it and the frame's `agentsUnmeasured` says why,
+ *  once. */
+export type AgentHelperState =
+  | 'launched' | 'running' | 'done' | 'failed' | 'stopped' | 'finished' | 'unlisted' | 'gone' | 'unmeasured';
+
+/** The runtime list derives from this record, which also says which states are final (D-6048's idiom). */
+const AGENT_HELPER_STATE_FINAL: Record<AgentHelperState, boolean> = {
+  launched: false, running: false, done: true, failed: true, stopped: true, finished: true, unlisted: false, gone: false, unmeasured: false,
+};
+export const AGENT_HELPER_STATES: readonly AgentHelperState[] = Object.keys(AGENT_HELPER_STATE_FINAL) as AgentHelperState[];
+export const isFinalHelperState = (s: AgentHelperState): boolean => AGENT_HELPER_STATE_FINAL[s];
+
+/** The words a row says. `unmeasured` has none: a state left out is never drawn. */
+export const AGENT_HELPER_STATE_WORDS: Record<AgentHelperState, string | null> = {
+  launched: 'launched', running: 'running', done: 'done', failed: 'failed', stopped: 'stopped', finished: 'finished',
+  unlisted: 'no longer listed', gone: 'session ended', unmeasured: null,
+};
+
+/** One Agent helper's row. EVERY NULL MEANS "NOT MEASURED", as in `WorkflowView`. */
+export interface AgentHelperView {
+  /** Claude Code's agent id (`[A-Za-z0-9_-]{1,64}`). */
+  id: string;
+  /** The launch's one line, from the meta, cut to `HELPER_DESCRIPTION_MAX`. */
+  description: string | null;
+  /** `subagent · <agentType>`: the meta's `agentType`, cut to `HELPER_LABEL_MAX`. */
+  agentType: string | null;
+  /** The meta's model, else the launch result's resolved one. */
+  model: string | null;
+  /** A missing effort is null, never guessed. */
+  effort: string | null;
+  state: AgentHelperState;
+  /** The launch result's time, else the roster's `startedAt`; epoch ms. */
+  startedAt: number | null;
+  /** Only for a final state, from the end source's own time (Table 6); null while it is not final, and for a final row whose time cannot be read. */
+  endedAt: number | null;
+  /** The helper transcript's last line's time, epoch ms. */
+  lastActivityAt: number | null;
+  tokens: number | null;
+  /** The notification's summary: one line of at most `HELPER_SUMMARY_MAX_BYTES` bytes. */
+  summary: string | null;
+  /** A report exists for the row to open (it travels on request, never in the frame). */
+  hasReport: boolean;
+}
+
+/** Why the live state of Agent helpers is not known, read from the stream's raw hook read. Sent only while a known helper's state was left out. */
+export type HelpersUnmeasured =
+  | { why: 'stale'; hookAgeMs: number }
+  | { why: 'absent' }
+  | { why: 'unreadable' }   // a failed read, or a malformed file
+  | { why: 'foreign' }      // the state of another run of this session
+  | { why: 'unregistered' } // the session's identity is not registered yet
+  | { why: 'unseen'; helpers: number }; // drops this reader did not see
+
+/** A finished Agent helper or workflow stays this long after its end time, folded (the coordinator's ruling on review 2861, F5). */
+export const HELPER_FINISHED_KEEP_MS = 600_000;
+/** The most finished rows kept per arm, the newest. */
+export const HELPER_KEPT_MAX = 20;
+
+// THE BOUNDS OF THE AGENT ARM (review 2900 F9). The frame's Agent arm is at most
+// HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX = 84 rows, each under 1 KiB.
+/** The hook roster's own cap: the most `running` rows. */
+export const HELPER_LISTED_MAX = 32;
+/** The most rows that are not final and not listed (launched, no longer listed, session ended, state left out) together. */
+export const HELPER_NONFINAL_MAX = 32;
+/** The description's length, in characters. */
+export const HELPER_DESCRIPTION_MAX = 200;
+/** The agent type's, model's and effort's length, in characters. */
+export const HELPER_LABEL_MAX = 64;
+/** A summary is one line of at most this many bytes. */
+export const HELPER_SUMMARY_MAX_BYTES = 200;
+/** A report is at most this many bytes, and a cut one says so. */
+export const HELPER_REPORT_MAX_BYTES = 16_384;
+/** The most ids whose launch results and notifications the fold remembers, the oldest evicted first. */
+export const HELPER_FACTS_MAX = 256;
+/** A finished (kept) workflow carries at most this many agents, failed and running first. */
+export const WORKFLOW_KEPT_AGENTS_MAX = 40;
+
+/** What Claude Code names a workflow's agents, in the hook roster's `name` and in their meta's `agentType`: never an Agent row. */
+export const WORKFLOW_AGENT_TYPE = 'workflow-subagent';
+
+/** An agent id, as the hook's own rule has it (`[A-Za-z0-9_-]`, 1 to 64 characters). Defined once: the fact parser and the
+ *  decision both read it, and an id that fails it is never a row. */
+const HELPER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
+export const isHelperId = (v: unknown): v is string => typeof v === 'string' && HELPER_ID_RE.test(v);

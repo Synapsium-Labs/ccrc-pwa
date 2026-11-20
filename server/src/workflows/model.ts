@@ -19,13 +19,29 @@
 // where the disk allows, and where it does not the field is null and the row
 // says so (`shared/workflows.ts`).
 import {
+  HELPER_DESCRIPTION_MAX,
+  HELPER_FACTS_MAX,
+  HELPER_FINISHED_KEEP_MS,
+  HELPER_KEPT_MAX,
+  HELPER_LABEL_MAX,
+  HELPER_LISTED_MAX,
+  HELPER_NONFINAL_MAX,
+  HELPER_SUMMARY_MAX_BYTES,
   WORKFLOW_AGENTS_MAX,
+  WORKFLOW_AGENT_TYPE,
   WORKFLOW_EVICT_MS,
+  WORKFLOW_KEPT_AGENTS_MAX,
+  isFinalHelperState,
+  isHelperId,
+  type AgentHelperState,
+  type AgentHelperView,
+  type HelpersUnmeasured,
   type WorkflowAgentState,
   type WorkflowAgentView,
   type WorkflowState,
   type WorkflowView,
 } from '../../../shared/workflows.js';
+import type { HelperFact } from '../transcript/parse.js';
 
 /** Claude Code's run id, as measured: `wf_` + 8 hex + `-` + 3 hex. Anything
  *  else in the runs directory is not a run. Defined once in `shared/workflow-ids.mjs`
@@ -278,13 +294,16 @@ const AGENT_STATE: Record<KeyState['last'], WorkflowAgentState> = { started: 'ru
 
 /** The wire cut: every running and failed agent first (the ones a reader is
  *  looking for), then the newest done; shown back in schedule order. */
-function cutAgents<T extends { seq: number; view: WorkflowAgentView }>(all: T[]): { agents: WorkflowAgentView[]; omitted: number } {
+function cutAgents<T extends { seq: number; view: WorkflowAgentView }>(
+  all: T[],
+  max: number = WORKFLOW_AGENTS_MAX,
+): { agents: WorkflowAgentView[]; omitted: number } {
   const ordered = [...all].sort((x, y) => x.seq - y.seq);
-  if (ordered.length <= WORKFLOW_AGENTS_MAX) return { agents: ordered.map((a) => a.view), omitted: 0 };
+  if (ordered.length <= max) return { agents: ordered.map((a) => a.view), omitted: 0 };
   const urgent = ordered.filter((a) => a.view.state !== 'done');
   const done = ordered.filter((a) => a.view.state === 'done');
-  const keep = new Set(urgent.slice(-WORKFLOW_AGENTS_MAX));
-  for (let i = done.length - 1; i >= 0 && keep.size < WORKFLOW_AGENTS_MAX; i--) keep.add(done[i]!);
+  const keep = new Set(urgent.slice(-max));
+  for (let i = done.length - 1; i >= 0 && keep.size < max; i--) keep.add(done[i]!);
   const agents = ordered.filter((a) => keep.has(a)).map((a) => a.view);
   return { agents, omitted: ordered.length - agents.length };
 }
@@ -478,4 +497,320 @@ export function workflowsFrame(
   if (read.kind === 'read') return { workflows: read.workflows, unreadable: false };
   if (read.kind === 'absent' && !hookSaysWorkflow) return { workflows: [], unreadable: false };
   return { workflows: [...lastRead], unreadable: true };
+}
+
+/**
+ * Whether the frame is due (D-5560, moved here by H1a so the delivery code decides nothing). "Never had": the session has
+ * no workflows directory, no known Agent helper id, and no frame was ever sent — a session that never ran a helper gets
+ * no frame. An absent read made `unreadable` by the hook's word, an unreadable read, a read and a known helper are all
+ * due, and so is any frame after one was sent (its rows must be cleared). Whether the JSON changed is delivery's.
+ */
+export function frameDue(a: {
+  workflows: WorkflowsRead['kind'];
+  unreadable: boolean;
+  /** `AgentArm.known` of this reading. */
+  knownHelpers: number;
+  sentBefore: boolean;
+}): boolean {
+  const neverHad = a.workflows === 'absent' && !a.unreadable && a.knownHelpers === 0;
+  return !(neverHad && !a.sentBefore);
+}
+
+// ---------------------------------------------------------------------------
+// Agent helpers (desktop polish C49, H1a, D-8829; spec 2026-11-19-session-helpers-design §3.2, Figure 2).
+//
+// An Agent helper's state is decided HERE, from measured facts only, strongest first:
+//   a final task notification or a completed launch result, the meta's `finished` marker, a session process that is
+//   gone, a roster that cannot be used (state left out), a roster that lists the id (running), a roster read before the
+//   launch result (launched), a drop this reader SAW (no longer listed), else the state is left out.
+// Nothing is ever inferred to be running, and dropping off the roster is never called an end. No fs, no clock: every
+// time (`now`, the roster's read time) is an input.
+
+/** What a workflow's agents are called on the roster: no Agent row. */
+export const isWorkflowAgentName = (name: string): boolean => name === WORKFLOW_AGENT_TYPE;
+
+/** The facts of one id, folded from the transcript's `HelperFact`s. `launch` is the Agent launch result's; `end` is the
+ *  final task notification, or a foreground launch's completed result (`from`). */
+export interface HelperIdFacts {
+  launch: { at: number | null; model: string | null; async: boolean; durationMs: number | null } | null;
+  end: { outcome: 'done' | 'failed' | 'stopped'; at: number | null; summary: string | null; hasReport: boolean; from: 'notification' | 'launch' } | null;
+}
+
+const HELPER_OUTCOME = { completed: 'done', failed: 'failed', killed: 'stopped', stopped: 'stopped' } as const;
+type HelperEnd = NonNullable<HelperIdFacts['end']>;
+type HelperLaunch = NonNullable<HelperIdFacts['launch']>;
+
+/** The later of two ends, by their own times; an end with a time beats one with none, and a tie goes to the newer read. */
+function laterEnd(a: HelperEnd | null, b: HelperEnd): HelperEnd {
+  if (a === null) return b;
+  if (a.at === null) return b;
+  if (b.at === null) return a;
+  return b.at >= a.at ? b : a;
+}
+/** The earlier of two launches, one with a time beating one with none. */
+function earlierLaunch(a: HelperLaunch | null, b: HelperLaunch): HelperLaunch {
+  if (a === null) return b;
+  if (a.at === null) return b.at === null ? a : b;
+  return b.at !== null && b.at < a.at ? b : a;
+}
+
+/**
+ * Fold `facts` into a copy of `prev`, per id, in either order of arrival. At most `HELPER_FACTS_MAX` ids are kept, the
+ * least recently touched evicted first (a notification for a task that is no Agent helper — a workflow's, a shell's — is a
+ * fact too, and nothing here can tell it from one). `prev` is never mutated.
+ */
+export function foldHelperFacts(prev: ReadonlyMap<string, HelperIdFacts>, facts: readonly HelperFact[]): Map<string, HelperIdFacts> {
+  const out = new Map(prev);
+  for (const f of facts) {
+    const cur = out.get(f.id) ?? { launch: null, end: null };
+    let { launch, end } = cur;
+    if (f.source === 'launch') {
+      launch = earlierLaunch(launch, { at: f.at, model: f.model, async: f.status === 'async_launched', durationMs: f.durationMs });
+    }
+    if (f.status !== 'async_launched') {
+      end = laterEnd(end, {
+        outcome: HELPER_OUTCOME[f.status],
+        at: f.at,
+        summary: f.summary,
+        hasReport: f.report !== null && f.report !== '',
+        from: f.source,
+      });
+    }
+    out.delete(f.id);
+    out.set(f.id, { launch, end });
+  }
+  while (out.size > HELPER_FACTS_MAX) out.delete(out.keys().next().value as string);
+  return out;
+}
+
+/** What one Agent helper's meta file and transcript say, as the reader measured them. */
+export interface HelperMeta {
+  /** Where the meta sits: `subagents/agent-<id>.meta.json` (`agent`) or under a workflow's run directory (`workflow`). */
+  path: 'agent' | 'workflow';
+  agentType: string | null;
+  description: string | null;
+  model: string | null;
+  effort: string | null;
+  /** The meta's own `finished` marker, the only on-disk end marker. */
+  finished: boolean;
+  /** The helper transcript's last line's `timestamp`, epoch ms: its last write, and a `finished` row's end time. */
+  lastWriteAt: number | null;
+  tokens: number | null;
+}
+
+/** Why the roster cannot be used: `HelpersUnmeasured` less the one case this decision itself finds. */
+export type RosterUnusable = Exclude<HelpersUnmeasured, { why: 'unseen' }>;
+
+/** The hook's roster as the stream's raw read gave it. `at` is the published copy's READ time (`HookReading.at`), not the
+ *  hook state's `updatedAt`, which SubagentStart and Stop leave alone (review 2900 F6). */
+export type RosterInput =
+  | { kind: 'usable'; at: number; entries: ReadonlyArray<{ id: string | null; name: string; startedAt: number | null }> }
+  | { kind: 'unusable'; why: RosterUnusable };
+
+/** What one reading hands the next: the roster it saw, and the drops it has seen. Immutable by convention: the decision
+ *  returns a new one and never edits the one it was given. */
+export interface HelperMemory {
+  /** The ids on the last USABLE roster; null when the last reading's was not usable (nothing to compare with). */
+  listed: ReadonlySet<string> | null;
+  /** That roster held `HELPER_LISTED_MAX` entries: the cap evicts, so an absence is not a stop. */
+  listedFull: boolean;
+  /** `Proc.live.startedAt` at that reading; null when not measured. */
+  procStartedAt: number | null;
+  /** Ids this reader saw drop, still absent: they read "no longer listed" while the roster stays usable. */
+  dropped: ReadonlySet<string>;
+  /** Final rows with no readable end time that were already drawn once: they leave with the next reading. */
+  noEndShown: ReadonlySet<string>;
+}
+export const emptyHelperMemory = (): HelperMemory => ({ listed: null, listedFull: false, procStartedAt: null, dropped: new Set(), noEndShown: new Set() });
+
+export interface AgentArmInput {
+  now: number;
+  roster: RosterInput;
+  proc: Proc;
+  facts: ReadonlyMap<string, HelperIdFacts>;
+  metas: ReadonlyMap<string, HelperMeta>;
+  memory: HelperMemory;
+}
+
+export interface AgentArm {
+  /** The rows, at most `HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX`: running first, the rest of the main list by state, finished last. */
+  agents: AgentHelperView[];
+  /** Rows the three bounds evicted (a finished row that merely aged out of the keep is not one). */
+  omitted: number;
+  /** Sent only while a known helper's state was left out (§8): the roster's own reason, else the drops this reader did not see. */
+  unmeasured: HelpersUnmeasured | null;
+  /** The Agent helper ids known this reading (the frame gate's `knownHelpers`), before any bound or keep. */
+  known: number;
+  memory: HelperMemory;
+}
+
+/** Whether a finished helper or workflow is still kept, by its END TIME (review 2900 F5): the keep's one owner. An end
+ *  time that cannot be read is not kept — such a row is drawn in the reading that decided it only. */
+export const isFinishedKept = (endedAt: number | null, now: number): boolean => endedAt !== null && now - endedAt < HELPER_FINISHED_KEEP_MS;
+
+/** A kept (finished) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` agents, running and failed first, and says what it left out. */
+export function capKeptWorkflow(v: WorkflowView): WorkflowView {
+  if (v.agents.length <= WORKFLOW_KEPT_AGENTS_MAX) return v;
+  const cut = cutAgents(v.agents.map((view, seq) => ({ seq, view })), WORKFLOW_KEPT_AGENTS_MAX);
+  return { ...v, agents: cut.agents, agentsOmitted: v.agentsOmitted + cut.omitted };
+}
+
+const capChars = (s: string | null, max: number): string | null => {
+  if (s === null) return null;
+  if (s.length <= max) return s;
+  const cut = s.slice(0, max);
+  const last = cut.charCodeAt(max - 1);
+  return last >= 0xd800 && last <= 0xdbff ? cut.slice(0, -1) : cut; // never half a surrogate pair
+};
+const capBytes = (s: string | null, max: number): string | null => {
+  if (s === null) return null;
+  let bytes = 0;
+  let out = '';
+  for (const ch of s) {
+    const n = Buffer.byteLength(ch, 'utf8');
+    if (bytes + n > max) break;
+    bytes += n;
+    out += ch;
+  }
+  return out;
+};
+
+/** A state's place in the main list: running first, the unfinished and the undecided below it. */
+const STATE_RANK: Record<AgentHelperState, number> = { running: 0, launched: 1, unmeasured: 2, unlisted: 3, gone: 4, done: 5, failed: 5, stopped: 5, finished: 5 };
+const byStart = (a: AgentHelperView, b: AgentHelperView): number =>
+  (a.startedAt ?? Infinity) - (b.startedAt ?? Infinity) || (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
+/** The newest `max` by start time (an unknown start is the oldest), and how many were evicted. */
+function newestStarted(rows: AgentHelperView[], max: number): { kept: AgentHelperView[]; evicted: number } {
+  if (rows.length <= max) return { kept: rows, evicted: 0 };
+  const newest = [...rows].sort((a, b) => (b.startedAt ?? -Infinity) - (a.startedAt ?? -Infinity) || (a.id < b.id ? -1 : 1)).slice(0, max);
+  return { kept: newest, evicted: rows.length - max };
+}
+const newestEnded = (rows: AgentHelperView[], max: number): { kept: AgentHelperView[]; evicted: number } => {
+  // a row drawn once for want of an end time is the newest decision there is
+  const rank = (r: AgentHelperView): number => r.endedAt ?? Infinity;
+  const sorted = [...rows].sort((a, b) => (rank(a) === rank(b) ? (a.id < b.id ? -1 : 1) : rank(b) - rank(a)));
+  return { kept: sorted.slice(0, max), evicted: Math.max(0, sorted.length - max) };
+};
+
+/** Bound a memory set: the newest `HELPER_FACTS_MAX` entries. */
+const boundedSet = (s: Iterable<string>): ReadonlySet<string> => {
+  const all = [...s];
+  return new Set(all.length > HELPER_FACTS_MAX ? all.slice(-HELPER_FACTS_MAX) : all);
+};
+
+/**
+ * Decide every known Agent helper's state, row and bound from one reading's measured inputs (Figure 2), and hand back the
+ * memory the next reading compares against. Pure: nothing here reads a clock, a file or a socket.
+ *
+ * THE WITNESS OF A DROP (review 2900 F13). `no longer listed` needs a drop this reader SAW: listed in the last usable
+ * roster, absent now, with room (fewer than `HELPER_LISTED_MAX` listed in both), and no reset between. A SessionStart
+ * (a `clear` or an in-session `resume`, which Claude Code does without a new process) empties the roster, and nothing the
+ * reader receives says one happened — `SubagentStart` and `Stop` leave the main event and `updatedAt` alone, and the
+ * session id does not change on resume. The witness taken is the roster's own CONTINUITY: a reset empties it whole, so an
+ * id listed in both readings other than the dropped one proves none happened between; the process start time
+ * (`Proc.live.startedAt`) is a second witness against a restarted process. RESIDUAL: the last listed id's Stop looks
+ * exactly like a reset, so its state is left out (counted as `unseen`) rather than called a drop.
+ */
+export function decideAgentHelpers(i: AgentArmInput): AgentArm {
+  const usable = i.roster.kind === 'usable' ? i.roster : null;
+  const entries = usable?.entries ?? [];
+  const listedIds = new Set<string>();
+  const entryById = new Map<string, (typeof entries)[number]>();
+  for (const e of entries) if (isHelperId(e.id)) { listedIds.add(e.id); entryById.set(e.id, e); }
+  const listedFull = entries.length >= HELPER_LISTED_MAX;
+
+  // Which ids are Agent helpers. A launch result names one (positive evidence); else its meta sits at the Agent path with
+  // another type than a workflow's, and the roster does not call it a workflow's agent.
+  const isAgent = (id: string): boolean => {
+    if (i.facts.get(id)?.launch != null) return true;
+    const m = i.metas.get(id);
+    if (m === undefined || m.path !== 'agent' || m.agentType === WORKFLOW_AGENT_TYPE) return false;
+    const e = entryById.get(id);
+    return !(e !== undefined && isWorkflowAgentName(e.name));
+  };
+  const ids = new Set<string>();
+  for (const [id, f] of i.facts) if (isHelperId(id) && f.launch !== null && isAgent(id)) ids.add(id);
+  for (const id of i.metas.keys()) if (isHelperId(id) && isAgent(id)) ids.add(id);
+
+  const prev = i.memory;
+  const procChanged = i.proc.kind === 'live' && i.proc.startedAt !== null && prev.procStartedAt !== null && i.proc.startedAt !== prev.procStartedAt;
+  const witnessed = usable !== null && !listedFull && prev.listed !== null && !prev.listedFull && !procChanged
+    && [...prev.listed].some((x) => listedIds.has(x));
+  /** Only asked of an id the roster does not list (the listed branch comes first). */
+  const seenDrop = (id: string): boolean => witnessed && prev.listed!.has(id);
+  const droppedNow = new Set<string>();
+
+  const rows: AgentHelperView[] = [];
+  const shownNoEnd = new Set<string>();
+  for (const id of ids) {
+    const f = i.facts.get(id);
+    const m = i.metas.get(id) ?? null;
+    const launch = f?.launch ?? null;
+    const endFact = f?.end ?? null;
+    let state: AgentHelperState;
+    let endedAt: number | null = null;
+    if (endFact !== null) {
+      state = endFact.outcome;
+      endedAt = endFact.at;
+    } else if (m?.finished === true) {
+      state = 'finished';
+      endedAt = m.lastWriteAt;
+    } else if (i.proc.kind === 'gone') state = 'gone';
+    else if (usable === null) state = 'unmeasured';
+    else if (listedIds.has(id)) state = 'running';
+    else if (launch !== null && launch.at !== null && usable.at < launch.at) state = 'launched';
+    else if (seenDrop(id)) { state = 'unlisted'; droppedNow.add(id); }
+    else if (prev.dropped.has(id)) state = 'unlisted';
+    else state = 'unmeasured';
+
+    if (isFinalHelperState(state)) {
+      if (endedAt === null) {
+        if (prev.noEndShown.has(id)) continue; // drawn once already: it leaves with this reading
+        shownNoEnd.add(id);
+      } else if (!isFinishedKept(endedAt, i.now)) continue;
+    }
+
+    const fromLaunch = launch === null ? null : launch.async ? launch.at : launch.at !== null && launch.durationMs !== null ? launch.at - launch.durationMs : null;
+    rows.push({
+      id,
+      description: capChars(m?.description ?? null, HELPER_DESCRIPTION_MAX),
+      agentType: capChars(m?.agentType ?? null, HELPER_LABEL_MAX),
+      model: capChars(m?.model ?? launch?.model ?? null, HELPER_LABEL_MAX),
+      effort: capChars(m?.effort ?? null, HELPER_LABEL_MAX),
+      state,
+      startedAt: fromLaunch ?? entryById.get(id)?.startedAt ?? null,
+      endedAt, // only a final branch above sets it
+      lastActivityAt: m?.lastWriteAt ?? null,
+      tokens: m?.tokens ?? null,
+      summary: capBytes(endFact?.summary ?? null, HELPER_SUMMARY_MAX_BYTES),
+      hasReport: endFact?.hasReport ?? false,
+    });
+  }
+
+  // THE BOUNDS (review 2900 F9): the listed, the other non-final, and the finished each have their own cap.
+  const running = newestStarted(rows.filter((r) => r.state === 'running'), HELPER_LISTED_MAX);
+  const others = newestStarted(rows.filter((r) => r.state !== 'running' && !isFinalHelperState(r.state)), HELPER_NONFINAL_MAX);
+  const finals = newestEnded(rows.filter((r) => isFinalHelperState(r.state)), HELPER_KEPT_MAX);
+  const agents = [
+    ...running.kept.sort(byStart),
+    ...others.kept.sort((a, b) => STATE_RANK[a.state] - STATE_RANK[b.state] || byStart(a, b)),
+    ...finals.kept,
+  ];
+  const shown = new Set(agents.map((r) => r.id));
+  const left = agents.filter((r) => r.state === 'unmeasured').length;
+
+  const nowDropped = usable === null ? [] : [...prev.dropped, ...droppedNow].filter((id) => !listedIds.has(id) && ids.has(id));
+  return {
+    agents,
+    omitted: running.evicted + others.evicted + finals.evicted,
+    unmeasured: left === 0 ? null : usable === null ? (i.roster as { why: RosterUnusable }).why : { why: 'unseen', helpers: left },
+    known: ids.size,
+    memory: {
+      listed: usable === null ? null : listedIds,
+      listedFull: usable !== null && listedFull,
+      procStartedAt: i.proc.kind === 'live' ? i.proc.startedAt : null,
+      dropped: boundedSet(nowDropped),
+      noEndShown: boundedSet([...prev.noEndShown, ...[...shownNoEnd].filter((id) => shown.has(id))]),
+    },
+  };
 }

@@ -1,4 +1,4 @@
-// Session helpers H1a: `helperFactsOf`, the pure parser of an Agent launch result and of a task
+// Session helpers H1a (D-8829): `helperFactsOf`, the pure parser of an Agent launch result and of a task
 // notification, one raw transcript line in, `HelperFact[]` out. Every fixture is built from the SHAPES measured on
 // 2.1.280 to 2.1.319 (key names, value types), with neutral names and values: no measured content.
 import { describe, expect, it } from 'vitest';
@@ -36,11 +36,49 @@ describe('helperFactsOf: an Agent launch result', () => {
     ]);
   });
 
-  it('a foreground launch (completed): the report, the duration, and no model', () => {
+  it('a foreground launch (completed): the report, the duration, and the resolved model when it names one', () => {
     const f = helperFactsOf(toolResult({ status: 'completed', agentId: 'a1', content: [{ type: 'text', text: 'first' }, { type: 'text', text: 'second' }], totalDurationMs: 4200 }));
     expect(f).toEqual([
       { source: 'launch', id: 'a1', status: 'completed', at: AT, model: null, durationMs: 4200, summary: null, report: 'first\nsecond', reportCut: false },
     ]);
+  });
+
+  it('a foreground launch that names a resolved model carries it', () => {
+    expect(helperFactsOf(toolResult({ status: 'completed', agentId: 'a1', content: 'r', resolvedModel: 'claude-sonnet-5-5' }))[0]!.model).toBe('claude-sonnet-5-5');
+  });
+
+  it('a foreground report of whitespace only is no report', () => {
+    expect(helperFactsOf(toolResult({ status: 'completed', agentId: 'a1', content: '  \n ' }))[0]).toMatchObject({ report: null, reportCut: false });
+  });
+
+  it('a foreground report over the cap is cut, and says so', () => {
+    const f = helperFactsOf(toolResult({ status: 'completed', agentId: 'a1', content: [{ type: 'text', text: 'word '.repeat(10_000) }] }))[0]!;
+    expect(Buffer.byteLength(f.report!, 'utf8')).toBeLessThanOrEqual(HELPER_REPORT_MAX_BYTES);
+    expect(f.reportCut).toBe(true);
+  });
+
+  it('a record that is not a user record yields none, whatever it carries', () => {
+    expect(helperFactsOf(toolResult(ASYNC, { type: 'assistant' }))).toEqual([]);
+    expect(helperFactsOf(notification().replace('"type":"user"', '"type":"assistant"'))).toEqual([]);
+  });
+
+  it('a record that carries both reads as the launch result (one record is one fact)', () => {
+    const both = line({ type: 'user', timestamp: TS, toolUseResult: ASYNC, message: { role: 'user', content: '<task-notification><task-id>other</task-id><status>completed</status></task-notification>' } });
+    expect(helperFactsOf(both).map((f) => [f.source, f.id])).toEqual([['launch', 'a516cb53d83b231c7']]);
+  });
+
+  it('a notification whose tag never closes yields none, and never throws', () => {
+    const open = line({ type: 'user', timestamp: TS, message: { role: 'user', content: '<task-notification><task-id>a1</task-id>' } });
+    expect(helperFactsOf(open)).toEqual([]);
+  });
+
+  it('a numeric timestamp is no time (a number reads as a date by coercion, never as one here)', () => {
+    expect(helperFactsOf(toolResult(ASYNC, { timestamp: 123 }))[0]!.at).toBeNull();
+  });
+
+  it('a foreground duration too big to be a number is null: the JSON 1e999 parses to Infinity', () => {
+    const raw = toolResult({ status: 'completed', agentId: 'a1', content: 'r' }).replace('"status":"completed"', '"totalDurationMs":1e999,"status":"completed"');
+    expect(helperFactsOf(raw)[0]!.durationMs).toBeNull();
   });
 
   it('a foreground report given as a plain string content reads too', () => {
@@ -52,6 +90,9 @@ describe('helperFactsOf: an Agent launch result', () => {
     ['a Workflow launch (no agent id)', { status: 'async_launched', taskId: 'wabc', taskType: 'local_workflow', runId: 'wf_1-aa' }],
     ['an agent id outside [A-Za-z0-9_-]{1,64}', { ...ASYNC, agentId: 'bad id;' }],
     ['an agent id of 65 characters', { ...ASYNC, agentId: 'a'.repeat(65) }],
+    ['an agent id with a space', { ...ASYNC, agentId: 'a b' }],
+    ['an empty agent id', { ...ASYNC, agentId: '' }],
+    ['an agent id that is a number', { ...ASYNC, agentId: 7 }],
     ['a status that is neither launched nor completed', { ...ASYNC, status: 'weird' }],
     ['a non-object result', 'async_launched'],
     ['a null result', null],
@@ -110,6 +151,9 @@ describe('helperFactsOf: a task notification', () => {
 
   it('a task id outside the id grammar yields none', () => {
     expect(helperFactsOf(notification({ id: 'bad id;' }))).toEqual([]);
+    expect(helperFactsOf(notification({ id: 'a b' }))).toEqual([]);
+    expect(helperFactsOf(notification({ id: 'a'.repeat(65) }))).toEqual([]);
+    expect(helperFactsOf(notification({ id: 'a'.repeat(64) }))).toHaveLength(1);
   });
 
   it('the summary is one line of at most HELPER_SUMMARY_MAX_BYTES bytes, cut on a character boundary', () => {
@@ -119,6 +163,12 @@ describe('helperFactsOf: a task notification', () => {
     expect(Buffer.byteLength(long.summary!, 'utf8')).toBeLessThanOrEqual(HELPER_SUMMARY_MAX_BYTES);
     expect(long.summary).toBe('é'.repeat(HELPER_SUMMARY_MAX_BYTES / 2));
     expect(long.summary).not.toContain('�');
+  });
+});
+
+describe('helperFactsOf: the bounds are the spec\'s numbers', () => {
+  it('a report is at most 16 KiB and a summary at most 200 bytes', () => {
+    expect([HELPER_REPORT_MAX_BYTES, HELPER_SUMMARY_MAX_BYTES]).toEqual([16_384, 200]);
   });
 });
 

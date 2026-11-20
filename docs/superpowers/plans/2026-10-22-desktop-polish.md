@@ -4514,6 +4514,84 @@ title, and no visible "coordinator" text; a worker draws no badge; the command p
 
 **Rollback.** A plain revert.
 
+### Task H1a: the helpers decision, pure (D-8829) — now
+
+**What.** The pure pieces of C49's Helpers section (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.2,
+Figure 2, and §11's H1a row), and nothing that reads, sends or draws: no read, no frame and no UI, which H1b and H2 wire.
+Built on this task's branch, red first (the branch's first commit: 136 cases, every one failing on `main`):
+
+- `shared/workflows.ts` (L0, K): `AgentHelperView`, `AgentHelperState` (its runtime list, its final states and its words
+  derived from one record), `HelpersUnmeasured`, `HELPER_FINISHED_KEEP_MS` (ten minutes) and `HELPER_KEPT_MAX` (20), the bounds
+  of the Agent arm below, `WORKFLOW_AGENT_TYPE` and `isHelperId`. Nothing in `shared/api.ts`, which stays at its cap.
+- `server/src/transcript/parse.ts` (L1, C3): `helperFactsOf(line)` reads an Agent launch result (`async_launched`, or a
+  foreground `completed` with its report and duration) and a task notification (`completed`, `failed`, `killed`, `stopped`).
+  A report and a summary are masked, then cut (review 2900 F15), a report to 16 KiB and a summary to one line of 200 bytes.
+- `server/src/workflows/model.ts` (L1, C3): `decideAgentHelpers` (Figure 2, strongest fact first), `foldHelperFacts`,
+  `isFinishedKept` (the keep's one owner, review 2900 F5), `capKeptWorkflow`, `frameDue` (the frame gate, moved out of
+  `checkWorkflows`) and `isWorkflowAgentName`.
+
+**The witness of a drop (review 2900 F13).** The process start time alone is not sound: a `/clear` or an in-session
+`resume` runs a SessionStart and empties the roster without a new process, and the dispatcher `/clear`s a worker between
+waves. The decision takes two witnesses as inputs: the roster's own CONTINUITY (a reset empties it whole, so an id listed
+in both readings other than the dropped one proves no reset between them) and `Proc.live.startedAt` against the last
+reading's. `no longer listed` needs both, with fewer than 32 listed in both readings. RESIDUAL: the last listed id's Stop
+looks exactly like a reset, so that helper's state is left out (`agentsUnmeasured: { why: 'unseen' }`) rather than called a drop.
+It is a helper that is usually also final by its notification or its meta's marker a moment later.
+
+**The roster's read time (review 2900 F6).** `launched` compares the launch result's time with `RosterInput.at`, an input
+H1b fills from `HookReading.at`; `now` decides nothing there (a test moves `now` an hour).
+
+**The bounds (review 2900 F9), each an exported constant.** The Agent arm is at most `HELPER_LISTED_MAX` (32) running rows +
+`HELPER_NONFINAL_MAX` (32) launched, no-longer-listed, session-ended and left-out rows together + `HELPER_KEPT_MAX` (20)
+finished rows = 84 rows, each under 1 KiB (description 200 characters, three labels of 64, a summary of 200 bytes), so the arm
+is under 84 KiB; the eviction keeps the newest and `omitted` counts what it evicted. The fold of launch results and
+notifications keeps `HELPER_FACTS_MAX` (256) ids, and the memory it hands the next reading is bounded by the same constant.
+The workflow arm: a finished (kept) workflow carries at most `WORKFLOW_KEPT_AGENTS_MAX` (40) agents, running and failed
+first, and says how many it left out; at most 20 finished workflows are kept (H2 applies it). A running workflow keeps today's
+`WORKFLOW_AGENTS_MAX` (120). Not bounded by this task, and said: the count of RUNNING workflows (the reader's budget, H1b)
+and the length of a workflow agent's label and phase (an existing reader's).
+
+**Measured and inferred.** The launch result's shape (`async_launched` with `agentId` and `resolvedModel`) and the
+notification's (`task-id`, `status`, `summary`, `result`, as a user record whose content is the envelope) were read on this
+box's own session transcripts: measured. The foreground `completed` result's `content` blocks and `totalDurationMs` are read
+from the broker's fixture of that shape, not from a transcript: inferred. A continued agent (a second notification for one
+id) takes the later end by its time: inferred, untested against a capture.
+
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter that holds each TypeScript file as
+the module text and runs the two new test files against a copy of the tree with that one file replaced): 169 mutants run, 169 killed (the decision 106, the fact parser 36, the shared types 27); the first round left 26 alive, which added a case for each, and six mutants were removed rather than killed (the note names each).
+The table is in `docs/superpowers/programs/desktop-polish/h1a.md`.
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8829** — `helpers-decision-pure`: Task H1a, issued on 2026-11-20. The Agent arm's decision is a pure function of its
+  inputs, and it departs from the spec in these places:
+  - `drop-witness-is-continuity` (F13): the witness of a seen drop is the roster's continuity plus the process start, not
+    "no SessionStart between them", which nothing the reader receives states. The residual above is accepted.
+  - `seen-drop-persists`: a seen drop stays `no longer listed` on later readings while the roster stays usable, held in the
+    memory the decision hands back and forgotten when the roster cannot be used. The spec's "listed in one reading, absent in the
+    next" would otherwise flip the row back to a state left out one reading later.
+  - `foreground-start-is-end-less-duration`: a foreground helper's launch result is written when it ENDS, so its start is
+    that time less `totalDurationMs`, else the roster's `startedAt`, else unknown; the spec's "elapsed from the launch result's
+    timestamp" is right for a background launch only.
+  - `agents-unmeasured-for-left-out-states`: `agentsUnmeasured` is sent only while a known helper's state was left out, which
+    is a subset of "a known helper is not final" (a session-ended row needs no word about the roster).
+  - `launch-result-is-positive-evidence`: an id a launch result names is an Agent row even if its roster name or meta would
+    exclude it; the exclusion by name, type and meta path applies to ids no launch named.
+  - `kept-per-arm`: `HELPER_KEPT_MAX` is the cap of each arm (20 Agent rows and 20 workflow rows), not of both together.
+  - `omitted-and-known-leave-the-arm`: the decision returns `omitted` (rows the bounds evicted) and `known` (the frame gate's
+    count of known ids); neither is on the wire yet, and H1b decides whether the first is.
+  - `helperfact-type-lives-in-parse`: `HelperFact` is defined in `parse.ts` and imported by `model.ts` as a type only; the
+    spec's table puts the tailer's `HelperFact[]` in `tail.ts`, which only carries it (H1b).
+
+Spec corrections for the coordinator to fold: §3.2's `no longer listed` paragraph (the witness and the residual above);
+§4.2's elapsed for a foreground helper; §5's frame bound (the Agent arm is 84 rows, not 52 KiB's 32 and 20) and the workflow
+arm's bound; and §8's `agentsUnmeasured` condition.
+
+**Acceptance.** The two new suites pass (42 and 120 cases), every suite that imports one of the three modules passes, and
+every mutant of every decision branch goes red. `tsc` passes for `server` and `pwa`.
+
+**Rollback.** A plain revert: nothing reads these pieces yet.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
