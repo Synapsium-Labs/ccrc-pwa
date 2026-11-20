@@ -8,7 +8,7 @@
 // plus the approvals' input retention (T8-4).
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
 import { APPROVAL_RULING_AUTHORITIES, type ApprovalParkWord, type ApprovalRulingAuthority } from '../../../shared/approval-park.js';
-import { parkHorizonFrom, parkWordAt } from './approvalPark.js';
+import { parkFactsOf, parkHorizonFrom, parkOpen, parkWordAt } from './approvalPark.js';
 
 const STMTS = new WeakMap<DatabaseSync, Map<string, StatementSync>>();
 function stmt(db: DatabaseSync, sql: string): StatementSync {
@@ -63,7 +63,9 @@ const isAuthority = (v: unknown): v is ApprovalRulingAuthority =>
   typeof v === 'string' && (APPROVAL_RULING_AUTHORITIES as readonly string[]).includes(v);
 
 /** A stored park, read back through the vocabularies: a ruling whose verdict or authority this build does not know reads
- *  as a SPENT ruling (it blocks nothing and is met by nothing), and a state other than `open` reads void. */
+ *  as a SPENT ruling (it blocks nothing and is met by nothing), and a state other than `open` reads void. This FOLDS: an
+ *  unknown authority reads `operator`, an unknown verdict `deny` and a missing class `forbidden`. That is safe only because
+ *  such a ruling is also marked spent, so no reader acts on the folded words (review 2889 F11). */
 function hydrate(r: ParkDb): ParkRow {
   const verdict = r.rulingVerdict === 'allow' || r.rulingVerdict === 'deny' ? r.rulingVerdict : null;
   const known = verdict !== null && isAuthority(r.rulingAuthority);
@@ -86,14 +88,16 @@ export function parkByKey(db: DatabaseSync, key: string): ParkRow | null {
   return r === undefined ? null : hydrate(r);
 }
 
-/** The mint's park step, INSIDE the mint's transaction (F1, the cap race): the word `parkWordAt` gives for the key's slots
- *  as read here. A `live` word reserves one slot and creates the park on its first mint; any mint on a key that already
- *  has a park counts a retry. A `shadow` mint reserves nothing and creates nothing. */
+/** The mint's park step, INSIDE the mint's transaction (F1, the cap race): the word `parkWordAt` gives for the key's park
+ *  as read here, its slots and whether it is still open (`parkOpen`, the one void rule; the key names the child's live
+ *  binding run, which the raise read open). A `live` word reserves one slot and creates the park on its first mint; any
+ *  mint on a key that already has a park counts a retry. A `shadow` or `capped` mint reserves nothing and creates nothing. */
 export function reserveParkAtMint(
   db: DatabaseSync, p: { key: string; childId: string; runId: number; laneLive: boolean; signedIn: boolean; now: number },
 ): ApprovalParkWord {
   const existing = parkByKey(db, p.key);
-  const word = parkWordAt(p.laneLive, p.signedIn, existing?.slots ?? 0);
+  const keyOpen = existing === null || parkOpen(parkFactsOf(existing, false), p.now);
+  const word = parkWordAt(p.laneLive, p.signedIn, existing?.slots ?? 0, keyOpen);
   if (existing !== null) stmt(db, 'UPDATE approval_parks SET retries = retries + 1 WHERE parkKey = ?').run(p.key);
   if (word !== 'live') return word;
   if (existing === null) {
@@ -147,15 +151,11 @@ export function spendParkRuling(db: DatabaseSync, key: string, rulingAt: number)
 }
 
 /** A pane answer on parked rows voids their parks (F4): a later ruling on them can never allow the next identical command.
- *  Called in the operator mark's own transaction, BEFORE its rows move, with the same row selection. */
-export function voidParksOfParkedRows(db: DatabaseSync, where: { childId: string } | { ids: readonly number[] }): void {
-  if ('childId' in where) {
-    stmt(db, "UPDATE approval_parks SET state = 'void' WHERE parkKey IN (SELECT parkKey FROM approvals WHERE childId = ? AND state = 'parked' AND parkKey IS NOT NULL)")
-      .run(where.childId);
-    return;
-  }
+ *  Only the rows the cleared dialog covered (`CoordStore#markApprovalOperatorRows`, BEFORE its rows move, with the same
+ *  ids), never every parked row of the child: a press on another prompt voids no park (review 2889 F3). */
+export function voidParksOfParkedRows(db: DatabaseSync, ids: readonly number[]): void {
   const s = stmt(db, "UPDATE approval_parks SET state = 'void' WHERE parkKey = (SELECT parkKey FROM approvals WHERE id = ? AND state = 'parked')");
-  for (const id of where.ids) s.run(id);
+  for (const id of ids) s.run(id);
 }
 
 /** The retention (T8-4): a park is deleted once its horizon is `before` (the horizon plus the approvals' input retention,

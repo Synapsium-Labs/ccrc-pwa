@@ -485,7 +485,8 @@ export function WaitingScreen(props: WaitingScreenProps): ReactNode {
   const pressed = (program: string | null): boolean => (program === null ? noProgramme : list.programme === program);
   // The pills count what is drawn (`shownSummary`, review 1537 F4): under a filter, that filter's share alone.
   const words = summaryWords(shownSummary(shown));
-  const empty = groups.length === 0;
+  // A parked approval waits on the operator too (approvals PR 3, review 2889 F7): a screen holding only those is not empty.
+  const empty = groups.length === 0 && (view.approvals?.length ?? 0) === 0;
   // Calls made for the operator (D-8126) never count and never make a group on the rows' account: a programme with calls and no
   // rows draws them apart, among the groups, under the filter that shows it.
   const callFilter: CallFilter = { noProgramme, programme: list.programme };

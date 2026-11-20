@@ -318,7 +318,7 @@ const TABLES = ['run_events', 'mail_deliveries', 'feed_events', 'lifecycle_event
   'programme_remaining', 'programme_edges', 'overlord_designation', 'programme_forecasts', 'overlord_ladder', 'overlord_latches',
   'continuity_renew_requests', 'operator_marks', 'operator_mark_quiet',
   'decision_rows', 'decision_host', 'decision_lines', 'programme_health', 'run_spend',
-  'continuity_act_keys', 'approval_census', 'overlord_fence_refusals',
+  'continuity_act_keys', 'approval_census', 'approval_parks', 'overlord_fence_refusals',
   'continuity_hook_reports', 'continuity_witness_checks'] as const;
 
 /** Each table's writers, `file#Class.method`, sorted and unique, read off the one scan (`sqlStatements.ts#sqlWrites`). `tables`
@@ -369,6 +369,10 @@ describe(TABLES_PIN, () => {
           'markApprovalOperatorRows', 'pruneApprovalInputs', 'staleApproval', 'takeApprovalForRule'].map((m) => `${S}${m}`)],
       // The approval census (approvals PR 1): its one writer, reached only through the questions owner, and its retention.
       approval_census: ['insertCensusRow', 'pruneCensusSummaries'].map((f) => `server/src/coord/approvalCensusStore.ts#${f}`),
+      // The park (approvals PR 3, review 2889 F8): one table, written only in its own store, reached through `CoordStore` from the
+      // questions owner.
+      approval_parks: ['markFirstPark', 'noteCoordinatorVerdictOfRow', 'pruneParks', 'recordParkRuling', 'releaseParkSlotOfRow',
+        'reserveParkAtMint', 'spendParkRuling', 'voidParksOfParkedRows'].map((f) => `server/src/coord/approvalParkStore.ts#${f}`),
       practice_cases: ['server/src/coord/practiceCasesStore.ts#openPracticeCase'],
       continuity_starts: ['server/src/continuity/continuityStore.ts#insertStart'],
       // The designation's go-live restamps the pending body's generation with its term (Overlord W1 designation, X5).

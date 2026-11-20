@@ -13466,7 +13466,7 @@ export type ApprovalRulingRecord = ApprovalRulingRecordV1 | ApprovalRulingRecord
 
 /** The bytes the server signs and the verifier checks: a v1 record's ten fields, or a v2 record's thirteen, and only
  *  those, in canonical form. `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented
- *  second copy, held equal by `approval-verify.test.ts`. */
+ *  second copy of v1's bytes, held equal by `approval-verify.test.ts` (v2's copy is PR 3v's). */
 export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
   const v1 = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
     nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt };
@@ -13477,7 +13477,6 @@ export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
   for (const k of ['authority', 'denyCurrent', 'family'] as const) if (r[k] !== undefined) v2[k] = r[k];
   return canonicalJson(v2);
 }
-
 
 /** `POST /api/approvals`'s body, as the child's hook sends it through `ccrc-api approvals request` (spec §6.3 hook
  *  step 3). `canonical` is the request's canonical array (`approvalDigestBytes`), `digest` its lowercase hex sha256,

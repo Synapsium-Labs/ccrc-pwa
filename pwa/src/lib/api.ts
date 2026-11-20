@@ -1115,7 +1115,7 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
       })).json() as Promise<SecretSaveAnswer>,
     /** The operator's ruling on a parked permission prompt (approvals PR 3), posted to the questions answer door as
      *  `{kind: 'approval', verdict}`. A credential act: session-gated with a step-up when armed. A refusal (`step-up-required`,
-     *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, and `kind-mismatch` until that arm is wired) rejects with an
+     *  `park-ruled`, `hook-gone`, `coordinator-denied`, `auth-off`, or a guard's word from the door's approval arm) rejects with an
      *  `ApiError` like every non-2xx. */
     ruleParkedApproval: async (id: number, verdict: 'allow' | 'deny'): Promise<unknown> =>
       (await request(`/api/questions/approval-${id}/answer`, {

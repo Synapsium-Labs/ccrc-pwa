@@ -7,18 +7,21 @@
 //  - `classMeets`: whether a retry's fresh class may meet a ruling taken against an earlier row's class;
 //  - `parkRecordRefusal`: whether a principal's ruling may be recorded on a parked row's park (the doors);
 //  - `signingRefusal`: the ONE SIGNING SITE's guard (§3.4, F11), run before every signature;
-//  - `fetchedAtRecordable`: whether the ruling read may record `fetchedAt` (F8-c, F2-a);
 //  - `parkedApprovalViewOf`: a parked row as Waiting on you lists it (§3.3.2).
+// `parkOpen` over `parkFactsOf` is the park's ONE void rule (review 2889 F2): the listing, both doors, the retry and the mint
+// ask it, each with the park's own run read for its closure.
 import { type ApprovalRefusal } from '../../../shared/api.js';
+import { approvalAllowRefusal } from './approvalDenyFloor.js';
 import { APPROVAL_PARK_HORIZON_MS, APPROVAL_PARK_SLOTS, type ApprovalParkWord, type ApprovalRulingAuthority, type ParkedApprovalView } from '../../../shared/approval-park.js';
 
 /** The park's word at mint (§3.3.1): `shadow` while the park lane is not live or sign-in is dark (a parked `escalate`
- *  prompt would have no door, F12); otherwise `capped` when the key's `APPROVAL_PARK_SLOTS` are all taken, else `live`.
- *  The store asks this INSIDE the mint's transaction with the slots it read there, so two requests of one key can never
- *  both be told `live` past the cap (the cap race, F1). */
-export function parkWordAt(laneLive: boolean, signedIn: boolean, slotsTaken: number): ApprovalParkWord {
+ *  prompt would have no door, F12); otherwise `capped` when the key's park is no longer open (`keyOpen` false: a pane
+ *  answer voided it, or its horizon passed, review 2889 F4: a prompt parked there would be staled at once and lost) or its
+ *  `APPROVAL_PARK_SLOTS` are all taken, else `live`. The store asks this INSIDE the mint's transaction with the park it read
+ *  there, so two requests of one key can never both be told `live` past the cap (the cap race, F1). */
+export function parkWordAt(laneLive: boolean, signedIn: boolean, slotsTaken: number, keyOpen: boolean): ApprovalParkWord {
   if (!laneLive || !signedIn) return 'shadow';
-  return slotsTaken >= APPROVAL_PARK_SLOTS ? 'capped' : 'live';
+  return !keyOpen || slotsTaken >= APPROVAL_PARK_SLOTS ? 'capped' : 'live';
 }
 
 /** The park key (§3.3.1): the child's REGISTRY id (it survives a roll), the run id (registry ids are recycled, F8-d) and
@@ -135,30 +138,24 @@ export interface SigningFacts {
  *    earlier claimant's ruling), for a deny too: the ruling is the claimant's act.
  *  - A deny is otherwise always signed.
  *  - An allow on a key whose park records the coordinator's deny: `coordinator-denied`.
- *  - An allow of a `forbidden` row, by its stored class or its fresh one: `guard-forbidden`.
- *  - A `coordinator` allow: `deny-not-current` when the row was minted with older deny rules, or when the standing read
- *    at signing is no longer `current` (an `unread` standing skips this second check only); then `guard-escalate` unless
- *    both classes are `ordinary`.
- *  - An `operator` allow: the classes `ordinary` or `escalate`, any deny currency (Table 3b's operator row). */
+ *  - A `coordinator` allow: PR 0's `approvalAllowRefusal` (`approvalDenyFloor.ts`, review 2889 F6: the one copy of that
+ *    rule, so its floor measures the code that runs): `guard-forbidden` by the stored class or the fresh one, then
+ *    `deny-not-current` when the row was minted with older deny rules or the standing read at signing is no longer
+ *    `current` (an `unread` standing skips this second check only), then `guard-escalate` unless both classes are
+ *    `ordinary`.
+ *  - An `operator` allow: `guard-forbidden` as above, else the classes `ordinary` or `escalate`, any deny currency
+ *    (Table 3b's operator row). */
 export function signingRefusal(f: SigningFacts): ApprovalRefusal | null {
   if (f.authority === 'coordinator' && f.claimantNow !== f.ruler) return 'parent-changed';
   if (f.verdict === 'deny') return null;
   if (f.parkDenied) return 'coordinator-denied';
-  if (f.rowClass === 'forbidden' || f.freshClass === 'forbidden') return 'guard-forbidden';
   if (f.authority === 'coordinator') {
-    if (!f.rowDenyCurrent) return 'deny-not-current';
-    if (f.denyStandingNow !== 'unread' && f.denyStandingNow !== 'current') return 'deny-not-current';
-    return f.rowClass === 'ordinary' && f.freshClass === 'ordinary' ? null : 'guard-escalate';
+    const standingCurrent = f.denyStandingNow === 'unread' || f.denyStandingNow === 'current';
+    return approvalAllowRefusal(f.rowClass, f.freshClass, f.rowDenyCurrent && standingCurrent);
   }
+  if (f.rowClass === 'forbidden' || f.freshClass === 'forbidden') return 'guard-forbidden';
   const known = (c: string): boolean => c === 'ordinary' || c === 'escalate';
   return known(f.rowClass) && known(f.freshClass) ? null : 'guard-escalate';
-}
-
-/** May the ruling read record `fetchedAt` now (F8-c, F2-a)? Only when it serves the ruling at least `graceMs` before the
- *  record's `expiresAt`: a ruling served later may expire on the fleet clock before the verifier reads it, so it counts as
- *  unfetched and the last-poll move may still carry it onto the park. */
-export function fetchedAtRecordable(now: number, expiresAt: number, graceMs: number): boolean {
-  return now <= expiresAt - graceMs;
 }
 
 /** A park's horizon from its first park (open question 5). */

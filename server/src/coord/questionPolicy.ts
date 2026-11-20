@@ -5,8 +5,8 @@
 // Decide in L1, act in L4. The words are today's branches, named; nothing here changes what the sweep does.
 //
 // Its one runtime import is `askwindow.ts`, a pure L1 module with no imports of its own, where `ASK_ANSWERING_MAX_MS`
-// lives (slug q3c-policy-askwindow). `APPROVAL_RULED_GRACE_MS` stays `watch.ts`'s and is handed in (slug
-// q3c-grace-param).
+// lives (slug q3c-policy-askwindow). `APPROVAL_RULED_GRACE_MS` lives there too since approvals PR 3, and is still handed in
+// (slug q3c-grace-param).
 import type { AskState } from '../../../shared/api.js';
 import { APPROVAL_HOOK_WAIT_S, DIALOG_MULTI_REFUSE_CODES, DIALOG_TEXT_REFUSE_CODES, QUESTION_DOOR_REFUSALS } from '../../../shared/api.js';
 import { ASK_ANSWERING_MAX_MS } from '../askwindow.js';

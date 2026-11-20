@@ -240,7 +240,6 @@
   "server/src/coord/approvalPark.ts#parkOpen": 1,
   "server/src/coord/approvalPark.ts#parkRecordRefusal": 1,
   "server/src/coord/approvalPark.ts#signingRefusal": 1,
-  "server/src/coord/approvalPark.ts#fetchedAtRecordable": 1,
   "server/src/coord/approvalPark.ts#parkedApprovalViewOf": 1,
   "server/src/coord/questionPolicy.ts#decideApprovalLapse": 1,
   "server/src/coord/untrustedBuildItem.ts#untrustedBuildItemOf": 1,

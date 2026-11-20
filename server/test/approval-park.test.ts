@@ -297,7 +297,7 @@ describe('the park follows the child\'s live binding run, not its mark (review 2
     r.lapse(pastWindow(r, a.id));
     r.lapse(pastWindow(r, a.id) + 1);
     expect(r.row(a.id).state).toBe('parked');
-    expect(parkedApprovalsFor(r.f.coord, Date.now()).map((p) => p.id)).toEqual([a.id]);
+    expect((parkedApprovalsFor(r.f.coord, Date.now()) ?? []).map((p) => p.id)).toEqual([a.id]);
     expect(r.q.operatorRuleApproval({ id: a.id, verdict: 'allow', reason: 'ok', by: 'operator' }).status).toBe(200);
   });
   it('a wave 3 retry does not meet a wave 2 ruling of the same command', async () => {

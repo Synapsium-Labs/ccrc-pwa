@@ -8,6 +8,7 @@ import {
 } from '../src/ledgers/parkedApprovalWords';
 import { ApiError, api } from '../src/lib/api';
 import { NOW, waitingView } from './ledgersFixture';
+import { EMPTY_WORD } from '../src/ledgers/ledgerWords';
 
 afterEach(() => { cleanup(); vi.restoreAllMocks(); });
 
@@ -29,6 +30,15 @@ describe('the parked approvals group', () => {
     expect(screen.getByText(/project-a-quiet-basin asks to run Bash/)).toBeTruthy();
     expect(screen.getAllByText('ls <b>-la</b>').length).toBe(2);
     expect(document.querySelector('pre b')).toBeNull();
+  });
+
+  it('a screen holding only parked approvals never says nothing needs you (review 2889 F7)', () => {
+    open([parked()]);
+    expect(screen.getByRole('region', { name: PARKED_HEADING })).toBeTruthy();
+    expect(screen.queryByText(EMPTY_WORD)).toBeNull();
+    cleanup();
+    open([]);
+    expect(screen.getByText(EMPTY_WORD)).toBeTruthy();
   });
 
   it('draws no group when approvals is absent or empty', () => {

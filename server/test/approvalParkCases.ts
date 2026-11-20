@@ -1,6 +1,6 @@
 // The park's L1 deciders, case by case (approvals plan 2026-11-18, §3.3 and Tasks 3.1 to 3.3; approvals PR 3). Two lists of
 // named cases: `APPROVAL_PARK_CASES` over `server/src/coord/approvalPark.ts` (the mint's word, the key, a retry's class, the
-// doors' recording refusals, the one signing site's guard, `fetchedAt`, Waiting on you's view) and `APPROVAL_LAPSE_PARK_CASES`
+// doors' recording refusals, the one signing site's guard, Waiting on you's view) and `APPROVAL_LAPSE_PARK_CASES`
 // over `server/src/coord/questionPolicy.ts` (`decideApprovalLapse`'s park arms and the deferred push's parked drop). Run by
 // `approval-park-policy.test.ts` and by the mutation floors' `sim/approvalParkSets.ts` over a mutated copy of each module.
 // Neutral fixtures only.
@@ -11,7 +11,7 @@ import type { ParkFacts, SigningFacts } from '../src/coord/approvalPark.js';
 import type { ApprovalLapse, ApprovalLapsePark, ApprovalLapseRow, DeferredApprovalPush, DeferredApprovalRows } from '../src/coord/questionPolicy.js';
 
 export interface ApprovalParkModule {
-  parkWordAt(laneLive: boolean, signedIn: boolean, slotsTaken: number): ApprovalParkWord;
+  parkWordAt(laneLive: boolean, signedIn: boolean, slotsTaken: number, keyOpen: boolean): ApprovalParkWord;
   parkKeyOf(childId: string, runId: number, inputSha256: string): string;
   classMeets(freshClass: string, rulingClass: string): boolean;
   parkOpen(park: ParkFacts, now: number): boolean;
@@ -20,7 +20,6 @@ export interface ApprovalParkModule {
     verdict: 'allow' | 'deny', now: number,
   ): ApprovalRefusal | null;
   signingRefusal(f: SigningFacts): ApprovalRefusal | null;
-  fetchedAtRecordable(now: number, expiresAt: number, graceMs: number): boolean;
   parkHorizonFrom(parkedAt: number): number;
   parkedApprovalViewOf(rows: readonly (Parameters<typeof import('../src/coord/approvalPark.js').parkedApprovalViewOf>[0][number])[], now: number): ParkedApprovalView[];
 }
@@ -42,14 +41,19 @@ const sign = (over: Partial<SigningFacts> = {}): SigningFacts => ({
 
 export const APPROVAL_PARK_CASES: readonly Case<ApprovalParkModule>[] = [
   // ── the mint's word (F1, F12, the cap) ──
-  { name: 'the word: shadow while the lane is not live', run: (m) => expect(m.parkWordAt(false, true, 0)).toBe('shadow') },
-  { name: 'the word: shadow while sign-in is dark, even with the lane live (F12)', run: (m) => expect(m.parkWordAt(true, false, 0)).toBe('shadow') },
-  { name: 'the word: live under the cap', run: (m) => expect([0, 1, 2].map((n) => m.parkWordAt(true, true, n))).toEqual(['live', 'live', 'live']) },
+  { name: 'the word: shadow while the lane is not live', run: (m) => expect(m.parkWordAt(false, true, 0, true)).toBe('shadow') },
+  { name: 'the word: shadow while sign-in is dark, even with the lane live (F12)', run: (m) => expect(m.parkWordAt(true, false, 0, true)).toBe('shadow') },
+  { name: 'the word: live under the cap', run: (m) => expect([0, 1, 2].map((n) => m.parkWordAt(true, true, n, true))).toEqual(['live', 'live', 'live']) },
   { name: 'the word: capped when the three slots are taken, and past them (the cap race)', run: (m) => {
-    expect(m.parkWordAt(true, true, 3)).toBe('capped');
-    expect(m.parkWordAt(true, true, 4)).toBe('capped');
+    expect(m.parkWordAt(true, true, 3, true)).toBe('capped');
+    expect(m.parkWordAt(true, true, 4, true)).toBe('capped');
   } },
-  { name: 'the word: a shadow lane is shadow even at the cap (one meaning per word)', run: (m) => expect(m.parkWordAt(false, true, 3)).toBe('shadow') },
+  { name: 'the word: a shadow lane is shadow even at the cap (one meaning per word)', run: (m) => expect(m.parkWordAt(false, true, 3, true)).toBe('shadow') },
+  { name: 'the word: capped on a key whose park is void or past its horizon, whatever its slots (review 2889 F4)', run: (m) => {
+    expect(m.parkWordAt(true, true, 0, false)).toBe('capped');
+    expect(m.parkWordAt(true, true, 2, false)).toBe('capped');
+  } },
+  { name: 'the word: a shadow lane is shadow on a closed key too', run: (m) => expect(m.parkWordAt(false, true, 0, false)).toBe('shadow') },
   // ── the key (F8-d) ──
   { name: 'the key names the registry id, the run and the input digest', run: (m) => {
     expect(m.parkKeyOf('project-a-quiet-basin', 7, 'ab'.repeat(32))).toBe(`project-a-quiet-basin:7:${'ab'.repeat(32)}`);
@@ -129,6 +133,7 @@ export const APPROVAL_PARK_CASES: readonly Case<ApprovalParkModule>[] = [
     expect(m.signingRefusal(sign({ rowClass: 'forbidden' }))).toBe('guard-forbidden');
     expect(m.signingRefusal(sign({ freshClass: 'forbidden' }))).toBe('guard-forbidden');
     expect(m.signingRefusal(sign({ authority: 'operator', freshClass: 'forbidden' }))).toBe('guard-forbidden');
+    expect(m.signingRefusal(sign({ authority: 'operator', rowClass: 'forbidden' }))).toBe('guard-forbidden');
   } },
   { name: 'sign: a coordinator allow of a row minted with older deny rules is deny-not-current', run: (m) => {
     expect(m.signingRefusal(sign({ rowDenyCurrent: false }))).toBe('deny-not-current');
@@ -149,15 +154,6 @@ export const APPROVAL_PARK_CASES: readonly Case<ApprovalParkModule>[] = [
   { name: 'sign: the operator may allow escalate at any deny currency, never an unknown class', run: (m) => {
     expect(m.signingRefusal(sign({ authority: 'operator', rowClass: 'escalate', freshClass: 'escalate', rowDenyCurrent: false, denyStandingNow: 'history' }))).toBeNull();
     expect(m.signingRefusal(sign({ authority: 'operator', freshClass: 'from-the-future' }))).toBe('guard-escalate');
-  } },
-  // ── `fetchedAt` (F8-c, F2-a) ──
-  { name: 'fetchedAt: recorded when served at least the grace before expiry', run: (m) => {
-    expect(m.fetchedAtRecordable(NOW, NOW + 10_000, 10_000)).toBe(true);
-    expect(m.fetchedAtRecordable(NOW, NOW + 10_001, 10_000)).toBe(true);
-  } },
-  { name: 'fetchedAt: not recorded when served later than the grace before expiry', run: (m) => {
-    expect(m.fetchedAtRecordable(NOW, NOW + 9_999, 10_000)).toBe(false);
-    expect(m.fetchedAtRecordable(NOW, NOW - 1, 0)).toBe(false);
   } },
   // ── Waiting on you's view (§3.3.2) ──
   { name: 'the view lists open parked rows oldest first, held by the coordinator', run: (m) => {

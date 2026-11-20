@@ -10031,7 +10031,7 @@ export class CoordStore {
    *  on a held row with a run, the word is decided INSIDE this transaction from the key's slots as read here, a `live`
    *  word reserves a slot, and the row stores the word and key. Answers the id and the word (null: no park step ran). */
   insertApprovalAt(a: Parameters<CoordStore['insertApproval']>[0] & {
-    park?: { key: string; laneLive: boolean; signedIn: boolean };
+    park?: { key: string; runId: number; laneLive: boolean; signedIn: boolean };
   }): { id: number; parkWord: ApprovalParkWord | null } {
     if (a.runId !== null && !isPositiveDecimalSafeInteger(a.runId)) {
       throw new Error('insertApproval: approval runId is not a positive safe integer');
@@ -10045,9 +10045,10 @@ export class CoordStore {
     const reason = a.releaseReason ?? null;
     return tx(this.db, () => {
       // The park's word, decided here with the slots this transaction reads (the cap race, F1): only a held row with a run.
+      // The park's run is the key's (the child's live binding run, review 2889 F2), not the row's.
       const park = a.park !== undefined && reason === null && a.runId !== null ? a.park : null;
       const parkWord = park === null ? null : parks.reserveParkAtMint(this.db, {
-        key: park.key, childId: a.childId, runId: a.runId as number, laneLive: park.laneLive, signedIn: park.signedIn, now: a.askAt,
+        key: park.key, childId: a.childId, runId: park.runId, laneLive: park.laneLive, signedIn: park.signedIn, now: a.askAt,
       });
       const exactId = stmt.run(
         a.childId, a.parentId, a.runId, a.digest, a.nonce, a.agentId, a.tool, a.inputRedacted, a.truncated ? 1 : 0,
@@ -10124,18 +10125,15 @@ export class CoordStore {
   /** The operator answered the dialog, or the painted dialog closed with no ruling taken: every open row (`held` or
    *  `released`) of the child becomes `operator`, so a later ruling is `409 already-ruled`. Returns the count. */
   markApprovalOperator(childId: string, now: number): number {
-    // Approvals PR 3 (F4): a pane answer on a parked row marks it `operator` too, and voids its park first, so a later ruling on
-    // that park can never allow the next identical command (a void park only refuses, so the two need no shared transaction).
-    parks.voidParksOfParkedRows(this.db, { childId });
     const res = this.db.prepare(
-      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released','parked')",
+      "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE childId = ? AND state IN ('held','released')",
     ).run(now, ASK_OPERATOR_PRINCIPAL, childId);
     return Number(res.changes);
   }
 
   /** A cleared painted dialog (`FleetWatcher`): of these rows, the ones no principal ruled become `operator`. */
   markApprovalOperatorRows(ids: readonly number[], now: number): number {
-    parks.voidParksOfParkedRows(this.db, { ids });   // approvals PR 3 (F4), as `markApprovalOperator`
+    parks.voidParksOfParkedRows(this.db, ids);   // approvals PR 3 (F4): only the rows this cleared dialog covered (review 2889 F3)
     let n = 0;
     const stmt = this.db.prepare(
       "UPDATE approvals SET state = 'operator', ruledAt = ?, answeredBy = ? WHERE id = ? AND state IN ('held','released','parked')");
