@@ -16,7 +16,9 @@
 
 This section says what reader mode builds on. Every claim about ccrc was read from `main` at `62276e71b`, and every claim about the library from the installed `@synapsium-labs/docserver` 1.1.0, on 2026-11-20.
 
-XR1 does not run on 1.1.0. It runs on the contract release, after X1's wave C re-pins ccrc to it and X2's P5 builds on it (§7.5). That release is 1.1.0 plus two designed landings: X1's contract (X1 spec §2, §6, §10) and X2's additions (X2 spec §4.7): the `place` op, `push` and `from` on the `hash` op, and the `close-overlay` and `goto` commands. Neither landing changes the chrome switches, the Aa menu's `settings` command, the keys the frame binds, `progress` or `pos`. So the 1.1.0 facts below are the contract release's as designed, and XR1's first step re-reads each one on the installed release before any code (the plan's Task XR1.1 Step 0).
+XR1 does not run on 1.1.0. It runs on the contract release, after X1's wave C re-pins ccrc to it and X2's P5 builds on it (§7.5). That release is 1.1.0 plus two designed landings: X1's contract (X1 spec §2, §6, §10) and X2's additions (X2 spec §4.7): the `place` op, `push` and `from` on the `hash` op, and the `close-overlay` and `goto` commands. Neither landing changes the chrome switches, the Aa menu's `settings` command, `progress` or `pos`, or, in the default layout, the keys the frame binds. So the 1.1.0 facts below are the contract release's default layout as designed, and XR1's first step re-reads each one on the installed release before any code (the plan's Task XR1.1 Step 0).
+
+The contract release also carries X2's five layouts (X2 spec §4.2): `default`, `classic`, `editorial`, `review` (with a rail and its own keys) and `guided` (folded sections, and tables as cards on a phone). The host picks one per device, and a change remounts the frame. Reader mode reads in the default layout only (§4.3, the coordinator's ruling on review 2947 F3), so every fact this design relies on is the default layout's.
 
 ### 1.1 What exists
 
@@ -309,7 +311,9 @@ flowchart TB
 ### 4.3 XR1 enters by a remount; XR2 does not
 
 The library reads its chrome switches once, at mount, in 1.1.0 and in the contract release alike: neither X1's landing nor X2's changes them.
-- **On a phone, no remount.** A phone's mount is already `host-bar`: the frame's bar is off and its top space trimmed, and the contents rail is a drawer. XR1 enters in place there, with nothing reloaded.
+- **The default layout, always.** Reader mode reads in the `default` layout, whatever layout the reader chose (the coordinator's ruling on review 2947 F3). Entering mounts the frame in `default` for reader mode's duration, and leaving remounts it in the reader's own layout. Where the reader's layout is already `default`, nothing remounts on that account. In another layout, entering costs one remount on a phone too, through the same `ReaderMount.remount` as the desktop's, with the same quiet wait and no opening hash. The other four layouts are never reached in reader mode: their rails, keys and folds never meet the menu control, `r` or the overlay.
+- **Measured first, with a fallback.** XR1's first step measures, per engine, whether leaving a non-default layout needs a remount on a phone, and what that remount costs: its time against lab E4's 1.4 s, and whether the 2026-11-06 phone blocks and the one-bar budgets hold through it. The browser leg measures this at 412 by 915, and the phones measure it as device row FS-9. If the remount breaks any of those, the fallback applies instead: the button is offered only while the default layout is active, with one sentence where it would be, "Reader mode reads in the default layout. Choose it in Page details to use reader mode." The measurement decides between the two, and the plan writes both as one rule.
+- **On a phone in the default layout, no remount.** A phone's mount is already `host-bar`: the frame's bar is off and its top space trimmed, and the contents rail is a drawer. XR1 enters in place there, with nothing reloaded.
 - **On a desktop, one remount.** XR1 remounts the same document in the same container with the chrome off, through a new bridge method, `ReaderMount.remount(chrome)`: the same rendered document, a new `MessageChannel` and nonce, as the same-page link's `openAt` already does (rich-docs §4.1, D2), but with no `initialHash`, because the library lets a hash win over the stored place and the page's opening fragment must not pull you back to it. The place comes back from the library's own `pos` field. That field is written 250 ms after scrolling stops, and the host drops the old frame's messages once it is destroyed, so the remount waits until `READER_REMOUNT_QUIET_MS` (400 ms) have passed since the last `progress` message, which XR1 asks for from every production mount (D-8805). The fill is drawn at once; only the swap waits.
 - **The cost** is one frame swap, about 0.2 to 1.4 s (lab E4's srcdoc timings), and what a remount already resets: the "Changed since your last visit" notice, open folds and drawn figures. XR2 replaces the remount with the in-place `reading` op (§7.2), so entering and leaving keep the very scroll position, the drawn figures and the folds on every device.
 
@@ -329,6 +333,7 @@ The library reads its chrome switches once, at mount, in 1.1.0 and in the contra
 | FS-6 | Every engine above | A tap in the frame after entry: keys and turns reach the frame; the external-link sheet shows inside reader mode | Holds |
 | FS-7 | iOS and Android | Wake lock granted in the tab and in the installed app; released when hidden | Granted where the engine has the API |
 | FS-8 | Desktop Chrome and one phone engine | `requestFullscreen` without a tap's activation rejects; with it, it resolves (M-1) | Holds |
+| FS-9 | iOS and Android, tab and installed | Entering reader mode from a non-default layout: whether it remounts, its time, and the one bar and the phone blocks through it (§4.3) | One remount, under 1.4 s |
 
 ### 4.5 The desktop Chromium measurement
 
@@ -534,7 +539,7 @@ Two ops ride the existing port, the existing host parser and `BRIDGE_LIMITS`; th
 | `r` and Esc forwarded; `r` in the keys sheet | `keys.js`, `keysheet.js` | Only when the seed accepts reader |
 | Text size, `size: s \| m \| l \| xl`, an Aa row | enhance's own stored prefs (`PREF_VALUES`, beside the lens), the stylesheet's `--rem` | Additive stored pref; the `prefs` op is unchanged; an absent size reads as `m` |
 | Reading time in `render()`'s `meta` | render | Additive field; not a frame asset |
-| Conformance and browser cases: a turn lands on a whole line in a fixture of known line boxes; a tap on a link, a selection, a Render button and a swipe in a wide table never turn; reduced motion; both ops' parser rows; taps at ten a second never close the bridge | the library's suites | New cases |
+| Conformance and browser cases, in the default layout (reader mode reads only there; the enhance modules are shared, so §7.4 still counts the growth in all five layouts): a turn lands on a whole line in a fixture of known line boxes; a tap on a link, a selection, a Render button and a swipe in a wide table never turn; reduced motion; both ops' parser rows; taps at ten a second never close the bridge | the library's suites | New cases |
 
 ### 7.4 Size: this design's share under test 8
 
@@ -611,7 +616,7 @@ This section says how each part is proved; the plan carries the rows.
 
 | Row | Installed action and observation |
 |---|---|
-| Reader mode | On the installed release carrying XR2: open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. (After XR1 alone, the text scrolls, and two small controls stay over its top corners, ccrc's menu control and the reader's own Aa, as §4.2 says; the row is run in full after XR2.) Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-8 recorded per engine |
+| Reader mode | On the installed release carrying XR2, in the default layout (reader mode switches to it for its duration, and the other four layouts are never reached in reader mode; one entry from `review` checks the switch and the return): open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. (After XR1 alone, the text scrolls, and two small controls stay over its top corners, ccrc's menu control and the reader's own Aa, as §4.2 says; the row is run in full after XR2.) Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-8 recorded per engine |
 
 ## 10. Decisions
 
@@ -639,6 +644,7 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R18 | The console behind reader mode | Inert and hidden from assistive technology, written as the page's own hiding through `modal-layers.ts`, which no closing sheet lifts; the palette does not offer reader mode | Proposed |
 | R19 | Blocks in full screen | End reader mode | Proposed |
 | R20 | XR1's library | The contract release, continuous scroll; LX6 in it if ready, else the next release, never held for | Agreed: the coordinator, review 2933 F7 (a), 2026-11-20 |
+| R21 | Layouts | Reader mode reads in the default layout: entering mounts it in `default`, leaving restores the reader's layout; if XR1's measurement shows that remount breaks a budget, reader mode is offered in the default layout only | Agreed: the coordinator, review 2947 F3, 2026-11-20 |
 
 ## 11. Promise delta
 
