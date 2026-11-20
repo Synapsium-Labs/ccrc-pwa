@@ -109,6 +109,10 @@ describe('parked approvals join the one list (approvals PR 3, review 2889 F7)', 
     expect(needsYouCount(entries)).toBe(2);
     expect(needsYouCount(entries, 'prog-a')).toBe(0);
   });
+  it('a resumed child\'s parked approval files the park\'s run the server names (wave 2), never wave 1 (approvals PR 3c F-D)', () => {
+    const runs = [run(7, 'done', 'project-a-quiet-basin', 'project-a-calm-mesa'), run(8, 'working', 'project-a-quiet-basin', 'project-a-calm-mesa')];
+    expect(needsYou([], [], runs, [parkedRow(1, 8)])).toEqual([{ programme: '', runId: 8, kind: 'parked' }]);
+  });
   it('the Waiting door\'s badge counts a screen that holds only parked approvals', () => {
     expect(waitingItemsCount(waitingView({ approvals: [parkedRow(1, null)] }), [], [])).toBe(1);
     expect(waitingItemsCount(waitingView({}), [], [])).toBe(0);

@@ -4,7 +4,7 @@
 // (`createQuestions`); the route hunks that wire it are pinned through the server in `approval-park-routes.test.ts`. The lane
 // is driven live past its gate (`parkGate`), because this build holds it inert. A case named
 // "inert" pins that hold. Neutral fixtures only; never the live HOME.
-import { describe, it, expect, afterEach } from 'vitest';
+import { describe, it, expect, afterEach, vi } from 'vitest';
 import { createPublicKey, verify } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -553,6 +553,14 @@ describe('the park write asks whether the key\'s park is still open (approvals P
     expect(parkOf(r, a.id)?.parkedAt ?? null, 'no first park is recorded').toBeNull();
     expect(r.pushes).toEqual([]);
     expect(parkedApprovalsFor(r.f.coord, Date.now())).toEqual([]);
+  });
+  it('a park whose run cannot be read parks nothing: doubt closes it, as at the doors', async () => {
+    const r = await rig();
+    const a = await minted(r.raise());
+    const read = vi.spyOn(r.f.coord, 'run').mockReturnValue({ ok: false, kind: 'run-unreadable', detail: 'the fixture refuses' } as never);
+    try { r.lapse(pastWindow(r, a.id)); } finally { read.mockRestore(); }
+    expect(r.row(a.id).state).toBe('stale');
+    expect(r.pushes).toEqual([]);
   });
   it('the last-poll move on a closed run: an unfetched allow is not moved, and no mail says run it again', async () => {
     const r = await rig();

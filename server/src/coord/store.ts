@@ -10182,7 +10182,7 @@ export class CoordStore {
 
   // The park (approvals PR 3): its SQL is `approvalParkStore.ts`'s, every write in this store's transaction. `parkApprovalRow`
   // is the one write of `parked`; `meetApprovalParkRuling` is the spend (F6); see each function there.
-  parkApprovalRow(id: number, now: number): boolean { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now)); }
+  parkApprovalRow(id: number, now: number, runClosed: (runId: number) => boolean): parks.ParkMove { return tx(this.db, () => parks.parkApprovalRow(this.db, id, now, runClosed)); }
   /** The last-poll move's read (F2): ruled rows minted `live` at or after `sinceAskAt` whose ruling the hook never fetched. */
   approvalsUnfetchedLive(sinceAskAt: number): ApprovalsReadResult {
     return this.approvalRows("WHERE state IN ('allowed','denied') AND parkWord = 'live' AND fetchedAt IS NULL AND askAt >= ? ORDER BY id", sinceAskAt);

@@ -142,8 +142,10 @@ export interface DeferredApprovalEntry { readonly rowIds: readonly number[] }
 export type DeferredApprovalRows = { readonly ok: true; readonly rows: readonly Pick<ApprovalRow, 'id' | 'state' | 'notifyAt' | 'ruledAt'>[] } | { readonly ok: false };
 
 /** One deferred push at `now` (D-5298, D-5440): an unreadable read `wait`s (retried next sweep); an entry covering a
- *  `parked` row is `drop`ped (approvals PR 3, F4, F16: a parked row's push is the outbox's, and the dialog is never pushed
- *  for a pane press); a covered row still `held` inside its window `wait`s; every covered row ruled within the last
+ *  `parked` row is never pushed (approvals PR 3, F4, F16: a parked row's push is sent at park time, and the dialog is never
+ *  pushed for a pane press): it `wait`s while its dialog is painted, so the operator's press on that dialog still reaches
+ *  the parked row and voids its park (approvals PR 3c, F-A), and is `drop`ped once it is not; a covered row still `held`
+ *  inside its window `wait`s; every covered row ruled within the last
  *  `graceMs` (the ruled grace, measured from each row's `ruledAt`: the hook is printing the ruling and the dialog is about
  *  to clear) `wait`s; otherwise the entry goes, `push` while its dialog is still `painted` and `drop` when it is not. */
 export function decideDeferredApprovalPush(
@@ -151,12 +153,36 @@ export function decideDeferredApprovalPush(
 ): DeferredApprovalPush {
   if (!rows.ok) return 'wait';
   const mine = rows.rows.filter((x) => entry.rowIds.includes(x.id));
-  if (mine.some((x) => x.state === 'parked')) return 'drop';
+  if (mine.some((x) => x.state === 'parked')) return painted ? 'wait' : 'drop';
   if (mine.some((x) => x.state === 'held' && now < x.notifyAt)) return 'wait';
   const ruledRecently = mine.length === entry.rowIds.length && mine.length > 0
     && mine.every((x) => x.state !== 'held' && x.ruledAt !== null && now < x.ruledAt + graceMs);
   if (ruledRecently) return 'wait';
   return painted ? 'push' : 'drop';
+}
+
+/** How long before a `held` `live` row's `notifyAt` a cleared dialog is read as the hook's park deny, not as a press
+ *  (approvals PR 3c, F-A). Measured from the hook: its deadline is its own clock at the `201` plus the whole seconds of
+ *  `waitS` (`floor`, up to 1 s early), and its clock falls back to whole seconds where `EPOCHREALTIME` and `date +%s%3N`
+ *  are both missing (up to 1 s more). So the park deny can clear the prompt up to 2 s before `notifyAt`, never earlier; the
+ *  watcher's 2 s poll only sees it later. */
+export const APPROVAL_PARK_CLEAR_SLACK_MS = 2_000;
+
+/** The child's rows a cleared-dialog settle reads (`held`, `released`, `parked`), or `unreadable`. */
+export type ClearSettleRows = { readonly ok: true; readonly rows: readonly Pick<ApprovalRow, 'id' | 'state' | 'notifyAt' | 'parkWord'>[] } | { readonly ok: false };
+type ClearSettleRow = Extract<ClearSettleRows, { ok: true }>['rows'][number];
+
+/** The rows a painted approval dialog's clear marks `operator` (spec §6.3 server step 5; approvals PR 3c, F-A): of the
+ *  rows its deferred push covers, each `held` or `released` one, EXCEPT a `held` row stored `live` at or past its
+ *  `notifyAt` less `APPROVAL_PARK_CLEAR_SLACK_MS` (the hook printed the park deny, which cleared the dialog; the sweep parks
+ *  the row, in this tick or the next). A `parked` row is never settled by a clear: after the park a clear is the park deny,
+ *  and only the operator's press on that dialog voids the park. An unreadable read settles nothing: the sweep rules each
+ *  held row by its own clock. Covered ids, in the entry's order. */
+export function clearSettledApprovalIds(rowIds: readonly number[], rows: ClearSettleRows, now: number): number[] {
+  if (!rows.ok) return [];
+  const settles = (x: ClearSettleRow): boolean =>
+    x.state === 'released' || (x.state === 'held' && !(x.parkWord === 'live' && now >= x.notifyAt - APPROVAL_PARK_CLEAR_SLACK_MS));
+  return rowIds.filter((id) => rows.rows.some((x) => x.id === id && settles(x)));
 }
 
 /** The phases of an entry in the hold carrier (`coord/questions.ts#createQuestions`'s `questionHolds`, W3 Q3d, D-7028):
