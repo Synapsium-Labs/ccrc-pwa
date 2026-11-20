@@ -214,9 +214,12 @@ export class LinearMigration {
     if (!parsed.ok) return parsed;
     // An issue ccrc's sync already holds (a programme born in the new shape, §10.5) is no part of a map: one writer per Linear object.
     const held = new Set(plan.boundLinearIdsOf(open.workspaceId));
-    // A follow-up's issues are the ones the apply skipped: an adopted one keeps its binding (its ticket dropped "put back"), so the
-    // binding must not hide it from the follow-up map.
-    const rows = followUp === null ? open.rows.filter((r) => !held.has(r.linearId)) : open.rows.filter((r) => followUp.includes(r.identifier));
+    // A follow-up's issues are the ones the apply skipped: one this migration adopted and then set aside keeps its binding (its
+    // ticket dropped "put back"), so exactly those, by this migration's own set-aside rows, are not hidden by it; any other bound
+    // issue stays out on both paths (the wave's security review).
+    const setAside = new Set(plan.movesOf(row.id).filter((x) => x.subject.includes(':skipped:') && x.linearId !== null).map((x) => x.linearId!));
+    const mappable = open.rows.filter((r) => !held.has(r.linearId) || setAside.has(r.linearId));
+    const rows = followUp === null ? mappable : mappable.filter((r) => followUp.includes(r.identifier));
     const runs = this.runFacts();
     if (runs === null) return { ok: false, word: 'unreachable', detail: 'the runs could not be read' };
     const project = row.project ?? owner.project;
@@ -673,9 +676,12 @@ export class LinearMigration {
     if (slot === undefined || this.deps.planSync.keyBlockedUntil(m.workspaceId) > now) return;
     const entries = this.deps.directory.get(slot.ref, slot.digest);
     if (entries === null) return;
-    const moves = plan.movesOf(m.id).filter((x) => x.appliedAt !== null);
-    const local = (kind: string) => moves.filter((x) => x.before === null && x.subject.startsWith(`${kind}:`)).map((x) => Number(x.subject.split(':')[1]));
-    plan.dropPutBack({ epics: local('epic'), checkpoints: local('checkpoint'), tickets: moves.flatMap((x) => (typeof x.after['ticketId'] === 'number' ? [x.after['ticketId']] : [])) }, now);
+    // The ccrc half covers every record the migration made, applied or not (a security review: an unapplied adoption's ticket must
+    // not stay live); Linear's half restores only what was applied.
+    const recorded = plan.movesOf(m.id);
+    const local = (kind: string) => recorded.filter((x) => x.before === null && x.subject.startsWith(`${kind}:`)).map((x) => Number(x.subject.split(':')[1]));
+    plan.dropPutBack({ epics: local('epic'), checkpoints: local('checkpoint'), tickets: recorded.flatMap((x) => (typeof x.after['ticketId'] === 'number' ? [x.after['ticketId']] : [])) }, now);
+    const moves = recorded.filter((x) => x.appliedAt !== null);
     const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()) };
     const movedSince = new Set(report.movedSince);
     const todo = moves.filter((x) => x.kind === 'issue' && x.revertedAt === null && x.linearId !== null).sort((a, b) => b.id - a.id).slice(0, PUT_BACK_ISSUES_PER_TICK);
@@ -701,7 +707,10 @@ export class LinearMigration {
         // The programme's plan was the map's: its end is recorded `abandoned` "put back", so nothing reopens it, and its initiative
         // is canceled here, in the key's flight. With every epic put back, the sync's snapshot has no fact for the initiative and
         // sends it nothing, so it never writes over this cancel.
-        if (slug !== null && plan.planEndOf(slug) === null) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now());
+        // Only a programme whose plan is still the map's own is ended and its initiative canceled (a security review): one its
+        // coordinator has since declared is theirs, and is left as it is.
+        if (slug === null || plan.planOf(slug).planBy !== MIGRATION_PLAN_BY) { plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
+        if (plan.planEndOf(slug) === null) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now());
         if (row.linearId !== null) {
           const out = await this.deps.planSync.withFlight(slug ?? `migration:${row.linearId}`, () => this.deps.call({
             pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, op: 'initiativeUpdate', target: row.linearId,

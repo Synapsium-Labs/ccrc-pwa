@@ -1,6 +1,9 @@
 /* The map body's structure section and the report's lists (Linear hierarchy design §11.3, D-8186; D-8737's handover): plain
-   lists that wrap at every width, each programme's epics indented under it and each epic's checkpoints under that. */
-.wm-structure, .wm-rlist { display: grid; gap: var(--sp-1); min-width: 0; margin-top: var(--sp-3); }
-.wm-plain { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+   block lists that wrap at every width, each programme's epics indented under it and each epic's checkpoints under that.
+   Measured in the browser file's width table: `min-width: 0` on the sections, or `overflow-wrap: anywhere` on their items,
+   shrank the body's track and clipped the issue groups beside them at laptop and wide widths; `break-word` wraps a long name
+   without shrinking it, and every view passes. */
+.wm-structure, .wm-rlist { margin-top: var(--sp-3); }
+.wm-plain { list-style: none; margin: 0; padding: 0; }
+.wm-plain li { margin-top: var(--sp-1); overflow-wrap: break-word; }
 .wm-plain .wm-plain { padding-inline-start: var(--sp-3); }
-.wm-plain li { min-width: 0; overflow-wrap: anywhere; }

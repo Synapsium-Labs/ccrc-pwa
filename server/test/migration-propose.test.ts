@@ -163,6 +163,20 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1')] }, open)).toMatchObject({ ok: true });
   });
 
+  it('a follow-up map still leaves out a bound issue this migration never set aside (security review)', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2')]);
+    r.issues.get(U(102))!.title = 'Edited by a person after the map';
+    await r.until(() => r.stateOf(id) === 'applied');
+    // AAA-1 was adopted and applied: listing it among the skipped does not open it to a follow-up map
+    const m = r.plan.migrationById(id)!;
+    r.plan.setMigration(id, ['applied'], { report: { ...m.report!, skipped: ['AAA-1', 'AAA-2'] } }, r.t.now);
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-1' });
+  });
+
   it('awaitsMap answers only while a migration waits', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);

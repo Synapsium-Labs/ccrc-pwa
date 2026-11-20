@@ -134,6 +134,30 @@ describe('the migration report and put back (D-8186)', () => {
     expect(r.asks.filter((a) => a.op === 'initiativeUpdate')).toEqual([]);
   });
 
+  it('put back leaves a programme its coordinator has since declared: no plan end, no initiative write (security review)', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    r.addIssue(1);
+    const id = await r.applied([B_LEAF(1, 'k1')], STRUCTURE);
+    r.db.prepare("UPDATE programs SET planBy = 'coord-b' WHERE slug = 'prog-b'").run();
+    r.asks.length = 0;
+    await putBack(r, id);
+    expect(r.plan.migrationById(id)!.state).toBe('put-back');
+    expect(r.plan.planEndOf('prog-b')).toBeNull();
+    expect(r.asks.filter((a) => a.op === 'initiativeUpdate' && a.pass === 'put-back')).toEqual([]);
+  });
+
+  it('put back drops the ticket of a move row that never applied, as well as the applied ones (security review)', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const id = await r.applied([leaf(1, 'k1')]);
+    const row = r.plan.movesOf(id).find((x) => x.kind === 'issue')!;
+    r.db.prepare('UPDATE linear_migration_moves SET appliedAt = NULL WHERE id = ?').run(row.id);
+    await putBack(r, id);
+    const ticket = r.plan.planOf(SLUG).epics.flatMap((e) => e.tickets).find((t) => t.id === row.after['ticketId']);
+    expect(ticket?.putBackAt).not.toBeNull();
+  });
+
   it("put back leaves the project's Upkeep epic in place, and inbound keeps placing into it", async () => {
     const r = await migRig();
     r.addIssue(1);
