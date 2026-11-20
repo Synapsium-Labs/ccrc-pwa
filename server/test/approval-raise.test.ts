@@ -170,7 +170,7 @@ describe('raiseApproval: each fixture request maps to its verdict arm (W3 Q3e, D
     const rows: Array<[ApprovalRaiseRequest, ApprovalRaiseDeps, string]> = [
       [{ ...t, truncated: true }, raiseDeps(f), 'truncated'],
       [req(hookInput({ toolInput: ['rm'] as never })), raiseDeps(f), 'unparseable'],
-      [req(), raiseDeps(f, { heldFor: async () => ({ kind: 'released', parent: PARENT, runId: f!.runId, reason: 'parent-not-live' }) }), 'parent-not-live'],
+      [req(), raiseDeps(f, { heldFor: async () => ({ kind: 'released', parent: PARENT, runId: f!.runId, bindingRunId: f!.runId, reason: 'parent-not-live' }) }), 'parent-not-live'],
       [req(hookInput({ command: 'ccd ws-rm project-a-still-cove' })), raiseDeps(f), 'forbidden'],
     ];
     for (const [r, d, reason] of rows) {
