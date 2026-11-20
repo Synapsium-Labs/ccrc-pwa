@@ -7,7 +7,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import type { Element as HastElement } from 'hast';
 import {
-  DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, contentClass, docsApi, docsPageUrl, resolveDocRef,
+  DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, contentClass, docsApi, docsPageUrl, entryView, resolveDocRef,
   type DocPin, type DocsEntry, type DocsPageLocation, type RasterMime,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
@@ -121,13 +121,21 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   }
   const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
-  if (!ip.ok) return refused(ip.why);
+  if (!ip.ok) {
+    // A draft with no fingerprint is withheld here (the raster route needs one), but its own page reads it by range
+    // through its stat pin (spec 4.3), so the chip opens that page.
+    if (ip.why === 'draft-withheld' && e !== undefined && entryView(e, ctx.tree.drafts, 'ref').pin?.kind === 'stat') {
+      return refused('draft-unhashed', { kind: 'viewer', href: leafHref });
+    }
+    return refused(ip.why);
+  }
   // Refinement (n): on a version page the listing's size is not checked, so ccd's class cap answers. Every other page
   // asks the one size basis the mockup planner reserves by (`mockupSizeBasis`, D-8659): a listed size is checked here.
   const basis = ctx.pageAt !== null ? null : mockupSizeBasis(e, ctx.tree, ip.pin, cls);
   const cap = DOCS_CLASS_CAP[cls];
   if (basis !== null && basis.kind === 'listed' && basis.bytes > cap) {
-    return refused('too-large', null, { size: kib(basis.bytes), cap: kib(cap) });
+    // Spec 4.3: the chip keeps its sentence and opens the image's own page, which reads it by range.
+    return refused('too-large', { kind: 'viewer', href: leafHref }, { size: kib(basis.bytes), cap: kib(cap) });
   }
   return {
     kind: 'pinned', pin: ip.pin, cls, draft: ip.draft, uncommittedNotShown: ip.uncommittedNotShown, leafHref,

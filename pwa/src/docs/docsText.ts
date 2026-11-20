@@ -377,7 +377,7 @@ export const DOC_LINK_OUTSIDE_PAGE = 'Links open only inside a Docs page';
 export type DocImageRefusal =
   | 'outside-page'
   | Extract<ImagePin, { ok: false }>['why']
-  | 'not-image' | 'external' | 'too-large' | 'fragment' | 'repo'
+  | 'not-image' | 'external' | 'too-large' | 'draft-unhashed' | 'fragment' | 'repo'
   | Extract<DocRefResolution, { kind: 'self-contained' }>['scheme']
   | Extract<DocRefResolution, { kind: 'refused' }>['why'];
 
@@ -390,6 +390,7 @@ export const DOC_IMAGE_REFUSED_SENTENCE: Record<DocImageRefusal, string> = {
   'not-image': 'it is not an image Docs shows (PNG, JPEG, GIF, WebP or SVG)',
   'external': 'it is on another site, and Docs never loads images from other sites',
   'too-large': 'it is {size}; Docs shows images up to {cap}',
+  'draft-unhashed': 'its draft has no fingerprint, so only its own page shows it',
   'fragment': 'it names a place in this page, not an image',
   'repo': 'it is outside the Docs sections',
   'data': 'it carries its own bytes, which Docs does not load',

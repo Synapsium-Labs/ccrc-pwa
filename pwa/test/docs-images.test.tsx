@@ -389,6 +389,26 @@ describe('M4.U1: nothing hostile becomes src, and nothing is fetched for it', ()
     expect(imgs(container)).toHaveLength(0);
   });
 
+  it('an image past its class cap keeps its chip, and the chip opens the image\'s own page (X2 P1, review F5)', async () => {
+    const cap = DOCS_CLASS_CAP.raster;
+    const url = '/docs/demo/specs/a.md?ref=main';
+    const committed = renderDoc('![i](i.png)', { tree: withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: cap + 1 } }), url });
+    await act(async () => {});
+    expect(committed.container.querySelector('span.doc-img-refused')?.textContent)
+      .toBe(refusedText('too-large', { size: kib(cap + 1), cap: kib(cap) }));
+    fireEvent.click(committed.getByRole('button', { name: DOC_IMAGE_TEXT.openViewer }));
+    expect(location.pathname + location.search).toBe('/docs/demo/specs/i.png?ref=main');
+    expect(committed.assets.raster).not.toHaveBeenCalled();
+    cleanup();
+    const drafted = renderDoc('![i](i.png)', {
+      tree: withImage({ committed: { kind: 'file', blob: '1'.repeat(40), size: 10 }, draft: draftOf('modified', { fp: FP_2, size: cap + 1 }) },
+        { draft: draftOf('modified') }),
+      url,
+    });
+    await act(async () => {});
+    expect(drafted.queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer })).toHaveLength(1);
+  });
+
   it('outside a Docs page every image is refused, and nothing is fetched', () => {
     const d = detachUrls(treeOf('![i](i.png)'));
     const bare = render(<>{renderHast(d.tree, { components: { ...SHARED_COMPONENTS, img: DocImage } })}</>);
@@ -455,6 +475,28 @@ describe('M4.U2 and row 66: each page loads exactly the pin the rule gives', () 
       [refusedText('deleted-in-worktree'), refusedText('draft-withheld')]);
     expect(assets.raster).not.toHaveBeenCalled();
     expect(imgs(container)).toHaveLength(0);
+  });
+
+  it('a draft image with no fingerprint but a stat pin is withheld here and its chip opens its page, which reads it by range (X2 P1, review F5)', async () => {
+    const stat = { fp: null, size: 5 * 1048576, mtimeNs: '1700000000000000000' };
+    const tree = treeOk({
+      drafts: holder(),
+      entries: [
+        entry('specs', 'a.md', { draft: draftOf('modified') }),
+        entry('specs', 'big.png', { draft: draftOf('modified', stat) }),
+        entry('specs', 'old.png', { draft: draftOf('modified', { fp: null }) }),
+      ],
+    });
+    const { container, getByRole, queryAllByRole, assets } = renderDoc('![b](big.png) ![o](old.png)',
+      { tree, url: '/docs/demo/specs/a.md?ref=main' });
+    await act(async () => {});
+    expect([...container.querySelectorAll('span.doc-img-refused')].map((s) => s.textContent))
+      .toEqual([refusedText('draft-unhashed'), refusedText('draft-withheld')]);
+    expect(queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer }), 'the draft with no stat pin offers nothing').toHaveLength(1);
+    fireEvent.click(getByRole('button', { name: DOC_IMAGE_TEXT.openViewer }));
+    expect(location.pathname + location.search).toBe('/docs/demo/specs/big.png?ref=main');
+    expect(assets.raster).not.toHaveBeenCalled();
+    expect(assets.file).not.toHaveBeenCalled();
   });
 
   it('tapping a loaded image opens its own leaf in-app at the page ref, never /api/', async () => {
