@@ -8,9 +8,12 @@ import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-libra
 import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocListPin, type DocPin } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
-import { RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
+import { DocsLeaf, RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
+import { useDocsVisit } from '../src/docs/useDocsVisit';
+import { parseMarkdown } from '../src/lib/markdownParse';
+import { draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk } from './docsFixtures';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
-import { DOCS_RANGE_TEXT, fillSentence } from '../src/docs/docsText';
+import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, fillSentence } from '../src/docs/docsText';
 import { MarkdownParts } from '../src/docs/range/MarkdownParts';
 import { RangeImage, RangeLeaf, rangeReadKey } from '../src/docs/range/RangeLeaf';
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
@@ -145,70 +148,104 @@ describe('RangeLeaf: one read per read key', () => {
 });
 
 describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
-  type Stat = { kind: 'stat'; size: number; mtimeNs: string };
-  const STAT_OLD: Stat = { kind: 'stat', size: 5242880, mtimeNs: '1700000000000000000' };
-  const STAT_NEW: Stat = { kind: 'stat', size: 5242881, mtimeNs: '1700000000000000001' };
-  const at = (range: Stat): RangeTarget => ({
-    project: 'demo', range, size: range.size,
-    pin: { kind: 'draft', branch: 'ws/a', head: 'c'.repeat(40), section: 'specs', path: 'big.md', fp: null,
-      stat: { size: range.size, mtimeNs: range.mtimeNs } },
+  /** The range side of the visit, which owns the one re-list rule: `stale` is what it answers to a failed read. */
+  const fakeVisit = (stale: 'relist' | 'changing' | 'other') =>
+    ({ rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), retryTree: vi.fn() });
+  const failing = (word: string, commits: string[]): RangeLoader => ({
+    async prepare(t) {
+      commits.push(t.pin.kind === 'committed' ? t.pin.commit : '');
+      return { s: 'failed', body: { ok: false, failure: word as 'draft-changed' } };
+    },
+    async frame() { throw new Error('no frame'); },
   });
+  const withCommit = (c: string): RangeTarget => ({ ...target(5242880), pin: { ...COMMITTED, commit: c.repeat(40) } });
+  const propsOf = (t: RangeTarget, loader: RangeLoader, visit: ReturnType<typeof fakeVisit>) =>
+    ({ target: t, cls: 'markdown' as const, name: 'big.md', loader, visit });
 
   it.each(['draft-changed', 'unknown-commit', 'worktree-moved', 'worktree-gone'] as const)(
-    'a %s answer calls relist once, and the next Read it reads the pin the new listing gave',
+    'a %s answer is handed to the visit, and once its re-list gives a new pin the leaf reads it without a tap',
     async (word) => {
-      // A committed doc re-listed after a force-push keeps its blob, so its read key does not move: "Read it" is the
-      // way on, and it must send the commit the new listing gave.
+      // A committed doc re-listed after a force-push keeps its blob, so its read key does not move: the leaf starts the
+      // read itself when the pin it was given changes while a re-list is pending.
       const commits: string[] = [];
-      const loader: RangeLoader = {
-        async prepare(t) {
-          commits.push(t.pin.kind === 'committed' ? t.pin.commit : '');
-          return { s: 'failed', body: { ok: false, failure: word } };
-        },
-        async frame() { throw new Error('no frame'); },
-      };
-      const relist = vi.fn();
-      const withCommit = (c: string): RangeTarget => ({ ...target(5242880), pin: { ...COMMITTED, commit: c.repeat(40) } });
-      const props = (t: RangeTarget) => ({ target: t, cls: 'markdown' as const, name: 'big.md', loader, relist });
-      const { rerender } = render(<RangeLeaf {...props(withCommit('a'))}>{() => <p>view</p>}</RangeLeaf>);
+      const visit = fakeVisit('relist');
+      const loader = failing(word, commits);
+      const { rerender } = render(<RangeLeaf {...propsOf(withCommit('a'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
       await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-      expect(relist, 'one re-list for the stale answer').toHaveBeenCalledTimes(1);
-      // The re-list gave the leaf a new pin: the same instance sees it through its props.
-      rerender(<RangeLeaf {...props(withCommit('e'))}>{() => <p>view</p>}</RangeLeaf>);
-      fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.readAgain));
-      await waitFor(() => expect(commits).toHaveLength(2));
-      expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]);
-      await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-      expect(relist, 'a second stale answer does not re-list again').toHaveBeenCalledTimes(1);
+      expect(visit.rangeFailed).toHaveBeenCalledTimes(1);
+      expect(visit.rangeFailed).toHaveBeenCalledWith(word);
+      rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
+      await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]));
     },
   );
 
-  it('a draft re-listed with a new stat pin reads again by itself, with the new pin, and re-lists once', async () => {
-    const seen: string[] = [];
-    const loader: RangeLoader = {
-      async prepare(t) { seen.push(rangeReadKey(t)); return { s: 'failed', body: { ok: false, failure: 'draft-changed' } }; },
-      async frame() { throw new Error('no frame'); },
-    };
-    const relist = vi.fn();
-    const props = (t: RangeTarget) => ({ target: t, cls: 'markdown' as const, name: 'big.md', loader, relist });
-    const { rerender } = render(<RangeLeaf {...props(at(STAT_OLD))}>{() => <p>view</p>}</RangeLeaf>);
-    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
-    rerender(<RangeLeaf {...props(at(STAT_NEW))}>{() => <p>view</p>}</RangeLeaf>);
-    await waitFor(() => expect(seen).toHaveLength(2));
-    expect(seen[1]).toBe(rangeReadKey(at(STAT_NEW)));
-    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
-    expect(relist, 'the stale answer of the new read was the leaf\'s second, and re-lists no more').toHaveBeenCalledTimes(1);
+  it('once the visit has spent its re-list the failure says the listing changed, and Read it goes through the visit\'s retry', async () => {
+    const commits: string[] = [];
+    const visit = fakeVisit('changing');
+    const loader = failing('draft-changed', commits);
+    const { rerender } = render(<RangeLeaf {...propsOf(withCommit('a'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(DOCS_VIEW_TEXT.changing));
+    fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.readAgain));
+    expect(visit.retryTree, 'the tap re-lists; it does not resend the stale pin').toHaveBeenCalledTimes(1);
+    expect(commits).toEqual(['a'.repeat(40)]);
+    rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]));
   });
 
-  it('an answer that is not a re-list word never calls relist', async () => {
-    const loader: RangeLoader = {
-      async prepare() { return { s: 'failed', body: { ok: false, failure: 'snapshot-gone' } }; },
+  it('a failure that is no re-list word keeps its own sentence, and Read it reads again at once', async () => {
+    const commits: string[] = [];
+    const visit = fakeVisit('other');
+    const loader = failing('snapshot-gone', commits);
+    render(<RangeLeaf {...propsOf(withCommit('a'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(screen.getByRole('alert').textContent).not.toBe(DOCS_VIEW_TEXT.changing);
+    fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.readAgain));
+    await waitFor(() => expect(commits).toHaveLength(2));
+    expect(visit.retryTree).not.toHaveBeenCalled();
+  });
+
+  it('a read that succeeds tells the visit, which re-arms its one re-list', async () => {
+    const s = servingLoader(BYTES);
+    const visit = fakeVisit('relist');
+    render(<RangeLeaf {...propsOf(target(BYTES.length), s.loader, visit)}>{() => <p>shown</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByText('shown')).toBeTruthy());
+    expect(visit.rangeRead).toHaveBeenCalledTimes(1);
+    expect(visit.rangeFailed).not.toHaveBeenCalled();
+  });
+});
+
+describe('DocsLeaf: a changing draft re-lists once (X2 P1, review F2)', () => {
+  it('a draft that changes on every listing re-lists once and reads twice at most, then says the listing changed', async () => {
+    let listings = 0;
+    const MIB5 = 5 * 1048576;
+    const treeAt = (n: number) => treeOk({
+      drafts: holder(),
+      entries: [entry('specs', 'big.md', {
+        draft: draftOf('modified', { fp: null, size: MIB5, mtimeNs: String(1700000000000000000n + BigInt(n)) }),
+      })],
+    });
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async () => { listings += 1; return okTree(treeAt(listings)); });
+    const prepares: string[] = [];
+    const rangeLoader: RangeLoader = {
+      async prepare(t) { prepares.push(rangeReadKey(t)); return { s: 'failed', body: { ok: false, failure: 'draft-changed' } }; },
       async frame() { throw new Error('no frame'); },
     };
-    const relist = vi.fn();
-    render(<RangeLeaf target={at(STAT_OLD)} cls="markdown" name="big.md" loader={loader} relist={relist}>{() => <p>view</p>}</RangeLeaf>);
-    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
-    expect(relist).not.toHaveBeenCalled();
+    const located = pageAt('/docs/demo/specs/big.md?ref=main');
+    if (located.kind !== 'path') throw new Error('fixture: not a leaf');
+    const page = located;
+    const parser = async (src: string) => parseMarkdown(src, 'docs');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={rangeLoader} />;
+    }
+    render(<Harness />);
+    await waitFor(() => expect(prepares.length).toBeGreaterThan(0));
+    await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
+    expect(prepares.length, 'the first read, and the one read of the re-listed pin').toBeLessThanOrEqual(2);
+    expect(listings, 'the visit\'s first listing and its one re-list').toBe(2);
+    expect(screen.getByRole('alert').textContent).toBe(DOCS_VIEW_TEXT.changing);
   });
 });
 

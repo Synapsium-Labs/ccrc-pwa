@@ -136,6 +136,9 @@ export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocListPin | n
   throw new Error('pinFor: a draft opened with neither a fingerprint nor a stat pin');
 }
 
+/** What `DocsVisit.rangeFailed` answers a failed range read (see there). */
+export type RangeStale = 'relist' | 'changing' | 'other';
+
 /** One visit, as the Docs views read it. */
 export interface DocsVisit {
   /** The current page's tree slot; null = the page names no project (the index, or a URL that did not parse). */
@@ -156,6 +159,14 @@ export interface DocsVisit {
   retryTree(): void;
   /** Read the current leaf again: after `changing`, re-list first; after any other failure, read again. */
   retryFile(): void;
+  /** A range read of the current leaf was refused with `word`. The one owner of the automatic re-list for a read that
+   *  went by range, beside the file route's (`relist`: the word asked for it and the visit just took the page's one
+   *  re-list, so the leaf waits for the new pin; `changing`: it asked and the re-list is spent, so the leaf says the
+   *  listing changed and offers Read it through `retryTree`; `other`: not a re-list word, or a version page). Optional
+   *  only so a hand-built visit that reads no range (a view test's) need not carry it; `useDocsVisit` always does. */
+  rangeFailed?(word: DocsFailure): RangeStale;
+  /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does. */
+  rangeRead?(): void;
   /** The freshness chip's tap: one manual POST, only while the tree slot is ok and no POST is in flight. */
   refreshManual(): void;
   /** `unresolved-ref`'s Fetch from origin: one manual POST, only while the slot holds that word. */
@@ -219,6 +230,19 @@ function isLocalHeadsRef(ref: DocsRefSpec | null): boolean {
 
 function autoRetryId(scope: string, key: string, word: string): string {
   return [scope, key, word].join(NUL);
+}
+
+/** The page the one automatic re-list belongs to: tree key, section, path. It is never a file key, which carries a
+ *  fingerprint or a stat pin that can move on every listing (a per-key one-shot would then re-list without end). */
+function relistPageKey(tKey: string, section: string, path: string): string {
+  return [tKey, section, path].join(NUL);
+}
+
+/** Whether a failed read's word asks for the one automatic re-list: a word that means the listing moved, off a version
+ *  page (a version's commit is the URL's own, so no re-list can change its answer). The file route and the range read
+ *  both ask it. */
+function relistsOn(word: DocsFailure, version: boolean): boolean {
+  return DOCS_RELIST_WORDS.has(word) && !version;
 }
 
 /** Whether two pins name the same bytes: every field equal; a committed pin never equals a draft pin. Share compares a
@@ -538,7 +562,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     // The one automatic re-list belongs to the PAGE (tree key, section, path), never to the file key: a draft's key
     // carries its fingerprint, which can move on every listing, and a per-key one-shot would then re-list without end.
     // A body that reads ok re-arms it for the page's next move; a manual Retry does not, since it re-lists itself.
-    const page = [tKey, pin.section, pin.path].join(NUL);
+    const page = relistPageKey(tKey, pin.section, pin.path);
     if (a.s === 'ok') {
       autoRetried.current.delete(autoRetryId('relist', page, ''));
       put({ s: 'ok', pin, answer: a.value, receivedAt: Date.now() });
@@ -551,7 +575,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     const word = a.body.failure;
     // A version's commit is the URL's, so a word that would mean "the listing moved" is that commit's own answer: no
     // re-list can change it (refinement (p)).
-    if (DOCS_RELIST_WORDS.has(word) && !w.version) {
+    if (relistsOn(word, w.version)) {
       // Spec 4.3 item 1: the listing moved under the read. Re-list once automatically, then "changing, Retry".
       if (takeAutoRetry('relist', page, '')) {
         put({ s: 'loading', pin }, st.seq);
@@ -699,6 +723,22 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
         st.files.delete(w.fKey);
       }
       changed();
+    },
+    rangeFailed: (word) => {
+      const p = pageRef.current;
+      const t = targetOf(p);
+      if (t === null || p?.kind !== 'path' || !relistsOn(word, p.at !== null)) return 'other';
+      // The same one-shot as the file route's: one automatic re-list per page, spent here too.
+      if (!takeAutoRetry('relist', relistPageKey(treeKey(t.project, t.ref), p.section, p.path), '')) return 'changing';
+      listTree(t);
+      changed();
+      return 'relist';
+    },
+    rangeRead: () => {
+      const p = pageRef.current;
+      const t = targetOf(p);
+      if (t === null || p?.kind !== 'path') return;
+      autoRetried.current.delete(autoRetryId('relist', relistPageKey(treeKey(t.project, t.ref), p.section, p.path), ''));
     },
     refreshManual: () => {
       const t = targetOf(pageRef.current);
