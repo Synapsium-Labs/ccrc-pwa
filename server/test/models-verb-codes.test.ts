@@ -1,10 +1,10 @@
 // What this guards: the Models sheet words every refusal code that `ccrc models <lane> hold|release|revert` prints
-// (`VERB_CODE_WORDS`, pwa/src/accounts/modelsSheetWords.ts, a hand-kept list). This scan reads the two files that print
-// those codes, deploy/models-op.mjs and the lane-lock layer of ccd/ccrc, as text, and reds when a printed code has
+// (`VERB_CODE_WORDS`, pwa/src/accounts/modelsSheetWords.ts, a hand-kept list). This scan reads the files that print
+// those codes, deploy/models-op.mjs, its Anthropic arm deploy/models-anthropic.mjs and the lane-lock layer of ccd/ccrc, as text, and reds when a printed code has
 // neither a sentence there nor an entry in NOT_FROM_THE_ACTS below, so a new code turns something red.
 // Why a SERVER test: a change to deploy/ or ccd/ does not reach the PWA tests on a fast pull-request run, but it does
 // reach the server's tree-reading tests.
-import { readFileSync } from 'node:fs';
+import { existsSync, readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { describe, expect, it } from 'vitest';
@@ -100,7 +100,11 @@ const NOT_FROM_THE_ACTS: Readonly<Record<string, string>> = {
 };
 
 const words = read('pwa', 'src', 'accounts', 'modelsSheetWords.ts');
-const printedByOp = modelsOpCodes(read('deploy', 'models-op.mjs'));
+// The op's codes are printed from two files: the op itself and its Anthropic arm (when that file stands; the arm was moved
+// out of the op whole and its codes are the op's, so this reads both and the one set is the same wherever the code lives).
+const opSource = (): string => ['models-op.mjs', 'models-anthropic.mjs']
+  .filter((f) => existsSync(path.join(REPO, 'deploy', f))).map((f) => read('deploy', f)).join('\n');
+const printedByOp = modelsOpCodes(opSource());
 const printedByLock = lockLayerCodes(read('ccd', 'ccrc'));
 const printed = new Set([...printedByOp, ...printedByLock]);
 const worded = sentenceKeys(words);
@@ -129,7 +133,7 @@ describe('the codes hold, release and revert print all have a sentence on the Mo
   });
 
   it('PLANTED CONTROL: a new code in either file is reported as unworded', () => {
-    const op = modelsOpCodes(`${read('deploy', 'models-op.mjs')}\n  return refuse(1, 'planted-new-code', 'x');\n`);
+    const op = modelsOpCodes(`${opSource()}\n  return refuse(1, 'planted-new-code', 'x');\n`);
     expect(unworded(op, worded, excluded)).toEqual(['planted-new-code']);
     const lock = lockLayerCodes(`${read('ccd', 'ccrc')}\n  MODELS_LOCK_ERR=planted-lock-code\n`);
     expect(unworded(lock, worded, excluded)).toEqual(['planted-lock-code']);

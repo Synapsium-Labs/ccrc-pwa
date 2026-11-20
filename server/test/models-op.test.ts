@@ -49,6 +49,11 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const OP = path.join(REPO, 'deploy', 'models-op.mjs');
+/** A COPY of the op's source, its imports pointed at this checkout's files: `../shared/` (the shared rules) and, when the
+ *  Anthropic arm stands in its own module, `./models-anthropic.mjs` (beside the op, so a copy elsewhere cannot find it). */
+const pointImports = (src: string): string => src
+  .replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+  .replaceAll("from './models-anthropic.mjs'", `from '${pathToFileURL(path.join(REPO, 'deploy', 'models-anthropic.mjs')).href}'`);
 
 let home: string;
 const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
@@ -2668,7 +2673,7 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     const WRITE = "return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');";
     expect(src.split(WRITE), 'writeAdvance has its one write').toHaveLength(2);
     const copy = path.join(home, 'models-op-advance-unwritable.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), parsed, 'advance-unwritable');"));
     const run = spawnSync(process.execPath, [copy, 'init', '--file', rosterPath(), '--id', CODEX_ROW.id, '--probe', 'codex'],
       { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8', timeout: 10_000 });
@@ -2817,7 +2822,7 @@ describe('the advance file through init, set-class, rm and advance-backfill (aut
     const WRITE = "return writeJsonFile(registryPath(id), registry, 'registry-unwritable');";
     expect(src.split(WRITE), 'writeRegistry has its one line').toHaveLength(2);
     const copy = path.join(home, 'models-op-unwritable.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(WRITE, "return writeJsonFile(path.join(registryPath(id), 'x'), registry, 'registry-unwritable');"));
     const run = spawnSync(process.execPath,
       [copy, 'set-class', '--file', rosterPath(), '--id', ID, '--class', 'opus', '--model', 'model-6-delta'],
@@ -3222,7 +3227,7 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     const src = fs.readFileSync(OP, 'utf8');
     expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
     const copy = path.join(home, 'models-op-copy.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(line, instead));
     return copy;
   };
@@ -3713,9 +3718,8 @@ describe('readAdvance and writeAdvance keep to their answers before any op calls
   const probe = (line: string): { code: number | null; stdout: string; stderr: string } => {
     const src = fs.readFileSync(OP, 'utf8');
     expect(src.split(LAST), 'models-op ends in its one main call').toHaveLength(2);
-    const shared = pathToFileURL(path.join(REPO, 'shared')).href;
     const file = path.join(home, 'models-op-probe.mjs');
-    fs.writeFileSync(file, src.replaceAll("from '../shared/", `from '${shared}/`).replace(LAST, line));
+    fs.writeFileSync(file, pointImports(src).replace(LAST, line));
     const r = spawnSync(process.execPath, [file], { env: { ...process.env, HOME: home }, encoding: 'utf8' });
     return { code: r.status, stdout: r.stdout, stderr: r.stderr };
   };
@@ -4370,7 +4374,7 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
       src = src.replace(line, instead);
     }
     const copy = path.join(home, 'models-op-copy.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`));
+    fs.writeFileSync(copy, pointImports(src));
     const [verb, ...args] = argv;
     const r = spawnSync(process.execPath, [copy, verb!, '--file', rosterPath(), '--id', 'lane-a', ...args],
       { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: NOW }, encoding: 'utf8' });
@@ -5720,7 +5724,7 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     const src = fs.readFileSync(OP, 'utf8');
     expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
     const copy = path.join(home, 'models-op-copy.mjs');
-    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+    fs.writeFileSync(copy, pointImports(src)
       .replace(line, instead));
     return copy;
   };
@@ -6229,7 +6233,9 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
   it('nothing reads a secret path: the op and the resolver name no credential file', () => {
     // The three names are built from halves so this file does not spell them either.
     const names = [`.cred${'entials'}`, `.cc-sec${'rets'}`, `oauth${'Account'}`];
-    for (const f of [OP, path.join(REPO, 'shared', 'model-aliases.mjs')]) {
+    // The Anthropic arm lives in its own module: read it too, where it stands.
+    const arm = path.join(REPO, 'deploy', 'models-anthropic.mjs');
+    for (const f of [OP, ...(fs.existsSync(arm) ? [arm] : []), path.join(REPO, 'shared', 'model-aliases.mjs')]) {
       const src = fs.readFileSync(f, 'utf8');
       for (const word of names) expect(src.includes(word), `${path.basename(f)} names ${word}`).toBe(false);
     }
