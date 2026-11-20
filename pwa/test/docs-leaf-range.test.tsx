@@ -144,6 +144,74 @@ describe('RangeLeaf: one read per read key', () => {
   });
 });
 
+describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
+  type Stat = { kind: 'stat'; size: number; mtimeNs: string };
+  const STAT_OLD: Stat = { kind: 'stat', size: 5242880, mtimeNs: '1700000000000000000' };
+  const STAT_NEW: Stat = { kind: 'stat', size: 5242881, mtimeNs: '1700000000000000001' };
+  const at = (range: Stat): RangeTarget => ({
+    project: 'demo', range, size: range.size,
+    pin: { kind: 'draft', branch: 'ws/a', head: 'c'.repeat(40), section: 'specs', path: 'big.md', fp: null,
+      stat: { size: range.size, mtimeNs: range.mtimeNs } },
+  });
+
+  it.each(['draft-changed', 'unknown-commit', 'worktree-moved', 'worktree-gone'] as const)(
+    'a %s answer calls relist once, and the next Read it reads the pin the new listing gave',
+    async (word) => {
+      // A committed doc re-listed after a force-push keeps its blob, so its read key does not move: "Read it" is the
+      // way on, and it must send the commit the new listing gave.
+      const commits: string[] = [];
+      const loader: RangeLoader = {
+        async prepare(t) {
+          commits.push(t.pin.kind === 'committed' ? t.pin.commit : '');
+          return { s: 'failed', body: { ok: false, failure: word } };
+        },
+        async frame() { throw new Error('no frame'); },
+      };
+      const relist = vi.fn();
+      const withCommit = (c: string): RangeTarget => ({ ...target(5242880), pin: { ...COMMITTED, commit: c.repeat(40) } });
+      const props = (t: RangeTarget) => ({ target: t, cls: 'markdown' as const, name: 'big.md', loader, relist });
+      const { rerender } = render(<RangeLeaf {...props(withCommit('a'))}>{() => <p>view</p>}</RangeLeaf>);
+      await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+      expect(relist, 'one re-list for the stale answer').toHaveBeenCalledTimes(1);
+      // The re-list gave the leaf a new pin: the same instance sees it through its props.
+      rerender(<RangeLeaf {...props(withCommit('e'))}>{() => <p>view</p>}</RangeLeaf>);
+      fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.readAgain));
+      await waitFor(() => expect(commits).toHaveLength(2));
+      expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]);
+      await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+      expect(relist, 'a second stale answer does not re-list again').toHaveBeenCalledTimes(1);
+    },
+  );
+
+  it('a draft re-listed with a new stat pin reads again by itself, with the new pin, and re-lists once', async () => {
+    const seen: string[] = [];
+    const loader: RangeLoader = {
+      async prepare(t) { seen.push(rangeReadKey(t)); return { s: 'failed', body: { ok: false, failure: 'draft-changed' } }; },
+      async frame() { throw new Error('no frame'); },
+    };
+    const relist = vi.fn();
+    const props = (t: RangeTarget) => ({ target: t, cls: 'markdown' as const, name: 'big.md', loader, relist });
+    const { rerender } = render(<RangeLeaf {...props(at(STAT_OLD))}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(relist).toHaveBeenCalledTimes(1));
+    rerender(<RangeLeaf {...props(at(STAT_NEW))}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(seen).toHaveLength(2));
+    expect(seen[1]).toBe(rangeReadKey(at(STAT_NEW)));
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(relist, 'the stale answer of the new read was the leaf\'s second, and re-lists no more').toHaveBeenCalledTimes(1);
+  });
+
+  it('an answer that is not a re-list word never calls relist', async () => {
+    const loader: RangeLoader = {
+      async prepare() { return { s: 'failed', body: { ok: false, failure: 'snapshot-gone' } }; },
+      async frame() { throw new Error('no frame'); },
+    };
+    const relist = vi.fn();
+    render(<RangeLeaf target={at(STAT_OLD)} cls="markdown" name="big.md" loader={loader} relist={relist}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(relist).not.toHaveBeenCalled();
+  });
+});
+
 /** A PNG of `w` by `h` declared in its IHDR, nothing after it. */
 function pngOf(w: number, h: number): Uint8Array<ArrayBuffer> {
   const be32 = (n: number): number[] => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];

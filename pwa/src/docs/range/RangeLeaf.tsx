@@ -11,7 +11,7 @@ import {
   DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, docsRangePinText, sniffRaster, type DocContentClass,
   type DocPin,
 } from '../../../../shared/docs';
-import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
+import { DOCS_RANGE_TEXT, DOCS_RELIST_WORDS, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
 import { declaredRaster } from '../failures';
 import { rasterObjectUrl, saveBytes } from '../objectUrls';
 import { imageHeaderDims, imageViewVerdict, rangeVerdict } from './rangePolicy';
@@ -64,13 +64,17 @@ export function RangeLeaf(p: {
   readonly loader: RangeLoader;
   /** The view of the bytes once read; absent, the class has no view above its cap and the leaf offers Download only. */
   readonly children?: (read: RangeBytes) => ReactNode;
+  /** Re-lists the tree (the visit's `retryTree`). Called once when a read is refused with a word that means the listing
+   *  moved (`DOCS_RELIST_WORDS`, spec 4.3 item 1), so the next read takes the pin the new listing gives. */
+  readonly relist?: (() => void) | null;
 }): ReactNode {
   const key = rangeReadKey(p.target);
   const verdict = rangeVerdict(p.target.size, p.cls, p.target.range.kind);
   const hasView = p.children !== undefined;
   // The newest props, read by a read in flight: a re-render's new objects never restart it.
-  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView });
-  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView };
+  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, relist: p.relist ?? null });
+  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, relist: p.relist ?? null };
+  const relisted = useRef(false);
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
 
@@ -85,7 +89,17 @@ export function RangeLeaf(p: {
       onProgress: (done, total) => { if (!mine.signal.aborted) setState({ s: 'reading', done, total }); },
     }).then((r) => {
       if (ac.current !== mine) return;
-      if (!r.ok) { setState({ s: 'failed', why: r.why }); return; }
+      if (!r.ok) {
+        setState({ s: 'failed', why: r.why });
+        const { relist } = latest.current;
+        if (relist !== null && !relisted.current && r.why.kind === 'answer' && r.why.answer.s === 'failed'
+          && DOCS_RELIST_WORDS.has(r.why.answer.body.failure)) {
+          relisted.current = true;
+          relist();
+        }
+        return;
+      }
+      relisted.current = false;
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' } }); });

@@ -383,6 +383,7 @@ export function DocsLeaf(p: {
           <RangeLeaf
             key={rangeReadKey({ project: page.project, pin, range, size: listedSize })}
             target={{ project: page.project, pin, range, size: listedSize }} cls={cls} name={name} loader={rangeLoader}
+            relist={visit.retryTree}
           >
             {(read) => (
               <RangeImage
@@ -404,6 +405,7 @@ export function DocsLeaf(p: {
           <RangeLeaf
             key={rangeReadKey({ project: page.project, pin: file.pin, range, size: file.size })}
             target={{ project: page.project, pin: file.pin, range, size: file.size }} cls={cls} name={name} loader={rangeLoader}
+            relist={visit.retryTree}
           >
             {cls === 'markdown'
               ? (read) => (
