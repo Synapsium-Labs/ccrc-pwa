@@ -90,7 +90,15 @@ describe('checkMap body and targets', () => {
   it('a declared epic without a project is judged by the home project', () => {
     const map = mapOf([leaf(1)], { epics: [{ programme: 'prog-a', epics: [epic('e-1')] }] });
     expect(checkMap(map, [row(1)], () => none, ctx())).toMatchObject({ ok: true });
-    expect(bad(checkMap(map, [row(1)], () => none, ctx({ teamOf: () => 'BBB' }))).detail).toBe('leaf-other-team:AAA-1');
+    // The declared epic is judged first: its project, the home one, is in another team, so the structure is refused.
+    expect(bad(checkMap(map, [row(1)], () => none, ctx({ teamOf: () => 'BBB' }))).detail).toBe('epic-other-team:prog-a/e-1');
+  });
+  it('structure declared in another team\'s project is plan-bad-body (D-8186, security review)', () => {
+    const map = mapOf([leaf(1)], { epics: [{ programme: 'prog-a', epics: [epic('e-1'), epic('e-2', { project: 'other-proj' })] }] });
+    const teamOf = (q: string) => (q === 'other-proj' ? 'BBB' : 'AAA');
+    expect(bad(checkMap(map, [row(1)], () => none, ctx({ teamOf })))).toMatchObject({ word: 'plan-bad-body', detail: 'epic-other-team:prog-a/e-2' });
+    const backlogged = mapOf([leaf(1, { programme: 'new-a' })], { backlog: [{ slug: 'new-a', title: 'New', epics: [epic('e-1', { project: 'other-proj' })] }] });
+    expect(bad(checkMap(backlogged, [row(1)], () => none, ctx({ teamOf }))).detail).toBe('epic-other-team:new-a/e-1');
   });
   it('an unknown target is plan-bad-body', () => {
     for (const e of [leaf(1, { epic: 'nope' }), leaf(1, { programme: 'prog-z' }), entry(1, 'epic', { programme: 'prog-a' }),

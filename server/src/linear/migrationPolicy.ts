@@ -125,8 +125,15 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
     if (!good) return unknown(e);
   }
 
-  // 5. A leaf stays in its own team: a migration never moves an issue across teams.
+  // 5. A leaf stays in its own team: a migration never moves an issue across teams. And the structure a map declares lives in
+  //    the map's own team: an owner never creates projects in another team's projects (D-8186, a security review's finding).
   const team = map.team.toLowerCase();
+  for (const g of [...groups.map((x) => ({ slug: x.programme, epics: x.epics })), ...backlog.map((x) => ({ slug: x.slug, epics: x.epics }))]) {
+    for (const ep of g.epics) {
+      const key = ctx.teamOf(ep.project ?? ctx.home);
+      if (key === null || key.toLowerCase() !== team) return fail('plan-bad-body', `epic-other-team:${g.slug}/${ep.key}`);
+    }
+  }
   for (const e of map.entries) {
     if (e.class !== 'leaf') continue;
     const project = epicsFor(e.target!.programme!).get(e.target!.epic!)!.project;
