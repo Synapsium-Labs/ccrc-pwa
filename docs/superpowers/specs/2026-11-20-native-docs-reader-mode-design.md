@@ -213,7 +213,7 @@ sequenceDiagram
 
 - **The place.** `docsPlace: {visit, seq, kind: 'reader'}` on an entry carrying the doc's URL unchanged, beside X2's `overlay` and `jump` places. It counts toward X2's `PLACES_MAX` of 50 per visit.
 - **The visit's base.** X2's tab record (`{visit, doc, places, pendingSeq, lastIdx, next}`, X2 plan P5.3) gains one field, `baseIdx`: the `docsIdx` of the visit's own base entry, the doc's entry before any place, stamped when the visit starts. Without it the decider could not tell the doc's own entry from the previous screen's, because neither carries a `docsPlace`.
-- **The reader place that counts** is the topmost `reader` place of the current visit at or below `lastIdx`. A visit can hold two (exit by Back, Forward, enter again), and only the topmost is live.
+- **The reader place that counts** is the topmost `reader` place of the current visit at or below `lastIdx`. A visit normally holds one: a dead reader entry is left at once (below), and the next place push drops it from the record. Two stand only between a `leaveDead()` step-back and its landing, and then the topmost at or below `lastIdx` is the live one.
 - **The decider.** `historyPlaces.ts#decidePop` gains one answer, `{kind: 'exit-reader'; closeOverlay: boolean; route: boolean}`, and only when two things hold together:
   - reader mode is on, as the reader host reports it (`on()`);
   - the pop crosses that reader place: the popped entry's `docsIdx` is below the place's, while `lastIdx` is at or above it. Any number of the frame's own places (X2's overlay and jump places) may sit between.
