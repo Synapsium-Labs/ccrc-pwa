@@ -19,13 +19,16 @@ export { REPO_VISIBILITIES, LINKING_OVERRIDES, LINKING_MODES, TEMPLATE_STATES } 
 /** D-8405: what the automatic team link read, strongest first. `ticket-ids`: `ids` distinct ticket ids of the team's key
  *  among `of` distinct ids of every known team key, in the project's branches, pull request titles and commits (a
  *  private repository only). `name-match`: the project's name or its repository's name equals the team's name or key,
- *  ignoring case. */
+ *  ignoring case. D-8808 `pr-attachments`: `ids` distinct issues of the team attached to this repository's merged pull
+ *  requests among `of` distinct attached issues of every team (public and private repositories alike); the pair's
+ *  workspace rides the candidate or the link, not the evidence. */
 export type TeamEvidence =
   | { kind: 'ticket-ids'; ids: number; of: number }
-  | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' };
+  | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' }
+  | { kind: 'pr-attachments'; ids: number; of: number };
 export type TeamEvidenceKind = TeamEvidence['kind'];
 /** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true };
+const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true, 'pr-attachments': true };
 export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
 
 /** D-8405: who set a project's team key. */
@@ -47,11 +50,11 @@ export interface TeamCandidateWire {
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
-/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the two shapes. */
+/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the three shapes. */
 export function isTeamEvidence(v: unknown): v is TeamEvidence {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const o = v as Record<string, unknown>;
-  if (o['kind'] === 'ticket-ids') {
+  if (o['kind'] === 'ticket-ids' || o['kind'] === 'pr-attachments') {
     return Object.keys(o).length === 3 && isCount(o['ids']) && isCount(o['of']) && (o['ids'] as number) <= (o['of'] as number);
   }
   if (o['kind'] === 'name-match') {

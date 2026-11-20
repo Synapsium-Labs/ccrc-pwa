@@ -11,6 +11,12 @@
 //       ids of each known team key in the project's branch names, pull request titles and commits. Decisive when one
 //       key has at least `TEAM_LINK_MIN_IDS` of them and at least `TEAM_LINK_MIN_SHARE` of every id seen of any known key,
 //       and one pair holds that key (two pairs: each is a candidate).
+// D-8808 (Task 8.3): ATTACHED ISSUES, evidence that names its workspace and that a public repository carries too: the distinct
+// issues Linear attaches to this repository's merged pull requests, counted per (workspace, key) pair (`attachedIssues.ts`
+// reads them; null when that read is off or unmeasured, and then the decision is exactly what it was without it). Decisive at
+// the same bar as (a) (`TEAM_LINK_MIN_IDS` issues and `TEAM_LINK_MIN_SHARE` of every attached issue). Weighed beside (a):
+// ticket ids decisive for a DIFFERENT key leave no link; ticket ids decisive for a key two workspaces hold take the one pair
+// that attachments name; and attachments short of the bar offer their pairs as candidates, after the ticket ids.
 //   (b) NAME MATCH: the project's name, or its repository's name, equals a team's name or key, ignoring case. Decisive
 //       when exactly one PAIR matches and (a) saw no id of any OTHER key.
 //   (c) nothing: no link, and no candidate.
@@ -28,6 +34,12 @@ export const TEAM_CANDIDATES_MAX = 3;
 /** A team the box's Linear keys reach: a (workspace, key) pair. `workspaceName` is null when it is not known. */
 export interface KnownTeam { key: string; name: string; workspaceId: string; workspaceName: string | null }
 
+/** D-8808: one pair's distinct attached issues (`key` uppercased). */
+export interface AttachedPair { workspaceId: string; key: string; ids: number }
+/** D-8808: the distinct issues attached to the repository's merged pull requests: `total` of every team, `pairs` per
+ *  (workspace, key). The decider's input; `attachedIssues.ts` builds it. */
+export interface AttachedTally { total: number; pairs: readonly AttachedPair[] }
+
 /** What the decider reads for one project. `tally` is `ticketTally` of its texts; `repo` the repository's name (the
  *  slug's last part), or null when not measured. */
 export interface TeamLinkFacts {
@@ -36,6 +48,8 @@ export interface TeamLinkFacts {
   mode: LinkingMode;
   teams: readonly KnownTeam[];
   tally: ReadonlyMap<string, number>;
+  /** D-8808: the attached issues, or null when the read is off or unmeasured (the decision is then exactly as before). */
+  attached: AttachedTally | null;
 }
 
 export type TeamLinkDecision =
@@ -82,7 +96,7 @@ const candidateOf = (t: KnownTeam, evidence: TeamEvidence): TeamCandidateWire =>
 
 /**
  * The pair a decisive key means: the one that holds it, or null when several do. THE SEAM for evidence that names a
- * workspace (D-8808, the next task): `named` is the workspace such evidence names, and with it a key held in two
+ * workspace (D-8808, `attachedPairs` above): `named` is the workspace such evidence names, and with it a key held in two
  * workspaces picks the pair in that one.
  */
 function pairForKey(holders: readonly KnownTeam[], named: string | null = null): KnownTeam | null {
@@ -110,6 +124,17 @@ function nameMatches(f: TeamLinkFacts, teams: readonly KnownTeam[]): Map<string,
   return out;
 }
 
+/** D-8808: the attached pairs a known team holds, with at least one attached issue, most first. A pair no known team holds is ignored. */
+function attachedPairs(f: TeamLinkFacts, teams: readonly KnownTeam[]): Array<{ team: KnownTeam; ids: number }> {
+  if (f.attached === null) return [];
+  const out: Array<{ team: KnownTeam; ids: number }> = [];
+  for (const p of f.attached.pairs) {
+    const team = teams.find((t) => t.key === p.key.toUpperCase() && t.workspaceId === p.workspaceId);
+    if (team !== undefined && p.ids > 0) out.push({ team, ids: p.ids });
+  }
+  return out.sort((x, y) => y.ids - x.ids);
+}
+
 /** The decision for a project with no key: link when one pair's evidence is decisive, else the candidates. */
 export function decideTeamLink(f: TeamLinkFacts): TeamLinkDecision {
   const teams = distinctPairs(f.teams);
@@ -121,22 +146,34 @@ export function decideTeamLink(f: TeamLinkFacts): TeamLinkDecision {
     : [];
   const total = counted.reduce((n, c) => n + c.ids, 0);
   const best = counted[0];
-  if (best !== undefined && best.ids >= TEAM_LINK_MIN_IDS && best.ids >= TEAM_LINK_MIN_SHARE * total) {
-    const pair = pairForKey(teams.filter((t) => t.key === best.key));
-    if (pair !== null) {
-      return {
-        kind: 'link', key: pair.key, name: pair.name, workspaceId: pair.workspaceId, workspaceName: pair.workspaceName,
-        evidence: { kind: 'ticket-ids', ids: best.ids, of: total },
-      };
+  const idsKey = best !== undefined && best.ids >= TEAM_LINK_MIN_IDS && best.ids >= TEAM_LINK_MIN_SHARE * total ? best : null;
+  const attached = attachedPairs(f, teams);
+  const attachedTotal = f.attached?.total ?? 0;
+  const top = attached[0];
+  const attachedBest = top !== undefined && top.ids >= TEAM_LINK_MIN_IDS && top.ids >= TEAM_LINK_MIN_SHARE * attachedTotal ? top : null;
+  const linkOf = (t: KnownTeam, evidence: TeamEvidence): TeamLinkDecision =>
+    ({ kind: 'link', key: t.key, name: t.name, workspaceId: t.workspaceId, workspaceName: t.workspaceName, evidence });
+  // Ticket ids and attachments each decisive, for different keys: they disagree, so nothing links (both are offered).
+  const against = idsKey !== null && attachedBest !== null && attachedBest.team.key !== idsKey.key;
+  if (idsKey !== null && !against) {
+    const holders = teams.filter((t) => t.key === idsKey.key);
+    const evidence: TeamEvidence = { kind: 'ticket-ids', ids: idsKey.ids, of: total };
+    let pair = pairForKey(holders);
+    if (pair === null) {
+      // The key is shared: the attachments name the workspace when exactly one of its pairs has an attached issue.
+      const named = attached.filter((a) => a.team.key === idsKey.key);
+      if (named.length === 1) pair = pairForKey(holders, named[0]!.team.workspaceId);
     }
+    if (pair !== null) return linkOf(pair, evidence);
+  }
+  if (attachedBest !== null && !against) {
+    return linkOf(attachedBest.team, { kind: 'pr-attachments', ids: attachedBest.ids, of: attachedTotal });
   }
   const named = nameMatches(f, teams);
-  if (named.size === 1) {
+  if (!against && named.size === 1) {
     const { team, evidence } = [...named.values()][0]!;
     // Decisive only when no id names another key: ids of a different key are evidence against the name.
-    if (counted.every((c) => c.key === team.key)) {
-      return { kind: 'link', key: team.key, name: team.name, workspaceId: team.workspaceId, workspaceName: team.workspaceName, evidence };
-    }
+    if (counted.every((c) => c.key === team.key)) return linkOf(team, evidence);
   }
   const candidates: TeamCandidateWire[] = [];
   const offer = (c: TeamCandidateWire): void => {
@@ -145,6 +182,7 @@ export function decideTeamLink(f: TeamLinkFacts): TeamLinkDecision {
   for (const c of counted) {
     for (const t of teams.filter((x) => x.key === c.key)) offer(candidateOf(t, { kind: 'ticket-ids', ids: c.ids, of: total }));
   }
+  for (const a of attached) offer(candidateOf(a.team, { kind: 'pr-attachments', ids: a.ids, of: attachedTotal }));
   for (const { team, evidence } of named.values()) offer(candidateOf(team, evidence));
   return { kind: 'candidates', candidates: candidates.slice(0, TEAM_CANDIDATES_MAX) };
 }

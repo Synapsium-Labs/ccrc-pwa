@@ -1,0 +1,52 @@
+{
+  "name": "read-attachments-for-url-constructed",
+  "documentSource": "code",
+  "document": "query AttachmentsForUrl($url: String!) { attachmentsForURL(url: $url) { nodes { issue { id identifier team { key } } } } }",
+  "variables": {
+    "url": "https://github.com/owner/repo/pull/1"
+  },
+  "requestBody": "{\"query\":\"query AttachmentsForUrl($url: String!) { attachmentsForURL(url: $url) { nodes { issue { id identifier team { key } } } } }\",\"variables\":{\"url\":\"https://github.com/owner/repo/pull/1\"}}",
+  "requestHeaders": [
+    "authorization: <the key, bare, no Bearer>",
+    "content-type: application/json"
+  ],
+  "sentAtMs": 1793631382098,
+  "receivedAtMs": 1793631382429,
+  "sentAt": "2026-11-02T14:56:22.098+00:00",
+  "status": 200,
+  "statusLine": "HTTP/2 200 ",
+  "headers": [
+    [
+      "content-type",
+      "application/json; charset=utf-8"
+    ]
+  ],
+  "body": {
+    "data": {
+      "attachmentsForURL": {
+        "nodes": [
+          {
+            "issue": {
+              "id": "00000000-0006-4000-8000-000000000001",
+              "identifier": "AAA-1",
+              "team": {
+                "key": "AAA"
+              }
+            }
+          },
+          {
+            "issue": {
+              "id": "00000000-0006-4000-8000-000000000002",
+              "identifier": "BBB-1",
+              "team": {
+                "key": "BBB"
+              }
+            }
+          }
+        ]
+      }
+    }
+  },
+  "bodyRaw": "{\"data\":{\"attachmentsForURL\":{\"nodes\":[{\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000001\",\"identifier\":\"AAA-1\",\"team\":{\"key\":\"AAA\"}}},{\"issue\":{\"id\":\"00000000-0006-4000-8000-000000000002\",\"identifier\":\"BBB-1\",\"team\":{\"key\":\"BBB\"}}}]}}}\n",
+  "constructed": "NOT RECORDED (D-8808). Built from the document ops.ts sends. The attachmentsForURL shape (a connection of attachments, each with its issue) is the controller-accepted assumption of Linear's published schema, never measured; every id is a fixture id and the headers carry no complexity or rate-limit numbers. The operator's one live capture replaces this file with a recorded one before its numbers are relied on."
+}

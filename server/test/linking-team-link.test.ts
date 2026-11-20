@@ -10,7 +10,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
   TEAM_LINK_MIN_IDS, TEAM_LINK_MIN_SHARE, decideTeamLink, planTeamLink, repoNameOf, teamSourceAfterWrite, ticketTally,
-  type KnownTeam, type TeamLinkFacts,
+  type AttachedTally, type KnownTeam, type TeamLinkFacts,
 } from '../src/linking/teamLink.js';
 import { VisibilityLane } from '../src/linking/visibilityLane.js';
 import type { LinearStoreRead } from '../src/linear/store.js';
@@ -24,7 +24,7 @@ const WA = { workspaceId: 'ws-a', workspaceName: 'Workspace A' };
 const WB = { workspaceId: 'ws-b', workspaceName: 'Workspace B' };
 const TEAMS: KnownTeam[] = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'BBB', name: 'Beta', ...WA }, { key: 'CCC', name: 'project-a', ...WA }];
 const facts = (over: Partial<TeamLinkFacts> = {}): TeamLinkFacts => ({
-  project: 'project-x', repo: 'repo-x', mode: 'private', teams: TEAMS, tally: new Map(), ...over,
+  project: 'project-x', repo: 'repo-x', mode: 'private', teams: TEAMS, tally: new Map(), attached: null, ...over,
 });
 const tally = (o: Record<string, number>): Map<string, number> => new Map(Object.entries(o));
 
@@ -154,6 +154,75 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
   it('the same key and workspace listed twice is one team', () => {
     const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'aaa', name: 'Alpha', ...WA }];
     expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 4 }) }))).toMatchObject({ kind: 'link', key: 'AAA', ...WA });
+  });
+});
+
+// D-8808 (Task 8.3): the attached issues of this repository's merged pull requests, a read that names its workspace.
+const attached = (total: number, ...pairs: Array<[string, string, number]>): AttachedTally =>
+  ({ total, pairs: pairs.map(([workspaceId, key, ids]) => ({ workspaceId, key, ids })) });
+const AAA_ATT: AttachedTally = attached(4, ['ws-a', 'AAA', 4]);
+
+describe('decideTeamLink: attached issues (D-8808, evidence pr-attachments)', () => {
+  it('three attached issues of one team link a public repository', () => {
+    expect(decideTeamLink(facts({ mode: 'public', attached: attached(3, ['ws-a', 'AAA', 3]) }))).toEqual({
+      kind: 'link', key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'pr-attachments', ids: 3, of: 3 },
+    });
+    expect(decideTeamLink(facts({ mode: 'unknown', attached: AAA_ATT }))).toMatchObject({ kind: 'link', key: 'AAA' });
+  });
+
+  it('attached issues name the workspace of a key two workspaces share', () => {
+    const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'AAA', name: 'Alpha elsewhere', ...WB }];
+    // Ticket ids name the key only: with the read off, the key is shared and no pair links.
+    expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 5 }) })).kind).toBe('candidates');
+    // The attachments are in one workspace: the ticket-ids link takes that pair, with the ticket-ids evidence.
+    expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 5 }), attached: attached(4, ['ws-b', 'AAA', 4]) }))).toEqual({
+      kind: 'link', key: 'AAA', name: 'Alpha elsewhere', ...WB, evidence: { kind: 'ticket-ids', ids: 5, of: 5 },
+    });
+    // A public repository carries no ticket ids; the attachments alone link their pair.
+    expect(decideTeamLink(facts({ teams, mode: 'public', attached: attached(4, ['ws-b', 'AAA', 4]) }))).toMatchObject({
+      kind: 'link', key: 'AAA', ...WB, evidence: { kind: 'pr-attachments', ids: 4, of: 4 },
+    });
+  });
+
+  it('with the read off (null), the decision is today\'s', () => {
+    for (const f of [facts({ mode: 'public' }), facts({ tally: tally({ AAA: 8, BBB: 2 }) }), facts({ project: 'project-a', mode: 'public' })]) {
+      expect(decideTeamLink({ ...f, attached: null })).toEqual(decideTeamLink(f));
+    }
+    expect(decideTeamLink(facts({ mode: 'public', attached: null })).kind).toBe('candidates');
+  });
+
+  it('is decisive only at the ticket-id bar: at least 3 issues and at least 80% of every attached issue', () => {
+    expect(decideTeamLink(facts({ mode: 'public', attached: attached(2, ['ws-a', 'AAA', 2]) })).kind).toBe('candidates');
+    expect(decideTeamLink(facts({ mode: 'public', attached: attached(5, ['ws-a', 'AAA', 3], ['ws-a', 'BBB', 2]) })).kind).toBe('candidates');
+    expect(decideTeamLink(facts({ mode: 'public', attached: attached(5, ['ws-a', 'AAA', 4], ['ws-a', 'BBB', 1]) })).kind).toBe('link');
+  });
+
+  it('ticket ids decisive for a different key leave no link: both are candidates', () => {
+    const d = decideTeamLink(facts({ tally: tally({ BBB: 6 }), attached: AAA_ATT }));
+    expect(d.kind).toBe('candidates');
+    if (d.kind === 'candidates') expect(d.candidates.map((c) => [c.key, c.evidence.kind])).toEqual([['BBB', 'ticket-ids'], ['AAA', 'pr-attachments']]);
+  });
+
+  it('attachments that agree with the ticket ids keep the ticket-ids evidence', () => {
+    expect(decideTeamLink(facts({ tally: tally({ AAA: 6 }), attached: AAA_ATT }))).toMatchObject({ kind: 'link', key: 'AAA', evidence: { kind: 'ticket-ids' } });
+  });
+
+  it('attachments short of the bar join the candidates after ticket ids and before name matches; a pair no team holds is ignored', () => {
+    const d = decideTeamLink(facts({ project: 'project-a', mode: 'public', attached: attached(5, ['ws-a', 'AAA', 2], ['ws-a', 'BBB', 2], ['ws-x', 'ZZZ', 1]) }));
+    // Name match `CCC` is decisive on its own when no attachment is: here they are short of the bar, and the name still links.
+    expect(d).toMatchObject({ kind: 'link', key: 'CCC' });
+    const e = decideTeamLink(facts({ mode: 'public', attached: attached(5, ['ws-a', 'AAA', 2], ['ws-a', 'BBB', 2], ['ws-x', 'ZZZ', 1]) }));
+    expect(e).toEqual({ kind: 'candidates', candidates: [
+      { key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'pr-attachments', ids: 2, of: 5 } },
+      { key: 'BBB', name: 'Beta', ...WA, evidence: { kind: 'pr-attachments', ids: 2, of: 5 } },
+    ] });
+  });
+
+  it('the wire guard admits the pr-attachments shape and no other', () => {
+    expect(isTeamEvidence({ kind: 'pr-attachments', ids: 3, of: 4 })).toBe(true);
+    expect(isTeamEvidence({ kind: 'pr-attachments', ids: 5, of: 4 })).toBe(false);
+    expect(isTeamEvidence({ kind: 'pr-attachments', ids: 3, of: 4, extra: 1 })).toBe(false);
+    expect(isTeamEvidence({ kind: 'pr-attachments', ids: 3 })).toBe(false);
   });
 });
 
@@ -345,6 +414,16 @@ describe('the lane: linkTeams over a real coord.db', () => {
     expect(coord.linkingOf('project-a').teamCandidates!.map((c) => [c.key, c.workspaceId, c.workspaceName])).toEqual([
       ['AAA', WS_1, 'Workspace A'], ['AAA', WS_2, 'Workspace B'],
     ]);
+  });
+
+  it('a lane given no attached input decides exactly as before, even when attachments would have been decisive; with one, it links', async () => {
+    const decisive = { attached: () => attached(4, [WS_1, 'AAA', 4]) };
+    await lane(TEAM_STORE).linkTeams(['project-a'], 1000, inputs({}));
+    expect(coord.linkingOf('project-a')).toMatchObject({ teamKey: null, teamLink: null });
+    await lane(TEAM_STORE).linkTeams(['project-b'], 1000, { ...inputs({}), attached: () => null });
+    expect(coord.linkingOf('project-b')).toMatchObject({ teamKey: null, teamLink: null });
+    await lane(TEAM_STORE).linkTeams(['project-c'], 1000, { ...inputs({}), ...decisive });
+    expect(coord.linkingOf('project-c')).toMatchObject({ teamKey: 'AAA', teamLink: { source: 'auto', evidence: { kind: 'pr-attachments', ids: 4, of: 4 } } });
   });
 
   it('an unreadable Linear store links nothing and clears nothing', async () => {
