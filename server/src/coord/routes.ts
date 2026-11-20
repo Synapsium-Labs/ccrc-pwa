@@ -54,11 +54,13 @@ import { readParentGenerations, settleParentIncarnations } from './gitref.js';
 import { operatorRetainLease, resolveLease, retainLease, runStampsOfSeries, type LeaseDoorDeps } from './delegationLeaseDoor.js';
 import { parseOperatorRetainRequest, parseResolveRequest, parseRetainRequest } from './delegation-lease-acts.js';
 import { NO_SESSION, type GateDecision } from '../auth/gate.js';
-import { BASE_ONLY_MERGE, doneRunOf, verifyDone, type DoneClaim } from './fingerprint.js';
+import { BASE_ONLY_MERGE, verifyDone, type DoneClaim } from './fingerprint.js';
+import { doneRunOf } from './fingerprint.js';   // D-6096: an in-place run's done-claim is measured on its recorded branch
 import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
-import { bindRunInPlace, dispatchRun, stampDispatchAttempt, type DispatchOutcome, type InPlaceOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { bindRunInPlace, type InPlaceOutcome } from './dispatch.js';   // D-6096: the in-place bind
 import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
 import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
@@ -327,7 +329,7 @@ function sendDispatchOutcome(reply: FastifyReply, r: DispatchOutcome) {
       // `registry-unmeasurable` arm below states for `stderr`: an L4 adapter may
       // not narrow a distinction it received, and this field distinguishes by
       // PRESENCE. Its own spread rather than a member of `extra`, whose value
-      // type is `number` and must stay so: `by` is the project's NAME. `detail` (D-6096, `self-dispatch`) is the same.
+      // type is `number` and must stay so: `by` is the project's NAME.
       return reply.code(409).send({ ok: false, refused: r.code, ...extra,
         ...(r.by === undefined ? {} : { by: r.by }),
         ...(r.detail === undefined ? {} : { detail: r.detail }),
@@ -1771,21 +1773,21 @@ export function registerCoordRoutes(
     const id = parseCanonicalPositiveSafeInteger(idParam);
     if (id === null) return reply.code(400).send({ ok: false, error: 'bad-request' });
 
-    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown;
-      inPlace?: unknown; by?: unknown; byUuid?: unknown; branch?: unknown };
+    const body = (req.body ?? {}) as { brief?: unknown; items?: unknown; route?: unknown; slug?: unknown; intents?: unknown };
+    const inPlaceBody = (req.body ?? {}) as { inPlace?: unknown; by?: unknown; byUuid?: unknown; branch?: unknown };
     // D-6096: the IN-PLACE bind. A coordinator takes its own refused wave as the run's worker; no process starts and no
     // fleet act is composed, so none of the dispatch's deps below are built for it, and the skill self-install (which
     // belongs to a bound WORKER) never runs for it. Any `inPlace` value but `true` is malformed.
-    if (body.inPlace !== undefined) {
-      if (body.inPlace !== true) return refuseRoute(reply, 'bad-request', { detail: 'inPlace: must be true when given' });
-      if (typeof body.by !== 'string' || body.by === '' || typeof body.byUuid !== 'string' || body.byUuid === '') {
+    if (inPlaceBody.inPlace !== undefined) {
+      if (inPlaceBody.inPlace !== true) return refuseRoute(reply, 'bad-request', { detail: 'inPlace: must be true when given' });
+      if (typeof inPlaceBody.by !== 'string' || inPlaceBody.by === '' || typeof inPlaceBody.byUuid !== 'string' || inPlaceBody.byUuid === '') {
         return refuseRoute(reply, 'bad-request', { detail: 'inPlace: by and byUuid (the claimant) are required' });
       }
-      const by = body.by;
-      const byUuid = body.byUuid;
+      const by = inPlaceBody.by;
+      const byUuid = inPlaceBody.byUuid;
       const inPlaceDeps = { coord, io: deps.io, cfg: deps.cfg,
         attribute: (who: string, uuid: string) => attributionVerdict(deps.io, deps.cfg, who, uuid, 'claimedByUuid') };
-      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, body.branch, body.intents)));
+      return sendInPlaceOutcome(reply, await coordMutex.run(() => bindRunInPlace(inPlaceDeps, id, by, byUuid, inPlaceBody.branch, body.intents)));
     }
     const dispatchDeps: DispatchRunDeps = { coord, io: deps.io, cfg: deps.cfg, runCcd: deps.runCcd,
       fleetState: deps.fleetState, sendClear: clearSender({ tmux: deps.tmux, queue: deps.queue }),
