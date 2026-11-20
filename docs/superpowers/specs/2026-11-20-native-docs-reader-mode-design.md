@@ -191,8 +191,9 @@ sequenceDiagram
   participant B as Browser history
   participant D as Popstate dispatcher
   U->>H: tap Reader mode
-  H->>H: draw the fill, then ask for element full screen
+  H->>H: draw the fill
   H->>B: push the doc's URL with a reader place
+  H->>H: then ask for element full screen
   Note over U,H: You read
   alt Back
     U->>B: Back
@@ -206,7 +207,7 @@ sequenceDiagram
     B->>D: popstate, consumed only if it lands there
   end
 ```
-*Figure 2. One Back model. Entering pushes one place, Back pops it, and an exit by any other path steps back over it. The router never runs for these pops, so the page does not reload or move.*
+*Figure 2. One Back model. Entering draws the fill, pushes one place and only then asks for full screen, because the request consumes the tap's activation and the push must not wait on it. Back pops the place, and an exit by any other path steps back over it. The router never runs for these pops, so the page does not reload or move.*
 
 - **The place.** `docsPlace: {visit, seq, kind: 'reader'}` on an entry carrying the doc's URL unchanged, beside X2's `overlay` and `jump` places. It counts toward X2's `PLACES_MAX` of 50 per visit.
 - **The decider.** `historyPlaces.ts#decidePop` gains one answer, `{kind: 'exit-reader'; closeOverlay: boolean; then: <X2's answer>}`, and only when two things hold together:
