@@ -9,16 +9,16 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
 import {
-  DOCS_CLASS_CAP, DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
-  type DocsTreeOk,
+  DOCS_CLASS_CAP, DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation,
+  type DocsRangePin, type DocsShowOk, type DocsTreeOk,
 } from '../../../shared/docs';
 import { utf8Bytes } from '../../../shared/utf8';
 import { api } from '../lib/api';
 import { DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import { MarkdownParts } from './range/MarkdownParts';
-import { RangeImage, RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
-import { rangePinOf } from './range/rangePolicy';
-import type { RangeLoader } from './range/readRange';
+import { RangeImage, RangeLeaf, rangeFailureSentence, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
+import { rangeOfTooLarge, rangePinOf } from './range/rangePolicy';
+import { readRange, type RangeLoader } from './range/readRange';
 import { SourceParts } from './range/SourceParts';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
@@ -36,8 +36,8 @@ import {
   DOCS_RANGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, mib, shortCommit, slotSentence,
 } from './docsText';
 import { leafName } from './docsTree';
-import type { DocsNotOk } from './failures';
-import { downloadDocFile, showBytes } from './objectUrls';
+import type { DocsLoaders, DocsNotOk } from './failures';
+import { downloadDocFile, saveBytes, showBytes } from './objectUrls';
 import { ReaderFrame, type ReaderDeps } from './ReaderFrame';
 import { useReaderOnly } from './readerHistory';
 import { pinFor, type DocsVisit, type FileSlot } from './useDocsVisit';
@@ -89,18 +89,52 @@ function useFragmentScroll(root: RefObject<HTMLElement | null>, fragment: string
 
 /** Download (spec 5.4): the file's original bytes through `downloadDocFile` and the page's loaders, octet-stream for
  *  every class; a failure is said under the button. */
-function DownloadButton(p: { readonly project: string; readonly pin: DocPin; readonly name: string }): ReactNode {
+function DownloadButton(p: {
+  readonly project: string; readonly pin: DocPin; readonly name: string; readonly rangeLoader: RangeLoader;
+}): ReactNode {
   const assets = useContext(DocsAssetContext);
+  const { rangeLoader } = p;
   const [failed, setFailed] = useState<string | null>(null);
+  const [reading, setReading] = useState<string | null>(null);
+  const ac = useRef<AbortController | null>(null);
+  useEffect(() => () => ac.current?.abort(), []);
+  // A committed file the file route refused as too large, with the blob at this pin's commit named (a version page's
+  // Download, review Q4), is read by range and saved; anything else says its failure.
+  const readByRange = async (over: { blob: string; size: number }): Promise<void> => {
+    if (p.pin.kind !== 'committed') return;
+    ac.current?.abort();
+    const mine = new AbortController();
+    ac.current = mine;
+    const target = { project: p.project, pin: p.pin, range: { kind: 'blob', sha: over.blob } as const, size: over.size };
+    setReading(fillSentence(DOCS_RANGE_TEXT.reading, { done: mib(0), total: mib(over.size) }));
+    try {
+      const r = await readRange(rangeLoader, target, {
+        signal: mine.signal,
+        onProgress: (done, total) => { if (!mine.signal.aborted) setReading(fillSentence(DOCS_RANGE_TEXT.reading, { done: mib(done), total: mib(total) })); },
+      });
+      if (mine.signal.aborted) return;
+      setReading(null);
+      if (r.ok) saveBytes(p.name, r.bytes);
+      else setFailed(rangeFailureSentence(r.why, over.size));
+    } catch {
+      if (mine.signal.aborted) return;
+      setReading(null);
+      setFailed(DOCS_RANGE_TEXT.threw);
+    }
+  };
   const onClick = (): void => {
     setFailed(null);
     void downloadDocFile(p.project, p.pin, p.name, assets?.loaders).then((a) => {
-      if (a.s !== 'ok') setFailed(a.s === 'failed' ? failureSentence(a.body) : slotSentence(a));
+      if (a.s === 'ok') return;
+      const over = a.s === 'failed' && p.pin.kind === 'committed' ? rangeOfTooLarge(a.body) : null;
+      if (over !== null) void readByRange(over);
+      else setFailed(a.s === 'failed' ? failureSentence(a.body) : slotSentence(a));
     });
   };
   return (
     <>
-      <button type="button" className="docs-leaf-action" onClick={onClick}>{DOCS_VIEW_TEXT.download}</button>
+      <button type="button" className="docs-leaf-action" disabled={reading !== null} onClick={onClick}>{DOCS_VIEW_TEXT.download}</button>
+      {reading !== null && <p className="docs-loading" role="status">{reading}</p>}
       {failed !== null && (
         <p className="docs-note" role="alert">{fillSentence(DOCS_VIEW_TEXT.downloadFailed, { sentence: failed })}</p>
       )}
@@ -211,10 +245,24 @@ const IGNORE_DRAFT_ASSET = (): void => {};
  *  waits for (spec 4.16; refinement (f)); no image inside a document has that listener. */
 function RasterBody(p: {
   readonly link: LinkBase; readonly name: string; readonly onLeafImage: ((pin: DocPin | null) => void) | null;
+  /** A version page (review Q4): told when the raster route answers `too-large` with the blob at the version's commit, so
+   *  the leaf reads the image by range instead. Absent, the failure is the image's own sentence. */
+  readonly onOverCap?: ((over: { blob: string; size: number }) => void) | null;
 }): ReactNode {
   const assets = useContext(DocsAssetContext);
-  const own = useMemo<DocsAssetContextValue | null>(
-    () => (assets === null ? null : { ...assets, onDraftAsset: IGNORE_DRAFT_ASSET }), [assets]);
+  const onOverCap = p.onOverCap ?? null;
+  const own = useMemo<DocsAssetContextValue | null>(() => {
+    if (assets === null) return null;
+    const base = { ...assets, onDraftAsset: IGNORE_DRAFT_ASSET };
+    if (onOverCap === null) return base;
+    const raster: DocsLoaders['raster'] = async (project, pin, signal) => {
+      const answer = await assets.loaders.raster(project, pin, signal);
+      const over = answer.s === 'failed' ? rangeOfTooLarge(answer.body) : null;
+      if (over !== null) onOverCap(over);
+      return answer;
+    };
+    return { ...base, loaders: { ...assets.loaders, raster } };
+  }, [assets, onOverCap]);
   const node = useMemo<HastElement>(() => ({ type: 'element', tagName: 'img', properties: {}, children: [] }), []);
   const ctx = useMemo<DocLinkContextValue>(() => {
     const urls = new WeakMap<HastElement, DetachedUrls>();
@@ -391,6 +439,11 @@ export function DocsLeaf(p: {
     project: page.project, pageRef: page.ref, pageAt: page.at, view: page.view, section: page.section, path: page.path, tree,
     pageSource: pin?.kind === 'draft' ? 'draft' : 'committed', onFragment: visit.setFragment,
   }), [page, tree, pin?.kind, visit.setFragment]);
+  // A raster on a version page learns it is over its cap from the raster route's own answer (the visit reads no raster).
+  const versionKey = JSON.stringify([page.project, page.ref, page.at, page.section, page.path]);
+  const [rasterOver, setRasterOver] = useState<{ key: string; blob: string; size: number } | null>(null);
+  const onRasterOver = useCallback(
+    (over: { blob: string; size: number }) => setRasterOver({ key: versionKey, ...over }), [versionKey]);
   const entry = tree.entries.find((e) => e.section === page.section && e.path === page.path);
   if (entry === undefined) return null;
   const view = entryView(entry, tree.drafts, page.ref === null ? 'default' : 'ref');
@@ -403,59 +456,67 @@ export function DocsLeaf(p: {
   } else {
     // A draft with no fingerprint is downloaded through its range read (`RangeLeaf`'s own button), never the file route.
     const download = pin.kind === 'draft' && pin.fp === null ? null
-      : <DownloadButton project={page.project} pin={pin} name={name} />;
+      : <DownloadButton project={page.project} pin={pin} name={name} rangeLoader={rangeLoader} />;
     const file = visit.file;
     const listedSize = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
     const rasterByRange = cls === 'raster'
       && ((pin.kind === 'draft' && pin.fp === null) || (typeof listedSize === 'number' && listedSize > DOCS_MAX_IMAGE_BYTES));
-    if (cls === 'raster' && rasterByRange) {
+    // One range read of `rpin`'s bytes, the view by class: an image on its own page, Markdown in parts, a text file as
+    // source in parts, any other class a Download that reads by range first.
+    const rangeBody = (rpin: DocListPin, range: DocsRangePin, size: number, rentry: DocsEntry): ReactNode => (
+      <RangeLeaf
+        key={rangeReadKey({ project: page.project, pin: rpin, range, size })}
+        target={{ project: page.project, pin: rpin, range, size }} cls={cls} name={name} loader={rangeLoader} visit={visit}
+      >
+        {cls === 'raster'
+          ? (read) => (
+            <RangeImage
+              bytes={read.bytes} path={page.path} name={name}
+              assetKey={docsApi.file(page.project, openedRangePin(rpin, read.digest))}
+              openedPin={openedRangePin(rpin, read.digest)} onShown={p.onLeafImage ?? null}
+            />
+          )
+          : cls === 'markdown'
+            ? (read) => (
+              <RangeMarkdown
+                read={read} entry={rentry} pin={rpin} page={page} link={link} parser={parser} reader={reader} only={only}
+                pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
+              />
+            )
+            : cls === 'text'
+              ? (read) => <RangeSource read={read} entry={rentry} pin={rpin} />
+              : undefined}
+      </RangeLeaf>
+    );
+    // A version page (review Q4): the listing's size is the served commit's, so the file route (or, for an image, the
+    // raster route) answered `too-large`, and that answer names the size and the blob of this path AT the version's
+    // commit: the same range read, pinned by that blob. An answer that names none keeps the class cap's sentence.
+    const over = pin.kind !== 'committed' || page.at === null ? null
+      : cls === 'raster' ? (rasterOver !== null && rasterOver.key === versionKey ? rasterOver : null)
+        : file.s === 'failed' ? rangeOfTooLarge(file.body) : null;
+    if (over !== null) {
+      const atVersion: DocsEntry = entry.committed === null ? entry : { ...entry, committed: { ...entry.committed, blob: over.blob } };
+      body = rangeBody(pin, { kind: 'blob', sha: over.blob }, over.size, atVersion);
+    } else if (cls === 'raster' && rasterByRange) {
       // X2 P1 (spec 4.3): an image above its class cap, or a draft image with no fingerprint, is shown on its own page
       // from bytes read by range, after its header's dimensions pass the image-view ceilings.
       const range = rangePinOf(pin, entry);
       body = range === null || typeof listedSize !== 'number'
         ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
-        : (
-          <RangeLeaf
-            key={rangeReadKey({ project: page.project, pin, range, size: listedSize })}
-            target={{ project: page.project, pin, range, size: listedSize }} cls={cls} name={name} loader={rangeLoader}
-            visit={visit}
-          >
-            {(read) => (
-              <RangeImage
-                bytes={read.bytes} path={page.path} name={name}
-                assetKey={docsApi.file(page.project, openedRangePin(pin, read.digest))}
-                openedPin={openedRangePin(pin, read.digest)} onShown={p.onLeafImage ?? null}
-              />
-            )}
-          </RangeLeaf>
-        );
+        : rangeBody(pin, range, listedSize, entry);
     } else if (cls === 'raster') {
-      body = <><RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} /><div className="docs-leaf-actions">{download}</div></>;
+      body = (
+        <>
+          <RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} onOverCap={page.at !== null ? onRasterOver : null} />
+          <div className="docs-leaf-actions">{download}</div>
+        </>
+      );
     } else if (file.s === 'too-large' || file.s === 'stat-pinned') {
       // X2 P1 (spec 4.3): above the class cap, or a draft with no fingerprint, the file is read by range up to the range
       // ceiling: Markdown is shown in parts, a text file as source in parts (review F1); every other class is offered as a
       // Download read the same way.
       const range = rangePinOf(file.pin, entry);
-      body = range === null
-        ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
-        : (
-          <RangeLeaf
-            key={rangeReadKey({ project: page.project, pin: file.pin, range, size: file.size })}
-            target={{ project: page.project, pin: file.pin, range, size: file.size }} cls={cls} name={name} loader={rangeLoader}
-            visit={visit}
-          >
-            {cls === 'markdown'
-              ? (read) => (
-                <RangeMarkdown
-                  read={read} entry={entry} pin={file.pin} page={page} link={link} parser={parser} reader={reader} only={only}
-                  pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
-                />
-              )
-              : cls === 'text'
-                ? (read) => <RangeSource read={read} entry={entry} pin={file.pin} />
-                : undefined}
-          </RangeLeaf>
-        );
+      body = range === null ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p> : rangeBody(file.pin, range, file.size, entry);
     } else if (cls === 'other') {
       const size = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
       body = (

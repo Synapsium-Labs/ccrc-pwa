@@ -2,8 +2,8 @@
 // whether an image may be decoded for its own page, and the dimensions an image's header declares, read before any
 // decode. No I/O, no timers, no DOM: the loader and the views act on these answers.
 import {
-  DOCS_CLASS_CAP, DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES,
-  type DocContentClass, type DocListPin, type DocsEntry, type DocsRangePin,
+  DOCS_CLASS_CAP, DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, docsFailureBlob,
+  type DocContentClass, type DocListPin, type DocsEntry, type DocsFailureBody, type DocsRangePin,
 } from '../../../../shared/docs';
 
 /** How a leaf's bytes are read (spec 4.3).
@@ -24,6 +24,17 @@ export function rangeVerdict(size: number, cls: DocContentClass, pin: DocsRangeP
 export function rangePinOf(pin: DocListPin, entry: DocsEntry): DocsRangePin | null {
   if (pin.kind === 'committed') return entry.committed === null ? null : { kind: 'blob', sha: entry.committed.blob };
   return pin.fp === null ? { kind: 'stat', size: pin.stat.size, mtimeNs: pin.stat.mtimeNs } : { kind: 'fp', sha: pin.fp };
+}
+
+/** What a version page's range read needs from the file route's `too-large` answer (review Q4): the listing's size is the
+ *  served commit's, so on a version page the answer is the only place the size and the blob of the path AT THAT COMMIT
+ *  are named. `null` when the answer is no `too-large`, carries no blob (an older ccd) or a blob that is no full sha
+ *  (`docsFailureBlob`), or names no whole size: the class cap's sentence stays, and nothing is read by range. */
+export function rangeOfTooLarge(body: DocsFailureBody): { blob: string; size: number } | null {
+  const blob = docsFailureBlob(body);
+  const size = body.size;
+  if (body.failure !== 'too-large' || blob === null || typeof size !== 'number' || !Number.isSafeInteger(size) || size < 0) return null;
+  return { blob, size };
 }
 
 /** Whether an image may be decoded for its own page, from the dimensions `imageHeaderDims` read (each at least 1):

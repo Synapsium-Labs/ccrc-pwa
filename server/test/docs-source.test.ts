@@ -302,6 +302,34 @@ describe('check 7 and the verbatim rebuild (row 46, refinement (j))', () => {
       .toStrictEqual({ ok: false, failure, ...ctx });
   });
 
+  // A version page reads an over-cap committed file by range, pinned by the blob this answer names (X2 P1, review Q4).
+  it('a committed too-large line carries its blob to the body when the blob is a full sha (X2 P1, review Q4)', async () => {
+    for (const blob of ['ab'.repeat(20), '0f'.repeat(32)]) {
+      const ctx = { size: 5_000_000, cap: 2_097_152, blob };
+      expect(await showRaw(COMMITTED, failLine('docs-show', 'too-large', ctx)))
+        .toStrictEqual({ ok: false, failure: 'too-large', ...ctx });
+    }
+  });
+
+  it('a too-large line from an older ccd, with no blob, passes through as it always did (X2 P1, review Q4)', async () => {
+    const out = await showRaw(COMMITTED, failLine('docs-show', 'too-large', { size: 5_000_000, cap: 2_097_152 }));
+    expect(out).toStrictEqual({ ok: false, failure: 'too-large', size: 5_000_000, cap: 2_097_152 });
+    expect(Object.hasOwn(out as object, 'blob')).toBe(false);
+  });
+
+  it.each([
+    ['short', 'ab'.repeat(19)],
+    ['upper case', 'AB'.repeat(20)],
+    ['not hex', 'xy'.repeat(20)],
+    ['empty', ''],
+    ['a number', 7],
+    ['null', null],
+    ['a path-like string', '../' + 'a'.repeat(37)],
+  ] as const)('a too-large blob that is %s is dropped, never passed on (X2 P1, review Q4)', async (_label, blob) => {
+    const out = await showRaw(COMMITTED, failLine('docs-show', 'too-large', { size: 5_000_000, cap: 2_097_152, blob }));
+    expect(out).toStrictEqual({ ok: false, failure: 'too-large', size: 5_000_000, cap: 2_097_152 });
+  });
+
   it('an ok index keeps unwalked absent when ccd sent none, and 3 when it sent 3 (D-4157)', async () => {
     const index = { v: 1, verb: 'docs-index', ok: true, elapsedMs: 5, unlisted: 0, duplicates: [], projects: [] };
     const indexWith = async (stdout: string): Promise<Answer> =>

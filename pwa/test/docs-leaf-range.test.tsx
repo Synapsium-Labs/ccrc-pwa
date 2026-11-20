@@ -11,9 +11,12 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { DocsLeaf, RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { draftOf, entry, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
+import { BLOB_2, draftOf, entry, failedAnswer, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
-import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, fillSentence } from '../src/docs/docsText';
+import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
+import { createFetchQueue } from '../src/docs/fetchQueue';
+import type { DocsFileAnswer, DocsRasterAnswer } from '../src/docs/failures';
+import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence } from '../src/docs/docsText';
 import { MarkdownParts } from '../src/docs/range/MarkdownParts';
 import { RangeImage, RangeLeaf, rangeReadKey } from '../src/docs/range/RangeLeaf';
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
@@ -322,5 +325,115 @@ describe('MarkdownParts', () => {
     render(<MarkdownParts text={TEXT} pre={pre} fragment="somewhere" renderPart={(part) => <p>part {part.index + 1}</p>} />);
     await waitFor(() => expect(screen.getByText('part 1')).toBeTruthy());
     expect(screen.getByRole('status').textContent).toBe('The place this link names may be in a part Docs could not prepare, so the first part is shown.');
+  });
+});
+
+// ---- A version page above its class cap reads by range (review Q4) -----------------------------------------------------
+// On a version page (`?at=<commit>`) the listing's size is the served commit's, so the file route answers `too-large`,
+// and that answer now names the blob of the path at THAT commit: the range read's pin. Without a blob (an older ccd) the
+// class cap's sentence stays.
+describe('a version page above its class cap reads by range (X2 P1, review Q4)', () => {
+  const VERSION = '9'.repeat(40);
+  const enc = new TextEncoder();
+  const tooLarge = (size: number, blob?: string) => failedAnswer('too-large', { size, cap: 2097152, ...(blob === undefined ? {} : { blob }) });
+
+  /** `url` opened as a leaf on a version page of a listing holding `path`; the file and raster routes answer `answer`, and
+   *  every range target the leaf prepares is recorded. */
+  function openVersion(path: string, src: Uint8Array<ArrayBuffer>, answer: (size: number) => DocsFileAnswer & DocsRasterAnswer,
+    rangeFails: string | null = null) {
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', path)] })) });
+    f.file.mockResolvedValue(answer(src.length));
+    f.raster.mockResolvedValue(answer(src.length));
+    const served = servingLoader(src);
+    const targets: RangeTarget[] = [];
+    const rangeLoader: RangeLoader = {
+      async prepare(t, signal) {
+        targets.push(t);
+        return rangeFails === null ? served.loader.prepare(t, signal) : failedAnswer(rangeFails);
+      },
+      frame: (t, snapshot, offset, length, signal) => served.loader.frame(t, snapshot, offset, length, signal),
+    };
+    const assets: DocsAssetContextValue = { loaders: { file: f.file, raster: f.raster }, queue: createFetchQueue(), onDraftAsset: () => undefined };
+    const located = pageAt(`/docs/demo/specs/${path}?at=${VERSION}`);
+    if (located.kind !== 'path') throw new Error('fixture: not a leaf');
+    const page = located;
+    const parser = async (text: string) => parseMarkdown(text, 'docs');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return (
+        <DocsAssetContext value={assets}>
+          <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={rangeLoader} />
+        </DocsAssetContext>
+      );
+    }
+    return { f, targets, ...render(<Harness />) };
+  }
+
+  const versionTarget = (size: number) => ({
+    pin: { kind: 'committed', commit: VERSION, servedRef: 'refs/remotes/origin/main', section: 'specs', path: expect.any(String) },
+    range: { kind: 'blob', sha: BLOB_2 }, size,
+  });
+
+  it('a Markdown page: read by range at the version\'s commit and the blob the answer named, then shown', async () => {
+    const src = enc.encode('# Over the cap\n\nbody\n') as Uint8Array<ArrayBuffer>;
+    const { targets } = openVersion('big.md', src, (n) => tooLarge(n, BLOB_2));
+    expect(await screen.findByRole('heading', { name: 'Over the cap' })).toBeTruthy();
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject(versionTarget(src.length));
+  });
+
+  it('a text page: shown as source in parts', async () => {
+    const src = enc.encode('abcdefghi\n'.repeat(314573)) as Uint8Array<ArrayBuffer>;
+    const { targets, container } = openVersion('big.txt', src, (n) => tooLarge(n, BLOB_2));
+    await waitFor(() => expect(screen.getByText('Part 1 of 2')).toBeTruthy(), { timeout: 20000 });
+    expect(container.querySelector('pre.doc-plain')?.textContent?.startsWith('abcdefghi\n')).toBe(true);
+    expect(targets[0]).toMatchObject(versionTarget(src.length));
+  }, 60000);
+
+  it('an image page: shown from the bytes read by range, the raster route asked once', async () => {
+    const src = pngOf(4000, 3000);
+    const { targets, f, container } = openVersion('big.png', src, (n) => tooLarge(n, BLOB_2));
+    await waitFor(() => expect(container.querySelector('img.msg-img')).not.toBeNull());
+    expect(container.querySelector('img.msg-img')?.getAttribute('src')).toMatch(/^blob:/);
+    expect(f.raster).toHaveBeenCalledTimes(1);
+    expect(targets).toHaveLength(1);
+    expect(targets[0]).toMatchObject(versionTarget(src.length));
+  });
+
+  it('any other class: the Download, which the file route refused as too large, reads by range and saves the bytes', async () => {
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const clicks: HTMLAnchorElement[] = [];
+    const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
+    try {
+      const { targets } = openVersion('big.bin', src, (n) => tooLarge(n, BLOB_2));
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      expect(targets, 'nothing is read until the Download is tapped').toHaveLength(0);
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      expect(clicks[0]!.download).toBe('big.bin');
+      expect(targets).toHaveLength(1);
+      expect(targets[0]).toMatchObject(versionTarget(src.length));
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it.each([['an older ccd (no blob)', undefined], ['a blob that is no full sha', 'nope']] as const)(
+    '%s: the class cap\'s sentence stays and nothing is read by range', async (_label, blob) => {
+      const src = enc.encode('# x\n') as Uint8Array<ArrayBuffer>;
+      const answer = (n: number) => tooLarge(n, blob);
+      const { targets, container } = openVersion('big.md', src, answer);
+      await waitFor(() => expect(container.textContent).toContain(failureSentence(answer(src.length).body)));
+      expect(targets).toHaveLength(0);
+    });
+
+  it('a refused range read on a version page never re-lists: the visit answers other, the sentence is the failure\'s own', async () => {
+    const src = enc.encode('# x\n') as Uint8Array<ArrayBuffer>;
+    const { targets, f, container } = openVersion('big.md', src, (n) => tooLarge(n, BLOB_2), 'unknown-commit');
+    await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+    expect(container.textContent).not.toContain(DOCS_VIEW_TEXT.changing);
+    expect(f.tree, 'one listing').toHaveBeenCalledTimes(1);
+    expect(targets).toHaveLength(1);
   });
 });

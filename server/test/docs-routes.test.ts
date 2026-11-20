@@ -256,6 +256,19 @@ describe('answers, ccd failures and the gate (section 3.4, section 3.5)', () => 
     expect(rec.calls).toHaveLength(1);
   });
 
+  it('a committed file over its cap answers 413 with the blob ccd named, and a malformed blob is dropped (X2 P1, review Q4)', async () => {
+    const blob = 'c'.repeat(40);
+    const rec = scripted(() => failLine('docs-show', { failure: 'too-large', size: 5_000_000, cap: 2_097_152, blob }));
+    const { app } = await open({ run: rec.run });
+    const res = await app.inject({ url: fileUrl(COMMITTED_Q), headers: PWA_HEADERS });
+    expect(res.statusCode).toBe(413);
+    expect(res.json()).toStrictEqual({ ok: false, failure: 'too-large', size: 5_000_000, cap: 2_097_152, blob });
+    const bad = scripted(() => failLine('docs-show', { failure: 'too-large', size: 5_000_000, cap: 2_097_152, blob: 'nope' }));
+    const again = await (await open({ run: bad.run })).app.inject({ url: fileUrl(COMMITTED_Q), headers: PWA_HEADERS });
+    expect(again.statusCode).toBe(413);
+    expect(again.json()).toStrictEqual({ ok: false, failure: 'too-large', size: 5_000_000, cap: 2_097_152 });
+  });
+
   it('ccd-fault: 502 with the adapter\'s stderrHead', async () => {
     const rec = scripted(() => faultRes('boom'));
     const { app } = await open({ run: rec.run });

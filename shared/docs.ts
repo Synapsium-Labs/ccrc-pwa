@@ -208,6 +208,14 @@ export function isDocsCommit(s: string): boolean {
   return typeof s === 'string' && SHA_RE.test(s);
 }
 
+/** The blob a failure body names (`too-large` of a committed show: the blob of that path at that commit, which a version
+ *  page above its class cap pins its range read by), or `null`. The one reader: a value that is not a full sha (40 or 64
+ *  lowercase hex) is no blob, so the server drops it before the body leaves and the PWA never builds a pin from it. */
+export function docsFailureBlob(body: { readonly blob?: unknown }): string | null {
+  const blob = body.blob;
+  return typeof blob === 'string' && isDocsCommit(blob) ? blob : null;
+}
+
 /** The grammar, then the category check, then the whole-path bytes, the component bytes and the depth. */
 export function isDocsRelPath(s: string): boolean {
   if (typeof s !== 'string' || !REL_PATH_RE.test(s) || EXCLUDED_CODE_POINT_RE.test(s)) return false;
@@ -475,7 +483,7 @@ type DocsTriedRef = { ref: string; result: 'resolved' | 'absent' | 'dangling' | 
  * - `root`: unknown-project (ccd's projects root).
  * - `owner`, `branch`: linked-worktree, shared-repo.
  * - `tried`, `suggest`, `hint`: unresolved-ref. `ref`, `type`: ref-not-commit.
- * - `kind`: not-a-file. `size`, `cap`: too-large and range-too-large. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
+ * - `kind`: not-a-file. `size`, `cap`: too-large and range-too-large. `blob`: too-large of a committed show. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
  * - `candidates`: ambiguous-worktree. `why`: untrusted-worktree, malformed-answer, foreign-request, bad-query.
  * - `head`: worktree-moved. `now`: draft-changed. `lockAgeMs`: ref-locked.
  * - `step`, `rc`, `stderrHead`: git-failed, git-timeout. `signal`: ccd-killed. `code`, `stderrHead`: ccd-fault.
@@ -494,6 +502,8 @@ export interface DocsFailureContext {
   kind?: DocsNotAFileKind;
   size?: number;
   cap?: number;
+  /** too-large of a committed show: the blob of the asked path at the asked commit, a full sha (`docsFailureBlob`). */
+  blob?: string;
   count?: number;
   bytes?: number;
   errno?: string;

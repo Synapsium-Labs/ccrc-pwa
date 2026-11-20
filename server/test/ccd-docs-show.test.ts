@@ -63,6 +63,24 @@ describe('docs-show committed: size before read (M6.6, row 26)', () => {
     expect(blobReads(rec.calls())).toEqual([]);
   });
 
+  it('a committed file over the cap answers too-large with the exact blob of that path at that commit (X2 P1, review Q4)', () => {
+    // A version page reads an over-cap file by range, and the range pin is that blob: the answer names the one at the
+    // asked commit, not the one the path holds now.
+    const main = docsRepo(h, 'demo', { [`${SPECS}/big.md`]: 'x'.repeat(1001), [`${SPECS}/other.md`]: 'o'.repeat(1001) });
+    const first = head(main);
+    const firstBlob = h.git(main, 'rev-parse', `${first}:${SPECS}/big.md`);
+    commitDocs(h, main, { [`${SPECS}/big.md`]: 'y'.repeat(1002) });
+    const latestBlob = h.git(main, 'rev-parse', `HEAD:${SPECS}/big.md`);
+    expect(latestBlob, 'fixture: the path changed').not.toBe(firstBlob);
+    const env = { CCD_DOCS_MAX_FILE_BYTES: '1000' };
+    expect(parseOneLine(show(first, 'specs', 'big.md', { env }))).toMatchObject({
+      ok: false, failure: 'too-large', size: 1001, cap: 1000, blob: firstBlob,
+    });
+    expect(parseOneLine(show(head(main), 'specs', 'big.md', { env }))).toMatchObject({
+      ok: false, failure: 'too-large', size: 1002, cap: 1000, blob: latestBlob,
+    });
+  });
+
   it('exactly --max-bytes is served whole, as base64, with the sha256 of its bytes', () => {
     const png = pngOf(DOCS_MAX_IMAGE_BYTES);
     const main = docsRepo(h, 'demo', { [`${SPECS}/edge.png`]: png });

@@ -31,7 +31,7 @@ import { CCD_ARGV, DOCS_SECTIONS_CAP, capSupported, ccdCan } from '../ccdargv.js
 import { ccdEnding, type CcdResult, type CcdRunner } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import {
-  DOCS_CCD_FAILURES, docsRefText, redactDocsText,
+  DOCS_CCD_FAILURES, docsFailureBlob, docsRefText, redactDocsText,
   type DocFilePin, type DocPin, type DocsFailure, type DocsFailureBody, type DocsFetchOk, type DocsIndexOk, type DocsLogAsk, type DocsLogOk,
   type DocsRefSpec,
   type DocsShowOk, type DocsTreeOk, type DocsVerb,
@@ -266,6 +266,9 @@ function parseLine(verb: DocsVerb, stdout: string): DocsLine {
  *  `Object.fromEntries` defines each key as an own property, so a `__proto__` key in the line stays a plain key. */
 function ccdFailureBody(line: Readonly<Record<string, unknown>>): DocsFailureBody {
   const carried = Object.fromEntries(Object.entries(line).filter(([key]) => !ENVELOPE_ONLY_KEYS.has(key)));
+  // The one context key held to a grammar: a `blob` that is no full sha is dropped, never passed on (X2 P1, review Q4),
+  // because the PWA pins a range read by it.
+  if ('blob' in carried && docsFailureBlob(carried) === null) delete carried['blob'];
   return { ...carried, ok: false } as unknown as DocsFailureBody;
 }
 

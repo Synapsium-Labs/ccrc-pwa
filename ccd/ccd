@@ -48245,7 +48245,7 @@ def read_committed(repo, a, dl, range_cap=None, want_blob=None):
        '/', is not-a-file {directory}; neither is absent-path;
     4. mode 120000 is not-a-file {symlink}, 160000 not-a-file {submodule};
     5. the --long size against cap = min(--max-bytes, file_ceiling()): over
-       it is too-large {size, cap}, and cat-file never runs;
+       it is too-large {size, cap, blob}, and cat-file never runs;
     6. `cat-file blob <id>`, read to at most size + 1 bytes: any other length
        is git-failed {step:'cat-file'}; on rc 128 batch-check asks again, and
        a missing object is object-missing, anything else git-failed."""
@@ -48290,7 +48290,7 @@ def read_committed(repo, a, dl, range_cap=None, want_blob=None):
     else:
         cap = min(int(a.max_bytes), file_ceiling())
         if size > cap:
-            raise fail('too-large', size=size, cap=cap)
+            raise fail('too-large', size=size, cap=cap, blob=oid)
     r = show_git(repo, ['cat-file', 'blob', oid], dl, CALL_S['show'], stdout_cap=size + 1)
     if r.timed_out:
         raise fail('git-timeout', step='cat-file')
