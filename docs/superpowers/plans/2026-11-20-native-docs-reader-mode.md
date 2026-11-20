@@ -355,3 +355,25 @@ The review found 4 important findings (F1 to F4) and 8 minor ones (A-a to A-h). 
   - the commit-per-finding wording.
 - **The adversarial pass on the changed sections (Opus, high):** 8 important and 9 minor findings, all fixed in one commit. Among them: the §4.2 table, the blur in XR1 only, `active` on its own window, every mount planned in `default` while on, the fallback off the one bar, `leave-dead-reader` and `exitPending`, and FS-10.
 - New mutation rows: X6.52 to X6.71. No test, typecheck or install ran: docs only.
+
+### Fix round 3 (review run 2953 at `865a27bfb`, 2026-11-20, the last)
+
+The review found 8 important findings (F1 to F8) and 8 minor ones (A-a to A-h). The coordinator accepted X6 at the review cap, on condition that the report's replacement texts were applied verbatim in this round, one commit per id. Three quoted texts did not match exactly once: F7's plan:43 text, A-e's escaped quote marks and A-g's missing bold. The worker stopped and reported them, and the coordinator ruled on each. The texts were then applied as ruled, with no rewording.
+
+- **F1:** applied verbatim.
+- **F2:** applied verbatim.
+- **F3:** applied verbatim, both XR2 mockups redrawn at their box widths.
+- **F4:** applied verbatim.
+- **F5:** applied verbatim.
+- **F6:** applied verbatim.
+- **F7:** applied verbatim (plan:86 first, then plan:43 alone, by the coordinator's ruling).
+- **F8:** applied verbatim.
+- **A-a:** applied verbatim.
+- **A-b and A-h:** not applied: superseded by F3 (coordinator's ruling at the cap).
+- **A-c:** applied verbatim.
+- **A-d:** applied verbatim.
+- **A-e:** applied verbatim (the report's JSON escapes removed, by the coordinator's ruling).
+- **A-f:** applied verbatim.
+- **A-g:** applied verbatim (the bold lead on spec:488 kept, by the coordinator's ruling).
+- **XR2.1's hide test renamed:** coordinator's correction at the cap, follow-on to F3. The test and mutation row X6.58 now name a tap anywhere on the top strip.
+- New mutation rows: X6.72 to X6.75. No test, typecheck or install ran: docs only.

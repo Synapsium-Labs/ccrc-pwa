@@ -43,3 +43,5 @@ The task note for wave 31 of the native Docs reader programme, for the coordinat
 - **Review 2947 (round 2):**
   - F1 to F4, with the coordinator's rulings on F2 (the overlay hides by touch, Kindle-like) and F3 (reader mode reads in the default layout, R21), and A-a to A-h;
   - committed as the plan's Results describe, which lists them.
+- **Review 2953 (round 3, the last):** accepted at the cap on condition. The report's texts F1 to F8, A-a and A-c to A-g are applied verbatim, one commit each. A-b and A-h are not applied, being superseded by F3. The coordinator ruled on three texts that did not match exactly once, and added one correction of its own, XR2.1's hide test renamed after F3. New mutation rows X6.72 to X6.75. The plan's Results list each.
+- **For XR2's brief:** from XR2 the overlay's top strip holds only the title, and Exit, the turn setting and Aa sit in the bottom strip (review 2953 F3). XR2.1 retires rows X6.21, X6.25, X6.35, X6.54 to X6.56, X6.66, X6.68 and X6.69 before its Step 1 (F6).
