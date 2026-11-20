@@ -28,7 +28,7 @@ import {
   mailOnly, stopDoneVerdict, workerAsleepNotice, workerAsleepNoticeDue, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
-import type { SleepPolicy } from './sleep.js';
+import { mailHoldsSleep, type SleepPolicy } from './sleep.js';
 import { designationFactFrom, designationFactOf, type DesignationFact } from './roleOf.js';
 import type { LaneName } from './laneSchedule.js';
 import { runNamesSession } from './coord/runBinding.js';
@@ -750,7 +750,7 @@ function storeReadFor(
       // would keep a finished worker resident that long). Stopping it leaves the
       // row to the lifecycle rung, which rejects a stopped recipient's mail
       // `recipient-stopped` exactly as before the park existed.
-      mail: coord.outstandingMailFor(id).some((m) => m.parkedAt == null),
+      mail: coord.outstandingMailFor(id).some(mailHoldsSleep),
     };
   } catch (err) {
     return { ok: false, detail: err instanceof Error ? err.message : String(err) };
@@ -1068,7 +1068,7 @@ function storeRead(coord: HibernateSweepDeps['coord'], claimants: ReadonlySet<st
       // would keep this session resident that long). Its retry still reaches
       // the session through the due loop, and a hibernated one through the
       // ensure-wake gate first; a fresh box then differs from its park and lands.
-      mail: coord.outstandingMailFor(id).some((m) => m.parkedAt == null),
+      mail: coord.outstandingMailFor(id).some(mailHoldsSleep),
     };
   } catch (err) {
     return { ok: false, detail: errText(err) };

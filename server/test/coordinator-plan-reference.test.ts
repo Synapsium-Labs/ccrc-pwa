@@ -2,8 +2,8 @@
 // its contract. `references/plan.md` names every plan verb the closed client routes by wave 6 and every plan refusal a
 // coordinator meets from one, says the hierarchy is ccrc's and its items are the operator's to act on in the console, and
 // gives the Linear owner its one duty; the open step declares the plan first and names the run's ticket; the ledger
-// template's Waves table has an epic column; SKILL.md points at the plan reference. Clause 21 itself, and its pin, wait for
-// D-8739's follow-up PR, so nothing here reads the contract.
+// template's Waves table has an epic column; SKILL.md points at the plan reference. The contract's clause 22 (D-8739's
+// follow-up) is pinned in `coordinator-skill.test.ts`, so nothing here reads the contract.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,10 +53,10 @@ describe('the coordinator skill points at the plan reference (D-8185)', () => {
     expect(linear).toContain('The hierarchy is ccrc\'s, kept from your plan (`references/plan.md`).');
   });
 
-  it('its Linear section states the console-only rule for hierarchy items, until clause 21 lands (D-8739, review 2580 F1)', () => {
+  it('its Linear section leaves the console-only rule to clause 22, its one home in SKILL.md (D-8739, review 2580 F1)', () => {
     const linear = flat(skill.slice(skill.indexOf('\n## Linear\n')));
-    expect(linear).toContain('The operator acts on hierarchy items in the console, and a coordinator never answers one for them '
-      + 'nor asks for those approvals in its turn text.');
+    expect(linear).not.toContain('The operator acts on hierarchy items in the console');
+    expect(flat(skill)).toContain('22. A new programme\'s plan is declared with `ccrc-api plan put`');
   });
 
   it('its Linear section keeps every name Linear returns as data, and Linear text in its workspace (review 2580 A2)', () => {
@@ -139,26 +139,44 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable (a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4)', () => {
+  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
       const next = text.indexOf('\n## ', at + 1);
       const section = flat(text.slice(at, next === -1 ? undefined : next));
       expect(at, heading).toBeGreaterThanOrEqual(0);
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first\)/);
+      // review 2885 F5 as review 2920 F2 rules it: the third case, a key Linear refused with a 401 (only a 401 is a verdict on the
+      // key); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read; review 2929 F3: the fifth, an
+      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed)
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; and when Linear answered about that one issue, refusing it as forbidden or invalid or answering outside its grammar, a retry gets the same answer until that issue changes in Linear\)/);
+      // review 2920 F1 and 2929 F1: the clauses main's api.md pin held, now pinned where they live, "only" included: a decision
+      // that binds the issue is refused, and a close, a raise or a return goes on (`inboundDoorVerdict`)
+      expect(section, heading).toMatch(heading === '## plan take'
+        ? /`unreachable` \([^)]*refused only for a decision that binds it: a take into an epic, while a close or a return goes on; or, for an Upkeep ticket's take or close, the programme's home workspace could not be resolved;/
+        : /`unreachable` \([^)]*refused only for a decision that binds it: a hand, an Upkeep placement or a take into an epic, while a close, a raise or a return goes on;/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
-    // the API reference's inbound refusal list says the same (by its holder's consent)
+  });
+
+  it('api.md points at plan.md for plan triage and plan take, one home for their vocabulary (review 2597 F3)', () => {
     const api = flat(read('references', 'api.md'));
-    // and says what plan.md says (review 2834 A5, 2874 A6): only a binding decision, take's unresolvable home, when a retry helps
-    expect(api).toMatch(/`unreachable` \([^)]*refused only for a decision that binds it[^)]*home workspace cannot be resolved[^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first\)/);
-    expect(api).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
+    expect(api).toContain('`references/plan.md` owns both: their bodies, their refusals and what to do about each.');
+    expect(api).not.toContain('"$API" plan triage');
+    expect(api).not.toContain('"$API" plan take');
+    expect(api).not.toContain('`issue-not-inbound`');
   });
 
   it('plan.md and api.md give runs open the same wave-epic-mismatch and ticket-required, after WM6 (review 2874 F1, F2, A8)', () => {
     const api = flat(read('references', 'api.md'));
-    expect(api).toContain('`runs open` also answers six refusals');
+    // review 2885 F8: the stated count is the list's own, counted from its bullets, never one pinned word
+    const raw = read('references', 'api.md');
+    const at = raw.indexOf('`runs open` also answers ');
+    const list = raw.slice(raw.indexOf('\n\n', at) + 2, raw.indexOf('\n\n', raw.indexOf('\n\n', at) + 2));
+    const bullets = list.split('\n').filter((l) => l.startsWith('- `')).length;
+    const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'eight', 'nine', 'ten'];
+    expect(bullets).toBeGreaterThan(0);
+    expect(api).toContain(`\`runs open\` also answers ${WORDS[bullets]} refusals`);
     for (const [name, text] of [['plan.md', flat(plan())], ['api.md', api]] as const) {
       expect(text, name).toContain('`ticket-required`');
       // a ticket of a live epic that lists no waves opens at any wave, so it is never wave-epic-mismatch
@@ -166,7 +184,14 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       // no ticket at an unlisted wave is wave-epic-mismatch only where every live epic lists waves; else ticket-required
       expect(text, name).toContain('no live epic lists this wave, and every live epic lists waves');
       expect(text, name).toContain('no live epic lists this wave and a live epic lists no waves');
+      // review 2885 F2, F3: both cases need a live epic, and an unavailable ticket at a listed wave is answered first
+      // review 2920 F6: with no live epic, two refusals and one open, each named as what it is
+      expect(text, name).toContain('Both cases need a live epic: with none, the run is refused `plan-missing` when the programme needs a '
+        + 'plan, else `ticket-unavailable` when it names a ticket, else it opens with no ticket; and at a wave a live epic lists, a named '
+        + 'ticket that is unavailable (below) answers `ticket-unavailable` first.');
     }
+    // review 2885 F1: a ticket of a live epic that lists no waves opens at any wave, in the ticket sentence too
+    expect(flat(plan())).toContain('of a live epic that lists no waves (it opens at any wave)');
   });
 
   it('a ticket names its project when its work lands outside the home project (review 2580 A4)', () => {

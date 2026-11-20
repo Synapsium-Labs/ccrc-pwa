@@ -11,7 +11,7 @@ the operator's, in the console, after this lands.
 |---|---|
 | 7.1 | `server/src/linear/migrationPolicy.ts` (L1): `checkMap`, `applySteps`, `reconcileMove`, `putBackSteps`, `replacementComment`; `IssueSnapshot` and `MapBody` in `shared/plan.ts` beside D-8737's shapes; `isPlanKebab` admits the map classes |
 | 7.2 | `POST /api/projects/:project/hierarchy/migrate` (session-gated) and the map item's `approve` and `return` (`hierarchyRoutes.ts`); `plan map-propose`, `POST /api/teams/:team/plan/map` (box token, the team's Linear owner, `planRoutes.ts`), its client row and its section in `references/plan.md`; the console's "Reshape in Linear" |
-| 7.3 | `server/src/linear/migration.ts` (`LinearMigration`, L4): the owner and coordinator mails for a map, the apply at wave boundaries, the report; the plan store's migration functions; the `linearMigration` lane (30 s); migration 113 (four columns on `linear_migrations`, D-8800) |
+| 7.3 | `server/src/linear/migration.ts` (`LinearMigration`, L4): the owner and coordinator mails for a map, the apply at wave boundaries, the report; the plan store's migration functions; the `linearMigration` lane (30 s); migration 114 (four columns on `linear_migrations`, D-8800) |
 | 7.4 | The report item's `put-back` and `done`; put back from the move record alone, run by the lane |
 
 ## Departures (defined in the plan's Deviations found)
@@ -55,7 +55,7 @@ the operator's, in the console, after this lands.
 | 7.3 the `applying` guard in `planSync.ts` | the sync emits no issue step for a listed issue with no applied move row | not needed: a listed issue has no binding until its move row exists (D-8796); the sync instead charges a migrating object's steps to lane `migration` |
 | 7.4 put back | run by the act | asked by the act (`putBackAskedAt`), run by the migration lane (D-8796) |
 | 7.2 approve | the map item settles on `applied` | it settles on Approve, with a note that the report follows; the report item is raised on `applied` (D-8799) |
-| — | no migration in wave 7 | migration 113 (D-8800): `linear_migrations.project`, `report`, `putBackAskedAt`, `reportDoneAt` |
+| — | no migration in wave 7 | migration 114 (D-8800): `linear_migrations.project`, `report`, `putBackAskedAt`, `reportDoneAt` |
 | — | — | `GET /api/migrations/:id` (session-gated, masked), D-8737's read for the map and report bodies |
 | — | a server cap per new verb | none: `shared/api.ts` may only shrink (D-8635), so `plan map-propose` rides `plan-v1`; an older server answers 404 |
 
@@ -105,7 +105,7 @@ Every code fix has a test seen red before it (one run over the six server files,
 | A2 | a follow-up map is stored on its own, the map it joins kept as `prior` until Approve merges them; its item counts its own entries | `migration-propose.test.ts` |
 | A3 | the console's `migration-in-flight` sentences: one for Reshape (one team at a time, or migrated already), one for Put back (refused for good) | `linear-item-controls.test.tsx` |
 | A4 | `stateOfTeam` reads the workspace the team's key routes to | `migration-propose.test.ts` |
-| A5 | D-8799 (the map item settles on Approve) and D-8800 (migration 113's four columns) in the plan | — |
+| A5 | D-8799 (the map item settles on Approve) and D-8800 (migration 114's four columns) in the plan | — |
 | A6 | the report names a done programme whose initiative stays active while its placed tickets are open | `migration-policy.test.ts` |
 | A7 | `MIGRATION_CALLS_PER_TICK` counts every Linear call of a tick; a rate refusal of any of them rests the lane | `migration-apply.test.ts` |
 
@@ -133,8 +133,29 @@ mutation, measured one mutation at a time from a saved copy:
 | A4 to A7 | the four wirings the panel mutated green: round 1's A6 done-programme sentence, F6's `heldIssues` wiring in the proposal, F6's self-reference by issue id with F8's `unclear` exclusion, and A4's newest-first sort in `stateOfTeam` | `migration-apply.test.ts` "A6" (red with `done` dropped) and "F8: a programme named only by an unclear entry" (red without the exclusion); `migration-propose.test.ts` "F6: a superseded entry may name a successor ccrc already holds" (red without `heldIssues`) and "A4: of two rows" (red with the sort reversed); `migration-policy.test.ts` F6, by issue id (red without the check) |
 
 Also in this round: `main` merged twice more (it took migration 111, the waiting workers' lane-arm row, and then 112, the
-dispatch cap's lane-arm row), so this run's migration is 113. README's count word is applied (see below), so
+dispatch cap's lane-arm row), so this run's migration was 113; the land-sync below moves it to 114. README's count word is applied (see below), so
 the census case red since round 1 is green.
+
+## Review 2955 and the land-sync (round 3, the coordinator's mail of 2026-11-20)
+
+Review 2955 (round 3, the last under the review cap) read `d2a497e99` and found four important findings and four advisories,
+real defects in the migration's report and its closers that cannot fire until the operator starts a team's migration from the
+console. The coordinator's ruling: this PR lands at the cap as a land-sync only (`main` merged at `f95ac048a`, which took
+migration 113 for the admission wait, so this run's migration is 114; the monotonic lane count is 57 with `main`'s admission
+wake; nothing else changes), and the findings go to a follow-up run of their own, plan ticket `w7-fixes` in the `migration`
+epic, with a fresh review, which must land before any team's migration is started. The wave 7 pilot waits for it.
+
+The rulings, for that run:
+
+| Item | Ruling |
+|---|---|
+| F1 | The three early returns on an unread read save the report with the tick's `unrelated` set merged in, and (A2) a level joins `unrelated` only after its state write succeeds. Test: a no-relation close, then a refused read in the same tick, and the report still lists it. |
+| F2 (ruled) | An issue a live binding holds leaves the migration: once the owner has taken it through inbound, it is neither skipped nor waited on. The report lists it as taken by the owner (its own list and console words, not "Skipped as changed"), the owner's mail never asks to map it, and the apply does not wait on it. D-8796 is amended to name the cause. |
+| A1 (ruled) | F1's one-writer rule covers closers too: a closer-class entry (epic, stale, superseded, finished) naming an issue a live binding holds is not commented on or closed; it goes to the same taken-by-the-owner list. |
+| F3 | D-8796's amended sentence and the two comments say what the code does: the Upkeep epic's create goes out on lane `sync` as the plan sync's own pass, and step 1's pass and the Upkeep pass are bounded by the lane, the pass deadline and the one rate service, not by the writes cap. "Never spent" and "the writes cap" are dropped for those two passes. |
+| F4 | `graceBindingsOf`'s retired guard gets a test that goes red without it. |
+| A3 | The waiting words cover a leaf not yet placed, and say that a leaf later skipped means the level closes with no relation. |
+| A4 | D-8802 is cited at the put-back gate it explains. |
 
 ## Follow-ups and open points
 

@@ -1381,6 +1381,14 @@ _tba_cx_put_rows() {   # <box directory>
   done
 }
 
+# `_tba_cx_box_holds_release` -> rc 0 iff the box's installed marker (beside its box file) names the release this act installs
+# (CX_TAG). A marker that cannot be read, or names another release, is rc 1: the caller then asks as for a first install.
+_tba_cx_box_holds_release() {
+  [ -n "${CX_TAG-}" ] || return 1
+  _tba_cx_out sh -c 'sed -n "s/^release[[:space:]][[:space:]]*//p" "$1" 2>/dev/null | head -n 1' sh "${TBA_BOX_ENV_PATH%/*}/installed"
+  [ "$CX_RC" = 0 ] && [ "${CX_OUT%%$'\n'*}" = "$CX_TAG" ]
+}
+
 # phase 3, settings: the box file as root by a temp and a rename, and the row files and the push key's public half
 # beside the staging tree.
 _tba_cx_settings() {
@@ -1389,10 +1397,15 @@ _tba_cx_settings() {
   # tried from the box here, before any file is written there.
   up="${CX_SET[CCRC_TESTBOX_REGISTRY_UPSTREAM]:-$TBA_NPM_DEFAULT}"
   hp="$(_tba_url_hostport "$up")" || { TBA_CODE=box-value-refused; TBA_CODE_KEYS=CCRC_TESTBOX_REGISTRY_UPSTREAM; return 1; }
-  # shellcheck disable=SC2086  # hp is `host port`, split on purpose
+  # Only a box that will install: one whose installed marker already names this release runs no npm (the installer's phases 2
+  # to 4 are a first install's), and its firewall is up, so a probe from this login's shell, which is in none of the firewall's
+  # cgroup sets, could only fail. Asked that way, every Try again after the install phase ended no-egress.
   PF_FATAL=""
-  _tba_box_tcp "$(_tba_deadline)" $hp
-  [ "$PF_RC" = 0 ] || { _tba_cx_fail "$PF_RC" no-egress; return 1; }
+  if ! _tba_cx_box_holds_release; then
+    # shellcheck disable=SC2086  # hp is `host port`, split on purpose
+    _tba_box_tcp "$(_tba_deadline)" $hp
+    [ "$PF_RC" = 0 ] || { _tba_cx_fail "$PF_RC" no-egress; return 1; }
+  fi
   _tba_cx_push_key || { TBA_CODE="${TBA_CODE:-pair-failed}"; return 1; }
   _tba_cx_put_box "$CX_BOXENV"
   [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" box-value-refused; return 1; }
@@ -1447,7 +1460,9 @@ _tba_cx_pair() {
   ( umask 077; printf '%s' "$tok" >"$tmp" ) 2>/dev/null && chmod 600 "$tmp" 2>/dev/null && mv -f -- "$tmp" "$CX_TOKEN_FILE" 2>/dev/null \
     || { rm -f -- "$tmp"; TBA_CODE="pair-failed"; return 1; }
   svc_tok="${CX_VAL[SVC_TOKEN]}"
-  _tba_cx_out sh -c 'umask 022; p=$1; case $p in "~/"*) p=/var/lib/$2/${p#"~/"};; esac; mkdir -p "$(dirname "$p")" || exit 1; install -m 0600 -o "$2" /dev/stdin "$p"' sh "$svc_tok" "${CX_VAL[SVC]}" \
+  # By a temp beside it and a rename, never `install … /dev/stdin <file>`: with a token already there (a second pairing of the same
+  # box) that write fails on some userlands (`install: No such file or directory`), and every Try again then ended pair-failed.
+  _tba_cx_out sh -c 'umask 022; p=$1; case $p in "~/"*) p=/var/lib/$2/${p#"~/"};; esac; mkdir -p "$(dirname "$p")" || exit 1; t=$(umask 077; mktemp "$p.XXXXXXXX") || exit 1; cat >"$t" && chown "$2" "$t" && chmod 0600 "$t" && mv -f -- "$t" "$p" || { rm -f -- "$t"; exit 1; }' sh "$svc_tok" "${CX_VAL[SVC]}" \
     < <(printf '%s' "$tok")
   tok=""
   [ "$CX_RC" = 0 ] || { _tba_cx_fail "$CX_RC" pair-failed; return 1; }

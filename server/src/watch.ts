@@ -75,6 +75,7 @@ import {
 import { stallCoordBallMailStep } from './coord/coordBall.js';
 import { ballOnlySubjects, coordBallInputOf, idleNudgeOpenRunOf, r7BreachNotice, type StallCoordinatorSubject } from './coord/coordBallLane.js';
 import { blockWakesPass } from './coord/blockWakeLane.js';
+import { admissionWakePass, type AdmissionWakeMemory } from './coord/admissionWakeLane.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
@@ -301,7 +302,7 @@ import {
   WAKE_GATE_DEFAULT, WAKE_GATE_LINE_MS, wakeAdmit, wakeMemoryGate, wakeRefund, wakeRefusalWord, type WakeAdmission, type WakeKind, type WakeMemoryRefusal, type WakeRefused,
 } from './coord/wakeBudget.js';
 import { HIBERNATE_AFTER_HOURS_FILE } from './coord/hibernate.js';
-import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor } from './turnverdict.js';
+import { liveRowFor, liveWordFor, processStartedAtFor, turnMarkFor, turnReadDeps, turnVerdictFor, workerFactsFor } from './turnverdict.js';
 import { rollPass, type ReleaseRead, type RollSweepMemory } from './rollLane.js';
 import { longLivedOf, rollTargetsOf } from './coord/rollTarget.js';
 import { NODE_FILES } from '../../shared/agent-protocol.js';
@@ -1293,6 +1294,8 @@ export class FleetWatcher {
   private wakeRecent: number[] = [];
   /** D-8792 (D-6094's pacing): the freed-slot admit's window (`admitFreedSlot`), a list of its own. */
   private freedSlotRecent: number[] = [];
+  /** D-6095: the `admissionWake` lane's own window and round-robin (`AdmissionWakeMemory`), in memory by design. */
+  private readonly admissionWakeMemory: AdmissionWakeMemory = { recent: [], served: new Map() };
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
@@ -2566,6 +2569,17 @@ export class FleetWatcher {
     await this.runLane('staleArchive', () => this.staleArchive.pass(records, names));
   }
 
+  /** The `admissionWake` lane (D-6095; `coord/admissionWakeLane.ts`): a coordinator the concurrency cap refused is mailed
+   *  when the cap has room. Gated on `primed`; the pass holds itself on the two switches and the serialiser. */
+  async sweepAdmissionWake(names: readonly string[] | null): Promise<void> {
+    const coord = this.deps.coord;
+    if (!this.primed || !coord) return;
+    const turnReads = turnReadDeps(this.deps, this);
+    await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), memory: this.admissionWakeMemory,
+      push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
+  }
+
   /** At an unattended act (the stop-done lane's, hibernation's): the registry record read AGAIN and the frame's row
    *  assembled from it, so a `.hold`, a stop stamp, an archive or a bucket that changed since the tick is seen. */
   private async rowAtAct(rec: SessionRecord): Promise<{ ok: true; row: FleetSession } | { ok: false }> {
@@ -3104,6 +3118,8 @@ export class FleetWatcher {
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
       void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // D-6095: the admission wake, its own lane, never awaited; it reads the tick's listing for the two switches.
+      void this.sweepAdmissionWake(registryRead.names).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.

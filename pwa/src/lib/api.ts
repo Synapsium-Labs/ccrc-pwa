@@ -43,7 +43,7 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView } from '../../../shared/plan';
+import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView, WorkAnswer } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
@@ -568,8 +568,9 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     hierarchy: () => getJson<HierarchyAnswer>('/api/hierarchy'),
     saveHierarchy: (project: string, body: Pick<HierarchyProjectRow, 'initiatives' | 'linearOwner' | 'ownsTeam'>) =>
       postJson<{ ok: true; settings: typeof body }>(`/api/projects/${encodeURIComponent(project)}/hierarchy`, body),
-    /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused. */
-    plan: (slug: string) => getJson<{ ok: true; plan: PlanView }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
+    /** `GET /api/programmes/:slug/plan` and `GET /api/projects/:project/upkeep` (D-8184): the plan, and a project's Upkeep epic (null before first use) with the closes Linear refused.
+     *  `work` is the work map beside the plan (WM2, D-8823): absent from an older server, which draws no Work card. */
+    plan: (slug: string) => getJson<{ ok: true; plan: PlanView; work?: WorkAnswer }>(`/api/programmes/${encodeURIComponent(slug)}/plan`),
     upkeep: (project: string) => getJson<UpkeepAnswer>(`/api/projects/${encodeURIComponent(project)}/upkeep`),
     /** `POST /api/items/:id/linear` (D-8184): one act on a hierarchy item (map, report, drift, initiatives, owner). */
     linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>

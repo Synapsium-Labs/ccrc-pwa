@@ -1,4 +1,4 @@
-import { TERMINAL_RUN_STATES, type FleetSession, type MarkerState } from '../../shared/api.js';
+import { TERMINAL_DELIVERY_STATES, TERMINAL_RUN_STATES, type FleetSession, type MailSummary, type MarkerState } from '../../shared/api.js';
 import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { turnSays, turnWordOf, type TurnPolicy } from './sessionReading.js';
 
@@ -99,6 +99,15 @@ export type SleepStoreRead =
     readonly claim: boolean;
     readonly mail: boolean;
   };
+
+/** Whether one row of a session's mailbox read (`outstandingMailFor`) holds the session awake: mail the delivery lane
+ *  will still act on. That read also answers the rows a person should look at, among them a delivery this server gave up
+ *  on (`rejected`, the mailbox's "abandoned" rows). No retry, nudge or ack is owed on one, so it holds nothing: counted,
+ *  it kept a session awake, and on its old Claude Code build, for as long as the row existed. A parked row does not hold
+ *  either (D-5838). A state this build cannot name still holds: the gate fails closed. */
+export function mailHoldsSleep(m: Pick<MailSummary, 'state' | 'parkedAt'>): boolean {
+  return !(TERMINAL_DELIVERY_STATES as readonly string[]).includes(m.state) && m.parkedAt == null;
+}
 
 /** The turn marker, as `turnMarkFor` reads it judged against the live process. Any `ok: false` holds `marker`. */
 export type SleepMark =
