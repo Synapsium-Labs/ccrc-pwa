@@ -12458,9 +12458,10 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
     case "$c" in
       advance-file-unreadable|advance-file-invalid)
         # An Anthropic lane (`DR_MA_ANTHROPIC`) has no registry to refill a class from, and ccd applies its holds from
-        # this file alone (`_held_model_env_to`, ccd/lib/model-aliases.sh): review 2886 R1.
+        # this file alone (`_held_model_env_to`, ccd/lib/model-aliases.sh): review 2886 R1. ccd reads only what a launch needs
+        # (the classes object and each `hold.model`), so a file the op calls invalid can still carry holds ccd applies (review 2964 F7).
         case "${DR_MA_ANTHROPIC:-}" in
-          *"|$id|"*) part="advance file — repair the file the finding names; until it is read again no hold reaches a launch, and every class of this lane launches on its alias's current id. If you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the lane's Models sheet or with 'ccrc models $id hold <class>', each class that must stay where it is" ;;
+          *"|$id|"*) part="advance file — repair the file the finding names; until it is repaired, hold, release and revert on this lane are refused, a hold ccd can no longer read does not reach a launch (that class launches on its alias's current id), and a hold ccd can still read keeps applying. If you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the lane's Models sheet or with 'ccrc models $id hold <class>', each class that must stay where it is" ;;
           *) part="advance file — repair the file the finding names; if you remove it instead, its holds and move history are lost and the next hourly refresh seeds every empty class again and fills it, so run 'ccrc models $id hold <class>' at once for each class that must stay where it is" ;;
         esac ;;
       registry-unreadable|registry-invalid)

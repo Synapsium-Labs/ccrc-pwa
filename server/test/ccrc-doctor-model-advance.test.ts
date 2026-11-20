@@ -1105,7 +1105,8 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     const warn = out.split('\n').findIndex((l) => l.startsWith('WARN model-advance-blocked: lane-c'));
     expect(warn, out).toBeGreaterThanOrEqual(0);
     expect(out.split('\n')[warn + 1]).toBe('  remedy: per cause: advance file — repair the file the finding names; until '
-      + 'it is read again no hold reaches a launch, and every class of this lane launches on its alias\'s current id. If '
+      + 'it is repaired, hold, release and revert on this lane are refused, a hold ccd can no longer read does not reach a '
+      + 'launch (that class launches on its alias\'s current id), and a hold ccd can still read keeps applying. If '
       + 'you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the '
       + 'lane\'s Models sheet or with \'ccrc models lane-c hold <class>\', each class that must stay where it is');
   });
