@@ -428,7 +428,7 @@ flowchart TD
 | Outside hosts | One unticked checkbox per origin the pre-scan found (the census `origins.ts` already makes), each saying "loads from this host can carry what the page shows to it, and may see this link". At most 8. An origin on the console's, artifact or content host is never offered |
 | Above the folder | "N references point above this page's folder and will not load", from the pre-scan |
 | Unmeasured files | "N files beside it could not be measured and will not load", when the scope read's `unsized` is above 0 |
-| Not scanned | On a page the console never loaded (its too-large view), the pre-scan has not run, so the two rows above are replaced by "This page was not scanned, so outside hosts cannot be offered and references above its folder are not counted. It runs with outside loads closed." Prepare then mints with no outside host |
+| Not scanned | Whenever the leaf holds no census for the page (its too-large view, the stand-in with no asset reader, the gated view before Render, and a page the pre-scan refused, none of which reaches the census `MockupView` builds after loading), the pre-scan has not run, so the two rows above are replaced by "This page was not scanned, so outside hosts cannot be offered and references above its folder are not counted. It runs with outside loads closed." Prepare then mints with no outside host |
 | Others open | "Another artifact is open. Pages run as artifacts can share data with each other while open", when the box has another live capability |
 | Windows | Unticked: "Let it open windows. A window it opens can send what the page shows anywhere." |
 | Buttons | Prepare (mints with the boxes as ticked; a tick changed after Prepare revokes that capability and needs Prepare again), then Open (the real link), and Cancel |
@@ -481,7 +481,7 @@ This section maps the standalone-only losses X2 measured onto how this design cl
 
 C3 and rows F11, F12 (beyond the walls) and F13 move from Conflict to Gap, designed here. A row moves from Gap to Same when its acceptance row passes on the installed release, with the artifact names set up, and with the differences below recorded beside it.
 
-Nine differences from the standalone reader are recorded, not waived. The standalone reader serves every file raw, with CORS and at any size (X2 F12), so differences 4 to 6 and 8 are the manifest's own exclusions:
+Ten differences from the standalone reader are recorded, not waived. The standalone reader serves every file raw, with CORS and at any size (X2 F12), so differences 4 to 6 and 8 are the manifest's own exclusions:
 
 1. A page that fetches from an outside API fails, because `connect-src` takes no outside host (§4.3).
 2. A page opened as an artifact runs in a new tab, not inline (§4.1).
@@ -492,8 +492,9 @@ Nine differences from the standalone reader are recorded, not waived. The standa
 7. A page opened at an earlier version (a version page, or a tag or a commit, which X2 §5.3 opens as `at=`) runs within the walls only, because the tree read answers only a branch's current version (§3.2). The standalone reader runs it at that tag or commit (X2 I7). Running it in full is Later.
 8. A file above `DOCS_RANGE_MAX_BYTES` (64 MiB, C4's ceiling) beside the page is left out of the manifest and does not load (§5). The scope read counts it with the unmeasured files.
 9. A page with more than six files above 1 MiB loads the seventh and later only on a reload, not on its first open (§5, Prepare busy).
+10. A page the console holds no census for (above 2 MiB, refused by the pre-scan, gated and not yet rendered, or with no asset reader) runs with outside loads closed. No outside host can be ticked, so a page that loads a CDN script or style fails there; the gated view's Render, then Open as artifact, offers its hosts.
 
-Differences 2, 3 and 7 hold for every artifact row, F11 and F13 included. F12 carries 1, 4 to 6, 8 and 9 as well, and moves to Same only with all of them recorded beside it. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
+Differences 2, 3, 7 and 10 hold for every artifact row, F11 and F13 included. F12 carries 1, 4 to 6, 8 and 9 as well, and moves to Same only with all of them recorded beside it. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
 
 ## 9. Rings, contexts and census
 
