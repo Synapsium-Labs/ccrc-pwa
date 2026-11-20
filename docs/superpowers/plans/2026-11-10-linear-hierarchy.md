@@ -379,7 +379,7 @@ number from `POST /api/ledger/deviations`.
   apply tick starts at most `MIGRATION_WRITES_PER_TICK` issue writes, so a large map's issue writes never spend the sync's own
   share (§10.6; the Upkeep epic's one create does, below). A
   live programme's part, its adoptions included, waits for no run in `ACTIVE_RUN_STATES`. A migration reads `applied` only
-  when every move row is applied or its issue skipped and listed. An adopted issue a person changes before the sync's write is
+  when every move row is applied or its issue skipped or taken, and listed. An adopted issue a person changes before the sync's write is
   put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
   (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
   listed as skipped (fix round 1, review 2892 F5). An issue a live binding holds leaves the migration: one the team's Linear
@@ -388,9 +388,11 @@ number from `POST /api/ledger/deviations`.
   wait of its own (a live programme's part still waits for its wave boundary, and a held entry in it reaches `taken` when its
   step comes); the report lists it as taken by the owner (`taken`), not as skipped (the coordinator's rulings on review 2955 F2
   and A1). A close asks again inside its flight, after its read and before each of its writes (the comment, the relation, the
-  state), and a held answer ends it there, with nothing more sent: only a take that lands while one write is already in flight
-  lets that one write through, recorded in the move row, and the owner sees the issue as inbound (the coordinator's rulings on
-  review 2998 F1, F4 and F5). The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
+  state), and a held answer ends it there, with nothing more sent. Only a take that lands while one write is already in flight
+  lets that one write reach Linear (recorded in the move row when it is the relation or the state write; a comment is recorded
+  nowhere); a state write that lands is followed by one more ask, so the issue is then listed taken, not counted closed. Either
+  way the issue is left alone from then on: put back skips an issue a live binding holds, never reopens or rewrites it, and
+  lists it as taken (the coordinator's rulings on review 2998 F1, F4 and F5 and on review 3004 F2 and F3). The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
   cap, and a rate refusal of any of them rests the lane. Two passes of the plan sync's own are counted by neither cap: step 1's
   structure pass (only until the plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep
   epic's pass, whose create has no move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane,
