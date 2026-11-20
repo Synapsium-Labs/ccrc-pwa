@@ -513,7 +513,7 @@ describe('M4.U2 and row 66: each page loads exactly the pin the rule gives', () 
     expect(assets.file).not.toHaveBeenCalled();
   });
 
-  it('imagePinFor answers draft-unhashed for a stat-pinned draft, and an SVG of one keeps the withheld refusal with no action', async () => {
+  it('imagePinFor answers draft-unhashed for a stat-pinned draft, and an SVG of one says the same, with no action', async () => {
     const stat = { fp: null, size: 5 * 1048576, mtimeNs: '1700000000000000000' };
     const tree = treeOk({
       drafts: holder(),
@@ -529,7 +529,7 @@ describe('M4.U2 and row 66: each page loads exactly the pin the rule gives', () 
     expect(imagePinFor(tree.entries[3], tree, page), 'no mtimeNs: nothing opens').toEqual({ ok: false, why: 'draft-withheld' });
     const { container, queryAllByRole } = renderDoc('![s](big.svg)', { tree, url: '/docs/demo/specs/a.md?ref=main' });
     await act(async () => {});
-    expect(container.querySelector('span.doc-img-refused')?.textContent).toBe(refusedText('draft-withheld'));
+    expect(container.querySelector('span.doc-img-refused')?.textContent).toBe(refusedText('draft-unhashed'));
     expect(queryAllByRole('button', { name: DOC_IMAGE_TEXT.openViewer })).toHaveLength(0);
   });
 

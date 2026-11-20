@@ -123,10 +123,10 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   const ip = imagePinFor(e, ctx.tree, page);
   if (!ip.ok) {
     // A draft with no fingerprint is not loaded here (the raster route needs one), but its own page reads a raster by
-    // range through its stat pin (spec 4.3), so the chip opens that page. An SVG's page offers Download alone: it keeps
-    // the withheld refusal, with no action.
+    // range through its stat pin (spec 4.3), so the chip opens that page. An SVG's page offers Download alone: the same
+    // refusal, with no action.
     if (ip.why === 'draft-unhashed') {
-      return cls === 'raster' ? refused('draft-unhashed', { kind: 'viewer', href: leafHref }) : refused('draft-withheld');
+      return refused('draft-unhashed', cls === 'raster' ? { kind: 'viewer', href: leafHref } : null);
     }
     return refused(ip.why);
   }

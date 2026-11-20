@@ -4,6 +4,7 @@
 // here and the screen's adapter implements over the existing Docs loaders and per-screen queue. No transport adapter
 // receives admission authority: it reads the pins it is given and nothing else.
 import type { DocPin, DocRefResolution, DocSectionSlug, DocsEntry, DocsPageLocation, DocsTreeOk } from '../../../../shared/docs';
+import type { ImagePin } from '../docsLinks';
 import type { MockupAssetKind } from './policy';
 
 /** Where a reference was written: the section and path of the page (depth 0) or of the stylesheet that holds it, as
@@ -43,7 +44,7 @@ export type MockupRefVerdict =
   | { readonly v: 'kept'; readonly why: 'fragment' | 'self-contained' }
   | { readonly v: 'external'; readonly origin: string; readonly via: 'src' | 'script-text' }
   | { readonly v: 'refused'; readonly why: MockupRefusedWhy }
-  | { readonly v: 'missing'; readonly why: 'absent-at-commit' | 'deleted-in-worktree' | 'draft-withheld' | 'draft-unhashed' }
+  | { readonly v: 'missing'; readonly why: 'absent-at-commit' | Exclude<Extract<ImagePin, { ok: false }>['why'], 'absent'> }
   | { readonly v: 'unsupported'; readonly why: 'kind' | 'element' | 'css-depth' }
   | { readonly v: 'skipped'; readonly why: 'too-large' | 'over-budget' }
   | { readonly v: 'failed'; readonly failure: string };
