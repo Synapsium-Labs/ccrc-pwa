@@ -18,6 +18,7 @@
   "server/src/continuity/generationMachine.ts#generationStep": 1,
   "server/src/coord/mailPace.ts#mailPaceOf": 1,
   "server/src/coord/urgentMail.ts#urgentSenderVerdict": 1,
+  "server/src/coord/mailHoldPolicy.ts#decideMailHold": 1,
   "pwa/src/face/mood.ts#moodOf": 1,
   "pwa/src/face/mood.ts#shownMood": 1,
   "pwa/src/face/splash.ts#splashShows": 1,
