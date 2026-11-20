@@ -898,3 +898,118 @@ describe('review 2955 (D-8186)', () => {
     expect(rep.unrelated).toEqual(['AAA-2']);
   });
 });
+
+describe('review 2998 fix round 1 (D-8186, D-8796)', () => {
+  const hold = (r: MigRig, n: number, key: string): void => {
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key, kind: 'work', title: key, body: 'x', project: 'project-a', source: 'inbound' };
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [t], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const id = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === key)!.id;
+    adoptIssueBindingInTx(r.db, id, WS.a.id, 'AAA', U(100 + n), `AAA-${n}`, r.t.now);
+  };
+  const whyOf = (r: MigRig, id: number): string => (r.db.prepare('SELECT why FROM operator_items WHERE id = ?').get(r.plan.migrationById(id)!.reportItemId!) as { why: string }).why;
+  const migrationUpdates = (r: MigRig, id: string) => updates(r, id).filter((a) => a.lane === 'migration');
+
+  it('F1: a live binding made while the close\'s comment is in flight stops the close: no state write, the issue is taken', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => { if (ask.op === 'issueComment' && ask.input['issueId'] === U(101)) hold(r, 1, 'held1'); return undefined; };
+    const id = await r.approved([entry(1, 'stale')]);
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(migrationUpdates(r, U(101))).toEqual([]);
+    expect(r.issues.get(U(101))!.stateType).not.toBe('canceled');
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
+  });
+
+  it('F1: a live binding made while a replaced level\'s relation is in flight stops the close before its state write', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), entry(2, 'epic', { programme: SLUG, epic: 'e1' })]);
+    r.override.current = (ask) => { if (ask.op === 'issueRelationCreate' && ask.input['issueId'] === U(102)) hold(r, 2, 'held2'); return undefined; };
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(migrationUpdates(r, U(102))).toEqual([]);
+    expect(r.issues.get(U(102))!.stateType).not.toBe('canceled');
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-2']);
+  });
+
+  it('F1: a live binding made while the closer\'s first read is in flight inserts no move row: the issue is taken', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => { if (ask.op === 'issueOwned' && ask.input['id'] === U(101)) hold(r, 1, 'held1'); return undefined; };
+    const id = await r.approved([entry(1, 'stale')]);
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.plan.movesOf(id)).toEqual([]);
+    expect(writesOf(r).filter((x) => x.lane === 'migration')).toEqual([]);
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
+  });
+
+  it('F1: a live binding made while step 2\'s reconcile read is in flight stops the retried close before its comment', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => (ask.op === 'issueUpdate' ? fail('unreachable') : undefined);
+    const id = await r.approved([entry(1, 'stale')]);
+    await r.tick();
+    const comments = r.opsOf('issueComment').length;
+    r.override.current = (ask) => { if (ask.op === 'issueOwned' && ask.input['id'] === U(101)) hold(r, 1, 'held1'); return undefined; };
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.opsOf('issueComment')).toHaveLength(comments);
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-1']);
+  });
+
+  it('F2: a skipped issue the owner takes while the row is still applying is counted taken, not skipped, in the report item', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2); r.addIssue(3);
+    // AAA-1 is skipped in tick 1; the epic close waits on AAA-2's adoption, so the row stays applying
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2'), entry(3, 'epic', { programme: SLUG, epic: 'e1' })]);
+    r.issues.get(U(101))!.title = 'Changed before the apply';
+    await r.tick();
+    expect(r.stateOf(id)).toBe('applying');
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+    hold(r, 1, 'held1');
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.skipped).toEqual([]);
+    expect(whyOf(r, id)).toContain('0 skipped as changed');
+  });
+
+  it('F2: a follow-up map stored while a held issue is still on the skipped list moves it to taken and refuses a map naming it', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2); r.addIssue(3);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2'), leaf(3, 'k3')]);
+    r.issues.get(U(101))!.title = 'Changed before the apply';
+    r.issues.get(U(103))!.title = 'Changed before the apply too';
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect([...r.plan.migrationById(id)!.report!.skipped].sort()).toEqual(['AAA-1', 'AAA-3']);
+    hold(r, 1, 'held1');                                    // no tick has run: the applied row's report still lists it as skipped
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b'), leaf(3, 'k3b')] }, open)).toMatchObject({ ok: false });
+    const stored = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(3, 'k3b')] }, open);
+    expect(stored).toMatchObject({ ok: true });
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.skipped).toEqual([]);
+  });
+
+  it('F3: a map-declared programme refused at the apply puts an issue a live binding holds in taken, never in skipped', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1', { programme: 'prog-b', epic: 'eb', checkpoint: 'cb' }), leaf(2, 'k2')], {
+      epics: [{ programme: 'prog-b', epics: [{ key: 'eb', title: 'Epic B', summary: 'S', project: 'project-a', waves: [], checkpoints: [{ key: 'cb', title: 'CB', kind: 'acceptance' }] }] }],
+    });
+    applyPlanChanges(r.db, 'prog-b', changes({
+      epics: { insert: [{ key: 'ez', project: 'project-a', waves: [1], ordinal: 0, title: 'Their own epic', summary: 'S' }], update: [], drop: [] },
+    }), OWNER, T, null);
+    hold(r, 1, 'held1');
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.skipped).toEqual([]);
+    expect(whyOf(r, id)).toContain('0 skipped as changed');
+  });
+});

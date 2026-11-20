@@ -230,8 +230,7 @@ export class LinearMigration {
     const { plan, coord } = this.deps;
     const now = this.deps.now();
     const row = this.waitingRow(team, open.workspaceId);
-    // A follow-up's issues are the report's skipped ones less any a live binding holds (review 2955 F2).
-    const followUp = row?.state === 'applied' ? row.report?.skipped.filter((i) => !this.heldIdentifier(row, i)) ?? [] : null;
+    const followUp = row?.state === 'applied' ? row.report?.skipped ?? [] : null;
     if (row === null) return { ok: false, word: 'plan-bad-body', detail: `no migration of team ${team} is waiting for a map` };
     const owner = this.ownerOf(team);
     if (owner === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
@@ -473,7 +472,8 @@ export class LinearMigration {
         const ours = stored.planBy === null || stored.planBy === MIGRATION_PLAN_BY;
         const diff = facts.live || !ours ? null : diffPlan(stored, { epics: g.epics }, { home: m.project ?? '', doneWhenCount: 0, workspaceOfProject: () => m.workspaceId });
         if (diff === null || !diff.ok) {
-          for (const e of map.entries) if (programmeOfEntry(e) === g.slug) skipped.add(e.identifier);
+          // An issue a live binding holds is taken, never skipped (review 2998 F3).
+          for (const e of map.entries) if (programmeOfEntry(e) === g.slug) (taken.has(e.identifier) || this.heldIdentifier(m, e.identifier) ? taken : skipped).add(e.identifier);
           continue;
         }
         plan.declareMapStructure(m.id, g.slug, diff.changes, MIGRATION_PLAN_BY, now, g.backlog === null ? null : { home: m.project ?? '', title: g.backlog.title, state: 'paused' });
@@ -510,7 +510,7 @@ export class LinearMigration {
         if (relation?.kind === 'none') unrelated.add(e.identifier);   // the state write landed: it joins the list (review 2955 A2)
       }
       else if (v === 'skip') this.skipAdopted(row, e, skipped, now);
-      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated);
+      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries, budget, relation, unrelated, taken);
       else { budget.calls -= 1; await this.deps.planSync.passFor(String(row.after['key'] ?? ''), now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred'); }
     }
 
@@ -546,11 +546,13 @@ export class LinearMigration {
           const seen = await this.readIssue(m, slot, e.issue, budget);
           if (seen === 'unread') return 'unread' as const;
           if (seen === 'gone' || !snapshotHolds(was, seen)) return 'changed' as const;
+          if (this.heldIdentifier(m, e.identifier)) return 'taken' as const;   // review 2998 F1: no move row for a held issue
           return plan.insertMove({ migrationId: m.id, subject: `issue:${e.issue}`, kind: 'issue', linearId: e.issue, identifier: e.identifier, before: seen, after: this.closeAfter(e) });
         });
         if (out === 'unread') { this.saveReport(m, report, lists, now); return; }
+        if (out === 'taken') { taken.add(e.identifier); continue; }
         if (out === 'changed') { skipped.add(e.identifier); continue; }
-        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated);
+        await this.closeIssue(m, e, out, slot, entries, budget, relation, unrelated, taken);
       } else {
         const out = await this.adopt(m, e, was, store, slot, budget);
         if (out === 'unread') { this.saveReport(m, report, lists, now); return; }
@@ -729,14 +731,22 @@ export class LinearMigration {
    *  ticket placed under it closes with none and joins the report's `unrelated` list (review 2918 F2). */
   private async closeIssue(
     m: MigrationRow, e: MapEntry, row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>, budget: TickBudget,
-    relation: CloserRelation | null, unrelated: Set<string>,
+    relation: CloserRelation | null, unrelated: Set<string>, taken: Set<string>,
   ): Promise<void> {
     const { plan, coord } = this.deps;
     const state = String((row.after['expect'] as Record<string, unknown> | undefined)?.['state'] ?? 'canceled');
     const status = statusOfType(entries, 'issue', state, m.teamKey);
     if (status === null) return;
     const base = { pass: 'migration', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, target: e.identifier } as const;
+    // A live binding that comes to hold the issue ends the close before the next write: it goes to `taken`, its row stays unapplied
+    // (review 2998 F1). The one window left is a binding made while a single write is already in flight.
+    const heldNow = (): boolean => {
+      if (!this.heldIdentifier(m, e.identifier)) return false;
+      taken.add(e.identifier);
+      return true;
+    };
     await this.deps.planSync.withFlight(`migration:${e.issue}`, async () => {
+      if (heldNow()) return;
       const home = this.homeTitle(e);
       const linking = coord.linkingOf(m.project ?? '');
       const repo = linking.measured.state === 'measured' ? linking.measured.slug : null;
@@ -746,6 +756,7 @@ export class LinearMigration {
             : replacementComment(home, linking.mode, null);
       const comment = await this.callIn(budget, { ...base, op: 'issueComment', fields: ['body'], input: { requestId: uuidOf(`migration:${m.id}:${e.issue}:comment`), issueId: e.issue, body: withCcrcProvenance(egress(text)) } });
       if (!comment.ok && !(comment.word === 'linear-invalid' && comment.detail === 'conflict')) return;
+      if (heldNow()) return;
       const related = row.after['related'] === true ? null
         : e.class === 'superseded' ? e.target?.successor ?? null : relation?.kind === 'relate' ? relation.issue : null;
       if (related !== null) {
@@ -754,6 +765,7 @@ export class LinearMigration {
         if (budget.stopped) return;
         if (rel.ok) plan.setMove(row.id, { after: { ...row.after, related: true } });
       }
+      if (heldNow()) return;
       const update = await this.callIn(budget, { ...base, op: 'issueUpdate', fields: ['state'], input: { id: e.issue, stateId: status.id } });
       if (update.ok) {
         plan.setMove(row.id, { appliedAt: this.deps.now() });
