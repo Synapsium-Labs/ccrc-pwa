@@ -46,18 +46,38 @@ stack branch `handoff/d8126-autonomy-stack`, commits `518b7c71c` to `1edff44d1` 
 - `api-untyped-answers`: `api.md`'s untyped-answer paragraphs (rows 20 and 21) and `cross-project.md`'s no-project
   case (row 30) said "stop and report"; they now give the recovery. `not-configured` cannot be recorded as a block,
   because the call record needs the same coordination database, so the turn's text says it.
+- `no-review-rounds-door-lands-without-regressions`: on an older server without the lift door, spec rows 12 and 62
+  say only "a 404 is P4, recorded with `wakeOn: update`". The procedure and the advance file add what happens to the
+  PR: rule on the findings held, land with known limits only when no open finding is a regression, and otherwise wait
+  for the update (the coordinator's ruling on review 2865 F4).
+- `row-33-end-request`: a repeating `hookstate-unmeasurable` or `status-unmeasurable` ends in an end request for the
+  run after the backoff, not in closing it as failed: the run is still `planned`, which that close does not take.
+- `row-43-no-repin`: a landing pin that differs is re-measured (`decision-procedure.md`); the re-pin through the
+  normal advance that row 43 adds is not written, so a stale server pin stays the landing programme's to settle.
+- `row-58-no-disposition`: `not-dispatched` on close keeps today's text; row 58's end request is not added there.
+  Review 2865 (F13 h) found rows 33, 43 and 58 sound as written.
 - `held-paths`: `server/test/coordinator-skill.test.ts` and `README.md` are held by the same run and pin the contract.
   Under the operator's answer to item 486 (2026-11-19) that run's coordinator takes additive packets only: nothing
   existing removed or rewritten, a forced count word allowed. This wave's packet (v4, a unified diff on main
   `963286cc9`) appends clause 21 to the pinned CONTRACT, adds the count word `twenty-one` (README too), raises the
   length pin to 21 and makes the two count harvests hyphen-aware, which the count word forces.
 - D-8807 (the coordinator's ruling (a), 2026-11-20; defined in the plan): the rewrites of clauses 4, 11, 19 and 20 rewrite existing pinned CONTRACT entries, so
-  they wait for a second packet once that freeze ends, with the plan's A5-2 row pins. Until then two passages stay
-  inside the clauses as they stand. The paused entry (SKILL.md and the dispatch row) keeps its split by cause, but
-  both causes are a report, never a retry (clause 4), where the rebuilt clause 4 would make the fault a backoff
-  retry. And `decision-procedure.md` rules a child's question under clause 11, which still releases a NEW decision
-  to the operator. The coordinator accepted both. Clause 21 reads consistently beside the old clauses 19 and 20: both already keep the dialog out
-  while a child is active and raise operator questions as items.
+  they wait for a second packet once that freeze ends, with the plan's A5-2 row pins. Until then three passages stay
+  inside the clauses as they stand:
+  - the paused entry (SKILL.md and the dispatch row) keeps its split by cause, but both causes are a report, never a
+    retry (clause 4), where the rebuilt clause 4 would make the fault a backoff retry;
+  - `decision-procedure.md` rules a child's question under clause 11, which still releases a NEW decision to the
+    operator;
+  - `wave-lifecycle-asks.md` keeps clause 11's own two sentences ("Decline anything that would be a NEW decision …"
+    and "If answering would require guessing rather than reading, decline it."), restored in review 2865's fix round
+    (F1, the coordinator's ruling).
+  The coordinator accepted all three. Clause 21 reads consistently beside the old clauses 19 and 20: both already keep
+  the dialog out while a child is active and raise operator questions as items. The deferred packet also carries:
+  - 5b's lines 439 to 442 (`wave-lifecycle-5b-landing.md`, held), whose `changes-requested` dialog wording
+    `decision-procedure.md` overrides on a pinned programme until then (F5);
+  - the stale "twenty" in held test text: `coordinator-skill.test.ts` (the comment above `CONTRACT`, the
+    escaped-quotes comment, the case title "carries all twenty clauses verbatim", and the two "These twenty
+    sentences" comments) and `coordinator-approval-prompts.test.ts`'s comment on the clauses (F13 g).
 
 ## Sentences that depend on waves building beside this one
 
@@ -77,12 +97,12 @@ Clause 21's operator-only list is D-8126's O1 to O6, which `decision-procedure.m
 spec's R1 inherits that list unchanged as its critical list, and R23's later autonomy clause (§11.4, its clause 25)
 sits on top of clause 21 without changing any class's meaning. Nothing in this wave changes a class: the two agree.
 
-## Budget, measured on main `963286cc9`
+## Budget, measured on main `208afddca`
 
 - Contract end: 13,668 bytes now; 15,004 with clause 21 alone (15,177 once the deferred rewrites land); budget 16,750;
   1,746 left now. The recall, Linear and Overlord clauses need 1,481 by the ratchet header's arithmetic.
-- SKILL.md file: 23,230 bytes on main; 24,345 with this wave, which is the new cap (clause 21's line allows 1,332 of
-  growth).
+- SKILL.md file: 23,230 bytes on main; 24,339 with this wave, which is the new cap (clause 21's line allows 1,332 of
+  growth). Review 2865's fixes took 6 bytes out of SKILL.md, so the cap fell from 24,345 rather than rising.
 
 ## Red first, measured
 
@@ -94,3 +114,10 @@ dropped; "ignore" given to the coordinator; the paused entry without its cause; 
 turned back into a retry; a child's question taken outside clause 11; the cap-concurrency entry rewritten early; the
 split rule stated twice; the ledger template without its goals section; clause 21 softened; the debugging ceiling
 dropped. The last run was with packet v4 applied (clause 21 alone).
+
+Review 2865's fix round added pins, mutated in place the same way, one run of `coordinator-skill-autonomy.test.ts`
+per mutant. All ten went red: clause 21 with a sentence appended (F3's whole-line pin, taken from the spec's §9.1
+quote); peer-protocol escalating to the operator again; resume without the id-preserving revive, or without the
+Resume door; api retrying blindly, or recording on a server it cannot reach; cross-project reusing `sessionId`;
+wave-steps letting the cap make a thread wait; the boundary file without its end request; and the stale-uuid entry's
+"resend once" turned into "resend at once" (F6).

@@ -96,7 +96,8 @@ window lapses on its own. A release is FINAL: the row moves to `declined`, a ter
 and an answer you send for it afterwards is refused `declined` (D-5289) — releasing hands the
 question over, it does not defer it. Only a `held` row can be released; a release of a row
 that has already lapsed, or that a principal has taken or answered, is refused `not-held`.
-Release only a question that falls in an operator-only class (O1 to O6 of `references/decision-procedure.md`): rule every other question from the goals. Working an answer out from the goals is reading, not guessing.
+Decline anything that would be a NEW decision (clause 11's own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than
+guessing at it.
 ```bash
 "$API" asks list
 ```
@@ -115,7 +116,7 @@ What the ask row does NOT carry is the reason to answer it. `question` and `opti
 entire evidentiary surface — no rationale, no chat history, no transcript of the child's
 reasoning is readable through any route in this tree. Rule only from what you can already read
 elsewhere: the spec, the plan, the ledger, the branch, and your own prior rulings on this
-program. Working an answer out from the goals is reading; release the question only when it is operator-only (O1 to O6), because a guess is never allowed.
+program. If answering would require guessing rather than reading, decline it.
 
 ## The approval lane — a child's permission prompt (plan Task 16)
 

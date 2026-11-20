@@ -1,8 +1,8 @@
 # The decision procedure
 
 Clause 21 of SKILL.md is the rule: decide by default and keep going. This file is how. Read it before the first
-question you would otherwise ask, and before you stop a thread. The classes below are the operator's rulings of
-2026-11-09 (D-8126); the steps and tie-breakers are the author's calls built on them.
+question you would otherwise ask, and before you stop a thread. O1 to O4 below are the operator's rulings
+of 2026-11-09 (D-8126); O5 and O6, the steps and the tie-breakers are the author's calls, approved with the spec.
 
 Every call named here is made as `references/api.md` sets it up.
 
@@ -11,7 +11,8 @@ Every call named here is made as `references/api.md` sets it up.
 A thread of work stops for two reasons only: a decision or act only the operator can make (O1 to O6), or a physical
 block after the self-healing below has been tried (P1 to P4). Everything else is a fault to recover from, and
 SKILL.md's "When something is wrong" and the step files give the recovery. The landing verdict's stops have their
-own section below.
+own section below. The debugging ceiling is the one other stop: a third debugging attempt is a rung a human chooses
+(`routing-matrix.md`), so raise it as a `decide` item, which parks that thread only.
 
 One stopped thread never stops the programme. Park the thread, raise the item, then work every thread that is not
 blocked. End the turn only when no unblocked work is left or children hold all of it, and say which in the turn's text.
@@ -123,7 +124,7 @@ A big call that departs from the spec or the plan is also entered as a deviation
 D-number from the ledger allocator.
 
 A **routine call** is everything about how to get there: sequencing and scheduling; dispatch, routing and which
-worker; landing, re-queueing, and a second landing attempt; one more review round within step 7; fix strategy within
+worker; landing, re-queueing, and a second landing attempt within 5b's two doors; one more review round within step 7; fix strategy within
 the spec; triage of flaky tests; retries; approving a wave plan that implements an approved spec; coordination with
 another programme by mail; reading an ambiguous rule in the source documents the programme implements; reporting what
 was measured. Never ask for consent to a plan already inside the goals.
@@ -154,8 +155,9 @@ Decide when the last allowed round's report lands, before you open the next revi
 The lift's refusals:
 - `cap-not-reached`: nothing to lift, or it is already lifted. Open the review.
 - `no-review-rounds-door`: the client's own refusal when the server's cap file lacks `review-rounds-v1`, an older
-  server. That is P4: record a `block` call with `wakeOn: update`, rule on the findings you hold, and land with known
-  limits. A bare 404 with no `refused` field is the same older server.
+  server. That is P4: record a `block` call with `wakeOn: update` and rule on the findings you hold. Land with known
+  limits only when no open finding is a regression; otherwise the PR waits for the update. A bare 404 with no
+  `refused` field is the same older server.
 - `not-found`: the id is wrong, or it is not a work run (a review run's id, which the report arrives on, is the usual
   mistake). Re-read it with `runs list` and lift on the work run's id.
 - `not-your-programme` and `run-closed`: not retried. Re-read the run and your claim.
@@ -186,7 +188,7 @@ condition clears. A `block` call that waits on a condition lapses on its own aft
   time wake until the service answers or the operator ticks the item. When the ccrc server itself is down, nothing can
   be recorded there: say so in the turn's text and end the turn.
 - **P4. A repository or tool is beyond its rights.** (1) Look for an allowed route: the server door for the act, a
-  different ccd verb, the owning coordinator by mail, the claim holder's `expiresAt`. (2) Check whether the missing
+  read-only or already-granted ccd verb, the owning coordinator by mail, the claim holder's `expiresAt`. (2) Check whether the missing
   verb ships in a pending release (`unsupported`, `no-questions-door`, an old client, an older server's answer).
   (3) Never work round a hook deny or a SAFETY rule. The update that brings the verb wakes it: record the block with
   `wakeOn: update`.
@@ -196,14 +198,16 @@ condition clears. A `block` call that waits on a condition lapses on its own aft
 `wave-lifecycle-5b-landing.md` decides how a landing is read, how long it waits and when it stops, and nothing here
 lands past a stop, starts a second wait, or makes a new landing attempt that file does not allow. Clause 15's refused
 merge stays a stop. Where 5b sends a stop to the operator, this section says who decides it, and a stop parks that
-run's thread only while the rest of the programme goes on:
+run's thread only while the rest of the programme goes on. On a pinned programme this section overrides 5b's dialog
+wording: where 5b asks the operator with AskUserQuestion, raise an item instead.
 - **The repository's rules** (`unknown-rule-type`, `method-set-empty`, `rebase-only`, `queue-method-not-allowed`,
   `two-queue-methods`, `auto-merge-off`, `read-3b-unknowable`, `unverifiable`): O4. Raise one non-blocking item naming
   the PR, the stop and what it read.
 - **A read that failed, or checks still pending once the attempt's bounded wait is spent** (`unreadable`,
   `verdict-unread`, `checks-gate-unread`, `not-reported`, a `WAIT` line): P3. The landing stays stopped as 5b says.
   Record a `block` call with a time wake on the backoff schedule, and after 4 hours raise one non-blocking `do` item
-  naming the PR and the line.
+  naming the PR and the line. The wake only re-reads (the run list and the PR) and reports; it never lands outside
+  5b's two doors.
 - **`not-at-head`:** re-measure the head, and bind it through the paths 5b and step 6 give.
 - **`changes-requested`:** address it by default, as 5b's Address bullet says: a fix round to the owning worker, then a
   fresh review. Only "ignore" is the operator's (O6): raise it as a `decide` item, never a dialog on a pinned

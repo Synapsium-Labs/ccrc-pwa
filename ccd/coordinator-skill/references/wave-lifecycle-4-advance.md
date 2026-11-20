@@ -124,7 +124,7 @@ To extend, run `"$API" runs review-rounds <work run id> --json -` (`POST /api/ru
 
 Refusals:
 
-- `no-review-rounds-door`: an older server (the client's own refusal when the server's cap file lacks `review-rounds-v1`; a bare 404 with no `refused` field is the same). That is class P4: record a `block` call with `wakeOn: update`, rule on the findings you hold and land with known limits.
+- `no-review-rounds-door`: an older server (the client's own refusal when the server's cap file lacks `review-rounds-v1`; a bare 404 with no `refused` field is the same). That is class P4: record a `block` call with `wakeOn: update` and rule on the findings you hold. Land with known limits only when no open finding is a regression; otherwise the PR waits for the update.
 - `not-found` (404): the id is wrong, or it is not a work run (a review run's id, which the report arrives on, is the usual mistake). Re-read it with `runs list` and extend on the work run's id.
 - `cap-not-reached`: the cap is not reached, or it is already extended; open the review.
 - `not-your-programme` and `run-closed`: not retried. Re-read the run and your claim.

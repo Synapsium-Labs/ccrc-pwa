@@ -153,9 +153,9 @@ the step files give each refusal its recovery.
 
 - **A dispatch is refused `paused`.** A report, never a retry (clause 4). Read
   whether `$REG/coordinator-paused` exists, and never touch the file. Present:
-  the operator's pause, so no dispatch, in-place bind or self-work on new
-  waves, while non-dispatch work continues. Absent: the registry could not be
-  listed, a fault (P3), and the report says so.
+  the operator's pause, reported in the turn's text; no dispatch, in-place bind
+  or self-work on new waves, while non-dispatch work continues. Absent: the
+  registry could not be listed, a fault, reported as one non-blocking `do` item.
 - **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
   woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
@@ -166,10 +166,10 @@ the step files give each refusal its recovery.
 - **A mail or ack is refused `stale-uuid`.** Derive your identity again
   (`ccrc-api whoami`) and resend once; a second is P4.
 - **You cannot reach the server.** Nothing is invented or done by hand in its
-  place. Retry with backoff (P3), each retry recorded with `ccrc-api calls record`
-  as a `block` call with `wakeOn: time:<epoch ms>`, and work every thread that
-  does not need it. When the server itself is down, say so in the turn's text and
-  end the turn.
+  place, and nothing can be stored there, a `ccrc-api calls record` block
+  included: say so in the turn's text and end the turn. Backoff with recorded
+  blocks (P3, `wakeOn: time:<epoch ms>`) is for other services.
+
 ## Linear
 
 Load the `ccrc-linear` skill for Linear work (never a Linear MCP tool, a connector or

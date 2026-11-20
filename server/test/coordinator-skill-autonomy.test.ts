@@ -4,6 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { readdirSync, readFileSync } from 'node:fs';
 import path from 'node:path';
+import { SKILL_INSTALL_OUTCOMES } from '../src/coord/skillInstall.js';
 
 const root = path.resolve(__dirname, '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -25,6 +26,16 @@ const section = (heading: string): string => {
 
 /** The `## The contract` section, where clause 3 alone may name the destructive verbs. */
 const contract = section('The contract');
+
+describe('clause 21, whole (D-8126 A5-2, review 2865 F3)', () => {
+  it('is one whole line of SKILL.md, exactly the spec\'s §9.1 quote, so an append to it is red', () => {
+    const spec = readFileSync(path.join(root, 'docs/superpowers/specs/2026-11-09-coordinator-autonomy-default-design.md'), 'utf8');
+    const quoted = spec.split('\n### 9.1 The skill\n')[1]!.split('\n').filter((l) => l.startsWith('  > ')).map((l) => l.slice(4));
+    const clause21 = quoted.join(' ');
+    expect(clause21.startsWith('21. This session decides by default and keeps going.')).toBe(true);
+    expect(skill.split(`\n${clause21}\n`), 'clause 21 is not one whole SKILL.md line, exactly once').toHaveLength(2);
+  });
+});
 
 describe('the decision procedure reference (D-8126 A5-3)', () => {
   it('is a reference the installer refuses to install without', () => {
@@ -107,6 +118,26 @@ describe('the decision procedure reference (D-8126 A5-3)', () => {
       'red-unreachable', 'github-refused']) expect(landing).toContain(`\`${stop}\``);
   });
 
+  it('overrides 5b\'s dialog wording on a pinned programme, and a stopped landing\'s wake only re-reads (F5, F8)', () => {
+    const landing = flat(procedure.split('## The landing verdict\'s stops')[1]!.split('\n## ')[0]!);
+    expect(landing).toContain('On a pinned programme this section overrides 5b\'s dialog wording: where 5b asks the operator with AskUserQuestion, raise an item instead.');
+    expect(landing).toContain('The wake only re-reads (the run list and the PR) and reports; it never lands outside 5b\'s two doors.');
+  });
+
+  it('names the debugging ceiling as a decide item that parks that thread only (F9)', () => {
+    const stops = flat(procedure.split('## Which stops are allowed')[1]!.split('\n## ')[0]!);
+    expect(stops).toContain('The debugging ceiling is the one other stop');
+    expect(stops).toContain('raise it as a `decide` item, which parks that thread only');
+  });
+
+  it('lands past an older server\'s missing lift door only when no open finding is a regression (F4)', () => {
+    const step7 = flat(procedure.split('### Step 7.')[1]!.split('\n## ')[0]!);
+    const advance = flat(read('references/wave-lifecycle-4-advance.md'));
+    for (const text of [step7, advance]) {
+      expect(text).toContain('Land with known limits only when no open finding is a regression; otherwise the PR waits for the update.');
+    }
+  });
+
   it('records a time wake in epoch milliseconds, within the server\'s bound', () => {
     expect(flat(procedure)).toContain('`wakeOn: time:<epoch ms>` (epoch milliseconds, not seconds;');
   });
@@ -154,21 +185,23 @@ describe('"When something is wrong" carries §7\'s dispositions (D-8126 A5-4)', 
     // Clause 4 still reads "a report, not a retry" until its rewrite lands after run 1850's freeze (D-8807).
     expect(paused).toContain('A report, never a retry (clause 4)');
     expect(paused).not.toContain('backoff');
+    expect(paused).not.toContain('(P3)');
+    expect(flat(paused)).toContain('the operator\'s pause, reported in the turn\'s text');
+    expect(flat(paused)).toContain('a fault, reported as one non-blocking `do` item');
     expect(paused).toContain('never touch the file');
   });
 
-  it('meets an unreachable server with backoff and a time wake, and says so when the server itself is down', () => {
-    const down = wrong.split('cannot reach the server')[1]!.split('- **')[0]!;
-    expect(down).toContain('backoff');
-    expect(down).toContain('`ccrc-api calls record`');
-    expect(down).toContain('`wakeOn: time:<epoch ms>`');
-    expect(down).toContain('turn\'s text');
+  it('meets an unreachable server in the turn\'s text, since nothing can be recorded there; backoff is for other services (F7)', () => {
+    const down = flat(wrong.split('cannot reach the server')[1]!.split('- **')[0]!.split('\n## ')[0]!);
+    expect(down).toContain('nothing can be stored there, a `ccrc-api calls record` block included');
+    expect(down).toContain('say so in the turn\'s text and end the turn');
+    expect(down).toContain('Backoff with recorded blocks (P3, `wakeOn: time:<epoch ms>`) is for other services');
   });
 
   it('resends once after a stale-uuid, then treats a second as P4', () => {
     const stale = wrong.split('`stale-uuid`')[1]!.split('- **')[0]!;
     expect(stale).toContain('`ccrc-api whoami`');
-    expect(stale).toContain('once');
+    expect(flat(stale)).toMatch(/\bresend once\b/);
     expect(stale).toContain('P4');
   });
 
@@ -193,7 +226,7 @@ describe('the references carry the new dispositions (D-8126 A5-5)', () => {
     for (const n of lifecycle) expect(flat(read(`references/${n}`)), n).not.toContain('running the installer is a human act');
     // A7 (#3079) made the install a server lane that records a run event, not a field of the dispatch answer.
     const dispatch = flat(read('references/wave-lifecycle-2-dispatch.md'));
-    expect(dispatch).toContain('`skill-install:<installed|converged|failed|unsupported>`');
+    expect(dispatch).toContain(`\`skill-install:<${SKILL_INSTALL_OUTCOMES.join('|')}>\``);
     expect(dispatch).not.toContain('`skillInstall`');
   });
 
@@ -213,13 +246,49 @@ describe('the references carry the new dispositions (D-8126 A5-5)', () => {
   it('keeps the paused row and a child\'s question inside clauses 4 and 11 as they stand (D-8807)', () => {
     const row = read('references/wave-lifecycle-2-dispatch.md').split('\n').find((l) => l.startsWith('| `paused` |'))!;
     expect(row).toContain('never a retry (clause 4)');
+    expect(row).toContain('reported in the turn\'s text, never retried (clause 4)');
     expect(row).not.toContain('dispatch again');
+    expect(row).not.toContain('(class P3)');
     expect(flat(read('references/decision-procedure.md'))).toContain('A child\'s question is ruled under clause 11');
+    // review 2865 F1: the ask lane keeps clause 11's own words until D-8807's packet lands.
+    const asks = flat(read('references/wave-lifecycle-asks.md'));
+    expect(asks).toContain('Decline anything that would be a NEW decision (clause 11\'s own words — product intent, scope, a tradeoff nobody ruled on, anything irreversible) rather than guessing at it.');
+    expect(asks).toContain('If answering would require guessing rather than reading, decline it.');
+    expect(asks).not.toContain('Release only a question that falls in an operator-only class');
   });
 
   it('settles intent-held between the two coordinators, and a claim holder\'s no:<reason> by its expiry (rows 35, 50)', () => {
     const dispatch = flat(read('references/wave-lifecycle-2-dispatch.md'));
     expect(dispatch).toContain('The holder\'s word decides');
     expect(flat(read('references/peer-protocol.md'))).toContain('`expiresAt`');
+  });
+
+  // review 2865 F6: one new phrase per rewritten disposition, each absent at the merge base.
+  it('pins each rewritten disposition by its own new words (F6)', () => {
+    const peer = flat(read('references/peer-protocol.md'));
+    expect(peer).toContain('do not escalate to the operator: work the uncontested paths and wait for the claim\'s `expiresAt`');
+    expect(peer).not.toContain('escalate to the operator instead');
+    expect(flat(read('references/resume.md'))).toContain('try the id-preserving revive of §3 first');
+    expect(flat(read('references/resume.md'))).toContain('through the console\'s Resume door and its picker');
+    const api = flat(read('references/api.md'));
+    expect(api).toContain('read the `stderr` as the dispatch table\'s bare-502 row says');
+    expect(api).toContain('Nothing can be recorded on that server, the call record included');
+    expect(flat(read('references/cross-project.md'))).toContain('open the wave without `sessionId` and record the registry fault as a routine call');
+    expect(flat(read('references/wave-steps.md'))).toContain('the cap never makes a thread wait');
+    expect(flat(read('references/wave-lifecycle-5-boundary.md'))).toContain('raise an end request for the run (`ccrc-api runs end-request <run id>`, a non-blocking ask)');
+  });
+
+  it('compares the ledger only when no Goals pin exists; a pinned mismatch parks at once (row 28, F2)', () => {
+    const row = read('references/wave-lifecycle-1-open.md').split('\n').find((l) => l.startsWith('| `home-mismatch` |'))!;
+    expect(row).toContain('No pin (a programme opened before Goals pins existed): compare the ledger\'s recorded home');
+    expect(row).toContain('No match: the slug names another programme, so park the thread and raise an item without comparing anything');
+    expect(row).not.toContain('No match, or no pin');
+  });
+
+  it('carries only the spec\'s stated definition of done into the pin; a draft waits for approval (F12)', () => {
+    for (const text of [read('references/ledger-template.md'), readFileSync(path.join(root, 'docs/superpowers/programs/TEMPLATE.md'), 'utf8')]) {
+      expect(flat(text)).toContain('carry the spec\'s stated definition of done in the same call');
+      expect(flat(text)).toContain('it reaches the pin only through `ccrc-api goals modify` once approved');
+    }
   });
 });

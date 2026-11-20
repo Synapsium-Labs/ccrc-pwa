@@ -30,11 +30,12 @@ The section a coordinator reads before it asks the operator anything (SKILL.md c
 pinned spec path, its "In short" and the stored definition of done. Write the goals in a few lines and the
 definition of done as a numbered list of conditions, each one something that can be measured, as
 `docs/superpowers/programs/ccrc-history.md` does. When the operator approves a spec, pin it with
-`ccrc-api goals pin`, and carry the definition of done in the same call. A change to the goals, the scope or the definition of
+`ccrc-api goals pin`, and carry the spec's stated definition of done in the same call. A change to the goals, the scope or the definition of
 done is the operator's (O3): record only a change the operator has ruled, with `ccrc-api goals modify`, and cite
 the ruling here. Where the spec states its definition of done already, copy it verbatim and change nothing about
 what done means. Where it does not, draft one from the spec, raise one non-blocking `decide` item for the
-operator to approve it, and use the draft for routine calls only, never to widen or narrow scope.
+operator to approve it, and keep the draft in this ledger until they do: it reaches the pin only through
+`ccrc-api goals modify` once approved. Use the draft for routine calls only, never to widen or narrow scope.
 
 ## Handoffs are commits
 
