@@ -13,10 +13,11 @@ import { upkeepPath } from '../src/lib/routes';
 import { ApiError } from '../src/lib/apiError';
 import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
+import type { LinearWorkspaceView } from '../../shared/linear';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
 import { candidateLabel, candidateWhy, evidenceWords, linkingRowsOf, teamLinkLine } from '../src/fleet/linkingWords';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); supplied = null; });
 
 const NOW = Date.UTC(2026, 10, 9, 12, 0, 0);
 const measured = (over: Partial<Extract<ProjectLinkingWire['measured'], { state: 'measured' }>> = {}): ProjectLinkingWire['measured'] =>
@@ -27,6 +28,8 @@ const row = (name: string, linking?: ProjectLinkingWire): ProjectRow =>
   ({ name, workdir: `/w/${name}`, ...(linking === undefined ? {} : { linking }) });
 const serve = (projects: ProjectRow[]) => vi.spyOn(api, 'projects').mockResolvedValue({ roots: ['/w'], projects });
 let answer: HierarchyAnswer | null = null;
+// The frame's one workspace list, handed to the card as a prop (`serveWorkspaces` sets it).
+let supplied: LinearWorkspaceView[] | null = null;
 // `null`: an older server (the route is absent, 404); an Error: a read that failed; an answer: the route's answer.
 const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | null = null): Promise<HTMLElement> => {
   serve(projects);
@@ -36,7 +39,7 @@ const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | nul
   else if (hier instanceof Error) read.mockRejectedValue(hier);
   else read.mockImplementation(async () => answer!);
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
-  await act(async () => { render(<><ToastHost /><ProjectLinkingCard /></>); });
+  await act(async () => { render(<><ToastHost /><ProjectLinkingCard workspaces={supplied} /></>); });
   return screen.findByRole('region', { name: SETTINGS_CARDS.security.linking.title });
 };
 const rowOf = (name: string): HTMLElement => document.querySelector<HTMLElement>(`[data-linking-row="${name}"]`)!;
@@ -825,15 +828,13 @@ describe('the hierarchy settings', () => {
 });
 
 // D-8808 (wave 8, Task 8.6): the workspace picker, the candidates' workspaces and suggestions, an Overlord link as its call.
-import type { LinearWorkspaceView } from '../../shared/linear';
 import type { TeamCandidateWire } from '../../shared/linking';
 import { waitingPath } from '../src/lib/routes';
 import { OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel } from '../src/fleet/linkingWords';
 
 const wsView = (id: string, name: string, keys: string[]): LinearWorkspaceView =>
   ({ state: 'details-unknown', why: 'absent', id, name, urlKey: null, user: null, teams: keys.map((key) => ({ key, name: key })), keyTail: null, checkedAt: null });
-const serveWorkspaces = (workspaces: LinearWorkspaceView[] | 'unreadable') =>
-  vi.spyOn(api, 'linearWorkspaces').mockResolvedValue(workspaces === 'unreadable' ? 'unreadable' : { store: 'ok', workspaces, legacy: null });
+const serveWorkspaces = (workspaces: LinearWorkspaceView[] | 'unreadable'): void => { supplied = workspaces === 'unreadable' ? null : workspaces; };
 const picker = (name: string): HTMLSelectElement | null =>
   within(rowOf(name)).queryByLabelText(PICKER_WORDS.label) as HTMLSelectElement | null;
 
@@ -869,7 +870,6 @@ describe('the team key\'s workspace picker (D-8808)', () => {
   it('is left out for a key one workspace holds (that workspace rides the write), a key none holds, and an unreadable list', async () => {
     serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['BBB'])]);
     await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'ZZZ' }))]);
-    await waitFor(() => expect(api.linearWorkspaces).toHaveBeenCalled());
     const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA' }) });
     expect(picker('project-a')).toBeNull();
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
@@ -879,10 +879,15 @@ describe('the team key\'s workspace picker (D-8808)', () => {
     expect(picker('project-b')).toBeNull();
   });
 
+  it('reads no workspace list of its own: the frame hands it the one read', async () => {
+    const own = vi.spyOn(api, 'linearWorkspaces');
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))]);
+    expect(own).not.toHaveBeenCalled();
+  });
+
   it('an unreadable list leaves the picker out and the write as it was', async () => {
     serveWorkspaces('unreadable');
     await mount([row('project-a', wire({ teamKey: 'AAA' }))]);
-    await waitFor(() => expect(api.linearWorkspaces).toHaveBeenCalled());
     const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA' }) });
     expect(picker('project-a')).toBeNull();
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
@@ -910,7 +915,6 @@ describe('the candidates (D-8808)', () => {
     serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
     const bare: TeamCandidateWire = { key: 'AAA', name: 'Alpha', evidence: { kind: 'suggested', by: 'lane-a', why: 'the branches name it' } };
     await mount([row('project-a', wire({ teamCandidates: [bare] }))]);
-    await waitFor(() => expect(api.linearWorkspaces).toHaveBeenCalled());
     const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamWorkspace: 'id-b' }) });
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: candidateLabel(bare) }));
     await waitFor(() => expect(picker('project-a')).not.toBeNull());

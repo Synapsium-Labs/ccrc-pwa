@@ -218,8 +218,9 @@ export function SecuritySection({ poll, auth, passkeys, refreshAuth, linear }: {
           reads its own endpoint, so it does not wait on /api/updates. */}
       <LinearSection poll={linear} />
       {/* Project linking (D-8147) follows Linear: how each project's pull requests reach their ticket. It reads the
-          project list itself, so it waits on neither poll. */}
-      <ProjectLinkingCard />
+          project list itself, and takes the Linear card's one workspace list (the picker's source) from the frame's
+          read, so it waits on neither poll. */}
+      <ProjectLinkingCard workspaces={linear.view?.workspaces ?? null} />
       {/* Approvals (D-8382): one read-only line on where approval rulings are minted and signed. It reads the
           overrides route itself, so it waits on neither poll. */}
       <ApprovalsTopologyCard />

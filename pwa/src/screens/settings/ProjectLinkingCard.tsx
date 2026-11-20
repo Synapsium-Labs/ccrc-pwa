@@ -335,7 +335,9 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
 /** One read of the project list, and the rows the cards draw from it. */
 type Read = { kind: 'loading' } | { kind: 'failed' } | { kind: 'read'; rows: ProjectRow[] };
 
-export function ProjectLinkingCard(): ReactNode {
+/** `workspaces` is the Settings frame's one read of `GET /api/linear/workspaces` (the Linear card's poll), never a read of the
+ *  card's own: `null` while it is unread or unreadable, so no picker (D-8808). */
+export function ProjectLinkingCard({ workspaces }: { workspaces: readonly LinearWorkspaceShown[] | null }): ReactNode {
   const card = SETTINGS_CARDS.security.linking;
   const now = useNow(30_000);
   const [read, setRead] = useState<Read>({ kind: 'loading' });
@@ -368,8 +370,6 @@ export function ProjectLinkingCard(): ReactNode {
     return mine;
   }, []);
   // The seq of the read the last owner-for-all save needs: a floor every row's lock also checks.
-  // D-8808: the connected workspaces and their teams (the picker's source); an unreadable read is no list, so no picker.
-  const [workspaces, setWorkspaces] = useState<readonly LinearWorkspaceShown[] | null>(null);
   const [floor, setFloorState] = useState(0);
   // Hierarchy writes (and owner-for-all) in flight: every row is locked from the moment one starts, since it may change other rows.
   const [inflight, setInflight] = useState(0);
@@ -383,10 +383,6 @@ export function ProjectLinkingCard(): ReactNode {
       () => { if (live) setRead({ kind: 'failed' }); },
     );
     void reread();
-    api.linearWorkspaces().then(
-      (w) => { if (live) setWorkspaces(w === 'unreadable' ? null : w.workspaces); },
-      () => { if (live) setWorkspaces(null); },
-    );
     return () => { live = false; };
   }, [reread]);
   const stored = useCallback((project: string, linking: ProjectLinkingWire): void => {
