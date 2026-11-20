@@ -4436,13 +4436,15 @@ though please". The spec is `docs/superpowers/specs/2026-11-19-session-helpers-d
 `docs/design/2026-11-19-session-helpers-design/`. A **Helpers** section in the session panel lists each subagent and
 workflow, running ones first, with its description, kind, model, effort, measured state, elapsed time and last activity, and
 for a workflow its phase and agents done out of total. A finished helper keeps a one-line outcome for ten minutes, folded.
-The facts come from the reader of the session's workflow files, extended to the session's Agent helpers (`server/src/workflows/`),
-and travel as additive fields on the `workflows` frame. The broker's activity records leave the session panel. Unowned
+The facts come from the reader of the session's workflow files, extended to the session's Agent helpers (`server/src/workflows/`)
+with a bounded scan of the transcript at stream start, and travel as additive fields on the `workflows` frame. The broker's
+activity records and the `N delegated` chip leave the session panel, and a worktree row there says its path, disposition and
+controls. Unowned
 delegated worktrees, and leases whose two sessions are both gone, get a section of the Archive screen (the coordinator's
 call). The broker gains an end from an Agent's task report, plus a one-time, dry-run-first pass that closes the old records
 it never closed (the coordinator's call, designed and not done here). The build is seven PRs (H4, H1a, H1b, H2, H3, S1 and
-S2), listed in the spec's §11. The measurements, including why the records never closed, are in the spec's §2 and in
-`docs/superpowers/programs/desktop-polish/c49.md`.
+S2), listed in the spec's §11. The measurements are in the spec's §2, which also says what was not measured: why the old
+records never closed.
 
 - **D-8794** — `session-panel-carries-helpers`: Task C49, issued on 2026-11-19. The session's own panel, not the fleet list,
   carries a session's helper information, subagents and workflows alike, by the operator's ruling of 2026-11-19. This line is
@@ -4450,7 +4452,8 @@ S2), listed in the spec's §11. The measurements, including why the records neve
 
 This section was added beside Task C48 with that task's consent (its worker's mail of 2026-11-19), which covered this one
 section only. Its revision after review 2861 has C48's consent too (its worker's mail of 2026-11-20), for this section
-only.
+only. Its revision after review 2888 has the consent of Task C50's worker, who holds the plan's claim now (its mail of
+2026-11-20), for this section only.
 
 ## Acceptance (the matrix, per PR)
 
