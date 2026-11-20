@@ -13,6 +13,7 @@ import { answerAsk, readAskAnswer, type AskDeps } from '../inject/ask.js';
 import { clearSender } from '../inject/send.js';
 import { assembleFleet, fleetNow } from '../fleet.js';
 import { conversationAfterClearFor, turnReadDeps, turnVerdictFor } from '../turnverdict.js';
+import { workerFactsFor } from '../turnverdict.js';
 import type { TurnVerdict } from './archiveDoor.js';
 import { configDirFor } from '../config.js';
 import { peerDeliverable, archiveContradicted } from './peers.js';
@@ -58,6 +59,7 @@ import { doneRejectionMail } from './closeDecide.js';
 import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } from './advance.js';
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
+import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
@@ -677,6 +679,13 @@ export function registerCoordRoutes(
   const coordMutex = new CoordMutex();
   // The turn reads' deps (D-5238), built once from the watcher this function receives.
   const turnReads = turnReadDeps(deps, watcher);
+  // D-8792: the dispatch cap's two ports, ONE pair for the dispatch door, the send-back door and the caps view, so the
+  // three agree on one reading: a run worker's measured facts, and the freed-slot window, the watcher's own list
+  // (`FleetWatcher.admitFreedSlot`), never the shared wake list. Shadow until the `cap-counts-working` row is armed.
+  const capPorts: CapPorts = {
+    workerFacts: (sessionId: string) => workerFactsFor(turnReads, sessionId),
+    ...(watcher?.admitFreedSlot === undefined ? {} : { admitFreedSlot: () => watcher.admitFreedSlot() }),
+  };
 
   /** `closeRun`'s abandon arm exactly as `POST /api/runs/:id/abandon` runs it — `{intent:'abandon'}` built here and
    *  never read off a body (D-280), `causedBy:'operator'`, #166 wave 3's `childReclaim` port onto the session's own
@@ -1769,6 +1778,8 @@ export function registerCoordRoutes(
       // Overlord W2 forecasts B, fix round 1 (F3): the resumed worker's conversation id after its `/clear`, read from the
       // live process by `turnverdict.ts`; the spend arm counts a reading only in the conversation the run was dispatched into.
       conversationAfterClear: (rec, prior) => conversationAfterClearFor(turnReads, rec, prior),
+      // D-8792: the cap's worker readings and its freed-slot window, the pair the send-back door and the caps view use.
+      ...capPorts,
       // D-5242: the wake budget's one list, the watcher's (optional: a test's stand-in watcher may carry none).
       ...(watcher?.admitWake === undefined ? {} : { admitWake: (kind: 'asked', sid: string) => watcher.admitWake(kind, sid) }) };
     // D-8182 (§5.6): a fresh work run for a ticket in a private project waits (outside `coordMutex`) for its issue and is
@@ -2072,8 +2083,11 @@ export function registerCoordRoutes(
       prPhase: fp.prPhase as DoneClaim['prPhase'], handoffCommit: fp.handoffCommit };
 
     return coordMutex.run(async () => {
+      // D-8792: the send-back's cap check, read inside the serialiser before the synchronous gate. Shadow, or any edge but
+      // an idle run sent back to `working`, it is today's lazy `capsMeasured(coord).overConcurrency`, unchanged.
+      const sendBackOverConcurrency = await sendBackCapCheck(coord, capPorts, id, to);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
-        overConcurrency: () => capsMeasured(coord).overConcurrency });
+        overConcurrency: sendBackOverConcurrency });
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
@@ -2476,6 +2490,17 @@ export function registerCoordRoutes(
    *  saying something the other does not. */
   const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
     ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
+  /** D-8792: `view` (by default `capsView`) with the cap reader's two additive fields, `usage.waiting` (how many of
+   *  `running`'s runs have a worker measured waiting or gone, over the same worker port the two doors use) and
+   *  `usage.workingOnly` (whether the armed `cap-counts-working` row leaves them out). The readings are bounded by
+   *  `WORKER_READINGS_DEADLINE_MS` and taken OUTSIDE the coordination serialiser: a caller holding it passes the view it
+   *  read there. With no worker port, no reading was made, so neither field is sent: never a guessed 0 (review 2875 F9). */
+  const capsViewMeasured = async (store: NonNullable<Deps['coord']>, view = capsView(store)): Promise<CoordCapsView> => {
+    const readings = await workerReadings(store, capPorts.workerFacts);
+    if (readings === null) return view;
+    const { waiting, workingOnly } = capsMeasured(store, readings, capCountsWorkingArmed(store)).usage;
+    return waiting === undefined ? view : { ...view, usage: { ...view.usage, waiting, workingOnly: workingOnly === true } };
+  };
 
   /**
    * `POST /api/coord/review-cap` (D-6795): the operator lifts the review-round cap for ONE work run, `{ run: <id> }`.
@@ -2516,7 +2541,7 @@ export function registerCoordRoutes(
 
   app.get('/api/coord/caps', async (_req, reply) => {
     if (!deps.coord) return notConfigured(reply);
-    return reply.code(200).send({ ok: true, ...capsView(deps.coord) });
+    return reply.code(200).send({ ok: true, ...(await capsViewMeasured(deps.coord)) });
   });
 
   app.post('/api/coord/caps', async (req, reply) => {
@@ -2530,7 +2555,7 @@ export function registerCoordRoutes(
     const shape = decideCaps(coord.caps(), req.body ?? {});
     // AN OLDER PWA'S SAVE OF A RETIRED DIAL (D-7068): accepted, written nowhere and recorded
     // nowhere — no cap that still exists moved. The answer is the current view, so that PWA settles on it.
-    if (shape.ok === 'retired') return reply.code(200).send({ ok: true, ...capsView(coord) });
+    if (shape.ok === 'retired') return reply.code(200).send({ ok: true, ...(await capsViewMeasured(coord)) });
     if (!shape.ok) {
       return reply.code(400).send({ ok: false, error: 'bad-request', detail: shape.detail });
     }
@@ -2568,6 +2593,8 @@ export function registerCoordRoutes(
       coord.setCaps(merged.next, Date.now());
       return { before: current, view: capsView(coord) };
     });
+    // D-8792 (review 2875 F1): the worker readings are taken after the lock is released, never inside it.
+    const measured = await capsViewMeasured(coord, view);
     // A `run_events` row would be WRONG here: there is no run, and
     // `recordRunEvent` writes `fromState === toState`, which `pushNewRuns`
     // skips outright — the row would land and be seen by nobody. The durable
@@ -2583,7 +2610,7 @@ export function registerCoordRoutes(
       body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}`,
       runId: null,
     }, 'record-only', { degraded: 'caps written, feed archive degraded' });
-    return reply.code(200).send({ ok: true, ...view });
+    return reply.code(200).send({ ok: true, ...measured });
   });
 
   /** `GET`/`POST /api/coord/stall-watch` — the stall watch's level and quiet time become a choice the operator makes

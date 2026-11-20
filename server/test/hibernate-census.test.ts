@@ -116,9 +116,11 @@ const CENSUS: readonly Row[] = [
     why: 'the session socket\'s `resolve()` (D-5561): `gone` rules the session\'s workflow runs interrupted, so none '
       + 'shows as running — true of a sleeper, whose pane runs nothing; and a running workflow is background work, '
       + 'which the verdict\'s holds keep from ever being put to sleep' },
-  { source: 'tmux-verdict', file: 'server/src/turnverdict.ts', hits: 1, stances: ['wakes-first'],
+  { source: 'tmux-verdict', file: 'server/src/turnverdict.ts', hits: 2, stances: ['wakes-first', 'consults'],
     why: 'the fail-closed turn verdict reads a sleeper `unmeasured`; dispatch\'s `/clear` gate meets it only after '
-      + 'its `ensure` woke it (D-5238\'s `worker-starting`), and the swap route answers `409 hibernated` before reading it' },
+      + 'its `ensure` woke it (D-5238\'s `worker-starting`), and the swap route answers `409 hibernated` before reading it. '
+      + '`workerFactsFor` (D-8792, review 2875 F5) consults the sleep stamp first and asks the pane only to prove it: '
+      + 'a sleeper is `gone` only with its pane proved gone' },
   // ── shared ─────────────────────────────────────────────────────────────────────────────────────────────────────
   { source: 'dead-compare', file: 'shared/api.ts', hits: 3, stances: ['consults', 'true-of-pane'],
     why: '`bucketFor`: a sleeper\'s bucket stays `dead` (D-5242: the PWA words it `hibernated`, Task 18); '

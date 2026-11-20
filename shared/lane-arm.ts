@@ -35,8 +35,16 @@ export const APPROVAL_PARK_LANE = 'approval-park';
  *  case for a dispatched worker on a `working` run whose turn marker has been quiet 30 minutes. In shadow the sleep lane
  *  logs the worker it would put to sleep; live, it puts it to sleep and mails the run's coordinator once. */
 export const WORKING_IDLE_SLEEP_LANE = 'working-idle-sleep';
+/** The dispatch cap's row (D-8792; waiting workers spec 2026-11-19, Part 3): a run holds a concurrency slot only while its
+ *  worker works. In shadow the cap counts every active run as before and the caps view reports how many have a worker
+ *  measured waiting; live, the cap leaves those out, hands the slots they free out at the wake budget's rate, and a
+ *  send-back to a live or sleeping worker, or a resume of a live one, is never refused at the cap. Shadow is its off
+ *  switch. */
+export const CAP_COUNTS_WORKING_LANE = 'cap-counts-working';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE, WORKING_IDLE_SLEEP_LANE] as const;
+export const LANE_ARM_LANES = [
+  ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE, WORKING_IDLE_SLEEP_LANE, CAP_COUNTS_WORKING_LANE,
+] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -242,6 +250,18 @@ export const LANE_ARM_TEXT = {
         + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
         + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
         + 'worker is put to sleep, because its coordinator could not be told.',
+      gate: null,
+    },
+    [CAP_COUNTS_WORKING_LANE]: {
+      legend: 'Count only working workers',
+      shadowNote: 'The workers cap counts every active run, as before. The caps control also says how many of them have a '
+        + 'worker waiting (quiet 30 minutes with nothing running) or asleep, and a dispatch or send-back the cap refuses that '
+        + 'arming would have let through is logged to the server journal, as lines beginning '
+        + '"ccrc-server: cap-counts-working shadow:".',
+      liveNote: 'A run whose worker is waiting or asleep holds no slot under the workers cap; the slots this frees are handed '
+        + 'out a few at a time, and a send-back to a live or sleeping worker, or a resume of a live one, is never refused at '
+        + 'the cap. A worker '
+        + 'that wakes counts again at once.',
       gate: null,
     },
   },

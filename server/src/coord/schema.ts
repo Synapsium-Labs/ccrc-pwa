@@ -4078,6 +4078,35 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
+  // The dispatch cap counts only working workers (waiting workers spec 2026-11-19, Part 3; D-8792): the seed row
+  // `cap-counts-working` = `shadow` adds the cap's switch to the Shadow lanes card. Shadow, the cap counts every active run
+  // as before and the caps view reports how many have a worker measured waiting; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, leaves those runs out of the count. The merge arms nothing, and shadow is its off switch.
+  //
+  // `OR IGNORE`: a file that already holds the row (a replay over a database rolled back one version, as
+  // decision-model-records.test.ts does) keeps the operator's choice, and the entry is a no-op there rather than a refusal.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
+  // and migrates nothing), reads the `cap-counts-working` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`: door B1 took 110 and capacity Task 2 took 111 first, so this
+  // entry moved up to 112; approvals PR 3 builds on the slots after 111 too, so whoever lands second moves up (the
+  // coordinator's standing license). RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
+  `,
+
+  // ── 113: user_version 112 -> 113 ──────────────────────────────────────────
+  // RESERVED for capacity Task 4 (#3117, in the merge queue ahead of approvals PR 3), which holds this slot: the coordinator
+  // gave the park 114 before #3117 merged. A no-op here only so the park can sit at its own position; approvals PR 3 is never
+  // landed with it. The absorb of main after #3117 merges replaces this entry with #3117's own and nothing else.
+  `
+  SELECT 1;
+  `,
+
+  // ── 114: user_version 113 -> 114 ──────────────────────────────────────────
   // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
   // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
   // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
@@ -4090,8 +4119,8 @@ export const MIGRATIONS: readonly string[] = [
   // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
   // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
   // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108, Overlord gates B (#3076) 109, door
-  // process B1 (#3099) 110 and the waiting workers' sleep (#3101) 111 first, so this is 112. RE-MEASURE the slot before
-  // merge (it must print 111 before this entry is counted):
+  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112 and capacity Task
+  // 4 (#3117) 113 first, so this is 114. RE-MEASURE the slot before merge (it must print 113 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
