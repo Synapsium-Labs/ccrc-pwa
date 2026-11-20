@@ -281,35 +281,45 @@ describe('the observe step fills the marker once', () => {
     expect(marker()).toBe(`${B} claude opus -`);
   });
 
+  // The memo is a SHELL-GLOBAL array, so a case about it runs its ticks in ONE shell (`h.sh` starts a new one each call): the
+  // transcript appears from inside the same shell, copied from a staged file (`stage`), between two runs of ticks.
+  const stage = (lines: string[]): void => { fs.writeFileSync(path.join(h.home, 'staged.jsonl'), `${lines.join('\n')}\n`); };
+  const APPEAR = `tp=$(_transcript_path ${ID}); mkdir -p "$(dirname "$tp")"; cp "$HOME/staged.jsonl" "$tp"`;
+
   it('a transcript that appears later is read and fills the marker', () => {
     plant(); sidecar(B + 100, 'claude-opus-9-1');
-    h.sh(`${COUNT_FILL} for _ in 1 2 3; do _alias_observe ${ID}; done`);
-    expect(marker()).toBe(`${B} claude opus -`);
-    expect(reads()).toBe(1);
-    writeTranscript([turn(B + 90)]);   // the first prompt: the transcript is written, the sidecar's bytes are the same
-    h.sh(`${COUNT_FILL} for _ in 1 2 3 4; do _alias_observe ${ID}; done`);
+    stage([turn(B + 90)]);
+    h.sh(`${COUNT_FILL}
+      for _ in 1 2 3; do _alias_observe ${ID}; done
+      cat "$REG/${ID}.aliaslaunch" > "$HOME/mid-marker"; cp "$HOME/usc-count" "$HOME/mid-count"
+      ${APPEAR}   # the first prompt: the transcript is written, the sidecar's bytes are the same
+      for _ in 1 2 3 4; do _alias_observe ${ID}; done`);
+    expect(fs.readFileSync(path.join(h.home, 'mid-marker'), 'utf8').trim(), 'undecided while the transcript is absent').toBe(`${B} claude opus -`);
+    expect(fs.readFileSync(path.join(h.home, 'mid-count'), 'utf8').split('\n').filter(Boolean)).toHaveLength(1);
     expect(marker(), 'the unchanged sidecar is judged again because the transcript appeared').toBe(`${B} claude opus claude-opus-9-1`);
     expect(reads(), 'one more read, for the fill; a filled marker reads none').toBe(2);
   });
 
   it('a transcript that appears later with a /model typed in the window drops the marker', () => {
     plant(); sidecar(B + 100, 'claude-opus-9-0');
-    observe(3);
-    expect(marker()).toBe(`${B} claude opus -`);
-    writeTranscript([turn(B + 30), cmd(B + 50, 'model', 'claude-opus-9-0'), ack(B + 50, SESSION('Opus 9')), turn(B + 90)]);
-    observe(2);
+    stage([turn(B + 30), cmd(B + 50, 'model', 'claude-opus-9-0'), ack(B + 50, SESSION('Opus 9')), turn(B + 90)]);
+    h.sh(`for _ in 1 2 3; do _alias_observe ${ID}; done
+      cat "$REG/${ID}.aliaslaunch" > "$HOME/mid-marker"
+      ${APPEAR}
+      for _ in 1 2; do _alias_observe ${ID}; done`);
+    expect(fs.readFileSync(path.join(h.home, 'mid-marker'), 'utf8').trim(), 'still unfilled while the transcript was absent').toBe(`${B} claude opus -`);
     expect(marker(), 'the manual choice is seen once the transcript exists: the first reading is not the alias\'s own').toBeNull();
   });
 
   it('a directory where the transcript should be is waited on like an absent one: no re-read per tick', () => {
     plant(); sidecar(B + 100, 'claude-opus-9-1');
     fs.mkdirSync(transcriptPath(), { recursive: true });   // a directory where the file should be: it never reads as a file
-    h.sh(`${COUNT_FILL} for _ in 1 2 3 4; do _alias_observe ${ID}; done`);
-    expect(marker()).toBe(`${B} claude opus -`);
-    expect(reads()).toBe(1);
-    fs.rmSync(transcriptPath(), { recursive: true });
-    writeTranscript([turn(B + 90)]);
-    observe();
+    stage([turn(B + 90)]);
+    h.sh(`${COUNT_FILL} for _ in 1 2 3 4; do _alias_observe ${ID}; done
+      cp "$HOME/usc-count" "$HOME/mid-count"
+      rmdir "$(_transcript_path ${ID})"; ${APPEAR}
+      for _ in 1 2; do _alias_observe ${ID}; done`);
+    expect(fs.readFileSync(path.join(h.home, 'mid-count'), 'utf8').split('\n').filter(Boolean), 'four ticks, one read').toHaveLength(1);
     expect(marker(), 'control: once it is a file it is read').toBe(`${B} claude opus claude-opus-9-1`);
   });
 
