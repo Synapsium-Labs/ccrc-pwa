@@ -86,7 +86,7 @@ The programme's plan (`ccrc-api plan show model-class-advance`) holds the same e
 |---|---|---|---|---|---|
 | 1 | catalogue-current | client-version-now | Raise the catalogue probe's Codex client version to the current Codex release | #3023 | merged; measured |
 | 2 | catalogue-current | client-version-tracks | Track that version automatically, with the shipped constant as a floor | #3025 | merged |
-| 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | in review, round 4 (run 2455) |
+| 3 | catalogue-current | backward-move | Explain the step to an older model and back; fix the cause | #3118 | accepted at 776e4a9f after four review rounds (run 2455); waits for the bridge handoff and a DevOps approval |
 | - | doctor | doctor-land | Land #2943 | #2943 | merged 2026-11-19 |
 | 4 | models-sheet | models-sheet | `POST /api/models/:lane` hold, release and revert, and the Models sheet; closes #1441 | #3028 | merged |
 | 5 | read-path | retire-grant | Retire the model-file read grant; an unknown advance state reads `invalid` with the classes kept | #3041 | merged |
@@ -102,8 +102,9 @@ The programme's plan (`ccrc-api plan show model-class-advance`) holds the same e
 | - | doctor | release-lookup-warn | Doctor warns when the Codex release lookup has failed for over a day | #3118 | folded into wave 3 |
 | - | anthropic-arm | repick-landing-notes | Six notes for the id re-pick, read with A3.6's re-check | #3122 | read in wave 8, whose A3.0 left the re-pick unmeasured |
 | - | acceptance | natural-move | Watch the next real release through: canary, move, a new session, no sessions-behind warning | | watched from wave 1's rollout |
-| - | anthropic-arm | cache-row-skip | Wave 7's review finding F5, carried as the plan's ticket of that name | | after wave 8 |
-| - | doctor | doctor-caps-one-reader | Wave 7's review finding F6, carried as the plan's ticket of that name | | after wave 8 |
+| - | anthropic-arm | cache-row-skip | One bad row in Claude Code's model cache must not make the whole file unreadable (wave 7's review, F5) | | after wave 8 |
+| - | doctor | doctor-caps-one-reader | One reader of `ccd caps` in doctor; an unmeasured answer is never a PASS (wave 7's review, F6) | | after wave 8 |
+| - | doctor | effort-fallback-pins | Pin the two terms of the effort-file claim that wave 3's last review found unpinned, with three note corrections | | after wave 8 |
 | - | anthropic-arm | typed-repick | The re-pick measured with a hand-typed `/model`, which wave 8's A3.0 left unmeasured | | after wave 8; the owner types it |
 
 Order: #2943 merged on 2026-11-19, which opened waves 3 and 7. They share five files: the models op
@@ -115,8 +116,8 @@ lists). The three follow-ups marked "after wave 7" touch wave 7's files too, so 
 
 Wave 7 merged on 2026-11-20 (#3107). Waves 3 and 8 then ran side by side, each built on `main` after #3107. They share
 the advance rule, its declaration file, `ccd/ccrc` and two test files, and each edits only the hunks the other's worker
-consented to in writing, one round at a time; a consent releases no claim. Wave 3 is in its fourth review round and wave
-8 in its second. Wave 3 lands only after the Codex bridge's check week has closed and its evidence is handed over;
+consented to in writing, one round at a time; a consent releases no claim. Wave 3 passed its fourth review round and wave 8
+is in its second. Wave 3 lands only after the Codex bridge's check week has closed and its evidence is handed over;
 `usage-user-agent` (#3085) waits for the same handoff.
 
 ## Waiting on the owner
@@ -129,7 +130,7 @@ session cannot read the server box's roster, so 407 was confirmed on the owner's
 Coming: the review judge marks waves 3 and 8 as infrastructure changes, so each lands only after an approving review
 from the DevOps team, outside its author set, on its final head (`devops-approval-needed`). An item asks for it once
 that head has passed review. Item 517 asked for one on wave 3's round-3 head and was withdrawn when that round sent the
-head back for a fix.
+head back for a fix; item 519 asks for it on wave 3's accepted head, 776e4a9f.
 
 ## Decisions & deviations
 
