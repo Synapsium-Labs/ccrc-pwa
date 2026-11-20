@@ -49213,7 +49213,7 @@ def range_abort(cache, rid):
 
 def range_stat_matches(st, pin):
     """A stat pin's check of an opened descriptor's fstat: the pinned size and the pinned modified time, to the
-    nanosecond. Run before the copy and again after it."""
+    nanosecond. Before the copy it refuses a stale pin unread; after it, a backstop the stable-field check implies (M11.84)."""
     return st.st_size == pin[1] and st.st_mtime_ns == pin[2]
 
 
