@@ -48952,11 +48952,11 @@ cmd_ws_title() {   # ccd ws-title --session <id> (--title <text> | --clear) — 
   fi
 }
 
-# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279), THE TRAIN PROOF (D-7463), THE DELEGATION LEASE (wave 5), THE POOL SET, THE LONG-LIVED ARMS AND THE DOOR ──
+# ── THE LIBRARIES: DISK RETENTION (D-6913; GitHub #1279), THE TRAIN PROOF (D-7463), THE DELEGATION LEASE (wave 5), THE POOL SET, THE LONG-LIVED ARMS, THE DOOR AND THE MODEL ALIASES ──
 # The fleet disk-retention verbs live in ccd/lib/disk-retention.sh, the train proof in ccd/lib/train-proof.sh, the delegation lease in
 # ccd/lib/delegation-lease.sh, the session's pool set (the Overlord's W1) in ccd/lib/pool-set.sh and the Overlord's ccd arms (its W1,
-# `ccd keep-awake` first) in ccd/lib/long-lived.sh and the door process's registry directory and program check (its W1) in
-# ccd/lib/door.sh, all
+# `ccd keep-awake` first) in ccd/lib/long-lived.sh, the door process's registry directory and program check (its W1) in
+# ccd/lib/door.sh and the model-class Anthropic arm's aliases reader (its A3) in ccd/lib/model-aliases.sh, all
 # installed beside this body and loaded HERE, once every function and variable they call exists; each pin below works as
 # this paragraph tells for the first. The first pin below names disk-retention.sh's SHA-256, and like the stamp on line 2 it is written AT
 # INSTALL TIME (D-6913, the ruling that gave the pin #1525's treatment): the committed line is the fixed placeholder
@@ -48989,6 +48989,8 @@ __CCD_LIB_POOLSET_SHA256=stamp-at-install
 __CCD_LIB_LONGLIVED_SHA256=stamp-at-install
 # shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
 __CCD_LIB_DOOR_SHA256=stamp-at-install
+# shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
+__CCD_LIB_ALIASES_SHA256=stamp-at-install
 # THE DOOR PROGRAM'S PIN: the SHA-256 of the door process program (`ccd/door-process.mjs`, installed by a later PR at
 # `~/.local/libexec/ccrc/door-process.mjs`), read only by `_door_prog_ok` in ccd/lib/door.sh; the entry installer renders it with the program.
 # shellcheck disable=SC2100  # an install-time placeholder ccd-entry-install.py matches as this whole line, not arithmetic (D-8198)
@@ -49006,12 +49008,13 @@ __CCD_REDACT_CLI_SHA256=stamp-at-install
 # installed layout. A census in ccd-lib-load.test.ts pins the single writer over ccd/ccd and ccd/lib/*.sh.
 __CCD_LAYOUT=
 __CCD_HASH_CMD=()
-_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's, ccd/lib/delegation-lease.sh's, ccd/lib/pool-set.sh's, ccd/lib/long-lived.sh's and ccd/lib/door.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
+# @ccd-lib:aliases — the model-class Anthropic arm's aliases reader (its A3, spec 2026-10-13 §2.5) lives in ccd/lib/model-aliases.sh
+_ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof.sh's, ccd/lib/delegation-lease.sh's, ccd/lib/pool-set.sh's, ccd/lib/long-lived.sh's, ccd/lib/door.sh's and ccd/lib/model-aliases.sh's functions defined; else the refusal line on stderr and rc 1, nothing evaluated
   local self="${BASH_SOURCE[0]}" dir=. f src sum __ccd_i
   [[ "$self" == */* ]] && dir="${self%/*}"
   # THE LIBRARIES, in load order, each beside its pin (D-7463): every file is read, and every digest checked, before ANY
   # file is evaluated, so one library that is not what was shipped refuses the start with none of the others run.
-  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh" "$dir/lib/pool-set.sh" "$dir/lib/long-lived.sh" "$dir/lib/door.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256" "$__CCD_LIB_POOLSET_SHA256" "$__CCD_LIB_LONGLIVED_SHA256" "$__CCD_LIB_DOOR_SHA256") __ccd_lib_srcs=()
+  local -a __ccd_lib_files=("$dir/lib/disk-retention.sh" "$dir/lib/train-proof.sh" "$dir/lib/delegation-lease.sh" "$dir/lib/pool-set.sh" "$dir/lib/long-lived.sh" "$dir/lib/door.sh" "$dir/lib/model-aliases.sh") __ccd_lib_pins=("$__CCD_LIB_SHA256" "$__CCD_LIB_TRAIN_SHA256" "$__CCD_LIB_LEASE_SHA256" "$__CCD_LIB_POOLSET_SHA256" "$__CCD_LIB_LONGLIVED_SHA256" "$__CCD_LIB_DOOR_SHA256" "$__CCD_LIB_ALIASES_SHA256") __ccd_lib_srcs=()
   for f in "${__ccd_lib_files[@]}"; do
     if [[ -L "$f" || ! -f "$f" || ! -r "$f" ]]; then
       printf 'ccd: refused (lib-missing): %s is not a readable regular file — ccd and its library install together (re-run: ccrc update); nothing was run\n' "$f" >&2
@@ -49025,7 +49028,7 @@ _ccd_lib_load() {   # -> 0 with ccd/lib/disk-retention.sh's, ccd/lib/train-proof
   # or a broken install (line 2 really stamped): the second refuses. Line 2 is read from this file, as bash already read it.
   # Only a body with EVERY pin a placeholder is a source checkout; any one pin left a placeholder beside a rendered one is a
   # broken install too.
-  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install && "$__CCD_LIB_LEASE_SHA256" == stamp-at-install && "$__CCD_LIB_POOLSET_SHA256" == stamp-at-install && "$__CCD_LIB_LONGLIVED_SHA256" == stamp-at-install && "$__CCD_LIB_DOOR_SHA256" == stamp-at-install ]]; then
+  if [[ "$__CCD_LIB_SHA256" == stamp-at-install && "$__CCD_LIB_TRAIN_SHA256" == stamp-at-install && "$__CCD_LIB_LEASE_SHA256" == stamp-at-install && "$__CCD_LIB_POOLSET_SHA256" == stamp-at-install && "$__CCD_LIB_LONGLIVED_SHA256" == stamp-at-install && "$__CCD_LIB_DOOR_SHA256" == stamp-at-install && "$__CCD_LIB_ALIASES_SHA256" == stamp-at-install ]]; then
     local l1='' l2=''
     { IFS= read -r l1 && IFS= read -r l2; } < "$self" 2>/dev/null || :
     if [[ "$l2" == '# ccrc:stamp-at-install'* ]]; then
