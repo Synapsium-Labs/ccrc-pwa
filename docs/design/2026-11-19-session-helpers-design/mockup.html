@@ -6,8 +6,8 @@
 <title>Session helpers: mockup (desktop polish C49)</title>
 <!--
   A static mockup for docs/superpowers/specs/2026-11-19-session-helpers-design.md.
-  Every name, number and text in it is invented. Pick the view with ?view=desk, ?view=phone, ?view=phone-open
-  or ?view=archive. Colours are the Refined skin's dark tokens (ui/src/styles/tokens.css).
+  Every name, number and text in it is invented. Pick the view with ?view=desk, ?view=states, ?view=phone,
+  ?view=phone-open or ?view=archive. Colours are the Refined skin's dark tokens (ui/src/styles/tokens.css).
 -->
 <style>
   :root {
@@ -23,7 +23,10 @@
   .mono { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
   .t3 { color: var(--ink-tertiary); } .t2 { color: var(--ink-secondary); }
   .view { display: none; } body[data-view="desk"] #desk, body[data-view="phone"] #phone,
-  body[data-view="phone-open"] #phone, body[data-view="archive"] #archive { display: flex; }
+  body[data-view="phone-open"] #phone, body[data-view="archive"] #archive, body[data-view="states"] #states { display: flex; }
+  #states { width: 1280px; height: 520px; gap: 20px; padding: 20px; background: var(--bg-page); }
+  #states .col { flex: 1; min-width: 0; } #states .cap { font-size: 12px; color: var(--ink-tertiary); margin: 0 4px 8px; }
+  #states .helpers { margin: 0; } .hhead .nk { color: var(--ink-secondary); font-size: 13px; }
 
   /* desktop shell */
   .shell { height: 100vh; width: 100vw; }
@@ -125,8 +128,8 @@
     </div>
     <div class="chat">
       <div class="bubble me">Measure the three sources, then draft the spec.</div>
-      <div class="tool">⏺ Agent · Measure server sources (background)</div>
-      <div class="tool">⏺ Agent · Measure transcript sources (background)</div>
+      <div class="tool">⏺ Agent · Measure server helper sources (background)</div>
+      <div class="tool">⏺ Agent · Measure transcript helper sources (background)</div>
       <div class="tool">⏺ Workflow · review-panel</div>
       <div class="bubble">Three helpers are running; I'll read their reports as they arrive.</div>
     </div>
@@ -142,11 +145,39 @@
         <div class="meta">workflow · <b>running</b> · phase Verify · 7/12 agents · active 4s ago · ↓ 2.5m tokens</div></div>
       <div class="fold"><span class="tw">▾</span>Finished · last 10 min (2)</div>
       <div class="frow"><div class="l1">Measure today's session panel</div><span class="ok">✓ done · 4m12s ·</span> header facts only; no right panel below 1600 px
-        <div class="report mono">Today's helper view is a header fact set, not a right-hand panel. Subagents: one button, a name and an elapsed time per row. Workflows: the strip under the transcript…<span class="more">Show all (38 lines) · Copy</span></div></div>
+        <div class="report mono">Today's helper view is a set of header facts, not a right-hand panel.<br>Subagents: one button, then a name and an elapsed time per row.<br>Workflows: the strip under the transcript, at every width.<br>Broker records: a disclosure of rows with condition words.<span class="more">Show all (38 lines) · Copy</span></div></div>
       <div class="frow"><div class="l1">Render the mockup</div><span class="bad">✕ failed · 1m3s ·</span> headless browser not found</div>
     </section>
     <div class="composer">Message lane-a-project-a…</div>
   </main>
+</div>
+
+
+<!-- ===================== OTHER STATES, 1280 ===================== -->
+<div id="states" class="view">
+  <div class="col">
+    <div class="cap">A fresh roster</div>
+    <section class="helpers" aria-label="Helpers">
+      <div class="hhead"><span class="lbl">Helpers</span><span class="cnt">1 running</span><span class="fin">· 2 finished</span><span class="chev">▾</span></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Index the test fixtures</span><span class="right mono">4m10s</span>
+        <div class="meta">subagent · Explore · Haiku · <b>running</b> · active 6s ago · ↓ 12k</div></div>
+      <div class="hrow"><span class="ic done">◇</span><span class="what">Draft the release note</span><span class="right mono">9m02s</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · no longer listed · <span class="q">quiet 3m</span> · ↓ 30k</div></div>
+      <div class="fold"><span class="tw">▾</span>Finished · last 10 min (2)</div>
+      <div class="frow"><div class="l1">Check the migration order</div><span class="ok">■ stopped · 22s</span></div>
+      <div class="frow"><div class="l1">Summarise the failing suites</div><span class="ok">✓ finished · 6m</span></div>
+    </section>
+  </div>
+  <div class="col">
+    <div class="cap">A stale roster</div>
+    <section class="helpers" aria-label="Helpers">
+      <div class="hhead"><span class="lbl">Helpers</span><span class="nk">2 helpers · live state not known: no news from the session for 41m</span><span class="chev">▾</span></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Index the test fixtures</span><span class="right mono">46m</span>
+        <div class="meta">subagent · Explore · Haiku · <span class="q">quiet 41m</span> · ↓ 12k</div></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Draft the release note</span><span class="right mono">51m</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <span class="q">quiet 43m</span> · ↓ 30k</div></div>
+    </section>
+  </div>
 </div>
 
 <!-- ===================== PHONE, 360 ===================== -->
@@ -157,7 +188,7 @@
   </div>
   <div class="chat">
     <div class="bubble me">Measure the three sources, then draft the spec.</div>
-    <div class="tool">⏺ Agent · Measure server sources</div>
+    <div class="tool">⏺ Agent · Measure server helper sources</div>
     <div class="bubble">Three helpers are running; I'll read their reports as they arrive.</div>
   </div>
   <section class="helpers" aria-label="Helpers">
@@ -194,15 +225,15 @@
     <h1>Archive</h1>
     <div class="sub">What is sitting around, and what removing it would free.</div>
     <div class="card">
-      <h3>Work no session owns <span class="n">3</span></h3>
+      <h3>Work no session owns <span class="n">3</span><span class="n">· presence on disk not measured for 1 tree</span></h3>
       <div class="note">Delegated worktrees the broker could not give one owner, and worktrees whose two sessions are both gone.</div>
       <div class="grp">No single owner (2)</div>
       <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-a1b2c3d4</div><div class="l2">two owners claimed it · tried 3 days ago</div></div>
         <div class="acts"><button class="btn">Not delegated</button></div></div>
-      <div class="urow"><div><div class="l1">project-b · agent-e5f6a7b8</div><div class="l2">no owner found · unmeasured · tried 9 days ago</div></div>
+      <div class="urow"><div><div class="l1">project-b · agent-e5f6a7b8</div><div class="l2">no owner found · tried 9 days ago</div></div>
         <div class="acts"></div></div>
       <div class="grp">Both sessions gone (1)</div>
-      <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-c9d0e1f2</div><div class="l2">from lane-b-project-a · via lane-d-project-a</div></div>
+      <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-c9d0e1f2</div><div class="l2">worktree kept</div></div>
         <div class="acts"><button class="btn">Keep worktree</button><button class="btn">Not delegated</button></div></div>
     </div>
     <div class="card">
