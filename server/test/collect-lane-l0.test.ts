@@ -54,7 +54,7 @@ const DECLARATIONS: readonly string[] = [
   '^export interface CollectLaneConfirmRequired\\b',
 ];
 
-/** `peers-claims-l0.test.ts`'s fifteen lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916, the eighteenth the hook event union, D-8613). The block adds none. */
+/** `peers-claims-l0.test.ts`'s twenty-one lines (the eleventh is the host-pressure block, #1170, the twelfth the landing line's entry, the thirteenth the programme ledgers' waiting frame, the fourteenth the backup block, D-7858, the fifteenth the box settings' `ReadFailure`, D-6916, the eighteenth the hook event union, D-8613). The block adds none. The twenty-first is the team-link vocabulary move (linear-hierarchy wave 8, D-8635): a type-only import from linking.ts, erased at compile, so no cycle forms. */
 const IMPORTS = [
   "import type { Hue, RosterKindWire } from './roster.js';",
   "import type { RosterFactsWire } from './rosterFacts.js';",
@@ -80,6 +80,7 @@ const IMPORTS = [
   "import type { HostPressureHealth } from './pressure.js';",
   "import type { BackupHealth } from './backup.js';",
   "import type { TestboxAct, TestboxActOutcome, TestboxAdminCode, TestboxAdminStatus, TestboxSettingChange } from './testbox-admin.js';",
+  "import type { TeamCandidateWire, TeamLinkWire } from './linking.js';",
 ];
 
 describe("the collector switch's L0 vocabulary (path-identity spec §5.7)", () => {

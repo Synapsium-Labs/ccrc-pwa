@@ -287,7 +287,11 @@ const WORDS = ['zero', 'one', 'two', 'three', 'four', 'five', 'six', 'seven', 'e
   // Overlord W1 door process B1: POST /api/sessions/:id/report, the hook's report door, a box-token lane in the continuity file: ninety-three machine lanes in all.
   'ninety-three',
   // D-8186: POST /api/teams/:team/plan/map (`plan map-propose`), the per-team migration's map, a box-token lane in the plan file: ninety-four machine lanes in all.
-  'ninety-four'];
+  'ninety-four',
+  // D-8808: POST /api/linking/suggest, a coordinator's suggestion of a team, a box-token lane in the linking file: ninety-five machine lanes in all.
+  'ninety-five',
+  // D-8809: POST /api/linking/confirm, the Overlord's confirm of a team candidate, a box-token lane in the linking file: ninety-six machine lanes in all.
+  'ninety-six'];
 // D-2168: LONGEST FIRST, not numeric order. A JS alternation is leftmost-first,
 // so with `twenty` ahead of `twenty-one` the shorter branch wins and `\b` ends
 // the match at the hyphen — `twenty-one` scanned as `twenty`, and `twenty-two`
@@ -435,8 +439,9 @@ describe('the box-token surface is derived, and no prose site under-claims it', 
       'POST /api/programmes/:slug/modifications', 'POST /api/programmes/:slug/modifications/merged',
       'POST /api/programmes/:slug/spec',
     ]);
-    // …and the linking standard's one (D-8147): the session's read, by name; the operator's write beside it is no lane.
-    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking']);
+    // …and the linking standard's three (D-8147 the session's read, D-8808 the coordinator's suggestion, D-8809 the Overlord's
+    // confirm), by name; the operator's write beside it is no lane.
+    expect(LINKING_LANES, 'linking/routes.ts lost its box-token lane, or a write gained a token check').toEqual(['GET /api/linking', 'POST /api/linking/suggest', 'POST /api/linking/confirm']);
     // …and the continuity routes' one (Overlord W1a): the hook's start report, by name.
     expect(CONTINUITY_LANES, 'continuity/routes.ts lost a box-token lane').toEqual(['POST /api/sessions/:id/start', 'POST /api/sessions/:id/start/loads', 'POST /api/sessions/:id/act-key', 'POST /api/sessions/:id/report', 'GET /api/sessions/:id/card',
       'POST /api/sessions/:id/notes', 'GET /api/sessions/:id/notes', 'POST /api/sessions/:id/handover',

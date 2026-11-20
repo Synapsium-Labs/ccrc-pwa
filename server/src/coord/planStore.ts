@@ -734,17 +734,17 @@ export function setLinearOwnerForAll(db: DatabaseSync, linearOwner: string): num
 }
 
 /** Every project the hierarchy settings can name: each `project_linking` row and each programme's home, with its settings. */
-export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean; /** The `project_linking` row's insertion order: the first project that set a team key. Null for a project with no row. */ order: number | null }
+export interface HierarchyProjectFacts { project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null; ownsTeam: boolean; /** The `project_linking` row's insertion order: the first project that set a team key. Null for a project with no row. */ order: number | null; /** D-8808: the workspace id the row's key resolves in. Absent reads as null (`hierarchyProjectsOf` always fills it; `teamOwnerProject` folds both). */ workspaceId?: string | null }
 export function hierarchyProjectsOf(db: DatabaseSync): HierarchyProjectFacts[] {
   const rows = db.prepare(
-    'SELECT project, teamKey, initiatives, linearOwner, ownsTeam, rowid AS ord FROM project_linking '
-    + 'UNION ALL SELECT homeProject, NULL, \'on\', NULL, 0, NULL FROM programs WHERE homeProject IS NOT NULL '
+    'SELECT project, teamKey, initiatives, linearOwner, ownsTeam, rowid AS ord, teamWorkspace FROM project_linking '
+    + 'UNION ALL SELECT homeProject, NULL, \'on\', NULL, 0, NULL, NULL FROM programs WHERE homeProject IS NOT NULL '
     + 'AND homeProject NOT IN (SELECT project FROM project_linking) GROUP BY homeProject ORDER BY 1',
   ).all() as unknown as Raw[];
   return rows.map((r) => ({
     project: r.project as string, teamKey: (r.teamKey as string | null) ?? null, initiatives: r.initiatives === 'off' ? 'off' as const : 'on' as const,
     linearOwner: (r.linearOwner as string | null) ?? null, ownsTeam: r.ownsTeam === 1,
-    order: (r.ord as number | null) ?? null,
+    order: (r.ord as number | null) ?? null, workspaceId: (r.teamWorkspace as string | null) ?? null,
   }));
 }
 /** The coordinator of a project's newest programme (the plan owner of the newest programme homed there), else null. */

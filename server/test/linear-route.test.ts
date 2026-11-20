@@ -13,7 +13,7 @@ import { LINEAR_TEAM_PAGE_SIZE, checkLinearKey, verifyLinearKey, type FetchLike 
 import { keyTailOf, type LinearKeyRead } from '../src/linear/connection.js';
 import { LINEAR_QUOTA, type LinearRateService } from '../src/linear/rate.js';
 import { LINEAR_MISS_RETRY_AFTER_S, checkLinearSlot } from '../src/linear/refresher.js';
-import { routableSlots, routeLinear, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
+import { routableSlots, routableTeams, routeLinear, routeProjectTeam, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
 import { putLinearSlot, readLinearStore, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
@@ -161,6 +161,14 @@ describe('routableSlots: what the store read can route', () => {
     expect(routeLinear(slots, issue('BBB'))).toMatchObject({ kind: 'slot', slot: { ref: { source: 'legacy' } } });
     expect(routeLinear(slots, issue('AAA'))).toMatchObject({ kind: 'slot', slot: { ref: { source: 'file', id: WS_A } } });
     expect(routeLinear(slots, byWorkspace(null))).toEqual({ kind: 'refused', word: 'workspace-required' });
+  });
+
+  it('routableTeams answers each team as a pair with its workspace id and name: a file slot and the learned legacy slot', () => {
+    const store = listed([fileSlot(WS_A, DIGEST_A, { kind: 'details', details: record(WS_A, DIGEST_A) })], legacy());
+    expect(routableTeams(store)).toEqual([
+      { key: 'AAA', name: 'Team aaa', workspaceId: WS_A, workspaceName: 'Workspace' },
+      { key: 'BBB', name: 'Team BBB', workspaceId: WS_L, workspaceName: 'Legacy' },
+    ]);
   });
 });
 
@@ -551,5 +559,25 @@ describe('the background refresher (spec §4.3)', () => {
     expect(await recordOf(b, WS_A)).toMatchObject({ outcome: 'rejected', keyDigest: valueDigestHex(KEY_1) });
     // KEY_2's answer named workspace A, not B: B's record is as it was.
     expect(await recordOf(b, WS_B)).toEqual(slotRecord(WS_B, KEY_2));
+  });
+});
+
+// Linear hierarchy wave 8, D-8808: a project row that names its workspace resolves its team key there only.
+describe('routeProjectTeam', () => {
+  const A2 = slot(WS_B, 'ws-b', ['AAA', 'BBB']);
+  it("a key two workspaces share resolves in the row's workspace", () => {
+    expect(routeLinear([A, A2], { kind: 'team', team: 'AAA', workspace: null })).toMatchObject({ kind: 'refused', word: 'team-ambiguous' });
+    expect(routeProjectTeam([A, A2], { teamKey: 'AAA', workspaceId: WS_B })).toEqual({ kind: 'slot', slot: A2 });
+    expect(routeProjectTeam([A, A2], { teamKey: 'aaa', workspaceId: WS_A })).toEqual({ kind: 'slot', slot: A });
+  });
+  it('a row with no workspace resolves as before', () => {
+    expect(routeProjectTeam([A, A2], { teamKey: 'AAA', workspaceId: null }))
+      .toEqual(routeLinear([A, A2], { kind: 'team', team: 'AAA', workspace: null }));
+    expect(routeProjectTeam([A, A2], { teamKey: 'BBB', workspaceId: null })).toEqual({ kind: 'slot', slot: A2 });
+    expect(routeProjectTeam([], { teamKey: 'AAA', workspaceId: null })).toEqual({ kind: 'refused', word: 'not-configured' });
+  });
+  it('a row whose workspace is gone or does not hold the key is team-unknown, never ambiguous', () => {
+    expect(routeProjectTeam([A, A2], { teamKey: 'BBB', workspaceId: WS_A })).toEqual({ kind: 'refused', word: 'team-unknown' });
+    expect(routeProjectTeam([A, A2], { teamKey: 'AAA', workspaceId: WS_L })).toEqual({ kind: 'refused', word: 'team-unknown' });
   });
 });

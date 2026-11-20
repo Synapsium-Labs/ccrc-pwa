@@ -46,6 +46,7 @@ export type DoorRow = OverlordDoorRow | OperatorDoorRow;
 const CONTINUITY = 'server/src/continuity/routes.ts';
 const OVERLORD = 'server/src/coord/overlordRoutes.ts';
 const LEDGERS = 'server/src/coord/ledgersRoutes.ts';
+const LINKING = 'server/src/linking/routes.ts';
 
 const operator = (method: HttpMethod, path: string, file: string, verbClass: VerbClass): OperatorDoorRow =>
   ({ group: 'operator', method, path, file, verbClass });
@@ -74,6 +75,12 @@ export const OVERLORD_DOORS: Readonly<Record<string, DoorRow>> = {
   handover: continuity('POST', '/api/sessions/:id/handover', 'operate', true, 'write-note'),
   'probe-read': continuity('GET', '/api/sessions/:id/probe', 'view', false, 'read'),
   'probe-answer': continuity('POST', '/api/sessions/:id/probe', 'operate', true, 'write-note'),
+  // D-8809: the Overlord's confirm of one team candidate (Linear hierarchy wave 8): the first Overlord door of class `other`,
+  // so every step of the order runs, and its act is allowed at `full` only.
+  'link-team': {
+    group: 'overlord', method: 'POST', path: '/api/linking/confirm', file: LINKING, verbClass: 'operate', write: true,
+    word: 'overlord-v1', others: 'refuse', ladderClass: 'other', act: 'link-team',
+  },
 };
 
 /** The row a registration names, by its key. A key the table lacks throws: a programming error the census catches. */

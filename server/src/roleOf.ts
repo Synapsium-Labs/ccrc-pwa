@@ -132,6 +132,13 @@ export function designationFactFrom(r: DesignationRead): DesignationFact | 'unme
 
 const word = (v: boolean | 'unmeasured'): RoleFactWord => (v === 'unmeasured' ? 'unmeasured' : v ? 'yes' : 'no');
 
+/** THE ONE DECIDER of "this session claims an open run" (`RoleFacts.claimsOpenRun`): its id among the open claimants
+ *  (`openCoordinatorIds`), or 'unmeasured' when they could not be read, never `no`. `roleFactsOf` and the linking suggest
+ *  gate (`suggesterVerdict`, D-8808, review 2997 A4) both decide it here, so the role and the gate cannot disagree. Pure. */
+export function claimsOpenRunOf(sessionId: string, openCoordinators: ReadonlySet<string> | 'unmeasured'): RoleFactWord {
+  return openCoordinators === 'unmeasured' ? 'unmeasured' : word(openCoordinators.has(sessionId));
+}
+
 /** THE ONE ASSEMBLY of a session's `RoleFacts` (Overlord W1a, renewal deciders Task 0): every lane that asks `roleOf`
  *  about a session builds its facts here. Pure. `auditBody` and `replayBody` are fixed (false, false) until their waves bring readers; an unmeasured input stays unmeasured, never `no`. */
 export function roleFactsOf(sessionId: string, i: RoleFactInputs): RoleFacts {
@@ -139,7 +146,7 @@ export function roleFactsOf(sessionId: string, i: RoleFactInputs): RoleFacts {
     designation: designationFactOf(sessionId, i.designation), auditBody: false, replayBody: false,
     child: i.child,
     childRunKind: i.child.kind === 'child' ? i.childRunKind : 'unmeasured',
-    claimsOpenRun: i.openCoordinators === 'unmeasured' ? 'unmeasured' : word(i.openCoordinators.has(sessionId)),
+    claimsOpenRun: claimsOpenRunOf(sessionId, i.openCoordinators),
     declaredIntent: word(i.intentDeclared),
   };
 }
