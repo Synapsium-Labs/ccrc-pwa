@@ -21,7 +21,9 @@ describe('the lane is gated in PR 3', () => {
   });
 });
 
-describe('an unchanged verifier prints nothing for a v2 record (PR 3v changes this)', () => {
+// PR 3v has landed this case's change: the verifier now prints a signed v2 OPERATOR record (Table 3b). The lane's gate
+// above still holds the park inert; the verifier alone never arms it.
+describe('the verifier prints a signed v2 operator record (PR 3v)', () => {
   const kp = generateKeyPairSync('ed25519');
   const pem = kp.publicKey.export({ type: 'spki', format: 'pem' }).toString();
   const expected = { sessionId: 'project-a-quiet-basin', agentId: '', digest: 'a'.repeat(64), nonce: 'b'.repeat(32), rowId: 7, now: 1_000 };
@@ -32,8 +34,8 @@ describe('an unchanged verifier prints nothing for a v2 record (PR 3v changes th
   it('a signed v1 ordinary allow prints (the control)', () => {
     expect(verdictFor(signed({ v: 1, ...base, class: 'ordinary', verdict: 'allow' }), expected, pem)).toBe('allow ok');
   });
-  it.each(['allow', 'deny'] as const)('a signed v2 operator %s prints nothing', (verdict) => {
+  it.each(['allow', 'deny'] as const)('a signed v2 operator %s prints its line', (verdict) => {
     const v2: ApprovalRulingRecordV2 = { v: 2, ...base, class: 'escalate', verdict, authority: 'operator', denyCurrent: true, family: 'none' };
-    expect(verdictFor(signed(v2 as unknown as Record<string, unknown>), expected, pem)).toBeNull();
+    expect(verdictFor(signed(v2 as unknown as Record<string, unknown>), expected, pem)).toBe(`${verdict}:operator ok`);
   });
 });
