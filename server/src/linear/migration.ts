@@ -53,14 +53,16 @@ export const MIGRATION_PASS_BUDGET_MS = 20_000;
  *  holds 100 calls an hour and the lane ticks every 30 s (120 ticks an hour). An adoption costs its read and one update, and a
  *  close up to four calls (read, comment, relation, state), so under `MIGRATION_CALLS_PER_TICK` two closes never share a tick:
  *  closes go one a tick, an adoption beside one (review 2918 A1). An adopted issue's row settles on a later tick's read, so the
- *  pilot's ~220 issues take about two to four hours, and the sync's own lane is never spent. */
+ *  pilot's ~220 issues take about two to four hours. The cap counts the issue writes only: step 1's structure pass and the
+ *  Upkeep epic's pass run before it is spent (review 2955 F3). */
 export const MIGRATION_WRITES_PER_TICK = 2;
 /** Review 2892 A7, narrowed by the coordinator's ruling on review 2918 F3: the migration's own issue reads and writes of a tick
  *  count here (a read, a comment, a relation, a state write, and one for the update an adoption's pass sends). A step starts only
- *  when the calls it may need are left: an adoption two, a close up to four, so an adoption and a close fit one tick. The two
- *  passes of the plan sync's own that run on lane `migration` are not counted here: step 1's structure pass (only until the
- *  plan's objects exist, bounded by its pass deadline) and the Upkeep epic's pass. They, and every call of the tick, stay
- *  bounded by the writes cap, the lane and the one rate service (D-8796). */
+ *  when the calls it may need are left: an adoption two, a close up to four, so an adoption and a close fit one tick. Two passes
+ *  of the plan sync's own are counted neither here nor by `MIGRATION_WRITES_PER_TICK`: step 1's structure pass (only until the
+ *  plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep epic's pass, whose create has no
+ *  move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane, the pass deadline
+ *  (`MIGRATION_PASS_BUDGET_MS`) and the one rate service (D-8796, as review 2955 F3 corrected it). */
 export const MIGRATION_CALLS_PER_TICK = 6;
 const ADOPT_CALLS = 2;
 const CLOSE_CALLS = 4;
@@ -806,8 +808,8 @@ export class LinearMigration {
         // is canceled here, in the key's flight. With every epic put back, the sync's snapshot has no fact for the initiative and
         // sends it nothing, so it never writes over this cancel.
         // Only a programme whose plan is still the map's own is ended and its initiative canceled (a security review): one its
-        // coordinator has since taken over (its first plan write after the map's, which makes `planBy` the coordinator's, review
-        // 2892 F1) is theirs, and is left as it is.
+        // coordinator has since taken over (its first plan write after the map's, which makes `planBy` the coordinator's, D-8802,
+        // review 2892 F1) is theirs, and is left as it is.
         if (slug === null || plan.planOf(slug).planBy !== MIGRATION_PLAN_BY) { plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
         if (plan.planEndOf(slug) === null) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now());
         if (row.linearId !== null) {
