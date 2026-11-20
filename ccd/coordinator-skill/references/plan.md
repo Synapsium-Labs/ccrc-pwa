@@ -14,7 +14,7 @@ those approvals in its turn text.
 
 Every work run of a planned programme opens with its ticket: send `"ticket":"<ticket key>"` in the `runs open` body to
 attach a ticket of the epic that lists the wave or of a live epic that lists no waves (it opens at any wave), or send none
-and ccrc makes one in the epic that lists the wave, keyed `run-<run id>`.
+and ccrc makes one in the epic that lists the wave, keyed `run-<run id>`, unless `ticket-required` refuses it (below).
 
 A run is refused at `runs open` when the plan does not allow it:
 
@@ -191,3 +191,71 @@ no managed team, nothing is re-read and no retry helps until one of its teams is
 about that one issue, refusing it as forbidden or invalid or answering outside its grammar, a retry gets the same answer
 until that issue changes in Linear) and the client's own `capability-missing`
 (the server does not advertise `plan-inbound-v1`; nothing was sent).
+
+## Keep the plan: the programme page shows what remains
+
+The programme page's **Work card** is drawn from this plan and from nothing else a coordinator writes: the epics and
+tickets are the work, the **phases** are the sequence, and what remains is every ticket not done. A programme with no plan
+shows only the work runs so far, under a note that what remains is not known. So declare the plan before the first wave
+and keep it as the work changes, with the verbs above and the three below. Never type "done" for a ticket a run did: a run
+that closes `done` while it holds its ticket records that itself.
+
+- **Declare the work and the sequence.** `plan put` takes `epics` (above) and, beside them, `phases`: each phase has a
+  `key`, a `title`, a one-line `summary` and the epics and tickets it takes on, by key. A put's `refs` are added to the
+  references a phase already holds, never replace them. A phase you cut is named again with `droppedWhy` and keeps its
+  references. A body with no `phases` leaves the stored ones as they are.
+
+  ```bash
+  "$API" plan put <slug> --json - <<JSON
+  {"epics":[],"phases":[{"key":"p1","title":"Capture","summary":"the first stage",
+    "refs":[{"kind":"epic","key":"w1-capture"},{"kind":"ticket","key":"w1-2"}]}]}
+  JSON
+  ```
+
+- **Add a ticket in the same act that adds the task to your plan file.** `plan ticket-add` (above) is that act: a task
+  that is in the plan file and not in the plan is work the card does not show.
+- **Name the ticket at `runs open`.** Once the plan has phases, a run that names none is refused `ticket-required` while
+  the epic it opens into still has an open ticket no run has started. Open again with `"ticket":"<that ticket's key>"`
+  (the list at the top has the other case). A plan with no phases takes the run without one.
+- **Record a slip as a carry.** A ticket the programme moves to a later phase is carried, so the card says it slipped:
+
+  ```bash
+  "$API" plan phase-ref <slug> --json - <<JSON
+  {"op":"carry","from":"p1","to":"p2","ticket":"w1-2"}
+  JSON
+  ```
+
+  `{"op":"add","phase":"p1","ref":{"kind":"ticket","key":"w1-3"}}` and the same with `"op":"remove"` add or take away one
+  reference of a phase. Refusals: `not-plan-owner`, `plan-closed`, `plan-bad-body`, `unknown-ref` and `bad-carry`, and the
+  client's own `capability-missing` (the server does not advertise `plan-phases-v1`; nothing was sent).
+  - `unknown-ref`: a phase, epic or ticket the body names is not in the plan, is dropped, or (for `remove`) is not held by
+    that phase. Read `plan show`, declare the missing object with `plan put` or `plan ticket-add` first, and name the
+    key as the plan shows it.
+  - `bad-carry`: the carry cannot stand. The phase it goes to is not later than the one it leaves, either phase is
+    dropped, the ticket is done or is not the first phase's own work, or a `remove` would undo a carry. Carry to a later
+    live phase that is not dropped, and a ticket that is done is not carried. Read the phases with `plan show` first: a
+    carry is recorded once, and undone by neither verb.
+- **Record a ticket finished another way.** A ticket done by work that was not a run on it (a pull request landed by hand,
+  or a run opened before the ticket was declared) is recorded with the evidence, exactly one piece:
+
+  ```bash
+  "$API" plan ticket-done <slug> --json - <<JSON
+  {"ticket":"w1-2","evidence":{"runId":1234}}
+  JSON
+  ```
+
+  `{"pr":123}` instead names a pull request the landing line holds as landed for the ticket's own project. The run
+  verifies when it is a work run of this programme, is `done`, and its own ticket is this ticket, an auto ticket
+  (`run-<id>`) or none. One piece of evidence closes one ticket. Refusals: `not-plan-owner`, `plan-closed`, `unknown-ticket`,
+  `plan-bad-body` (the ticket is not open), `plan-runs-open` (a run holds the ticket: it is recorded done when that run
+  ends), `evidence-unverified` and the client's own `capability-missing` (the server does not advertise
+  `plan-ticket-done-v1`; no ticket was changed).
+  - `evidence-unverified`: the evidence does not hold, and the ticket stays open (the detail names which condition). The run
+    is missing, is not a work run of this programme, is not `done` yet, or did another declared ticket; the landing line
+    holds no entry for the pull request, shows it unlanded, or could not be read; or the evidence already closes another
+    ticket. Name the run that carried the pull request instead of a bare number when the line holds no entry for the
+    project; wait for the run to be `done`, then record it; and name different evidence for a ticket whose first piece was
+    taken. Never record it again unchanged: the same body gets the same answer until the fact changes.
+
+A coordinator that joined a programme before the plan had phases back-fills it once: `plan put` with its epics, tickets and
+phases, then `plan ticket-done` for each ticket already finished, with the run that did it.

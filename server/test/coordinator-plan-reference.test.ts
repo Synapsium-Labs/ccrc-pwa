@@ -11,6 +11,7 @@ import { fileURLToPath } from 'node:url';
 import { PLAN_REFUSALS } from '../../shared/plan.js';
 import { parsePlanTake, parsePlanTriage } from '../src/coord/planPolicy.js';
 import { clientRoutes } from './ccrcApiTable.js';
+import { parsePlanPhaseRef, parsePlanPut, parsePlanTicketDone } from '../src/coord/planPolicy.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
 const skillDir = path.join(root, 'ccd/coordinator-skill');
@@ -18,25 +19,20 @@ const read = (...parts: string[]): string => readFileSync(path.join(skillDir, ..
 const flat = (s: string): string => s.replace(/\s+/g, ' ');
 const plan = (): string => read('references', 'plan.md');
 
-/** The `plan` rows of the closed client that are not this plan's: the programme work map's, which its WM5 writes into
- *  `references/plan.md` itself. `phase-ref` is WM0's row, on `main`; `ticket-done` is WM1's row (#2997), not on `main` at this
- *  wave's build, and is listed so that its landing does not red this file before WM5 documents it. Wave 7's
+/** The `plan` rows of the closed client that are not this plan's. None are left: the programme work map's rows, `phase-ref`
+ *  (WM0) and `ticket-done` (WM1), are documented in `references/plan.md` by its WM5 and checked below like the rest. Wave 7's
  *  `plan map-propose` has no row until Task 7.2, and joins the check then. */
-const WORK_MAP_VERBS: ReadonlySet<string> = new Set(['phase-ref', 'ticket-done']);
+const WORK_MAP_VERBS: ReadonlySet<string> = new Set([]);
 
 /** The plan's refusal words `plan.md` need not name yet, each with where it is answered: the words a coordinator never meets
- *  from a plan verb by wave 6, and a later word whose verb `plan.md` does not document yet (programme work map WM1's
- *  `evidence-unverified`, which `plan ticket-done` returns; WM5 names it and deletes its row, as its Step 1b says). A word
- *  added to `PLAN_REFUSALS` later reds the check below until `plan.md` names it or this table says where it is answered. */
+ *  from a plan verb by wave 6. A word added to `PLAN_REFUSALS` later reds the check below until `plan.md` names it or this
+ *  table says where it is answered. */
 const NOT_MET: Readonly<Record<string, string>> = {
   'map-rewrites-plan': 'wave 7, plan map-propose',
   'map-incomplete': 'wave 7, plan map-propose',
   'migration-in-flight': 'wave 7, the migration',
   'not-managed': 'wave 7, the migration',
   'item-act-mismatch': 'the console, the item act route',
-  // Programme work map WM1's (#2997), as `ticket-done` is in WORK_MAP_VERBS: `plan ticket-done` refuses evidence it cannot
-  // verify with it, and WM5 documents it in `plan.md` with the verb.
-  'evidence-unverified': 'programme work map WM1, plan ticket-done; WM5 documents it in plan.md',
 };
 
 describe('the coordinator skill points at the plan reference (D-8185)', () => {
@@ -129,6 +125,23 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     const bodies = bodiesOf('## plan take');
     expect(bodies).toHaveLength(3);
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
+  });
+
+  it('its "Keep the plan" examples (plan put with phases, phase-ref, ticket-done) parse as the routes parse them (programme work map WM5)', () => {
+    const text = plan();
+    const section = text.slice(text.indexOf('\n## Keep the plan'));
+    expect(section.length).toBeGreaterThan(1);
+    const bodyOf = (verb: string): unknown => {
+      const m = new RegExp(`"\\$API" plan ${verb} <slug> --json - <<JSON\\n([\\s\\S]*?)\\n\\s*JSON`).exec(section);
+      expect(m, `no ${verb} example`).not.toBeNull();
+      return JSON.parse(m![1]!) as unknown;
+    };
+    expect(parsePlanPut(bodyOf('put')).ok, 'plan put').toBe(true);
+    expect(parsePlanPhaseRef(bodyOf('phase-ref')).ok, 'plan phase-ref carry').toBe(true);
+    expect(parsePlanTicketDone(bodyOf('ticket-done')).ok, 'plan ticket-done').toBe(true);
+    const inline = [...section.matchAll(/`(\{"op":"add"[^`]+\})`/g)].map((m) => JSON.parse(m[1]!) as unknown);
+    expect(inline).toHaveLength(1);
+    expect(parsePlanPhaseRef(inline[0]).ok, 'plan phase-ref add').toBe(true);
   });
 
   it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3)', () => {
