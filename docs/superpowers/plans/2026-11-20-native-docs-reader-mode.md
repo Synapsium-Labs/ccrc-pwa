@@ -274,3 +274,23 @@ Before the push, one Opus reviewer read the spec and this plan against shipped s
 
 - The measurement: `node <session temp root>/x6fs/measure.mjs <the cached Chromium 156>`, run three times: once before the first refusal (its values empty), then twice under the coordinator's word, the last after the one-line fix that made the host page's script run. Chromium was killed by its own PID each time; the script and its three profile directories are deleted.
 - No test, typecheck or install ran: this wave is docs only.
+
+### Fix round 1 (review run 2933 at `52c0de20d`, 2026-11-20)
+
+The review found 8 important findings (F1 to F8) and 6 minor ones (A1 to A6). The coordinator ruled F7 and directed the rest; each finding has its own commit, and this design's text above is the fixed state.
+
+- **F7, the coordinator's ruling, option (a):** XR1 runs on the contract release (X1's contract and X2's history places, after the library's L1, rename and L2), in continuous scroll. LX6 joins that release if it is ready by the cut, else the next, and no release waits for it. XR2 follows on the release that carries LX6. The parts the 1.1.0 premise forced were redone on that release:
+  - **F4:** XR1 keeps the frame's own Aa, because the contract release still unregisters its command with `settings: false`. A corner menu control replaces the strip that covered Aa. The overlay's Aa and D-8803 move to XR2.
+  - **A3:** the In short says what each wave delivers.
+  - **A2 and A5:** Esc on the overlay only hides it, through a handler on the toolbar element.
+- **F1:** `exit-reader` applies only while reader mode is on, and only to a pop that crosses the reader place. It routes when the pop lands past the doc, which the record's new `baseIdx` decides.
+- **F2:** the step-back counts live entries, and a place push drops the recorded places above `lastIdx`.
+- **F3:** the console is hidden as the page's own, without a mark, through `hideAsPage` and `releaseAsPage` in `modal-layers.ts`. The shipped record and the sheet's lift rule never lift that hiding. Reader mode is not offered under any dialog, and the palette does not list it.
+- **F5:** a turn lands below whatever is pinned at the top, and a bounded band covers the cut bottom line.
+- **F6:** a `progress` whose share changed counts as reading activity.
+- **F8:** two focus guards wrap Tab, proved in browser rows.
+- **A1:** D-8831, issued for this finding, amends rich-docs §5.2's phishing row.
+- **A4:** a 360 by 800 row tests the one bar.
+- **A6:** Figure 2 now pushes the place, then requests full screen.
+- **The adversarial pass on the changed sections (Opus, high):** 4 important and 6 minor findings, all fixed in one commit. Among them: `baseIdx` and `route` in the decider, `close-overlay` only on the crossing pop, a bounded bottom band, no offer under a closing dialog, a live region inside the container, and a repeated share that counts for nothing.
+- New mutation rows: X6.35 to X6.51. No test, typecheck or install ran: docs only.

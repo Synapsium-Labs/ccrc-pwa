@@ -5,16 +5,34 @@ The task note for wave 31 of the native Docs reader programme, for the coordinat
 ## What landed
 
 - Spec: `docs/superpowers/specs/2026-11-20-native-docs-reader-mode-design.md`.
-- Leaf plan: `docs/superpowers/plans/2026-11-20-native-docs-reader-mode.md`: waves XR1 (ccrc on library 1.1.0), LX6 (the library landing, designed here) and XR2 (ccrc adopts it).
+- Leaf plan: `docs/superpowers/plans/2026-11-20-native-docs-reader-mode.md`: waves XR1 (ccrc on the contract release, continuous scroll), LX6 (the library landing, designed here) and XR2 (ccrc adopts the release carrying LX6: the screen pages).
 
 ## For the ledger
 
-- **Waves row.** X6, reader mode: the operator's request of 2026-11-19. Design wave 31, run 2847. XR1 waits for X1's host wave and X2's P5.3 (the popstate dispatcher and the places decider); XR2 waits for the release carrying LX6 and X2's P5 adoption. If P5.3's host half lands before the library release, XR1 can run ahead of it.
+- **Waves row.** X6, reader mode: the operator's request of 2026-11-19. Design wave 31, run 2847. The order is the coordinator's ruling on review 2933 F7, option (a):
+  - the library lands L1 (X1's landing), its rename and L2 (X2's landing), and cuts the contract release;
+  - X1's wave C re-pins ccrc to it, and X2's P5 and P6 build on it;
+  - XR1 follows on it, in continuous scroll;
+  - LX6 joins the contract release if ready by the cut, otherwise the next release, and no cut waits for it;
+  - XR2 follows on whichever release carries LX6.
 - **Ask 656** (pages or scroll): screen pages, with scroll as a reader setting; the operator's answer, relayed 2026-11-20. Calm scroll and true book pages stay priced in the spec's §5.1.
-- **Deviations defined** in the plan's `## Deviations found`, the whole issued block: D-8803 (reader-overlay-commands), D-8804 (reader-mode-ops), D-8805 (progress-beyond-the-bar). No number left unspent.
-- **Library input.** LX6 lands after the X1 and X2 landings of the library wave, in the same release if it is not cut yet, else the next minor. Proposed shares under test 8: frame 15 360 characters, total 59 392 (spec §7.4), recorded by a shares-only landing first. Test 9's record gains one entry (`reading` in `FRAME_ACCEPTS`, `reader` in `FRAME_OPS`).
-- **Device item** for the coordinator to raise: FS-1 to FS-8 (spec §4.4), the phone engines' element full screen, Android Back in full screen, desktop Esc (M-5), activation (M-1), and the wake lock per engine.
-- **Acceptance.** A proposed Task 17 row, AR-X6 (the plan's Acceptance row).
-- **Measured.** Element full screen on headless Chromium 156: rows M-1, M-2, M-6, M-7 (the console's half) and M-8 held; M-3, M-4, M-5 and M-7's frame half are UNMEASURED, taken by XR1.1 Step 0 and the device item (spec §4.5).
-- **Refusals this wave**, each reported and answered before any retry: the session hook on an edit of the scratch measurement script after an unresolvable `cd`; the account guard on the first draft of that report, which quoted the refusal text; the graph gate on a source grep. The coordinator's rulings were followed as given.
-- **Adversarial pass (Opus, high), 2026-11-20:** 14 important and 12 minor findings; all fixed in the spec and plan before the push, the one sheet-portal finding by its own alternative (sheets always portal into the container). The fix commit lists them.
+- **Deviations defined** in the plan's `## Deviations found`: D-8803 (reader-overlay-commands, now XR2's), D-8804 (reader-mode-ops), D-8805 (progress-beyond-the-bar), and D-8831 (reader-mode-chrome-hidden, issued for review 2933 A1). No issued number is left unspent.
+- **Library input.** LX6 lands after L2, as the waves row says. Proposed shares under test 8: frame 15 360 characters, total 59 392 (spec §7.4), recorded by a shares-only landing first. Test 9's record gains one entry (`reading` in `FRAME_ACCEPTS`, `reader` in `FRAME_OPS`). LX6.2 now also offsets a turn by the elements pinned at the top, and draws a bounded band over the cut bottom line (review 2933 F5); the shares are unchanged, and they are a ceiling.
+- **Device item** for the coordinator to raise: FS-1 to FS-8 (spec §4.4):
+  - the phone engines' element full screen;
+  - Android Back in full screen;
+  - desktop Esc (M-5);
+  - activation (M-1);
+  - the wake lock per engine.
+- **Acceptance.** A proposed Task 17 row, AR-X6 (the plan's Acceptance row), run in full after XR2; it says what XR1 alone leaves on screen.
+- **Measured.** Element full screen on headless Chromium 156: rows M-1, M-2, M-6, M-7 (the console's half) and M-8 held. M-3, M-4, M-5 and M-7's frame half are UNMEASURED; XR1.1 Step 0 and the device item take them. XR1.1 Step 0 also re-reads the 1.1.0 facts on the installed contract release before any code.
+- **Refusals this wave**, each reported and answered before any retry:
+  - the session hook, on an edit of the scratch measurement script after an unresolvable `cd`;
+  - the account guard, on the first draft of that report, which quoted the refusal text;
+  - the graph gate, on a source grep.
+
+  The coordinator's rulings were followed as given.
+- **Adversarial passes (Opus, high), 2026-11-20:**
+  - before the first push: 14 important and 12 minor findings, all fixed;
+  - after review 2933's fix round, on the changed sections: 4 important and 6 minor findings, all fixed.
+- **Review 2933 (round 1):** F1 to F8 and A1 to A6, each fixed in its own commit, and listed in the plan's Results. The judge's `pr1-files-invalid` for this note is accepted by the coordinator, as for X5.
