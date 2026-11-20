@@ -290,8 +290,8 @@ _alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always 
 # reads `model=`, `picked=` or `held=`: `_route_pending_word_to` compares `class` and `effort` by name only.
 # @ccd-lib:modelid
 _route_applied_put() {   # id list [keep] -> writes routeapplied; with `keep` the new file takes the old file's mtime (`touch -r`) before it is renamed, so the stamp does not move; rc 0 iff it is on disk
-  local id="$1" tmp keep="${3-}" f=routeapplied
-  [[ -n "$keep" && -e "$REG/$id.routeapplied" ]] || { _reg_set "$id" routeapplied "$2"; return; }   # every write but a kept one is `_reg_set`'s
+  local id="$1" tmp __ap_keep="${3-}" f=routeapplied
+  [[ -n "$__ap_keep" && -e "$REG/$id.routeapplied" ]] || { _reg_set "$id" routeapplied "$2"; return; }   # every write but a kept one is `_reg_set`'s
   _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
   tmp="$REG/.$id.$f.$BASHPID.$_REG_SET_SEQ.tmp"   # `_reg_set`'s own template (`.<id>.<field>.<pid>.<seq>.tmp`), so the id-length census covers it
   printf '%s' "$2" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
