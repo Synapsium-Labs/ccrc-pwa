@@ -1476,23 +1476,29 @@ export function docsPageUrl(loc: DocsPageLocation): string {
   return pairs.length === 0 ? url : url + '?' + pairs.join('&');
 }
 
-/** What a file request names (spec 3.2, 3.4). A committed pin is the tree answer's commit and `ref.served`; a
- *  draft pin is the draft branch, the holder's HEAD and the draft's fingerprint. Neither is ever a page URL. */
+/** What a file request names (spec 3.2, 3.4): the OPENED pin. A committed pin is the tree answer's commit and
+ *  `ref.served`; a draft pin is the draft branch, the holder's HEAD and the sha256 of the bytes the page shows (`fp`),
+ *  with the listing's `stat` when the draft was read by range. Neither is ever a page URL. Every reader of `fp` as bytes
+ *  and the file route (`docsApi.file`, `DocsLoaders.file` and `.raster`) take this one, so a listing pin without bytes
+ *  cannot reach them (X2 P1, review F4). */
 export type DocPin =
   | { kind: 'committed'; commit: string; servedRef: string; section: DocSectionSlug; path: string }
   | DocDraftPin;
 
-/** A draft page's pin (X2 P1, spec 4.3). Its bytes are named by `fp`, the sha256 of what the page shows. A draft the
- *  listing could not fingerprint is read by range: until its prepare answers, its pin carries `fp: null` and the
- *  listing's `stat`, and the opened pin then carries the snapshot's digest as `fp` and the same `stat`. `samePin` holds
- *  the two equal; every reader of `fp` as bytes reads an opened pin. */
-/** The pin the file route reads (`docs-show`): a committed pin, or a draft pin with its fingerprint. A stat-pinned draft
- *  is never one: it is read by range alone. */
-export type DocFilePin = Exclude<DocPin, { fp: null }>;
+/** The pin the file route reads (`docs-show`): the opened pin itself, kept as a name for the server's ports. */
+export type DocFilePin = DocPin;
 
+/** A draft page's opened pin: its bytes are named by `fp`, the sha256 of what the page shows. */
 export type DocDraftPin =
-  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string;
-    stat?: { size: number; mtimeNs: string } }
+  { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string;
+    stat?: { size: number; mtimeNs: string } };
+
+/** The LISTING's pin (X2 P1, spec 4.3): an opened pin, or a draft the listing could not fingerprint, which carries
+ *  `fp: null` and its `stat`. Such a draft is read by range alone; once the prepare answers, its opened pin carries the
+ *  snapshot's digest as `fp` and the same `stat`, and `samePin` holds the two equal. Used only where a listing pin
+ *  flows (`pinFor`, the visit's `stat-pinned` slot, the range target); never by the file route. */
+export type DocListPin =
+  | DocPin
   | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: null;
     stat: { size: number; mtimeNs: string } };
 
@@ -1509,7 +1515,7 @@ function apiQuery(pairs: readonly (readonly [string, string])[]): string {
 
 /** A range URL's place keys, in ccd's argv order: a committed doc's commit, section, path; a draft's branch, head,
  *  section, path. */
-function rangePlace(pin: DocPin): (readonly [string, string])[] {
+function rangePlace(pin: DocListPin): (readonly [string, string])[] {
   return pin.kind === 'committed'
     ? [['commit', pin.commit], ['section', pin.section], ['path', pin.path]]
     : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path]];
@@ -1522,13 +1528,11 @@ export const docsApi = {
   projects: (): string => DOCS_API_PREFIX + '/projects',
   tree: (project: string, ref: DocsRefSpec | null): string =>
     apiProjectPath(project) + '/tree' + (ref === null ? '' : apiQuery([['ref', docsRefText(ref)]])),
-  // A stat-pinned draft before its prepare (`fp: null`, X2 P1) is named by its stat in place of `fp`, so the URL stays a
-  // distinct key; the file route knows no `stat` key and refuses it, since such a draft is read by range only.
+  // The file route's pin is the opened one, which always names its bytes by `fp`: the file URL never carries `stat`.
   file: (project: string, pin: DocPin): string =>
     apiProjectPath(project) + '/file' + apiQuery(pin.kind === 'committed'
       ? [['commit', pin.commit], ['servedRef', pin.servedRef], ['section', pin.section], ['path', pin.path]]
-      : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path],
-        pin.fp === null ? ['stat', String(pin.stat.size) + ':' + pin.stat.mtimeNs] : ['fp', pin.fp]]),
+      : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path], ['fp', pin.fp]]),
   refresh: (project: string): string => apiProjectPath(project) + '/refresh',
   /** One doc's history (rich-docs spec G4): commit, section, path, in ccd's argv order. */
   history: (project: string, ask: DocsLogAsk): string => apiProjectPath(project) + '/history'
@@ -1536,10 +1540,10 @@ export const docsApi = {
   /** One range read's prepare (X2 P1, spec 4.3): the leaf's place as ccd takes it (a committed doc's `commit`, a draft's
    *  `branch` and `head`; neither the file route's `servedRef` nor `fp`, which ccd never reads, the range pin being the
    *  pin), then section, path and the range pin's wire form, then `prepare=1`. */
-  rangePrepare: (project: string, pin: DocPin, range: DocsRangePin): string =>
+  rangePrepare: (project: string, pin: DocListPin, range: DocsRangePin): string =>
     apiProjectPath(project) + '/range' + apiQuery([...rangePlace(pin), ['pin', docsRangePinText(range)], ['prepare', '1']]),
   /** One frame of a prepared snapshot: the same place and pin, then `snapshot`, `offset` and `length`. */
-  rangeFrame: (project: string, pin: DocPin, range: DocsRangePin, snapshot: string, offset: number, length: number): string =>
+  rangeFrame: (project: string, pin: DocListPin, range: DocsRangePin, snapshot: string, offset: number, length: number): string =>
     apiProjectPath(project) + '/range' + apiQuery([
       ...rangePlace(pin), ['pin', docsRangePinText(range)],
       ['snapshot', snapshot], ['offset', String(offset)], ['length', String(length)]]),

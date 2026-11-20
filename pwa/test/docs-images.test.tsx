@@ -1028,7 +1028,7 @@ describe('the plain view, the reader and the mockup planner share one pin rule a
   /** The mockup attempt's context for the same page: its own pin is what the tree opens for it. */
   function mockupCtx(url: string, tree: DocsTreeOk): MockupContext {
     const pin = pinFor(tree, leafAt(url));
-    if (pin === null) throw new Error('fixture page does not open');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture page does not open');
     return { project: 'demo', pin, tree };
   }
 

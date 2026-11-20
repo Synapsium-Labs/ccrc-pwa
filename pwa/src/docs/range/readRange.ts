@@ -13,14 +13,14 @@
 // before any request and reads nothing, rather than showing bytes it cannot check.
 import {
   DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES,
-  type DocPin, type DocsRangeFrame, type DocsRangePin, type DocsRangePrepared,
+  type DocListPin, type DocsRangeFrame, type DocsRangePin, type DocsRangePrepared,
 } from '../../../../shared/docs';
 import type { DocsAnswer, DocsNotOk } from '../failures';
 import { b64Bytes } from './rangePolicy';
 
 /** What is read: the project and the page pin (which bytes the page shows), the range pin ccd checks, and the size the
  *  listing gave, which the prepare's size must equal. */
-export interface RangeTarget { readonly project: string; readonly pin: DocPin; readonly range: DocsRangePin; readonly size: number }
+export interface RangeTarget { readonly project: string; readonly pin: DocListPin; readonly range: DocsRangePin; readonly size: number }
 
 /** The two calls one read makes. Each resolves an answer, as every docs loader does; `signal` aborts the request. */
 export interface RangeLoader {

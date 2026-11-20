@@ -9,7 +9,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
 import {
-  DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
+  DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
   type DocsTreeOk,
 } from '../../../shared/docs';
 import { utf8Bytes } from '../../../shared/utf8';
@@ -287,14 +287,14 @@ function MarkdownBody(p: {
 /** The opened pin of bytes read by range (spec 4.3, "Where the time comes from, and where the pin lives"): a draft the
  *  listing could not fingerprint takes the snapshot's digest as its `fp`, the sha256 of the bytes the page shows, and
  *  keeps its stat, so `samePin` holds it equal to the listing's pin and every reader of `fp` reads the bytes' digest. */
-export function openedRangePin(pin: DocPin, digest: string): DocPin {
+export function openedRangePin(pin: DocListPin, digest: string): DocPin {
   return pin.kind === 'draft' && pin.fp === null ? { ...pin, fp: digest, stat: pin.stat } : pin;
 }
 
 /** A Markdown leaf read by range (spec 4.3): its bytes as a docs-show answer of their own (text, size and digest), under
  *  the opened pin, through the same Markdown body, which shows it in parts. */
 export function RangeMarkdown(p: {
-  readonly read: RangeBytes; readonly entry: DocsEntry; readonly pin: DocPin; readonly page: Leaf; readonly link: LinkBase;
+  readonly read: RangeBytes; readonly entry: DocsEntry; readonly pin: DocListPin; readonly page: Leaf; readonly link: LinkBase;
   readonly parser: MarkdownParser; readonly reader: ReaderDeps | null; readonly only: string | null;
   readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
 }): ReactNode {
@@ -368,7 +368,9 @@ export function DocsLeaf(p: {
       : view.committedKind === 'submodule' ? DOCS_VIEW_TEXT.submodule : DOCS_VIEW_TEXT.nothingToShow;
     body = <p className="docs-note">{why}</p>;
   } else {
-    const download = <DownloadButton project={page.project} pin={pin} name={name} />;
+    // A draft with no fingerprint is downloaded through its range read (`RangeLeaf`'s own button), never the file route.
+    const download = pin.kind === 'draft' && pin.fp === null ? null
+      : <DownloadButton project={page.project} pin={pin} name={name} />;
     const file = visit.file;
     const listedSize = page.at !== null ? undefined : pin.kind === 'draft' ? entry.draft?.size : entry.committed?.size;
     const rasterByRange = cls === 'raster'
@@ -387,7 +389,8 @@ export function DocsLeaf(p: {
           >
             {(read) => (
               <RangeImage
-                bytes={read.bytes} path={page.path} name={name} assetKey={docsApi.file(page.project, pin)}
+                bytes={read.bytes} path={page.path} name={name}
+                assetKey={docsApi.file(page.project, openedRangePin(pin, read.digest))}
                 openedPin={openedRangePin(pin, read.digest)} onShown={p.onLeafImage ?? null}
               />
             )}

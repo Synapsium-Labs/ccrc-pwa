@@ -426,9 +426,19 @@ describe('the page pin of a draft read through its snapshot', () => {
     expect(samePin(opened, fpOnly), 'two digests compare by the digest').toBe(true);
   });
 
-  it('fileKey: a stat-pinned draft is keyed by its stat, never as a fingerprint', () => {
+  it('fileKey: takes only the opened pin, and a stat-pinned draft is keyed through the opened pin\'s digest', () => {
     const listed = pinFor(bigDraft, page)!;
-    expect(fileKey(listed, bigDraft, false)).toContain('stat:5242880:' + MTIME);
+    if (listed.kind !== 'draft' || listed.fp !== null) throw new Error('fixture: a stat-pinned draft');
+    // Compile-time: the listing's fp-null arm is refused, so it can never be keyed as if its fp were a fingerprint
+    // (the directive reds, as an unused one, if fileKey takes a listing pin again).
+    // @ts-expect-error a listing pin is not an opened pin
+    const refused: (p: typeof listed) => string = (p) => fileKey(p, bigDraft, false);
+    expect(typeof refused).toBe('function');
+    const a = fileKey({ ...listed, fp: 'a'.repeat(64) }, bigDraft, false);
+    const b = fileKey({ ...listed, fp: 'b'.repeat(64) }, bigDraft, false);
+    expect(a).toContain('a'.repeat(64));
+    expect(a, 'two digests of one stat are two bodies').not.toBe(b);
+    expect(a).not.toContain('stat:');
   });
 
   it('docsLinks: a stat-pinned draft page is a draft page', () => {

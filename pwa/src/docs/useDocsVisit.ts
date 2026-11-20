@@ -10,7 +10,7 @@
 import { useCallback, useEffect, useReducer, useRef, useState } from 'react';
 import {
   DOCS_CLASS_CAP, DOCS_STALE_MS, contentClass, docsRefText, entryView, parseDocsPage,
-  type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
+  type DocListPin, type DocPin, type DocsEntry, type DocsFailure, type DocsFailureBody, type DocsFileResponse, type DocsPageLocation,
   type DocsRefreshFetch, type DocsRefSpec, type DocsTreeOk, type DocsTreeResponse,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
@@ -45,8 +45,8 @@ export type FileSlot =
   | { s: 'loading'; pin: DocPin }
   | { s: 'ok'; pin: DocPin; answer: DocsFileResponse; receivedAt: number }
   | { s: 'failed'; pin: DocPin; body: DocsFailureBody }
-  | { s: 'too-large'; pin: DocPin; size: number; cap: number }
-  | { s: 'stat-pinned'; pin: DocPin; size: number }
+  | { s: 'too-large'; pin: DocListPin; size: number; cap: number }
+  | { s: 'stat-pinned'; pin: DocListPin; size: number }
   | { s: 'changing'; pin: DocPin; word: DocsFailure }
   | (DocsClientSlot & { pin: DocPin });
 
@@ -89,8 +89,7 @@ function findEntry(tree: DocsTreeOk, section: DocPin['section'], path: string): 
  *  body of a version page (`version`) by its pin's commit, which the listing's moving cannot change. */
 export function fileKey(pin: DocPin, tree: DocsTreeOk, version: boolean): string {
   if (pin.kind === 'draft') {
-    const bytes = pin.fp === null ? 'stat:' + String(pin.stat.size) + ':' + pin.stat.mtimeNs : pin.fp;
-    return ['draft', pin.branch, pin.head, pin.section, pin.path, bytes].join(NUL);
+    return ['draft', pin.branch, pin.head, pin.section, pin.path, pin.fp].join(NUL);
   }
   // A version page's body is keyed by its pin's commit: the listing's blob is the tip's, and the listing can move under it.
   if (version) return ['commit', pin.commit, pin.section, pin.path].join(NUL);
@@ -104,7 +103,7 @@ export function fileKey(pin: DocPin, tree: DocsTreeOk, version: boolean): string
  *  file in this tree (not a leaf page, no such entry, or `entryView` opens nothing for it). The default view
  *  (`page.ref === null`) never opens a draft; `view=committed` opens the committed side of a draft row, or nothing
  *  when there is none. A version page (`at`) opens the committed bytes at `at`, or nothing. */
-export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocPin | null {
+export function pinFor(tree: DocsTreeOk, page: DocsPageLocation): DocListPin | null {
   if (page.kind !== 'path' || page.dirSlash) return null;
   const entry = findEntry(tree, page.section, page.path);
   if (entry === undefined) return null;
@@ -224,7 +223,7 @@ function autoRetryId(scope: string, key: string, word: string): string {
 
 /** Whether two pins name the same bytes: every field equal; a committed pin never equals a draft pin. Share compares a
  *  leaf's opened pin with `pinFor`'s answer through it (spec 4.16). */
-export function samePin(a: DocPin, b: DocPin): boolean {
+export function samePin(a: DocListPin, b: DocListPin): boolean {
   if (a.kind === 'committed' && b.kind === 'committed') {
     return a.commit === b.commit && a.servedRef === b.servedRef && a.section === b.section && a.path === b.path;
   }
@@ -274,7 +273,7 @@ function fragmentKeyOfHref(href: string): string | null {
 }
 
 /** The commit a pin reads at: a committed pin's commit, a draft pin's holder HEAD. */
-export function pinCommit(pin: DocPin): string {
+export function pinCommit(pin: DocListPin): string {
   return pin.kind === 'committed' ? pin.commit : pin.head;
 }
 

@@ -3,7 +3,7 @@
 // a raster is checked twice on the client (M5.18). Every fetch is injected: no case reaches a server.
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
-  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, docsApi, type DocPin, type DocsRangePin,
+  DOCS_RASTER_TYPES, DOCS_REQUEST_HEADER, DOCS_REQUEST_HEADER_VALUE, docsApi, type DocListPin, type DocPin, type DocsRangePin,
 } from '../../shared/docs';
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 import { ApiError, createApi } from '../src/lib/api';
@@ -412,5 +412,26 @@ describe('api.docs.range: the range loader beside DocsLoaders (X2 P1.3)', () => 
     const member: DocsLoaders extends { readonly range: unknown } ? never
       : [RangeMember] extends [RangeLoader] ? ([RangeLoader] extends [RangeMember] ? true : never) : never = true;
     expect(member).toBe(true);
+  });
+
+  it('the file route takes only an opened pin: no pin parameter of the file URL or a loader accepts the fp:null listing arm (X2 P1, review F4)', () => {
+    // Compile-time: each pin parameter is inferred (no indexed access on `DocsLoaders`), and the compiler refuses the
+    // `true` when one accepts the listing's draft arm (`fp: null`, read by range alone) or stops accepting an opened pin.
+    type NullArm = Extract<DocListPin, { fp: null }>;
+    type FileParam = DocsLoaders extends { file(project: string, pin: infer P, signal?: AbortSignal): unknown } ? P : never;
+    type RasterParam = DocsLoaders extends { raster(project: string, pin: infer P, signal?: AbortSignal): unknown } ? P : never;
+    type ApiParam = typeof docsApi.file extends (project: string, pin: infer P) => string ? P : never;
+    type Narrow<P> = [NullArm] extends [never] ? never : [NullArm] extends [P] ? never : [P] extends [DocPin] ? ([DocPin] extends [P] ? true : never) : never;
+    const file: Narrow<FileParam> = true;
+    const raster: Narrow<RasterParam> = true;
+    const url: Narrow<ApiParam> = true;
+    expect([file, raster, url]).toEqual([true, true, true]);
+    // Runtime: an opened draft's file URL names its bytes by `fp` and never carries `stat`.
+    const opened: DocPin = {
+      kind: 'draft', branch: 'ws/a', head: 'd'.repeat(40), section: 'plans', path: 'a.md', fp: 'f'.repeat(64),
+      stat: { size: 5, mtimeNs: '1700000000000000000' },
+    };
+    expect(docsApi.file('demo', opened)).toContain(`&fp=${'f'.repeat(64)}`);
+    expect(docsApi.file('demo', opened)).not.toContain('stat');
   });
 });

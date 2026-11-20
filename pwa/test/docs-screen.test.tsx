@@ -864,7 +864,7 @@ describe('a fragment belongs to the page it was meant for (refinement (o), revie
     const page = pageAt('/docs/demo/specs/' + path);
     if (page.kind !== 'path') throw new Error('fixture: not a leaf');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture: no pin');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: no pin');
     const base = fileResponse(text);
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 },
@@ -1340,7 +1340,7 @@ describe("W5 Share: a raster leaf's own image reports the pin it settled at (spe
   it('an image inside a Markdown document reports nothing', async () => {
     const tree = treeOk({ entries: [entry('specs', 'a.md'), entry('specs', 'x.png')] });
     const pin = pinFor(tree, pageAt('/docs/demo/specs/a.md'));
-    if (pin === null) throw new Error('fixture: no pin');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture: no pin');
     const f = fakeLoaders({ tree: okTree(tree) });
     f.raster.mockResolvedValue(okPng());
     const seen = vi.fn();
@@ -1677,7 +1677,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const mdTree = treeOk();
     const inline = pageAt('/docs/demo/specs/a.md');
     const mdPin = pinFor(mdTree, inline);
-    if (mdPin === null || inline.kind !== 'path') throw new Error('fixture');
+    if (mdPin === null || (mdPin.kind === 'draft' && mdPin.fp === null) || inline.kind !== 'path') throw new Error('fixture');
     const mdFile: FileSlot = { s: 'ok', pin: mdPin, answer: fileResponse('# T\n'), receivedAt: 0 };
     const mdParsed = parseMarkdown('# T\n', 'docs');
     if (mdParsed.kind !== 'tree') throw new Error('fixture');
@@ -1788,7 +1788,7 @@ describe('W5 Export on the Docs screen (spec 4.5, 4.17; M4.SH3, M4.SH8 Export ha
     const tree = treeOk();
     const page = pageAt('/docs/demo/specs/a.md');
     const pin = pinFor(tree, page);
-    if (pin === null) throw new Error('fixture');
+    if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error('fixture');
     const file: FileSlot = { s: 'ok', pin, answer: fileResponse('# New\n'), receivedAt: 0 };
     const old = parseMarkdown('# Old\n', 'docs');
     if (old.kind !== 'tree') throw new Error('fixture');

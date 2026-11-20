@@ -5,7 +5,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
-import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocPin } from '../../shared/docs';
+import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocListPin, type DocPin } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
@@ -259,12 +259,12 @@ describe('RangeMarkdown', () => {
 
 describe('the page pin of a draft read by range', () => {
   it('md parts: a stat-pinned draft\'s page pin carries the snapshot digest as fp', () => {
-    const listed: DocPin = {
+    const listed: DocListPin = {
       kind: 'draft', branch: 'main', head: 'a'.repeat(40), section: 'specs', path: 'big.md', fp: null,
       stat: { size: 5242880, mtimeNs: '1795125141216123456' },
     };
     expect(openedRangePin(listed, 'e'.repeat(64))).toEqual({ ...listed, fp: 'e'.repeat(64) });
-    const fp: DocPin = { ...listed, fp: 'f'.repeat(64), stat: undefined };
+    const fp: DocPin = { kind: 'draft', branch: 'main', head: 'a'.repeat(40), section: 'specs', path: 'big.md', fp: 'f'.repeat(64) };
     expect(openedRangePin(fp, 'e'.repeat(64)), 'a fingerprinted draft keeps its own fp').toBe(fp);
     expect(openedRangePin(COMMITTED, 'e'.repeat(64))).toBe(COMMITTED);
   });

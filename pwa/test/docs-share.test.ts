@@ -109,7 +109,7 @@ function drafted(path: string, draft = draftOf('modified'),
 /** The pin the tree implies for `url`'s leaf; throws when it opens nothing (a fixture defect). */
 function pinOf(tree: DocsTreeOk, url: string): DocPin {
   const pin = pinFor(tree, pageAt(url));
-  if (pin === null) throw new Error(`fixture: ${url} opens no file`);
+  if (pin === null || (pin.kind === 'draft' && pin.fp === null)) throw new Error(`fixture: ${url} opens no file`);
   return pin;
 }
 
