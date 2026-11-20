@@ -15,7 +15,7 @@ import type { BuildInfo } from './buildinfo.js';
 import type { BoxTokenView } from './box-token.js';
 import type { ReadFailure } from './agent-protocol.js';
 import type { PerfHealth } from './perf.js';
-import type { WorkflowView } from './workflows.js';
+import type { HelperFrameMembers, WorkflowView } from './workflows.js';
 import type { WaitingView } from './ledgers.js';
 import type { CHECKS_MAIL_TOKEN } from './landing.js';
 import type { LandingWrite } from './landingLine.js';
@@ -5003,7 +5003,7 @@ export type SessionStreamMsg =
    *  directory this pass: `workflows` is then the last rows it DID read (or
    *  none), and the panel says so rather than reading an empty list as "nothing
    *  running". Absent from an older server: no frame, no panel. */
-  | { type: 'workflows'; workflows: WorkflowView[]; unreadable?: true }
+  | ({ type: 'workflows'; workflows: WorkflowView[]; unreadable?: true } & HelperFrameMembers)
   /** This session's own OUTSTANDING mail — `state` restricted server-side to
    *  `queued` or `delivered`, never `acked`/`rejected` (`sessionws.ts`'s
    *  `checkMail`). Read directly off `CoordStore.outstandingMailFor` in-process,

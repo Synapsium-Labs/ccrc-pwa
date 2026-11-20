@@ -179,7 +179,8 @@ describe('characterization: the gate H1b deleted from `checkWorkflows` agrees wi
 });
 
 describe('a worst-case Agent row\'s serialised size, pinned where the frame is built (review 2961 F5)', () => {
-  // Every text field at its cap; a summary at its byte cap. Measured on this branch, and pinned so that a cap that
+  // Every text field at its cap; an ASCII summary at its byte cap; 13-digit times. Measured on this branch (H1a's note
+  // measured 895, 1,677 and 1,287 bytes on a row of its own with other numbers in it), and pinned so that a cap that
   // grows, or a field added to the row, is a decision someone makes, not a drift.
   const worst = (ch: string): AgentArm => {
     const capped = (n: number): string => ch.repeat(n);
@@ -193,12 +194,12 @@ describe('a worst-case Agent row\'s serialised size, pinned where the frame is b
   };
   const rowBytes = (arm: AgentArm): number => Buffer.byteLength(JSON.stringify(frameOf({ arm }).frame.agents![0]), 'utf8');
 
-  it('ASCII text: 885 bytes a row', () => { expect(rowBytes(worst('a'))).toBe(885); });
-  it('3-byte characters: 1,667 bytes a row', () => { expect(rowBytes(worst('€'))).toBe(1_667); });
-  it('supplementary-plane characters: 1,277 bytes a row (a pair of code units is one character of the cap\'s count)', () => {
-    expect(rowBytes(worst('😀'))).toBe(1_277);
+  it('ASCII text: 801 bytes a row', () => { expect(rowBytes(worst('a'))).toBe(801); });
+  it('3-byte characters: 1,585 bytes a row', () => { expect(rowBytes(worst('€'))).toBe(1_585); });
+  it('supplementary-plane characters: 1,193 bytes a row (the cap counts UTF-16 code units, so a pair is two of them)', () => {
+    expect(rowBytes(worst('😀'))).toBe(1_193);
   });
-  it('so the Agent arm\'s 84 rows are at most about 137 KiB of JSON at the 3-byte worst', () => {
+  it('so the Agent arm\'s 84 rows are at most about 130 KiB of JSON at the 3-byte worst', () => {
     const rows = HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX;
     expect(rows).toBe(84);
     expect(rows * rowBytes(worst('€'))).toBeLessThan(140 * 1024);

@@ -251,11 +251,11 @@ describe('the helper tier: at most HELPER_READS_PER_TICK reads a reading, spent 
     seedTranscript('f1', plainLine(NOW - 70_000) + plainLine(NOW - 20_000));
     const io = counted(localIO);
     const r = new SessionHelpers(io, S);
-    const first = await read(r, listed([]));
+    const first = await read(r, listed(['f1']));
     expect(first.arm.agents).toEqual([expect.objectContaining({ id: 'f1', state: 'finished', endedAt: NOW - 20_000, lastActivityAt: NOW - 20_000 })]);
     expect(helperCalls(io).map((c) => `${c.op} ${c.file}`)).toEqual(['read agent-f1.meta.json', 'stat agent-f1.jsonl', 'range agent-f1.jsonl']);
     io.calls.length = 0;
-    for (let k = 0; k < RESTAT_EVERY + 2; k++) await read(r, listed([]));
+    for (let k = 0; k < RESTAT_EVERY + 2; k++) await read(r, listed(['f1']));
     expect(helperCalls(io)).toEqual([]);
   });
 
@@ -263,7 +263,7 @@ describe('the helper tier: at most HELPER_READS_PER_TICK reads a reading, spent 
     seedMeta('g1', { finished: true });
     seedTranscript('g1', plainLine(NOW - 90_000) + 'x'.repeat(TAIL_BYTES * 2) + '\n' + plainLine(NOW - 15_000));
     const r = new SessionHelpers(localIO, S);
-    expect((await read(r, listed([]))).arm.agents[0]).toMatchObject({ state: 'finished', endedAt: NOW - 15_000 });
+    expect((await read(r, listed(['g1']))).arm.agents[0]).toMatchObject({ state: 'finished', endedAt: NOW - 15_000 });
   });
 });
 
@@ -274,22 +274,23 @@ describe('a finished row whose last write is read one reading late is held, not 
     const r = new SessionHelpers(localIO, S);
     const drawn = new Map<string, number>();
     for (let k = 0; k < 4; k++) {
-      const { arm } = await read(r, listed([]));
+      const { arm } = await read(r, listed(ids));
       for (const a of arm.agents) {
         if (a.state !== 'finished') continue;
         expect(a.endedAt, `${a.id} at reading ${k}`).toBe(NOW - 30_000);
         drawn.set(a.id, (drawn.get(a.id) ?? 0) + 1);
       }
     }
-    // reading 0 spends the budget on the twelve metas; readings 1 and 2 read six last writes each
+    // reading 0 spends the budget on the twelve metas (each row held: the roster lists it, so it reads running); readings
+    // 1 and 2 read six last writes each
     expect([...drawn.keys()].sort()).toEqual([...ids].sort());
   });
 
   it('a transcript that cannot be read does not hold the row forever: it is decided with no end time (drawn once)', async () => {
     seedMeta('k1', { finished: true });
     const r = new SessionHelpers(localIO, S);
-    const first = await read(r, listed([]));
+    const first = await read(r, listed(['k1']));
     expect(first.arm.agents).toEqual([expect.objectContaining({ id: 'k1', state: 'finished', endedAt: null })]);
-    expect((await read(r, listed([]))).arm.agents).toEqual([]);
+    expect((await read(r, listed(['k1']))).arm.agents).toEqual([]);
   });
 });

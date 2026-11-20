@@ -16,7 +16,7 @@ import {
   type SessionStreamMsg,
   type TaskItem,
 } from '../../../shared/api';
-import type { WorkflowView } from '../../../shared/workflows';
+import type { AgentHelperView, HelperFrameMembers, HelpersUnmeasured, WorkflowView } from '../../../shared/workflows';
 import { api, ApiError, sendErrorText, type Api } from '../lib/api';
 import { ReconnectingSocket, wsUrl } from '../lib/ws';
 import { onOnline, onPageHidden, onPageVisible } from '../lib/pageClock';
@@ -154,6 +154,12 @@ export interface SessionState {
   workflows: WorkflowView[];
   /** The workflows frame said its rows could not be re-read (`unreadable`). */
   workflowsUnreadable: boolean;
+  /** Session helpers H1b (D-8862): the same frame's Agent helper rows, why a helper's state was left out, and whether the
+   *  helper tier rotated, each as the frame stated it, replaced wholesale with every frame; none when an older server's
+   *  frame carries none. The store decides nothing about them; H2 draws them. */
+  agents: AgentHelperView[];
+  agentsUnmeasured: HelpersUnmeasured | null;
+  readEvery: NonNullable<HelperFrameMembers['readEvery']> | null;
   /** Outstanding mail for THIS session — queued or delivered, never acked or
    *  rejected (the server filters, `sessionws.ts`'s `checkMail`). Replaced
    *  wholesale like `tasks`, because the frame is a statement about the
@@ -230,6 +236,11 @@ export type SessionSnapshot = Pick<
    *  snapshot built without them (the reducer's own suites) reads as no rows. */
   workflows?: WorkflowView[];
   workflowsUnreadable?: boolean;
+  /** H1b. Optional HERE only, as `workflows`: `snapshotOf` always carries all three, and a snapshot built without them
+   *  reads as none. */
+  agents?: AgentHelperView[];
+  agentsUnmeasured?: HelpersUnmeasured | null;
+  readEvery?: NonNullable<HelperFrameMembers['readEvery']> | null;
   missingFile: string | null;
   strandedAccount: string | null;
   searchComplete: boolean;
@@ -272,6 +283,9 @@ const sameTranscript = (was: string | null | undefined, now: string | null | und
   typeof was === 'string' && was !== '' && was === now;
 
 /** Pure reducer over the session stream — one message in, next snapshot out. */
+/** H1b (D-8862): the helper members as none, fresh each time, where every reset site clears them with the workflow rows. */
+const noHelpers = (): Pick<SessionState, 'agents' | 'agentsUnmeasured' | 'readEvery'> => ({ agents: [], agentsUnmeasured: null, readEvery: null });
+
 export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): SessionSnapshot {
   switch (msg.type) {
     case 'backlog': {
@@ -292,7 +306,7 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
         // until the server's restated frame replaces them: clearing there
         // unmounted the strip, collapsed it and jumped the conversation on
         // every foregrounding of the PWA.
-        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false }),
+        ...(sameTranscript(s.file, msg.file) ? {} : { workflows: [], workflowsUnreadable: false, ...noHelpers() }),
         missingFile: msg.missing ? msg.file : null,
         // Unconditional, where `missingFile` above is gated: the file is the
         // address this `offset` is measured in, and a reconnect has to echo
@@ -327,7 +341,11 @@ export function applySessionMsg(s: SessionSnapshot, msg: SessionStreamMsg): Sess
     case 'tasks':
       return { ...s, tasks: msg.tasks, tasksTouchedAt: msg.touchedAt };
     case 'workflows':
-      return { ...s, workflows: msg.workflows, workflowsUnreadable: msg.unreadable === true };
+      // H1b: the helper members are the same frame's, one reader each; an absent member is none.
+      return {
+        ...s, workflows: msg.workflows, workflowsUnreadable: msg.unreadable === true,
+        agents: msg.agents ?? [], agentsUnmeasured: msg.agentsUnmeasured ?? null, readEvery: msg.readEvery ?? null,
+      };
     // Build 7 Task 6: the session's own outstanding mail, one row above the
     // plan (`@ccrc/ui` mail-strip.tsx). Same replace-wholesale rule as `tasks`
     // just above.
@@ -408,6 +426,9 @@ const snapshotOf = (s: SessionState): SessionSnapshot => ({
   tasksTouchedAt: s.tasksTouchedAt,
   workflows: s.workflows,
   workflowsUnreadable: s.workflowsUnreadable,
+  agents: s.agents,
+  agentsUnmeasured: s.agentsUnmeasured,
+  readEvery: s.readEvery,
   mail: s.mail,
   missingFile: s.missingFile,
   strandedAccount: s.strandedAccount,
@@ -829,6 +850,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
       tasks: [],
       workflows: [],
       workflowsUnreadable: false,
+      ...noHelpers(),
       mail: [],
       missingFile: null,
       strandedAccount: null,
@@ -985,6 +1007,7 @@ export function createSessionStore(id: string, deps: SessionStoreDeps = {}): Ses
         // `askFrameSeen` (D-6325) goes with the `ask` it qualifies: the next connection has not spoken yet.
         set({
           ask: null, askFrameSeen: false, pairing: null, mail: [], status: null, statusUpdatedAt: null, workflows: [], workflowsUnreadable: false,
+          ...noHelpers(),
         });
       },
 

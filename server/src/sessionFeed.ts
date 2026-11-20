@@ -61,6 +61,10 @@ export interface FeedReading {
   readonly dialog: DialogReading;
   readonly tasks: FeedTasks | null;
   readonly hook: HookStateRawRead | null;
+  /** When `hook` was read (H1b, D-8862; review 2900 F6): the published copy's `at`, else the moment the feed's own read
+   *  RETURNED (the watcher stamps its copy the same way). Null exactly when `hook` is. The Helpers' `launched` compares a
+   *  launch result's time with it, never with the hook state's `updatedAt`. Readings carry it NONDECREASING (`ordered`). */
+  readonly hookAt: number | null;
   readonly mail: FeedMail | null;
 }
 
@@ -93,6 +97,8 @@ export class SessionFeed {
   /** The watcher's latest look at the pane and read of the hookstate, as published. */
   private pane: PaneReading | null = null;
   private hookPub: HookReading | null = null;
+  /** The last hook read a reading carried, per identity: what `ordered` holds the next one against (review 2961 F7). */
+  private lastHook: HookReading | null = null;
   /** When the last answer was handled: a pane captured before it is older than what the client was told. */
   private answeredAt = 0;
   private inflight: Promise<FeedReading> | null = null;
@@ -201,9 +207,20 @@ export class SessionFeed {
     const dialog = await this.readDialog(facts?.file ?? null, gen, look.pane, look.counted);
     const { io } = this.deps;
     const tasks = facts === null ? null : await readTasks(io, facts.cfgDir, facts.uuid, { touchedAt: true });
-    const hook = facts === null ? null : await this.hookRead(facts.uuid, startedAt);
+    const hook = facts === null ? null : this.ordered(await this.hookRead(facts.uuid, startedAt));
     const mail = facts === null || !this.deps.coord ? null : this.deps.coord.outstandingMailFor(this.id, MAIL_LIMIT);
-    return { startedAt, gen, dialog, tasks, hook, mail };
+    return { startedAt, gen, dialog, tasks, hook: hook?.raw ?? null, hookAt: hook?.at ?? null, mail };
+  }
+
+  /** ONE MEMORY PER FEED, IN ORDER (review 2961 F7): a hook read of this identity older than the one a reading already
+   *  carried is not handed on; that newer read stands, its time with it. A published copy can lag the feed's own read, and
+   *  the Helpers' drop witness compares each roster with the one before it, so a roster read out of order would fabricate a
+   *  drop. A read of another identity is never compared with this one's. */
+  private ordered(h: HookReading): HookReading {
+    const last = this.lastHook;
+    if (last !== null && last.uuid === h.uuid && h.at < last.at) return last;
+    this.lastHook = h;
+    return h;
   }
 
   /** The pane as the watcher published it, when that is fresh and was captured after the last answer; otherwise a
@@ -219,11 +236,13 @@ export class SessionFeed {
     return { pane: await this.deps.tmux.capture(this.id), counted: false };
   }
 
-  /** The raw hookstate as the watcher published it for this identity, when fresh; otherwise our own read. */
-  private async hookRead(uuid: string, now: number): Promise<HookStateRawRead> {
+  /** The raw hookstate as the watcher published it for this identity, when fresh; otherwise our own read, stamped when it
+   *  returned. */
+  private async hookRead(uuid: string, now: number): Promise<HookReading> {
     const h = this.hookPub;
-    if (h !== null && h.uuid === uuid && now - h.at <= PUBLISHED_FRESH_MS) return h.raw;
-    return readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
+    if (h !== null && h.uuid === uuid && now - h.at <= PUBLISHED_FRESH_MS) return h;
+    const raw = await readHookStateRawMeasured(this.deps.io, this.deps.cfg.registryDir, this.id, uuid);
+    return { at: Date.now(), uuid, raw };
   }
 
   /** Read what menu `pane` (null: the capture failed) holds, enriched from the transcript `file` while the menu is

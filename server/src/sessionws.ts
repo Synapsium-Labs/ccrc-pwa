@@ -14,9 +14,10 @@ import {
 } from './transcript/resolve.js';
 import { readBacklog, TranscriptTailer } from './transcript/tail.js';
 import { feedFor, type FeedFacts, type FeedMail, type FeedReading, type FeedSubscriber, type FeedTasks, type SessionFeed } from './sessionFeed.js';
-import { SessionWorkflows, sessionDirOf } from './workflows/read.js';
-import { workflowsFrame, type Proc } from './workflows/model.js';
-import { foldHookStateRead, type HookStateRawRead } from './hookstate.js';
+import { HELPER_FACTS_PENDING_MAX, SessionWorkflows, sessionDirOf } from './workflows/read.js';
+import { helpersFrame, rosterInputOf, type Proc } from './workflows/model.js';
+import type { HelperFact } from './transcript/parse.js';
+import { foldHookStateRead, HOOKSTATE_FRESH_MS, type HookStateRawRead } from './hookstate.js';
 import { paintedApprovalOf } from './coord/approvalEnvelope.js';
 import { askKey, nextAgedKeep, NO_AGED_KEEP, type AgedKeep } from './askkey.js';
 import { framePairing } from './pane/askPairing.js';
@@ -135,6 +136,9 @@ export class SessionStream implements FeedSubscriber {
   private lastWorkflowsJson: string | undefined = undefined;
   /** Whether this connection has sent a `workflows` frame yet (see above). */
   private sentWorkflows = false;
+  /** H1b (D-8862): the helper facts the backlog and the tailer gave since the last reading, handed to the reader by the next
+   *  one. A backlog restates them from its window (`sendBacklogAndTail`), so they reset where the backlog resets. */
+  private helperFacts: HelperFact[] = [];
   /** The hook's last fresh Stop listed a `workflow` among its background kinds
    *  (D-5231's pair, read by `applyHook`). The one witness that a workflow
    *  exists when its directory does not — see `checkWorkflows`. */
@@ -422,7 +426,7 @@ export class SessionStream implements FeedSubscriber {
     if (reading.hook !== null) this.applyHook(reading.hook);
     if (this.stopped) return;
     const at = this.resolvedFor;
-    if (reading.tasks !== null && at !== null) await this.checkWorkflows(at.file, at.proc);
+    if (reading.tasks !== null && at !== null) await this.checkWorkflows(at.file, at.proc, reading);
     if (this.stopped) return;
     if (reading.mail !== null) this.applyMail(reading.mail);
   }
@@ -540,29 +544,33 @@ export class SessionStream implements FeedSubscriber {
     this.send({ type: 'tasks', tasks, ...(typeof touchedAt === 'number' ? { touchedAt } : {}) });
   }
 
-  /** D-5560/D-5561: read the session's workflows (`workflows/read.ts`) and
-   *  send them when they differ from what this client last saw. What a read
-   *  becomes is `workflowsFrame`'s decision (model.ts) — absent, unreadable and
-   *  read are three frames, never folded; this method only carries it.
-   *  Read-only: nothing here starts, stops or changes a workflow. */
-  private async checkWorkflows(file: string, proc: Proc): Promise<void> {
+  /** D-5560/D-5561: read the session's workflows and, since H1b (D-8862), its Agent helpers (`workflows/read.ts`), and
+   *  send them when they differ from what this client last saw. What a reading becomes, and whether the frame is due, is
+   *  `helpersFrame`'s decision (model.ts; its gate `frameDue` replaced the copy this method held, review 2961 F9); the
+   *  roster is `rosterInputOf` the feed's raw hook read and its read time. This method only carries them. A new session
+   *  dir rebuilds the reader, which forgets the old dir's helpers with its workflows.
+   *  Read-only: nothing here starts, stops or changes a workflow or a helper. */
+  private async checkWorkflows(file: string, proc: Proc, hook: Pick<FeedReading, 'hook' | 'hookAt'> | null = null): Promise<void> {
     if (this.stopped) return;
     const dir = sessionDirOf(file);
     if (this.workflows?.sessionDir !== dir) {
       this.workflows = new SessionWorkflows(this.deps.io, dir);
       this.shownWorkflows = { type: 'workflows', workflows: [] };
     }
-    const read = await this.workflows.read(proc, Date.now());
+    const now = Date.now();
+    const facts = this.helperFacts;
+    this.helperFacts = [];
+    const roster = rosterInputOf(hook?.hook ?? null, hook?.hookAt ?? null, now, HOOKSTATE_FRESH_MS);
+    const { workflows: read, helpers } = await this.workflows.readAll(proc, now, { roster, facts });
     if (this.stopped) return;
-    const decided = workflowsFrame(read, this.hookWorkflowBackground, this.shownWorkflows.workflows);
-    const frame: SessionStreamMsg & { type: 'workflows' } = decided.unreadable
-      ? { type: 'workflows', workflows: decided.workflows, unreadable: true }
-      : { type: 'workflows', workflows: decided.workflows };
+    const { due, frame } = helpersFrame({
+      read, hookSaysWorkflow: this.hookWorkflowBackground, lastRead: this.shownWorkflows.workflows, arm: helpers.arm,
+      readEvery: helpers.readEvery, sentBefore: this.sentWorkflows,
+    });
     const json = JSON.stringify(frame);
     if (json === this.lastWorkflowsJson) return;
-    const neverHad = read.kind === 'absent' && !decided.unreadable;
     this.lastWorkflowsJson = json;
-    if (neverHad && this.sentWorkflows === false) return;
+    if (!due) return;
     this.sentWorkflows = true;
     if (frame.unreadable !== true) this.shownWorkflows = frame;
     this.send(frame);
@@ -811,9 +819,10 @@ export class SessionStream implements FeedSubscriber {
     // `io.stat` right here, so this method and `readBacklog` could stat the
     // same path a moment apart and disagree; and that stat's `null` asserted
     // absence for conditions nobody measured (D-114).
-    const { events, offset, missing, measured } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
+    const { events, offset, missing, measured, helpers } = await readBacklog(this.deps.io, r.file, BACKLOG_N);
     if (this.stopped) return;
     this.tailed = r.resolution;
+    this.helperFacts = helpers ?? [];
     // D-5560: the client drops its workflow rows on every backlog (a backlog is
     // where the session dir can change under it), so the next workflows read
     // is a FIRST read again and is stated — see `lastWorkflowsJson`.
@@ -836,6 +845,7 @@ export class SessionStream implements FeedSubscriber {
     t.on('events', (events, newOffset) => {
       this.send({ type: 'events', uuid, events, offset: newOffset });
     });
+    t.on('helpers', (facts) => { this.helperFacts = [...this.helperFacts, ...facts].slice(-HELPER_FACTS_PENDING_MAX); });
     t.on('rotated', () => { void this.onFileShrunk(); }); // truncation/rewrite — refetch
     t.start();
   }
