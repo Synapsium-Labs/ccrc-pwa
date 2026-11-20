@@ -188,6 +188,11 @@ describe('partForFragment', () => {
     expect(partForFragment([ids('a'), null, ids('c')], 'gone')).toEqual({ part: 0, note: true });
     expect(partForFragment([ids('a'), null, ids('c')], 'c'), 'a known part still opens').toEqual({ part: 2, note: false });
   });
+  it('a percent-encoded fragment finds its part by its decoded id, as fragmentTarget finds its heading', () => {
+    expect(partForFragment([ids('a'), ids('café')], 'caf%C3%A9')).toEqual({ part: 1, note: false });
+    expect(partForFragment([ids('a'), ids('b')], '%E0%A4%A'), 'a fragment that does not decode matches as written only').toEqual({ part: 0, note: false });
+  });
+
   it('a fragment no part holds, every part known, opens part 1 with no note', () => {
     expect(partForFragment([ids('a'), ids('b')], 'zzz')).toEqual({ part: 0, note: false });
   });

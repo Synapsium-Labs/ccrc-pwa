@@ -16,7 +16,7 @@ import { utf8Bytes } from '../../../shared/utf8';
 import { api } from '../lib/api';
 import { DOCS_RENDER_GATE_BYTES } from '../lib/markdownLimits';
 import { MarkdownParts } from './range/MarkdownParts';
-import { RangeImage, RangeLeaf, type RangeBytes } from './range/RangeLeaf';
+import { RangeImage, RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
 import { rangePinOf } from './range/rangePolicy';
 import type { RangeLoader } from './range/readRange';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
@@ -293,31 +293,31 @@ export function openedRangePin(pin: DocPin, digest: string): DocPin {
 
 /** A Markdown leaf read by range (spec 4.3): its bytes as a docs-show answer of their own (text, size and digest), under
  *  the opened pin, through the same Markdown body, which shows it in parts. */
-function RangeMarkdown(p: {
+export function RangeMarkdown(p: {
   readonly read: RangeBytes; readonly entry: DocsEntry; readonly pin: DocPin; readonly page: Leaf; readonly link: LinkBase;
   readonly parser: MarkdownParser; readonly reader: ReaderDeps | null; readonly only: string | null;
   readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
 }): ReactNode {
   const opened = useMemo(() => openedRangePin(p.pin, p.read.digest), [p.pin, p.read.digest]);
-  const show = useMemo<DocsShowOk>(() => {
-    let text: string | null = null;
+  const decoded = useMemo<{ utf8: boolean; text: string }>(() => {
     try {
-      text = new TextDecoder('utf-8', { fatal: true }).decode(p.read.bytes);
+      return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(p.read.bytes) };
     } catch {
-      text = null;
+      // Bytes that are not UTF-8 are shown as the plain view with its note, never parsed (spec 4.4's not-UTF-8 row).
+      return { utf8: false, text: new TextDecoder('utf-8').decode(p.read.bytes) };
     }
+  }, [p.read.bytes]);
+  const show = useMemo<DocsShowOk>(() => {
     const base = {
       v: 1 as const, verb: 'docs-show' as const, ok: true as const, elapsedMs: 0, section: p.entry.section, path: p.entry.path,
-      size: p.read.bytes.length, sha256: p.read.digest,
+      size: p.read.bytes.length, sha256: p.read.digest, encoding: 'utf8' as const, text: decoded.text,
     };
-    const body = text === null
-      ? { encoding: 'base64' as const, b64: '' }
-      : { encoding: 'utf8' as const, text };
     return opened.kind === 'draft'
-      ? { ...base, ...body, source: 'draft', branch: opened.branch, head: opened.head, fp: p.read.digest }
-      : { ...base, ...body, source: 'committed', commit: opened.commit, blob: p.entry.committed?.blob, onRef: 'unmeasured' };
-  }, [p.read, p.entry, opened]);
+      ? { ...base, source: 'draft', branch: opened.branch, head: opened.head, fp: p.read.digest }
+      : { ...base, source: 'committed', commit: opened.commit, blob: p.entry.committed?.blob, onRef: 'unmeasured' };
+  }, [p.read, p.entry, opened, decoded]);
   const bodyKey = ['range', p.page.project, p.entry.section, p.entry.path, p.read.digest].join('\u0000');
+  if (!decoded.utf8) return <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />;
   return (
     <MarkdownBody
       show={show} bodyKey={bodyKey} link={p.link} parser={p.parser} pin={opened} page={p.page} only={p.only}
@@ -380,8 +380,16 @@ export function DocsLeaf(p: {
       body = range === null || typeof listedSize !== 'number'
         ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
         : (
-          <RangeLeaf target={{ project: page.project, pin, range, size: listedSize }} cls={cls} name={name} loader={rangeLoader}>
-            {(read) => <RangeImage bytes={read.bytes} path={page.path} name={name} />}
+          <RangeLeaf
+            key={rangeReadKey({ project: page.project, pin, range, size: listedSize })}
+            target={{ project: page.project, pin, range, size: listedSize }} cls={cls} name={name} loader={rangeLoader}
+          >
+            {(read) => (
+              <RangeImage
+                bytes={read.bytes} path={page.path} name={name} assetKey={docsApi.file(page.project, pin)}
+                openedPin={openedRangePin(pin, read.digest)} onShown={p.onLeafImage ?? null}
+              />
+            )}
           </RangeLeaf>
         );
     } else if (cls === 'raster') {
@@ -393,7 +401,10 @@ export function DocsLeaf(p: {
       body = range === null
         ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
         : (
-          <RangeLeaf target={{ project: page.project, pin: file.pin, range, size: file.size }} cls={cls} name={name} loader={rangeLoader}>
+          <RangeLeaf
+            key={rangeReadKey({ project: page.project, pin: file.pin, range, size: file.size })}
+            target={{ project: page.project, pin: file.pin, range, size: file.size }} cls={cls} name={name} loader={rangeLoader}
+          >
             {cls === 'markdown'
               ? (read) => (
                 <RangeMarkdown

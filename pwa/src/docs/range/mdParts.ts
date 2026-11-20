@@ -32,9 +32,21 @@ export function partText(text: string, p: MdPart): string {
  *  so the page can say why it opened the first part. */
 export function partForFragment(ids: readonly (ReadonlySet<string> | null)[], fragment: string): { part: number; note: boolean } {
   for (let k = 0; k < ids.length; k += 1) {
-    if (ids[k]?.has(fragment) === true) return { part: k, note: false };
+    if (partHolds(ids[k] ?? null, fragment)) return { part: k, note: false };
   }
   return { part: 0, note: ids.some((s) => s === null) };
+}
+
+/** Whether a part's ids hold `fragment`, as written or percent-decoded once: `DocLink.tsx#fragmentTarget`'s rule, so a
+ *  fragment that finds its heading on the page finds its part. */
+export function partHolds(ids: ReadonlySet<string> | null, fragment: string): boolean {
+  if (ids === null || fragment === '') return false;
+  if (ids.has(fragment)) return true;
+  try {
+    return ids.has(decodeURIComponent(fragment));
+  } catch {
+    return false;
+  }
 }
 
 const HEADING_RE = /^ {0,3}#{1,2}(?:[ \t]|$)/;

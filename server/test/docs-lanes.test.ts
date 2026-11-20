@@ -13,7 +13,7 @@ import {
 } from '../src/docs/lane.js';
 import {
   DOCS_FETCH_GLOBAL, DOCS_FETCH_MAX_WAIT_MS, DOCS_FETCH_QUEUE, DOCS_LANE_BYTES, DOCS_LANE_EXECS, DOCS_LANE_LARGE_RAW,
-  DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, RANGE_PREPARE_JOB, docsBusyBody, type DocsJob,
+  DOCS_LANE_MAX_WAIT_MS, DOCS_LANE_QUEUE, LISTING_JOB, RANGE_PREPARE_JOB, docsBusyBody, laneStep, type DocsJob, type LaneLoad,
 } from '../src/docs/policy.js';
 import { blocker } from './docsRouteHelpers.js';
 
@@ -143,6 +143,35 @@ describe('W3 T4: the read lane admits by laneAdmit, applied to its head (section
     c.release(1, 't');
     await Promise.all([prepare, tree]);
     expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('docs-lanes: a prepare held back by the one-prepare rule is passed by the reads behind it, and keeps its place among prepares', async () => {
+    const lane = readLane();
+    const b = blocker<string>();
+    const first = lane.run(RANGE_PREPARE_JOB, live(), b.exec);
+    const second = lane.run(RANGE_PREPARE_JOB, live(), b.exec);
+    // The second prepare is at the head of the queue; a tree read that arrives now is admitted at once, past it.
+    const tree = lane.run(LISTING_JOB, live(), b.exec);
+    expect(b.started(), 'the first prepare and the tree read run').toBe(2);
+    expect(lane.load()).toMatchObject({ execs: 2, prepares: 1, queued: 1 });
+    b.release(1, 't');
+    expect(await tree).toStrictEqual({ kind: 'ran', value: 't' });
+    b.release(0, 'a');
+    expect(await first).toStrictEqual({ kind: 'ran', value: 'a' });
+    await flush();
+    expect(b.started(), 'the second prepare starts once the first ends').toBe(3);
+    b.release(2, 'b');
+    expect(await second).toStrictEqual({ kind: 'ran', value: 'b' });
+    expect(lane.load()).toStrictEqual(IDLE);
+  });
+
+  it('laneStep: a prepare refused only by the one-prepare rule is skipped; any other refusal stops the pump', () => {
+    const one: LaneLoad = { execs: 1, bytes: RANGE_PREPARE_JOB.wire, large: 0, prepares: 1 };
+    expect(laneStep(one, RANGE_PREPARE_JOB)).toBe('skip');
+    expect(laneStep(one, LISTING_JOB)).toBe('start');
+    const full: LaneLoad = { execs: 2, bytes: 2 * RANGE_PREPARE_JOB.wire, large: 0, prepares: 1 };
+    expect(laneStep(full, RANGE_PREPARE_JOB), 'no exec free: the pump stops, whatever the job').toBe('stop');
+    expect(laneStep(full, LISTING_JOB)).toBe('stop');
   });
 
   it('an idle lane admits one job over the whole byte budget, alone', async () => {

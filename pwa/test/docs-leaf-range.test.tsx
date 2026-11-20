@@ -2,14 +2,17 @@
 // a file above its class cap (or a draft with no fingerprint) by range, with progress and a Cancel, and says plainly when
 // a file passes the range ceiling; `MarkdownParts` shows a text above the render gate one part at a time, and opens the
 // part a link names, from the pre-pass's heading ids. Placeholders only (`demo`, `specs/...`).
-import { afterEach, describe, expect, it } from 'vitest';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import type React from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocPin } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
 import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
-import { openedRangePin } from '../src/docs/DocsLeaf';
+import { RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
+import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
+import { DOCS_RANGE_TEXT, fillSentence } from '../src/docs/docsText';
 import { MarkdownParts } from '../src/docs/range/MarkdownParts';
-import { RangeLeaf } from '../src/docs/range/RangeLeaf';
+import { RangeImage, RangeLeaf, rangeReadKey } from '../src/docs/range/RangeLeaf';
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 
 afterEach(cleanup);
@@ -68,6 +71,121 @@ describe('RangeLeaf', () => {
     expect(held.calls).toEqual([]);
     fireEvent.click(screen.getByText('Download'));
     expect(screen.getByText('Cancel')).toBeTruthy();
+  });
+});
+
+/** A loader that answers every call from `src`, counting its prepares. */
+function servingLoader(src: Uint8Array<ArrayBuffer>, opts: { throws?: boolean } = {}) {
+  let prepares = 0;
+  const hex = async (b: Uint8Array<ArrayBuffer>): Promise<string> =>
+    [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
+  const b64 = (b: Uint8Array): string => { let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); };
+  const loader: RangeLoader = {
+    async prepare() {
+      prepares += 1;
+      if (opts.throws === true) throw new TypeError('a loader fault');
+      return { s: 'ok', value: { snapshot: 's'.repeat(32), size: src.length, digest: await hex(src) } };
+    },
+    async frame(_t, snapshot, offset, length) {
+      const part = src.slice(offset, offset + length);
+      return { s: 'ok', value: { snapshot, offset, bytesB64: b64(part), digest: await hex(part), total: src.length } };
+    },
+  };
+  return { loader, prepares: () => prepares };
+}
+
+const BYTES = new Uint8Array(DOCS_RANGE_FRAME_BYTES + 77).map((_, i) => 65 + (i % 26));
+
+describe('RangeLeaf: one read per read key', () => {
+  it('a re-render with an equal but new target object reads nothing again, and the view stays', async () => {
+    const s = servingLoader(BYTES);
+    const view = (): React.ReactNode => <p>shown</p>;
+    const { rerender } = render(<RangeLeaf target={{ ...target(BYTES.length) }} cls="markdown" name="a.md" loader={s.loader}>{view}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByText('shown')).toBeTruthy());
+    for (let i = 0; i < 3; i += 1) {
+      rerender(<RangeLeaf target={{ ...target(BYTES.length) }} cls="markdown" name="a.md" loader={s.loader}>{() => <p>shown</p>}</RangeLeaf>);
+    }
+    await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+    expect(s.prepares(), 'one prepare, whatever re-renders').toBe(1);
+    expect(screen.getByText('shown')).toBeTruthy();
+  });
+
+  it('another doc is another read: keyed by rangeReadKey, a leaf never keeps the last file\'s bytes', async () => {
+    const s = servingLoader(BYTES);
+    const a = { ...target(BYTES.length) };
+    const b: RangeTarget = { ...a, pin: { ...COMMITTED, path: 'b.bin' } };
+    expect(rangeReadKey(a)).not.toBe(rangeReadKey(b));
+    const { rerender } = render(<RangeLeaf key={rangeReadKey(a)} target={a} cls="markdown" name="a.md" loader={s.loader}>{() => <p>shown</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByText('shown')).toBeTruthy());
+    rerender(<RangeLeaf key={rangeReadKey(b)} target={b} cls="other" name="b.bin" loader={s.loader} />);
+    expect(screen.getByText(/offers it as a Download/)).toBeTruthy();
+  });
+
+  it('Download on tap saves the bytes it read, under the leaf\'s own name', async () => {
+    const s = servingLoader(BYTES);
+    const clicks: HTMLAnchorElement[] = [];
+    const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
+    try {
+      render(<RangeLeaf target={target(BYTES.length)} cls="other" name="b.bin" loader={s.loader} />);
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      expect(clicks[0]!.download).toBe('b.bin');
+      const blob = vi.mocked(URL.createObjectURL).mock.calls.at(-1)![0] as Blob;
+      expect(blob.size).toBe(BYTES.length);
+    } finally {
+      spy.mockRestore();
+    }
+  });
+
+  it('a read that throws says so, never "nothing was kept" as a cancel does', async () => {
+    const s = servingLoader(BYTES, { throws: true });
+    render(<RangeLeaf target={target(BYTES.length)} cls="markdown" name="a.md" loader={s.loader}>{() => <p>shown</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(DOCS_RANGE_TEXT.threw));
+  });
+});
+
+/** A PNG of `w` by `h` declared in its IHDR, nothing after it. */
+function pngOf(w: number, h: number): Uint8Array<ArrayBuffer> {
+  const be32 = (n: number): number[] => [(n >>> 24) & 255, (n >>> 16) & 255, (n >>> 8) & 255, n & 255];
+  return new Uint8Array([137, 80, 78, 71, 13, 10, 26, 10, ...be32(13), 73, 72, 68, 82, ...be32(w), ...be32(h), 8, 6, 0, 0, 0, 0, 0, 0, 0]);
+}
+
+describe('RangeImage', () => {
+  it('a PNG within the image-view ceilings shows as one object URL of its type, held to the page width, revoked when it goes', async () => {
+    const revoke = vi.mocked(URL.revokeObjectURL);
+    const shown: DocPin[] = [];
+    const { unmount } = render(<RangeImage bytes={pngOf(4000, 3000)} path="specs/p.png" name="p.png" openedPin={COMMITTED} onShown={(pin) => shown.push(pin)} />);
+    const img = await screen.findByRole('img');
+    expect(img.className).toBe('msg-img');
+    expect(img.getAttribute('src')).toMatch(/^blob:/);
+    expect(shown, 'the leaf image reports its pin, which Share waits for').toEqual([COMMITTED]);
+    const url = img.getAttribute('src');
+    unmount();
+    expect(revoke.mock.calls.map((c) => c[0])).toContain(url);
+  });
+
+  it('an image wider than the side ceiling, or bytes that are not the declared type, show a sentence and no image', () => {
+    render(<RangeImage bytes={pngOf(16385, 16)} path="specs/p.png" name="p.png" />);
+    expect(screen.getByRole('status').textContent).toBe(fillSentence(DOCS_RANGE_TEXT.imageSide, { w: 16385, h: 16, side: 16384 }));
+    expect(screen.queryByRole('img')).toBeNull();
+    cleanup();
+    render(<RangeImage bytes={pngOf(10, 10)} path="specs/p.gif" name="p.gif" />);
+    expect(screen.getByRole('status').textContent).toBe(DOCS_RANGE_TEXT.imageMismatch);
+  });
+});
+
+describe('RangeMarkdown', () => {
+  it('bytes that are not UTF-8 show as the plain view with its note, never an empty page', () => {
+    const entry = { section: 'specs' as const, path: 'big.md', committed: { kind: 'file' as const, blob: 'b'.repeat(40), size: 4 }, draft: null };
+    const page = { kind: 'path', project: 'demo', ref: null, at: null, view: 'default', section: 'specs', path: 'big.md', dirSlash: false } as never;
+    render(
+      <RangeMarkdown
+        read={{ bytes: new Uint8Array([0x23, 0x20, 0xff, 0x41]), digest: 'd'.repeat(64) }} entry={entry} pin={COMMITTED} page={page}
+        link={{} as never} parser={(async () => ({ kind: 'threw' })) as never} reader={null} only={null}
+        pendingFragment={null} onFragmentConsumed={() => undefined}
+      />,
+    );
+    expect(screen.getByText(DOC_NOT_UTF8_NOTE)).toBeTruthy();
   });
 });
 

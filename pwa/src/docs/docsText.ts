@@ -288,6 +288,7 @@ export const DOCS_RANGE_TEXT = {
   overCeiling: 'This file is {size}; Docs reads files up to {cap}.',
   noDigest: 'Docs can read this file only over a secure connection (HTTPS): it checks every part it reads, and this page cannot.',
   mismatch: 'Docs stopped reading this file: a part it received was not the one it asked for.',
+  threw: 'Docs could not finish reading this file: the read failed in this page. Try again, or Download it.',
   imageNoHeader: 'Docs could not read this image’s size from its header, so it does not show it here; Download it instead.',
   imageSide: 'This image is {w} × {h} pixels; Docs shows images up to {side} pixels a side here. Download it instead.',
   imagePixels: 'This image is {w} × {h} pixels; Docs shows images up to {px} megapixels here. Download it instead.',

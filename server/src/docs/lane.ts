@@ -12,7 +12,7 @@
 // not started.
 import type { DocsFailureBody } from '../../../shared/docs.js';
 import {
-  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, lanePrepare, laneOverflow,
+  DOCS_FETCH_MAX_WAIT_MS, DOCS_LANE_MAX_WAIT_MS, docsBusyBody, fetchAdmit, laneAdmit, laneLarge, lanePrepare, laneOverflow, laneStep,
   type DocsJob, type DocsLaneName, type LaneLoad,
 } from './policy.js';
 
@@ -70,9 +70,10 @@ interface ReadWaiter {
 }
 
 /**
- * A read lane (section 6.3). A job starts at once only when the FIFO is empty and `laneAdmit` admits it; else it
- * queues (or is `busy` when `laneOverflow` says `DOCS_LANE_QUEUE` jobs already wait). Only the HEAD is ever considered, so a large job
- * cannot starve. Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so does a
+ * A read lane (section 6.3). A job starts at once only when the FIFO is empty (or holds only prepares `laneStep`
+ * skips) and `laneAdmit` admits it; else it queues (or is `busy` when `laneOverflow` says `DOCS_LANE_QUEUE` jobs already
+ * wait). The pump walks the FIFO in order and stops at the first job `laneStep` stops at, so a large job cannot starve;
+ * the one job it passes is a prepare held back only because a prepare already runs (X2 P1). Every settle of a running exec releases its share exactly once (in `finally`) and pumps; so does a
  * queued job leaving, since the job behind it may now admit.
  */
 export function docsReadLane(): DocsReadLane {
@@ -86,13 +87,20 @@ export function docsReadLane(): DocsReadLane {
     w.signal.removeEventListener('abort', w.onAbort);
   };
 
+  // In FIFO order; a prepare `laneStep` skips (one already runs) keeps its place and the pump considers the job behind
+  // it; any other refusal stops the pump, as before (X2 P1).
   const pump = (): void => {
-    while (queue.length > 0 && laneAdmit(load, queue[0].job)) {
-      const head = queue.shift() as ReadWaiter;
-      detach(head);
-      head.begin();
+    for (let i = 0; i < queue.length;) {
+      const step = laneStep(load, queue[i]!.job);
+      if (step === 'stop') return;
+      if (step === 'skip') { i += 1; continue; }
+      const [w] = queue.splice(i, 1) as [ReadWaiter];
+      detach(w);
+      w.begin();
     }
   };
+  /** Whether every queued job is a prepare the pump would skip now, so an arriving job may start before them. */
+  const onlySkipped = (): boolean => queue.every((w) => laneStep(load, w.job) === 'skip');
 
   /** Take a queued job out of the FIFO and answer it `run`; the job behind it may now admit. */
   const leave = (w: ReadWaiter, run: DocsLaneRun<never>): void => {
@@ -129,7 +137,7 @@ export function docsReadLane(): DocsReadLane {
     run<T>(job: DocsJob, signal: AbortSignal, exec: () => Promise<T>): Promise<DocsLaneRun<T>> {
       if (signal.aborted) return Promise.resolve(ABANDONED);
       if (closed) return Promise.resolve(busy('read'));
-      if (queue.length === 0 && laneAdmit(load, job)) return running(job, exec);
+      if (onlySkipped() && laneAdmit(load, job)) return running(job, exec);
       if (laneOverflow('read', queue.length + 1)) return Promise.resolve(busy('read'));
       return new Promise<DocsLaneRun<T>>((resolve) => {
         const w: ReadWaiter = {

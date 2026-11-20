@@ -32,7 +32,10 @@ export interface RangeLoader {
  *  `size-mismatch`: the prepare's size is not the listing's. `over-ceiling`: the size passes `DOCS_RANGE_MAX_BYTES`.
  *  `frame-mismatch`: a frame names another snapshot, offset or total, or holds another length than asked for.
  *  `frame-digest`: a frame's bytes do not hash to its digest. `no-digest`: this origin has no `crypto.subtle` (not a
- *  secure context), so no frame could be checked and nothing was read. */
+ *  secure context), so no frame could be checked and nothing was read. `whole-digest`: every frame checked, but the
+ *  reassembled bytes do not hash to the prepare's digest, which a stat-pinned draft's page pin would take as its `fp`.
+ *  `threw`: the read threw (a loader or digest fault), not an abort; `readRange` itself rejects with it, and the leaf
+ *  names it apart from a cancel. */
 export type RangeReadFailure =
   | { kind: 'answer'; answer: DocsNotOk }
   | { kind: 'aborted' }
@@ -40,7 +43,9 @@ export type RangeReadFailure =
   | { kind: 'over-ceiling' }
   | { kind: 'frame-mismatch'; offset: number }
   | { kind: 'frame-digest'; offset: number }
-  | { kind: 'no-digest' };
+  | { kind: 'no-digest' }
+  | { kind: 'whole-digest' }
+  | { kind: 'threw' };
 
 export type RangeReadResult =
   | { ok: true; bytes: Uint8Array<ArrayBuffer>; digest: string }
@@ -97,6 +102,10 @@ Promise<RangeReadResult | { restart: true }> {
     opts.onProgress(offset + length, size);
     if (signal.aborted) { buf = null; return ABORTED; }
   }
+  // The whole: the digest the page pin takes is measured here, never only asserted by the prepare.
+  const whole = await sha256Hex(subtle, buf!);
+  if (signal.aborted) { buf = null; return ABORTED; }
+  if (whole !== digest) { buf = null; return { ok: false, why: { kind: 'whole-digest' } }; }
   return { ok: true, bytes: buf!, digest };
 }
 

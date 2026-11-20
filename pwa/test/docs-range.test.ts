@@ -307,6 +307,18 @@ describe('readRange', { timeout: 30000 }, () => {
     }
   });
 
+  it('range reassembly: frames that each check but do not make the prepare\'s digest fail the read, so fp is measured', async () => {
+    const { loader } = fakeLoader(SRC);
+    const real = loader.prepare.bind(loader);
+    loader.prepare = async (...a) => {
+      const ans = await real(...a);
+      return ans.s === 'ok' ? { s: 'ok', value: { ...ans.value, digest: 'c'.repeat(64) } } : ans;
+    };
+    const r = await readRange(loader, TARGET, { signal: new AbortController().signal, onProgress: noProgress });
+    expect(r.ok).toBe(false);
+    expect(!r.ok && r.why).toEqual({ kind: 'whole-digest' });
+  });
+
   it('range reassembly: an already aborted signal reads nothing', async () => {
     const ac = new AbortController();
     ac.abort();

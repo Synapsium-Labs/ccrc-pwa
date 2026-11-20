@@ -542,6 +542,18 @@ export function laneAdmit(load: LaneLoad, job: DocsJob): boolean {
 }
 
 /**
+ * The read lane pump's step for one queued job (X2 P1, the P1.2/P1.3 reviews' head-of-line finding), the fetch lane's
+ * `fetchAdmit` shape: `'start'` when `laneAdmit` admits it; `'skip'` for a prepare refused only because a prepare
+ * already runs (it keeps its place, and the pump considers the job behind it, so one range read never holds the page's
+ * tree, files and images behind a second for up to a prepare's ~23 s); `'stop'` for any other refusal, which keeps the
+ * FIFO for every other job exactly as before.
+ */
+export function laneStep(load: LaneLoad, job: DocsJob): 'start' | 'skip' | 'stop' {
+  if (laneAdmit(load, job)) return 'start';
+  return lanePrepare(job) && load.prepares > 0 && laneAdmit({ ...load, prepares: 0 }, job) ? 'skip' : 'stop';
+}
+
+/**
  * The most content bytes a show can answer (section 6.2): the class cap, lowered by a size the server already holds.
  * `knownSize` is `undefined` when the server holds no size fact, one meaning; it comes from the listing map for a
  * committed pin or the `fp -> size` map for a draft (W3), NEVER from the request (M6.4: the query refuses `size` and

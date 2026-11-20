@@ -3,9 +3,14 @@
 // the read shows its progress and a Cancel, runs frame by frame (`readRange`), and hands the checked bytes to
 // `children` (Markdown in parts, or the image view); a class with no view above its cap gets a Download that reads the
 // file by range first. Cancel, leaving the page or opening another doc aborts the read and drops every frame held.
-import { useCallback, useEffect, useRef, useState, type ReactNode } from 'react';
+import { useCallback, useContext, useEffect, useRef, useState, type ReactNode } from 'react';
+import { DocsAssetContext } from '../DocImage';
+import { ASSET_FAILED } from '../export/exportAssets';
 import { Button } from '@ccrc/ui';
-import { DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, sniffRaster, type DocContentClass } from '../../../../shared/docs';
+import {
+  DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, docsRangePinText, sniffRaster, type DocContentClass,
+  type DocPin,
+} from '../../../../shared/docs';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
 import { declaredRaster } from '../failures';
 import { rasterObjectUrl, saveBytes } from '../objectUrls';
@@ -28,6 +33,10 @@ export function rangeFailureSentence(why: RangeReadFailure, size: number): strin
       return DOCS_RANGE_TEXT.mismatch;
     case 'no-digest':
       return DOCS_RANGE_TEXT.noDigest;
+    case 'whole-digest':
+      return DOCS_RANGE_TEXT.mismatch;
+    case 'threw':
+      return DOCS_RANGE_TEXT.threw;
   }
 }
 
@@ -41,6 +50,13 @@ type ReadState =
  *  its `fp`). */
 export interface RangeBytes { readonly bytes: Uint8Array<ArrayBuffer>; readonly digest: string }
 
+/** One read's identity: the project, the place, the range pin and the size. A leaf is keyed by it (`DocsLeaf` gives it as
+ *  the element's `key`), so another doc is another instance with its own state, and a re-render that rebuilds an equal
+ *  target object reads nothing again. */
+export function rangeReadKey(t: RangeTarget): string {
+  return [t.project, t.pin.section, t.pin.path, docsRangePinText(t.range), String(t.size)].join('\u0000');
+}
+
 export function RangeLeaf(p: {
   readonly target: RangeTarget;
   readonly cls: DocContentClass;
@@ -49,18 +65,20 @@ export function RangeLeaf(p: {
   /** The view of the bytes once read; absent, the class has no view above its cap and the leaf offers Download only. */
   readonly children?: (read: RangeBytes) => ReactNode;
 }): ReactNode {
-  const { target, loader } = p;
-  const verdict = rangeVerdict(target.size, p.cls, target.range.kind);
-  const view = p.children;
+  const key = rangeReadKey(p.target);
+  const verdict = rangeVerdict(p.target.size, p.cls, p.target.range.kind);
+  const hasView = p.children !== undefined;
+  // The newest props, read by a read in flight: a re-render's new objects never restart it.
+  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView });
+  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView };
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
-  const saveAfter = useRef(false);
 
   const start = useCallback((save: boolean) => {
     ac.current?.abort();
     const mine = new AbortController();
     ac.current = mine;
-    saveAfter.current = save;
+    const { target, loader } = latest.current;
     setState({ s: 'reading', done: 0, total: target.size });
     void readRange(loader, target, {
       signal: mine.signal,
@@ -68,21 +86,18 @@ export function RangeLeaf(p: {
     }).then((r) => {
       if (ac.current !== mine) return;
       if (!r.ok) { setState({ s: 'failed', why: r.why }); return; }
-      if (saveAfter.current) {
-        saveBytes(p.name, r.bytes);
-        setState(view === undefined ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
-        return;
-      }
-      setState({ s: 'done', bytes: r.bytes, digest: r.digest });
-    }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'aborted' } }); });
-  }, [loader, target, p.name, view]);
+      if (save) saveBytes(latest.current.name, r.bytes);
+      setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
+    }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' } }); });
+  }, []);
 
-  // A leaf with a view reads as soon as it opens; leaving it aborts the read, whatever its state.
+  // A leaf with a view reads as soon as it opens, once per read key; leaving it aborts the read, whatever its state.
   useEffect(() => {
-    if (verdict !== 'over-ceiling' && view !== undefined) start(false);
+    if (verdict !== 'over-ceiling' && hasView) start(false);
     return () => { ac.current?.abort(); ac.current = null; };
-    // `start` changes with the target; a new target is a new read.
-  }, [verdict, start, view]);
+  }, [key, verdict, hasView, start]);
+  const { target } = p;
+  const view = p.children;
 
   if (verdict === 'over-ceiling') {
     return (
@@ -135,18 +150,37 @@ export function RangeLeaf(p: {
 
 /** The image view above the class cap (spec 4.3): the header's dimensions checked before any decode, the bytes checked
  *  against the declared raster type, then one object URL of that type, revoked when the view goes. */
-export function RangeImage(p: { readonly bytes: Uint8Array<ArrayBuffer>; readonly path: string; readonly name: string }): ReactNode {
+export function RangeImage(p: {
+  readonly bytes: Uint8Array<ArrayBuffer>; readonly path: string; readonly name: string;
+  /** Export's registry key for the leaf's own image (`docsApi.file` of the page pin), or null: nothing is registered. */
+  readonly assetKey?: string | null;
+  /** Called once the image is shown, with the pin it opened at (Share waits for the leaf's image, spec 4.16). */
+  readonly onShown?: ((pin: DocPin) => void) | null;
+  readonly openedPin?: DocPin | null;
+}): ReactNode {
   const declared = declaredRaster(p.path);
   const dims = imageHeaderDims(p.bytes);
   const verdict = dims === null ? null : imageViewVerdict(dims);
   const matches = declared !== null && sniffRaster(declared, p.bytes) === 'match';
   const [url, setUrl] = useState<string | null>(null);
+  const assets = useContext(DocsAssetContext);
+  const latest = useRef({ onShown: p.onShown ?? null, openedPin: p.openedPin ?? null });
+  latest.current = { onShown: p.onShown ?? null, openedPin: p.openedPin ?? null };
+  const assetKey = p.assetKey ?? null;
   useEffect(() => {
-    if (declared === null || !matches || verdict !== 'show') return undefined;
-    const u = rasterObjectUrl(p.bytes, mimeOf(declared));
+    const hold = assetKey === null || assets?.exportAssets == null ? null : assets.exportAssets.track(assetKey);
+    if (declared === null || !matches || verdict !== 'show') {
+      hold?.report(ASSET_FAILED);
+      return () => hold?.release();
+    }
+    const mime = mimeOf(declared);
+    const u = rasterObjectUrl(p.bytes, mime);
     setUrl(u);
-    return () => { URL.revokeObjectURL(u); setUrl(null); };
-  }, [p.bytes, declared, matches, verdict]);
+    hold?.report({ s: 'loaded', asset: { kind: 'raster', bytes: p.bytes, mime } });
+    const { onShown, openedPin } = latest.current;
+    if (onShown !== null && openedPin !== null) onShown(openedPin);
+    return () => { hold?.release(); URL.revokeObjectURL(u); setUrl(null); };
+  }, [p.bytes, declared, matches, verdict, assetKey, assets]);
   if (!matches) return <p className="docs-note" role="status">{DOCS_RANGE_TEXT.imageMismatch}</p>;
   if (dims === null) return <p className="docs-note" role="status">{DOCS_RANGE_TEXT.imageNoHeader}</p>;
   if (verdict === 'side') {
@@ -159,7 +193,8 @@ export function RangeImage(p: { readonly bytes: Uint8Array<ArrayBuffer>; readonl
       </p>
     );
   }
-  return url === null ? null : <div className="docs-raster"><img src={url} alt={p.name} width={dims.w} height={dims.h} /></div>;
+  // `msg-img` holds the image to the page's width (DocImage's own class); width and height are the aspect hint only.
+  return url === null ? null : <div className="docs-raster"><img className="msg-img" src={url} alt={p.name} width={dims.w} height={dims.h} /></div>;
 }
 
 function mimeOf(t: NonNullable<ReturnType<typeof declaredRaster>>): Parameters<typeof rasterObjectUrl>[1] {
