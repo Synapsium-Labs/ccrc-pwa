@@ -224,7 +224,9 @@ describe('S1: the first boot and the rebuild (spec §7.1, "Two effects at S1\'s 
   });
 
   it('S1-B3: the applier saves what the first boot ended: the disk checkpoint, SQLite\'s endBasis column and one warn line', async () => {
-    const records = world();
+    // W starts and never ends: a row whose endBasis column is NULL, read back as no key.
+    const W = 'agent-w1';
+    const records = chain([sessionStart(1), subagentStart(2, X), subagentStart(3, Y), notification(5, X), notification(6, Y, 'cancelled'), subagentStart(7, W)]);
     const before = editRows(liveFold(records).build(1), (a) => a.sourceKind === 'agent', reopened);
     const dir = mkTmp('ccrc-s1-boot-');
     writeFileSync(path.join(dir, DELEGATION_JOURNAL_FILE), Buffer.concat(records.map((r) => Buffer.from(encodeDelegationJournalRecord(r)))));
@@ -237,8 +239,13 @@ describe('S1: the first boot and the rebuild (spec §7.1, "Two effects at S1\'s 
     const disk = decodeDelegationCheckpoint(new Uint8Array(readFileSync(path.join(dir, DELEGATION_CHECKPOINT_FILE))));
     expect([agentRow(disk, X)?.endBasis, agentRow(disk, Y)?.endBasis], 'the disk checkpoint').toEqual(['task-report', 'task-report']);
     const db = store.db.prepare("SELECT upstreamId, executionState, endBasis FROM delegation_activities WHERE sourceKind = 'agent' ORDER BY upstreamId").all();
-    expect(db, 'SQLite').toEqual([{ upstreamId: X, executionState: 'ended', endBasis: 'task-report' }, { upstreamId: Y, executionState: 'ended', endBasis: 'task-report' }]);
-    expect(store.readDelegationProjection().activities.map((a) => (a as Row).endBasis), 'and the projection reads it back').toEqual(['task-report', 'task-report']);
+    expect(db, 'SQLite').toEqual([{ upstreamId: W, executionState: 'active', endBasis: null },
+      { upstreamId: X, executionState: 'ended', endBasis: 'task-report' }, { upstreamId: Y, executionState: 'ended', endBasis: 'task-report' }]);
+    const projected = store.readDelegationProjection().activities;
+    expect([agentRow({ ...disk, activities: projected }, X)?.endBasis, agentRow({ ...disk, activities: projected }, Y)?.endBasis], 'the projection reads it back')
+      .toEqual(['task-report', 'task-report']);
+    expect(agentRow({ ...disk, activities: projected }, W), 'a NULL column reads back as no key').not.toHaveProperty('endBasis');
+    expect(projected, 'every projected row reads back as its checkpoint row, field for field').toEqual(disk.activities);
     expect(lines.filter((l) => l.includes('delegation recovery changed 2 activity row(s) from covered task notifications')), 'one warn line').toHaveLength(1);
   });
 });
