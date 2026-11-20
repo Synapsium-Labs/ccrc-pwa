@@ -57,13 +57,15 @@
   .hrow .ic { color: var(--busy); padding-top: 1px; } .hrow .ic.wf { color: var(--attention); } .hrow .ic.done { color: var(--ink-tertiary); }
   .hrow .what { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
   .hrow .meta { grid-column: 2 / 4; font-size: 12px; color: var(--ink-secondary); }
-  .hrow .meta b { font-weight: 500; color: var(--busy-text); } .hrow .meta .q { color: var(--attention); }
+  .hrow .meta b { font-weight: 500; color: var(--busy-text); } .hrow .meta .q { color: var(--ink-tertiary); }
   .hrow .right { font-size: 12px; color: var(--ink-tertiary); text-align: right; }
   .meter { grid-column: 2 / 4; height: 5px; border-radius: 3px; background: var(--bg-raised); margin: 6px 0 2px; overflow: hidden; }
   .meter i { display: block; height: 100%; background: var(--busy); }
   .fold { padding: 7px 12px; font-size: 12px; color: var(--ink-tertiary); background: var(--bg-raised); border-top: 1px solid var(--edge-subtle); border-radius: 0 0 10px 10px; }
   .fold .tw { margin-right: 6px; }
   .frow { padding: 7px 12px 7px 34px; font-size: 12px; color: var(--ink-secondary); border-top: 1px solid var(--edge-subtle); }
+  .frow .l1 { font-size: 13px; color: var(--ink-primary); font-weight: 500; }
+  .report .more { color: var(--ink-tertiary); display: block; margin-top: 4px; }
   .frow .ok { color: var(--ink-tertiary); } .frow .bad { color: var(--dead-text); }
   .report { margin: 6px 0 2px; padding: 8px 10px; background: var(--bg-well); border-radius: 6px; color: var(--ink-secondary); font-size: 12px; }
   .composer { margin: 0 16px 16px; padding: 10px 12px; border: 1px solid var(--edge-strong); border-radius: 10px; background: var(--bg-raised); color: var(--ink-tertiary); }
@@ -74,6 +76,8 @@
   #phone .helpers { margin: 0 8px 8px; }
   #phone .composer { margin: 0 8px 10px; }
   #phone .hrow .meta { white-space: normal; }
+  #phone .hrow { grid-template-columns: 14px 1fr; }
+  #phone .hhead { min-height: 44px; }
   .glance { padding: 6px 12px; font-size: 12px; color: var(--ink-secondary); display: flex; gap: 6px; border-bottom: 1px solid var(--edge-subtle); }
   .glance:last-child { border-bottom: 0; }
   .glance .w { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .glance b { color: var(--busy-text); font-weight: 500; }
@@ -88,6 +92,8 @@
   .card h3 .n { color: var(--ink-tertiary); font-weight: 400; } .card .note { padding: 8px 14px; font-size: 12px; color: var(--ink-tertiary); border-bottom: 1px solid var(--edge-subtle); }
   .urow { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--edge-subtle); }
   .urow:last-child { border-bottom: 0; }
+  .grp { padding: 8px 14px; font-size: 12px; color: var(--ink-tertiary); background: var(--bg-raised); border-bottom: 1px solid var(--edge-subtle); }
+  .urow .l3 { font-size: 12px; color: var(--ink-tertiary); }
   .urow .l1 { font-weight: 500; } .urow .l2 { font-size: 12px; color: var(--ink-secondary); }
   .acts { display: flex; gap: 6px; align-items: center; }
   .btn { border: 1px solid var(--edge-strong); background: var(--bg-raised); color: var(--ink-primary); border-radius: 7px; padding: 5px 10px; font-size: 12px; }
@@ -135,9 +141,9 @@
         <div class="meter"><i style="width:58%"></i></div>
         <div class="meta">workflow · <b>running</b> · phase Verify · 7/12 agents · active 4s ago · ↓ 2.5m tokens</div></div>
       <div class="fold"><span class="tw">▾</span>Finished · last 10 min (2)</div>
-      <div class="frow"><span class="ok">✓ done · 4m12s ·</span> Measure today's PWA session panel: header facts, no right panel below 1600 px
-        <div class="report mono">Today's helper view is a header fact set, not a right-hand panel. Subagents: one button, a name and an elapsed time per row… <span class="t3">(open report · Copy)</span></div></div>
-      <div class="frow"><span class="bad">✕ failed · 1m3s ·</span> Render the mockup: headless browser not found</div>
+      <div class="frow"><div class="l1">Measure today's session panel</div><span class="ok">✓ done · 4m12s ·</span> header facts only; no right panel below 1600 px
+        <div class="report mono">Today's helper view is a header fact set, not a right-hand panel. Subagents: one button, a name and an elapsed time per row. Workflows: the strip under the transcript…<span class="more">Show all (38 lines) · Copy</span></div></div>
+      <div class="frow"><div class="l1">Render the mockup</div><span class="bad">✕ failed · 1m3s ·</span> headless browser not found</div>
     </section>
     <div class="composer">Message lane-a-project-a…</div>
   </main>
@@ -158,16 +164,16 @@
     <div class="hhead"><span class="lbl">Helpers</span><span class="cnt">3 running</span><span class="fin">· 2 finished</span><span class="chev closed-only">▸</span><span class="chev open-only">▾</span></div>
     <div class="closed-only">
       <div class="glance"><span class="w">◆ Measure server helper sources</span><b>running</b></div>
-      <div class="glance"><span class="w">▣ review-panel · 7/12</span><b>running</b></div>
+      <div class="glance"><span class="w">◆ Measure transcript helper sources</span><b>running</b></div>
     </div>
     <div class="open-only scroll">
-      <div class="hrow"><span class="ic">◆</span><span class="what">Measure server helper sources</span><span class="right mono">12m</span>
-        <div class="meta">subagent · Sonnet · high · <b>running</b> · active 20s ago</div></div>
-      <div class="hrow"><span class="ic">◆</span><span class="what">Measure transcript helper sources</span><span class="right mono">11m</span>
-        <div class="meta">subagent · Sonnet · high · <b>running</b> · <span class="q">quiet 11m</span></div></div>
-      <div class="hrow"><span class="ic wf">▣</span><span class="what">review-panel</span><span class="right mono">6m</span>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Measure server helper sources</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <b>running</b> · 12m · active 20s ago</div></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Measure transcript helper sources</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <b>running</b> · 11m · <span class="q">quiet 11m</span></div></div>
+      <div class="hrow"><span class="ic wf">▣</span><span class="what">review-panel</span>
         <div class="meter"><i style="width:58%"></i></div>
-        <div class="meta">workflow · <b>running</b> · phase Verify · 7/12 agents</div></div>
+        <div class="meta">workflow · <b>running</b> · 6m · phase Verify · 7/12 agents · active 4s ago</div></div>
       <div class="fold"><span class="tw">▸</span>Finished · last 10 min (2)</div>
     </div>
   </section>
@@ -188,12 +194,16 @@
     <h1>Archive</h1>
     <div class="sub">What is sitting around, and what removing it would free.</div>
     <div class="card">
-      <h3>Work no session owns <span class="n">2</span></h3>
-      <div class="note">Delegated worktrees whose session has gone. Attach one to a live session, keep it, or say it was not delegated.</div>
-      <div class="urow"><div><div class="l1">project-a · ws/feature-x-helper</div><div class="l2">made by lane-b-project-a · 3 days old · worktree present</div></div>
-        <div class="acts"><button class="btn primary">Attach to…</button><button class="btn">Keep</button><button class="btn">Not delegated</button></div></div>
-      <div class="urow"><div><div class="l1">project-b · ws/bugfix-y-worker</div><div class="l2">maker not recorded · 9 days old · presence inferred</div></div>
-        <div class="acts"><button class="btn primary">Attach to…</button><button class="btn">Keep</button><button class="btn">Not delegated</button></div></div>
+      <h3>Work no session owns <span class="n">3</span></h3>
+      <div class="note">Delegated worktrees the broker could not give one owner, and worktrees whose two sessions are both gone.</div>
+      <div class="grp">No single owner (2)</div>
+      <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-a1b2c3d4</div><div class="l2">two owners claimed it · tried 3 days ago</div></div>
+        <div class="acts"><button class="btn">Not delegated</button></div></div>
+      <div class="urow"><div><div class="l1">project-b · agent-e5f6a7b8</div><div class="l2">no owner found · unmeasured · tried 9 days ago</div></div>
+        <div class="acts"></div></div>
+      <div class="grp">Both sessions gone (1)</div>
+      <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-c9d0e1f2</div><div class="l2">from lane-b-project-a · via lane-d-project-a</div></div>
+        <div class="acts"><button class="btn">Keep worktree</button><button class="btn">Not delegated</button></div></div>
     </div>
     <div class="card">
       <h3>Archived workspaces <span class="n">12 · 3.4 GB measured</span></h3>
@@ -201,7 +211,7 @@
       <div class="arow"><span>project-b · lane-c-project-b</span><span>archived 5 days ago · 1.2 GB</span></div>
       <div class="arow"><span class="t3">…10 more</span><span></span></div>
     </div>
-    <div class="callout" style="left:22px;top:84px;width:calc(100% - 44px);height:206px"></div>
+    <div class="callout" style="left:22px;top:84px;width:calc(100% - 44px);height:334px"></div>
     <div class="tag" style="left:34px;top:74px">New in H4</div>
   </main>
 </div>

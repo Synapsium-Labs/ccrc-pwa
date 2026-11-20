@@ -4366,17 +4366,18 @@ workflow, running ones first, with its description, kind, model, effort, measure
 for a workflow its phase and agents done out of total. A finished helper keeps a one-line outcome for ten minutes, folded.
 The facts come from the reader of the session's workflow files, extended to the session's Agent helpers (`server/src/workflows/`),
 and travel as additive fields on the `workflows` frame. The broker's activity records leave the session panel. Unowned
-delegated worktrees get a section of the Archive screen (the coordinator's call). The broker gains ends from measured
-evidence, plus a one-time, dry-run-first pass that closes the 2,391 records it never closed (the coordinator's call, designed
-and not done here). The build is six PRs (H4, H1, H2, H3, S1 and S2), listed in the spec's §11. The measurements, including
-why the records never closed, are in the spec's §2 and in `docs/superpowers/programs/desktop-polish/c49.md`.
+delegated worktrees, and leases whose two sessions are both gone, get a section of the Archive screen (the coordinator's
+call). The broker gains an end from an Agent's task report, plus a one-time, dry-run-first pass that closes the old records
+it never closed (the coordinator's call, designed and not done here). The build is seven PRs (H4, H1a, H1b, H2, H3, S1 and
+S2), listed in the spec's §11. The measurements, including why the records never closed, are in the spec's §2 and in
+`docs/superpowers/programs/desktop-polish/c49.md`.
 
-- **D-8794** — `session-panel-carries-helpers`: Task C49, issued on 2026-11-19. The session's own panel, not the fleet list,
-  carries a session's helper information, subagents and workflows alike, by the operator's ruling of 2026-11-19. Defined in
-  full in the spec's §12.
+This task's deviation, D-8794 (`session-panel-carries-helpers`), is defined in the spec's §12, Deviations; this section only
+points at it.
 
 This section was added beside Task C48 with that task's consent (its worker's mail of 2026-11-19), which covered this one
-section only.
+section only. Its revision after review 2861 has C48's consent too (its worker's mail of 2026-11-20), for this section
+only.
 
 ## Acceptance (the matrix, per PR)
 
