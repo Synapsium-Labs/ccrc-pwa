@@ -98,26 +98,26 @@ Reader mode, full screen
 
 Reader mode, overlay shown
 +--------------------------------------------------------------------------------+
-| [x Exit]   Native Docs reader: reader mode                    [Pages|Scroll] [Aa]|
+| Native Docs reader: reader mode                                                |
 |                 1. Context                                                     |
 |                 ...                                                            |
-| ===========================------------------------------------  41%  12 min left|
+| [x Exit] [Pages|Scroll] [Aa]   =================------------  41%  12 min left |
 +--------------------------------------------------------------------------------+
 ```
-*Mockup 1. Desktop. The Reader mode action leads the head's action row. In reader mode only the text remains. The overlay is two thin strips: Exit, the title, the turn setting and Aa at the top, and the progress line with percent and time left at the bottom.*
+*Mockup 1. Desktop. The Reader mode action leads the head's action row. In reader mode only the text remains. The overlay is two thin strips: the title alone at the top, and Exit, the turn setting, Aa and the progress line with percent and time left at the bottom.*
 
 ### 2.2 Phone
 
 ```text
 Normal view, 412 x 915, one bar            Reader mode                    Overlay shown
 +------------------------------+     +------------------------------+  +------------------------------+
-| < Title of the doc  [/][=][R]|     |  (top band)                  |  |[x]  Title of the doc   [S][Aa]|
+| < Title of the doc  [/][=][R]|     |  (top band)                  |  |Title of the doc              |
 |==============---------------- |     | 1. Context                   |  | 1. Context                   |
 | 1. Context                   |     | This section says what       |  | This section says what       |
 | This section says what       |     | reader mode builds on.       |  | reader mode builds on.       |
 | reader mode builds on.       |     | Every claim about ccrc ...   |  | ...                          |
 | ...                          |     |                              |  |                              |
-|                              |     | <- back   |   forward ->     |  |==========-------- 41% 12 min |
+|                              |     | <- back   |   forward ->     |  |[x] [S] [Aa] ======--- 41% 12m|
 +------------------------------+     +------------------------------+  +------------------------------+
   [/] Jump  [=] Contents  [R] Reader mode            [S] Pages or Scroll   [Aa] the reader's own Aa
 ```
@@ -307,11 +307,11 @@ flowchart TB
 
 **The overlay, shown and hidden (the coordinator's ruling on review 2947 F2: Kindle-like, both ways).** It never hides by itself, because a timeout would surprise a reader who is looking at the progress.
 - **Show.** In XR1, a tap on the menu control. From XR2, a tap on the frame's top band (`reader {act: 'menu'}`).
-- **Hide, by the same control again.** A second tap on the menu control toggles it off in XR1. From XR2 the strip is drawn over the top band, so a second tap there lands on the strip, and a tap on the strip outside its controls hides it. The decider's `menu` toggles in both waves.
+- **Hide, by the same control again.** A second tap on the menu control toggles it off in XR1. From XR2 the strip is drawn over the top band, so a second tap there lands on the strip, and a tap anywhere on the top strip hides it, because it holds no control. The decider's `menu` toggles in both waves.
 - **Hide, by a tap anywhere outside the overlay.** ccrc cannot see a tap inside the frame, so while the overlay shows, ccrc draws a clear layer over the reading area below the strip. A tap on that layer hides the overlay and does nothing else, as a Kindle's tap outside its menu does. The layer is not focusable and is `aria-hidden`, so the focus wrap and screen readers never meet it. While it shows it takes touch and wheel scrolling too, so the frame scrolls again once the overlay hides.
 - **The frame's Aa while the overlay shows (XR1 only).** The layer leaves the frame's Aa corner uncovered. A tap there opens the frame's settings and moves focus into the frame. The window's blur (`lib/pageClock.ts#onWindowBlur`) then hides the overlay and its layer, so the Aa menu, which opens below the Aa, takes the next tap. Where an engine moves no focus on that tap (iOS can do this with a cross-origin frame; device row FS-10), the overlay stays, and the first tap on the Aa menu lands on the layer and only hides it. That costs one tap, never a wrong act. XR2 does not subscribe to the blur: it hides the frame's Aa, and a blur there would race the band's `menu` act.
 - **Esc** on the overlay hides it too (§3.3).
-- **Where things sit.** In XR1 the strip runs from the menu control's right edge to the Aa corner's left edge. The menu control stays where it was, as the toggle, and the strip holds the title, the percentage and Exit, with Exit at its right end. So Exit never sits where the menu control was, a second tap there can never leave reader mode, and the frame's Aa corner is never covered. From XR2 the strip runs the full width, with Exit at its right end, in portrait and in landscape alike, and the same clear layer below it.
+- **Where things sit.** In XR1 the strip runs from the menu control's right edge to the Aa corner's left edge. The menu control stays where it was, as the toggle, and the strip holds the title, the percentage and Exit, with Exit at its right end. So Exit never sits where the menu control was, a second tap there can never leave reader mode, and the frame's Aa corner is never covered. From XR2 the top strip runs the full width, in portrait and in landscape alike, and carries only the title: a tap anywhere on it hides the overlay, so a second tap where the first one showed it always hides it and never acts. Exit, the turn setting and Aa sit in the bottom strip beside the progress line, with Exit at its left end, and the same clear layer lies between the two strips.
 
 ### 4.3 When entering remounts the frame
 
