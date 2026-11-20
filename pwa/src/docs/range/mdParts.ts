@@ -51,12 +51,58 @@ export function partHolds(ids: ReadonlySet<string> | null, fragment: string): bo
 
 const HEADING_RE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
 const BLANK_RE = /^[ \t]*$/;
-// A fence is seen at any indentation, after any run of blockquote marks (`>`) and list markers (`-`, `*`, `+`, `1.`,
-// `1)`), so a fence in a nested list item or a blockquote is tracked and never cut. The prefix is group 1.
-const FENCE_PREFIX = '((?:[ \\t]*(?:>|(?:[-*+]|\\d{1,9}[.)])(?=[ \\t])))*[ \\t]*)';
-const FENCE_OPEN_RE = new RegExp('^' + FENCE_PREFIX + '(`{3,}|~{3,})([^\\n]*)$');
-const FENCE_CLOSE_RE = new RegExp('^' + FENCE_PREFIX + '(`{3,}|~{3,})[ \\t]*$');
+// A fence is seen after any run of blockquote marks (`>`) and list markers (`-`, `*`, `+`, `1.`, `1)`), so a fence in a
+// list item or a blockquote is tracked and never cut. The prefix is group 1. Its indentation is judged by `readPrefix`:
+// an opener is indented at most three columns past its container's content column (so four columns at the top level is
+// an indented code block, not a fence), a closer at most three past its opener's.
+const PREFIX_SRC = '((?:[ \\t]*(?:>|(?:[-*+]|\\d{1,9}[.)])(?=[ \\t])))*[ \\t]*)';
+const PREFIX_RE = new RegExp('^' + PREFIX_SRC);
+const FENCE_OPEN_RE = new RegExp('^' + PREFIX_SRC + '(`{3,}|~{3,})([^\\n]*)$');
+const FENCE_CLOSE_RE = new RegExp('^' + PREFIX_SRC + '(`{3,}|~{3,})[ \\t]*$');
 const LIST_MARKER_RE = /(?:[-*+]|\d{1,9}[.)])(?=[ \t])/g;
+
+/** What a line's prefix says: `bq` blockquote marks; `col` the column the content starts at; `base` the column the
+ *  innermost quote's content starts at; `lcol` the content column of a list marker on this line (-1 for none). */
+interface Prefix { bq: number; col: number; base: number; lcol: number }
+
+function readPrefix(p: string): Prefix {
+  let col = 0;
+  let base = 0;
+  let bq = 0;
+  let lcol = -1;
+  let i = 0;
+  while (i < p.length) {
+    const c = p[i]!;
+    if (c === ' ') { col += 1; i += 1; }
+    else if (c === '\t') { col += 4 - (col % 4); i += 1; }
+    else if (c === '>') {
+      bq += 1; col += 1; i += 1;
+      if (p[i] === ' ') { col += 1; i += 1; }
+      base = col; lcol = -1;
+    } else {
+      let j = i;
+      while (j < p.length && p[j] !== ' ' && p[j] !== '\t') j += 1;
+      col += j - i; i = j;
+      let s = 0;
+      for (let k = i; k < p.length && (p[k] === ' ' || p[k] === '\t'); k += 1) s += p[k] === ' ' ? 1 : 4 - ((col + s) % 4);
+      lcol = col + (s >= 1 && s <= 4 ? s : 1);
+    }
+  }
+  return { bq, col, base, lcol };
+}
+
+/** The column a line's container content starts at, given the list column `list` carried from the lines above (-1 for
+ *  none): this line's own list marker, else the open list item's when the line is inside it, else the quote's. */
+const containerCol = (pr: Prefix, list: number): number =>
+  pr.lcol >= 0 ? pr.lcol : list >= pr.base && pr.col >= list ? list : pr.base;
+
+/** The list column after a line outside any fence: a marker sets it, a non-blank line indented less than it ends it. */
+function listAfter(list: number, line: string): number {
+  const m = PREFIX_RE.exec(line)!;
+  const pr = readPrefix(m[1]!);
+  if (pr.lcol >= 0) return pr.lcol;
+  return list >= 0 && !BLANK_RE.test(line) && pr.col < list ? -1 : list;
+}
 /** The longest prefix a fence may be reopened under; a longer one (a pathological document) is tracked, not reopened. */
 const REOPEN_PREFIX_MAX = 64;
 /** The longest fence marker a part may reopen. A longer marker (a pathological document) is still tracked, so no
@@ -71,8 +117,12 @@ const REOPEN_INFO_MAX = 64;
  *     same width, so the closer stays inside the same list item and quote and opens no new item;
  *   - `reopen` and `closeFlat` serve every part that starts inside the fence: the blockquote marks alone (`> ` once per
  *     `>`), at column 0. A list marker would open a new item, and an indent of four columns would make an indented code
- *     block, so the list nesting is dropped there; the code still renders as code, under the same quote. */
-interface Fence { mark: string; reopen: string | null; close: string | null; closeFlat: string | null }
+ *     block, so the list nesting is dropped there; the code still renders as code, under the same quote.
+ *  A list fence's original closer is indented, so read at column 0 it would open a fence of its own: `flatCut` marks a
+ *  fence whose container is a list item, and a part that starts inside it ends just before the original closer, which
+ *  starts a part of its own with no reopen (the closer then renders as a stray indented line, and nothing after it is code).
+ *  `bq` and `ec` (the container's content column) are what a closer is judged against. */
+interface Fence { mark: string; reopen: string | null; close: string | null; closeFlat: string | null; bq: number; ec: number; flatCut: boolean }
 
 /** The closing line a part ends a fence with: `fence` is the fence the part started inside (`inside`) or opened itself. */
 const closeFor = (fence: Fence, startedInside: Fence | null): string | null => (fence === startedInside ? fence.closeFlat : fence.close);
@@ -83,44 +133,53 @@ const RANK_LINE = 2;
 const RANK_FENCE = 1;
 
 /** A line's text as tested: without its `\n` and without one `\r` before it. */
-function lineAt(text: string, off: number, limit: number, probe?: Probe): { end: number; line: string; bytes: number } {
-  // Only `[off, limit)` is looked at, never the rest of a long line. A line that does not end before `limit` ends at
-  // `limit` here: it is longer than the window, and its tail is never read.
-  const w = text.slice(off, limit);
-  const i = w.indexOf('\n');
-  const stop = i < 0 ? w.length : i;
-  const end = i < 0 ? w.length : i + 1;
-  const line = w.slice(0, stop > 0 && w.charCodeAt(stop - 1) === 13 ? stop - 1 : stop);
-  const bytes = utf8Bytes(i < 0 ? w : w.slice(0, end));
-  if (probe !== undefined) probe.chars += (i < 0 ? w.length : i + 1) + line.length + end;
-  return { end: off + end, line, bytes };
+function lineAt(win: string, base: number, off: number, probe?: Probe): { end: number; line: string; bytes: number } {
+  // `win` is the part's window, `text.slice(base, limit)`, cut once per part. Only it is looked at, never the rest of a
+  // long line: a line that does not end inside it ends at its end here (longer than the window; its tail is never read).
+  const rel = off - base;
+  const i = win.indexOf('\n', rel);
+  const stop = i < 0 ? win.length : i;
+  const end = i < 0 ? win.length : i + 1;
+  const line = win.slice(rel, stop > rel && win.charCodeAt(stop - 1) === 13 ? stop - 1 : stop);
+  const bytes = utf8Bytes(win.slice(rel, end));
+  if (probe !== undefined) probe.chars += (end - rel) + line.length + (end - rel);
+  return { end: base + end, line, bytes };
 }
 
 /** How far past a window's end a line is read: enough for a heading test, which needs six characters of a line. */
 const LINE_SLACK = 8;
 
-/** The fence state after `line`, given the state before it. */
-function fenceAfter(fence: Fence | null, line: string): Fence | null {
+/** The fence state after `line`, given the state before it and the list column `list` above it. */
+function fenceAfter(fence: Fence | null, line: string, list: number): Fence | null {
   if (fence === null) {
     const m = FENCE_OPEN_RE.exec(line);
     if (m === null) return null;
     const prefix = m[1]!;
     const mark = m[2]!;
     const info = m[3]!;
+    const pr = readPrefix(prefix);
+    const ec = containerCol(pr, list);
+    if (pr.col - ec > 3) return null; // indented code, not a fence
     if (mark[0] === '`' && info.includes('`')) return null;
-    if (mark.length > REOPEN_MARKER_MAX || prefix.length > REOPEN_PREFIX_MAX) return { mark, reopen: null, close: null, closeFlat: null };
+    const own = { bq: pr.bq, ec, flatCut: ec > pr.base };
+    if (mark.length > REOPEN_MARKER_MAX || prefix.length > REOPEN_PREFIX_MAX) return { mark, reopen: null, close: null, closeFlat: null, ...own };
     const word = info.trim().split(/[ \t]/)[0] ?? '';
     const keep = word !== '' && utf8Bytes(word) <= REOPEN_INFO_MAX ? word : '';
-    const flat = '> '.repeat(prefix.split('>').length - 1);
+    const flat = '> '.repeat(pr.bq);
     return {
       mark,
       reopen: flat + mark + (keep === '' ? '' : ' ' + keep) + '\n',
       close: prefix.replace(LIST_MARKER_RE, (s) => ' '.repeat(s.length)) + mark + '\n',
       closeFlat: flat + mark + '\n',
+      ...own,
     };
   }
   const m = FENCE_CLOSE_RE.exec(line);
-  return m !== null && m[2]![0] === fence.mark[0] && m[2]!.length >= fence.mark.length ? null : fence;
+  if (m === null || m[2]![0] !== fence.mark[0] || m[2]!.length < fence.mark.length) return fence;
+  // CommonMark: a closer sits in the opener's quote depth, carries no list marker, and is indented at most three columns
+  // past the container's content column. Any other line of that shape is content, so a fence inside a fence stays inside.
+  const pr = readPrefix(m[1]!);
+  return pr.bq === fence.bq && pr.lcol < 0 && pr.col <= fence.ec + 3 ? null : fence;
 }
 
 /** The fence a part starting at a cut is inside, for reopening: only a reopenable one. */
@@ -130,7 +189,9 @@ const reopenable = (f: Fence | null): Fence | null => (f !== null && f.reopen !=
  *  nothing the cutter answers; it lets a test bound the work by an operation count, never by wall time. */
 export interface Probe { chars: number }
 
-interface Cut { off: number; bytes: number; fence: Fence | null }
+/** A cut candidate: its offset, the bytes before it, the fence and list state there, and whether the line after it is the
+ *  closer of that fence. */
+interface Cut { off: number; bytes: number; fence: Fence | null; list: number; closerNext: boolean }
 
 /** The largest offset in `[from, to)` whose prefix `text.slice(from, off)` is at most `budget` UTF-8 bytes, at a code
  *  point boundary, and at least one code point past `from`, so a cut always makes progress. */
@@ -155,33 +216,42 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
   let start = 0;
   let inside: Fence | null = null; // the reopenable fence this part starts inside
   let state: Fence | null = null; // the fence state at `start`, reopenable or not
+  let listState = -1; // the list column at `start`
   let continued = false;
   while (start < text.length) {
     const reopen = inside === null ? null : inside.reopen;
     const head = reopen === null ? 0 : utf8Bytes(reopen);
     // A part holds at most `maxBytes` bytes, so at most `maxBytes` characters: no line is read past this limit.
     const limit = Math.min(text.length, start + maxBytes + LINE_SLACK);
+    const win = text.slice(start, limit);
+    if (probe !== undefined) probe.chars += win.length;
     // One window: scan lines from `start` while the part still fits, keeping the latest cut of each rank.
     const best: (Cut | undefined)[] = [];
     let off = start;
     let bytes = 0;
     let fence = state;
+    let list = listState;
     let prevRank = RANK_LINE;
     let firstLineEnd = -1;
     let atEnd = false;
     while (off < text.length) {
-      const { end, line, bytes: lineBytes } = lineAt(text, off, limit, probe);
+      const { end, line, bytes: lineBytes } = lineAt(win, start, off, probe);
       if (firstLineEnd < 0) firstLineEnd = end;
+      const next = fenceAfter(fence, line, list);
+      const closerNext = fence !== null && next === null;
       if (off > start) {
         const rank = fence === null && HEADING_RE.test(line) ? RANK_HEADING : prevRank;
         const tailText = fence === null ? null : closeFor(fence, inside);
         const tail = tailText === null ? 0 : utf8Bytes(tailText);
         if (rank !== RANK_FENCE || fence?.reopen != null) {
-          if (head + bytes + tail <= maxBytes) best[rank] = { off, bytes, fence };
+          if (head + bytes + tail <= maxBytes) best[rank] = { off, bytes, fence, list, closerNext };
         }
+        // A reopened list fence ends before its original closer (see `Fence`): nothing after it is scanned.
+        if (closerNext && fence === inside && fence!.flatCut) break;
       }
       const blank = fence === null && BLANK_RE.test(line);
-      fence = fenceAfter(fence, line);
+      if (fence === null) list = listAfter(list, line);
+      fence = next;
       if (head + bytes + lineBytes > maxBytes) break;
       bytes += lineBytes;
       off = end;
@@ -199,7 +269,10 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
       continued = best[RANK_HEADING] !== pick;
       start = pick.off;
       state = pick.fence;
-      inside = reopenable(pick.fence);
+      listState = pick.list;
+      // The closer of a list fence that starts the next part is not reopened over: it closes the fence (the scan) and
+      // renders as the stray line it is, outside any fence.
+      inside = pick.closerNext && pick.fence!.flatCut ? null : reopenable(pick.fence);
       continue;
     }
     // No line boundary fits: the first line is longer than what is left. Cut it at a code point boundary. Inside a
@@ -212,7 +285,10 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
     parts.push({ start, end: cut.off, continued, reopen, close: closeText });
     if (cut.off >= firstLineEnd) {
       // The whole first line went: the fence state moves past it.
-      state = fenceAfter(state, lineAt(text, start, limit, probe).line);
+      const first = lineAt(win, start, start, probe).line;
+      const after = fenceAfter(state, first, listState);
+      if (state === null) listState = listAfter(listState, first);
+      state = after;
       inside = reopenable(state);
     } else if (closeText === null) {
       inside = null;

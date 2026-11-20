@@ -234,6 +234,72 @@ describe('splitMarkdownParts', () => {
     expect(rl[2]!.close).toBe('```\n');
   });
 
+  it('md parts: a fence closes only on a closer within its container: a nested fence in a Markdown-source fence stays inside it', () => {
+    // The outer fence holds a list with an indented fence: its inner `    ```` is content, not the outer's closer.
+    const nested = '```markdown\n- item\n    ```js\n    x\n    ```\n```\n';
+    const t = nested + 'tail para\n\n# Real heading\n\n' + 'f\n\n'.repeat(200);
+    const { parts } = splitMarkdownParts(t, 300);
+    checkCover(t, parts, 300);
+    expect(parts.some((p) => t.startsWith('# Real heading', p.start)), 'the real heading is still a cut').toBe(true);
+    for (const p of parts) expect(p.reopen).toBeNull();
+  });
+
+  it('md parts: an indented code block that looks like a fence is not a fence: headings after it are still cuts', () => {
+    const t = 'Example:\n\n    ```js\n    let x;\n' + 'prose line\n\n## Sec\n\nmore prose\n\n'.repeat(80);
+    const { parts } = splitMarkdownParts(t, 500);
+    checkCover(t, parts, 500);
+    expect(parts.length).toBeGreaterThan(3);
+    for (const p of parts) expect(p.reopen).toBeNull();
+    for (const p of parts.slice(1)) expect(t.startsWith('## ', p.start), JSON.stringify(t.slice(p.start, p.start + 20))).toBe(true);
+  });
+
+  /** The lines of `s` that a top-level reader (fences indented at most three columns) holds inside a fence, and whether
+   *  one is still open at the end. */
+  function topLevelFences(s: string): { inside: Set<string>; openAtEnd: boolean } {
+    const inside = new Set<string>();
+    let open: string | null = null;
+    for (const l of s.split('\n')) {
+      const m = /^ {0,3}(`{3,}|~{3,})\s*\S*\s*$/.exec(l);
+      if (open !== null) {
+        if (m !== null && m[1]![0] === open[0] && m[1]!.length >= open.length && /^ {0,3}(`{3,}|~{3,})\s*$/.test(l)) open = null;
+        else inside.add(l);
+      } else if (m !== null) open = m[1]!;
+    }
+    return { inside, openAtEnd: open !== null };
+  }
+
+  it('md parts: a list fence reopened at column 0 never swallows the text after its original closer', () => {
+    const list = '- item\n    - ```json\n' + '      zzzzzzzzzzzzzzzzzzzz\n'.repeat(60) + '      ```\n' + '\nAfter the list.\n## Next\n';
+    const parts = splitMarkdownParts(list, 300).parts;
+    checkCover(list, parts, 300);
+    const last = partText(list, parts.at(-1)!);
+    expect(last.startsWith('      ```\n'), 'the original closer starts the last part, outside any reopen').toBe(true);
+    expect(parts.at(-1)!.reopen).toBeNull();
+    for (const [i, p] of parts.entries()) {
+      if (p.reopen === null && i !== parts.length - 1) continue;
+      const f = topLevelFences(partText(list, p));
+      expect(f.openAtEnd, `part ${i} ends outside a fence`).toBe(false);
+      expect(f.inside.has('After the list.'), `part ${i}: the paragraph is not code`).toBe(false);
+      expect(f.inside.has('## Next'), `part ${i}: the heading is not code`).toBe(false);
+    }
+  });
+
+  it('md parts: a heading-looking line cut off by the window end is not a heading (the line is read a few characters past it)', () => {
+    const t = 'a'.repeat(40) + '\n\n' + 'b'.repeat(57) + '\n' + '#tag text\n' + 'c'.repeat(200) + '\n';
+    const { parts } = splitMarkdownParts(t, 100);
+    checkCover(t, parts, 100);
+    expect(parts[0]!.end, 'the blank-line cut wins').toBe(42);
+    expect(parts[1]!.continued).toBe(true);
+  });
+
+  it('md parts: a window of many short lines is cut in linear work', () => {
+    const t = 'abc\n'.repeat(100000);
+    const probe = { chars: 0 };
+    const { parts } = splitMarkdownParts(t, 1000, probe);
+    checkCover(t, parts, 1000);
+    expect(probe.chars, 'characters examined stay a small multiple of the text').toBeLessThanOrEqual(8 * t.length);
+  });
+
   it('md parts: sizes are UTF-8 bytes, so a part of four-byte characters is cut at the gate\'s bytes', () => {
     const t = '\u{1F600}'.repeat(300000); // 1 200 000 bytes, 600 000 UTF-16 units
     const { parts } = splitMarkdownParts(t, GATE);
