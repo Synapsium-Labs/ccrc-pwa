@@ -474,6 +474,11 @@ Turns are instant in both motion settings (§5.3). The overlay appears and goes 
 - It is released on exit, and by the browser when the page is hidden; ccrc requests it again when the page is visible and reader mode is still on.
 - **The idle release.** After 5 minutes with no reading activity ccrc releases it, and requests it again on the next activity. So a forgotten phone sleeps at its normal timeout after 5 minutes.
 - **What counts as activity.** Taps, keys and scrolls inside the frame never reach ccrc. Its only sign of reading there is the `progress` op, so a `progress` message whose share differs from the last one counts, routed by the frame's mount to the reader-mode hook as it is to the progress line. A repeated share counts for nothing, so a frame that resends the same `progress` cannot hold the screen on. A tap on ccrc's own controls counts too. A turn reaches ccrc only as a progress change, in XR2 as in XR1: the `reader` op carries no turn. A turn at the very end changes nothing, and that is correct, because nothing is being read.
+- **Reading sideways, and figures.** Some reading moves no vertical share: a wide table or code block read by horizontal scroll, and a figure studied in its full screen.
+  - **A figure's full screen counts in both waves.** It reaches ccrc through X2's `place {kind: 'overlay'}` and `overlay-closed`, so its opening and its closing each count.
+  - **From XR2, the frame also reports this reading itself,** as one more act of the `reader` op, `active`. It is sent while the reader scrolls a table or code block sideways, or scrolls, pans or zooms inside a figure's full screen, at most once per `readerActiveMs` (60 000 ms, a new protocol constant). So such reading keeps the screen on like any other.
+  - **In XR1, horizontal scrolling is not seen.** Five minutes of reading sideways alone, with no vertical move, no figure opened or closed and no tap on ccrc, lets the screen dim at its normal timeout. That is XR1's stated residue, and XR2 closes it.
+- **The idle timer.** `wakeLockWanted` is re-read on every reader-mode state change and by one timer, the reader-mode hook's idle timer. Its handle is held on the hook, and every activity re-arms it to fire at the last activity plus `READER_WAKE_IDLE_MS`. When it fires, it re-reads `wakeLockWanted` and releases the lock. It is a scheduler in L4, the hook, and the decision stays in L1.
 - A refusal or a missing API changes nothing you can see. There is no setting in this design; one is Later.
 
 ### 6.4 Orientation
@@ -517,7 +522,7 @@ This section names every new op, the paged reading, its size share under the lib
 | `--z-reading` | `ui/src/styles/tokens.css` | L0 style |
 | The mount: `onProgress` for every production mount, `remount(chrome)` and `focus()` (XR1), the `reading` op and `onReader` (XR2) | `reader/bridge.ts`, `reader/policy.ts#readerMountPlan` | L3, L1 |
 
-Every decision is in L1 and every act in L4 (CLAUDE.md, decide in L1, act in L4). The fill, the full-screen request and the wake lock are one hook; no second listener is added for history (X2's dispatcher, with a second host slot for a second owner), keys (the command registry), visibility (the page clock) or the hiding of the console (`modal-layers.ts`, the modal layers' own module, which gains `hideAsPage` and `releaseAsPage`; `sheet.tsx`'s lift rule is unchanged). The wake lock has one decider, `wakeLockWanted`, re-read on every state change.
+Every decision is in L1 and every act in L4 (CLAUDE.md, decide in L1, act in L4). The fill, the full-screen request and the wake lock are one hook; no second listener is added for history (X2's dispatcher, with a second host slot for a second owner), keys (the command registry), visibility (the page clock) or the hiding of the console (`modal-layers.ts`, the modal layers' own module, which gains `hideAsPage` and `releaseAsPage`; `sheet.tsx`'s lift rule is unchanged). The wake lock has one decider, `wakeLockWanted`, re-read on every state change and by the hook's one idle timer (§6.3).
 
 ### 7.2 The library: ops
 
@@ -526,10 +531,10 @@ Two ops ride the existing port, the existing host parser and `BRIDGE_LIMITS`; th
 | Op | Direction | Payload, and its `OP_KEYS` row | Check | Effect |
 |---|---|---|---|---|
 | `reading` | parent to frame | `{mode}`, one of `screens`, `scroll`, `off`; `reading: ['t', 'mode']` | The frame's port parser, through `FRAME_ACCEPTS`; an unknown mode is ignored | The frame hides or restores its bar, rail, settings button and top space in place, and turns screen pages on or off. `DocFrame.setReading(mode)` queues it before `ready`, latest wins, and seeds a later remount |
-| `reader` | frame to parent | `{act}`, one of `menu`, `exit`, `toggle`; `reader: ['t', 'act']` | The host parser: a closed set, no other key | ccrc's `onReader(act)` callback. Sent only when the seed's `bridge.reader` is true, which the library sets when the host passes `onReader`; so a 1.1 host never counts it as refused |
+| `reader` | frame to parent | `{act}`, one of `menu`, `exit`, `toggle`, `active`; `reader: ['t', 'act']` | The host parser: a closed set, no other key | ccrc's `onReader(act)` callback. Sent only when the seed's `bridge.reader` is true, which the library sets when the host passes `onReader`; so a 1.1 host never counts it as refused |
 
 - **Pacing in the frame, not refusal in the host.** `BRIDGE_LIMITS` has no per-op rate for this, and it closes the port after 16 refused messages (`refusalsToClose`), so a host that refused fast taps would bring the frame down to the plain view. The frame paces `reader` itself, as it paces `progress`: a new protocol constant, `readerWindowMs: 250`, leading edge, the latest act of a window at its end. A well-paced frame is therefore never refused, and taps at ten a second never close the bridge (a library case).
-- `menu` is a tap on the top band. `exit` is Esc with no overlay of the frame's own open, or `r`, while reader mode is on. `toggle` is `r` while it is off. The frame never sends a URL or a position; ccrc decides what each act does.
+- `menu` is a tap on the top band. `exit` is Esc with no overlay of the frame's own open, or `r`, while reader mode is on. `toggle` is `r` while it is off. `active` is reading that moves no vertical share: a table or code block scrolled sideways, or a scroll, pan or zoom inside a figure's full screen. The frame sends it only while reader mode is on, at most once per `readerActiveMs` (60 000 ms), and ccrc counts it as wake-lock activity only (§6.3). The frame never sends a URL or a position; ccrc decides what each act does.
 - The library's `features.chrome` stays as it is for a mount; the `reading` op is the in-place switch for an open frame.
 
 ### 7.3 The library: the rest
