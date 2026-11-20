@@ -42,6 +42,11 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
   in shadow behind the `cap-counts-working` row. `capsRoomOf` now leaves out waiting runs only when the reading is
   armed (`usage.workingOnly`). In shadow, the lane reads no worker facts, and only a slot freed in the ordinary way
   wakes anyone. Armed, a slot that a waiting or gone worker frees is room too. The brief makes this binding.
+- **lane-file.** The draft wrote the lane's pass inside `server/src/watch.ts`, about 70 lines. Measured with
+  growth-check armed, that grew `watch.ts` by 54 net code lines with Task 3's lines, over the limit of 40, and this
+  run takes no waiver. The pass now lives in `server/src/coord/admissionWakeLane.ts` (L4, context C5), in the block-wake
+  lane's shape: `FleetWatcher.sweepAdmissionWake` hands it the store, the listing, the serialiser, the worker-facts port,
+  the lane's memory and the feed sink, and the pass decides nothing itself.
 - **migration-slot.** The stack took slot 52 and the draft took 107. This PR takes 111: the next free slot by
   position after capacity Task 3's seed row (110), which it stacks on, with `main` at 109 when it last took `main`.
   Whoever lands second renumbers, under the coordinator's standing licence. The coord-db version pins and
