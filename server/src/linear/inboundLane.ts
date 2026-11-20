@@ -296,7 +296,9 @@ export class InboundLane {
         const conflict = !comment.ok && comment.word === 'linear-invalid' && comment.detail === 'conflict';
         if (!comment.ok && !conflict) { this.refused(fresh, comment, slot); return; }
         // the owner is told once per close (the subject is keyed per close) whenever the fallback comment landed, made now or by an
-        // earlier attempt, so a lost answer or a pass with no live owner never loses the mail; before the cancel
+        // earlier attempt, so a lost answer never loses the mail, and an owner whose session is gone is still mailed; before the
+        // cancel. A team with no Linear owner at all has no addressee: no mail, and the close and cancel go on (review 2874 F3,
+        // the coordinator's ruling: as for the no-cancel and give-up mails; the fallback comment is already on the issue)
         if (refusal !== null) this.mailOwnerOnce(fresh, closeTextRefusedMail(fresh, refusal, closeId));
         const update = await this.deps.call({ ...base, op: 'issueUpdate', fields: ['state'], input: { id: row.linearId, stateId: canceled.id } });
         if (!update.ok) { this.refused(fresh, update, slot); return; }

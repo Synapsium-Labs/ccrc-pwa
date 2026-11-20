@@ -726,6 +726,12 @@ describe('textRefusalOf and textFactsOf (review 2457 F3)', () => {
     const s = snap({ mode: 'private', tickets: [tk()] });
     expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 999, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
   });
+
+  it('a project the snapshot does not describe is judged unknown, public, with the binding\'s own team (review 2874 A5)', () => {
+    const s = { ...snap({ mode: 'private', tickets: [tk()] }), projects: [] };
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1, teamKey: 'BBB' }))).toEqual([textFactOfTeam(null, 'BBB')]);
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
+  });
 });
 
 describe('textFactOfTeam (review 2834 F1)', () => {

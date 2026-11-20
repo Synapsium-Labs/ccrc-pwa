@@ -194,7 +194,7 @@ export const closeTimeOf = (row: { mailedAt: number | null; seenAt: number }): n
 
 /** The first 12 hex digits of a digest of a stored reason. The digest is `uuidOf`'s (L1 stays free of `node:` imports); its first
  *  12 hex digits are the sha256's own. It keys the REASON comment (that text is posted anyway) and the owner mail's subject (which
- *  stays inside ccrc), and NEVER the fallback comment's key (`fallbackKeyOf`). */
+ *  stays inside ccrc), and NEVER the fallback comment's key (the `fallback` kind of `closeCommentSeedOf`). */
 export const reasonDigestOf = (reason: string | null): string => uuidOf(reason ?? '').replace(/-/g, '').slice(0, 12);
 
 /** A close's identity: the reason's digest and the close's time. It tells one close of an issue apart from a later one with another

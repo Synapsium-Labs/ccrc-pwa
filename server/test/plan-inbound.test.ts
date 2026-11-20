@@ -2163,12 +2163,18 @@ describe('the refused-text close has its own identity (review 2834 A1, A2, A6)',
     const ids = comments(r).map((a) => String(a.input['requestId']));
     expect(ids).toHaveLength(2);
     expect(ids[1]).toBe(ids[0]);
-    // a reason attempt of that round is keyed otherwise
+    // two REASON attempts of one close round, for two clean reasons, are keyed apart (review 2874 A2): the reason kind's key
+    // carries the reason's digest, so the second reason is posted, not answered conflict
     const r2 = await rig({ mode: 'public' });
     await detect(r2, [node(12)]);
-    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
-    await passAt(r2, r2.t.now + 1);
-    expect(String(comments(r2)[0]!.input['requestId'])).not.toBe(ids[0]);
+    await closeRefused(r2, 'a duplicate of other work');           // the reason comment lands, the cancel fails retryably
+    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'a second, different reason' });
+    await passAt(r2, r2.t.now + 3600_000);
+    const reasonIds = comments(r2).map((a) => String(a.input['requestId']));
+    expect(reasonIds).toHaveLength(2);
+    expect(reasonIds[1]).not.toBe(reasonIds[0]);
+    expect(r2.lin.comments.map((c) => c.body).some((b) => b.includes('a second, different reason'))).toBe(true);
+    expect(reasonIds).not.toContain(ids[0]);
   });
 
   it('two refused closes of one issue (a real retire and reopen between) are mailed twice, even with the SAME reason', async () => {
@@ -2189,6 +2195,19 @@ describe('the refused-text close has its own identity (review 2834 A1, A2, A6)',
     expect(m[0]!.subject).not.toBe(m[1]!.subject);
     expect(r2.lin.comments).toHaveLength(2);                        // each close posted its own fallback
     for (const x of m) { expect(x.body).not.toContain('AAA-99'); expect(x.body).toContain('a comment without the reason is on the issue'); }
+  });
+
+  it('a refused-text close in a team with no Linear owner: the fallback and the cancel go on, actedAt is set, no mail (review 2874 F3)', async () => {
+    const r = await rig({ mode: 'public', named: null, progs: false });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: REFUSED });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    const w = writes(r);
+    expect(w.map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(String(w[0]!.input['body'])).not.toContain('AAA-99');
+    expect(rowOf(r, 12)!.actedAt).toBe(r.t.now);
+    expect(mails(r)).toEqual([]);
   });
 
   it('a fallback answered conflict (an earlier attempt landed it) still mails once; a later pass of the same close mails nothing more', async () => {

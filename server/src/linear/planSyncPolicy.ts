@@ -260,24 +260,26 @@ export function textRefusalOf(texts: readonly string[], facts: readonly { teamKe
 /** Review 2834 F1, the ONE writer of "a team no project claims is judged as `unknown`, public" (design §6.1): the project fact
  *  `textRefusalOf` reads for one issue's text. `owner` is the owning project's linking reading (its team key and mode), or null
  *  when no project claims the issue's team; then the fact is the issue's own team with mode `unknown`, which is public. The plan
- *  routes' door and the inbound lane's act-time check both come here, so they never disagree on an unowned team. */
+ *  routes' door, the inbound lane's act-time check and the sync's per-binding facts (`textFactsOf`, review 2874 A5) all come
+ *  here, so they never disagree on an unowned team. */
 export function textFactOfTeam(owner: { teamKey: string | null; mode: LinkingMode } | null, issueTeam: string | null): { teamKey: string | null; mode: LinkingMode } {
   return owner ?? { teamKey: issueTeam, mode: 'unknown' };
 }
 
 /** The project facts that speak for a binding's text (review 2457 F3): a ticket's and an epic's own project; an initiative's, every
  *  epic's of the plan (the strictest reading: the one fact set `planSyncSteps` picks per workspace is a subset of it); a checkpoint's
- *  epic's. A project the snapshot does not describe is judged as `unknown`, public (§6.1), with the binding's own team. */
+ *  epic's. A project the snapshot does not describe is judged as `unknown`, public (§6.1), with the binding's own team, through
+ *  `textFactOfTeam`. */
 export function textFactsOf(s: Pick<SyncSnapshot, 'plan' | 'projects'>, b: Pick<BindingRow, 'localKind' | 'localId' | 'teamKey'>): { teamKey: string | null; mode: LinkingMode }[] {
-  const unknown = { teamKey: b.teamKey, mode: 'unknown' } as const;
-  const factOf = (project: string): { teamKey: string | null; mode: LinkingMode } => s.projects.find((p) => p.project === project) ?? unknown;
+  const factOf = (project: string): { teamKey: string | null; mode: LinkingMode } =>
+    textFactOfTeam(s.projects.find((p) => p.project === project) ?? null, b.teamKey);
   const epics = s.plan.epics;
   const projects: string[] = b.localKind === 'programme' ? epics.map((e) => e.project)
     : b.localKind === 'epic' ? epics.filter((e) => e.id === b.localId).map((e) => e.project)
       : b.localKind === 'checkpoint' ? epics.filter((e) => e.checkpoints.some((c) => c.id === b.localId)).map((e) => e.project)
         : epics.flatMap((e) => e.tickets.filter((t) => t.id === b.localId).map((t) => t.project));
   const facts = [...new Set(projects)].map(factOf);
-  return facts.length > 0 ? facts : [unknown];
+  return facts.length > 0 ? facts : [textFactOfTeam(null, b.teamKey)];
 }
 
 /** `opts.force` (the drift restore, Task 4.2): a binding id in it is treated as NOT current, so its absolute update is emitted
