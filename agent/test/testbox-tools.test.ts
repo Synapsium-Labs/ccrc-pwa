@@ -57,6 +57,10 @@ const MADISON: Record<string, string> = {
   python3: 'python3 | 3.12.3-0ubuntu2 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
   git: '       git | 1:2.43.0-1ubuntu7 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
   tmux: '      tmux | 3.4-1ubuntu0.1 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n      tmux | 3.3a-1 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
+  // Chrome's libraries as a distribution past the 64-bit time_t rename ships them: `libasound2` is only a virtual name there
+  // (no line), its package is `libasound2t64`; of `libcurl3-gnutls | libcurl4` only the second exists.
+  libasound2t64: 'libasound2t64 | 1.2.11-1 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
+  libcurl4: 'libcurl4 | 8.5.0-2 | http://mirror.testbox.invalid noble/main amd64 Packages\n',
 };
 const MEASURED_AT = '2026-10-29T12:00:00Z';
 /** Another npm, for a sync that changes npm alone on the same node. */
@@ -359,7 +363,7 @@ function zipStore(entries: readonly { name: string; data: Buffer; mode: number }
 }
 const chromeZip = (version: string): Buffer => zipStore([
   { name: 'chrome-linux64/chrome', data: Buffer.from(`#!/bin/sh\necho "Google Chrome for Testing ${version}"\n`), mode: 0o755 },
-  { name: 'chrome-linux64/deb.deps', data: Buffer.from('libnss3\nlibgbm1\n'), mode: 0o644 },
+  { name: 'chrome-linux64/deb.deps', data: Buffer.from('libnss3 (>= 2:3.35)\nlibgbm1\nlibasound2 (>= 1.0.17)\nlibcurl3-gnutls | libcurl3-nss | libcurl4 | libcurl3\n'), mode: 0o644 },
 ]);
 
 /** A fixture CA-signed certificate for the two download hosts. */
@@ -566,7 +570,7 @@ describe('tools-sync on a fixture box laid out as TB7\'s bootstrap leaves it (D-
     expect(report(b).chromeSha256).toBe(sha256(W.chrome));
     // 5. The OS packages at the measured versions, through the package manager.
     const apt = readFileSync(path.join(path.dirname(b.root), 'apt-argv'), 'utf8').trim().split('\n');
-    expect(apt).toEqual(['-q update', '-q install -y --no-install-recommends libnss3 libgbm1',
+    expect(apt).toEqual(['-q update', '-q install -y --no-install-recommends libnss3 libgbm1 libasound2t64 libcurl4',
       '-q install -y --no-install-recommends --allow-downgrades python3=3.12.3-0ubuntu2 git=1:2.43.0-1ubuntu7 tmux=3.4-1ubuntu0.1 strace jq']);
     // 6. The set, the release's server/ and agent/ production dependencies (the test service imports ws, D-7568), the
     // two switches and the takeover file.
@@ -781,6 +785,29 @@ describe('a tool that fails leaves current and the installed release unchanged',
     expect(r.stderr).toMatch(/tool sync failed \(tmux: the OS mirror has no tmux 3\.4\)/);
     expectUnchanged(b);
     expect(readFileSync(path.join(path.dirname(b.root), 'apt-argv'), 'utf8')).not.toMatch(/python3=/);
+  });
+
+  it('a tool whose printed version is not its package\'s version is still pinned: a lettered respin, and python3\'s metapackage', async () => {
+    const b = makeBox();
+    const fx = path.join(path.dirname(b.root), 'madison');
+    // the package is 3.4a and its `tmux -V` says 3.4; `python3` is the metapackage at 3.12.2 for an interpreter printing 3.12.3
+    writeFileSync(path.join(fx, 'tmux'), 'tmux | 3.4a-2ubuntu0.2 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n');
+    writeFileSync(path.join(fx, 'python3'), 'python3 | 3.12.2-0ubuntu2 | http://mirror.testbox.invalid noble/main amd64 Packages\n');
+    writeFileSync(path.join(fx, 'python3.12'), 'python3.12 | 3.12.3-1ubuntu0.4 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n');
+    resetLogs();
+    const r = await sync(b);
+    expect(r.code, r.stderr).toBe(0);
+    const apt = readFileSync(path.join(path.dirname(b.root), 'apt-argv'), 'utf8').trim().split('\n');
+    expect(apt[apt.length - 1]).toBe('-q install -y --no-install-recommends --allow-downgrades python3 python3.12=3.12.3-1ubuntu0.4 git=1:2.43.0-1ubuntu7 tmux=3.4a-2ubuntu0.2 strace jq');
+    // an exact package version still wins over a lettered one beside it
+    writeFileSync(path.join(fx, 'tmux'), 'tmux | 3.4a-2 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n tmux | 3.4-1ubuntu0.1 | http://mirror.testbox.invalid noble/main amd64 Packages\n');
+    resetLogs();
+    const again = makeBox();
+    writeFileSync(path.join(path.dirname(again.root), 'madison', 'tmux'), 'tmux | 3.4a-2 | http://mirror.testbox.invalid noble-updates/main amd64 Packages\n tmux | 3.4-1ubuntu0.1 | http://mirror.testbox.invalid noble/main amd64 Packages\n');
+    const r2 = await sync(again);
+    expect(r2.code, r2.stderr).toBe(0);
+    const apt2 = readFileSync(path.join(path.dirname(again.root), 'apt-argv'), 'utf8').trim().split('\n');
+    expect(apt2[apt2.length - 1]).toContain(' tmux=3.4-1ubuntu0.1 ');
   });
 
   it('a spec naming another tools directory, or a value not its format, is refused before anything is fetched', async () => {
