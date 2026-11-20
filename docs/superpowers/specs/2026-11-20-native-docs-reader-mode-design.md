@@ -60,7 +60,8 @@ XR1 does not run on 1.1.0. It runs on the contract release, after X1's wave C re
 | Screen page | One viewport of text. A turn moves to the next screen page and lands on a whole line |
 | Turn | Moving one screen page forward or back |
 | The overlay | ccrc's small reader-mode toolbar: progress and time left, Aa, the turn setting and Exit |
-| The top band | The strip at the top of the reading view whose tap shows the overlay |
+| The top band | The strip at the top of the reading view whose tap shows the overlay; drawn and reported by the frame, from XR2 |
+| The menu control | XR1's small ccrc button in a top corner of the reading view, whose tap shows the overlay; gone from XR2 |
 | Reading container | The ccrc element that holds the reader frame and the overlay, and that goes full screen |
 
 ## 2. The experience
@@ -116,7 +117,21 @@ Normal view, 412 x 915, one bar            Reader mode                    Overla
 +------------------------------+     +------------------------------+  +------------------------------+
   [/] Jump  [=] Contents  [R] Reader mode            [S] Pages or Scroll   [Aa] the reader's own Aa
 ```
-*Mockup 2. Phone. The Reader mode tool is the last tool on the one bar, at the thumb's side. In reader mode the text fills the screen inside the safe areas. A tap at the top shows the overlay; a tap on the left third turns back, anywhere else below the top band turns forward.*
+*Mockup 2. Phone. The Reader mode tool is the last tool on the one bar, at the thumb's side. In reader mode the text fills the screen inside the safe areas. A tap at the top shows the overlay; a tap on the left third turns back, anywhere else below the top band turns forward. Mockups 1 and 2 show reader mode from XR2.*
+
+```text
+XR1 on a phone, 412 x 915                 XR1, the menu control tapped
++------------------------------+          +------------------------------+
+|[=]                       [Aa]|          |[x]  Title of the doc   41%   |
+| 1. Context                   |          | 1. Context                   |
+| This section says what       |          | This section says what       |
+| reader mode builds on.       |          | reader mode builds on.       |
+| Every claim about ccrc ...   |          | ...                          |
+|  (continuous scroll)         |          |                              |
++------------------------------+          +------------------------------+
+  [=] ccrc's menu control   [Aa] the reader's own Aa, drawn by the frame
+```
+*Mockup 3. XR1 on a phone. The text scrolls as it does today. Two small controls stay over the page's top corners: ccrc's menu control, which shows the overlay with Exit and the percentage, and the reader's own Aa, which still opens width, font and folds. XR2 removes both.*
 
 ### 2.3 The states
 
@@ -261,7 +276,8 @@ flowchart TB
 | ccrc's head, truth line, banners, the one bar, the shell's navigation | Hidden | Outside the container, covered by the fill or outside the full-screen subtree |
 | The reader's own bar, running head, progress line | Hidden | XR1: the reader-mode remount passes `features.chrome {bar: false}`. XR2: the library hides it in place |
 | The contents rail | Hidden | XR1: `rail: false` at the remount. XR2: in place |
-| The frame's Aa button | XR1: stays, because at 1.1.0 `settings: false` also unregisters the `settings` command (`enhance/settings.js`), so the overlay's Aa could not open it. XR2: hidden in place, reachable from the overlay's Aa (`command settings`) | XR1 keeps it; XR2 hides it |
+| The frame's Aa button | XR1: stays, drawn by the frame at the top right, where the library puts it with the bar off (`.aa-wrap`, sticky, 8 px from the top). The contract release cannot hide it and keep its menu: there, as at 1.1.0, `settings: false` also unregisters the `settings` command (`enhance/settings.js`), and neither X1 nor X2 adds a host switch for it (X1 spec §6 keeps one Aa, in the frame). So in XR1 you reach width, font and folds through that Aa, in reader mode, with nothing of ccrc's over it. XR2: hidden in place, reachable from the overlay's Aa (`command settings`, D-8803) | XR1 keeps it; XR2 hides it |
+| ccrc's menu control | XR1 only: one 44 by 44 px button in the top corner the frame's Aa does not use (the top left), inside the safe areas, on the reader's ground at 85% opacity, labelled "Reader mode menu". A tap shows the overlay | Text scrolls beneath it, as it does beneath the frame's Aa; a drag anywhere else scrolls the frame. XR2 removes it |
 | Figure tools, Render buttons of figures not drawn yet, code copy, table filter, cards | Kept | They are the document's own controls. Figures stay on request (E17, both phone blocks unchanged) |
 | The top space above the first heading | Trimmed | `topSpace: false` |
 
@@ -377,7 +393,7 @@ flowchart TB
 - **A tap** is a primary pointer up within 10 px and 500 ms of its down. A long press is not a tap.
 - **Interactive targets** are named by one selector list in the library: `a[href]`, `button`, `summary`, `input`, `select`, `textarea`, `label`, `[role="button"]`, `[tabindex]`, the figure tools, the table filter, cards and menus. Mermaid's Render button is a button, so a tap on it draws the figure and never turns.
 - **The top band** is the same in both settings, so you always know where the overlay is. It sits inside the frame, so it is the library's to draw nothing on and to report; ccrc draws the overlay.
-- **XR1, before the library landing,** has no turns and no frame-side band. ccrc draws its own top band as a transparent strip, 44 px tall, over the top of the frame; a tap or a hover on it shows the overlay. The text under it scrolls into reach. XR2 removes the strip when the frame's seed accepts reader mode, so one mechanism reports the band at a time.
+- **XR1, before the library landing,** has no turns and no frame-side band, and ccrc draws no strip over the frame: a strip across the top would cover the frame's Aa, so a tap there would open ccrc's overlay instead of the settings, and a drag that started on it would not scroll. ccrc draws only its menu control, a 44 px button in the top corner the frame's Aa leaves free (§4.2). XR2 removes it when the frame's seed accepts reader mode, so one mechanism shows the overlay at a time.
 
 ### 5.5 Figures, tables, code and Mermaid
 
@@ -432,7 +448,7 @@ Reader mode never locks orientation (`screen.orientation.lock` stays unused): yo
 ### 6.5 Focus order and screen readers
 
 - **On entering,** focus moves into the frame, so its keys work at once: at once where nothing remounts (a phone in XR1, every device in XR2), and on the new mount's `ready` after XR1's desktop remount, through a new `ReaderMount.focus()`. A polite live region in ccrc says "Reader mode. Esc or Back leaves it."
-- **The overlay** is a `role="toolbar"` region named "Reader mode", not a modal: Exit, the turn setting, Aa, then the progress text, which is not focusable. Showing it moves focus to Exit. Tab past Aa returns to the frame. Esc on the overlay hides it and returns focus to the frame, without leaving reader mode.
+- **The overlay** is a `role="toolbar"` region named "Reader mode", not a modal: Exit, the turn setting and Aa (the last two from XR2), then the progress text, which is not focusable. Showing it moves focus to Exit. Tab past Aa returns to the frame. Esc on the overlay hides it and returns focus to the frame, without leaving reader mode.
 - **On leaving,** focus returns to the frame (after XR1's desktop remount, on its `ready`): the control that entered may not exist yet, because the head draws its reader controls only once the frame is ready again.
 - **Behind it,** the console is inert and hidden from assistive technology while reader mode is on (§4.1).
 - **Screen pages and screen readers.** A turn only scrolls, so a screen reader's own reading order and navigation are untouched. A turn announces nothing, because the text is what the reader reads next.
@@ -542,7 +558,7 @@ This section checks reader mode against every wall and records what it departs f
 | The hidden console | Inert and hidden from assistive technology while reader mode is on, so nothing behind the fill takes focus or speaks (§4.1) |
 
 **Departures, defined in the leaf plan** (issued block 8803 to 8805):
-- **D-8803:** the overlay's Aa sends `command settings` from ccrc's reader-mode overlay, not only "from a tap on ccrc's own bar" (rich-docs §4.4's `command` row).
+- **D-8803:** from XR2, the overlay's Aa sends `command settings` from ccrc's reader-mode overlay, not only "from a tap on ccrc's own bar" (rich-docs §4.4's `command` row). XR1's overlay has no Aa: the frame's own stays on screen (§4.2).
 - **D-8804:** the new `reading` op (to the frame) and `reader` op (from it), against rich-docs §4.4's closed lists of parent messages ("`prefs`, `changes.result`, `mermaid` or `command`") and of frame ops.
 - **D-8805:** ccrc asks for `progress` from every production mount, from XR1, against the `progress` row's "ccrc asks only for a frame mounted on its own bar".
 
@@ -560,7 +576,7 @@ This section says how each part is proved; the plan carries the rows.
 
 | Row | Installed action and observation |
 |---|---|
-| Reader mode | On the installed release: open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-8 recorded per engine |
+| Reader mode | On the installed release carrying XR2: open a spec on a phone (412 by 915, in the browser and installed) and on a desktop (1280 by 800 and 1920 by 1080). Enter by the button and by `r`. Only the text remains. (After XR1 alone, the text scrolls, and two small controls stay over its top corners, ccrc's menu control and the reader's own Aa, as §4.2 says; the row is run in full after XR2.) Turn forward and back by a side tap, a swipe and the arrow keys; every turn lands on a whole line; a link, a selection and a Render button never turn; a wide table scrolls under a swipe. Switch to Scroll and back. A tap at the top shows the percentage, the time left, Aa and Exit. Leave by Esc, Back (Android Back, iOS swipe), Exit and the browser's own exit, each once. Reopen the doc: the place is kept. The screen stays on while reading and sleeps after the idle release. An external link's sheet shows inside reader mode. Every control meets 44 px. FS-1 to FS-8 recorded per engine |
 
 ## 10. Decisions
 
@@ -578,7 +594,7 @@ Technical choices are the worker's, each argued above; the one product choice wa
 | R8 | Losing full screen | Ends reader mode | Proposed |
 | R9 | A link to another doc | Ends reader mode; reader sessions across docs Later | Proposed |
 | R10 | Paging runs | In the frame, a library reading mode | Proposed |
-| R11 | Overlay trigger | The top band; ccrc's strip in XR1, the frame's band from XR2 | Proposed |
+| R11 | Overlay trigger | ccrc's menu control in a top corner in XR1, beside the frame's own Aa; the frame's top band from XR2 | Proposed |
 | R12 | Time left | From `render()`'s meta, the library's rule, no ccrc copy | Proposed |
 | R13 | Text size | A new reader-local pref, four steps | Proposed |
 | R14 | Wake lock | Taken, with a 5 minute idle release | Proposed |
