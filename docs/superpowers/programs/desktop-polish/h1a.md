@@ -80,6 +80,22 @@ shared the box and the test slice. **Measured**.
 | `pwa`: `stores.test.ts`, `workflow-strip.test.tsx` (the two that import `shared/workflows`) | 172 and 32 passed |
 
 
+### Fix round 1 (review 2961): the runs at the new tip
+
+Same method: `ccrc test -- <command>`, one test file per process, `--maxWorkers=2`, load (1 minute) recorded; **measured**.
+
+| Run | Result |
+|---|---|
+| `helper-facts.test.ts`, `helpers-decision.test.ts` | 57 and 152 passed (load 11 to 20); the same files on an extraction of `origin/main` (at this branch's base): 57 and 152 failed |
+| every direct importer of the three modules and of `shared/continuity-reports` (`continued-in-parity`, `continuity-hook-reports`, `continuity-readings`, `continuity-report-route`, `continuity-witness`, `door-tools`, `inflight-manifest-parity`, `pane-sgr-guard-characterization`, `session-hook-door-reports`, `single-definition/vocabularies`, `transcript-ladder`, `transcript-parse`, `w7-compaction-parity`, `workflow-controls-table`, `workflows-model`, `workflows-read`) | passed |
+| `rings/*` (all 12, `wire-totality` and `totality` included), `coord-policy-rings`, `ownership`, `dtbd`, `ci-ledger-guard`, `citations`, `anchors`, `public-text`, `growth-check`, `growth-caps`, `oss-metadata`, all 42 `single-definition/*` (`docs-l0` and `advance-switches` included) | passed in one pass (load 9 to 32) |
+| `topology-clean` | 61 of 61 passed (it was UNMEASURED in the first round, killed by the memory cap) |
+| `deviation-refs` (after a fresh `git fetch origin main`) | first pass: 33 of 34, the one failure the 20 s time-out of the case that builds two git trees (load 25); alone, 34 of 34 (load 17). A merge probe of this branch against `origin/main` is clean |
+| `secret-mask` | 2 time-outs at 20 s in the drawer's echo cases, in the full pass and alone (load 18). Nothing in those cases touches the new code. The same file on an extraction of `origin/main` fails too (one case, load 18, and 8 in the first round): a load flake, as in the first round; CI is the arbiter |
+| `tsc --noEmit`: `server` (src, shared and the two new test files), `pwa` | clean |
+| `pwa`: `workflow-strip.test.tsx`, `stores.test.ts`, `session-store-beat.test.ts` (the importers of `shared/workflows` and the store that reads it) | 32, 172 and 1 passed |
+
+
 ## 5. Mutation run
 
 `ccd/coordinator-skill/references/mutation-run.py` mutates Python module text, so each TypeScript file is wrapped as a Python
