@@ -61,7 +61,8 @@ helpers S1)".
   comparing the basis, `foldTaskReport` (called beside `foldNotification`, in replay and observe alike), and the three
   existing end sites routed through `isEndable` and `endedBy`: `touchActivity`, and `foldNotification`'s run and worker
   arms. Net growth measured with `growthCheck.ts#codeLines`: +3 code lines.
-- [x] **The migration, slot 112** (the next free slot at `origin/main` d0b7467b9, which holds 111 entries). One
+- [x] **The migration, slot 116** (the next free slot at `origin/main` 5041cf1733, which holds 115 entries; it was 112 at
+  d0b7467b9, and moved up when the branch absorbed `main` after 112 to 115 landed). One
   `ALTER TABLE delegation_activities ADD COLUMN endBasis` whose CHECK holds the three words and Table 9's two rules.
   Every test that pins the migration list or the schema, found by what it asserts, is run locally; the task note says
   which files ran where (the coordinator's ruling of 2026-11-20 leaves the other schema importers to CI's selection).
@@ -147,7 +148,7 @@ one (`isEndable`), so S2 adds no end rule of its own.
 - **D-8830** — `broker-task-report-end`: session helpers S1 (desktop polish wave 156). An Agent's final task notification
   ends its broker activity record on the natural key through the mapping, with no launch index; `endedAt` is the
   notification's observed time, and `endBasis` (`observed`, `task-report` or `backfill-unmeasured`, optional, absence
-  meaning `observed`) is a checkpoint key and a nullable column (migration 112). A later measured end replaces a
+  meaning `observed`) is a checkpoint key and a nullable column (migration 116). A later measured end replaces a
   backfill one, at every end site. Each departure from the spec, by slug:
   - `observed-written-as-absence`: an `observed` end is written by removing the key, never as `endBasis: 'observed'`, so
     a checkpoint carries the key only for a task report or a backfill. The codec still reads an explicit `observed`.
