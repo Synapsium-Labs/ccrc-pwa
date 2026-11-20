@@ -243,7 +243,8 @@ Every wave ends with the common acceptance cycle of the completion plan (exact-t
   - P1's cutter (`pwa/src/docs/range/mdParts.ts`) is a line scanner. It cannot know which list item or quote a line belongs to, so some inputs still break meaning (listed in Results, Wave P1, "The cutter's residuals").
   - Replace its cut points with the top-level block boundaries of the library's own block parse, run beside the render job: a part ends only between two top-level blocks, and a single top-level block longer than a part falls back to P1's close-and-reopen or line cut.
   - This needs the parser beside the render job, so it changes the markdown-purity import rule: `pwa/test/markdown-purity.test.ts` allows the parse in that one module, and the dynamic `import()` list stays `['./readerRenderJob']`.
-  - The failing cases first: each residual input in Results, each asserting that no part renders text as code or code as text, judged by the library's parse of the whole document against each part.
+  - The failing cases first: every residual class in Results (Wave P1, "The cutter's residuals", classes 1 to 7), each with its recorded input, asserting that no part renders text as code or code as text, judged by the library's parse of the whole document against each part. The pinned cases for residuals 1, 6 and 7 in `docs-md-parts.test.ts` must flip: today they assert P1's wrong parts.
+  - The acceptance bar is the full-mix differential fuzz recorded in Results (seed 20261120, 8 000 documents, the mdast oracle): zero violations, where P1's cutter has 35 159.
   - Keep P1's fit, cover and linearity cases green, and the render gate's 524 287, 524 288 and 524 289 byte cases.
 - [ ] **Step 0c: what P1 left for this task's files** (placed here by the coordinator, review 2884 Q2).
   - **Export** of a document read by range: it exports the part on screen, with the stat-pinned draft's banner from `exportProvenance`.
@@ -430,7 +431,11 @@ Each row ships with the task that owns it; the row is red when the guard is remo
 | M11.109 | P1.4 | Pass the version page's Download callback on a default page too | a default page: a Download refused as too large says its failure, and the version arm does not apply |
 | M11.110 | P1.5 | Make the snapshot-gone sentence promise a restart again | range reassembly: the snapshot-gone sentence, shown only after the one restart failed, promises no restart (review F10) |
 | M11.111 | P1.4 | Never clear a version page's told answer when the page changes | a version page told by a Download tap saves once: going to another page and back does not save again |
-| M11.74 | P5.5 | Drop the review strip's and the plan marks' classes (`rs-wait`, `cnt`, `tmeta`, `step-no`, `who`) from `printAllow`'s class list | print mode: the review strip prints its waiting list (its `div.rs-wait > ol > li` selector finds none); print mode: each task heading prints its chip (`span.task-id span.tmeta` finds none) |
+| M11.112 | P1.5 | Convert a fence to a zone whenever it opened past column 0, list or not (`fence.col === 0` for `!fence.list`) | md parts: a top-level fence opened at one column in no list, with content at column 0, is closed and reopened across parts |
+| M11.113 | P1.5 | Never close a zone on a matching fence line (`zoneVerdict`'s `close` to `stay`) | md parts: residual 1 (a list-ended fence, then a later fence at column 0): pinned as today's behaviour, which P6.1 Step 0b2 flips |
+| M11.114 | P1.4 | Drop the open-page check in `DocsLeaf`'s `onTold` | a late Download answer for a page left behind is dropped: coming back saves nothing, a direct tap saves once |
+| M11.115 | P1.5 | End a four-column zone at its opener's own column (`Math.max(2, r.indent - 3)` to `r.indent`) | md parts: residual 6 (indented fence-looking code, then an indented real fence opener the zone detector swallows): pinned as today's behaviour, which P6.1 Step 0b2 flips |
+| M11.116 | P1.5 | Let a lazy line end a list item (`listAfter`'s final `return` to `return 0`) | md parts: residual 7 (an empty list marker, a plain line, then a fence at the marker's content column: the item is read as open): pinned as today's behaviour, which P6.1 Step 0b2 flips || M11.74 | P5.5 | Drop the review strip's and the plan marks' classes (`rs-wait`, `cnt`, `tmeta`, `step-no`, `who`) from `printAllow`'s class list | print mode: the review strip prints its waiting list (its `div.rs-wait > ol > li` selector finds none); print mode: each task heading prints its chip (`span.task-id span.tmeta` finds none) |
 
 ## Deviations found
 
@@ -709,12 +714,39 @@ The review found 8 important findings (F1 to F8), 4 minor ones (F9 to F12) and 5
 | Q1, Q2, Q4 | The coordinator's placements: P6.1 Steps 0b, 0b2 and 0c, P2.1 Step 0 | `4f06d1e41`, `d1747d32f` |
 | Q4 | A version page above its cap reads by range. ccd's committed `too-large` answer carries `blob=<oid>`, an additive field with no new verb or argv, and `ccd/ccd` stays at +598. Commit `dd50561d0`'s message calls its ccd change "the one line changed"; it changes two, the raise and a docstring line (review 2915 a4; history is not rewritten). `docsFailureBlob` is its one reader. An older ccd's answer without it keeps the class-cap sentence. Download has one range owner, `RangeLeaf`, and the first tap saves | `dd50561d0`, `66e37d0b4`, `93e685a59` |
 
-**The cutter's residuals** (F9, ruled option (a), mail 27541). P1 keeps the line-scanner cutter at `389d7a82a`. It is better than P1's original on every input the reviews named, and worse on none. The final review compared each part against micromark over about 450 000 fuzzed cuts: fit, cover and linear work held everywhere. These inputs still break meaning, and P6.1 Step 0b2 takes them as its red cases:
+**The cutter's residuals** (F9, ruled option (a), mail 27541). P1 keeps the line-scanner cutter, at `389d7a82a` and then with review 2915's F4 fix (`0d14e4d4b`). Measured against P1's original cutter (`a2ea7a7c8`) by the differential fuzz below, it is better on the plain and listed mixes and worse on 1 109 of the full mix's 8 000 documents, all in the residual classes listed here (review 2915 F4, mail 27845). The final review compared each part against micromark over about 450 000 fuzzed cuts: fit, cover and linear work held everywhere. These inputs still break meaning, and P6.1 Step 0b2 takes them as its red cases:
 - **A fence that its list item ended, then a later fence at column 0:** fence parity inverts for the rest of the document. For example `'- a\n  ```js\n  x\n- b\n\n' + 'prose para.\n\n'.repeat(5) + '```\n' + 'code line\n'.repeat(200) + '```\n\n' + 'after para.\n\n'.repeat(200)` at `maxBytes` 4000, and `'- item one\n'.repeat(80) + '- item\n  ```js\n' + '  code\n'.repeat(5) + '- next item\n\nThe closing paragraph.\n'` at 900. The same root, a bare-indent zone swallowing a column-2 opener: `'    ```\n  ```js\nreal code\n```\n\nprose one\n\nprose two\n\nprose three\n'` at 30.
 - **A zone longer than a whole part:** a container fence, a fence with a marker over 64 characters, or the rest of a fence that a list item ended. It is cut inside at a line end, with no reopen and no close. The part that then starts inside it ends right after its closer, so the part cut inside it holds code the reader shows as plain text, and no text after the zone is shown as code.
 - **Windows under about 60 bytes:** the close or reopen line may not fit. For example, the list-ended fence input above at `maxBytes` 11 to 14 and 51 to 54.
 - **A code-point tail that starts with a fence marker:** `'```\n' + 'a'.repeat(1000) + '```\ncode\n```\n\nprose after the fence.\n\nmore prose.\n'` at `maxBytes` 509.
 - **A cut inside a list item, outside any fence, that starts a part with indented text**, which renders as code: `'1. first\n\n    para two of the item\n\n'.repeat(60)` at 200. This was already true before F9.
+- **Class 6: indented fence-looking code, then an indented real fence opener**, which the zone detector takes for its own, so the real fence is cut inside with no close (review 2915 F4, mail 27845).
+  - At `maxBytes` 80, `'    ```js\n  ```ts\n' + 'x'.repeat(40) + '\n' + 'y'.repeat(40) + '\n```\nafter\n'` is cut at 59, inside the block at `[12,104)`.
+  - The same input with a list-marker line (`'\n- ```md\n'`) inside that fence is cut at 67.
+  - It predates round 3: `fc4bec01d` cuts the same. P1's original handled it.
+  - Pinned: "md parts: residual 6 (…)".
+- **Class 7: an empty list marker, a plain line, then a fence at the marker's content column.** The list tracker reads the plain line as a lazy continuation, holds the fence in the item, and the next column-0 line ends it, so the fence is cut with no reopen.
+  - At `maxBytes` 80, `'-\nx\n  ```ts\n' + 'x'.repeat(40) + '\n' + 'y'.repeat(40) + '\n```\nafter\n'` is cut at 53, inside the block at `[6,98)`.
+  - `fc4bec01d` converted every fence at columns 1 to 3 the same way.
+  - Pinned: "md parts: residual 7 (…)".
+
+**The differential fuzz** (review 2915 F4, ruled option (a) in mail 27845).
+- **Setup:** seed 20261120; 8 000 random documents per mix; `maxBytes` 60 to 800 (300 to 800 in the listed mix).
+- **Oracle:** mdast-util-from-markdown's parse of the whole document. A cut strictly inside a top-level fenced code block, in a part that adds no close line for it, is a violation.
+- **Cutters:** P1's original (`a2ea7a7c8`), round 2's (`fc4bec01d`), and this one, after `0d14e4d4b`.
+
+| Mix | Documents of more than one part | `a2ea7a7c8` | `fc4bec01d` | Now |
+|---|---|---|---|---|
+| plain: top-level fences at columns 0 to 3, no container fence | 7 635 | 0 | 60 669 violations (6 349 documents) | 0 |
+| listed: plain, plus well-formed list and quote fences shorter than a part | 7 254 | 2 094 (808) | 15 732 (4 320) | 0 |
+| full: adds list-ended fences, unclosed fences, and container fences longer than a part | 7 656 | 19 309 (3 746) | 72 527 (6 655) | 35 159 (4 811) |
+
+- **Against `fc4bec01d`:** this cutter is worse on 0 documents in every mix.
+- **Against `a2ea7a7c8`:** worse on 0 documents in the plain and listed mixes, and on 1 109 in the full mix:
+  - 1 070 hold a fenced block in a list or quote (classes 1 and 2);
+  - 17 hold a fence-looking line after a list marker: 15 are class 6's root (the marker line is only text the cutter then takes for a container fence; making the markers plain keeps the violation in all 17), and 2 are class 7;
+  - 22 are indented fence-looking code followed by an indented real fence opener (class 6).
+- The scripts are not in the tree. P6.1 Step 0b2 takes the full mix, with this oracle, as its acceptance bar: zero violations.
 
 **CI on the fix round's push (`50f905f78`):** one red, in `drawer-keybar` ("no two modules under pwa/src differ only in case"): F1's cutter `range/sourceParts.ts` and its component `range/SourceParts.tsx` named one file on a case-insensitive disk. The cutter is now `range/textParts.ts`; `drawer-keybar` and `docs-source-parts` pass, 170 of 170.
 
@@ -751,3 +783,48 @@ The PR's CI on the exact tip decides all three.
 - **Claims:**
   - Claims 5710 and 5711 hit their hard cap mid-round and were re-taken at once, as 5853.
   - `pwa/test/mockup-plan.test.ts` was edited before I had claimed it. It was claimed (5846) as soon as I saw it.
+
+#### Review 2915's fix round (round 2 of 3, at `fc4bec01d`; the last round)
+
+The review found 6 important findings (F1 to F6) and 5 advisory ones (a0 to a4). It held round 1's F1, F3 to F8, F10 to F12 and Q1 to Q5 closed, along with the version-page wiring, the F4 split, the main merge's counts, and M11.84 as a true equivalent mutant. The coordinator ruled in mail 27810, and on the fuzz in mail 27845.
+
+| Finding | What changed | Commits |
+|---|---|---|
+| F1 | D-8784 ledgers the type-only retypes in `DocsHead.tsx`, `share.ts` and `mockup/ports.ts`, quoting both sentences it departs from. The Results line that said P1 touches no reader host file names it. No other programme held a claim on the three files | `ee8d32a9a` |
+| F2 | A late Download answer for a version page the user has left is dropped (`DocsLeaf` keeps the open page's key in a ref, and `onTold` ignores an answer for another key). A case leaves before the answer lands and checks that nothing saves on return, and that a direct tap then saves once | `b5e2351bd` |
+| F3 | `mdParts.ts`'s header names the seven recorded residual classes. Residuals 1, 6 and 7 are pinned as today's behaviour by cases that P6.1 Step 0b2 must flip | `1a8055cb5`, `a4c2bfa67` |
+| F4 | `converted()` applies only to a fence that a list item holds, using list-item state carried across parts. The reviewer's input and its 4-space and list-like twins are cases. The differential fuzz is under "The cutter's residuals" | `0d14e4d4b` |
+| F5 | M11.74 is its own table row again | `ee8d32a9a` |
+| F6 | The rows are measured, below | (no code) |
+| a1 | P1.5's interface text and its built row define `DocListPin`'s draft arm | `ee8d32a9a` |
+| a4 | `dd50561d0` changed two ccd lines, not one (noted in the Q4 row above) | `ee8d32a9a` |
+| a0 | Stays as recorded (the range read's third minor) | none |
+
+**Mutation rows measured** (review 2915 F6). M11.87 to M11.97 were measured by review 2915 itself, on copies of the cutter against the md-parts cases, and each reds its named case. M11.84 is the equivalent mutant. Every other row from M11.83 to M11.114 was measured in this round. Each row was run alone (`ccrc test --`, one call each), its named case seen red, and the file restored from a saved copy with sha256 equal before and after. Counts are failed / passed / skipped:
+
+| Row | Red |
+|---|---|
+| M11.83 | `ccd-docs-range` 1/0/25: `reads` 2 where 0 is expected |
+| M11.85 | `ccd-docs-range` 1/0/25: `ok: true` where `snapshot-gone` is expected |
+| M11.86 | `ccd-docs-range` 1/0/25: mode 0755 (493) where 0700 (448) is expected |
+| M11.98 | `docs-leaf-range` 1/0/46: the case times out (it re-lists without end) |
+| M11.99 | `docs-leaf-range` 1/0/46: stays on "Loading…" |
+| M11.100 | `docs-leaf-range` 1/0/46: no "changing" alert; it saved on its own |
+| M11.101 | the one-file compile: `docs-api.test.ts(425)` TS2322, the pin |
+| M11.102 | `docs-images` 1/0/106: `draft-withheld` where `draft-unhashed` is expected (the `imagePinFor` half of the row; the chip half is held by the SVG and raster chip cases) |
+| M11.103 | `docs-source-parts` 1/0/16: no part bar (the Download note instead) |
+| M11.104 | `docs-source-parts` 1/0/16: 2 097 153 bytes in one part |
+| M11.105 | `docs-source-parts` 1/0/16: stays at part 2 for another document |
+| M11.106 | `ccd-docs-show` 1/0/86: no `blob` in the answer |
+| M11.107 | `docs-leaf-range` 6/5/36: no range read on the version page |
+| M11.108 | `docs-source` 7/0/171: a malformed `blob` passed on, all seven shapes |
+| M11.109 | `docs-leaf-range` 1/0/46: the default page reads by range |
+| M11.110 | `docs-range` 1/0/24: the sentence promises a restart |
+| M11.111 | `docs-leaf-range` 1/0/46: two saves for one tap |
+| M11.112 | `docs-md-parts` 1/0/43: no reopen for the one-column fence |
+| M11.113 | `docs-md-parts` 1/0/43: 4 parts where residual 1's pin has 2 |
+| M11.114 | `docs-leaf-range` 1/0/46: the late answer saves |
+| M11.115 | `docs-md-parts` 1/3/42: the residual 6 pin's cut moves (closed and reopened) |
+| M11.116 | `docs-md-parts` 1/3/42: the residual 7 pin's fence is closed and reopened |
+
+**Process this round:** the leave was kept to the letter by me and by every implementer: file text only through Edit and Write, each test, compile or script run its own `ccrc test --` call, one at a time, no chained calls, and every file claimed before its first edit. No breach.
