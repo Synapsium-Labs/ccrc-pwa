@@ -10,10 +10,10 @@
 //
 // RED FIRST: committed before the code, against origin/main, where none of it exists.
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
-import { appendFileSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { appendFileSync, mkdirSync, rmSync, utimesSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { localIO, type FleetIO } from '../src/io.js';
-import { HELPER_READS_PER_TICK, RESTAT_EVERY, SessionHelpers, TAIL_BYTES, type HelpersRead } from '../src/workflows/read.js';
+import { HELPER_READS_PER_TICK, RESTAT_EVERY, SessionHelpers, SessionWorkflows, TAIL_BYTES, type HelpersRead } from '../src/workflows/read.js';
 import type { Proc, RosterInput } from '../src/workflows/model.js';
 import type { HelperFact } from '../src/transcript/parse.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -26,18 +26,29 @@ const usageLine = (ms: number, input: number): string =>
   line({ type: 'assistant', timestamp: iso(ms), message: { usage: { input_tokens: input, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, output_tokens: 3 } } });
 const plainLine = (ms: number): string => line({ type: 'user', timestamp: iso(ms), message: { role: 'user', content: 'x' } });
 
-interface Counted extends FleetIO { calls: Array<{ op: string; file: string }> }
+interface Counted extends FleetIO { calls: Array<{ op: string; file: string }>; ranges: Array<{ file: string; offset: number; max: number }>; fail: (op: string, file: string) => boolean }
 const counted = (inner: FleetIO): Counted => {
   const calls: Counted['calls'] = [];
+  const ranges: Counted['ranges'] = [];
   const name = (p: string): string => path.basename(p);
-  return {
+  const io: Counted = {
     ...inner,
     calls,
+    ranges,
+    fail: () => false,
     readdirMeasured: async (p, ...rest) => { calls.push({ op: 'readdir', file: name(p) }); return inner.readdirMeasured(p, ...rest); },
     statMeasured: async (p) => { calls.push({ op: 'stat', file: name(p) }); return inner.statMeasured(p); },
-    readFileMeasured: async (p, ...rest) => { calls.push({ op: 'read', file: name(p) }); return inner.readFileMeasured(p, ...rest); },
-    readFileFromBytesMeasured: async (p, o, m, ...rest) => { calls.push({ op: 'range', file: name(p) }); return inner.readFileFromBytesMeasured(p, o, m, ...rest); },
+    readFileMeasured: async (p, ...rest) => {
+      calls.push({ op: 'read', file: name(p) });
+      return io.fail('read', name(p)) ? { ok: false, reason: 'unreadable' } : inner.readFileMeasured(p, ...rest);
+    },
+    readFileFromBytesMeasured: async (p, o, m, ...rest) => {
+      calls.push({ op: 'range', file: name(p) });
+      ranges.push({ file: name(p), offset: o, max: m });
+      return inner.readFileFromBytesMeasured(p, o, m, ...rest);
+    },
   };
+  return io;
 };
 
 let home: string;
@@ -114,7 +125,7 @@ describe('reads by id: the meta and the transcript of each helper the roster lis
     const launch: HelperFact = { source: 'launch', id: 'a2', status: 'async_launched', at: NOW - 500, model: 'model-b', durationMs: null, summary: null, report: null, reportCut: false };
     const r = new SessionHelpers(localIO, S);
     const { arm } = await read(r, listed([], NOW - 1_000), { facts: [launch] });
-    expect(arm.agents).toEqual([expect.objectContaining({ id: 'a2', state: 'launched', startedAt: NOW - 500 })]);
+    expect(arm.agents).toEqual([expect.objectContaining({ id: 'a2', state: 'launched', startedAt: NOW - 500, description: 'look at a2', agentType: 'Explore' })]);
   });
 
   it('facts fold across readings: a notification read after its launch ends the row, with its summary', async () => {
@@ -264,6 +275,191 @@ describe('the helper tier: at most HELPER_READS_PER_TICK reads a reading, spent 
     seedTranscript('g1', plainLine(NOW - 90_000) + 'x'.repeat(TAIL_BYTES * 2) + '\n' + plainLine(NOW - 15_000));
     const r = new SessionHelpers(localIO, S);
     expect((await read(r, listed(['g1']))).arm.agents[0]).toMatchObject({ state: 'finished', endedAt: NOW - 15_000 });
+  });
+});
+
+describe('the tier\'s accounting (cases added after the first mutation round)', () => {
+  const launchOf = (id: string): HelperFact => ({ source: 'launch', id, status: 'async_launched', at: NOW - 500, model: 'model-b', durationMs: null, summary: null, report: null, reportCut: false });
+
+  it('(1) the roster\'s new ids are read before a launch\'s: thirteen listed and one launched, the twelve first listed come first', async () => {
+    const ids = Array.from({ length: 13 }, (_, i) => `r${i}`);
+    for (const id of [...ids, 'l1']) seedMeta(id);
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(ids), { facts: [launchOf('l1')] });
+    expect(helperCalls(io).map((c) => c.file)).toEqual(ids.slice(0, 12).map((id) => `agent-${id}.meta.json`));
+  });
+
+  it('an id that is no Agent helper (no meta at the Agent path, no launch) costs its one meta read and nothing after', async () => {
+    const notice: HelperFact = { source: 'notification', id: 'x1', status: 'completed', at: NOW - 100, model: null, durationMs: null, summary: 's', report: null, reportCut: false };
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed([]), { facts: [notice] });
+    expect(helperCalls(io)).toEqual([{ op: 'read', file: 'agent-x1.meta.json' }]);
+    io.calls.length = 0;
+    for (let k = 0; k < RESTAT_EVERY + 1; k++) await read(r, listed([]));
+    expect(helperCalls(io)).toEqual([]);
+  });
+
+  it('a helper whose transcript did not grow costs ONE read of the budget: twelve quiet helpers are all looked at in one reading', async () => {
+    const ids = Array.from({ length: 12 }, (_, i) => `q${i}`);
+    for (const id of ids) { seedMeta(id); seedTranscript(id, plainLine(NOW - 9_000)); }
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(ids));                 // twelve metas
+    await read(r, listed(ids));                 // six transcripts first read
+    await read(r, listed(ids));                 // the other six
+    io.calls.length = 0;
+    const out = await read(r, listed(ids));     // nothing grew
+    expect(helperCalls(io)).toEqual(ids.map((id) => ({ op: 'stat', file: `agent-${id}.jsonl` })).slice(0, 12));
+    expect(out.readEvery).toBeNull();
+  });
+
+  it('an odd budget never overspends: the last stat\'s read waits, and that helper is the next reading\'s FIRST', async () => {
+    const ids = Array.from({ length: 8 }, (_, i) => `o${i}`);
+    for (const id of ids) { seedMeta(id); seedTranscript(id, plainLine(NOW - 9_000)); }
+    seedMeta('o8');
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(ids));                 // eight metas, then two transcripts (o0, o1)
+    for (const id of ids) grow(id, plainLine(NOW - 1_000));
+    io.calls.length = 0;
+    await read(r, listed([...ids, 'o8']));      // one new meta (o8), then 11 left: five helpers read, a sixth stat'ed
+    const calls = helperCalls(io);
+    expect(calls).toHaveLength(HELPER_READS_PER_TICK);
+    expect(calls[0]).toEqual({ op: 'read', file: 'agent-o8.meta.json' });
+    const lastStat = calls.at(-1)!;
+    expect(lastStat.op).toBe('stat');
+    io.calls.length = 0;
+    await read(r, listed([...ids, 'o8']));
+    expect(helperCalls(io)[0]).toEqual(lastStat);
+    expect(helperCalls(io)[1]).toEqual({ op: 'range', file: lastStat.file });
+  });
+});
+
+describe('the tier\'s finality, re-stats, eviction and tail reads (cases added after the first mutation round)', () => {
+  it('"not final" is the LAST DECISION\'s word: a helper continued after its end (listed with a later start) keeps its transcript read', async () => {
+    seedMeta('c1');
+    seedTranscript('c1', plainLine(NOW - 60_000));
+    const end: HelperFact = { source: 'notification', id: 'c1', status: 'completed', at: NOW - 15 * 60_000, model: null, durationMs: null, summary: 's', report: null, reportCut: false };
+    const roster: RosterInput = { kind: 'usable', at: NOW - 1_000, entries: [{ id: 'c1', name: 'Explore', startedAt: NOW - 60_000 }] };
+    const r = new SessionHelpers(localIO, S);
+    expect((await read(r, roster, { facts: [end] })).arm.agents[0]).toMatchObject({ state: 'running', lastActivityAt: NOW - 60_000 });
+    grow('c1', plainLine(NOW - 2_000));
+    expect((await read(r, roster)).arm.agents[0]).toMatchObject({ state: 'running', lastActivityAt: NOW - 2_000 });
+  });
+
+  it('a helper first seen final has its last write read in step 5, AFTER the open helpers\' transcripts', async () => {
+    seedMeta('f9', { finished: true });
+    seedTranscript('f9', plainLine(NOW - 70_000));
+    seedMeta('a9');
+    seedTranscript('a9', plainLine(NOW - 5_000));
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(['f9', 'a9']));
+    expect(helperCalls(io).map((c) => `${c.op} ${c.file}`)).toEqual([
+      'read agent-f9.meta.json', 'read agent-a9.meta.json',
+      'stat agent-a9.jsonl', 'range agent-a9.jsonl',
+      'stat agent-f9.jsonl', 'range agent-f9.jsonl',
+    ]);
+  });
+
+  it('step 5 never overspends: with one read left it waits for the next reading', async () => {
+    const ids = Array.from({ length: 11 }, (_, i) => `z${i}`);
+    for (const id of ids) { seedMeta(id, { finished: true }); seedTranscript(id, plainLine(NOW - 30_000)); }
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(ids));
+    expect(helperCalls(io)).toHaveLength(11);
+  });
+
+  it('(4) a meta that did not change since its last re-stat is not read again', async () => {
+    seedMeta('m1');
+    seedTranscript('m1', plainLine(NOW - 40_000));
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    for (let k = 0; k < 2 * RESTAT_EVERY + 2; k++) await read(r, { kind: 'usable', at: NOW - 1_000, entries: k === 0 ? [{ id: 'm1', name: 'Explore', startedAt: NOW - 50_000 }] : [] }, { proc: { kind: 'unmeasured' } });
+    const metaCalls = helperCalls(io).filter((c) => c.file.endsWith('.meta.json'));
+    // the first read; the first re-stat reads it once (nothing was stored to compare with); the second finds it unchanged
+    expect(metaCalls.map((c) => c.op)).toEqual(['read', 'stat', 'read', 'stat']);
+  });
+
+  it('an id the roster lists that is no Agent helper (a workflow\'s meta) is read once and kept, not read again each reading', async () => {
+    seedMeta('w2', { agentType: 'workflow-subagent' });
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    for (let k = 0; k < 5; k++) await read(r, listed(['w2']));
+    expect(helperCalls(io)).toEqual([{ op: 'read', file: 'agent-w2.meta.json' }]);
+  });
+
+  it('a transcript that grew by more than TAIL_BYTES is read from its last TAIL_BYTES only', async () => {
+    seedMeta('t1');
+    seedTranscript('t1', plainLine(NOW - 60_000));
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(['t1']));
+    grow('t1', `${'y'.repeat(TAIL_BYTES * 2)}\n${plainLine(NOW - 3_000)}`);
+    io.ranges.length = 0;
+    expect((await read(r, listed(['t1']))).arm.agents[0]!.lastActivityAt).toBe(NOW - 3_000);
+    expect(io.ranges).toHaveLength(1);
+    expect(io.ranges[0]!.max).toBeLessThanOrEqual(TAIL_BYTES);
+  });
+
+  it('a transcript rewritten SMALLER is read again from its tail, not left at the old size', async () => {
+    seedMeta('s1');
+    seedTranscript('s1', plainLine(NOW - 60_000) + plainLine(NOW - 50_000) + plainLine(NOW - 40_000));
+    const r = new SessionHelpers(localIO, S);
+    await read(r, listed(['s1']));
+    seedTranscript('s1', plainLine(NOW - 1_000));
+    expect((await read(r, listed(['s1']))).arm.agents[0]!.lastActivityAt).toBe(NOW - 1_000);
+  });
+
+  it('a meta re-read that fails keeps what was read before: the row stays', async () => {
+    for (const id of ['u1', 'u2', 'u3']) { seedMeta(id); seedTranscript(id, plainLine(NOW - 50_000)); }
+    const io = counted(localIO);
+    const r = new SessionHelpers(io, S);
+    await read(r, listed(['u1', 'u2', 'u3']));
+    await read(r, listed(['u1', 'u2', 'u3']));
+    io.fail = (op, file) => op === 'read' && file === 'agent-u2.meta.json';
+    const { arm } = await read(r, listed(['u1', 'u3']));   // a seen drop re-reads u2's meta, which fails
+    expect(helperCalls(io).filter((c) => c.file === 'agent-u2.meta.json').at(-1)).toEqual({ op: 'read', file: 'agent-u2.meta.json' });
+    expect(arm.agents.find((a) => a.id === 'u2')).toMatchObject({ state: 'unlisted', description: 'look at u2' });
+  });
+
+  it('a read deferred for the budget re-arms the hold: a meta that turned finished waits for that write, not the stale one', async () => {
+    const ids = ['p0', 'p1', 'p2', 'p3', 'p4', 'p5'];
+    for (const id of ids) { seedMeta(id); seedTranscript(id, plainLine(NOW - 90_000)); }
+    const r = new SessionHelpers(localIO, S);
+    await read(r, listed(ids));        // six metas, three transcripts (p0..p2); the rotation's cursor at p3
+    await read(r, listed(ids));        // p3..p5 read, p0..p2 stat'ed; the cursor back at p3
+    for (const id of ids) grow(id, plainLine(NOW - 2_000));
+    seedMeta('p2', { finished: true });
+    // p2 drops (older survivors listed): its meta is re-read (finished), and of the eleven reads left, p3, p4, p5, p0 and
+    // p1 are read and p2 only stat'ed: its new write is not read this reading
+    const held = await read(r, listed(['p0', 'p1', 'p3', 'p4', 'p5']));
+    expect(held.arm.agents.find((a) => a.id === 'p2')?.state).not.toBe('finished');
+    const next = await read(r, listed(['p0', 'p1', 'p3', 'p4', 'p5']));
+    expect(next.arm.agents.find((a) => a.id === 'p2')).toMatchObject({ state: 'finished', endedAt: NOW - 2_000 });
+  });
+});
+
+describe('a workflow row carries lastActivityAt: the newest write the reader measured', () => {
+  it('a running workflow: its running agent\'s transcript, written after the journal, is the last activity', async () => {
+    const RUN = 'wf_00000000-aaa';
+    const dir = path.join(S, 'subagents', 'workflows', RUN);
+    mkdirSync(dir, { recursive: true });
+    const at = (f: string, ms: number): void => utimesSync(f, new Date(ms), new Date(ms));
+    writeFileSync(path.join(dir, 'agent-w1.meta.json'), JSON.stringify({ agentType: 'workflow-subagent', description: 'w' }));
+    at(path.join(dir, 'agent-w1.meta.json'), NOW - 60_000);
+    writeFileSync(path.join(dir, 'agent-w1.jsonl'), plainLine(NOW - 5_000));
+    at(path.join(dir, 'agent-w1.jsonl'), NOW - 5_000);
+    const j = path.join(dir, 'journal.jsonl');
+    writeFileSync(j, line({ type: 'started', key: `v2:${'1'.padStart(64, '0')}`, agentId: 'w1', label: 'l', phase: null }));
+    at(j, NOW - 30_000);
+    const w = new SessionWorkflows(localIO, S);
+    await w.read(LIVE, NOW);
+    const second = await w.read(LIVE, NOW);
+    expect(second.kind === 'read' ? second.workflows[0]?.lastActivityAt : undefined).toBe(NOW - 5_000);
   });
 });
 
