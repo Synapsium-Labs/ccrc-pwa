@@ -1229,6 +1229,33 @@ describe('a person\'s own milestone is not a new difference (round 5 A3)', () =>
   });
 });
 
+// Round 3 F1: a one-way set's event holds the planned members Linear lacks, so the record says so rather than "= <id>".
+describe('the drift record names a one-way set for what it is (round 3 F1)', () => {
+  it('the item and the Hand mail read "planned, missing in Linear", and a scalar field still reads "= value"', async () => {
+    const r = await synced(await rig());
+    r.lin.over.project = { milestones: [] };
+    await passAt(r, r.t.now + 1);
+    const [it] = items(r);
+    const ev = driftEventsOf(r.db, bindingOf(r, 'epic').id, 0).find((e) => e.field === 'milestoneIds')!;
+    const line = `milestoneIds: planned, missing in Linear: ${ev.value}`;
+    expect(ev.value).not.toBe('');
+    expect(it!.why).toContain(line);
+    expect(it!.why).not.toContain('milestoneIds = ');
+    expect(r.drift.act(it!.id, 'hand', bindingOf(r, 'epic').id)).toEqual({ ok: true });
+    const m = mails(r).filter((x) => x.subject.includes('drift on'));
+    expect(m).toHaveLength(1);
+    expect(m[0]!.body).toContain(line);
+    expect(m[0]!.body).not.toContain('milestoneIds = ');
+  });
+
+  it('a scalar field keeps its "<field> = <value>" line', async () => {
+    const r = await synced(await rig());
+    r.lin.over.issue = { title: 'Edited in Linear' };
+    for (let i = 0; i < 3; i += 1) await passAt(r, r.t.now + (i === 0 ? 1 : DRIFT_PASS_MS));
+    expect(items(r)[0]!.why).toContain('title = Edited in Linear');
+  });
+});
+
 // Review 2457 F1: the call site of round 5 F1's skip (`syncWroteSince` in the compare loop) is what keeps a sync write that landed
 // after the Linear read out of `compare`. The test above ("a sync write landing after the Linear read is skipped") cannot go red
 // without it: the restore's own moot check (`seen` is the pre-read fingerprint) and `eventVerdict` hide the difference. What only the
@@ -1316,6 +1343,19 @@ describe('two bindings of one workspace holding one linearId: the lowest id is t
       SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
     expect(r.plan.bindingByLinearId(b.workspaceId, b.linearId!)!.id).toBe(b.id);
     expect(bindingByLinearIdOf(r.plan.bindingsInWorkspace(b.workspaceId)).get(b.linearId!)!.id).toBe(b.id);
+  });
+
+  it('the two twins agree on a duplicate whatever order the rows reach the L1 reader in (round 3 F6, D-8183)', async () => {
+    const r = await synced(await rig());
+    const b = bindingOf(r, 'ticket');
+    r.db.prepare(`INSERT INTO linear_bindings (localKind, localId, workspaceId, teamKey, linearId, identifier, fingerprint, syncedAt, state)
+      SELECT localKind, localId + 100000, workspaceId, teamKey, linearId, identifier, 'another-fingerprint', syncedAt, state FROM linear_bindings WHERE id = ?`).run(b.id);
+    const rows = r.plan.bindingsInWorkspace(b.workspaceId);
+    const stored = r.plan.bindingByLinearId(b.workspaceId, b.linearId!)!.id;
+    expect(rows.filter((x) => x.linearId === b.linearId).length).toBeGreaterThan(1);
+    // ascending (the store's own order) and reversed (a first-wins reader would pick the higher id)
+    expect(bindingByLinearIdOf(rows).get(b.linearId!)!.id).toBe(stored);
+    expect(bindingByLinearIdOf([...rows].reverse()).get(b.linearId!)!.id).toBe(stored);
   });
 });
 
