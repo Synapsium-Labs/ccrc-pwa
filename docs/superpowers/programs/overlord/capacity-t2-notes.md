@@ -37,6 +37,7 @@ programme ledger. It defines no D-number: D-8790 (slug `working-idle-sleeps`) an
 | `task-1-pin-on-dispatched` | Task 1 pins "an own-run hold on a working run is still held by the run". | Task 2 makes a quiet `working` run the waiting case on purpose, so that pin moves to a `dispatched` run (its brief unread), which still holds `not-done`. The draft moved its own pins that read a `working` run as `not-done` the same way. |
 | `lane-row-order` | The draft appends `working-idle-sleep` after `anchor-slot`. | Kept. Approvals PR 3 appends `approval-park` after `anchor-slot` as well; its worker and this one agreed that whoever lands second appends after the other and re-counts the lane censuses. |
 | `lane-words-file` | The plan lists `pwa/src/fleet/laneArmWords.ts` among the files. | The row's words live in `shared/lane-arm.ts` (`LANE_ARM_TEXT`) as every row's do, and the console's one lane-keyed table that needs the row is `SHADOW_LOG` in `ShadowLanesSection.tsx`, so `laneArmWords.ts` is not changed. |
+| `seed-or-ignore` | The draft seeds the row with a plain `INSERT`, as the earlier lane rows do. | `INSERT OR IGNORE`, as the `linear-sync` programme seed does. CI's first run caught it: `decision-model-records.test.ts` rebuilds a database one version back by undoing every later entry's DDL, which cannot undo a seeded row, so re-applying a plain `INSERT` refused to start on the lane's primary key. A row that already stands now keeps its stored choice. Pinned in `coord-db.test.ts`; the plain `INSERT` reds both suites. |
 | `suite-copies-one-store` | The draft's new suite opened a fresh coordination store per use. | Every open replays every migration. Under a loaded box, three live cases that open two or three stores passed the 20 s case bound. The suite now builds one migrated database in `beforeAll` and copies it per store (the pattern of `designation-actor.test.ts`), and closes each copy after its case. |
 
 ## 2. The design review's rulings (review 2848, relayed by the coordinator)
@@ -63,6 +64,7 @@ a saved copy:
 | unread mail does not hold a waiting worker (review focus 4) | killed (2 failed) |
 | background work does not hold a waiting worker (review focus 4) | killed (2 failed) |
 | a session cron does not hold a waiting worker (review focus 4) | killed (2 failed) |
+| the seed as a plain `INSERT` | killed (`decision-model-records` and `coord-db`, 2 failed each) |
 | F5: the per-run bound lifted (`workerAsleepNoticeDue` always true) | killed (1 failed) |
 | F5: the observation row's detail drops the sleep's instant, so every sleep of a worker on a run is one key | killed (3 failed) |
 

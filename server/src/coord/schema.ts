@@ -4044,15 +4044,17 @@ export const MIGRATIONS: readonly string[] = [
   // `working` run that it would put to sleep, and acts on nothing; only `live`, set by the operator at
   // `POST /api/coord/lane-arm`, puts it to sleep and mails its coordinator. The merge arms nothing.
   //
-  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
-  // and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // ONE SEED ROW, nothing else, and `OR IGNORE`: a file that already carries the row (a database rolled back below this
+  // entry with its rows kept, as a test rebuilds one) keeps the stored choice and migrates, where a plain INSERT would
+  // refuse to start on the lane's primary key. An older build opening a file at this entry's version takes rule 3 (it
+  // warns, reads as-is and migrates nothing), reads the `working-idle-sleep` lane-arm row as no lane it knows, and boots. Every earlier entry
   // is frozen. This is the next free slot by position on `main`; approvals PR 3 and door B1 build on the slots after 109
   // too, so whoever lands second moves up. RE-MEASURE the slot before the PR and before merge (it must print the count
   // before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
-  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('working-idle-sleep', 'shadow', 0);
   `,
 ];
 
