@@ -29,7 +29,7 @@ export function SessionWorktrees({ worktrees, project, nowMs }: {
   // review 2864 F4): the focus then goes to the nearest ancestor that has one, made a script-focus target if it is not.
   const host = useRef<HTMLElement | null>(null);
   const keepHost = (el: HTMLElement | null): void => { if (el !== null) host.current = el.closest<HTMLElement>('.chat-facts'); };
-  const landing = (): HTMLElement | null => {
+  const restFocusAt = (): HTMLElement | null => {
     let el = host.current;
     while (el !== null && getComputedStyle(el).display === 'contents') el = el.parentElement;
     if (el !== null && !el.hasAttribute('tabindex')) el.setAttribute('tabindex', '-1');
@@ -51,7 +51,7 @@ export function SessionWorktrees({ worktrees, project, nowMs }: {
             {w.sourceProject !== null && <WorksOnChip project={w.sourceProject} />}
             {chips.map((c, i) => c === null ? null : <span key={i} className="proj-work-chip" title={c.title}>{c.text}</span>)}
             {controls !== null && <WorktreeControls leaseId={l.leaseId} worktree={l.adminRecord} controls={controls}
-              offer={offerOf(l.leaseId, controls, l)} nowMs={now} getHeading={() => heading.current ?? landing()} />}
+              offer={offerOf(l.leaseId, controls, l)} nowMs={now} getHeading={() => heading.current ?? restFocusAt()} />}
           </WorkLine>
         );
       })}
