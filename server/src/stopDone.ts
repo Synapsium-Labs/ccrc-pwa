@@ -74,7 +74,7 @@ const STOP_DONE_HOLD_MAP = {
   'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`, nor `working` with its worker waiting',
   'close-unplaced': 'its newest placed run reads `done` or `failed` with no close time',
   grace: 'its run closed less than the grace ago',
-  'mail-disabled': 'the waiting case only: `mail-disabled` stands, or the registry could not be listed, so its coordinator could not be told (D-8791)',
+  'mail-disabled': 'the waiting case only: `mail-disabled` stands at the pass or at the act, so its coordinator could not be told (D-8791); an unlistable registry is held before this, by the tick\'s fail-shut return and the act\'s `registry-unlistable`',
   'run-worker': 'another active run names it as worker (beside its own `working` run, a second one)',
   'run-claimant': 'it claims an open run (it coordinates)',
   claim: 'it holds a live claim',
@@ -132,6 +132,11 @@ export const STOP_DONE_WAITING_HOLD_OFF_MS = STOP_DONE_PARKED_IDLE_MS / 3;
 export function waitingCaseKey(workerId: string, runId: number, state: string): string {
   return `${workerId}\t${runId}\t${state}`;
 }
+
+/** Capacity follow-ups F-D (review 2913): the waiting case's hold-offs lapse when its row reads armed after a pass that
+ *  read it in shadow, so arming measures every waiting worker on the next pass. A first pass (`wasArmed` unset) clears
+ *  nothing: its memory is empty. */
+export const waitingHoldsLapse = (wasArmed: boolean | undefined, armed: boolean): boolean => armed && wasArmed === false;
 
 /** At most this many stops a pass, fleet-wide: a herd of stops is a herd of supervisors restarting on a re-dispatch,
  *  and a slower drain costs nothing (the 2026-08-14 usage-scan herd). */
@@ -233,7 +238,8 @@ export interface StopDoneInput {
   readonly live: StopDoneLive;
   readonly now: number;
   readonly graceMs: number;
-  /** D-8791 (review 2887 F2): `$REG/mail-disabled` as the pass's listing read it. Anything but `clear` holds the
+  /** D-8791 (review 2887 F2): `$REG/mail-disabled` as the pass's listing read it, and again as the act's own listing read
+   *  it (capacity follow-ups F-A). Anything but `clear` holds the
    *  waiting case (`mail-disabled`): its coordinator must be told of every waiting sleep, and while mail cannot be
    *  sent the worker stays awake, with no observation row and no mail. Finished and parked sleeps never read it.
    *  Absent: not read, as `clear` (the input builders a test writes by hand); the lane always reads it. */

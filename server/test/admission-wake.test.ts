@@ -14,10 +14,11 @@ import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, waitOnSendBackRefusal, type DispatchOutcome, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
-import { admissionWakeChoice, admissionWakeDetail, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
+import { admissionWakeChoice, admissionWakeDetail, blockWokenWith, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
 import { queueAdmissionWake } from '../src/coord/admissionWakeTx.js';
+import { admissionWakePass, type AdmissionWakeDeps } from '../src/coord/admissionWakeLane.js';
 import { capsReadingOf, capsRoomOf } from '../src/coord/dispatchDecide.js';
-import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany } from '../src/coord/wakeBudget.js';
+import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany, wakeRoom } from '../src/coord/wakeBudget.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { FleetWatcher } from '../src/watch.js';
 import { buildServer } from '../src/server.js';
@@ -352,6 +353,19 @@ describe('the decider: admissionWakeChoice', () => {
   });
 });
 
+describe('blockWokenWith: which blocks a wake wakes (capacity follow-ups, T4 F3)', () => {
+  const w = { runId: 7, program: 'prog-a' };
+  it('a capacity block naming the woken run, yes; another run of the same coordinator, no; another wake word, no', () => {
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: 7, program: 'prog-a' }, w)).toBe(true);
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: 8, program: 'prog-a' }, w)).toBe(false);
+    expect(blockWokenWith({ wakeOn: 'disk', runId: 7, program: 'prog-a' }, w)).toBe(false);
+  });
+  it('a capacity block naming no run is woken by a wake in its programme, and by no other', () => {
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: null, program: 'prog-a' }, w)).toBe(true);
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: null, program: 'prog-b' }, w)).toBe(false);
+  });
+});
+
 describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships in shadow)', () => {
   // Three counted runs under a limit of three; two of their workers read waiting or gone.
   const rows = [{ runId: 1, sessionId: 'w-1' }, { runId: 2, sessionId: 'w-2' }, { runId: 3, sessionId: 'w-3' }];
@@ -359,14 +373,32 @@ describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships 
   it('in shadow a waiting worker still holds its slot, even when the reading measured it: no room', () => {
     const shadow = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, false);
     expect(shadow.usage.waiting).toBe(2);
-    expect(capsRoomOf(shadow)).toBe(0);
+    expect(capsRoomOf(shadow, WAKE_BURST)).toBe(0);
   });
-  it('armed, the waiting and gone workers free their slots: room for two', () => {
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true))).toBe(2);
+  it('armed, the waiting and gone workers free their slots: room for two, while the freed-slot window admits two', () => {
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true), 2)).toBe(2);
+  });
+  it('capacity follow-ups (T4 F5): armed, a freed slot is room only up to what the freed-slot window admits now', () => {
+    const armed = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true);
+    expect(capsRoomOf(armed, 1)).toBe(1);
+    expect(capsRoomOf(armed, 0)).toBe(0);
+    // An ordinary free slot never waits on the window: limit 5 over three counted runs, two of them waiting.
+    const roomy = capsReadingOf({ maxConcurrentWorkers: 5 }, rows, readings, true);
+    expect(capsRoomOf(roomy, 0)).toBe(2);
+    expect(capsRoomOf(roomy, 1)).toBe(3);
+  });
+  it('capacity follow-ups (T4 F5): wakeRoom reads the window without recording into it', () => {
+    const NOW = 10 * WAKE_WINDOW_MS;
+    const list = [NOW - 1];
+    expect(wakeRoom([], NOW)).toBe(WAKE_BURST);
+    expect(wakeRoom(list, NOW)).toBe(WAKE_BURST - 1);
+    expect(wakeRoom([NOW - 1, NOW - 2], NOW)).toBe(0);
+    expect(wakeRoom([NOW - WAKE_WINDOW_MS], NOW)).toBe(WAKE_BURST);
+    expect(list).toEqual([NOW - 1]);
   });
   it('with no readings it is today\'s count, and never below zero', () => {
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 5 }, rows, null, false))).toBe(2);
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 2 }, rows, null, true))).toBe(0);
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 5 }, rows, null, false), 0)).toBe(2);
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 2 }, rows, null, true), WAKE_BURST)).toBe(0);
   });
 });
 
@@ -482,6 +514,29 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     const id = l.refused('prog-a', 'coord-a', T0 - MIN);
     await l.sweep(T0);
     expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${id}`]);
+  });
+
+  it('capacity follow-ups (T4 F5), armed: a freed slot the freed-slot window would refuse is no room, so a waiter refused there is woken once, not every pass', async () => {
+    const l = await lane();
+    l.coord.setCaps({ maxConcurrentWorkers: 1 });
+    l.coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
+    l.holder('other');   // gone: armed, its slot is a freed slot, which only the freed-slot window hands out
+    const id = l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toHaveLength(1);
+    // Two other starts take the window's two admits; the coordinator's dispatch then meets the window and is refused again.
+    vi.setSystemTime(T0 + 1_000);
+    expect(l.w.admitFreedSlot()).toBe(true);
+    expect(l.w.admitFreedSlot()).toBe(true);
+    expect(l.w.admitFreedSlot()).toBe(false);
+    l.coord.stampAdmissionWait(id, T0 + 2_000);
+    // The lane's next pass (its cadence is the window), with both admits still inside the window: the readings still free
+    // the slot, but the window would refuse it, so nobody is woken.
+    await l.sweep(T0 + MIN);
+    expect(l.wakeMail()).toHaveLength(1);
+    // CONTROL: the pass after, the window admits again, and the refused coordinator is woken for its new refusal.
+    await l.sweep(T0 + 2 * MIN);
+    expect(l.wakeMail()).toHaveLength(2);
   });
 
   it('shadow (cap-counts-working not armed): a gone worker still holds its slot, so nobody is woken', async () => {
@@ -602,6 +657,140 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     await l.sweep(T0 + MIN);
     expect(l.wakeMail()).toHaveLength(1);
     expect(l.coord.callById(cap)!.wokenAt).toBe(T0);
+  });
+
+  it('capacity follow-ups (T4 F3): a coordinator refused in two runs has only the woken run\'s capacity block woken', async () => {
+    const l = await lane();
+    // One slot free: two holders under a cap of three.
+    l.coord.setCaps({ maxConcurrentWorkers: 3 });
+    l.busyHolder('prog-h1');
+    l.busyHolder('prog-h2');
+    const first = l.refused('prog-a', 'coord-a', T0 - 2 * MIN);
+    const second = l.refused('prog-a', 'coord-a', T0 - MIN);
+    const park = (runId: number | null): number => l.coord.insertCall('prog-a', 'coord-a', {
+      class: 'block', runId, question: null, options: null, chosen: `waiting for a slot for ${runId}`, why: 'w', reversible: true,
+      wakeOn: 'capacity' as never,
+    }, 'b1', T0 - MIN);
+    const forFirst = park(first);
+    const forSecond = park(second);
+    await l.sweep(T0);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${first}`]);
+    expect(l.coord.callById(forFirst)!.wokenAt).toBe(T0);
+    expect(l.coord.callById(forSecond)!.wokenAt).toBeNull();
+  });
+
+  /** The block lane's own wake mail to `coord-a` (`blockWakeMail`), every delivery state. */
+  const blockMail = (l: { coord: CoordStore }): { subject: string; toId: string; fromId: string }[] => l.coord.db.prepare(
+    "SELECT subject, toId, fromId FROM mail WHERE subject LIKE 'wake: call %' ORDER BY id",
+  ).all() as never;
+  const parkCapacity = (l: { coord: CoordStore }, runId: number | null, at: number, program = 'prog-a'): number => l.coord.insertCall(program, 'coord-a', {
+    class: 'block', runId, question: null, options: null, chosen: 'waiting for a slot', why: 'w', reversible: true, wakeOn: 'capacity' as never,
+  }, 'b1', at);
+
+  it('capacity follow-ups (T4 F3): a capacity block recorded after its run\'s wake is woken, with its mail, at the next pass with room — not left live for 24 hours', async () => {
+    const l = await lane();
+    const id = l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toHaveLength(1);
+    // After the wake, the coordinator parks a thread on capacity for that run: no eligible waiter will ever wake it.
+    const late = parkCapacity(l, id, T0 + 10);
+    await l.sweep(T0 + MIN);
+    expect(l.coord.callById(late)!.wokenAt).toBe(T0 + MIN);
+    expect(blockMail(l)).toEqual([{ subject: `wake: call ${late} (capacity)`, toId: 'coord-a', fromId: 'operator' }]);
+    // Once: the next pass sends nothing more.
+    await l.sweep(T0 + 2 * MIN);
+    expect(blockMail(l)).toHaveLength(1);
+    expect(l.wakeMail()).toHaveLength(1);
+  });
+
+  it('capacity follow-ups (T4 F3): a run-less capacity block of a coordinator with no waiter is woken when the cap has room', async () => {
+    const l = await lane();
+    const parked = parkCapacity(l, null, T0 - MIN);
+    await l.sweep(T0);
+    expect(l.coord.callById(parked)!.wokenAt).toBe(T0);
+    expect(blockMail(l).map((m) => m.subject)).toEqual([`wake: call ${parked} (capacity)`]);
+  });
+
+  it('capacity follow-ups (T4 F3): block wakes spend the lane\'s own wake budget, oldest first', async () => {
+    const l = await lane();
+    const ids = ['prog-a', 'prog-b', 'prog-c'].map((p, k) => parkCapacity(l, null, T0 - (3 - k) * MIN, p));
+    await l.sweep(T0);
+    expect(ids.map((id) => l.coord.callById(id)!.wokenAt !== null)).toEqual([true, true, false]);
+    expect(blockMail(l)).toHaveLength(WAKE_BURST);
+    // One slot left under the cap: the third block is woken on the next pass, inside the room.
+    l.coord.setCaps({ maxConcurrentWorkers: 1 });
+    await l.sweep(T0 + MIN);
+    expect(l.coord.callById(ids[2]!)!.wokenAt).toBe(T0 + MIN);
+  });
+
+  it('capacity follow-ups (T4 F3): block wakes never pass the room, oldest first', async () => {
+    const room = await lane();
+    room.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const two = ['prog-a', 'prog-b'].map((p, k) => parkCapacity(room, null, T0 - (2 - k) * MIN, p));
+    await room.sweep(T0);
+    expect(two.map((id) => room.coord.callById(id)!.wokenAt !== null)).toEqual([true, false]);
+  });
+
+  it('capacity follow-ups (T4 F3): no room, or a pause or mail-disabled, wakes no block; room later wakes it', async () => {
+    const l = await lane();
+    l.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const holder = l.busyHolder('prog-h1');
+    const parked = parkCapacity(l, null, T0 - MIN);
+    await l.sweep(T0);
+    expect(l.coord.callById(parked)!.wokenAt).toBeNull();
+    l.coord.setCaps({ maxConcurrentWorkers: 2 });
+    await l.sweep(T0 + MIN, ['mail-disabled']);
+    await l.sweep(T0 + 2 * MIN, ['coordinator-paused']);
+    expect(l.coord.callById(parked)!.wokenAt).toBeNull();
+    expect(blockMail(l)).toEqual([]);
+    await l.sweep(T0 + 3 * MIN);
+    expect(l.coord.callById(parked)!.wokenAt).toBe(T0 + 3 * MIN);
+    expect(holder).toBeGreaterThan(0);
+  });
+
+  it('capacity follow-ups (T4 F3): a block whose run still has an eligible waiter is left to that waiter\'s wake', async () => {
+    const l = await lane();
+    // Room for five, but one waiter a programme a pass: prog-a's older refusal is woken, its newer one waits, and the
+    // block naming the newer run waits with it, though the room has slots left.
+    const older = l.refused('prog-a', 'coord-a', T0 - 3 * MIN);
+    const newer = l.refused('prog-a', 'coord-a', T0 - MIN);
+    const parked = parkCapacity(l, newer, T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${older}`]);
+    expect(l.coord.callById(parked)!.wokenAt).toBeNull();
+    expect(blockMail(l)).toEqual([]);
+  });
+});
+
+describe('the pass reads no worker while nothing could be woken (review 2981 F2)', () => {
+  const passWith = async (f: ReturnType<typeof fixture>, workerFacts: AdmissionWakeDeps['workerFacts']): Promise<void> =>
+    admissionWakePass({
+      coord: f.coord, names: [], serial: async (fn) => fn(), workerFacts, freedSlotRecent: () => [],
+      memory: { recent: [], served: new Map() }, push: () => undefined, warn: () => undefined,
+    });
+  const park = (f: ReturnType<typeof fixture>, wakeOn: string): number => f.coord.insertCall('prog-a', 'coord-a', {
+    class: 'block', runId: null, question: null, options: null, chosen: 'parked', why: 'w', reversible: true, wakeOn: wakeOn as never,
+  }, 'b1', Date.now() - 60_000);
+
+  it('armed, with no waiter and no capacity block (a disk block only), no worker is read and nothing is woken', async () => {
+    const f = fixture();
+    f.coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
+    f.holder('other');
+    const disk = park(f, 'disk');
+    const facts = vi.fn(async () => ({ kind: 'unmeasured' as const }));
+    await passWith(f, facts);
+    expect(facts).not.toHaveBeenCalled();
+    expect(f.coord.callById(disk)!.wokenAt).toBeNull();
+  });
+
+  it('CONTROL: armed, a capacity block no waiter would wake is a reason, so the workers are read', async () => {
+    const f = fixture();
+    f.coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
+    f.holder('other');
+    park(f, 'capacity');
+    const facts = vi.fn(async () => ({ kind: 'unmeasured' as const }));
+    await passWith(f, facts);
+    expect(facts).toHaveBeenCalled();
   });
 });
 
