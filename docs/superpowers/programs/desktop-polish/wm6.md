@@ -188,3 +188,45 @@ Run on the committed fix-round head (`95bb03254`, after `git fetch origin main`)
 | `ledger-guard.mjs --base origin/main` | exit 0, passed by the head's `Ledger-Edit` trailer, which now names the plan edit it covers; layout ok. `ci-ledger-guard.test.ts`: 32 passed |
 | the private-names scan (the canonical `private-names.mjs` against the operator's local list), tracked tree | exit 0, empty output |
 | `git merge-tree` against `origin/HEAD` | exit 0: clean. Main has moved by two commits since the build's head (a mask-slice change and the mail times change), neither touching this branch's files, and I did not merge it |
+
+## 8. The land-sync: one absorb of main (the coordinator's mail 27156)
+
+**Why.** #3071 (WM2) merged at `62276e71b`, and at `301e453b4` this branch conflicted with main in three files. The
+coordinator ordered one `git merge` of `origin/main` into `ws/polish-wm6`, keeping both sides, and told me to stop if any
+hunk needed more (clause 16's third trigger). **Measured:** `origin/main` was `62276e71b7808a0901676507b070af9e4ce2f7f1`
+at the merge and at the last fetch before the push; the merge commit is `be6e0c8fd`.
+
+**The three conflicts, each resolved by keeping both sides and changing no line of either** (measured: the markers are gone,
+`mutation-floors.json` parses as JSON with 258 keys, and `git diff --name-only origin/main HEAD` lists only this task's files):
+- the work-map plan: WM2's D-8779 entry and its "Task WM2 departs" line, then this task's D-8780 entry (the order WM2 asked
+  for and the coordinator's F13 ruling names);
+- `server/test/sim/mutation-floors.json`: the `epicForOpen` row after `landedFactOf`, then main's rows (WM2's three
+  `workMap.ts` keys and #3076's four `overlordGate.ts` keys); the `actKeyClaimVerdict` row on both sides was one row, kept
+  once with the comma it needs now that it is no longer last;
+- `server/test/sim/mutation-floors.test.ts`: both sides' import line (mine, then WM2's) and both sides' spread line.
+
+**Claims.** My claims had lapsed (their hard expiry passed while the run waited for a slot), so I re-took the plan and
+this note (claim 5756). The floors files were claimed by another worker (claim 5663, approvals PR 3), so that claim was
+refused (`claim-conflict`); I resolved the merge conflicts in them under the coordinator's land-sync order and added no
+content of my own, so no co-edit consent was asked. The earlier consent for my one import line, spread line and floor row
+(§5) stands.
+
+**Runs after the merge**, all measured, `ccrc test`, from `server/`, `--maxWorkers=2`, one file per process, load average
+10 to 20:
+
+| Run | Result |
+|---|---|
+| `test/sim/mutation-floors.test.ts`, the whole file | **killed by the test slice's memory cap** (163 of 267 had passed; exit 1). Rerun filtered to `epicForOpen`, WM2's three `workMap.ts` keys, #3076's four `overlordGate.ts` keys and the case that the floors and the sets name the same deciders: 9 passed, 258 skipped |
+| `plan-epic-waves` | 18 passed |
+| `plan-policy` | 62 passed |
+| `open-run-preconditions` | 131 passed |
+| `plan-routes` | 45 passed (main's WM2 cases are in it now) |
+| `work-map` | 93 passed |
+| `test/single-definition` (43 files) | first run: 2 failed, both **timeouts at 20000 ms under load** (`advance-switches`'s `the pin scan parses only the test files that spell a W1a basename`, and `docs-l0`'s `no python rule table fed to re.compile stands in ccd's shipped programs`), files this change does not touch. Rerun alone: `docs-l0` 142 passed; `advance-switches` timed out a second time at load 19, then passed, 53 of 53, at load 13 |
+| `test/rings` (12 files), `coord-policy-rings` | 133 passed; 20 passed |
+| server compile check | clean (exit 0) |
+| server test-project compile check | clean (exit 0): the whole 3,203-file project, measured this time |
+| `deviation-refs` (after a fresh `git fetch origin main`) | first run: 1 failed, a **timeout at 20000 ms under load** (`is looking at two real trees`); rerun alone: 34 passed |
+| `dtbd`, `topology-clean` | 1 passed; 61 passed |
+| the ledger guard (`ledger-guard.mjs --base origin/main`) and `ci-ledger-guard.test.ts` | exit 0, passed by the head's `Ledger-Edit` trailer (covering the work-map plan), layout ok; 32 passed |
+
