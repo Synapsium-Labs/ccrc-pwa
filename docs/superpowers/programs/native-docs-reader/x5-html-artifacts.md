@@ -46,7 +46,7 @@ Review run 2850 read the branch at `d1bb9ffee` and confirmed 13 findings (F1 to 
 |---|---|
 | F1 | D-8786 also records C1 as ruled (ask 596, a fresh start), so X2's spec no longer lists C1 as waiting |
 | F2, F3 | A1 waits for X3 R1, as R1 waits for X2 P1. A1 moves R1's `isReviewToken` body to `shared/capabilityToken.ts` and re-exports the name, so R1's plan and tests are unchanged. Every shared file is listed with its order |
-| F4 | "Open as artifact" is offered on every HTML page beside its walls view, so no refusal detector is built |
+| F4 | "Open as artifact" is offered on every HTML page at its branch's current version beside its walls view, so no refusal detector is built (narrowed to the current version in round 2, N3) |
 | F5 | The liveness port measures the current secret generation on each call. An absent or unusable secret ends every capability. Real-store test |
 | F6 | A4 writes a stock-Caddy global block that filters `request>uri` and the `Referer` header out of every log entry. A test pins it. ART-L10 confirms it, and a token found turns the tier off and asks |
 | F7 | The scope read and the mint refuse `pin-moved` when the tree read is not the pinned version |
