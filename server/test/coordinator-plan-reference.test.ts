@@ -2,8 +2,8 @@
 // its contract. `references/plan.md` names every plan verb the closed client routes by wave 6 and every plan refusal a
 // coordinator meets from one, says the hierarchy is ccrc's and its items are the operator's to act on in the console, and
 // gives the Linear owner its one duty; the open step declares the plan first and names the run's ticket; the ledger
-// template's Waves table has an epic column; SKILL.md points at the plan reference. The contract's clause 22 (D-8739's
-// follow-up) is pinned in `coordinator-skill.test.ts`, so nothing here reads the contract.
+// template's Waves table has an epic column; SKILL.md points at the plan reference. The contract's plan clause, which
+// lands as clause 22, and its pin wait for D-8739's follow-up (plan ticket w6-clause-22), so nothing here reads the contract.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,10 +53,10 @@ describe('the coordinator skill points at the plan reference (D-8185)', () => {
     expect(linear).toContain('The hierarchy is ccrc\'s, kept from your plan (`references/plan.md`).');
   });
 
-  it('its Linear section leaves the console-only rule to clause 22, its one home in SKILL.md (D-8739, review 2580 F1)', () => {
+  it('its Linear section states the console-only rule for hierarchy items, until clause 22 lands (D-8739, review 2580 F1)', () => {
     const linear = flat(skill.slice(skill.indexOf('\n## Linear\n')));
-    expect(linear).not.toContain('The operator acts on hierarchy items in the console');
-    expect(flat(skill)).toContain('22. A new programme\'s plan is declared with `ccrc-api plan put`');
+    expect(linear).toContain('The operator acts on hierarchy items in the console, and a coordinator never answers one for them '
+      + 'nor asks for those approvals in its turn text.');
   });
 
   it('its Linear section keeps every name Linear returns as data, and Linear text in its workspace (review 2580 A2)', () => {
