@@ -218,7 +218,7 @@ stateDiagram-v2
   Live --> Dead: server restart or artifact keys changed
   Dead --> [*]: forgotten, no tombstone
 ```
-*Figure 2. A capability's life. Every way out of Live is immediate, for work already admitted as well as the next request: a request still waiting answers the 404, and a response under way is cut before its next frame (§5, Work in flight). A revoke cuts it at once. Nothing revives a dead capability. Opening the page again mints a new one.*
+*Figure 2. A capability's life. A revoke, Revoke all and a restart end work already admitted at once: a waiting request answers the 404 and a response under way is cut. The other ways out (sign-out, session expiry, a passphrase change, the idle hour, the absolute expiry) are seen at the next look-up. A waiting request answers the 404 when it is admitted, at most `ARTIFACT_QUEUE_WAIT_MS` later, and a response under way is cut before its next frame, so at most the one frame already being read reaches the reader (§5, Work in flight). Nothing revives a dead capability. Opening the page again mints a new one.*
 
 | Rule | Value | Why |
 |---|---|---|
