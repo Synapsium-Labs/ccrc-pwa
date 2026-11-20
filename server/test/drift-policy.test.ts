@@ -4,7 +4,7 @@ import { describe, it, expect } from 'vitest';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, OWNED_FIELDS, RESTORED_LINE_PREFIX, driftVerdict, driftedFields, isInbound, isPersistent,
   restoreComment, restoredDescription, restoredLine, withoutRestoredLines, type OwnedFields,
-  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreCommentChoice, restoreFallbackCommentOf, restoreHoldVerdict, restoreSides, restoreTargetVerdict, syncWroteSince, bindingByLinearIdOf, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
+  DRIFT_COMMENT_MS, LINEAR_TEXT_PREFACE, driftEventValue, driftEventText, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, restoreCommentChoice, restoreFallbackCommentOf, restoreHoldVerdict, restoreSides, restoreTargetVerdict, syncWroteSince, bindingByLinearIdOf, type NameFacts, commentDue, driftValueText, restoreCommentOf, shouldRaiseDriftItem,
   UNRESTORABLE, eventVerdict, graceRereads, graceVerdict, isNewUnrestorable, missingLinksVerdict, restorableFields,
   DRIFT_KEEP_NOTE, DRIFT_SWEEP_MARGIN_MS, closedByKeep, driftCursorAfterFailure, handRoute, sweepStep, sweepWatermark,
 } from '../src/linear/driftPolicy.js';
@@ -396,6 +396,14 @@ describe('what the drift pass records and where it looks (round 5 and 6)', () =>
     expect(driftEventValue('initiativeIds', [], ['i'])).toBe('i');
     expect(driftEventValue('title', 'Linear title', 'Plan')).toBe('Linear title');
     expect(driftEventValue('teamKeys', ['AAA', 'B'], ['AAA'])).toBe('AAA, B');
+  });
+  it('the record line names a one-way set\'s value for what it is (round 3 F1)', () => {
+    expect(driftEventText('initiativeIds', 'i1')).toBe('initiativeIds: planned, missing in Linear: i1');
+    expect(driftEventText('projectIds', 'p1, p2')).toBe('projectIds: planned, missing in Linear: p1, p2');
+    expect(driftEventText('milestoneIds', 'm2')).toBe('milestoneIds: planned, missing in Linear: m2');
+    expect(driftEventText('title', 'Linear title')).toBe('title = Linear title');
+    expect(driftEventText('title', '')).toBe('title = (empty)');
+    expect(driftEventText('teamKeys', 'AAA, B')).toBe('teamKeys = AAA, B');
   });
   it('scope follows the binding, not where the object sits now', () => {
     const m = new Set(['AAA']);

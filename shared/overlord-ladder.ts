@@ -58,9 +58,17 @@ export const LADDER_CAUSE_MAP = {
     kind: 'condition', effect: { kind: 'cap', cap: 'chat' }, notice: 'none',
     spec: 'a generation degraded (Table 7.5a, §3.3.11)',
   },
+  'off-model': {
+    kind: 'condition', effect: { kind: 'one-under-operator', floor: 'chat' }, notice: 'none',
+    spec: 'a generation off the designated model, its replay not passed (Table 7.5a)',
+  },
   'rung-word-missing': {
     kind: 'condition', effect: { kind: 'server-words' }, notice: 'none',
     spec: 'the operator\'s rung is above the highest rung whose word the server holds (the W2 route plan, RV8)',
+  },
+  'unwitnessed-third': {
+    kind: 'latch', effect: { kind: 'cap', cap: 'advise' }, notice: 'push',
+    spec: 'the third unwitnessed write in a day (Table 7.5a)',
   },
 } as const satisfies Readonly<Record<string, LadderCauseRow>>;
 export type LadderCause = keyof typeof LADDER_CAUSE_MAP;

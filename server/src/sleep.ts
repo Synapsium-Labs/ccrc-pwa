@@ -30,7 +30,8 @@ export const SLEEP_POLICY_NAMES = ['run-done', 'idle-hours'] as const;
 export type SleepPolicyName = (typeof SLEEP_POLICY_NAMES)[number];
 
 /** Whether a stand hold (`.hold`) can pass. `any-holds`: every hold holds. `workspace-passes`: a hold the lane classified
- *  as guarding only the workspace (a programme hold, or one naming a terminal run) passes when the box's ccd can pass it
+ *  as guarding only the workspace (a programme hold, one naming a terminal run, or one naming the worker's own newest
+ *  placed run, D-8789) passes when the box's ccd can pass it
  *  too (`hibernate-hold-ok`); the input says so in `heldPasses`. */
 export const SLEEP_HELD_RULES = { anyHolds: 'any-holds', workspacePasses: 'workspace-passes' } as const;
 export type SleepHeldRule = (typeof SLEEP_HELD_RULES)[keyof typeof SLEEP_HELD_RULES];

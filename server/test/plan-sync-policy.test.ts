@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import type { BindingRow, CheckpointRow, EpicRow, StoredPlan, TicketRow } from '../src/coord/planStore.js';
 import {
   adoptionVerdict, deferralOf, deferralUntil, deferralUsesBackoff, dispatchWaitVerdict, probeEpisodeText, probeRecheckDue, directoryMissed, directoryWaitVerdict, DIRECTORY_EPISODE_REFILLS, issueReadVerdict, nextDirectoryStreak, probeWaitsVerdict, plannedFingerprint, withoutPutBack, fitProjectName, initiativeDescription, LINEAR_PROJECT_NAME_MAX_CHARS, planSyncSteps,
-  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, textFactsOf, textRefusalOf, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
+  requeueVerdict, requestIdOf, uuidOf, linkMarkOf, withLinkMark, textFactsOf, textRefusalOf, textFactOfTeam, type AdoptionKind, type DeferCause, type Deferral, type AdoptionNode, type ProgrammeSnapshot, type SyncSnapshot, type SyncStep,
 } from '../src/linear/planSyncPolicy.js';
 import { givenUpReason, givenUpWord, inboundActVerdict, inboundHeld, keyWaitMail } from '../src/linear/inboundPolicy.js';
 import { LINEAR_INITIATIVE_STATUSES } from '../src/linear/hierarchyOps.js';
@@ -725,5 +725,20 @@ describe('textRefusalOf and textFactsOf (review 2457 F3)', () => {
   it('an object the plan does not hold is judged unknown, public, with the binding\'s own team', () => {
     const s = snap({ mode: 'private', tickets: [tk()] });
     expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 999, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
+  });
+
+  it('a project the snapshot does not describe is judged unknown, public, with the binding\'s own team (review 2874 A5)', () => {
+    const s = { ...snap({ mode: 'private', tickets: [tk()] }), projects: [] };
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1, teamKey: 'BBB' }))).toEqual([textFactOfTeam(null, 'BBB')]);
+    expect(textFactsOf(s, bind({ localKind: 'ticket', localId: 1, teamKey: 'BBB' }))).toEqual([{ teamKey: 'BBB', mode: 'unknown' }]);
+  });
+});
+
+describe('textFactOfTeam (review 2834 F1)', () => {
+  it('an owner reading stands as it is; no owner is the issue\'s own team, unknown (public)', () => {
+    expect(textFactOfTeam({ teamKey: 'AAA', mode: 'private' }, 'ZZZ')).toEqual({ teamKey: 'AAA', mode: 'private' });
+    expect(textFactOfTeam(null, 'CCC')).toEqual({ teamKey: 'CCC', mode: 'unknown' });
+    expect(textFactOfTeam(null, null)).toEqual({ teamKey: null, mode: 'unknown' });
+    expect(textRefusalOf(['dup of CCC-77'], [textFactOfTeam(null, 'CCC')], [])).toBe('tracker id');
   });
 });
