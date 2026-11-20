@@ -404,6 +404,7 @@ export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
   'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
   'team-unknown': 'That team and workspace pair is not in any connected Linear workspace. Choose a workspace that holds the key, or check the workspace key.',
   'team-set': 'This project already has a Linear team, so a suggestion is not needed.',
+  'team-ambiguous': 'More than one connected Linear workspace has that team key. Choose the workspace, then link it.',
 };
 
 /** The words the linking POST routes answer beside the fixed table (D-8147): not in `LINKING_REFUSAL_TEXT`, because

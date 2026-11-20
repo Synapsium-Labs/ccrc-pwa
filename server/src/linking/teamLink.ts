@@ -221,11 +221,19 @@ export function decideTeamLink(f: TeamLinkFacts): TeamLinkDecision {
 export const autoLinkAllowed = (teamKey: string | null, source: TeamLinkSource | null): boolean =>
   teamKey === null && source !== 'manual';
 
-/** Who set the key after the operator's write: a write that changes the key (sets, replaces or clears it) is the
- *  operator's; one that sends the stored key back (an override change re-sends it) keeps whoever set it. */
+/** Whether the operator's write changes the linked pair: the key (set, replaced or cleared), or, with the key kept, the workspace
+ *  it lives in (D-8808, final review M3). `written.workspace` is the DECIDED one (`workspaceAfterWrite`); absent keeps the stored. */
+export const pairChangedByWrite = (
+  before: { teamKey: string | null; workspace?: string | null }, written: { teamKey: string | null; workspace?: string | null },
+): boolean => written.teamKey !== before.teamKey
+  || (written.workspace !== undefined && written.workspace !== (before.workspace ?? null));
+
+/** Who set the key after the operator's write: a write that changes the pair (`pairChangedByWrite`: the key, or its workspace) is
+ *  the operator's decision; one that sends the stored pair back (an override change re-sends it) keeps whoever set it. */
 export const teamSourceAfterWrite = (
-  before: { teamKey: string | null; source: TeamLinkSource | null }, written: string | null,
-): TeamLinkSource | null => (written === before.teamKey ? before.source : 'manual');
+  before: { teamKey: string | null; source: TeamLinkSource | null; workspace?: string | null },
+  written: { teamKey: string | null; workspace?: string | null },
+): TeamLinkSource | null => (pairChangedByWrite(before, written) ? 'manual' : before.source);
 
 /** What the pass does for one project: link `link` (when the store takes it), else record `candidates`. */
 export interface TeamLinkPlan {

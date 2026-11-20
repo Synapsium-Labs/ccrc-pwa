@@ -83,6 +83,16 @@ export function workspaceToWrite(holders: ReadonlyArray<{ id: string }>, chosen:
   return holders.length > 1 && holders.some((h) => h.id === chosen) ? chosen : undefined;
 }
 
+/** D-8808 (final review I2): what a candidate's one-tap Link does. A candidate with a workspace writes its pair. One stored with no
+ *  workspace writes the key in the one connected workspace that holds it (none known: the key alone, as before); when several hold
+ *  it, nothing is written (a key with no workspace would resolve nowhere): the key goes into the field and the picker asks. */
+export function candidateTap(c: TeamCandidateWire, read: readonly LinearWorkspaceShown[] | null): { kind: 'write'; workspace?: string } | { kind: 'pick' } {
+  if (c.workspaceId !== undefined) return { kind: 'write', workspace: c.workspaceId };
+  const holders = workspacesHoldingKey(read, c.key);
+  if (holders.length > 1) return { kind: 'pick' };
+  return holders.length === 1 ? { kind: 'write', workspace: holders[0]!.id } : { kind: 'write' };
+}
+
 /** A candidate's workspace, as a line; null for a candidate an older build stored. */
 export function candidateWorkspaceLine(c: TeamCandidateWire): string | null {
   if (c.workspaceId === undefined) return null;

@@ -142,6 +142,21 @@ describe('project_linking.teamSuggestions', () => {
     const by = linkingOf(db, 'project-a').teamCandidates!.map((c) => (c.evidence as { by: string }).by);
     expect(by).toEqual(['3', '4', '5', '6', '7', '8', '9', '10'].map((n) => `lane-${n}`));
   });
+  it('the cap evicts only among the other sessions\' suggestions, never the one just written (final review D2)', () => {
+    row('project-a');
+    for (let i = 1; i <= 8; i++) recordTeamSuggestion(db, 'project-a', { ...S, by: `lane-${i}`, at: 100 + i });
+    // A suggestion stamped older than every stored one (a clock that stepped back) is still the one kept: the oldest OTHER goes.
+    expect(recordTeamSuggestion(db, 'project-a', { ...S, by: 'lane-new', at: 1 })).toBe('written');
+    const by = linkingOf(db, 'project-a').teamCandidates!.map((c) => (c.evidence as { by: string }).by);
+    expect(by).toHaveLength(8);
+    expect(by).toContain('lane-new');
+    expect(by).not.toContain('lane-1');
+    // A resend by a stored session replaces its own element and evicts nobody.
+    expect(recordTeamSuggestion(db, 'project-a', { ...S, by: 'lane-2', why: 'again', at: 2 })).toBe('written');
+    const again = linkingOf(db, 'project-a').teamCandidates!.map((c) => (c.evidence as { by: string }).by);
+    expect(again).toHaveLength(8);
+    expect(again).toEqual(expect.arrayContaining(['lane-new', 'lane-2', 'lane-3']));
+  });
   it('a cell that does not parse reads as none, and a key write clears the cell', () => {
     row('project-a');
     db.prepare("UPDATE project_linking SET teamSuggestions = 'not json' WHERE project = 'project-a'").run();
@@ -206,6 +221,22 @@ describe('project_linking.teamCallId (the Overlord link)', () => {
     setLinking(db, 'project-a', { teamKey: 'BBB', override: null }, 'd', 200);
     expect({ ...stored('project-a') }).toEqual({ teamSource: 'manual', teamCallId: null });
     expect(linkingOf(db, 'project-a').teamLink).toEqual({ source: 'manual', at: 200 });
+  });
+  it('a write that keeps the key but changes its workspace is the operator\'s decision: manual, the call id cleared (final review M3)', () => {
+    const id = linkTeamOverlord(db, 'project-a', LINK, CALL, 100)!;
+    expect(linkingOf(db, 'project-a').teamLink).toMatchObject({ source: 'overlord', callId: id });
+    // The same pair sent back (an override change) keeps the Overlord's link.
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: 'private', workspace: 'ws-a' }, 'd', 150);
+    expect(linkingOf(db, 'project-a').teamLink).toMatchObject({ source: 'overlord', callId: id });
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: 'private', workspace: 'ws-b' }, 'd', 200);
+    expect({ ...stored('project-a') }).toEqual({ teamSource: 'manual', teamCallId: null });
+    expect(linkingOf(db, 'project-a')).toMatchObject({ teamKey: 'AAA', teamWorkspace: 'ws-b', teamLink: { source: 'manual', at: 200 } });
+  });
+  it('the same for the automatic link: a workspace change with the key kept makes it manual (final review M3)', () => {
+    recordReading(db, 'project-a', MEASURED);
+    expect(linkTeamAuto(db, 'project-a', LINK, 100)).toBe(true);
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: null, workspace: null }, 'd', 200);
+    expect(linkingOf(db, 'project-a')).toMatchObject({ teamKey: 'AAA', teamWorkspace: null, teamLink: { source: 'manual', at: 200 } });
   });
   it('the automatic link writes no call id, even over a stale one', () => {
     recordReading(db, 'project-a', MEASURED);

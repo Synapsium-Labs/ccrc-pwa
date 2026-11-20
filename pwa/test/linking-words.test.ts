@@ -16,7 +16,7 @@ describe('evidenceWords', () => {
 
 // D-8808 (wave 8, Task 8.6): the workspace picker's and the candidate rows' words.
 import {
-  candidateAriaLabel, candidateKeyOf, candidateWorkspaceLine, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+  candidateAriaLabel, candidateKeyOf, candidateTap, candidateWorkspaceLine, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
   OVERLORD_LINK_WORDS, PICKER_WORDS,
 } from '../src/fleet/linkingWords';
 import type { LinearWorkspaceShown } from '../../shared/linear';
@@ -65,5 +65,22 @@ describe('an Overlord link', () => {
   it('reads as a call made for the operator, and says how to overturn it', () => {
     expect(teamLinkLine(l)).toBe(`Linked by the Overlord for you to Alpha: 9 of 10 ticket ids in its branches, pull requests and commits use AAA. ${OVERLORD_LINK_WORDS.overturn}`);
     expect(OVERLORD_LINK_WORDS.call).toBe('See it in Calls made for you');
+  });
+});
+
+// D-8808 (final review I2): a candidate's tap never writes a shared key with no workspace.
+describe('a candidate\'s tap', () => {
+  const read = [ws('id-a', 'ws-a', ['AAA', 'BBB']), ws('id-b', 'ws-b', ['AAA'])];
+  const bare = { key: 'AAA', name: 'Alpha', evidence: { kind: 'suggested', by: 'lane-a', why: 'the branches' } } as const;
+  it('a candidate with a workspace writes its pair', () => {
+    expect(candidateTap({ ...bare, workspaceId: 'id-b', workspaceName: 'ws-b' }, read)).toEqual({ kind: 'write', workspace: 'id-b' });
+  });
+  it('one with no workspace whose key several workspaces hold asks for the workspace, writing nothing', () => {
+    expect(candidateTap(bare, read)).toEqual({ kind: 'pick' });
+  });
+  it('one with no workspace whose key one workspace holds writes that workspace; none known writes the key alone', () => {
+    expect(candidateTap({ ...bare, key: 'BBB' }, read)).toEqual({ kind: 'write', workspace: 'id-a' });
+    expect(candidateTap(bare, null)).toEqual({ kind: 'write' });
+    expect(candidateTap({ ...bare, key: 'ZZZ' }, read)).toEqual({ kind: 'write' });
   });
 });

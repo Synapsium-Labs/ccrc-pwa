@@ -136,7 +136,7 @@ export interface LinkingWriteBody {
 /** Every refusal word the linking routes answer; each reaches the PWA through `refusalText`. */
 export const LINKING_REFUSALS = ['bad-team-key', 'bad-override', 'no-project', 'repo-public', 'repo-unmeasured',
   'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public', 'template-failed', 'override-private-public', 'team-unknown',
-  'team-set'] as const;
+  'team-set', 'team-ambiguous'] as const;
 export type LinkingRefusal = (typeof LINKING_REFUSALS)[number];
 /** Whether a word is one of the linking routes' refusals: the guard the coordination kebab census admits them through
  *  (`mail-routes.test.ts`), so a store in `server/src/coord` may answer one by name (D-8809). */

@@ -446,12 +446,26 @@ describe('POST /api/linking/suggest', () => {
     ]);
   });
 
-  it('without a workspace the key must be held by some workspace, and none is recorded', async () => {
+  it('without a workspace, a key one workspace holds is stored in that workspace (final review I2)', async () => {
     app = await boot();
     const res = await suggest(app, (() => { const b = ok({ team: 'bbb' }); delete b['workspace']; return b; })());
     expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().suggestion).toMatchObject({ key: 'BBB', workspaceId: WS_B, workspaceName: 'Workspace ws-b' });
     const c = coord!.linkingOf('project-a').teamCandidates;
-    expect(c).toEqual([{ key: 'BBB', name: 'Team BBB', evidence: { kind: 'suggested', by: ME.byId, why: 'the branches name this team' } }]);
+    expect(c).toEqual([{
+      key: 'BBB', name: 'Team BBB', evidence: { kind: 'suggested', by: ME.byId, why: 'the branches name this team' },
+      workspaceId: WS_B, workspaceName: 'Workspace ws-b',
+    }]);
+  });
+
+  it('without a workspace, a key two connected workspaces hold is refused team-ambiguous and writes nothing (final review I2)', async () => {
+    app = await boot();
+    const res = await suggest(app, (() => { const b = ok({ team: 'AAA' }); delete b['workspace']; return b; })());
+    expect([res.statusCode, res.json().error]).toEqual([409, 'team-ambiguous']);
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+    // Named, either workspace of the shared key is a suggestion of its own pair.
+    expect((await suggest(app, ok({ team: 'AAA', workspace: WS_A }))).statusCode).toBe(200);
+    expect(coord!.linkingOf('project-a').teamCandidates).toMatchObject([{ key: 'AAA', workspaceId: WS_A }]);
   });
 
   it('a project with a key refuses it team-set and writes nothing', async () => {

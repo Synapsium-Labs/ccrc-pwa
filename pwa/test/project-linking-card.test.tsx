@@ -906,6 +906,23 @@ describe('the candidates (D-8808)', () => {
     fireEvent.click(r.getByRole('button', { name: candidateAriaLabel(same[1]!) }));
     await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-b' }));
   });
+  it('a tap on a candidate with no workspace whose key two workspaces hold writes nothing and opens the picker (final review I2)', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    const bare: TeamCandidateWire = { key: 'AAA', name: 'Alpha', evidence: { kind: 'suggested', by: 'lane-a', why: 'the branches name it' } };
+    await mount([row('project-a', wire({ teamCandidates: [bare] }))]);
+    await waitFor(() => expect(api.linearWorkspaces).toHaveBeenCalled());
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamWorkspace: 'id-b' }) });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: candidateLabel(bare) }));
+    await waitFor(() => expect(picker('project-a')).not.toBeNull());
+    expect(save).not.toHaveBeenCalled();
+    expect(keyField('project-a').value).toBe('AAA');
+    expect(picker('project-a')!.value).toBe('');
+    expect(within(rowOf('project-a')).getByText(PICKER_WORDS.needed)).toBeInTheDocument();
+    // The workspace chosen, Save writes the pair.
+    fireEvent.change(picker('project-a')!, { target: { value: 'id-b' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-b' }));
+  });
   it('a suggestion shows its session and its reason as text, never as markup', async () => {
     serveWorkspaces('unreadable');
     await mount([row('project-a', wire({ teamCandidates: same }))]);

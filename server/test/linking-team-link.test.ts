@@ -9,7 +9,7 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
-  TEAM_LINK_MIN_IDS, TEAM_LINK_MIN_SHARE, decideTeamLink, planTeamLink, repoNameOf, teamSourceAfterWrite, ticketTally,
+  TEAM_LINK_MIN_IDS, TEAM_LINK_MIN_SHARE, decideTeamLink, pairChangedByWrite, planTeamLink, repoNameOf, teamSourceAfterWrite, ticketTally,
   attachedAnswer, tallyAttached, type AttachedTally, type KnownTeam, type TeamLinkFacts,
 } from '../src/linking/teamLink.js';
 import { VisibilityLane } from '../src/linking/visibilityLane.js';
@@ -132,6 +132,15 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
         { key: 'AAA', name: 'Alpha', ...WA, evidence: ev },
         { key: 'AAA', name: 'Alpha elsewhere', ...WB, evidence: ev },
       ],
+    });
+  });
+
+  it('a decisive key in two workspaces plus exactly one name-matching pair links that pair (final review D1)', () => {
+    // AAA is decisive by ticket ids but held in ws-a and ws-b, so (a) names no pair; (b) has one pair, ws-b's AAA, whose name
+    // equals the project's; no id names any other key, so the name match links ws-b's pair.
+    const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'AAA', name: 'project-a', ...WB }];
+    expect(decideTeamLink(facts({ project: 'project-a', teams, tally: tally({ AAA: 4 }) }))).toEqual({
+      kind: 'link', key: 'AAA', name: 'project-a', ...WB, evidence: { kind: 'name-match', matched: 'project', on: 'name' },
     });
   });
 
@@ -263,10 +272,22 @@ describe('planTeamLink and teamSourceAfterWrite: the operator\'s key always wins
   });
 
   it('a write that changes the key is the operator\'s; one that sends the stored key back keeps its source', () => {
-    expect(teamSourceAfterWrite({ teamKey: 'AAA', source: 'auto' }, 'AAA')).toBe('auto');
-    expect(teamSourceAfterWrite({ teamKey: 'AAA', source: 'auto' }, 'BBB')).toBe('manual');
-    expect(teamSourceAfterWrite({ teamKey: 'AAA', source: 'auto' }, null)).toBe('manual');
-    expect(teamSourceAfterWrite({ teamKey: null, source: null }, null)).toBeNull();
+    expect(teamSourceAfterWrite({ teamKey: 'AAA', source: 'auto' }, { teamKey: 'AAA' })).toBe('auto');
+    expect(teamSourceAfterWrite({ teamKey: 'AAA', source: 'auto' }, { teamKey: 'BBB' })).toBe('manual');
+    expect(teamSourceAfterWrite({ teamKey: 'AAA', source: 'auto' }, { teamKey: null })).toBe('manual');
+    expect(teamSourceAfterWrite({ teamKey: null, source: null }, { teamKey: null })).toBeNull();
+  });
+
+  it('a write that keeps the key but changes its workspace is the operator\'s; the same pair sent back keeps its source (final review M3)', () => {
+    const before = { teamKey: 'AAA', source: 'overlord' as const, workspace: 'ws-a' };
+    expect(teamSourceAfterWrite(before, { teamKey: 'AAA', workspace: 'ws-b' })).toBe('manual');
+    expect(teamSourceAfterWrite(before, { teamKey: 'AAA', workspace: null })).toBe('manual');
+    expect(teamSourceAfterWrite({ ...before, workspace: null }, { teamKey: 'AAA', workspace: 'ws-a' })).toBe('manual');
+    expect(teamSourceAfterWrite(before, { teamKey: 'AAA', workspace: 'ws-a' })).toBe('overlord');
+    // absent: the stored workspace is kept, so the pair is unchanged
+    expect(teamSourceAfterWrite(before, { teamKey: 'AAA' })).toBe('overlord');
+    expect(pairChangedByWrite(before, { teamKey: 'AAA', workspace: 'ws-b' })).toBe(true);
+    expect(pairChangedByWrite(before, { teamKey: 'AAA' })).toBe(false);
   });
 });
 

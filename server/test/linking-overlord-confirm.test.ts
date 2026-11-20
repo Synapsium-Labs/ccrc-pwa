@@ -23,14 +23,17 @@ import type { TeamCandidateWire } from '../../shared/linking.js';
 import { ACT_COUNTER_HEADER, ACT_GENERATION_HEADER, ACT_KEY_HEADER, WITNESS_KEY_HEADER } from '../../shared/continuity-door.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
+import { readLinearStore, type LinearStoreRead } from '../src/linear/store.js';
+import { seedSlot, WS } from './linearProxyRig.js';
 
 const NOW = 1_800_000_000_000;
 const TOKEN = 'a'.repeat(64);
 const BODY = 'lane-a-overlord';            // the Overlord's session id
 const COORDINATOR = 'lane-b-project-a';    // another coordinator
 const INC = 'inc-1';
-const WS_A = '00000000-0000-4000-8000-0000000000a1';
-const WS_B = '00000000-0000-4000-8000-0000000000b2';
+// The candidates' workspaces are the fixture slots' (`linearProxyRig.ts`): the confirm re-checks the pair in the live store.
+const WS_A = WS.a.id;
+const WS_B = WS.b.id;
 const DESIGNATED = {
   kind: 'designated', sessionId: BODY, term: 1,
   row: { bound: { sessionId: BODY, generation: INC }, pending: null, term: 1, designatedTerm: 1 },
@@ -77,8 +80,20 @@ function fresh(): { gen: GenRow; key: string } {
 }
 
 interface Rig { app: FastifyInstance; notices: Array<{ title: string; body: string; mode: string }>; waiting: () => number; act: () => Record<string, string> }
+/** The live Linear store the confirm re-reads (final review I3): `both` ws-a holding AAA and ws-b BBB; `shared` ws-b holding AAA
+ *  too; `lost-a` only ws-b (ws-a's slot is gone); `throw` and `unreadable` a store that cannot be read. */
+type Linear = 'both' | 'shared' | 'lost-a' | 'throw' | 'unreadable';
+async function linearOf(kind: Linear): Promise<() => Promise<LinearStoreRead>> {
+  if (kind === 'throw') return async () => { throw new Error('the store is gone'); };
+  if (kind === 'unreadable') return async () => ({ kind: 'unreadable', code: 'EIO' }) as LinearStoreRead;
+  const ccrcDir = path.join(mkTmp('ccrc-link-confirm-linear-'), '.ccrc');
+  if (kind !== 'lost-a') await seedSlot(ccrcDir, 'a');
+  await seedSlot(ccrcDir, 'b', kind === 'shared' ? { teams: [...WS.b.teams, { id: 'bbbbbbbb-1111-4000-8000-0000000000b2', key: 'AAA', name: 'Team A' }] } : {});
+  return () => readLinearStore(ccrcDir);
+}
+
 /** The door over the real gate runner; `rung` is the effective rung the ladder port reads, `card` the card read. */
-async function rig(over: { rung?: Rung; card?: 'current' | 'none' } = {}): Promise<Rig> {
+async function rig(over: { rung?: Rung; card?: 'current' | 'none'; linear?: Linear } = {}): Promise<Rig> {
   const { gen, key } = fresh();
   let counter = 0;
   const deps: OverlordGateDeps = {
@@ -107,7 +122,10 @@ async function rig(over: { rung?: Rung; card?: 'current' | 'none' } = {}): Promi
   bus.on('waiting', () => { waiting += 1; });
   const app = Fastify({ logger: false });
   apps.push(app);
-  registerLinkingRoutes(app, { coord: s, by: () => 'device-a', now: () => NOW, mailToken: () => TOKEN, gate: overlordGateRun(deps), notice, bus, build: 'v-test' });
+  registerLinkingRoutes(app, {
+    coord: s, by: () => 'device-a', now: () => NOW, mailToken: () => TOKEN, gate: overlordGateRun(deps), notice, bus, build: 'v-test',
+    readLinearStore: await linearOf(over.linear ?? 'both'),
+  });
   await app.ready();
   return {
     app, notices, waiting: () => waiting,
@@ -250,6 +268,35 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     expect(call.chosen).toBe('Beta Team');
     expect(call.why).toContain('suggested by lane-c: the branches say so');
     expect(s.linkingOf('project-a')).toMatchObject({ teamKey: 'BBB', teamWorkspace: null, teamLink: { source: 'overlord' } });
+  });
+
+  it('a slot that no longer holds the pair is team-unknown: no link, no call (final review I3)', async () => {
+    const r = await rig({ linear: 'lost-a' });
+    seed();
+    refused(await confirm(r, {}), 'team-unknown');
+    unlinked();
+    expect(r.notices).toEqual([]);
+    expect(s.linkingOf('project-a').teamCandidates).toHaveLength(2);
+  });
+
+  it('a Linear store that cannot be read is unavailable, never team-unknown: no link, no call (final review I3)', async () => {
+    for (const linear of ['throw', 'unreadable'] as const) {
+      const r = await rig({ linear });
+      seed();
+      refused(await confirm(r, {}), 'unavailable');
+      unlinked();
+    }
+  });
+
+  it('a candidate with no workspace whose key two workspaces hold is team-ambiguous: no link, no call (final review I3)', async () => {
+    const r = await rig({ linear: 'shared' });
+    s.recordLinkingReading('project-a', MEASURED);
+    expect(s.recordTeamSuggestion('project-a', { by: 'lane-c', key: 'AAA', workspaceId: null, workspaceName: null, teamName: 'Team A', why: 'the branches say so', at: 1 })).toBe('written');
+    refused(await confirm(r, { team: 'AAA', workspace: null }), 'team-ambiguous');
+    unlinked();
+    // The same key named with its workspace is a pair the store holds: it links.
+    s.recordTeamCandidates('project-a', [ALPHA]);
+    expect((await confirm(r, {})).statusCode).toBe(200);
   });
 
   it('a project with no row is no-project (404) and mints no row', async () => {

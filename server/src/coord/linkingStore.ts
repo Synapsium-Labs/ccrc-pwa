@@ -13,7 +13,7 @@ import type {
 import { isTeamCandidate, isTeamEvidence } from '../../../shared/linking.js';
 import { isLinearTeamKey } from '../../../shared/linear.js';
 import { linkingMode } from '../linking/policy.js';
-import { teamSourceAfterWrite } from '../linking/teamLink.js';
+import { pairChangedByWrite, teamSourceAfterWrite } from '../linking/teamLink.js';
 import { insertCall } from './coordCallsStore.js';
 import type { NewCall } from './coordCalls.js';
 import { tx } from './tx.js';
@@ -136,24 +136,28 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
 
 /** The operator's write: the key and the override, who and when; the reading is left as it is. D-8405: a write that
  *  changes the key makes it the operator's (`teamSourceAfterWrite`), and the pass's team and evidence go with the old key;
- *  one that sends the stored key back keeps whoever set it. D-8808: `w.workspace` is the DECIDED workspace
- *  (`workspaceAfterWrite`), written with the key in the same statement: a string or null is written as it is, and ABSENT
+ *  one that sends the stored key back keeps whoever set it. D-8808 (final review M3): a write that keeps the key but changes its
+ *  workspace changes the pair (`pairChangedByWrite`), so it is the operator's decision too, and the Overlord's call id goes.
+ *  D-8808: `w.workspace` is the DECIDED workspace (`workspaceAfterWrite`), written with the key in the same statement: a string or null is written as it is, and ABSENT
  *  leaves the stored workspace untouched here too (one meaning at the wire and at the store: omitted keeps). The route
  *  always passes the decided one. Read and written in one transaction. */
 export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBody, by: string, at: number): void {
   tx(db, () => {
-    const before = db.prepare('SELECT teamKey, teamSource, teamCallId FROM project_linking WHERE project = ?').get(project) as
-      { teamKey: string | null; teamSource: string | null; teamCallId: number | null } | undefined;
-    const prior = { teamKey: before?.teamKey ?? null, source: linkSourceOf(before?.teamSource ?? null, before?.teamCallId ?? null) };
-    const keyChanged = w.teamKey !== prior.teamKey;
+    const before = db.prepare('SELECT teamKey, teamSource, teamCallId, teamWorkspace FROM project_linking WHERE project = ?').get(project) as
+      { teamKey: string | null; teamSource: string | null; teamCallId: number | null; teamWorkspace: string | null } | undefined;
+    const prior = {
+      teamKey: before?.teamKey ?? null, source: linkSourceOf(before?.teamSource ?? null, before?.teamCallId ?? null), workspace: before?.teamWorkspace ?? null,
+    };
+    const written = { teamKey: w.teamKey, ...(w.workspace === undefined ? {} : { workspace: w.workspace }) };
+    const pairChanged = pairChangedByWrite(prior, written);
     db.prepare(
       'INSERT INTO project_linking (project, teamKey, override, setBy, setAt, teamSource, teamAt, teamWorkspace) VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
       + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, override = excluded.override, '
       + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource'
       + (w.workspace !== undefined ? ', teamWorkspace = excluded.teamWorkspace' : '')
       + (w.teamKey !== null ? ', teamSuggestions = NULL' : '')
-      + (keyChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt, teamCallId = NULL' : ''),
-    ).run(project, w.teamKey, w.override, by, at, storedWordOf(teamSourceAfterWrite(prior, w.teamKey)), keyChanged ? at : null, w.workspace ?? null);
+      + (pairChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt, teamCallId = NULL' : ''),
+    ).run(project, w.teamKey, w.override, by, at, storedWordOf(teamSourceAfterWrite(prior, written)), pairChanged ? at : null, w.workspace ?? null);
   });
 }
 
@@ -221,7 +225,7 @@ export function recordTeamCandidates(db: DatabaseSync, project: string, candidat
 export const TEAM_SUGGESTIONS_MAX = 8;
 
 /** D-8808: a coordinator session's suggestion of a team for a project: one per session (a resend replaces its element), at
- *  most `TEAM_SUGGESTIONS_MAX` (the oldest by `at` goes). A candidate only. UPDATE-only: a project with no row is `no-project`
+ *  most `TEAM_SUGGESTIONS_MAX` (the oldest by `at` of the other sessions' goes; never the one being written). A candidate only. UPDATE-only: a project with no row is `no-project`
  *  (a typo mints no phantom project; every listed project has a row from the visibility lane's reading). Written only where no
  *  key is stored, in the same statement (`team-set` otherwise, an operator's key landing first wins). Nothing in the pass or the
  *  decider reads the cell. */
@@ -230,12 +234,14 @@ export function recordTeamSuggestion(db: DatabaseSync, project: string, s: TeamS
     const row = db.prepare('SELECT teamKey, teamSuggestions FROM project_linking WHERE project = ?').get(project) as
       { teamKey: string | null; teamSuggestions: string | null } | undefined;
     if (row === undefined) return 'no-project';
-    const next = [...suggestionsOf(row.teamSuggestions).filter((e) => e.by !== s.by), s];
-    while (next.length > TEAM_SUGGESTIONS_MAX) {
+    // The cap evicts the oldest of the OTHER sessions' suggestions, never the one just written (final review D2).
+    const others = suggestionsOf(row.teamSuggestions).filter((e) => e.by !== s.by);
+    while (others.length > TEAM_SUGGESTIONS_MAX - 1) {
       let oldest = 0;
-      next.forEach((e, i) => { if (e.at < next[oldest]!.at) oldest = i; });
-      next.splice(oldest, 1);
+      others.forEach((e, i) => { if (e.at < others[oldest]!.at) oldest = i; });
+      others.splice(oldest, 1);
     }
+    const next = [...others, s];
     const res = db.prepare('UPDATE project_linking SET teamSuggestions = ? WHERE project = ? AND teamKey IS NULL').run(JSON.stringify(next), project);
     return Number(res.changes) > 0 ? 'written' : 'team-set';
   });

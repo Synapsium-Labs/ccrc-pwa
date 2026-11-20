@@ -15,7 +15,7 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, OptionRow, QuickConfirm, Section, Select, TextInput, TextLink, elapsedWords, useNow } from '@ccrc/ui';
-import type { LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../../shared/linking';
+import type { LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamCandidateWire } from '../../../../shared/linking';
 import type { LinearWorkspaceShown } from '../../../../shared/linear';
 import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
 import type { ProjectRow } from '../../../../shared/api';
@@ -30,7 +30,7 @@ import { upkeepPath, waitingPath } from '../../lib/routes';
 import { writeOutcomeUnknown } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
 import {
-  OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateWhy, candidateWorkspaceLine, candidatesShown, linkingRowsOf,
+  OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, linkingRowsOf,
   teamLinkLine, workspaceToWrite, workspacesHoldingKey,
 } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
@@ -185,6 +185,13 @@ function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, 
     const workspace = key === '' ? undefined : workspaceToWrite(workspacesHoldingKey(workspaces, key), chosen);
     write({ teamKey: key === '' ? null : key, override: linking.override, ...(workspace === undefined ? {} : { workspace }) });
   };
+  // A candidate's tap (`candidateTap`): its pair is written, or, for a key several workspaces hold and the candidate names none of,
+  // the key goes into the field with no workspace chosen, so the picker asks and Save waits for it (final review I2).
+  const tapCandidate = (c: TeamCandidateWire): void => {
+    const tap = candidateTap(c, workspaces);
+    if (tap.kind === 'pick') { setDraft(c.key); setChosen(''); return; }
+    write({ teamKey: c.key, override: linking.override, ...(tap.workspace === undefined ? {} : { workspace: tap.workspace }) });
+  };
   const linkLine = teamLinkLine(linking);
   const candidates = candidatesShown(linking);
   const openTemplate = (): void => {
@@ -239,7 +246,7 @@ function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, 
             {candidates.map((c) => (
               <div key={candidateKeyOf(c)} className="linking-candidate" data-linking-candidate={c.key}>
                 <Button variant="ghost" disabled={busy} aria-label={candidateAriaLabel(c)}
-                  onClick={() => write({ teamKey: c.key, override: linking.override, ...(c.workspaceId === undefined ? {} : { workspace: c.workspaceId }) })}>
+                  onClick={() => tapCandidate(c)}>
                   {candidateLabel(c)}
                 </Button>
                 {candidateWorkspaceLine(c) !== null && <p className="settings-note">{candidateWorkspaceLine(c)}</p>}

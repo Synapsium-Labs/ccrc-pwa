@@ -7,6 +7,7 @@ import type {
 } from '../../../shared/linking.js';
 import { TEAM_SUGGESTION_WHY_MAX, teamEvidenceClause } from '../../../shared/linking.js';
 import { CALL_OPTIONS_MAX, CALL_OPTION_MAX, CALL_TEXT_MAX, CALL_WHY_MAX } from '../coord/coordCalls.js';
+import type { LinearRoute } from '../linear/route.js';
 import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
 
@@ -127,6 +128,14 @@ export function parseTeamConfirm(body: unknown): { ok: true; value: TeamConfirmB
  *  by null, and only by null), or null when the pair is none of them. */
 export function confirmedCandidate(candidates: readonly TeamCandidateWire[], team: string, workspace: string | null): TeamCandidateWire | null {
   return candidates.find((c) => c.key === team && (c.workspaceId ?? null) === workspace) ?? null;
+}
+
+/** D-8808 (final review I2, I3): what a (key, workspace) pair's route through the LIVE Linear store (`routeProjectTeam`) means for a
+ *  suggestion or a confirm: the workspace of the one slot that holds it; `team-ambiguous` for a key two connected workspaces hold
+ *  with no workspace named (storing it with none would resolve nowhere); every other refusal `team-unknown`. */
+export function teamPairVerdict(route: LinearRoute): { ok: true; workspaceId: string } | { ok: false; error: 'team-unknown' | 'team-ambiguous' } {
+  if (route.kind === 'slot') return { ok: true, workspaceId: route.slot.workspaceId };
+  return { ok: false, error: route.word === 'team-ambiguous' ? 'team-ambiguous' : 'team-unknown' };
 }
 
 /** One line of at most `max` characters: whitespace runs folded, a longer text cut with an ellipsis. */
