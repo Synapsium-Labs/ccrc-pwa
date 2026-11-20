@@ -16,6 +16,7 @@ import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
 import { admissionWakeChoice, admissionWakeDetail, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
 import { queueAdmissionWake } from '../src/coord/admissionWakeTx.js';
+import { capsReadingOf, capsRoomOf } from '../src/coord/dispatchDecide.js';
 import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany } from '../src/coord/wakeBudget.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { FleetWatcher } from '../src/watch.js';
@@ -331,6 +332,24 @@ describe('the decider: admissionWakeChoice', () => {
   it('a woken waiter does not block the next in its programme (the store lists eligible waiters only)', () => {
     const c = admissionWakeChoice([w(2, 'a', 20)], 1, [], NOW);
     expect(ids(c)).toEqual([2]);
+  });
+});
+
+describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships in shadow)', () => {
+  // Three counted runs under a limit of three; two of their workers read waiting or gone.
+  const rows = [{ runId: 1, sessionId: 'w-1' }, { runId: 2, sessionId: 'w-2' }, { runId: 3, sessionId: 'w-3' }];
+  const readings = new Map([[1, 'waiting'], [2, 'gone'], [3, 'busy']] as const);
+  it('in shadow a waiting worker still holds its slot, even when the reading measured it: no room', () => {
+    const shadow = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, false);
+    expect(shadow.usage.waiting).toBe(2);
+    expect(capsRoomOf(shadow)).toBe(0);
+  });
+  it('armed, the waiting and gone workers free their slots: room for two', () => {
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true))).toBe(2);
+  });
+  it('with no readings it is today\'s count, and never below zero', () => {
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 5 }, rows, null, false))).toBe(2);
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 2 }, rows, null, true))).toBe(0);
   });
 });
 

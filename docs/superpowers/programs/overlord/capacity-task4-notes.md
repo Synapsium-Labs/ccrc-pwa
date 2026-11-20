@@ -59,6 +59,29 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
   that a block is never woken without its mail. `queueAdmissionWake` therefore marks those blocks in the same
   transaction as the mail (`markBlockWoken`, the one writer of `wokenAt`).
 
+## Mutants
+
+Each guard was mutated by hand, one at a time, and the admission-wake suite run against it; all 15 are killed by an
+assertion, none by a timeout.
+
+| Mutant | Guard | Result |
+|---|---|---|
+| M1 | a move clears the wait | 3 failed |
+| M2 | the stamp keeps the oldest wait | 2 failed |
+| M3 | a waiter refused again after its wake is eligible | 3 failed |
+| M4 | the observation needs the same refusal | 3 failed |
+| M5 | a duplicate re-marks the woken stamp and the blocks | 2 failed |
+| M6 | in shadow a waiting worker holds its slot | 1 failed (the room cases, added for it) |
+| M6b | armed, a waiting worker frees its slot | 1 failed |
+| M7 | the pause and mail-disabled markers stop the pass | 1 failed |
+| M8 | a refused dispatch stamps | 2 failed |
+| M9 | a refused send-back stamps | 2 failed |
+| M10 | the claimant's `capacity` blocks are marked | 1 failed |
+| M11 | no more wakes than the room | 5 failed |
+| M12 | no more wakes than the budget admits | 1 failed |
+| M13 | the observation key is the refusal | 3 failed |
+| M14 | the advance route calls the send-back half | 1 failed |
+
 ## Follow-ups
 
 - **hook-false-positive.** The session hook refused two of this run's calls as a "copy or recursive read" of the ccrc
