@@ -4,8 +4,9 @@ import { describe, it, expect } from 'vitest';
 import {
   withoutTrackerIds, slugForTicket,
   VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue, workspaceAfterWrite,
-  parseTeamConfirm, confirmedCandidate, overlordLinkCallBody,
+  parseTeamConfirm, confirmedCandidate, overlordLinkCallBody, writeReadsStore, confirmedWorkspaceName, suggesterVerdict,
 } from '../src/linking/policy.js';
+import { routeProjectTeam, type LinearRouteSlot } from '../src/linear/route.js';
 import { WS_SLUG_MAX } from '../../shared/slug.js';
 import type { ProjectLinkingWire, TeamCandidateWire } from '../../shared/linking.js';
 
@@ -157,42 +158,116 @@ describe('parseLinkingWrite: the optional workspace', () => {
 describe('workspaceAfterWrite', () => {
   const WS_A = '00000000-0000-4000-8000-0000000000a1';
   const WS_B = '00000000-0000-4000-8000-0000000000b2';
-  const holdsOnly = (ws: string, key: string) => (w: string, k: string): boolean => w === ws && k === key;
-  const none = () => { throw new Error('holds must not be asked'); };
+  /** The Linear store as the route reads it: each workspace's team keys, through the one resolver. */
+  const store = (held: Record<string, string[]>) => {
+    const slots: LinearRouteSlot[] = Object.entries(held).map(([id, keys]) => ({ ref: { source: 'file', id }, workspaceId: id, urlKey: id, teamKeys: keys }));
+    return (teamKey: string, workspace: string | null) => routeProjectTeam(slots, { teamKey, workspaceId: workspace });
+  };
+  const shared = store({ [WS_A]: ['AAA'], [WS_B]: ['AAA', 'BBB'] });   // AAA in both, BBB in ws-b only
+  const unreadable = () => 'unmeasured' as const;
+  const unasked = () => { throw new Error('the store must not be asked'); };
 
   it('a named workspace that holds the key is stored', () => {
-    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, holds: holdsOnly(WS_A, 'AAA') }))
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, route: shared }))
       .toEqual({ ok: true, workspace: WS_A });
   });
   it('a named workspace that does not hold the key, or a named one with no key, is team-unknown', () => {
-    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_B }, holds: holdsOnly(WS_A, 'AAA') }))
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'BBB', workspace: WS_A }, route: shared }))
       .toEqual({ ok: false, error: 'team-unknown' });
-    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: null, workspace: WS_A }, holds: none }))
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: null, workspace: WS_A }, route: unasked }))
       .toEqual({ ok: false, error: 'team-unknown' });
   });
   it('a named workspace read from an unreadable store is unavailable, never team-unknown', () => {
-    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, holds: () => 'unmeasured' }))
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, route: unreadable }))
       .toEqual({ ok: false, error: 'unavailable' });
   });
-  it('workspace null, or no key, stores no workspace', () => {
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'AAA', workspace: null }, holds: none }))
+  it('no key stores no workspace, asking nothing', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: null }, route: unasked }))
       .toEqual({ ok: true, workspace: null });
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: null }, holds: none }))
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: null, workspace: null }, route: unasked }))
       .toEqual({ ok: true, workspace: null });
   });
-  it('an omitted workspace with the key unchanged keeps the stored one, asking nothing', () => {
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'AAA' }, holds: none }))
+  it('an omitted workspace with the key unchanged keeps the stored one, asking nothing (a stored none too)', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'AAA' }, route: unasked }))
       .toEqual({ ok: true, workspace: WS_A });
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: null }, written: { teamKey: 'BBB' }, holds: none }))
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: null }, written: { teamKey: 'AAA' }, route: unasked }))
       .toEqual({ ok: true, workspace: null });
   });
   it('an omitted workspace with the key changed keeps the stored one only if it holds the new key', () => {
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: holdsOnly(WS_A, 'BBB') }))
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_B }, written: { teamKey: 'BBB' }, route: shared }))
+      .toEqual({ ok: true, workspace: WS_B });
+  });
+  // F4 (review 2971, the coordinator's ruling): a key's workspace is set in the same write.
+  it('a key written with no workspace named stores the one workspace that holds it (F4)', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'BBB' }, route: shared }))
+      .toEqual({ ok: true, workspace: WS_B });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, route: shared }))
+      .toEqual({ ok: true, workspace: WS_B });
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'BBB', workspace: null }, route: shared }))
+      .toEqual({ ok: true, workspace: WS_B });
+  });
+  it('a key two connected workspaces hold, written with none named, is team-ambiguous, never stored with none (F4)', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA' }, route: shared }))
+      .toEqual({ ok: false, error: 'team-ambiguous' });
+    expect(workspaceAfterWrite({ before: { teamKey: 'BBB', workspace: WS_B }, written: { teamKey: 'AAA', workspace: null }, route: shared }))
+      .toEqual({ ok: false, error: 'team-ambiguous' });
+  });
+  it('a key written with no workspace named reads an unreadable store as unavailable, never stores none (F4)', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA' }, route: unreadable }))
+      .toEqual({ ok: false, error: 'unavailable' });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, route: unreadable }))
+      .toEqual({ ok: false, error: 'unavailable' });
+  });
+  it('a key no connected workspace holds is stored with none, as before (set before Linear is connected)', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'CCC' }, route: shared }))
+      .toEqual({ ok: true, workspace: null });
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'CCC' }, route: store({}) }))
+      .toEqual({ ok: true, workspace: null });
+  });
+  // F2 (review 2971, the coordinator's ruling: no change of source): a row stored with no workspace (before migration 114) whose
+  // key one connected workspace holds already resolves to that workspace, so the unchanged key sent back with it changes nothing.
+  it("the unchanged key sent with the one workspace that holds it keeps a stored none: the pair is the same (F2)", () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'BBB', workspace: null }, written: { teamKey: 'BBB', workspace: WS_B }, route: shared }))
+      .toEqual({ ok: true, workspace: null });
+    expect(workspaceAfterWrite({ before: { teamKey: 'BBB', workspace: null }, written: { teamKey: 'BBB', workspace: null }, route: shared }))
+      .toEqual({ ok: true, workspace: null });
+  });
+  it('a real choice is still a change: a workspace among two holders, or another key (F2)', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, route: shared }))
       .toEqual({ ok: true, workspace: WS_A });
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: holdsOnly(WS_A, 'AAA') }))
-      .toEqual({ ok: true, workspace: null });
-    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: () => 'unmeasured' }))
-      .toEqual({ ok: true, workspace: null });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: null }, written: { teamKey: 'BBB', workspace: WS_B }, route: shared }))
+      .toEqual({ ok: true, workspace: WS_B });
+  });
+});
+
+// F5 (review 2971): the route's two small decisions, made in L1.
+describe('writeReadsStore and confirmedWorkspaceName (F5)', () => {
+  it('the store is read for every write with a key, except the stored key sent back with no workspace named', () => {
+    expect(writeReadsStore({ teamKey: 'AAA' }, { teamKey: null })).toBe(false);
+    expect(writeReadsStore({ teamKey: 'AAA' }, { teamKey: null, workspace: 'w' })).toBe(false);
+    expect(writeReadsStore({ teamKey: 'AAA' }, { teamKey: 'AAA' })).toBe(false);
+    expect(writeReadsStore({ teamKey: 'AAA' }, { teamKey: 'AAA', workspace: null })).toBe(true);
+    expect(writeReadsStore({ teamKey: 'AAA' }, { teamKey: 'AAA', workspace: 'w' })).toBe(true);
+    expect(writeReadsStore({ teamKey: null }, { teamKey: 'AAA' })).toBe(true);
+    expect(writeReadsStore({ teamKey: 'AAA' }, { teamKey: 'BBB' })).toBe(true);
+  });
+  it("a confirm stores the routed slot's workspace name, else the candidate's, else none", () => {
+    const c: TeamCandidateWire = { key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' }, workspaceId: 'w-1', workspaceName: 'Old name' };
+    const teams = [{ key: 'AAA', workspaceId: 'w-2', workspaceName: 'Other' }, { key: 'AAA', workspaceId: 'w-1', workspaceName: 'Live name' }];
+    expect(confirmedWorkspaceName(teams, c, 'w-1')).toBe('Live name');
+    expect(confirmedWorkspaceName([], c, 'w-1')).toBe('Old name');
+    expect(confirmedWorkspaceName([{ key: 'AAA', workspaceId: 'w-1', workspaceName: null }], c, 'w-1')).toBe('Old name');
+    expect(confirmedWorkspaceName([], { ...c, workspaceName: undefined }, 'w-1')).toBeNull();
+  });
+});
+
+// F7 (review 2971, the coordinator's ruling): only a session that claims an open run (a coordinator) suggests.
+describe('suggesterVerdict (F7)', () => {
+  it('a session claiming an open run passes; none is not-a-coordinator; an unreadable run series refuses, never passes', () => {
+    expect(suggesterVerdict(1)).toEqual({ ok: true });
+    expect(suggesterVerdict(3)).toEqual({ ok: true });
+    expect(suggesterVerdict(0)).toEqual({ ok: false, error: 'not-a-coordinator' });
+    expect(suggesterVerdict('unmeasured')).toEqual({ ok: false, error: 'run-unreadable' });
   });
 });
 
@@ -227,7 +302,9 @@ describe('parseTeamConfirm, confirmedCandidate and overlordLinkCallBody (D-8809)
       why: "The Overlord linked it on its evidence: 9 of 10 ticket ids in its branches, pull requests and commits use this team's key.",
     });
     expect(JSON.stringify(body)).not.toMatch(/\bAAA\b|\bBBB\b/);
-    expect(overlordLinkCallBody('project-a', B, [B]).why).toBe('The Overlord linked it on its evidence: suggested by lane-c: the branches say so.');
+    // F6 (review 2971): a call may be mirrored, so it names no session: "suggested by a coordinator", with its reason.
+    expect(overlordLinkCallBody('project-a', B, [B]).why).toBe('The Overlord linked it on its evidence: suggested by a coordinator, with the reason "the branches say so".');
+    expect(JSON.stringify(overlordLinkCallBody('project-a', B, [B]))).not.toContain('lane-c');
     const unnamed = overlordLinkCallBody('project-a', { ...A, workspaceName: null }, [A]);
     expect(unnamed.chosen).toBe('Alpha Team in a workspace whose name is unknown');
   });

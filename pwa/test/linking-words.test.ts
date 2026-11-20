@@ -16,9 +16,11 @@ describe('evidenceWords', () => {
 
 // D-8808 (wave 8, Task 8.6): the workspace picker's and the candidate rows' words.
 import {
-  candidateAriaLabel, candidateKeyOf, candidateTap, candidateWorkspaceLine, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+  candidateAriaLabel, candidateKeyOf, candidateTap, candidateWorkspaceLine, keyWriteText, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
   OVERLORD_LINK_WORDS, PICKER_WORDS,
 } from '../src/fleet/linkingWords';
+import { ApiError } from '../src/lib/apiError';
+import { LINKING_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import type { LinearWorkspaceShown } from '../../shared/linear';
 import type { ProjectLinkingWire } from '../../shared/linking';
 
@@ -53,6 +55,27 @@ describe('the candidate rows', () => {
     expect(candidateAriaLabel({ ...c, workspaceId: 'id-a', workspaceName: 'ws-a' })).toBe('Link AAA in workspace ws-a');
     expect(candidateAriaLabel(c)).toBe('Link AAA');
     expect(candidateKeyOf({ ...c, workspaceId: 'id-a' })).not.toBe(candidateKeyOf({ ...c, workspaceId: 'id-b' }));
+  });
+  it("keys a row by its evidence kind and suggester too, so one pair offered twice is two rows (review 2971 A2)", () => {
+    const pass = { ...c, workspaceId: 'id-a' };
+    const byA = { ...pass, evidence: { kind: 'suggested' as const, by: 'lane-a', why: 'a reason' } };
+    const byB = { ...pass, evidence: { kind: 'suggested' as const, by: 'lane-b', why: 'a reason' } };
+    const keys = [pass, byA, byB].map(candidateKeyOf);
+    expect(new Set(keys).size).toBe(3);
+  });
+});
+
+describe("a refused key write's words (review 2971 F4)", () => {
+  const refused = (error: string) => new ApiError(409, { ok: false, error });
+  it('team-ambiguous points at the picker when the card lists two holders, else says the list could not be read', () => {
+    expect(keyWriteText(refused('team-ambiguous'), 2)).toBe(PICKER_WORDS.ambiguous);
+    expect(keyWriteText(refused('team-ambiguous'), 1)).toBe(PICKER_WORDS.ambiguousUnlisted);
+    expect(keyWriteText(refused('team-ambiguous'), 0)).toBe(PICKER_WORDS.ambiguousUnlisted);
+    expect(PICKER_WORDS.ambiguous).toContain(PICKER_WORDS.label);
+  });
+  it('every other refusal is the write\'s own sentence', () => {
+    expect(keyWriteText(refused('team-unknown'), 2)).toBe(LINKING_REFUSAL_TEXT['team-unknown']);
+    expect(keyWriteText(refused('bad-team-key'), 0)).toBe(LINKING_REFUSAL_TEXT['bad-team-key']);
   });
 });
 

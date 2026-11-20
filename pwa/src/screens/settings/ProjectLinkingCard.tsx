@@ -30,8 +30,8 @@ import { upkeepPath, waitingPath } from '../../lib/routes';
 import { writeOutcomeUnknown } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
 import {
-  OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, linkingRowsOf,
-  teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+  OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
+  linkingRowsOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
 } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
 
@@ -172,7 +172,7 @@ function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, 
         (a) => { onStored(name, a.linking); setNeed(reread()); result.say(LINKING_TEXT.saved); },
         (err: unknown) => {
           if (writeOutcomeUnknown(err)) setNeed(reread());
-          result.say(hierarchyWriteText(err), 'refusal');
+          result.say(keyWriteText(err, holders.length), 'refusal');
         },
       )
       .finally(() => setBusy(false));

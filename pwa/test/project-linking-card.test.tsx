@@ -127,7 +127,8 @@ describe('the card', () => {
       vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(400, { ok: false, error: word, detail: 'box text that must not show' }));
       fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
       const sentence = await within(rowOf('project-a')).findByRole('status');
-      expect(sentence.textContent, word).toBe(LINKING_REFUSAL_TEXT[word]);
+      // A key write's team-ambiguous points at the picker (review 2971 F4); with no workspace list read, it says so.
+      expect(sentence.textContent, word).toBe(word === 'team-ambiguous' ? PICKER_WORDS.ambiguousUnlisted : LINKING_REFUSAL_TEXT[word]);
       expect(sentence.textContent).not.toContain('box text');
       vi.restoreAllMocks();
     }
@@ -926,6 +927,25 @@ describe('the candidates (D-8808)', () => {
     fireEvent.change(picker('project-a')!, { target: { value: 'id-b' } });
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
     await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-b' }));
+  });
+  it('one pair offered by the pass and by two suggesters renders three rows with no duplicate key (review 2971 A2)', async () => {
+    serveWorkspaces('unreadable');
+    const pass: TeamCandidateWire = { key: 'AAA', name: 'Alpha', evidence: { kind: 'pr-attachments', ids: 4, of: 5 }, workspaceId: 'id-a', workspaceName: 'ws-a' };
+    const by = (who: string): TeamCandidateWire => ({ ...pass, evidence: { kind: 'suggested', by: who, why: 'the branches name it' } });
+    const errors = vi.spyOn(console, 'error');
+    await mount([row('project-a', wire({ teamCandidates: [pass, by('lane-a'), by('lane-b')] }))]);
+    expect(within(rowOf('project-a')).getAllByRole('button', { name: /^Link AAA/ })).toHaveLength(3);
+    expect(errors.mock.calls.flat().join(' ')).not.toMatch(/same key/);
+  });
+  it('a key write refused team-ambiguous points at the picker the card shows (review 2971 F4)', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA', teamWorkspace: 'id-a' }))]);
+    await waitFor(() => expect(picker('project-a')).not.toBeNull());
+    vi.spyOn(api, 'saveLinking').mockRejectedValue(new ApiError(409, { ok: false, error: 'team-ambiguous' }));
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    const sentence = await within(rowOf('project-a')).findByRole('status');
+    expect(sentence.textContent).toBe(PICKER_WORDS.ambiguous);
+    expect(picker('project-a')).not.toBeNull();
   });
   it('a suggestion shows its session and its reason as text, never as markup', async () => {
     serveWorkspaces('unreadable');

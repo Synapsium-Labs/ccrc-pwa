@@ -32,14 +32,15 @@ export type TeamEvidenceKind = TeamEvidence['kind'];
 /** D-6048 (ARCH-12): the runtime list, derived from the type. */
 const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true, 'pr-attachments': true, suggested: true };
 
-/** D-8809: what the evidence was, as a clause that names no team key (the call it goes into reaches the operator's console,
- *  which may be mirrored): "9 of 10 ticket ids in its branches, pull requests and commits use this team's key". */
+/** D-8809: what the evidence was, as a clause that names no team key and no session (the call it goes into reaches the operator's
+ *  console, which may be mirrored): "9 of 10 ticket ids in its branches, pull requests and commits use this team's key". */
 export function teamEvidenceClause(e: TeamEvidence): string {
   switch (e.kind) {
     case 'ticket-ids': return `${e.ids} of ${e.of} ticket ids in its branches, pull requests and commits use this team's key`;
     case 'name-match': return `the ${e.matched === 'project' ? 'project' : 'repository'} name matches this team's ${e.on === 'name' ? 'name' : 'key'}`;
     case 'pr-attachments': return `${e.ids} of ${e.of} issues attached to this repository's merged pull requests are this team's`;
-    case 'suggested': return `suggested by ${e.by}: ${e.why}`;
+    // The call this goes into may be mirrored, so it names no session (review 2971 F6): the card shows `by`.
+    case 'suggested': return `suggested by a coordinator, with the reason "${e.why}"`;
     default: { const never: never = e; return never; }
   }
 }
@@ -129,14 +130,15 @@ export interface TeamConfirmAnswer {
 /** `POST /api/projects/:project/linking`: the operator's write. */
 export interface LinkingWriteBody {
   teamKey: string | null; override: LinkingOverride | null;
-  /** D-8808: the workspace id the key lives in; null: none; omitted: keep the stored one while it holds the key (`workspaceAfterWrite`). */
+  /** D-8808: the workspace id the key lives in. Omitted keeps the stored one while it holds the key; omitted otherwise, or null,
+   *  names none, and the server stores the one connected workspace that holds the key (`workspaceAfterWrite`, review 2971 F4). */
   workspace?: string | null;
 }
 
 /** Every refusal word the linking routes answer; each reaches the PWA through `refusalText`. */
 export const LINKING_REFUSALS = ['bad-team-key', 'bad-override', 'no-project', 'repo-public', 'repo-unmeasured',
   'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public', 'template-failed', 'override-private-public', 'team-unknown',
-  'team-set', 'team-ambiguous'] as const;
+  'team-set', 'team-ambiguous', 'not-a-coordinator'] as const;
 export type LinkingRefusal = (typeof LINKING_REFUSALS)[number];
 /** Whether a word is one of the linking routes' refusals: the guard the coordination kebab census admits them through
  *  (`mail-routes.test.ts`), so a store in `server/src/coord` may answer one by name (D-8809). */

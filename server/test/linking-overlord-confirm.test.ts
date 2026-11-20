@@ -268,7 +268,9 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     expect(res.json().link).toEqual({ key: 'BBB', teamName: 'Beta Team', workspaceId: WS_B, workspaceName: 'Workspace B', evidence: { kind: 'suggested', by: 'lane-c', why: 'the branches say so' } });
     const call = s.callById(res.json().callId)!;
     expect(call.chosen).toBe('Beta Team');
-    expect(call.why).toContain('suggested by lane-c: the branches say so');
+    // The call may be mirrored: it names no session, only "a coordinator" and the reason (review 2971 F6).
+    expect(call.why).toContain('suggested by a coordinator, with the reason "the branches say so"');
+    expect(JSON.stringify(call)).not.toContain('lane-c');
     expect(s.linkingOf('project-a')).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B, teamLink: { source: 'overlord' } });
   });
 

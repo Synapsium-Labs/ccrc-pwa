@@ -3,6 +3,8 @@
 import type { ProjectRow } from '../../../shared/api';
 import type { LinearWorkspaceShown } from '../../../shared/linear';
 import type { ProjectLinkingWire, TeamCandidateWire, TeamEvidence } from '../../../shared/linking';
+import { refusalText } from '../lib/refusalWords';
+import { hierarchyWriteText } from './hierarchyWords';
 
 /**
  * One row per PROJECT. `GET /api/projects` answers one row per checkout directory (`listProjects` keys its rows by
@@ -65,7 +67,16 @@ export const PICKER_WORDS = {
   needed: 'Choose a workspace to save this key.',
   unnamed: 'An unnamed workspace',
   unnamedIn: 'In an unnamed workspace',
+  ambiguous: 'More than one connected Linear workspace has this key. Choose one in Workspace, then Save.',
+  ambiguousUnlisted: 'More than one connected Linear workspace has this key, and this page could not list them. Reload the page, then choose the workspace.',
 } as const;
+
+/** D-8808 (review 2971 F4): what a refused key write says. The server stores a key's workspace in the same write, so a key two
+ *  connected workspaces hold, sent with none, is `team-ambiguous`: the sentence points at the picker when the card lists those
+ *  workspaces (`holders`, more than one), and says the list could not be read when it does not. Any other refusal is the write's
+ *  own sentence (`hierarchyWriteText`). */
+export const keyWriteText = (err: unknown, holders: number): string =>
+  refusalText(err, { 'team-ambiguous': holders > 1 ? PICKER_WORDS.ambiguous : PICKER_WORDS.ambiguousUnlisted }) ?? hierarchyWriteText(err);
 
 /** The connected workspaces that hold a team key (compared uppercased), each by the name the picker shows. An unreadable
  *  read (`null`) is no list: the picker is left out, never guessed. */
@@ -103,5 +114,7 @@ export function candidateWorkspaceLine(c: TeamCandidateWire): string | null {
 export const candidateAriaLabel = (c: TeamCandidateWire): string =>
   (c.workspaceId === undefined ? candidateLabel(c) : `${candidateLabel(c)} in workspace ${c.workspaceName ?? PICKER_WORDS.unnamed.toLowerCase()}`);
 
-/** A candidate row's React key: the key and its workspace, since several rows may share a key. */
-export const candidateKeyOf = (c: TeamCandidateWire): string => `${c.key}|${c.workspaceId ?? ''}`;
+/** A candidate row's React key: the key, its workspace, its evidence kind and its suggester, since one pair may be offered by the
+ *  pass and by several suggesters (review 2971 A2); the store keeps one suggestion per suggester, so the four are unique. */
+export const candidateKeyOf = (c: TeamCandidateWire): string =>
+  `${c.key}|${c.workspaceId ?? ''}|${c.evidence.kind}|${c.evidence.kind === 'suggested' ? c.evidence.by : ''}`;

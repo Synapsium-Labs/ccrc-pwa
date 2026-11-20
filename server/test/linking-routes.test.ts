@@ -349,8 +349,73 @@ describe('POST /api/projects/:project/linking: the workspace', () => {
     const kept = await post(app, 'project-a', { teamKey: 'BBB', override: null });
     expect(kept.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B });
     await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_A });
-    const cleared = await post(app, 'project-a', { teamKey: 'BBB', override: null });
-    expect(cleared.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: null });
+    // ws-a does not hold BBB: the one workspace that does is stored in the same write (review 2971 F4).
+    const moved = await post(app, 'project-a', { teamKey: 'BBB', override: null });
+    expect(moved.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B });
+  });
+
+  it('a key written with no workspace: the one holder is stored, two holders are team-ambiguous, an unreadable store unavailable (F4)', async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    const one = await post(app, 'project-a', { teamKey: 'bbb', override: null });
+    expect(one.statusCode, one.body).toBe(200);
+    expect(one.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B });
+    // project-b has no workspace stored: AAA, in both workspaces, cannot be stored with none, whether omitted or null.
+    const two = await post(app, 'project-b', { teamKey: 'AAA', override: null });
+    expect([two.statusCode, two.json().error]).toEqual([409, 'team-ambiguous']);
+    const none = await post(app, 'project-b', { teamKey: 'AAA', override: null, workspace: null });
+    expect([none.statusCode, none.json().error]).toEqual([409, 'team-ambiguous']);
+    expect(coord!.linkingOf('project-b')).toMatchObject({ teamKey: null, teamWorkspace: null });
+    // project-a's stored ws-b holds AAA too: the omitted workspace keeps it.
+    expect((await post(app, 'project-a', { teamKey: 'AAA', override: null })).json().linking).toMatchObject({ teamKey: 'AAA', teamWorkspace: WS_B });
+    expect((await post(app, 'project-a', { teamKey: 'BBB', override: null })).json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B });
+    const store = path.join(home, '.ccrc', 'linear');
+    rmSync(store, { recursive: true, force: true });
+    writeFileSync(store, 'not a directory');
+    const blind = await post(app, 'project-a', { teamKey: 'CCC', override: null });
+    expect([blind.statusCode, blind.json().error]).toEqual([503, 'unavailable']);
+    expect(coord!.linkingOf('project-a')).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B });
+    // The stored key sent back with no workspace named, and a cleared key, need no store.
+    expect((await post(app, 'project-a', { teamKey: 'BBB', override: 'public' })).statusCode).toBe(200);
+    expect((await post(app, 'project-a', { teamKey: null, override: null })).json().linking).toMatchObject({ teamKey: null, teamWorkspace: null });
+  });
+
+  // F2 (review 2971, the coordinator's ruling: no change of source): a row stored before migration 114 has no workspace.
+  it("Save of the unchanged key on a pre-migration automatic or Overlord link keeps its source, team name, evidence and time (F2)", async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    const evidence = { kind: 'name-match', matched: 'project', on: 'name' } as const;
+    expect(coord!.linkTeamAuto('project-a', { key: 'BBB', name: 'Team BBB', evidence }, 5)).toBe(true);
+    expect(coord!.linkingOf('project-a').teamWorkspace).toBeNull();
+    const before = coord!.linkingOf('project-a').teamLink;
+    expect(before).toEqual({ source: 'auto', teamName: 'Team BBB', evidence, at: 5 });
+    // The card sends the one workspace that holds the key; the stored none already resolves there.
+    const res = await post(app, 'project-a', { teamKey: 'BBB', override: null, workspace: WS_B });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().linking.teamLink).toEqual(before);
+    expect((await post(app, 'project-a', { teamKey: 'BBB', override: 'private' })).json().linking.teamLink).toEqual(before);
+    // The Overlord's link, stored with no workspace, keeps its call too.
+    coord!.db.prepare('DELETE FROM project_linking').run();
+    const call = { program: 'linear-sync', madeBy: 'lane-a', build: null, call: {
+      class: 'big' as const, runId: null, question: 'q', options: ['a', 'b'], chosen: 'a', why: 'w', reversible: true, wakeOn: null } };
+    const callId = coord!.linkTeamOverlord('project-a', { key: 'BBB', name: 'Team BBB', evidence }, call, 6);
+    expect(callId).not.toBeNull();
+    const overlord = coord!.linkingOf('project-a').teamLink;
+    expect(overlord).toMatchObject({ source: 'overlord', callId });
+    expect((await post(app, 'project-a', { teamKey: 'BBB', override: null, workspace: WS_B })).json().linking.teamLink).toEqual(overlord);
+  });
+
+  it('a real change of a pre-migration link is still the operator\'s: a workspace among two holders, or another key (F2)', async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    const evidence = { kind: 'name-match', matched: 'project', on: 'name' } as const;
+    coord!.linkTeamAuto('project-a', { key: 'AAA', name: 'Team AAA', evidence }, 5);
+    const picked = await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_A });
+    expect(picked.json().linking).toMatchObject({ teamWorkspace: WS_A, teamLink: { source: 'manual' } });
+    coord!.db.prepare('DELETE FROM project_linking').run();
+    coord!.linkTeamAuto('project-a', { key: 'AAA', name: 'Team AAA', evidence }, 5);
+    const other = await post(app, 'project-a', { teamKey: 'BBB', override: null, workspace: WS_B });
+    expect(other.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B, teamLink: { source: 'manual' } });
   });
 
   it('a write with no workspace and the key unchanged keeps the stored workspace', async () => {
@@ -382,9 +447,15 @@ describe('POST /api/linking/suggest', () => {
     a.inject({ method: 'POST', url: '/api/linking/suggest', payload: body as never, headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
   const ok = (over: Record<string, unknown> = {}): Record<string, unknown> =>
     ({ ...ME, project: 'project-a', team: 'BBB', workspace: WS_B, why: 'the branches name this team', ...over });
+  /** A session that claims an open run of `program`: a coordinator, the only caller the door takes (review 2971 F7). */
+  const coordinate = (claimedBy: string, program: string): void => {
+    coord!.openRun({ program, title: program.toUpperCase(), project: 'project-a', wave: 1, waveOf: null, claimedBy });
+  };
   const boot = async (): Promise<FastifyInstance> => {
     seedRow(home, ME.byId, { project: 'project-a' });
     seedRow(home, OTHER.byId, { project: 'project-a' });
+    coordinate(ME.byId, 'prog-a');
+    coordinate(OTHER.byId, 'prog-b');
     await seedWorkspaces();
     // Every listed project has a row from the visibility lane's reading; the door writes to an existing row only.
     coord!.recordLinkingReading('project-a', { state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'present', at: 1 });
@@ -489,6 +560,7 @@ describe('POST /api/linking/suggest', () => {
 
   it('an unreadable Linear store is unavailable (503), never team-unknown', async () => {
     seedRow(home, ME.byId, { project: 'project-a' });
+    coordinate(ME.byId, 'prog-a');
     app = await open({ coord, mailToken: ID_GATE_TOKEN });
     const store = path.join(home, '.ccrc', 'linear');
     rmSync(store, { recursive: true, force: true });
@@ -520,6 +592,7 @@ describe('POST /api/linking/suggest', () => {
 
   it('an unknown project writes no row and answers no-project', async () => {
     seedRow(home, ME.byId, { project: 'project-typo' });
+    coordinate(ME.byId, 'prog-a');
     await seedWorkspaces();
     app = await open({ coord, mailToken: ID_GATE_TOKEN });
     const res = await suggest(app, ok({ project: 'project-typo' }));
@@ -546,6 +619,35 @@ describe('POST /api/linking/suggest', () => {
       const res = await suggest(app, b);
       expect([res.statusCode, res.json().error, res.json().detail], field).toEqual([400, 'bad-request', field]);
     }
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('a session that claims no open run is refused not-a-coordinator (403) and writes nothing (review 2971 F7)', async () => {
+    app = await boot();
+    const lone = { byId: 'project-a-lone-reed', byUuid: 'u-project-a-lone-reed' };
+    seedRow(home, lone.byId, { project: 'project-a' });
+    const res = await suggest(app, ok(lone));
+    expect([res.statusCode, res.json().error]).toEqual([403, 'not-a-coordinator']);
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+    // A session whose runs are all closed coordinates nothing either.
+    const run = (coord!.openRun({ program: 'prog-c', title: 'PROG-C', project: 'project-a', wave: 1, waveOf: null, claimedBy: lone.byId }) as { id: number }).id;
+    expect((await suggest(app, ok(lone))).statusCode).toBe(200);
+    coord!.db.prepare("UPDATE runs SET state = 'done' WHERE id = ?").run(run);
+    coord!.recordTeamCandidates('project-a', []);
+    coord!.db.prepare('UPDATE project_linking SET teamSuggestions = NULL').run();
+    expect((await suggest(app, ok(lone))).json().error).toBe('not-a-coordinator');
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it("a caller whose runs cannot be read is refused run-unreadable (503), never passed (review 2971 F7)", async () => {
+    app = await boot();
+    const real = coord!.bindingsOf.bind(coord!);
+    coord!.bindingsOf = (id: string) => ({ ...real(id), claimant: () => ({ ok: false as const, kind: 'run-unreadable' as const, detail: 'unreadable row' }) });
+    const res = await suggest(app, ok());
+    expect([res.statusCode, res.json().error]).toEqual([503, 'run-unreadable']);
+    coord!.bindingsOf = () => { throw new Error('db'); };
+    expect((await suggest(app, ok())).json().error).toBe('run-unreadable');
+    coord!.bindingsOf = real;
     expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
   });
 

@@ -21,8 +21,8 @@ import type { FleetState } from '../fleetstate.js';
 import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
 import { autoLinkAllowed } from './teamLink.js';
 import {
-  confirmedCandidate, overlordLinkCallBody, parseLinkingWrite, parseTeamConfirm, parseTeamSuggestion, suggestionReasonVerdict,
-  teamPairVerdict, workspaceAfterWrite,
+  confirmedCandidate, confirmedWorkspaceName, overlordLinkCallBody, parseLinkingWrite, parseTeamConfirm, parseTeamSuggestion,
+  suggesterVerdict, suggestionReasonVerdict, teamPairVerdict, workspaceAfterWrite, writeReadsStore,
 } from './policy.js';
 import { routableSlots, routableTeams, routeProjectTeam } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
@@ -93,18 +93,18 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
       if (parsed.write.override === 'private' && before.override !== 'private' && m.state === 'measured' && m.visibility === 'public') {
         return refuseRoute(reply, 'override-private-public');
       }
-      // D-8808: the workspace stored beside the key, decided once (`workspaceAfterWrite`). The store is read only when the answer
-      // can need it: a named workspace, or a stored one that a changed key must be checked against.
+      // D-8808: the workspace stored beside the key, decided once (`workspaceAfterWrite`), from the Linear store read when the
+      // decision needs it (`writeReadsStore`); an unread or unreadable store answers `unmeasured`.
       const w = parsed.write;
-      const needsStore = typeof w.workspace === 'string' || (w.workspace === undefined && before.teamWorkspace != null && w.teamKey !== before.teamKey);
+      const prior = { teamKey: before.teamKey, workspace: before.teamWorkspace ?? null };
       let store: LinearStoreRead | null = null;
-      if (needsStore && opts.readLinearStore !== undefined) {
+      if (writeReadsStore(prior, w) && opts.readLinearStore !== undefined) {
         try { store = await opts.readLinearStore(); } catch { store = null; }
       }
       const slots = store !== null && store.kind === 'listed' ? routableSlots(store) : null;
       const decided = workspaceAfterWrite({
-        before: { teamKey: before.teamKey, workspace: before.teamWorkspace ?? null }, written: w,
-        holds: (workspace, teamKey) => (slots === null ? 'unmeasured' : routeProjectTeam(slots, { teamKey, workspaceId: workspace }).kind === 'slot'),
+        before: prior, written: w,
+        route: (teamKey, workspace) => (slots === null ? 'unmeasured' : routeProjectTeam(slots, { teamKey, workspaceId: workspace })),
       });
       if (!decided.ok) return refuseRoute(reply, decided.error);
       coord.setLinking(project, { ...w, workspace: decided.workspace }, opts.by(req), now());
@@ -154,7 +154,9 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
    * `POST /api/linking/suggest` (D-8808): a session suggests a Linear team (and optionally its workspace) for a project with no
    * key, with a reason. A candidate only: it never links, and the reason is shown in the console and never written to Linear.
    * A box-token machine lane (an `auth/gate.ts` EXEMPT entry): the token first (never the cookie), then the body's shape, then the
-   * registry's attribution, then the store, then the row (`team-set` when it has a key), then the pair (a Linear store that
+   * registry's attribution, then the caller's standing (review 2971 F7: it claims an open run, so it coordinates a programme;
+   * `not-a-coordinator` otherwise, and a run series that cannot be read is `run-unreadable`, never a pass), then the store, then
+   * the row (`team-set` when it has a key), then the pair (a Linear store that
    * cannot be read is `unavailable`, never `team-unknown`; with no workspace named, the one workspace that holds the key is stored,
    * and a key two connected workspaces hold is `team-ambiguous`), then the reason as PUBLIC text (the console may be mirrored), then
    * the write, which itself refuses a row that got a key in the meantime. The 200 is the caller's own stored suggestion only,
@@ -175,6 +177,13 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     if (coord === undefined || opts.attribute === undefined) return refuseRoute(reply, 'unavailable');
     const attributed = await opts.attribute(s.byId, s.byUuid);
     if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    let open: number | 'unmeasured';
+    try {
+      const claimed = coord.bindingsOf(s.byId).claimant();
+      open = claimed.ok ? claimed.siblings.length : 'unmeasured';
+    } catch { open = 'unmeasured'; }
+    const standing = suggesterVerdict(open);
+    if (!standing.ok) return refuseRoute(reply, standing.error);
     if (coord.linkingOf(s.project).teamKey !== null) return refuseRoute(reply, 'team-set');
     let store: LinearStoreRead | null = null;
     if (opts.readLinearStore !== undefined) {
@@ -257,8 +266,7 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
       // The ROUTED slot's workspace and name are stored, never a candidate's null (D-8809): a key one slot holds, stored with
       // none, would make a later operator Save of the same key (which sends that slot's id) read as a pair change.
       const workspaceId = pair.workspaceId;
-      const workspaceName = routableTeams(linear).find((t) => t.key === chosen.key && t.workspaceId === workspaceId)?.workspaceName
-        ?? chosen.workspaceName ?? null;
+      const workspaceName = confirmedWorkspaceName(routableTeams(linear), chosen, workspaceId);
       const callId = store.linkTeamOverlord(c.project, { key: chosen.key, name: chosen.name, evidence: chosen.evidence, workspace: workspaceId },
         { program: LINEAR_SYNC_PROGRAMME, madeBy: c.byId, call: call.call, build: opts.build ?? null }, at);
       if (callId === null) return refuseRoute(reply, 'team-set', { detail: 'the project got a key, or the operator decided it, meanwhile' });

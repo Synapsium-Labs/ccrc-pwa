@@ -162,28 +162,73 @@ export function overlordLinkCallBody(project: string, chosen: TeamCandidateWire,
   };
 }
 
-/** D-8808: the workspace a write stores beside the key. `holds` answers whether a workspace has a team key (`unmeasured`: the
- *  Linear store could not be read). A named workspace must hold the key (`team-unknown`), and an unreadable store is
- *  `unavailable`, never read as "no such team". `workspace: null` or no key stores none. An omitted workspace keeps the stored
- *  one while the key is unchanged, or while it holds the new key; an unmeasured holding drops it (the pass or the operator
- *  names it again). The ONE writer of which workspace a row stores. */
+/** D-8808: what the Linear store answers for a team key in a workspace (null: in no named one), through the one resolver
+ *  (`routeProjectTeam`), or `unmeasured` when the store could not be read. */
+export type PairRoute = (teamKey: string, workspace: string | null) => LinearRoute | 'unmeasured';
+
+/** D-8808 (review 2971 F5): whether the operator's write must read the Linear store to decide its workspace. Never for a cleared
+ *  key, nor for the stored key sent back with no workspace named (it keeps what is stored); every other write with a key does. */
+export function writeReadsStore(before: { teamKey: string | null }, written: { teamKey: string | null; workspace?: string | null }): boolean {
+  return written.teamKey !== null && !(written.workspace === undefined && written.teamKey === before.teamKey);
+}
+
+/** D-8808: the workspace a write stores beside the key, from the LIVE Linear store (`route`, asked only when `writeReadsStore`).
+ *  A key's workspace is set in the same write (spec §3.1.1, review 2971 F4):
+ *  - a named workspace must hold the key (`team-unknown`);
+ *  - with none named (`workspace` omitted or null), an omitted one keeps the stored workspace while it holds the key; otherwise
+ *    the one connected workspace that holds the key is stored, a key two hold is `team-ambiguous`, and a key none holds (Linear
+ *    not connected yet, or not this team) is stored with none;
+ *  - an unreadable store is `unavailable`, never stored as none;
+ *  - no key stores none (a named workspace with no key is `team-unknown`).
+ *  A row stored with no workspace whose key one connected workspace holds already resolves to it, so the unchanged key sent back
+ *  with that workspace (or with none) keeps the stored none (review 2971 F2): the pair is the same, and its source, team name,
+ *  evidence and time stay. The ONE writer of which workspace a row stores. */
 export function workspaceAfterWrite(a: {
   before: { teamKey: string | null; workspace: string | null };
   written: { teamKey: string | null; workspace?: string | null };
-  holds: (workspace: string, teamKey: string) => boolean | 'unmeasured';
-}): { ok: true; workspace: string | null } | { ok: false; error: 'team-unknown' | 'unavailable' } {
+  route: PairRoute;
+}): { ok: true; workspace: string | null } | { ok: false; error: 'team-unknown' | 'team-ambiguous' | 'unavailable' } {
   const { before, written } = a;
-  if (written.workspace === undefined && before.workspace !== null && written.teamKey !== null) {
-    if (written.teamKey === before.teamKey) return { ok: true, workspace: before.workspace };
-    return { ok: true, workspace: a.holds(before.workspace, written.teamKey) === true ? before.workspace : null };
+  const key = written.teamKey;
+  if (key === null) return typeof written.workspace === 'string' ? { ok: false, error: 'team-unknown' } : { ok: true, workspace: null };
+  if (!writeReadsStore(before, written)) return { ok: true, workspace: before.workspace };
+  // The workspace the stored none resolves to: the unchanged key's one holder (F2).
+  const keptNone = (workspace: string): boolean => key === before.teamKey && before.workspace === null
+    && soleHolder(a.route(key, null)) === workspace;
+  if (typeof written.workspace === 'string') {
+    const named = a.route(key, written.workspace);
+    if (named === 'unmeasured') return { ok: false, error: 'unavailable' };
+    if (named.kind !== 'slot') return { ok: false, error: 'team-unknown' };
+    return { ok: true, workspace: keptNone(written.workspace) ? null : written.workspace };
   }
-  if (written.workspace === undefined || written.workspace === null || written.teamKey === null) {
-    if (typeof written.workspace === 'string') return { ok: false, error: 'team-unknown' };
-    return { ok: true, workspace: null };
+  if (written.workspace === undefined && before.workspace !== null) {
+    const kept = a.route(key, before.workspace);
+    if (kept === 'unmeasured') return { ok: false, error: 'unavailable' };
+    if (kept.kind === 'slot') return { ok: true, workspace: before.workspace };
   }
-  const held = a.holds(written.workspace, written.teamKey);
-  if (held === 'unmeasured') return { ok: false, error: 'unavailable' };
-  return held ? { ok: true, workspace: written.workspace } : { ok: false, error: 'team-unknown' };
+  const any = a.route(key, null);
+  if (any === 'unmeasured') return { ok: false, error: 'unavailable' };
+  if (any.kind === 'slot') return { ok: true, workspace: keptNone(any.slot.workspaceId) ? null : any.slot.workspaceId };
+  return any.word === 'team-ambiguous' ? { ok: false, error: 'team-ambiguous' } : { ok: true, workspace: null };
+}
+
+/** The one workspace a route answered, or null. */
+const soleHolder = (r: LinearRoute | 'unmeasured'): string | null => (r !== 'unmeasured' && r.kind === 'slot' ? r.slot.workspaceId : null);
+
+/** D-8809 (review 2971 F5): the workspace name the Overlord's confirm stores: the routed slot's own name for the pair in the live
+ *  store, else the candidate's, else none. */
+export function confirmedWorkspaceName(
+  teams: ReadonlyArray<{ key: string; workspaceId: string; workspaceName: string | null }>, chosen: TeamCandidateWire, workspaceId: string,
+): string | null {
+  return teams.find((t) => t.key === chosen.key && t.workspaceId === workspaceId)?.workspaceName ?? chosen.workspaceName ?? null;
+}
+
+/** D-8808 (review 2971 F7, the coordinator's ruling): whether a session may suggest a team: one that claims an open run (a
+ *  coordinator of some programme). `open` is how many open runs it claims, or `unmeasured` when its run series could not be read,
+ *  which refuses (`run-unreadable`), never passes. */
+export function suggesterVerdict(open: number | 'unmeasured'): { ok: true } | { ok: false; error: 'not-a-coordinator' | 'run-unreadable' } {
+  if (open === 'unmeasured') return { ok: false, error: 'run-unreadable' };
+  return open > 0 ? { ok: true } : { ok: false, error: 'not-a-coordinator' };
 }
 
 /** A failed reading is taken again after this long, not after a day: a failure says nothing about the repository. */
