@@ -70,7 +70,7 @@ export class VisibilityLane {
         const plan = planTeamLink({ teamKey: l?.teamKey ?? null, source: l?.teamLink?.source ?? null }, {
           project, repo: slug === null ? null : repoNameOf(slug), mode: l?.mode ?? 'unknown', teams, tally: inputs.tally(project),
         });
-        if (plan.link !== null && coord.linkTeamAuto(project, plan.link, now)) continue;
+        if (plan.link !== null && coord.linkTeamAuto(project, { ...plan.link, workspace: plan.link.workspaceId }, now)) continue;
         coord.recordTeamCandidates(project, plan.candidates);
       }
     } catch (e) {

@@ -13,7 +13,7 @@ import { LINEAR_TEAM_PAGE_SIZE, checkLinearKey, verifyLinearKey, type FetchLike 
 import { keyTailOf, type LinearKeyRead } from '../src/linear/connection.js';
 import { LINEAR_QUOTA, type LinearRateService } from '../src/linear/rate.js';
 import { LINEAR_MISS_RETRY_AFTER_S, checkLinearSlot } from '../src/linear/refresher.js';
-import { routableSlots, routeLinear, routeProjectTeam, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
+import { routableSlots, routableTeams, routeLinear, routeProjectTeam, type LinearRoute, type LinearRouteAsk, type LinearRouteSlot } from '../src/linear/route.js';
 import { putLinearSlot, readLinearStore, type LinearFileSlot, type LinearLegacySlot, type LinearSlotRef, type LinearStoreRead } from '../src/linear/store.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { linearAnswer, type LinearAnswer } from './linearFetchFake.js';
@@ -161,6 +161,14 @@ describe('routableSlots: what the store read can route', () => {
     expect(routeLinear(slots, issue('BBB'))).toMatchObject({ kind: 'slot', slot: { ref: { source: 'legacy' } } });
     expect(routeLinear(slots, issue('AAA'))).toMatchObject({ kind: 'slot', slot: { ref: { source: 'file', id: WS_A } } });
     expect(routeLinear(slots, byWorkspace(null))).toEqual({ kind: 'refused', word: 'workspace-required' });
+  });
+
+  it('routableTeams answers each team as a pair with its workspace id and name: a file slot and the learned legacy slot', () => {
+    const store = listed([fileSlot(WS_A, DIGEST_A, { kind: 'details', details: record(WS_A, DIGEST_A) })], legacy());
+    expect(routableTeams(store)).toEqual([
+      { key: 'AAA', name: 'Team aaa', workspaceId: WS_A, workspaceName: 'Workspace' },
+      { key: 'BBB', name: 'Team BBB', workspaceId: WS_L, workspaceName: 'Legacy' },
+    ]);
   });
 });
 

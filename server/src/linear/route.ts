@@ -77,15 +77,19 @@ export function currentDetails(s: Listed['slots'][number]) {
 }
 
 /**
- * D-8405: every team the routable slots reach, key (uppercased) and name, in slot order: what the automatic team link
+ * D-8405: every team the routable slots reach, key (uppercased), name and workspace id and name, in slot order: what the automatic team link
  * chooses among. The same slots `routableSlots` answers, by the same rules, so a team the router cannot reach is never
- * linked; a key two workspaces share appears once per workspace, and the decider counts it once.
+ * linked; a key two workspaces share appears once per workspace, each as its own (workspace, key) pair (D-8808).
  */
-export function routableTeams(store: Listed): Array<{ key: string; name: string }> {
-  const out = store.slots.flatMap((s) => (currentDetails(s)?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+export function routableTeams(store: Listed): Array<{ key: string; name: string; workspaceId: string; workspaceName: string | null }> {
+  const out = store.slots.flatMap((s) => {
+    const d = currentDetails(s);
+    return (d?.teams ?? []).map((t) => ({ key: t.key.toUpperCase(), name: t.name, workspaceId: s.id, workspaceName: d?.name ?? null }));
+  });
   const legacy = store.legacy;
   if (legacy !== null && legacy.workspace !== null && !legacy.superseded) {
-    out.push(...legacy.workspace.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name })));
+    const w = legacy.workspace;
+    out.push(...w.teams.map((t) => ({ key: t.key.toUpperCase(), name: t.name, workspaceId: w.workspaceId, workspaceName: w.name as string | null })));
   }
   return out;
 }

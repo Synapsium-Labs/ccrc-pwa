@@ -20,7 +20,9 @@ import { isTeamCandidate, isTeamEvidence } from '../../shared/linking.js';
 import { isLinearTeamKey } from '../../shared/linear.js';
 import { mkTmp } from './tmpHelpers.js';
 
-const TEAMS: KnownTeam[] = [{ key: 'AAA', name: 'Alpha' }, { key: 'BBB', name: 'Beta' }, { key: 'CCC', name: 'project-a' }];
+const WA = { workspaceId: 'ws-a', workspaceName: 'Workspace A' };
+const WB = { workspaceId: 'ws-b', workspaceName: 'Workspace B' };
+const TEAMS: KnownTeam[] = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'BBB', name: 'Beta', ...WA }, { key: 'CCC', name: 'project-a', ...WA }];
 const facts = (over: Partial<TeamLinkFacts> = {}): TeamLinkFacts => ({
   project: 'project-x', repo: 'repo-x', mode: 'private', teams: TEAMS, tally: new Map(), ...over,
 });
@@ -52,7 +54,7 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
     expect(TEAM_LINK_MIN_IDS).toBe(3);
     expect(TEAM_LINK_MIN_SHARE).toBe(0.8);
     expect(decideTeamLink(facts({ tally: tally({ AAA: 8, BBB: 2 }) }))).toEqual({
-      kind: 'link', key: 'AAA', name: 'Alpha', evidence: { kind: 'ticket-ids', ids: 8, of: 10 },
+      kind: 'link', key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'ticket-ids', ids: 8, of: 10 },
     });
   });
 
@@ -62,12 +64,12 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
 
   it('(a) below the floor or the share gives candidates, best first, never a link', () => {
     expect(decideTeamLink(facts({ tally: tally({ AAA: 2 }) }))).toEqual({
-      kind: 'candidates', candidates: [{ key: 'AAA', name: 'Alpha', evidence: { kind: 'ticket-ids', ids: 2, of: 2 } }],
+      kind: 'candidates', candidates: [{ key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'ticket-ids', ids: 2, of: 2 } }],
     });
     expect(decideTeamLink(facts({ tally: tally({ AAA: 7, BBB: 3 }) }))).toEqual({
       kind: 'candidates', candidates: [
-        { key: 'AAA', name: 'Alpha', evidence: { kind: 'ticket-ids', ids: 7, of: 10 } },
-        { key: 'BBB', name: 'Beta', evidence: { kind: 'ticket-ids', ids: 3, of: 10 } },
+        { key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'ticket-ids', ids: 7, of: 10 } },
+        { key: 'BBB', name: 'Beta', ...WA, evidence: { kind: 'ticket-ids', ids: 3, of: 10 } },
       ],
     });
   });
@@ -80,21 +82,21 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
 
   it('(b) links on one exact match of the project name to a team name, ignoring case', () => {
     expect(decideTeamLink(facts({ project: 'PROJECT-A', mode: 'public' }))).toEqual({
-      kind: 'link', key: 'CCC', name: 'project-a', evidence: { kind: 'name-match', matched: 'project', on: 'name' },
+      kind: 'link', key: 'CCC', name: 'project-a', ...WA, evidence: { kind: 'name-match', matched: 'project', on: 'name' },
     });
   });
 
   it('(b) links on the repository name matching a team key', () => {
     expect(decideTeamLink(facts({ repo: 'bbb', mode: 'unknown' }))).toEqual({
-      kind: 'link', key: 'BBB', name: 'Beta', evidence: { kind: 'name-match', matched: 'repo', on: 'key' },
+      kind: 'link', key: 'BBB', name: 'Beta', ...WA, evidence: { kind: 'name-match', matched: 'repo', on: 'key' },
     });
   });
 
   it('(b) two teams matching give both as candidates, never a link', () => {
     expect(decideTeamLink(facts({ project: 'alpha', repo: 'bbb' }))).toEqual({
       kind: 'candidates', candidates: [
-        { key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } },
-        { key: 'BBB', name: 'Beta', evidence: { kind: 'name-match', matched: 'repo', on: 'key' } },
+        { key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'name-match', matched: 'project', on: 'name' } },
+        { key: 'BBB', name: 'Beta', ...WA, evidence: { kind: 'name-match', matched: 'repo', on: 'key' } },
       ],
     });
   });
@@ -102,8 +104,8 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
   it('(b) is not decisive against ids of another team: both are offered', () => {
     expect(decideTeamLink(facts({ project: 'alpha', tally: tally({ BBB: 2 }) }))).toEqual({
       kind: 'candidates', candidates: [
-        { key: 'BBB', name: 'Beta', evidence: { kind: 'ticket-ids', ids: 2, of: 2 } },
-        { key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } },
+        { key: 'BBB', name: 'Beta', ...WA, evidence: { kind: 'ticket-ids', ids: 2, of: 2 } },
+        { key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'name-match', matched: 'project', on: 'name' } },
       ],
     });
     // Ids of the matched team itself, short of (a)'s floor, do not stand in its way.
@@ -115,9 +117,43 @@ describe('decideTeamLink: the evidence order (a) ticket ids, (b) name match, (c)
     expect(decideTeamLink(facts({ teams: [], tally: tally({ AAA: 9 }) }))).toEqual({ kind: 'candidates', candidates: [] });
   });
 
-  it('a key two workspaces share is one team to link', () => {
-    const teams = [{ key: 'AAA', name: 'Alpha' }, { key: 'aaa', name: 'Alpha elsewhere' }];
-    expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 4 }) }))).toMatchObject({ kind: 'link', key: 'AAA', name: 'Alpha' });
+  it('a decisive key in one workspace links with that workspace', () => {
+    const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'BBB', name: 'Other', ...WB }];
+    expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 4 }) }))).toEqual({
+      kind: 'link', key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'ticket-ids', ids: 4, of: 4 },
+    });
+  });
+
+  it('a decisive key in two workspaces with no evidence for either offers both, each with its workspace', () => {
+    const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'aaa', name: 'Alpha elsewhere', ...WB }];
+    const ev = { kind: 'ticket-ids', ids: 4, of: 4 };
+    expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 4 }) }))).toEqual({
+      kind: 'candidates', candidates: [
+        { key: 'AAA', name: 'Alpha', ...WA, evidence: ev },
+        { key: 'AAA', name: 'Alpha elsewhere', ...WB, evidence: ev },
+      ],
+    });
+  });
+
+  it('a name match of one team name in two workspaces offers both, each with its workspace, and links neither', () => {
+    const teams = [{ key: 'AAA', name: 'project-a', ...WA }, { key: 'BBB', name: 'Project-A', ...WB }];
+    const ev = { kind: 'name-match', matched: 'project', on: 'name' };
+    expect(decideTeamLink(facts({ project: 'project-a', teams, mode: 'public' }))).toEqual({
+      kind: 'candidates', candidates: [
+        { key: 'AAA', name: 'project-a', ...WA, evidence: ev },
+        { key: 'BBB', name: 'Project-A', ...WB, evidence: ev },
+      ],
+    });
+  });
+
+  it('a ticket-id-decisive key held by one pair links it with that workspace even when another workspace holds a different key', () => {
+    const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'BBB', name: 'Beta', ...WB }];
+    expect(decideTeamLink(facts({ teams, tally: tally({ BBB: 5 }) }))).toMatchObject({ kind: 'link', key: 'BBB', ...WB });
+  });
+
+  it('the same key and workspace listed twice is one team', () => {
+    const teams = [{ key: 'AAA', name: 'Alpha', ...WA }, { key: 'aaa', name: 'Alpha', ...WA }];
+    expect(decideTeamLink(facts({ teams, tally: tally({ AAA: 4 }) }))).toMatchObject({ kind: 'link', key: 'AAA', ...WA });
   });
 });
 
@@ -129,7 +165,7 @@ describe('planTeamLink and teamSourceAfterWrite: the operator\'s key always wins
   });
 
   it('a key the operator cleared is not linked again: the decisive team is offered instead', () => {
-    const link = { key: 'AAA', name: 'Alpha', evidence: { kind: 'ticket-ids', ids: 5, of: 5 } };
+    const link = { key: 'AAA', name: 'Alpha', ...WA, evidence: { kind: 'ticket-ids', ids: 5, of: 5 } };
     expect(planTeamLink({ teamKey: null, source: 'manual' }, decisive)).toEqual({ link: null, candidates: [link] });
     expect(planTeamLink({ teamKey: null, source: null }, decisive)).toEqual({ link, candidates: [link] });
   });
@@ -152,6 +188,18 @@ describe('the wire guards', () => {
     const ev = { kind: 'name-match', matched: 'project', on: 'name' };
     expect(isTeamCandidate({ key: 'AAA', name: 'Alpha', evidence: ev }, isLinearTeamKey)).toBe(true);
     expect(isTeamCandidate({ key: 'not a key', name: 'Alpha', evidence: ev }, isLinearTeamKey)).toBe(false);
+  });
+
+  it('admit a candidate of 3 keys (an older build), or 5 with its workspace; refuse 4 or a bad workspace', () => {
+    const ev = { kind: 'name-match', matched: 'project', on: 'name' };
+    const old = { key: 'AAA', name: 'Alpha', evidence: ev };
+    expect(isTeamCandidate(old, isLinearTeamKey)).toBe(true);
+    expect(isTeamCandidate({ ...old, workspaceId: 'ws-a', workspaceName: 'Workspace A' }, isLinearTeamKey)).toBe(true);
+    expect(isTeamCandidate({ ...old, workspaceId: 'ws-a', workspaceName: null }, isLinearTeamKey)).toBe(true);
+    expect(isTeamCandidate({ ...old, workspaceId: 'ws-a' }, isLinearTeamKey)).toBe(false);
+    expect(isTeamCandidate({ ...old, workspaceName: 'Workspace A' }, isLinearTeamKey)).toBe(false);
+    expect(isTeamCandidate({ ...old, workspaceId: '', workspaceName: null }, isLinearTeamKey)).toBe(false);
+    expect(isTeamCandidate({ ...old, workspaceId: 'ws-a', workspaceName: 3 }, isLinearTeamKey)).toBe(false);
   });
 });
 
@@ -234,15 +282,14 @@ describe('the store: one writer of the linking row, the operator first', () => {
 });
 
 /** A Linear store read with one file slot whose record describes the key now in its file. */
-const storeWith = (teams: { key: string; name: string }[]): LinearStoreRead => ({
-  kind: 'listed',
-  slots: [{
-    source: 'file', id: '00000000-0000-4000-8000-000000000001',
-    key: { kind: 'key', digest: 'd1' },
-    record: { kind: 'details', details: { keyDigest: 'd1', teams: teams.map((t, i) => ({ id: `t${i}`, ...t })) } },
-  }],
-  legacy: null,
-} as unknown as LinearStoreRead);
+const WS_1 = '00000000-0000-4000-8000-000000000001';
+const WS_2 = '00000000-0000-4000-8000-000000000002';
+const slotOf = (id: string, name: string, teams: { key: string; name: string }[]) => ({
+  source: 'file', id, key: { kind: 'key', digest: `d-${id}` },
+  record: { kind: 'details', details: { keyDigest: `d-${id}`, name, teams: teams.map((t, i) => ({ id: `t${i}`, ...t })) } },
+});
+const storeOf = (...slots: ReturnType<typeof slotOf>[]): LinearStoreRead => ({ kind: 'listed', slots, legacy: null } as unknown as LinearStoreRead);
+const storeWith = (teams: { key: string; name: string }[]): LinearStoreRead => storeOf(slotOf(WS_1, 'Workspace A', teams));
 
 describe('the lane: linkTeams over a real coord.db', () => {
   const lane = (store: LinearStoreRead | null) => new VisibilityLane(
@@ -257,7 +304,10 @@ describe('the lane: linkTeams over a real coord.db', () => {
   const privateRow = (p: string): void => coord.recordLinkingReading(p, { state: 'measured', visibility: 'private', slug: `owner/${p}`, template: 'present', at: 1 });
 
   it('routableTeams reads the slot\'s teams while its record describes the key in its file', () => {
-    expect(routableTeams(TEAM_STORE as Extract<LinearStoreRead, { kind: 'listed' }>)).toEqual([{ key: 'AAA', name: 'Alpha' }, { key: 'BBB', name: 'Beta' }]);
+    expect(routableTeams(TEAM_STORE as Extract<LinearStoreRead, { kind: 'listed' }>)).toEqual([
+      { key: 'AAA', name: 'Alpha', workspaceId: WS_1, workspaceName: 'Workspace A' },
+      { key: 'BBB', name: 'Beta', workspaceId: WS_1, workspaceName: 'Workspace A' },
+    ]);
   });
 
   it('links a private project on decisive ids, offers candidates for an ambiguous one, and leaves a typed key alone', async () => {
@@ -279,6 +329,22 @@ describe('the lane: linkTeams over a real coord.db', () => {
     expect(coord.linkingOf('project-z')).toMatchObject({ teamKey: 'BBB', teamLink: { source: 'auto', evidence: { kind: 'name-match', matched: 'repo', on: 'name' } } });
     await lane(TEAM_STORE).linkTeams(['project-z'], 2000, inputs({}, { 'project-z': 'owner/alpha' }));
     expect(coord.linkingOf('project-z')).toMatchObject({ teamKey: 'BBB', teamLink: { at: 1000 } });
+  });
+
+  it('the lane writes the link\'s workspace into teamWorkspace, readable through linkingOf', async () => {
+    privateRow('project-a');
+    await lane(TEAM_STORE).linkTeams(['project-a'], 1000, inputs({ 'project-a': { AAA: 6 } }));
+    expect(coord.linkingOf('project-a')).toMatchObject({ teamKey: 'AAA', teamWorkspace: WS_1 });
+  });
+
+  it('a key two workspaces share is never linked by the lane: each pair is a candidate with its workspace', async () => {
+    privateRow('project-a');
+    const two = storeOf(slotOf(WS_1, 'Workspace A', [{ key: 'AAA', name: 'Alpha' }]), slotOf(WS_2, 'Workspace B', [{ key: 'AAA', name: 'Alpha two' }]));
+    await lane(two).linkTeams(['project-a'], 1000, inputs({ 'project-a': { AAA: 6 } }));
+    expect(coord.linkingOf('project-a')).toMatchObject({ teamKey: null, teamWorkspace: null });
+    expect(coord.linkingOf('project-a').teamCandidates!.map((c) => [c.key, c.workspaceId, c.workspaceName])).toEqual([
+      ['AAA', WS_1, 'Workspace A'], ['AAA', WS_2, 'Workspace B'],
+    ]);
   });
 
   it('an unreadable Linear store links nothing and clears nothing', async () => {

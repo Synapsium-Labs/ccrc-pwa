@@ -40,5 +40,8 @@ describe('the team-link vocabulary (pinned across its move)', () => {
     expect(isTeamCandidate({ ...ok, key: 'not a key' }, isLinearTeamKey)).toBe(false);
     expect(isTeamCandidate({ ...ok, evidence: { kind: 'ticket-ids', ids: 5, of: 1 } }, isLinearTeamKey)).toBe(false);
     expect(isTeamCandidate(null, isLinearTeamKey)).toBe(false);
+    // D-8808: the 5-key shape names its workspace; a 4-key one is refused.
+    expect(isTeamCandidate({ ...ok, workspaceId: 'ws-a', workspaceName: 'Workspace A' }, isLinearTeamKey)).toBe(true);
+    expect(isTeamCandidate({ ...ok, workspaceId: 'ws-a' }, isLinearTeamKey)).toBe(false);
   });
 });

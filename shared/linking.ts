@@ -39,8 +39,11 @@ export type TeamLinkWire =
   | { source: 'manual'; at: number | null }
   | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number };
 
-/** D-8405: one team the automatic pass offers for a project, with the evidence that names it. */
-export interface TeamCandidateWire { key: string; name: string; evidence: TeamEvidence }
+/** D-8405: one team the automatic pass offers for a project, with the evidence that names it. D-8808: and the workspace
+ *  it lives in (absent on a candidate an older build stored; `workspaceName` null when the workspace's name is unknown). */
+export interface TeamCandidateWire {
+  key: string; name: string; evidence: TeamEvidence; workspaceId?: string; workspaceName?: string | null;
+}
 
 const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
 
@@ -63,7 +66,11 @@ export function isTeamEvidence(v: unknown): v is TeamEvidence {
 export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v is TeamCandidateWire {
   if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
   const o = v as Record<string, unknown>;
-  return Object.keys(o).length === 3 && isKey(o['key']) && typeof o['name'] === 'string' && isTeamEvidence(o['evidence']);
+  if (!(isKey(o['key']) && typeof o['name'] === 'string' && isTeamEvidence(o['evidence']))) return false;
+  const n = Object.keys(o).length;
+  if (n === 3) return true;   // an older build's candidate: no workspace
+  return n === 5 && typeof o['workspaceId'] === 'string' && o['workspaceId'] !== ''
+    && (o['workspaceName'] === null || typeof o['workspaceName'] === 'string');
 }
 
 /** `GET /api/linking`: a session's read of its own project. */
