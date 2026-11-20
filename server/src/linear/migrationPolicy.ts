@@ -300,6 +300,13 @@ export function closerRelation(e: MapEntry, entries: readonly MapEntry[], applie
   return under.some((x) => !skipped.has(x.identifier)) ? { kind: 'wait' } : { kind: 'none' };
 }
 
+/** Every skipped issue a live binding holds moves to the taken list (review 2955 F2): the team's Linear owner took it through
+ *  inbound, so it leaves the migration. `isHeld` is the plan store's one reader (`issueBound`); taken stays deduplicated, in order. */
+export function shedTaken(skipped: readonly string[], taken: readonly string[], isHeld: (identifier: string) => boolean): { skipped: string[]; taken: string[]; moved: boolean } {
+  const held = skipped.filter((i) => isHeld(i));
+  return { skipped: skipped.filter((i) => !held.includes(i)), taken: [...new Set([...taken, ...held])], moved: held.length > 0 };
+}
+
 /** The comment on an issue closed as finished (spec §10.3, review 2892 F7, D-8801): it names its evidence. A private team's names the
  *  pull request; a public (or unmeasured) team's names it only when it is in the project's own repository (`repo`, measured),
  *  and says "a pull request" for any other, which may be private. The text passes the public-text check for the team, or the

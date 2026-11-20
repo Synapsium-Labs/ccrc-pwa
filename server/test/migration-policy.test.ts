@@ -1,7 +1,7 @@
 // D-8186: the migration map's deciders (`linear/migrationPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  applySteps, checkMap, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, ticketKeyOf, ticketKindOf, programmeOfEntry,
+  applySteps, checkMap, finishedComment, putBackSteps, reconcileMove, replacementComment, reportItemInput, shedTaken, ticketKeyOf, ticketKindOf, programmeOfEntry,
   type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from '../src/linear/migrationPolicy.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
@@ -288,5 +288,16 @@ describe('review 2892 fix round 1 (D-8186)', () => {
     const why = reportItemInput(4, 'AAA', c, ['prog-b']).why;
     expect(why).toContain('prog-b');
     expect(why).toContain('initiative stays active in Linear while its placed tickets are open');
+  });
+});
+
+describe('shedTaken (review 2955 F2)', () => {
+  it('moves each held identifier from skipped to taken, deduplicated and in order', () => {
+    const held = new Set(['AAA-2', 'AAA-4']);
+    expect(shedTaken(['AAA-1', 'AAA-2', 'AAA-3', 'AAA-4'], ['AAA-4', 'AAA-9'], (i) => held.has(i)))
+      .toEqual({ skipped: ['AAA-1', 'AAA-3'], taken: ['AAA-4', 'AAA-9', 'AAA-2'], moved: true });
+  });
+  it('moves nothing when no skipped identifier is held', () => {
+    expect(shedTaken(['AAA-1'], ['AAA-9'], () => false)).toEqual({ skipped: ['AAA-1'], taken: ['AAA-9'], moved: false });
   });
 });

@@ -342,5 +342,7 @@ export interface MigrationView {
     skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[]; waitingWhy?: Record<string, MigrationWaitingWhy>;
     /** The replaced levels closed with no relation, as no ticket was placed under them (review 2918 F2). */
     unrelated?: string[];
+    /** The issues a live binding holds, taken by the team's Linear owner through inbound, which leave the migration (review 2955 F2, A1). */
+    taken?: string[];
   } | null;
 }
