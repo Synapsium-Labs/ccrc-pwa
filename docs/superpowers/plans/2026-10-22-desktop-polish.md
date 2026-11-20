@@ -4455,6 +4455,61 @@ section only. Its revision after review 2861 has C48's consent too (its worker's
 only. Its revision after review 2888 has the consent of Task C50's worker, who holds the plan's claim now (its mail of
 2026-11-20), for this section only.
 
+### Task H4: the Archive holds work no session owns (D-8828) — now
+
+**What.** The first build task of C49's session-helpers design (`docs/superpowers/specs/2026-11-19-session-helpers-design.md`, §6, Table 8,
+Figure 6 and Table 13's H4 row). C48 took the unowned rows and the leases of two unlisted sessions off the fleet list and gave them no
+home. The Archive screen now has a section, **Work no session owns**, above the archived workspaces, under two subheads: **No single owner**
+(a tree the broker could not give one owner) and **Neither session listed** (a worktree whose parent and worker are both unlisted).
+An unowned row says the project, the path (the admin record when no path is known), the verdict (`no owner found` or `two owners claimed
+it`) and the attempt's age (`tried 3 days ago`), and offers Not delegated only where a lease is hidden (`leaseId`), through the existing
+resolve door. A worktree row says the project, the path and its disposition word, and offers what `worktreeControls` gives (Keep
+worktree and Not delegated in the states that offer them; never Attach to…, which needs a listed parent). No row carries a liveness word,
+a `title` or the bare word `unmeasured`: where presence on disk was not measured the head says it once (`presence on disk not measured for
+1 tree`). The note under the title says what the section holds. With nothing of either kind the section draws nothing, and the fleet list
+gains nothing.
+
+**Files.** New: `pwa/src/fleet/ArchiveUnownedWork.tsx` (L4, C4: the section, one row view and one group view), `pwa/src/fleet/archiveUnownedWork.css`
+(a new stylesheet: `fleet.css` is capped), `pwa/test/archive-unowned-work.test.tsx`, `pwa/browser/archive-unowned.browser.test.ts`. Edited:
+`pwa/src/fleet/delegationWords.ts` (L1: `VERDICT_WORD`, `hiddenLeaseOf`, `unownedControls` re-added as Table 8 says; `unlistedLeases`,
+`presenceWord`, `triedWord` and `unownedWork`, which decides every row, count and word), `pwa/src/screens/ArchiveScreen.tsx` (takes the frame
+and a clock), `pwa/src/app.tsx` (the `/archive` route reads the frame from the store), `pwa/design/audit.mjs` (four grounds),
+`pwa/test/contrast.test.ts` (one line in the app's stylesheet list, with the consent of the worker holding that file's claim, 2026-11-20),
+`pwa/test/app.test.tsx` (one route case), and the two census lists that name the files allowed to name the broker
+(`server/test/delegation-wave3.integration.test.ts` and its mirror in `server/test/fleet-health.test.ts`). Nothing on the wire or the
+server changes.
+
+**Measured.** The red-first run, the mutation table, the real-Chrome measures and the screenshots are in
+`docs/superpowers/programs/desktop-polish/h4.md`.
+
+**Acceptance.** An Archive screen over a frame with an unowned tree, a hidden lease and a worktree of two unlisted sessions draws the
+section with each row's words and acts as above; an archived session counts as unlisted; one listed session gives a lease a page and takes
+it out of the section; no row draws a liveness word, a title or `unmeasured`; the presence sentence is in the head once; a frame with
+none of either kind, or no frame, draws no section; each act posts to its existing door (Not delegated to `POST /api/leases/:lease/resolve`
+with `{action:'foreign'}` after a confirm, Keep worktree to `operator-retain`).
+
+- **D-8828** — `archive-holds-unowned-work`: Task H4, issued on 2026-11-20. The Archive screen holds the delegated work no session
+  owns, as spec §6 and Table 8 say, with these departures from the spec, each named by slug and each a spec correction for the
+  coordinator to fold:
+  - `neither-session-listed`: the second subhead reads "Neither session listed", not "Both sessions gone" (spec §6, Table 8, Figure 6 and
+    its mockup). An archived session is unlisted, not gone (review 2900's minor).
+  - `unlisted-means-not-listed-live`: "neither session is a row of the fleet list" is decided by `listedLive` (a row of the store that is
+    not an archived row), the one reader of that fact, so a lease whose coordinator is an archived row is drawn here as well as on that
+    row's own page (C48's SW-S2). The spec's "row of the fleet list" read as "present in the store" would have left such a lease with
+    its archived page as its only home.
+  - `disposition-word-with-its-date`: the worktree row's disposition is `worktreeStateParts`' words, the one owner of them, which carry the
+    held-until date for an adopted or retained tree (`worktree kept until 17 Nov`); spec §4.4 lists `worktree kept` without it.
+  - `age-in-whole-words`: the attempt's age is `elapsedShort`'s ladder (the one shared ladder) in whole words: `tried 5 minutes ago`,
+    `tried 2 hours ago`, `tried 3 days ago`, `tried just now` under a minute; a time that cannot be read leaves the age out of the row.
+  - `section-above-archived-and-alone`: the section sits above the archived workspaces and draws when nothing is archived, with the
+    "Nothing is archived." line kept below it (the spec is silent on an empty archive). Unowned trees list the newest attempt first.
+  - `words-in-delegation-words`: the words and the selection live in `delegationWords.ts`, the existing L1 owner of every delegation
+    label, not in a new file; spec Table 12 names only the component.
+  - `no-title-attributes`: no row carries a `title`, so no word hides in a tooltip a phone never shows (the spec's §4.4 says no liveness word;
+    it does not mention titles).
+  - `presence-in-the-head-title`: the head's title carries the count of both kinds and the presence sentence, as the mockup draws it, so
+    the section's accessible name includes them.
+
 ### Task C50: the operator's tidying notes (D-8817) — now
 
 **Why.** The operator, 2026-11-19, two notes on the fleet list. First: "We don't need to write the word "Programme" when we use
