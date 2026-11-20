@@ -9,11 +9,21 @@
 // shown by a badge another task adds.
 import { elapsedWords } from '@ccrc/ui';
 import {
-  WORK_COUNTED_GROUPS,
+  WORK_APART_GROUPS, WORK_COUNTED_GROUPS,
   type CheckpointEvidence, type CheckpointKind, type WorkCountedGroup, type WorkEpicView, type WorkItemView, type WorkMapView, type WorkPhaseView,
   type WorkStatus, type WorkUnreadable,
 } from '../../../shared/plan';
 import { releaseDate } from '../lib/format';
+
+/** The card's answer: the server's `WorkAnswer` (`WorkMapView`, or `{ unreadable }`), widened by the page's own two arms, each of
+ *  which may carry the last view the page drew. The shipped `WorkAnswer` has no `last` and no failed-read arm; the card's one
+ *  `work` prop is this (D-8806, `unreadable-carries-the-last-view`; D-8823, `failed-read-arm`: the page's failed read speaks in
+ *  the refusal's word, which the server's `unreadable` has no place for). Defined here (L1) so the page's decider, `workRead.ts`,
+ *  reads it without importing the component. */
+export type WorkCardAnswer =
+  | WorkMapView
+  | { unreadable: WorkUnreadable; last?: WorkMapView | null }
+  | { readFailed: string; last?: WorkMapView | null };
 
 /** A ticket's status in the operator's words, one per `WorkStatus` and spelt once (spec Table 6). `done-unverified` is the
  *  front of "marked done, but …": the row's facts carry the reason that finishes the sentence. */
@@ -38,11 +48,20 @@ export const statusWord = (status: WorkStatus): string => STATUS_WORD[status];
 
 /** An outstanding group's words in the outstanding line (spec §5 item 1). Keyed by the counted groups less `done`, so a group
  *  the server starts counting is a compile error until it has a word; the line writes them in `WORK_COUNTED_GROUPS` order
- *  (review 2873 F3). */
+ *  (review 2873 F3). A group that is also a status reads that status's word, spelt once in `STATUS_WORD` (review 2891 F5). */
 const OUTSTANDING_WORD: Readonly<Record<Exclude<WorkCountedGroup, 'done'>, string>> = {
-  'in-progress': 'in progress', 'waiting-on-you': 'waiting on you', held: 'held', 'not-started': 'not started',
+  'in-progress': 'in progress', 'waiting-on-you': STATUS_WORD['waiting-on-you'], held: 'held', 'not-started': STATUS_WORD['not-started'],
 };
 const OUTSTANDING_GROUPS = WORK_COUNTED_GROUPS.filter((g): g is Exclude<WorkCountedGroup, 'done'> => g !== 'done');
+
+/** The groups a headline and a phase line write apart from "N of M": `WORK_APART_GROUPS` less `dropped`, which no line writes (a
+ *  dropped ticket leaves the plan). Keyed by that list, so an apart group the server adds is a compile error until it has a word,
+ *  and is then written in both lines (review 2891 F5); each word is its status's, spelt once in `STATUS_WORD`. */
+type ApartGroup = Exclude<(typeof WORK_APART_GROUPS)[number], 'dropped'>;
+const APART_WORD: Readonly<Record<ApartGroup, string>> = { closed: STATUS_WORD.closed, 'left-open': STATUS_WORD['left-open'], failed: STATUS_WORD.failed };
+const APART_GROUPS = WORK_APART_GROUPS.filter((g): g is ApartGroup => g !== 'dropped');
+/** "2 closed", "1 left open", "3 failed", in `WORK_APART_GROUPS` order, each left out when it is zero. */
+const apartParts = (c: WorkMapView['counts']): string[] => APART_GROUPS.filter((g) => c[g] > 0).map((g) => `${c[g]} ${APART_WORD[g]}`);
 
 /** What the headline's "N of M" counts: the work still in the plan, each ticket once, over the groups the server counts
  *  (`WORK_COUNTED_GROUPS`, the one list `workMapOf`'s own strip reads). Closed, left open, dropped and failed count apart. */
@@ -54,11 +73,7 @@ const plural = (n: number, one: string, many: string): string => `${n} ${n === 1
  *  ended. Null for a plan declared with nothing to count, where the note says it (spec §5.1). */
 export function headline(view: WorkMapView): string | null {
   const c = view.counts;
-  const apart = [
-    c.closed > 0 ? `${c.closed} closed` : null,
-    c['left-open'] > 0 ? `${c['left-open']} left open` : null,
-    c.failed > 0 ? `${c.failed} failed` : null,
-  ].filter((p): p is string => p !== null);
+  const apart = apartParts(c);
   if (view.source === 'declared-empty') return null;
   if (view.source === 'runs') return [`${plural(c.done, 'work run', 'work runs')} done`, ...apart].join(' · ');
   if (view.end !== null) {
@@ -116,8 +131,7 @@ export function phaseLine(p: WorkPhaseView, carriedTo: readonly number[]): strin
   const own = countedIn(p.counts);
   const parts = [
     ...(own > 0 ? [`${p.counts.done} of ${own} done`] : []),
-    ...(p.counts.closed > 0 ? [`${p.counts.closed} closed`] : []),
-    ...(p.counts['left-open'] > 0 ? [`${p.counts['left-open']} left open`] : []),
+    ...apartParts(p.counts),
     ...(p.carried === 0 ? [] : [carriedTo.length === 0 ? `${p.carried} carried` : `${p.carried} carried to ${carriedTo.length === 1 ? 'phase' : 'phases'} ${joinWords(carriedTo)}`]),
   ];
   return parts.length === 0 ? 'no work of its own yet' : parts.join(' · ');
@@ -171,7 +185,14 @@ const UNREADABLE_WHY: Readonly<Record<WorkUnreadable, string>> = {
   'run-unreadable': 'the runs could not be read',
   'read-failed': 'a read failed',
 };
-export const unreadableNote = (why: WorkUnreadable): string => `The work could not be read: ${UNREADABLE_WHY[why]}`;
+/** The unreadable words this build can word: the keys of `UNREADABLE_WHY`, so the page's decider checks a server's word against what the card
+ *  knows and falls to the failed-read arm for any other (review 2922 F3). Keyed by the type, so a word added to it is a compile error here. */
+export const UNREADABLE_WORDS: readonly WorkUnreadable[] = Object.keys(UNREADABLE_WHY) as WorkUnreadable[];
+/** The note over a card whose read failed; the one sentence, spelt once, for the server's `unreadable` and the page's failed read. */
+const couldNotRead = (why: string): string => `The work could not be read: ${why}`;
+export const unreadableNote = (why: WorkUnreadable): string => couldNotRead(UNREADABLE_WHY[why]);
+/** The page's failed read, in the refusal's own word ("The work could not be read: not-found"). */
+export const readFailedNote = (word: string): string => couldNotRead(word);
 /** The card's section name, and the strip's. */
 export const WORK_TITLE = 'Work';
 export const NOT_IN_PHASE_WORD = 'Not in a phase';
