@@ -13,7 +13,7 @@ claim says whether it was **measured** (read on the tree, the live server or a t
 | `doneEvidenceVerdict`, the read side of WM1's evidence rule (§4.1: verified when recorded and on every read) | `workMap.ts` | Measured: the `evidence:` cases |
 | `verdictsReadOf`: the run verdicts reader as the map reads it, `not-read` while absent or empty, never "not stuck" | `workMap.ts` | Measured: the `verdicts:` cases |
 | `CoordStore.programmeWorkRuns(slug)`: every work run of one programme with its ticket's key (`runs.ticketId` joined to `plan_tickets.key`), all-or-failure, no clamp | `server/src/coord/store.ts`, after `runs()` | Measured: the route cases and RM-4 |
-| `PlanRouteOpts.runVerdicts` (`Pick<RunVerdicts, 'all'>`), wired to the watcher's reader | `planRoutes.ts`, `server.ts` (one property) | Measured: the route's stuck case (the option); the wiring line by the server compile |
+| `PlanRouteOpts.runVerdicts` (`Pick<RunVerdicts, 'all'>`), wired to the watcher's reader | `planRoutes.ts`, `server.ts` (one property) | Measured: the route's stuck case (the option). The wiring line was only type-checked by the server compile (the option is optional, so deleting the line still compiled): unpinned until WM7's `plan-work-wiring.test.ts` (review 2815 M7), which builds the real server and goes red when the line is deleted |
 | `GET /api/programmes/:slug/plan` answers `{ ok, plan, work }`; a read behind `work` that fails answers `work: { unreadable: <word> }` and still serves `plan` (F15) | `planRoutes.ts` (`workOf`, which gathers and decides nothing) | Measured: `plan-routes.test.ts`'s `plan show carries the work map` block |
 | Three mutant sets and three floors | `server/test/sim/workMapSets.ts`, `mutation-floors.test.ts`, `mutation-floors.json` | Measured (§4) |
 
@@ -69,6 +69,43 @@ fix round (§8).
 - `last-move-unmeasured-is-absent`: an item whose run's last move could not be read (the read failed, or the run is not
   among the work runs) carries no `lastMoveAt`, as `withLastMoves` leaves a run, while null means no run or no move. The
   shared type marks the field optional and says so (review 2795 F3).
+
+### 2.1 The basis of each slug (review 2815 M8, recorded by WM7)
+
+The header promises a basis on every claim; the bullets above carry it in prose where they carry it at all, so this table gives
+each slug one word and its evidence. **Measured** means a case red under a mutant (the case or mutant id is named) or a read of
+the code named here; **inferred** means reasoned from reading, with no case.
+
+| Slug | Basis | Evidence |
+|---|---|---|
+| `closed-reads-nothing-yet` | Measured | `closed: new Map()` in `planRoutes.ts`; the row 2 cases (T6-2) |
+| `evidence-and-verdicts-decided-in-l1` | Measured | the `evidence:` and `verdicts:` cases (V-1, VR-1 to VR-3, T6-4c) |
+| `last-move-from-the-run` | Measured | V-6; the route case `an item carries its run's last move …` (RM-9) |
+| `dropped-tickets-are-items` | Measured | `a dropped ticket is in no total` |
+| `declared-reads-planBy` | Measured by reading | `planStore.ts` sets `planBy` and `planAt` in one statement; `workOf` reads `stored.planBy !== null`; the `declared-empty` case (`workMapCases.ts`) |
+| `run-row-title-nullable` | Measured by reading | the types in `shared/plan.ts`; the no-plan fallback cases |
+| `held-by-an-unread-run` | Measured | row 10's case `a ticket held by a run the read did not return …` (T6-14b) |
+| `unreadable-words` | Measured | the route cases `a failing read answers work unreadable and still serves plan` and `an evidence run that cannot be read …` |
+| `dropped-epic-while-it-holds-a-ticket` | Measured by reading, partly inferred | the strip's `dropped && keys.length === 0` line in `workMap.ts`; that `dropEpicInto` leaves only done tickets is inferred from reading it, with no case here |
+| `not-in-phase-only-when-phased` | Measured | R-4; `a plan with no phases still fills epics and items` |
+| `three-floor-keys` | Measured | `mutation-floors.json` holds the three keys |
+| `map-words-are-plan-words` | Measured | `single-definition/plan.test.ts`; `plan-vocabulary` |
+| `characterization-reads-plan-only` | Measured | the WM0 characterization suite over `planPhasesFixture.ts` |
+| `fold-by-the-held-ticket` | Measured, except one sentence | V-3b. The last sentence of the bullet (a run outside the programme's work runs folds nothing) is **inferred**: it follows from the code (`runById.get(ev.runId)` is undefined for such a run), and no case pins it |
+| `pr-evidence-folds-its-carrier` | Measured | V-3c, V-3d; the route case `a pull request the landing line holds landed verifies, and the run that carried it folds in` (RM-6, RM-12) |
+| `last-move-unmeasured-is-absent` | Measured | V-6; RM-9 |
+
+### 2.2 One join, two readers: `programmeWorkRuns` and `ticketOfRun` (review 2815 M3, recorded by WM7)
+
+`CoordStore.programmeWorkRuns` joins `runs.ticketId` to `plan_tickets.key` in one statement for every work run of one
+programme; `planStore.ts`'s `ticketOfRun` makes the same join for one run id. They read the same fact, "the ticket a run
+holds", so this records why the batch is kept: it is the **batch twin of the one-row read, not a second owner**. The map needs
+the key of every run of a programme at once (its fold and its lookups compare keys across runs), and a call to `ticketOfRun` per
+run would be N statements where the store already reads the runs in one. It is not another host or process, and not a
+security boundary: both read `coord.db` on the server, synchronously, so the reason is the one statement per programme, nothing
+subtler. What keeps the two from drifting is a case, not this paragraph: `plan-routes.test.ts`'s `the work runs' ticket keys
+agree with ticketOfRun` reads both for every run of a seeded programme and fails when the joins differ (its mutant is in
+`wm7.md`).
 
 ## 3. Rows, and what reds each
 
@@ -224,15 +261,15 @@ Review 2795 read `002912bfe` and found F1 to F7; the coordinator ruled them all 
 
 ### 8.1 What changed
 
-| Finding | Change | Case(s) and mutant(s) |
-|---|---|---|
-| F1 (a) | the fold finds the auto ticket the run holds (`fold-by-the-held-ticket`) | `a reused auto ticket folds …` (V-3b) |
-| F2 | a `{ pr }` folds in its carrier's auto ticket (`pr-evidence-folds-its-carrier`); the route hands `prLinks` | `a pull request's carrier folds in: …` (V-3c, V-3d); route: `a pull request the landing line holds landed verifies, and the run that carried it folds in` (RM-6, RM-12) |
-| F3 | a last move not read is no field (`last-move-unmeasured-is-absent`) | `a run whose last move was not read …` (V-6); route: `an item carries its run's last move …` (RM-9) |
-| F4 | one case per item 1 to 7 | §3, review 2795 F4 rows (T6-7b, T6-1b, T6-2b, T6a-2b, S-3b, T6-G11 to T6-G13, R-1b, V-4b) |
-| F5 | route cases for the gathering | §8.3 (RM-5 to RM-12) |
-| F6 | records: §2's list, RM-3's count, §5's co-edits and dates, the fixture's claim, Step 2 unticked with its note, the PR body | this note, the plan's D-8779 entry |
-| F7 | the fallback "the evidence was not read" | `a done ticket whose stored evidence was not read …` (T6-4c); the carry interaction is §8.4 |
+| Finding | Change | Case(s) and mutant(s) | Basis |
+|---|---|---|---|
+| F1 (a) | the fold finds the auto ticket the run holds (`fold-by-the-held-ticket`) | `a reused auto ticket folds …` (V-3b) | Measured (the cases red under their mutants, §8.2, §8.3) |
+| F2 | a `{ pr }` folds in its carrier's auto ticket (`pr-evidence-folds-its-carrier`); the route hands `prLinks` | `a pull request's carrier folds in: …` (V-3c, V-3d); route: `a pull request the landing line holds landed verifies, and the run that carried it folds in` (RM-6, RM-12) | Measured (the cases red under their mutants, §8.2, §8.3) |
+| F3 | a last move not read is no field (`last-move-unmeasured-is-absent`) | `a run whose last move was not read …` (V-6); route: `an item carries its run's last move …` (RM-9) | Measured (the cases red under their mutants, §8.2, §8.3) |
+| F4 | one case per item 1 to 7 | §3, review 2795 F4 rows (T6-7b, T6-1b, T6-2b, T6a-2b, S-3b, T6-G11 to T6-G13, R-1b, V-4b) | Measured (§3 rows; §8.3) |
+| F5 | route cases for the gathering | §8.3 (RM-5 to RM-12) | Measured (§3 rows; §8.3) |
+| F6 | records: §2's list, RM-3's count, §5's co-edits and dates, the fixture's claim, Step 2 unticked with its note, the PR body | this note, the plan's D-8779 entry | Measured (the records were read against the tree by review 2815's third lens; no case) |
+| F7 | the fallback "the evidence was not read" | `a done ticket whose stored evidence was not read …` (T6-4c); the carry interaction is §8.4 | Measured (the cases red under their mutants, §8.2, §8.3) |
 
 ### 8.2 Red before the fix
 
@@ -322,7 +359,8 @@ Rerun after this merge, one file per process: §8.9.
 The linear-hierarchy wave 4 follow-ups (run 2810) asked this task, which holds `planRoutes.ts` and
 `single-definition/plan.test.ts`, for a co-edit of two doc comments and plan take's Upkeep lookup in the first, and one
 appended case in the second; this task said yes (mail 26622, 2026-11-19), noting that the work gatherer ends just above
-one of those comments and that the describe's last case is WM2's, so whoever lands second keeps both.
+one of those comments and that the describe's last case is WM2's, so whoever lands second keeps both. *Basis:* the mail id and the date are from the mail, which the tree cannot show (recorded, not
+measured here); the two named files and the describe's last case are read from the tree.
 
 ### 8.8 The rerun after the merge
 
