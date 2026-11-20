@@ -383,10 +383,14 @@ number from `POST /api/ledger/deviations`.
   put aside in one transaction: its ticket dropped "put back", so the sync never writes over the change; its binding `retired`
   (a binding state, the row kept), so the issue reaches the team's Linear owner as inbound, as §10.3 step 5 says; and it is
   listed as skipped (fix round 1, review 2892 F5). An issue a live binding holds leaves the migration: one the team's Linear
-  owner has taken through inbound (before the apply, between a close's first write and its last, or while it sits on the
-  skipped list) is neither adopted, commented on nor closed, whatever its class, is never asked of the owner in a follow-up map, and holds
-  no wait; the report lists it as taken by the owner (`taken`), not as skipped (the coordinator's rulings on review 2955 F2 and
-  A1). The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
+  owner has taken through inbound (before the apply, on an earlier tick of a close, or while it sits on the skipped list) is
+  neither adopted, commented on nor closed, whatever its class, is never asked of the owner in a follow-up map, and holds no
+  wait of its own (a live programme's part still waits for its wave boundary, and a held entry in it reaches `taken` when its
+  step comes); the report lists it as taken by the owner (`taken`), not as skipped (the coordinator's rulings on review 2955 F2
+  and A1). A close asks again inside its flight, after its read and before each of its writes (the comment, the relation, the
+  state), and a held answer ends it there, with nothing more sent: only a take that lands while one write is already in flight
+  lets that one write through, recorded in the move row, and the owner sees the issue as inbound (the coordinator's rulings on
+  review 2998 F1, F4 and F5). The migration's own issue reads and writes of an apply tick count against `MIGRATION_CALLS_PER_TICK` besides the write
   cap, and a rate refusal of any of them rests the lane. Two passes of the plan sync's own are counted by neither cap: step 1's
   structure pass (only until the plan's objects exist), on lane `migration` for the objects the map declares, and the Upkeep
   epic's pass, whose create has no move row and so goes out on lane `sync` as the plan sync's own. Each is bounded by its lane,

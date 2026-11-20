@@ -179,6 +179,22 @@ counts skipped issues but not taken ones (the report's own list shows them); and
 no map entry names falls back to the identifier alone (a binding holding the issue with no identifier stored is then missed,
 and the issue stays skipped until the operator's Done).
 
+### Review 2998 and its fix round (the coordinator's mail of 2026-11-20)
+
+Review 2998 read `12f35966f` with the held-out panel: one important finding (F1), one important test gap (F2), three minors.
+The rulings and what was built:
+
+| Item | Ruling and what was built | Test, and what reds it |
+|---|---|---|
+| F1 (ruled: close it) | a close asks `issueBound` again inside its flight: after the read (step 3's closer flight inserts no move row for a held issue), at the start of `closeIssue`, and before the relation and the state write; a held answer ends the close there into `taken`, nothing more sent, its row unapplied. The window left, a take while one write is already in flight, is accepted and said in D-8796 | `migration-apply.test.ts` "F1: a live binding made while the close's comment is in flight …", "… while a replaced level's relation is in flight …", "… while the closer's first read is in flight inserts no move row …", "… while step 2's reconcile read is in flight …": each red with its check removed (the comment case was red on `12f35966f`: a state write went out) |
+| F2 | the two shed sites the panel found unpinned, the apply tick's and the follow-up store's, each get a test | "F2: a skipped issue the owner takes while the row is still applying is counted taken, not skipped, in the report item" and "F2: a follow-up map stored while a held issue is still on the skipped list …": each red with its site's held predicate made false. A held filter on the follow-up's issues that no test could red (the `mappable` filter already leaves held rows out) is removed |
+| F3 | step 1's structure refusal sends an issue already taken, or held now, to `taken`, never to `skipped`, so `finishApply` never freezes a count that includes it | "F3: a map-declared programme refused at the apply puts an issue a live binding holds in taken, never in skipped" |
+| F4 (ruled: soften the text) | a live programme's own wait stands: a held entry in its part waits for the wave boundary like any other and reaches `taken` when its step comes; D-8796 says "no wait of its own". `applySteps` is not reordered | — |
+| F5 | D-8796 says what F1 makes true, the one-write residual included | — |
+
+The review's nit on the owner's map reference (`map-incomplete` against `plan-bad-body` when the taken issue was the only skipped
+one) is a rules file and goes to the skill-words ticket `w6-words`, not this pull request.
+
 ## Follow-ups and open points
 
 - **The F3/F5 interaction, built in fix round 1** (wave 3's carry: a bound ticket put back could take its held team off its
