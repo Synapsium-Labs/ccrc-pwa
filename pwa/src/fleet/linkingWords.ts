@@ -23,7 +23,7 @@ export function evidenceWords(e: TeamEvidence, key: string): string {
     case 'ticket-ids': return `${e.ids} of ${e.of} ticket ids in its branches, pull requests and commits use ${key}`;
     case 'name-match': return `the ${e.matched === 'project' ? 'project' : 'repository'} name matches the team ${e.on === 'name' ? 'name' : 'key'}`;
     case 'pr-attachments': return `${e.ids} of ${e.of} issues attached to this repository's merged pull requests are ${key} issues`;
-    case 'suggested': return `suggested by ${e.by}: ${e.why}`;
+    case 'suggested': return `suggested by ${e.by} — ${e.why}`;
     default: { const never: never = e; return never; }
   }
 }
@@ -62,6 +62,7 @@ export const OVERLORD_LINK_WORDS = {
 export const PICKER_WORDS = {
   label: 'Workspace',
   choose: 'Choose a workspace',
+  needed: 'Choose a workspace to save this key.',
   unnamed: 'An unnamed workspace',
   unnamedIn: 'In an unnamed workspace',
 } as const;

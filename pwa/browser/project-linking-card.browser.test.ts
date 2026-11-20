@@ -385,8 +385,8 @@ describe('Settings › Security › Project linking, per width, skin and theme (
   }, 120_000);
 
   // D-8808 (wave 8, Task 8.6): the workspace picker and candidate rows that name a workspace, a long suggestion's reason and an
-  // Overlord link's line, at 360 and 1280 px, in both skins: all wrap inside the key cell, and nothing scrolls sideways.
-  for (const width of [360, 1280]) {
+  // Overlord link's line, at every width, in both skins and both themes: all wrap inside the key cell, and nothing scrolls sideways.
+  for (const width of WIDTHS) {
     it(`the workspace picker, candidates with workspaces and an Overlord link stay inside the key cell at ${width}px`, async () => {
       const WS = (id: string, name: string, keys: string[]) => ({
         state: 'connected', outcome: 'ok', org: name, id, name, urlKey: id.slice(0, 4) === '1111' ? 'ws-a' : 'ws-b', user: 'user-a', keyTail: 'abcd', checkedAt: NOW - 60_000,
@@ -420,8 +420,8 @@ describe('Settings › Security › Project linking, per width, skin and theme (
         },
         fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'coord', coord: { pause: 'clear' } }],
       };
-      for (const skin of SKINS) {
-        const view: AppView = { skin, theme: 'light', width };
+      for (const skin of SKINS) for (const theme of THEMES) {
+        const view: AppView = { skin, theme, width };
         const app = await openApp(browser!, view, fixture);
         try {
           await app.page.goto(server!.origin + '/settings/security');
@@ -458,6 +458,6 @@ describe('Settings › Security › Project linking, per width, skin and theme (
           await app.ctx.close();
         }
       }
-    }, 120_000);
+    }, 240_000);
   }
 });

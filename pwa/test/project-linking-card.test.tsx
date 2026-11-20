@@ -831,7 +831,7 @@ import { waitingPath } from '../src/lib/routes';
 import { OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel } from '../src/fleet/linkingWords';
 
 const wsView = (id: string, name: string, keys: string[]): LinearWorkspaceView =>
-  ({ state: 'details-unknown', why: 'absent', id, name, urlKey: null, user: null, teams: keys.map((key) => ({ key, name: key })), keyTail: null, checkedAt: null } as unknown as LinearWorkspaceView);
+  ({ state: 'details-unknown', why: 'absent', id, name, urlKey: null, user: null, teams: keys.map((key) => ({ key, name: key })), keyTail: null, checkedAt: null });
 const serveWorkspaces = (workspaces: LinearWorkspaceView[] | 'unreadable') =>
   vi.spyOn(api, 'linearWorkspaces').mockResolvedValue(workspaces === 'unreadable' ? 'unreadable' : { store: 'ok', workspaces, legacy: null });
 const picker = (name: string): HTMLSelectElement | null =>
@@ -848,6 +848,22 @@ describe('the team key\'s workspace picker (D-8808)', () => {
     fireEvent.change(picker('project-a')!, { target: { value: 'id-a' } });
     fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
     await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-a' }));
+  });
+
+  it('Save and Enter write nothing while a key held by two workspaces has no workspace chosen, and say so', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))]);
+    await waitFor(() => expect(picker('project-a')).not.toBeNull());
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA' }) });
+    const btn = within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save });
+    expect(btn).toBeDisabled();
+    expect(within(rowOf('project-a')).getByText(PICKER_WORDS.needed)).toBeInTheDocument();
+    fireEvent.keyDown(keyField('project-a'), { key: 'Enter' });
+    fireEvent.click(btn);
+    expect(save).not.toHaveBeenCalled();
+    fireEvent.change(picker('project-a')!, { target: { value: 'id-a' } });
+    expect(btn).toBeEnabled();
+    expect(within(rowOf('project-a')).queryByText(PICKER_WORDS.needed)).toBeNull();
   });
 
   it('is left out for a key one workspace holds (that workspace rides the write), a key none holds, and an unreadable list', async () => {
@@ -894,7 +910,7 @@ describe('the candidates (D-8808)', () => {
     serveWorkspaces('unreadable');
     await mount([row('project-a', wire({ teamCandidates: same }))]);
     const r = within(rowOf('project-a'));
-    expect(r.getByText('Alpha two: suggested by lane-a: <b>the branches name it</b>')).toBeInTheDocument();
+    expect(r.getByText('Alpha two: suggested by lane-a — <b>the branches name it</b>')).toBeInTheDocument();
     expect(rowOf('project-a').querySelector('b')).toBeNull();
     expect(r.getByText(candidateWhy(same[0]!))).toBeInTheDocument();
   });

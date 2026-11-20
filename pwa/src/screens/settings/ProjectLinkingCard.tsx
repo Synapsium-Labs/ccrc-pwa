@@ -177,7 +177,10 @@ function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, 
       )
       .finally(() => setBusy(false));
   };
+  // A key held by several workspaces needs one chosen: Save and Enter wait for it.
+  const needsWorkspace = holders.length > 1 && workspaceToWrite(holders, chosen) === undefined;
   const saveKey = (): void => {
+    if (needsWorkspace) return;
     const key = draft.trim().toUpperCase();
     const workspace = key === '' ? undefined : workspaceToWrite(workspacesHoldingKey(workspaces, key), chosen);
     write({ teamKey: key === '' ? null : key, override: linking.override, ...(workspace === undefined ? {} : { workspace }) });
@@ -214,7 +217,7 @@ function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, 
             onChange={(e) => setDraft(e.target.value.toUpperCase())}
             onKeyDown={(e) => { if (e.key === 'Enter') saveKey(); }}
           />
-          <Button variant="ghost" disabled={busy} onClick={saveKey}>{LINKING_TEXT.save}</Button>
+          <Button variant="ghost" disabled={busy || needsWorkspace} onClick={saveKey}>{LINKING_TEXT.save}</Button>
         </div>
         {holders.length > 1 && (
           <div className="linking-workspace" data-linking-workspace="">
@@ -223,6 +226,7 @@ function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, 
               <option value="">{PICKER_WORDS.choose}</option>
               {holders.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
             </Select>
+            {needsWorkspace && <p className="settings-note">{PICKER_WORDS.needed}</p>}
           </div>
         )}
         {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
