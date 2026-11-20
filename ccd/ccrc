@@ -13200,42 +13200,34 @@ _models_advance_steps() {   # <id> <deadline-secs> -> appends to the caller's `e
 # Each class that moved is pushed through `_models_push`, one line each, built by `moveline` in the Codex step's own
 # shape after `tok` and `word` have checked the tokens, as `recovered` does; a refresh with no move pushes nothing.
 _models_aliases_lane() {   # <id> <roster file> <deadline-secs> -> prints ONE row; rc 0 unless the row failed
-  local id="$1" file="$2" body rc=0 line word detail
-  local MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
-  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then
-    jq -cn --arg id "$id" '{id: $id, ok: true, aliases: {ok: false, error: "budget-deferred", moved: []}}'
-    return 0
+  local id="$1" file="$2" body='{"ok":false,"error":"budget-deferred"}' rc=0 pre=1 line row MODELS_AUTO_DEADLINE="$3" MODELS_AUTO_TAIL_S=44
+  if ! _models_advance_admit "$MODELS_AUTO_DEADLINE" 2; then :
+  elif ! _models_advance_capable "$id"; then body='{"ok":false,"error":"not-capable"}'
+  else pre=0
+    body="$(_models_node_locked "$id" aliases-refresh --file "$file" --id "$id" --reg "$_SVC_REG" 2>/dev/null)" || rc=$?
+    body="$(printf '%s' "$body" | tail -n1)"
   fi
-  if ! _models_advance_capable "$id"; then
-    jq -cn --arg id "$id" '{id: $id, ok: true, aliases: {ok: false, error: "not-capable", moved: []}}'
-    return 0
-  fi
-  body="$(_models_node_locked "$id" aliases-refresh --file "$file" --id "$id" --reg "$_SVC_REG" 2>/dev/null)" || rc=$?
-  body="$(printf '%s' "$body" | tail -n1)"
-  if [ "$rc" -eq 0 ] && printf '%s' "$body" | jq -e 'type == "object" and .ok == true and .op == "aliases-refresh"' >/dev/null 2>&1; then
-    jq -cn --arg id "$id" --argjson b "$body" \
-      '{id: $id, ok: true, aliases: {ok: true, moved: ($b.moved | if type == "array" then . else [] end)}}' || return 1
-    while IFS= read -r line; do
-      [ -n "$line" ] && _models_push "$line"
-    done < <(printf '%s' "$body" | jq -r --arg id "$id" "$MODELS_JQ_DEFS"'
-      (.moved // []) | if type == "array" then .[] else empty end
-      | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
-      | moveline($id)' 2>/dev/null)
-    return 0
-  fi
-  word="$(printf '%s' "$body" | jq -r 'if type == "object" and (.error | type) == "string" then .error else empty end' 2>/dev/null)"
-  detail="$(printf '%s' "$body" | jq -r 'if type == "object" and (.detail | type) == "string" then .detail else empty end' 2>/dev/null)"
-  [ -n "$word" ] || word="no-answer"
-  # The budget ran out between the admission above and the lock: a deferral, as above, never a failure.
-  if [ "$word" = budget-deferred ]; then
-    jq -cn --arg id "$id" '{id: $id, ok: true, aliases: {ok: false, error: "budget-deferred", moved: []}}'
-    return 0
-  fi
-  [ -n "$detail" ] || detail="aliases-refresh refused with $word"
-  [ "$word" != no-answer ] || detail="aliases-refresh exited $rc with no answer"
-  jq -cn --arg id "$id" --arg w "$word" --arg d "$detail" \
-    '{id: $id, ok: false, reason: $d, aliases: {ok: false, error: $w, moved: []}}'
-  return 1
+  # ONE jq decides the row from the answer: refreshed; NOT RUN (a deferral before the op, or `budget-deferred` from the
+  # lock when the budget ran out between the admission and the lock); or failed, with the op's word, or `no-answer`.
+  row="$(jq -cn --arg id "$id" --arg rc "$rc" --arg pre "$pre" --arg body "$body" '
+    ($body | fromjson? // null) as $b
+    | if $pre == "0" and $rc == "0" and ($b | type) == "object" and $b.ok == true and $b.op == "aliases-refresh"
+      then {id: $id, ok: true, aliases: {ok: true, moved: ($b.moved | if type == "array" then . else [] end)}}
+      else (if ($b | type) == "object" and ($b.error | type) == "string" then $b.error else "no-answer" end) as $w
+        | if $pre == "1" or $w == "budget-deferred" then {id: $id, ok: true, aliases: {ok: false, error: $w, moved: []}}
+          else {id: $id, ok: false, aliases: {ok: false, error: $w, moved: []},
+                reason: (if $w == "no-answer" then "aliases-refresh exited \($rc) with no answer"
+                         elif ($b.detail | type) == "string" then $b.detail else "aliases-refresh refused with \($w)" end)}
+          end end')" || return 1
+  printf '%s\n' "$row"
+  case "$row" in *'"ok":false,"aliases"'*) return 1 ;; *'"aliases":{"ok":true'*) ;; *) return 0 ;; esac
+  while IFS= read -r line; do
+    [ -n "$line" ] && _models_push "$line"
+  done < <(printf '%s' "$body" | jq -r --arg id "$id" "$MODELS_JQ_DEFS"'
+    (.moved // []) | if type == "array" then .[] else empty end
+    | select(type == "object" and (.class | word) and (.to | tok) and (.from == null or (.from | tok)))
+    | moveline($id)' 2>/dev/null)
+  return 0
 }
 
 # D25 (codex-bridge Stage 2, Task 15): a refusal the lane's bridge recorded lowers that model's window, through the
