@@ -211,29 +211,6 @@ describe('splitMarkdownParts', () => {
     }
   });
 
-  it('md parts: a fence in a blockquote or a list longer than the window is closed and reopened under the same quote, at column 0', () => {
-    const quote = '> ```json\n' + '> yyyyyyyyyyyyyyyyyyyy\n'.repeat(60) + '> ```\n';
-    const rq = splitMarkdownParts(quote, 300).parts;
-    checkCover(quote, rq, 300);
-    expect(rq.length).toBeGreaterThan(3);
-    // The text opens with the fence, so part 0 opens and closes it, and every later part reopens it under the same quote.
-    expect(rq[0]!.reopen).toBeNull();
-    expect(rq[0]!.close).toBe('> ```\n');
-    expect(rq[1]!.reopen).toBe('> ``` json\n');
-    expect(rq[1]!.close).toBe('> ```\n');
-    const list = '- item\n    - ```json\n' + '      zzzzzzzzzzzzzzzzzzzz\n'.repeat(60) + '      ```\n';
-    const rl = splitMarkdownParts(list, 300).parts;
-    checkCover(list, rl, 300);
-    expect(rl.length).toBeGreaterThan(3);
-    // The part that opens the fence closes it where it opened: the list item's indentation, no marker. A later part
-    // reopens it at column 0, with no list marker or indentation (a marker would open a new item, four columns an
-    // indented code block), and closes it there too.
-    expect(rl[1]!.reopen).toBeNull();
-    expect(rl[1]!.close).toBe('      ```\n');
-    expect(rl[2]!.reopen).toBe('``` json\n');
-    expect(rl[2]!.close).toBe('```\n');
-  });
-
   it('md parts: a fence closes only on a closer within its container: a nested fence in a Markdown-source fence stays inside it', () => {
     // The outer fence holds a list with an indented fence: its inner `    ```` is content, not the outer's closer.
     const nested = '```markdown\n- item\n    ```js\n    x\n    ```\n```\n';
@@ -268,20 +245,95 @@ describe('splitMarkdownParts', () => {
     return { inside, openAtEnd: open !== null };
   }
 
-  it('md parts: a list fence reopened at column 0 never swallows the text after its original closer', () => {
+  it('md parts: the residual: a container fence longer than a window is cut inside it with no reopen and no close, and the text after it is never code', () => {
     const list = '- item\n    - ```json\n' + '      zzzzzzzzzzzzzzzzzzzz\n'.repeat(60) + '      ```\n' + '\nAfter the list.\n## Next\n';
     const parts = splitMarkdownParts(list, 300).parts;
     checkCover(list, parts, 300);
-    const last = partText(list, parts.at(-1)!);
-    expect(last.startsWith('      ```\n'), 'the original closer starts the last part, outside any reopen').toBe(true);
-    expect(parts.at(-1)!.reopen).toBeNull();
+    expect(parts.length).toBeGreaterThan(3);
     for (const [i, p] of parts.entries()) {
-      if (p.reopen === null && i !== parts.length - 1) continue;
+      expect(p.reopen, `part ${i} is not reopened`).toBeNull();
+      expect(p.close, `part ${i} is not closed`).toBeNull();
+      const f = topLevelFences(partText(list, p));
+      expect(f.openAtEnd, `part ${i} opens no top-level fence`).toBe(false);
+      expect(f.inside.has('After the list.'), `part ${i}: the paragraph is not code`).toBe(false);
+      expect(f.inside.has('## Next'), `part ${i}: the heading is not code`).toBe(false);
+    }
+    // The closer ends the zone: the heading after it is a cut again.
+    const quote = '> ```json\n' + '> yyyyyyyyyyyyyyyyyyyy\n'.repeat(60) + '> ```\n\n## Next\n\n' + 'f\n\n'.repeat(200);
+    const rq = splitMarkdownParts(quote, 300).parts;
+    checkCover(quote, rq, 300);
+    for (const p of rq) { expect(p.reopen).toBeNull(); expect(p.close).toBeNull(); }
+    expect(rq.some((p) => quote.startsWith('## Next', p.start))).toBe(true);
+  });
+
+  /** A text that repeats `unit` followed by `pad`, cut in windows of `max`: no part holds half a fence, no part is
+   *  reopened or closed (a container fence is never reopened), and the parts fit and cover. */
+  function noCutInFences(unit: string, pad: string, count: number, max: number): MdPart[] {
+    const t = (unit + pad).repeat(count);
+    const { parts } = splitMarkdownParts(t, max);
+    expect(parts.length).toBeGreaterThan(3);
+    checkCover(t, parts, max);
+    for (const p of parts) {
+      expect(p.reopen).toBeNull();
+      expect(p.close).toBeNull();
+      expect(fenceLines(partText(t, p)) % 2, JSON.stringify(partText(t, p))).toBe(0);
+    }
+    return parts;
+  }
+
+  it('md parts: a fence indented at most three columns is a top-level fence: a long one is reopened at column 0 and closed by its own closer', () => {
+    const list = '- item\n  ```json\n' + '  zzzzzzzzzzzzzzzzzzzz\n'.repeat(60) + '  ```\n\nAfter the list.\n## Next\n';
+    const { parts } = splitMarkdownParts(list, 300);
+    checkCover(list, parts, 300);
+    expect(parts.length).toBeGreaterThan(3);
+    expect(parts.filter((p) => p.reopen !== null).length).toBeGreaterThan(2);
+    for (const [i, p] of parts.entries()) {
+      if (p.reopen !== null) expect(p.reopen, `part ${i} reopens at column 0`).toBe('``` json\n');
       const f = topLevelFences(partText(list, p));
       expect(f.openAtEnd, `part ${i} ends outside a fence`).toBe(false);
       expect(f.inside.has('After the list.'), `part ${i}: the paragraph is not code`).toBe(false);
       expect(f.inside.has('## Next'), `part ${i}: the heading is not code`).toBe(false);
     }
+  });
+
+  it('md parts: a fence in a list item after a nested item is never cut, blank lines inside it included', () => {
+    noCutInFences('1. Configure\n    - edit\n\n    ```yaml\n    a: 1\n\n    b: 2\n    ```\n', 'plain\n', 40, 200);
+  });
+
+  it('md parts: a fence after a lazy line is never cut', () => {
+    noCutInFences('- a\n    - b\nlazy\n      ```js\n      x\n\n      y\n      ```\n', 'plain\n', 40, 200);
+  });
+
+  it('md parts: a fence in a quoted list is never cut', () => {
+    noCutInFences('> - ```json\n>   one\n>\n>   two\n>   ```\n', 'plain\n', 40, 100);
+  });
+
+  it('md parts: a fence after a quote marker and a tab is never cut', () => {
+    noCutInFences('>\t```text\n>\tone\n>\n>\ttwo\n>\t```\n', 'plain\n', 40, 100);
+  });
+
+  it('md parts: list markers inside an indented code block do not make the next fence-looking line a fence', () => {
+    const t = 'Para.\n\n    - item\n      ```js\n    x\n' + 'prose\n\n## Sec\n\n'.repeat(80);
+    const { parts } = splitMarkdownParts(t, 400);
+    checkCover(t, parts, 400);
+    expect(parts.length).toBeGreaterThan(3);
+    for (const p of parts) expect(p.reopen).toBeNull();
+    for (const p of parts.slice(1)) expect(t.startsWith('## ', p.start), JSON.stringify(t.slice(p.start, p.start + 20))).toBe(true);
+  });
+
+  it('md parts: a quoted fence is over where its quote is: a later heading is a cut again', () => {
+    const t = '> ```\n> code\nplain para\n# H\n\n' + 'f\n\n'.repeat(200);
+    const { parts } = splitMarkdownParts(t, 300);
+    checkCover(t, parts, 300);
+    expect(parts.some((p) => t.startsWith('# H', p.start)), 'the heading after the quote is a cut').toBe(true);
+  });
+
+  it('md parts: a heading-looking line indented three columns and cut off by the window end is not a heading', () => {
+    const t = 'a'.repeat(40) + '\n\n' + 'b'.repeat(57) + '\n' + '   #tag text\n' + 'c'.repeat(200) + '\n';
+    const { parts } = splitMarkdownParts(t, 100);
+    checkCover(t, parts, 100);
+    expect(parts[0]!.end, 'the blank-line cut wins').toBe(42);
+    expect(parts[1]!.continued).toBe(true);
   });
 
   it('md parts: a heading-looking line cut off by the window end is not a heading (the line is read a few characters past it)', () => {
@@ -292,6 +344,8 @@ describe('splitMarkdownParts', () => {
     expect(parts[1]!.continued).toBe(true);
   });
 
+  // This bounds the cutter's own ACCOUNTING of the characters it examines (the probe counts what the code reports), not
+  // the engine's real work: it would not red against a per-line slice that the code forgot to report.
   it('md parts: a window of many short lines is cut in linear work', () => {
     const t = 'abc\n'.repeat(100000);
     const probe = { chars: 0 };
