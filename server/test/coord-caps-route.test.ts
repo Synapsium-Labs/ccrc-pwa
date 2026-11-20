@@ -79,7 +79,8 @@ describe('GET /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 4 },
-      usage: { running: 0 },
+      // D-8792: the cap reader's two additive fields; no run, so none waits, and the merge leaves the row in shadow.
+      usage: { running: 0, waiting: 0, workingOnly: false },
       updatedAt: 1_700_000_000_000 });
   });
 
@@ -109,7 +110,8 @@ describe('GET /api/coord/caps', () => {
       wave: 1, waveOf: 8, claimedBy: 'the-coordinator' }) as { id: number };
     coord.markDispatched(r.id, 'the-worker', 'ws', 'ws/ws', false);
     expect(coord.advance(r.id, 'dispatched', 'test').ok).toBe(true);
-    expect((await getCaps(app)).json().usage).toEqual({ running: 1 });
+    // D-8792: `the-worker` has no registry row, so its worker reads gone: reported waiting, and in shadow still counted.
+    expect((await getCaps(app)).json().usage).toEqual({ running: 1, waiting: 1, workingOnly: false });
   });
 });
 
@@ -120,7 +122,7 @@ describe('POST /api/coord/caps', () => {
     expect(res.statusCode).toBe(200);
     expect(res.json()).toEqual({ ok: true,
       caps: { maxConcurrentWorkers: 5 },
-      usage: { running: 0 },
+      usage: { running: 0, waiting: 0, workingOnly: false },
       // A write stamps it; the route reads the STORED value back, so this is the
       // server's own clock and not the caller's assertion about it.
       updatedAt: expect.any(Number) });
@@ -552,9 +554,14 @@ describe('the caps answer shape is defined ONCE, and both halves send it', () =>
     const b = blankCommentsAndStrings(r);
     expect(/const capsView\s*=/.test(b),
       'the shared builder is gone under this name — the scan below is over nothing').toBe(true);
+    // D-8792: both halves send `capsViewMeasured`, which adds the cap reader's two fields to the shared builder's
+    // answer, and builds nothing of its own: its body calls `capsView(`.
+    const measured = /const capsViewMeasured\s*=([\s\S]*?)\n {2}};/.exec(b);
+    expect(measured, 'the measured view is gone under this name').not.toBeNull();
+    expect(measured![1], 'the measured view rebuilds the answer instead of extending the shared one').toContain('capsView(');
     for (const decl of ["app.get('/api/coord/caps'", "app.post('/api/coord/caps'"]) {
       expect(handlerBody(r, b, decl), `${decl} builds its own answer instead of the shared one`)
-        .toContain('capsView(');
+        .toContain('capsViewMeasured(');
     }
   });
 
