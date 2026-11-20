@@ -86,12 +86,21 @@ describe('readAttachedIssues', () => {
     expect(await readAttachedIssues(r.deps, [slotOf('a')], [url(1)])).toBe('unmeasured');
   });
 
-  it('a failing slot stops at its first failure and does not stop another slot', async () => {
+  it('a failing slot stops at its first failure, another is still asked, and the overall answer is unmeasured', async () => {
     const r = await rig((key) => (key === WS.a.key ? 'fail' : answerOf([node(5, 'BBB')])));
-    const out = await readAttachedIssues(r.deps, [slotOf('a'), slotOf('b')], [url(1), url(2)]);
-    expect(out).toEqual({ total: 1, pairs: [{ workspaceId: WS.b.id, key: 'BBB', ids: 1 }] });
+    expect(await readAttachedIssues(r.deps, [slotOf('a'), slotOf('b')], [url(1), url(2)])).toBe('unmeasured');
     expect(r.asked.filter((x) => x.key === WS.a.key)).toHaveLength(1);
     expect(r.asked.filter((x) => x.key === WS.b.key)).toHaveLength(2);
+  });
+
+  it('one malformed slot and one good slot are unmeasured: a partial tally is never a measurement', async () => {
+    const r = await rig((key) => (key === WS.a.key ? { data: { attachmentsForURL: { nodes: [{ issue: { id: 'x' } }] } } } : answerOf([node(5, 'BBB')])));
+    expect(await readAttachedIssues(r.deps, [slotOf('a'), slotOf('b')], [url(1)])).toBe('unmeasured');
+  });
+
+  it('a slot that answered with no attachment counts as answered, beside one with attachments', async () => {
+    const r = await rig((key) => answerOf(key === WS.a.key ? [] : [node(5, 'BBB')]));
+    expect(await readAttachedIssues(r.deps, [slotOf('a'), slotOf('b')], [url(1)])).toEqual({ total: 1, pairs: [{ workspaceId: WS.b.id, key: 'BBB', ids: 1 }] });
   });
 
   it('no slot answered, or no URL, is unmeasured', async () => {

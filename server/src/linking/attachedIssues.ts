@@ -33,14 +33,13 @@ export function tallyAttached(found: readonly AttachedIssue[]): AttachedTally {
   return { total: seen.size, pairs: [...pairs.values()] };
 }
 
-/** One slot's attached issues over every URL, or null at its first failure word (a slot that failed answers nothing, so a
- *  count never rests on part of its URLs). */
+/** One slot's attached issues over every URL, or null at its first failure word (a slot that failed answers nothing). */
 async function readSlot(deps: CcrcCallDeps, slot: LinearRouteSlot, urls: readonly string[]): Promise<AttachedIssue[] | null> {
   const out: AttachedIssue[] = [];
   for (const url of urls) {
-    // `plan-sync` is attribution only, on a read: no journal row, no policy ask.
+    // The `team-link` pass is attribution only, on a read: no journal row, no policy ask.
     const r = await runCcrcOp(deps, {
-      op: 'attachmentsForUrl', pass: 'plan-sync', lane: 'sync', slot: slot.ref, workspaceId: slot.workspaceId,
+      op: 'attachmentsForUrl', pass: 'team-link', lane: 'sync', slot: slot.ref, workspaceId: slot.workspaceId,
       teamKey: null, target: null, fields: [], input: { url },
     });
     if (!r.ok) return null;
@@ -53,8 +52,10 @@ async function readSlot(deps: CcrcCallDeps, slot: LinearRouteSlot, urls: readonl
 
 /**
  * The distinct attached issues per pair over `urls` (at most {@link ATTACHED_URLS_MAX}), asked of each routable slot, or
- * `unmeasured` when no slot answered all of them (no slot, no URL, every slot failed or answered out of shape: never a zero).
- * A failing slot does not stop another. Never throws.
+ * `unmeasured` unless EVERY slot asked answered all of them (a slot that answered with no attachment counts as answered; no
+ * slot, no URL, or any slot that failed or answered out of shape is unmeasured, never a zero and never a part of the
+ * evidence, since a share over part of it could turn decisive). A failing slot does not stop another from being asked.
+ * Never throws.
  */
 export async function readAttachedIssues(
   deps: CcrcCallDeps, slots: readonly LinearRouteSlot[], urls: readonly string[],
@@ -62,12 +63,11 @@ export async function readAttachedIssues(
   const asked = urls.slice(0, ATTACHED_URLS_MAX);
   if (asked.length === 0) return 'unmeasured';
   const found: AttachedIssue[] = [];
-  let answered = 0;
+  let complete = slots.length > 0;
   for (const slot of slots) {
     const got = await readSlot(deps, slot, asked);
-    if (got === null) continue;
-    answered += 1;
+    if (got === null) { complete = false; continue; }
     found.push(...got);
   }
-  return answered === 0 ? 'unmeasured' : tallyAttached(found);
+  return complete ? tallyAttached(found) : 'unmeasured';
 }
