@@ -27,11 +27,13 @@ import {
  * close", confirmed as F5 (0) on 2026-10-20). `recent` keeps its word and changes its clock: the turn marker's newest
  * stamp must be at least the grace (`STOP_DONE_GRACE_MS`) old, not hibernation's N, so a finished worker sleeps about
  * ten minutes after its run reads `done`. The holds that guard a WORKSPACE stop holding sleep for this policy (spec
- * §3.0, sleep versus retire): a programme hold, a hold naming a terminal run, a review of an open run, and a `planned`
- * run naming it (a wave not yet dispatched uses nothing). They still guard retirement, which this lane never does. A
- * programme-held child sleeps only through `ccd hibernate --hold-ok <the exact text>` on a box that advertises
- * `hibernate-hold-ok`; an operator's own hold, a hold naming an open or unreadable run, and a box without the token
- * keep `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
+ * §3.0, sleep versus retire): a programme hold, a hold naming a terminal run, a hold naming the worker's own newest
+ * placed run (D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b)
+ * requires), a review of an open run, and a `planned` run naming it (a wave not yet dispatched uses nothing). They still
+ * guard retirement, which this lane never does. A programme-held child sleeps only through `ccd hibernate --hold-ok <the
+ * exact text>` on a box that advertises `hibernate-hold-ok`; an operator's own hold, a hold naming any other open run
+ * (another session's, or an older or `planned` run of its own) or an unreadable one, and a box without the token keep
+ * `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
  * `hibernate-disabled` stops this lane too. The words that are this lane's alone say why it is narrower: only a
  * dispatched child (`not-a-child`), only once its newest placed run is finished (`no-run`, `not-done`,
  * `close-unplaced`) and a grace has passed (`grace`), only on a box whose ccd has the verb (`no-verb`), and only with
@@ -171,7 +173,7 @@ export type StopDoneLive =
 /** What the row's `.hold` is, classified by the sweep (L4) so this file still imports L0 alone (D-6091). `none`: no
  *  hold. `operator`: any text outside the programme-hold grammar (`programmeHoldOf`), the unreadable and empty
  *  placeholders included. `programme`: a programme hold naming no run. `run-terminal` / `run-live`: one naming a run
- *  the store reads in / outside `TERMINAL_RUN_STATES`. `run-own`: one naming an open run whose worker is this session;
+ *  the store reads in / outside `TERMINAL_RUN_STATES`. `run-own`: one naming the worker's own newest placed run, open;
  *  D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b) requires.
  *  `unreadable`: one naming a run the store could not read. */
 export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-own' | 'run-live' | 'unreadable';

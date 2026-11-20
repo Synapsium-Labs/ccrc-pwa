@@ -701,26 +701,30 @@ describe('heldKindOf: the row\'s hold, classified (D-6091)', () => {
     for (const id of [9, 10, 11]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c, null)).toBe('run-live');
   });
 
-  it('now: a run: suffix naming the asking worker\'s OWN open run reads run-own; no asker, or another, reads run-live (was: run-live) (D-8789)', () => {
+  it('now: a run: suffix naming the asking worker\'s own newest placed run reads run-own; any other reads run-live (was: run-live) (D-8789)', () => {
     const own = { run: (id: number) => ({ ok: true as const, run: { id, state: 'awaiting-review', sessionId: 'project-a-quiet-basin' } }) } as unknown as
       Pick<StopDoneSweepDeps['coord'], 'run'>;
-    expect(heldKindOf('program:programme-a wave:2 run:7', own, 'project-a-quiet-basin')).toBe('run-own');
-    expect(heldKindOf('program:programme-a wave:2 run:7', own, null)).toBe('run-live');
-    expect(heldKindOf('program:programme-a wave:2 run:7', own, 'project-a-other-basin')).toBe('run-live');
+    const asker = (sessionId: string, newestPlacedRunId: number | null) => ({ sessionId, newestPlacedRunId });
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, asker('project-a-quiet-basin', 7))).toBe('run-own');
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, null), 'no asker').toBe('run-live');
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, asker('project-a-other-basin', 7)), 'another session').toBe('run-live');
+    // Review 2868 F1: its own open run that is NOT its newest placed run (an older one, or a planned wave) holds.
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, asker('project-a-quiet-basin', 8)), 'not its newest placed run').toBe('run-live');
+    expect(heldKindOf('program:programme-a wave:2 run:7', own, asker('project-a-quiet-basin', null)), 'no placed run').toBe('run-live');
     // The comparison is on the run's sessionId, never on the hold's text: a hold whose text happens to carry the
     // asker's id still reads the run it names.
     expect(heldKindOf('program:project-a-quiet-basin wave:2 run:7', { run: (id: number) => ({ ok: true as const,
-      run: { id, state: 'working', sessionId: 'project-a-other-basin' } }) } as never, 'project-a-quiet-basin')).toBe('run-live');
+      run: { id, state: 'working', sessionId: 'project-a-other-basin' } }) } as never, asker('project-a-quiet-basin', 7))).toBe('run-live');
   });
 
   it('an own run that cannot be read — refused, absent or throwing — is unreadable, never run-own (D-8789)', () => {
     const c = coord({ 7: 'unreadable', 8: 'absent', 9: 'throws' });
-    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c, 'project-a-quiet-basin')).toBe('unreadable');
+    for (const id of [7, 8, 9]) expect(heldKindOf(`program:programme-a wave:2 run:${id}`, c, { sessionId: 'project-a-quiet-basin', newestPlacedRunId: id })).toBe('unreadable');
   });
 
   it('a terminal own run reads run-terminal, as before (D-8789)', () => {
     const c = { run: (id: number) => ({ ok: true as const, run: { id, state: 'done', sessionId: 'project-a-quiet-basin' } }) } as never;
-    expect(heldKindOf('program:programme-a wave:2 run:7', c, 'project-a-quiet-basin')).toBe('run-terminal');
+    expect(heldKindOf('program:programme-a wave:2 run:7', c, { sessionId: 'project-a-quiet-basin', newestPlacedRunId: 7 })).toBe('run-terminal');
   });
 
   it('a run: suffix whose run cannot be read — refused, absent or throwing — is unreadable', () => {
@@ -1009,6 +1013,84 @@ describe('the watcher\'s own pass, its deps unmocked (D-5370)', () => {
       h.coord.db.close();
     }
   });
+
+  // Review 2868 F1 (D-8789): `run-own` is the worker's own NEWEST PLACED run alone. A hold naming any other open run
+  // of its own (a `planned` wave N+1, or an older run parked beside a newer one) stays awake. Each row has a control
+  // that differs only in the run the hold names, and sleeps.
+  const stateOf = (h: { coord: CoordStore }, id: number): string =>
+    (h.coord.db.prepare('SELECT state FROM runs WHERE id = ?').get(id) as { state: string }).state;
+
+  const plannedBeside = async () => {
+    const h = await harness({ holdOk: true });
+    h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL WHERE id = ?").run(h.runId);
+    const next = h.coord.openRun({ program: 'p', title: 't2', project: 'project-a', wave: 2, waveOf: 2, claimedBy: 'c' });
+    if (!('id' in next)) throw new Error(`fixture openRun refused: ${JSON.stringify(next)}`);
+    h.coord.bindSession(next.id, WID);   // the open route binds wave N+1 to the named workspace before any dispatch
+    return { h, planned: next.id };
+  };
+
+  it('kept: a hold naming its own PLANNED run (wave N+1 opened, not dispatched) holds (D-8789, review 2868 F1)', async () => {
+    const { h, planned } = await plannedBeside();
+    try {
+      expect(stateOf(h, planned)).toBe('planned');
+      writeFileSync(path.join(h.reg, `${WID}.hold`), `program:p wave:2 run:${planned}`);
+      const t = await h.tick();
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+      expect(h.stops()).toEqual([]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  it('control: beside the same planned run, a hold naming its newest placed run sleeps (D-8789, review 2868 F1)', async () => {
+    const { h } = await plannedBeside();
+    try {
+      const hold = `program:p wave:1 run:${h.runId}`;
+      writeFileSync(path.join(h.reg, `${WID}.hold`), hold);
+      const t = await h.tick();
+      await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+      expect(h.stops()).toEqual([['hibernate', '--hold-ok', hold, WID]]);
+    } finally {
+      h.coord.db.close();
+    }
+  });
+
+  for (const older of ['awaiting-review', 'merging', 'closing'] as const) {
+    const parkedPair = async () => {
+      const h = await harness({ holdOk: true });
+      h.coord.db.prepare('UPDATE runs SET state = ?, closedAt = NULL WHERE id = ?').run(older, h.runId);
+      const newer = h.coord.openRun({ program: 'p', title: 't2', project: 'project-a', wave: 2, waveOf: 2, claimedBy: 'c' });
+      if (!('id' in newer)) throw new Error(`fixture openRun refused: ${JSON.stringify(newer)}`);
+      h.coord.markDispatched(newer.id, WID, WID, `ws/${WID}`, true);
+      h.coord.db.prepare("UPDATE runs SET state = 'awaiting-review', closedAt = NULL WHERE id = ?").run(newer.id);
+      return { h, newer: newer.id };
+    };
+
+    it(`kept: a hold naming an OLDER own run parked at ${older}, beside a newer parked own run, holds (D-8789, review 2868 F1)`, async () => {
+      const { h } = await parkedPair();
+      try {
+        writeFileSync(path.join(h.reg, `${WID}.hold`), `program:p wave:1 run:${h.runId}`);
+        const t = await h.tick();
+        await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+        expect(h.stops()).toEqual([]);
+      } finally {
+        h.coord.db.close();
+      }
+    });
+
+    it(`control: beside an older own run parked at ${older}, a hold naming the newer, its newest placed run, sleeps (D-8789, review 2868 F1)`, async () => {
+      const { h, newer } = await parkedPair();
+      try {
+        const hold = `program:p wave:2 run:${newer}`;
+        writeFileSync(path.join(h.reg, `${WID}.hold`), hold);
+        const t = await h.tick();
+        await h.w.sweepSleep(t.rows, t.records, [], 'run-done');
+        expect(h.stops()).toEqual([['hibernate', '--hold-ok', hold, WID]]);
+      } finally {
+        h.coord.db.close();
+      }
+    });
+  }
 
   it('kept: a hold naming a run the store does not have holds, with hibernate-hold-ok (D-8789)', async () => {
     const h = await parkedOwnHeld({ holdOk: true });
