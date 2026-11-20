@@ -212,7 +212,7 @@ export function hibernateSleepInput(i: HibernateInput, now: number, afterMs: num
   const r = i.row;
   return {
     row: r, child: null, paneDead: r.status === 'dead', stopped: null, heldPasses: false, overlord: i.overlord, optedOut: i.optedOut,
-    store: i.store.ok ? { ...i.store, last: null, parkedWorker: false } : i.store,
+    store: i.store.ok ? { ...i.store, last: null, parkedWorker: false, otherOpenWorker: false } : i.store,
     viewer: i.viewer, sinceStartMs: i.sinceStartMs, viewerOpenTtlMs: VIEWER_OPEN_TTL_MS, verb: null,
     live: i.live.kind === 'read' ? { ...i.live, turn: null } : i.live, now, quietMs: afterMs,
   };

@@ -766,9 +766,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // follow-ups, D-8734, D-8735),
     // and MIGRATIONS[107] (mail.urgentAs and mail_urgent, urgent mail, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, the gate's fence refusals, Overlord W1 gates B),
-    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1).
-    expect(COORD_SCHEMA_VERSION).toBe(110);
-    expect(MIGRATIONS.length).toBe(110);
+    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1),
+    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, waiting workers sleep, D-8790).
+    expect(COORD_SCHEMA_VERSION).toBe(111);
+    expect(MIGRATIONS.length).toBe(111);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -904,8 +905,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // follow-ups),
     // and MIGRATIONS[107] (mail.urgentAs, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B),
-    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, Overlord W1 door process B1); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(110);
+    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, Overlord W1 door process B1),
+    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, D-8790); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(111);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -2687,7 +2689,8 @@ describe('coord.db: continuity_generations and continuity_cursor, the generation
     expect(db.prepare('SELECT count(*) AS n FROM continuity_generations').get()).toEqual({ n: 0 });
     expect(db.prepare('SELECT lane, choice, updatedAt FROM lane_arm_settings ORDER BY lane').all())
       .toEqual([{ lane: 'anchor-slot', choice: 'shadow', updatedAt: 0 }, { lane: 'continuity', choice: 'shadow', updatedAt: 0 },
-        { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 }]);
+        { lane: 'launch-profile', choice: 'shadow', updatedAt: 0 }, { lane: 'roster-card', choice: 'live', updatedAt: 7 },
+        { lane: 'working-idle-sleep', choice: 'shadow', updatedAt: 0 }]);
     db.close();
   });
 });
@@ -2872,6 +2875,49 @@ describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'roster-card'").get()).toEqual({ choice: 'live', updatedAt: 7 });
     expect(db.prepare('SELECT sessionId, door, at FROM continuity_reads').all()).toEqual([{ sessionId: 'lane-a-project-a', door: 'card', at: 5 }]);
+    db.close();
+  });
+});
+
+describe('coord.db: the working-idle-sleep lane-arm row (waiting workers sleep, D-8790)', () => {
+  /** Found by its text, never hard-coded. */
+  const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('working-idle-sleep', 'shadow', 0)")) + 1;
+  const ENTRY = /^INSERT OR IGNORE INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('working-idle-sleep', 'shadow', 0\);$/;
+  it('ONE SEED ROW, shadow, nothing else, the entry after the hook\'s reports (Overlord W1 door process B1)', () => {
+    expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE continuity_hook_reports')) + 2);
+    expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
+  });
+
+  it('reaches a database ALREADY at the version before it: the row lands shadow, and every existing row is as it was', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 7 WHERE lane = 'anchor-slot'");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'working-idle-sleep'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+
+  it('a database one version back that already carries the row keeps its stored choice and boots (OR IGNORE)', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec("UPDATE lane_arm_settings SET choice = 'live', updatedAt = 9 WHERE lane = 'working-idle-sleep'");
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'working-idle-sleep'").get()).toEqual({ choice: 'live', updatedAt: 9 });
     db.close();
   });
 });
