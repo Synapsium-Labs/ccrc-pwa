@@ -4372,8 +4372,9 @@ it never closed (the coordinator's call, designed and not done here). The build 
 S2), listed in the spec's §11. The measurements, including why the records never closed, are in the spec's §2 and in
 `docs/superpowers/programs/desktop-polish/c49.md`.
 
-This task's deviation, D-8794 (`session-panel-carries-helpers`), is defined in the spec's §12, Deviations; this section only
-points at it.
+- **D-8794** — `session-panel-carries-helpers`: Task C49, issued on 2026-11-19. The session's own panel, not the fleet list,
+  carries a session's helper information, subagents and workflows alike, by the operator's ruling of 2026-11-19. This line is
+  the ledger's definition; the spec's §12 carries the same entry with its full text.
 
 This section was added beside Task C48 with that task's consent (its worker's mail of 2026-11-19), which covered this one
 section only. Its revision after review 2861 has C48's consent too (its worker's mail of 2026-11-20), for this section
