@@ -311,6 +311,11 @@ They decide every question the plan leaves open.
   until the operator's go for one live capture; the coordinator's suggestion; the Overlord's link) and design calls 30 to
   32; the plan gains wave 8, alongside wave 7's pilot.
 
+- **2026-11-20 — an epic may list no waves, on main (the coordinator).** Desktop polish's #3075 (WM6) merged at
+  `208afddca`. The spec's §4.1 amendment, §12's coordinator line and design call 2 now say which epics count (live
+  ones) and when a run with no ticket is refused `ticket-required`. The plan's wave-epic-mismatch lines and Task 2.1's
+  wire contract (`waves?` on `PlanEpicBody`) are run 2810's item 14, taken into its fix round.
+
 ## Carried constraints
 
 Reviewers of every wave get these.
