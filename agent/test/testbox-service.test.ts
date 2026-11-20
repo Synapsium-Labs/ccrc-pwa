@@ -23,7 +23,7 @@ import {
 import {
   ConfigRefusal, configFromLines, KNOB_FIELD_SEP, knobArgv, parseKnobLines, readRepoRows, readTestboxConfig, realKnobRunner, SERVICE_KNOBS,
 } from '../src/testbox/config.js';
-import { reflinkProbe } from '../src/testbox/fsprobe.js';
+import { reflinkProbe, reflinkProbeDir } from '../src/testbox/fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from '../src/testbox/hello.js';
 import { listenRefusal, POLICY_CLOSE_CODE, startTestboxServer } from '../src/testbox/main.js';
 import { mirrorOps, type MirrorOps } from '../src/testbox/mirror.js';
@@ -555,6 +555,15 @@ describe('fsprobe.ts: the reflink probe', () => {
     expect(calls[0]!.slice(0, 3)).toEqual(['cp', '--reflink=always', '--']);
     expect(readdirSync(root)).toEqual([]);
     expect(await reflinkProbe(root, async () => ({ status: 0, stdout: '', stderr: '', killed: false }))).toEqual({ ok: true });
+  });
+  it('the probe writes in `out`, the service user\'s directory of the run root, never at the run root, which is root\'s', () => {
+    expect(reflinkProbeDir('/srv/box')).toBe(path.join('/srv/box', 'out'));
+    const here = path.dirname(fileURLToPath(import.meta.url));
+    // the installer makes the run root root's and `out` the service user's: the two facts the choice rests on
+    const installer = readFileSync(path.join(here, '..', '..', 'deploy', 'testbox', 'install.sh'), 'utf8');
+    expect(installer).toContain('dir 0755 root root "$ROOT"');
+    expect(installer).toMatch(/for d in [a-z ]*\bout\b[a-z ]*; do dir 0750 "\$SVC" "\$SVC" "\$ROOT\/\$d"; done/);
+    expect(readFileSync(path.join(here, '..', 'src', 'testbox', 'main.ts'), 'utf8')).toContain('reflinkProbe(reflinkProbeDir(cfg.root), short)');
   });
   it('a box whose probe fails answers down', async () => {
     const box = makeBox({}, false);

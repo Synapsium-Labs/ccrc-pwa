@@ -425,7 +425,9 @@ for i in "${!ROW_NAMES[@]}"; do
   if [ ! -d "$m" ]; then _tbi_git init -q --bare --shared=0664 "$m" >/dev/null || fail "cannot make the mirror $m"; fi
   for kv in "core.sharedRepository=0664" "core.hooksPath=$TREE/deploy/testbox/git" "remote.origin.url=${ROW_URLS[$i]}" \
     "remote.origin.fetch=+refs/heads/*:refs/remotes/origin/*"; do
-    _tbi_git -C "$m" config "${kv%%=*}" "${kv#*=}" || fail "cannot configure the mirror $m (${kv%%=*})"
+    # By the file, never `-C "$m"`: on a second run the mirror is the service user's, and git refuses to open a repository
+    # another user owns, so every re-run that reached this phase failed here.
+    _tbi_git config --file "$m/config" "${kv%%=*}" "${kv#*=}" || fail "cannot configure the mirror $m (${kv%%=*})"
   done
   _sys chown -R "$SVC:$TBI_GIT_GROUP" "$m" || fail "cannot give the mirror $m to $SVC"
   _sys chown root:root "$m/config" || fail "cannot give $m/config to root"

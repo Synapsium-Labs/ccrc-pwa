@@ -7,6 +7,13 @@ import path from 'node:path';
 import type { Exec } from './exec.js';
 import type { ProbeResult } from './status.js';
 
+/** Where the probe writes: `out`, a directory of the run root that is the service user's (`deploy/testbox/install.sh`
+ *  makes it so). The run root itself is root's, 0755, so a probe file written there as the service user was refused
+ *  (EACCES) and every installed box read `down`. `out` is on the run root's filesystem, which is what the probe asks about. */
+export function reflinkProbeDir(root: string): string {
+  return path.join(root, 'out');
+}
+
 export async function reflinkProbe(root: string, exec: Exec, cp = 'cp'): Promise<ProbeResult> {
   const src = path.join(root, '.reflink-probe');
   const dst = path.join(root, '.reflink-probe.clone');
