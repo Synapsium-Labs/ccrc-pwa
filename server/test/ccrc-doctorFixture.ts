@@ -1795,8 +1795,14 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  deploy/models-op.mjs, so advance-health prints no answer, and its roster names no lane with a model registry
  *  either way. Measured the same way: with the four in the table and this `+ 4` absent, every `(N skipped)` pin
  *  that reads this constant reds (`ccrc-doctor-codex-host.test.ts`: 22 skipped measured where 18 was pinned, and 21
- *  where 17 was). `ccrc-doctor-model-advance.test.ts` plants the op and the lane files. */
-export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 22;
+ *  where 17 was). `ccrc-doctor-model-advance.test.ts` plants the op and the lane files.
+ *
+ *  RAISED BY ONE AGAIN, on every platform (model-class auto-advance wave 3): `codex-release-lookup` SKIPs -
+ *  `healthy()` writes no `~/.ccrc/codex-client-release.json`, so no release lookup has been tried. Measured the same
+ *  way: with the check in the table and this `+ 1` absent, the `(N skipped)` pins that read this constant red
+ *  (`ccrc-doctor-fleet.test.ts`: 24 skipped measured where 23 was pinned). `ccrc-doctor-model-advance.test.ts`
+ *  plants the record and each answer. */
+export const HEALTHY_SKIPS = (process.platform === 'darwin' ? 3 : 0) + 23;
 
 // ── the session gate: the flag, and the passphrase it needs ───────────────
 // Stage 3a, Task 9. TWO FACTS, ONE VERDICT — `CCRC_AUTH` (out of `ccrc.env`,
