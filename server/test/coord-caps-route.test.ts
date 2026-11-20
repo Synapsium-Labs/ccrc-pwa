@@ -25,6 +25,7 @@ import { CAP_MAX, CAP_MIN } from '../src/coord/caps.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedLegacyProgramme } from './helpers/plan.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const srcRoot = path.resolve(here, '..', 'src');
@@ -556,9 +557,11 @@ describe('the caps answer shape is defined ONCE, and both halves send it', () =>
       'the shared builder is gone under this name — the scan below is over nothing').toBe(true);
     // D-8792: both halves send `capsViewMeasured`, which adds the cap reader's two fields to the shared builder's
     // answer, and builds nothing of its own: its body calls `capsView(`.
-    const measured = /const capsViewMeasured\s*=([\s\S]*?)\n {2}};/.exec(b);
-    expect(measured, 'the measured view is gone under this name').not.toBeNull();
-    expect(measured![1], 'the measured view rebuilds the answer instead of extending the shared one').toContain('capsView(');
+    const reg = sourceOfSymbol(path.join(srcRoot, 'coord', 'routes.ts'), 'registerCoordRoutes');
+    const at = reg.indexOf('const capsViewMeasured');
+    expect(at, 'the measured view is gone under this name').toBeGreaterThan(-1);
+    expect(reg.slice(at, reg.indexOf('\n  };', at)),
+      'the measured view rebuilds the answer instead of extending the shared one').toMatch(/\bcapsView\(store\)/);
     for (const decl of ["app.get('/api/coord/caps'", "app.post('/api/coord/caps'"]) {
       expect(handlerBody(r, b, decl), `${decl} builds its own answer instead of the shared one`)
         .toContain('capsViewMeasured(');
