@@ -94,6 +94,9 @@ const NOT_FROM_THE_ACTS: Readonly<Record<string, string>> = {
   'whitelist-absent': 'discovery add\'s ownership whitelist',
   'materialise-unreadable': 'materialise --check compares files on disk; the acts write through materialise and never check',
   'unwritable': 'rm\'s unlink loop',
+  'aliases-invalid': 'aliases-refresh builds and writes the aliases file; the acts only read it',
+  'aliases-unwritable': 'aliases-refresh writes the aliases file; the acts only read it',
+  'not-an-anthropic-lane': 'aliases-refresh on a lane that is not an Anthropic lane',
 };
 
 const words = read('pwa', 'src', 'accounts', 'modelsSheetWords.ts');
