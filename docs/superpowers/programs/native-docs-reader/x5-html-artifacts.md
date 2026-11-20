@@ -58,7 +58,26 @@ Review run 2850 read the branch at `d1bb9ffee` and confirmed 13 findings (F1 to 
 | F13 | `CONTENT_HEADERS` is pinned to literals. The bad-frame bytes never reach the client. Rows for every named limit and fence. Spies on every `console` method |
 | A1 to A13 | COOP wording; the PR body's Parity line; the message rule; `/clear`'s CSP and the gate's words; P1's real names; no outward import and a null size rule; sources quoted only for what they say; real Task 17 rows; doctor's Host; golden answers for the browser harness; a section path and no port default; grants argued and section roots narrowed; token crossing named |
 
-Mutation rows now run MX5.1 to MX5.69. The adversarial pass ran again over the round's diff before this wave-done: one Opus (high) read found 4 important and 9 minor defects and no security regression, and confirmed every quoted passage byte for byte. All 13 are fixed in this round. The important four: the seam keeps `buildServer`'s body, because four tests read it; the wait is 90 s, so six large files load whole; the fence admits a same-origin download; and the bytes port has a `busy` word.
+Round 1 left the mutation rows at MX5.1 to MX5.69. The adversarial pass ran again over the round's diff before this wave-done: one Opus (high) read found 4 important and 9 minor defects and no security regression, and confirmed every quoted passage byte for byte. All 13 are fixed in this round. The important four: the seam keeps `buildServer`'s body, because four tests read it; the wait is 90 s, so six large files load whole; the fence admits a same-origin download; and the bytes port has a `busy` word.
+
+## Review round 2 (run 2860)
+
+Review run 2860 read the branch at `a2a439fcf`, closed 23 of the 26 round-1 ids, and confirmed 10 findings (N1 to N10) and 5 advisories (M1 to M5), with two residues. The coordinator ruled N1, N3 and N4. Each was fixed in its own commit, related advisories folded in.
+
+| Finding | Fix |
+|---|---|
+| N1 (ruled a) | A capability's end reaches work in flight: `lookup` again at admission and before each frame, a revoke drains the queue with the identical 404 and cuts running responses, and `ARTIFACT_FRAME_STALL_MS` (30 s) and `ARTIFACT_RESPONSE_MAX_MS` (10 minutes) free a slot a reader holds. M1 and M3 folded in: expiry is decided inside the mint's count, `sweep()` is gone, and §9 lists the queue constants |
+| N2 | A failed artifact listen warns once, turns the tier off with its own word `artifact-listener-down`, and leaves the console listening; doctor names the port |
+| N3 (ruled) | Version pages are out of the tier, with a sentence pointing to the current version; the offer is narrowed to every HTML page at its branch's current version; `pin-moved`'s remedy is one action, Reload and open again |
+| N4 (ruled a) | The offer sits on `DocsLeaf.tsx`'s too-large and stand-in branches, and A5 waits for X2 P1 and P3. The walls' 2 MiB cap is never consulted; the tier's one per-file limit is `DOCS_RANGE_MAX_BYTES`, and a page above it is refused `page-too-large`. M2 folded in: the shared-file table is complete |
+| N5 | Six parity differences, one count in spec and note |
+| N6 | The capability keeps its `DocPin` and the tree's ref, and a table maps each entry onto the shipped reads |
+| N7, N8, N9 | Mutation rows MX5.5, MX5.30 and MX5.49 now go red: an accept-list host above the console, crafted manifest keys, a rendered `MockupView` |
+| N10 | Sibling maps for the two unions, `CONTROLS` rows, the doctor table entry, and literal keys in the carry |
+| M4, M5 | The sibling-import rule and the scope read's query; the DDNS start degrades; one rule for ART-L10; the golden test's Sec-Fetch sets are Chromium's |
+| Residues | The log block writes `level INFO`; a draft page above 4 MiB is refused `draft-too-large` |
+
+Mutation rows now run MX5.1 to MX5.89.
 
 ## Measured, and how
 
