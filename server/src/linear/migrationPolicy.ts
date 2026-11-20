@@ -1,8 +1,10 @@
 // L1 policy, pure (D-8186): the migration map's deciders. They check a map against the open issues and the plans, order
 // the writes, say how to resume a half-done move, and say how to put a migration back. No I/O: the caller reads Linear
 // and the store, and runs the steps this returns.
-import { isPlanKey, TICKET_KINDS, type IssueSnapshot, type MapBody, type MapCounts, type MapEntry, type PlanEpicBody, type TicketKind } from '../../../shared/plan.js';
+import { isPlanKey, MAP_CLASSES, TICKET_KINDS, type HierarchyState, type IssueSnapshot, type MapBody, type MapCounts, type MapEntry, type MigrationState, type PlanEpicBody, type TicketKind } from '../../../shared/plan.js';
 import type { LinkingMode } from '../../../shared/api.js';
+import { LINEAR_SYNC_PROGRAMME } from '../../../shared/plan.js';
+import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { parsePlanPut } from '../coord/planPolicy.js';
 import type { StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
@@ -153,17 +155,23 @@ export function checkMap(map: MapBody, open: readonly IssueSnapshotRow[], plans:
   }
 
   // 7. Counts.
+  const counts = countsOfMap(map);
+  if (counts.moved + counts.closed + counts.left !== map.entries.length) throw new Error('migrationPolicy: counts do not add up');
+  return { ok: true, counts };
+}
+
+/** A map's counts before it is applied (§10.3): the objects its structure creates, the issues it moves, closes and leaves. */
+export function countsOfMap(map: MapBody): MapCounts {
   const n = (cls: MapEntry['class'][]) => map.entries.filter((e) => cls.includes(e.class)).length;
-  const declaredEpics: PlanEpicBody[] = [...groups, ...backlog].flatMap((g) => g.epics);
-  const counts: MapCounts = {
-    created: slugs.length + declaredEpics.length + declaredEpics.reduce((a, e) => a + e.checkpoints.length, 0),
+  const groups = [...(map.epics ?? []), ...(map.backlog ?? [])];
+  const declaredEpics: PlanEpicBody[] = groups.flatMap((g) => g.epics);
+  return {
+    created: groups.length + declaredEpics.length + declaredEpics.reduce((a, e) => a + e.checkpoints.length, 0),
     moved: n(['leaf', 'upkeep']),
     closed: n(['programme', 'epic', 'checkpoint', 'finished', 'superseded', 'stale']),
     left: n(['unclear']),
     skipped: 0,
   };
-  if (counts.moved + counts.closed + counts.left !== map.entries.length) throw new Error('migrationPolicy: counts do not add up');
-  return { ok: true, counts };
 }
 
 // ── applySteps ──
@@ -238,3 +246,167 @@ export function replacementComment(home: string, mode: LinkingMode, url: string 
   return `This issue now lives in “${home}”${link}. ccrc's migration closed it; nothing was deleted.`;
 }
 
+// ── The migration's lifecycle words (Tasks 7.2 to 7.4; L1, pure) ──
+
+/** The facts of a migration row these deciders read (the store's `MigrationRow`, narrowed). */
+export interface MigrationFacts {
+  id: number; workspaceId: string; teamKey: string; state: MigrationState; appliedAt: number | null; putBackAt: number | null;
+  reportDoneAt: number | null; itemId: number | null; reportItemId: number | null; createdAt: number; updatedAt: number;
+}
+/** A migration that no longer holds the order (§10.2): put back, failed, or applied with its report closed. */
+export const migrationSettled = (m: Pick<MigrationFacts, 'state' | 'reportDoneAt'>): boolean =>
+  m.state === 'put-back' || m.state === 'failed' || (m.state === 'applied' && m.reportDoneAt !== null);
+
+/** `POST /api/projects/:project/hierarchy/migrate` (Task 7.2): one team at a time, in order (§10.2), and never a team already
+ *  migrated. `rows` are every migration, any order. */
+export function startVerdict(rows: readonly MigrationFacts[], team: string | null, workspaceId: string | null):
+  { ok: true } | { ok: false; word: 'no-team-key' | 'migration-in-flight'; detail: string } {
+  if (team === null) return { ok: false, word: 'no-team-key', detail: 'the project has no Linear team key' };
+  const open = rows.find((m) => !migrationSettled(m));
+  if (open !== undefined) return { ok: false, word: 'migration-in-flight', detail: `team ${open.teamKey}'s migration is not finished` };
+  const same = rows.filter((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId));
+  if (same.some((m) => m.state === 'applied')) return { ok: false, word: 'migration-in-flight', detail: `team ${team} is migrated already` };
+  return { ok: true };
+}
+
+/** The hierarchy state a project row shows (§11.1) from its team's newest migration: none is "Not migrated". */
+export function hierarchyStateOf(m: MigrationFacts | null): { state: HierarchyState; at: number | null; itemId: number | null } {
+  if (m === null) return { state: 'not-migrated', at: null, itemId: null };
+  switch (m.state) {
+    case 'proposed': return { state: 'map-waiting', at: m.updatedAt, itemId: m.itemId };
+    case 'proposing': case 'approved': case 'applying': return { state: 'migrating', at: m.createdAt, itemId: m.itemId };
+    case 'applied': return { state: 'migrated', at: m.appliedAt, itemId: m.reportItemId };
+    case 'put-back': return { state: 'put-back', at: m.putBackAt, itemId: m.reportItemId };
+    default: return { state: 'not-migrated', at: null, itemId: null };
+  }
+}
+
+/** Put back is offered until the team's next migration starts (§10.4): a later row for the same team refuses it. */
+export function putBackVerdict(m: MigrationFacts, rows: readonly MigrationFacts[]):
+  { ok: true } | { ok: false; word: 'migration-in-flight' | 'item-act-mismatch'; detail: string } {
+  if (m.state !== 'applied') return { ok: false, word: 'item-act-mismatch', detail: `the migration is ${m.state}` };
+  const later = rows.some((r) => r.id > m.id && r.teamKey.toUpperCase() === m.teamKey.toUpperCase() && r.workspaceId === m.workspaceId);
+  return later ? { ok: false, word: 'migration-in-flight', detail: 'the team\'s next migration has started' } : { ok: true };
+}
+
+/** A re-read in snapshot terms from the sync's planned owned fields of an issue (D-8796): the team by key, the state by type,
+ *  the project and milestone by id, and the texts. `parentId` is not owned (ccrc sets no parent), so `expect` leaves it out. */
+export function expectOfOwned(owned: Readonly<Record<string, unknown>>): Partial<IssueSnapshot> {
+  const out: Partial<IssueSnapshot> = {};
+  const str = (v: unknown): string | null | undefined => (typeof v === 'string' || v === null ? v : undefined);
+  const pairs: [keyof IssueSnapshot, string][] = [['title', 'title'], ['description', 'description'], ['team', 'teamKey'], ['project', 'projectId'], ['milestone', 'milestoneId'], ['state', 'stateType']];
+  for (const [to, from] of pairs) {
+    const v = str(owned[from]);
+    if (v !== undefined) (out as Record<string, string | null>)[to] = v;
+  }
+  return out;
+}
+
+/** The report's counts (§10.3): created objects and moved issues from the applied move rows; closed issues likewise; skipped
+ *  and left from the report and the map. */
+export function reportCounts(moves: readonly Pick<MoveRow, 'kind' | 'before' | 'appliedAt' | 'after'>[], map: MapBody, skipped: number): MapCounts {
+  const applied = moves.filter((m) => m.appliedAt !== null);
+  const closing = (m: (typeof applied)[number]): boolean => {
+    const st = isObj(m.after.expect) ? (m.after.expect as Partial<IssueSnapshot>).state : undefined;
+    return st === 'canceled' || st === 'completed';
+  };
+  return {
+    created: applied.filter((m) => m.before === null).length,
+    moved: applied.filter((m) => m.kind === 'issue' && m.before !== null && !closing(m)).length,
+    closed: applied.filter((m) => m.kind === 'issue' && m.before !== null && closing(m)).length,
+    left: map.entries.filter((e) => e.class === 'unclear').length,
+    skipped,
+  };
+}
+
+/** The map body a `plan map-propose` sends (`entries`, optional `backlog` and `epics`), shaped; the server fills `team` and
+ *  `snapshot`. The deep checks are `checkMap`'s; this refuses only a body of the wrong shape. */
+export function parseMapProposal(body: unknown, team: string): { ok: true; map: Omit<MapBody, 'snapshot'> } | { ok: false; word: 'plan-bad-body'; detail: string } {
+  const bad = (detail: string) => ({ ok: false as const, word: 'plan-bad-body' as const, detail });
+  if (!isObj(body)) return bad('the body is not an object');
+  const { entries, backlog, epics } = body;
+  if (!Array.isArray(entries)) return bad('entries is not a list');
+  const out: MapEntry[] = [];
+  for (const e of entries) {
+    if (!isObj(e) || typeof e['issue'] !== 'string' || typeof e['identifier'] !== 'string' || !(MAP_CLASSES as readonly unknown[]).includes(e['class'])) return bad('an entry needs issue, identifier and a class');
+    const t = e['target'];
+    if (t !== undefined && !isObj(t)) return bad(`${e['identifier']}: target is not an object`);
+    for (const [k, v] of Object.entries(t ?? {})) {
+      if (!['programme', 'epic', 'checkpoint', 'successor', 'ticketKey', 'kind'].includes(k) || typeof v !== 'string') return bad(`${e['identifier']}: target.${k}`);
+    }
+    out.push({ issue: e['issue'], identifier: e['identifier'], class: e['class'] as MapEntry['class'], ...(t === undefined ? {} : { target: t as MapEntry['target'] }) });
+  }
+  const groups = (v: unknown, key: 'slug' | 'programme'): boolean => v === undefined || (Array.isArray(v) && v.every((g) => isObj(g) && typeof g[key] === 'string' && Array.isArray(g['epics'])));
+  if (!groups(backlog, 'slug')) return bad('backlog');
+  if (!groups(epics, 'programme')) return bad('epics');
+  return {
+    ok: true,
+    map: {
+      team, entries: out,
+      ...(backlog === undefined ? {} : { backlog: backlog as NonNullable<MapBody['backlog']> }),
+      ...(epics === undefined ? {} : { epics: epics as NonNullable<MapBody['epics']> }),
+    },
+  };
+}
+
+// ── Items and mails (§11.3; every one raised under `linear-sync`, acted on in the console only) ──
+
+const countsLine = (c: MapCounts): string =>
+  `${c.created} to create, ${c.moved} to move, ${c.closed} to close, ${c.left} left as they are${c.skipped > 0 ? `, ${c.skipped} skipped as changed` : ''}`;
+
+/** The map's `decide` item: Approve (recommended) or Return with a note to the Linear owner. */
+export function mapItemInput(migrationId: number, team: string, owner: string, c: MapCounts): RaiseItemInput {
+  return {
+    program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'decide', neededBy: 'later', soonLabel: null, secretSlot: null,
+    title: `Approve the Linear migration map for team ${team}`,
+    why: `The Linear owner ${owner} proposed how team ${team}'s open issues fit the hierarchy: ${countsLine(c)}. Nothing changes in Linear until you approve it, and the report after it offers Put back.`,
+    how: [
+      'Read the counts, each programme\'s epics and checkpoints, and the issues grouped by class below.',
+      'Approve: ccrc applies the map, each live programme\'s part at its next wave boundary, and raises a report when it is done.',
+      'Return: write a note; it goes back to the Linear owner, who proposes again.',
+    ],
+    options: ['Approve', 'Return'], recommended: 0, recommendedWhy: 'The server checked that the map lists every open issue once and every target exists.',
+    action: { verb: 'linear-map', migrationId },
+  };
+}
+/** The report's `do` item: Put back (confirm) or Done. */
+export function reportItemInput(migrationId: number, team: string, c: MapCounts): RaiseItemInput {
+  return {
+    program: LINEAR_SYNC_PROGRAMME, runId: null, raisedBy: 'ccrc', kind: 'do', neededBy: 'later', soonLabel: null, secretSlot: null,
+    title: `Linear migration report for team ${team}`,
+    why: `The map for team ${team} is applied: ${c.created} created, ${c.moved} moved, ${c.closed} closed, ${c.skipped} skipped as changed, ${c.left} left. Team ${team} is now managed: ccrc keeps its Linear hierarchy.`,
+    how: [
+      'Read the counts and the full list below.',
+      'Done: the report closes, and the next team may start.',
+      'Put back: ccrc reverses every move from its record, cancels what it created (nothing is deleted), and lists any issue moved since.',
+    ],
+    options: null, action: { verb: 'linear-report', migrationId },
+  };
+}
+/** The mail asking the team's Linear owner for the map (Task 7.2), deduped by its subject. */
+export function proposeMail(migrationId: number, team: string, project: string, followUp: readonly string[] = []): { subject: string; body: string } {
+  return {
+    subject: `linear migration ${migrationId}: propose the map for team ${team}`,
+    body: [
+      `You are the Linear owner of project ${project}, whose team ${team} is to be reshaped into ccrc's hierarchy (migration ${migrationId}).`,
+      followUp.length === 0
+        ? 'Read the team\'s open issues, then send the map with `ccrc-api plan map-propose ' + team + ' --json -` (references/plan.md, "The migration map").'
+        : `A follow-up map covers only the issues skipped as changed: ${followUp.join(', ')}. Send it with \`ccrc-api plan map-propose ${team} --json -\`.`,
+      'The operator approves it in the console; nothing in Linear changes before that.',
+    ].join('\n'),
+  };
+}
+/** The mail asking a live programme's coordinator to declare its plan before the map places its issues (§10.1). */
+export function declareMail(migrationId: number, team: string, slug: string): { subject: string; body: string } {
+  return {
+    subject: `linear migration ${migrationId}: declare the plan of ${slug} first`,
+    body: `Team ${team} is being reshaped into ccrc's hierarchy. Programme ${slug} is live and has no declared plan: declare its epics (with their waves) and checkpoints with \`ccrc-api plan put ${slug}\`, so the team's Linear owner can place its open issues onto them. A map never rewrites your plan.`,
+  };
+}
+/** The operator's Return, mailed to the Linear owner with its note. */
+export function returnMail(migrationId: number, team: string, note: string, at: number): { subject: string; body: string } {
+  return {
+    subject: `linear migration ${migrationId}: the map for team ${team} came back at ${new Date(at).toISOString()}`,
+    body: `The operator returned the map for team ${team} with this note:\n\n${note}\n\nPropose it again with \`ccrc-api plan map-propose ${team} --json -\`.`,
+  };
+}

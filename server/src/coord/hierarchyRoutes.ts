@@ -8,12 +8,13 @@ import type { FastifyInstance, FastifyRequest } from 'fastify';
 import { LINEAR_ITEM_ACTS, isLinearItemAct, isLinearItemAction, type CoordinatorPresence, type ItemAction } from '../../../shared/ledgers.js';
 import { UPKEEP_DUE_PREFIX, type HierarchyAnswer, type HierarchyProjectRow } from '../../../shared/plan.js';
 import { refuseRoute } from '../refuse.js';
-import type { HierarchyItemRefusal } from '../../../shared/refusal.js';
+import type { HierarchyItemRefusal, RouteRefusal } from '../../../shared/refusal.js';
 import type { CoordRoutesHandle } from './routes.js';
 import type { HierarchyProjectFacts, HierarchySettingsBody, PlanStorePort } from './planStore.js';
 import { linearOwnerOf, linearOwnerOfProject } from './planPolicy.js';
 import { planViewOf } from './planRoutes.js';
 import { givenUpWord } from '../linear/inboundPolicy.js';
+import type { LinearMigration } from '../linear/migration.js';
 
 export interface HierarchyRouteOpts {
   /** The plan tables through their port; undefined (a test, a script): `unavailable`. */
@@ -33,6 +34,9 @@ export interface HierarchyRouteOpts {
    *  with no usable Linear owner to go to is `no-linear-owner` (D-8736, review 2394 A-7): the item stays open, and the answer passes
    *  through `refuseRoute` at its 409 like the others. */
   driftAct?: (itemId: number, act: 'hand' | 'keep', bindingId: number) => { ok: true } | { ok: false; word: 'not-found' | 'not-open' | 'unavailable' | HierarchyItemRefusal };
+  /** The per-team migration (D-8186, wave 7): its start, the map's and the report's acts, the item body's read and each team's
+   *  state; undefined (a test, a script): those doors answer `unavailable` and every row reads "Not migrated". */
+  migration?: Pick<LinearMigration, 'start' | 'workspaceOfTeam' | 'act' | 'view' | 'stateOfTeam'>;
   now?: () => number;
 }
 
@@ -86,6 +90,40 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
       });
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /** `POST /api/projects/:project/hierarchy/migrate` (D-8186, Task 7.2): the operator's "Reshape in Linear". The team's workspace is
+   *  read before the mutex; the row is written inside it. One team at a time (`migration-in-flight`), never a project with no key
+   *  (`no-team-key`). Session-gated, no box token. */
+  app.post('/api/projects/:project/hierarchy/migrate', async (req, reply) => {
+    const { project } = req.params as { project: string };
+    if (!PROJECT_RE.test(project)) return refuseRoute(reply, 'bad-request', { detail: 'project' });
+    const migration = opts.migration;
+    if (migration === undefined) return refuseRoute(reply, 'unavailable');
+    const workspaceId = await migration.workspaceOfTeam(project).catch(() => null);
+    try {
+      return await opts.serial(async () => {
+        const out = migration.start(project, workspaceId);
+        return out.ok ? out : refuseRoute(reply, out.word as RouteRefusal, { detail: out.detail });
+      });
+    } catch (err) {
+      return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
+
+  /** `GET /api/migrations/:id` (D-8186; D-8737's handover): a migration's map or report for its item's body. Session-gated, in
+   *  `MASKED_GET_ROUTES`: titles and identifiers are Linear text. */
+  app.get('/api/migrations/:id', async (req, reply) => {
+    const id = Number((req.params as { id: string }).id);
+    if (!Number.isInteger(id) || id < 1) return refuseRoute(reply, 'bad-request', { detail: 'id' });
+    const migration = opts.migration;
+    if (migration === undefined) return refuseRoute(reply, 'unavailable');
+    try {
+      const view = migration.view(id);
+      return view === null ? refuseRoute(reply, 'not-found') : view;
+    } catch (err) {
+      return refuseRoute(reply, 'unavailable', { detail: err instanceof Error ? err.message : String(err) });
     }
   });
 
@@ -159,6 +197,22 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
           return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
         }
       }
+      case 'linear-map':
+      case 'linear-report': {
+        // D-8186 (Tasks 7.2 and 7.4): Approve and Return on the map, Put back and Done on the report, inside `serial`; Put back is
+        // only marked here, and the migration lane runs it (D-8796).
+        const migration = opts.migration;
+        const act = b['act'];
+        const note = typeof b['note'] === 'string' ? b['note'].slice(0, 2000) : null;
+        if (migration === undefined || (act !== 'approve' && act !== 'return' && act !== 'put-back' && act !== 'done')) break;
+        if (act === 'return' && (note === null || note.trim() === '')) return refuseRoute(reply, 'bad-request', { detail: 'note' });
+        try {
+          const done = await opts.serial(async () => migration.act(id, action.migrationId, act, note));
+          return done.ok ? { ok: true } : refuseRoute(reply, done.word, { detail: done.detail });
+        } catch (err) {
+          return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+        }
+      }
       default: break;
     }
     return refuseRoute(reply, 'unavailable', { detail: 'act' });
@@ -196,11 +250,14 @@ export function registerHierarchyRoutes(app: FastifyInstance, opts: HierarchyRou
       const rows = plan.hierarchyProjectsOf();
       const answer: HierarchyAnswer = {
         ok: true,
-        // The migration (wave 7) fills state and item; until then no project has either. The waiting count is the inbound path's (D-8183).
-        projects: rows.map((r) => ({
-          project: r.project, teamKey: r.teamKey, initiatives: r.initiatives, linearOwner: r.linearOwner,
-          ownerNow: ownerNow(plan, rows, r), ownsTeam: r.ownsTeam, state: 'not-migrated' as const, stateAt: null, itemId: null, inboundWaiting: plan.inboundWaiting(r.project),
-        })),
+        // The team's newest migration names the state and its item (D-8186); the waiting count is the inbound path's (D-8183).
+        projects: rows.map((r) => {
+          const st = opts.migration?.stateOfTeam(r.teamKey) ?? { state: 'not-migrated' as const, at: null, itemId: null };
+          return {
+            project: r.project, teamKey: r.teamKey, initiatives: r.initiatives, linearOwner: r.linearOwner,
+            ownerNow: ownerNow(plan, rows, r), ownsTeam: r.ownsTeam, state: st.state, stateAt: st.at, itemId: st.itemId, inboundWaiting: plan.inboundWaiting(r.project),
+          };
+        }),
         coordinators: plan.coordinatorIdsOf().map((id) => ({ id, live: opts.presenceOf(id) === 'alive' })),
       };
       return answer;

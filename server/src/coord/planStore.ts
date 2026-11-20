@@ -14,6 +14,7 @@ import {
   LINEAR_SYNC_PROGRAMME, UPKEEP_DUE_PREFIX, UPKEEP_EPIC_KEY, UPKEEP_EPIC_TITLE,
   type BindingKind, type BindingState, type InboundState, type CheckpointEvidence, type CheckpointKind, type CheckpointState, type EpicState,
   type PhaseRefKind, type PlanEndOutcome, type TicketDoneEvidence, type TicketKind, type TicketSource, type TicketState,
+  type IssueSnapshot, type MapBody, type MigrationState,
 } from '../../../shared/plan.js';
 import { AUTO_TICKET_PREFIX, autoTicketKey, ccrcIssueIds, epicAdmitsRun, epicIsDone, fitInboundText } from './planPolicy.js';
 import { inboundRetirable, retireWhyOf, type RetireWhy } from '../linear/inboundRetire.js';
@@ -336,11 +337,18 @@ export function updateTicket(db: DatabaseSync, id: number, patch: TicketPatch, n
 export function applyPlanChanges(
   db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string } | null,
 ): void {
-  tx(db, () => {
+  tx(db, () => applyPlanChangesInTx(db, program, changes, by, now, newRow));
+}
+/** `applyPlanChanges` inside the caller's transaction. A new row is `active` unless `newRow.state` says `paused` (a backlog
+ *  programme a migration map proposes, D-8186). */
+function applyPlanChangesInTx(
+  db: DatabaseSync, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string; state?: 'paused' } | null,
+): void {
+  {
     if (newRow !== null) {
       db.prepare(
-        "INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired) VALUES (?, ?, ?, 'active', ?, 1) ON CONFLICT(slug) DO NOTHING",
-      ).run(program, newRow.title, now, newRow.home);
+        "INSERT INTO programs (slug, title, createdAt, state, homeProject, planRequired) VALUES (?, ?, ?, ?, ?, 1) ON CONFLICT(slug) DO NOTHING",
+      ).run(program, newRow.title, now, newRow.state ?? 'active', newRow.home);
     }
     const touched = new Set<number>();
     const touchEpic = (id: number | null): void => { if (id !== null) touched.add(id); };
@@ -401,7 +409,7 @@ export function applyPlanChanges(
     db.prepare('UPDATE programs SET planBy = ?, planAt = ? WHERE slug = ? AND planBy IS NULL').run(by, now, program);
     for (const epicId of touched) settleEpicInTx(db, epicId, now);
     markSyncDueInTx(db, program, now);
-  });
+  }
 }
 
 const PHASE_COLS = ['ordinal', 'title', 'summary'] as const;
@@ -1132,6 +1140,170 @@ export function takeUpkeepTicket(
   return tx(db, () => { moveTicketToProgrammeInTx(db, p.ticketId, p.program, p.epicId, p.checkpointId, p.now); return { ok: true as const, ticketId: p.ticketId }; });
 }
 
+// ── The migration (D-8186, wave 7; the rows of migration 95, the columns of this wave's migration) ─────────────────────────
+
+/** What a migration's report lists beyond its move rows: issues skipped as changed since the map was stored, issues of a live
+ *  programme still waiting for its wave boundary, and, after put back, the issues that moved since (left untouched) and the
+ *  milestones the migration created (they stay in Linear under their canceled project, D-8795). Identifiers, never UUIDs alone. */
+export interface MigrationReport { skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[] }
+export const EMPTY_MIGRATION_REPORT = (): MigrationReport => ({ skipped: [], waiting: [], movedSince: [], milestonesLeft: [] });
+export interface MigrationRow {
+  id: number; workspaceId: string; teamKey: string; project: string | null; state: MigrationState; map: MapBody | null;
+  itemId: number | null; reportItemId: number | null; createdAt: number; updatedAt: number; appliedAt: number | null;
+  putBackAt: number | null; report: MigrationReport | null; putBackAskedAt: number | null; reportDoneAt: number | null;
+}
+/** A `linear_migration_moves` row as stored (`before` and `after` parsed): `kind` is `issue`, or the binding kind of an object the
+ *  migration created (`before` null, `subject` `<kind>:<localId>`). */
+export interface MoveRowStored {
+  id: number; migrationId: number; subject: string; kind: 'issue' | 'programme' | 'epic' | 'checkpoint'; linearId: string | null;
+  identifier: string | null; before: IssueSnapshot | null; after: Record<string, unknown>; appliedAt: number | null; revertedAt: number | null;
+}
+const migrationOf = (r: Raw): MigrationRow => ({
+  ...(r as unknown as MigrationRow), map: json<MapBody | null>(r.map, null), report: json<MigrationReport | null>(r.report, null),
+});
+const moveOf = (r: Raw): MoveRowStored => ({
+  ...(r as unknown as MoveRowStored), before: json<IssueSnapshot | null>(r.before, null), after: json<Record<string, unknown>>(r.after, {}),
+});
+export function migrationById(db: DatabaseSync, id: number): MigrationRow | null {
+  const r = db.prepare('SELECT * FROM linear_migrations WHERE id = ?').get(id) as Raw | undefined;
+  return r === undefined ? null : migrationOf(r);
+}
+/** Every migration, newest first (one row per team migration: a small table). */
+export function migrationsOf(db: DatabaseSync): MigrationRow[] {
+  return (db.prepare('SELECT * FROM linear_migrations ORDER BY id DESC').all() as Raw[]).map(migrationOf);
+}
+/** A new migration of one team, `proposing`. */
+export function insertMigration(db: DatabaseSync, m: { workspaceId: string; teamKey: string; project: string; now: number }): number {
+  const res = db.prepare(
+    "INSERT INTO linear_migrations (workspaceId, teamKey, project, state, createdAt, updatedAt) VALUES (?, ?, ?, 'proposing', ?, ?)",
+  ).run(m.workspaceId, m.teamKey, m.project, m.now, m.now);
+  return Number(res.lastInsertRowid);
+}
+const MIGRATION_PATCH = ['state', 'map', 'itemId', 'reportItemId', 'appliedAt', 'putBackAt', 'report', 'putBackAskedAt', 'reportDoneAt'] as const;
+export type MigrationPatch = Partial<{
+  state: MigrationState; map: MapBody | null; itemId: number | null; reportItemId: number | null; appliedAt: number | null;
+  putBackAt: number | null; report: MigrationReport | null; putBackAskedAt: number | null; reportDoneAt: number | null;
+}>;
+/** THE one writer of a migration row's columns: the patch lands only while the row's state is one of `from` (a guard, so two
+ *  acts never both move one row), and `updatedAt` moves with it. False: the row is not in any of those states. Opens no
+ *  transaction of its own; a single statement is atomic. */
+export function setMigration(db: DatabaseSync, id: number, from: readonly MigrationState[], patch: MigrationPatch, now: number): boolean {
+  const cols = MIGRATION_PATCH.filter((c) => patch[c] !== undefined);
+  const args = cols.map((c) => (c === 'map' || c === 'report') ? (patch[c] === null ? null : JSON.stringify(patch[c])) : patch[c] as string | number | null);
+  const res = db.prepare(
+    `UPDATE linear_migrations SET ${[...cols.map((c) => `${c} = ?`), 'updatedAt = ?'].join(', ')} WHERE id = ? AND state IN (${from.map(() => '?').join(', ')})`,
+  ).run(...args, now, id, ...from);
+  return Number(res.changes) > 0;
+}
+/** A move row, written BEFORE its write; a second insert of one subject keeps the first (the unique index): the row as it stands. */
+export function insertMove(
+  db: DatabaseSync,
+  m: { migrationId: number; subject: string; kind: MoveRowStored['kind']; linearId: string | null; identifier: string | null; before: IssueSnapshot | null; after: Record<string, unknown> },
+): MoveRowStored {
+  db.prepare(
+    'INSERT INTO linear_migration_moves (migrationId, subject, kind, linearId, identifier, before, after) VALUES (?, ?, ?, ?, ?, ?, ?) ON CONFLICT DO NOTHING',
+  ).run(m.migrationId, m.subject, m.kind, m.linearId, m.identifier, m.before === null ? null : JSON.stringify(m.before), JSON.stringify(m.after));
+  return moveOf(db.prepare('SELECT * FROM linear_migration_moves WHERE migrationId = ? AND subject = ?').get(m.migrationId, m.subject) as Raw);
+}
+export function movesOf(db: DatabaseSync, migrationId: number): MoveRowStored[] {
+  return (db.prepare('SELECT * FROM linear_migration_moves WHERE migrationId = ? ORDER BY id').all(migrationId) as Raw[]).map(moveOf);
+}
+/** A move's later facts: its Linear id (a created object's, from its binding), its after (a re-measured one), when it was applied,
+ *  when it was put back. A field not named stays. */
+export function setMove(db: DatabaseSync, id: number, p: Partial<{ linearId: string; after: Record<string, unknown>; appliedAt: number; revertedAt: number }>): void {
+  if (p.linearId !== undefined) db.prepare('UPDATE linear_migration_moves SET linearId = ? WHERE id = ?').run(p.linearId, id);
+  if (p.after !== undefined) db.prepare('UPDATE linear_migration_moves SET after = ? WHERE id = ?').run(JSON.stringify(p.after), id);
+  if (p.appliedAt !== undefined) db.prepare('UPDATE linear_migration_moves SET appliedAt = ? WHERE id = ? AND appliedAt IS NULL').run(p.appliedAt, id);
+  if (p.revertedAt !== undefined) db.prepare('UPDATE linear_migration_moves SET revertedAt = ? WHERE id = ? AND revertedAt IS NULL').run(p.revertedAt, id);
+}
+
+/** Task 7.3's adoption of an existing open issue as a ticket (D-8186; D-8796: inside the caller's transaction, with its move
+ *  row): a `plan_tickets` row (the key and kind the map gives, the issue's title and body fitted to the ticket bounds, the epic's
+ *  project, `source` `plan` for a leaf and `inbound` for an upkeep entry, `started` when the issue's state type is `started`,
+ *  else `open`) and a binding already `bound` to the issue with the adopted fingerprint, so the next pass of the key sends one
+ *  absolute update and never creates a second issue (`adoptIssueBindingInTx`, the inbound path's). The key is marked due.
+ *  Opens no transaction. */
+export function adoptIssueAsTicketInTx(
+  db: DatabaseSync,
+  a: { issue: IssueSnapshot & { linearId: string; identifier: string }; programme: string | null; epicId: number; checkpointId: number | null; key: string; kind: TicketKind; source: 'plan' | 'inbound'; mask?: (text: string) => string },
+  binding: { workspaceId: string; teamKey: string },
+  now: number,
+): number {
+  const e = epicById(db, a.epicId);
+  if (e === null) throw new Error(`plan store: no epic ${a.epicId} to adopt ${a.issue.identifier} into`);
+  const mask = a.mask ?? ((x: string) => x);
+  const fit = fitInboundText(mask(a.issue.title), mask(a.issue.description));
+  const state: TicketState = a.issue.state === 'started' ? 'started' : 'open';
+  const res = db.prepare(
+    'INSERT INTO plan_tickets (program, project, epicId, checkpointId, key, kind, title, body, source, state) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+  ).run(a.programme, e.project, a.epicId, a.checkpointId, a.key, a.kind, fit.title, fit.body ?? '', a.source, state);
+  const ticketId = Number(res.lastInsertRowid);
+  adoptIssueBindingInTx(db, ticketId, binding.workspaceId, binding.teamKey, a.issue.linearId, a.issue.identifier, now);
+  markSyncDueInTx(db, dueKeyOf(e), now);
+  return ticketId;
+}
+/** The structure a map declares for one programme (D-8186, §10.1; D-8796): its plan rows, a new `paused` row for a backlog
+ *  programme, and one move row per object the plan sync will create for it (`before` null, no Linear id yet), all in ONE
+ *  transaction, so put back finds every created object in the move record. The key is marked due (the sync creates the
+ *  objects). `by` is the plan's author for `planBy`. Answers the move rows written. */
+export function declareMapStructure(
+  db: DatabaseSync, migrationId: number, program: string, changes: PlanChanges, by: string, now: number, newRow: { home: string; title: string; state: 'paused' } | null,
+): MoveRowStored[] {
+  return tx(db, () => {
+    applyPlanChangesInTx(db, program, changes, by, now, newRow);
+    const rowid = programmeRowId(db, program);
+    const subjects: { subject: string; kind: MoveRowStored['kind'] }[] = [];
+    if (rowid !== null && !(db.prepare("SELECT 1 FROM linear_bindings WHERE localKind = 'programme' AND localId = ?").get(rowid))) {
+      subjects.push({ subject: `programme:${rowid}`, kind: 'programme' });
+    }
+    for (const e of changes.epics.insert) {
+      const id = epicIdByKey(db, program, e.project, e.key);
+      if (id !== null) subjects.push({ subject: `epic:${id}`, kind: 'epic' });
+    }
+    for (const c of changes.checkpoints.insert) {
+      const epicId = epicIdByKey(db, program, '', c.epicKey);
+      const id = epicId === null ? null : checkpointIdByKey(db, epicId, c.key);
+      if (id !== null) subjects.push({ subject: `checkpoint:${id}`, kind: 'checkpoint' });
+    }
+    return subjects.map((x) => insertMove(db, { migrationId, ...x, linearId: null, identifier: null, before: null, after: { created: true } }));
+  });
+}
+/** D-8796 (condition 1): the objects an `approved` or `applying` migration still writes through the sync, as
+ *  `<bindingKind>:<localId>`: a created object's move row names its own, an adopted issue's names its ticket (`after.ticketId`). */
+export function migratingLocals(db: DatabaseSync): Set<string> {
+  const rows = db.prepare(
+    "SELECT mv.subject AS subject, mv.after AS after FROM linear_migration_moves mv JOIN linear_migrations m ON m.id = mv.migrationId "
+    + "WHERE m.state IN ('approved', 'applying') AND mv.appliedAt IS NULL",
+  ).all() as Raw[];
+  const out = new Set<string>();
+  for (const r of rows) {
+    const subject = r.subject as string;
+    if (!subject.startsWith('issue:')) { out.add(subject); continue; }
+    const t = json<Record<string, unknown>>(r.after, {})['ticketId'];
+    if (typeof t === 'number') out.add(`ticket:${t}`);
+  }
+  return out;
+}
+/** Every programme of the team's migration made plan-required on apply (§4.3): a new run there names its ticket. */
+export function setPlanRequired(db: DatabaseSync, programs: readonly string[]): void {
+  for (const p of programs) db.prepare('UPDATE programs SET planRequired = 1 WHERE slug = ?').run(p);
+}
+/** Put back's ccrc half (D-8186, Task 7.4): the epics, checkpoints and tickets the migration made are dropped with the reason
+ *  "put back" and `putBackAt` set, in ONE transaction; the sync's snapshot leaves out every record with `putBackAt` set
+ *  (`withoutPutBack`), so it emits nothing for them. A record already put back is left. Each touched epic's key is marked due. */
+export function dropPutBack(db: DatabaseSync, ids: { epics: readonly number[]; checkpoints: readonly number[]; tickets: readonly number[] }, now: number): void {
+  tx(db, () => {
+    const why = 'put back';
+    for (const id of ids.tickets) db.prepare("UPDATE plan_tickets SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
+    for (const id of ids.checkpoints) db.prepare("UPDATE plan_checkpoints SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
+    for (const id of ids.epics) db.prepare("UPDATE plan_epics SET state = 'dropped', droppedWhy = ?, putBackAt = ? WHERE id = ? AND putBackAt IS NULL").run(why, now, id);
+    const keys = new Set<string>();
+    for (const id of ids.epics) { const e = epicById(db, id); if (e !== null) keys.add(dueKeyOf(e)); }
+    for (const id of ids.tickets) { const t = ticketById(db, id); const e = t === null ? null : epicById(db, t.epicId); if (e !== null) keys.add(dueKeyOf(e)); }
+    for (const k of keys) markSyncDueInTx(db, k, now);
+  });
+}
+
 // ── The port ───────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 const PORT_FUNCTIONS = {
@@ -1145,6 +1317,8 @@ const PORT_FUNCTIONS = {
   settledProbes, addSettledProbe, clearSettledProbes, bindingByLinearId, bindingsInWorkspace, dueKeyOfBinding, managedSince,
   upkeepEpicOf, upkeepPlanOf, ensureUpkeepEpicInTx, inboundTicketInTx, adoptIssueBindingInTx, moveTicketToProgrammeInTx, inboundByIdentifier, handedInboundByIdentifier,
   upkeepTicketByIdentifier, setInboundNote, inboundNoteOf, clearInboundNote, placeInboundInUpkeep, takeInboundIntoEpic, takeUpkeepTicket, boundLinearIdsOf, upkeepProjectsOf, inTransaction,
+  migrationById, migrationsOf, insertMigration, setMigration, insertMove, movesOf, setMove, adoptIssueAsTicketInTx, declareMapStructure,
+  setPlanRequired, dropPutBack, migratingLocals,
 };
 type Bound<F> = F extends (db: DatabaseSync, ...a: infer A) => infer R ? (...a: A) => R : never;
 type PortShape = { [K in keyof typeof PORT_FUNCTIONS]: Bound<(typeof PORT_FUNCTIONS)[K]> };

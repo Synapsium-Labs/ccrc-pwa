@@ -307,3 +307,16 @@ export interface MapBody {
   entries: MapEntry[];
   snapshot: Record<string, IssueSnapshot>;
 }
+/** One programme's epics and checkpoints as a map item shows them (§11.3; D-8737's handover): those the map declares, and for a
+ *  programme it places issues into, those its plan holds. `backlog` marks a programme the map proposes (created `paused`). */
+export interface MigrationStructure {
+  programme: string; title: string | null; backlog: boolean; declared: boolean;
+  epics: { key: string; title: string; checkpoints: { key: string; title: string }[] }[];
+}
+/** `GET /api/migrations/:id` (D-8186): a migration's map or report, for its item's body. `counts` are the map's before the apply
+ *  and the report's after it; `report` lists what the move rows do not (skipped as changed, waiting, and after put back the issues
+ *  moved since and the milestones left under their canceled project). Every title and identifier is Linear text or plan text. */
+export interface MigrationView {
+  ok: true; id: number; team: string; state: MigrationState; counts: MapCounts; entries: MapEntry[]; structure: MigrationStructure[];
+  report: { skipped: string[]; waiting: string[]; movedSince: string[]; milestonesLeft: string[] } | null;
+}

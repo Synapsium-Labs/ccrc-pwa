@@ -62,6 +62,7 @@ import { LinearRateService } from './linear/rate.js';
 import { LinearRefresher } from './linear/refresher.js';
 import { planSyncFor } from './linear/planSync.js';
 import { driftPassFor } from './linear/driftPass.js';
+import { linearMigrationFor } from './linear/migration.js';
 import { readLinearStore } from './linear/store.js';
 import { accountOpsFor } from './accounts/ops.js';
 import { TestboxAudit } from './testboxAudit.js';
@@ -446,6 +447,12 @@ deps.driftPass = driftPassFor({
   coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
   readLinearStore: () => readLinearStore(cfg.ccrcDir), currentFleet: () => watcher.currentFleet(), viaFleet: (ids) => linearJournal.viaFleet(ids),
   presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id), directory: linearRefresher.directory,
+});
+// The per-team migration (D-8186): ticked by the watcher's `linearMigration` lane; `plan map-propose` and the hierarchy doors reach it.
+deps.linearMigration = linearMigrationFor({
+  coord, plan: deps.plan, planSync: deps.planSync, ccrcDir: cfg.ccrcDir, rate: linearRate, journal: linearJournal, policy: allowAll,
+  readLinearStore: () => readLinearStore(cfg.ccrcDir), directory: linearRefresher.directory,
+  presenceOf: (id) => coordinatorPresenceIn(watcher.currentFleet(), watcher.currentRegistryIds(), id),
 });
 // Wrapped once for reconcile and the roster reload (D-5518, accounts plan Task A12): every answer that carries a
 // roster feeds `reloadRoster`, which ingests its fingerprints into the masker's table; an op whose outcome is unknown

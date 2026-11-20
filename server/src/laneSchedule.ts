@@ -208,7 +208,7 @@ export type LaneName =
   | 'claimRenew' | 'claimLapse' | 'stalls' | 'blockWakes' | 'idleNudge' | 'mail' | 'asks' | 'approvalPrune' | 'digestBeat' | 'pushOutbox'
   | 'childReclaim' | 'collect' | 'archivedExpiry' | 'deadCoordinator' | 'orphanTrees' | 'delegation'
   | 'sleepRunDone' | 'sleepIdleHours' | 'rollIdle' | 'diskAlarm' | 'tmpCensus' | 'staleArchive' | 'runStuck' | 'runUntold' | 'runClose' | 'cases' | 'overlaps' | 'generations'
-  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'forecasts' | 'decisionAnchors' | 'skillInstall';
+  | 'launchProfile' | 'timers' | 'quiz' | 'responses' | 'linearPlanSync' | 'linearDrift' | 'linearMigration' | 'forecasts' | 'decisionAnchors' | 'skillInstall';
 
 export interface LaneRow {
   readonly name: LaneName | (string & {});
@@ -412,6 +412,8 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   // is a handful of reads and one restore flight per programme met, bounded by `staleAfterMs`; a tick the runner restarts as
   // stuck finds the first still running (`DriftPass` returns at once) and never starts a second pass.
   { name: 'linearDrift', cadenceMs: 60_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear drift pass failed' },
+  // D-8186: the per-team migration (Linear hierarchy design §10): mails for a map, applies an approved map, runs a put back asked for.
+  { name: 'linearMigration', cadenceMs: 30_000, derivedFrom: null, clock: 'mono', flight: 'skip', staleAfterMs: 600_000, warnKey: 'ccrc-server: linear migration failed' },
   // The worker skill's self-install (D-8126, wave A7-5; `coord/skillInstallLane.ts`): one pass at a time, every 15 s, so an
   // install follows its dispatch's `skill-preflight:absent` within one beat. A pass runs at most `SKILL_INSTALL_PER_PASS`
   // verbs, each under `SKILL_ENSURE_DEADLINE_MS` (60 s), which `staleAfterMs` stays above, and never two on one home at once

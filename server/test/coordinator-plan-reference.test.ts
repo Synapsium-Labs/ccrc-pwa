@@ -10,6 +10,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { PLAN_REFUSALS } from '../../shared/plan.js';
 import { parsePlanTake, parsePlanTriage } from '../src/coord/planPolicy.js';
+import { parseMapProposal } from '../src/linear/migrationPolicy.js';
 import { clientRoutes } from './ccrcApiTable.js';
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
@@ -29,9 +30,8 @@ const WORK_MAP_VERBS: ReadonlySet<string> = new Set(['phase-ref', 'ticket-done']
  *  `evidence-unverified`, which `plan ticket-done` returns; WM5 names it and deletes its row, as its Step 1b says). A word
  *  added to `PLAN_REFUSALS` later reds the check below until `plan.md` names it or this table says where it is answered. */
 const NOT_MET: Readonly<Record<string, string>> = {
-  'map-rewrites-plan': 'wave 7, plan map-propose',
-  'map-incomplete': 'wave 7, plan map-propose',
-  'migration-in-flight': 'wave 7, the migration',
+  // The migration's start is the operator's console door, never a coordinator's verb (D-8186).
+  'migration-in-flight': 'wave 7, the operator\'s migration door',
   'not-managed': 'wave 7, the migration',
   'item-act-mismatch': 'the console, the item act route',
   // Programme work map WM1's (#2997), as `ticket-done` is in WORK_MAP_VERBS: `plan ticket-done` refuses evidence it cannot
@@ -123,6 +123,14 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     const bodies = bodiesOf('## The Linear owner: plan triage');
     expect(bodies.length).toBeGreaterThanOrEqual(1);
     for (const b of bodies) expect(parsePlanTriage(b).ok, JSON.stringify(b)).toBe(true);
+  });
+
+  it('its plan map-propose example parses as the route parses it, and names the map\'s refusals (D-8186)', () => {
+    const bodies = bodiesOf('## The Linear owner: plan map-propose');
+    expect(bodies).toHaveLength(1);
+    for (const b of bodies) expect(parseMapProposal(b, 'AAA').ok, JSON.stringify(b)).toBe(true);
+    const section = flat(plan().slice(plan().indexOf('\n## The Linear owner: plan map-propose\n')));
+    for (const word of ['not-linear-owner', 'map-incomplete', 'map-rewrites-plan', 'plan-bad-body']) expect(section).toContain(`\`${word}\``);
   });
 
   it('its plan take examples, all three arms, parse as the route parses them (review 2580 A5)', () => {

@@ -18,6 +18,8 @@ import { isLinearTeamKey } from '../../../shared/linear.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import { routableSlots, routeLinear } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
+import type { LinearMigration } from '../linear/migration.js';
+import type { RouteRefusal } from '../../../shared/refusal.js';
 import { refuseOtherLane, refuseRoute, refuseRun } from '../refuse.js';
 import type { OtherLane, OtherLaneReads } from './otherLanes.js';
 import {
@@ -37,6 +39,7 @@ import {
   parsePlanTicketDone, parsePlanTicketMove, parsePlanTriage, dropEpicInto, linearOwnerOfTeam, phaseNumbers, phaseRefVerdict,
   planCallerVerdict, teamOwnerProject, ticketDoneVerdict, ticketIsHeld, landedFactOf, triageVerdict, handedRowOf,
   type TicketDoneFacts,
+  followUpTicketMail,
 } from './planPolicy.js';
 import { inboundRetirable } from '../linear/inboundRetire.js';
 import { NO_PLAN_CHANGES } from './planStore.js';
@@ -77,6 +80,8 @@ export interface PlanRouteOpts {
    *  and `plan triage` ask it BEFORE they act (outside the run writers' mutex), so an issue that left the managed teams is never
    *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable`. */
   inboundRecheck?: (row: InboundRow) => Promise<InboundRecheck>;
+  /** The per-team migration's propose (D-8186, Task 7.2); absent (a test, a script): `plan map-propose` answers `unavailable`. */
+  migration?: Pick<LinearMigration, 'readOpen' | 'storeProposal'>;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -541,6 +546,11 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       program: slug, epicKey, checkpointKey: ticket.checkpoint ?? null, key: ticket.key, kind: ticket.kind, title: mask(ticket.title),
       body: mask(ticket.body ?? ''), project, source: caller === owner || owner === null ? 'plan' : 'worker',
     }, opts.now());
+    // Wave 6 review 3 F4, carried to wave 7 (D-8186): a worker's follow-up is told to the programme's coordinator, once.
+    const told = followUpTicketMail({ slug, key: ticket.key, title: mask(ticket.title), epic: epicKey, caller, owner });
+    if (told !== null) {
+      plan.inTransaction(() => insertSystemMailTx(coord, { program: slug }, { fromId: 'operator', toId: told.to, runId: null, kind: 'status', subject: told.subject, body: told.body }));
+    }
     return { ok: true, plan: viewOf(plan, coord, slug) };
   }));
 
@@ -780,6 +790,35 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
       }
     }
   })));
+
+  // `plan map-propose` (D-8186, Task 7.2): the team's Linear owner sends the migration map. Only that owner causes a Linear read;
+  // the team's open issues are read before the mutex (lane `migration`), and `checkMap` and the store's write run inside it,
+  // where the owner is judged again (`LinearMigration#storeProposal`).
+  app.post('/api/teams/:team/plan/map', {
+    config: WRITE_LIMIT,
+    onRequest: async (req, reply) => refuseToken(reply, checkMailToken(opts.mailToken(), req.headers[MAIL_TOKEN_HEADER], 'POST /api/teams/:team/plan/map')),
+  }, async (req, reply) => {
+    const raw = (req.params as { team?: unknown }).team;
+    if (!isLinearTeamKey(raw)) return refuseRoute(reply, 'bad-request', { detail: 'team' });
+    const team = raw.toUpperCase();
+    const who = await callerOf(req, reply);
+    if (!who.ok) return who.reply;
+    if (!(await refuseOtherLane(reply, 'planMap', who.id, opts.otherLaneReads))) return reply;
+    const migration = opts.migration;
+    if (migration === undefined) return refuseRoute(reply, 'unavailable');
+    const owner = linearOwnerOfTeam(team, who.plan.hierarchyProjectsOf(), ownerFacts(who.plan));
+    if (owner === null || owner.id !== who.id) return refuse(reply, 'not-linear-owner', `only the Linear owner of team ${team} proposes its map`);
+    const open = await migration.readOpen(team);
+    if (!open.ok) return refuseRoute(reply, open.word as RouteRefusal, { detail: open.detail });
+    try {
+      return await opts.serial(async () => {
+        const out = migration.storeProposal(team, who.id, req.body, open);
+        return out.ok ? out : refuse(reply, out.word as PlanRefusal, out.detail);
+      });
+    } catch (err) {
+      return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
+  });
 
   // `plan take`: a programme's coordinator takes a handed issue or an Upkeep ticket into an epic of its plan, closes it, or returns it.
   app.post('/api/programmes/:slug/plan/take', {
