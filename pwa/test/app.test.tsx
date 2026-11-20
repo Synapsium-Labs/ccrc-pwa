@@ -392,6 +392,8 @@ describe('ROUTES and the ladder, both ways', () => {
     '/settings/reader-lab',
     // One run's page (the runs rebuild, D-8072): a canonical number, its slash form, and the addresses that are no run page.
     '/runs/410', '/runs/410/', '/runs/advanced', '/runs/advanced/', '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
+    // The Flows screen and one flow (flows design 2026-11-19 §9), and the addresses that are no flow.
+    '/flows', '/flows/', '/flows/3', '/flows/3/', '/flows/0', '/flows/x', '/flowsx',
   ];
   const placeholder = (): Element | null => document.querySelector('.shell-placeholder');
 
@@ -400,7 +402,7 @@ describe('ROUTES and the ladder, both ways', () => {
   const OUTSIDE = new Set([
     '/nope', '/docsearch', '/docs-x', '/s/', '/runsx', '/mail/x', '/waiting/x', '/waiting/7/y', '/waitingx',
     '/programmes', '/programmes/a/b', '/programmesx', '/programmes/a.b', '/programmes/%zz', '/s/%zz', '/settings/%zz', '/settings/a/b',
-    '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x',
+    '/runs/0', '/runs/007', '/runs/99999999999999999999', '/runs/x', '/flows/0', '/flows/x', '/flowsx',
     '/programmes/prog-a/epics', '/programmes/a.b/epics/e-1', '/programmes/prog-a/epics/%zz', '/projects/project-a', '/projects/a/b/upkeep',
   ]);
 

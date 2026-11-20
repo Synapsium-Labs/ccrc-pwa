@@ -369,6 +369,9 @@ const CONTROLS: Record<string, string> = {
     'TOKEN. The Overturn sheet\'s note box (D-8126): `.wl-overturn-note` is '
     + '`min-height: calc(var(--tap-min) * 2)`, two floors tall, because the '
     + 'operator writes a sentence into it and it grows by its own resize handle.',
+  'flows/FlowsScreen.tsx <textarea> flow-prompt':
+    'TOKEN. A Flows step\'s prompt (flows design 2026-11-19 §9): `.flow-prompt` is `min-height: calc(var(--tap-min) * 3)`, '
+    + 'three floors tall, because a prompt is a paragraph and grows by its own resize handle.',
   'session/Composer.tsx <textarea> composer-input':
     'TOKEN by VALUE — see FLOOR_BY_VALUE. `padding: 10px 0` around '
     + '`--fs-input` (16px) at `--lh-normal` (1.5) is 10 + 24 + 10 = 44 exactly, '
