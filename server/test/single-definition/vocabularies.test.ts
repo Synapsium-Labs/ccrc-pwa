@@ -1636,3 +1636,24 @@ describe('the trigger table has one definition (Overlord §9.7)', () => {
     expect(b[0]!.init).not.toMatch(/key:\s*['"]/);
   });
 });
+
+// — Session helpers H1b (D-8862; review 2961 F6, review 2978 F5): the agent id rule and its one guard —
+describe('the agent id rule is defined once, and so is the guard over it', () => {
+  // The hook's rule for an agent id it keeps, `[A-Za-z0-9_-]{1,64}`. `shared/continuity-reports.ts` holds the one
+  // `AGENT_ID_RE` and the one guard over it (`isAgentId`); the hook state reader, the continuity hook reports and the helpers'
+  // `isHelperId` read it. A source written with the same pattern for ANOTHER id is named here, never silently passed:
+  // `continuity/routes.ts`'s `ROUND_ID_RE` is a round id, which only happens to share the grammar today.
+  const RULE = '/^[A-Za-z0-9_-]{1,64}$/';
+  const codeOf = (f: string): string => readFileSync(f, 'utf8').split('\n').filter((l) => !/^\s*(\/\/|\*|\/\*)/.test(l)).join('\n');
+
+  it('the pattern is written in exactly the shared definition and the one named other id', () => {
+    const holders = ALL.filter((f) => codeOf(f).includes(RULE)).map(rel).sort();
+    expect(holders).toEqual(['server/src/continuity/routes.ts', 'shared/continuity-reports.ts']);
+    expect(readFileSync(path.join(ccrcRoot, 'server/src/continuity/routes.ts'), 'utf8')).toMatch(/const ROUND_ID_RE = \/\^\[A-Za-z0-9_-\]\{1,64\}\$\//);
+  });
+
+  it('the guard `AGENT_ID_RE.test(` is written once, in the shared file: every reader calls `isAgentId` (or its alias)', () => {
+    const holders = ALL.filter((f) => codeOf(f).includes('AGENT_ID_RE.test(')).map(rel).sort();
+    expect(holders).toEqual(['shared/continuity-reports.ts']);
+  });
+});

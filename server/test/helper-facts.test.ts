@@ -153,6 +153,17 @@ describe('helperFactsOf: a task notification', () => {
     expect(helperFactsOf(human)).toEqual([]);
   });
 
+  // H1b (review 2978 F2): the tag-prefix test is NOT a mere prefilter. `parseTaskNotification` reads a notification
+  // wherever it sits among sibling tag blocks, so without the prefix a content that opens with another block would be
+  // read. This reader asks the envelope to open the content; a characterization pin of H1a's code (0 of 28,579
+  // notification-bearing records measured by the review had a sibling first, so it changes nothing live).
+  it('a content that opens with a sibling tag block before the notification is refused, in both record shapes', () => {
+    const sibling = `<system-reminder>\nkeep going\n</system-reminder>\n${envelope()}`;
+    expect(helperFactsOf(line({ type: 'user', timestamp: TS, message: { role: 'user', content: sibling } }))).toEqual([]);
+    expect(helperFactsOf(attached({ prompt: sibling }))).toEqual([]);
+    expect(helperFactsOf(notification())).toHaveLength(1);
+  });
+
   it('a notification with no task id yields none', () => {
     const noId = line({ type: 'user', timestamp: TS, message: { role: 'user', content: '<task-notification><status>completed</status><summary>s</summary></task-notification>' } });
     expect(helperFactsOf(noId)).toEqual([]);

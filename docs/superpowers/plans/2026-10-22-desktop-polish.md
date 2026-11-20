@@ -4636,6 +4636,20 @@ every mutant of every decision branch goes red. `tsc` passes for `server` and `p
 
 **Rollback.** A plain revert: nothing reads these pieces yet.
 
+### Task H1b: the helpers reach the frame and the store (D-8862) — now
+
+**What.** C49's H1b row (spec `docs/superpowers/specs/2026-11-19-session-helpers-design.md` §3.1, §5, §8, Table 12 and Table
+13's H1b row), less two pieces the coordinator moved out (below): H1a's pure decision is wired to the session's reads, the
+helpers go on the session's `workflows` frame, and the PWA's store accepts them. Nothing is drawn yet: H2 draws. Built red
+first (the branch's first commit holds the tests, each failing on `main` unless labelled a characterization pin).
+
+**Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
+
+- **D-8862** — `helpers-reach-the-frame`: Task H1b, issued on 2026-11-20. The helpers reach the session frame and the store,
+  and it departs from the spec in these places:
+  - `start-scan-and-report-request-split` (review 2900 F14, the coordinator's call): the start scan of the transcript moves to
+    a task H1c after this one, with its own measurement, and the `helper-report` request moves to H2, its first user.
+
 ## Acceptance (the matrix, per PR)
 
 Each rendered task's PR body carries a table: rows Refined and Instrument × dark and light; columns the task's widths (at least 360, 390, 1280 and 1920), each cell a before (`origin/main`) and after pair checked for: no horizontal page scroll; no page errors; no clipped or overlapping text; 44 px targets under coarse emulation; the identity core present; one instance of each moved readout; nothing moved that the task did not intend; and the task's own claim. Mark it ✓, or write the defect and its fix. Fixture names only. Departures are named by slug under `## Departures`, for the coordinator to number.
