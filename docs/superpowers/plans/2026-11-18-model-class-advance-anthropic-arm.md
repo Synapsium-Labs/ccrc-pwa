@@ -1263,3 +1263,28 @@ evidence older than the standing hold, is unobserved, asked by the resolver and 
 class reverted right after a move is named by nothing until a refresh reads newer evidence) in
 `shared/model-aliases.mjs`; `SIDECAR_TS_MAX_S`, `AT_RE` and `isAt` in `shared/model-advance.mjs`. Cost if wrong: a
 wider API surface on two shared modules, each member with one owner.
+
+### D-8832 — wave A3's library grows past the growth limit: a waiver for `ccd/lib/model-aliases.sh`
+
+Where: wave A3 (Tasks A3.1 to A3.6), the growth check's rows for `ccd/lib/model-aliases.sh` and `ccd (program)`;
+granted by the programme's coordinator on 2026-11-20. The plan puts the whole wave in a new pinned library, so that
+`ccd/ccd` grows only by its call sites. The library is new, so it is over the per-PR limit (+302 net code lines, and
+the program row +313), and nothing pays for it: no shrink, and no same-home file. The waiver
+(`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`, maxDelta 302) raises the program row's limit by the
+same figure. `ccd/ccd` grew by +11. Cost if wrong: a 302-line library lands in one PR, read by one review rather than
+split across several.
+
+### D-8833 — Task A3.6 is built on Task A3.0's Step 3 fallback, with Step 2 unmeasured
+
+Where: wave A3, Task A3.6, against Task A3.0 Step 2 (the re-pick); ruled by the programme's coordinator on
+2026-11-20 (slug `repick-unmeasured-fallback`). Step 2 needed the owner to type a `/model` in a throwaway session, and
+that typing was not scheduled, so the step is unmeasured, not failed. A3.6 builds what both outcomes need:
+- `routeapplied`'s `model=` key, written with `keep` so the stamp does not move;
+- the observe step's recording of it, and the readback's record of the id it confirmed;
+- the drop of `model=` and `picked=` on a class change, and the tick-budget case.
+
+It builds no typed move: no `picked=` writer, no `_route_id_pending` and no id arm in `_route_apply_now`. An id change
+is recorded, never typed, and doctor's `model-sessions-behind` names a session left behind with the relaunch remedy.
+The typed arm, its hand-pick read and the plan's re-pick tests become the follow-up ticket `typed-repick`, gated on
+the owner's typing. Cost if wrong: after an alias move, a running session is relaunched by hand until `typed-repick`
+lands.

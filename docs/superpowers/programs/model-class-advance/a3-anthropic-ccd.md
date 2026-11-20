@@ -31,7 +31,7 @@ or not. That is the variable's own meaning; this wave changes nothing about it.
 A throwaway workspace on lane-a was spawned with `class=default` (`mca-a30-repick`, kept for the owner to reap), and
 the owner was asked to type `/model <previous opus id>` there through the console. That typing had not happened when
 A3.1 to A3.5 were green: the session's usage sidecar was still the one written at its spawn, reporting
-`<current opus id>`. The coordinator ruled the plan's Step 3 fallback (slug `repick-unmeasured-fallback`).
+`<current opus id>`. The coordinator ruled the plan's Step 3 fallback, D-8833 (slug `repick-unmeasured-fallback`).
 
 ### Step 3: what the result selects
 
@@ -73,7 +73,7 @@ Every task's tests were run red first, and every mutation row named by the plan 
     `alias-hold-not-applied` sentence and the codes guard's entry.
   - `server/test/modelsOpCopy.ts` is removed, so the hold, release and revert tests run the shipped op.
   - A held id now reaches every launch on the lane through Task A3.4, in this same branch.
-  - The lift keeps the number D-8820.
+  - This wave removes the gate D-8820 put in; the lift takes no number of its own.
 - **F4 (review 2886): a held class records no alias move.**
   - Measured first on the Codex arm, in a new case in the models op's tests: an advance of a held class is abandoned
     (`held`), with no history entry, `previous` untouched and no push.
@@ -95,9 +95,11 @@ Every task's tests were run red first, and every mutation row named by the plan 
   run's freeze covers the file. That run's coordinator accepted this one-line packet as sent (sha256 `30e48bf3…`), so
   it lands here.
 
-## Departures, by slug (the coordinator allocates numbers)
+## Departures (numbered where the coordinator issued one, by slug otherwise)
 
-- `repick-unmeasured-fallback`: A3.0 Step 2 is unmeasured and Task A3.6 is built as the plan's Step 3 fallback; the
+- D-8832: the growth waiver for the new library (Growth, below).
+
+- D-8833, `repick-unmeasured-fallback`: A3.0 Step 2 is unmeasured and Task A3.6 is built as the plan's Step 3 fallback; the
   typed arm is the follow-up `typed-repick` (above). Of A3.6's test list, the recording, readback and "never typed"
   cases are built (22 cases in `server/test/ccd-route-model-id.test.ts`, plus one `ccd-tick-budget` case at the
   `idle-home` figure); the pending, re-pick and hand-pick cases, and the two tick-budget cases that plant `picked=`, go
@@ -192,7 +194,7 @@ Measured armed, against the merge-base with `origin/main` fetched:
 | `ccd/lib/model-aliases.sh` | +302 (new) |
 | `ccd (program)` | +313 |
 
-The library carries the whole wave so that `ccd/ccd` grows only by its call sites. Its waiver, GROWTH_WAIVER, raises
+The library carries the whole wave so that `ccd/ccd` grows only by its call sites. Its waiver, D-8832 (`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`, maxDelta 302), raises
 the program row's limit by the same figure.
 
 ## The live gate (read-only)

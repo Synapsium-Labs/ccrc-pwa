@@ -1,0 +1,8 @@
+{
+  "file": "ccd/lib/model-aliases.sh",
+  "maxDelta": 302,
+  "d": "D-8832",
+  "reason": "the model-class Anthropic arm's seventh pinned library, ccd/lib/model-aliases.sh, holds the whole of plan Wave A3 so that ccd/ccd grows by only its one-line call sites (+11): the cached reader of a lane's aliases and advance files (A3.1), the launch marker and the tick's observe step (A3.2), the effort rule from data (A3.3), the held id's launch environment (A3.4), the orphaned-effort carry (A3.5) and the routing record's model id with its keep-the-stamp write (A3.6); measured +302 net code lines against the merge-base (a new file), the ccd program row +313, which this entry raises by the same figure",
+  "added": "2026-11-20",
+  "createdAt": "2026-11-20"
+}
