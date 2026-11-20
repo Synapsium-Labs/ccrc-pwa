@@ -195,7 +195,9 @@ trap 'rm -rf "$TMPD"; rm -f "$NORM"' EXIT
 # ONE FILE FOR THE BOX, `~/.ccrc/codex-client-release.json` (0600, temp and
 # rename in its own directory): `version` and `readAt`, the last good release and
 # when it was read; `triedAt`, the last try, good or not; `lastError`, the last
-# failure's reason, gone after a success. A cache file that cannot be read or
+# failure's reason, and `failingSince`, the first try of the failures since the
+# last success (programme wave 3: doctor's `codex-release-lookup` check), both
+# gone after a success. A cache file that cannot be read or
 # parsed (a deeply nested one included) is ABSENT, so the next lookup rewrites
 # it. A lookup runs only when `triedAt` is an hour old, absent or unreadable, or
 # stamped more than SKEW seconds ahead of this box's clock; a stamp up to SKEW
@@ -360,6 +362,9 @@ def failed(c, why):
     """A failed try: the last good release kept, the try and its reason recorded when the file can be written."""
     new = {k: c[k] for k in ("version", "readAt") if k in c and (plain(c[k]) if k == "version" else stamp(c[k]))}
     new["triedAt"] = int(time.time())
+    # When this run of failures began: kept from the try before, else now; a success writes none (doctor's
+    # codex-release-lookup check reads it, programme wave 3).
+    new["failingSince"] = c["failingSince"] if stamp(c.get("failingSince")) else new["triedAt"]
     new["lastError"] = why[:200]
     try:
         write(new)

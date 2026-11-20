@@ -7,6 +7,7 @@ export declare const BLOCKED_CAUSES: readonly [
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
   'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
+  'pin-missing', 'effort-dropped',
 ];
 export type BlockedCause = (typeof BLOCKED_CAUSES)[number];
 export declare const REASON_MAX: 200;
@@ -25,12 +26,38 @@ export declare function parseModelId(id: string): ParsedModelId | null;
 export declare function familyOf(id: string | null): string | null;
 export declare function compareVersions(a: readonly number[], b: readonly number[]): -1 | 0 | 1;
 export declare function eligibleIds(registry: Registry, catalogue: Catalogue | null): string[];
+/** Programme wave 3: how long a pin is missing from every fresh catalogue before its class moves `retired`. */
+export declare const RETIRE_GRACE_MS: 21600000;
+/** When a class first saw its pin missing from a fresh catalogue (`markMissing`). */
+export interface MissingMark { model: string; since: string }
 export declare function chooseCandidate(
-  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; family: string | null },
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; family: string | null;
+    missing?: MissingMark | unknown; nowMs?: number },
 ): Choice;
+export interface PinMissing { model: string; since: string | null; until: string | null; older: string }
+export declare function pinMissing(
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; missing?: MissingMark | unknown; nowMs: number },
+): PinMissing | null;
+export interface Candidate extends Choice { effortTo: string | null; canaryEffort: string | null }
+export declare function candidateFor(
+  a: { registry: Registry; catalogue: Catalogue | null; cls: ModelClass; family: string | null;
+    missing?: MissingMark | unknown; nowMs?: number },
+): Candidate;
+export declare function markMissing(
+  adv: Advance, registry: Registry, catalogue: Catalogue | null, at: string,
+): { advance: Advance; changed: boolean };
+/** One class's stored effort level lowered because its model no longer offers it (programme wave 3). */
+export interface EffortFallback { class: ModelClass; model: string; from: string; to: string }
+export declare function effortFallbacks(
+  json: unknown, catalogue: Catalogue | null,
+): { registry: Registry; fallbacks: EffortFallback[] } | null;
 export declare function resolveEffort(
   a: { stored: string | undefined; oldEfforts: readonly string[] | null; newEfforts: readonly string[] },
 ): string | undefined;
+/** A class's effort level set in (or, for null, removed from) a registry copy, edited in place and returned. */
+export declare function withEffort<R extends Registry>(next: R, cls: ModelClass, level: string | null): R;
+/** A history reason as `parseAdvance` accepts it: printable ASCII, at most `REASON_MAX` characters. */
+export declare const historyReason: (text: unknown) => string;
 export declare function canaryEffort(efforts: readonly string[]): string | null;
 
 // ── the advance file (§2.1, D13, D21) ──
@@ -79,6 +106,10 @@ export interface ClassAdvance {
   history: HistoryEntry[];
   /** When an Anthropic lane's hold on the class was last released (Task A2.3); no history entry is made for it. */
   releasedAt?: string;
+  /** Programme wave 3: when the pin was first seen missing from a fresh catalogue (`markMissing`). */
+  missing?: MissingMark;
+  /** Programme wave 3: the effort level the refresh last lowered on this class (`recordEffortFallbacks`). */
+  effortFallback?: { at: string; model: string; from: string; to: string };
   [key: string]: unknown;
 }
 /** An automatic advance's intent (W2's `advance-commit`): it carries no `how`. */
@@ -124,6 +155,10 @@ export declare function recordFailure(
 ): { advance: Advance; isNew: boolean };
 export declare function reconcilePending(adv: Advance, registry: Registry): { advance: Advance; recovered: boolean };
 export declare function heldBackOf(c: ClassAdvance, candidate: string | null): HistoryEntry | null;
+export declare function recordEffortFallbacks(adv: Advance, fallbacks: readonly EffortFallback[], at: string): Advance;
+export declare function effortFallbackOf(
+  c: ClassAdvance | null, registry: Registry, cls: ModelClass,
+): { at: string; model: string; from: string; to: string } | null;
 export declare function lastMoveOf(c: ClassAdvance): HistoryEntry | null;
 
 // ── the move that lowered a lane's window (D-8384, D-8564) ──

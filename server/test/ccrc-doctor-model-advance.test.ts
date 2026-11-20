@@ -127,7 +127,7 @@ interface Run { code: number; out: string; err: string; ms: number }
 /** One check, as `cmd_doctor` runs it. A runner's own knobs never steer a case; `CCRC_MODELS_NOW` fixes the op's
  *  clock. Ended at 30 s, in a process group of its own (`spawnSyncGroup`), so a check that hangs reds its case, never
  *  the suite, and takes its children with it; a timeout comes back as `error` (ETIMEDOUT). */
-function check(h: string, name: Check, extra: NodeJS.ProcessEnv = {}, o: { pre?: string; noJq?: boolean } = {}): Run {
+function check(h: string, name: Check | 'codex-release-lookup', extra: NodeJS.ProcessEnv = {}, o: { pre?: string; noJq?: boolean } = {}): Run {
   const inherited: NodeJS.ProcessEnv = { ...process.env };
   for (const k of ['CCRC_MODELS_NOW', 'CCRC_DOCTOR_GH_TIMEOUT', 'CCRC_MODELS_LOCK_S', 'CCRC_ROLE', 'CCD_TIMEOUT_KILL_AFTER']) {
     delete inherited[k];
@@ -166,20 +166,22 @@ const asked = (h: string): string[] => {
 
 /** The table line D-8689 places the four names on, exactly: after `history`, before `secrets-backup-excluded`. */
 const TABLE_LINE = '  models codex docs history model-advance-held-back model-held-behind model-sessions-behind '
-  + 'model-advance-blocked secrets-backup-excluded filevault snapshot-posture delegation-hooks update-sweep docs-sw   '
-  + '# fourteen entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), '
+  + 'model-advance-blocked codex-release-lookup secrets-backup-excluded filevault snapshot-posture delegation-hooks '
+  + 'update-sweep docs-sw   '
+  + '# fifteen entries on one line: every line below is cited by number elsewhere; docs-sw stays LAST (M7.6), '
   + 'update-sweep and delegation-hooks before it, each pinned, and the three backups checks before delegation-hooks, '
-  + 'pinned; the four model-advance checks (D-8689) follow history, and their functions are at the very END of this '
+  + 'pinned; the four model-advance checks (D-8689) follow history, then codex-release-lookup (model classes wave 3), '
+  + 'and their functions are at the very END of this '
   + 'file; _check_delegation-hooks and then _check_update-sweep are near the END of this file, and the three backups '
   + 'checks (A11b) after them';
 
 describe('the table and the one call (plan W3 Task 15; D-8689)', () => {
-  it('the table carries the four names after history, in place, and their functions are the last four in the file', () => {
+  it('the table carries the four names after history, in place, then codex-release-lookup, and their functions are the last five in the file', () => {
     const lines = fs.readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
     const table = lines.filter((l) => l.startsWith('  models codex docs history '));
     expect(table).toEqual([TABLE_LINE]);
     const fns = lines.map((l) => /^_check_([A-Za-z0-9_-]+)\(\) \{$/.exec(l)?.[1]).filter((n): n is string => n !== undefined);
-    expect(fns.slice(-4)).toEqual([...CHECKS]);
+    expect(fns.slice(-5)).toEqual([...CHECKS, 'codex-release-lookup']);
   });
 
   it('the doctor reaches models-op through ccrc\'s own _models_node in a bounded child, with advance-health alone, a read-only op', () => {
@@ -280,11 +282,14 @@ describe('model-held-behind', () => {
 
   it('a held class whose pin has left the catalogue says so, and never calls an older fallback newer', () => {
     const h = box();
+    // Programme wave 3: the pin has been missing from the catalogue for the whole grace (six hours before NOW).
     plantLane(h, { registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-7-gamma' } },
-      advance: stepAdvance({ opus: { hold: HOLD } }) });
+      advance: stepAdvance({ opus: { hold: HOLD, missing: { model: 'model-7-gamma', since: '2026-10-23T03:00:00Z' } } }) });
     expect(check(h, 'model-held-behind').out.split('\n')[0]).toBe('WARN model-held-behind: lane-a opus is held '
       + '(2026-10-22T08:00Z, by hand) on model-7-gamma, which has left the catalogue; model-6.1-gamma is the newest '
       + 'left in its family');
+    // Within the grace a missing pin is no fallback yet, so a held class is not behind one.
+    expect(check(h, 'model-held-behind', { CCRC_MODELS_NOW: '2026-10-23T08:59:59Z' }).code).toBe(0);
   });
 });
 
@@ -1094,5 +1099,105 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     plantAnthropicSession(h, { sidecar: 'bad' });
     expect(check(h, 'model-sessions-behind').out).toBe('PASS model-sessions-behind: 1 lane(s) with a model registry or an aliases file: no '
       + 'running session is still on a model a move replaced 24 h or more ago; 1 session(s) could not be measured (sidecar-unreadable 1)\n');
+  });
+});
+
+// ── Programme wave 3: the two new blocked causes, and the Codex release lookup's own check ───────────────────────────
+describe('model-advance-blocked: pin-missing and effort-dropped (programme wave 3)', () => {
+  it('names a class waiting out the retired grace on a missing pin, with when it moves and the hold and revert remedy', () => {
+    const h = box();
+    plantLane(h, { registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-9-gamma' } },
+      advance: stepAdvance({ opus: { missing: { model: 'model-9-gamma', since: '2026-10-23T05:00:00Z' } } }) });
+    const r = check(h, 'model-advance-blocked');
+    expect(r.out).toBe('WARN model-advance-blocked: lane-a opus: pin-missing (model-9-gamma is missing from the lane\'s '
+      + 'catalogue since 2026-10-23T05:00:00Z; the class moves to model-6.1-gamma, an older model, at 2026-10-23T11:00:00Z, '
+      + 'unless it is listed again)\n'
+      + '  remedy: per cause: missing pin — the class waits six hours for its pin to be listed again before it moves to '
+      + 'the older model named; to keep it where it is, hold it from the lane\'s Models sheet (or \'ccrc models lane-a hold '
+      + '<class>\'), and after a move, Revert on the sheet (or \'ccrc models lane-a revert <class>\') puts it back\n');
+    expect(r.code).toBe(2);
+    // Past the grace it is a move, not a wait: the plan names it, and this check stays quiet about it.
+    expect(check(h, 'model-advance-blocked', { CCRC_MODELS_NOW: '2026-10-23T11:00:00Z' }).out)
+      .toBe('PASS model-advance-blocked: 1 lane(s) with a model registry or an aliases file: nothing blocks an advance\n');
+  });
+
+  it('names a class the refresh lowered, and a registry still refused for a dropped level, with the set-effort remedy', () => {
+    const h = box();
+    plantLane(h, { registry: { ...STEP_REGISTRY, effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } },
+      advance: stepAdvance({ opus: { effortFallback: { at: '2026-10-23T08:00:00Z', model: 'model-5.6-gamma', from: 'ultra',
+        to: 'xhigh' } } }) });
+    const remedy = '  remedy: per cause: effort level — choose one the class\'s model offers with \'ccrc models lane-a '
+      + 'set-effort <class> <level>\' (\'ccrc models lane-a show\' lists them); until then the hourly refresh runs the class '
+      + 'at the next level down\n';
+    expect(check(h, 'model-advance-blocked').out).toBe('WARN model-advance-blocked: lane-a opus: effort-dropped '
+      + '(model-5.6-gamma no longer offers effort ultra, so it runs at xhigh)\n' + remedy);
+    plantLane(h, { registry: { ...STEP_REGISTRY, effort: { ...STEP_REGISTRY.effort, opus: 'ultra' } } });
+    expect(check(h, 'model-advance-blocked').out).toBe('WARN model-advance-blocked: lane-a opus: effort-dropped '
+      + '(model-5.6-gamma no longer offers effort ultra)\n' + remedy);
+    // A hand set-effort ends the recorded fallback.
+    plantLane(h, { registry: { ...STEP_REGISTRY, effort: { ...STEP_REGISTRY.effort, opus: 'high' } },
+      advance: stepAdvance({ opus: { effortFallback: { at: '2026-10-23T08:00:00Z', model: 'model-5.6-gamma', from: 'ultra',
+        to: 'xhigh' } } }) });
+    expect(check(h, 'model-advance-blocked').code).toBe(0);
+  });
+});
+
+describe('codex-release-lookup (programme wave 3, release-lookup-warn)', () => {
+  // The check's clock is jq's `now`, the real one (the doctor suite's PATH holds no `date`), so each record is stamped
+  // relative to the real time, never to the op's fixed NOW.
+  const T = Math.floor(Date.now() / 1000);
+  const plant = (h: string, v: unknown): void => {
+    fs.writeFileSync(join(h, '.ccrc', 'codex-client-release.json'), typeof v === 'string' ? v : JSON.stringify(v));
+  };
+  const at = (h: string, v: unknown): Run => { plant(h, v); return check(h, 'codex-release-lookup'); };
+  const REMEDY = '  remedy: each Codex lane\'s catalogue is asked as the last good release, or the built-in floor, until a '
+    + 'read succeeds; check that this box reaches https://registry.npmjs.org (the reason above is the last try\'s); the '
+    + 'probe tries again at the next hourly refresh\n';
+
+  it('the table names it after model-advance-blocked, and its function is the last in the file', () => {
+    const lines = fs.readFileSync(join(REPO, 'ccd', 'ccrc-doctor-checks'), 'utf8').split('\n');
+    const fns = lines.map((l) => /^_check_([A-Za-z0-9_-]+)\(\) \{$/.exec(l)?.[1]).filter((n): n is string => n !== undefined);
+    expect(fns.at(-1)).toBe('codex-release-lookup');
+  });
+
+  it('SKIPs with no record, and on a record the probe would read as absent', () => {
+    const h = box();
+    expect(check(h, 'codex-release-lookup').code).toBe(3);
+    for (const bad of ['{"version":', '[1]', JSON.stringify({ version: '0.171.0' })]) {
+      const r = at(h, bad);
+      expect(r.code, bad).toBe(3);
+      expect(r.out, bad).toMatch(/^SKIP codex-release-lookup: /);
+    }
+  });
+
+  it('PASSes a lookup that read a release in the last day', () => {
+    const h = box();
+    const r = at(h, { version: '0.171.0', readAt: T - 3600, triedAt: T - 3600 });
+    expect(r.code).toBe(0);
+    expect(r.out).toMatch(/^PASS codex-release-lookup: the Codex release lookup read 0\.171\.0 1 h ago\n$/);
+  });
+
+  it('WARNs a lookup whose last good read is over a day old while it is still tried, naming the last reason', () => {
+    const h = box();
+    const r = at(h, { version: '0.171.0', readAt: T - 2 * 86400, triedAt: T - 600, failingSince: T - 2 * 86400 + 3600,
+      lastError: 'curl: (6) Could not resolve host' });
+    expect(r.code).toBe(2);
+    expect(r.out).toBe('WARN codex-release-lookup: the Codex release lookup has failed for 48 h: its last good read '
+      + '(0.171.0) was 48 h ago, and its last try 0 h ago failed (curl: (6) Could not resolve host)\n' + REMEDY);
+  });
+
+  it('WARNs a lookup that has never read a release after a day of tries, and not before', () => {
+    const h = box();
+    const r = at(h, { triedAt: T - 600, failingSince: T - 86400 - 60, lastError: 'no answer' });
+    expect(r.code).toBe(2);
+    expect(r.out).toBe('WARN codex-release-lookup: the Codex release lookup has never read a release, and has failed for '
+      + '24 h (no answer)\n' + REMEDY);
+    expect(at(h, { triedAt: T - 600, failingSince: T - 3600, lastError: 'no answer' }).code).toBe(0);
+    expect(at(h, { triedAt: T - 600, lastError: 'no answer' }).code, 'no failingSince yet (an older probe)').toBe(0);
+  });
+
+  it('PASSes a record nobody has tried for a day: the lookup is not running, which is not this check\'s finding', () => {
+    const h = box();
+    expect(at(h, { version: '0.171.0', readAt: T - 5 * 86400, triedAt: T - 2 * 86400 }).code).toBe(0);
   });
 });

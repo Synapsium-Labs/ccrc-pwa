@@ -1872,6 +1872,9 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "cap-floor": "PASS",
   "cert": "SKIP",
   "codex": "SKIP",
+  // Model classes wave 3 (release-lookup-warn): SKIP at every stage: no Codex lane has been probed on a fresh box, so
+  // there is no release lookup record.
+  "codex-release-lookup": "SKIP",
   "config": "PASS",
   "credentials": "SKIP",
   "delegation-hooks": "PASS",

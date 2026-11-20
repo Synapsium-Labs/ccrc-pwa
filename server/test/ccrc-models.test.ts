@@ -2298,6 +2298,45 @@ describe('ccrc models refresh', () => {
   });
 });
 
+// Programme wave 3, effort-level-dropped: when a newer catalogue no longer offers an effort level a class stores, the
+// registry stopped parsing against it, the refresh's materialise refused, and every later hour `lanes` read the lane as
+// registry-invalid and never probed it again, so its catalogue was never replaced. Now the refresh keeps running for
+// the lane, and the class falls back to the next level down, recorded on its advance file.
+describe('ccrc models refresh: a stored effort level the new catalogue drops (programme wave 3, effort-level-dropped)', () => {
+  /** CODEX_RAW with the opus class's model (`gpt-5.6-sol`) no longer offering `max`, and optionally one more model. */
+  const dropMax = (extra: boolean): string => {
+    const raw = JSON.parse(fs.readFileSync(CODEX_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+    for (const m of raw.models) {
+      if (m['slug'] === 'gpt-5.6-sol') {
+        m['supported_reasoning_levels'] = (m['supported_reasoning_levels'] as { effort: string }[])
+          .filter((l) => l.effort !== 'max');
+      }
+    }
+    if (extra) raw.models.push({ ...raw.models.find((m) => m['slug'] === 'gpt-5.5')!, slug: 'gpt-5.5-extra', display_name: 'gpt-5.5-extra' });
+    const p = join(home, `raw-dropped-${extra ? 'b' : 'a'}.json`);
+    fs.writeFileSync(p, JSON.stringify(raw));
+    return p;
+  };
+  const models = (f: string): any => JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', f), 'utf8'));
+
+  it('the refresh keeps running for the lane, the class falls back to an offered level, and the advance file records it', async () => {
+    await seatCodexA();
+    expect(models('codex-a.classes.json').effort.opus).toBe('max');
+    const r1 = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
+    expect(r1.code, r1.stdout + r1.stderr).toBe(0);
+    expect((oneObject(r1)['refreshed'] as Record<string, unknown>[])[0]).toMatchObject({ id: 'codex-a', ok: true });
+    // gpt-6-astra still lists max, so it ranks the level: the next one down that gpt-5.6-sol offers is xhigh.
+    expect(models('codex-a.classes.json').effort.opus).toBe('xhigh');
+    expect(models('codex-a.effort.json').byModel['gpt-5.6-sol']).toBe('xhigh');
+    expect(models('codex-a.advance.json').classes.opus.effortFallback)
+      .toMatchObject({ model: 'gpt-5.6-sol', from: 'max', to: 'xhigh' });
+    // The next hour probes the lane again, so a changed catalogue reaches it.
+    const r2 = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(true) });
+    expect(r2.code, r2.stdout + r2.stderr).toBe(0);
+    expect((models('codex-a.json').models as { id: string }[]).map((m) => m.id)).toContain('gpt-5.5-extra');
+  });
+});
+
 describe('ccrc models litellm', () => {
   // Plan 4 Task C1: the external arm these cases were first written against
   // left with the other repository's lane, and a codex-kind lane's own arm has

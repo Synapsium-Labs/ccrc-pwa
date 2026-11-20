@@ -1385,6 +1385,25 @@ describe.skipIf(pythonOrSkip() === null)('the Codex client version follows the p
     expect(typeof c['lastError']).toBe('string');
   });
 
+  // Programme wave 3 (release-lookup-warn): the failures since the last success carry when they began, so doctor can
+  // tell a lookup that has failed for a day from one that has never had a good read.
+  it('a failed try records failingSince once, keeps it through later failures, and a success drops it', () => {
+    const readAt = now() - 3 * 86400;
+    plantCache({ version: NEWER, readAt, triedAt: now() - 7200 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
+    const first = cache();
+    expect(first['failingSince']).toBe(first['triedAt']);
+    const since = now() - 2 * 86400;
+    plantCache({ ...first, failingSince: since, triedAt: now() - 7200 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
+    expect(cache()['failingSince'], 'a later failure keeps when the failures began').toBe(since);
+    expect(cache()['readAt']).toBe(readAt);
+    plantCache({ ...cache(), triedAt: now() - 7200 });
+    expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: answer('newer', npm(NEWER)) }).code).toBe(0);
+    expect(cache()).not.toHaveProperty('failingSince');
+    expect(cache()).not.toHaveProperty('lastError');
+  });
+
   it('a failed lookup with no cache asks as the floor; so does an unreadable cache', () => {
     expect(codex({ CCRC_MODELS_PROBE_RELEASE_FIXTURE: path.join(home, 'no-answer') }).code).toBe(0);
     expect(askedAs()).toBe(FLOOR);

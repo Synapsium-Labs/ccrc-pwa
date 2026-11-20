@@ -12,7 +12,7 @@
 // never a seed: the grammar is the provider's convention, not a contract, so an id that breaks it is ignored
 // rather than guessed at. A class follows ONE family and moves only forwards, to the newest eligible model of it,
 // except when its pin has left a fresh catalogue.
-import { CLASSES, MODEL_ID_RE, resolveDiscovery } from './models.mjs';
+import { CLASSES, MODEL_ID_RE, RegistryInvalid, parseRegistry, resolveDiscovery } from './models.mjs';
 
 /** Every reason a lane or a class cannot advance, the words `model-advance-blocked` names. `chooseCandidate`
  *  answers the two that are a fact about one class; the others are facts about a lane's files, its kind or its
@@ -26,7 +26,18 @@ export const BLOCKED_CAUSES = Object.freeze([
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
   'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
+  // Programme wave 3 (backward-move, effort-level-dropped): a class waiting out `RETIRE_GRACE_MS` on a pin its fresh
+  // catalogue no longer lists, and a class whose stored effort level its model no longer offers (`effortFallbacks`).
+  // `advance-health` answers them; no file holds them, so an older build never reads either word.
+  'pin-missing', 'effort-dropped',
 ]);
+
+/** How long a pin must be missing from every fresh catalogue the hourly step reads before its class moves `retired`
+ *  (programme wave 3, backward-move): six hours, six hourly reads. Measured 2026-11-10: one lane's fresh catalogue left
+ *  out a current pin for about two hours and listed it again, and the class moved to an older model and back, each
+ *  move behind a passing canary. A pin that is gone for good is still retired (D-5199), six hours late; a newer model
+ *  never waits (`newer`). The class records when it was first seen missing (`markMissing`, the class's `missing`). */
+export const RETIRE_GRACE_MS = 6 * 3_600_000;
 
 /** Why `chooseCandidate` named its candidate, the three words its `reason` takes: `newer` (a model strictly newer
  *  than the pin), `retired` (the pin left a fresh catalogue, the one move that may go to an OLDER version) and
@@ -103,10 +114,14 @@ export function eligibleIds(registry, catalogue) {
  *     never a candidate until one of its ids leaves the catalogue. Only ELIGIBLE ids make a tie: a hidden twin,
  *     or one outside the discovery list, unties the other.
  *  5. Then, among the untied ids that neither this class nor another pins: an EMPTY class takes the newest
- *     (`empty`); a pin the catalogue no longer lists takes the newest (`retired`, the one move that may go to
- *     an older version) but only on a catalogue that is fresh, because absence from a stale one is not evidence
- *     (D-5199); otherwise the newest STRICTLY newer than the pin (`newer`). A pin the catalogue lists HIDDEN is
- *     listed, so it is never retired.
+ *     (`empty`); a pinned class takes the newest STRICTLY newer than its pin (`newer`), whether or not the catalogue
+ *     still lists the pin, so a newer model never waits; failing that, a pin the catalogue no longer lists takes the
+ *     newest left (`retired`, the one move that may go to an older version), but only on a catalogue that is fresh,
+ *     because absence from a stale one is not evidence (D-5199), and only once `missing`, the class's record of
+ *     when its pin was first seen missing (`markMissing`), names this pin and is at least `RETIRE_GRACE_MS` older
+ *     than `nowMs` (programme wave 3, backward-move: a catalogue that leaves a pin out for an hour or two moves no
+ *     class backwards). With no record, or no clock, the class waits (`pinMissing` names it). A pin the catalogue
+ *     lists HIDDEN is listed, so it is never retired.
  * Another class's pin is excluded in step 5 as well as tested in step 3, and a case pins it: when the family's
  * newest version is a tie of two ids nobody pins, step 3 stays quiet, and only the exclusion keeps a class off
  * the older id another class holds.
@@ -115,10 +130,37 @@ export function eligibleIds(registry, catalogue) {
  * (D-5199) is the ops' — `advance-plan` answers `why: catalogue-stale`, and
  * `advance-commit` abandons with it (W2 Tasks 8 and 9). A case pins this split, so neither half is "fixed" alone.
  */
-export function chooseCandidate({ registry, catalogue, cls, family }) {
+export function chooseCandidate({ registry, catalogue, cls, family, missing, nowMs }) {
+  const r = choose({ registry, catalogue, cls, family });
+  if (r.older === undefined) return r.choice;
+  const due = isObj(missing) && missing.model === registry.classes[cls] && isAt(missing.since)
+    && nowMs - Date.parse(missing.since) >= RETIRE_GRACE_MS;
+  return due ? { ...r.choice, candidate: r.older, reason: 'retired' } : r.choice;
+}
+
+/** `({registry, catalogue, cls, missing, nowMs}) => {model, since, until, older} | null`: the class `chooseCandidate`
+ *  holds back on a missing pin (programme wave 3, backward-move). Its pin is not listed by a FRESH catalogue, no
+ *  model newer than the pin is free, and `older`, the newest model left in its family, is the `retired` move the
+ *  grace has not yet allowed. `since` is when the class first saw its pin missing (`missing`, when it names this pin;
+ *  null when nothing has recorded it yet), and `until` when the grace ends (null with no `since`). Null on every
+ *  other class, a class whose grace has ended included: `chooseCandidate` names its move. Pure. */
+export function pinMissing({ registry, catalogue, cls, missing, nowMs }) {
+  const r = choose({ registry, catalogue, cls, family: null });
+  if (r.older === undefined) return null;
+  const pin = registry.classes[cls];
+  const since = isObj(missing) && missing.model === pin && isAt(missing.since) ? missing.since : null;
+  const until = since === null ? null : isoSeconds(Date.parse(since) + RETIRE_GRACE_MS);
+  if (until !== null && !(nowMs < Date.parse(until))) return null;
+  return { model: pin, since, until, older: r.older };
+}
+
+/** The family rule's steps 1 to 5 (`chooseCandidate`'s comment), with the `retired` fallback held apart: `choice` is
+ *  the answer with no retirement, and `older` the id a retirement would take, present only when the pin is not listed
+ *  by a fresh catalogue and no newer model is free. */
+function choose({ registry, catalogue, cls, family }) {
   const none = { candidate: null, reason: null, blocked: null };
   const pin = registry.classes[cls] ?? null;
-  if (pin !== null && parseModelId(pin) === null) return { ...none, blocked: 'pin-grammar' };
+  if (pin !== null && parseModelId(pin) === null) return { choice: { ...none, blocked: 'pin-grammar' } };
   const fam = pin !== null ? familyOf(pin) : family;   // D-5992: step 1 has refused a pin familyOf cannot read
   const inFamily = [];
   for (const id of eligibleIds(registry, catalogue)) {
@@ -129,19 +171,70 @@ export function chooseCandidate({ registry, catalogue, cls, family }) {
     .filter((v) => v !== null && v !== undefined));
   const topVersion = inFamily.reduce((v, m) => (v === null || compareVersions(m.version, v) > 0 ? m.version : v), null);
   if (topVersion !== null && inFamily.some((m) => compareVersions(m.version, topVersion) === 0
-      && m.id !== pin && otherPins.has(m.id))) return { ...none, blocked: 'shared-family' };
+      && m.id !== pin && otherPins.has(m.id))) return { choice: { ...none, blocked: 'shared-family' } };
   const untied = inFamily.filter((m) => inFamily.filter((o) => compareVersions(o.version, m.version) === 0).length === 1);
   const newestFirst = [...untied].sort((x, y) => compareVersions(y.version, x.version));
   const free = newestFirst.filter((m) => m.id !== pin && !otherPins.has(m.id));
-  if (pin === null) return free.length > 0 ? { ...none, candidate: free[0].id, reason: 'empty' } : none;
-  const listed = catalogue !== null && catalogue !== undefined && catalogue.models.some((m) => m.id === pin);
-  if (!listed) {
-    if (catalogue === null || catalogue === undefined || catalogue.stale) return none;
-    return free.length > 0 ? { ...none, candidate: free[0].id, reason: 'retired' } : none;
-  }
+  if (pin === null) return { choice: free.length > 0 ? { ...none, candidate: free[0].id, reason: 'empty' } : none };
   const pinVersion = parseModelId(pin).version;
   const newer = free.filter((m) => compareVersions(m.version, pinVersion) > 0);
-  return newer.length > 0 ? { ...none, candidate: newer[0].id, reason: 'newer' } : none;
+  if (newer.length > 0) return { choice: { ...none, candidate: newer[0].id, reason: 'newer' } };
+  const listed = catalogue !== null && catalogue !== undefined && catalogue.models.some((m) => m.id === pin);
+  if (listed || catalogue === null || catalogue === undefined || catalogue.stale || free.length === 0) return { choice: none };
+  return { choice: none, older: free[0].id };
+}
+
+/** `({registry, catalogue, cls, family, missing, nowMs}) => {candidate, reason, blocked, effortTo, canaryEffort}`: one
+ *  class's candidate this hour (`chooseCandidate`) and the two effort levels that go with it (auto-advance spec §2.2
+ *  to §2.3): `effortTo`, the level the class would carry on the candidate (`resolveEffort`, ranked by its pin's own
+ *  row, D-5200; null: none), and `canaryEffort`, the lowest level the candidate lists (null: it lists none). Both null
+ *  with no candidate. ONE computation for `advance-plan`, which reports it before the canary, and `advance-commit`,
+ *  which re-checks it under the lock after the canary and writes its `effortTo`, so the level a plan names and the
+ *  level a commit writes cannot differ. `family` is the class's stored family, which `chooseCandidate` reads for an
+ *  EMPTY class only (D-5992); `missing` and `nowMs` are its grace on a missing pin. Moved here from
+ *  `deploy/models-op.mjs` (programme wave 3), where it was the op's own; it is pure. */
+export function candidateFor({ registry, catalogue, cls, family, missing, nowMs }) {
+  const choice = chooseCandidate({ registry, catalogue, cls, family, missing, nowMs });
+  if (choice.candidate === null) return { ...choice, effortTo: null, canaryEffort: null };
+  const rowOf = (id) => catalogue.models.find((m) => m.id === id);
+  const pin = registry.classes[cls];
+  const next = rowOf(choice.candidate);
+  const prev = pin === null ? undefined : rowOf(pin);
+  const newEfforts = next === undefined ? [] : next.efforts;
+  return {
+    ...choice,
+    effortTo: resolveEffort({
+      stored: isObj(registry.effort) ? registry.effort[cls] : undefined,
+      oldEfforts: prev === undefined ? null : prev.efforts,
+      newEfforts,
+    }) ?? null,
+    canaryEffort: canaryEffort(newEfforts),
+  };
+}
+
+/** `(adv, registry, catalogue, at) => {advance, changed}`: each pinned class's `missing` brought up to date with a
+ *  FRESH catalogue (programme wave 3, backward-move). A pin the catalogue does not list gets `{model, since: at}`,
+ *  unless its record already names that pin (the first sighting stands); a listed pin, or an empty class, loses its
+ *  record. A stale or absent catalogue is no evidence either way, so nothing changes. `changed` says whether the file
+ *  would differ. The one writer is `advance-backfill`, under the lane lock, every hour; every other writer keeps the
+ *  key as it keeps any unknown one, and a record that names another model than the pin is read as none. */
+export function markMissing(adv, registry, catalogue, at) {
+  if (catalogue === null || catalogue === undefined || catalogue.stale) return { advance: adv, changed: false };
+  const next = copy(adv);
+  let changed = false;
+  for (const cls of CLASSES) {
+    const pin = registry.classes[cls] ?? null;
+    const c = next.classes[cls];
+    const gone = pin !== null && !catalogue.models.some((m) => m.id === pin);
+    if (gone && !(isObj(c.missing) && c.missing.model === pin)) {
+      c.missing = { model: pin, since: at };
+      changed = true;
+    } else if (!gone && c.missing !== undefined) {
+      delete c.missing;
+      changed = true;
+    }
+  }
+  return { advance: changed ? next : adv, changed };
 }
 
 /**
@@ -161,6 +254,60 @@ export function resolveEffort({ stored, oldEfforts, newEfforts }) {
   }
   return newEfforts[0]; // the model's lowest: the list is lowest first (see `canaryEffort`)
 }
+
+/** `(json, catalogue) => {registry, fallbacks} | null` (programme wave 3, effort-level-dropped): a class registry
+ *  `parseRegistry` refuses ONLY because a stored effort level is one its class's model no longer offers, read with each
+ *  such level lowered to one it does offer. The level is `resolveEffort`'s, ranked by a catalogue row that still lists
+ *  the stored level (D-5991's rule, as `revert` ranks it), so `max` on a model now offering up to `xhigh` becomes
+ *  `xhigh`, and with no row listing it the model's lowest. `fallbacks` is one `{class, model, from, to}` per class
+ *  lowered, `CLASSES` order. Null for a registry that parses as it is, one refused for any other reason, or one still
+ *  refused after the levels are lowered: those are `registry-invalid` as before. Pure: the caller writes. */
+export function effortFallbacks(json, catalogue) {
+  const field = (fn) => { try { fn(); return null; } catch (e) { if (e instanceof RegistryInvalid) return e; throw e; } };
+  if (field(() => parseRegistry(json, catalogue)) === null || !isObj(json) || !isObj(json.effort) || !isObj(json.classes)) {
+    return null;
+  }
+  const rows = catalogue?.models ?? [];
+  const next = copy(json);
+  const fallbacks = [];
+  for (const cls of CLASSES) {
+    const from = next.effort[cls];
+    const row = rows.find((m) => m.id === next.classes[cls]);
+    if (typeof from !== 'string' || row === undefined || row.efforts.length === 0 || row.efforts.includes(from)) continue;
+    const ranker = rows.find((m) => m.efforts.includes(from));
+    const to = resolveEffort({ stored: from, oldEfforts: ranker?.efforts ?? null, newEfforts: row.efforts });
+    next.effort[cls] = to;
+    fallbacks.push({ class: cls, model: row.id, from, to });
+  }
+  let registry = null;
+  if (fallbacks.length === 0 || field(() => { registry = parseRegistry(next, catalogue); }) !== null) return null;
+  return { registry, fallbacks };
+}
+
+/** A class's effort level in a registry copy the caller is building (`next`, edited in place and returned): set to
+ *  `level`, or removed for null, the `effort` map dropped once that was its last entry. ONE rule for every op that
+ *  moves a level: `revert`, `advance-commit` and `set-effort` (moved here from `deploy/models-op.mjs`, programme wave 3). */
+export function withEffort(next, cls, level) {
+  if (level === null) {
+    if (isObj(next.effort)) {
+      delete next.effort[cls];
+      if (Object.keys(next.effort).length === 0) delete next.effort;
+    }
+  } else {
+    next.effort = { ...(isObj(next.effort) ? next.effort : {}), [cls]: level };
+  }
+  return next;
+}
+
+/** A history `reason` as the advance file's reader accepts it (plan §3.1):
+ *  printable ASCII, at most `REASON_MAX` characters, the number `parseAdvance`
+ *  holds every reason to. Every reason `deploy/models-op.mjs` records passes
+ *  through it (moved here from that file, programme wave 3), the canary's
+ *  (`--reason`) and its own, because one the reader refused would make the
+ *  whole advance file unreadable, and every later advance on the lane blocked
+ *  behind it. */
+export const historyReason = (text) =>
+  String(text).replace(/[^\x20-\x7e]+/g, ' ').replace(/\s+/g, ' ').trim().slice(0, REASON_MAX);
 
 /** The canary's effort (§2.3 step 3): the lowest level the model offers, or null when it lists none.
  *  `efforts[0]` IS the lowest, here and in `resolveEffort`'s fallback: the probe keeps the provider's own order,
@@ -326,6 +473,17 @@ export function parseAdvance(input) {
     if (x.releasedAt !== undefined && !isAt(x.releasedAt)) {
       bad(`${f}.releasedAt`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
     }
+    // Programme wave 3: when the pin was first seen missing (`markMissing`), and the effort level the refresh last
+    // lowered (`recordEffortFallbacks`). Optional, so every file written before reads; an older build keeps both.
+    if (x.missing !== undefined && !(isObj(x.missing) && isIdOrNull(x.missing.model) && x.missing.model !== null
+        && isAt(x.missing.since))) {
+      bad(`${f}.missing`, 'is not {"model": <id>, "since": <time>}.');
+    }
+    const fb = x.effortFallback;
+    if (fb !== undefined && !(isObj(fb) && isAt(fb.at) && typeof fb.model === 'string' && MODEL_ID_RE.test(fb.model)
+        && isLevelOrNull(fb.from) && fb.from !== null && isLevelOrNull(fb.to) && fb.to !== null)) {
+      bad(`${f}.effortFallback`, 'is not {"at": <time>, "model": <id>, "from": <level>, "to": <level>}.');
+    }
     if (x.previous !== null) {
       if (!isObj(x.previous)) bad(`${f}.previous`, 'is not null or {"model": <id|null>, "effort": <level|null>}.');
       if (!isIdOrNull(x.previous.model)) bad(`${f}.previous.model`, 'is not a model id or null.');
@@ -449,6 +607,23 @@ export function heldBackOf(c, candidate) {
   const last = c.history[c.history.length - 1];
   return last !== undefined && candidate !== null && last.how === 'advance' && last.ok === false && last.to === candidate
     ? last : null;
+}
+
+/** `(adv, fallbacks, at) => Advance`: each `effortFallbacks` row recorded on its class as `effortFallback`, `{at, model,
+ *  from, to}`, replacing the one before (programme wave 3, effort-level-dropped). Not a history entry: an older build's
+ *  `parseAdvance` refuses an entry `how` or `cause` it does not know, and would then read the whole file as invalid. */
+export function recordEffortFallbacks(adv, fallbacks, at) {
+  const next = copy(adv);
+  for (const f of fallbacks) next.classes[f.class].effortFallback = { at, model: f.model, from: f.from, to: f.to };
+  return next;
+}
+
+/** The class's recorded effort fallback while it still stands, or null: the class still pins the model it was
+ *  recorded on, and still carries the level it was lowered to. A hand `set-effort`, or a move, ends it. */
+export function effortFallbackOf(c, registry, cls) {
+  const fb = isObj(c) ? c.effortFallback : undefined;
+  const level = isObj(registry.effort) ? registry.effort[cls] : undefined;
+  return isObj(fb) && fb.model === registry.classes[cls] && fb.to === level ? fb : null;
 }
 
 /** The class's newest entry that succeeded, of any kind, or null. */
