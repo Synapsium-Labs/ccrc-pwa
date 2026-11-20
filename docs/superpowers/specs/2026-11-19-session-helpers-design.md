@@ -623,7 +623,15 @@ this spec's own call, marked Judgement.
   section is the one list. It supersedes SessionDetails' subagent list (D-5232's reader) and drops the session panel's
   broker activity rows (the delegation visibility spec's §5 header list). The record keeps the lease rows C48 moves there.
 
-## 13. Testing and proof
+## 13. Promise delta
+
+This design ships no behaviour; each build task carries any Promise change of its own.
+
+```promise-delta
+none - a design spec for review that ships no behaviour, and the build tasks carry any Promise change
+```
+
+## 14. Testing and proof
 
 How we will know it works:
 
@@ -636,7 +644,7 @@ How we will know it works:
 - S1 ends with a measurement a week after it lands: the open agent records of that week, and how many S1 ended.
 - S2's dry run is pasted, as counts, into its PR before the pass runs.
 
-## 14. Words used here
+## 15. Words used here
 
 These are the terms this spec uses in a narrow sense.
 
