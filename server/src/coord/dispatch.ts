@@ -357,7 +357,7 @@ export async function sendBackCapCheck(
   const read = coord.run(id);
   if (!read.ok || read.run === null || !sendBackCharged(to, read.run.state)) return today;
   const sessionId = read.run.sessionId;
-  if (sessionId !== null && resumeSkipsCap(await factsOf(workerFacts, sessionId), 'send-back')) return () => null;
+  if (sessionId !== null && resumeSkipsCap(await factsOf(workerFacts, sessionId), 'advance')) return () => null;
   const reading = capsMeasured(coord, await workerReadings(coord, workerFacts), true);
   return () => capRefusalOf(reading, ports.admitFreedSlot);
 }

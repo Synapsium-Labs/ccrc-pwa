@@ -2880,7 +2880,7 @@ describe('coord.db: the anchor-slot lane-arm row (Overlord W1a, the anchor piece
 describe('coord.db: the cap-counts-working lane-arm row (the dispatch cap counts only working workers, D-8792)', () => {
   /** Found by its text, never hard-coded. */
   const SLOT = MIGRATIONS.findIndex((m) => m.includes("VALUES ('cap-counts-working', 'shadow', 0)")) + 1;
-  const ENTRY = /^INSERT INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('cap-counts-working', 'shadow', 0\);$/;
+  const ENTRY = /^INSERT OR IGNORE INTO lane_arm_settings \(lane, choice, updatedAt\) VALUES \('cap-counts-working', 'shadow', 0\);$/;
   it('ONE SEED ROW, shadow, nothing else, the entry after the gate\'s fence refusals (Overlord W1 gates B)', () => {
     expect(SLOT).toBe(MIGRATIONS.findIndex((m) => m.includes('CREATE TABLE overlord_fence_refusals')) + 2);
     expect(MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '').trim()).toMatch(ENTRY);
@@ -2900,6 +2900,22 @@ describe('coord.db: the cap-counts-working lane-arm row (the dispatch cap counts
     expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'cap-counts-working'").get()).toEqual({ choice: 'shadow', updatedAt: 0 });
     expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'anchor-slot'").get()).toEqual({ choice: 'live', updatedAt: 7 });
+    db.close();
+  });
+
+  it('a file one version back that already holds the row keeps it as it was, and the migration does not refuse', () => {
+    const p = dbPathIn(mkTmp('ccrc-coord-'));
+    mkdirSync(path.dirname(p), { recursive: true });
+    const raw = new DatabaseSync(p);
+    tx(raw, () => {
+      for (let v = 0; v < SLOT - 1; v++) raw.exec(MIGRATIONS[v]!);
+      raw.exec(`PRAGMA user_version = ${SLOT - 1}`);
+      raw.exec("INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'live', 9)");
+    });
+    raw.close();
+    const db = openCoordDb(p);
+    expect((db.prepare('PRAGMA user_version').get() as { user_version: number }).user_version).toBe(COORD_SCHEMA_VERSION);
+    expect(db.prepare("SELECT choice, updatedAt FROM lane_arm_settings WHERE lane = 'cap-counts-working'").get()).toEqual({ choice: 'live', updatedAt: 9 });
     db.close();
   });
 });

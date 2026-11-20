@@ -24,6 +24,7 @@ import type { TurnMarkRead } from '../src/coord/stall.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER } from '../src/coord/rundefs.js';
 import { WAKE_BURST, WAKE_WINDOW_MS } from '../src/coord/wakeBudget.js';
 import { FleetWatcher } from '../src/watch.js';
+import { quietAtTestEnd } from './laneQuiet.js';   // D-8140: nothing a watcher fires outlives its test
 import { Bus } from '../src/bus.js';
 import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
@@ -220,13 +221,13 @@ describe('workerReadingOf, the one rule for a worker reading (D-8792)', () => {
 describe('resumeSkipsCap and the send-back edge (D-6093, D-8792)', () => {
   it('a dispatch resume is free only for an awake worker; a send-back also for a sleeping one', () => {
     expect(resumeSkipsCap(awake(markQuiet(MIN)), 'dispatch')).toBe(true);
-    expect(resumeSkipsCap(awake(markQuiet(MIN)), 'send-back')).toBe(true);
-    expect(resumeSkipsCap(ASLEEP, 'send-back')).toBe(true);
+    expect(resumeSkipsCap(awake(markQuiet(MIN)), 'advance')).toBe(true);
+    expect(resumeSkipsCap(ASLEEP, 'advance')).toBe(true);
     expect(resumeSkipsCap(ASLEEP, 'dispatch')).toBe(false);
     for (const f of [STOPPED, { kind: 'gone', why: 'archived' }, { kind: 'gone', why: 'absent' }, { kind: 'gone', why: 'no-pane' },
       { kind: 'unmeasured' }] as WorkerFacts[]) {
       expect(resumeSkipsCap(f, 'dispatch'), JSON.stringify(f)).toBe(false);
-      expect(resumeSkipsCap(f, 'send-back'), JSON.stringify(f)).toBe(false);
+      expect(resumeSkipsCap(f, 'advance'), JSON.stringify(f)).toBe(false);
     }
   });
 
@@ -579,7 +580,7 @@ describe('the freed-slot window and the mail wake (D-8792 pacing, D-8793)', () =
     const home = mkTmp('ccrc-freed-slot-');
     mkdirSync(path.join(home, '.cc-sessions'), { recursive: true });
     const runner: Runner = async () => ({ ran: true, code: 0, stdout: '', stderr: '' });
-    return new FleetWatcher(testDeps(home, runner), new Bus(), 10_000);
+    return quietAtTestEnd(new FleetWatcher(testDeps(home, runner), new Bus(), 10_000));
   };
 
   it('slots freed by the readings are handed out no faster than WAKE_BURST a window', () => {

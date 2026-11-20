@@ -136,13 +136,13 @@ export function workerReadingOf(f: WorkerFacts, now: number): WorkerReading {
 
 /**
  * D-6093 and D-8792, ARMED ONLY: whether a door's start of this worker is a resume that is not charged a slot. A resume
- * dispatch (`dispatch`) of an awake worker starts no process (D-6093). A send-back (`send-back`, `advance -> working`
+ * dispatch (`dispatch`) of an awake worker starts no process (D-6093). A send-back (`advance`, `advance -> working`
  * from an idle state) of an awake worker starts none either, and a send-back of a sleeping one is a wake, which the wake
  * budget paces and the cap does not govern (D-8793). Everything else, an unmeasured read included, is charged as today.
  */
-export function resumeSkipsCap(f: WorkerFacts, door: 'dispatch' | 'send-back'): boolean {
+export function resumeSkipsCap(f: WorkerFacts, door: 'dispatch' | 'advance'): boolean {
   if (f.kind === 'awake') return true;
-  return door === 'send-back' && f.kind === 'gone' && f.why === 'asleep';
+  return door === 'advance' && f.kind === 'gone' && f.why === 'asleep';
 }
 
 /** D-8792: the one edge a send-back is charged on, the cap gate's own (`advance.ts`, its `cap` row): an idle run sent back

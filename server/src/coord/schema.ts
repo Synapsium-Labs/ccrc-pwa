@@ -4044,6 +4044,9 @@ export const MIGRATIONS: readonly string[] = [
   // as before and the caps view reports how many have a worker measured waiting; only `live`, set by the operator at
   // `POST /api/coord/lane-arm`, leaves those runs out of the count. The merge arms nothing, and shadow is its off switch.
   //
+  // `OR IGNORE`: a file that already holds the row (a replay over a database rolled back one version, as
+  // decision-model-records.test.ts does) keeps the operator's choice, and the entry is a no-op there rather than a refusal.
+  //
   // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
   // and migrates nothing), reads the `cap-counts-working` lane-arm row as no lane it knows, and boots. Every earlier entry
   // is frozen. This is the next free slot by position on `main`; capacity Task 2, approvals PR 3 and door B1 build on the
@@ -4052,7 +4055,7 @@ export const MIGRATIONS: readonly string[] = [
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `
-  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
   `,
 ];
 
