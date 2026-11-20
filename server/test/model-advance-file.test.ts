@@ -691,9 +691,9 @@ describe('the advance file on an Anthropic lane (model-class Anthropic arm A2.3)
     expect(Object.isFrozen(BLOCKED_CAUSES)).toBe(true);
   });
 
-  // The older build, as it stood before this task: #2943's head, whose `parseAdvance` keeps keys it does not know. The
-  // file is read out of git history into the run's own temporary directory (it cannot be a fixture: a second copy of
-  // the rules would drift), so the case is skipped on a checkout that does not hold that commit.
+  // The older build, as it stood before this task: #2943's merge commit on main, whose `parseAdvance` keeps keys it does
+  // not know. The file is read out of git history into the run's own temporary directory (it cannot be a fixture: a
+  // second copy of the rules would drift); CI clones with full history, and a checkout without that commit reds.
   const OLDER = 'ea0c3010a0';
   const olderFiles = (): string | null => {
     const dir = mkTmp('model-advance-older-');
@@ -708,10 +708,10 @@ describe('the advance file on an Anthropic lane (model-class Anthropic arm A2.3)
 
   it('an older parseAdvance build reads a hold with model and a releasedAt: both keys kept, and a history entry with evidenceAt', async () => {
     const file = olderFiles();
-    if (file === null) {
-      console.warn(`skipped: this checkout does not hold commit ${OLDER}`);
-      return;
-    }
+    // A main commit (#2943's merge), so every full-history clone holds it; a clone that cannot read it reds here
+    // rather than passing with nothing asserted.
+    expect(file, `this checkout does not hold commit ${OLDER}, the older build this test reads`).not.toBeNull();
+    if (file === null) return;
     const older = await import(pathToFileURL(file).href) as { parseAdvance: (j: unknown) => Advance };
     expect('seedAnthropicAdvance' in older, 'the build under test is the older one').toBe(false);
     const a = seedAnthropicAdvance();
