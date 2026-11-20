@@ -48,6 +48,9 @@ The coordinator's rulings of mail 27858. Words and pins only.
 | F5 | Accepted: the PR lands squashed; history is not rewritten. | Nothing. | |
 | F6 | With no live epic, say which answers are refusals and which is the open. | api.md and plan.md: "with none, the run is refused `plan-missing` when the programme needs a plan, else `ticket-unavailable` when it names a ticket, else it opens with no ticket; and at a wave a live epic lists, a named ticket that is unavailable (below) answers `ticket-unavailable` first." Checked against `planGate`. | Red with the old wording put back in api.md. |
 
+Consents for the round: wave 7 for plan.md and the pin file (mail 27867), wave 8 for the two ledger entries (mail 27868: its
+branch adds D-8808 and D-8809 after D-8736 and edits neither entry).
+
 Every mutation ran in a scratch clone of this branch with the round applied, through `ccrc test --`, and each file was restored
 from a saved copy (`sha256sum -c` OK). Suites green with the round applied: coordinator-plan-reference, coordinator-skill,
 worker-skill, skill-size-ratchet, ccrc-api-closed, public-text, reviewer-skill, plan-inbound, plan-inbound-policy and

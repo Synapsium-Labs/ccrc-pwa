@@ -131,15 +131,20 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5)', () => {
+  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
       const next = text.indexOf('\n## ', at + 1);
       const section = flat(text.slice(at, next === -1 ? undefined : next));
       expect(at, heading).toBeGreaterThanOrEqual(0);
-      // review 2885 F5: the third case, a key Linear refused, where a slot and a key exist and no retry helps
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key, held as unauthorised or answered 403, no retry helps until the operator replaces it\)/);
+      // review 2885 F5 as review 2920 F2 rules it: the third case, a key Linear refused with a 401 (only a 401 is a verdict on the
+      // key; a 403 is an answer about one issue); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; and when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again\)/);
+      // review 2920 F1: the two clauses main's api.md pin held, now pinned where they live
+      expect(section, heading).toMatch(heading === '## plan take'
+        ? /`unreachable` \([^)]*for an Upkeep ticket's take or close, the programme's home workspace could not be resolved;/
+        : /`unreachable` \([^)]*for a decision that binds it: a hand, an Upkeep placement or a take;/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
   });
@@ -170,9 +175,10 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       expect(text, name).toContain('no live epic lists this wave, and every live epic lists waves');
       expect(text, name).toContain('no live epic lists this wave and a live epic lists no waves');
       // review 2885 F2, F3: both cases need a live epic, and an unavailable ticket at a listed wave is answered first
-      expect(text, name).toContain('Both cases need a live epic (with none, `plan-missing`, `ticket-unavailable` or an open with no '
-        + 'ticket answers first), and at a wave a live epic lists, a named ticket that is unavailable (below) answers '
-        + '`ticket-unavailable` first.');
+      // review 2920 F6: with no live epic, two refusals and one open, each named as what it is
+      expect(text, name).toContain('Both cases need a live epic: with none, the run is refused `plan-missing` when the programme needs a '
+        + 'plan, else `ticket-unavailable` when it names a ticket, else it opens with no ticket; and at a wave a live epic lists, a named '
+        + 'ticket that is unavailable (below) answers `ticket-unavailable` first.');
     }
     // review 2885 F1: a ticket of a live epic that lists no waves opens at any wave, in the ticket sentence too
     expect(flat(plan())).toContain('of a live epic that lists no waves (it opens at any wave)');

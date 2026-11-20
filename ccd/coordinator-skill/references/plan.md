@@ -24,8 +24,9 @@ A run is refused at `runs open` when the plan does not allow it:
   and either no live epic lists this wave or the ticket belongs to another epic than the one that lists it; or you named
   no `ticket`, no live epic lists this wave, and every live epic lists waves. Revise the plan (`plan put`, or
   `plan ticket-move`) so the wave and the ticket share an epic.
-  Both cases need a live epic (with none, `plan-missing`, `ticket-unavailable` or an open with no ticket answers first),
-  and at a wave a live epic lists, a named ticket that is unavailable (below) answers `ticket-unavailable` first.
+  Both cases need a live epic: with none, the run is refused `plan-missing` when the programme needs a plan, else
+  `ticket-unavailable` when it names a ticket, else it opens with no ticket; and at a wave a live epic lists, a named ticket
+  that is unavailable (below) answers `ticket-unavailable` first.
 - `ticket-required`: you named no `ticket`, and either the plan has phases and the epic that lists this wave still has
   an open ticket no run has started, or no live epic lists this wave and a live epic lists no waves. Open again naming
   that ticket (in the second case, a ticket of the epic that lists no waves), so the run's work is counted against it.
@@ -161,7 +162,8 @@ triage), `plan-bad-body`, `plan-closed`, `reserved-programme` (a hand to `linear
 `unknown-epic`, `unknown-checkpoint`, `linear-text-public`, `unreachable` (Linear could not be read to confirm the issue
 is still inbound, for a decision that binds it: a hand, an Upkeep placement or a take; a retry helps when Linear or ccrc's
 Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused
-the key, held as unauthorised or answered 403, no retry helps until the operator replaces it) and the client's own
+the key with a 401, held as unauthorised, no retry helps until the operator replaces it; and when the issue's workspace has
+no managed team, nothing is re-read and no retry helps until one of its teams is managed again) and the client's own
 `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
 
 ## plan take
@@ -181,6 +183,7 @@ programme, and not an open Upkeep ticket), `unknown-epic`, `unknown-checkpoint`,
 `ticket-workspace-mismatch`, `linear-text-public`, `unreachable` (Linear could not be read to confirm the issue is still
 inbound, for a take into an epic; or, for an Upkeep ticket's take or close, the programme's home workspace could not be
 resolved; a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking
-must be set first; when Linear refused the key, held as unauthorised or answered 403, no retry helps until the operator
-replaces it) and the client's own `capability-missing`
+must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator
+replaces it; and when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its
+teams is managed again) and the client's own `capability-missing`
 (the server does not advertise `plan-inbound-v1`; nothing was sent).

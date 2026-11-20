@@ -307,9 +307,11 @@ number from `POST /api/ledger/deviations`.
   items in the console, and that a coordinator never answers one for them nor asks for those approvals in its turn text,
   lives in the coordinator SKILL.md's Linear section and `references/plan.md`, not in the contract (amended in review
   round 1, run 2580 F1). In the same commit, the follow-up's caps hunk sets the coordinator skill's size cap to the
-  file's measured size with clause 21 (23872); wave 6's PR shrinks that file below `main`'s cap first, so the cap moves
-  by less than the clause's bytes (amended in review round 2, run 2590 A2). Record: the wave 6 note, which carries the
-  follow-up's exact content.
+  file's measured size with the clause, measured when it lands, never a figure carried from an older tree; wave 6's PR
+  shrank that file below `main`'s cap first, so the cap moves by less than the clause's bytes (amended in review round 2,
+  run 2590 A2). The Overlord's clause took 21, so this clause lands as 22; run 2878's carried packet measured 24829
+  against `main`'s 24339 (6c8f52199c), and the clause waits on plan ticket `w6-clause-22` (amended by review 2920 F4).
+  Record: the wave 6 note and the w6-clause note, which carry the follow-up's exact content.
 - **D-8733 (2026-11-18)** — drift-reads-every-team: `changedIssues` is asked with every team key the workspace's key
   lists, not only the managed ones, so a bound issue moved out of a managed team is still read and put back (§6.2 owns the
   team; round 6 P2). `ops.ts` stays frozen: no new document. An issue of a team ccrc does not manage that no binding names
@@ -330,9 +332,11 @@ number from `POST /api/ledger/deviations`.
   moved out of a managed team is retired too, with its own cause, `moved-out` (review run 2457 F4, D-8733's "inbound counts
   only issues now in a managed team"): take, triage and the close re-read the issue by id before acting and refuse it
   `issue-not-inbound`, and the lane re-reads by id, at a bounded interval, the open stored rows a pass did not see. When the
-  doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused), a decision that binds the issue
-  (a take into an epic, an Upkeep placement, a hand) is refused `unreachable` (503, the Linear read's existing word: a retry
-  helps), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused, no managed team in the issue's
+  workspace), a decision that binds the issue (a take into an epic, an Upkeep placement, a hand) is refused `unreachable`
+  (503, the Linear read's existing word; a retry helps only when Linear or ccrc's Linear store could not be read: a missing
+  key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to replace it, and a
+  workspace with no managed team is not re-read at all; amended by review 2920 F4), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
