@@ -498,6 +498,25 @@ Ten confirmed findings (N1 to N10), five advisories (M1 to M5) and two residues,
 
 ### Review round 3 (review run 2881, at `5bfe51ad9`)
 
+The coordinator accepted X5 on the condition that the reviewer's replacement texts are applied verbatim, one commit per id. Every quoted sentence matched exactly once at its commit's parent. Mutation rows now run MX5.1 to MX5.93.
+
+- **Q1.** Applied verbatim: all six edits, and the task note's F6 row ("filters `request>uri` and every request header").
+- **Q2.** Applied verbatim, combined with m4 in the coordinator's final texts.
+- **Q3.** Applied verbatim, with the coordinator's correction to its test text, and row MX5.93.
+- **Q4.** Applied verbatim; part 4 as difference 10 of spec §8, with the coordinator's count, row and task-note texts (ten differences).
+- **Q5.** Applied verbatim; `D-<n>` stays a literal placeholder, issued at A4's run-open.
+- **Q6.** Applied verbatim.
+- **m1.** Applied verbatim.
+- **m2.** Applied verbatim.
+- **m3.** Not applied; carried, below.
+- **m4.** Applied verbatim, with Q2.
+- **m5.** Applied verbatim, after the plan's sentence "A draft sibling above 4 MiB is unaffected: it is pinned by its stat pin, as before." (the report quotes it in lower case).
+- **m6.** Applied verbatim.
+- **m7.** Applied verbatim.
+- **m8.** Applied verbatim.
+- **m9.** Applied verbatim.
+- **m10.** Applied verbatim.
+- **m11.** Applied verbatim, with plain double quotes around `$CCRC_EXPOSURE_FILE` (the report's backslashes are its escaping).
 - **Carried at the review cap.** m3 is not applied in this pull request. A2.3, A3.3 and A5.1 own it and apply it against X2 P1's merged code. Its (a) text, verbatim (its line references are at `5bfe51ad9`):
 
   > (1) plan:237, replace the range cell "the same range verb with `--pin fp:<sha>`" with "X2 P1's range builder with its draft arm, `{branch: pin.branch, head: pin.head}` (never `--commit`), and `--pin fp:<sha>`, as P1 merged it". In plan:238, replace "the same range verb with `--pin stat:<size>:<mtimeNs>`" with "X2 P1's range builder with its draft arm, `{branch: pin.branch, head: pin.head}`, and `--pin stat:<size>:<mtimeNs>`, as P1 merged it". (2) plan:305, replace "the `file.s === 'too-large'` arm for `cls === 'html'`, beside its sentence and Download" with "the branch that serves an HTML leaf above its class cap without mounting `MockupView` (on `main` the `file.s === 'too-large'` arm; after X2 P1 the `too-large`/`stat-pinned` range branch), beside its Download". (3) plan:193, replace "Before `pinHolds`, a draft pin whose page entry has `draft.fp` null," with "Before the pin parser and `pinHolds`, a draft pin that is stat-pinned (X2 P1's `fp: null` with `stat`, which the file route's pin excludes), or whose page entry has `draft.fp` null,".

@@ -529,7 +529,7 @@ None carries the box token, so the CLAUDE.md box-token bullet owes none a senten
 
 ## 10. Testing and proof
 
-This section says how each claim is proved. The leaf plan carries the tasks, mutation rows MX5.1 to MX5.92 and acceptance rows AR-A1 to AR-A5. The lab rows run on the installed release in F.
+This section says how each claim is proved. The leaf plan carries the tasks, mutation rows MX5.1 to MX5.93 and acceptance rows AR-A1 to AR-A5. The lab rows run on the installed release in F.
 
 | Claim | Proof |
 |---|---|
