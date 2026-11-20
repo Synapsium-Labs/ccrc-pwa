@@ -39,6 +39,22 @@ export function wakeAdmit(recent: readonly number[], now: number, kind: WakeKind
   return { admit: true, recent: [...live, now] };
 }
 
+/** D-6095: how many of `wanted` automatic admissions a caller with a window of ITS OWN may take at `now`, and its list after
+ *  taking them. Each is a `wakeAdmit(…, 'auto')` in turn, so the rule has this one spelling; the list handed in is never
+ *  mutated, and a caller that wants none gets its list pruned. The `admissionWake` lane's budget (`coord/admissionWake.ts`
+ *  never calls `wakeAdmit` itself: the pin `wakeAdmit is defined once and applied by the watcher alone` holds). */
+export function wakeAdmitMany(recent: readonly number[], now: number, wanted: number): { admitted: number; recent: number[] } {
+  let list = recent.filter((t) => now - t < WAKE_WINDOW_MS);
+  let admitted = 0;
+  while (admitted < wanted) {
+    const a = wakeAdmit(list, now, 'auto');
+    list = a.recent;
+    if (!a.admit) break;
+    admitted++;
+  }
+  return { admitted, recent: list };
+}
+
 // ── the memory gate (D-8122) ────────────────────────────────────────────────────────────────────────────────────────
 
 /** `CCRC_WAKE_PRESSURE_GATE`: the pressure level at or above which an automatic wake waits. `warn` is PSI full at or

@@ -32,6 +32,8 @@ import {
   type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop, type WorkerFacts, type WorkerReading,
 } from './dispatchDecide.js';
 import { laneArmRowViewOf } from './laneArm.js';
+import { capWaitOf } from './admissionWake.js';
+import type { AdvanceRefusal } from './advance.js';
 import { CAP_COUNTS_WORKING_LANE } from '../../../shared/lane-arm.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
@@ -293,7 +295,9 @@ export type DispatchOutcome =
  * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
  * a cap that refuses without saying what it is is indistinguishable from a bug).
  */
-export function capsMeasured(coord: CoordStore, readings?: ReadonlyMap<number, WorkerReading>, armed = false): CapsReading {
+export function capsMeasured(
+  coord: Pick<CoordStore, 'caps' | 'capsCountedRuns'>, readings?: ReadonlyMap<number, WorkerReading>, armed = false,
+): CapsReading {
   // D-8792: the counted rows are `capsUsage`'s own (`capsCountedRuns`, its one statement), read in this one synchronous
   // step with the caps, and the decision is `capsReadingOf`'s. With no `readings` it is today's count; with them it also
   // says `usage.waiting`, and only `armed` (the `cap-counts-working` row, `capCountsWorkingArmed`) lets them change a
@@ -323,7 +327,7 @@ async function factsOf(workerFacts: NonNullable<CapPorts['workerFacts']>, sessio
  * a while, and new starts are refused until the count is back under it.
  */
 export async function workerReadings(
-  coord: CoordStore, workerFacts: CapPorts['workerFacts'], now: number = Date.now(),
+  coord: Pick<CoordStore, 'capsCountedRuns'>, workerFacts: CapPorts['workerFacts'], now: number = Date.now(),
 ): Promise<Map<number, WorkerReading>> {
   const out = new Map<number, WorkerReading>();
   if (workerFacts === undefined) return out;
@@ -465,6 +469,32 @@ function stopped(coord: CoordStore, id: number, d: DispatchStop): DispatchHalt {
     default:
       return d satisfies never;
   }
+}
+
+/**
+ * D-6095: a refusal by the concurrency cap is a wait, not a dead end. The run is stamped (`stampAdmissionWait`: the oldest
+ * refusal kept, the newest moved) so the `admissionWake` lane can mail its claimant when the cap has room, and one journal
+ * line says what was refused and the arithmetic. Called inside the coordination serialiser by the doors that charge the
+ * cap: the dispatch below, and the advance route's send-back (`waitOnSendBackRefusal`). The run keeps its state.
+ */
+export function noteCapRefusal(coord: CoordStore, runId: number, limit: number, running: number, at: number = Date.now()): void {
+  coord.stampAdmissionWait(runId, at);
+  coord.recordRunEvent(runId, 'coordinator', `admission-refused:cap-concurrency limit=${limit} running=${running}`, at);
+}
+
+/**
+ * D-6095: the send-back door's half of the wait. A send-back the cap refused (`capWaitOf`, L1) waits like a refused
+ * dispatch (`noteCapRefusal`); a gate that passed, or any other refusal, writes nothing. It takes the advance gate's own
+ * answer, so the route adds one call and no decision (ARCH-33's pin of at most four ifs in that handler). Its caller is
+ * `POST /api/runs/:id/advance`, inside the serialiser (`docs/superpowers/programs/overlord/capacity-task4-notes.md`,
+ * slug send-back-routes-packet).
+ */
+export function waitOnSendBackRefusal(
+  coord: CoordStore, runId: number, gate: { ok: true } | { ok: false; refusal: AdvanceRefusal },
+): void {
+  if (gate.ok) return;
+  const wait = capWaitOf(gate.refusal);
+  if (wait !== null) noteCapRefusal(coord, runId, wait.limit, wait.running);
 }
 
 /** What a dispatch bound: the session it will hold, brief and (resumed) `/clear`. */
@@ -664,7 +694,13 @@ export async function dispatchRun(
   }
   const admit = decideDispatch({ step: 'admit', names, resumeFree, caps: () => caps,
     ...(deps.admitFreedSlot === undefined ? {} : { admitFreedSlot: deps.admitFreedSlot }) });
-  if (admit.kind !== 'go') return stopped(coord, id, admit);
+  if (admit.kind !== 'go') {
+    const halt = stopped(coord, id, admit);
+    if (!halt.ok && halt.kind === 'refused' && halt.code === 'cap-concurrency') {
+      noteCapRefusal(coord, id, halt.limit ?? 0, halt.running ?? 0);
+    }
+    return halt;
+  }
   // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
   // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.
   const browserCap = routeForBrowserCap(plannedRoute, capSupported(deps.fleetState, BROWSER_ROUTE_CAP));

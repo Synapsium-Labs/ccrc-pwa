@@ -60,6 +60,7 @@ import { advanceGate, advanceRequest, landingAdvanceReject, type AdvanceBody } f
 import { REVIEW_ROUND_CAP, reviewCapAsk, reviewCapNotice, reviewFindingsOf } from './reviewcap.js';
 import { dispatchRun, stampDispatchAttempt, type DispatchOutcome, type DispatchRunDeps, capsMeasured } from './dispatch.js';
 import { capCountsWorkingArmed, sendBackCapCheck, workerReadings, type CapPorts } from './dispatch.js';
+import { waitOnSendBackRefusal } from './dispatch.js';   // D-6095: a send-back the cap refused waits (capacity Task 4)
 import { abandonDetail, abandonRefusal, closeRun, type CloseOutcome, type CloseRunDeps, type SweepCloseGuard } from './close.js';
 import { childReclaimSessions, reclaimChild, withChildReclaim, type ChildReclaimRequest } from './childReclaim.js';
 import { reclaimRun, type ReclaimRunDeps } from './reclaim.js';
@@ -2083,6 +2084,7 @@ export function registerCoordRoutes(
       const sendBackOverConcurrency = await sendBackCapCheck(coord, capPorts, id, to);
       const gate = advanceGate({ to, read: () => coord.run(id), reviewInFlight: () => coord.reviewInFlightFor(id),
         overConcurrency: sendBackOverConcurrency });
+      waitOnSendBackRefusal(coord, id, gate);   // D-6095: a send-back the cap refused waits like a refused dispatch
       if (!gate.ok) return refuseAdvance(reply, gate.refusal);
       return advanceAct(coord, reply, gate.run, id, to, claim, ejection);
     });
