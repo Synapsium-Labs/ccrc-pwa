@@ -24,6 +24,7 @@ import { queueAdmissionWake } from './admissionWakeTx.js';
 import { capCountsWorkingArmed, capsMeasured, workerReadings } from './dispatch.js';
 import { capsRoomOf, type WorkerFacts } from './dispatchDecide.js';
 import type { WatcherCoordPort } from './ports.js';
+import { wakeRoom } from './wakeBudget.js';
 
 /** The lane's own memory, held by the watcher and in memory by design: its wake window (never the shared `wakeRecent`,
  *  so the one real process wake, the mail lane's, is charged once, there) and when it last served each programme. */
@@ -44,6 +45,9 @@ export interface AdmissionWakeDeps {
   readonly serial: (<T>(fn: () => Promise<T>) => Promise<T>) | null;
   /** A run worker's measured facts (`turnverdict.ts#workerFactsFor`), the doors' own port. */
   readonly workerFacts: (sessionId: string) => Promise<WorkerFacts>;
+  /** The freed-slot window's list (`FleetWatcher.admitFreedSlot`'s), read and never written: armed, a slot the readings
+   *  free is room only while that window would admit it (`capsRoomOf`, T4 F5). */
+  readonly freedSlotRecent: () => readonly number[];
   readonly memory: AdmissionWakeMemory;
   readonly push: (n: AdmissionWokenNotice) => void;
   readonly warn: (line: string) => void;
@@ -62,7 +66,7 @@ export async function admissionWakePass(d: AdmissionWakeDeps): Promise<void> {
     const readings = armed ? await workerReadings(d.coord, d.workerFacts) : undefined;
     await serial(async () => {
       const now = Date.now();
-      const room = capsRoomOf(capsMeasured(d.coord, readings, armed));
+      const room = capsRoomOf(capsMeasured(d.coord, readings, armed), wakeRoom(d.freedSlotRecent(), now));
       const waiters = d.coord.admissionWaiters();
       const pick = admissionWakeChoice(waiters, room, d.memory.recent, now, d.memory.served);
       d.memory.recent = pick.recent;

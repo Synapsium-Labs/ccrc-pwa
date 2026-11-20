@@ -2576,7 +2576,7 @@ export class FleetWatcher {
     if (!this.primed || !coord) return;
     const turnReads = turnReadDeps(this.deps, this);
     await this.runLane('admissionWake', () => admissionWakePass({ coord, names, serial: this.stopDoneSerial,
-      workerFacts: (sid) => workerFactsFor(turnReads, sid), memory: this.admissionWakeMemory,
+      workerFacts: (sid) => workerFactsFor(turnReads, sid), freedSlotRecent: () => this.freedSlotRecent, memory: this.admissionWakeMemory,
       push: (n) => this.pushOne(n, this.activeProjects), warn: (line) => console.warn(line) }));
   }
 

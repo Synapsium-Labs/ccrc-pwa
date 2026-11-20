@@ -17,7 +17,7 @@ import { configDirFor } from '../src/config.js';
 import { admissionWakeChoice, admissionWakeDetail, blockWokenWith, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
 import { queueAdmissionWake } from '../src/coord/admissionWakeTx.js';
 import { capsReadingOf, capsRoomOf } from '../src/coord/dispatchDecide.js';
-import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany } from '../src/coord/wakeBudget.js';
+import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany, wakeRoom } from '../src/coord/wakeBudget.js';
 import { testDeps, withFakeClock } from './helpers.js';
 import { FleetWatcher } from '../src/watch.js';
 import { buildServer } from '../src/server.js';
@@ -372,14 +372,32 @@ describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships 
   it('in shadow a waiting worker still holds its slot, even when the reading measured it: no room', () => {
     const shadow = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, false);
     expect(shadow.usage.waiting).toBe(2);
-    expect(capsRoomOf(shadow)).toBe(0);
+    expect(capsRoomOf(shadow, WAKE_BURST)).toBe(0);
   });
-  it('armed, the waiting and gone workers free their slots: room for two', () => {
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true))).toBe(2);
+  it('armed, the waiting and gone workers free their slots: room for two, while the freed-slot window admits two', () => {
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true), 2)).toBe(2);
+  });
+  it('capacity follow-ups (T4 F5): armed, a freed slot is room only up to what the freed-slot window admits now', () => {
+    const armed = capsReadingOf({ maxConcurrentWorkers: 3 }, rows, readings, true);
+    expect(capsRoomOf(armed, 1)).toBe(1);
+    expect(capsRoomOf(armed, 0)).toBe(0);
+    // An ordinary free slot never waits on the window: limit 5 over three counted runs, two of them waiting.
+    const roomy = capsReadingOf({ maxConcurrentWorkers: 5 }, rows, readings, true);
+    expect(capsRoomOf(roomy, 0)).toBe(2);
+    expect(capsRoomOf(roomy, 1)).toBe(3);
+  });
+  it('capacity follow-ups (T4 F5): wakeRoom reads the window without recording into it', () => {
+    const NOW = 10 * WAKE_WINDOW_MS;
+    const list = [NOW - 1];
+    expect(wakeRoom([], NOW)).toBe(WAKE_BURST);
+    expect(wakeRoom(list, NOW)).toBe(WAKE_BURST - 1);
+    expect(wakeRoom([NOW - 1, NOW - 2], NOW)).toBe(0);
+    expect(wakeRoom([NOW - WAKE_WINDOW_MS], NOW)).toBe(WAKE_BURST);
+    expect(list).toEqual([NOW - 1]);
   });
   it('with no readings it is today\'s count, and never below zero', () => {
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 5 }, rows, null, false))).toBe(2);
-    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 2 }, rows, null, true))).toBe(0);
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 5 }, rows, null, false), 0)).toBe(2);
+    expect(capsRoomOf(capsReadingOf({ maxConcurrentWorkers: 2 }, rows, null, true), WAKE_BURST)).toBe(0);
   });
 });
 
@@ -495,6 +513,29 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     const id = l.refused('prog-a', 'coord-a', T0 - MIN);
     await l.sweep(T0);
     expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${id}`]);
+  });
+
+  it('capacity follow-ups (T4 F5), armed: a freed slot the freed-slot window would refuse is no room, so a waiter refused there is woken once, not every pass', async () => {
+    const l = await lane();
+    l.coord.setCaps({ maxConcurrentWorkers: 1 });
+    l.coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
+    l.holder('other');   // gone: armed, its slot is a freed slot, which only the freed-slot window hands out
+    const id = l.refused('prog-a', 'coord-a', T0 - MIN);
+    await l.sweep(T0);
+    expect(l.wakeMail()).toHaveLength(1);
+    // Two other starts take the window's two admits; the coordinator's dispatch then meets the window and is refused again.
+    vi.setSystemTime(T0 + 1_000);
+    expect(l.w.admitFreedSlot()).toBe(true);
+    expect(l.w.admitFreedSlot()).toBe(true);
+    expect(l.w.admitFreedSlot()).toBe(false);
+    l.coord.stampAdmissionWait(id, T0 + 2_000);
+    // The lane's next pass (its cadence is the window), with both admits still inside the window: the readings still free
+    // the slot, but the window would refuse it, so nobody is woken.
+    await l.sweep(T0 + MIN);
+    expect(l.wakeMail()).toHaveLength(1);
+    // CONTROL: the pass after, the window admits again, and the refused coordinator is woken for its new refusal.
+    await l.sweep(T0 + 2 * MIN);
+    expect(l.wakeMail()).toHaveLength(2);
   });
 
   it('shadow (cap-counts-working not armed): a gone worker still holds its slot, so nobody is woken', async () => {
