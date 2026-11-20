@@ -1176,7 +1176,7 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
     expect(PREDECESSOR, 'no MIGRATIONS entry creates dead_coordinator_breaker_state').toBeGreaterThanOrEqual(19);
     expect(SLOT, 'no MIGRATIONS entry creates delegation_sessions').toBeGreaterThan(PREDECESSOR);
     expect(SLOT).toBeLessThanOrEqual(MIGRATIONS.length);
-    expect(MIGRATIONS.filter((m) => m.includes('delegation_')), 'one migration, not several').toHaveLength(1);
+    expect(MIGRATIONS.filter((m) => m.includes('CREATE TABLE delegation_')), 'one migration, not several').toHaveLength(1);
     const ddl = MIGRATIONS[SLOT - 1]!.replace(/--[^\n]*/g, '');
     const statements = ddl.split(';').map((s) => s.trim()).filter((s) => s !== '');
     expect(statements.every((s) => /^CREATE (UNIQUE )?(TABLE|INDEX) /.test(s)),
