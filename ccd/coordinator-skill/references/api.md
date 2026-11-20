@@ -86,9 +86,10 @@ response said. The refusals you will actually meet are
   is in another epic than the one that lists it; or no `ticket` was named, no live epic
   lists this wave, and every live epic lists waves. Revise the plan so the wave and the
   ticket share an epic.
-  Both cases need a live epic (with none, `plan-missing`, `ticket-unavailable` or an open
-  with no ticket answers first), and at a wave a live epic lists, a named ticket that is
-  unavailable (below) answers `ticket-unavailable` first.
+  Both cases need a live epic: with none, the run is refused `plan-missing` when the
+  programme needs a plan, else `ticket-unavailable` when it names a ticket, else it opens
+  with no ticket; and at a wave a live epic lists, a named ticket that is unavailable
+  (below) answers `ticket-unavailable` first.
 - `ticket-required`: no `ticket` was named, and either the plan has phases and the epic
   that lists this wave still has an open ticket no run has started, or no live epic
   lists this wave and a live epic lists no waves. Open again naming that ticket (in the

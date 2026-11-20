@@ -24,16 +24,34 @@ code, no migration.
 | Brief item | What changed | Pin (seen red) |
 |---|---|---|
 | 3, round 3 F2 | `ccd/linear-skill/SKILL.md`: "ccrc creates, moves and closes each plan's initiatives, projects, milestones and issues in any linked team, and in a managed team (a team whose migration is applied) puts back an edit a person makes". The file shrinks from 11181 to 11176 bytes (R5 gives it no allowance). | `worker-skill.test.ts`, the Linear hierarchy case: red on main's wording (`expected '--- name: ccrc-linear …' to contain 'closes each plan\'s initiatives, proj…'`), green on the new. |
-| 4, round 3 F3 | `references/api.md`: the inbound path's two verbs are one paragraph that points at `references/plan.md`, which owns their bodies and refusals. Nothing api.md said there is missing from plan.md. | `coordinator-plan-reference.test.ts`: api.md points at plan.md and carries neither body (red on main's api.md). |
+| 4, round 3 F3 | `references/api.md`: the inbound path's two verbs are one paragraph that points at `references/plan.md`, which owns their bodies and refusals. Nothing api.md said there is missing from plan.md, and since fix round 1 nothing its pins held is pinned less (review 2920 F1, below). | `coordinator-plan-reference.test.ts`: api.md points at plan.md and carries neither body (red on main's api.md). |
 | 5b, F1 | Test only. | plan.md's "of a live epic that lists no waves (it opens at any wave)": red with "a live epic" there made "an epic" (review 2885's M2). |
 | 5c, 5d, F2, F3 | One sentence in api.md's and plan.md's `wave-epic-mismatch` bullet: "Both cases need a live epic (with none, `plan-missing`, `ticket-unavailable` or an open with no ticket answers first), and at a wave a live epic lists, a named ticket that is unavailable (below) answers `ticket-unavailable` first." The plan's Task 2 says the same in its own words. Checked against `planGate` (`server/src/coord/openRun.ts`) and `epicForOpen`. | `coordinator-plan-reference.test.ts`, both references (red on main's text). |
 | 5e, F4 | The plan's Task 2: the dropped-waveless-epic clause is gone (dropping an epic drops its open tickets). | None (plan text). |
-| 5f, F5 | plan.md's `plan triage` and `plan take`: "when Linear refused the key, held as unauthorised or answered 403, no retry helps until the operator replaces it". api.md no longer carries the list (item 4). | The two plan.md regexes (red on main's text). |
+| 5f, F5 | plan.md's `plan triage` and `plan take`: "when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it" (as fix round 1 words it: review 2920 F2). api.md no longer carries the list (item 4). | The two plan.md regexes (red on main's text). |
 | 5g, F6 | `plan-inbound.test.ts`: a refused-text close in a team no project claims. The fallback and the cancel go on and no mail is sent. | Red with `mailOwnerOnce`'s `owner === null` half removed (`expected [ 'issueComment' ] to deeply equal [ 'issueComment', 'issueUpdate' ]`); review 2874's F3 case stays green under that mutation. Restored from a saved copy, sha256 equal. |
 | 5h, F8 | The run refusal count is derived from the bullets of api.md's list. | `coordinator-plan-reference.test.ts`: red with a seventh bullet added and "six" kept (`… to contain '\`runs open\` also answers seven refusa…'`). |
 
 The coordinator SKILL.md, CLAUDE.md and the caps file are as on main. The console-only sentence stays in the coordinator
 skill's Linear section, and its pin's title now says it stays there until clause 22 lands.
+
+## Fix round 1 (review 2920)
+
+The coordinator's rulings of mail 27858. Words and pins only.
+
+| Item | Ruling | Done | Pin (seen red) |
+|---|---|---|---|
+| F1 | The move of the `unreachable` pin from api.md to plan.md lost two clauses' pins; nothing may be pinned less than on main. | Each plan.md section's regex gains its own clause: triage's "for a decision that binds it: a hand, an Upkeep placement or a take", take's "for an Upkeep ticket's take or close, the programme's home workspace could not be resolved". | Red with each clause cut (two mutations, one per section). |
+| F2 | Only a 401 is a verdict on the key: `client.ts` maps a 401 to `unauthorised` and a 403 to `forbidden`, which no caller may treat as one; `inboundPolicy.ts`'s key words are `not-configured` and `linear-unauthorised`, and a `linear-forbidden` answer is a row word, about that one issue. | The third case names the 401 hold only: "when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it". No 403 clause. | Red with the 403 wording put back. |
+| F3 | Add the fourth case the doors produce. | Checked against `InboundLane#readById` (no managed team in the workspace: Linear is not asked, `inboundRecheckOf` answers unmeasured with no word), `inboundDoorVerdict` (an unmeasured answer refuses a binding decision `unreachable`) and `planRoutes.ts`'s `recheckRefusal`. Both sections: "and when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again". | Red with the case cut. |
+| F4 | Amend both stale ledgered statements here. | D-8739: the cap is the size measured when the clause lands, never a carried figure; the clause lands as 22, the carried packet measured 24829 against main's 24339, and it waits on plan ticket `w6-clause-22`. D-8735: a retry helps only when Linear or ccrc's Linear store could not be read; a missing key or slot, a 401, and a workspace with no managed team each say what they need. The head commit carries the Ledger-Edit trailer. | None (plan text). |
+| F5 | Accepted: the PR lands squashed; history is not rewritten. | Nothing. | |
+| F6 | With no live epic, say which answers are refusals and which is the open. | api.md and plan.md: "with none, the run is refused `plan-missing` when the programme needs a plan, else `ticket-unavailable` when it names a ticket, else it opens with no ticket; and at a wave a live epic lists, a named ticket that is unavailable (below) answers `ticket-unavailable` first." Checked against `planGate`. | Red with the old wording put back in api.md. |
+
+Every mutation ran in a scratch clone of this branch with the round applied, through `ccrc test --`, and each file was restored
+from a saved copy (`sha256sum -c` OK). Suites green with the round applied: coordinator-plan-reference, coordinator-skill,
+worker-skill, skill-size-ratchet, ccrc-api-closed, public-text, reviewer-skill, plan-inbound, plan-inbound-policy and
+deviation-refs (after `git fetch origin main`), 713 tests.
 
 ## Sizes, measured
 
