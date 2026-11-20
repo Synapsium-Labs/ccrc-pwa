@@ -768,6 +768,32 @@ describe('review 2955 (D-8186)', () => {
     expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-1', 'AAA-2']);
   });
 
+  it('F1: a no-relation close\'s `unrelated` entry is kept when step 3 then ends early on a refused adoption read', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    // the second checkpoint has no leaf under it (the leaf sits under c1), so its close goes ahead with no relation
+    applyPlanChanges(r.db, SLUG, changes({ checkpoints: { insert: [{ epicKey: 'e1', key: 'c2', ordinal: 1, title: 'Checkpoint two', kind: 'acceptance', proves: [], itemId: null }], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const id = await r.approved([entry(1, 'checkpoint', { programme: SLUG, epic: 'e1', checkpoint: 'c2' }), leaf(2, 'k2')]);
+    // tick 1: the leaf cannot be placed yet (its epic is not bound in Linear), and the close's state write is refused once
+    const epicBinding = r.db.prepare("SELECT id, state FROM linear_bindings WHERE localKind = 'epic' AND state = 'bound'").all() as { id: number; state: string }[];
+    expect(epicBinding.length).toBeGreaterThan(0);
+    r.db.prepare("UPDATE linear_bindings SET state = 'pending' WHERE localKind = 'epic' AND state = 'bound'").run();
+    let refused = 0;
+    r.override.current = (ask) => (ask.op === 'issueUpdate' && ask.input['id'] === U(101) && refused++ === 0 ? fail('unreachable') : undefined);
+    await r.tick();
+    expect(r.plan.movesOf(id).map((x) => [x.identifier, x.appliedAt])).toEqual([['AAA-1', null]]);
+    expect(r.plan.migrationById(id)!.report!.unrelated ?? []).toEqual([]);
+    // tick 2: step 2 retries the close and it lands; then step 3's adoption read is refused
+    r.db.prepare("UPDATE linear_bindings SET state = 'bound' WHERE localKind = 'epic' AND id IN (" + epicBinding.map((b) => b.id).join(',') + ')').run();
+    r.override.current = (ask) => (ask.op === 'issueOwned' && ask.input['id'] === U(102) ? fail('unreachable') : undefined);
+    await r.tick();
+    expect(r.issues.get(U(101))!.stateType).toBe('canceled');
+    expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-1']);
+    r.override.current = null;
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-1']);
+  });
+
   it('A2: a no-relation close whose state write is refused is not listed as unrelated until the write lands', async () => {
     const r = await migRig();
     r.addIssue(1);
