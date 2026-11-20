@@ -7,7 +7,9 @@
 //
 // It decides nothing itself: `capsMeasured` and `capsRoomOf` measure the room, `admissionWakeChoice` (L1) picks who is
 // woken, and `queueAdmissionWake` writes each wake (the observation row, the mail, the woken stamp and the claimant's
-// `capacity` blocks) in one transaction. Fail shut: nothing runs while the coordinator pause or the mail-disabled marker
+// `capacity` blocks for that run) in one transaction. With the room the waiters leave, `capacityBlockWakes` (L1) picks the
+// live `capacity` blocks no eligible waiter would wake (capacity follow-ups, T4 F3), and each is woken with the block
+// lane's own mail through `wakeBlockTx`, the one writer of `wokenAt`, in one transaction. Fail shut: nothing runs while the coordinator pause or the mail-disabled marker
 // stands or the registry listing is unreadable, nothing is read when nobody waits, and nobody is woken without the
 // coordination serialiser. The room is the cap reading's own: while `cap-counts-working` is in shadow every counted run
 // holds its slot, so only a slot freed the ordinary way wakes anyone; armed, the worker readings are gathered first,
@@ -15,7 +17,9 @@
 // step, the waiters are read again, the room measured (consuming no freed-slot admit), the choice made and each chosen
 // waiter woken, so a run dispatched while the readings were taken is not mailed.
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../../shared/switches.js';
-import { admissionWakeChoice, type AdmissionWaiter } from './admissionWake.js';
+import { admissionWakeChoice, capacityBlockWakes, isCapacityBlock, type AdmissionWaiter } from './admissionWake.js';
+import { blockWakeMail, type CallRow } from './coordCalls.js';
+import { insertSystemMailTx } from './rundefsTx.js';
 import { queueAdmissionWake } from './admissionWakeTx.js';
 import { capCountsWorkingArmed, capsMeasured, workerReadings } from './dispatch.js';
 import { capsRoomOf, type WorkerFacts } from './dispatchDecide.js';
@@ -53,16 +57,21 @@ export async function admissionWakePass(d: AdmissionWakeDeps): Promise<void> {
   const serial = d.serial;
   if (serial === null) return;
   try {
-    if (d.coord.admissionWaiters().length === 0) return;
+    if (d.coord.admissionWaiters().length === 0 && capacityBlocksOf(d.coord, Date.now()).length === 0) return;
     const armed = capCountsWorkingArmed(d.coord);
     const readings = armed ? await workerReadings(d.coord, d.workerFacts) : undefined;
     await serial(async () => {
       const now = Date.now();
       const room = capsRoomOf(capsMeasured(d.coord, readings, armed));
-      const pick = admissionWakeChoice(d.coord.admissionWaiters(), room, d.memory.recent, now, d.memory.served);
+      const waiters = d.coord.admissionWaiters();
+      const pick = admissionWakeChoice(waiters, room, d.memory.recent, now, d.memory.served);
       d.memory.recent = pick.recent;
       for (const [program, at] of pick.served) d.memory.served.set(program, at);
       for (const w of pick.chosen) wakeOne(d, w, now);
+      // Read after the waiters' wakes, which woke their own runs' blocks.
+      const blocks = capacityBlockWakes(capacityBlocksOf(d.coord, now), waiters, room - pick.chosen.length, d.memory.recent, now);
+      d.memory.recent = blocks.recent;
+      for (const b of blocks.chosen) wakeBlock(d, b, now);
     });
   } catch (err) {
     d.warn(`ccrc-server: admission wake failed (${why(err)}) — the next pass asks again`);
@@ -83,5 +92,24 @@ function wakeOne(d: AdmissionWakeDeps, w: AdmissionWaiter, now: number): void {
     });
   } catch (err) {
     d.warn(`ccrc-server: admission wake of run ${w.runId} failed (${why(err)}) — the next pass asks again`);
+  }
+}
+
+/** Every live `capacity` block of every coordinator that has one, through the block lane's two reads. */
+function capacityBlocksOf(coord: WatcherCoordPort, now: number): CallRow[] {
+  return coord.blockClaimants(now).flatMap((id) => coord.liveBlocksOf(id, now)).filter(isCapacityBlock);
+}
+
+/** One block woken on its own: `wakeBlockTx` is the compare-and-set and its mail goes in the same transaction, the block
+ *  lane's own (`blockWakeLane.ts`), so a block is never woken without its mail and two passes send one. A failure leaves
+ *  it unwoken and is logged, so the next pass asks again. */
+function wakeBlock(d: AdmissionWakeDeps, b: CallRow, now: number): void {
+  try {
+    const woken = d.coord.wakeBlockTx(b.id, now, () => {
+      insertSystemMailTx(d.coord, null, { fromId: 'operator', toId: b.madeBy, runId: null, kind: 'status', ...blockWakeMail(b) });
+    });
+    if (woken) d.warn(`ccrc-server: admission wake: call ${b.id} (a capacity block of ${b.madeBy}) has room under the concurrency cap; mailed ${b.madeBy}`);
+  } catch (err) {
+    d.warn(`ccrc-server: admission wake of call ${b.id} failed (${why(err)}) — the next pass asks again`);
   }
 }
