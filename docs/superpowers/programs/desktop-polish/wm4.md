@@ -99,7 +99,13 @@ Each through `ccrc test`, one run at a time, cd'd into the package, `--maxWorker
 | server: `deviation-refs` (after `git fetch origin main`) | 13 | killed by the memory cap once; alone: 34 of 34 |
 | server: `dtbd`, the ledger guard suite | 11 | 1 of 1, 32 of 32 |
 
-Not run: the macOS legs, the whole server suite (CI's) and CI itself. A memory-cap kill was never counted as a result: each killed file was re-run
+**CI's first run of the PR's tip (fix round 1, measured):** two guards my local runs had not reached were red: `browser-dist` (the new browser file
+served `sharedDist()` inline, not as `dist = sharedDist()` then `serveDist(dist)`) and the wire-guard kit's one-owner scan in `server/test/rings`
+(`workRead.ts` had its own `isRecord`; it now imports the kit's, `lib/wire.ts`). Both fixed in one commit, then `browser-dist`, `programme-screen`
+and `work-card` (177 of 177), the whole `server/test/rings` directory, the compile check and the new browser file (13 of 13) re-run green here. The
+lesson for the plan's list of runs: add `server/test/rings` and `browser-dist` to a pwa change's runs, which the brief's list did not name.
+
+Not run: the macOS legs and the whole server suite (CI's). A memory-cap kill was never counted as a result: each killed file was re-run
 alone, and the table says so where it happened.
 
 ## 6. What was seen in a real browser

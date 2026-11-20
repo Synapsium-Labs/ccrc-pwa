@@ -9,6 +9,7 @@
 import type { RunSummary } from '../../../shared/api';
 import type { ItemView } from '../../../shared/ledgers';
 import type { WorkMapView, WorkUnreadable } from '../../../shared/plan';
+import { isRecord } from '../lib/wire';
 import type { WorkCardAnswer } from './workMapWords';
 
 /** What the last read came to, beside the programme it was for and the view the page last drew. */
@@ -28,7 +29,6 @@ export interface WorkRead {
 /** One event of the read: an answer that arrived, or the word a failed read gave. */
 export type WorkReadEvent = { readonly answer: unknown } | { readonly failed: string };
 
-const isRecord = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null;
 
 /** The word of a refused or odd answer: its `error` when it has one. */
 const WORD_UNREADABLE_ANSWER = 'unreadable answer';
