@@ -250,6 +250,7 @@ Each row ships with the task that owns it; it is red when the guard is removed a
 | X6.30 | XR2.1 | `onReader` not passed | reader ops: frame exit leaves reader mode |
 | X6.31 | XR2.1 | Frame toggle accepted without focus | reader ops: frame toggle is refused unless the frame is ready and focused |
 | X6.32 | XR2.1 | Frame toggle requests full screen without activation | reader ops: frame toggle enters as fill without activation, and asks for full screen with it |
+| X6.58 | XR2.1 | The second `menu` act only shows the overlay, or the layer outside it dropped in landscape | reader ops: a second menu act hides the overlay, and a tap on the layer outside it or on the strip outside its controls hides it |
 | X6.33 | XR2.1 | Entering still remounts | reader ops: entering sends setReading with the stored turn and remounts nothing |
 | X6.34 | XR2.2 | A second writer of the turn key | turn: the storage key is in the census and written in one place |
 
