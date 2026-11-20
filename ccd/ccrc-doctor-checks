@@ -12581,7 +12581,7 @@ _check_model-sessions-behind() {
 }
 
 _check_model-advance-blocked() {
-  local rc rows caps id key text kept="" note=""
+  local rc rows caps id key text ma_kept="" ma_note=""
   _dr_ma_read model-advance-blocked; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   if ! rows="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
@@ -12600,11 +12600,11 @@ _check_model-advance-blocked() {
     *)
       while IFS=$'\x1f' read -r id key text; do
         [ -n "$id" ] || continue
-        if [ "$key" = alias-source-absent ]; then note+="${note:+, }$id"; else kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
+        if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
       done <<< "$rows"
-      rows="$kept"
-      [ -z "$note" ] || note="; no source until ccd marks alias launches ($note)" ;;
+      rows="$ma_kept"
+      [ -z "$ma_note" ] || ma_note="; no source until ccd marks alias launches ($ma_note)" ;;
   esac
   _dr_ma_report model-advance-blocked "$rows" _dr_ma_blocked_fix \
-    "$DR_MA_LANES lane(s) with a model registry or an aliases file: nothing blocks an advance" "$note"
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: nothing blocks an advance" "$ma_note"
 }
