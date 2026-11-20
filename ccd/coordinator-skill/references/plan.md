@@ -192,8 +192,7 @@ declare structure: `"epics":[{"programme":"<slug>","epics":[...]}]` for a done p
 or `"backlog":[{"slug":"<new slug>","title":"<title>","epics":[...]}]` for a new paused programme, each epic as in
 `plan put`. The operator approves the map in the console (or returns it with a note, mailed to you); nothing changes in
 Linear before that. Issues the apply skipped because they changed reach you again as one follow-up map; one you have since
-taken through inbound has left the migration: the report lists it as taken, the follow-up never asks for it, and listing
-it is `map-incomplete`. Refusals:
+taken through inbound is held, and stays off it (listing it is `map-incomplete`). Refusals:
 `not-linear-owner` (only the team's owner proposes), `map-incomplete` (an open issue missing, listed twice, or not
 open), `map-rewrites-plan` (structure for a programme that has a plan or a live run), and `plan-bad-body` (a target
 that does not exist, a successor that does not exist, a finished issue with no evidence, a leaf whose epic is in another
