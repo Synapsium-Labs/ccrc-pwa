@@ -1,6 +1,6 @@
 // The native Docs reader's HTTP routes (design 2026-10-01, section 3.4, section 3.6, section 6.3-6.5; W3 refinements
 // (c), (i), (j), (k) and (l)): L4. `composeDocs` builds one node's reader, fetcher, lanes and caches, once per call
-// (never at module scope); `registerDocsReadRoutes` registers the four reads on the docs plugin's own instance, and
+// (never at module scope); `registerDocsReadRoutes` registers the five reads on the docs plugin's own instance, and
 // Task 7's `registerDocsRefreshRoute` the refresh. The read registration never receives a fetcher (section 2 (g)'s
 // wall 1): its signature takes readers and lanes only. The history read has no cache of its own (rich-docs spec G4):
 // it joins a single flight and books the read lane on every request.
@@ -14,7 +14,8 @@
 // ...')`: the server runs `Fastify({ logger: false })`, so the request logger is a silent no-op.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import type {
-  DocPin, DocsFailureBody, DocsHistoryResponse, DocsProjectsResponse, DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
+  DocPin, DocsFailureBody, DocsHistoryResponse, DocsProjectsResponse, DocsRangeFrameResponse, DocsRangePrepareResponse,
+  DocsRefreshFetch, DocsRefSpec, DocsTreeOk, DocsTreeResponse,
 } from '../../../shared/docs.js';
 import { docsCaches, type DocsCaches } from './cache.js';
 import { ccdDocsFetcher, ccdDocsReader, type CcdDocsDeps } from './ccdsource.js';
@@ -26,13 +27,14 @@ import {
 import {
   DOCS_PRIMARY_NODE, DOCS_REFRESH_SKIPPED, HISTORY_JOB, LISTING_JOB, docsAnswerShape, docsCacheFill, docsCacheHitAnswer,
   docsCacheVerdict, docsFileReply, docsIndexCacheable, docsIndexFlightKey, docsKnownSize, docsLogDue, docsLogFlightKey, docsNodeKey,
-  docsProjectKey, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
+  docsProjectKey, docsRangeAnswerShape, docsRangeFlightKey, docsRangePlan, docsRefreshAnswer, docsRefreshFetchHalf, docsRefreshFlightKey, docsShowBound, docsShowFlightKey,
   docsShowPlan, docsStoredShow, docsTreeEcho, docsTreeFlightKey, fetchBranchFor, parseDocsApiQuery, parseDocsProjectParam,
   parseDocsRefreshBody, refreshDue, type DocsApiRequest, type DocsFileReply, type DocsJob, type DocsListedFile, type DocsRefreshHalf,
   type DocsRefreshRequest,
 } from './policy.js';
 import type {
-  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsLogRead, DocsReader, DocsShowRead, DocsSourceId, DocsTreeRead,
+  DocsFetchRun, DocsFetcher, DocsIndexRead, DocsLogRead, DocsRangeFrameRead, DocsRangePrepareRead, DocsReader, DocsShowRead,
+  DocsSourceId, DocsTreeRead,
 } from './ports.js';
 
 /** One value per fleet node (section 3.12). `primary` is the node every request reads: the API carries no node key,
@@ -133,6 +135,7 @@ type DocsParams = Readonly<{ project?: unknown }>;
 type TreeRequest = Extract<DocsApiRequest, { route: 'tree' }>;
 type FileRequest = Extract<DocsApiRequest, { route: 'file' }>;
 type HistoryRequest = Extract<DocsApiRequest, { route: 'history' }>;
+type RangeRequest = Extract<DocsApiRequest, { route: 'range' }>;
 
 /** An ok index the adapter passed, believed only after `docsAnswerShape`; a believed index fills the node's
  *  micro-cache only when L1's `docsIndexCacheable` says the node's generation is still `gen`, the one its flight
@@ -205,6 +208,29 @@ function believeLog(got: DocsLogRead): DocsLogRead {
   return got;
 }
 
+/** An ok range prepare the adapter passed, believed only after `docsRangeAnswerShape` (X2 P1). A failure is handed back as
+ *  it came. Nothing is cached: a snapshot lives in ccd's own cache, and the route answers `no-store` like every JSON. */
+function believeRangePrepare(got: DocsRangePrepareRead): DocsRangePrepareRead {
+  if (!got.ok) return got;
+  const shape = docsRangeAnswerShape('prepare', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs range prepare answer failed its shape check');
+    return shape;
+  }
+  return got;
+}
+
+/** An ok range frame the adapter passed, believed only after `docsRangeAnswerShape`. A failure is handed back as it came. */
+function believeRangeFrame(got: DocsRangeFrameRead): DocsRangeFrameRead {
+  if (!got.ok) return got;
+  const shape = docsRangeAnswerShape('frame', got.answer);
+  if (!shape.ok) {
+    console.warn('ccrc-server: docs range frame answer failed its shape check');
+    return shape;
+  }
+  return got;
+}
+
 /**
  * One tree read (section 6.4): join the tree flight of (node, project, ref, the project's CURRENT generation), whose
  * starter books `LISTING_JOB` on the read lane; the answer is believed (and recorded) once, inside the flight, before
@@ -232,7 +258,7 @@ function sendFile(reply: FastifyReply, out: DocsFileReply): FastifyReply {
 }
 
 /**
- * The four docs reads (section 3.4), on the docs plugin's own instance, each with `exposeHeadRoute: false`
+ * The docs reads (section 3.4; the range read, X2 P1), on the docs plugin's own instance, each with `exposeHeadRoute: false`
  * (refinement (c): a HEAD would run the whole GET for a discarded body), and an `onClose` that closes every node's
  * read and fetch lane, so a closing server answers every queued job `docs-busy` instead of leaving it to its wait.
  * Each handler parses `:project` and the query with L1's parsers (a refusal is sent before any exec), probes its
@@ -295,6 +321,37 @@ export function registerDocsReadRoutes(app: FastifyInstance, readers: DocsNodes<
     if (!run.value.ok) return sendDocsFailure(reply, run.value);
     const body: DocsHistoryResponse = { ok: true, log: run.value.answer };
     return reply.send(body);
+  });
+
+  // X2 P1 (spec 4.3): one file read in frames. The query parser and `docsRangePlan` refuse before any exec; a prepare and a
+  // frame each join their own flight and book the read lane with the plan's job. Nothing is cached here: the snapshot is
+  // ccd's own, and the answer is `no-store` like every JSON.
+  app.get('/api/docs/:project/range', { exposeHeadRoute: false }, async (req, reply) => {
+    const p = parseDocsProjectParam((req.params as DocsParams).project);
+    if (!p.ok) return sendDocsFailure(reply, p);
+    const q = parseDocsApiQuery('range', req.query as DocsQuery);
+    if (!q.ok) return sendDocsFailure(reply, q);
+    const plan = docsRangePlan((q.req as RangeRequest).query);
+    if (!plan.ok) return sendDocsFailure(reply, plan);
+    const { target, frame, job } = plan;
+    const src: DocsSourceId = { node, project: p.project };
+    const key = docsRangeFlightKey(node, src.project, target, frame);
+    if (frame === null) {
+      const run = await at.flights.join(key, clientGone(reply),
+        (flight) => at.read.run(job, flight, async () => believeRangePrepare(await reader.range.prepare(src, target))));
+      if (run.kind !== 'ran') return notRan(reply, run);
+      if (!run.value.ok) return sendDocsFailure(reply, run.value);
+      const { snapshot, size, digest } = run.value.answer;
+      const prepared: DocsRangePrepareResponse = { ok: true, prepared: { snapshot, size, digest } };
+      return reply.send(prepared);
+    }
+    const run = await at.flights.join(key, clientGone(reply),
+      (flight) => at.read.run(job, flight, async () => believeRangeFrame(await reader.range.frame(src, target, frame))));
+    if (run.kind !== 'ran') return notRan(reply, run);
+    if (!run.value.ok) return sendDocsFailure(reply, run.value);
+    const { snapshot, offset, bytesB64, digest, total } = run.value.answer;
+    const framed: DocsRangeFrameResponse = { ok: true, frame: { snapshot, offset, bytesB64, digest, total } };
+    return reply.send(framed);
   });
 
   app.get('/api/docs/:project/file', { exposeHeadRoute: false }, async (req, reply) => {

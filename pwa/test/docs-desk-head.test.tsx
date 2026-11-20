@@ -16,7 +16,7 @@ import { parseMarkdown } from '../src/lib/markdownParse';
 import type { MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
-import { COMMIT_B, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
+import { COMMIT_B, NO_RANGE_VISIT, draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk, treeResponse, type FakeLoaders } from './docsFixtures';
 import { labelInName, shownText } from './labelInName';
 
 /** matchMedia at `width`: a min-width or max-width query answered as an engine at that width answers it. */
@@ -220,7 +220,7 @@ describe('the desk head is one row and one dense line (desk-nav Part B)', () => 
     const visit: DocsVisit = {
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: Date.now() },
       file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: COMMIT_B, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
     };
     render(<DocsHead page={pageAt('/docs/demo/specs/a.md')} visit={visit} tree={tree} plainView />);
     const kids = [...head().children].map((c) => c.className);

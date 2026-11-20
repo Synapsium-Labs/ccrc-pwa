@@ -1291,6 +1291,8 @@ export class FleetWatcher {
    *  automatic wakes and the routes' asked ones (`admitWake`) share it. In memory by design — a restart empties it,
    *  which can let one extra burst through and no more. */
   private wakeRecent: number[] = [];
+  /** D-8792 (D-6094's pacing): the freed-slot admit's window (`admitFreedSlot`), a list of its own. */
+  private freedSlotRecent: number[] = [];
   /** The last wake per session (any kind), for the mail lane's own floor (`MAIL_WAKE_FLOOR_MS`). In memory, pruned
    *  as it is read. */
   private readonly lastWakeAt = new Map<string, number>();
@@ -2337,6 +2339,18 @@ export class FleetWatcher {
     return this.wakeVerdictAt(kind, id, Date.now()).admit;
   }
 
+  /**
+   * D-8792 (D-6094's pacing): admit one dispatch-cap slot the worker readings freed (a run whose worker is waiting or gone,
+   * counted out only while the `cap-counts-working` row is armed). `WAKE_BURST` per `WAKE_WINDOW_MS` through the pure
+   * `wakeAdmit`, in a list of its OWN: it never records into `wakeRecent`, so a real process wake is charged once and a
+   * mail wake is never pushed back by it (D-8793: the cap governs starts, not wakes).
+   */
+  admitFreedSlot(): boolean {
+    const r = wakeAdmit(this.freedSlotRecent, Date.now(), 'auto');
+    this.freedSlotRecent = r.recent;
+    return r.admit;
+  }
+
   /** `admitWake` with the reason a refusal had (D-8122): `wake-budget` for the window, the memory gate's word for the
    *  gate. The mail lane reads it to name the gate on the delivery. */
   wakeVerdict(kind: WakeKind, id: string): { admit: boolean; refused: WakeMemoryRefusal | 'wake-budget' | null } {
@@ -2422,6 +2436,8 @@ export class FleetWatcher {
         listing: async () => {
           try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
         },
+        // D-8791: the waiting case's one mail to the run's coordinator.
+        stallNotice: (run, n) => queueStallNotice(coord, run, n),
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {

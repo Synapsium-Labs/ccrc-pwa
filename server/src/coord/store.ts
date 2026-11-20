@@ -1019,6 +1019,10 @@ export type LastRunsResult =
      *  sessions a run PARKED at review, merge or close names (the idle set without `planned`), newest or not, so the
      *  policy's parked clock is not cut short by a newer done run beside it. */
     lastPlaced: LastRun[]; openPlacedWorkers: string[]; parkedPlacedWorkers: string[];
+    /** D-8790, additive: the asked sessions an ACTIVE run names that is NOT their newest placed run
+     *  (the same negative predicate as `openPlacedWorkers`). A worker whose newest placed run is itself active is held
+     *  by a second active run only; for every other worker this answers what `openPlacedWorkers` does. */
+    otherOpenPlacedWorkers: string[];
   }
   | { ok: false; kind: 'run-unreadable'; detail: string };
 
@@ -1317,6 +1321,9 @@ const INACTIVE_RUN_STATES_SQL = `('${[...IDLE_RUN_STATES, ...TERMINAL_RUN_STATES
  *  strands query, which binds the same L0 constant as bound placeholders
  *  (D-2794). */
 const TERMINAL_RUN_STATES_SQL = `('${TERMINAL_RUN_STATES.join("','")}')`;
+/** One row the dispatch cap counts (`CoordStore.capsCountedRuns`, D-8792): the run and the worker it names, or null for a
+ *  row with no session, which the cap always counts. */
+export interface CapsCountedRun { readonly runId: number; readonly sessionId: string | null }
 /** The idle list, joined the same way (sibling-parked-run-takes-parked-clock): `lastRunBySession`'s parked read takes
  *  it without `planned`, as `STOP_DONE_PARKED_STATES` does. */
 const IDLE_RUN_STATES_SQL = `('${IDLE_RUN_STATES.join("','")}')`;
@@ -5138,6 +5145,7 @@ export class CoordStore {
     if (sessionIds.length === 0) {
       return {
         ok: true, last: [], openWorkers: [], openClaimants: [], lastPlaced: [], openPlacedWorkers: [], parkedPlacedWorkers: [],
+        otherOpenPlacedWorkers: [],
       };
     }
     const ph = placeholders(sessionIds.length);
@@ -5180,9 +5188,15 @@ export class CoordStore {
     const parked = (this.db.prepare(
       `SELECT DISTINCT sessionId FROM runs WHERE sessionId IN (${ph}) AND state IN ${IDLE_RUN_STATES_SQL} AND state <> ?`,
     ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
+    // D-8790: an active run beside the newest placed one (`planned` is never active, so the newest
+    // placed run is the newest whose state is not `planned`, as `newest(true)` reads it).
+    const other = (this.db.prepare(
+      `SELECT DISTINCT r.sessionId FROM runs r WHERE r.sessionId IN (${ph}) AND r.state NOT IN ${INACTIVE_RUN_STATES_SQL} ` +
+      'AND r.id <> (SELECT MAX(n.id) FROM runs n WHERE n.sessionId = r.sessionId AND n.state <> ?)',
+    ).all(...sessionIds, planned) as { sessionId: string }[]).map((r) => r.sessionId);
     return {
       ok: true, last, openWorkers: open(false), openClaimants: this.openCoordinatorIds(),
-      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked,
+      lastPlaced, openPlacedWorkers: open(true), parkedPlacedWorkers: parked, otherOpenPlacedWorkers: other,
     };
   }
 
@@ -6185,10 +6199,23 @@ export class CoordStore {
     // wave 6 of account-pools on 2026-09-14 (runs 39/40, 110 h at
     // awaiting-review). D-13's principle is kept and sharpened: this names
     // the runs whose session is WORKING.
-    const running = (this.db.prepare(
-      `SELECT count(*) AS c FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL}`,
-    ).get() as { c: number }).c;
-    return { running };
+    //
+    // D-8792 (waiting workers spec 2026-11-19 Part 3): the count is the length of `capsCountedRuns`, the ONE statement
+    // that names the counted rows, so the cap reader's waiting subset (`dispatch.ts#capsMeasured`) is taken over exactly
+    // these rows and never over a second copy of the predicate.
+    return { running: this.capsCountedRuns().length };
+  }
+
+  /**
+   * D-8792: the rows `capsUsage().running` counts, one per run, with the worker each names, oldest first. The ONE
+   * statement of the cap's counted-row predicate: `capsUsage` counts these rows, and the cap reader
+   * (`dispatch.ts#capsMeasured`) reads which of them have a worker measured waiting. A `planned` row and a row whose
+   * `dispatchedAt` is null are not here.
+   */
+  capsCountedRuns(): readonly CapsCountedRun[] {
+    return this.db.prepare(
+      `SELECT id AS runId, sessionId FROM runs WHERE dispatchedAt IS NOT NULL AND state NOT IN ${INACTIVE_RUN_STATES_SQL} ORDER BY id`,
+    ).all() as unknown as CapsCountedRun[];
   }
 
   // ── the automatic roll's setting (D-7453) ─────────────────────────────────

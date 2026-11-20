@@ -112,10 +112,11 @@ export function detachUrls(tree: HastRoot): Detached {
  *  whose draft would overlay there ("uncommitted change not shown"). Not ok, each one reason: `absent` (no entry at
  *  the path, or the side the rule needs is not a committed file or exec), `deleted-in-worktree` (a draft page whose
  *  image the worktree deletes), `draft-withheld` (a draft page whose image's draft is withheld or a type change: the
- *  committed bytes are never shown in its place). */
+ *  committed bytes are never shown in its place), `draft-unhashed` (a draft page whose image's draft opens through its
+ *  stat pin, read by range: it has no fingerprint to pin by, but its own page shows it). */
 export type ImagePin =
   | { ok: true; pin: DocPin; draft: boolean; uncommittedNotShown: boolean }
-  | { ok: false; why: 'absent' | 'deleted-in-worktree' | 'draft-withheld' };
+  | { ok: false; why: 'absent' | 'deleted-in-worktree' | 'draft-withheld' | 'draft-unhashed' };
 
 /** THE pin rule for a page's images (spec 4.11; the ONE derivation: `DocImage` now, Export in part 2, the W6 mockup
  *  planner). `e` is the tree entry at the image's resolved path; `undefined` means there is none. The page is a DRAFT
@@ -148,9 +149,12 @@ export function imagePinFor(
   const draft = e.draft;
   if (draft === null) return committed(false);
   if (entryView(e, drafts, 'ref').badge === 'deleted') return { ok: false, why: 'deleted-in-worktree' };
-  if (entryView(e, drafts, 'ref').opens !== 'draft' || drafts.state !== 'holder' || draft.fp === null) {
+  if (entryView(e, drafts, 'ref').opens !== 'draft' || drafts.state !== 'holder') {
     return { ok: false, why: 'draft-withheld' };
   }
+  // X2 P1: a draft the page opens through its stat pin (read by range, spec 4.3) has no fingerprint to pin an image by;
+  // this is not the withheld case, which opens nothing.
+  if (draft.fp === null) return { ok: false, why: 'draft-unhashed' };
   const pin: DocPin = {
     kind: 'draft', branch: drafts.branch, head: drafts.worktree.head, section: e.section, path: e.path, fp: draft.fp,
   };
