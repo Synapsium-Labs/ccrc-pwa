@@ -27,14 +27,13 @@ export const SOURCE_PART_MIN_BYTES = 4;
  * part is non-empty, the parts are contiguous and cover the whole text, and none passes `maxBytes`. Throws `RangeError` for
  * a `maxBytes` below `SOURCE_PART_MIN_BYTES`, which no part could honour.
  */
-export function splitSourceParts(text: string, maxBytes: number): { parts: SourcePart[]; bytes: number } {
+export function splitSourceParts(text: string, maxBytes: number): { parts: SourcePart[] } {
   if (!Number.isSafeInteger(maxBytes) || maxBytes < SOURCE_PART_MIN_BYTES) {
     throw new RangeError(`splitSourceParts: maxBytes must be a whole number of at least ${String(SOURCE_PART_MIN_BYTES)}`);
   }
   const parts: SourcePart[] = [];
   const n = text.length;
   let start = 0;
-  let total = 0;
   // The next line end at or after the scan position, searched for once: a line end found beyond a part's end stays found
   // for the next part, and -1 (none left) is never searched for again.
   let nextLf = -2;
@@ -44,7 +43,6 @@ export function splitSourceParts(text: string, maxBytes: number): { parts: Sourc
   };
   const close = (end: number, bytes: number): void => {
     parts.push({ start, end, bytes, continued: start > 0 && text.charCodeAt(start - 1) !== LF });
-    total += bytes;
     start = end;
   };
   while (start < n) {
@@ -87,5 +85,5 @@ export function splitSourceParts(text: string, maxBytes: number): { parts: Sourc
     }
   }
   if (parts.length === 0) close(0, 0);
-  return { parts, bytes: total };
+  return { parts };
 }

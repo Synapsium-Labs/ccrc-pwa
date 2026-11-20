@@ -4,12 +4,11 @@
 // by range and decodes it as UTF-8, and bytes that are not UTF-8 keep the Download. Placeholders only (`demo`, `specs/...`).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type React from 'react';
-import { readFileSync } from 'node:fs';
-import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DOCS_MAX_DOC_BYTES, type DocsTreeOk } from '../../shared/docs';
 import { DocsLeaf, RangeSource } from '../src/docs/DocsLeaf';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
+import { ExportBodyContext, type ExportBody } from '../src/docs/exportBody';
 import type { RangeBytes } from '../src/docs/range/RangeLeaf';
 import { DOCS_RANGE_TEXT, fillSentence, mib } from '../src/docs/docsText';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
@@ -28,9 +27,9 @@ const bytesOf = (s: string): number => enc.encode(s).length;
 describe('splitSourceParts: the cutter', () => {
   it('source parts: 2 097 151 and 2 097 152 bytes stay one part, 2 097 153 bytes make two', () => {
     for (const [n, count] of [[DOCS_MAX_DOC_BYTES - 1, 1], [DOCS_MAX_DOC_BYTES, 1], [DOCS_MAX_DOC_BYTES + 1, 2]] as const) {
-      const { parts, bytes } = splitSourceParts('a'.repeat(n), DOCS_MAX_DOC_BYTES);
+      const { parts } = splitSourceParts('a'.repeat(n), DOCS_MAX_DOC_BYTES);
       expect(parts, `${String(n)} bytes`).toHaveLength(count);
-      expect(bytes).toBe(n);
+      expect(parts.reduce((sum, p) => sum + p.bytes, 0), 'the parts hold every byte').toBe(n);
       expect(Math.max(...parts.map((p) => p.bytes))).toBeLessThanOrEqual(DOCS_MAX_DOC_BYTES);
     }
   });
@@ -90,7 +89,7 @@ describe('splitSourceParts: the cutter', () => {
       let text = '';
       for (let i = 0, len = next(400); i < len; i += 1) text += alphabet[next(alphabet.length)]!;
       const max = 4 + next(40);
-      const { parts, bytes } = splitSourceParts(text, max);
+      const { parts } = splitSourceParts(text, max);
       let at = 0;
       for (const p of parts) {
         expect(p.start, `round ${String(round)} contiguous`).toBe(at);
@@ -100,7 +99,7 @@ describe('splitSourceParts: the cutter', () => {
         at = p.end;
       }
       expect(at, 'covers the text').toBe(text.length);
-      expect(bytes).toBe(bytesOf(text));
+      expect(parts.reduce((sum, p) => sum + p.bytes, 0), 'the parts hold every byte').toBe(bytesOf(text));
     }
   });
 
@@ -274,12 +273,23 @@ describe('RangeSource: one document at a time', () => {
     expect(document.querySelector('pre.doc-plain')?.textContent?.startsWith('bbbb')).toBe(true);
   }, 60000);
 
-  it('source parts: a part is shown from its text alone, never from an answer that carries the whole file\'s digest', () => {
-    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'DocsLeaf.tsx'), 'utf8');
-    const from = src.indexOf('export function RangeSource');
-    const body = src.slice(from, src.indexOf('\n}\n', from));
-    expect(from).toBeGreaterThan(0);
-    expect(body).not.toMatch(/rangeShowOf|sha256|DocsShowOk/);
-    expect(body).toMatch(/TextSource/);
-  });
+  it('source parts: a part is shown, and published for Export, from its own text alone, with no whole-file digest on it', () => {
+    const digest = 'd1'.repeat(32);
+    const published: ExportBody[] = [];
+    const publish = (b: ExportBody | null): void => { if (b !== null) published.push(b); };
+    render(
+      <ExportBodyContext value={publish}>
+        <RangeSource read={read(0x61, digest)} path="specs/a.log" />
+      </ExportBodyContext>,
+    );
+    const part1 = 'a'.repeat(DOCS_MAX_DOC_BYTES);
+    const shown = (): string => document.querySelector('pre.doc-plain')?.textContent ?? '';
+    expect(shown(), 'part 1 is the first 2 MiB of the file, no more').toBe(part1);
+    expect(published.at(-1), 'and the Export body is that text alone').toEqual({ kind: 'text', text: part1, lang: null });
+    fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.partNext));
+    expect(shown(), 'part 2 is the rest').toBe('a'.repeat(10));
+    expect(published.at(-1)).toEqual({ kind: 'text', text: 'a'.repeat(10), lang: null });
+    for (const b of published) expect(Object.keys(b).sort(), 'a body carries kind, lang and text only').toEqual(['kind', 'lang', 'text']);
+    expect(document.body.innerHTML, 'no digest on the page').not.toContain(digest);
+  }, 60000);
 });
