@@ -11,7 +11,7 @@ the operator's, in the console, after this lands.
 |---|---|
 | 7.1 | `server/src/linear/migrationPolicy.ts` (L1): `checkMap`, `applySteps`, `reconcileMove`, `putBackSteps`, `replacementComment`; `IssueSnapshot` and `MapBody` in `shared/plan.ts` beside D-8737's shapes; `isPlanKebab` admits the map classes |
 | 7.2 | `POST /api/projects/:project/hierarchy/migrate` (session-gated) and the map item's `approve` and `return` (`hierarchyRoutes.ts`); `plan map-propose`, `POST /api/teams/:team/plan/map` (box token, the team's Linear owner, `planRoutes.ts`), its client row and its section in `references/plan.md`; the console's "Reshape in Linear" |
-| 7.3 | `server/src/linear/migration.ts` (`LinearMigration`, L4): the owner and coordinator mails for a map, the apply at wave boundaries, the report; the plan store's migration functions; the `linearMigration` lane (30 s); migration 112 (four columns on `linear_migrations`, D-8800) |
+| 7.3 | `server/src/linear/migration.ts` (`LinearMigration`, L4): the owner and coordinator mails for a map, the apply at wave boundaries, the report; the plan store's migration functions; the `linearMigration` lane (30 s); migration 113 (four columns on `linear_migrations`, D-8800) |
 | 7.4 | The report item's `put-back` and `done`; put back from the move record alone, run by the lane |
 
 ## Departures (defined in the plan's Deviations found)
@@ -55,7 +55,7 @@ the operator's, in the console, after this lands.
 | 7.3 the `applying` guard in `planSync.ts` | the sync emits no issue step for a listed issue with no applied move row | not needed: a listed issue has no binding until its move row exists (D-8796); the sync instead charges a migrating object's steps to lane `migration` |
 | 7.4 put back | run by the act | asked by the act (`putBackAskedAt`), run by the migration lane (D-8796) |
 | 7.2 approve | the map item settles on `applied` | it settles on Approve, with a note that the report follows; the report item is raised on `applied` (D-8799) |
-| — | no migration in wave 7 | migration 112 (D-8800): `linear_migrations.project`, `report`, `putBackAskedAt`, `reportDoneAt` |
+| — | no migration in wave 7 | migration 113 (D-8800): `linear_migrations.project`, `report`, `putBackAskedAt`, `reportDoneAt` |
 | — | — | `GET /api/migrations/:id` (session-gated, masked), D-8737's read for the map and report bodies |
 | — | a server cap per new verb | none: `shared/api.ts` may only shrink (D-8635), so `plan map-propose` rides `plan-v1`; an older server answers 404 |
 
@@ -105,7 +105,7 @@ Every code fix has a test seen red before it (one run over the six server files,
 | A2 | a follow-up map is stored on its own, the map it joins kept as `prior` until Approve merges them; its item counts its own entries | `migration-propose.test.ts` |
 | A3 | the console's `migration-in-flight` sentences: one for Reshape (one team at a time, or migrated already), one for Put back (refused for good) | `linear-item-controls.test.tsx` |
 | A4 | `stateOfTeam` reads the workspace the team's key routes to | `migration-propose.test.ts` |
-| A5 | D-8799 (the map item settles on Approve) and D-8800 (migration 112's four columns) in the plan | — |
+| A5 | D-8799 (the map item settles on Approve) and D-8800 (migration 113's four columns) in the plan | — |
 | A6 | the report names a done programme whose initiative stays active while its placed tickets are open | `migration-policy.test.ts` |
 | A7 | `MIGRATION_CALLS_PER_TICK` counts every Linear call of a tick; a rate refusal of any of them rests the lane | `migration-apply.test.ts` |
 
@@ -132,8 +132,8 @@ mutation, measured one mutation at a time from a saved copy:
 | A3 | `single-definition/plan.test.ts` rows for `MIGRATION_WAITING_WHY`, `MigrationWaitingWhy` and `MIGRATION_PLAN_BY` | — |
 | A4 to A7 | the four wirings the panel mutated green: round 1's A6 done-programme sentence, F6's `heldIssues` wiring in the proposal, F6's self-reference by issue id with F8's `unclear` exclusion, and A4's newest-first sort in `stateOfTeam` | `migration-apply.test.ts` "A6" (red with `done` dropped) and "F8: a programme named only by an unclear entry" (red without the exclusion); `migration-propose.test.ts` "F6: a superseded entry may name a successor ccrc already holds" (red without `heldIssues`) and "A4: of two rows" (red with the sort reversed); `migration-policy.test.ts` F6, by issue id (red without the check) |
 
-Also in this round: `main` merged again (it took migration 111, the waiting workers' lane-arm row), so this run's migration is
-112; the gate's route counts and the census words did not move with this merge. README's count word is applied (see below), so
+Also in this round: `main` merged twice more (it took migration 111, the waiting workers' lane-arm row, and then 112, the
+dispatch cap's lane-arm row), so this run's migration is 113. README's count word is applied (see below), so
 the census case red since round 1 is green.
 
 ## Follow-ups and open points
