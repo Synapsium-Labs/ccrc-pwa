@@ -83,12 +83,15 @@ export type PlanRefusal = (typeof PLAN_REFUSALS)[number];
 
 /** The kebab words of this vocabulary, for the mail-routes census (`mail-routes.test.ts`): a quoted kebab word in
  *  `server/src/coord` is a declared code or passes an exported guard, and this is the guard for the plan's. */
-const PLAN_KEBAB: ReadonlySet<string> = new Set<string>([
+/** Built on first use, because the work map's lists (programme work map WM2, D-8779) are declared further down, beside the
+ *  view they type. */
+let planKebab: ReadonlySet<string> | null = null;
+export const isPlanKebab = (tok: string): boolean => (planKebab ??= new Set<string>([
   LINEAR_SYNC_PROGRAMME, ...PLAN_REFUSALS, ...EPIC_STATES, ...CHECKPOINT_KINDS, ...CHECKPOINT_STATES, ...TICKET_KINDS,
   ...TICKET_SOURCES, ...TICKET_STATES, ...PLAN_END_OUTCOMES, ...BINDING_KINDS, ...BINDING_STATES, ...MIGRATION_STATES,
   ...HIERARCHY_STATES, ...INBOUND_STATES, ...PHASE_REF_KINDS, ...PHASE_REF_OPS,
-]);
-export const isPlanKebab = (tok: string): boolean => PLAN_KEBAB.has(tok);
+  ...WORK_STATUSES, ...WORK_GROUPS, ...WORK_SOURCES, ...WORK_VERDICT_READS, WORK_READ_FAILED,
+])).has(tok);
 
 // ── Wire types ─────────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -165,6 +168,109 @@ export interface PlanView {
    *  Optional on the wire (review 2268 F6); its reader is `ccrc-api plan show`. */
   phases?: PhaseView[];
 }
+
+// ── The work map (programme work map WM2, D-8779; spec 2026-11-16 §3.1, §4, §5.1 and §7, D2, D3, D4, D19 and D20) ──────
+// One decider, `server/src/coord/workMap.ts#workMapOf`, makes the view; the plan read serves it as `work` beside `plan`.
+
+/** A ticket's status (spec Table 6's fourteen rows, in order, first match), then `failed`, the no-plan fallback's alone
+ *  (review 2268 F22). `closed`: the hierarchy's close with a reason (F10); `left-open`: a ticket of an ended plan that is not
+ *  done (F4), one marked done whose evidence does not verify included (review 2382 L3-F1). */
+export const WORK_STATUSES = ['dropped', 'closed', 'done', 'done-unverified', 'left-open', 'waiting-on-you', 'stuck',
+  'blocked', 'working', 'state-unknown', 'in-review', 'merging', 'queued', 'not-started', 'failed'] as const;
+export type WorkStatus = (typeof WORK_STATUSES)[number];
+/** Who acts on a status. `closed` and `left-open` count apart, in no "N of M" and no outstanding count (F4); `held` is the
+ *  machine's or the coordinator's, `waiting-on-you` the operator's alone (F25). */
+export const WORK_GROUPS = ['done', 'in-progress', 'waiting-on-you', 'held', 'not-started', 'dropped', 'closed',
+  'left-open', 'failed'] as const;
+export type WorkGroup = (typeof WORK_GROUPS)[number];
+/** Where the map comes from (spec §5.1, D19): `ended` when the plan has an end; `plan` with a ticket to count;
+ *  `declared-empty` when `plan put` ran with nothing to count; `runs` (no plan) otherwise. */
+export const WORK_SOURCES = ['plan', 'declared-empty', 'ended', 'runs'] as const;
+export type WorkSource = (typeof WORK_SOURCES)[number];
+/** The run verdicts reader's state on the map: `not-read` skips the stuck and blocked rows (Table 6 rows 7 and 8). */
+export const WORK_VERDICT_READS = ['read', 'not-read'] as const;
+/** The work map's own word for a read behind `work` that throws. */
+export const WORK_READ_FAILED = 'read-failed';
+/** Why `work` could not be read: the store's run read-failure word (`run-unreadable`, its own family's, which the plan's
+ *  words do not admit), or `read-failed`. */
+export type WorkUnreadable = 'run-unreadable' | typeof WORK_READ_FAILED;
+/** One ticket (or, in the no-plan fallback, one work run) on the map. */
+export interface WorkItemView {
+  key: string;
+  /** A ticket's title. Null only on a no-plan run row whose run title is missing or repeats the programme's title, which the
+   *  card draws as "Wave N". */
+  title: string | null;
+  status: WorkStatus; group: WorkGroup;
+  /** done-unverified: why the evidence does not hold; closed: its reason; null otherwise. */
+  reason: string | null;
+  /** The work axis: the ticket's epic (null on a run row). */
+  epic: { key: string; title: string } | null;
+  /** The sequence axis, in phase order: each phase not dropped whose work holds this ticket, every number from
+   *  `planPolicy.ts#phaseNumbers` (F6). `carriedFrom` lists each phase whose recorded carry names this one, in phase order
+   *  (F14); a carry from a source dropped since stands, and its number is null (review 2375 F10). */
+  phases: { key: string; number: number; carriedTo: { key: string; number: number } | null;
+    carriedFrom: { key: string; number: number | null }[] }[];
+  runId: number | null;
+  /** The run's last move (`RunSummary.lastMoveAt`): null for no run or a run with no move; ABSENT when it could not be read,
+   *  so unmeasured never reads as quiet (review 2795 F3). */
+  lastMoveAt?: number | null;
+  wave: number | null;
+  doneAt: number | null;
+  /** The open operator items that make it waiting-on-you. */
+  itemIds: number[];
+  /** The newest failed run that held a ticket now back at not-started. */
+  lastFailedRunId: number | null;
+}
+export type PhaseFinish = null | { at: number } | { at: 'unknown' };
+export interface WorkPhaseView {
+  /** `number` from `phaseNumbers` (F6); a dropped phase is not listed. */
+  key: string; number: number; title: string; summary: string;
+  /** Null while not finished, and always for an empty phase (F14). */
+  finish: PhaseFinish;
+  /** Its own work by group (referenced, less dropped and carried out); closed and left-open apart. */
+  counts: Record<WorkGroup, number>;
+  /** Carried out of this phase. */
+  carried: number;
+  /** The epics this phase takes on whole. */
+  wholeEpics: string[];
+  /** Ticket keys, plan order: its own work, its closed and left-open tickets, and the ones carried out of it. */
+  items: string[];
+}
+export interface WorkEpicView {
+  key: string; title: string;
+  /** `done` of `total`, where `total` counts what the headline's "N of M" counts, so the strip adds up to it (F3). */
+  done: number; total: number; url: string | null;
+  /** A dropped epic is listed only while it holds a ticket that is not dropped, its done ones (F3). */
+  dropped: boolean;
+  /** Dropped checkpoints are in neither (F23), nor listed. */
+  checkpointsMet: number; checkpointsTotal: number;
+  checkpoints: { key: string; title: string; kind: CheckpointKind; state: CheckpointState; metAt: number | null;
+    evidence: CheckpointEvidence | null; url: string | null }[];
+  items: string[];
+}
+export interface WorkMapView {
+  source: WorkSource;
+  end: { outcome: PlanEndOutcome; why: string | null; at: number } | null;
+  verdicts: (typeof WORK_VERDICT_READS)[number];
+  /** Each ticket once (each run once in the fallback). */
+  counts: Record<WorkGroup, number>;
+  items: WorkItemView[];
+  /** The sequence axis; [] when none is declared. */
+  phases: WorkPhaseView[];
+  /** Tickets no phase holds, plan order; [] when the plan declares no phase. */
+  notInPhase: string[];
+  /** The work axis and the strip. */
+  epics: WorkEpicView[];
+  /** One per workspace, as `PlanView` carries them (F7). */
+  initiatives: { workspaceId: string; url: string | null; state: BindingState | 'off' | 'none' }[];
+  doneWhen: { text: string; proved: boolean }[];
+  /** A planned programme's work runs with no ticket (D12); null when none, and on the no-plan fallback. */
+  beforePlan: { runs: number } | null;
+  /** The no-plan fallback: its work runs, newest first, and the waves they span (null with no run). */
+  runs: { items: WorkItemView[]; waves: { from: number; to: number } | null } | null;
+}
+/** The plan read's `work` field: the map, or why the reads behind it failed (D19). Absent means an older server. */
+export type WorkAnswer = WorkMapView | { unreadable: WorkUnreadable };
 export interface HierarchyProjectRow {
   project: string; teamKey: string | null; initiatives: 'on' | 'off'; linearOwner: string | null;
   ownerNow: { id: string | null; source: 'named' | 'default' | 'none'; live: boolean; project?: string; ifUnnamed?: { id: string | null; live: boolean } };

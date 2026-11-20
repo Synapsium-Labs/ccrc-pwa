@@ -63,7 +63,7 @@ describe('decideIdleCompactNudge, per word', () => {
     dialogPending: false, askSummary: null, ask: null, now: at,
     live: { ok: true, word, since: T_NOTICE },
     mark: { ok: true, state: 'done', bg: 0 },
-    tasks: { ok: true, open: 2, touchedAt: at - 10 * MIN },
+    tasks: { ok: true, open: 2, touchedAt: at - 10 * MIN }, openRun: null,
     compaction: readCompactionTail(jsonl(IDLE_TAIL)),
     alreadyNudged: () => false,
   });
