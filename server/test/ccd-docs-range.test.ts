@@ -536,6 +536,49 @@ describe('docs-show-range (X2 P1.2)', () => {
     expect(noRecord()).toEqual([]);
   });
 
+  it('range: a stale stat pin refuses before any byte of the file is copied', () => {
+    // The pre-copy check and the after-copy check compare the same pin, so a refusal alone cannot tell them apart: with
+    // the pre-copy check gone the after-copy one still answers draft-changed, only after the whole file was read and
+    // written into the cache (up to 64 MiB). What only a copy produces is a read of the file: the unit counts the
+    // `SYS.read` calls that meet the draft's inode, and a stale pin must meet none. The counter is the observable
+    // because a refused prepare removes its partial copy, so the cache directory shows nothing afterwards.
+    // The after-copy stat comparison has no case of its own, and cannot have one: it runs only after the stable-field
+    // check (inode, size, modified and change time against the file as first opened), and the pre-copy check has
+    // already matched that first fstat to the pin, so while the pre-copy check stands it can never be the one that
+    // refuses. Delete it alone and nothing is red (measured); delete both and "a file changed since the listing refuses" is.
+    const { wt, head } = holder();
+    const p = writeDraft(wt, 'd.md', 'listed bytes\n');
+    const readsOf = (pin: string): Answer => unitJson<Answer>(h.home, [
+      'import json, os',
+      `target = ${JSON.stringify(draftFile(wt, 'd.md'))}`,
+      'reads = []',
+      'class CountsReads(type(H.SYS)):',
+      '    def read(self, fd, n):',
+      '        if os.fstat(fd).st_ino == os.stat(target).st_ino:',
+      '            reads.append(n)',
+      '        return super().read(fd, n)',
+      'H.SYS = CountsReads()',
+      `reply = json.loads(H.run(${JSON.stringify(unitArgv(draftArgs(head, 'd.md', pin, ['--prepare'])))}).decode('utf-8'))`,
+      "reply['reads'] = len(reads)",
+      'out(reply)',
+    ].join('\n'));
+    // CONTROL: the pin as measured copies, and the counter sees the reads (a counter that counts nothing proves nothing).
+    const control = readsOf(statPinOf(p));
+    expect(control).toMatchObject({ ok: true, size: 13 });
+    expect(control['reads'], 'a prepare that copies reads the file').toBeGreaterThan(0);
+    dropCache();
+    // Touched: the same bytes, a later modified time.
+    const listed = statPinOf(p);
+    const later = new Date(Date.now() + 5000);
+    fs.utimesSync(p, later, later);
+    expect(readsOf(listed)).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present', reads: 0 });
+    // Grown: a new pin for the touched file, then a byte appended.
+    const grownPin = statPinOf(p);
+    fs.appendFileSync(p, 'x');
+    expect(readsOf(grownPin)).toMatchObject({ ok: false, failure: 'draft-changed', now: 'present', reads: 0 });
+    expect(noRecord()).toEqual([]);
+  });
+
   it('range: a frame naming a snapshot of another draft head, another branch, or the committed side refuses', () => {
     const { main, wt, head } = holder();
     const body = bytesOf(2000);
