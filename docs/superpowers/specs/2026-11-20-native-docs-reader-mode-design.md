@@ -63,7 +63,7 @@ The contract release also carries X2's five layouts (X2 spec §4.2): `default`, 
 | Full screen | Fill, plus the browser's element full screen on ccrc's reading container, where the engine grants it |
 | Screen page | One viewport of text. A turn moves to the next screen page and lands on a whole line |
 | Turn | Moving one screen page forward or back |
-| The overlay | ccrc's small reader-mode toolbar. XR1: Exit, the title and the percentage. From XR2 it adds the time left, Aa and the turn setting |
+| The overlay | ccrc's small reader-mode toolbar. XR1: the title, the percentage and Exit. From XR2 it adds the time left, Aa and the turn setting |
 | The top band | The strip at the top of the reading view whose tap shows the overlay; drawn and reported by the frame, from XR2 |
 | The menu control | XR1's small ccrc button in a top corner of the reading view, whose tap shows the overlay; gone from XR2 |
 | Reading container | The ccrc element that holds the reader frame and the overlay, and that goes full screen |
