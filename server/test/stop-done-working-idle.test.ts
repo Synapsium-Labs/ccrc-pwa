@@ -489,7 +489,9 @@ describe('review 2887: the waiting case and the rest of the run-done lane', () =
       const w = world(s);
       vi.spyOn(console, 'warn').mockImplementation(() => undefined);
       if (names === null) {
-        // An unlistable registry is no clear switch: it holds too, read through the pass's facts.
+        // The verdict reads an unmeasurable switch as no clear switch and holds. In the lane an unlistable registry never
+        // reaches it: the tick returns before any sweep when its listing fails, and the act's own failed listing holds
+        // as `registry-unlistable` (capacity follow-ups F-B).
         expect(stopDoneVerdict({ ...input('working'), mailDisabled: 'unmeasurable' })).toEqual({ act: 'hold', reason: 'mail-disabled' });
         continue;
       }
@@ -523,6 +525,84 @@ describe('review 2887: the waiting case and the rest of the run-done lane', () =
     const later = { ...w.deps, now: () => NOW + 15 * MIN } as StopDoneSweepDeps;
     await stopDonePass(later, m, [fleetRow(id)], [rec(WORKER)], []);
     expect(w.argv).toEqual([HIB]);
+  });
+});
+
+// ── Capacity follow-ups round 1 (reviews of Task 2, review 2913): the act's own listing (F-A), the hold-off on arming
+// (F-D), and the key's run part (F-E) ──────────────────────────────────────────────────────────────────────────────
+
+describe('capacity follow-ups: the waiting case at the act and across an arming', () => {
+  it('F-A: mail-disabled raised between the pass\'s listing and the act holds the waiting worker: no sleep, no row, no mail', async () => {
+    const s = store();
+    const id = runAt(s, 'working');
+    live(s);
+    const w = world(s);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    // The pass lists the registry clear; the act's own listing carries the marker.
+    w.deps = { ...w.deps, listing: async () => ['mail-disabled'] };
+    expect(await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], []))
+      .toEqual([{ id: WORKER, kind: 'held-at-act', verdict: { act: 'hold', reason: 'mail-disabled' } }]);
+    expect(w.argv).toEqual([]);
+    expect(mailed(s)).toEqual([]);
+    expect(s.runEvents(id).filter((e) => e.detail !== null && e.detail.startsWith(WORKER_ASLEEP_DETAIL_PREFIX))).toEqual([]);
+  });
+
+  it('F-A control: the same marker at the act leaves a finished worker\'s sleep alone', async () => {
+    const s = store();
+    const c = crowd(s, 0);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    c.w.deps = { ...c.w.deps, listing: async () => ['mail-disabled'] };
+    await stopDonePass(c.w.deps, mem(), c.rows, c.recs, []);
+    expect(c.w.argv).toEqual([HIB_OF(c.done)]);
+  });
+
+  it('F-D: a worker logged in shadow is measured on the first pass after the row is armed, not up to an hour later', async () => {
+    const s = store();
+    const id = runAt(s, 'working');
+    const w = world(s);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const m = mem();
+    await stopDonePass(w.deps, m, [fleetRow(id)], [rec(WORKER)], []);
+    expect(w.argv).toEqual([]);
+    expect(m.waitingHeld?.has(waitingCaseKey(WORKER, id, 'working'))).toBe(true);
+    // A minute later, inside the shadow line's hour, the operator arms the row.
+    live(s);
+    const measured = vi.fn(w.deps.liveWord);
+    const later = { ...w.deps, liveWord: measured, now: () => NOW + MIN } as StopDoneSweepDeps;
+    expect(await stopDonePass(later, m, [fleetRow(id)], [rec(WORKER)], [])).toEqual([{ id: WORKER, kind: 'hibernated', runId: id }]);
+    expect(measured).toHaveBeenCalled();
+    expect(w.argv).toEqual([HIB]);
+    expect(mailed(s)).toHaveLength(1);
+  });
+
+  it('F-D control: with the row still in shadow, the next pass inside the hour measures nothing', async () => {
+    const s = store();
+    const id = runAt(s, 'working');
+    const w = world(s);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const m = mem();
+    await stopDonePass(w.deps, m, [fleetRow(id)], [rec(WORKER)], []);
+    const measured = vi.fn(w.deps.liveWord);
+    await stopDonePass({ ...w.deps, liveWord: measured, now: () => NOW + MIN } as StopDoneSweepDeps, m, [fleetRow(id)], [rec(WORKER)], []);
+    expect(measured).not.toHaveBeenCalled();
+  });
+
+  it('F-E: a shadow-logged worker re-dispatched onto a new working run is measured at once', async () => {
+    const s = store();
+    const first = runAt(s, 'working');
+    const w = world(s);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const m = mem();
+    await stopDonePass(w.deps, m, [fleetRow(first)], [rec(WORKER)], []);
+    // The first run ends and the worker is dispatched onto a second, which is now working.
+    s.db.prepare("UPDATE runs SET state = 'done', closedAt = ? WHERE id = ?").run(NOW, first);
+    const second = runAt(s, 'working', 2);
+    const measured = vi.fn(w.deps.liveWord);
+    await stopDonePass({ ...w.deps, liveWord: measured, now: () => NOW + MIN } as StopDoneSweepDeps, m, [fleetRow(second)], [rec(WORKER)], []);
+    expect(measured).toHaveBeenCalled();
+    const shadow = warn.mock.calls.map((c) => String(c[0])).filter((l) => l.startsWith('ccrc-server: stop-done shadow:'));
+    expect(shadow).toHaveLength(2);
+    expect(shadow[1]).toContain(`run ${second},`);
   });
 });
 
