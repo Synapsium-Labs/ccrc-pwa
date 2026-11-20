@@ -27,9 +27,11 @@ follow, each under a slug below.
   run for every fleet act: no ws-release, ws-hold, ws-archive or child gate on the coordinator. The four self-claimed
   rows of the characterization flip.
 - `skill-row-in-dispatch-reference`: `main` split `wave-lifecycle.md`, so the `self-dispatch` refusal row is in
-  `ccd/coordinator-skill/references/wave-lifecycle-2-dispatch.md`. The plan's one SKILL.md line is NOT in this PR: the
-  skill-size ratchet raises a SKILL.md cap only for a new pinned clause, and a raise for a plain line fails it. W1-5
-  rewrites that entry.
+  `ccd/coordinator-skill/references/wave-lifecycle-2-dispatch.md`. That row satisfies `coordinator-skill.test.ts`'s
+  `RUN_REFUSE_CODES` loop.
+- `skill-line-to-w1-5`: the plan's one SKILL.md line is NOT in this PR, by the coordinator's ruling. SKILL.md sits at its
+  size cap, and the skill-size ratchet raises a cap only for a new pinned clause: a line with an 80-byte raise was built,
+  failed the ratchet, and was dropped. W1-5 adds the line when it rewrites that entry.
 - `migration-slot`: the column takes the next free `MIGRATIONS` slot on this branch's base. It is renumbered by merge if
   another migration lands first.
 - `routes-forced-line`: the dispatch and advance routes' hunks are added lines, except one forced line. The advance
