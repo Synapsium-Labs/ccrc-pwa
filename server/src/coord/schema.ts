@@ -4121,6 +4121,26 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 114: user_version 113 -> 114 ──────────────────────────────────────────
+  // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186, D-8800), four nullable columns on
+  // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
+  // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
+  // lists beyond the move rows, as JSON (issues skipped as changed, issues of a live programme still waiting, and after put back
+  // the issues that moved since and the milestones left under their canceled project); `putBackAskedAt`, when the operator asked
+  // for put back (the migration lane runs it, never the act); `reportDoneAt`, when the operator closed the report (the next team
+  // may start only then, §10.2). One writer, `planStore.ts#setMigration`. FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build
+  // opening a file at this `user_version` takes rule 3 and never names them. The slot is the next free one by position: the
+  // admission wait's columns (113) are the last on main, so this is 114, renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 113 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE linear_migrations ADD COLUMN project TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN report TEXT;
+  ALTER TABLE linear_migrations ADD COLUMN putBackAskedAt INTEGER;
+  ALTER TABLE linear_migrations ADD COLUMN reportDoneAt INTEGER;
+  `,
+
+  // ── 115: user_version 114 -> 115 ──────────────────────────────────────────
   // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
   // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
   // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
@@ -4133,8 +4153,9 @@ export const MIGRATIONS: readonly string[] = [
   // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
   // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
   // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108, Overlord gates B (#3076) 109, door
-  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112 and capacity Task
-  // 4 (#3117) 113 first, so this is 114. RE-MEASURE the slot before merge (it must print 113 before this entry is counted):
+  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112, capacity Task 4
+  // (#3117) 113 and the per-team Linear migration (#3109) 114 first, so this is 115. RE-MEASURE the slot before merge (it
+  // must print 114 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

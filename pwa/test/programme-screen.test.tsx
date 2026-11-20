@@ -10,8 +10,10 @@ import { ApiError } from '../src/lib/apiError';
 import { api } from '../src/lib/api';
 import { LEDGER_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import { PROGRAM_SLUG_MAX_CHARS, type ProgrammeRow, type RunHit } from '../../shared/api';
-import { ROUTES, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath, shellViewOf, topRouteOf } from '../src/lib/routes';
+import { ROUTES, epicPath, isProgrammeSlug, matchRoute, programmeIsOpenable, programmePath, runPath, shellViewOf, topRouteOf } from '../src/lib/routes';
+import { WORK_GROUPS, type PlanView, type WorkGroup, type WorkMapView } from '../../shared/plan';
 import { ProgrammeScreen } from '../src/ledgers/ProgrammeScreen';
+import { planKey, workCardOf, workReadNext } from '../src/ledgers/workRead';
 import { STORED_TEXT, type RemoveSecret } from '../src/ledgers/ItemView';
 import { itemPath } from '../src/ledgers/ledgerWords';
 import { createFleetStore } from '../src/stores/fleet';
@@ -30,6 +32,7 @@ const goals = (over: Partial<GoalsView> = {}): GoalsView => ({
   program: 'prog-a', specPath: SPEC, inShort: 'A console view of what the programme is building.',
   inShortAt: NOW - 3 * 24 * 60 * MIN, modifications: [], ...over,
 });
+const PLAN = { program: 'prog-a', planned: true, initiatives: [], epics: [], doneWhen: [] } as unknown as PlanView;
 const live = [runRow({ id: 1, program: 'prog-a', state: 'working', wave: 2, waveOf: 5, programTitle: 'Programme A', homeProject: 'project-a' } as never)];
 
 /** A store that has heard the fleet, the runs and a list. */
@@ -43,6 +46,8 @@ beforeEach(() => {
   vi.stubGlobal('fetch', vi.fn(async () => { throw new TypeError('offline'); }));
   vi.spyOn(api, 'goals').mockResolvedValue({ ok: true, goals: goals() });
   vi.spyOn(api, 'storedSecrets').mockResolvedValue({ ok: true, program: 'prog-a', slots: [] });
+  // The plan read answers no `work` (an older server), so a case that is not about the Work card draws no card (WM4).
+  vi.spyOn(api, 'plan').mockResolvedValue({ ok: true, plan: PLAN });
   history.replaceState(null, '', '/');
 });
 afterEach(() => { cleanup(); vi.restoreAllMocks(); vi.unstubAllGlobals(); history.replaceState(null, '', '/'); });
@@ -125,6 +130,30 @@ describe('the programme route', () => {
 });
 
 describe('the programme view: the head', () => {
+  // The operator's ruling of 2026-11-20 (fix round 1 amendment, D-8823 `head-icon-not-word`): the head keeps two of the note's three cues, the
+  // programme's colour and its wave line, so the word goes too, and the programme icon the box draws (`RoleBadge`) stands before the title.
+  it('draws no visible "Programme" word, and no kicker', () => {
+    const store = heard({ runs: [runRow({ id: 1, program: 'prog-a', state: 'working', wave: 2, waveOf: 5, programTitle: 'Billing', homeProject: 'project-a' } as never)] });
+    const view = render(<ProgrammeScreen slug="prog-a" store={store} />);
+    const head = view.container.querySelector('.pv-head')!;
+    expect(head.querySelector('.pv-kicker')).toBeNull();
+    expect(head.textContent).not.toMatch(/programme/i);
+    expect(head.textContent).toContain('Billing');
+  });
+
+  it('its programme icon is an image named Programme, with the same title, standing before the title on its line', () => {
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    const head = view.container.querySelector('.pv-head') as HTMLElement;
+    const icon = within(head).getByRole('img', { name: 'Programme' });
+    expect(icon.getAttribute('aria-label')).toBe('Programme');
+    expect(icon.getAttribute('title')).toBe('Programme');
+    expect(icon.querySelector('svg')).not.toBeNull();
+    const heading = within(head).getByRole('heading', { level: 1, name: 'Programme A' });
+    expect(icon.nextElementSibling).toBe(heading);
+    expect(icon.parentElement).toBe(heading.parentElement);
+    expect(icon.parentElement!.classList.contains('pv-name')).toBe(true);
+  });
+
   it('names the programme, its wave and a way back to the fleet', () => {
     render(<ProgrammeScreen slug="prog-a" store={heard()} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Programme A' })).toBeTruthy();
@@ -648,19 +677,22 @@ describe('the programme page: Runs', () => {
     expect(find).toHaveBeenCalledTimes(2);
   });
 
-  it('at a desk Waiting on you and Stored secrets sit under Goals, and Runs in the other column (o8)', async () => {
+  it('at a desk Goals and Work stack in the first column and Waiting on you, Stored secrets and Runs in the other (o8, WM4)', async () => {
     const { readers } = readersOf([answerRow()]);
     const view = render(<ProgrammeScreen slug="prog-a" store={heard()} readers={readers} />);
     await screen.findByTestId('programme-facts');
     const two = view.container.querySelector('.pv-two')!;
     const main = two.querySelector(':scope > .pv-main')!;
+    const side = two.querySelector(':scope > .pv-side')!;
     expect(main.querySelector('[aria-label="Goals"], .pg-goals')).not.toBeNull();
-    expect(main.querySelector('section[aria-label="Waiting on you"]')).not.toBeNull();
+    expect(main.querySelector('section[aria-label="Waiting on you"]')).toBeNull();
+    expect(side.querySelector(':scope > section[aria-label="Waiting on you"]')).not.toBeNull();
+    expect(side.querySelector(':scope > [data-testid="programme-runs"]')).not.toBeNull();
     expect(main.querySelector('[data-testid="programme-runs"]')).toBeNull();
-    expect(two.querySelector(':scope > [data-testid="programme-runs"]')).not.toBeNull();
     const css = stripComments(readFileSync(path.join(__dirname, '../src/ledgers/ledgers.css'), 'utf8'));
     expect(css).toMatch(/\.pv-two \{ display: grid; grid-template-columns: minmax\(0, 1\.05fr\) minmax\(0, 1fr\);/);
     expect(css).toMatch(/@media \(max-width: 900px\) \{ \.pv-two \{ grid-template-columns: minmax\(0, 1fr\); \} \}/);
+    expect(css).toMatch(/\.pv-main,\s*\.pv-side \{ display: grid; gap: var\(--sp-3\); min-width: 0; align-content: start; \}/);
   });
 
   describe('Resume sits once on the head (F25, A46, A55, A60)', () => {
@@ -774,5 +806,352 @@ describe('the programme view: ratifying Goals', () => {
     fireEvent.click(await screen.findByRole('button', { name: 'Ratify' }));
     expect(await screen.findByText('Ratifying goals needs sign-in, which is off on this server.')).toBeTruthy();
     expect(screen.queryByRole('button', { name: 'Ratify' })).toBeNull();
+  });
+});
+
+// The Work card on the programme page (programme work map WM4, D-8823; spec 2026-11-16 §5 and §5.1; plan Task WM4). The page reads
+// the plan on arrival and again when its key moves, keeps the last view the card drew, and passes the card its links. The card's
+// own words and layout are `work-card.test.tsx`'s; this block is what the PAGE does with the answer.
+describe('the programme page: the Work card (WM4)', () => {
+  const ZERO = Object.fromEntries(WORK_GROUPS.map((g) => [g, 0])) as Record<WorkGroup, number>;
+  const ticket = (key: string, title: string, status: 'done' | 'working', over: Record<string, unknown> = {}) => ({
+    key, title, status, group: status === 'done' ? 'done' : 'in-progress', reason: null, epic: { key: 'epic-a', title: 'Epic A' }, phases: [],
+    runId: null, wave: null, doneAt: null, itemIds: [], lastFailedRunId: null, ...over,
+  });
+  const workView = (over: Partial<WorkMapView> = {}): WorkMapView => ({
+    source: 'plan', end: null, verdicts: 'read', counts: { ...ZERO, done: 1, 'in-progress': 1 },
+    items: [ticket('t-1', 'First ticket', 'done'), ticket('t-2', 'Second ticket', 'working', { runId: 12, itemIds: [7] })] as never,
+    phases: [{ key: 'p1', number: 1, title: 'First phase', summary: '', finish: null, counts: { ...ZERO, done: 1, 'in-progress': 1 }, carried: 0,
+      carriedOut: [], wholeEpics: [], items: ['t-1', 't-2'] }],
+    notInPhase: [],
+    epics: [{ key: 'epic-a', title: 'Epic A', done: 1, total: 2, url: null, dropped: false, checkpointsMet: 0, checkpointsTotal: 1, items: ['t-1', 't-2'],
+      checkpoints: [{ key: 'c-1', title: 'Guide accepted', kind: 'acceptance', state: 'open', metAt: null, evidence: null, url: null }] }],
+    initiatives: [], doneWhen: [], beforePlan: null, runs: null, ...over,
+  });
+  const answers = (work: unknown) => vi.spyOn(api, 'plan').mockResolvedValue({ ok: true, plan: PLAN, work } as never);
+  const card = (): HTMLElement => screen.getByRole('heading', { level: 2, name: 'Work' }).closest('section')!;
+  const headlineOf = (): string | null => card().querySelector('.wk-headline')!.textContent;
+  const flush = () => act(async () => { await Promise.resolve(); });
+
+  it('the Work card sits below Goals', async () => {
+    answers(workView());
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    const main = view.container.querySelector('.pv-two > .pv-main')!;
+    const goals = main.querySelector('.pg-goals')!;
+    expect(main.contains(card())).toBe(true);
+    expect(goals.compareDocumentPosition(card()) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(view.container.querySelector('.pv-side')!.contains(card())).toBe(false);
+    expect(api.plan).toHaveBeenCalledWith('prog-a');
+    expect(headlineOf()).toBe('1 of 2 done');
+  });
+
+  it('Waiting on you heads the right column, above Runs', async () => {
+    answers(workView());
+    const { readers } = { readers: { find: async () => ({ ok: true as const, exact: null, runs: [], reviewsOf: [], next: null }), programmes: async () => ({ ok: true as const, programmes: [], closedToday: { operator: 0, sweep: 0, coordinator: 0 } }) } };
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} readers={readers} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    const side = view.container.querySelector('.pv-two > .pv-side')!;
+    const kids = [...side.children].map((c) => c.getAttribute('aria-label') ?? c.getAttribute('data-testid'));
+    expect(kids).toEqual(['Waiting on you', 'Runs']);
+  });
+
+  it('a run of this programme moving re-reads the plan, and a run of another programme does not', async () => {
+    answers(workView());
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    expect(api.plan).toHaveBeenCalledTimes(1);
+    act(() => store.setState({ runs: [...live, runRow({ id: 90, program: 'prog-b', state: 'working' })] }));
+    await flush();
+    expect(api.plan).toHaveBeenCalledTimes(1);
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(api.plan).toHaveBeenCalledTimes(2));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging', stuck: { reason: 'overtaken', cause: null, since: Date.now(), closes: null } } as never] }));
+    await waitFor(() => expect(api.plan).toHaveBeenCalledTimes(3));
+  });
+
+  it('an item of this programme moving re-reads the plan, and an item of another programme does not', async () => {
+    answers(workView());
+    const store = heard({ waiting: waitingView({ items: [itemView({ id: 7 })] }) });
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 7 }), itemView({ id: 8, program: 'prog-b' })] }) }));
+    await flush();
+    expect(api.plan).toHaveBeenCalledTimes(1);
+    act(() => store.setState({ waiting: waitingView({ items: [itemView({ id: 7, state: 'checking' } as never)] }) }));
+    await waitFor(() => expect(api.plan).toHaveBeenCalledTimes(2));
+  });
+
+  it('an answer with no work draws no card', async () => {
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    await waitFor(() => expect(api.plan).toHaveBeenCalledTimes(1));
+    await flush();
+    expect(screen.queryByRole('heading', { level: 2, name: 'Work' })).toBeNull();
+    expect(view.container.querySelector('.wk-card')).toBeNull();
+  });
+
+  it('nothing is drawn for the work until the first read answers', async () => {
+    let answer: (v: never) => void = () => {};
+    vi.spyOn(api, 'plan').mockReturnValue(new Promise((r) => { answer = r as never; }));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    expect(screen.queryByRole('heading', { level: 2, name: 'Work' })).toBeNull();
+    await act(async () => { answer({ ok: true, plan: PLAN, work: workView() } as never); });
+    expect(screen.getByRole('heading', { level: 2, name: 'Work' })).toBeTruthy();
+  });
+
+  it('a slow answer that arrives after a newer read has answered is dropped', async () => {
+    const pending: Array<(v: never) => void> = [];
+    vi.spyOn(api, 'plan').mockImplementation(() => new Promise((r) => { pending.push(r as never); }));
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await waitFor(() => expect(pending.length).toBe(1));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(pending.length).toBe(2));
+    await act(async () => { pending[1]!({ ok: true, plan: PLAN, work: workView({ counts: { ...ZERO, done: 2 } }) } as never); });
+    expect(headlineOf()).toBe('2 of 2 done');
+    await act(async () => { pending[0]!({ ok: true, plan: PLAN, work: workView() } as never); });
+    expect(headlineOf()).toBe('2 of 2 done');
+  });
+
+  it('a view followed by an answer with no work draws no card, and a failed read after that has no last view to keep (review 2922 F4)', async () => {
+    answers(workView());
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    vi.spyOn(api, 'plan').mockResolvedValue({ ok: true, plan: PLAN });
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 2, name: 'Work' })).toBeNull());
+    vi.spyOn(api, 'plan').mockRejectedValue(new TypeError('offline'));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'awaiting-review' }] }));
+    await screen.findByText('The work could not be read: offline');
+    expect(card().querySelector('.wk-headline')).toBeNull();
+  });
+
+  it('a slow failure that arrives after a newer read has answered is dropped (review 2922 F5)', async () => {
+    const pending: Array<{ ok: (v: never) => void; fail: (e: unknown) => void }> = [];
+    vi.spyOn(api, 'plan').mockImplementation(() => new Promise((ok, fail) => { pending.push({ ok: ok as never, fail }); }));
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await waitFor(() => expect(pending.length).toBe(1));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(pending.length).toBe(2));
+    await act(async () => { pending[1]!.ok({ ok: true, plan: PLAN, work: workView({ counts: { ...ZERO, done: 2 } }) } as never); });
+    expect(headlineOf()).toBe('2 of 2 done');
+    await act(async () => { pending[0]!.fail(new ApiError(503, { ok: false, error: 'plan-store-down' })); });
+    expect(headlineOf()).toBe('2 of 2 done');
+    expect(within(card()).queryByRole('alert')).toBeNull();
+  });
+
+  it('a work with an unreadable word this build cannot word is a failed read, and a view missing a list does not throw (review 2922 F3)', async () => {
+    answers({ unreadable: 'new-word' });
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    expect(await screen.findByText('The work could not be read: unreadable answer')).toBeTruthy();
+    answers(workView());
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(headlineOf()).toBe('1 of 2 done'));
+    answers({ ...workView(), epics: undefined });
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'awaiting-review' }] }));
+    expect((await within(card()).findByRole('alert')).textContent).toBe('The work could not be read: unreadable answer');
+    expect(headlineOf()).toBe('1 of 2 done');
+  });
+
+  it('a failed read keeps the last view and says the read failed', async () => {
+    answers(workView());
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    expect(headlineOf()).toBe('1 of 2 done');
+    vi.spyOn(api, 'plan').mockRejectedValue(new ApiError(503, { ok: false, error: 'plan-store-down' }));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    const alert = await within(card()).findByRole('alert');
+    expect(alert.textContent).toBe('The work could not be read: plan-store-down');
+    expect(headlineOf()).toBe('1 of 2 done');
+    expect(within(card()).getByText('Second ticket')).toBeTruthy();
+    // The next good read clears the note and draws the new view.
+    answers(workView({ counts: { ...ZERO, done: 2 } }));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'done' }] }));
+    await waitFor(() => expect(within(card()).queryByRole('alert')).toBeNull());
+    expect(headlineOf()).toBe('2 of 2 done');
+  });
+
+  it('a failed read with no word of its own says what the transport said', async () => {
+    answers(workView());
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    vi.spyOn(api, 'plan').mockRejectedValue(new TypeError('offline'));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    expect((await within(card()).findByRole('alert')).textContent).toBe('The work could not be read: offline');
+  });
+
+  it('an unreadable work keeps the last view and says so', async () => {
+    answers(workView());
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    answers({ unreadable: 'run-unreadable' });
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    expect((await within(card()).findByRole('alert')).textContent).toBe('The work could not be read: the runs could not be read');
+    expect(headlineOf()).toBe('1 of 2 done');
+  });
+
+  it('an unreadable work on the first read draws the note alone', async () => {
+    answers({ unreadable: 'read-failed' });
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    expect((await within(await screen.findByRole('heading', { level: 2, name: 'Work' }).then(() => card())).findByRole('alert')).textContent)
+      .toBe('The work could not be read: a read failed');
+    expect(within(card()).queryByText(/of \d+ done/)).toBeNull();
+  });
+
+  it('a failed first read says the work could not be read, with the refusal\'s word', async () => {
+    vi.spyOn(api, 'plan').mockRejectedValue(new ApiError(503, { ok: false, error: 'plan-store-down' }));
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    const note = await screen.findByText('The work could not be read: plan-store-down');
+    expect(card().contains(note)).toBe(true);
+    expect(note.getAttribute('role')).toBe('alert');
+    expect(within(card()).queryByText(/of \d+ done/)).toBeNull();
+  });
+
+  it('the plan read of a refused answer (ok false) is a failed read too', async () => {
+    vi.spyOn(api, 'plan').mockResolvedValue({ ok: false, error: 'not-found' } as never);
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    expect(await screen.findByText('The work could not be read: not-found')).toBeTruthy();
+  });
+
+  it('a run link opens the run, an item link the held item, and an epic\'s checkpoint row links its epic page', async () => {
+    answers(workView());
+    render(<ProgrammeScreen slug="prog-a" store={heard({ waiting: waitingView({ items: [itemView({ id: 7 })] }) })} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    expect(within(card()).getByRole('link', { name: 'Run #12' }).getAttribute('href')).toBe(runPath(12));
+    expect(within(card()).getByRole('link', { name: 'Item #7' }).getAttribute('href')).toBe(itemPath(7, { at: 'waiting', programme: 'prog-a', back: 'goals' }));
+    fireEvent.click(within(card()).getByRole('button', { name: /Epic A/ }));
+    expect(within(card()).getByRole('link', { name: 'Open the epic' }).getAttribute('href')).toBe(epicPath('prog-a', 'epic-a'));
+  });
+
+  it('an item the page does not hold is drawn as its number, with no link', async () => {
+    answers(workView());
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    expect(within(card()).queryByRole('link', { name: 'Item #7' })).toBeNull();
+    expect(within(card()).getByText('Item #7')).toBeTruthy();
+  });
+
+  it('the card writes neither Programme nor coordinator', async () => {
+    answers(workView());
+    render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    expect(card().textContent).not.toMatch(/programme|coordinator/i);
+  });
+
+  it('a different slug\'s page asks for its own plan and draws no card until that answers', async () => {
+    answers(workView());
+    const store = heard();
+    const view = render(<ProgrammeScreen key="prog-a" slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    vi.spyOn(api, 'plan').mockReturnValue(new Promise(() => {}));
+    view.rerender(<ProgrammeScreen slug="prog-b" store={store} />);
+    expect(screen.queryByRole('heading', { level: 2, name: 'Work' })).toBeNull();
+    expect(api.plan).toHaveBeenLastCalledWith('prog-b');
+  });
+});
+
+// What the page does with each answer is decided once, in `workRead.ts` (L1); the screen only holds its state and draws it.
+describe('the work read: the page keeps the last view, and the time of the last good read', () => {
+  const shape = { source: 'plan', counts: {}, phases: [], notInPhase: [], epics: [], initiatives: [], doneWhen: [] };
+  const view = { ...shape, items: [] } as unknown as WorkMapView;
+  const other = { ...shape, items: [{ key: 'x' }] } as unknown as WorkMapView;
+  const T0 = 1_000;
+
+  it('a view is the card\'s answer, with the time it was read', () => {
+    const r = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    expect(workCardOf(r, 'prog-a')).toEqual({ answer: view, readAt: T0 });
+  });
+
+  it('an absent work is no card, and drops the view the page held', () => {
+    const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    const r2 = workReadNext(r1, 'prog-a', { answer: { ok: true, plan: {} } }, T0 + 1);
+    expect(workCardOf(r2, 'prog-a')).toBeNull();
+  });
+
+  it('an absent work drops the held view for good: a failed read after it has no last view (review 2922 F4)', () => {
+    const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    const r2 = workReadNext(r1, 'prog-a', { answer: { ok: true, plan: {} } }, T0 + 1);
+    expect(r2.last).toBeNull();
+    const r3 = workReadNext(r2, 'prog-a', { failed: 'plan-store-down' }, T0 + 2);
+    expect(r3.last).toBeNull();
+    expect(workCardOf(r3, 'prog-a')?.answer).toEqual({ readFailed: 'plan-store-down', last: null });
+    const r4 = workReadNext(r2, 'prog-a', { answer: { ok: true, plan: {}, work: { unreadable: 'read-failed' } } }, T0 + 3);
+    expect(workCardOf(r4, 'prog-a')?.answer).toEqual({ unreadable: 'read-failed', last: null });
+  });
+
+  it('a word the card cannot word, or a view missing a list the card walks, is a failed read (review 2922 F3)', () => {
+    const unknownWord = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: { unreadable: 'new-word' } } }, T0);
+    expect(workCardOf(unknownWord, 'prog-a')?.answer).toEqual({ readFailed: 'unreadable answer', last: null });
+    for (const list of ['items', 'phases', 'notInPhase', 'epics', 'initiatives', 'doneWhen', 'counts']) {
+      const partial = { ...shape, items: [] } as Record<string, unknown>;
+      delete partial[list];
+      const r = workReadNext(workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0), 'prog-a', { answer: { ok: true, plan: {}, work: partial } }, T0 + 1);
+      expect(workCardOf(r, 'prog-a')?.answer, `no ${list}`).toEqual({ readFailed: 'unreadable answer', last: view });
+    }
+    const notList = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: { ...shape, items: [], epics: {} } } }, T0);
+    expect(workCardOf(notList, 'prog-a')?.answer).toEqual({ readFailed: 'unreadable answer', last: null });
+  });
+
+  it('nothing read yet is no card', () => {
+    expect(workCardOf(null, 'prog-a')).toBeNull();
+  });
+
+  it('an unreadable work keeps the last view and the time of the read that drew it', () => {
+    const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    const r2 = workReadNext(r1, 'prog-a', { answer: { ok: true, plan: {}, work: { unreadable: 'run-unreadable' } } }, T0 + 500);
+    expect(workCardOf(r2, 'prog-a')).toEqual({ answer: { unreadable: 'run-unreadable', last: view }, readAt: T0 });
+  });
+
+  it('a failed read keeps the last view and the time of the last good read, and a good read after it replaces both', () => {
+    const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    const r2 = workReadNext(r1, 'prog-a', { failed: 'plan-store-down' }, T0 + 500);
+    expect(workCardOf(r2, 'prog-a')).toEqual({ answer: { readFailed: 'plan-store-down', last: view }, readAt: T0 });
+    const r3 = workReadNext(r2, 'prog-a', { answer: { ok: true, plan: {}, work: other } }, T0 + 900);
+    expect(workCardOf(r3, 'prog-a')).toEqual({ answer: other, readAt: T0 + 900 });
+  });
+
+  it('a failed first read has no last view', () => {
+    const r = workReadNext(null, 'prog-a', { failed: 'plan-store-down' }, T0);
+    expect(workCardOf(r, 'prog-a')).toEqual({ answer: { readFailed: 'plan-store-down', last: null }, readAt: T0 });
+  });
+
+  it('an answer that is not ok is a failed read, worded by its error', () => {
+    const r = workReadNext(null, 'prog-a', { answer: { ok: false, error: 'not-found' } }, T0);
+    expect(workCardOf(r, 'prog-a')?.answer).toEqual({ readFailed: 'not-found', last: null });
+    const odd = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: 'text' } }, T0);
+    expect(workCardOf(odd, 'prog-a')?.answer).toEqual({ readFailed: 'unreadable answer', last: null });
+  });
+
+  it('a view held for another programme is never drawn for this one, nor carried into its next read', () => {
+    const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    expect(workCardOf(r1, 'prog-b')).toBeNull();
+    const r2 = workReadNext(r1, 'prog-b', { failed: 'x' }, T0 + 1);
+    expect(workCardOf(r2, 'prog-b')?.answer).toEqual({ readFailed: 'x', last: null });
+  });
+
+  it('the key is this programme\'s runs as id:state:stuck and its items as id:state, nothing else', () => {
+    const runs = [
+      runRow({ id: 2, program: 'prog-a', state: 'working' }), runRow({ id: 1, program: 'prog-a', state: 'merging', stuck: { reason: 'overtaken' } } as never),
+      runRow({ id: 9, program: 'prog-b', state: 'working' }),
+    ];
+    const items = [itemView({ id: 7, program: 'prog-a', state: 'open' }), itemView({ id: 8, program: 'prog-b' })];
+    expect(planKey('prog-a', runs, waitingView({ items }))).toBe('1:merging:1,2:working:0|7:open');
+    expect(planKey('prog-a', [], waitingView())).toBe('|');
+    expect(planKey('prog-a', [], null)).toBe('|');
+  });
+
+  it('the items of the key are the open ones and the cleared ones of this programme, the list\'s choice and not the screen\'s (review 2922 A5)', () => {
+    const open = itemView({ id: 7, program: 'prog-a', state: 'open' });
+    const cleared = itemView({ id: 6, program: 'prog-a', state: 'done' });
+    const otherCleared = itemView({ id: 5, program: 'prog-b', state: 'done' });
+    expect(planKey('prog-a', [], waitingView({ items: [open], cleared: [cleared, otherCleared] }))).toBe('|6:done,7:open');
+    expect(planKey('prog-a', [], waitingView({ items: [open] }))).toBe('|7:open');
   });
 });

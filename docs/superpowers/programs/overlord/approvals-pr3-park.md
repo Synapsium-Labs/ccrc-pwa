@@ -45,7 +45,7 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
   own run by the listing, both doors, the retry and the mint. `questionPolicy.ts#decideApprovalLapse` gains `park` and `shadow-park` beside `lapse` and `stale`, in the
   same function, reading the row's stored `parkWord` and `fetchedAt`, the grace, and the park's horizon and void;
   `decideDeferredApprovalPush` drops an entry covering a `parked` row.
-- **L3, `server/src/coord/approvalParkStore.ts`, and the store.** `approval_parks` (migration 114: see "Migration"), written only through `CoordStore` from the questions owner. The mint's park step
+- **L3, `server/src/coord/approvalParkStore.ts`, and the store.** `approval_parks` (migration 115: see "Migration"), written only through `CoordStore` from the questions owner. The mint's park step
   runs inside the mint's transaction (`insertApprovalAt`, the cap race). `parkApprovalRow` is the one statement that writes
   `parked`; a ruling inside the window releases its slot and records a coordinator's deny on the key in the same transaction,
   as the decline does; `meetApprovalParkRuling` is the spend (re-read, sign, use 0 to 1, the retry row's ruling) in one
@@ -118,7 +118,7 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
   signs whatever record it is handed, so it compiles unchanged at `main`'s text. The approval signing path therefore stays
   outside a diff that touches the questions owner, as `consolidation-path-guard.test.ts`'s W3 arm requires. That arm is
   not loosened.
-- `lane-seed-or-ignore`: migration 114 seeds the park's Shadow lanes row with `INSERT OR IGNORE`. A migration replayed
+- `lane-seed-or-ignore`: migration 115 seeds the park's Shadow lanes row with `INSERT OR IGNORE`. A migration replayed
   over a database that already carries the row (a replay test does exactly this) then answers as on a fresh database,
   instead of failing `UNIQUE`.
 - `park-on-the-binding-run` (review 2889 F2): the park key and the park's run are the child's LIVE BINDING run, the run its
@@ -156,13 +156,41 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
   at signing. For a v1 coordinator allow the hook's fleet-side deny-history gate still covers it; for an operator v2 record it
   only feeds the informational `denyCurrent`. To move into the signing transaction's reach when PR 3v lifts the gate.
 
+### For PR 3c (review 2980, the coordinator's ruling)
+
+The second review (run 2980, at 323ab84a3) found four things in the dark lane. The coordinator ruled them out of this PR
+into PR 3c, opened after this PR lands, which must be on main before the park lane can be armed. Each is inert today (the
+lane gate and its other holds).
+
+- **F-A (state machine).** In a watcher tick that sees the dialog's clear edge before the sweep parks the row,
+  `settleClearedApproval` finds the `held` entry and `markApprovalOperatorRows` turns a still-`held` `live` row into
+  `operator`, so it never parks, though the hook told the child "parked". And when the sweep parks first, the deferred push
+  decision drops the entry covering the parked row and the sweep deletes the hold, so a later pane press or clear finds no
+  entry and voids no park: the plan's "a press in that interval marks the parked row `operator` and voids its park" cannot
+  hold through the watcher. Fix direction: a clear edge does not settle a `held` `live` row at or past `notifyAt` less a
+  slack (the sweep parks it), or the sweep runs before the clear settle; and the watcher keeps what a later press needs to
+  void the park. **The case PR 3c must add:** a watcher-level ordering test, with a clear edge before the sweep in the same
+  tick, and a pane press after the park. (Today's case calls `markApprovalOperatorRows` directly, past the entry gate.)
+- **F-B (park write, fail-closed).** `parkApprovalRow`, the one write of `parked`, does not ask whether the key's park is
+  still open, so a row minted `live` before its key's park went void, passed its horizon or lost its run still parks at
+  `notifyAt`; the operator is pushed for a row staled on the next pass, and the last-poll move ignores
+  `recordParkRuling`'s answer, so "run the same command again" can be mailed for a park no retry can meet. Fix direction:
+  ask `parkOpen` with the park's own run inside `parkApprovalRow`'s transaction, or pass the park's facts into the lapse
+  decision.
+- **F-C.** If `markApprovalFetched` throws, `noteRulingServed` warns and the route still serves the allow, leaving
+  `fetchedAt` null, so the move could later park a served allow and mail "run it again". The safe direction is to withhold
+  the ruling on that route.
+- **F-D (display).** The parked view's `runId` is the mark's run, so a resumed child's Waiting on you entry names the first
+  wave's run, not the park's. Fix direction: name the park's run (`approval_parks.runId`).
+
 ## Migration
 
 `approval_parks` and four nullable `approvals` columns (`parkWord`, `parkKey`, `fetchedAt`, `wouldPark`), one index each, and
-the lane's seed row, at slot 114, the coordinator's: urgent mail (#3073) took 108, Overlord gates B (#3076) 109, door
+the lane's seed row, at slot 115, the coordinator's: urgent mail (#3073) took 108, Overlord gates B (#3076) 109, door
 process B1 (#3099) 110, the waiting workers' sleep (#3101) 111 and the dispatch cap's switch (#3103) 112, each absorbed from
 main (the last three in the review fix round, the last after the coordinator ruled that #3103 keeps 112). Capacity Task 4
-(#3117) took 113, so the park is 114, absorbed from main after Task 4 merged. The Shadow lanes
+(#3117) took 113 and the per-team Linear migration (#3109) 114, so the park is 115, absorbed from main at the
+land sync. The Shadow lanes
 card lists the park's row before the sleep lane's, as their worker and I agreed, and the cap's switch last.
 
 ## Mutation measurements
@@ -252,7 +280,7 @@ then green, and each guard has its mutant above.
 The holders of the files touched agreed first: linear-hierarchy wave 8 (shared/api.ts, store.ts), the docs reader's P1 (the
 console's client), capacity Task 4 (the single-definition file) and door process B1 (the floors file). Door B1's #3099 took
 migration slot 110, the waiting workers' sleep (#3101) 111 and the dispatch cap's switch (#3103) 112, so the park moved to
-114, past capacity Task 4's 113 (#3117; additive conflicts, absorbed). The fast run on the first fix-round tip refused one raise-suite fixture of heldFor that
+115, past capacity Task 4's 113 (#3117) and the per-team Linear migration's 114 (#3109; additive conflicts, absorbed). The fast run on the first fix-round tip refused one raise-suite fixture of heldFor that
 lacked bindingRunId, outside the narrow typecheck configs used here (the full one is killed by the test slice's memory cap);
 fixed in the same round.
 

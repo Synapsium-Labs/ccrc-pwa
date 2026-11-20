@@ -213,17 +213,17 @@ unreadable first read.
   as a grid), no chevron on any folded line, and an ended plan's bar drawn all done.
 - Not done: a real programme's data, a touch device, a screen reader, and the two skins other than the default.
 
-Screenshots (all viewed after the last styling change, except where §6 says otherwise):
+Screenshots (the first, second, third and last of the table were taken from WM3's throw-away harness and are replaced in place by pictures of the card on the programme page, WM4's; the others are WM3's, viewed after its last styling change except where §6 says otherwise):
 
 | Image | What |
 |---|---|
-| ![Phased plan, 1280 px, light](../../../design/2026-11-16-programme-work-map-design/wm3/phased-1280-light.png) | phased, 684 px card, the first epic open |
-| ![Phased plan, 360 px, light](../../../design/2026-11-16-programme-work-map-design/wm3/phased-360-light.png) | phased, 344 px card, the first epic open |
-| ![Phased plan, 1280 px, dark](../../../design/2026-11-16-programme-work-map-design/wm3/phased-1280-dark.png) | phased, dark |
+| ![Phased plan, 1280 px, light](../../../design/2026-11-16-programme-work-map-design/wm3/phased-1280-light.png) | phased, the programme page at a 1280 window (a 451px card, no epic open), ordinary titles; replaced by WM4's picture of the page (review 2891 F2, review 2922 A2) |
+| ![Phased plan, 360 px, light](../../../design/2026-11-16-programme-work-map-design/wm3/phased-360-light.png) | phased, the programme page at a 360 window, ordinary titles; replaced by WM4's picture of the page |
+| ![Phased plan, 1280 px, dark](../../../design/2026-11-16-programme-work-map-design/wm3/phased-1280-dark.png) | phased, the programme page at a 1280 window, dark; replaced by WM4's picture of the page |
 | ![No plan, 360 px](../../../design/2026-11-16-programme-work-map-design/wm3/noplan-360-light.png) | the no-plan fallback |
 | ![Ended plan, 360 px](../../../design/2026-11-16-programme-work-map-design/wm3/ended-360-light.png) | an ended plan |
 | ![Plan with no phases, 1280 px](../../../design/2026-11-16-programme-work-map-design/wm3/nophases-1280-light.png) | grouped by epic, with a closed ticket |
-| ![Unreadable over the last view, 1280 px](../../../design/2026-11-16-programme-work-map-design/wm3/unreadable-1280-light.png) | an `unreadable` answer over the last view |
+| ![Unreadable over the last view, 1280 px](../../../design/2026-11-16-programme-work-map-design/wm3/unreadable-1280-light.png) | an unreadable re-read over the last view, the page at a 1280 window; replaced by WM4's picture of the page |
 
 ## 7. Records and claims
 

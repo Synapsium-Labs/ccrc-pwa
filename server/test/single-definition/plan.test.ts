@@ -49,4 +49,11 @@ describe('the plan vocabulary has one home (D-8181)', () => {
     }
     expect(holders(/Keeping the plan; ccrc goes on restoring/)).toEqual(['server/src/linear/driftPolicy.ts']);
   });
+
+  // Review 2918 A3 (plan Global Constraints: a row for each new list): the migration's waiting reasons and the `planBy` of the
+  // rows its map declares are declared once, in shared/plan.ts; the planBy word itself is spelled there alone.
+  it('the migration\'s waiting reasons and its planBy word are declared once, in shared/plan.ts (review 2918 A3)', () => {
+    for (const c of ['MIGRATION_WAITING_WHY', 'MigrationWaitingWhy', 'MIGRATION_PLAN_BY']) expect(holders(decl(c)), c).toEqual(['shared/plan.ts']);
+    expect(holders(/'ccrc-migration'/)).toEqual(['shared/plan.ts']);
+  });
 });
