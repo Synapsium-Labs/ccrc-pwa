@@ -49,11 +49,12 @@ import {
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const OP = path.join(REPO, 'deploy', 'models-op.mjs');
+const ARM = path.join(REPO, 'deploy', 'models-anthropic.mjs');
 /** A COPY of the op's source, its imports pointed at this checkout's files: `../shared/` (the shared rules) and, when the
  *  Anthropic arm stands in its own module, `./models-anthropic.mjs` (beside the op, so a copy elsewhere cannot find it). */
-const pointImports = (src: string): string => src
+const pointImports = (src: string, arm: string = path.join(REPO, 'deploy', 'models-anthropic.mjs')): string => src
   .replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
-  .replaceAll("from './models-anthropic.mjs'", `from '${pathToFileURL(path.join(REPO, 'deploy', 'models-anthropic.mjs')).href}'`);
+  .replaceAll("from './models-anthropic.mjs'", `from '${pathToFileURL(arm).href}'`);
 
 let home: string;
 const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
@@ -5719,13 +5720,19 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     opEnv({ CCRC_MODELS_NOW: NOW }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
   const verbOf = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
     opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
-  /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. */
-  const copyOf = (line: string, instead: string): string => {
-    const src = fs.readFileSync(OP, 'utf8');
-    expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
+  /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. A line of the
+   *  Anthropic arm (`inArm`) is replaced in a copy of that module, which the op's copy imports in place of the shipped one. */
+  const copyOf = (line: string, instead: string, inArm = false): string => {
+    const armCopy = path.join(home, 'models-anthropic-copy.mjs');
+    const src = fs.readFileSync(inArm ? ARM : OP, 'utf8');
+    expect(src.split(line), `the ${inArm ? 'arm' : 'op'} has the line ${line}`).toHaveLength(2);
     const copy = path.join(home, 'models-op-copy.mjs');
-    fs.writeFileSync(copy, pointImports(src)
-      .replace(line, instead));
+    if (inArm) {
+      fs.writeFileSync(armCopy, pointImports(src).replace(line, instead));
+      fs.writeFileSync(copy, pointImports(fs.readFileSync(OP, 'utf8'), armCopy));
+    } else {
+      fs.writeFileSync(copy, pointImports(src).replace(line, instead));
+    }
     return copy;
   };
   const refreshThrough = (copy: string, at: string): Result => {
@@ -5944,14 +5951,15 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
   });
 
   it.each([
-    ['the aliases write fails after the move is recorded', "  return writeJsonFile(aliasesPath(id), parsed, 'aliases-unwritable');",
-      "  return writeJsonFile(path.join(advancePath(id), 'x'), parsed, 'aliases-unwritable');", 'aliases-unwritable', 1],
+    // The aliases writer lives in the Anthropic arm (`deploy/models-anthropic.mjs`), the advance writer in the op.
+    ['the aliases write fails after the move is recorded', "    return writeJsonFile(aliasesPath(id), parsed, 'aliases-unwritable');",
+      "    return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'aliases-unwritable');", 'aliases-unwritable', 1, true],
     ['the advance write fails before anything is recorded', "  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
-      "  return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'advance-unwritable');", 'advance-unwritable', 0],
-  ] as [string, string, string, string, number][])('a cut-short move is recorded once when newer evidence arrives: %s', (_w, line, instead, error, entries) => {
+      "  return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'advance-unwritable');", 'advance-unwritable', 0, false],
+  ] as [string, string, string, string, number, boolean][])('a cut-short move is recorded once when newer evidence arrives: %s', (_w, line, instead, error, entries, inArm) => {
     baseline([{ id: X1 }, { id: X2 }]);
     plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
-    const cut = refreshThrough(copyOf(line, instead), T1);
+    const cut = refreshThrough(copyOf(line, instead, inArm), T1);
     expect([cut.code, cut.body['error']], cut.stdout + cut.stderr).toEqual([1, error]);
     expect(cut.body['moved'], 'the cut refresh answered no move').toBeUndefined();
     expect(readAliases().classes.opus).toMatchObject({ id: X1, idSince: T0 });

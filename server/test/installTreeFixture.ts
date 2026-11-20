@@ -107,6 +107,9 @@ export const TREE_FILES = [
   // ERR_MODULE_NOT_FOUND. Copied, never stubbed, for the GPT lane's reason above.
   'ccd/ccrc-models-probe',
   'deploy/models-op.mjs',
+  // The Anthropic arm of the models op (model-class Anthropic arm A2): `deploy/models-op.mjs` imports it at load, so a
+  // placed tree without it fails every models verb with ERR_MODULE_NOT_FOUND.
+  'deploy/models-anthropic.mjs',
   'deploy/litellm-config.template.yaml',
   'shared/modelenv.mjs',
   'shared/litellm.mjs',
