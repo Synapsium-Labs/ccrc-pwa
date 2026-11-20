@@ -63,6 +63,8 @@ a saved copy:
 | unread mail does not hold a waiting worker (review focus 4) | killed (2 failed) |
 | background work does not hold a waiting worker (review focus 4) | killed (2 failed) |
 | a session cron does not hold a waiting worker (review focus 4) | killed (2 failed) |
+| F5: the per-run bound lifted (`workerAsleepNoticeDue` always true) | killed (1 failed) |
+| F5: the observation row's detail drops the sleep's instant, so every sleep of a worker on a run is one key | killed (3 failed) |
 
 The characterization commit (`test(sleep): pin today's run-done answer …`) is green on its base, Task 1's tip; the
 rows marked `today:` are the ones the behaviour commit flips to `now: … (was: …)`.
