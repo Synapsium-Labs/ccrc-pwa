@@ -2,11 +2,12 @@
 // the auth gate is armed, and no box token — a session never edits a flow. They decide nothing: each asks
 // `doors.ts` (L1) and acts on the answer through the store's delegates.
 import type { FastifyInstance } from 'fastify';
-import type { FlowAnswer, FlowsListAnswer } from '../../../shared/flows.js';
+import type { FlowAnswer, FlowProgrammeRow, FlowsListAnswer } from '../../../shared/flows.js';
 import { refuseRoute } from '../refuse.js';
 import type { CoordStore } from '../coord/store.js';
 import { decideCreate, decideDefault, decideDraft, decidePublish, flowIdOf, problemsOf, type DoorRefusal } from './doors.js';
 import { FLOW_TEMPLATES } from './templates.js';
+import { flowPositionOf } from './position.js';
 
 export interface FlowsRouteOpts {
   /** The coordination store; undefined (a test, a script): `unavailable`. */
@@ -50,6 +51,26 @@ export function registerFlowsRoutes(app: FastifyInstance, opts: FlowsRouteOpts):
     const { draft, versions, ...flow } = read.value;
     const answer: FlowAnswer = { flow, draft, problems: problemsOf(draft), versions, isDefault: opts.coord.readDefaultFlow() === id };
     return answer;
+  });
+
+  // Wave 3a: the programmes that pin this flow, each with where it is, derived on this read (`position.ts`).
+  app.get('/api/flows/:id/programmes', async (req, reply) => {
+    if (opts.coord === undefined) return refuseRoute(reply, 'unavailable');
+    const id = flowIdOf((req.params as { id?: unknown }).id);
+    if (id === null) return refuseRoute(reply, 'bad-request', { detail: 'id' });
+    const flow = opts.coord.readFlow(id);
+    if (!flow.ok) return refuseRoute(reply, 'unavailable', { detail: flow.detail });
+    if (flow.value === null) return refuseRoute(reply, 'not-found');
+    const read = opts.coord.flowProgrammes(id);
+    if (!read.ok) return refuseRoute(reply, 'unavailable', { detail: read.detail });
+    const docs = new Map<number, ReturnType<typeof opts.coord.readFlowVersion>>();
+    const programmes: FlowProgrammeRow[] = read.value.map((p) => {
+      if (!docs.has(p.version)) docs.set(p.version, opts.coord!.readFlowVersion(id, p.version));
+      const v = docs.get(p.version)!;
+      const doc = v.ok && v.value !== null ? v.value.doc : null;
+      return { slug: p.slug, title: p.title, version: p.version, position: flowPositionOf(doc, p.facts) };
+    });
+    return { programmes };
   });
 
   app.get('/api/flows/:id/versions/:version', async (req, reply) => {
