@@ -53,6 +53,12 @@ to run 2838 and defined in the plan's "Deviations found".
   count in shadow that the cap does not use.
 - **migration-slot.** The seed takes slot 110, the next free one on `main` today. Capacity Task 2, approvals PR 3 and
   door B1 build on the same slot, so whoever lands second moves up. The entry says how to re-measure.
+- **seed-or-ignore.** The seed is `INSERT OR IGNORE`. The first full run on the PR found that
+  `decision-model-records.test.ts` rolls a database back one version by dropping later tables. It cannot drop a row
+  from an older table, so a plain insert met the row on replay and refused. A file that already holds the row now
+  keeps it, which a `coord-db` case pins.
+- **advance-door-word.** `resumeSkipsCap`'s send-back door is named `'advance'`, the route it rides. `mail-routes`'
+  census reads a quoted kebab word under `server/src/coord` as a code, and this one is a parameter.
 - **test-db-template.** `caps-counts-working.test.ts` copies one migrated database per case instead of replaying 110
   migrations each time, which timed out a six-fixture case on a loaded box.
 
