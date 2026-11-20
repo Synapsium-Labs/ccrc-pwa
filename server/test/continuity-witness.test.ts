@@ -170,7 +170,7 @@ function rig(opts: { verbs?: readonly string[] | null; journal?: Parameters<type
   let n = 0;
   const verbs = opts.verbs === undefined ? [DOOR_WITNESS_CAP] : opts.verbs;
   const fresh = () => witnessPorts({
-    coord: s, fleetState: () => ({ ccdVerbs: verbs }), journal: opts.journal ?? NO_LADDER_AUTHORITY,
+    coord: s, fleetState: () => ({ ccdVerbs: verbs === null ? null : [...verbs] }), journal: opts.journal ?? NO_LADDER_AUTHORITY,
     clock: { wall: () => clock.now }, entropy: { hex: () => { n += 1; return String(n).padStart(32, '0'); } },
     push: (p) => { pushes.push(p); },
   });

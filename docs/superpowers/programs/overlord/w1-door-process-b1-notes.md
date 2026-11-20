@@ -87,6 +87,11 @@ is taken here.
   union widened in place), within its cap (5127 of 5140); the coordinator accepted it.
 - **`off-model-reading-is-l1`**: `overlordLadder.ts#offModelReading` maps the answer to a condition reading (decide in L1).
 - **`off-model-replay-reads-not-passed-in-w1`** (the plan's slug): a measured off-model reads `standing`.
+- **`report-keep-is-its-own-seven-days`**: `REPORT_KEEP_MS` (seven days, the plan's starting value) joins the seven-day
+  holders in `token-shared.test.ts` as the nineteenth separate quantity, by the coordinator's ruling (2026-11-20, run 2832).
+- **`pickup-owner-check-is-not-a-binding`**: the report door's picked-up arm compares a message's addressee with the
+  reporting session. No run is read, so `runSessionCensus.ts`'s `NOT_BINDING_SITES` names it. That file was held by the
+  capacity Task 1 worker, who consented to the one additive row.
 
 ## Residuals
 
@@ -145,3 +150,13 @@ is taken here.
 - **Not run here:** the ccd suite for account sign-in, one of the suites that hold `CCD_CAPABILITY_TOKENS`: the session hook
   refused the call, because its text names an account act, and it was not rerouted. The tests-inclusive type check is
   OOM-killed in the test slice; the server's own type check is clean. CI is the arbiter of both.
+- **The first full run (at fd573aad6) was red**, and every red was this change's guard pins:
+  - the `degradedReading` mutant set's four old texts occurred twice, because `offModelReading` repeats its gate lines;
+  - the client's route count;
+  - the witness key's environment row in the settings census;
+  - the run/session census row above;
+  - the seven-day holder above;
+  - a readonly array in the witness test, which only the tests-inclusive type check sees.
+
+  All six were fixed in one round, and each suite passes alone. The tests-inclusive check passes over B1's test files in a
+  narrowed project. `storybook-a11y` failed on the runner's apt install, which this change cannot reach.

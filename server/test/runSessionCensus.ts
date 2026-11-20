@@ -261,6 +261,8 @@ export const NOT_BINDING_SITES: readonly NotBindingSite[] = [
     why: "the live process file's conversation id, unread when empty (Overlord W2 forecasts B, F3's conversationAfterClearFor): Claude Code's conversation, no run is read" },
   { file: 'server/src/turnverdict.ts', text: 'live.state.sessionId !== prior',
     why: "the live process file's conversation id against the one before the /clear, until it rotates (Overlord W2 forecasts B, F3): Claude Code's conversation, no run is read" },
+  { file: 'server/src/continuity/routes.ts', text: 'owner.value.sessionId !== id',
+    why: "the private store's addressee of an operator message against the session reporting it picked up (Overlord W1 door process B1, the report door's picked-up arm): a message's recipient, no run is read" },
 ];
 
 /** The sites that still decide a binding by hand: every site but the `NOT_BINDING_SITES` ones. */
