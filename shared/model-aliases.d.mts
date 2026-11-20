@@ -95,3 +95,7 @@ export declare function resolveAliases(input: ResolveInput): Aliases;
 export declare function parseAliases(json: unknown): Aliases;
 export declare function serializeAliases(a: Aliases): string;
 export declare function aliasesSourceCause(a: Aliases): AliasSourceCause | null;
+
+/** Whether a build of `laneVersion` can launch `row` (null: a target with no row, which names no minimum): a row naming
+ *  a minimum is not launchable when the build is unreadable (`null`) or below it. */
+export declare function rowLaunchable(row: AliasRow | null, laneVersion: string | null): boolean;

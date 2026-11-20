@@ -126,6 +126,10 @@ export const MODELS_DIR_NAME = 'models';
 export const registryFileName = (id) => `${id}.classes.json`;
 /** `<id>.json`: the lane's catalogue (§4.2). */
 export const catalogueFileName = (id) => `${id}.json`;
+/** `<id>.aliases.json`: an Anthropic lane's aliases file, the id each class's alias resolves to and where that reading
+ *  comes from (model-class Anthropic arm, Task A2.3). It sits beside the advance file; a lane that carries a class
+ *  registry has none. `deploy/models-op.mjs` writes it and `rm` reaps it. */
+export const aliasesFileName = (id) => `${id}.aliases.json`;
 
 /** The longest models notice `/api/notify` sends to the phone (auto-advance
  *  plan W2 Task 12). A CEILING, not a promise that every well-formed line

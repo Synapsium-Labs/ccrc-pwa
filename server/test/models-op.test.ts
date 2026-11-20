@@ -21,10 +21,15 @@ import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { ADVANCE_EXAMPLE, ADV_CATALOGUE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, EFFORTS4 } from './fixtures/advanceCases.js';
-import { backfillAdvance, chooseCandidate, familyOf, recordMove, serializeAdvance } from '../../shared/model-advance.mjs';
+import {
+  backfillAdvance, chooseCandidate, familyOf, lastMoveOf, parseAdvance, recordMove, seedAnthropicAdvance, serializeAdvance,
+} from '../../shared/model-advance.mjs';
+import { parseAliases } from '../../shared/model-aliases.mjs';
+import type { Aliases } from '../../shared/model-aliases.mjs';
 import type { Advance, HistoryEntry } from '../../shared/model-advance.mjs';
 import type { ModelClass, Registry } from '../../shared/models.js';
-import { parseRegistry } from '../../shared/models.js';
+import { aliasesFileName } from '../../shared/models.mjs';
+import { CLASSES, parseRegistry } from '../../shared/models.js';
 // Auto-advance plan W2 (Tasks 8 and 9). Only names this file does not bind yet:
 // W1 already imports `parseRegistry` and the type `Advance`.
 import {
@@ -3124,8 +3129,10 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
     expect(fs.readFileSync(advPath(ID), 'utf8')).toBe('{"v": 2}');
   });
 
-  it.each([['hold'], ['release'], ['revert']])('%s is refused on an Anthropic lane, as every op but show is', (v) => {
-    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id, '--class', 'opus');
+  // Model-class Anthropic arm A2.3: an Anthropic lane has its own path for these three (and `aliases-refresh`), so
+  // they are no longer refused as `anthropic-lane`; every other op still is (`an anthropic lane: ...` block).
+  it.each([['set-subagent']])('%s is still refused on an Anthropic lane, as every op but show and the four it admits is', (v) => {
+    const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', ROSTER.accounts[1]!.id, '--class', 'haiku');
     expect([r.code, r.body['error']]).toEqual([1, 'anthropic-lane']);
   });
 
@@ -5623,5 +5630,563 @@ describe('a stale catalogue under a class model with no measured window (D-8685,
     expect(op('show', '--file', rosterPath(), '--id', 'lane-a').body['windowNotices']).toEqual([]);
     const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
     expect(lanes.find((l) => l['id'] === 'lane-a')!['windowNotices']).toEqual([]);
+  });
+});
+
+// ── Model-class Anthropic arm A2, Task A2.3: the writer on an Anthropic lane ───────────────────────────────────────
+// Plan docs/superpowers/plans/2026-11-18-model-class-advance-anthropic-arm.md. An Anthropic lane carries no registry:
+// its own path admits `hold`, `release`, `revert` and `aliases-refresh`, and it keeps the lane's aliases file (what
+// each class's alias resolves to) and the holds in its advance file. Every case runs in a fixture HOME with invented
+// ids (`claude-opus-9-1`, `claude-opus-9-2`): nothing reads a real home, a cache of the box or a credential.
+describe('an anthropic lane: the aliases file, holds and the writer (model-class Anthropic arm A2.3)', () => {
+  const LANE = 'lane-a';
+  const OTHER = 'lane-b';
+  const SUFFIX = '.claude-lane-a';
+  const OTHER_SUFFIX = '.claude-lane-b';
+  const anthropicRow = (id: string, suffix: string): Record<string, unknown> => ({
+    id, label: id, configDirSuffix: suffix, exec: { kind: 'generated' }, homeAble: true, hue: 'violet',
+    telemetry: 'anthropic',
+  });
+  const X1 = 'claude-opus-9-1';
+  const X2 = 'claude-opus-9-2';
+  const X3 = 'claude-opus-9-3';
+  const S1 = 'claude-sonnet-9-1';
+  // Times: caches are fetched before the refresh that reads them, each a whole second.
+  const C1 = '2026-11-16T00:00:00Z';
+  const T0 = '2026-11-16T06:00:00Z';
+  const C2 = '2026-11-16T12:00:00Z';
+  const T1 = '2026-11-16T18:00:00Z';
+  const C3 = '2026-11-17T00:00:00Z';
+  const T2 = '2026-11-17T06:00:00Z';
+  const T3 = '2026-11-17T12:00:00Z';
+
+  const regDir = (): string => path.join(home, 'reg');
+  beforeEach(() => {
+    seed({ ...ROSTER, accounts: [...ROSTER.accounts, anthropicRow(LANE, SUFFIX), anthropicRow(OTHER, OTHER_SUFFIX)] });
+    fs.mkdirSync(regDir(), { recursive: true });
+  });
+
+  const aliasesFile = (id: string = LANE): string => path.join(home, '.ccrc', 'models', aliasesFileName(id));
+  const readAliases = (id: string = LANE): Aliases => parseAliases(JSON.parse(fs.readFileSync(aliasesFile(id), 'utf8')));
+  const advFile = (id: string = LANE): string => advPath(id);
+  const writeText = (p: string, text: string): void => {
+    fs.mkdirSync(path.dirname(p), { recursive: true });
+    fs.writeFileSync(p, text);
+  };
+  /** One catalogue cache file, in the current format: `targets` maps a class to the id its alias resolves to. */
+  const cacheJson = (fetchedAt: string, targets: Partial<Record<ModelClass, string>>,
+    rows: { id: string; min?: string | null }[]): unknown => ({
+    version: 2, fetchedAt: Date.parse(fetchedAt), staleAt: Date.parse(fetchedAt) + 3_600_000, resolution: 'token_org',
+    catalog: { config: {
+      provider_alias_targets: Object.fromEntries(Object.entries(targets).map(([c, id]) => [c, { default: id }])),
+      models: rows.map((r) => ({
+        id: r.id, name: `Name ${r.id}`, min_claude_code_version: r.min ?? null,
+        runtime: { effort_levels: ['low', 'high'], default_effort: 'high' }, thinking: { type: 'effort' },
+      })),
+    } },
+  });
+  const plantCache = (suffix: string, name: string, json: unknown): void => {
+    writeText(path.join(home, suffix, 'cache', 'model-catalog', `${name}.json`), `${JSON.stringify(json)}\n`);
+  };
+  const plantBuild = (suffix: string, version: unknown): void => {
+    writeText(path.join(home, suffix, '.last-update-result.json'), `${JSON.stringify({ version_to: version })}\n`);
+  };
+  /** A launch marker as ccd writes it (Task A3.2): `<born-epoch> <wrapper> <class> <id|->`. */
+  const plantLaunch = (sid: string, bornAt: string, wrapper: string, cls: string, id: string): void => {
+    writeText(path.join(regDir(), `${sid}.aliaslaunch`), `${Date.parse(bornAt) / 1000} ${wrapper} ${cls} ${id}\n`);
+  };
+  const refreshArgs = (id: string): string[] => ['aliases-refresh', '--file', rosterPath(), '--id', id, '--reg', regDir()];
+  const refresh = (at: string, id: string = LANE, extra: NodeJS.ProcessEnv = {}): Result =>
+    opEnv({ CCRC_MODELS_NOW: at, ...extra }, ...refreshArgs(id));
+  const adv = (id: string = LANE): Advance => JSON.parse(fs.readFileSync(advFile(id), 'utf8')) as Advance;
+  const plantSeeded = (): string => {
+    const bytes = serializeAdvance(seedAnthropicAdvance());
+    fs.mkdirSync(path.dirname(advFile()), { recursive: true });
+    fs.writeFileSync(advFile(), bytes);
+    return bytes;
+  };
+  const hold = (cls = 'opus', id: string = LANE): Result =>
+    opEnv({ CCRC_MODELS_NOW: NOW }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
+  const verbOf = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
+    opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
+  /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. */
+  const copyOf = (line: string, instead: string): string => {
+    const src = fs.readFileSync(OP, 'utf8');
+    expect(src.split(line), `the op has the line ${line}`).toHaveLength(2);
+    const copy = path.join(home, 'models-op-copy.mjs');
+    fs.writeFileSync(copy, src.replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
+      .replace(line, instead));
+    return copy;
+  };
+  const refreshThrough = (copy: string, at: string): Result => {
+    const r = spawnSync(process.execPath, [copy, ...refreshArgs(LANE)],
+      { env: { ...process.env, HOME: home, CCRC_MODELS_NOW: at }, encoding: 'utf8' });
+    const stdout = r.stdout ?? '';
+    expect(stdout.split('\n'), `stdout is not one JSON line: ${JSON.stringify(stdout)} ${r.stderr}`).toHaveLength(2);
+    return { code: r.status ?? -1, body: JSON.parse(stdout.split('\n')[0]!), stderr: r.stderr ?? '', stdout };
+  };
+  /** The baseline every move case starts from: one cache naming X1 for opus, refreshed at T0. */
+  const baseline = (rows: { id: string; min?: string | null }[] = [{ id: X1 }]): void => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1 }, rows));
+    const r = refresh(T0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['moved']).toEqual([]);
+  };
+
+  it("aliases-refresh writes the file: the lane's own cache gives each class its id, 0600, with no advance file made for it", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2, sonnet: S1 }, [{ id: X2 }, { id: S1 }]));
+    // Another home's cache is read for ROWS only: its target never names this lane's class.
+    plantCache(OTHER_SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X3 }, [{ id: X3 }]));
+    const r = refresh(T0);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toEqual({ ok: true, op: 'aliases-refresh', id: LANE, moved: [] });
+    const a = readAliases();
+    expect(a).toMatchObject({ v: 1, at: T0, stale: false, cache: { fetchedAt: C1, format: 'current' } });
+    expect(a.classes.opus).toMatchObject({ id: X2, source: 'cache', evidenceAt: C1, idSince: T0, cacheTarget: X2 });
+    expect(a.classes.sonnet).toMatchObject({ id: S1, source: 'cache' });
+    expect(a.classes.haiku.id).toBeNull();
+    expect(a.classes.opus.row).toMatchObject({ id: X2, label: `Name ${X2}` });
+    expect(fs.statSync(aliasesFile()).mode & 0o777).toBe(0o600);
+    expect(fs.existsSync(advFile()), 'a refresh with no move makes no advance file').toBe(false);
+  });
+
+  it("aliases-refresh reads a row from another home, by id, and never that home's target", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, []));
+    plantCache(OTHER_SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X3 }, [{ id: X2, min: null }, { id: X3 }]));
+    expect(refresh(T0).code).toBe(0);
+    const o = readAliases().classes.opus;
+    expect(o).toMatchObject({ id: X2, rowFrom: 'box', cacheTarget: X2 });
+    expect(o.row).toMatchObject({ id: X2 });
+  });
+
+  it("aliases-refresh reads the lane's build and a home with no cache reads as absent", () => {
+    plantBuild(SUFFIX, '9.2.0');
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      env: { SOME_KEY: 'x' }, modelSettings: { [X1]: { effortLevel: 'high' }, 'not a model id!': { effortLevel: 'low' } },
+    }));
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2, min: '9.9.0' }]));
+    expect(refresh(T0).code).toBe(0);
+    // The build (9.2.0) is below the row's minimum, so the target is no candidate.
+    expect(readAliases().classes.opus.id).toBeNull();
+    expect(readAliases().cache).toEqual({ fetchedAt: C1, format: 'current' });
+    expect(refresh(T1, OTHER).code).toBe(0);
+    expect(readAliases(OTHER).cache).toEqual({ none: 'absent' });
+    expect(readAliases(OTHER).classes.opus.id).toBeNull();
+  });
+
+  it('saved levels reach the file: a level under another id of the class is orphaned, a level under the current id is not', () => {
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      modelSettings: { [X1]: { effortLevel: 'high' }, [X2]: { effortLevel: 7 }, 'not a model id!': { effortLevel: 'low' } },
+    }));
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().classes.opus.orphaned).toEqual({ id: X1, level: 'high' });
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      modelSettings: { [X1]: { effortLevel: 'high' }, [X2]: { effortLevel: 'low' } },
+    }));
+    expect(refresh(T1).code).toBe(0);
+    expect(readAliases().classes.opus.orphaned).toBeNull();
+  });
+
+  it('an unreadable cache directory is cache.none unreadable, and a build that is no version reads as unknown', () => {
+    writeText(path.join(home, SUFFIX, 'cache', 'model-catalog'), 'a file where the directory belongs');
+    plantBuild(SUFFIX, { not: 'a version' });
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().cache).toEqual({ none: 'unreadable' });
+  });
+
+  it('a cache file that is not JSON is cache.none invalid', () => {
+    writeText(path.join(home, SUFFIX, 'cache', 'model-catalog', 'cache-fixture.json'), '{ not json');
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().cache).toEqual({ none: 'invalid' });
+  });
+
+  it('aliases-refresh records a move: the second refresh after the target moved appends one entry, sets previous and names it', () => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const r = refresh(T1);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, evidenceAt: C2, idSince: T1 });
+    const opus = adv().classes.opus;
+    expect(opus.history).toHaveLength(1);
+    expect(opus.previous).toEqual({ model: X1, effort: null });
+    for (const c of CLASSES.filter((k) => k !== 'opus')) expect(adv().classes[c].history).toEqual([]);
+  });
+
+  it("a move's entry is complete: ok, cause newer, the evidence time, and lastMoveOf returns it", () => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const entry = adv().classes.opus.history[0]!;
+    expect(entry).toEqual({ at: T1, how: 'advance', from: X1, to: X2, ok: true, canary: 'not-run', cause: 'newer',
+      evidenceAt: C2 });
+    expect(lastMoveOf(adv().classes.opus)).toEqual(entry);
+    expect(causeOf(entry)).toBe('newer');
+    expect(adv().pending).toBeNull();
+    expect(adv().classes.opus.family).toBe('opus');
+  });
+
+  it('a source change is not a move: the cache then a newer launch of the same id records nothing', () => {
+    baseline();
+    const seeded = plantSeeded();
+    plantLaunch('s1', C2, LANE, 'opus', X1);
+    const r = refresh(T1);
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, source: 'use', seenId: X1 });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it('a first id is not a move: null to an id records no entry, no previous and no push', () => {
+    const seeded = plantSeeded();
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1 }, [{ id: X1 }]));
+    const r = refresh(T0);
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, idSince: T0 });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it('a swap and a wake record no backward move: a marker that goes never hands the class back, and nothing is recorded', () => {
+    const seeded = plantSeeded();
+    // No usable cache. S1 was marked before a release and filled X1; S2 was marked after it and filled X2.
+    plantLaunch('s1', '2026-11-16T01:00:00Z', LANE, 'opus', X1);
+    plantLaunch('s2', '2026-11-16T03:00:00Z', LANE, 'opus', X2);
+    expect(refresh(T0).body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, source: 'use', seenId: X2 });
+    // A swap or a wake's respawn removes S2's marker.
+    fs.rmSync(path.join(regDir(), 's2.aliaslaunch'));
+    const second = refresh(T1);
+    expect(second.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, seenId: X2 });
+    // And S1's too.
+    fs.rmSync(path.join(regDir(), 's1.aliaslaunch'));
+    expect(refresh(T2).body['moved']).toEqual([]);
+    expect(readAliases().classes.opus.id).toBe(X2);
+    expect(fs.readFileSync(advFile(), 'utf8'), 'no history entry and no previous').toBe(seeded);
+  });
+
+  it('a marker of another lane, an unfilled one, an unknown class and a malformed one are not readings; a 1M reading fills the bare id', () => {
+    plantLaunch('s1', '2026-11-16T01:00:00Z', OTHER, 'opus', X2);
+    plantLaunch('s2', '2026-11-16T01:00:00Z', LANE, 'opus', '-');
+    plantLaunch('s3', '2026-11-16T01:00:00Z', LANE, 'turbo', X2);
+    writeText(path.join(regDir(), 's4.aliaslaunch'), 'not a marker\n');
+    writeText(path.join(regDir(), 's5.aliaslaunch'), `${'9'.repeat(5000)}\n`);
+    plantLaunch('s6', '2026-11-16T01:00:00Z', LANE, 'sonnet', `${S1}[1m]`);
+    expect(refresh(T0).code).toBe(0);
+    const a = readAliases();
+    expect(a.classes.opus.id).toBeNull();
+    expect(a.classes.sonnet).toMatchObject({ id: S1, source: 'use', seenId: S1 });
+  });
+
+  it('a stale cache records no backward move: a launch older than the cache never hands the class back', () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson('2026-11-10T00:00:00Z', { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh('2026-11-12T00:00:00Z').code).toBe(0);
+    const seeded = plantSeeded();
+    plantLaunch('s1', '2026-11-08T00:00:00Z', LANE, 'opus', X1);
+    const r = refresh('2026-11-20T00:00:00Z');
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases()).toMatchObject({ stale: true });
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, source: 'cache' });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it('an unreadable prior is never written over: the cause word, both files and the advance mtime untouched', () => {
+    baseline();
+    const seeded = plantSeeded();
+    fs.rmSync(aliasesFile());
+    fs.mkdirSync(aliasesFile());
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const advMtime = fs.statSync(advFile()).mtimeMs;
+    const r = refresh(T1);
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'aliases-file-unreadable']);
+    expect(r.body['moved']).toBeUndefined();
+    expect(fs.statSync(aliasesFile()).isDirectory()).toBe(true);
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+    expect(fs.statSync(advFile()).mtimeMs).toBe(advMtime);
+  });
+
+  it("an invalid prior is never written over: the cause word, the file's bytes and mtime, and the advance file untouched", () => {
+    baseline();
+    const seeded = plantSeeded();
+    const bad = '{"v": 2}\n';
+    fs.writeFileSync(aliasesFile(), bad);
+    const mtime = fs.statSync(aliasesFile()).mtimeMs;
+    const advMtime = fs.statSync(advFile()).mtimeMs;
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const r = refresh(T1);
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'aliases-file-invalid']);
+    expect(r.body['moved']).toBeUndefined();
+    expect(fs.readFileSync(aliasesFile(), 'utf8')).toBe(bad);
+    expect(fs.statSync(aliasesFile()).mtimeMs).toBe(mtime);
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+    expect(fs.statSync(advFile()).mtimeMs).toBe(advMtime);
+  });
+
+  it('an advance file it cannot read refuses the refresh and writes neither file', () => {
+    baseline();
+    const aliases0 = fs.readFileSync(aliasesFile(), 'utf8');
+    fs.writeFileSync(advFile(), '{"v": 2}');
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const r = refresh(T1);
+    expect([r.code, r.body['error']]).toEqual([1, 'advance-file-invalid']);
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe('{"v": 2}');
+    expect(fs.readFileSync(aliasesFile(), 'utf8')).toBe(aliases0);
+  });
+
+  it.each([
+    ['the aliases write fails after the move is recorded', "  return writeJsonFile(aliasesPath(id), parsed, 'aliases-unwritable');",
+      "  return writeJsonFile(path.join(advancePath(id), 'x'), parsed, 'aliases-unwritable');", 'aliases-unwritable', 1],
+    ['the advance write fails before anything is recorded', "  return writeJsonFile(advancePath(id), parsed, 'advance-unwritable');",
+      "  return writeJsonFile(path.join(aliasesPath(id), 'x'), parsed, 'advance-unwritable');", 'advance-unwritable', 0],
+  ] as [string, string, string, string, number][])('a cut-short move is recorded once when newer evidence arrives: %s', (_w, line, instead, error, entries) => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const cut = refreshThrough(copyOf(line, instead), T1);
+    expect([cut.code, cut.body['error']], cut.stdout + cut.stderr).toEqual([1, error]);
+    expect(cut.body['moved'], 'the cut refresh answered no move').toBeUndefined();
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, idSince: T0 });
+    expect(fs.existsSync(advFile()) ? adv().classes.opus.history : []).toHaveLength(entries);
+    // Newer evidence for X2 arrives (a cache refetched later); the next refresh runs at T2.
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    const next = refresh(T2);
+    expect(next.code, next.stdout + next.stderr).toBe(0);
+    expect(next.body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(adv().classes.opus.history, 'one entry for the move, whichever file was cut').toHaveLength(1);
+    expect(adv().classes.opus.history[0]).toMatchObject({ from: X1, to: X2, at: entries === 1 ? T1 : T2 });
+    expect(adv().classes.opus.previous).toEqual({ model: X1, effort: null });
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, evidenceAt: C3 });
+    // And a refresh after that finds nothing to say.
+    expect(refresh(T3).body['moved']).toEqual([]);
+    expect(adv().classes.opus.history).toHaveLength(1);
+  });
+
+  it('a repeated move gets its own entry: X1 to X2, X2 unlaunchable and replaced by X1 with no move, then X1 to X2 again', () => {
+    plantBuild(SUFFIX, '9.2.0');
+    const rows = [{ id: X1 }, { id: X2, min: '9.2.0' }];
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1 }, rows));
+    expect(refresh(T0).body['moved']).toEqual([]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, rows));
+    expect(refresh(T1).body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    expect(adv().classes.opus.history).toHaveLength(1);
+    // The lane's build falls below X2's minimum; a fresh launch fills X1, which replaces X2 with no move.
+    plantBuild(SUFFIX, '9.1.0');
+    plantLaunch('s1', '2026-11-16T14:00:00Z', LANE, 'opus', X1);
+    const replaced = refresh(T2);
+    expect(replaced.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X1, source: 'use', idSince: T2 });
+    expect(adv().classes.opus.history).toHaveLength(1);
+    // The build returns and a refetched cache names X2 again.
+    plantBuild(SUFFIX, '9.2.0');
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C3, { opus: X2 }, rows));
+    const again = refresh(T3);
+    expect(again.body['moved']).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+    const h = adv().classes.opus.history;
+    expect(h).toHaveLength(2);
+    expect(h[1]).toMatchObject({ at: T3, from: X1, to: X2, ok: true });
+    expect(adv().classes.opus.previous).toEqual({ model: X1, effort: null });
+  });
+
+  it("an unlaunchable id's replacement is not a move, and neither is the id staying unlaunchable", () => {
+    plantBuild(SUFFIX, '9.2.0');
+    const rows = [{ id: X2, min: '9.2.0' }, { id: X3 }];
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, rows));
+    expect(refresh(T0).code).toBe(0);
+    const seeded = plantSeeded();
+    plantBuild(SUFFIX, '9.1.0');
+    expect(refresh(T1).body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X2, unobserved: true, unlaunchable: { needs: '9.2.0', laneVersion: '9.1.0' } });
+    plantLaunch('s1', '2026-11-16T12:00:00Z', LANE, 'opus', X3);
+    const r = refresh(T2);
+    expect(r.body['moved']).toEqual([]);
+    expect(readAliases().classes.opus).toMatchObject({ id: X3, unlaunchable: null });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(seeded);
+  });
+
+  it("hold records the held id: the class's current id from the aliases file, and the first hold seeds the advance file with the class words", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    expect(fs.existsSync(advFile())).toBe(false);
+    const r = hold();
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ ok: true, op: 'hold', class: 'opus', changed: true, anthropic: true });
+    const a = adv();
+    expect(a.classes.opus.hold).toEqual({ at: NOW, by: 'hand', model: X2 });
+    for (const c of CLASSES) {
+      expect(a.classes[c].family, `${c}'s family is its own class word`).toBe(c);
+      expect(a.classes[c].previous).toBeNull();
+      expect(a.classes[c].history).toEqual([]);
+    }
+    expect(a.pending).toBeNull();
+    expect(parseAdvance(a)).toEqual(a);
+    // A second hold changes nothing.
+    const held = fs.readFileSync(advFile(), 'utf8');
+    expect(opEnv({ CCRC_MODELS_NOW: T3 }, 'hold', '--file', rosterPath(), '--id', LANE, '--class', 'opus').body).toMatchObject({ changed: false });
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(held);
+  });
+
+  it('hold with no id refuses alias-source-absent, writing nothing: no aliases file, a class with no id, or an unlaunchable id', () => {
+    const r0 = hold();
+    expect([r0.code, r0.body['error']], r0.stdout + r0.stderr).toEqual([1, 'alias-source-absent']);
+    expect(fs.existsSync(advFile())).toBe(false);
+    plantBuild(SUFFIX, '9.2.0');
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2, min: '9.2.0' }]));
+    expect(refresh(T0).code).toBe(0);
+    expect(hold('sonnet').body['error']).toBe('alias-source-absent');
+    plantBuild(SUFFIX, '9.1.0');
+    expect(refresh(T2).code).toBe(0);
+    expect(readAliases().classes.opus.unlaunchable).not.toBeNull();
+    expect(hold('opus').body['error']).toBe('alias-source-absent');
+    expect(fs.existsSync(advFile())).toBe(false);
+  });
+
+  it.each([
+    ['unreadable', 'aliases-file-unreadable', (p: string): void => { fs.mkdirSync(p); }],
+    ['invalid', 'aliases-file-invalid', (p: string): void => { fs.writeFileSync(p, '{"v": 2}\n'); }],
+  ] as [string, string, (p: string) => void][])('hold refuses an aliases file that is %s, naming it, and writes nothing', (_w, word, plant) => {
+    fs.mkdirSync(path.dirname(aliasesFile()), { recursive: true });
+    plant(aliasesFile());
+    const r = hold();
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, word]);
+    expect(fs.existsSync(advFile())).toBe(false);
+  });
+
+  it("hold refuses settings-overrides-hold when the home's settings env names that class's key, and a key of another class does not", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'something' } }));
+    const r = hold();
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'settings-overrides-hold']);
+    expect(fs.existsSync(advFile())).toBe(false);
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_SONNET_MODEL: 'something' } }));
+    expect(hold().code).toBe(0);
+  });
+
+  it('revert holds the previous id: by revert, at previous.model, records no history entry and keeps previous', () => {
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const r = verbOf('revert');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    const opus = adv().classes.opus;
+    expect(opus.hold).toEqual({ at: NOW, by: 'revert', model: X1 });
+    expect(opus.history).toHaveLength(1);
+    expect(opus.previous).toEqual({ model: X1, effort: null });
+  });
+
+  it('revert with nothing to revert to refuses no-previous, and a settings key refuses a revert too', () => {
+    const r = verbOf('revert');
+    expect([r.code, r.body['error']]).toEqual([1, 'no-previous']);
+    expect(fs.existsSync(advFile())).toBe(false);
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const before = fs.readFileSync(advFile(), 'utf8');
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'something' } }));
+    expect(verbOf('revert').body['error']).toBe('settings-overrides-hold');
+    expect(fs.readFileSync(advFile(), 'utf8')).toBe(before);
+  });
+
+  it('release keeps releasedAt and spends no history: ten entries before, ten after, lastMoveOf unchanged', () => {
+    const a = seedAnthropicAdvance();
+    a.classes.opus.history = Array.from({ length: 10 }, (_v, i) => ({
+      at: `2026-11-${String(i + 1).padStart(2, '0')}T00:00:00Z`, how: 'advance' as const, from: X1, to: X2, ok: true, canary: 'not-run' as const,
+      cause: 'newer' as const,
+    }));
+    a.classes.opus.hold = { at: '2026-11-12T00:00:00Z', by: 'hand', model: X2 };
+    fs.mkdirSync(path.dirname(advFile()), { recursive: true });
+    fs.writeFileSync(advFile(), serializeAdvance(a));
+    const lastBefore = lastMoveOf(a.classes.opus);
+    const r = verbOf('release');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body).toMatchObject({ op: 'release', changed: true });
+    const after = adv().classes.opus;
+    expect(after.hold).toBeNull();
+    expect(after['releasedAt']).toBe(NOW);
+    expect(after.history).toEqual(a.classes.opus.history);
+    expect(after.history).toHaveLength(10);
+    expect(lastMoveOf(after)).toEqual(lastBefore);
+    // A release of a class not held changes nothing and keeps the earlier releasedAt.
+    expect(opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus').body)
+      .toMatchObject({ changed: false });
+    expect(adv().classes.opus['releasedAt']).toBe(NOW);
+  });
+
+  it('set-class still refuses anthropic-lane, and so does every other registry op', () => {
+    for (const args of [['set-class', '--class', 'opus', '--model', X2], ['set-subagent', '--class', 'haiku'],
+      ['materialise'], ['advance-backfill'], ['init', '--probe', 'codex']]) {
+      const r = op(args[0]!, '--file', rosterPath(), '--id', LANE, ...args.slice(1));
+      expect([r.code, r.body['error']], args[0]).toEqual([1, 'anthropic-lane']);
+    }
+    expect(fs.existsSync(path.join(home, '.ccrc', 'models', `${LANE}.classes.json`))).toBe(false);
+  });
+
+  it('aliases-refresh refuses a lane that is not an Anthropic lane, and an unknown account', () => {
+    const r = refresh(T0, 'gpt');
+    expect([r.code, r.body['error']]).toEqual([1, 'not-an-anthropic-lane']);
+    expect(refresh(T0, 'ghost').body['error']).toBe('no-such-account');
+  });
+
+  it('aliases-refresh needs --reg, an absolute one', () => {
+    expect(op('aliases-refresh', '--file', rosterPath(), '--id', LANE).code).toBe(2);
+    const r = op('aliases-refresh', '--file', rosterPath(), '--id', LANE, '--reg', 'reg');
+    expect([r.code, r.body['error']]).toEqual([2, 'bad-argv']);
+  });
+
+  it('an absent session registry means no launches', () => {
+    fs.rmSync(regDir(), { recursive: true });
+    expect(refresh(T0).code).toBe(0);
+    expect(readAliases().classes.opus.id).toBeNull();
+  });
+
+  it("rm reaps the aliases file and still clears only ccrc's keys from the settings", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({
+      env: { DISABLE_TELEMETRY: '1', ANTHROPIC_DEFAULT_OPUS_MODEL: 'x' }, model: 'kept', modelSettings: { [X2]: { effortLevel: 'high' } },
+    }));
+    const r = op('rm', '--file', rosterPath(), '--id', LANE);
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(r.body['removed']).toContain(aliasesFile());
+    expect(fs.existsSync(aliasesFile())).toBe(false);
+    const s = JSON.parse(fs.readFileSync(path.join(home, SUFFIX, 'settings.json'), 'utf8'));
+    expect(s).toEqual({ env: { DISABLE_TELEMETRY: '1' }, model: 'kept', modelSettings: { [X2]: { effortLevel: 'high' } } });
+  });
+
+  it("refresh and hold never write the home's settings, a cache or a build file", () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    plantBuild(SUFFIX, '9.2.0');
+    writeText(path.join(home, SUFFIX, 'settings.json'), '{"env":{"A":"1"}}\n');
+    const snap = (): string[] => ['settings.json', '.last-update-result.json', 'cache/model-catalog/cache-fixture.json']
+      .map((n) => `${fs.readFileSync(path.join(home, SUFFIX, n), 'utf8')}@${fs.statSync(path.join(home, SUFFIX, n)).mtimeMs}`);
+    const before = snap();
+    expect(refresh(T0).code).toBe(0);
+    expect(hold().code).toBe(0);
+    expect(snap()).toEqual(before);
+  });
+
+  it('show answers aliases beside advance: the parsed file, or its state', () => {
+    const absent = op('show', '--file', rosterPath(), '--id', LANE);
+    expect(absent.body['aliases']).toEqual({ state: 'absent' });
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    const ok = op('show', '--file', rosterPath(), '--id', LANE);
+    expect(ok.body['aliases']).toEqual(JSON.parse(fs.readFileSync(aliasesFile(), 'utf8')));
+    expect(ok.body['advance']).toEqual({ state: 'absent' });
+    fs.writeFileSync(aliasesFile(), '{"v": 2}\n');
+    expect(op('show', '--file', rosterPath(), '--id', LANE).body['aliases']).toMatchObject({ state: 'invalid' });
+    fs.rmSync(aliasesFile());
+    fs.mkdirSync(aliasesFile());
+    expect(op('show', '--file', rosterPath(), '--id', LANE).body['aliases']).toMatchObject({ state: 'unreadable' });
+    // A lane that carries a registry answers no `aliases` at all.
+    expect(op('show', '--file', rosterPath(), '--id', 'gpt').body).not.toHaveProperty('aliases');
+  });
+
+  it('nothing reads a secret path: the op and the resolver name no credential file', () => {
+    // The three names are built from halves so this file does not spell them either.
+    const names = [`.cred${'entials'}`, `.cc-sec${'rets'}`, `oauth${'Account'}`];
+    for (const f of [OP, path.join(REPO, 'shared', 'model-aliases.mjs')]) {
+      const src = fs.readFileSync(f, 'utf8');
+      for (const word of names) expect(src.includes(word), `${path.basename(f)} names ${word}`).toBe(false);
+    }
   });
 });

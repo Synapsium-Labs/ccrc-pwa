@@ -148,6 +148,10 @@ function launchable(row, laneVersion) {
   return lane !== null && compareVersions(versionParts(row.minVersion), lane) <= 0;
 }
 
+/** `(row, laneVersion) => boolean`: `launchable`, for the writer (`deploy/models-op.mjs`), which asks it of the id a class
+ *  just left to tell a move from the replacement of an id the lane's build could not launch (Task A2.3). */
+export const rowLaunchable = launchable;
+
 /** The current-format readings, newest first (equal times keep their order). */
 const currentsNewestFirst = (readings) => readings
   .filter((r) => r.format === 'current')

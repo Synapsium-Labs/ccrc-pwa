@@ -6,6 +6,7 @@ export declare const BLOCKED_CAUSES: readonly [
   'advance-file-unreadable', 'advance-file-invalid', 'registry-unreadable', 'registry-invalid',
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
+  'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
 ];
 export type BlockedCause = (typeof BLOCKED_CAUSES)[number];
 export declare const REASON_MAX: 200;
@@ -47,7 +48,8 @@ export declare class AdvanceInvalid extends Error {
   constructor(field: string, message: string);
 }
 
-export interface Hold { at: string; by: HoldBy }
+/** `model` is the id an Anthropic lane's hold holds (Task A2.3); absent on a Codex lane's. */
+export interface Hold { at: string; by: HoldBy; model?: string }
 export interface Previous { model: string | null; effort: string | null }
 export interface HistoryEntry {
   at: string;
@@ -61,6 +63,8 @@ export interface HistoryEntry {
   tries?: number;
   lastAt?: string;
   recovered?: boolean;
+  /** The time of the evidence an Anthropic lane's move rests on (Task A2.3), kept as data. */
+  evidenceAt?: string;
   /** Why an advance moved (D-8384): absent on an entry written before the field, which `causeOf` reads as unknown. */
   cause?: CandidateReason;
   [key: string]: unknown;
@@ -70,6 +74,8 @@ export interface ClassAdvance {
   hold: Hold | null;
   previous: Previous | null;
   history: HistoryEntry[];
+  /** When an Anthropic lane's hold on the class was last released (Task A2.3); no history entry is made for it. */
+  releasedAt?: string;
   [key: string]: unknown;
 }
 /** An automatic advance's intent (W2's `advance-commit`): it carries no `how`. */
@@ -107,6 +113,8 @@ export declare function serializeAdvance(adv: Advance): string;
 export declare function backfillAdvance(
   a: { registry: Registry; seedFamilies: Readonly<Record<ModelClass, string | null>> | null },
 ): Advance;
+/** An Anthropic lane's advance file: every class's family its own class word, nothing else set. */
+export declare function seedAnthropicAdvance(): Advance;
 export declare function recordMove(adv: Advance, cls: ModelClass, e: HistoryEntry): Advance;
 export declare function recordFailure(
   adv: Advance, cls: ModelClass, f: { at: string; from: string | null; to: string; reason: string },

@@ -18,11 +18,14 @@ import { CLASSES, MODEL_ID_RE, resolveDiscovery } from './models.mjs';
  *  answers the two that are a fact about one class; the others are facts about a lane's files, its kind or its
  *  lock. `windows-unreadable`, `shared-family`, `lane-not-codex-kind` and `lock-unwritable` are this plan's
  *  additions to the spec's list (D-5193), so none of them goes quiet. `lock-unwritable` is
- *  measured by `advance-health` alone, read-only, and says what every writer on that lane is already refused. */
+ *  measured by `advance-health` alone, read-only, and says what every writer on that lane is already refused. The last
+ *  four are an Anthropic lane's (spec §2.8, model-class Anthropic arm): its aliases file names no id for any class,
+ *  its newest cache is stale, or the aliases file cannot be read or is not one this build reads. No fifth word. */
 export const BLOCKED_CAUSES = Object.freeze([
   'advance-file-unreadable', 'advance-file-invalid', 'registry-unreadable', 'registry-invalid',
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
+  'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
 ]);
 
 /** Why `chooseCandidate` named its candidate, the three words its `reason` takes: `newer` (a model strictly newer
@@ -226,6 +229,9 @@ function checkEntry(e, f) {
     bad(`${f}.lastAt`, 'belongs on a failed advance only, as a time of the form YYYY-MM-DDTHH:MM:SSZ.');
   }
   if (e.recovered !== undefined && typeof e.recovered !== 'boolean') bad(`${f}.recovered`, 'is not true or false.');
+  if (e.evidenceAt !== undefined && !isAt(e.evidenceAt)) {
+    bad(`${f}.evidenceAt`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
+  }
   if (e.cause !== undefined && !(e.how === 'advance' && CANDIDATE_REASONS.includes(e.cause))) {
     bad(`${f}.cause`, `belongs on an advance only, as one of ${CANDIDATE_REASONS.join(', ')}.`);
   }
@@ -310,6 +316,13 @@ export function parseAdvance(input) {
       if (!isObj(x.hold)) bad(`${f}.hold`, 'is not null or {"at": <time>, "by": <act>}.');
       if (!isAt(x.hold.at)) bad(`${f}.hold.at`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
       if (!HOLD_BY.includes(x.hold.by)) bad(`${f}.hold.by`, `is not one of ${HOLD_BY.join(', ')}.`);
+      // An Anthropic lane's hold names the id it holds (model-class Anthropic arm, Task A2.3); absent on every other.
+      if (x.hold.model !== undefined && !(typeof x.hold.model === 'string' && MODEL_ID_RE.test(x.hold.model))) {
+        bad(`${f}.hold.model`, 'is not a model id.');
+      }
+    }
+    if (x.releasedAt !== undefined && !isAt(x.releasedAt)) {
+      bad(`${f}.releasedAt`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
     }
     if (x.previous !== null) {
       if (!isObj(x.previous)) bad(`${f}.previous`, 'is not null or {"model": <id|null>, "effort": <level|null>}.');
@@ -338,6 +351,15 @@ export function backfillAdvance({ registry, seedFamilies }) {
     const pin = registry.classes[c] ?? null;
     classes[c] = { family: pin !== null ? familyOf(pin) : (seedFamilies?.[c] ?? null), hold: null, previous: null, history: [] };
   }
+  return { v: ADVANCE_VERSION, classes, pending: null };
+}
+
+/** The advance file an Anthropic lane starts with (model-class Anthropic arm, Task A2.3): it has no class registry to
+ *  read a family off, so each class's `family` is its own class word, and there is no hold, previous or history and no
+ *  pending intent. A fresh object each call. */
+export function seedAnthropicAdvance() {
+  const classes = {};
+  for (const c of CLASSES) classes[c] = { family: c, hold: null, previous: null, history: [] };
   return { v: ADVANCE_VERSION, classes, pending: null };
 }
 
