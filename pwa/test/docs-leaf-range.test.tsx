@@ -17,7 +17,7 @@ import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsRasterAnswer } from '../src/docs/failures';
-import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence } from '../src/docs/docsText';
+import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib } from '../src/docs/docsText';
 import { MarkdownParts } from '../src/docs/range/MarkdownParts';
 import { RangeImage, RangeLeaf as RangeLeafOf, rangeReadKey } from '../src/docs/range/RangeLeaf';
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
@@ -447,7 +447,7 @@ describe('a version page above its class cap reads by range (X2 P1, review Q4)',
   /** `url` opened as a leaf on a version page of a listing holding `path`; the file and raster routes answer `answer`, and
    *  every range target the leaf prepares is recorded. */
   function openVersion(path: string, src: Uint8Array<ArrayBuffer>, answer: (size: number) => DocsFileAnswer & DocsRasterAnswer,
-    rangeFails: string | null = null) {
+    rangeFails: string | null = null, atVersion = true) {
     const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', path)] })) });
     f.file.mockResolvedValue(answer(src.length));
     f.raster.mockResolvedValue(answer(src.length));
@@ -461,7 +461,7 @@ describe('a version page above its class cap reads by range (X2 P1, review Q4)',
       frame: (t, snapshot, offset, length, signal) => served.loader.frame(t, snapshot, offset, length, signal),
     };
     const assets: DocsAssetContextValue = { loaders: { file: f.file, raster: f.raster }, queue: createFetchQueue(), onDraftAsset: () => undefined };
-    const located = pageAt(`/docs/demo/specs/${path}?at=${VERSION}`);
+    const located = pageAt(`/docs/demo/specs/${path}${atVersion ? `?at=${VERSION}` : ''}`);
     if (located.kind !== 'path') throw new Error('fixture: not a leaf');
     const page = located;
     const parser = async (text: string) => parseMarkdown(text, 'docs');
@@ -508,22 +508,72 @@ describe('a version page above its class cap reads by range (X2 P1, review Q4)',
     expect(targets[0]).toMatchObject(versionTarget(src.length));
   });
 
-  it('any other class: the Download, which the file route refused as too large, reads by range and saves the bytes', async () => {
+  it('any other class: the Download the file route refused as too large hands the leaf the size and blob, and the leaf\'s one range Download reads and saves', async () => {
     const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
     const clicks: HTMLAnchorElement[] = [];
     const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
     try {
-      const { targets } = openVersion('big.bin', src, (n) => tooLarge(n, BLOB_2));
+      const { targets, f } = openVersion('big.bin', src, (n) => tooLarge(n, BLOB_2));
       await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
-      expect(targets, 'nothing is read until the Download is tapped').toHaveLength(0);
+      expect(targets, 'nothing is read until a Download is tapped').toHaveLength(0);
+      fireEvent.click(screen.getByText('Download'));
+      // The file route's answer is the probe: the leaf now shows the range body, with its own sentence and Download.
+      await waitFor(() => expect(screen.getByText(fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(src.length) }))).toBeTruthy());
+      expect(f.file, 'the probe asked the file route once').toHaveBeenCalledTimes(1);
+      expect(targets, 'and read nothing by range itself').toHaveLength(0);
+      expect(clicks).toHaveLength(0);
       fireEvent.click(screen.getByText('Download'));
       await waitFor(() => expect(clicks).toHaveLength(1));
       expect(clicks[0]!.download).toBe('big.bin');
       expect(targets).toHaveLength(1);
       expect(targets[0]).toMatchObject(versionTarget(src.length));
+      expect(f.file, 'the range Download does not ask the file route again').toHaveBeenCalledTimes(1);
     } finally {
       spy.mockRestore();
     }
+  });
+
+  it('any other class: a Download over the range ceiling says so and reads nothing (the one owner\'s check)', async () => {
+    const src = new Uint8Array([1]) as Uint8Array<ArrayBuffer>;
+    const { targets } = openVersion('big.bin', src, () => tooLarge(DOCS_RANGE_MAX_BYTES + 1, BLOB_2));
+    await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+    fireEvent.click(screen.getByText('Download'));
+    await waitFor(() => expect(screen.getByRole('status').textContent).toBe(
+      fillSentence(DOCS_RANGE_TEXT.overCeiling, { size: mib(DOCS_RANGE_MAX_BYTES + 1), cap: mib(DOCS_RANGE_MAX_BYTES) })));
+    expect(targets).toHaveLength(0);
+  });
+
+  it('a default page: a Download refused as too large says its failure, and the version arm does not apply', async () => {
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const answer = (n: number) => tooLarge(n, BLOB_2);
+    const { targets } = openVersion('big.bin', src, answer, null, false);
+    await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+    fireEvent.click(screen.getByText('Download'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toContain(failureSentence(answer(src.length).body)));
+    expect(targets).toHaveLength(0);
+    expect(screen.queryByText(DOCS_RANGE_TEXT.cancel)).toBeNull();
+  });
+
+  it('an image page from an older ccd (no blob): the image\'s own sentence, the raster route asked once, nothing read by range', async () => {
+    const src = pngOf(4000, 3000);
+    const answer = (n: number) => tooLarge(n);
+    const { targets, f, container } = openVersion('big.png', src, answer);
+    await waitFor(() => expect(container.querySelector('.doc-img-failed')).not.toBeNull());
+    expect(container.querySelector('.doc-img-failed')?.textContent).toBe(failureSentence(answer(src.length).body));
+    expect(f.raster).toHaveBeenCalledTimes(1);
+    expect(targets).toHaveLength(0);
+    expect(container.querySelector('img')).toBeNull();
+  });
+
+  it('a Download from an older ccd (no blob): the failure\'s own sentence under the button, nothing read by range', async () => {
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const answer = (n: number) => tooLarge(n);
+    const { targets } = openVersion('big.bin', src, answer);
+    await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+    fireEvent.click(screen.getByText('Download'));
+    await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(
+      fillSentence(DOCS_VIEW_TEXT.downloadFailed, { sentence: failureSentence(answer(src.length).body) })));
+    expect(targets).toHaveLength(0);
   });
 
   it.each([['an older ccd (no blob)', undefined], ['a blob that is no full sha', 'nope']] as const)(
