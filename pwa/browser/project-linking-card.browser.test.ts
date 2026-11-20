@@ -383,4 +383,81 @@ describe('Settings › Security › Project linking, per width, skin and theme (
     }
     expect(seen.length).toBe(SKINS.length);
   }, 120_000);
+
+  // D-8808 (wave 8, Task 8.6): the workspace picker and candidate rows that name a workspace, a long suggestion's reason and an
+  // Overlord link's line, at 360 and 1280 px, in both skins: all wrap inside the key cell, and nothing scrolls sideways.
+  for (const width of [360, 1280]) {
+    it(`the workspace picker, candidates with workspaces and an Overlord link stay inside the key cell at ${width}px`, async () => {
+      const WS = (id: string, name: string, keys: string[]) => ({
+        state: 'connected', outcome: 'ok', org: name, id, name, urlKey: id.slice(0, 4) === '1111' ? 'ws-a' : 'ws-b', user: 'user-a', keyTail: 'abcd', checkedAt: NOW - 60_000,
+        teams: keys.map((key) => ({ key, name: key })),
+      });
+      const long = 'a suggested reason long enough that it has to wrap onto several lines on a phone screen';
+      const fixture: AppFixture = {
+        api: {
+          '/api/hierarchy': { ok: true, coordinators: [], projects: [] },
+          '/api/linear/workspaces': {
+            ok: true, store: 'ok', legacy: null,
+            workspaces: [WS('11111111-1111-4111-8111-111111111111', 'ws-a', ['AAA']), WS('22222222-2222-4222-8222-222222222222', 'ws-b-with-a-rather-long-workspace-name', ['AAA'])],
+          },
+          '/api/accounts': { accounts: [], projected: null, roster: [] },
+          '/api/feed': { events: [] },
+          '/api/projects': {
+            roots: ['/w'],
+            projects: [
+              { name: 'project-a', workdir: '/w/project-a', linking: wire({ teamKey: 'AAA', teamWorkspace: '11111111-1111-4111-8111-111111111111' }) },
+              { name: 'project-b', workdir: '/w/project-b', linking: wire({
+                teamKey: null, teamCandidates: [
+                  { key: 'AAA', name: LONG_TEAM, evidence: { kind: 'pr-attachments', ids: 4, of: 5 }, workspaceId: '11111111-1111-4111-8111-111111111111', workspaceName: 'ws-a' },
+                  { key: 'AAA', name: LONG_TEAM, evidence: { kind: 'suggested', by: 'cc-coord-with-a-long-identifier', why: long }, workspaceId: '22222222-2222-4222-8222-222222222222', workspaceName: 'ws-b-with-a-rather-long-workspace-name' },
+                ],
+              }) },
+              { name: 'project-c', workdir: '/w/project-c', linking: wire({
+                teamKey: 'AAA', teamLink: { source: 'overlord', teamName: LONG_TEAM, evidence: { kind: 'ticket-ids', ids: 1234, of: 1250 }, at: NOW - 60_000, callId: 7 },
+              }) },
+            ],
+          },
+        },
+        fleetFrames: [{ type: 'fleet', sessions: [] }, { type: 'coord', coord: { pause: 'clear' } }],
+      };
+      for (const skin of SKINS) {
+        const view: AppView = { skin, theme: 'light', width };
+        const app = await openApp(browser!, view, fixture);
+        try {
+          await app.page.goto(server!.origin + '/settings/security');
+          const section = app.page.locator('[data-linking="section"]');
+          await section.locator('[data-linking-row]').first().waitFor({ timeout: 30_000 });
+          await section.locator('[data-linking-workspace]').first().waitFor({ timeout: 30_000 });
+          const at = named(view);
+          const m = await section.evaluate((el) => {
+            const box = (e: Element) => { const r = e.getBoundingClientRect(); return { left: r.left, right: r.right, width: r.width }; };
+            const rows = [...el.querySelectorAll('[data-linking-row]')].map((r) => {
+              const key = box(r.querySelector('.linking-key')!);
+              const inside = [...r.querySelectorAll('.linking-workspace, .linking-workspace select, .linking-candidate, .linking-candidate p, .linking-candidate button, .linking-auto, .linking-key a')].map(box);
+              return { name: r.getAttribute('data-linking-row') ?? '', key, inside,
+                pickers: r.querySelectorAll('[data-linking-workspace]').length, candidates: r.querySelectorAll('.linking-candidate').length,
+                call: r.querySelectorAll('.linking-key a').length };
+            });
+            return {
+              rows, pageScroll: document.documentElement.scrollWidth, pageClient: document.documentElement.clientWidth,
+              clipped: [...el.querySelectorAll('*')].filter((e) => e.tagName !== 'SELECT' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0).map((e) => e.tagName.toLowerCase() + '.' + (e.getAttribute('class') ?? '')),
+              ellipsis: [...el.querySelectorAll('*')].filter((e) => getComputedStyle(e).textOverflow === 'ellipsis').length,
+            };
+          });
+          expect(m.rows.map((r) => [r.name, r.pickers, r.candidates, r.call]), `${at}: a picker for a key two workspaces hold, two candidate rows, the call link`)
+            .toEqual([['project-a', 1, 0, 0], ['project-b', 0, 2, 0], ['project-c', 1, 0, 1]]);
+          for (const r of m.rows) for (const b of r.inside) {
+            expect(b.right, `${at}: ${r.name} runs past its key cell`).toBeLessThanOrEqual(r.key.right + 0.5);
+            expect(b.left, `${at}: ${r.name} starts left of its key cell`).toBeGreaterThanOrEqual(r.key.left - 0.5);
+          }
+          expect(m.pageScroll, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClient);
+          expect(m.clipped, `${at}: an element is wider than its box`).toEqual([]);
+          expect(m.ellipsis, `${at}: text is cut short`).toBe(0);
+          expect(app.errors.filter((e) => !/Failed to fetch|net::ERR/.test(e))).toEqual([]);
+        } finally {
+          await app.ctx.close();
+        }
+      }
+    }, 120_000);
+  }
 });

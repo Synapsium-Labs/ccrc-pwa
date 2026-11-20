@@ -168,3 +168,23 @@ The other arms are `{"issue":"AAA-12","close":{"why":"<why>"}}` and
 `{"issue":"AAA-12","return":{"note":"<why it is not yours>"}}`; an Upkeep ticket cannot be returned. Refusals: `not-plan-owner`, `issue-not-inbound` (not handed to this
 programme, and not an open Upkeep ticket), `unknown-epic`, `unknown-checkpoint`, `plan-bad-body`, `plan-closed`,
 `ticket-workspace-mismatch` and `linear-text-public`.
+
+## linking suggest
+
+A project with no Linear team key, whose programme files into it, has nowhere for its tickets to go. A coordinator that knows
+which team it should be suggests one, with exactly one body:
+
+```bash
+"$API" linking suggest --json - <<JSON
+{"project":"project-a","team":"AAA","workspace":"<id, optional>","why":"<reason>"}
+JSON
+```
+
+`workspace` is needed only when the key exists in more than one connected workspace. Never put `byId` or `byUuid` in the
+body: the client adds the pane's own pair and refuses a body that names either. A suggestion is a candidate and never a
+link: it appears on the console's Project linking card, under the project, with the workspace and your reason, and the
+operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
+to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
+`team-set` (the project already has a key, or the operator decided it), `team-unknown` (no connected workspace has that
+team), `no-project`, `linear-text-public` and `bad-request` (a body that is not exactly these keys, or a reason over its
+length).

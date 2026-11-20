@@ -823,3 +823,92 @@ describe('the hierarchy settings', () => {
     expect(HIERARCHY_TEXT.allDone).toBe('Saved. Every project with Linear settings now names that coordinator.');
   });
 });
+
+// D-8808 (wave 8, Task 8.6): the workspace picker, the candidates' workspaces and suggestions, an Overlord link as its call.
+import type { LinearWorkspaceView } from '../../shared/linear';
+import type { TeamCandidateWire } from '../../shared/linking';
+import { waitingPath } from '../src/lib/routes';
+import { OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel } from '../src/fleet/linkingWords';
+
+const wsView = (id: string, name: string, keys: string[]): LinearWorkspaceView =>
+  ({ state: 'details-unknown', why: 'absent', id, name, urlKey: null, user: null, teams: keys.map((key) => ({ key, name: key })), keyTail: null, checkedAt: null } as unknown as LinearWorkspaceView);
+const serveWorkspaces = (workspaces: LinearWorkspaceView[] | 'unreadable') =>
+  vi.spyOn(api, 'linearWorkspaces').mockResolvedValue(workspaces === 'unreadable' ? 'unreadable' : { store: 'ok', workspaces, legacy: null });
+const picker = (name: string): HTMLSelectElement | null =>
+  within(rowOf(name)).queryByLabelText(PICKER_WORDS.label) as HTMLSelectElement | null;
+
+describe('the team key\'s workspace picker (D-8808)', () => {
+  it('appears for a key two connected workspaces hold, preselects the stored one, and its choice rides the same write', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['AAA'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA', teamWorkspace: 'id-b' }))]);
+    await waitFor(() => expect(picker('project-a')).not.toBeNull());
+    expect(picker('project-a')!.value).toBe('id-b');
+    expect(within(picker('project-a')!).getAllByRole('option').map((o) => o.textContent)).toEqual([PICKER_WORDS.choose, 'ws-a', 'ws-b']);
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamWorkspace: 'id-a' }) });
+    fireEvent.change(picker('project-a')!, { target: { value: 'id-a' } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-a' }));
+  });
+
+  it('is left out for a key one workspace holds (that workspace rides the write), a key none holds, and an unreadable list', async () => {
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA']), wsView('id-b', 'ws-b', ['BBB'])]);
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: 'ZZZ' }))]);
+    await waitFor(() => expect(api.linearWorkspaces).toHaveBeenCalled());
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA' }) });
+    expect(picker('project-a')).toBeNull();
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-a' }));
+    fireEvent.click(within(rowOf('project-b')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(save).toHaveBeenLastCalledWith('project-b', { teamKey: 'ZZZ', override: null }));
+    expect(picker('project-b')).toBeNull();
+  });
+
+  it('an unreadable list leaves the picker out and the write as it was', async () => {
+    serveWorkspaces('unreadable');
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))]);
+    await waitFor(() => expect(api.linearWorkspaces).toHaveBeenCalled());
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA' }) });
+    expect(picker('project-a')).toBeNull();
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null }));
+  });
+});
+
+describe('the candidates (D-8808)', () => {
+  const same: TeamCandidateWire[] = [
+    { key: 'AAA', name: 'Alpha', evidence: { kind: 'pr-attachments', ids: 4, of: 5 }, workspaceId: 'id-a', workspaceName: 'ws-a' },
+    { key: 'AAA', name: 'Alpha two', evidence: { kind: 'suggested', by: 'lane-a', why: '<b>the branches name it</b>' }, workspaceId: 'id-b', workspaceName: 'ws-b' },
+  ];
+  it('two candidates of one key render as two rows with their workspaces, and a tap sends its own workspace', async () => {
+    serveWorkspaces('unreadable');
+    await mount([row('project-a', wire({ teamCandidates: same }))]);
+    const r = within(rowOf('project-a'));
+    expect(r.getAllByRole('button', { name: /^Link AAA/ })).toHaveLength(2);
+    expect(r.getByText('In workspace ws-a')).toBeInTheDocument();
+    expect(r.getByText('In workspace ws-b')).toBeInTheDocument();
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamWorkspace: 'id-b' }) });
+    fireEvent.click(r.getByRole('button', { name: candidateAriaLabel(same[1]!) }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: 'id-b' }));
+  });
+  it('a suggestion shows its session and its reason as text, never as markup', async () => {
+    serveWorkspaces('unreadable');
+    await mount([row('project-a', wire({ teamCandidates: same }))]);
+    const r = within(rowOf('project-a'));
+    expect(r.getByText('Alpha two: suggested by lane-a: <b>the branches name it</b>')).toBeInTheDocument();
+    expect(rowOf('project-a').querySelector('b')).toBeNull();
+    expect(r.getByText(candidateWhy(same[0]!))).toBeInTheDocument();
+  });
+});
+
+describe('an Overlord link (D-8809, D-8808)', () => {
+  it('shows as a call made for the operator, links to Calls made for you and says how to overturn it', async () => {
+    serveWorkspaces('unreadable');
+    const l = wire({ teamKey: 'AAA', teamLink: { source: 'overlord', teamName: 'Alpha', evidence: { kind: 'ticket-ids', ids: 9, of: 10 }, at: NOW, callId: 7 } });
+    await mount([row('project-a', l)]);
+    const r = within(rowOf('project-a'));
+    expect(r.getByText(teamLinkLine(l)!)).toBeInTheDocument();
+    expect(teamLinkLine(l)).toContain(OVERLORD_LINK_WORDS.overturn);
+    const link = r.getByRole('link', { name: OVERLORD_LINK_WORDS.call });
+    expect(link.getAttribute('href')).toBe(waitingPath());
+  });
+});

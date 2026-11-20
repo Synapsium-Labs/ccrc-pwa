@@ -1,6 +1,7 @@
 // The Project linking card's pure readers (D-8405): which rows it draws and what the automatic team link says. L1: no
 // store, no `lib/api.ts`, no component; `ProjectLinkingCard.tsx` renders what these answer.
 import type { ProjectRow } from '../../../shared/api';
+import type { LinearWorkspaceShown } from '../../../shared/linear';
 import type { ProjectLinkingWire, TeamCandidateWire, TeamEvidence } from '../../../shared/linking';
 
 /**
@@ -33,6 +34,9 @@ export function teamLinkLine(l: ProjectLinkingWire): string | null {
   const t = l.teamLink;
   if (t === undefined || t === null) return null;
   if (t.source === 'auto' && l.teamKey !== null) return `Linked automatically to ${t.teamName}: ${evidenceWords(t.evidence, l.teamKey)}.`;
+  if (t.source === 'overlord' && l.teamKey !== null) {
+    return `Linked by the Overlord for you to ${t.teamName}: ${evidenceWords(t.evidence, l.teamKey)}. ${OVERLORD_LINK_WORDS.overturn}`;
+  }
   if (t.source === 'manual' && l.teamKey === null) return 'The key was cleared here, so it is not linked automatically.';
   return null;
 }
@@ -46,3 +50,47 @@ export const candidateLabel = (c: TeamCandidateWire): string => `Link ${c.key}`;
 
 /** The line under a candidate's button: the team's name, which may be long and wraps, and why it is offered. */
 export const candidateWhy = (c: TeamCandidateWire): string => `${c.name}: ${evidenceWords(c.evidence, c.key)}`;
+
+/** D-8808: an Overlord link is a call made for the operator; the card links to "Calls made for you" (a call has no address of
+ *  its own on the Waiting on you screen, so the link is to the screen) and says how to overturn it. */
+export const OVERLORD_LINK_WORDS = {
+  call: 'See it in Calls made for you',
+  overturn: 'Change the key to overturn it.',
+} as const;
+
+/** D-8808: the workspace picker's words. */
+export const PICKER_WORDS = {
+  label: 'Workspace',
+  choose: 'Choose a workspace',
+  unnamed: 'An unnamed workspace',
+  unnamedIn: 'In an unnamed workspace',
+} as const;
+
+/** The connected workspaces that hold a team key (compared uppercased), each by the name the picker shows. An unreadable
+ *  read (`null`) is no list: the picker is left out, never guessed. */
+export function workspacesHoldingKey(read: readonly LinearWorkspaceShown[] | null, key: string): Array<{ id: string; name: string }> {
+  const k = key.trim().toUpperCase();
+  if (read === null || k === '') return [];
+  return read.filter((w) => w.teams.some((t) => t.key.toUpperCase() === k))
+    .map((w) => ({ id: w.id, name: w.name ?? w.urlKey ?? PICKER_WORDS.unnamed }));
+}
+
+/** The `workspace` a save sends: the one workspace that holds the key; the chosen one while the key is held by several;
+ *  nothing (the server answers as it does today) for none, or for no valid choice yet. */
+export function workspaceToWrite(holders: ReadonlyArray<{ id: string }>, chosen: string): string | undefined {
+  if (holders.length === 1) return holders[0]!.id;
+  return holders.length > 1 && holders.some((h) => h.id === chosen) ? chosen : undefined;
+}
+
+/** A candidate's workspace, as a line; null for a candidate an older build stored. */
+export function candidateWorkspaceLine(c: TeamCandidateWire): string | null {
+  if (c.workspaceId === undefined) return null;
+  return c.workspaceName === null || c.workspaceName === undefined ? PICKER_WORDS.unnamedIn : `In workspace ${c.workspaceName}`;
+}
+
+/** The button's accessible name: the label, and the workspace when the candidate has one, so two rows of one key differ. */
+export const candidateAriaLabel = (c: TeamCandidateWire): string =>
+  (c.workspaceId === undefined ? candidateLabel(c) : `${candidateLabel(c)} in workspace ${c.workspaceName ?? PICKER_WORDS.unnamed.toLowerCase()}`);
+
+/** A candidate row's React key: the key and its workspace, since several rows may share a key. */
+export const candidateKeyOf = (c: TeamCandidateWire): string => `${c.key}|${c.workspaceId ?? ''}`;

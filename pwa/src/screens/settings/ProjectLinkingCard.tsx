@@ -15,7 +15,8 @@
 import { useCallback, useEffect, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, OptionRow, QuickConfirm, Section, Select, TextInput, TextLink, elapsedWords, useNow } from '@ccrc/ui';
-import type { LinkingOverride, ProjectLinkingWire } from '../../../../shared/linking';
+import type { LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../../shared/linking';
+import type { LinearWorkspaceShown } from '../../../../shared/linear';
 import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
 import type { ProjectRow } from '../../../../shared/api';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/plan';
@@ -25,10 +26,13 @@ import {
   HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyWriteText, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
-import { upkeepPath } from '../../lib/routes';
+import { upkeepPath, waitingPath } from '../../lib/routes';
 import { writeOutcomeUnknown } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
-import { candidateLabel, candidateWhy, candidatesShown, linkingRowsOf, teamLinkLine } from '../../fleet/linkingWords';
+import {
+  OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateWhy, candidateWorkspaceLine, candidatesShown, linkingRowsOf,
+  teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+} from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
 
 /** The card's words. Short labels only; the sentences a refusal says are `LINKING_REFUSAL_TEXT`'s. */
@@ -138,12 +142,13 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
   );
 }
 
-function LinkingRow({ name, linking, now, onStored, answer, landed, floor, inflight, raise, track, reread }: {
-  name: string; linking: ProjectLinkingWire; now: number; onStored: (project: string, linking: ProjectLinkingWire) => void;
+function LinkingRow({ name, linking, now, workspaces, onStored, answer, landed, floor, inflight, raise, track, reread }: {
+  name: string; linking: ProjectLinkingWire; now: number; workspaces: readonly LinearWorkspaceShown[] | null; onStored: (project: string, linking: ProjectLinkingWire) => void;
   answer: HierarchyAnswer | null; landed: number; floor: number; inflight: number; raise: (seq: number) => void; track: (d: 1 | -1) => void; reread: () => number;
 }): ReactNode {
   const keyId = useId();
   const overrideId = useId();
+  const workspaceId = useId();
   const [draft, setDraft] = useState(linking.teamKey ?? '');
   const [busy, setBusy] = useState(false);
   // The seq of the re-read this row's last write needs: the hierarchy controls stay locked until a read that new has landed.
@@ -154,8 +159,12 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
 
   // The stored row is what the field shows: a re-read (the answer of a write) puts the field back on it.
   useEffect(() => { setDraft(linking.teamKey ?? ''); }, [linking.teamKey]);
+  // D-8808: the workspace the typed key lives in, among the connected workspaces that hold it; the stored one is preselected.
+  const [chosen, setChosen] = useState(linking.teamWorkspace ?? '');
+  useEffect(() => { setChosen(linking.teamWorkspace ?? ''); }, [linking.teamWorkspace]);
+  const holders = workspacesHoldingKey(workspaces, draft);
 
-  const write = (body: { teamKey: string | null; override: LinkingOverride | null }): void => {
+  const write = (body: LinkingWriteBody): void => {
     setBusy(true);
     result.clear();
     void api.saveLinking(name, body)
@@ -170,7 +179,8 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
   };
   const saveKey = (): void => {
     const key = draft.trim().toUpperCase();
-    write({ teamKey: key === '' ? null : key, override: linking.override });
+    const workspace = key === '' ? undefined : workspaceToWrite(workspacesHoldingKey(workspaces, key), chosen);
+    write({ teamKey: key === '' ? null : key, override: linking.override, ...(workspace === undefined ? {} : { workspace }) });
   };
   const linkLine = teamLinkLine(linking);
   const candidates = candidatesShown(linking);
@@ -206,15 +216,29 @@ function LinkingRow({ name, linking, now, onStored, answer, landed, floor, infli
           />
           <Button variant="ghost" disabled={busy} onClick={saveKey}>{LINKING_TEXT.save}</Button>
         </div>
+        {holders.length > 1 && (
+          <div className="linking-workspace" data-linking-workspace="">
+            <label htmlFor={workspaceId} className="settings-note">{PICKER_WORDS.label}</label>
+            <Select id={workspaceId} value={chosen} disabled={busy} onChange={(e) => setChosen(e.target.value)}>
+              <option value="">{PICKER_WORDS.choose}</option>
+              {holders.map((h) => <option key={h.id} value={h.id}>{h.name}</option>)}
+            </Select>
+          </div>
+        )}
         {linkLine !== null && <p className="settings-note linking-auto" data-linking-auto="">{linkLine}</p>}
+        {linking.teamLink?.source === 'overlord' && (
+          <TextLink href={waitingPath()} onClick={inAppClick(waitingPath())}>{OVERLORD_LINK_WORDS.call}</TextLink>
+        )}
         {candidates.length > 0 && (
           <div className="linking-candidates" role="group" aria-label={LINKING_TEXT.candidates}>
             <p className="settings-note">{LINKING_TEXT.candidates}</p>
             {candidates.map((c) => (
-              <div key={c.key} className="linking-candidate" data-linking-candidate={c.key}>
-                <Button variant="ghost" disabled={busy} onClick={() => write({ teamKey: c.key, override: linking.override })}>
+              <div key={candidateKeyOf(c)} className="linking-candidate" data-linking-candidate={c.key}>
+                <Button variant="ghost" disabled={busy} aria-label={candidateAriaLabel(c)}
+                  onClick={() => write({ teamKey: c.key, override: linking.override, ...(c.workspaceId === undefined ? {} : { workspace: c.workspaceId }) })}>
                   {candidateLabel(c)}
                 </Button>
+                {candidateWorkspaceLine(c) !== null && <p className="settings-note">{candidateWorkspaceLine(c)}</p>}
                 <p className="settings-note">{candidateWhy(c)}</p>
               </div>
             ))}
@@ -333,6 +357,8 @@ export function ProjectLinkingCard(): ReactNode {
     return mine;
   }, []);
   // The seq of the read the last owner-for-all save needs: a floor every row's lock also checks.
+  // D-8808: the connected workspaces and their teams (the picker's source); an unreadable read is no list, so no picker.
+  const [workspaces, setWorkspaces] = useState<readonly LinearWorkspaceShown[] | null>(null);
   const [floor, setFloorState] = useState(0);
   // Hierarchy writes (and owner-for-all) in flight: every row is locked from the moment one starts, since it may change other rows.
   const [inflight, setInflight] = useState(0);
@@ -346,6 +372,10 @@ export function ProjectLinkingCard(): ReactNode {
       () => { if (live) setRead({ kind: 'failed' }); },
     );
     void reread();
+    api.linearWorkspaces().then(
+      (w) => { if (live) setWorkspaces(w === 'unreadable' ? null : w.workspaces); },
+      () => { if (live) setWorkspaces(null); },
+    );
     return () => { live = false; };
   }, [reread]);
   const stored = useCallback((project: string, linking: ProjectLinkingWire): void => {
@@ -362,7 +392,7 @@ export function ProjectLinkingCard(): ReactNode {
       : shown.length === 0 ? <p className="settings-note">{LINKING_TEXT.noRows}</p>
         : (
           <ul className="linking-list">
-            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />)}
+            {shown.map((p) => <LinkingRow key={p.name} name={p.name} linking={p.linking} now={now} workspaces={workspaces} onStored={stored} answer={answer} landed={hier.kind === 'read' ? hier.landed : 0} floor={floor} inflight={inflight} raise={raise} track={track} reread={reread} />)}
           </ul>
         );
   }
