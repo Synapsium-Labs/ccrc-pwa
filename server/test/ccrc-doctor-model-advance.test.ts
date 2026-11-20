@@ -1000,7 +1000,14 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     const h = box();
     plantLane(h, { registry: MOVED_REGISTRY, advance: MOVED_ADVANCE });
     plantSession(h);
-    moved(h);
+    // Review 2886 F12(c): the Anthropic lane's move rests on a launch marker as ccd writes it (Task A3.2: `<born-epoch>
+    // <wrapper> <class> <id>`, a fresh alias launch's first reading), not on a second cache.
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1, sonnet: S1 });
+    aop(h, T0, 'aliases-refresh');
+    fs.writeFileSync(join(reg(h), 'lane-c-fresh.aliaslaunch'), `${Date.parse(C2) / 1000} ${AL} opus ${X2}\n`);
+    aop(h, T1, 'aliases-refresh');
+    expect(JSON.parse(fs.readFileSync(aliasesPath(h), 'utf8')).classes.opus).toMatchObject({ id: X2, source: 'use' });
     plantAnthropicSession(h);
     const lanes = health(h).lanes;
     expect(lanes.map((l) => [l['id'], (l['sessionsBehind'] as Json[]).length])).toEqual([['lane-a', 1], [AL, 1]]);
@@ -1083,6 +1090,24 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: word }]);
     expect(causes(laneOf(h))).toEqual([word]);
     expect(behindOf(h)).toEqual([]);
+  });
+
+  // Review 2886 R1: on an Anthropic lane the refresh seeds no class and fills none, and a hold reaches launches only through
+  // that file (Task A3.4), so the advance-file clause says what is true there.
+  it('the advance-file clause on an Anthropic lane names its holds, never a refill', () => {
+    const h = box();
+    plantBuild(h, '9.9.0');
+    plantCache(h, C1, { opus: X1 });
+    aop(h, T0, 'aliases-refresh');
+    fs.rmSync(advancePath(h), { force: true });
+    fs.mkdirSync(advancePath(h));
+    const out = check(h, 'model-advance-blocked').out;
+    const warn = out.split('\n').findIndex((l) => l.startsWith('WARN model-advance-blocked: lane-c'));
+    expect(warn, out).toBeGreaterThanOrEqual(0);
+    expect(out.split('\n')[warn + 1]).toBe('  remedy: per cause: advance file — repair the file the finding names; until '
+      + 'it is read again no hold reaches a launch, and every class of this lane launches on its alias\'s current id. If '
+      + 'you remove it instead, its holds and move history are lost and nothing refills them: hold again, from the '
+      + 'lane\'s Models sheet or with \'ccrc models lane-c hold <class>\', each class that must stay where it is');
   });
 
   it('the PASS and the WARN carry the unmeasured count of an Anthropic lane\'s sessions', () => {
