@@ -3,7 +3,7 @@
 // live capture); nothing reaches a network. Neutral data: teams `AAA`/`BBB`, workspaces `ws-a`/`ws-b`, `owner/repo`.
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
-import { ATTACHED_URLS_MAX, readAttachedIssues, tallyAttached } from '../src/linking/attachedIssues.js';
+import { ATTACHED_URLS_MAX, readAttachedIssues } from '../src/linking/attachedIssues.js';
 import type { CcrcCallDeps } from '../src/linear/ccrcCall.js';
 import type { FetchLike } from '../src/linear/client.js';
 import type { LinearRouteSlot } from '../src/linear/route.js';
@@ -40,20 +40,6 @@ async function rig(answer: (key: string, url: string) => unknown | 'fail'): Prom
   };
   return { deps: { ccrcDir, rate: fx.rate, journal: fx.journal, policy: fx.policy, fetch, now: () => 1_800_000_000_000 }, asked };
 }
-
-describe('tallyAttached: distinct issues per (workspace, key)', () => {
-  it('counts one issue once however many URLs name it, per pair, with a total', () => {
-    const t = tallyAttached([
-      { workspaceId: 'ws-a', issueId: 'i1', teamKey: 'AAA' }, { workspaceId: 'ws-a', issueId: 'i1', teamKey: 'AAA' },
-      { workspaceId: 'ws-a', issueId: 'i2', teamKey: 'AAA' }, { workspaceId: 'ws-b', issueId: 'i3', teamKey: 'AAA' },
-      { workspaceId: 'ws-a', issueId: 'i4', teamKey: 'BBB' },
-    ]);
-    expect(t.total).toBe(4);
-    expect([...t.pairs].sort((x, y) => (x.workspaceId + x.key).localeCompare(y.workspaceId + y.key))).toEqual([
-      { workspaceId: 'ws-a', key: 'AAA', ids: 2 }, { workspaceId: 'ws-a', key: 'BBB', ids: 1 }, { workspaceId: 'ws-b', key: 'AAA', ids: 1 },
-    ]);
-  });
-});
 
 describe('readAttachedIssues', () => {
   it('asks each slot once per URL with the constructed fixture\'s document and reads its answer', async () => {

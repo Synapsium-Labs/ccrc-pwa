@@ -10,7 +10,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { MIGRATIONS } from '../src/coord/schema.js';
 import {
   TEAM_LINK_MIN_IDS, TEAM_LINK_MIN_SHARE, decideTeamLink, planTeamLink, repoNameOf, teamSourceAfterWrite, ticketTally,
-  type AttachedTally, type KnownTeam, type TeamLinkFacts,
+  attachedAnswer, tallyAttached, type AttachedTally, type KnownTeam, type TeamLinkFacts,
 } from '../src/linking/teamLink.js';
 import { VisibilityLane } from '../src/linking/visibilityLane.js';
 import type { LinearStoreRead } from '../src/linear/store.js';
@@ -223,6 +223,29 @@ describe('decideTeamLink: attached issues (D-8808, evidence pr-attachments)', ()
     expect(isTeamEvidence({ kind: 'pr-attachments', ids: 5, of: 4 })).toBe(false);
     expect(isTeamEvidence({ kind: 'pr-attachments', ids: 3, of: 4, extra: 1 })).toBe(false);
     expect(isTeamEvidence({ kind: 'pr-attachments', ids: 3 })).toBe(false);
+  });
+});
+
+describe('tallyAttached and attachedAnswer (D-8808): distinct issues per (workspace, key)', () => {
+  it('counts one issue once however many URLs name it, per pair, with a total', () => {
+    const t = tallyAttached([
+      { workspaceId: 'ws-a', issueId: 'i1', teamKey: 'AAA' }, { workspaceId: 'ws-a', issueId: 'i1', teamKey: 'AAA' },
+      { workspaceId: 'ws-a', issueId: 'i2', teamKey: 'AAA' }, { workspaceId: 'ws-b', issueId: 'i3', teamKey: 'AAA' },
+      { workspaceId: 'ws-a', issueId: 'i4', teamKey: 'BBB' },
+    ]);
+    expect(t.total).toBe(4);
+    expect([...t.pairs].sort((x, y) => (x.workspaceId + x.key).localeCompare(y.workspaceId + y.key))).toEqual([
+      { workspaceId: 'ws-a', key: 'AAA', ids: 2 }, { workspaceId: 'ws-a', key: 'BBB', ids: 1 }, { workspaceId: 'ws-b', key: 'AAA', ids: 1 },
+    ]);
+  });
+
+  it('attachedAnswer is a measurement only when every asked slot answered; a slot with no attachment counts as answered', () => {
+    const one = [{ workspaceId: 'ws-a', issueId: 'i1', teamKey: 'AAA' }];
+    expect(attachedAnswer([one, []])).toEqual({ total: 1, pairs: [{ workspaceId: 'ws-a', key: 'AAA', ids: 1 }] });
+    expect(attachedAnswer([[], []])).toEqual({ total: 0, pairs: [] });
+    expect(attachedAnswer([one, null])).toBe('unmeasured');
+    expect(attachedAnswer([null])).toBe('unmeasured');
+    expect(attachedAnswer([])).toBe('unmeasured');
   });
 });
 

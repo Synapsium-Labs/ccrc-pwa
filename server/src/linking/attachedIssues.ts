@@ -7,31 +7,14 @@
 // OFF BY DEFAULT: nothing calls this reader. It is built and tested on a CONSTRUCTED fixture and is wired into the lane only
 // after the operator's go for one live capture of the answer (`TeamLinkInputs.attached`, `visibilityLane.ts`).
 //
-// The counting is a pure helper (`tallyAttached`); the I/O is `readAttachedIssues`, which never throws.
+// L4 DELIVERY around `teamLink.ts`'s pure counting (`tallyAttached`, and `attachedAnswer`'s rule that a count is a measurement
+// only when every slot asked answered): this file only asks and hands each slot's answer over; `readAttachedIssues` never throws.
 import { runCcrcOp, type CcrcCallDeps } from '../linear/ccrcCall.js';
 import type { LinearRouteSlot } from '../linear/route.js';
-import type { AttachedPair, AttachedTally } from './teamLink.js';
+import { attachedAnswer, type AttachedIssue, type AttachedTally } from './teamLink.js';
 
 /** The most pull request URLs one read asks of each slot. */
 export const ATTACHED_URLS_MAX = 10;
-
-/** One attached issue as a slot answered it. */
-export interface AttachedIssue { workspaceId: string; issueId: string; teamKey: string }
-
-/** The distinct issues of `found` (one per workspace and issue id, however many URLs name it), per (workspace, key). */
-export function tallyAttached(found: readonly AttachedIssue[]): AttachedTally {
-  const seen = new Map<string, AttachedIssue>();
-  for (const i of found) seen.set(`${i.workspaceId}\u0000${i.issueId}`, i);
-  const pairs = new Map<string, AttachedPair>();
-  for (const i of seen.values()) {
-    const key = i.teamKey.toUpperCase();
-    const id = `${i.workspaceId}\u0000${key}`;
-    const p = pairs.get(id);
-    if (p === undefined) pairs.set(id, { workspaceId: i.workspaceId, key, ids: 1 });
-    else p.ids += 1;
-  }
-  return { total: seen.size, pairs: [...pairs.values()] };
-}
 
 /** One slot's attached issues over every URL, or null at its first failure word (a slot that failed answers nothing). */
 async function readSlot(deps: CcrcCallDeps, slot: LinearRouteSlot, urls: readonly string[]): Promise<AttachedIssue[] | null> {
@@ -52,22 +35,15 @@ async function readSlot(deps: CcrcCallDeps, slot: LinearRouteSlot, urls: readonl
 
 /**
  * The distinct attached issues per pair over `urls` (at most {@link ATTACHED_URLS_MAX}), asked of each routable slot, or
- * `unmeasured` unless EVERY slot asked answered all of them (a slot that answered with no attachment counts as answered; no
- * slot, no URL, or any slot that failed or answered out of shape is unmeasured, never a zero and never a part of the
- * evidence, since a share over part of it could turn decisive). A failing slot does not stop another from being asked.
- * Never throws.
+ * `unmeasured` unless every slot asked answered all of them (`attachedAnswer`). A failing slot does not stop another from
+ * being asked. Never throws.
  */
 export async function readAttachedIssues(
   deps: CcrcCallDeps, slots: readonly LinearRouteSlot[], urls: readonly string[],
 ): Promise<AttachedTally | 'unmeasured'> {
   const asked = urls.slice(0, ATTACHED_URLS_MAX);
   if (asked.length === 0) return 'unmeasured';
-  const found: AttachedIssue[] = [];
-  let complete = slots.length > 0;
-  for (const slot of slots) {
-    const got = await readSlot(deps, slot, asked);
-    if (got === null) { complete = false; continue; }
-    found.push(...got);
-  }
-  return complete ? tallyAttached(found) : 'unmeasured';
+  const answers: Array<AttachedIssue[] | null> = [];
+  for (const slot of slots) answers.push(await readSlot(deps, slot, asked));
+  return attachedAnswer(answers);
 }

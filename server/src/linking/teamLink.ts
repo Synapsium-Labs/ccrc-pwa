@@ -40,6 +40,35 @@ export interface AttachedPair { workspaceId: string; key: string; ids: number }
  *  (workspace, key). The decider's input; `attachedIssues.ts` builds it. */
 export interface AttachedTally { total: number; pairs: readonly AttachedPair[] }
 
+/** D-8808: one attached issue as a slot answered it. */
+export interface AttachedIssue { workspaceId: string; issueId: string; teamKey: string }
+
+/** The distinct issues of `found` (one per workspace and issue id, however many URLs name it), per (workspace, key). */
+export function tallyAttached(found: readonly AttachedIssue[]): AttachedTally {
+  const seen = new Map<string, AttachedIssue>();
+  for (const i of found) seen.set(`${i.workspaceId}\u0000${i.issueId}`, i);
+  const pairs = new Map<string, AttachedPair>();
+  for (const i of seen.values()) {
+    const key = i.teamKey.toUpperCase();
+    const id = `${i.workspaceId}\u0000${key}`;
+    const p = pairs.get(id);
+    if (p === undefined) pairs.set(id, { workspaceId: i.workspaceId, key, ids: 1 });
+    else p.ids += 1;
+  }
+  return { total: seen.size, pairs: [...pairs.values()] };
+}
+
+/**
+ * The completeness rule: what each asked slot answered (its attached issues, or null when it failed or answered out of shape).
+ * A tally is a measurement only when there is at least one slot and EVERY one answered (a slot that answered with no
+ * attachment counts as answered); otherwise `unmeasured`, never a zero and never a part of the evidence, since a share over
+ * part of it could turn decisive.
+ */
+export function attachedAnswer(answers: ReadonlyArray<readonly AttachedIssue[] | null>): AttachedTally | 'unmeasured' {
+  if (answers.length === 0 || answers.some((a) => a === null)) return 'unmeasured';
+  return tallyAttached(answers.flatMap((a) => a!));
+}
+
 /** What the decider reads for one project. `tally` is `ticketTally` of its texts; `repo` the repository's name (the
  *  slug's last part), or null when not measured. */
 export interface TeamLinkFacts {
