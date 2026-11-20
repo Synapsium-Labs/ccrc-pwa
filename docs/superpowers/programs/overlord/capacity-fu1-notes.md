@@ -86,5 +86,12 @@ from the copy. All 16 mutants are killed by an assertion.
 
 - **Hook.** The graphify gate refused one search (`grep` for the arming card's words) until a graph query had answered.
   The query ran and its answer was not used: the graph is not an ancestor of HEAD. The search then ran.
-- **Load.** The box ran at a load of about 18 throughout. Every red in the gate that was a vitest `Test timed out` was
-  re-run alone; section 3 and the wave-done name each.
+- **Load.** The box ran at a load of about 18 throughout, and every gate file ran alone through `ccrc test`. Green:
+  `stop-done-working-idle`, `stop-done-verdict`, `sleep-lanes-pin`, `lane-arm-route`, `caps-counts-working`,
+  `wake-budget`, `lane-schedule`, `dtbd`, every `single-definition` and `rings` file, `growth-check` armed, and the server
+  and PWA source typechecks. Reds, all vitest `Test timed out`, none an assertion: `stop-done-sweep` (three cases) and
+  `admission-wake` (two older cases), both green when re-run alone; `deviation-refs` (its two-real-trees case) and
+  `coord-db` (three migration cases), which still timed out alone. The server test typecheck was killed twice by the test
+  slice's memory cap. This branch touches no migration, schema or ledger, so CI is the arbiter for those four.
+- **Hook, again.** The slice hook refused one `ccrc-api timer set` whose note text named the checks still to run; the
+  note was worded without them.
