@@ -166,9 +166,9 @@ export function pruneParks(db: DatabaseSync, before: number): number {
 }
 
 /** What the one write of `parked` did (approvals PR 3c, F-B): `parked` (the row moved; a moved ruling the park did not take,
- *  because an unspent one stands, is not recorded), `parked-ruled` (moved, and its ruling recorded on the park as the
+ *  because an unspent one stands, is not recorded), `ruled` (moved, and its ruling recorded on the park as the
  *  coordinator's), `closed` (the key's park is no longer open: nothing parked, and a `held` row was staled), `unmoved`. */
-export type ParkMove = 'parked' | 'parked-ruled' | 'closed' | 'unmoved';
+export type ParkMove = 'parked' | 'ruled' | 'closed' | 'unmoved';
 
 /** THE ONE WRITE of `parked` (approvals PR 3, F8-a), inside the caller's transaction, reached only through the questions
  *  owner's `parkApproval`: a `held` row whose stored word is `live` (its window ended unruled), or an `allowed`/`denied` row
@@ -194,7 +194,7 @@ export function parkApprovalRow(db: DatabaseSync, id: number, now: number, runCl
   if ((row.state === 'allowed' || row.state === 'denied') && (row.verdict === 'allow' || row.verdict === 'deny')) {
     return recordParkRuling(db, row.parkKey, {
       verdict: row.verdict, authority: 'coordinator', by: row.answeredBy ?? row.parentId, reason: row.reason ?? '', class: row.class, rowId: id, now,
-    }) ? 'parked-ruled' : 'parked';
+    }) ? 'ruled' : 'parked';
   }
   return 'parked';
 }

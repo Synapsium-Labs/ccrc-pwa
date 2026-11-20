@@ -910,7 +910,7 @@ export function createQuestions(deps: QuestionsDeps, rules?: QuestionRules): Que
    */
   const parkApproval = (coord: WatcherCoordPort, row: ApprovalRow, now: number, push: (ev: QuestionPush) => void): void => {
     const move = coord.parkApprovalRow(row.id, now, (runId) => runClosedOf(coord, runId) !== false);
-    if (move === 'parked-ruled' && row.verdict !== null) {
+    if (move === 'ruled' && row.verdict !== null) {
       nudgeParkRuling(coord, row, 'coordinator', row.verdict, row.reason ?? '');
       return;
     }

@@ -62,8 +62,8 @@ L1 by `questionPolicy.ts#clearSettledApprovalIds`, beside the deferred push's de
   park write itself (compare-and-set on `held`), not left `held` to the hook's ceiling: it can never meet a ruling, it leaves the
   coordinator's card, and the hook's next poll stops on `stale`. A ruled row the hook never fetched keeps its state on a closed
   key; the sweep asks again each tick until the hook's ceiling, and each ask refuses inside the transaction.
-- **`park-move-word`.** `parkApprovalRow` answers `ParkMove` (`parked`, `parked-ruled`, `closed`, `unmoved`) instead of a
-  boolean, so `parkApproval` acts on what the write did: the push for a moved `held` row, the nudge only for `parked-ruled`.
+- **`park-move-word`.** `parkApprovalRow` answers `ParkMove` (`parked`, `ruled`, `closed`, `unmoved`) instead of a
+  boolean, so `parkApproval` acts on what the write did: the push for a moved `held` row, the nudge only for `ruled`.
 - **`park-run-doubt-closes`.** The park's run is read through the owner's `runClosedOf`, the doors' read; a run it cannot read
   closes the park here (as `parkFactsFor(…, true)` does at the doors).
 - **`withheld-as-503-in-the-owner`.** `server/src/coord/routes.ts` is held by run 1850's frozen landing work and is not touched.
@@ -115,4 +115,9 @@ saved copy, run, and the file restored and checked byte for byte.
 
 ## For the ledger
 
-- Hook refusals: none in this PR.
+- Hook refusals: one. The graph-first gate refused a read-only search of the test tree for the kebab-token scan (no graph
+  query yet this session); I ran the graph query the refusal named (its graph is not an ancestor of HEAD, so its answer was
+  a lead only), and the gate then let the search through.
+- The first fast run was red on one guard, `mail-routes.test.ts`'s scan of quoted kebab tokens under `server/src/coord`: the
+  `ParkMove` word for a moved ruling the park took was kebab (`parked` plus `ruled`). It is now `ruled`, not kebab, so the scan's
+  allowlist is unchanged. That guard was not in the brief's list and I did not run it before the push.
