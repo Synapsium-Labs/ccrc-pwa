@@ -13,6 +13,10 @@ import { NO_PLAN_CHANGES, applyPlanChanges, planStorePort, type PlanChanges, typ
 import { linearOwnerOfProject } from '../src/coord/planPolicy.js';
 import { registerPlanRoutes } from '../src/coord/planRoutes.js';
 import { readLinearStore } from '../src/linear/store.js';
+import { InboundLane } from '../src/linear/inboundLane.js';
+import { PlanSync } from '../src/linear/planSync.js';
+import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
+import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -23,7 +27,7 @@ const U = (n: number): string => `00000000-0000-4000-8000-${String(n).padStart(1
 /** ws-b's own team keyed AAA (a different team id from ws-a's). */
 const AAA_IN_B = [{ id: 'bbbbbbbb-1111-4000-8000-0000000000b1', key: 'AAA', name: 'Team A' }];
 
-interface Rig { coord: CoordStore; plan: PlanStorePort; app: FastifyInstance }
+interface Rig { coord: CoordStore; plan: PlanStorePort; app: FastifyInstance; ccrcDir: string }
 const dirs: string[] = [];
 const apps: FastifyInstance[] = [];
 afterEach(async () => {
@@ -68,7 +72,7 @@ async function rig(): Promise<Rig> {
     inboundRecheck: async () => ({ kind: 'managed' }),
   });
   await app.ready();
-  return { coord, plan, app };
+  return { coord, plan, app, ccrcDir };
 }
 
 const send = (r: Rig, url: string, body: unknown, who: string) =>
@@ -124,5 +128,46 @@ describe("linearOwnerOfProject decides a shared key's owner in the project row's
     const rows = [row('project-a', WS.a.id, 1, 'coord-a'), row('project-b', WS.b.id, 2, 'coord-b')];
     expect(linearOwnerOfProject('project-b', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-b' });
     expect(linearOwnerOfProject('project-a', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-a' });
+  });
+});
+
+// Fix round 1 F1 (review 2971): the inbound lane's own public-text re-check, run before a close comment is sent, judges the reason
+// by the project that owns the team IN THE ROW'S WORKSPACE. project-a (ws-a, private) set AAA first; a ws-b issue's close reason is
+// judged by project-b's mode (public), so a tracker id in it never reaches Linear.
+describe("the inbound lane's re-check before a close comment takes the row's workspace (fix round 1 F1)", () => {
+  const DIRECTORY: LinearDirectoryEntries = {
+    viewerId: U(900), labels: [], projects: [], users: [], initiatives: 'on',
+    states: [{ id: U(21), name: 'Todo', type: 'unstarted', teamKey: 'AAA' }, { id: U(24), name: 'Nope', type: 'canceled', teamKey: 'AAA' }],
+    projectStatuses: [],
+  };
+
+  it("a ws-b close reason naming a tracker id is judged by project-b's mode (public): the fallback comment, never the reason", async () => {
+    const r = await rig();
+    for (const ws of [WS.a.id, WS.b.id]) {
+      r.coord.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(ws, 'AAA', 'applied', T - 1000);
+    }
+    // The route would refuse this reason; the lane re-checks it anyway (the facts may change between triage and the act).
+    r.plan.setInboundState(U(20), { state: 'closed', reason: 'a duplicate of AAA-5' });
+    const asks: CcrcOpAsk[] = [];
+    const call = async (ask: CcrcOpAsk): Promise<CcrcOpOutcome> => {
+      asks.push(ask);
+      if (ask.op === 'issueOwned') return { ok: true, value: { issue: { id: U(20), identifier: 'AAA-20', teamKey: 'AAA', stateType: 'unstarted' } }, created: null };
+      return { ok: true, value: { id: U(30) }, created: null };
+    };
+    const directory = { get: () => DIRECTORY, filledAt: () => T - 1000, projectStatusesRead: () => 'read' as const };
+    const read = () => readLinearStore(r.ccrcDir);
+    const sync = new PlanSync({
+      coord: r.coord, plan: r.plan, ccrcDir: r.ccrcDir, readLinearStore: read, call, directory, directoryMiss: () => undefined,
+      markSlotRejected: async () => undefined, now: () => T, privateTrackerKeys: [], upkeepOwnerOf: () => null,
+    });
+    const lane = new InboundLane({
+      coord: r.coord, plan: r.plan, planSync: sync, readLinearStore: read, call, now: () => T, presenceOf: () => 'alive', viaFleet: () => new Set(), directory,
+    });
+    await lane.tick(T);
+    const comment = asks.find((a) => a.op === 'issueComment');
+    expect(comment, JSON.stringify(asks.map((a) => a.op))).toBeDefined();
+    expect(String(comment!.input['body'])).not.toContain('AAA-5');
+    expect(String(comment!.input['body'])).toContain('did not pass the public-text check');
+    expect(asks.map((a) => a.op)).toContain('issueUpdate');
   });
 });

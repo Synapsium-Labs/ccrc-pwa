@@ -311,10 +311,12 @@ export class InboundLane {
 
   /** Spec §6.1, re-run before the close comment is sent: the facts (the project that owns the team, its linking mode, the installer's
    *  private tracker keys) may have changed since the close was decided. `textRefusalOf` is the one check; a team no project claims is
-   *  judged as `unknown`, public, with the row's team key. The class that refused it, or null. */
+   *  judged as `unknown`, public, with the row's team key. The project is decided in the row's own workspace, as the lane's other
+   *  owner lookups are (review 2971 F1): a key two workspaces hold never takes its mode from the other workspace's project. The class
+   *  that refused it, or null. */
   private textRefusal(row: InboundRow): string | null {
     const { coord, plan, planSync } = this.deps;
-    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf());
+    const project = teamOwnerProject(row.teamKey, plan.hierarchyProjectsOf(), row.workspaceId);
     const fact = textFactOfTeam(project === null ? null : coord.linkingOf(project), row.teamKey);
     return textRefusalOf([row.reason ?? ''], [fact], planSync.privateKeys());
   }
