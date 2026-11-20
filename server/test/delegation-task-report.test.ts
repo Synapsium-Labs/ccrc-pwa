@@ -173,6 +173,13 @@ describe('S1: an Agent\'s final task notification ends its record (spec §7.1)',
     expect(agentRow(cp, X)).toMatchObject({ executionState: 'active', endedAt: null });
   });
 
+  it('S1-A7: out-of-order event times: the end is never before the record opened, and lastEventAt never moves back', () => {
+    // X opens at 5 (its launch), a tool event inside it is seen at 9, and its notification, journaled last, was observed at 3.
+    const toolInX: Ev = { ...base(9), eventKind: 'PostToolUse', toolName: 'Bash', toolUseId: 'toolu_x9', outcome: 'completed', agentId: X };
+    const x = agentRow(liveFold(chain([sessionStart(1), agentLaunch(5, X), toolInX, notification(3, X)])).build(1), X);
+    expect(x).toMatchObject({ executionState: 'ended', openedAt: T(5), endedAt: T(5), lastEventAt: T(9), endBasis: 'task-report' });
+  });
+
   it('S1-R1: a record retired behind the cut before its notification arrives: the fold does not refuse, opens nothing, and the open sibling still ends', () => {
     const records = chain([sessionStart(1), subagentStart(2, X), subagentStop(3, X), subagentStart(4, Y)]);
     const b = liveFold(records);
@@ -277,7 +284,7 @@ describe('S1: endBasis in the checkpoint (spec Table 9)', () => {
   });
 
   it('S1-C2: the codec refuses a basis outside the three words', () => {
-    const bad = editRows(ended(), () => true, (a) => ({ ...a, endBasis: 'guessed' }));
+    const bad = editRows(ended(), () => true, (a) => ({ ...a, endBasis: 'guessed' } as unknown as Row));
     expect(failureCode(() => decodeDelegationCheckpoint(encodeDelegationCheckpoint(bad)))).toBe('bad-shape');
   });
 

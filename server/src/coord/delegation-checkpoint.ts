@@ -44,6 +44,7 @@ import {
   canonicalDelegationJson,
   DELEGATION_BASH_PENDING_MS,
   DELEGATION_STOP_CANDIDATE_HORIZON_MS,
+  DELEGATION_END_BASES,
   delegationListingsEqual,
   deriveDelegationLineageId,
   deriveDelegationRunLineageId,
@@ -80,6 +81,7 @@ import {
 import {
   type DelegationRecordNaming,
 } from './delegation-compaction.js';
+import { endBasisDefect, endedBy, isEndable, taskReportEnd } from './delegation-end-basis.js';
 import {
   foldLeaseCarrierSeen,
   foldLeaseRelease,
@@ -217,13 +219,13 @@ const readAttempt = (v: unknown): DelegationAttemptRow => {
 };
 
 const readActivity = (v: unknown): DelegationActivityRow => {
-  const f = Fields.of(v, 'activity', ['activityId', 'parentId', 'parentIncarnation', 'sourceKind', 'upstreamId', 'identityJournalId', 'displayName', 'executionState', 'openedAt', 'endedAt', 'lastEventAt']);
+  const f = Fields.of(v, 'activity', ['activityId', 'parentId', 'parentIncarnation', 'sourceKind', 'upstreamId', 'identityJournalId', 'displayName', 'executionState', 'openedAt', 'endedAt', 'lastEventAt'], ['endBasis']);
   return {
     activityId: f.hex('activityId'), parentId: f.str('parentId'), parentIncarnation: f.str('parentIncarnation'),
     sourceKind: f.member('sourceKind', DELEGATION_ACTIVITY_SOURCE_KINDS), upstreamId: f.str('upstreamId'),
     identityJournalId: f.hex('identityJournalId'), displayName: f.strN('displayName'),
     executionState: f.member('executionState', DELEGATION_EXECUTION_STATES), openedAt: f.inst('openedAt'), endedAt: f.instN('endedAt'),
-    lastEventAt: f.inst('lastEventAt'),
+    lastEventAt: f.inst('lastEventAt'), ...(f.has('endBasis') ? { endBasis: f.member('endBasis', DELEGATION_END_BASES) } : {}),   // D-8830: optional
   };
 };
 
@@ -398,6 +400,7 @@ export function assertDelegationCheckpointProjectable(cp: DelegationCheckpointV1
     naturalKeys.add(nk);
     needSession(a.parentId, a.parentIncarnation, `activity ${a.activityId}`);
     if (a.endedAt !== null && a.endedAt < a.openedAt) unprojectable(`activity ${a.activityId} ended before it opened`);
+    if (endBasisDefect(a) !== null) unprojectable(`activity ${a.activityId} is ${endBasisDefect(a)}`);   // D-8830: rows carrying endBasis only
     if (a.lastEventAt < a.openedAt) unprojectable(`activity ${a.activityId} had its last event before it opened`);
   }
   const attempts = new Set<string>();
@@ -729,7 +732,7 @@ interface DelegationWorkflowLaunchFact {
 }
 
 const sameActivity = (a: DelegationActivityRow, b: DelegationActivityRow): boolean =>
-  a.executionState === b.executionState && a.endedAt === b.endedAt && a.lastEventAt === b.lastEventAt;
+  a.executionState === b.executionState && a.endedAt === b.endedAt && a.lastEventAt === b.lastEventAt && a.endBasis === b.endBasis;
 
 /**
  * The working form of a checkpoint. Rows are held in maps and treated as immutable values (an update REPLACES a row), so
@@ -895,6 +898,7 @@ export class DelegationCheckpointBuilder {
     if (replay) this.touchSession(e);
     this.indexWorkflowLaunch(record, e);    // D-6269: before the naming loop, so a launch is indexed whether or not its join opens or refuses
     this.foldNotification(e, replay);       // D-6269
+    this.foldTaskReport(e, replay);         // D-8830
     for (const na of namedAgentsOf(e)) {
       const key: DelegationActivityNaturalKey = { parentId: e.sessionId, parentIncarnation: e.parentIncarnation, sourceKind: na.sourceKind, upstreamId: na.upstreamId };
       const encoded = encodeDelegationNaturalKey(key);
@@ -946,8 +950,9 @@ export class DelegationCheckpointBuilder {
 
   /** D-6269: a task notification whose tool-use id and task id are a Workflow launch's. A terminal status (`completed`, `failed`,
    *  `cancelled`) ends the run and its `<runId>-<n>` workers; `unknown` only touches `lastEventAt` (a paused workflow is not ended). An
-   *  Agent's notification is never touched (the index holds Workflow launches only), and one journaled before its launch is ignored. In
-   *  observe mode it is the one place a covered record edits a row. */
+   *  Agent's notification is not this arm's (the index holds Workflow launches only): `foldTaskReport` folds it (D-8830). One journaled
+   *  before its launch is ignored. In observe mode these two arms are the one place a covered record edits a row. A record S2's backfill
+   *  closed is still endable here (D-8830, `isEndable`), and an end written here is `observed` (`endedBy`). */
   private foldNotification(e: DelegationEventEnvelopeV1, replay: boolean): void {
     if (e.eventKind !== 'UserPromptSubmit') return;
     const n = e.notification;
@@ -958,8 +963,8 @@ export class DelegationCheckpointBuilder {
     if (run === undefined) return refuse('fold-refused', `the task notification of workflow run ${L.runId} of (${e.sessionId}, ${e.parentIncarnation}) finds no run row, although its launch was folded`);
     const terminal = n.status !== 'unknown';
     const changed: DelegationActivityRow[] = [];
-    const nextRun: DelegationActivityRow = terminal && run.executionState !== 'ended'
-      ? { ...run, executionState: 'ended', endedAt: maxInstant(e.observedAt, run.openedAt), lastEventAt: maxInstant(run.lastEventAt, e.observedAt) }
+    const nextRun: DelegationActivityRow = terminal && isEndable(run)
+      ? endedBy(run, e.observedAt, 'observed')
       : { ...run, lastEventAt: maxInstant(run.lastEventAt, e.observedAt) };
     if (!sameActivity(nextRun, run)) changed.push(nextRun);
     if (terminal) {
@@ -968,13 +973,21 @@ export class DelegationCheckpointBuilder {
       // that run's worker here; the observed run ids (`wf_<8 hex>-<suffix>`) never nest that way.
       const prefix = `${run.upstreamId}-`;
       for (const w of this.activities.values()) {
-        if (w.sourceKind !== 'workflow' || w.parentId !== run.parentId || w.parentIncarnation !== run.parentIncarnation || w.executionState === 'ended') continue;
+        if (w.sourceKind !== 'workflow' || w.parentId !== run.parentId || w.parentIncarnation !== run.parentIncarnation || !isEndable(w)) continue;
         if (!w.upstreamId.startsWith(prefix) || !isDelegationWorkerIndex(w.upstreamId.slice(prefix.length))) continue;
-        changed.push({ ...w, executionState: 'ended', endedAt: maxInstant(e.observedAt, w.openedAt), lastEventAt: maxInstant(w.lastEventAt, e.observedAt) });
+        changed.push(endedBy(w, e.observedAt, 'observed'));
       }
     }
     for (const a of changed) this.activities.set(a.activityId, a);
     if (!replay) this.coveredEnds += changed.length;
+  }
+
+  /** D-8830: an Agent's final task notification ends its record on the natural key, through the mapping (`taskReportEnd` decides). Like
+   *  `foldNotification` it runs in observe mode too, so the first boot after S1 ends every open record whose notification is retained. */
+  private foldTaskReport(e: DelegationEventEnvelopeV1, replay: boolean): void {
+    const mapped = (enc: string): string | undefined => (Object.hasOwn(this.mapping, enc) ? this.mapping[enc] : undefined);   // the mapping first (O4)
+    const ended = taskReportEnd(e, (k) => { const id = mapped(encodeDelegationNaturalKey(k)); return id === undefined ? undefined : this.activities.get(id); });
+    if (ended !== null) { this.activities.set(ended.activityId, ended); if (!replay) this.coveredEnds += 1; }
   }
 
   /** D-6267: rule A, for a bash-worktree key the checkpoint does NOT map. `at` is the record's parsed acceptedAt. */
@@ -1067,13 +1080,8 @@ export class DelegationCheckpointBuilder {
   private touchActivity(activityId: string, e: DelegationEventEnvelopeV1, na: DelegationNamedUpstream): void {
     const a = this.activities.get(activityId);
     if (a === undefined) return refuse('fold-refused', `the mapping names activity ${activityId}, which has no row`);
-    const ends = na.ends && a.executionState !== 'ended';
-    this.activities.set(activityId, {
-      ...a,
-      lastEventAt: maxInstant(a.lastEventAt, e.observedAt),
-      executionState: ends ? 'ended' : a.executionState,
-      endedAt: ends ? maxInstant(e.observedAt, a.openedAt) : a.endedAt,
-    });
+    // D-8830: a backfill close is still endable, and the end is `observed` (`endedBy` removes the basis key).
+    this.activities.set(activityId, na.ends && isEndable(a) ? endedBy(a, e.observedAt, 'observed') : { ...a, lastEventAt: maxInstant(a.lastEventAt, e.observedAt) });
   }
 
   /** `c` carries no `sequence`, `stopOnly` or `lastAcceptedAt`: opening never reads them, and a worker opened from its run's row (or a Bash call

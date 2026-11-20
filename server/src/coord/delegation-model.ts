@@ -168,7 +168,17 @@ export interface DelegationActivityRow {
   openedAt: string;
   endedAt: string | null;
   lastEventAt: string;
+  /** Session helpers S1 (D-8830): what an `ended` row's end rests on. OPTIONAL, and its absence means `observed`, so every row ended
+   *  before S1 reads as it did and a checkpoint carries the key only once some row ends by a task report (or S2's backfill). The rules
+   *  that read and write it are `delegation-end-basis.ts`'s. */
+  endBasis?: DelegationEndBasis;
 }
+
+/** Session helpers S1 (D-8830, spec 2026-11-19 §7.1): `observed`, a SubagentStop, a completed launch or a Workflow's terminal
+ *  notification (every end before S1); `task-report`, an Agent's final task notification; `backfill-unmeasured`, S2's one-time pass,
+ *  which closes a record with no end time. */
+export const DELEGATION_END_BASES = ['observed', 'task-report', 'backfill-unmeasured'] as const;
+export type DelegationEndBasis = (typeof DELEGATION_END_BASES)[number];
 
 export interface DelegationLeaseRow {
   leaseId: string;
@@ -1031,7 +1041,7 @@ export const delegationAttemptCodec: DelegationRowCodec<DelegationAttemptRow, (t
 
 const ACTIVITY_COLUMNS = [
   'activityId', 'parentId', 'parentIncarnation', 'sourceKind', 'upstreamId', 'identityJournalId', 'displayName',
-  'executionState', 'openedAt', 'endedAt', 'lastEventAt',
+  'executionState', 'openedAt', 'endedAt', 'lastEventAt', 'endBasis',
 ] as const;
 export const delegationActivityCodec: DelegationRowCodec<DelegationActivityRow, (typeof ACTIVITY_COLUMNS)[number]> = {
   table: 'delegation_activities',
@@ -1040,16 +1050,18 @@ export const delegationActivityCodec: DelegationRowCodec<DelegationActivityRow, 
     activityId: r.activityId, parentId: r.parentId, parentIncarnation: r.parentIncarnation, sourceKind: r.sourceKind,
     upstreamId: r.upstreamId, identityJournalId: r.identityJournalId, displayName: r.displayName,
     executionState: r.executionState, openedAt: instantMs(r.openedAt), endedAt: instantMsOrNull(r.endedAt),
-    lastEventAt: instantMs(r.lastEventAt),
+    lastEventAt: instantMs(r.lastEventAt), endBasis: r.endBasis ?? null,
   }),
   fromDb: (raw) => {
     const r = readers('delegation_activities', raw);
+    // D-8830: a NULL column is a row without the key (absence means `observed`), so it compares equal to its checkpoint row.
+    const endBasis = raw['endBasis'] === null ? null : r.member('endBasis', DELEGATION_END_BASES);
     return {
       activityId: r.text('activityId'), parentId: r.text('parentId'), parentIncarnation: r.text('parentIncarnation'),
       sourceKind: r.member('sourceKind', DELEGATION_ACTIVITY_SOURCE_KINDS), upstreamId: r.text('upstreamId'),
       identityJournalId: r.text('identityJournalId'), displayName: r.textOrNull('displayName'),
       executionState: r.member('executionState', DELEGATION_EXECUTION_STATES), openedAt: r.instant('openedAt'),
-      endedAt: r.instantOrNull('endedAt'), lastEventAt: r.instant('lastEventAt'),
+      endedAt: r.instantOrNull('endedAt'), lastEventAt: r.instant('lastEventAt'), ...(endBasis === null ? {} : { endBasis }),
     };
   },
 };

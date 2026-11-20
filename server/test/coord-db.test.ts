@@ -767,9 +767,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // and MIGRATIONS[107] (mail.urgentAs and mail_urgent, urgent mail, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, the gate's fence refusals, Overlord W1 gates B),
     // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1),
-    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, waiting workers sleep, D-8790).
-    expect(COORD_SCHEMA_VERSION).toBe(111);
-    expect(MIGRATIONS.length).toBe(111);
+    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, waiting workers sleep, D-8790),
+    // and MIGRATIONS[111] (delegation_activities.endBasis, what a broker activity's end rests on, session helpers S1, D-8830).
+    expect(COORD_SCHEMA_VERSION).toBe(112);
+    expect(MIGRATIONS.length).toBe(112);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -906,8 +907,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // and MIGRATIONS[107] (mail.urgentAs, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B),
     // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, Overlord W1 door process B1),
-    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, D-8790); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(111);
+    // and MIGRATIONS[110] (the working-idle-sleep lane-arm row, D-8790),
+    // and MIGRATIONS[111] (delegation_activities.endBasis, D-8830); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(112);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
@@ -1227,6 +1229,7 @@ describe('coord.db: the six delegation_* tables (delegation broker wave 3, spec 
       ['activityId', 'TEXT', 1, 1], ['parentId', 'TEXT', 1, 0], ['parentIncarnation', 'TEXT', 1, 0], ['sourceKind', 'TEXT', 1, 0],
       ['upstreamId', 'TEXT', 1, 0], ['identityJournalId', 'TEXT', 1, 0], ['displayName', 'TEXT', 0, 0],
       ['executionState', 'TEXT', 1, 0], ['openedAt', 'INTEGER', 1, 0], ['endedAt', 'INTEGER', 0, 0], ['lastEventAt', 'INTEGER', 1, 0],
+      ['endBasis', 'TEXT', 0, 0],
     ]);
     expect(cols(db, 'delegation_leases')).toEqual([
       ['leaseId', 'TEXT', 1, 1], ['generation', 'INTEGER', 1, 0], ['creatingJournalSequence', 'INTEGER', 1, 0],
