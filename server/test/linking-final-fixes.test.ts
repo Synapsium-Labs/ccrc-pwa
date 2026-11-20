@@ -4,9 +4,8 @@
 // own Linear owner (`linearOwnerOfProject`) is decided in its own row's workspace. A real coord.db and a real Linear store on a tmp
 // dir; the routes on a bare Fastify with the real plan store. Neutral fixtures only; nothing reaches a network.
 import { afterEach, describe, expect, it } from 'vitest';
-import { mkdirSync, readFileSync, rmSync } from 'node:fs';
+import { mkdirSync, rmSync } from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath } from 'node:url';
 import Fastify, { type FastifyInstance } from 'fastify';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
@@ -125,24 +124,5 @@ describe("linearOwnerOfProject decides a shared key's owner in the project row's
     const rows = [row('project-a', WS.a.id, 1, 'coord-a'), row('project-b', WS.b.id, 2, 'coord-b')];
     expect(linearOwnerOfProject('project-b', rows, f)).toMatchObject({ project: 'project-b', id: 'coord-b' });
     expect(linearOwnerOfProject('project-a', rows, f)).toMatchObject({ project: 'project-a', id: 'coord-a' });
-  });
-});
-
-// Final review M4: the coordinator's `## linking suggest` says what `team-set` covers (a project WITH a key: one the operator
-// cleared still takes suggestions) and names `team-ambiguous`, which the door now answers.
-describe("the coordinator skill's linking suggest section (final review M4)", () => {
-  const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '../..');
-  const section = (): string => {
-    const text = readFileSync(path.join(root, 'ccd/coordinator-skill/references/plan.md'), 'utf8');
-    const start = text.indexOf('## linking suggest');
-    expect(start, 'the section is gone').toBeGreaterThan(-1);
-    const next = text.indexOf('\n## ', start + 1);
-    return (next === -1 ? text.slice(start) : text.slice(start, next)).replace(/\s+/g, ' ');
-  };
-  it('team-set covers a project that has a key only, and team-ambiguous is a refusal it names', () => {
-    const s = section();
-    expect(s).not.toContain('or the operator decided it');
-    expect(s).toContain('a project whose key the operator cleared still takes suggestions');
-    expect(s).toContain('`team-ambiguous`');
   });
 });

@@ -180,25 +180,3 @@ inbound, for a take into an epic; or, for an Upkeep ticket's take or close, the 
 resolved; a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking
 must be set first) and the client's own `capability-missing`
 (the server does not advertise `plan-inbound-v1`; nothing was sent).
-
-## linking suggest
-
-A project with no Linear team key, whose programme files into it, has nowhere for its tickets to go. A coordinator that knows
-which team it should be suggests one, with exactly one body:
-
-```bash
-"$API" linking suggest --json - <<JSON
-{"project":"project-a","team":"AAA","workspace":"<id, optional>","why":"<reason>"}
-JSON
-```
-
-`workspace` is needed only when the key exists in more than one connected workspace; without it, the one workspace that
-holds the key is recorded. Never put `byId` or `byUuid` in the
-body: the client adds the pane's own pair and refuses a body that names either. A suggestion is a candidate and never a
-link: it appears on the console's Project linking card, under the project, with the workspace and your reason, and the
-operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
-to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
-`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
-`team-unknown` (no connected workspace has that team, or the named workspace does not), `team-ambiguous` (no workspace named
-and the key is in more than one connected workspace: send it again with `workspace`), `no-project`, `linear-text-public` and
-`bad-request` (a body that is not exactly these keys, or a reason over its length).
