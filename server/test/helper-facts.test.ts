@@ -15,18 +15,26 @@ const toolResult = (toolUseResult: unknown, extra: object = {}): string =>
 
 const ASYNC = { isAsync: true, status: 'async_launched', agentId: 'a516cb53d83b231c7', description: 'd', resolvedModel: 'claude-opus-5-5', prompt: 'p', outputFile: '/o', canReadOutputFile: true, canContinueAgent: true };
 
-/** A task notification record: the harness writes it as a user record whose content is the envelope. */
-const notification = (o: { id?: string; status?: string; summary?: string; result?: string | null; ts?: string } = {}): string =>
+type NoticeOpts = { id?: string; status?: string; summary?: string; result?: string | null; ts?: string };
+/** The envelope a task notification carries, in either record shape. */
+const envelope = (o: NoticeOpts = {}): string =>
+  `<task-notification>\n<task-id>${o.id ?? 'a516cb53d83b231c7'}</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/o</output-file>\n`
+  + `<status>${o.status ?? 'completed'}</status>\n<summary>${o.summary ?? 'Agent "x" completed'}</summary>\n`
+  + `${o.result === null ? '' : `<result>${o.result ?? 'the report'}</result>\n`}</task-notification>`;
+
+/** A task notification record, the first of its two shapes: a user record whose content is the envelope (a notification
+ *  that reaches an idle main thread). */
+const notification = (o: NoticeOpts = {}): string =>
+  line({ type: 'user', timestamp: o.ts ?? TS, origin: { kind: 'task-notification' }, message: { role: 'user', content: envelope(o) } });
+
+/** The second shape: a notification that reaches a BUSY main thread is an `attachment` record (a queued command whose mode
+ *  is task-notification) carrying the same envelope as its `prompt` (measured, review 2961 F1). */
+const attached = (o: NoticeOpts & { type?: string; mode?: string; prompt?: unknown } = {}, extra: object = {}): string =>
   line({
-    type: 'user',
+    type: 'attachment',
     timestamp: o.ts ?? TS,
-    origin: { kind: 'task-notification' },
-    message: {
-      role: 'user',
-      content: `<task-notification>\n<task-id>${o.id ?? 'a516cb53d83b231c7'}</task-id>\n<tool-use-id>toolu_01</tool-use-id>\n<output-file>/o</output-file>\n`
-        + `<status>${o.status ?? 'completed'}</status>\n<summary>${o.summary ?? 'Agent "x" completed'}</summary>\n`
-        + `${o.result === null ? '' : `<result>${o.result ?? 'the report'}</result>\n`}</task-notification>`,
-    },
+    attachment: { type: o.type ?? 'queued_command', commandMode: o.mode ?? 'task-notification', prompt: o.prompt ?? envelope(o), source_uuid: 'u1' },
+    ...extra,
   });
 
 describe('helperFactsOf: an Agent launch result', () => {
@@ -57,9 +65,10 @@ describe('helperFactsOf: an Agent launch result', () => {
     expect(f.reportCut).toBe(true);
   });
 
-  it('a record that is not a user record yields none, whatever it carries', () => {
+  it('an assistant record yields none, whatever it carries (a launch result and a notification are read from the two shapes below, no other)', () => {
     expect(helperFactsOf(toolResult(ASYNC, { type: 'assistant' }))).toEqual([]);
     expect(helperFactsOf(notification().replace('"type":"user"', '"type":"assistant"'))).toEqual([]);
+    expect(helperFactsOf(toolResult(ASYNC, { type: 'system' }))).toEqual([]);
   });
 
   it('a record that carries both reads as the launch result (one record is one fact)', () => {
@@ -169,6 +178,78 @@ describe('helperFactsOf: a task notification', () => {
 describe('helperFactsOf: the bounds are the spec\'s numbers', () => {
   it('a report is at most 16 KiB and a summary at most 200 bytes', () => {
     expect([HELPER_REPORT_MAX_BYTES, HELPER_SUMMARY_MAX_BYTES]).toEqual([16_384, 200]);
+  });
+});
+
+describe('helperFactsOf: a notification that reaches a busy main thread (review 2961 F1)', () => {
+  it('an attachment record (queued_command, task-notification) reads as the same fact as the user record, with the record\'s own time', () => {
+    const fromAttachment = helperFactsOf(attached({ status: 'failed', summary: 'Agent "x" failed', result: 'what went wrong' }));
+    expect(fromAttachment).toEqual([
+      { source: 'notification', id: 'a516cb53d83b231c7', status: 'failed', at: AT, model: null, durationMs: null, summary: 'Agent "x" failed', report: 'what went wrong', reportCut: false },
+    ]);
+    expect(fromAttachment).toEqual(helperFactsOf(notification({ status: 'failed', summary: 'Agent "x" failed', result: 'what went wrong' })));
+  });
+
+  it('killed and stopped are read from it too', () => {
+    expect(helperFactsOf(attached({ status: 'killed' }))[0]).toMatchObject({ status: 'killed' });
+    expect(helperFactsOf(attached({ status: 'stopped' }))[0]).toMatchObject({ status: 'stopped' });
+  });
+
+  it('the record\'s time is the fact\'s time, not the attachment\'s own', () => {
+    const f = helperFactsOf(JSON.stringify({ type: 'attachment', timestamp: TS, attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: envelope(), timestamp: '2020-01-01T00:00:00.000Z' } }));
+    expect(f[0]!.at).toBe(AT);
+  });
+
+  it('a queued command of any other mode is no notification (a typed prompt is the chat\'s, not a helper\'s)', () => {
+    expect(helperFactsOf(attached({ mode: 'prompt' }))).toEqual([]);
+    expect(helperFactsOf(attached({ mode: 'bash' }))).toEqual([]);
+  });
+
+  it('an attachment of any other type is no notification', () => {
+    expect(helperFactsOf(attached({ type: 'hook_success' }))).toEqual([]);
+    expect(helperFactsOf(attached({ type: 'queued_commands' }))).toEqual([]);
+  });
+
+  it('a prompt that is not a string, or not an envelope, yields none', () => {
+    expect(helperFactsOf(attached({ prompt: { text: envelope() } }))).toEqual([]);
+    expect(helperFactsOf(attached({ prompt: 'plain words' }))).toEqual([]);
+    expect(helperFactsOf(attached({ prompt: null }))).toEqual([]);
+  });
+
+  it('a notification of a status still running, or with no task id, yields none through this shape as through the other', () => {
+    expect(helperFactsOf(attached({ status: 'running' }))).toEqual([]);
+    expect(helperFactsOf(attached({ id: 'bad id!' }))).toEqual([]);
+  });
+
+  it('a sidechain attachment is a subagent\'s own and yields none', () => {
+    expect(helperFactsOf(attached({}, { isSidechain: true }))).toEqual([]);
+  });
+
+  it('an attachment record with no attachment object yields none and never throws', () => {
+    expect(helperFactsOf(line({ type: 'attachment', timestamp: TS }))).toEqual([]);
+    expect(helperFactsOf(line({ type: 'attachment', timestamp: TS, attachment: 'x' }))).toEqual([]);
+    expect(helperFactsOf(line({ type: 'attachment', timestamp: TS, attachment: null }))).toEqual([]);
+  });
+
+  it('a launch result on an attachment record is not read: only a user record carries one', () => {
+    const rec = line({ type: 'attachment', timestamp: TS, toolUseResult: ASYNC, attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: 'plain words' } });
+    expect(helperFactsOf(rec)).toEqual([]);
+  });
+});
+
+describe('helperFactsOf: the review 2961 cuts of a fact\'s own fields', () => {
+  it('a negative foreground duration is no duration (it would put the start after the end)', () => {
+    expect(helperFactsOf(toolResult({ status: 'completed', agentId: 'a1', content: 'r', totalDurationMs: -5 }))[0]!.durationMs).toBeNull();
+    expect(helperFactsOf(toolResult({ status: 'completed', agentId: 'a1', content: 'r', totalDurationMs: 0 }))[0]!.durationMs).toBe(0);
+  });
+
+  it('the summary is masked BEFORE its first line is taken: a key block spread over lines is gone whole (review 2961 F12)', () => {
+    const body = 'MIIEvQIBADANBgkqhkiG9w0BAQEFAASCBKcwggSjAgEAAoIBAQC7'.repeat(2);
+    const pem = `-----BEGIN PRIVATE KEY-----\n${body}\n-----END PRIVATE KEY-----`;
+    const f = helperFactsOf(notification({ summary: pem }))[0]!;
+    expect(f.summary ?? '').not.toContain('BEGIN PRIVATE KEY');
+    expect(f.summary ?? '').not.toContain('MIIEvQ');
+    expect(JSON.stringify(f)).not.toContain('MIIEvQ');
   });
 });
 

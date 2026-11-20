@@ -29,6 +29,7 @@ import {
   frameDue,
   isFinishedKept,
   isWorkflowAgentName,
+  seenDrops,
   type AgentArm,
   type AgentArmInput,
   type HelperIdFacts,
@@ -148,6 +149,52 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
     });
   });
 
+  describe('a helper continued after its end and listed again is running again (review 2961 F3; a continued agent fires a new SubagentStart, measured)', () => {
+    const listedFrom = (startedAt: number | null, entryAt = ROSTER_AT): RosterInput => ({ kind: 'usable', at: entryAt, entries: [{ id: A, name: 'Explore', startedAt }] });
+    const endedAt = (outcome: 'done' | 'failed' | 'stopped', at: number | null): Partial<HelperIdFacts> => ({ launch: asyncLaunch(NOW - 30 * MIN), end: end(outcome, at) });
+
+    it.each(['done', 'failed', 'stopped'] as const)('a %s end 15 minutes old and a listing whose start is LATER than it: running, with no end time, no summary and no report', (outcome) => {
+      const arm = run(base({ facts: { [A]: facts(endedAt(outcome, NOW - 15 * MIN)) }, roster: listedFrom(NOW - MIN) }));
+      expect(stateOf(arm, A)).toBe('running');
+      expect(row(arm, A)).toMatchObject({ endedAt: null, summary: null, hasReport: false });
+      expect(arm.known).toBe(1);
+    });
+
+    it('a listing that started BEFORE the end, AT the end, or with no readable start is no continuation: the end stands', () => {
+      for (const start of [NOW - 3 * MIN, NOW - 2 * MIN, null]) {
+        const arm = run(base({ facts: { [A]: facts(endedAt('done', NOW - 2 * MIN)) }, roster: listedFrom(start) }));
+        expect(stateOf(arm, A)).toBe('done');
+      }
+    });
+
+    it('an end with no readable time cannot be compared with a start: it stands', () => {
+      const arm = run(base({ facts: { [A]: facts(endedAt('failed', null)) }, roster: listedFrom(NOW - MIN) }));
+      expect(stateOf(arm, A)).toBe('failed');
+    });
+
+    it('a process that is gone and a roster that cannot be used are not a listing: the end stands', () => {
+      const gone = run(base({ facts: { [A]: facts(endedAt('done', NOW - 2 * MIN)) }, roster: listedFrom(NOW - MIN), proc: { kind: 'gone' } }));
+      expect(stateOf(gone, A)).toBe('done');
+      const stale = run(base({ facts: { [A]: facts(endedAt('done', NOW - 2 * MIN)) }, roster: { kind: 'unusable', why: { why: 'absent' } } }));
+      expect(stateOf(stale, A)).toBe('done');
+    });
+
+    it('a roster that does not list the id leaves an old end where it was (not running, aged out of the keep)', () => {
+      const arm = run(base({ facts: { [A]: facts(endedAt('done', NOW - 15 * MIN)) }, roster: usable(['other']) }));
+      expect(arm.agents.find((a) => a.id === A)).toBeUndefined();
+      expect(arm.known).toBe(1);
+    });
+
+    it('the meta\'s finished marker yields the same way, by the helper transcript\'s last write', () => {
+      const f = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 15 * MIN }) }, roster: listedFrom(NOW - MIN) });
+      expect(stateOf(run(f), A)).toBe('running');
+      const before = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 2 * MIN }) }, roster: listedFrom(NOW - 3 * MIN) });
+      expect(stateOf(run(before), A)).toBe('finished');
+      const noWrite = base({ metas: { [A]: meta({ finished: true, lastWriteAt: null }) }, roster: listedFrom(NOW - MIN) });
+      expect(stateOf(run(noWrite), A)).toBe('finished');
+    });
+  });
+
   describe('the meta\'s finished marker comes next', () => {
     it('finished, with its end the helper transcript\'s last write, ranks above a process gone and a roster that lists it', () => {
       const arm = run(base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 3 * MIN }) }, proc: { kind: 'gone' }, roster: usable([A]) }));
@@ -252,35 +299,60 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
     });
   });
 
-  describe('no longer listed: only from a drop this reader SAW (review 2900 F13)', () => {
+  describe('no longer listed: only from a drop this reader SAW (review 2900 F13, review 2961 F2)', () => {
     const metasFor = (ids: string[]): Record<string, HelperMeta> => Object.fromEntries(ids.map((i) => [i, meta()]));
-    const ALL = ['a1', 'a2', 'a3', 'z1'];
     const read = (ids: string[], extra: Setup = {}): AgentArm => run({ metas: metasFor(ids), roster: usable(ids), ...extra });
     /** A later reading of the same session: the helpers in `known` exist, the roster lists `ids`. */
     const later = (prev: AgentArm, ids: string[], known: string[], extra: Setup = {}): AgentArm =>
       run({ metas: metasFor(known), roster: usable(ids), memory: prev.memory, ...extra });
 
-    it('listed in one reading, absent in the next, with another previously listed id still listed: no longer listed', () => {
+    it('listed in one reading, absent in the next, with an OLDER previously listed id still listed: no longer listed', () => {
       const one = read(['a1', 'a2']);
-      expect(stateOf(one, 'a1')).toBe('running');
-      const two = later(one, ['a2'], ['a1', 'a2']);
-      expect(stateOf(two, 'a1')).toBe('unlisted');
-      expect(stateOf(two, 'a2')).toBe('running');
+      expect(stateOf(one, 'a2')).toBe('running');
+      const two = later(one, ['a1'], ['a1', 'a2']);
+      expect(stateOf(two, 'a2')).toBe('unlisted');
+      expect(stateOf(two, 'a1')).toBe('running');
       expect(two.unmeasured).toBeNull();
-      expect(row(two, 'a1').endedAt).toBeNull();
+      expect(row(two, 'a2').endedAt).toBeNull();
+    });
+
+    it('a survivor that sat AFTER the dropped id proves nothing: the cap takes the oldest first, so a real stop of the oldest entry is left out (the accepted residual)', () => {
+      const one = read(['a1', 'a2']);
+      const two = later(one, ['a2'], ['a1', 'a2']);
+      expect(stateOf(two, 'a1')).toBe('unmeasured');
+      expect(two.unmeasured).toEqual({ why: 'unseen', helpers: 1 });
+    });
+
+    it('the reviewer\'s probe: a helper and thirty workflow agents (31 entries, room in both readings), then 31 entries with the helper evicted: state left out, not "no longer listed"', () => {
+      const wf = Array.from({ length: 30 }, (_, i) => `w${i}`);
+      const one = run({ metas: metasFor(['h1']), roster: usable(['h1', ...wf]) });
+      expect(stateOf(one, 'h1')).toBe('running');
+      const two = run({ metas: metasFor(['h1']), roster: usable([...wf, 'w30']), memory: one.memory });
+      expect(stateOf(two, 'h1')).toBe('unmeasured');
+      expect(two.unmeasured).toEqual({ why: 'unseen', helpers: 1 });
+    });
+
+    it('the memory keeps the roster\'s own order, which the witness reads', () => {
+      expect([...read(['a3', 'a1', 'a2']).memory.listed!]).toEqual(['a3', 'a1', 'a2']);
+    });
+
+    it('a drop of the middle entry with an older survivor and a younger one is seen', () => {
+      const one = read(['a1', 'a2', 'a3']);
+      const two = later(one, ['a1', 'a3'], ['a1', 'a2', 'a3']);
+      expect(stateOf(two, 'a2')).toBe('unlisted');
     });
 
     it('a drop the reader did not see (no earlier reading of a usable roster) leaves the state out and counts it', () => {
-      const two = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a2']) });
-      expect(stateOf(two, 'a1')).toBe('unmeasured');
+      const two = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a1']) });
+      expect(stateOf(two, 'a2')).toBe('unmeasured');
       expect(two.unmeasured).toEqual({ why: 'unseen', helpers: 1 });
     });
 
     it('a roster that was unusable in between forgets: a drop across it is not seen', () => {
       const one = read(['a1', 'a2']);
       const mid = run({ metas: metasFor(['a1', 'a2']), roster: { kind: 'unusable', why: { why: 'stale', hookAgeMs: 31 * MIN } }, memory: one.memory });
-      const two = later(mid, ['a2'], ['a1', 'a2']);
-      expect(stateOf(two, 'a1')).toBe('unmeasured');
+      const two = later(mid, ['a1'], ['a1', 'a2']);
+      expect(stateOf(two, 'a2')).toBe('unmeasured');
     });
 
     it('the LAST listed id dropping cannot be told from a roster reset: state left out, not called a drop (the residual)', () => {
@@ -299,20 +371,31 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       expect(two.unmeasured).toEqual({ why: 'unseen', helpers: 2 });
     });
 
-    it('the process start time is a second witness: a process that restarted between the readings forbids the drop', () => {
+    it('the process start time vetoes the drop: a process that restarted between the readings forbids it', () => {
       const one = read(['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 3_600_000 } });
-      const sameProc = later(one, ['a2'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 3_600_000 } });
-      expect(stateOf(sameProc, 'a1')).toBe('unlisted');
-      const restarted = later(one, ['a2'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 1_000 } });
-      expect(stateOf(restarted, 'a1')).toBe('unmeasured');
+      const sameProc = later(one, ['a1'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 3_600_000 } });
+      expect(stateOf(sameProc, 'a2')).toBe('unlisted');
+      const restarted = later(one, ['a1'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 1_000 } });
+      expect(stateOf(restarted, 'a2')).toBe('unmeasured');
     });
 
     it('an unmeasured process start does not forbid a drop the roster itself witnesses', () => {
       const one = read(['a1', 'a2']);
-      const two = later(one, ['a2'], ['a1', 'a2'], { proc: { kind: 'unmeasured' } });
-      expect(stateOf(two, 'a1')).toBe('unlisted');
-      const noStart = later(one, ['a2'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: null } });
-      expect(stateOf(noStart, 'a1')).toBe('unlisted');
+      const two = later(one, ['a1'], ['a1', 'a2'], { proc: { kind: 'unmeasured' } });
+      expect(stateOf(two, 'a2')).toBe('unlisted');
+      const noStart = later(one, ['a1'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: null } });
+      expect(stateOf(noStart, 'a2')).toBe('unlisted');
+    });
+
+    it('the process start is carried across a reading that does not measure it live, so a restart seen only afterwards still vetoes (review 2961 F11)', () => {
+      const t1 = NOW - 3_600_000;
+      const one = read(['a1', 'a2'], { proc: { kind: 'live', startedAt: t1 } });
+      for (const proc of [{ kind: 'unmeasured' }, { kind: 'live', startedAt: null }, { kind: 'gone' }] as Proc[]) {
+        const mid = later(one, ['a1', 'a2'], ['a1', 'a2'], { proc });
+        expect(mid.memory.procStartedAt).toBe(t1);
+        const restarted = later(mid, ['a1'], ['a1', 'a2'], { proc: { kind: 'live', startedAt: NOW - 1_000 } });
+        expect(stateOf(restarted, 'a2')).toBe('unmeasured');
+      }
     });
 
     it('a full roster (32 listed) is not room: the oldest entry falls off the cap, so neither side of a drop counts', () => {
@@ -324,58 +407,116 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       const dropped = run({ metas, roster: usable(ids.slice(1)), memory: full.memory });
       expect(stateOf(dropped, 'a1')).toBe('unmeasured');
       // the current reading is full: an absence is the cap's, not a stop's
-      const small = run({ metas, roster: usable(['a1', ids[1]!]) });
+      const small = run({ metas, roster: usable([ids[1]!, 'a1']) });
       const nowFull = run({ metas, roster: usable(ids), memory: small.memory });
       expect(stateOf(nowFull, 'a1')).toBe('unmeasured');
     });
 
+    it('room is counted by ENTRIES, not by ids: thirty ids and two entries with no id is a full roster (the hook counts every entry toward its cap)', () => {
+      const ids = Array.from({ length: 30 }, (_, i) => `f${i}`);
+      const metas = metasFor([...ids, 'x1']);
+      const one = run({ metas, roster: usable([...ids, 'x1', null].slice(0, 32)) });
+      expect(one.memory.listedFull).toBe(true);
+      expect(stateOf(one, 'x1')).toBe('running');
+      const two = run({ metas, roster: usable(ids.slice(0, 29)), memory: one.memory });
+      expect(stateOf(two, 'x1')).toBe('unmeasured');
+      // and the current roster: 29 ids and three entries with none is full as well
+      const small = run({ metas, roster: usable(['f0', 'x1']) });
+      const nowFull = run({ metas, roster: usable([...ids.slice(0, 29), null, null, null]), memory: small.memory });
+      expect(stateOf(nowFull, 'x1')).toBe('unmeasured');
+    });
+
     it('a seen drop stays seen while the roster stays usable: the row does not flicker back to "state left out"', () => {
       const one = read(['a1', 'a2']);
-      const two = later(one, ['a2'], ['a1', 'a2']);
-      const three = later(two, ['a2'], ['a1', 'a2']);
-      const four = later(three, ['a2'], ['a1', 'a2']);
-      expect(stateOf(three, 'a1')).toBe('unlisted');
-      expect(stateOf(four, 'a1')).toBe('unlisted');
+      const two = later(one, ['a1'], ['a1', 'a2']);
+      const three = later(two, ['a1'], ['a1', 'a2']);
+      const four = later(three, ['a1'], ['a1', 'a2']);
+      expect(stateOf(three, 'a2')).toBe('unlisted');
+      expect(stateOf(four, 'a2')).toBe('unlisted');
       expect(four.unmeasured).toBeNull();
     });
 
     it('a dropped id that is listed again is running again, and a later drop of it is a new drop', () => {
       const one = read(['a1', 'a2']);
-      const two = later(one, ['a2'], ['a1', 'a2']);
+      const two = later(one, ['a1'], ['a1', 'a2']);
       const back = later(two, ['a1', 'a2'], ['a1', 'a2']);
-      expect(stateOf(back, 'a1')).toBe('running');
-      const again = later(back, ['a2'], ['a1', 'a2']);
-      expect(stateOf(again, 'a1')).toBe('unlisted');
+      expect(stateOf(back, 'a2')).toBe('running');
+      const again = later(back, ['a1'], ['a1', 'a2']);
+      expect(stateOf(again, 'a2')).toBe('unlisted');
     });
 
     it('a seen drop is forgotten when the roster becomes unusable (no claim survives what the reader cannot read)', () => {
       const one = read(['a1', 'a2']);
-      const two = later(one, ['a2'], ['a1', 'a2']);
+      const two = later(one, ['a1'], ['a1', 'a2']);
       const gap = run({ metas: metasFor(['a1', 'a2']), roster: { kind: 'unusable', why: { why: 'absent' } }, memory: two.memory });
-      const after = later(gap, ['a2'], ['a1', 'a2']);
-      expect(stateOf(after, 'a1')).toBe('unmeasured');
+      const after = later(gap, ['a1'], ['a1', 'a2']);
+      expect(stateOf(after, 'a2')).toBe('unmeasured');
     });
 
     it('a helper the reader never saw listed is not "dropped" by a roster that merely lacks it', () => {
       const one = read(['a1', 'a2']);
-      const two = later(one, ['a2'], ['a1', 'a2', 'a3']);
-      expect(stateOf(two, 'a1')).toBe('unlisted');
+      const two = later(one, ['a1'], ['a1', 'a2', 'a3']);
+      expect(stateOf(two, 'a2')).toBe('unlisted');
       expect(stateOf(two, 'a3')).toBe('unmeasured');
       expect(two.unmeasured).toEqual({ why: 'unseen', helpers: 1 });
     });
 
     it('a dropped id that came back and then vanished with no survivor is not called dropped on the strength of the old drop', () => {
       const one = read(['a1', 'a2']);
-      const two = later(one, ['a2'], ['a1', 'a2']);
+      const two = later(one, ['a1'], ['a1', 'a2']);
       const back = later(two, ['a1', 'a2'], ['a1', 'a2']);
       const reset = later(back, ['z1'], ['a1', 'a2', 'z1']);
-      expect(stateOf(reset, 'a1')).toBe('unmeasured');
+      expect(stateOf(reset, 'a2')).toBe('unmeasured');
     });
 
     it('a roster entry with no id counts toward room and never matches a helper', () => {
       const one = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a1', 'a2', null]) });
-      const two = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a2', null]), memory: one.memory });
-      expect(stateOf(two, 'a1')).toBe('unlisted');
+      const two = run({ metas: metasFor(['a1', 'a2']), roster: usable(['a1', null]), memory: one.memory });
+      expect(stateOf(two, 'a2')).toBe('unlisted');
+    });
+
+    it('a dropped id the reader no longer knows is forgotten from the memory, and a drop that came back is too', () => {
+      const one = read(['a1', 'a2', 'a3']);
+      const two = later(one, ['a1', 'a3'], ['a1', 'a2', 'a3']);
+      expect([...two.memory.dropped]).toEqual(['a2']);
+      const forgotten = later(two, ['a1', 'a3'], ['a1', 'a3']); // a2's meta is gone: no row, no memory of it
+      expect([...forgotten.memory.dropped]).toEqual([]);
+      const back = later(two, ['a1', 'a2', 'a3'], ['a1', 'a2', 'a3']);
+      expect([...back.memory.dropped]).toEqual([]);
+    });
+  });
+
+  describe('seenDrops: the witness as a pure function the reader can ask before the decision runs (review 2961 F13)', () => {
+    const metasFor = (ids: string[]): Record<string, HelperMeta> => Object.fromEntries(ids.map((i) => [i, meta()]));
+    const first = (ids: string[], proc: Proc = LIVE): AgentArm => run({ metas: metasFor(ids), roster: usable(ids), proc });
+
+    it('names the ids listed in the last usable roster and absent now, when the witness holds', () => {
+      const one = first(['a1', 'a2', 'a3']);
+      expect([...seenDrops(one.memory, usable(['a1']), LIVE)].sort()).toEqual(['a2', 'a3']);
+    });
+
+    it('names none when no older survivor proves the roster was not reset, when the roster is unusable, and with no earlier reading', () => {
+      const one = first(['a1', 'a2']);
+      expect([...seenDrops(one.memory, usable(['a2']), LIVE)]).toEqual([]);
+      expect([...seenDrops(one.memory, usable(['z1']), LIVE)]).toEqual([]);
+      expect([...seenDrops(one.memory, { kind: 'unusable', why: { why: 'absent' } }, LIVE)]).toEqual([]);
+      expect([...seenDrops(emptyHelperMemory(), usable(['a1']), LIVE)]).toEqual([]);
+    });
+
+    it('names none across a full roster, a changed process start, and ids the roster still lists', () => {
+      const ids = Array.from({ length: HELPER_LISTED_MAX }, (_, i) => `f${i}`);
+      const full = run({ metas: metasFor(ids), roster: usable(ids) });
+      expect([...seenDrops(full.memory, usable(ids.slice(0, 3)), LIVE)]).toEqual([]);
+      const one = first(['a1', 'a2']);
+      expect([...seenDrops(one.memory, usable(['a1']), { kind: 'live', startedAt: NOW - 5 })]).toEqual([]);
+      expect([...seenDrops(one.memory, usable(['a1', 'a2']), LIVE)]).toEqual([]);
+    });
+
+    it('is what the decision uses: a row is "no longer listed" exactly for these ids (and the drops it remembers)', () => {
+      const one = first(['a1', 'a2', 'a3']);
+      const seen = seenDrops(one.memory, usable(['a1']), LIVE);
+      const two = run({ metas: metasFor(['a1', 'a2', 'a3']), roster: usable(['a1']), memory: one.memory });
+      expect(two.agents.filter((a) => a.state === 'unlisted').map((a) => a.id).sort()).toEqual([...seen].sort());
     });
   });
 });
@@ -735,6 +876,64 @@ describe('every bound of the Agent arm (review 2900 F9)', () => {
   });
 });
 
+describe('contracts the first mutation round left unpinned (review 2961 F4)', () => {
+  const A = 'a1';
+  const sized = (n: number): HelperIdFacts => facts({ end: { ...end('done', NOW - MIN), summary: 'é'.repeat(n) } });
+
+  it('the model: the meta\'s, else the launch result\'s: with both set, the meta\'s', () => {
+    const arm = run({ roster: usable([A]), metas: { [A]: meta({ model: 'm-meta' }) }, facts: { [A]: facts({ launch: { ...asyncLaunch(NOW - 5 * MIN), model: 'm-launch' } }) } });
+    expect(row(arm, A).model).toBe('m-meta');
+    const only = run({ roster: usable([A]), metas: { [A]: meta({ model: null }) }, facts: { [A]: facts({ launch: { ...asyncLaunch(NOW - 5 * MIN), model: 'm-launch' } }) } });
+    expect(row(only, A).model).toBe('m-launch');
+  });
+
+  it('the summary is cut at exactly HELPER_SUMMARY_MAX_BYTES bytes: 100 two-byte characters, or 200 ASCII ones', () => {
+    const two = run({ metas: { [A]: meta() }, facts: { [A]: sized(150) } });
+    expect(row(two, A).summary).toBe('é'.repeat(100));
+    const ascii = run({ metas: { [A]: meta() }, facts: { [A]: facts({ end: { ...end('done', NOW - MIN), summary: 'x'.repeat(250) } }) } });
+    expect(row(ascii, A).summary).toBe('x'.repeat(200));
+    const exact = run({ metas: { [A]: meta() }, facts: { [A]: sized(100) } });
+    expect(row(exact, A).summary).toBe('é'.repeat(100));
+  });
+
+  it('a description whose cut lands just after a COMPLETE surrogate pair keeps the pair', () => {
+    const arm = run({ roster: usable([A]), metas: { [A]: meta({ description: `${'a'.repeat(198)}\u{1F600}tail` }) } });
+    expect(row(arm, A).description).toBe(`${'a'.repeat(198)}\u{1F600}`);
+    const half = run({ roster: usable([A]), metas: { [A]: meta({ description: `${'a'.repeat(199)}\u{1F600}tail` }) } });
+    expect(row(half, A).description).toBe('a'.repeat(199));
+  });
+
+  it('running rows are ordered by start (oldest first), then by id', () => {
+    const entries = [['r1', NOW - 1_000], ['r2', NOW - 3_000], ['r3', NOW - 2_000], ['r0', NOW - 2_000]] as const;
+    const roster: RosterInput = { kind: 'usable', at: ROSTER_AT, entries: entries.map(([id, startedAt]) => ({ id, name: 'Explore', startedAt })) };
+    const arm = run({ roster, metas: { r1: meta(), r3: meta(), r2: meta(), r0: meta() } });
+    expect(arm.agents.map((a) => a.id)).toEqual(['r2', 'r0', 'r3', 'r1']);
+  });
+
+  it('rows in one non-final state are ordered by start (oldest first), then by id', () => {
+    const launches: Record<string, HelperIdFacts> = { u1: facts({ launch: asyncLaunch(NOW - 5 * MIN) }), u2: facts({ launch: asyncLaunch(NOW - 9 * MIN) }), u3: facts({ launch: asyncLaunch(NOW - 7 * MIN) }) };
+    const arm = run({ roster: usable(['other']), metas: { u1: meta(), u2: meta(), u3: meta() }, facts: launches });
+    expect(arm.agents.map((a) => [a.id, a.state])).toEqual([['u2', 'unmeasured'], ['u3', 'unmeasured'], ['u1', 'unmeasured']]);
+  });
+
+  it('the count of rows whose state was left out is of the rows SHOWN: a row the bound evicted is not counted', () => {
+    const ids = Array.from({ length: HELPER_NONFINAL_MAX + 8 }, (_, i) => `u${String(i).padStart(2, '0')}`);
+    const arm = run({ roster: usable(['other']), metas: Object.fromEntries(ids.map((id) => [id, meta()])) });
+    expect(arm.agents).toHaveLength(HELPER_NONFINAL_MAX);
+    expect(arm.omitted).toBe(8);
+    expect(arm.unmeasured).toEqual({ why: 'unseen', helpers: HELPER_NONFINAL_MAX });
+  });
+
+  it('the rows drawn once for want of an end time are remembered only while they are SHOWN: one the keep\'s bound evicted is not', () => {
+    const ids = Array.from({ length: HELPER_KEPT_MAX + 1 }, (_, i) => `e${String(i).padStart(2, '0')}`);
+    const arm = run({ roster: usable([]), facts: Object.fromEntries(ids.map((id) => [id, facts({ launch: asyncLaunch(NOW - 30 * MIN), end: end('done', null) })])) });
+    expect(arm.agents).toHaveLength(HELPER_KEPT_MAX);
+    expect(arm.memory.noEndShown.size).toBe(HELPER_KEPT_MAX);
+    expect(arm.memory.noEndShown.has(ids[HELPER_KEPT_MAX]!)).toBe(false);
+    expect(arm.memory.noEndShown.has(ids[0]!)).toBe(true);
+  });
+});
+
 describe('foldHelperFacts: the facts of one id, folded', () => {
   const fact = (o: Partial<HelperFact>): HelperFact => ({
     source: 'notification', id: 'a1', status: 'completed', at: NOW, model: null, durationMs: null, summary: 's', report: 'r', reportCut: false, ...o,
@@ -773,6 +972,22 @@ describe('foldHelperFacts: the facts of one id, folded', () => {
     for (const order of [[early, late], [late, early]]) {
       expect(foldHelperFacts(new Map(), order).get('a1')!.end).toMatchObject({ outcome: 'done' });
     }
+  });
+  it('two ends at one time are told apart by outcome (failed, then stopped, then done), whatever the order they were read in (review 2961 F10)', () => {
+    const at = NOW - MIN;
+    const by = (status: HelperFact['status']): HelperFact => fact({ status, at });
+    for (const order of [[by('completed'), by('failed')], [by('failed'), by('completed')], [by('killed'), by('completed')], [by('completed'), by('killed')]]) {
+      const want = order.some((f) => f.status === 'failed') ? 'failed' : 'stopped';
+      expect(foldHelperFacts(new Map(), order).get('a1')!.end).toMatchObject({ outcome: want });
+    }
+    expect(foldHelperFacts(new Map(), [by('killed'), by('failed')]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
+    expect(foldHelperFacts(new Map(), [by('failed'), by('killed')]).get('a1')!.end).toMatchObject({ outcome: 'failed' });
+  });
+  it('a notification seen in both of its record shapes is one fact twice: it folds to one end', () => {
+    const seen = fact({ status: 'failed', at: NOW - MIN, summary: 'x' });
+    const folded = foldHelperFacts(new Map(), [seen, { ...seen }]);
+    expect(folded.size).toBe(1);
+    expect(folded.get('a1')).toEqual(foldHelperFacts(new Map(), [seen]).get('a1'));
   });
   it('an end with a time beats an end with none', () => {
     const timed = fact({ status: 'failed', at: NOW - MIN });
