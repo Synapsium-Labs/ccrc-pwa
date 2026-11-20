@@ -2324,7 +2324,9 @@ describe('ccrc models refresh: a stored effort level the new catalogue drops (pr
     expect(models('codex-a.classes.json').effort.opus).toBe('max');
     const r1 = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
     expect(r1.code, r1.stdout + r1.stderr).toBe(0);
-    expect((oneObject(r1)['refreshed'] as Record<string, unknown>[])[0]).toMatchObject({ id: 'codex-a', ok: true });
+    // D-8842: never silent: the row says what was written, and that the advance file recorded it.
+    expect((oneObject(r1)['refreshed'] as Record<string, unknown>[])[0]).toMatchObject({ id: 'codex-a', ok: true,
+      effortFallback: [{ class: 'opus', model: 'gpt-5.6-sol', from: 'max', to: 'xhigh' }], effortFallbackRecord: 'recorded' });
     // gpt-6-astra still lists max, so it ranks the level: the next one down that gpt-5.6-sol offers is xhigh.
     expect(models('codex-a.classes.json').effort.opus).toBe('xhigh');
     expect(models('codex-a.effort.json').byModel['gpt-5.6-sol']).toBe('xhigh');
@@ -2334,6 +2336,60 @@ describe('ccrc models refresh: a stored effort level the new catalogue drops (pr
     const r2 = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(true) });
     expect(r2.code, r2.stdout + r2.stderr).toBe(0);
     expect((models('codex-a.json').models as { id: string }[]).map((m) => m.id)).toContain('gpt-5.5-extra');
+    expect((oneObject(r2)['refreshed'] as Record<string, unknown>[])[0], 'nothing more to fall back')
+      .not.toHaveProperty('effortFallback');
+  });
+
+  it('a lane with no advance file still falls back, and its row says the record has nowhere to go', async () => {
+    await seatCodexA();
+    fs.rmSync(join(home, '.ccrc', 'models', 'codex-a.advance.json'), { force: true });
+    const r = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: dropMax(false) });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect((oneObject(r)['refreshed'] as Record<string, unknown>[])[0]).toMatchObject({ ok: true,
+      effortFallback: [{ class: 'opus', from: 'max', to: 'xhigh' }], effortFallbackRecord: 'no-advance-file' });
+    expect(fs.existsSync(join(home, '.ccrc', 'models', 'codex-a.advance.json')), 'none is created for it').toBe(false);
+  });
+});
+
+describe('ccrc models refresh: the measured two-hour flap of a missing pin (programme wave 3, backward-move, D-8838)', () => {
+  const T0 = '2026-11-10T22:16:58Z';
+  const later = (m: number): string => new Date(Date.parse(T0) + m * 60_000).toISOString().replace(/\.\d{3}Z$/, 'Z');
+  /** CODEX_RAW with an older sol model beside the opus pin, and the pin itself left out unless `listed`. */
+  const raw = (listed: boolean): string => {
+    const r = JSON.parse(fs.readFileSync(CODEX_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+    const pin = r.models.find((m) => m['slug'] === 'gpt-5.6-sol')!;
+    r.models.push({ ...pin, slug: 'gpt-5.5-sol', display_name: 'gpt-5.5-sol' });
+    if (!listed) r.models = r.models.filter((m) => m['slug'] !== 'gpt-5.6-sol');
+    const p = join(home, `raw-flap-${listed ? 'listed' : 'gone'}.json`);
+    fs.writeFileSync(p, JSON.stringify(r));
+    return p;
+  };
+  const models = (f: string): any => JSON.parse(fs.readFileSync(join(home, '.ccrc', 'models', f), 'utf8'));
+  const advance = (): any => models('codex-a.advance.json');
+  /** One hourly refresh, at `m` minutes after the first sighting. */
+  const hour = (m: number, listed: boolean): Record<string, unknown> => {
+    const r = refreshFaked('codex-a', { CCRC_MODELS_PROBE_FIXTURE: raw(listed), CCRC_MODELS_NOW: later(m) });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    return (oneObject(r)['refreshed'] as Record<string, unknown>[])[0]!;
+  };
+
+  it('two sightings without the pin, listed again on the third: the record follows each one, and nothing moves', async () => {
+    await seatCodexA();
+    expect(hour(0, false)).toMatchObject({ id: 'codex-a', ok: true });
+    expect(advance().classes.opus.missing).toEqual({ model: 'gpt-5.6-sol', since: T0, seen: T0 });
+    hour(60, false);
+    expect(advance().classes.opus.missing).toEqual({ model: 'gpt-5.6-sol', since: T0, seen: later(60) });
+    hour(120, true);
+    expect(advance().classes.opus.missing, 'listed again: the run ends').toBeUndefined();
+    expect(models('codex-a.classes.json').classes.opus).toBe('gpt-5.6-sol');
+    expect(advance().classes.opus.history, 'no move, and no failed try').toEqual([]);
+  });
+
+  it('a missed hour between two sightings restarts the run at the second', async () => {
+    await seatCodexA();
+    hour(0, false);
+    hour(180, false);
+    expect(advance().classes.opus.missing).toEqual({ model: 'gpt-5.6-sol', since: later(180), seen: later(180) });
   });
 });
 
@@ -3390,6 +3446,45 @@ describe('the hourly refresh lowers a refused window on a direct lane (codex-bri
     expect(oneObject(r)['refreshed']).toEqual([{ id: ID, probe: 'codex', ok: true, count: 9, litellm: 'rendered',
       lowered: [{ model: OPUS, from: 400000, to: 225000, refused: 250000 }] }]);
     expect(eighthKey()).toBe('225000');
+  });
+
+  // Programme wave 3 (D-8842), the precedence in the first hour after a dropped effort level: the lowering pass runs
+  // before the probe, on the registry as stored, which is still refused, so it fails that hour and says so; the
+  // probe's materialise then writes the fallback; the lowering waits for the next hour, and the fallback never hides
+  // its failure (both are on the row, which stays ok, as any lowering failure leaves it).
+  it('the first hour after a dropped level: the refused lowering is named beside the fallback, and the next hour lowers', async () => {
+    await seatLane('direct', 250000);
+    const drop = (): string => {
+      const r = JSON.parse(fs.readFileSync(CODEX_RAW, 'utf8')) as { models: Record<string, unknown>[] };
+      for (const m of r.models) {
+        if (m['slug'] === OPUS) {
+          m['supported_reasoning_levels'] = (m['supported_reasoning_levels'] as { effort: string }[])
+            .filter((l) => l.effort !== 'max');
+        }
+      }
+      const p = join(home, 'raw-dropped.json');
+      fs.writeFileSync(p, JSON.stringify(r));
+      return p;
+    };
+    // An earlier hour's probe (an older build's, whose materialise refused the dropped level) left the new catalogue.
+    const pr = sourced(`_models_refresh_one ${ID} codex ""`, ['lock', 'ours', 'stop', 'start'],
+      { CCRC_MODELS_PROBE_FIXTURE: drop() });
+    expect(pr.code, pr.stdout + pr.stderr).toBe(0);
+    const r1 = refreshFaked(ID, { CCRC_MODELS_PROBE_FIXTURE: drop() });
+    expect(r1.code, r1.stdout + r1.stderr).toBe(0);
+    const row1 = (oneObject(r1)['refreshed'] as Record<string, unknown>[])[0]!;
+    expect(row1).toMatchObject({ id: ID, ok: true, effortFallback: [{ class: 'opus', model: OPUS, from: 'max' }],
+      effortFallbackRecord: 'recorded' });
+    expect(String(row1['lowerFailed'])).toMatch(/effort/);
+    expect(row1).not.toHaveProperty('lowered');
+    expect(tokensOf(OPUS)).toBe(400000);
+    const r2 = refreshFaked(ID, { CCRC_MODELS_PROBE_FIXTURE: drop() });
+    expect(r2.code, r2.stdout + r2.stderr).toBe(0);
+    const row2 = (oneObject(r2)['refreshed'] as Record<string, unknown>[])[0]!;
+    expect(row2).toMatchObject({ id: ID, probe: 'codex', ok: true, count: 9,
+      lowered: [{ model: OPUS, from: 400000, to: 225000, refused: 250000 }] });
+    expect(Object.keys(row2).filter((k) => k === 'lowerFailed' || k === 'effortFallback'), 'nothing left to fall back').toEqual([]);
+    expect(tokensOf(OPUS)).toBe(225000);
   });
 
   it('a lowering the op refuses is named on the row, and never fails it', async () => {

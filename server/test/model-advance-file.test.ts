@@ -730,7 +730,7 @@ describe('the advance file on an Anthropic lane (model-class Anthropic arm A2.3)
 // naming its field, and is kept by an older build as an unknown key, so the mixed-version window reads both ways.
 describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
   const AT = '2026-11-10T22:16:58Z';
-  const MISSING = { model: 'model-6.1-gamma', since: AT };
+  const MISSING = { model: 'model-6.1-gamma', since: AT, seen: '2026-11-10T23:16:55Z' };
   const FALLBACK = { at: AT, model: 'model-6.1-gamma', from: 'max', to: 'xhigh' };
 
   it('both parse, and survive parse, recordMove and serialize', () => {
@@ -745,11 +745,19 @@ describe('the advance file\'s wave 3 keys: missing and effortFallback', () => {
     expect(moved.classes.sonnet['effortFallback']).toEqual(FALLBACK);
   });
 
+  it('a missing record of the first shape, with no seen, still reads (the rule restarts it, D-8838)', () => {
+    const a = example();
+    a.classes.opus.missing = { model: 'model-6.1-gamma', since: AT };
+    expect(parseAdvance(a).classes.opus['missing']).toEqual({ model: 'model-6.1-gamma', since: AT });
+  });
+
   it.each([
     ['a missing that is not an object', (a: any) => { a.classes.opus.missing = 'yes'; }, 'classes.opus.missing'],
     ['a missing with no model', (a: any) => { a.classes.opus.missing = { model: null, since: AT }; }, 'classes.opus.missing'],
     ['a missing model that is not an id', (a: any) => { a.classes.opus.missing = { model: 'not an id', since: AT }; }, 'classes.opus.missing'],
     ['a missing since that is not a time', (a: any) => { a.classes.opus.missing = { model: 'model-6.1-gamma', since: '2026-11-10' }; }, 'classes.opus.missing'],
+    ['a missing seen that is not a time', (a: any) => { a.classes.opus.missing = { ...MISSING, seen: 1789000000 }; }, 'classes.opus.missing'],
+    ['a missing seen of null', (a: any) => { a.classes.opus.missing = { ...MISSING, seen: null }; }, 'classes.opus.missing'],
     ['an effortFallback that is not an object', (a: any) => { a.classes.opus.effortFallback = 1; }, 'classes.opus.effortFallback'],
     ['an effortFallback with no at', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, at: undefined }; }, 'classes.opus.effortFallback'],
     ['an effortFallback model that is not an id', (a: any) => { a.classes.opus.effortFallback = { ...FALLBACK, model: 'x y' }; }, 'classes.opus.effortFallback'],

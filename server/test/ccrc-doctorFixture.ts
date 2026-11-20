@@ -1797,7 +1797,7 @@ export const anyVerdictFor = (out: string, name: string): string | undefined =>
  *  that reads this constant reds (`ccrc-doctor-codex-host.test.ts`: 22 skipped measured where 18 was pinned, and 21
  *  where 17 was). `ccrc-doctor-model-advance.test.ts` plants the op and the lane files.
  *
- *  RAISED BY ONE AGAIN, on every platform (model-class auto-advance wave 3): `codex-release-lookup` SKIPs -
+ *  RAISED BY ONE AGAIN, on every platform (model-class auto-advance wave 3): `model-release-lookup` SKIPs -
  *  `healthy()` writes no `~/.ccrc/codex-client-release.json`, so no release lookup has been tried. Measured the same
  *  way: with the check in the table and this `+ 1` absent, the `(N skipped)` pins that read this constant red
  *  (`ccrc-doctor-fleet.test.ts`: 24 skipped measured where 23 was pinned). `ccrc-doctor-model-advance.test.ts`

@@ -164,6 +164,14 @@ describe('the Codex arm (§5)', () => {
     expect(cat.fetchedAt).toBeLessThanOrEqual(now + 1);
   });
 
+  it('stamps fetchedAt from CCRC_MODELS_NOW when it is a time of the file form, and from the clock otherwise (D-8838)', () => {
+    run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW, CCRC_MODELS_NOW: '2026-11-10T22:16:58Z' });
+    expect(parseCatalogue(catalogueAt('gpt')).fetchedAt).toBe(Date.parse('2026-11-10T22:16:58Z') / 1000);
+    run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW, CCRC_MODELS_NOW: '2026-11-10 22:16:58' });
+    const now = Math.floor(Date.now() / 1000);
+    expect(parseCatalogue(catalogueAt('gpt')).fetchedAt, 'another form reads the clock').toBeGreaterThan(now - 120);
+  });
+
   it('writes atomically — no temp file survives, and the mode is 0600', () => {
     run(['gpt', 'codex'], { CCRC_MODELS_PROBE_FIXTURE: CODEX_RAW });
     expect(fs.readdirSync(path.join(home, '.ccrc', 'models'))).toEqual(['gpt.json']);

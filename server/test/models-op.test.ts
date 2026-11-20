@@ -2951,10 +2951,12 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
   };
   const verb = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
     opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', ID, '--class', cls);
-  /** Every file under ~/.ccrc/models, name → bytes: what "writes nothing" is measured against. */
+  /** Every file under ~/.ccrc/models, name → bytes (a directory standing where a file goes, as one): what "writes
+   *  nothing" is measured against. */
   const modelFiles = (): Record<string, string> => {
     const d = path.join(home, '.ccrc', 'models');
-    return Object.fromEntries(fs.readdirSync(d).sort().map((n) => [n, fs.readFileSync(path.join(d, n), 'utf8')]));
+    return Object.fromEntries(fs.readdirSync(d).sort().map((n) => [n,
+      fs.statSync(path.join(d, n)).isDirectory() ? '<directory>' : fs.readFileSync(path.join(d, n), 'utf8')]));
   };
 
   it('hold records when and by what act; a second hold changes nothing; release clears it; a second release changes nothing', () => {
@@ -3093,6 +3095,17 @@ describe('hold, release and revert (auto-advance spec §2.7, D12)', () => {
       advanced();
       fs.writeFileSync(path.join(home, '.ccrc', 'models', `${ID}.advance.json`), '{"v": 1}');
     }, 'opus', 'advance-file-invalid'],
+    ['advance-file-unreadable: the advance file cannot be read', (): void => {
+      advanced();
+      const p = path.join(home, '.ccrc', 'models', `${ID}.advance.json`);
+      fs.rmSync(p, { force: true });
+      fs.mkdirSync(p);
+    }, 'opus', 'advance-file-unreadable'],
+    ['unknown-class: not one of the four', (): void => { advanced(); }, 'bogus', 'unknown-class'],
+    ['registry-invalid: a registry refused when it is read', (): void => {
+      advanced();
+      fs.writeFileSync(regPath(ID), `${JSON.stringify({ ...registryOf(ID), extra: 1 }, null, 2)}\n`);
+    }, 'opus', 'registry-invalid'],
   ] as [string, () => void, string, string][])('revert refuses %s, and writes nothing', (_why, plant, cls, error) => {
     plant();
     const before = modelFiles();
@@ -4098,13 +4111,14 @@ describe('advance-commit (auto-advance spec §2.1 D21 and §2.3; plan W2 Task 9)
   // reads differently from an advance. One case per reason `chooseCandidate` computes.
   it.each([
     ['newer', (): void => plantStep(), {}, 'opus', 'model-6.1-gamma'],
-    // Programme wave 3 (backward-move): retired only once the pin has been missing for the grace, so the plant
-    // carries the record of when it was first seen missing, six hours before this commit's clock.
+    // Programme wave 3 (backward-move, D-8838): retired only once six hours of sightings have missed the pin, the
+    // last of them this catalogue's own observation (fetchedAt, 2026-09-10T00:26:40Z), so the plant carries that run.
     ['retired', (): void => plantStep({
       registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
         effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } },
       catalogue: { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') },
-      advance: stepAdvance({ opus: { missing: { model: 'model-6.1-gamma', since: '2026-10-22T04:05:12Z' } } }),
+      advance: stepAdvance({ opus: { missing: { model: 'model-6.1-gamma', since: '2026-09-09T18:26:40Z',
+        seen: '2026-09-10T00:26:40Z' } } }),
     }), { from: 'model-6.1-gamma', to: 'model-5.6-gamma' }, 'opus', 'model-5.6-gamma'],
     ['empty', (): void => plantStep({ advance: stepAdvance({ fable: { family: 'delta' } }) }),
       { cls: 'fable', from: 'none', to: 'model-6-delta' }, 'fable', 'model-6-delta'],
@@ -5136,9 +5150,10 @@ describe('advance-health (auto-advance spec §2.8; plan W3 Task 14)', () => {
 
   it('a held class whose pin has left the catalogue is named with reason retired: its fallback may be OLDER than the pin', () => {
     // model-7-gamma is listed nowhere; the newest gamma the fresh catalogue lists is model-6.1-gamma, an older version.
-    // Its record says it has been missing for longer than the grace (programme wave 3).
+    // Its record is a run of sightings six hours long, ending at this catalogue's own observation (D-8838).
     plantH({ registry: { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-7-gamma' } },
-      advance: stepAdvance({ opus: { hold: HOLD, missing: { model: 'model-7-gamma', since: '2026-10-22T09:00:00Z' } } }) });
+      advance: stepAdvance({ opus: { hold: HOLD, missing: { model: 'model-7-gamma', since: '2026-09-09T18:26:40Z',
+        seen: '2026-09-10T00:26:40Z' } } }) });
     expect(laneH(health())['heldBehind']).toEqual([{ class: 'opus', pin: 'model-7-gamma', newer: 'model-6.1-gamma',
       reason: 'retired', hold: HOLD }]);
   });
@@ -6339,90 +6354,201 @@ describe('programme wave 3 through the ops', () => {
   /** The measured shape: opus pinned on a model the lane's fresh catalogue has stopped listing, its older sibling left. */
   const FLAP_REG = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, opus: 'model-6.1-gamma' },
     effort: { ...STEP_REGISTRY.effort, opus: 'xhigh' } };
-  const FLAP_CAT = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') };
+  /** The catalogue as the probe wrote it `h` hours after T0 (its `fetchedAt`), with or without the pin. */
+  const observed = (h: number, listed = false) => ({ ...STEP_CATALOGUE, fetchedAt: Date.parse(later(h)) / 1000,
+    models: listed ? STEP_CATALOGUE.models : STEP_CATALOGUE.models.filter((m) => m.id !== 'model-6.1-gamma') });
+  /** One hourly first pass: the probe's catalogue, then the refresh's own `materialise --refresh true`, a minute on. */
+  const sight = (h: number, listed = false): Result => {
+    writeCatalogue('lane-a', observed(h, listed));
+    const r = at(later(h + 1 / 60), 'materialise', '--refresh', 'true');
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    return r;
+  };
+  const run = (since: number, seen: number) => ({ model: 'model-6.1-gamma', since: later(since), seen: later(seen) });
   const opusPlan = (r: Result): Record<string, unknown> =>
     (r.body['classes'] as Record<string, unknown>[]).find((c) => c['class'] === 'opus')!;
 
-  it('a pin missing from a fresh catalogue: the backfill records it, nothing moves within six hours, then it retires', () => {
-    plantStep({ registry: FLAP_REG, catalogue: FLAP_CAT });
-    expect(at(T0, 'advance-backfill').code).toBe(0);
-    expect(laneAdvance().classes.opus['missing']).toEqual({ model: 'model-6.1-gamma', since: T0 });
-    expect(at(later(1), 'advance-backfill').code).toBe(0);
-    expect(laneAdvance().classes.opus['missing'], 'the first sighting stands').toEqual({ model: 'model-6.1-gamma', since: T0 });
-    const early = at(later(2), 'advance-plan');
+  it('the refresh\'s materialise records each sighting; nothing moves within six hours of them, then it retires', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    for (const h of [0, 1, 2]) sight(h);
+    expect(laneAdvance().classes.opus['missing']).toEqual(run(0, 2));
+    const early = at(later(2.1), 'advance-plan');
     expect(early.body['eligible']).toBe(true);
     expect(opusPlan(early)).toMatchObject({ candidate: null, reason: null });
     // A commit planned before the grace, or by an older plan, is re-checked under the lock and abandoned.
-    const c = at(later(2), 'advance-commit', '--class', 'opus', '--from', 'model-6.1-gamma', '--to', 'model-5.6-gamma',
+    const c = at(later(2.1), 'advance-commit', '--class', 'opus', '--from', 'model-6.1-gamma', '--to', 'model-5.6-gamma',
       '--canary', 'passed');
     expect(c.body).toMatchObject({ outcome: 'abandoned', why: 'candidate-changed' });
     expect(classesOf('lane-a')['opus']).toBe('model-6.1-gamma');
-    expect(opusPlan(at(later(6), 'advance-plan'))).toMatchObject({ candidate: 'model-5.6-gamma', reason: 'retired' });
-    const moved = at(later(6), 'advance-commit', '--class', 'opus', '--from', 'model-6.1-gamma', '--to', 'model-5.6-gamma',
+    for (const h of [3, 4, 5]) sight(h);
+    expect(opusPlan(at(later(5.1), 'advance-plan')), 'five hours of sightings').toMatchObject({ candidate: null });
+    sight(6);
+    expect(opusPlan(at(later(6.1), 'advance-plan'))).toMatchObject({ candidate: 'model-5.6-gamma', reason: 'retired' });
+    const moved = at(later(6.1), 'advance-commit', '--class', 'opus', '--from', 'model-6.1-gamma', '--to', 'model-5.6-gamma',
       '--canary', 'passed');
     expect(moved.body).toMatchObject({ outcome: 'moved' });
   });
 
-  it('a pin listed again clears the record, so a later absence starts the grace again', () => {
-    plantStep({ registry: FLAP_REG, catalogue: FLAP_CAT });
-    expect(at(T0, 'advance-backfill').code).toBe(0);
-    writeCatalogue('lane-a', STEP_CATALOGUE);
-    expect(at(later(2), 'advance-backfill').code).toBe(0);
-    expect(laneAdvance().classes.opus['missing']).toBeUndefined();
-    writeCatalogue('lane-a', FLAP_CAT);
-    expect(at(later(3), 'advance-backfill').code).toBe(0);
-    expect(laneAdvance().classes.opus['missing']).toEqual({ model: 'model-6.1-gamma', since: later(3) });
-    expect(opusPlan(at(later(7), 'advance-plan')), 'six hours from the first sighting, not from T0').toMatchObject({ candidate: null });
+  it('the plan clock never counts: one sighting, then a plan twelve hours on with no refresh between, moves nothing', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    sight(0);
+    expect(opusPlan(at(later(12), 'advance-plan'))).toMatchObject({ candidate: null });
   });
 
-  it('a stale catalogue records nothing, and the backfill leaves an unchanged file untouched', () => {
-    plantStep({ registry: FLAP_REG, catalogue: { ...FLAP_CAT, stale: true } });
-    expect(at(T0, 'advance-backfill').code).toBe(0);
+  it('a catalogue whose sighting was never recorded proposes nothing, however long the run before it', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    for (const h of [0, 1, 2, 3, 4, 5, 6]) sight(h);
+    // The probe wrote a newer catalogue, and no materialise --refresh recorded it (a held lock, a failed write).
+    writeCatalogue('lane-a', observed(7));
+    expect(opusPlan(at(later(7.1), 'advance-plan'))).toMatchObject({ candidate: null });
+  });
+
+  it('a pin listed again ends the run at the materialise, with no advance step at all; a later absence starts again', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    sight(0);
+    sight(1);
+    sight(2, true);
     expect(laneAdvance().classes.opus['missing']).toBeUndefined();
+    sight(3);
+    expect(laneAdvance().classes.opus['missing']).toEqual(run(3, 3));
+  });
+
+  it('a missed hour restarts the run; a stale catalogue, the same one again, or a materialise with no --refresh records nothing', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    sight(0);
+    sight(1);
+    sight(3);
+    expect(laneAdvance().classes.opus['missing'], 'a two-hour gap').toEqual(run(3, 3));
     const before = fs.statSync(advPath('lane-a')).mtimeMs;
-    writeCatalogue('lane-a', STEP_CATALOGUE);
-    expect(at(later(1), 'advance-backfill').code).toBe(0);
+    expect(at(later(3.5), 'materialise', '--refresh', 'true').code, 'the same catalogue again').toBe(0);
+    writeCatalogue('lane-a', { ...observed(4), stale: true });
+    expect(at(later(4.1), 'materialise', '--refresh', 'true').code).toBe(0);
+    writeCatalogue('lane-a', observed(5));
+    expect(at(later(5.1), 'materialise').code, 'the switch and ensure callers').toBe(0);
     expect(fs.statSync(advPath('lane-a')).mtimeMs, 'nothing to record: no write').toBe(before);
+    expect(laneAdvance().classes.opus['missing']).toEqual(run(3, 3));
+  });
+
+  it('the backfill never writes the record (D-8838), and a --refresh value other than true is refused', () => {
+    plantStep({ registry: FLAP_REG, catalogue: observed(0) });
+    expect(at(later(0.1), 'advance-backfill').code).toBe(0);
+    expect(laneAdvance().classes.opus['missing']).toBeUndefined();
+    const before = snapshot();
+    const bad = at(later(0.1), 'materialise', '--refresh', 'yes');
+    expect([bad.code, bad.body['error']]).toEqual([2, 'bad-argv']);
+    expect(snapshot()).toEqual(before);
   });
 
   // effort-level-dropped: the registry stores `max` for opus, and its model no longer offers it.
   const DROPPED_CAT = { ...STEP_CATALOGUE, models: STEP_CATALOGUE.models.map((m) => (m.id === 'model-5.6-gamma'
     ? { ...m, efforts: ['low', 'medium', 'high', 'xhigh'] } : m)) };
+  const FB = { class: 'opus', model: 'model-5.6-gamma', from: 'max', to: 'xhigh' };
+  const opusEffort = (): string | undefined => (registryOf('lane-a')['effort'] as Record<string, string>)['opus'];
 
   it('lanes still lists the lane with its probe, and names the dropped level, never registry-invalid', () => {
     plantStep();
     writeCatalogue('lane-a', DROPPED_CAT);
     const r = op('lanes', '--file', rosterPath());
     const lane = (r.body['lanes'] as Record<string, unknown>[]).find((l) => l['id'] === 'lane-a')!;
-    expect(lane).toMatchObject({ hasRegistry: true, registryInvalid: null, probe: 'codex',
-      effortDropped: [{ class: 'opus', model: 'model-5.6-gamma', from: 'max', to: 'xhigh' }] });
+    expect(lane).toMatchObject({ hasRegistry: true, registryInvalid: null, probe: 'codex', effortDropped: [FB] });
   });
 
-  it('materialise lowers the level, writes the registry, records it on the advance file and says so; once', () => {
+  it('materialise --refresh writes the fallback, records it, and says so; once', () => {
     plantStep();
     writeCatalogue('lane-a', DROPPED_CAT);
-    const chk = op('materialise', '--file', rosterPath(), '--id', 'lane-a', '--check', 'true');
+    const chk = op('materialise', '--file', rosterPath(), '--id', 'lane-a', '--check', 'true', '--refresh', 'true');
     expect(chk.body['error'], '--check writes nothing, so it still refuses').toBe('registry-invalid');
-    const m = at(T0, 'materialise');
+    const m = at(T0, 'materialise', '--refresh', 'true');
     expect(m.code, m.stdout + m.stderr).toBe(0);
-    expect(m.body['effortFallback']).toEqual([{ class: 'opus', model: 'model-5.6-gamma', from: 'max', to: 'xhigh' }]);
-    expect((registryOf('lane-a')['effort'] as Record<string, string>)['opus']).toBe('xhigh');
-    expect(laneAdvance().classes.opus['effortFallback'])
-      .toEqual({ at: T0, model: 'model-5.6-gamma', from: 'max', to: 'xhigh' });
-    const again = at(later(1), 'materialise');
+    expect(m.body).toMatchObject({ effortFallback: [FB], effortFallbackRecord: 'recorded' });
+    expect(opusEffort()).toBe('xhigh');
+    expect(JSON.parse(fs.readFileSync(path.join(home, '.ccrc', 'models', 'lane-a.effort.json'), 'utf8'))['byModel']['model-5.6-gamma'])
+      .toBe('xhigh');
+    expect(laneAdvance().classes.opus['effortFallback']).toEqual({ at: T0, model: 'model-5.6-gamma', from: 'max', to: 'xhigh' });
+    const again = at(later(1), 'materialise', '--refresh', 'true');
     expect(again.code).toBe(0);
     expect(again.body).not.toHaveProperty('effortFallback');
     expect(laneAdvance().classes.opus.effortFallback?.at, 'recorded once').toBe(T0);
   });
 
-  it('every other op still refuses the registry until the refresh has lowered it', () => {
+  it('a materialise with no --refresh (the switch and ensure callers) refuses the registry as before, and writes nothing', () => {
     plantStep();
     writeCatalogue('lane-a', DROPPED_CAT);
     const before = snapshot();
-    for (const args of [['show'], ['advance-plan'], ['hold', '--class', 'opus']]) {
+    const m = at(T0, 'materialise');
+    expect([m.code, m.body['error']]).toEqual([1, 'registry-invalid']);
+    expect(snapshot()).toEqual(before);
+  });
+
+  it('with no advance file the fallback is still written and answered, and no advance file is created', () => {
+    plantStep({ advance: null });
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = at(T0, 'materialise', '--refresh', 'true');
+    expect(m.body).toMatchObject({ ok: true, effortFallback: [FB], effortFallbackRecord: 'no-advance-file' });
+    expect(opusEffort()).toBe('xhigh');
+    expect(fs.existsSync(advPath('lane-a'))).toBe(false);
+  });
+
+  it('an advance file it cannot read is left as it is, and the answer names the read\'s word', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    fs.rmSync(advPath('lane-a'));
+    fs.mkdirSync(advPath('lane-a'));
+    const m = at(T0, 'materialise', '--refresh', 'true');
+    expect(m.body).toMatchObject({ ok: true, effortFallback: [FB], effortFallbackRecord: 'advance-file-unreadable' });
+    expect(fs.statSync(advPath('lane-a')).isDirectory()).toBe(true);
+  });
+
+  it('a materialise that fails writes the stored registry back and claims no fallback applied, recorded or not', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const reg0 = fs.readFileSync(regPath('lane-a'), 'utf8');
+    const eff = path.join(home, '.ccrc', 'models', 'lane-a.effort.json');
+    fs.rmSync(eff, { force: true });
+    fs.mkdirSync(eff);
+    const m = at(T0, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']]).toEqual([1, 'materialise-failed']);
+    expect(String(m.body['detail'])).toMatch(/The effort fallback was not applied: the stored registry was written back\.$/);
+    expect(m.body).not.toHaveProperty('effortFallback');
+    expect(fs.readFileSync(regPath('lane-a'), 'utf8'), 'the stored level, so the lane still reads as refused').toBe(reg0);
+    expect(laneAdvance().classes.opus['effortFallback']).toBeUndefined();
+  });
+
+  it('a set-effort that succeeds ends the record, at the level the class runs at too; a refused one does not', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    expect(at(T0, 'materialise', '--refresh', 'true').code).toBe(0);
+    const no = at(later(1), 'set-effort', '--class', 'opus', '--level', 'max');
+    expect([no.code, no.body['error']]).toEqual([1, 'registry-invalid']);
+    expect(laneAdvance().classes.opus['effortFallback'], 'refused: kept').toBeDefined();
+    const same = at(later(1), 'set-effort', '--class', 'opus', '--level', 'xhigh');
+    expect(same.code, same.stdout + same.stderr).toBe(0);
+    expect(laneAdvance().classes.opus['effortFallback'], 'the same level: ended').toBeUndefined();
+    expect(opusEffort()).toBe('xhigh');
+  });
+
+  it('the old level offered again ends the record at the next refresh, and keeps the level the class runs at', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    expect(at(T0, 'materialise', '--refresh', 'true').code).toBe(0);
+    writeCatalogue('lane-a', { ...STEP_CATALOGUE, fetchedAt: Date.parse(later(1)) / 1000 });
+    const m = at(later(1.1), 'materialise', '--refresh', 'true');
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    expect(m.body).not.toHaveProperty('effortFallback');
+    expect(laneAdvance().classes.opus['effortFallback']).toBeUndefined();
+    expect(opusEffort(), 'never put back over the chosen level').toBe('xhigh');
+  });
+
+  it('every other op still refuses the registry until the refresh has written the fallback', () => {
+    plantStep();
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const before = snapshot();
+    for (const args of [['show'], ['advance-plan'], ['hold', '--class', 'opus'], ['set-effort', '--class', 'opus',
+      '--level', 'high'], ['revert', '--class', 'opus']]) {
       const r = at(T0, ...args);
       expect(r.body['error'], args.join(' ')).toBe('registry-invalid');
     }
     expect(snapshot()).toEqual(before);
   });
 });
+

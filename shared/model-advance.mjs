@@ -26,18 +26,28 @@ export const BLOCKED_CAUSES = Object.freeze([
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
   'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
-  // Programme wave 3 (backward-move, effort-level-dropped): a class waiting out `RETIRE_GRACE_MS` on a pin its fresh
-  // catalogue no longer lists, and a class whose stored effort level its model no longer offers (`effortFallbacks`).
-  // `advance-health` answers them; no file holds them, so an older build never reads either word.
-  'pin-missing', 'effort-dropped',
+  // Programme wave 3 (backward-move, effort-level-dropped; D-8838, D-8842): a class waiting out `RETIRE_GRACE_MS` on a
+  // pin its fresh catalogue no longer lists; a registry still refused for a stored effort level its model no longer
+  // offers (`effortFallbacks`, until the hourly refresh writes the fallback); and a class running at the fallback the
+  // refresh recorded (`effortFallbackOf`). `advance-health` answers them; no file holds them, so an older build never
+  // reads any of the three words.
+  'pin-missing', 'effort-dropped', 'effort-fallback',
 ]);
 
-/** How long a pin must be missing from every fresh catalogue the hourly step reads before its class moves `retired`
- *  (programme wave 3, backward-move): six hours, six hourly reads. Measured 2026-11-10: one lane's fresh catalogue left
- *  out a current pin for about two hours and listed it again, and the class moved to an older model and back, each
- *  move behind a passing canary. A pin that is gone for good is still retired (D-5199), six hours late; a newer model
- *  never waits (`newer`). The class records when it was first seen missing (`markMissing`, the class's `missing`). */
+/** The shortest span of CONTINUOUS fresh sightings of the same missing pin before its class moves `retired`
+ *  (programme wave 3, backward-move, D-8838): six hours of the catalogue's own observation times (`fetchedAt`), never
+ *  wall time spent blind. Measured 2026-11-10: one lane's fresh catalogue left out a current pin for about two hours
+ *  and listed it again, and the class moved to an older model and back, each move behind a passing canary. The
+ *  hourly refresh observes about once an hour (its timer, plus however long the first pass takes), so the span is
+ *  six to seven hourly sightings. A pin that is gone for good is still retired (D-5199), six hours late; a newer
+ *  model never waits (`newer`). It is a backstop against a short absence, whatever caused it; it is not a finding
+ *  about why a catalogue was short. The class records the run of sightings as its `missing` (`markMissing`). */
 export const RETIRE_GRACE_MS = 6 * 3_600_000;
+
+/** The longest gap between two fresh sightings that still continues a run of them (D-8838): one hourly refresh plus
+ *  half an hour of slack, never two. A longer gap, from a missed hour, a failed probe or a stale catalogue, restarts
+ *  the run at the next sighting, so hours the lane was not observed never count toward `RETIRE_GRACE_MS`. */
+export const RETIRE_GAP_MS = 90 * 60_000;
 
 /** Why `chooseCandidate` named its candidate, the three words its `reason` takes: `newer` (a model strictly newer
  *  than the pin), `retired` (the pin left a fresh catalogue, the one move that may go to an OLDER version) and
@@ -114,44 +124,63 @@ export function eligibleIds(registry, catalogue) {
  *     never a candidate until one of its ids leaves the catalogue. Only ELIGIBLE ids make a tie: a hidden twin,
  *     or one outside the discovery list, unties the other.
  *  5. Then, among the untied ids that neither this class nor another pins: an EMPTY class takes the newest
- *     (`empty`); a pinned class takes the newest STRICTLY newer than its pin (`newer`), whether or not the catalogue
- *     still lists the pin, so a newer model never waits; failing that, a pin the catalogue no longer lists takes the
- *     newest left (`retired`, the one move that may go to an older version), but only on a catalogue that is fresh,
- *     because absence from a stale one is not evidence (D-5199), and only once `missing`, the class's record of
- *     when its pin was first seen missing (`markMissing`), names this pin and is at least `RETIRE_GRACE_MS` older
- *     than `nowMs` (programme wave 3, backward-move: a catalogue that leaves a pin out for an hour or two moves no
- *     class backwards). With no record, or no clock, the class waits (`pinMissing` names it). A pin the catalogue
- *     lists HIDDEN is listed, so it is never retired.
+ *     (`empty`); a pinned class takes the newest STRICTLY newer than its pin (`newer`), and on a FRESH catalogue
+ *     whether or not it still lists the pin, so a newer model never waits (D-8839); a pin a STALE catalogue does not
+ *     list gets nothing, as before, because absence from a stale one is not evidence (D-5199). Failing a newer
+ *     model, a pin a fresh catalogue no longer lists takes the newest left (`retired`, the one move that may go to an
+ *     older version), and only once `retireDue` holds (programme wave 3, backward-move, D-8838): `missing`, the
+ *     class's record of its run of sightings (`markMissing`), names this pin, its last sighting is this catalogue's
+ *     own observation time (so a sighting whose record was never written proposes nothing), and the run spans at
+ *     least `RETIRE_GRACE_MS`. Until then the class waits (`pinMissing` names it). A pin the catalogue lists HIDDEN
+ *     is listed, so it is never retired.
  * Another class's pin is excluded in step 5 as well as tested in step 3, and a case pins it: when the family's
  * newest version is a tie of two ids nobody pins, step 3 stays quiet, and only the exclusion keeps a class off
  * the older id another class holds.
- * THE STALE GATE HERE COVERS THE RETIRED FALLBACK ONLY. On a stale catalogue this function still names a `newer`
- * or an `empty` candidate; the rule that nothing advances on a stale catalogue at all
+ * THE STALE GATE HERE COVERS A PIN THE CATALOGUE DOES NOT LIST ONLY. On a stale catalogue this function still names
+ * a `newer` candidate for a pin it lists, or an `empty` one; the rule that nothing advances on a stale catalogue at all
  * (D-5199) is the ops' — `advance-plan` answers `why: catalogue-stale`, and
  * `advance-commit` abandons with it (W2 Tasks 8 and 9). A case pins this split, so neither half is "fixed" alone.
  */
 export function chooseCandidate({ registry, catalogue, cls, family, missing, nowMs }) {
   const r = choose({ registry, catalogue, cls, family });
   if (r.older === undefined) return r.choice;
-  const due = isObj(missing) && missing.model === registry.classes[cls] && isAt(missing.since)
-    && nowMs - Date.parse(missing.since) >= RETIRE_GRACE_MS;
-  return due ? { ...r.choice, candidate: r.older, reason: 'retired' } : r.choice;
+  return retireDue({ registry, catalogue, cls, missing, nowMs })
+    ? { ...r.choice, candidate: r.older, reason: 'retired' } : r.choice;
+}
+
+/** `(catalogue) => 'YYYY-MM-DDTHH:MM:SSZ' | null`: when a FRESH catalogue was observed, its `fetchedAt` (whole epoch
+ *  seconds, the probe's) in the advance file's time form; null for a stale or absent catalogue, or a `fetchedAt` that
+ *  is not a time a `Date` holds (D-8838: an unmeasured time is no sighting). */
+export function observedAt(catalogue) {
+  if (catalogue === null || catalogue === undefined || catalogue.stale) return null;
+  return isoSeconds(catalogue.fetchedAt * 1000);
+}
+
+/** Whether a class's run of sightings of its missing pin has qualified it to move `retired` (D-8838): the record names
+ *  the pin and has a last sighting (`seen`; a record of the original shape has none, so it never qualifies), that
+ *  sighting is this catalogue's own observation (`observedAt`), it is not later than `nowMs` (a future time never
+ *  qualifies), and the run from `since` to `seen` spans at least `RETIRE_GRACE_MS`. Every comparison is written as one
+ *  that HOLDS, so a time that does not parse fails it. */
+function retireDue({ registry, catalogue, cls, missing, nowMs }) {
+  const t = observedAt(catalogue);
+  return t !== null && isObj(missing) && missing.model === registry.classes[cls] && isAt(missing.since)
+    && missing.seen === t && Date.parse(t) <= nowMs && Date.parse(t) - Date.parse(missing.since) >= RETIRE_GRACE_MS;
 }
 
 /** `({registry, catalogue, cls, missing, nowMs}) => {model, since, until, older} | null`: the class `chooseCandidate`
- *  holds back on a missing pin (programme wave 3, backward-move). Its pin is not listed by a FRESH catalogue, no
- *  model newer than the pin is free, and `older`, the newest model left in its family, is the `retired` move the
- *  grace has not yet allowed. `since` is when the class first saw its pin missing (`missing`, when it names this pin;
- *  null when nothing has recorded it yet), and `until` when the grace ends (null with no `since`). Null on every
- *  other class, a class whose grace has ended included: `chooseCandidate` names its move. Pure. */
+ *  holds back on a missing pin (programme wave 3, backward-move, D-8838). Its pin is not listed by a FRESH catalogue,
+ *  no model newer than the pin is free, and `older`, the newest model left in its family, is the `retired` move the
+ *  grace has not yet allowed. `since` is when the class's current run of sightings began (`missing`, when it names
+ *  this pin and records a last sighting; null when nothing has recorded a run yet), and `until` the EARLIEST the move
+ *  can come, if every hourly sighting until then misses the pin (null with no `since`). Null on every other class, a
+ *  class `retireDue` has qualified included: `chooseCandidate` names its move. Pure. */
 export function pinMissing({ registry, catalogue, cls, missing, nowMs }) {
   const r = choose({ registry, catalogue, cls, family: null });
-  if (r.older === undefined) return null;
+  if (r.older === undefined || retireDue({ registry, catalogue, cls, missing, nowMs })) return null;
   const pin = registry.classes[cls];
-  const since = isObj(missing) && missing.model === pin && isAt(missing.since) ? missing.since : null;
-  const until = since === null ? null : isoSeconds(Date.parse(since) + RETIRE_GRACE_MS);
-  if (until !== null && !(nowMs < Date.parse(until))) return null;
-  return { model: pin, since, until, older: r.older };
+  const run = isObj(missing) && missing.model === pin && isAt(missing.since) && isAt(missing.seen);
+  return { model: pin, since: run ? missing.since : null,
+    until: run ? isoSeconds(Date.parse(missing.since) + RETIRE_GRACE_MS) : null, older: r.older };
 }
 
 /** The family rule's steps 1 to 5 (`chooseCandidate`'s comment), with the `retired` fallback held apart: `choice` is
@@ -176,11 +205,13 @@ function choose({ registry, catalogue, cls, family }) {
   const newestFirst = [...untied].sort((x, y) => compareVersions(y.version, x.version));
   const free = newestFirst.filter((m) => m.id !== pin && !otherPins.has(m.id));
   if (pin === null) return { choice: free.length > 0 ? { ...none, candidate: free[0].id, reason: 'empty' } : none };
+  if (catalogue === null || catalogue === undefined) return { choice: none };   // never probed: nothing is eligible
+  const listed = catalogue.models.some((m) => m.id === pin);
+  if (!listed && catalogue.stale) return { choice: none };   // D-5199: absence from a stale catalogue is no evidence
   const pinVersion = parseModelId(pin).version;
   const newer = free.filter((m) => compareVersions(m.version, pinVersion) > 0);
   if (newer.length > 0) return { choice: { ...none, candidate: newer[0].id, reason: 'newer' } };
-  const listed = catalogue !== null && catalogue !== undefined && catalogue.models.some((m) => m.id === pin);
-  if (listed || catalogue === null || catalogue === undefined || catalogue.stale || free.length === 0) return { choice: none };
+  if (listed || free.length === 0) return { choice: none };
   return { choice: none, older: free[0].id };
 }
 
@@ -212,27 +243,40 @@ export function candidateFor({ registry, catalogue, cls, family, missing, nowMs 
   };
 }
 
-/** `(adv, registry, catalogue, at) => {advance, changed}`: each pinned class's `missing` brought up to date with a
- *  FRESH catalogue (programme wave 3, backward-move). A pin the catalogue does not list gets `{model, since: at}`,
- *  unless its record already names that pin (the first sighting stands); a listed pin, or an empty class, loses its
- *  record. A stale or absent catalogue is no evidence either way, so nothing changes. `changed` says whether the file
- *  would differ. The one writer is `advance-backfill`, under the lane lock, every hour; every other writer keeps the
- *  key as it keeps any unknown one, and a record that names another model than the pin is read as none. */
-export function markMissing(adv, registry, catalogue, at) {
-  if (catalogue === null || catalogue === undefined || catalogue.stale) return { advance: adv, changed: false };
+/** `(adv, registry, catalogue, nowMs) => {advance, changed}`: each pinned class's `missing`, its run of sightings of
+ *  a missing pin `{model, since, seen}`, brought up to date with one catalogue (programme wave 3, backward-move,
+ *  D-8838). Only a FRESH catalogue with a measured observation time (`observedAt`) is a sighting: a stale or absent
+ *  catalogue changes nothing either way.
+ *   - A listed pin, or an empty class, loses its record, so a listed-again read ends the run.
+ *   - A sighting later than `nowMs` is unmeasured: it starts or continues no run.
+ *   - The same sighting twice (one catalogue read again) changes nothing.
+ *   - A pin the catalogue does not list continues its run (`seen` moves to the sighting) when the record names that
+ *     pin, has a last sighting, that sighting is earlier, and the gap is at most `RETIRE_GAP_MS`. Anything else
+ *     restarts the run at this sighting: no record, one naming another model, one of the original shape (no `seen`),
+ *     a gap past `RETIRE_GAP_MS` (a missed interval, or a clock that jumped forward), or a sighting earlier than the
+ *     last one (a clock that went back).
+ *  `changed` says whether the file would differ. The one writer is the hourly refresh's `materialise`, under the lane
+ *  lock, after every successful probe and before the advance step reads the record; every other writer keeps the key
+ *  as it keeps any unknown one. */
+export function markMissing(adv, registry, catalogue, nowMs) {
+  const t = observedAt(catalogue);
+  if (t === null) return { advance: adv, changed: false };
+  const tMs = Date.parse(t);
   const next = copy(adv);
   let changed = false;
   for (const cls of CLASSES) {
     const pin = registry.classes[cls] ?? null;
     const c = next.classes[cls];
-    const gone = pin !== null && !catalogue.models.some((m) => m.id === pin);
-    if (gone && !(isObj(c.missing) && c.missing.model === pin)) {
-      c.missing = { model: pin, since: at };
-      changed = true;
-    } else if (!gone && c.missing !== undefined) {
-      delete c.missing;
-      changed = true;
+    const m = c.missing;
+    if (pin === null || catalogue.models.some((row) => row.id === pin)) {
+      if (m !== undefined) { delete c.missing; changed = true; }
+      continue;
     }
+    if (!(tMs <= nowMs) || (isObj(m) && m.model === pin && m.seen === t)) continue;
+    const run = isObj(m) && m.model === pin && isAt(m.since) && isAt(m.seen) && Date.parse(m.seen) < tMs
+      && tMs - Date.parse(m.seen) <= RETIRE_GAP_MS;
+    c.missing = { model: pin, since: run ? m.since : t, seen: t };
+    changed = true;
   }
   return { advance: changed ? next : adv, changed };
 }
@@ -255,13 +299,15 @@ export function resolveEffort({ stored, oldEfforts, newEfforts }) {
   return newEfforts[0]; // the model's lowest: the list is lowest first (see `canaryEffort`)
 }
 
-/** `(json, catalogue) => {registry, fallbacks} | null` (programme wave 3, effort-level-dropped): a class registry
- *  `parseRegistry` refuses ONLY because a stored effort level is one its class's model no longer offers, read with each
- *  such level lowered to one it does offer. The level is `resolveEffort`'s, ranked by a catalogue row that still lists
- *  the stored level (D-5991's rule, as `revert` ranks it), so `max` on a model now offering up to `xhigh` becomes
- *  `xhigh`, and with no row listing it the model's lowest. `fallbacks` is one `{class, model, from, to}` per class
- *  lowered, `CLASSES` order. Null for a registry that parses as it is, one refused for any other reason, or one still
- *  refused after the levels are lowered: those are `registry-invalid` as before. Pure: the caller writes. */
+/** `(json, catalogue) => {registry, fallbacks} | null` (programme wave 3, effort-level-dropped, D-8842): a class
+ *  registry `parseRegistry` refuses ONLY because a stored effort level is one its class's model no longer offers, read
+ *  with each such level replaced by `resolveEffort`'s fallback, ranked by a catalogue row that still lists the stored
+ *  level (D-5991's rule, as `revert` ranks it). Usually the next level down that the model offers (`max` on a model
+ *  now offering up to `xhigh` becomes `xhigh`); with nothing below it offered, or no row listing it, the model's
+ *  LOWEST, which can rank above the stored level. The new level is always one the model offers. `fallbacks` is one
+ *  `{class, model, from, to}` per class that falls back, `CLASSES` order. Null for a registry that parses as it is,
+ *  one refused for any other reason, or one still refused after the fallback: those are `registry-invalid` as before.
+ *  Pure: the caller writes. */
 export function effortFallbacks(json, catalogue) {
   const field = (fn) => { try { fn(); return null; } catch (e) { if (e instanceof RegistryInvalid) return e; throw e; } };
   if (field(() => parseRegistry(json, catalogue)) === null || !isObj(json) || !isObj(json.effort) || !isObj(json.classes)) {
@@ -473,11 +519,13 @@ export function parseAdvance(input) {
     if (x.releasedAt !== undefined && !isAt(x.releasedAt)) {
       bad(`${f}.releasedAt`, 'is not a time of the form YYYY-MM-DDTHH:MM:SSZ.');
     }
-    // Programme wave 3: when the pin was first seen missing (`markMissing`), and the effort level the refresh last
-    // lowered (`recordEffortFallbacks`). Optional, so every file written before reads; an older build keeps both.
-    if (x.missing !== undefined && !(isObj(x.missing) && isIdOrNull(x.missing.model) && x.missing.model !== null
-        && isAt(x.missing.since))) {
-      bad(`${f}.missing`, 'is not {"model": <id>, "since": <time>}.');
+    // Programme wave 3: the run of sightings of a missing pin (`markMissing`; `seen` optional, so a record of the
+    // first shape still reads, and restarts), and the effort fallback the refresh last wrote (`recordEffortFallbacks`).
+    // Optional, so every file written before reads; an older build keeps both.
+    const ms = x.missing;
+    if (ms !== undefined && !(isObj(ms) && isIdOrNull(ms.model) && ms.model !== null && isAt(ms.since)
+        && (ms.seen === undefined || isAt(ms.seen)))) {
+      bad(`${f}.missing`, 'is not {"model": <id>, "since": <time>, "seen": <time>}.');
     }
     const fb = x.effortFallback;
     if (fb !== undefined && !(isObj(fb) && isAt(fb.at) && typeof fb.model === 'string' && MODEL_ID_RE.test(fb.model)
@@ -618,12 +666,70 @@ export function recordEffortFallbacks(adv, fallbacks, at) {
   return next;
 }
 
-/** The class's recorded effort fallback while it still stands, or null: the class still pins the model it was
- *  recorded on, and still carries the level it was lowered to. A hand `set-effort`, or a move, ends it. */
-export function effortFallbackOf(c, registry, cls) {
+/** The class's recorded effort fallback while it still stands, or null (D-8842): the class still pins the model it was
+ *  recorded on, still carries the level it fell back to, and the catalogue's row for that model does not offer the old
+ *  level again. A move, a hand level (`set-effort` deletes the record, `clearEffortFallback`), or the old level offered
+ *  again ends it; the refresh deletes a record that no longer stands (`refreshRecord`), and never puts the old level
+ *  back over the one the class runs at. */
+export function effortFallbackOf(c, registry, cls, catalogue) {
   const fb = isObj(c) ? c.effortFallback : undefined;
   const level = isObj(registry.effort) ? registry.effort[cls] : undefined;
-  return isObj(fb) && fb.model === registry.classes[cls] && fb.to === level ? fb : null;
+  if (!(isObj(fb) && fb.model === registry.classes[cls] && fb.to === level)) return null;
+  const row = catalogue?.models.find((m) => m.id === fb.model);
+  return row !== undefined && row.efforts.includes(fb.from) ? null : fb;
+}
+
+/** `({registry, catalogue, cls, c, nowMs}) => [{cause, detail}]`: one class's programme wave 3 rows for
+ *  `advance-health`'s `blocked` list, in the op's words (D-8838, D-8842): `effort-fallback` while a recorded fallback
+ *  stands (`effortFallbackOf`), and `pin-missing` while an unheld class waits out its grace (`pinMissing`; a held class
+ *  is quiet about it, D-8840). `c` is the class's advance entry, or null. Pure. */
+export function classWaits({ registry, catalogue, cls, c, nowMs }) {
+  const rows = [];
+  const fb = effortFallbackOf(c, registry, cls, catalogue);
+  if (fb !== null) {
+    rows.push({ cause: 'effort-fallback', detail: `${fb.model} no longer offers effort ${fb.from}, so since ${fb.at} `
+      + `it runs at ${fb.to}, the fallback the hourly refresh chose` });
+  }
+  const gone = c !== null && c.hold !== null ? null : pinMissing({ registry, catalogue, cls, missing: c?.missing, nowMs });
+  if (gone !== null) {
+    rows.push({ cause: 'pin-missing', detail: `${gone.model} is missing from the lane's catalogue${gone.since === null
+      ? '' : ` since ${gone.since}`}; the class moves to ${gone.older}, an older model, once every hourly sighting has `
+      + `missed it for six hours (${gone.until === null ? 'counted from the next sighting the refresh records'
+      : `${gone.until} at the earliest`}), and any sighting that lists it again ends the wait` });
+  }
+  return rows;
+}
+
+/** `advance-health`'s detail for a registry still refused for a dropped level (`effort-dropped`, D-8842), one per
+ *  `effortFallbacks` row. */
+export const effortDroppedDetail = (f) => `${f.model} no longer offers effort ${f.from}, so the lane's registry is `
+  + `refused until the hourly refresh writes the fallback, ${f.to}`;
+
+/** `(adv, cls) => {advance, changed}`: the class's `effortFallback` deleted, after a hand `set-effort` on it succeeded
+ *  (any level, the one it already runs at included): the operator has chosen the level (D-8842). */
+export function clearEffortFallback(adv, cls) {
+  if (adv.classes[cls].effortFallback === undefined) return { advance: adv, changed: false };
+  const next = copy(adv);
+  delete next.classes[cls].effortFallback;
+  return { advance: next, changed: true };
+}
+
+/** `(adv, {registry, catalogue, fallbacks, nowMs}) => {advance, changed}`: what the hourly refresh's `materialise`
+ *  records on the lane's advance file after one probe (D-8838, D-8842), as one write: each class's run of sightings of
+ *  a missing pin (`markMissing`), each effort fallback it just wrote (`recordEffortFallbacks`, at the sighting's own
+ *  clock), and the deletion of every recorded fallback that no longer stands (`effortFallbackOf`). Pure. */
+export function refreshRecord(adv, { registry, catalogue, fallbacks, nowMs }) {
+  const m = markMissing(adv, registry, catalogue, nowMs);
+  const next = recordEffortFallbacks(m.advance, fallbacks, isoSeconds(nowMs));
+  let changed = m.changed || fallbacks.length > 0;
+  for (const cls of CLASSES) {
+    const c = next.classes[cls];
+    if (c.effortFallback !== undefined && effortFallbackOf(c, registry, cls, catalogue) === null) {
+      delete c.effortFallback;
+      changed = true;
+    }
+  }
+  return { advance: changed ? next : adv, changed };
 }
 
 /** The class's newest entry that succeeded, of any kind, or null. */
