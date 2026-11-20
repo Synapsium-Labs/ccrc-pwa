@@ -49,12 +49,18 @@ Each is **measured** unless it says inferred.
   plan read with one line; they change a fixture line only, and were run once, together, at the first push (§5).
 - `phase-line-writes-every-apart-group`: review 2891 F5. The headline and the phase line share `apartParts`, over `WORK_APART_GROUPS` less `dropped`,
   keyed so a group added there is a compile error. The phase line therefore also writes "· N failed", a count that is zero in a phase today.
-- `kicker-left`: the page head's "Programme" kicker stays, by the coordinator's ruling on review 2922 F1, which put the head's word to the operator as a
-  separate question. The operator's note of 2026-11-19 reads: "We don't need to write the word "Programme" when we use the programme icon and colours and
-  also the wave timer." The head is outside it: it carries no programme icon and no wave timer, and its colour border alone does not name the kind of page.
-  Measured: the coordinator-badge task (run 2883, #3111) does not edit `ProgrammeScreen.tsx`: `git diff` of its branch against `main` is empty for that file,
-  read on 2026-11-20 while its PR was open and again after it merged. If the operator wants the word gone, it is a one-line change in the head, and a line of
-  `contrast.test.ts` that pins the kicker's hue.
+- `head-icon-not-word` (the coordinator's amendment of fix round 1, F1, which replaced his first ruling to keep the word): the page head's visible "Programme"
+  kicker is removed and the programme icon the box draws (`RoleBadge`, icon `workflow`, label and title "Programme", class `pv-ico`) stands before the title, in
+  one box with it (`pv-name`) so it adds no line to the head, sized to the title's text (`1em`) and in the programme's hue. The operator's note of 2026-11-19
+  reads: "We don't need to write the word "Programme" when we use the programme icon and colours and also the wave timer." The head already carries two of its
+  three cues, the programme's colour and its wave line (`pv-sub`), and the operator ruled on 2026-11-20, weighing compactness and usability, that the word goes
+  there too, so the head and the box speak one language and a screen reader still hears "Programme". The contrast audit's kicker row is the icon's now, one row
+  per hue. Measured: the coordinator-badge task (run 2883, #3111) does not edit `ProgrammeScreen.tsx` (`git diff` of its branch against `main` is empty for that
+  file, read while its PR was open and again after it merged); its badge reached this branch by the next departure.
+- `absorbs-main-once`: on the coordinator's word, in the amendment's mail ("one `git merge` of `origin/main` into `ws/polish-wm4`, no rebase and no force; do not copy
+  the files by hand"), one merge of `origin/main` as its own commit with `Ledger-Edit: D-8823`, because `RoleBadge` and the box's badge rows live only on main
+  and the head's icon and the contrast row need them. The probe before it was clean (`merge-tree` exit 0) and the merge made no conflict. The merge commit and its
+  two parents are in the wave-done mail.
 - `step-2-red-after-the-code`: Step 2 is ticked, but the red was taken after the code was written (§3).
 
 ## 3. Cases, and what reds each
@@ -85,6 +91,12 @@ red at fix round 1's tip** (18 of 90 at the first push; the first note said 17 o
 the file's existing ones and the pure cases, which load `workRead.ts` and so pass against the old page. The browser file's red is its first runs: at the
 plan's 34rem step the 1280 and 1470 cases failed ("expected 1 to be 3" tracks, a 451px and a 532px card), and at fix round 1 the F2 pins are red under the first
 fix's three-track layout (§4). Measured.
+
+**The amendment's cases (red first, at the merged tip, before the head changed):** `draws no visible "Programme" word, and no kicker` (the head's text,
+with a programme titled "Billing", names no programme, and it has no `.pv-kicker`) and `its programme icon is an image named Programme, with the same title,
+standing before the title on its line` (an `img` with `aria-label` and `title` "Programme", an `svg`, the heading's previous sibling in one `pv-name` box). Measured:
+2 of 98 red at that tip, the other 96 green; both green after the change. The Chrome file also pins, at every sampled width, no kicker, the icon before the title,
+on its line and sized to its text. The contrast case now measures the icon's rule, one row per hue (`.pv-head .pv-ico`).
 
 ## 4. Mutants
 
@@ -138,6 +150,19 @@ restored file byte for byte with the original after each; it is not in the repos
 | F3b, F3c, F3d | `epics`, `doneWhen`, or the `counts` check is removed from the view's shape |
 | A5 | the key's items leave out the cleared ones |
 
+**The amendment, 5 mutants on the head (`programme-screen.test.tsx`) and 2 on its colour (`contrast.test.ts`), all red** (H2 survived until the case read the
+icon's `aria-label`: an `img` with no label takes its name from its `title`, so the accessible name was the same, and the label is now pinned by its attribute):
+
+| # | The edit | Red cases |
+|---|---|---|
+| H1 | the kicker `<span>Programme</span>` is drawn again before the name box | the no-word case |
+| H2 | the icon's `label` is "" | the icon case |
+| H3 | the icon's `title` is "" | the icon case |
+| H4 | the icon is drawn after the title | the icon case |
+| H5 | the icon is drawn outside the title's box | the icon case |
+| C1 | the icon's colour is a faint ink (`--ink-disabled`) | six contrast cases |
+| C2 | the icon's rule is renamed (`.pv-icon`), so no row is measured for `.pv-ico` | the icon's per-hue case |
+
 **The browser file, 4 mutants for the layout pins, all red** (`programme-work-page.browser.test.ts`): the first fix's three tracks from 26rem with the
 facts beside the title (red at 1280, 1470, 1920, and the 1280 ordinary-titles cases); the 40rem step never applying (red at 800, the one sampled width
 between 690 and 900); the status track 14rem wide (red at 1280 and up); and an epic tag capped at 4ch so it breaks inside its words (red in the six ordinary-
@@ -166,6 +191,23 @@ the slice's memory cap killed several runs; each killed file was re-run alone, a
 | server `deviation-refs` (after `git fetch origin main`) | 7 | 34 of 34 |
 | server `dtbd`, the ledger guard suite | 8 | 1 of 1, 32 of 32 |
 | the ledger guard script as CI runs it, and the private-names scan of the tree (the canonical scanner with the operator's local list) | after the commits | the guard passed by the `Ledger-Edit` trailer with the layout arm ok; the scan exited 0 with empty output |
+
+**The F1 amendment (the tip), after the land-sync merge** (one file per process, `--maxWorkers=2`, load at each start; the Chrome was `chromium-1243`):
+
+| Run | Load | Result |
+|---|---|---|
+| pwa `programme-screen` | 27 | 98 of 98 (the two head cases were red at the merged tip before the change: 2 of 98) |
+| pwa `work-card` | 28 | 72 of 72 |
+| pwa `contrast` (the icon's per-hue rows; mutants C1, C2 red) | 28 | 367 of 367 |
+| pwa `programme-box-card`, `older-server-render` | 8 to 11 | 67 of 67, 1 of 1 |
+| pwa `coordinator-badge` | 7 | 14 of 15 at the first run: the case that pinned the page head's kicker went red, as it should; edited with C51's consent (§10); alone: 15 of 15 |
+| pwa words and css scanners: `plain-words`, `ledger-words`, `fleet-css`, `literal-census`, `markup-census`, `shape-census`, `role-census`, `utility-pairs`, `tap-targets`, `hook-class-collision`, `control-census` | 13 to 24 | all passed (65, 86, 102, 5, 11, 7, 10, 26, 96, 10, 12 cases) |
+| pwa `browser-dist` | 22 | 15 of 15 |
+| pwa `tsc --noEmit` | 26 | clean |
+| pwa browser `programme-work-page` (16 cases, the head's icon pinned at every width), `programme-page`, `programme-box` (the head probe now reads the icon) | 6 to 8 | 16 of 16, 20 of 20, 60 of 60 |
+| server `single-definition` (the directory) | 19 | 43 of 43 files, 1550 cases |
+| server `rings` (the directory), `dtbd`, the ledger guard suite | 14 to 16 | 12 files and 133 cases, 1 of 1, 32 of 32 |
+| server `topology-clean`, `deviation-refs` | 11 to 26 | **not green here**: killed by the test slice's memory cap in every one of eight runs each (alone, one worker, at load 11 to 26), after 6 to 43 cases. Both passed at the fix round's tip (61 of 61, 34 of 34) and read the branch's history, which the land-sync merge now makes larger. CI's `test (server)` is the arbiter; the PR's plan lists whether it ran them |
 
 **First push (the earlier tip), for the record:**
 
@@ -203,6 +245,8 @@ Measured, in Chrome over the production build, from the new file (16 cases) with
 - **What the browser found that the jsdom could not:** the card sat flush with the column edge (`work-card-in-pv-card`); the left column is narrower than the
   plan's table assumed (one 34rem step stacked a row at 1280 and 1470); and the first fix for that squeezed the title (about 146px at 1280, review 2922 F2),
   which the facts-under-the-title layout cures.
+- **The head** (the amendment): no "Programme" word; the programme icon, in the programme's hue, stands before the title on its line, as tall as its text, and
+  the head is no taller than before. Seen in the pictures below at 360, 800 and 1280, light and dark.
 - **The finished phase's heading**, which no one had seen in a browser (review 2891 F2): it reads "▸ Phase 1 · Foundations finished 2026-11-11" in the same size as
   an open phase's, with its chevron, at 360, 800 and 1280, light and dark.
 - **An unreadable re-read** (the fleet's runs frame moves the run, the page reads again, the server's answer is `{ unreadable }`): the alert reads "The work
@@ -226,7 +270,7 @@ Pictures, `docs/design/2026-11-16-programme-work-map-design/wm4/` (ordinary titl
 | ![Unreadable, 360 Instrument](../../../design/2026-11-16-programme-work-map-design/wm4/unreadable-360-dark-instrument.png) | the same on a phone, the Instrument skin, dark |
 
 Four of WM3's stale pictures (`wm3/phased-1280-light.png`, `phased-360-light.png`, `phased-1280-dark.png`, `unreadable-1280-light.png`) are replaced in
-place by the page's pictures of the same states, and their captions in `wm3.md` are corrected to say so (review 2922 A2; an edit of an existing note, with
+place by the page's pictures of the same states (all pictures re-taken after the amendment, so every one shows the icon in the head), and their captions in `wm3.md` are corrected to say so (review 2922 A2; an edit of an existing note, with
 this task's own claim 5951 and the coordinator's ask).
 
 ## 7. Carried from review 2891 (WM3's review)
@@ -248,7 +292,7 @@ this task's own claim 5951 and the coordinator's ask).
 
 | Finding | What was done |
 |---|---|
-| F1: the head's kicker | Kept by the coordinator's ruling; the slug now quotes the operator's note whole and says why the head is outside it (§2) |
+| F1: the head's kicker | First kept by the coordinator's ruling, then replaced by his amendment (the operator's ruling of 2026-11-20): the word is removed and the programme icon stands before the title (§2 `head-icon-not-word`); two red-first cases and five mutants (§3, §4); the contrast row is the icon's; pictures re-taken |
 | F2: a title's room on desktop | Fixed: the facts under the title from a 26rem card, three columns from 40rem; pinned in Chrome (title track at least the 360 one at every sampled width, an ordinary tag on one line); pictures re-taken |
 | F3: the work read's checks | Fixed in `workRead.ts`; the word list is `UNREADABLE_WORDS` in `workMapWords.ts`; a home in `shared/plan.ts` is a carry (it needs a co-edit of a file other workers hold) |
 | F4, F5: the two test gaps | Pure and page cases for F4, a rejection case for F5, each red under its mutant (§4) |
@@ -258,7 +302,7 @@ this task's own claim 5951 and the coordinator's ask).
 | A7: the second step sampled | An 800 window is sampled |
 | A2 (records): WM3's four captions | Corrected in `wm3.md` |
 
-Carries: the "Programme" kicker (a question put to the operator by the coordinator); the F3 and F4 rulings of review 2891; a home for `UNREADABLE_WORDS` in
+Carries: the F3 and F4 rulings of review 2891; a home for `UNREADABLE_WORDS` in
 `shared/plan.ts`; `STATUS_WORD`, `CHECKPOINT_KIND_WORD` and `UNREADABLE_WHY` still have no fallback for a word from a newer server (WM3's F15, unchanged for
 the status and kind words); the live render, on the operator's console, with a real programme's plan.
 
@@ -282,10 +326,16 @@ live console itself was not reached, so **what it shows, signed in, is the opera
 
 - Claims (measured from the claim list on 2026-11-20): 5877 (the page, the card, its words and css, the two jsdom files, the existing browser file, the
   note and the pictures' folder), 5880 (`workRead.ts`, `useWorkRead.ts`), 5884 (the new browser file), 5885 (`run-tally`, `phone-bar` and
-  `one-waiting-page` browser fixtures), 5899 (the plan and WM3's stale pictures), and 5951 (`wm3.md`, for the four captions of review 2922 A2).
+  `one-waiting-page` browser fixtures), 5899 (the plan and WM3's stale pictures), 5951 (`wm3.md`, for the four captions of review 2922 A2), and 5974 (`programme-box.browser.test.ts`, whose head probe reads the icon now).
+- `pwa/test/contrast.test.ts`, claim 5825 (the Linear hierarchy's wave 7, run 2846): its worker consented by mail on 2026-11-20 to a co-edit of the one case that
+  measures the programme's name on the surface in each hue (its key moves from the kicker's rule to the icon's), and said wave 7's only line in that file is the
+  `migration.css` entry in `APP_SHEETS`, so either landing order merges cleanly.
 - `pwa/src/lib/api.ts`, claim 5826 (the Docs reader's range wave, run 2743): its worker consented by mail on 2026-11-20 to a co-edit of the
   `plan(slug)` lines only, and said that whoever lands second merges `main` and keeps both. My change to the file is the import and that line; fix round 1
   does not touch it.
+- `pwa/test/coordinator-badge.test.tsx`, claim 5976 (the coordinator badge's move to the session header, run 2946): its worker consented by mail on 2026-11-20 to a
+  co-edit of exactly the lines of the programme box header case that required the page head's visible kicker, and their comment, and said whoever lands second
+  merges `main` and keeps both. The change requires the head's icon markup and no `pv-kicker` instead.
 - The plan was held by WM3's worker (claim 5806); that session no longer exists (the mail to it was refused `unknown-recipient`) and the claim was
   off the list by the time this task edited the plan, so the edit is under this task's own claim 5899. Inferred: its PR (#3105) merged and its
   claim lapsed.

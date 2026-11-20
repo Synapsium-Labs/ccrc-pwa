@@ -868,11 +868,17 @@ Task WM4 departs under its own number:
   `one-waiting-page`) answer its plan read, as a server does, so the page does not draw a failed read in them; `phase-line-writes-every-apart-group`, review
   2891 F5: the headline's and the phase line's apart counts are one function over `WORK_APART_GROUPS` less `dropped`, keyed so a group added there is a
   compile error, so the phase line now also writes "· N failed" (a count that is zero in a phase today, `failed` being the no-plan fallback's alone);
-  `kicker-left`, the page head's "Programme" kicker is left as it is, by the coordinator's ruling on review 2922 F1, which put the head's word to the operator
-  as a separate question (a removal is a one-line change in the head and a line of the contrast test). The operator's note of 2026-11-19 reads "We don't need
-  to write the word "Programme" when we use the programme icon and colours and also the wave timer." The head is outside it: it carries no programme icon and no
-  wave timer, and its colour border alone does not name the kind of page. The coordinator-badge task (run 2883) does not edit `ProgrammeScreen.tsx` (measured:
-  `git diff` of its branch against `main`, empty for that file, on 2026-11-20 before and after its PR merged); `step-2-red-after-the-code`, Step 2 is
+  `head-icon-not-word`, the page head's visible "Programme" kicker is removed and the programme icon the programme box draws (`RoleBadge`, icon
+  "workflow", label and title "Programme", `pv-ico`) stands before the title, in one box with it (`pv-name`) so it adds no line to the head, sized to the title's
+  text and in the programme's hue. The operator's note of 2026-11-19 reads "We don't need to write the word "Programme" when we use the programme icon and colours
+  and also the wave timer." The head already carries two of its three cues, the programme's colour and its wave line, and the operator ruled on 2026-11-20, weighing
+  compactness and usability, that the word goes there too and the icon takes its place, so the head and the box speak one language and a screen reader still hears
+  "Programme" (the coordinator's amendment of fix round 1, F1, replacing his first ruling that kept the word, and the first push's `kicker-left`). The contrast
+  audit's kicker row is the icon's now (one row per hue, as the box's badge is pinned). The coordinator-badge task (run 2883, #3111) did not edit
+  `ProgrammeScreen.tsx` (measured: `git diff` of its branch against `main`, empty for that file, on 2026-11-20 before and after its PR merged); the badge it added
+  reached this branch by `absorbs-main-once`: on the coordinator's word in the amendment's mail, one `git merge` of `origin/main` (no rebase, no force; the probe
+  was clean) as its own commit with `Ledger-Edit: D-8823`, because `RoleBadge` and the box's badge rows live only on main, and the head's icon and the contrast row
+  need them; `step-2-red-after-the-code`, Step 2 is
   ticked, though the red was taken after the code was written, not before: the jsdom cases were written first and run only once the page was built, then
   run against the old `ProgrammeScreen.tsx` (21 of 96 red at fix round 1's tip, 17 of 89 at the first push), and the browser file's red is its first run at 34rem (1280 and 1470 red). Edits under
   another's claim: `pwa/src/lib/api.ts`, claim 5826 (the Docs reader's range wave, run 2743), with that
