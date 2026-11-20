@@ -406,12 +406,11 @@ describe('api.docs.range: the range loader beside DocsLoaders (X2 P1.3)', () => 
     const loader: RangeLoader = createApi(vi.fn() as unknown as typeof fetch).docs.range;
     expect(Object.keys(loader).sort()).toEqual(['frame', 'prepare']);
     // Compile-time: the member must exist, be optional, and be exactly the readRange interface, or the compiler
-    // refuses the `true`.
-    const member: 'range' extends keyof DocsLoaders
-      ? (undefined extends DocsLoaders['range']
-        ? (Exclude<DocsLoaders['range'], undefined> extends RangeLoader
-          ? (RangeLoader extends Exclude<DocsLoaders['range'], undefined> ? true : never) : never) : never)
-      : never = true;
+    // refuses the `true`. A missing member infers `unknown`, a required one matches `{ range: unknown }`, and a
+    // retyped one fails one of the two assignability checks.
+    type RangeMember = DocsLoaders extends { readonly range?: infer R } ? Exclude<R, undefined> : never;
+    const member: DocsLoaders extends { readonly range: unknown } ? never
+      : [RangeMember] extends [RangeLoader] ? ([RangeLoader] extends [RangeMember] ? true : never) : never = true;
     expect(member).toBe(true);
   });
 });

@@ -608,3 +608,12 @@ The pull request's first run had six reds, all this wave's own. The PWA's re-run
 - **`ccd-contexts`:** the range helpers' rows now follow ccd's definition order.
 
 Main was merged once, because the branch conflicted in `ccd-archive.test.ts`'s import line (mid-turn mail PR 4's `MAILHOLD_ROUTE_CAP` beside this wave's `DOCS_RANGE_CAP`). Both sides were kept, and `ccd-archive` and `id-argv-census` passed 107 of 107 after it. The conflict was resolved by a script fed through the shell, another lapse of the leave above.
+
+#### Fix round 2 (CI on `0891393af`)
+
+The second run had one red cause, and it was the first fix round's own: the new compile-time pin on `DocsLoaders.range` indexed `DocsLoaders['range']` inside a conditional type, and the PWA's compiler refused the index (TS2538). That reddened every PWA leg and the server shard that runs the whole-package compile check. The rest of fix round 1 was green.
+
+- **The pin, rewritten:** it infers the member's type from `{ readonly range?: infer R }`, so a missing member infers `unknown`; it refuses a member that matches `{ readonly range: unknown }`, so a required member fails; and it checks assignability both ways against `RangeLoader`. The runtime assertion beside it stays.
+- **Checked in the slice** with a one-file config in the session's temp root that extends the PWA's config and lists only `docs-api.test.ts`. The pin line compiles clean; the only errors left are five `process` names that need Node's types, which the one-file program does not load. `docs-api` passes 39 of 39.
+- **Measured red by mutation**, `failures.ts` restored from a saved copy with its sha256 equal before and after. Each mutation reds the pin at `docs-api.test.ts(412)`: the member made required, retyped to `DocsHistoryLoader`, and removed.
+- **The refusal:** while looking into the red I ran a bare version query of the compiler outside `ccrc test --`, and the test-slice hook (D-7298) refused it. Nothing ran. It was a lapse of the leave's rule 2. I stopped and reported it, and resumed on the coordinator's word.
