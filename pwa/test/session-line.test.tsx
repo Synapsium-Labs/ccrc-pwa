@@ -1497,12 +1497,13 @@ describe('whose code a row works on (D-5527)', () => {
 // plain cell, first on the context line (`card-header-facts.test.tsx` pins its place); it is not a badge.
 describe('the coordinator badge (D-5301)', () => {
   const role = (): HTMLElement | null =>
-    [...document.querySelectorAll<HTMLElement>('.chat-fact')].find((e) => e.textContent === 'coordinator') ?? null;
+    [...document.querySelectorAll<HTMLElement>('.chat-fact')].find((e) => e.querySelector('[role="img"][aria-label="coordinator"]') !== null) ?? null;
 
-  it("is a header fact, and a plain role cell on the card, never a badge (D-8142)", () => {
+  it("is a header fact, and the role badge on the card, never the word (D-8142, D-8817)", () => {
     render(<SessionLine session={s({ role: 'coordinator' })} onOpen={() => {}} onActions={() => {}} />);
     expect(document.querySelectorAll('.sess-role')).toHaveLength(1);
-    expect(document.querySelector('.sess-role')?.textContent).toBe('coordinator');
+    expect(document.querySelector('.sess-role')?.getAttribute('aria-label')).toBe('coordinator');
+    expect(document.querySelector('.sess-role')?.textContent).toBe('');
     expect(document.querySelector('.sess-badge, [data-badge]')).toBeNull();
     expect(screen.getByRole('button', { name: /^quiet-mesa$/ })).toBeInTheDocument();
     cleanup();

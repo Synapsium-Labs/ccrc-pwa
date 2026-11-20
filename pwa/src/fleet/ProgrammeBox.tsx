@@ -125,9 +125,8 @@ export function ProgrammeBox({ view, state, tray, drawRow, drawAbroad, hueOf, on
   return (
     <section className="pg-box" data-hue={view.lead.hue} data-state={state}>
       <div className="pg-kicker" data-hue={view.lead.hue}>
-        <Icon name="workflow" className="pg-ico" />
-        <span className="pg-word">Programme</span>
-        <span className="pg-sep" aria-hidden="true">·</span>
+        {/* D-8817: the icon, the hue and the waves bar say programme, so the word is not drawn; the icon keeps its name. */}
+        <span className="pg-ico" role="img" aria-label="Programme"><Icon name="workflow" /></span>
         <Title slug={view.lead.slug} title={view.lead.title} />
         <WaitingChip slug={view.lead.slug} title={view.lead.title} />
         <BoxSpec slug={view.lead.slug} title={view.lead.title} />

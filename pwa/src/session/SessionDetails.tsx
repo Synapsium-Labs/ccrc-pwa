@@ -15,14 +15,14 @@
 // coordination row, so the header stays short until it is asked.
 import { useCallback, useId, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
-import { Door, Icon, elapsedShort } from '@ccrc/ui';
+import { Door, Icon, RoleBadge, elapsedShort } from '@ccrc/ui';
 import { navigate } from '../lib/router';
 import { runPath, sessionPath } from '../lib/routes';
 import { DESK_QUERY, useMediaQuery } from '../lib/useMediaQuery';
 import { SessionMeta } from '../fleet/SessionMeta';
 import { WorkLine } from '../fleet/WorkLine';
 import { NOTE_CLASS, SessionWorktrees } from './SessionWorktrees';
-import { cardFacts, contextFact, COORDINATOR_ROLE_TITLE, COORDINATOR_WORD, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
+import { cardFacts, contextFact, COORDINATOR_BADGE, heldWords, type SessionFactSet } from '../fleet/sessionFacts';
 import { programmeWave } from '../fleet/runWords';
 import { openRunAt } from '../fleet/openers';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
@@ -144,7 +144,7 @@ export function SessionDetails({ facts, coordination }: {
       {/* A main checkout's heading is its project; the name the card leads with is here. */}
       {s.workspace === null && s.name !== null && <Detail title="this session's name">{s.name}</Detail>}
       {runId !== null && <Detail title="the run this wave belongs to — the run board names it">{`run #${runId}`}</Detail>}
-      {facts.coordinatorRole && <Detail title={COORDINATOR_ROLE_TITLE}>{COORDINATOR_WORD}</Detail>}
+      {facts.coordinatorRole && <Detail><RoleBadge {...COORDINATOR_BADGE} className="sess-role" /></Detail>}
       {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{heldWords(s.held)}</Detail>}
       {s.pr?.number != null && <Detail>{`PR #${s.pr.number}`}</Detail>}
       {facts.lane.away && facts.offPool === null && facts.lane.label !== undefined && <Detail>{facts.lane.label}</Detail>}

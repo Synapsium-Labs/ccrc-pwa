@@ -1,6 +1,6 @@
-// D-8142: a coordinator's fleet card says `coordinator`, first on its context line, in a real Chrome over the production
-// build. One legible fact at every width: the word is drawn whole (not cut, not wrapped), inside its row, on the first
-// line of the context; a long branch beside it keeps the token-shortened form below the desk and its two-line clamp at the
+// D-8142, D-8817: a coordinator's fleet card wears the role BADGE (the word `coordinator` is its accessible name, not drawn),
+// first on its context line, in a real Chrome over the production build. One legible fact at every width: the badge is drawn
+// whole (not cut, not wrapped), 16px square, inside its row, on the first line of the context; a long branch beside it keeps the token-shortened form below the desk and its two-line clamp at the
 // desk (D-6332), and a child's card never wears it. `test/card-header-facts.test.tsx` holds the model and the markup;
 // this file holds the geometry. Measured in Refined's cards and in Instrument's status and project modes, in the Phosphor
 // palette and the light theme, at 360, 390, 1280, 1470 and 1920.
@@ -88,7 +88,9 @@ async function boot(view: AppView, mode: string): Promise<{ page: Page; errors: 
 interface RowRole {
   readonly name: string;
   readonly roles: number;
+  readonly label: string;
   readonly text: string;
+  readonly width: number;
   readonly cut: boolean;
   readonly inside: boolean;
   readonly oneLine: boolean;
@@ -104,7 +106,7 @@ function measure(page: Page): Promise<RowRole[]> {
     const roles = line.querySelectorAll<HTMLElement>('.sess-role');
     const role = roles[0];
     const ctx = line.querySelector<HTMLElement>('.sess-meta--context');
-    const empty = { name, roles: roles.length, text: '', cut: false, inside: true, oneLine: true, firstOnLine: true, contextOneLine: true };
+    const empty = { name, roles: roles.length, label: '', text: '', width: 0, cut: false, inside: true, oneLine: true, firstOnLine: true, contextOneLine: true };
     if (role === undefined || ctx === undefined || ctx === null) return empty;
     const r = role.getBoundingClientRect();
     const l = line.getBoundingClientRect();
@@ -112,7 +114,9 @@ function measure(page: Page): Promise<RowRole[]> {
     const lh = parseFloat(getComputedStyle(role).lineHeight) || r.height;
     return {
       ...empty,
+      label: role.getAttribute('aria-label') ?? '',
       text: role.textContent ?? '',
+      width: r.width,
       cut: role.scrollWidth > role.clientWidth + 0.5,
       inside: r.left >= l.left - 0.5 && r.right <= l.right + 0.5 && r.top >= l.top - 0.5 && r.bottom <= l.bottom + 0.5,
       oneLine: r.height <= lh * 1.5,
@@ -126,9 +130,9 @@ function measure(page: Page): Promise<RowRole[]> {
 const sideScroll = (page: Page): Promise<number> =>
   page.evaluate(() => document.documentElement.scrollWidth - document.documentElement.clientWidth);
 
-describe('D-8142: the card says coordinator', () => {
+describe('D-8142, D-8817: the card wears the coordinator badge', () => {
   for (const { view, mode } of CASES) {
-    it(`a coordinator's card wears the word whole, a child's does not (${named(view, mode)})`, async () => {
+    it(`a coordinator's card wears the badge whole, a child's does not (${named(view, mode)})`, async () => {
       const { page, errors, close } = await boot(view, mode);
       try {
         const rows = await measure(page);
@@ -136,11 +140,13 @@ describe('D-8142: the card says coordinator', () => {
           const r = rows.find((x) => x.name === name);
           expect(r, `${name} is drawn`).toBeDefined();
           expect(r!.roles, `${name}: exactly one role cell`).toBe(1);
-          expect(r!.text, `${name}: the word`).toBe('coordinator');
-          expect(r!.cut, `${name}: the word is not cut`).toBe(false);
-          expect(r!.inside, `${name}: the word is inside its row`).toBe(true);
-          expect(r!.oneLine, `${name}: the word is on one line`).toBe(true);
-          expect(r!.firstOnLine, `${name}: the word begins the context line`).toBe(true);
+          expect(r!.label, `${name}: the accessible name`).toBe('coordinator');
+          expect(r!.text, `${name}: no visible word`).toBe('');
+          expect(r!.width, `${name}: the badge is its icon's 16px`).toBe(16);
+          expect(r!.cut, `${name}: the badge is not cut`).toBe(false);
+          expect(r!.inside, `${name}: the badge is inside its row`).toBe(true);
+          expect(r!.oneLine, `${name}: the badge is on one line`).toBe(true);
+          expect(r!.firstOnLine, `${name}: the badge begins the context line`).toBe(true);
         }
         // The PR row and, below the desk, the branch row keep their context on one line (the desk clamps a branch to two, D-6332).
         expect(rows.find((x) => x.name === 'coord-pr')!.contextOneLine, 'the PR context is one line').toBe(true);
