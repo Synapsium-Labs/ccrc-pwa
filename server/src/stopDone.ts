@@ -27,11 +27,13 @@ import {
  * close", confirmed as F5 (0) on 2026-10-20). `recent` keeps its word and changes its clock: the turn marker's newest
  * stamp must be at least the grace (`STOP_DONE_GRACE_MS`) old, not hibernation's N, so a finished worker sleeps about
  * ten minutes after its run reads `done`. The holds that guard a WORKSPACE stop holding sleep for this policy (spec
- * §3.0, sleep versus retire): a programme hold, a hold naming a terminal run, a review of an open run, and a `planned`
- * run naming it (a wave not yet dispatched uses nothing). They still guard retirement, which this lane never does. A
- * programme-held child sleeps only through `ccd hibernate --hold-ok <the exact text>` on a box that advertises
- * `hibernate-hold-ok`; an operator's own hold, a hold naming an open or unreadable run, and a box without the token
- * keep `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
+ * §3.0, sleep versus retire): a programme hold, a hold naming a terminal run, a hold naming the worker's own newest
+ * placed run (D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b)
+ * requires), a review of an open run, and a `planned` run naming it (a wave not yet dispatched uses nothing). They still
+ * guard retirement, which this lane never does. A programme-held child sleeps only through `ccd hibernate --hold-ok <the
+ * exact text>` on a box that advertises `hibernate-hold-ok`; an operator's own hold, a hold naming any other open run
+ * (another session's, or an older or `planned` run of its own) or an unreadable one, and a box without the token keep
+ * `held`. Hibernation's own sweep (`idle-hours`, `hibernateVerdict`) is untouched: it acts only once armed, and
  * `hibernate-disabled` stops this lane too. The words that are this lane's alone say why it is narrower: only a
  * dispatched child (`not-a-child`), only once its newest placed run is finished (`no-run`, `not-done`,
  * `close-unplaced`) and a grace has passed (`grace`), only on a box whose ccd has the verb (`no-verb`), and only with
@@ -55,7 +57,7 @@ const STOP_DONE_HOLD_MAP = {
   archived: 'archived: the archive already stopped it',
   stopped: 'already stopped (the registry carries its stop stamp)',
   unmeasured: 'its identity or its status was not measured',
-  held: 'a hold stands that guards more than the workspace: the operator\'s own text, one naming a run that is open or unreadable, or a box whose ccd cannot pass a programme hold (`hibernate-hold-ok`)',
+  held: 'a hold stands that guards more than the workspace: the operator\'s own text, one naming another session\'s open run or a run that is unreadable, or a box whose ccd cannot pass a programme hold (`hibernate-hold-ok`)',
   stranded: 'stranded by an automatic swap',
   'swap-blocked': 'a swap was refused for it',
   substrate: 'a substrate marker stands',
@@ -171,8 +173,10 @@ export type StopDoneLive =
 /** What the row's `.hold` is, classified by the sweep (L4) so this file still imports L0 alone (D-6091). `none`: no
  *  hold. `operator`: any text outside the programme-hold grammar (`programmeHoldOf`), the unreadable and empty
  *  placeholders included. `programme`: a programme hold naming no run. `run-terminal` / `run-live`: one naming a run
- *  the store reads in / outside `TERMINAL_RUN_STATES`. `unreadable`: one naming a run the store could not read. */
-export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-live' | 'unreadable';
+ *  the store reads in / outside `TERMINAL_RUN_STATES`. `run-own`: one naming the worker's own newest placed run, open;
+ *  D-8789 amends D-6091's "an open run's hold still holds" for the worker's own newest placed run, as F5 (b) requires.
+ *  `unreadable`: one naming a run the store could not read. */
+export type StopDoneHeldKind = 'none' | 'operator' | 'programme' | 'run-terminal' | 'run-own' | 'run-live' | 'unreadable';
 
 export interface StopDoneInput {
   readonly row: StopDoneRow;
@@ -229,7 +233,7 @@ export const RUN_DONE_POLICY: SleepPolicy<StopDoneHold> = {
 export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
   return {
     row: i.row, child: i.row.child, paneDead: null, stopped: i.row.stoppedBy !== null,
-    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal'),
+    heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal' || i.heldKind === 'run-own'),
     overlord: i.overlord, optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
     viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
   };

@@ -13,7 +13,7 @@ The client sends `asks answer` and `asks release` to the question door family's 
 `POST /api/questions/:id/rule` and `POST /api/questions/:id/release` (id `ask-<n>`), with the
 row's kind added for you; the commands below do not change. A box whose server is older than the
 family is refused by the client before anything is sent (`no-questions-door`): nothing was
-answered, so say so to the operator rather than retrying.
+answered, so do not retry: it is an older build without the door, class P4 (`references/decision-procedure.md`). Record a `block` call with `wakeOn: update`, and work the rest.
 
 **A cross-project coordinator receives its children's questions** (the operator's ruling of
 2026-10-18, D-5530). A child's question is held for the recorded claimant of the child's run
