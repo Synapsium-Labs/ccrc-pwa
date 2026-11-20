@@ -43,7 +43,7 @@ import type { CoordRoutesHandle } from './routes.js';
 import type { CloseOutcome } from './close.js';
 import { TERMINAL_RUN_STATES } from '../../../shared/api.js';
 import { endRequestEndedMail, itemMailSubject, tickMail } from './ledgersMail.js';
-import { callViewOf } from './coordCalls.js';
+import { callViewOf, clearedCallViewOf } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import type { PlanStorePort } from './planStore.js';
 import type { PlanEndOutcome } from '../../../shared/plan.js';
@@ -53,6 +53,7 @@ import type { SpendUsageRead } from './portfolioStore.js';
 import type { LiveAskRead } from './ports.js';
 import { deviceActor } from '../ccdargv.js';
 import type { CallerIdentity } from '../auth/callerIdentity.js';
+import { consoleSubject } from '../auth/attributionIdentity.js';
 import { parseAnswerMarkWrite } from '../../../shared/answerMarks.js';
 import { DARK_MARK_ACTOR, askListsView, itemMarkable, itemMarksView, markViewOf, type ItemMarkRead, type Markable } from './answerMarks.js';
 import type { AnswerMarksRead } from './answerMarkStore.js';
@@ -179,7 +180,7 @@ export function waitingViewOf(
     cleared: cleared.map((r) => viewOfItem(coord, r, now, presenceOf, secretOf, marks)),
     goals: programmes.map((p) => coord.goalsFor(p)),
     calls: groups.open.map(callViewOf),
-    callsCleared: groups.cleared.map(callViewOf),
+    callsCleared: groups.cleared.map((r) => clearedCallViewOf(r, now)),
     ...asksViewOf(coord, now, liveAsk),
   };
 }
@@ -791,9 +792,10 @@ export function registerLedgerOperatorRoutes(app: FastifyInstance, deps: LedgerO
   app.post('/api/portfolio/rank', (req, reply) => {
     const coord = deps.coord;
     if (!coord) return refuseRoute(reply, 'not-configured');
-    // The console arm of the identity port (gates A, question 11): the device's actor, `unmeasured`, or `flag-off` dark.
-    const caller = deps.identity.console(deps.authEnabled, deps.authEnabled ? deps.sessionAuth(req).device : null);
-    const actor = caller.kind === 'signed-in' ? caller.actor.subject : caller.kind === 'device-unmeasured' ? 'unmeasured' : 'flag-off';
+    // The console arm of the identity port (gates A, question 11), mapped by its one owner (`consoleSubject`): the device's
+    // actor, `unmeasured`, or `flag-off` dark; an answer the port did not make refuses (gates B, ladder review F4).
+    const actor = consoleSubject(deps.identity.console(deps.authEnabled, deps.authEnabled ? deps.sessionAuth(req).device : null));
+    if (actor === null) return refuseRoute(reply, 'internal', { detail: 'the console answer was not the identity port\'s' });
     const parsed = parseRankWrite(req.body);
     if (!parsed.ok) return bad(reply, parsed.detail);
     const now = deps.now();

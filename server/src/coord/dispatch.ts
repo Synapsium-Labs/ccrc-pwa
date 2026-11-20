@@ -25,6 +25,7 @@ import {
   type RouteFields, type RunKind, type RunRefuseCode, type RunState, type SkillState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { readSkillState, skillDirFor } from '../skillstate.js';
+import { SKILL_PREFLIGHT_EVENT } from './skillInstall.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
   decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
@@ -382,6 +383,8 @@ function stopped(coord: CoordStore, id: number, d: DispatchStop): DispatchHalt {
   switch (d.kind) {
     case 'refused':
       if (d.event !== undefined) coord.recordRunEvent(id, 'coordinator', d.event);
+      // Last, so it is the run's newest row: the dead-dispatch pass reads the newest `dispatch-orphaned:` row (D-8126).
+      if (d.orphanEvent !== undefined) coord.recordRunEvent(id, 'coordinator', d.orphanEvent);
       return d.outcome;
     case 'stale':
       return d.outcome;
@@ -744,7 +747,7 @@ export async function dispatchRun(
   const skillState = await readSkillState(
     deps.io, bound.wrapper === null ? undefined : deps.configDir(bound.wrapper),
     skillDirFor(run.kind as 'work' | 'review'));
-  coord.recordRunEvent(id, 'coordinator', `skill-preflight:${skillState}`);
+  coord.recordRunEvent(id, 'coordinator', `${SKILL_PREFLIGHT_EVENT}${skillState}`);
 
   // 7: the brief, as MAIL (kind `status`, subject `wave-brief`) — never
   // injected directly, and (deviation D-47) queued ONLY when the worker's

@@ -1,6 +1,7 @@
 // The coordination store, ring L3 (the 08-10 spec's adapter list): every coordination read and write runs a
 // `node:sqlite` statement on the connection it is handed. That import is type-only, so the facts alone would read
 // L1; this declaration is what makes a runtime import of `CoordStore` from an L1 file an outward edge (#2370).
+import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { createHash } from 'node:crypto';
 import { CHECKS_ROW_PREFIX, CHECKS_SHADOW_ROW_PREFIX, mergingAtDetail, readChecksRowDetail, readMergingAtDetail, type ChecksMode, type ChecksRowRead } from '../../../shared/landing.js';
 import type { DatabaseSync, StatementSync } from 'node:sqlite';
@@ -56,6 +57,8 @@ import type { Observed } from '../time/observed.js';
 import type { BookState, ContinuityReadDoor, HandoverNote, RenewalMode, RenewalTrigger } from '../../../shared/continuity.js';
 import type { Invitation } from './peerBound.js';
 import type { KeyedMail } from './mailKey.js';
+import { urgentSenderVerdict, type UrgentFacts, type UrgentRole, type UrgentRunIds, type UrgentVerdict } from './urgentMail.js';
+import type { ChildMark } from '../../../shared/api.js';
 import type { ClosePrFacts } from '../prstate.js';
 import { liftReviewCapByCoordinator, raiseReviewCapAsk, reviewCapGate, reviewCapStatesOf, type CoordLiftResult, type ReviewCapState } from './reviewCapStore.js';
 import { renderEnvelope } from './envelope.js';
@@ -157,7 +160,7 @@ import {
   type HoldReasonVerdict,
 } from './rundefs.js';
 // `runLastMoves`' answer is declared by its consumer, the runs frame's wire composer (D-7334).
-import type { RunLastMovesRead } from './runWire.js';
+import { incarnationOfMark, type RunLastMovesRead } from './runWire.js';
 import { reviveDec, reviveMeas, reviveObs, type JournalRow } from './journalparse.js';
 import { BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, WAVE_BRIEF_SUBJECT, briefTakenStartDetail, type BriefTakenHow, type UnlandedBrief } from './briefwatch.js';
 import { MAIL_REPLAY_CEILING_ERROR } from './delivery.js';
@@ -1690,6 +1693,16 @@ const ABANDONED_PARK_SQL =
 const OUTSTANDING_OR_ABANDONED_SQL =
   `(d.state IN ${OUTSTANDING_STATES_SQL} OR ${ABANDONED_PARK_SQL})`;
 
+/** THE INBOX SET'S PREDICATE, named once (mid-turn mail, plan Task 2.1; spec §3.2): the ack door's guard
+ *  (`ackableDeliverySql`) AND the mailbox's read predicate (`OUTSTANDING_OR_ABANDONED_SQL`), over `d` (mail_deliveries)
+ *  and `rr` (the mail's run, LEFT JOINed), so it has no prefix: the read predicate is spelled over those two aliases.
+ *  `inboxFor`, `abandonedCount` and the urgent hold (`urgentHolds`, `urgentOutstanding`) read it, so the hold is the
+ *  urgent part of the set `mail inbox` prints, never a second copy of the rule. */
+const ACKABLE_OUTSTANDING_SQL: { readonly sql: string; readonly args: readonly string[] } = (() => {
+  const ack = ackableDeliverySql('d.');
+  return { sql: `${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`, args: ack.args };
+})();
+
 /** The joined row shape `mailForRecipient` and `outstandingMailFor` both
  *  read — they differ only in their WHERE clause, never in these columns.
  *
@@ -1716,7 +1729,10 @@ const MAIL_ROW_COLUMNS =
   'd.lastGate AS lastGate, d.gateCount AS gateCount, ' +
   'd.gateSince AS gateSince, d.gateAt AS gateAt, ' +
   // D-5838: when the park began, for the strip's `parked` line.
-  'd.parkedAt AS parkedAt';
+  'd.parkedAt AS parkedAt, ' +
+  // Mid-turn mail PR 1: the three stored times and the replay count, as TEXT (D-2545's reason: a wider integer throws).
+  'CAST(d.deliveredAt AS TEXT) AS deliveredAtText, CAST(d.ingestedAt AS TEXT) AS ingestedAtText, ' +
+  'CAST(d.ackedAt AS TEXT) AS ackedAtText, CAST(d.replayCount AS TEXT) AS replayCountText';
 
 interface MailRowDb {
   id: number; deliveryId: number; at: number; fromId: string; toId: string; runId: number | null;
@@ -1724,7 +1740,17 @@ interface MailRowDb {
   attempts: number; lastError: string | null;
   lastGate: string | null; gateCount: number; gateSince: number | null; gateAt: number | null;
   parkedAt: number | null;
+  deliveredAtText: string | null; ingestedAtText: string | null; ackedAtText: string | null; replayCountText: string | null;
 }
+
+/** One stored delivery number onto the wire (mid-turn mail PR 1): present only when its text is the one canonical
+ *  spelling of a positive safe integer (`parseCanonicalPositiveSafeInteger`), so a missing, fractional, textual,
+ *  hexadecimal, zero or unsafe value is absent, never zero. `replayCount` alone may also be zero, its column's default:
+ *  a first delivery not yet replayed. */
+const mailNumber = (key: 'deliveredAt' | 'ingestedAt' | 'ackedAt' | 'replayCount', text: string | null): Partial<MailSummary> => {
+  const v = key === 'replayCount' && text === '0' ? 0 : parseCanonicalPositiveSafeInteger(text);
+  return v === null ? {} : { [key]: v };
+};
 
 /** A route argument can never ask either mail read to walk more history (or
  *  more outstanding rows) than is reasonable to JSON-stringify into one
@@ -4216,6 +4242,19 @@ export class CoordStore {
     ).all(n) as unknown as RunRowDb[]);
   }
 
+  /** Every work run of one programme, each with its ticket's key (`runs.ticketId` joined to `plan_tickets.key`, null for
+   *  none), in id order, ALL-OR-FAILURE as `runs()`: the work map's one run read (programme work map WM2, D-8779; spec §5.1,
+   *  "Bound": every work run, not the closed-runs read's clamp). A failed run keeps its `ticketId`, so it names its ticket. */
+  programmeWorkRuns(program: string): { ok: true; runs: (RunRow & { ticketKey: string | null })[] } | Extract<RunsReadResult, { ok: false }> {
+    const rows = this.db.prepare(
+      `SELECT ${RUN_ROW_COLUMNS}, t.key AS ticketKey FROM runs r JOIN programs p ON p.slug = r.program ` +
+      "LEFT JOIN plan_tickets t ON t.id = r.ticketId WHERE r.program = ? AND r.kind = 'work' ORDER BY r.id",
+    ).all(program) as unknown as (RunRowDb & { ticketKey: string | null })[];
+    const read = this.hydrateRuns(rows);
+    if (!read.ok) return read;
+    return { ok: true, runs: read.runs.map((run, i) => ({ ...run, ticketKey: rows[i]!.ticketKey ?? null })) };
+  }
+
   /** `GET /api/runs/find` (D-8071, spec §11.4): the lookup and the close-order list, over stored columns. The query is
    *  `runFind.ts`'s; this delegate hands it the terminal-state list. */
   /** The runs that review run `id`, as hits (D-8071; spec §11.5 `reviewedBy`). */
@@ -6373,13 +6412,18 @@ export class CoordStore {
   }
 
   /** The act's candidates (D-7319): every `planned` run with no session whose dispatch stamp is at or before
-   *  `startedAtOrBefore`, oldest stamp first. Ids only: the executor reads each run whole (`run(id)`) and decides on it,
-   *  so this query is economy, never a permission. */
+   *  `startedAtOrBefore`, oldest stamp first. D-8126: also a planned run with no session whose newest `run_events` row at
+   *  or after its stamp begins `DISPATCH_ORPHANED_EVENT` (the dispatch said a spawn may exist that no run owns), whatever
+   *  the stamp: a later re-dispatch restamps, which puts the older event before the stamp and hides it. Ids only: the
+   *  executor reads each run whole (`run(id)`) and decides on it, so this query is economy, never a permission. */
   stalledDispatchRunIds(startedAtOrBefore: number): number[] {
     return (this.db.prepare(
       "SELECT CAST(id AS TEXT) AS idText FROM runs WHERE state = 'planned' AND sessionId IS NULL " +
-      'AND dispatchStartedAt IS NOT NULL AND dispatchStartedAt <= ? ORDER BY dispatchStartedAt, id',
-    ).all(startedAtOrBefore) as { idText: string }[]).map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
+      'AND dispatchStartedAt IS NOT NULL AND (dispatchStartedAt <= ? OR substr(COALESCE((' +
+      'SELECT e.detail FROM run_events e WHERE e.runId = runs.id AND e.at >= runs.dispatchStartedAt ' +
+      "ORDER BY e.id DESC LIMIT 1), ''), 1, ?) = ?) ORDER BY dispatchStartedAt, id",
+    ).all(startedAtOrBefore, DISPATCH_ORPHANED_EVENT.length, DISPATCH_ORPHANED_EVENT) as { idText: string }[])
+      .map((r) => Number(r.idText)).filter((n) => Number.isSafeInteger(n));
   }
 
   // ── the drift decider's reads (coordinator-durability tail spec §4.2, D-5921) ─────────────────────────────
@@ -6814,16 +6858,19 @@ export class CoordStore {
    *  wave 164): the sender's idempotency key, which only the mail ingress passes, on `mailKeyVerdict`'s `new`; absent or
    *  null for every other mail. This is that column's one writer too, and `mail_client_key_once` refuses a second row
    *  with the same sender and key (`isMailClientKeyClash` names that refusal). `inReplyTo`: the delivery id the send
-   *  named, as sent, which the key compares (review 2725 F1); absent or null when it named none. */
+   *  named, as sent, which the key compares (review 2725 F1); absent or null when it named none. `urgentAs` (mid-turn
+   *  mail, plan Task 2.2): the sender's role for an urgent mail, on `urgentSenderVerdict`'s `allowed`; absent or null for
+   *  every other mail. This is that column's one writer too. Only the mail ingress will pass it, and no caller passes it
+   *  until that ingress lands (`ingress-waits-for-routes`), so every row stays not urgent. */
   insertMail(m: { fromId: string; fromUuid: string; toId: string; runId: number | null;
                   kind: MailKind; subject: string; body: string;
                   artifacts: readonly string[]; answersMail?: number | null; clientKey?: string | null;
-                  inReplyTo?: number | null }): { id: number } {
+                  inReplyTo?: number | null; urgentAs?: UrgentRole | null }): { id: number } {
     const res = this.db.prepare(
-      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo) ' +
-      'VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
+      'INSERT INTO mail (at, fromId, fromUuid, toId, runId, kind, subject, body, artifacts, answersMail, clientKey, inReplyTo, ' +
+      'urgentAs) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)',
     ).run(Date.now(), m.fromId, m.fromUuid, m.toId, m.runId, m.kind, m.subject, m.body,
-      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null);
+      JSON.stringify(m.artifacts), m.answersMail ?? null, m.clientKey ?? null, m.inReplyTo ?? null, m.urgentAs ?? null);
     return { id: Number(res.lastInsertRowid) };
   }
 
@@ -6846,6 +6893,59 @@ export class CoordStore {
     } catch { /* UNREADABLE stands */ }
     return { id: row.id, toId: row.toId, runId: row.runId, kind: row.kind as MailKind, subject: row.subject,
       body: row.body, artifacts, inReplyTo: row.inReplyTo };
+  }
+
+  /** The urgent hold (mid-turn mail, spec §3.2, plan Task 2.5): per recipient, the urgent deliveries `mail inbox` would
+   *  print and the ack door would accept (`ACKABLE_OUTSTANDING_SQL`), in delivery-id order, each with the role its mail
+   *  stored. Derived, never stored: an ack, a run's close and a child's reclaim release a delivery by leaving that set.
+   *  `mail.urgentAs` is CHECKed to the two role words, so the read casts it. A recipient with nothing held is absent. */
+  urgentHolds(): ReadonlyMap<string, readonly { readonly deliveryId: number; readonly role: UrgentRole }[]> {
+    const rows = this.urgentRows('', []) as { toId: string; deliveryId: number; role: UrgentRole }[];
+    const holds = new Map<string, { deliveryId: number; role: UrgentRole }[]>();
+    for (const r of rows) holds.set(r.toId, [...(holds.get(r.toId) ?? []), { deliveryId: r.deliveryId, role: r.role }]);
+    return holds;
+  }
+
+  /** Whether `fromId` has an urgent mail to `toId` (the resolved recipient) still on the hold's set: the fact behind
+   *  `urgent-outstanding` (spec §3.1, plan P4). */
+  urgentOutstanding(fromId: string, toId: string): boolean {
+    return this.urgentRows('AND m.fromId = ? AND d.toId = ? ', [fromId, toId]).length > 0;
+  }
+
+  /** Whether `fromId` may mark its mail to `toId` (the resolved recipient) about run `runId` urgent now (spec §3.1, plan
+   *  P2 to P4). This store reads the facts once, as run ids from the binding's one view, and `urgentSenderVerdict` (L1)
+   *  decides. The recipient's runs are those that bind its INCARNATION, built from its registry mark (`mark`, which the
+   *  caller reads) as `heldFor` and the drift lane build it (`incarnationOfMark`), so a reused worker name never lets an
+   *  earlier occupant's coordinator through; a mark that cannot be read is `urgent-unmeasured`. Every fact read sits in
+   *  one try: a read that throws, or a series that cannot be represented, is `urgent-unmeasured`, never an empty answer.
+   *  The ingress (which waits for its own PR, `ingress-waits-for-routes`) asks with no `await` between this read and its
+   *  insert, so two sends cannot both pass. */
+  urgentVerdict(fromId: string, toId: string, runId: number | null, mark: ChildMark): UrgentVerdict {
+    const ids = (r: OpenSiblingsResult): UrgentRunIds => (r.ok ? r.siblings.map((s) => s.id) : 'unmeasured');
+    let facts: UrgentFacts;
+    try {
+      const recipient = this.bindingsOf(toId);
+      const d = this.designationRead();
+      facts = { senderId: fromId, recipientId: toId, runId,
+        recipientWorksOn: mark.kind === 'unreadable' ? 'unmeasured'
+          : ids(recipient.worker({ incarnation: incarnationOfMark(this, toId, mark) })),
+        senderClaims: ids(this.bindingsOf(fromId).claimant()),
+        recipientClaims: ids(recipient.claimant()),
+        designation: d.kind === 'designated' ? { kind: d.kind, sessionId: d.sessionId } : { kind: d.kind },
+        outstanding: this.urgentOutstanding(fromId, toId) };
+    } catch (e) {
+      return { kind: 'refused', code: 'urgent-unmeasured',
+        detail: `the facts for an urgent mail to ${toId} could not be read: ${e instanceof Error ? e.message : String(e)}` };
+    }
+    return urgentSenderVerdict(facts);
+  }
+
+  private urgentRows(and: string, args: readonly string[]): unknown[] {
+    return this.db.prepare(
+      'SELECT d.toId AS toId, d.id AS deliveryId, m.urgentAs AS role FROM mail m JOIN mail_deliveries d ON d.mailId = m.id ' +
+      `LEFT JOIN runs rr ON rr.id = m.runId WHERE m.urgentAs IS NOT NULL ${and}AND ${ACKABLE_OUTSTANDING_SQL.sql} ` +
+      'ORDER BY d.toId, d.id',
+    ).all(...args, ...ACKABLE_OUTSTANDING_SQL.args);
   }
 
   /**
@@ -7078,19 +7178,17 @@ export class CoordStore {
    * refuses, forever. Pure read: no row changes.
    */
   inboxFor(toId: string): { deliveryId: number; envelope: string }[] {
-    const ack = ackableDeliverySql('d.');
     return this.db.prepare(
       'SELECT d.id AS deliveryId, d.envelope FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL} ORDER BY d.id ASC`,
-    ).all(toId, ...ack.args) as unknown as { deliveryId: number; envelope: string }[];
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql} ORDER BY d.id ASC`,
+    ).all(toId, ...ACKABLE_OUTSTANDING_SQL.args) as unknown as { deliveryId: number; envelope: string }[];
   }
 
   /** D-6777: how many deliveries `outstandingMailFor`'s predicate admits that
    *  `inboxFor` does not (the park-ceiling rejection and its kin). `inboxFor` is
    *  a subset of that predicate by construction, so this is a plain difference. */
   abandonedCount(toId: string): number {
-    const ack = ackableDeliverySql('d.');
     const base = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       `LEFT JOIN runs rr ON rr.id = m.runId WHERE d.toId = ? AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
@@ -7098,8 +7196,8 @@ export class CoordStore {
     const inbox = this.db.prepare(
       'SELECT COUNT(*) AS n FROM mail_deliveries d JOIN mail m ON m.id = d.mailId ' +
       'LEFT JOIN runs rr ON rr.id = m.runId ' +
-      `WHERE d.toId = ? AND ${ack.sql} AND ${OUTSTANDING_OR_ABANDONED_SQL}`,
-    ).get(toId, ...ack.args) as { n: number };
+      `WHERE d.toId = ? AND ${ACKABLE_OUTSTANDING_SQL.sql}`,
+    ).get(toId, ...ACKABLE_OUTSTANDING_SQL.args) as { n: number };
     return base.n - inbox.n;
   }
 
@@ -7180,6 +7278,8 @@ export class CoordStore {
       // D-5838: a park is a fact about an OUTSTANDING row only. A rejected row
       // keeps its park columns as history, and the wire must not call it parked.
       parkedAt: r.state === 'queued' ? r.parkedAt : null,
+      ...mailNumber('deliveredAt', r.deliveredAtText), ...mailNumber('ingestedAt', r.ingestedAtText),
+      ...mailNumber('ackedAt', r.ackedAtText), ...mailNumber('replayCount', r.replayCountText),
     }));
   }
 
@@ -11410,6 +11510,10 @@ export class CoordStore {
   /** The newest tick mail of an item by its subject, whoever it went to, or null (the duplicate guard's and the stale label's one reader, plan PL4). */
   newestTickMail(subject: string): { state: MailDeliveryState; toId: string } | null { return ledgers.newestTickMail(this.db, subject); }
   pinnedProgrammes(): string[] { return ledgers.pinnedProgrammes(this.db); }
+  /** Whether the programme has a Goals (spec) pin: R7's test for a pinned programme. */
+  isPinned(program: string): boolean { return ledgers.isPinned(this.db, program); }
+  /** Whether the programme holds a `blocking` item in state `open`, waiting on the operator (a `checking` one is the coordinator's). */
+  programmeHasBlockingItem(program: string): boolean { return ledgers.programmeHasBlockingItem(this.db, program); }
 
   // ── the coordinator call record (D-8126, wave A3) ───────────────────────────────────────────────────────────────────
   // The SQL lives in `coordCallsStore.ts`; one writer per column (see its header).
@@ -11419,10 +11523,13 @@ export class CoordStore {
   bigCallsIn(fromMs: number, toMs: number): CallRow[] { return calls.bigCallsIn(this.db, fromMs, toMs); }
   callsForOperator(now: number): { open: CallRow[]; cleared: CallRow[] } { return calls.callsForOperator(this.db, now); }
   liveBlocksOf(madeBy: string, now: number): CallRow[] { return calls.liveBlocksOf(this.db, madeBy, now); }
+  blockClaimants(now: number): string[] { return calls.blockClaimants(this.db, now); }
+  blocksToWake(madeBy: string, now: number): CallRow[] { return calls.blocksToWake(this.db, madeBy, now); }
   callById(id: number): CallRow | null { return calls.callById(this.db, id); }
   markCallSeen(id: number, now: number): 'seen' | 'already' | 'unknown' | 'not-big' { return calls.markCallSeen(this.db, id, now); }
   overturnCallTx(id: number, note: string, now: number): void { calls.overturnCallTx(this.db, id, note, now); }
   markBlockWoken(id: number, now: number): boolean { return calls.markBlockWoken(this.db, id, now); }
+  wakeBlockTx(id: number, now: number, onWoken: () => void): boolean { return calls.wakeBlockTx(this.db, id, now, onWoken); }
   insertRemaining(program: string, byId: string, statement: programmeFacts.NewRemaining, edges: readonly programmeFacts.NewEdge[], build: string | null, now: number): programmeFacts.InsertRemainingResult { return programmeFacts.insertRemaining(this.db, program, byId, statement, edges, build, now); }
   remainingOf(program: string, limit: number): programmeFacts.RemainingStatement[] { return programmeFacts.remainingOf(this.db, program, limit); }
   openEdgesOf(programs: readonly string[]): programmeFacts.ProgrammeEdge[] { return programmeFacts.openEdgesOf(this.db, programs); }

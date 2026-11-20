@@ -10,6 +10,7 @@ import { floorsFallen, rewriteRelativeImports, runMutants, type MutantSet, type 
 import { FACE_MUTANT_SETS } from './faceSets.js';
 import { MAIL_PACE_MUTANT_SETS } from './mailPaceSets.js';
 import { MAIL_KEY_MUTANT_SETS } from './mailKeySets.js';
+import { URGENT_MAIL_MUTANT_SETS } from './urgentMailSets.js';
 import { LAUNCH_PROFILE_MUTANT_SETS } from './launchProfileSets.js';
 import { START_LOADS_MUTANT_SETS } from './startLoadsSets.js';
 import { COMPACTION_MUTANT_SETS } from './compactionSets.js';
@@ -51,10 +52,12 @@ import { OTHER_LANES_MUTANT_SETS } from './otherLanesSets.js';
 import { PLAN_PHASES_MUTANT_SETS } from './planPhasesSets.js';
 import { PLAN_TICKET_DONE_MUTANT_SETS } from './planTicketDoneSets.js';
 import { PLAN_EPIC_WAVES_MUTANT_SETS } from './planEpicWavesSets.js';
+import { WORK_MAP_MUTANT_SETS } from './workMapSets.js';
 import { DONE_TEST_MUTANT_SETS } from './doneTestSets.js';
 import { LADDER_MUTANT_SETS } from './ladderSets.js';
 import { FORECAST_MUTANT_SETS } from './forecastSets.js';
 import { APPROVAL_DENY_FLOOR_MUTANT_SETS } from './approvalDenyFloorSets.js';
+import { APPROVAL_ENVELOPE_MUTANT_SETS } from './approvalEnvelopeSets.js';
 import { PROGRAMME_HEALTH_MUTANT_SETS } from './programmeHealthSets.js';
 import { simulate } from './run.js';
 import {
@@ -186,6 +189,7 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...GENERATION_START_MUTANT_SETS,
   ...MAIL_PACE_MUTANT_SETS,
   ...MAIL_KEY_MUTANT_SETS,
+  ...URGENT_MAIL_MUTANT_SETS,
   ...FACE_MUTANT_SETS,
   ...LAUNCH_PROFILE_MUTANT_SETS,
   ...START_LOADS_MUTANT_SETS,
@@ -226,10 +230,12 @@ const MUTANT_SETS: Record<string, MutantSet<never>> = {
   ...PLAN_PHASES_MUTANT_SETS,
   ...PLAN_TICKET_DONE_MUTANT_SETS,
   ...PLAN_EPIC_WAVES_MUTANT_SETS,
+  ...WORK_MAP_MUTANT_SETS,
   ...DONE_TEST_MUTANT_SETS,
   ...LADDER_MUTANT_SETS,
   ...FORECAST_MUTANT_SETS,
   ...APPROVAL_DENY_FLOOR_MUTANT_SETS,
+  ...APPROVAL_ENVELOPE_MUTANT_SETS,
   ...PROGRAMME_HEALTH_MUTANT_SETS,
 };
 

@@ -9,8 +9,9 @@ import {
   type PlanTicketDoneBody, type TicketDoneEvidence, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
 import { isLinearIdentifier } from '../linear/ops.js';
+import { requestIdOf } from '../linear/planSyncPolicy.js';
 import type {
-  Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
+  BindingRow, Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
   PhaseChanges, PhasePatch, PhaseRefWrite, PhaseRow, PlanChanges, StoredPlan, TicketPatch,
 } from './planStore.js';
 
@@ -890,6 +891,27 @@ export function triageVerdict(
   if (owner.id === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner' };
   if (row === null || (row.state !== 'waiting' && row.state !== 'mailed')) return { ok: false, word: 'issue-not-inbound' };
   return { ok: true };
+}
+
+/** The Linear ids of a workspace that are ccrc's own (round 5 F2, round 6 P1; D-8183): every id a binding holds, and for each
+ *  `pending` TICKET binding the id its create was sent with (`requestIdOf`), since a create whose reply was lost sits in Linear
+ *  with no `linearId` on its binding yet. The ONE function that builds the set: the inbound lane's `detect` and the store's
+ *  two inbound composites both ask it, so an issue ccrc made is never read as inbound and never bound a second time. */
+export function ccrcIssueIds(bindings: ReadonlyArray<Pick<BindingRow, 'localKind' | 'localId' | 'workspaceId' | 'state' | 'linearId'>>): Set<string> {
+  const ids = new Set<string>();
+  for (const b of bindings) {
+    if (b.linearId !== null) ids.add(b.linearId);
+    if (b.localKind === 'ticket' && b.state === 'pending') ids.add(requestIdOf('ticket', b.localId, b.workspaceId));
+  }
+  return ids;
+}
+
+/** `plan take`'s choice among the rows handed to a programme under one identifier (review 2457 F2, round 4 A2): the only row, else
+ *  the one of the programme home's workspace; when the home does not decide (no home, or a workspace no row holds), none is chosen,
+ *  never a guess. */
+export function handedRowOf<R extends Pick<InboundRow, 'workspaceId'>>(rows: readonly R[], homeWorkspace: string | null): R | null {
+  if (rows.length === 1) return rows[0]!;
+  return homeWorkspace === null ? null : rows.find((x) => x.workspaceId === homeWorkspace) ?? null;
 }
 
 /** An inbound issue's reporter text, cut visibly to the plan's ticket bounds before it is stored (D-8705): the title to

@@ -375,6 +375,38 @@ describe('the spec pin and the modifications (plan PL2)', () => {
       pinRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenRatification: { ratified: false, why: 'unrecorded', source: null }, doneWhenVersion: null, modifications: [] });
   });
 
+  it('programmeHasBlockingItem is true only while an open item of that programme waits on the operator at the blocking level (D-8126)', () => {
+    const s = mk();
+    openRunFor(s, 'prog-a', 'lane-a');
+    raise(s, { neededBy: 'soon', soonLabel: 'before wave 6' });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(false);
+    const id = raise(s, { neededBy: 'blocking', soonLabel: null });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(true);
+    expect(s.programmeHasBlockingItem('prog-z')).toBe(false);
+    s.moveItem(id, 'withdraw', 'coordinator', {}, NOW + 1, live);
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(false);
+  });
+
+  it('a ticked blocking item (checking) no longer holds: the ball is the coordinator\'s (review 2817 R1)', () => {
+    const s = mk();
+    openRunFor(s, 'prog-a', 'lane-a');
+    const id = raise(s, { neededBy: 'blocking', soonLabel: null });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(true);
+    expect(s.moveItem(id, 'tick', 'operator', { answer: null }, NOW + 1, live)).toMatchObject({ ok: true, item: { state: 'checking' } });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(false);
+    expect(s.moveItem(id, 'return', 'coordinator', { note: 'Still off.' }, NOW + 2, live)).toMatchObject({ ok: true, item: { state: 'open' } });
+    expect(s.programmeHasBlockingItem('prog-a')).toBe(true);
+  });
+
+  it('isPinned is true only for a programme that has a spec pin (R7)', () => {
+    const s = mk();
+    openRunFor(s, 'prog-a', 'lane-a');
+    expect(s.isPinned('prog-a')).toBe(false);
+    expect(s.isPinned('prog-z')).toBe(false);
+    s.setSpecPin('prog-a', 'docs/superpowers/specs/2026-11-01-x-design.md', 'Summary.', NOW, null, { kind: 'coordinator' });
+    expect(s.isPinned('prog-a')).toBe(true);
+  });
+
   it('setSpecPin replaces the pin and its In short copy, and stamps the time', () => {
     const s = mk();
     openRunFor(s, 'prog-a', 'lane-a');
@@ -543,5 +575,28 @@ describe('the stored definition of done (D-8126)', () => {
       s.db.prepare('UPDATE programs SET doneWhen = ? WHERE slug = ?').run(bad, 'prog-a');
       expect(s.goalsFor('prog-a').doneWhen, bad).toBeNull();
     }
+  });
+});
+
+// A-1 (review 2394): the generic dismiss refuses a persistent-drift item, so only Hand or Keep closes it.
+describe('a persistent-drift item is not dismissed from the generic door (A-1)', () => {
+  const DRIFT = { verb: 'linear-drift', bindingId: 1 } as const;
+  const drift = (s: CoordStore): number => s.raiseItem({
+    program: 'prog-a', runId: null, raisedBy: 'ccrc', kind: 'decide', title: 'Linear keeps changing ticket t1', why: 'It keeps changing.',
+    how: [], options: ['Hand to the coordinator', 'Keep the plan'], recommended: 0, recommendedWhy: 'Because.', neededBy: 'later', soonLabel: null,
+    secretSlot: null, action: DRIFT,
+  }, NOW, 'ccrc');
+  it('dismiss answers not-open, the item stays open and no event is written; settle still closes it', () => {
+    const s = mk();
+    const id = drift(s);
+    expect(s.moveItem(id, 'dismiss', 'operator', {}, NOW + 1, live)).toEqual({ ok: false, why: 'not-open' });
+    expect(s.itemById(id)).toMatchObject({ state: 'open', closedAt: null });
+    expect(eventsOf(s, id)).toEqual(['raise:ccrc']);
+    expect(s.moveItem(id, 'settle', 'ccrc', {}, NOW + 2, live)).toMatchObject({ ok: true, item: { state: 'done' } });
+  });
+  it('an end-run item is still dismissed as before', () => {
+    const s = mk();
+    const id = raiseHeld(s, null);
+    expect(s.moveItem(id, 'dismiss', 'operator', {}, NOW + 1, live)).toMatchObject({ ok: true, item: { state: 'dismissed' } });
   });
 });
