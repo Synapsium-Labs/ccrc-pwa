@@ -205,3 +205,10 @@ is taken here.
     different case each run (1, 2 and 1 for the first; 3 and then 6 for the second). CI is the arbiter.
   - `coord-db`, run alone from load 27, failed seven or more cases, every one a vitest timeout (the migration-failure sweep
     at 137 s among them). None is a `continuity_*` or migration 110 case. CI passed the file on b94660f4a.
+  - CI's full run on 33b471903 failed one case, ARCH-06's ratchet in `single-definition/advance-switches.test.ts`: F4's
+    wiring pin read `server.ts` with `readFileSync` and sliced it by text, which the ratchet counts as four new literal
+    source pins over that file (27 against its ceiling of 23). The pin is now keyed on `buildServer` through
+    `scan/symbols.ts`'s `sourceOfSymbol`, as the guard asks, and the ceiling is unchanged. Both files are green alone, and
+    the pin still goes red when the spread is renamed in `server.ts` (restored from a saved copy, hash checked). Every
+    other leg of that run passed: `start-doors-characterization`, `run-close-switch` and `coord-db` among them, so their
+    local reds were load.

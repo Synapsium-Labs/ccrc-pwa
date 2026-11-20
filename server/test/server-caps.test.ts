@@ -16,6 +16,7 @@ import { Bus } from '../src/bus.js';
 import { mkTmp } from './tmpHelpers.js';
 import { seedRoster, testDeps, withFakeClock } from './helpers.js';
 import { buildServer } from '../src/server.js';
+import { sourceOfSymbol } from './scan/symbols.js';
 
 const AT = 1_790_000_000;
 
@@ -27,7 +28,8 @@ describe('continuity-v1 (Overlord W1 door process B1; review 2870 F4)', () => {
   // spread, or binding `witness`/`recordWitness` beside it (the old stub port), reds here.
   it('is advertised, and the gate runner takes its witness and recorder from witnessPorts alone', () => {
     expect(SERVER_CAPS).toContain('continuity-v1');
-    const src = readFileSync(path.resolve(path.dirname(new URL(import.meta.url).pathname), '../src/server.ts'), 'utf8');
+    // Keyed on `buildServer` through scan/symbols.ts (ARCH-06: never a literal source pin over server.ts).
+    const src = sourceOfSymbol('server/src/server.ts', 'buildServer');
     const from = src.indexOf('const gate = overlordGateRun({');
     expect(from).toBeGreaterThan(-1);
     const call = src.slice(from, src.indexOf('\n  });', from));
