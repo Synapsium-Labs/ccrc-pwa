@@ -23,7 +23,9 @@ import { itemView, waitingView } from '../test/ledgersFixture';
 
 const THEMES = [PHOSPHOR, 'light'];
 const SKINS = [REFINED, INSTRUMENT];
-const WIDTHS = [360, 390, 1280, 1470, 1920];
+// 800 is the one sampled width between 690 and 900: the page is one column there and the card as wide as the page, so the card's 40rem step
+// applies, which no wider window reaches the left column of (review 2922 A7).
+const WIDTHS = [360, 390, 800, 1280, 1470, 1920];
 const named = (v: AppView): string => `${v.skin}, ${v.theme}, ${v.width}px`;
 
 const NOW = Date.now();
@@ -121,8 +123,14 @@ interface Measured {
   goals: Box; work: Box; waiting: Box; runs: Box;
   /** The card's own width, inside its box: what the layout rows switch on. */
   cardWidth: number;
-  /** The first row's computed grid tracks: one on a phone, three (status, title with its tag, facts) from 1280. */
-  rowTracks: number;
+  /** The first ticket row's computed grid tracks, in px: one on a phone, two (status | title, the facts under the title) from a 26rem card,
+   *  three (status | title | facts) from a 40rem card. */
+  tracks: number[];
+  rem: number;
+  /** The width of the plain ticket's `.wk-what` (its title with its tag): the room a title has (review 2922 F2). */
+  titleTrack: number;
+  /** Each epic tag's height in lines: more than one means it broke. */
+  tagLines: number[];
   headings: { phases: number; finishedInsideSummary: boolean };
   ellipsis: string[];
   clipped: string[];
@@ -151,7 +159,10 @@ const measure = (root: Element): Measured => {
     pageClientWidth: document.documentElement.clientWidth,
     root: { scrollWidth: root.scrollWidth, clientWidth: root.clientWidth, box: box(root) },
     goals: box(one('.pv-main > .pv-card')), work: box(card.closest('.pv-card')!), cardWidth: cardBox.width, waiting: box(one('section[aria-label="Waiting on you"]')), runs: box(one('[data-testid="programme-runs"]')),
-    rowTracks: getComputedStyle(row).gridTemplateColumns.split(' ').length,
+    tracks: getComputedStyle(row).gridTemplateColumns.split(' ').map(parseFloat),
+    rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
+    titleTrack: box(one('.wk-row[data-ticket="t-4"] .wk-what')).width,
+    tagLines: [...card.querySelectorAll('.wk-epic')].map((e) => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight))),
     headings: { phases: card.querySelectorAll('h3.wk-phase-head').length, finishedInsideSummary: card.querySelector('details.wk-phase > summary > h3.wk-phase-head') !== null },
     ellipsis: [...root.querySelectorAll('*')].filter((e) => getComputedStyle(e).textOverflow === 'ellipsis').map((e) => e.tagName.toLowerCase()),
     clipped: [...root.querySelectorAll('*')]
@@ -172,6 +183,26 @@ const open = async (view: AppView) => {
   await root.locator('.wk-card .wk-row[data-ticket="t-2"]').waitFor({ timeout: 30_000 });
   await root.locator('[data-testid="programme-runs"]').waitFor({ timeout: 30_000 });
   return { ...app, root };
+};
+
+/** The card's row layout by the card's own width, as the stylesheet's two container steps say it (`card-width-steps`): one track below 26rem, two
+ *  from 26rem (status | title, the facts under it), three from 40rem (status | title | facts); the status track is 6.75rem and then 7.5rem. */
+const assertRowLayout = (m: Measured, at: string, width: number): void => {
+  const want: readonly [number | null, number] = m.cardWidth >= 40 * m.rem ? [7.5, 3] : m.cardWidth >= 26 * m.rem ? [6.75, 2] : [null, 1];
+  expect(m.tracks.length, `${at}: a ${Math.round(m.cardWidth)}px card draws ${m.tracks.length} row tracks, not ${want[1]}`).toBe(want[1]);
+  if (want[0] !== null) expect(m.tracks[0], `${at}: the status track`).toBeCloseTo(want[0] * m.rem, 0);
+  // From 800 up a row is never stacked in one column; the 800 case is the one that reaches the second step on a window under 900.
+  if (width >= 800) expect(m.tracks.length, `${at}: a row is stacked on a wide window`).toBeGreaterThanOrEqual(2);
+};
+
+let phoneTrack: Promise<number> | undefined;
+/** The title room at 360, Refined light: the floor every wider window has to keep. Measured once. */
+const phoneTitleTrack = (): Promise<number> => {
+  phoneTrack ??= (async () => {
+    const { ctx, root } = await open({ skin: REFINED, theme: 'light', width: 360 });
+    try { return (await root.evaluate(measure)).titleTrack; } finally { await ctx.close(); }
+  })();
+  return phoneTrack;
 };
 
 describe('the programme page with its Work card, per width, skin and theme (WM4)', () => {
@@ -203,22 +234,24 @@ describe('the programme page with its Work card, per width, skin and theme (WM4)
             expect(m.headings.phases, `${at}: three phase headings`).toBe(3);
             expect(m.headings.finishedInsideSummary, `${at}: the finished phase keeps its heading inside its summary`).toBe(true);
 
-            // The page's order (plan Task WM4's table).
-            if (width >= 1280) {
+            // The page's order (plan Task WM4's table): two columns from 900, one column under it.
+            if (width >= 900) {
               expect(Math.abs(m.work.left - m.goals.left), `${at}: Work and Goals do not share a left edge`).toBeLessThan(1);
               expect(m.work.top, `${at}: Work is not below Goals`).toBeGreaterThanOrEqual(m.goals.bottom - 0.5);
               expect(m.waiting.left, `${at}: Waiting on you is not in the right column`).toBeGreaterThanOrEqual(m.work.right - 0.5);
               expect(Math.abs(m.waiting.top - m.goals.top), `${at}: Waiting on you does not head the right column`).toBeLessThan(1);
               expect(Math.abs(m.runs.left - m.waiting.left), `${at}: Runs is not in Waiting on you's column`).toBeLessThan(1);
               expect(m.runs.top, `${at}: Runs is not below Waiting on you`).toBeGreaterThanOrEqual(m.waiting.bottom - 0.5);
-              expect(m.rowTracks, `${at}: a ticket row is not status, title and facts on one row (a ${Math.round(m.cardWidth)}px card)`).toBe(3);
             } else {
               for (const b of [m.work, m.waiting, m.runs]) expect(Math.abs(b.left - m.goals.left), `${at}: one column`).toBeLessThan(1);
               expect(m.work.top, `${at}: Work is not below Goals`).toBeGreaterThanOrEqual(m.goals.bottom - 0.5);
               expect(m.waiting.top, `${at}: Waiting on you is not below Work`).toBeGreaterThanOrEqual(m.work.bottom - 0.5);
               expect(m.runs.top, `${at}: Runs is not below Waiting on you`).toBeGreaterThanOrEqual(m.waiting.bottom - 0.5);
-              expect(m.rowTracks, `${at}: a ticket row is not stacked (a ${Math.round(m.cardWidth)}px card)`).toBe(1);
             }
+            assertRowLayout(m, at, width);
+            // F2 of review 2922: a title has at least the room on a desk that it has on a phone.
+            const ref = await phoneTitleTrack();
+            expect(m.titleTrack, `${at}: a ticket's title has less room (${Math.round(m.titleTrack)}px) than on a phone (${Math.round(ref)}px)`).toBeGreaterThanOrEqual(ref - 1);
             expect(errors, `${at}: page errors`).toEqual([]);
           } finally {
             await ctx.close();
@@ -273,7 +306,7 @@ describe('an unreadable re-read keeps the last view (WM4)', () => {
 // The same page with titles of ordinary length: what the operator sees first, and the pictures the task note links (`CCRC_SHOTS`).
 describe('the page with ordinary titles (WM4)', () => {
   const PLAIN = JSON.parse(JSON.stringify(WORK).replaceAll(LONG, 'with a plain name')) as WorkMapView;
-  for (const width of [360, 1280]) {
+  for (const width of [360, 800, 1280]) {
     for (const theme of ['light', PHOSPHOR]) {
       it(`at ${width}px, ${REFINED}, ${theme}`, async () => {
         const fixture: AppFixture = { ...FIXTURE, api: { ...FIXTURE.api,
@@ -292,6 +325,9 @@ describe('the page with ordinary titles (WM4)', () => {
           const m = await root.evaluate(measure);
           expect(m.pageScrollWidth, 'the page scrolls sideways').toBeLessThanOrEqual(m.pageClientWidth);
           expect(m.titles.filter((t) => t.overflows || t.outside), 'a title is clipped').toEqual([]);
+          // F2 of review 2922: a plain-name epic tag stays on one line, so it never breaks inside a word.
+          expect(m.tagLines.filter((n) => n !== 1), `at ${width}px an epic tag broke across lines`).toEqual([]);
+          expect(m.titleTrack, `at ${width}px a title has less room than on a phone`).toBeGreaterThanOrEqual((await phoneTitleTrack()) - 1);
           expect(app.errors, 'page errors').toEqual([]);
         } finally {
           await app.ctx.close();

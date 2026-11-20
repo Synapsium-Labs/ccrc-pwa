@@ -185,6 +185,9 @@ const UNREADABLE_WHY: Readonly<Record<WorkUnreadable, string>> = {
   'run-unreadable': 'the runs could not be read',
   'read-failed': 'a read failed',
 };
+/** The unreadable words this build can word: the keys of `UNREADABLE_WHY`, so the page's decider checks a server's word against what the card
+ *  knows and falls to the failed-read arm for any other (review 2922 F3). Keyed by the type, so a word added to it is a compile error here. */
+export const UNREADABLE_WORDS: readonly WorkUnreadable[] = Object.keys(UNREADABLE_WHY) as WorkUnreadable[];
 /** The note over a card whose read failed; the one sentence, spelt once, for the server's `unreadable` and the page's failed read. */
 const couldNotRead = (why: string): string => `The work could not be read: ${why}`;
 export const unreadableNote = (why: WorkUnreadable): string => couldNotRead(UNREADABLE_WHY[why]);

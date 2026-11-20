@@ -890,6 +890,49 @@ describe('the programme page: the Work card (WM4)', () => {
     expect(headlineOf()).toBe('2 of 2 done');
   });
 
+  it('a view followed by an answer with no work draws no card, and a failed read after that has no last view to keep (review 2922 F4)', async () => {
+    answers(workView());
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await screen.findByRole('heading', { level: 2, name: 'Work' });
+    vi.spyOn(api, 'plan').mockResolvedValue({ ok: true, plan: PLAN });
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(screen.queryByRole('heading', { level: 2, name: 'Work' })).toBeNull());
+    vi.spyOn(api, 'plan').mockRejectedValue(new TypeError('offline'));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'awaiting-review' }] }));
+    await screen.findByText('The work could not be read: offline');
+    expect(card().querySelector('.wk-headline')).toBeNull();
+  });
+
+  it('a slow failure that arrives after a newer read has answered is dropped (review 2922 F5)', async () => {
+    const pending: Array<{ ok: (v: never) => void; fail: (e: unknown) => void }> = [];
+    vi.spyOn(api, 'plan').mockImplementation(() => new Promise((ok, fail) => { pending.push({ ok: ok as never, fail }); }));
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    await waitFor(() => expect(pending.length).toBe(1));
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(pending.length).toBe(2));
+    await act(async () => { pending[1]!.ok({ ok: true, plan: PLAN, work: workView({ counts: { ...ZERO, done: 2 } }) } as never); });
+    expect(headlineOf()).toBe('2 of 2 done');
+    await act(async () => { pending[0]!.fail(new ApiError(503, { ok: false, error: 'plan-store-down' })); });
+    expect(headlineOf()).toBe('2 of 2 done');
+    expect(within(card()).queryByRole('alert')).toBeNull();
+  });
+
+  it('a work with an unreadable word this build cannot word is a failed read, and a view missing a list does not throw (review 2922 F3)', async () => {
+    answers({ unreadable: 'new-word' });
+    const store = heard();
+    render(<ProgrammeScreen slug="prog-a" store={store} />);
+    expect(await screen.findByText('The work could not be read: unreadable answer')).toBeTruthy();
+    answers(workView());
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'merging' }] }));
+    await waitFor(() => expect(headlineOf()).toBe('1 of 2 done'));
+    answers({ ...workView(), epics: undefined });
+    act(() => store.setState({ runs: [{ ...live[0]!, state: 'awaiting-review' }] }));
+    expect((await within(card()).findByRole('alert')).textContent).toBe('The work could not be read: unreadable answer');
+    expect(headlineOf()).toBe('1 of 2 done');
+  });
+
   it('a failed read keeps the last view and says the read failed', async () => {
     answers(workView());
     const store = heard();
@@ -978,7 +1021,7 @@ describe('the programme page: the Work card (WM4)', () => {
     expect(card().textContent).not.toMatch(/programme|coordinator/i);
   });
 
-  it('a new slug reads its own plan and never draws the last programme\'s view', async () => {
+  it('a different slug\'s page asks for its own plan and draws no card until that answers', async () => {
     answers(workView());
     const store = heard();
     const view = render(<ProgrammeScreen key="prog-a" slug="prog-a" store={store} />);
@@ -992,8 +1035,9 @@ describe('the programme page: the Work card (WM4)', () => {
 
 // What the page does with each answer is decided once, in `workRead.ts` (L1); the screen only holds its state and draws it.
 describe('the work read: the page keeps the last view, and the time of the last good read', () => {
-  const view = { source: 'plan', phases: [], epics: [], items: [] } as unknown as WorkMapView;
-  const other = { source: 'plan', phases: [], epics: [], items: [{ key: 'x' }] } as unknown as WorkMapView;
+  const shape = { source: 'plan', counts: {}, phases: [], notInPhase: [], epics: [], initiatives: [], doneWhen: [] };
+  const view = { ...shape, items: [] } as unknown as WorkMapView;
+  const other = { ...shape, items: [{ key: 'x' }] } as unknown as WorkMapView;
   const T0 = 1_000;
 
   it('a view is the card\'s answer, with the time it was read', () => {
@@ -1005,6 +1049,30 @@ describe('the work read: the page keeps the last view, and the time of the last 
     const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
     const r2 = workReadNext(r1, 'prog-a', { answer: { ok: true, plan: {} } }, T0 + 1);
     expect(workCardOf(r2, 'prog-a')).toBeNull();
+  });
+
+  it('an absent work drops the held view for good: a failed read after it has no last view (review 2922 F4)', () => {
+    const r1 = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    const r2 = workReadNext(r1, 'prog-a', { answer: { ok: true, plan: {} } }, T0 + 1);
+    expect(r2.last).toBeNull();
+    const r3 = workReadNext(r2, 'prog-a', { failed: 'plan-store-down' }, T0 + 2);
+    expect(r3.last).toBeNull();
+    expect(workCardOf(r3, 'prog-a')?.answer).toEqual({ readFailed: 'plan-store-down', last: null });
+    const r4 = workReadNext(r2, 'prog-a', { answer: { ok: true, plan: {}, work: { unreadable: 'read-failed' } } }, T0 + 3);
+    expect(workCardOf(r4, 'prog-a')?.answer).toEqual({ unreadable: 'read-failed', last: null });
+  });
+
+  it('a word the card cannot word, or a view missing a list the card walks, is a failed read (review 2922 F3)', () => {
+    const unknownWord = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: { unreadable: 'new-word' } } }, T0);
+    expect(workCardOf(unknownWord, 'prog-a')?.answer).toEqual({ readFailed: 'unreadable answer', last: null });
+    for (const list of ['items', 'phases', 'notInPhase', 'epics', 'initiatives', 'doneWhen', 'counts']) {
+      const partial = { ...shape, items: [] } as Record<string, unknown>;
+      delete partial[list];
+      const r = workReadNext(workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0), 'prog-a', { answer: { ok: true, plan: {}, work: partial } }, T0 + 1);
+      expect(workCardOf(r, 'prog-a')?.answer, `no ${list}`).toEqual({ readFailed: 'unreadable answer', last: view });
+    }
+    const notList = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: { ...shape, items: [], epics: {} } } }, T0);
+    expect(workCardOf(notList, 'prog-a')?.answer).toEqual({ readFailed: 'unreadable answer', last: null });
   });
 
   it('nothing read yet is no card', () => {
@@ -1050,7 +1118,16 @@ describe('the work read: the page keeps the last view, and the time of the last 
       runRow({ id: 9, program: 'prog-b', state: 'working' }),
     ];
     const items = [itemView({ id: 7, program: 'prog-a', state: 'open' }), itemView({ id: 8, program: 'prog-b' })];
-    expect(planKey('prog-a', runs, items)).toBe('1:merging:1,2:working:0|7:open');
-    expect(planKey('prog-a', [], [])).toBe('|');
+    expect(planKey('prog-a', runs, waitingView({ items }))).toBe('1:merging:1,2:working:0|7:open');
+    expect(planKey('prog-a', [], waitingView())).toBe('|');
+    expect(planKey('prog-a', [], null)).toBe('|');
+  });
+
+  it('the items of the key are the open ones and the cleared ones of this programme, the list\'s choice and not the screen\'s (review 2922 A5)', () => {
+    const open = itemView({ id: 7, program: 'prog-a', state: 'open' });
+    const cleared = itemView({ id: 6, program: 'prog-a', state: 'done' });
+    const otherCleared = itemView({ id: 5, program: 'prog-b', state: 'done' });
+    expect(planKey('prog-a', [], waitingView({ items: [open], cleared: [cleared, otherCleared] }))).toBe('|6:done,7:open');
+    expect(planKey('prog-a', [], waitingView({ items: [open] }))).toBe('|7:open');
   });
 });

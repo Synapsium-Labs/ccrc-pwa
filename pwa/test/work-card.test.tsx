@@ -607,8 +607,8 @@ describe('the layout rows of the plan table', () => {
   const css = stripComments(readFileSync(path.join(__dirname, '../src/ledgers/ledgers.css'), 'utf8'));
   it('a row is one column at 360 and 390, and one row from the wide layouts', () => {
     expect(css).toMatch(/\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*minmax\(0, 1fr\)/);
-    // Two steps (WM4, D-8823 `card-width-steps`): the narrow one-row tracks from 26rem, the roomy ones from 40rem.
-    expect(css).toMatch(/@container work \(min-width: 26rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*6\.75rem minmax\(0, 1fr\) minmax\(0, 10rem\)/);
+    // Two steps (WM4, D-8823 `card-width-steps`, fix round 1): two columns from 26rem with the facts under the title, three from 40rem.
+    expect(css).toMatch(/@container work \(min-width: 26rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*6\.75rem minmax\(0, 1fr\);[^@]*\.wk-card \.wk-facts\s*\{\s*grid-column:\s*2;/);
     expect(css).toMatch(/@container work \(min-width: 40rem\)\s*\{[^@]*\.wk-card \.wk-row\s*\{[^}]*grid-template-columns:\s*7\.5rem minmax\(0, 1fr\) minmax\(0, 14rem\)/);
     expect(effectiveValue(css, '.wk-card .wk-strip', 'flex-wrap')).toBe('wrap');
   });

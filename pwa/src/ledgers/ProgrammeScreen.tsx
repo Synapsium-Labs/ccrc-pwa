@@ -286,7 +286,7 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
   const [resumeOpen, setResumeOpen] = useState(false);
   const runsNow = useNow(30_000);
   // The plan is read again when one of this programme's runs or items moves: the frames' own rows, never a second poll.
-  const work = useWorkRead(slug, planKey(slug, heard, [...(view?.items ?? NO_ITEMS), ...(view?.cleared ?? NO_ITEMS)]));
+  const work = useWorkRead(slug, planKey(slug, heard, view));
   const fleetSessions = sessions ?? NO_SESSIONS;
   const entries = view === null || sessions === null || runs === null ? [] : needsYou(view.items, sessions, runs);
   const row = runsView.row;
