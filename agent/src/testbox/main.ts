@@ -14,6 +14,7 @@ import { fileURLToPath } from 'node:url';
 import { WebSocketServer, type WebSocket } from 'ws';
 import { isReleaseTag } from '../../../shared/api.js';
 import { readTestboxFrame } from '../../../shared/testbox.js';
+import { startedAsProgram } from './entry.js';
 import { durationMs, hostPort, readRepoRows, readTestboxConfig, type TestboxConfig } from './config.js';
 import { reflinkProbe } from './fsprobe.js';
 import { AUTH_CLOSE_CODE, checkHello, DEFAULT_HELLO_TIMEOUT_MS } from './hello.js';
@@ -252,7 +253,7 @@ async function main(): Promise<void> {
   }
 }
 
-const invoked = process.argv[1] !== undefined && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url);
+const invoked = startedAsProgram(process.argv[1], import.meta.url);
 if (invoked) {
   process.on('unhandledRejection', (reason) => { console.error('ccrc-testbox: unhandled rejection (ignored):', reason); });
   main().catch((e: unknown) => {
