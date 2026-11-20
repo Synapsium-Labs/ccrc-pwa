@@ -49,7 +49,7 @@ export const DOCS_FAILURE_SENTENCE: Record<DocsFailure, string> = {
   'untrusted-worktree': 'The worktree holding this draft failed the ownership check ({why}).',
   'worktree-moved': 'The worktree moved to another commit while Docs read it.',
   'draft-changed': 'The draft changed while Docs read it.',
-  'snapshot-gone': 'The saved copy Docs was reading this file from is gone; Docs starts the read again.',
+  'snapshot-gone': 'The saved copy Docs was reading this file from went away twice, so Docs stopped; read it again in a moment.',
   'range-too-large': 'This file is {size}; Docs reads files up to {cap}.',
   'prepare-busy': 'The fleet box is busy preparing other large files right now; try again in a moment.',
   'remote-absent': 'This repository has no origin remote to fetch from.',

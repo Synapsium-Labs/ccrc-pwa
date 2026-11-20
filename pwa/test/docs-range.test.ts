@@ -9,6 +9,7 @@ import {
 } from '../../shared/docs';
 import { b64Bytes, imageHeaderDims, imageViewVerdict, rangeVerdict } from '../src/docs/range/rangePolicy';
 import { readRange, type RangeLoader, type RangeTarget } from '../src/docs/range/readRange';
+import { DOCS_FAILURE_SENTENCE } from '../src/docs/docsText';
 
 const MIB2 = 2097152;
 const MIB64 = 67108864;
@@ -293,6 +294,12 @@ describe('readRange', { timeout: 30000 }, () => {
     expect(r2.ok).toBe(false);
     expect(!r2.ok && r2.why.kind === 'answer' && r2.why.answer.s === 'failed' && r2.why.answer.body.failure).toBe('snapshot-gone');
     expect(twice.calls.filter((c) => c.startsWith('prepare')).length, 'one restart only').toBe(2);
+  });
+
+  it('range reassembly: the snapshot-gone sentence, shown only after the one restart failed, promises no restart (review F10)', () => {
+    const s = DOCS_FAILURE_SENTENCE['snapshot-gone'];
+    expect(s).not.toMatch(/starts the read again|will (start|read) again/);
+    expect(s).toMatch(/stopped/);
   });
 
   it('range reassembly: a prepare whose size differs from the listing, or passes the ceiling, allocates nothing and fails', async () => {
