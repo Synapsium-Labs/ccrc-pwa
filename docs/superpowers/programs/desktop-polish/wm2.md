@@ -377,6 +377,7 @@ that reach the plan routes, and `plan-vocabulary` is #3021's changed pin of the 
 | `deviation-refs`, `dtbd`, `topology-clean` | 34, 1 and 61, all green | 11.9, 11.4 |
 | server compile, tests compile | both clean | 11.0, 10.6 |
 | the ledger guard (`--base origin/main`) | passed by the `Ledger-Edit: D-8779` trailer | |
+| `refusal-status` (review 2815 F6: #3021 changed it, and it reads every `.ts` file under `server/src` as text, `planRoutes.ts` included; run by review 2815 at the tip, and again by WM7 at its own tip) | 28 of 28 both times | 9.75 (review), 16.5 (WM7) |
 
 ### 8.9 The rerun after the second merge
 
