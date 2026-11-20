@@ -401,6 +401,18 @@ describe('docs-show-range (X2 P1.2)', () => {
     expect(fs.readdirSync(elsewhere)).toEqual([]);
   });
 
+  it('range: a cache directory left at a wider mode is repaired to 0700 by the next call', () => {
+    // The first case above starts with no directory, so the create alone yields 0700: only a directory that already
+    // stands, at a mode another user could list, shows the repair (`fchmod` on the opened descriptor).
+    const c = committed({ [`${SPECS}/a.md`]: 'tiny\n' });
+    const args = committedArgs(c.commit, 'specs', 'a.md', `blob:${c.blob(`${SPECS}/a.md`)}`, ['--prepare']);
+    fs.mkdirSync(cacheDir(), { mode: 0o755 });
+    fs.chmodSync(cacheDir(), 0o755); // the umask may have narrowed the create
+    expect(fs.statSync(cacheDir()).mode & 0o777, 'the planted directory is wide').toBe(0o755);
+    expect(run(args)).toMatchObject({ ok: true });
+    expect(fs.statSync(cacheDir()).mode & 0o777).toBe(0o700);
+  });
+
   it('range: ccd caps lists the verb and its token, and a bad shape or pin is refused before any copy', () => {
     const caps = h.sh('cmd_caps').split('\n');
     for (const t of ['docs-show-range', 'docs-range-v1']) expect(caps, t).toContain(t);
