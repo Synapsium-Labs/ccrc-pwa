@@ -26,7 +26,8 @@ _model_id_bare_to() {   # var raw -> var = raw with ONE trailing `[1m]` removed 
 MODEL_ALIASES_DIR="$HOME/.ccrc/models"
 
 # THE ONE JQ PROGRAM of both readers: it answers every class of a wrapper at once, one `<class> <answer>` line each, so a tick
-# that asks four classes forks once. `$mode` picks the Anthropic arm (`aliases`: the aliases and advance files) or the Codex arm
+# that asks four classes forks once. `$mode` picks the Anthropic arm (`aliases`: the aliases and advance files; `held`: the same, and with the aliases file ABSENT
+# it answers each class's hold from the advance file alone, `facts - - <held-id|-> - -`, for a launch) or the Codex arm
 # (`codex`: the registry and the catalogue). The id shape is `MODEL_ID_RE`'s, `shared/models.mjs`'s one owner, copied with `\z`
 # in place of `$` (the engine's `$` also matches before a final newline, which would splice a second line into an answer). An
 # effort level or orphaned level is spliced into a line, so it must be one token of `[A-Za-z0-9._-]`; anything else is invalid.
@@ -39,8 +40,19 @@ def bare: if type == "string" and endswith("[1m]") then .[:-4] else . end;
 def load($s; $t): if $s == "ok" then (try {st: "ok", v: ($t | fromjson)} catch {st: "invalid"}) else {st: $s} end;
 def rowbad: . != null and (type != "object" or ((.efforts // null) | . != null and (type != "array" or any(.[]; tok | not))));
 def effs: (.efforts // null) | if . == null then "-" elif length == 0 then "none" else join(",") end;
+def holdof($D; $c):
+  if $D.st == "unreadable" then {e: "unreadable advance"}
+  elif $D.st == "invalid" then {e: "invalid advance"}
+  elif $D.st == "ok" and (($D.v | type) != "object" or ($D.v.classes | type) != "object") then {e: "invalid advance"}
+  else
+    (if $D.st == "ok" then ($D.v.classes[$c] | if type == "object" then .hold else null end) else null end) as $hold
+    | if $hold != null and ($hold | type) != "object" then {e: "invalid hold"}
+      elif $hold != null and ($hold.model // null | idn | not) then {e: "invalid hold.model"}
+      else {hold: $hold}
+      end
+  end;
 def anthropic($A; $D; $c):
-  if $A.st == "absent" then "absent"
+  if $A.st == "absent" then (if $mode == "held" then (holdof($D; $c) | .e // "facts - - \(.hold.model // "-") - -") else "absent" end)
   elif $A.st == "unreadable" then "unreadable aliases"
   elif $A.st == "invalid" then "invalid json"
   elif ($A.v | type) != "object" or $A.v.v != 1 then "invalid v"
@@ -55,16 +67,12 @@ def anthropic($A; $D; $c):
       elif ($x.orphaned != null and ($x.orphaned.level | tok | not)) then "invalid classes.\($c).orphaned.level"
       elif ($x.row | rowbad) then "invalid classes.\($c).row"
       elif ($x.heldRow | rowbad) then "invalid classes.\($c).heldRow"
-      elif $D.st == "unreadable" then "unreadable advance"
-      elif $D.st == "invalid" then "invalid advance"
-      elif $D.st == "ok" and (($D.v | type) != "object" or ($D.v.classes | type) != "object") then "invalid advance"
       else
-        (if $D.st == "ok" then ($D.v.classes[$c] | if type == "object" then .hold else null end) else null end) as $hold
-        | if $hold != null and ($hold | type) != "object" then "invalid hold"
-          elif $hold != null and ($hold.model // null | idn | not) then "invalid hold.model"
+        holdof($D; $c) as $H
+        | if $H.e != null then $H.e
           else
-            ($hold != null) as $held
-            | ($hold.model // null) as $hm
+            ($H.hold != null) as $held
+            | ($H.hold.model // null) as $hm
             | (if $x.unlaunchable != null or $x.id == null then "-" else $x.id end) as $id
             | (if $held and $hm != null then $x.heldRow else $x.row end) as $row
             | "facts \($id) \(if $id == "-" or $row == null then "-" else ($row | effs) end) \($hm // "-") \(if $x.orphaned == null then "-" else $x.orphaned.level end) \(if $id != "-" and ($x.seenId | bare) == $id then "seen" else "-" end)"
@@ -105,7 +113,9 @@ _ma_file_to() {   # var file -> var = `absent` (no such path), `unreadable` (a p
 }
 
 _ma_answer_to() {   # var mode wrapper class file-a file-b -> var = the answer line for the class, from the per-wrapper cache; ONE jq fork answers all four classes when either file's bytes changed; rc 0
-  local IFS=$' \t\n' __ma_a __ma_b __ma_key __ma_ck="$2:$3" __ma_c __ma_cl='' __ma_out __ma_line
+  local IFS=$' \t\n' __ma_a __ma_b __ma_key __ma_ck __ma_c __ma_cl='' __ma_out __ma_line __ma_m="$2"
+  [[ "$2" != aliases ]] || __ma_m="${ALIAS_FACTS_MODE:-aliases}"   # a launch's caller makes `ALIAS_FACTS_MODE=held` a local of its own: that is the only way in
+  __ma_ck="$__ma_m:$3"
   for __ma_c in $ROUTE_CLASSES; do [[ "$__ma_c" == default ]] || __ma_cl+="$__ma_c "; done
   if [[ " $__ma_cl" != *" $4 "* ]]; then printf -v "$1" '%s' 'invalid class'; return 0; fi
   declare -gA _MA_KEY _MA_ANS 2>/dev/null || :
@@ -114,13 +124,13 @@ _ma_answer_to() {   # var mode wrapper class file-a file-b -> var = the answer l
   # from `_route_effort_for_to` on every box, most of which have no model files yet, and an unread file must cost no fork (every TICK_BUDGET).
   if [[ "$2" == codex ]]; then
     [[ "${__ma_a%%:*}" == ok && "${__ma_b%%:*}" == ok ]] || { printf -v "$1" '%s' unknown; return 0; }
-  elif [[ "${__ma_a%%:*}" != ok ]]; then
+  elif [[ "${__ma_a%%:*}" != ok && ! ( "$__ma_m" == held && "${__ma_a%%:*}" == absent && "${__ma_b%%:*}" != absent ) ]]; then   # (a launch, mode `held`, reads the advance file when only the aliases file is absent)
     if [[ "${__ma_a%%:*}" == absent ]]; then printf -v "$1" '%s' absent; else printf -v "$1" '%s' 'unreadable aliases'; fi
     return 0
   fi
   __ma_key="${#__ma_a}:$__ma_a:$__ma_b"
   if [[ "${_MA_KEY[$__ma_ck]-}" != "$__ma_key" || -z "${_MA_ANS[$__ma_ck:$4]+set}" ]]; then
-    __ma_out="$(jq -n -r --arg mode "$2" --arg as "${__ma_a%%:*}" --arg at "${__ma_a#*:}" --arg bs "${__ma_b%%:*}" --arg bt "${__ma_b#*:}" \
+    __ma_out="$(jq -n -r --arg mode "$__ma_m" --arg as "${__ma_a%%:*}" --arg at "${__ma_a#*:}" --arg bs "${__ma_b%%:*}" --arg bt "${__ma_b#*:}" \
       --arg classes "${__ma_cl% }" "$MODEL_ALIASES_JQ" 2>/dev/null)" || __ma_out=''
     if [[ -z "$__ma_out" ]]; then   # jq failed: not cached, so the next ask tries again
       printf -v "$1" '%s' "$([[ "$2" == codex ]] && echo unknown || echo 'unreadable aliases')"
@@ -133,7 +143,7 @@ _ma_answer_to() {   # var mode wrapper class file-a file-b -> var = the answer l
   return 0
 }
 
-_alias_facts_to() {   # var wrapper class -> var = ONE line: `absent`, `unreadable <aliases|advance>`, `invalid <field>` or `facts <id|-> <efforts> <held-id|-> <orphaned-level|-> <seen|->`; always rc 0
+_alias_facts_to() {   # var wrapper class -> var = ONE line: `absent`, `unreadable <aliases|advance>`, `invalid <field>` or `facts <id|-> <efforts> <held-id|-> <orphaned-level|-> <seen|->`; always rc 0. The tick asks plainly (no aliases file, no fork); a launch (`_held_model_env_to`, `_alias_launch_mark`) asks with `ALIAS_FACTS_MODE=held` as a local of its own, so a hold the advance file keeps survives an absent aliases file
   _ma_answer_to "$1" aliases "$2" "$3" "$MODEL_ALIASES_DIR/$2.aliases.json" "$MODEL_ALIASES_DIR/$2.advance.json"
 }
 
@@ -169,12 +179,13 @@ _class_takes_no_effort() {   # wrapper class -> rc 0 the class's model says it t
 }
 
 _class_effort_barred_to() {   # var wrapper class -> rc 0 the class takes no effort level, rc 1 it takes one. var (when not empty) = what to name in a refusal: `model <id>` when the lane's data decided, `class <class>` when the standing haiku rule did, empty on rc 1. The one decision all five sites of ccd share
-  local __eb_w="$2" __eb_c="${3-}" __eb_ans __eb_a __eb_id
+  local __eb_w="$2" __eb_c="${3-}" __eb_ans __eb_a __eb_id __eb_h
   [[ -z "$1" ]] || printf -v "$1" ''
   _class_takes_no_effort "$__eb_w" "$__eb_c"
   case $? in
     0) _alias_facts_to __eb_ans "$__eb_w" "$__eb_c"
-       read -r __eb_a __eb_id _ <<< "$__eb_ans"
+       read -r __eb_a __eb_id _ __eb_h _ <<< "$__eb_ans"
+       [[ "$__eb_h" == - ]] || __eb_id="$__eb_h"   # a held class is judged on the held row, so the refusal names the held id
        if [[ "$__eb_a" == facts && "$__eb_id" != - ]]; then __eb_id="model $__eb_id"; else __eb_id="class $__eb_c"; fi ;;
     1) return 1 ;;
     *) [[ "$__eb_c" == haiku ]] || return 1; __eb_id="class haiku" ;;
@@ -189,13 +200,13 @@ _class_effort_barred_to() {   # var wrapper class -> rc 0 the class takes no eff
 # saved level is the lane's decision); the caller (`_spawn_start`) asks only then. ccrc writes no model or effort choice into the home. A level
 # the current row lists none of is never carried: a launch is never stopped by a level Claude Code would refuse, and a model that takes none
 # takes no carried level.
-_orphaned_effort_to() {   # var wrapper class -> rc 0 and var = the orphaned level to put on `--effort`; rc 1 and var empty when the lane is no Anthropic backend, there is no class, no readable file, no orphan, or the current row does not list the level
+_orphaned_effort_to() {   # var wrapper class -> rc 0 and var = the orphaned level to put on `--effort`; rc 1 and var empty when the lane is no Anthropic backend, there is no class, no readable file, no orphan, the class is held or its id unlaunchable, or the current row does not list the level
   local IFS=$' \t\n' __oe_ans __oe_a __oe_id __oe_e __oe_h __oe_o
   printf -v "$1" ''
   [[ -n "${3-}" ]] && _is_anthropic_backend "$2" || return 1
   _alias_facts_to __oe_ans "$2" "$3"
   read -r __oe_a __oe_id __oe_e __oe_h __oe_o _ <<< "$__oe_ans"
-  [[ "$__oe_a" == facts && "$__oe_o" != - ]] || return 1
+  [[ "$__oe_a" == facts && "$__oe_o" != - && "$__oe_h" == - && "$__oe_id" != - ]] || return 1   # a held class runs the held id, and an unlaunchable one has none: neither carries the alias's orphan
   case ",$__oe_e," in
     *",$__oe_o,"*|,-,) ;;   # listed, or a row with no effort field (which cannot rule it out)
     *) return 1 ;;          # a list without it, or `none`
@@ -211,12 +222,12 @@ _orphaned_effort_to() {   # var wrapper class -> rc 0 and var = the orphaned lev
 # plain redirect (no temp file), and `_reg_purge` reaps it with the row like any dot-free field.
 # @ccd-lib:aliaslaunch
 _alias_launch_mark() {   # id wrapper class mode flags -> writes the marker iff this spawn is a fresh alias launch (see above); always rc 0
-  local IFS=$' \t\n' id="$1" wrapper="$2" cls="$3" mode="$4" flags="$5" ans w1 held born
+  local IFS=$' \t\n' id="$1" wrapper="$2" cls="$3" mode="$4" flags="$5" ans w1 held born ALIAS_FACTS_MODE=held
   [[ "$mode" == new && -n "$cls" && "$cls" != default ]] || return 0
   [[ " $ROUTE_CLASSES " == *" $cls "* ]] || return 0
   _is_anthropic_backend "$wrapper" || return 0
   [[ " $flags " == *" --model $cls "* && "${flags#*--model }" != *"--model"* ]] || return 0   # the class's own `--model`, and no other model flag
-  _alias_facts_to ans "$wrapper" "$cls"   # a held id for THIS class stops the mark; a hold elsewhere, no aliases file or an unreadable one does not
+  _alias_facts_to ans "$wrapper" "$cls"   # a held id for THIS class stops the mark (even with no aliases file); a hold elsewhere, no file at all or an unreadable one does not
   read -r w1 _ _ held _ <<< "$ans"
   [[ "$w1" == facts && "$held" != - ]] && return 0
   born=$(_pane_born "$id")
@@ -359,7 +370,7 @@ _alias_observe() {   # id -> the supervise tick's own step (never inside `_route
 # @ccd-lib:held
 HELD_MODEL_PAIRS=""
 _held_model_env_to() {   # var wrapper [id] -> var = the env words (each followed by one space, so the caller splices them as it does `$tmpenv`), empty when nothing is held or the lane is no Anthropic backend; sets HELD_MODEL_PAIRS; with an id, writes the floored `held-unread` line for a file it could not read; always rc 0
-  local IFS=$' \t\n' __hm_w="$2" __hm_id="${3-}" __hm_c __hm_ans __hm_a __hm_h __hm_env='' __hm_unread=''
+  local IFS=$' \t\n' __hm_w="$2" __hm_id="${3-}" __hm_c __hm_ans __hm_a __hm_h __hm_env='' __hm_unread='' ALIAS_FACTS_MODE=held
   HELD_MODEL_PAIRS=''
   printf -v "$1" ''
   _is_anthropic_backend "$__hm_w" || return 0

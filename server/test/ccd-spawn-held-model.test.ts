@@ -254,6 +254,74 @@ describe('a file ccd cannot read launches, and says so once', () => {
   });
 });
 
+describe('a hold survives the absence of the aliases file (review 2964 F3, D-8856)', () => {
+  it('a held class launches with its id when the aliases file is absent', () => {
+    seed(); roster();
+    h.sh(`_reg_set ${ID} class opus`);
+    put('claude.advance.json', advanceText({ opus: OPUS_HELD, sonnet: SONNET_HELD }));   // the advance file stands, the aliases file does not
+    const resumed = spawn('resume');
+    expect(resumed).toHaveLength(2);
+    for (const l of resumed) expect(keys(l)).toEqual([[`${KEY}OPUS_MODEL`, OPUS_HELD], [`${KEY}SONNET_MODEL`, SONNET_HELD]]);
+    expect(h.reg(ID, 'routeapplied')).toBe(`class=opus held=opus:${OPUS_HELD},sonnet:${SONNET_HELD}`);
+    expect(heldUnread()).toEqual([]);
+    // the control: with no hold in the same file, the same launch carries no key
+    put('claude.advance.json', advanceText({}));
+    for (const l of spawn('resume')) expect(l).not.toContain(KEY);
+  });
+
+  it('no hold and no aliases file: no key and no line', () => {
+    seed(); roster();
+    put('claude.advance.json', advanceText({ opus: null, sonnet: null }));
+    for (const mode of ['new', 'resume'] as const) for (const l of spawn(mode)) expect(l).not.toContain(KEY);
+    expect(heldUnread()).toEqual([]);
+  });
+
+  it('both files absent: no key, no line', () => {
+    seed(); roster();
+    for (const mode of ['new', 'resume'] as const) for (const l of spawn(mode)) expect(l).not.toContain(KEY);
+    expect(heldUnread()).toEqual([]);
+  });
+
+  it('an unreadable advance file without an aliases file logs held-unread once', () => {
+    seed(); roster();
+    fs.mkdirSync(path.join(dir(), 'claude.advance.json'), { recursive: true });
+    const first = spawn('resume');
+    expect(first).toHaveLength(2);   // a launch is never refused
+    for (const l of first) expect(l).not.toContain(KEY);
+    expect(heldUnread(), 'one floored line').toHaveLength(1);
+    spawn('resume');
+    expect(heldUnread()).toHaveLength(1);
+    // an advance file that is not JSON is read as the invalid file it is, on this path too
+    fs.rmdirSync(path.join(dir(), 'claude.advance.json'));
+    fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.heldunread`));
+    put('claude.advance.json', '{ not json');
+    for (const l of spawn('resume')) expect(l).not.toContain(KEY);
+    expect(heldUnread()).toHaveLength(2);
+  });
+
+  it('the id check still refuses a bad id when the aliases file is absent', () => {
+    seed(); roster();
+    h.sh(`_reg_set ${ID} class opus`);
+    for (const model of ["x';touch pwned;'", 'claude-opus-9-2 --model other', '-claude-opus-9-2', `claude-opus-9-2\n`]) {
+      const a = JSON.parse(advanceText({}));
+      a.classes.opus.hold = { at: '2026-11-02T00:00:00Z', by: 'hand', model };
+      put('claude.advance.json', `${JSON.stringify(a)}\n`);
+      for (const l of spawn('resume')) expect(l, `hold.model ${JSON.stringify(model)}`).not.toContain(KEY);
+      expect(fs.existsSync(path.join(h.home, 'pwned')), 'nothing was run').toBe(false);
+      fs.rmSync(path.join(h.home, '.cc-sessions', `${ID}.heldunread`), { force: true });
+    }
+    spawn('resume');
+    expect(heldUnread().length, 'a refused id is one line, not a silent miss').toBeGreaterThan(0);
+  });
+
+  it('a held launch with no aliases file leaves no launch marker (the held id is not the alias\'s own resolution)', () => {
+    seed(); roster();
+    put('claude.advance.json', advanceText({ opus: OPUS_HELD }));
+    h.sh(`_reg_set ${ID} class opus; ${STUB} rm -f "$HOME/pane-up"; _pane_born() { echo 1700000000; }; _spawn_start ${ID} new 2>/dev/null`);
+    expect(h.reg(ID, 'aliaslaunch')).toBeNull();
+  });
+});
+
 describe('the lane decides', () => {
   it('a Codex lane never gets the key', () => {
     seed('lane-a'); roster();

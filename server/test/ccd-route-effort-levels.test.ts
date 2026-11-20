@@ -13,6 +13,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, WS_ADD_REAL_SPAWN, ghContainedEnv, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { parseAliases, serializeAliases } from '../../shared/model-aliases.mjs';
+import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
 
 let h: CcdHarness;
 beforeEach(() => {
@@ -209,6 +210,34 @@ describe('the refusal names the model, not the class word', () => {
   });
 });
 
+describe('a held class is judged on the held row, and the refusal names the held id (review 2964 F13a)', () => {
+  const HELD = 'claude-opus-9-0';
+  /** opus is held on `HELD`, whose row lists `heldEfforts`; the alias's current row (`claude-opus-9-1`) lists `curEfforts`. */
+  const plantHeld = (curEfforts: string[], heldEfforts: string[]): void => {
+    const classes: Record<string, unknown> = {};
+    for (const c of ['fable', 'opus', 'sonnet', 'haiku']) classes[c] = entry(`claude-${c}-9-1`, ['low', 'high']);
+    classes.opus = { ...entry('claude-opus-9-1', curEfforts), heldRow: row(HELD, heldEfforts) };
+    put(`${ANTHROPIC}.aliases.json`, serializeAliases(parseAliases({
+      v: 1, at: '2026-11-01T00:00:00Z', cache: { format: 'current', fetchedAt: '2026-11-01T00:00:00Z' }, stale: false, classes,
+    })));
+    const adv = seedAnthropicAdvance() as { classes: Record<string, { hold: unknown }> };
+    adv.classes.opus!.hold = { at: '2026-11-02T00:00:00Z', by: 'hand', model: HELD };
+    put(`${ANTHROPIC}.advance.json`, serializeAdvance(adv as unknown as Parameters<typeof serializeAdvance>[0]));
+  };
+  const sayers = SITES.filter((s) => s.says);
+  it.each(sayers)('$name: a held row that takes none names the held id, not the alias\'s current one', (site) => {
+    plantHeld(['low', 'high'], []);
+    const v = site.probe(ANTHROPIC, 'opus');
+    expect(v.refused).toBe(true);
+    expect(v.text).toContain(`${HELD} takes no effort level`);
+    expect(v.text).not.toContain('claude-opus-9-1 takes no effort level');
+  });
+  it('the decision comes from the held row: levels on the held row take a level though the current row lists none', () => {
+    plantHeld([], ['low', 'high']);
+    expect(refuses(SITES[0]!, ANTHROPIC, 'opus')).toBe(false);
+  });
+});
+
 describe('_class_takes_no_effort', () => {
   const ask = (w: string, cls: string): number => {
     const r = shStatus(`_class_takes_no_effort ${w} ${cls}; echo "rc=$?"`);
@@ -244,6 +273,11 @@ describe('the two callers of _route_argv_check pass the lane they have chosen', 
     const r = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=quiet-mesa cmd_ws_add --no-rc --wrapper ${ANTHROPIC} --route class=haiku --route effort=high demo`);
     expect(r.status).toBe(1);
     expect(r.out).toContain('class haiku takes no effort level');
+    // the other branch of the title: opus takes the level (the same call is not refused for it)
+    const ok = shStatus(`${WS_ADD_REAL_SPAWN} CCD_WS_SLUG=calm-reef cmd_ws_add --no-rc --wrapper ${ANTHROPIC} --route class=opus --route effort=high demo`);
+    expect(ok.out).not.toContain('takes no effort level');
+    expect(ok.status).toBe(0);
+    expect(fs.existsSync(path.join(h.home, '.cc-sessions', 'demo-calm-reef.uuid'))).toBe(true);
   });
   it('start <wrapper> <project>: an Anthropic class that takes none refuses a level before the mint, naming the model', () => {
     plantAliases(['low', 'high'], { opus: [] });

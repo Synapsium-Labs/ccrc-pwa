@@ -11,6 +11,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { ccdSource, makeCcdHarness, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { parseAliases, serializeAliases } from '../../shared/model-aliases.mjs';
+import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
 
 let h: CcdHarness;
 beforeEach(() => { h = makeCcdHarness('ccrc-ccd-spawn-effort-'); });
@@ -147,14 +148,14 @@ describe('the settle types no effort command (D-8149)', () => {
 describe('an orphaned saved effort is carried at launch, only under auto (D23, D-8746)', () => {
   const modelsDir = (): string => path.join(h.home, '.ccrc', 'models');
   /** One aliases file for `claude`: opus's current id, its row's levels, and the orphaned level (null for none). */
-  const plantAliases = (o: { id?: string; orphan?: string | null; efforts?: string[] | null; orphanOn?: string } = {}): void => {
+  const plantAliases = (o: { id?: string; orphan?: string | null; efforts?: string[] | null; orphanOn?: string; unlaunchable?: boolean } = {}): void => {
     const id = o.id ?? 'claude-opus-9-1';
     const classes: Record<string, unknown> = {};
     for (const c of ['fable', 'opus', 'sonnet', 'haiku']) {
       const cid = c === 'opus' ? id : `claude-${c}-9-1`;
       const orphaned = c === (o.orphanOn ?? 'opus') && o.orphan ? { id: 'claude-opus-8-1', level: o.orphan } : null;
       classes[c] = { id: cid, source: 'cache', evidenceAt: null, idSince: null, seenAt: null, cacheTarget: cid, seenId: null, unobserved: false,
-        unlaunchable: null, row: { id: cid, label: null, efforts: o.efforts === undefined ? ['low', 'medium', 'high', 'xhigh'] : o.efforts, defaultEffort: null, minVersion: null },
+        unlaunchable: o.unlaunchable && c === 'opus' ? { needs: '9.9.9', laneVersion: null } : null, row: { id: cid, label: null, efforts: o.efforts === undefined ? ['low', 'medium', 'high', 'xhigh'] : o.efforts, defaultEffort: null, minVersion: null },
         rowFrom: 'own', heldRow: null, orphaned };
     }
     fs.mkdirSync(modelsDir(), { recursive: true });
@@ -250,6 +251,35 @@ describe('an orphaned saved effort is carried at launch, only under auto (D23, D
     plantAliases({ orphan: 'high', efforts: [] });   // a model that takes none takes no carried level either
     for (const l of both()) expect(effortFlags(l)).toEqual([]);
     expect(swapLog()).not.toMatch(/route-refuse/);
+  });
+
+  it('a held class carries no orphaned level (the session runs the held id, not the alias\'s current one)', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l), 'control: unheld, the orphan is carried').toEqual(['xhigh']);
+    const adv = seedAnthropicAdvance() as { classes: Record<string, { hold: unknown }> };
+    adv.classes.opus!.hold = { at: '2026-11-02T00:00:00Z', by: 'hand', model: 'claude-opus-8-1' };
+    fs.writeFileSync(path.join(modelsDir(), 'claude.advance.json'), serializeAdvance(adv as unknown as Parameters<typeof serializeAdvance>[0]));
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    adv.classes.opus!.hold = null;   // released: carried again
+    fs.writeFileSync(path.join(modelsDir(), 'claude.advance.json'), serializeAdvance(adv as unknown as Parameters<typeof serializeAdvance>[0]));
+    for (const l of both()) expect(effortFlags(l)).toEqual(['xhigh']);
+  });
+
+  it('an unlaunchable id carries no orphaned level', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort auto');
+    plantAliases({ orphan: 'xhigh', unlaunchable: true });
+    for (const l of both()) expect(effortFlags(l)).toEqual([]);
+    plantAliases({ orphan: 'xhigh' });
+    for (const l of both()) expect(effortFlags(l), 'control: launchable, the same orphan rides').toEqual(['xhigh']);
+  });
+
+  it('explicit effort is unchanged beside a held or unlaunchable class', () => {
+    seed('myid'); h.sh('_reg_set myid class opus; _reg_set myid effort medium');
+    plantAliases({ orphan: 'xhigh', unlaunchable: true });
+    for (const l of both()) expect(effortFlags(l)).toEqual(['medium']);
+    h.sh('rm -f "$REG/myid.effort"');
+    for (const l of both()) expect(effortFlags(l)).toEqual(['high']);
   });
 
   it('a Codex lane and a lane with no class carry nothing', () => {
