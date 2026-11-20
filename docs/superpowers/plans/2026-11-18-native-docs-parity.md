@@ -566,7 +566,7 @@ Each row was applied, its named test run alone and seen red, and the file restor
 
 #### Choices this wave made, and why
 
-- The four range failure words landed with P1.2 beside ccd's parity copy, `EntryView.pin` with P1.5 beside `entryView`'s oracle: adding either in P1.1 would have reddened an existing parity or oracle case.
+- The three range failure words (`snapshot-gone`, `range-too-large`, `prepare-busy`) landed with P1.2 beside ccd's parity copy, `EntryView.pin` with P1.5 beside `entryView`'s oracle: adding either in P1.1 would have reddened an existing parity or oracle case.
 - `readRange` answers bytes, not a `Blob`: `objectUrls.ts` is the one place under `pwa/src/docs` that makes a `Blob` (base spec 5.4). Each frame is checked with `crypto.subtle`; an origin without it (plain HTTP) refuses `no-digest` before any request, rather than a new hashing primitive.
 - A draft range read is named to ccd as `docs-show` names a draft (`--draft-branch`, `--head`); the plan's one-line argv shows only `--commit`.
 - A top-level heading is an ATX `#` or `##`; a reopened fence carries its marker and its info string's first word, each at most 64 bytes.
