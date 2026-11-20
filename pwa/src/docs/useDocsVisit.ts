@@ -331,7 +331,6 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     setHeld(fragment === null || key === null ? null : { fragment, key });
   }, []);
   // Any page change drops a fragment meant for another page: it was either spent, or it will never be.
-  // The same for a Download's save left for the next leaf of a page (`rangeSaves`): a page left unprompted never saves.
   useEffect(() => {
     setHeld((h) => (h !== null && h.key !== pageKey ? null : h));
   }, [pageKey]);
@@ -392,7 +391,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
   };
 
   /** Release the range reads that waited for `tKey`'s re-list and whose word landed before the request numbered `seq`
-   *  started (a listing that FAILED releases them all: `Infinity`, so the leaf reads again and says "changing"). A
+   *  started (a listing that FAILED releases them all: `Infinity`, so the leaf reads again and says "changing").
    *  A save is never carried across: it answers its own tap, in the leaf that took it. */
   const releaseRangeWaiters = (tKey: string, seq: number): void => {
     for (const [pk, w] of st.rangeWaits) {
