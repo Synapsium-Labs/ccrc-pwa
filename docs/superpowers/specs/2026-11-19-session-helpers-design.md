@@ -56,7 +56,7 @@ signal.
 | Agent helper files: `<session dir>/subagents/agent-<aid>.meta.json` and `.jsonl` | Meta: `agentType`, `description`, `model`, `effort` (sometimes), `toolUseId`, `spawnDepth`, and `finished`, the only on-disk end marker, set on 197 of 205 recent metas. Transcript lines carry `timestamp`, the resolved model and `usage`. A failed or stopped helper's state is NOT on disk. | Written by Claude Code as the helper works. | No reader today. `server/src/watch.ts#readAgentMeta` reads a meta for the worktree path only. | Measured (files and code) |
 | The session's own transcript: the Agent and Workflow tool calls, and background-task notifications | Launch input: `description`, `subagent_type`, `model`, `effort` (24 of 37 calls), `run_in_background`. Launch result: `status: async_launched`, `agentId`, `resolvedModel` (36 of 36 sampled results were async). Completion: a `task-notification` with `status` (`completed`, `failed`, `killed`, `stopped`), `summary`, `result`, and for a workflow its agent counts. | When Claude Code writes the record, then the next reading of the feed. | `server/src/transcript/parse.ts` on the session socket. The notification is parsed in `shared/api.ts#parseTaskNotification`, which the chat already uses (`pwa/src/session/chatItems.ts`). | Measured (one recent session sampled, and code) |
 | The broker's activity records, `delegation_activities` in `coord.db` | `sourceKind`, `displayName`, `openedAt`, `lastEventAt`, `executionState` (`active`, `ended`, or `unknown`, which has no writer). Opened by SubagentStart or a launch result. Closed by SubagentStop, a `completed` launch result, or a workflow's terminal notification, which closes the run and its `<run>-<n>` rows. | The broker lane, every 60 s (`DIVERGENCE_SWEEP_MS`). | `server/src/coord/delegation-checkpoint.ts#DelegationCheckpointBuilder` (the fold, the one writer). Projection: `delegation-projection.ts#livenessOf`. | Measured (code) |
-| ccrc history's subagent work (W4) | An approved design to ingest helper transcripts into the history store. It reads the meta's `toolUseId` and never reads the journal. Not shipped. | Store ingest, sweep cadence. | `ccd/history/sweep.mjs` (main transcripts only today). | Measured (spec and code) |
+| ccrc history's subagent work (W4) | The history sweep's walk has a subagent arm: it walks `subagents/` and each run directory, and ingests helper transcripts with their meta companions into the history store. It reads the meta's `toolUseId` and never reads the journal. A store of past text, not a live state. | The sweep's cadence. | `ccd/history/lib.mjs` (`AGENT_LEVELS`, the walk's levels) and the sweep; tests in `server/test/history-agents-ingest.test.ts`. | Measured (code) |
 
 *Table 1. Every source, what it carries and who reads it.*
 
@@ -472,7 +472,7 @@ Judgement.
 ### Later
 
 - A read-only view of a helper's own transcript, through a new bounded, session-gated read and the existing transcript
-  parser. It comes back after H2, at the operator's word (the third ask, on opening a helper's output).
+  parser. Its design weighs the history store, which already holds helper transcripts, as the source. It comes back after H2, at the operator's word (the third ask, on opening a helper's output).
 - A recurring quiet close in the broker, if S1's measured ends still leave records open a week after S1 lands. Measure the
   open count then.
 - Background shell commands and monitors in the Helpers section. They are background tasks too, but the operator asked about
