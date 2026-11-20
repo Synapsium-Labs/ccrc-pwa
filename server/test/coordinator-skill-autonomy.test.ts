@@ -151,7 +151,9 @@ describe('"When something is wrong" carries §7\'s dispositions (D-8126 A5-4)', 
     expect(paused).toContain('`$REG/coordinator-paused`');
     expect(paused).toContain('non-dispatch work continues');
     expect(paused).toContain('registry');
-    expect(paused).toContain('backoff');
+    // Clause 4 still reads "a report, not a retry" until its rewrite lands after run 1850's freeze (D-8807).
+    expect(paused).toContain('A report, never a retry (clause 4)');
+    expect(paused).not.toContain('backoff');
     expect(paused).toContain('never touch the file');
   });
 
@@ -206,6 +208,13 @@ describe('the references carry the new dispositions (D-8126 A5-5)', () => {
         expect(row, `${n}: a refusal row still says stop and report`).not.toMatch(/stop and report|stop, report|the operator resolves it/i);
       }
     }
+  });
+
+  it('keeps the paused row and a child\'s question inside clauses 4 and 11 as they stand (D-8807)', () => {
+    const row = read('references/wave-lifecycle-2-dispatch.md').split('\n').find((l) => l.startsWith('| `paused` |'))!;
+    expect(row).toContain('never a retry (clause 4)');
+    expect(row).not.toContain('dispatch again');
+    expect(flat(read('references/decision-procedure.md'))).toContain('A child\'s question is ruled under clause 11');
   });
 
   it('settles intent-held between the two coordinators, and a claim holder\'s no:<reason> by its expiry (rows 35, 50)', () => {

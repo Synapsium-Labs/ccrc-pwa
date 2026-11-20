@@ -61,7 +61,8 @@ mirror to public GitHub issues. Write the last two under the public-repository r
 
 ## The steps
 
-Follow them for every question you would otherwise ask, including a child's question (clause 11).
+Follow them for every question you would otherwise ask. A child's question is ruled under clause 11, which still
+releases a NEW decision to the operator with `"$API" asks release`.
 
 ### Step 1. Is it operator-only?
 

@@ -150,11 +150,11 @@ Every stop is a class or a recovery, never a report that waits:
 `references/decision-procedure.md` holds the classes (O1 to O6, P1 to P4), and
 the step files give each refusal its recovery.
 
-- **A dispatch is refused `paused`.** Read whether `$REG/coordinator-paused`
-  exists, and never touch the file. Present: the operator's pause, so no
-  dispatch, in-place bind or self-work on new waves, while non-dispatch work
-  continues. Absent: the registry could not be listed, a fault retried with
-  backoff (P3).
+- **A dispatch is refused `paused`.** A report, never a retry (clause 4). Read
+  whether `$REG/coordinator-paused` exists, and never touch the file. Present:
+  the operator's pause, so no dispatch, in-place bind or self-work on new
+  waves, while non-dispatch work continues. Absent: the registry could not be
+  listed, a fault (P3), and the report says so.
 - **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
   woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into

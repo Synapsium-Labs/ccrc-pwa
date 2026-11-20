@@ -9,7 +9,7 @@ stack branch `handoff/d8126-autonomy-stack`, commits `518b7c71c` to `1edff44d1` 
 | Piece | Ported or rebuilt | Why |
 |---|---|---|
 | Clause 21 | ported verbatim | The stack's line equals §9.1's quote byte for byte (1,331 bytes). |
-| Clauses 4, 11, 19 and 20 | rebuilt, shorter | The stack's rewrites added 739 bytes to the contract; the restore budget leaves 265 for them. The new words add 174. |
+| Clauses 4, 11, 19 and 20 | rebuilt, then deferred | The stack's rewrites added 739 bytes to the contract; the restore budget leaves 265 for them, and the rebuilt words add 173. They are not in this PR: D-8807. |
 | `references/decision-procedure.md` | ported, then re-grounded | API section now `references/api.md`; `coord-lift-off` is retired (D-8165); the review-rounds door's `not-found` is "not a work run" on main; sibling worktrees dropped from P2 (slug `p2-sibling-worktrees-a8`); an anti-goals list added. |
 | "When something is wrong" | rebuilt | Main's SKILL.md is the slim one; the stack's 64 KB file does not apply. |
 | Step 5's review cap | not ported | Main already decides the cap before the open (D-8125 as merged); only the refusals and "or wait" changed. |
@@ -47,7 +47,17 @@ stack branch `handoff/d8126-autonomy-stack`, commits `518b7c71c` to `1edff44d1` 
   case (row 30) said "stop and report"; they now give the recovery. `not-configured` cannot be recorded as a block,
   because the call record needs the same coordination database, so the turn's text says it.
 - `held-paths`: `server/test/coordinator-skill.test.ts` and `README.md` are held by the same run and pin the contract.
-  The contract edit (clause 21 and the four rewrites) lands only with the holder's consent or the coordinator's ruling.
+  Under the operator's answer to item 486 (2026-11-19) that run's coordinator takes additive packets only: nothing
+  existing removed or rewritten, a forced count word allowed. This wave's packet (v4, a unified diff on main
+  `963286cc9`) appends clause 21 to the pinned CONTRACT, adds the count word `twenty-one` (README too), raises the
+  length pin to 21 and makes the two count harvests hyphen-aware, which the count word forces.
+- D-8807 (the coordinator's ruling (a), 2026-11-20; defined in the plan): the rewrites of clauses 4, 11, 19 and 20 rewrite existing pinned CONTRACT entries, so
+  they wait for a second packet once that freeze ends, with the plan's A5-2 row pins. Until then two passages stay
+  inside the clauses as they stand. The paused entry (SKILL.md and the dispatch row) keeps its split by cause, but
+  both causes are a report, never a retry (clause 4), where the rebuilt clause 4 would make the fault a backoff
+  retry. And `decision-procedure.md` rules a child's question under clause 11, which still releases a NEW decision
+  to the operator. The coordinator accepted both. Clause 21 reads consistently beside the old clauses 19 and 20: both already keep the dialog out
+  while a child is active and raise operator questions as items.
 
 ## Sentences that depend on waves building beside this one
 
@@ -67,18 +77,20 @@ Clause 21's operator-only list is D-8126's O1 to O6, which `decision-procedure.m
 spec's R1 inherits that list unchanged as its critical list, and R23's later autonomy clause (§11.4, its clause 25)
 sits on top of clause 21 without changing any class's meaning. Nothing in this wave changes a class: the two agree.
 
-## Budget, measured on main `a9a529388`
+## Budget, measured on main `963286cc9`
 
-- Contract end: 13,668 bytes now; 15,178 with this wave; budget 16,750; 1,572 left; the recall, Linear and Overlord
-  clauses need 1,481 by the ratchet header's arithmetic, so 91 spare.
-- SKILL.md file: 23,230 bytes on main; with this wave about 24,480 (clause 21's line allows 1,332 of growth).
+- Contract end: 13,668 bytes now; 15,004 with clause 21 alone (15,177 once the deferred rewrites land); budget 16,750;
+  1,746 left now. The recall, Linear and Overlord clauses need 1,481 by the ratchet header's arithmetic.
+- SKILL.md file: 23,230 bytes on main; 24,345 with this wave, which is the new cap (clause 21's line allows 1,332 of
+  growth).
 
 ## Red first, measured
 
 Each guard was mutated in place in a scratch tree (the contract and the held-file hunks applied), restored from a saved
 copy and checked by sha, one vitest run of `coordinator-skill.test.ts` and `coordinator-skill-autonomy.test.ts` per
-mutant. All fifteen went red: the installer without `decision-procedure.md`; "stalls honestly" put back; `review-cap`,
+mutant. All sixteen went red: the installer without `decision-procedure.md`; "stalls honestly" put back; `review-cap`,
 the goals route or a SAFETY verb named in the procedure; "stop and report" back in a dispatch row; the `skill-install:` run event
-dropped; "ignore" given to the coordinator; the paused entry without its cause; the cap-concurrency entry rewritten
-early; the split rule stated twice; the ledger template without its goals section; clause 21 softened; clause 4
-relaxing the pause for dispatch; the debugging ceiling dropped.
+dropped; "ignore" given to the coordinator; the paused entry without its cause; the paused entry or the paused row
+turned back into a retry; a child's question taken outside clause 11; the cap-concurrency entry rewritten early; the
+split rule stated twice; the ledger template without its goals section; clause 21 softened; the debugging ceiling
+dropped. The last run was with packet v4 applied (clause 21 alone).
