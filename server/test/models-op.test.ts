@@ -6565,8 +6565,34 @@ describe('programme wave 3 through the ops', () => {
     expect([m.code, m.body['error']], m.stderr).toEqual([1, 'effort-fallback-unrestored']);
     expect(effortOnDisk()).toBe('xhigh');
     expect(opusDropped()).toBe('model-5.6-gamma no longer offers effort max, so the lane\'s registry is refused until the '
-      + 'hourly refresh writes the fallback, xhigh, which the lane\'s effort file already carries: a refresh wrote it and '
-      + 'could not put that file back');
+      + 'hourly refresh writes the fallback, xhigh; the lane\'s effort file already carries the fallback\'s levels, not the '
+      + 'stored registry\'s');
+  });
+
+  // Review 3015 F1: opus and fable on one model, fable's level still offered. The effort file is keyed by model and fable
+  // comes after opus, so the stored and the fallback renderings are the same bytes: the file tells nothing about which
+  // was written, and the detail is the ordinary one.
+  const SHARED_REG = { ...STEP_REGISTRY, classes: { ...STEP_REGISTRY.classes, fable: 'model-5.6-gamma' },
+    effort: { ...STEP_REGISTRY.effort, fable: 'high' } };
+  const ORDINARY = 'model-5.6-gamma no longer offers effort max, so the lane\'s registry is refused until the hourly '
+    + 'refresh writes the fallback, xhigh';
+
+  it('two classes on one model: after a restore that succeeded, the detail is the ordinary refused registry', () => {
+    plantStep({ registry: SHARED_REG });
+    writeCatalogue('lane-a', DROPPED_CAT);
+    const m = failing({ [LANE()]: [1] }, 'materialise', '--refresh', 'true');
+    expect([m.code, m.body['error']], m.stderr).toEqual([1, 'materialise-failed']);
+    expect(effortOnDisk(), 'fable\'s level, in both renderings').toBe('high');
+    expect(opusDropped()).toBe(ORDINARY);
+  });
+
+  it('two classes on one model: a registry refused before any refresh, over the file it had, is the ordinary detail', () => {
+    plantStep({ registry: SHARED_REG });
+    const m = at(T0, 'materialise');
+    expect(m.code, m.stdout + m.stderr).toBe(0);
+    writeCatalogue('lane-a', DROPPED_CAT);
+    expect(effortOnDisk()).toBe('high');
+    expect(opusDropped()).toBe(ORDINARY);
   });
 
   it('a write-back that fails leaves the fallback applied: answered, and recorded like any other', () => {

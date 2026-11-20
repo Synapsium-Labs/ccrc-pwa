@@ -2184,8 +2184,10 @@ function laneHealth(acc, ctx) {
   if (rd.err !== undefined) block(null, rd.err[0], rd.err[1]);
   if (reg.err !== undefined || reg.invalid !== undefined) {
     const word = reg.err !== undefined ? reg.err[0] : reg.dropped !== undefined ? 'effort-dropped' : 'registry-invalid';
-    const onDisk = reg.dropped !== undefined   // the lane's effort file already carries the fallback (D-8865)
-      && materialiseCheck(acc, reg.dropped.registry, cat.catalogue).changed?.effort === false;
+    // D-8865, review 3015 F1: the effort file holds the fallback's rendering and NOT the stored one; two classes on one
+    // model can render both alike, and then the file says nothing about which was written.
+    const onDisk = reg.dropped !== undefined && materialiseCheck(acc, reg.dropped.registry, cat.catalogue).changed?.effort === false
+      && materialiseCheck(acc, storedOf(reg.dropped), cat.catalogue).changed?.effort === true;
     if (reg.dropped !== undefined) for (const f of reg.dropped.fallbacks) block(f.class, word, effortDroppedDetail(f, onDisk));
     else block(null, word, reg.err !== undefined ? reg.err[1] : reg.invalid.message);
     // No session is judged here, so each is named unmeasured, by the registry's word (D-5220; review of R2).

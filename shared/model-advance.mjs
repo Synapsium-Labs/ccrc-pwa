@@ -701,11 +701,11 @@ export function classWaits({ registry, catalogue, cls, c, nowMs }) {
 }
 
 /** `advance-health`'s detail for a registry still refused for a dropped level (`effort-dropped`, D-8842), one per
- *  `effortFallbacks` row. `onDisk` when the lane's effort file already carries the fallback: a refresh wrote it, then
- *  could not render the files from the stored registry it put back (D-8865). */
+ *  `effortFallbacks` row. `onDisk` when the caller measured the lane's effort file holding the fallback's rendering and
+ *  not the stored registry's (D-8865, review 3015 F1): the detail says what the file carries, never how it came to. */
 export const effortDroppedDetail = (f, onDisk = false) => `${f.model} no longer offers effort ${f.from}, so the lane's `
-  + `registry is refused until the hourly refresh writes the fallback, ${f.to}${onDisk ? `, which the lane's effort file `
-  + 'already carries: a refresh wrote it and could not put that file back' : ''}`;
+  + `registry is refused until the hourly refresh writes the fallback, ${f.to}${onDisk ? '; the lane\'s effort file '
+  + 'already carries the fallback\'s levels, not the stored registry\'s' : ''}`;
 
 /** Why the automatic advance does not act on a lane that has a class registry, or null when it does (auto-advance
  *  spec §2.2; D-5198). The first that applies:

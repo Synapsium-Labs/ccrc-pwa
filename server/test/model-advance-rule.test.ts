@@ -498,7 +498,9 @@ describe('the retired grace (programme wave 3, backward-move, D-8838)', () => {
     }
   });
 
-  // Review 2999 N3: one case per term of the run's identity, each red when that term alone is removed (measured).
+  // Review 2999 N3: one case per guard of the run's identity. The three model checks each red when that term alone is
+  // removed (measured). The first-shape case pins the BEHAVIOUR, a record with no `seen` restarts within 90 minutes:
+  // `isAt(m.seen)`, the order and the gap term each enforce it, so removing one of them alone keeps it green (review 3015 F2).
   const other = (since: number, seen: number) => ({ ...run(since, seen), model: 'model-7-sol' });
 
   it('retireDue: a record of another model, six hours long and ending at this catalogue\'s sighting, never retires the pin', () => {
