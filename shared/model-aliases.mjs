@@ -6,11 +6,11 @@
 // hand-written `.d.mts`, `shared/model-advance.mjs`'s arrangement.
 //
 // PURE. It imports `./models.mjs` and `./model-advance.mjs` (for `isoSeconds`, the one writer of the whole-second time
-// form) and nothing else, not even `node:*`; it reads no file and no clock (`nowMs` is an input). It SPELLS NO CLASS
-// WORD and no model id, in code or prose: the classes come from `CLASSES`, the family of an id from `familyClassOf`,
-// and every id from data.
+// form, and `isAt`, its one test) and nothing else, not even `node:*`; it reads no file and no clock (`nowMs` is an
+// input). It SPELLS NO CLASS WORD and no model id, in code or prose: the classes come from `CLASSES`, the family of an
+// id from `familyClassOf`, and every id from data.
 import { CLASSES, MODEL_ID_RE, familyClassOf } from './models.mjs';
-import { BEHIND_AFTER_MS, compareVersions, isoSeconds } from './model-advance.mjs';
+import { BEHIND_AFTER_MS, compareVersions, isAt, isoSeconds } from './model-advance.mjs';
 
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
 const isStr = (v) => typeof v === 'string' && v.length > 0;
@@ -32,7 +32,9 @@ export function bareModelId(raw) {
 // can never say what an alias resolves to. `fetchedAt` is epoch milliseconds in the current format; it is read into the
 // whole-second ISO form the aliases file uses (`isoSeconds`), and an ISO string is accepted too.
 
-const VERSION_RE = /^\d+(?:\.\d+)*$/;
+/** A Claude Code build's version, a dotted number: the one test of that form, for a row's minimum here and for the lane's
+ *  build where the writer reads it (`deploy/models-anthropic.mjs`). */
+export const VERSION_RE = /^\d+(?:\.\d+)*$/;
 
 /** `(v) => 'YYYY-MM-DDTHH:MM:SSZ' | null`: an epoch in ms (a number), or an ISO time string, in the whole-second form. */
 function fetchedIso(v) {
@@ -132,8 +134,14 @@ export const ALIASES_VERSION = 1;
  *  the cache's `staleAt`, which lapses within the hour while Claude Code keeps launching over it. */
 export const CACHE_STALE_AFTER_MS = 604_800_000;
 
-const AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
-const isAt = (v) => typeof v === 'string' && AT_RE.test(v);
+/** `(evidenceAt, hold) => boolean`: whether a held class's id is UNOBSERVED against the hold standing now: a hold stands,
+ *  and the id rests on no evidence or on evidence older than the hold. Such an id says nothing about where the alias
+ *  went after the hold, so no reader names the class behind on it. The one rule: the resolver sets `unobserved` with
+ *  it, and the health reading (`deploy/models-anthropic.mjs`) asks it again of the hold that stands at its read, since a
+ *  `revert` writes a new hold without rewriting the aliases file. */
+export function heldUnobserved(evidenceAt, hold) {
+  return hold !== undefined && hold !== null && (evidenceAt === null || evidenceAt < hold.at);
+}
 
 /** `(version) => number[] | null`: a dotted version as integers; null for anything else (an unreadable build). */
 function versionParts(v) {
@@ -254,11 +262,10 @@ export function resolveAliases({ own, box, launches, prior, holds, laneVersion, 
       ? { needs: found.row.minVersion, laneVersion: lane } : null;
     const hold = holds[c];
     const heldRow = hold === undefined || hold === null ? null : findRow(hold.model, own, box).row;
-    const held = hold !== undefined && hold !== null;
     classes[c] = {
       id, source, evidenceAt, idSince,
       cacheTarget: target, seenId, seenAt,
-      unobserved: id === null || unlaunchable !== null || (held && (evidenceAt === null || evidenceAt < hold.at)),
+      unobserved: id === null || unlaunchable !== null || heldUnobserved(evidenceAt, hold),
       unlaunchable,
       row: found.row, rowFrom: found.from,
       heldRow,

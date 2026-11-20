@@ -21,6 +21,7 @@ import { ccdSource, ghContainedEnv } from './ccdWsHelpers.js';
 import { codexAuthDir } from './codexLaneFixture.js';
 import { STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster } from './fixtures/advanceCases.js';
 import { seedAnthropicAdvance, serializeAdvance } from '../../shared/model-advance.mjs';
+import { holdsAppliedOp } from './modelsOpCopy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -578,9 +579,11 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
   const aliasesPath = (h: string): string => join(h, '.ccrc', 'models', `${AL}.aliases.json`);
   const advancePath = (h: string): string => join(h, '.ccrc', 'models', `${AL}.advance.json`);
 
-  /** The model op itself, with `now` as its clock; every call is asked to end 0. */
+  /** The model op itself, with `now` as its clock; every call is asked to end 0. `hold` and `revert` run through a copy
+   *  with the hold gate open (D-8820: the shipped op refuses both on an Anthropic lane until Task A3.4). */
   function aop(h: string, now: string, verb: string, cls = 'opus'): Json {
-    const argv = [OP, verb, '--file', join(h, '.ccrc', 'accounts.json'), '--id', AL,
+    const script = verb === 'hold' || verb === 'revert' ? holdsAppliedOp(h) : OP;
+    const argv = [script, verb, '--file', join(h, '.ccrc', 'accounts.json'), '--id', AL,
       ...(verb === 'aliases-refresh' ? ['--reg', reg(h)] : ['--class', cls])];
     const r = spawnSyncGroup(process.execPath, argv, { env: { ...process.env, HOME: h, CCRC_MODELS_NOW: now }, encoding: 'utf8', timeout: 20_000 });
     expect(r.status, `${verb}: ${r.stdout}${r.stderr}`).toBe(0);
@@ -829,11 +832,33 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     expect(r.code).toBe(2);
   });
 
-  it('a null id is never held behind', () => {
+  it('a null id is never held behind, even in a hand-edited file that calls it observed', () => {
     const h = box();
     heldStale(h);
-    editAliases(h, (a) => { Object.assign(a.classes['opus']!, { id: null }); });
+    // By hand: the resolver never writes this pair (a null id is always unobserved), and `parseAliases` accepts it. Its
+    // evidence stays newer than the hold, so only the null half of the exemption keeps the class out.
+    editAliases(h, (a) => { Object.assign(a.classes['opus']!, { id: null, unobserved: false }); });
+    const opus = (JSON.parse(fs.readFileSync(aliasesPath(h), 'utf8')) as { classes: Record<string, Json> }).classes['opus']!;
+    expect(opus).toMatchObject({ id: null, unobserved: false, evidenceAt: C2 });
     expect(laneOf(h)['heldBehind']).toEqual([]);
+  });
+
+  it('a revert right after a recorded move names nothing until a refresh reads newer evidence', () => {
+    const h = box();
+    moved(h);
+    // The revert holds opus at X1 and rewrites no aliases file, so the file still says X2, observed, from before the hold.
+    aop(h, R1, 'revert');
+    const opus = (JSON.parse(fs.readFileSync(aliasesPath(h), 'utf8')) as { classes: Record<string, Json> }).classes['opus']!;
+    expect(opus).toMatchObject({ id: X2, unobserved: false, evidenceAt: C2 });
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+    expect(check(h, 'model-held-behind').out).toContain('PASS model-held-behind');
+    // A refresh over the same cache: still evidence older than the hold, still nothing.
+    aop(h, '2026-10-20T01:00:00Z', 'aliases-refresh');
+    expect(laneOf(h)['heldBehind']).toEqual([]);
+    // Claude Code fetches its catalogue after the hold, still naming X2: now the class is held behind, as it should be.
+    plantCache(h, '2026-10-20T02:00:00Z', { opus: X2, sonnet: S2 });
+    aop(h, '2026-10-20T03:00:00Z', 'aliases-refresh');
+    expect(laneOf(h)['heldBehind']).toEqual([{ class: 'opus', hold: { at: R1, by: 'revert' }, reason: 'newer', pin: X1, newer: X2 }]);
   });
 
   it('an unobserved class is never held behind', () => {
@@ -1047,6 +1072,19 @@ describe('an Anthropic lane (model-class Anthropic arm A2.5)', () => {
     fs.rmSync(aliasesPath(h));
     spoil(h);
     expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: word }, { session: 'lane-c-two', why: word }]);
+    expect(behindOf(h)).toEqual([]);
+  });
+
+  it.each([
+    ['advance-file-unreadable', (h: string): void => { fs.rmSync(advancePath(h)); fs.mkdirSync(advancePath(h)); }],
+    ['advance-file-invalid', (h: string): void => { fs.writeFileSync(advancePath(h), '{"v": 9}\n'); }],
+  ])('when the advance file cannot be used every session of the lane is named, as %s', (word, spoil) => {
+    const h = box();
+    moved(h);
+    plantAnthropicSession(h);
+    spoil(h);
+    expect(unmeasuredOf(h)).toEqual([{ session: ASID, why: word }]);
+    expect(causes(laneOf(h))).toEqual([word]);
     expect(behindOf(h)).toEqual([]);
   });
 

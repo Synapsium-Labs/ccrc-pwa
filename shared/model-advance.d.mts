@@ -43,6 +43,9 @@ export type How = (typeof HOWS)[number];
 export type CanaryResult = (typeof CANARY_RESULTS)[number];
 export type HoldBy = (typeof HOLD_BY)[number];
 
+/** A stored time's one form, `YYYY-MM-DDTHH:MM:SSZ`, and its test (`shared/model-aliases.mjs` imports both). */
+export declare const AT_RE: RegExp;
+export declare function isAt(v: unknown): v is string;
 export declare class AdvanceInvalid extends Error {
   readonly field: string;
   constructor(field: string, message: string);

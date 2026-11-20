@@ -16,7 +16,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync, spawn } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
-import { fileURLToPath, pathToFileURL } from 'node:url';
+import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
 import { CODEX, CODEX_STALE, SEEDED, SEEDED_REGISTRY_BYTES } from './fixtures/modelCases.js';
 import { codexAuthDir } from './codexLaneFixture.js';
@@ -45,16 +45,12 @@ import type { FleetIO } from '../src/io.js';
 import {
   STEP_CATALOGUE, STEP_REGISTRY, stepAdvance, stepRoster, stepRow,
 } from './fixtures/advanceCases.js';
+import { HOLDS_GATE_LINE, holdsAppliedOp, pointImports } from './modelsOpCopy.js';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
 const OP = path.join(REPO, 'deploy', 'models-op.mjs');
 const ARM = path.join(REPO, 'deploy', 'models-anthropic.mjs');
-/** A COPY of the op's source, its imports pointed at this checkout's files: `../shared/` (the shared rules) and, when the
- *  Anthropic arm stands in its own module, `./models-anthropic.mjs` (beside the op, so a copy elsewhere cannot find it). */
-const pointImports = (src: string, arm: string = path.join(REPO, 'deploy', 'models-anthropic.mjs')): string => src
-  .replaceAll("from '../shared/", `from '${pathToFileURL(path.join(REPO, 'shared')).href}/`)
-  .replaceAll("from './models-anthropic.mjs'", `from '${pathToFileURL(arm).href}'`);
 
 let home: string;
 const rosterPath = (): string => path.join(home, '.ccrc', 'accounts.json');
@@ -89,7 +85,12 @@ function op(...args: string[]): Result {
 
 /** `op`, with `extra` laid over its environment (`CCRC_MODELS_NOW`, the advance file's clock). */
 function opEnv(extra: NodeJS.ProcessEnv, ...args: string[]): Result {
-  const r = spawnSync(process.execPath, [OP, ...args],
+  return opThrough(OP, extra, ...args);
+}
+
+/** `opEnv`, through another copy of the op (`script`): the Anthropic hold path runs through `holdsAppliedOp`'s. */
+function opThrough(script: string, extra: NodeJS.ProcessEnv, ...args: string[]): Result {
+  const r = spawnSync(process.execPath, [script, ...args],
     { env: { ...process.env, HOME: home, ...extra }, encoding: 'utf8' });
   const stdout = r.stdout ?? '';
   // THE CONTRACT: exactly one JSON object on stdout, newline-terminated. A
@@ -5716,10 +5717,12 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     fs.writeFileSync(advFile(), bytes);
     return bytes;
   };
-  const hold = (cls = 'opus', id: string = LANE): Result =>
-    opEnv({ CCRC_MODELS_NOW: NOW }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
+  // The hold path runs through a copy with the hold gate open (D-8820: the shipped op refuses `hold` and `revert` on an
+  // Anthropic lane until Task A3.4); the gate's own cases below run the shipped op.
+  const hold = (cls = 'opus', id: string = LANE, at: string = NOW): Result =>
+    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: at }, 'hold', '--file', rosterPath(), '--id', id, '--class', cls);
   const verbOf = (v: string, cls = 'opus', extra: NodeJS.ProcessEnv = {}): Result =>
-    opEnv({ CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
+    opThrough(holdsAppliedOp(home), { CCRC_MODELS_NOW: NOW, ...extra }, v, '--file', rosterPath(), '--id', LANE, '--class', cls);
   /** The op through a COPY with one line replaced: the one way to make one of its writes fail for real. A line of the
    *  Anthropic arm (`inArm`) is replaced in a copy of that module, which the op's copy imports in place of the shipped one. */
   const copyOf = (line: string, instead: string, inArm = false): string => {
@@ -6038,7 +6041,7 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     expect(parseAdvance(a)).toEqual(a);
     // A second hold changes nothing.
     const held = fs.readFileSync(advFile(), 'utf8');
-    expect(opEnv({ CCRC_MODELS_NOW: T3 }, 'hold', '--file', rosterPath(), '--id', LANE, '--class', 'opus').body).toMatchObject({ changed: false });
+    expect(hold('opus', LANE, T3).body).toMatchObject({ changed: false });
     expect(fs.readFileSync(advFile(), 'utf8')).toBe(held);
   });
 
@@ -6102,6 +6105,40 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     writeText(path.join(home, SUFFIX, 'settings.json'), JSON.stringify({ env: { ANTHROPIC_DEFAULT_OPUS_MODEL: 'something' } }));
     expect(verbOf('revert').body['error']).toBe('settings-overrides-hold');
     expect(fs.readFileSync(advFile(), 'utf8')).toBe(before);
+  });
+
+  // THE GATE (D-8820): until ccd applies a held id at launch (Task A3.4), the shipped op refuses `hold` and `revert` on an
+  // Anthropic lane at its door, in a state where each would otherwise succeed, and writes nothing; `release` stays open.
+  it('the shipped op refuses hold and revert on an Anthropic lane, alias-hold-not-applied, writing nothing; release stays open', () => {
+    expect(fs.readFileSync(ARM, 'utf8').split(HOLDS_GATE_LINE), 'the arm carries the gate, closed').toHaveLength(2);
+    baseline([{ id: X1 }, { id: X2 }]);
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C2, { opus: X2 }, [{ id: X1 }, { id: X2 }]));
+    expect(refresh(T1).code).toBe(0);
+    const before = fs.readFileSync(advFile(), 'utf8');
+    for (const v of ['hold', 'revert']) {
+      const r = opEnv({ CCRC_MODELS_NOW: NOW }, v, '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+      expect([r.code, r.body['error']], `${v}: ${r.stdout}${r.stderr}`).toEqual([1, 'alias-hold-not-applied']);
+      expect(String(r.body['detail'])).toContain('Nothing was written.');
+      expect(fs.readFileSync(advFile(), 'utf8'), v).toBe(before);
+    }
+    // The same two, through the copy with the gate open, would have held: the refusal above is the gate's alone.
+    expect(verbOf('revert').code).toBe(0);
+    // A hold made before (by hand, or by A3.4's build before a rollback) is still released by the shipped op.
+    const r = opEnv({ CCRC_MODELS_NOW: T3 }, 'release', '--file', rosterPath(), '--id', LANE, '--class', 'opus');
+    expect([r.code, r.body['changed']], r.stdout + r.stderr).toEqual([0, true]);
+    expect(adv().classes.opus.hold).toBeNull();
+  });
+
+  it('a settings.json that is not JSON refuses the hold without quoting any of its text', () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X2 }, [{ id: X2 }]));
+    expect(refresh(T0).code).toBe(0);
+    // An unquoted value: the parser's own message would quote the text around it.
+    writeText(path.join(home, SUFFIX, 'settings.json'), '{"env":{"SOME_KEY": unquotedvalue12345}}\n');
+    const r = hold();
+    expect([r.code, r.body['error']], r.stdout + r.stderr).toEqual([1, 'settings-overrides-hold']);
+    expect(String(r.body['detail'])).toContain('settings.json is not valid JSON, so it cannot be shown not to name');
+    expect(r.stdout + r.stderr).not.toMatch(/unquoted|12345|SOME_KEY/);
+    expect(fs.existsSync(advFile())).toBe(false);
   });
 
   it('release keeps releasedAt and spends no history: ten entries before, ten after, lastMoveOf unchanged', () => {
@@ -6241,9 +6278,10 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
   it('nothing reads a secret path: the op and the resolver name no credential file', () => {
     // The three names are built from halves so this file does not spell them either.
     const names = [`.cred${'entials'}`, `.cc-sec${'rets'}`, `oauth${'Account'}`];
-    // The Anthropic arm lives in its own module: read it too, where it stands.
-    const arm = path.join(REPO, 'deploy', 'models-anthropic.mjs');
-    for (const f of [OP, ...(fs.existsSync(arm) ? [arm] : []), path.join(REPO, 'shared', 'model-aliases.mjs')]) {
+    // The Anthropic arm lives in its own module, the one the op imports: read it too, and red if it is not there.
+    expect(fs.readFileSync(OP, 'utf8'), 'the op imports its Anthropic arm from ARM').toContain("from './models-anthropic.mjs'");
+    expect(fs.existsSync(ARM), 'the Anthropic arm module').toBe(true);
+    for (const f of [OP, ARM, path.join(REPO, 'shared', 'model-aliases.mjs')]) {
       const src = fs.readFileSync(f, 'utf8');
       for (const word of names) expect(src.includes(word), `${path.basename(f)} names ${word}`).toBe(false);
     }

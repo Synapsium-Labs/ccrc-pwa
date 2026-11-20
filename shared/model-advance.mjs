@@ -197,11 +197,13 @@ export class AdvanceInvalid extends Error {
   }
 }
 
-const AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
+/** A stored time's one form, `YYYY-MM-DDTHH:MM:SSZ` (whole seconds, UTC; `isoSeconds` writes it), and its test. The one
+ *  owner of that form: `shared/model-aliases.mjs` imports both. */
+export const AT_RE = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/;
 /** A reason the file may hold: printable ASCII, at most `REASON_MAX` characters (Task 2's one number). */
 const REASON_RE = new RegExp(`^[\\x20-\\x7e]{0,${REASON_MAX}}$`);
 const isObj = (v) => typeof v === 'object' && v !== null && !Array.isArray(v);
-const isAt = (v) => typeof v === 'string' && AT_RE.test(v);
+export const isAt = (v) => typeof v === 'string' && AT_RE.test(v);
 const isIdOrNull = (v) => v === null || (typeof v === 'string' && MODEL_ID_RE.test(v));
 const isLevelOrNull = (v) => v === null || (typeof v === 'string' && v.length > 0);
 const copy = (v) => JSON.parse(JSON.stringify(v));

@@ -10,8 +10,8 @@ import { CLASSES, MODEL_ID_RE, aliasesFileName } from '../shared/models.mjs';
 import { MODEL_ENV_KEYS, readRegular } from '../shared/modelenv.mjs';
 import { SIDECAR_TS_MAX_S, isoSeconds, recordMove, seedAnthropicAdvance } from '../shared/model-advance.mjs';
 import {
-  AliasesInvalid, aliasSessionBehind, aliasesSourceCause, bareModelId, parseAliases, parseCatalogueCache, resolveAliases,
-  rowLaunchable,
+  AliasesInvalid, VERSION_RE, aliasSessionBehind, aliasesSourceCause, bareModelId, heldUnobserved, parseAliases,
+  parseCatalogueCache, resolveAliases, rowLaunchable,
 } from '../shared/model-aliases.mjs';
 
 // ── An Anthropic lane's own path (model-class Anthropic arm A2, Task A2.3; D-8744, D-8747) ───────────────────────────
@@ -25,6 +25,13 @@ import {
 /** The ops an Anthropic lane's own path admits. */
 export const ANTHROPIC_OPS = Object.freeze(['hold', 'release', 'revert', 'aliases-refresh']);
 
+/** THE GATE on holds (D-8820). Until ccd puts a held id on an Anthropic lane's launch (Task A3.4), a `hold` or `revert`
+ *  there would answer ok while every new session still launched on the alias's current id. So both refuse at the op's
+ *  door, `alias-hold-not-applied`, writing nothing; `release` stays open (it can clear a hand-made hold). The hold path
+ *  below is kept whole and tested through a copy of this file with the gate set true. Task A3.4 sets it true, or
+ *  removes it, in the release that makes ccd apply holds: ccd and this op always ship in one build. */
+export const ANTHROPIC_HOLDS_APPLIED = false;
+
 /** The largest cache file read: a catalogue cache is far smaller; a larger file is an `invalid` reading, never read whole. */
 const CACHE_FILE_MAX_BYTES = 1_048_576;
 /** At most this many cache files of one home are read (names sorted): a directory of thousands is not a cache. */
@@ -32,7 +39,6 @@ const CACHE_FILES_MAX = 256;
 /** The largest build file and settings file read (ids and levels only are taken from the settings). */
 const BUILD_FILE_MAX_BYTES = 65_536;
 const SETTINGS_FILE_MAX_BYTES = 1_048_576;
-const BUILD_VERSION_RE = /^\d+(?:\.\d+)*$/;
 const LAUNCH_LINE_RE = /^(\d{1,12}) (\S+) (\S+) (\S+)$/;
 const LAUNCH_SUFFIX = '.aliaslaunch';
 /** The key a class's alias is overridden by in a settings file's variables block: the one `MODEL_ENV_KEYS` entry naming
@@ -174,14 +180,15 @@ export function anthropicArm(io) {
     const cause = aliasesSourceCause(aliases);
     if (cause !== null) block(cause, aliasCauseDetail(aliases, cause));
     if (rd.err !== undefined) {
-      lane.sessionsUnmeasured = sessions.map((session) => ({ session, why: 'advance-file-unreadable' }));
+      lane.sessionsUnmeasured = sessions.map((session) => ({ session, why: rd.err[0] }));
       return lane;
     }
     const adv = rd.advance ?? seedAnthropicAdvance();
     for (const cls of CLASSES) {
       const hold = adv.classes[cls].hold;
       const row = aliases.classes[cls];
-      if (hold === null || typeof hold.model !== 'string' || row.unobserved || row.id === null || row.id === hold.model) continue;
+      if (hold === null || typeof hold.model !== 'string' || row.unobserved || heldUnobserved(row.evidenceAt, hold)
+        || row.id === null || row.id === hold.model) continue;
       lane.heldBehind.push({ class: cls, hold: { at: hold.at, by: hold.by }, reason: 'newer', pin: hold.model, newer: row.id });
     }
     const s = anthropicSessionsBehindOf(id, ctx, adv, aliases);
@@ -286,7 +293,7 @@ export function anthropicArm(io) {
   function readLaneBuild(home) {
     try {
       const j = JSON.parse(readSessionFile(path.join(home, '.last-update-result.json'), BUILD_FILE_MAX_BYTES));
-      return isObj(j) && typeof j.version_to === 'string' && BUILD_VERSION_RE.test(j.version_to) ? j.version_to : null;
+      return isObj(j) && typeof j.version_to === 'string' && VERSION_RE.test(j.version_to) ? j.version_to : null;
     } catch {
       return null;
     }
@@ -305,8 +312,9 @@ export function anthropicArm(io) {
     try {
       const json = JSON.parse(text);
       return isObj(json) ? { json } : { err: `${p} is not a JSON object` };
-    } catch (e) {
-      return { err: `${p} is not valid JSON: ${e.message}` };
+    } catch {
+      // Never the parser's message: it quotes the text around the bad token, which can be part of a value.
+      return { err: `${p} is not valid JSON` };
     }
   }
 
@@ -524,7 +532,13 @@ export function anthropicArm(io) {
 
   /** An Anthropic lane's own path, before the `anthropic-lane` and `no-registry` gates (`ANTHROPIC_OPS`). */
   function anthropicOp(opName, a, account, json) {
-    return opName === 'aliases-refresh' ? aliasesRefreshOp(a, account, json) : anthropicHoldOp(opName, a, account);
+    if (opName === 'aliases-refresh') return aliasesRefreshOp(a, account, json);
+    if (!ANTHROPIC_HOLDS_APPLIED && opName !== 'release') {
+      return refuse(1, 'alias-hold-not-applied', `account "${a.id}" is an Anthropic lane, and this fleet box's ccd does `
+        + `not yet put a held model on such a lane's launches, so a ${opName} would change nothing a session runs. `
+        + 'Nothing was written.');
+    }
+    return anthropicHoldOp(opName, a, account);
   }
 
   return { anthropicOp, anthropicLaneHealth, aliasIdsOf, aliasesReport, aliasesPath };

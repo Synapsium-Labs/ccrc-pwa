@@ -2493,6 +2493,10 @@ describe.skipIf(!HAS_FLOCK)('the hourly refresh and the push carry Anthropic lan
     fs.writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), `${show('ccd/ccrc')}\n# fixture fakes\n${FAKES}\n`);
     const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 });
     expect(r.code, r.stdout + r.stderr).toBe(0);
+    // The positive control: the older ccrc did reach the op, asked it for the lanes, and refreshed none of them (it keeps
+    // only registry rows, and every lane here is an Anthropic one).
+    expect(opCalls().map((l) => l.split(' ')[0]), 'the older ccrc asked for the lanes').toContain('lanes');
+    expect(oneObject(r)).toEqual({ ok: true, op: 'refresh', refreshed: [] });
     expect(aliasCalls(), 'the older ccrc ran the new op').toEqual([]);
     for (const id of ['lane-up', 'lane-a', 'lane-b']) expect(fs.existsSync(aliasesOf(id)), id).toBe(false);
     expect(notifyCalls()).toEqual([]);

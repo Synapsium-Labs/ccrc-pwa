@@ -78,6 +78,7 @@ export const VERB_CODE_WORDS: Readonly<Record<string, string>> = {
   'unroutable-lane': 'The lane\'s files cannot be rendered for routing, so the model was not moved. A hold may already be in place: the row shows what the lane holds now.',
   'no-such-account': 'The fleet box has no account by this name.',
   'anthropic-lane': 'This is an Anthropic lane: its classes are the client\'s own and carry no registry, so there is nothing to hold or revert.',
+  'alias-hold-not-applied': 'Holding or reverting a class on an Anthropic lane does not reach its sessions yet, so nothing was held. A later update of the fleet box brings it.',
   'alias-source-absent': 'The fleet box has no model on record for this class\'s alias yet, or only one this lane\'s Claude Code cannot launch, so there is no model to hold. Start one session on this lane, then try again.',
   'aliases-file-unreadable': 'The lane\'s aliases file cannot be read on the fleet box, so the class\'s current model is unknown and was not held. Move that file aside on the fleet box.',
   'aliases-file-invalid': 'The lane\'s aliases file is not one the fleet box reads, so the class\'s current model is unknown and was not held. Move that file aside on the fleet box.',
