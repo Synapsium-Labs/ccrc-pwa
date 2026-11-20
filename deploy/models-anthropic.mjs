@@ -78,6 +78,27 @@ function holdsOf(advance) {
   return holds;
 }
 
+/** A class's release evidence (review 2964 F4, D-8857): its `releasedHold`, the id it was held at when the release that set
+ *  its `releasedAt` lifted the hold, or null. It names that release only while its `at` is `releasedAt`: a later release by
+ *  a build that does not write the field leaves one naming an earlier release, and nothing reads that one. */
+function releaseEvidenceOf(c) {
+  const r = c.releasedHold;
+  return r !== undefined && r !== null && r.at === c.releasedAt ? r : null;
+}
+
+/** Whether an aliases row is a reading a release can be settled against (D-8857): an id the lane's build can launch. With
+ *  no hold standing this is the resolver's own `unobserved` rule; asked of a row a refresh wrote under the hold that was
+ *  since released, it leaves that hold out, as the release did. */
+const releaseReadable = (row) => row !== null && row !== undefined && row.id !== null && row.unlaunchable === null;
+
+/** Why a class has no model a hold could name, from its aliases file (`readAliases`'s answer, read) and its row. */
+function noModelWhy(aliases, k) {
+  if (aliases === null) return 'it has no aliases file yet';
+  if (k.id === null) return 'its alias has no model on record';
+  return `its model ${k.id} needs Claude Code ${k.unlaunchable.needs}, and the lane runs `
+    + `${k.unlaunchable.laneVersion ?? 'a build that cannot be read'}`;
+}
+
 /** The arm, bound to the helpers of `models-op.mjs` it shares (`io`, built once there): the output and refusal
  *  envelope (`out`, `refuse`), the clock and home (`now`, `HOME`), the models directory, the advance file's reader and
  *  writer and its refusal (`readAdvance`, `writeAdvance`, `refuseAdvance`), the atomic JSON write and its sentence
@@ -371,6 +392,18 @@ export function anthropicArm(io) {
    *     answers the move so that it is pushed then. An entry no later than `idSince` is an earlier move of an id since
    *     replaced, so a genuine repeat gets its own entry. `evidenceAt` is data and never part of the key: it is recomputed
    *     from the evidence at every refresh.
+   *   - A RELEASE IS SETTLED HERE (review 2964 F4, D-8857). A held class records nothing, and its release records no move:
+   *     it keeps the id the class was held at (`releasedHold`). The first refresh after it whose reading of the class is
+   *     trustworthy (`releaseReadable`, in an aliases file that was there before: a first baseline is not) settles it in
+   *     this refresh's one advance write: a move from the held id to the alias's id, with `previous` at the held id, when
+   *     they differ, and the evidence cleared either way. It stands in for the class's ordinary move in that refresh, so
+   *     the move is one entry and one push. An untrustworthy reading, or none, keeps the evidence for a later refresh; a
+   *     renewed hold drops it (`anthropicHoldOp`). Clearing the evidence in the write that records the move is what makes
+   *     a repeat record nothing.
+   *   - THE SETTLE'S CRASH KEY. A settle cut short after the advance write left no evidence to find; the class's alias has
+   *     not moved since (`before.id` is `after.id`), and its newest entry, a move TO that id, is LATER than the aliases
+   *     file we started from (`at`), whose write that refresh never made. That entry is answered so that it is pushed
+   *     then, and nothing is appended.
    *   - It never calls `advanceForWrite` or `reconcilePending`, and writes no pending intent: there is no registry move
    *     to be cut short, only these two writes. A missing advance file is made (`seedAnthropicAdvance`) only when a move
    *     is recorded. An advance file that cannot be read refuses the refresh, writing neither file. */
@@ -409,24 +442,41 @@ export function anthropicArm(io) {
     });
 
     const moves = [];
+    const settled = [];
     for (const c of CLASSES) {
       const before = prior.aliases === null ? null : prior.aliases.classes[c];
       const after = next.classes[c];
-      if (before === null || before.id === null || after.id === null || before.id === after.id) continue;
-      if (before.unlaunchable !== null || !rowLaunchable(before.row, laneVersion)) continue;
+      const was = cur.advance === null ? null : cur.advance.classes[c];
       // A HELD CLASS MOVES NOTHING (review 2886, F4), as the Codex arm's advance abandons a held class (`held`): no history
       // entry, `previous` untouched and no push, so a second revert still holds at the model the first one named. The
-      // aliases file below still records where the alias went, which is how doctor names the class held behind.
-      if (cur.advance !== null && cur.advance.classes[c].hold !== null) continue;
-      const history = cur.advance === null ? [] : cur.advance.classes[c].history;
+      // aliases file below still records where the alias went, which is how doctor names the class held behind; the first
+      // trustworthy refresh after the release records the move (D-8857).
+      if (was !== null && was.hold !== null) continue;
+      const lifted = was === null ? null : releaseEvidenceOf(was);
+      if (lifted !== null) {
+        if (prior.aliases === null || !releaseReadable(after)) continue;
+        settled.push(c);
+        if (after.id !== lifted.model) {
+          moves.push({ class: c, from: lifted.model, to: after.id, evidenceAt: after.evidenceAt, recorded: false });
+        }
+        continue;
+      }
+      const history = was === null ? [] : was.history;
       const newest = history[history.length - 1];
+      if (before !== null && before.id !== null && before.id === after.id && newest !== undefined && newest.ok === true
+          && newest.how === 'advance' && newest.to === after.id && newest.at > prior.aliases.at) {
+        moves.push({ class: c, from: newest.from, to: newest.to, evidenceAt: after.evidenceAt, recorded: true });
+        continue;
+      }
+      if (before === null || before.id === null || after.id === null || before.id === after.id) continue;
+      if (before.unlaunchable !== null || !rowLaunchable(before.row, laneVersion)) continue;
       const recorded = newest !== undefined && newest.ok === true && newest.from === before.id && newest.to === after.id
         && typeof before.idSince === 'string' && newest.at > before.idSince;
       moves.push({ class: c, from: before.id, to: after.id, evidenceAt: after.evidenceAt, recorded });
     }
 
     const toRecord = moves.filter((m) => !m.recorded);
-    if (toRecord.length > 0) {
+    if (toRecord.length > 0 || settled.length > 0) {
       let advance = cur.advance ?? seedAnthropicAdvance();
       for (const m of toRecord) {
         advance = recordMove(advance, m.class, {
@@ -435,6 +485,7 @@ export function anthropicArm(io) {
         });
         advance.classes[m.class].previous = { model: m.from, effort: null };
       }
+      for (const c of settled) delete advance.classes[c].releasedHold;
       const w = writeAdvance(a.id, advance);
       if (w !== null) return refuse(1, w[0], w[1]);
     }
@@ -456,10 +507,17 @@ export function anthropicArm(io) {
    *     is one the lane's build cannot launch, and `settings-overrides-hold` when the home's `settings.json` variables
    *     block names the class's alias key (that block beats the launch environment, so the hold could not reach a
    *     launch; a file that cannot be read cannot be shown not to, so it refuses the same). A second hold changes nothing.
+   *     A new hold drops a release's evidence (`releasedHold`): the move that release lifted is never recorded (D-8857).
    *   - `revert` holds the class at `previous.model` (`by: 'revert'`), over any hold already standing, under the same
-   *     settings refusal; `previous` stays on record and no history entry is made: the hold is not a move.
+   *     settings refusal; `previous` stays on record and no history entry is made: the hold is not a move. While a
+   *     release's evidence stands (D-8857: a release the hourly refresh has not settled, or a revert's hold over it),
+   *     `previous` may be stale, so revert reads the class's alias in the aliases file: an alias that moved off the held id
+   *     reverts to the held id, which is the `previous` the settle would write; one still at it reverts to `previous`. An
+   *     aliases file that cannot be read refuses with its word, and one with no id the lane can launch refuses
+   *     `alias-source-absent`, writing nothing. A revert keeps the evidence, so a second revert holds where the first did.
    *   - `release` clears the hold and records the time as the class's `releasedAt`, so a later reader can count a day from
-   *     it. It makes no history entry and spends no `HISTORY_CAP` slot, and `lastMoveOf` never sees it. */
+   *     it, and the held id with that time as `releasedHold`, the evidence the next trustworthy refresh settles (D-8857).
+   *     It makes no history entry and spends no `HISTORY_CAP` slot, and `lastMoveOf` never sees it. */
   function anthropicHoldOp(opName, a, account) {
     if (!CLASSES.includes(a.class)) {
       return refuse(1, 'unknown-class', `"${a.class}" is not a class: the four are ${CLASSES.join(', ')}.`);
@@ -472,14 +530,35 @@ export function anthropicArm(io) {
     let changed = false;
     if (opName === 'release') {
       if (c.hold !== null) {
+        const held = c.hold.model;
         c.hold = null;
         c.releasedAt = now();
+        if (typeof held === 'string') c.releasedHold = { model: held, at: c.releasedAt };
+        else delete c.releasedHold;
         changed = true;
       }
     } else if (opName === 'revert' || c.hold === null) {
       let model;
       if (opName === 'revert') {
-        model = c.previous === null ? null : c.previous.model;
+        const lifted = releaseEvidenceOf(c);
+        let moved = false;
+        if (lifted !== null) {
+          const al = readAliases(a.id);
+          if (al.err !== undefined) {
+            return refuse(1, al.err[0], `${al.err[1]} The ${a.class} class's hold at ${lifted.model} was released and the `
+              + 'hourly refresh has not yet recorded where its alias went, so revert reads that file to tell and will not '
+              + 'guess. Move it aside by hand (the next refresh rebuilds it), then revert again. Nothing was written.');
+          }
+          const k = al.aliases === null ? null : al.aliases.classes[a.class];
+          if (!releaseReadable(k)) {
+            return refuse(1, 'alias-source-absent', `account "${a.id}"'s ${a.class} class was released from a hold at `
+              + `${lifted.model}, and ${noModelWhy(al.aliases, k)}, so revert cannot tell whether its alias moved under the `
+              + 'hold and will not guess an earlier model from the history. Revert again after the next hourly refresh '
+              + 'that reads a model the lane can launch. Nothing was written.');
+          }
+          moved = k.id !== lifted.model;
+        }
+        model = moved ? lifted.model : (c.previous === null ? null : c.previous.model);
         if (model === null) {
           return refuse(1, 'no-previous',
             `account "${a.id}"'s ${a.class} class has no earlier model on record, so there is nothing to revert to. `
@@ -493,14 +572,10 @@ export function anthropicArm(io) {
             + 'hold again. Nothing was written.');
         }
         const k = al.aliases === null ? null : al.aliases.classes[a.class];
-        if (k === null || k.id === null || k.unlaunchable !== null) {
-          const why = al.aliases === null ? 'it has no aliases file yet'
-            : k.id === null ? 'its alias has no model on record'
-              : `its model ${k.id} needs Claude Code ${k.unlaunchable.needs}, and the lane runs `
-                + `${k.unlaunchable.laneVersion ?? 'a build that cannot be read'}`;
+        if (!releaseReadable(k)) {
           return refuse(1, 'alias-source-absent', `account "${a.id}"'s ${a.class} class has no model a hold could name: `
-            + `${why}. Start one session on this lane through ccd, or sign it in so Claude Code fetches its catalogue, `
-            + 'then hold again. Nothing was written.');
+            + `${noModelWhy(al.aliases, k)}. Start one session on this lane through ccd, or sign it in so Claude Code `
+            + 'fetches its catalogue, then hold again. Nothing was written.');
         }
         model = k.id;
       }
@@ -517,6 +592,7 @@ export function anthropicArm(io) {
             + `${path.join(homeOf(account), 'settings.json')} yourself, then hold again. Nothing was written.`);
       }
       c.hold = { at: now(), by: opName === 'revert' ? 'revert' : 'hand', model };
+      if (opName === 'hold') delete c.releasedHold;
       changed = true;
     }
     if (changed || created) {

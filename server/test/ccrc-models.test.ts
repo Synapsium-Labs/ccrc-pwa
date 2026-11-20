@@ -1320,6 +1320,84 @@ describe('ccrc models <id> hold, release and revert (auto-advance spec §2.7, D1
   });
 });
 
+// Review 2964's F4, ruled as D-8857 (`held-release-reconcile`), end to end through ccrc: a hold on an Anthropic lane records
+// no alias move and its release records none either; the first refresh after the release records the move from the held id
+// once and pushes it once, through the hourly refresh's own push; a revert in between holds at the held id. The ids are
+// invented; the lane is the roster's second Anthropic row, and the refresh runs with an advance budget so its step runs.
+describe.skipIf(spawnSync('bash', ['-c', 'command -v flock'], { encoding: 'utf8' }).status !== 0)(
+  "ccrc models on an Anthropic lane: a hold's alias move is recorded and pushed once, after the release (D-8857)", () => {
+    const LANE = ROSTER.accounts[1]!.id;
+    const X1 = 'claude-opus-9-1';
+    const X2 = 'claude-opus-9-2';
+    const X3 = 'claude-opus-9-3';
+    const advFile = (): string => join(home, '.ccrc', 'models', `${LANE}.advance.json`);
+    const opus = (): Record<string, unknown> & { history: unknown[] } =>
+      JSON.parse(fs.readFileSync(advFile(), 'utf8')).classes.opus;
+    const plantCache = (fetchedAt: string, target: string): void => {
+      const dir = join(home, ROSTER.accounts[1]!.configDirSuffix, 'cache', 'model-catalog');
+      fs.mkdirSync(dir, { recursive: true });
+      fs.writeFileSync(join(dir, 'cache-fixture.json'), `${JSON.stringify({
+        version: 2, fetchedAt: Date.parse(fetchedAt), staleAt: Date.parse(fetchedAt) + 3_600_000, resolution: 'token_org',
+        catalog: { config: {
+          provider_alias_targets: { opus: { default: target } },
+          models: [X1, X2, X3].map((id) => ({ id, name: `Name ${id}`, min_claude_code_version: null,
+            runtime: { effort_levels: ['low', 'high'], default_effort: 'high' }, thinking: { type: 'effort' } })),
+        } },
+      })}\n`);
+    };
+    const pushes = (): string[] => {
+      const p = join(home, 'notify-calls');
+      return fs.existsSync(p) ? fs.readFileSync(p, 'utf8').split('\n').filter(Boolean) : [];
+    };
+    /** The lane's refresh at `at`, its step run: answers the lane's row's `moved`. */
+    const refresh = (at: string): unknown => {
+      const r = run(['models', 'refresh', LANE], { CCRC_MODELS_NOW: at, CCRC_MODELS_ADVANCE_BUDGET_S: '120' });
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      const rows = oneObject(r)['refreshed'] as { aliases: { ok: boolean; moved: unknown } }[];
+      expect(rows[0]!.aliases.ok, r.stdout).toBe(true);
+      return rows[0]!.aliases.moved;
+    };
+    const verb = (v: string, at: string): Record<string, unknown> => {
+      const r = run(['models', LANE, v, 'opus'], { CCRC_MODELS_NOW: at });
+      expect(r.code, r.stdout + r.stderr).toBe(0);
+      return oneObject(r);
+    };
+    /** X1 to X2 recorded and pushed, the class held at X2, the alias on to X3 under the hold, then the release. */
+    const heldThenReleased = (): void => {
+      fs.mkdirSync(join(home, '.cc-sessions'), { recursive: true });
+      fs.writeFileSync(join(home, '.cc-sessions', 'notify.sh'),
+        '#!/bin/sh\nprintf \'%s\\t%s\\n\' "$1" "$2" >> "$HOME/notify-calls"\n', { mode: 0o755 });
+      plantCache('2026-11-16T00:00:00Z', X1);
+      expect(refresh('2026-11-16T06:00:00Z')).toEqual([]);
+      plantCache('2026-11-16T12:00:00Z', X2);
+      expect(refresh('2026-11-16T18:00:00Z')).toEqual([{ class: 'opus', from: X1, to: X2 }]);
+      expect(verb('hold', '2026-11-16T20:00:00Z')).toMatchObject({ op: 'hold', changed: true });
+      plantCache('2026-11-17T00:00:00Z', X3);
+      expect(refresh('2026-11-17T06:00:00Z'), 'a held class records no move').toEqual([]);
+      expect(verb('release', '2026-11-17T09:00:00Z')).toMatchObject({ op: 'release', changed: true });
+      expect(opus().history, 'the release records no move').toHaveLength(1);
+      expect(opus()['releasedHold']).toEqual({ model: X2, at: '2026-11-17T09:00:00Z' });
+      expect(pushes(), 'only the move before the hold was pushed').toEqual([`--push\t${LANE}: opus ${X1} → ${X2}`]);
+    };
+
+    it('the first refresh after the release records X2 to X3 once, with previous X2, and pushes it once', () => {
+      heldThenReleased();
+      expect(refresh('2026-11-17T12:00:00Z')).toEqual([{ class: 'opus', from: X2, to: X3 }]);
+      expect(refresh('2026-11-17T18:00:00Z')).toEqual([]);
+      expect(opus().history).toHaveLength(2);
+      expect(opus()['previous']).toEqual({ model: X2, effort: null });
+      expect(opus()['releasedHold']).toBeUndefined();
+      expect(pushes()).toEqual([`--push\t${LANE}: opus ${X1} → ${X2}`, `--push\t${LANE}: opus ${X2} → ${X3}`]);
+    });
+
+    it('a revert between the release and the refresh holds at X2, never X1', () => {
+      heldThenReleased();
+      expect(verb('revert', '2026-11-17T10:00:00Z')).toMatchObject({ op: 'revert', changed: true });
+      expect(opus()['hold']).toEqual({ at: '2026-11-17T10:00:00Z', by: 'revert', model: X2 });
+      expect(opus().history).toHaveLength(1);
+    });
+  });
+
 describe('ccrc models <id> discovery', () => {
   const whitelist = (providers: string[]): void => {
     fs.mkdirSync(join(home, '.handoff'), { recursive: true });
