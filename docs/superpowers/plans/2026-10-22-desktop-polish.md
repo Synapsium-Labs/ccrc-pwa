@@ -4682,6 +4682,13 @@ whose meta was written after its end keeps its end); F2 taken (a pin for a sibli
 corrected: that mutant is not equivalent); F3 taken as a comment and a residual (below), the memory's shape kept; F5 taken; F4
 and F6 left, records the coordinator folds.
 
+**Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through H1a's kind of adapter: each TypeScript file held
+as a module's text, each mutant run in a scratch copy of the tree): 94 mutants of the new branches in ten files, 92 killed and
+2 equivalent (the parser's prefilter, a cost cut; the store's snapshot members, which the reducer only writes). The first
+round left 26 missed cases (4 in the model's parsers, 17 in the reader's tier, 2 in the feed, 3 in the stream's wiring); each
+got a case and the second round killed it. Review 2978's own mutants (F1's N4 and N3, F2's tag prefix) are killed by the new
+pins. The tables are in `docs/superpowers/programs/desktop-polish/h1b.md`.
+
 **Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
 
 - **D-8862** — `helpers-reach-the-frame`: Task H1b, issued on 2026-11-20. The helpers reach the session frame and the store,
