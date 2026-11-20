@@ -32,7 +32,7 @@ import type { HighlightClock } from '../src/lib/highlightStore';
 import { docsRunner, type MarkdownParser } from '../src/lib/markdownRunner';
 import { navigate, useLocation } from '../src/lib/router';
 import {
-  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
+  BLOB_1, BLOB_2, COMMIT_A, COMMIT_B, FP_1, NO_RANGE_VISIT, RAN, draftOf, entry, failedAnswer, fakeLoaders, fetchFailed, fileResponse, holder,
   okFile, okRefresh, okTree, pageAt, treeOk, treeResponse, type FakeLoaders,
 } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter, syncTestStore, withSyncHighlight } from './highlightTestStore';
@@ -870,7 +870,7 @@ describe('a fragment belongs to the page it was meant for (refinement (o), revie
       tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 },
       file: { s: 'ok', pin, answer: { ...base, contentClass }, receivedAt: 0 },
       freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-      retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+      ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
       ...over,
     };
     return { visit, ...render(<DocsLeaf visit={visit} tree={tree} page={page} parser={parser} />) };
@@ -1287,7 +1287,7 @@ describe("Review 439 F23: a direct load's #fragment survives the linked-worktree
 describe("W5 Share: a raster leaf's own image reports the pin it settled at (spec 4.3 item 5, 4.16; refinement (f))", () => {
   const visitOf = (tree: DocsTreeOk, file: DocsVisit['file']): DocsVisit => ({
     tree: { s: 'ok', answer: treeResponse(tree), receivedAt: 0 }, file, freshness: { s: 'idle' }, updatedTo: null,
-    pendingFragment: null, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
+    pendingFragment: null, ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(),
     setFragment: vi.fn(),
   });
 

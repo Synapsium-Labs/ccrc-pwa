@@ -17,7 +17,7 @@ import { withRunBinding } from './runBindingFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
 import { lanesByFree } from '../src/fleet/laneOrder';
-import { pageAt, treeOk, treeResponse } from './docsFixtures';
+import { NO_RANGE_VISIT, pageAt, treeOk, treeResponse } from './docsFixtures';
 import type { DocsVisit } from '../src/docs/useDocsVisit';
 
 /** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
@@ -45,7 +45,7 @@ const { DocsHead } = await import('../src/docs/DocsHead');
 const docsVisit = (): DocsVisit => ({
   tree: { s: 'ok', answer: treeResponse(treeOk()), receivedAt: Date.now() },
   file: { s: 'none' }, freshness: { s: 'idle' }, updatedTo: null, pendingFragment: null,
-  retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
+  ...NO_RANGE_VISIT, retryTree: vi.fn(), retryFile: vi.fn(), refreshManual: vi.fn(), fetchFromOrigin: vi.fn(), setFragment: vi.fn(),
 });
 
 const SRC = path.join(import.meta.dirname, '..', 'src');

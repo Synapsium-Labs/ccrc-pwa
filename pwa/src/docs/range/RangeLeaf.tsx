@@ -80,7 +80,7 @@ export function RangeLeaf(p: {
   // True while a re-list is pending for this leaf: the read starts again when the visit says a re-list that started after
   // the failure has answered, whatever pin it gave (a worktree that moved and came back gives the same one).
   const pending = useRef(false);
-  const relists = p.visit.rangeRelists ?? 0;
+  const relists = p.visit.rangeRelists;
   const lastRelists = useRef(relists);
 
   const start = useCallback((save: boolean) => {
@@ -98,12 +98,12 @@ export function RangeLeaf(p: {
       if (!r.ok) {
         const { why } = r;
         const stale: RangeStale = why.kind === 'answer' && why.answer.s === 'failed'
-          ? latest.current.visit.rangeFailed?.(why.answer.body.failure) ?? 'other' : 'other';
+          ? latest.current.visit.rangeFailed(why.answer.body.failure) : 'other';
         pending.current = stale === 'relist';
         setState({ s: 'failed', why, stale });
         return;
       }
-      latest.current.visit.rangeRead?.();
+      latest.current.visit.rangeRead();
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });
@@ -166,11 +166,10 @@ export function RangeLeaf(p: {
           {view !== undefined && <Button variant="ghost" className="docs-fail-action" onClick={() => {
             // A stale pin is mended by a new listing, not by sending it again: re-list through the visit, and the read
             // starts when that listing answers, with the pin it gives or the same one.
-            const retry = latest.current.visit.rangeRetry;
-            if (state.stale === 'other' || retry === undefined) { start(false); return; }
+            if (state.stale === 'other') { start(false); return; }
             pending.current = true;
             setState({ s: 'failed', why, stale: 'relist' });
-            retry();
+            latest.current.visit.rangeRetry();
           }}>{DOCS_RANGE_TEXT.readAgain}</Button>}
           {download}
         </div>

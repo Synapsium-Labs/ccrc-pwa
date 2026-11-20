@@ -164,16 +164,15 @@ export interface DocsVisit {
    *  re-list, so the leaf waits for the new pin; `changing`: it asked and the re-list is spent, so the leaf says the
    *  listing changed and offers Read it through `rangeRetry`; `other`: not a re-list word, or a version page). On
    *  `relist` the read waits as a file read does: the re-list that STARTS after this call and answers moves
-   *  `rangeRelists`, whatever pin it gives. Optional only so a hand-built visit that reads no range (a view test's) need
-   *  not carry it; `useDocsVisit` always does. */
-  rangeFailed?(word: DocsFailure): RangeStale;
+   *  `rangeRelists`, whatever pin it gives. A hand-built visit in a test takes the stub of `docsFixtures.ts`. */
+  rangeFailed(word: DocsFailure): RangeStale;
   /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does. */
-  rangeRead?(): void;
+  rangeRead(): void;
   /** Read it after a spent re-list: re-lists again and waits for it as `rangeFailed` does, taking no one-shot. */
-  rangeRetry?(): void;
+  rangeRetry(): void;
   /** How many re-lists of this page's listing served a range read that waited for one: a leaf that waits restarts when
    *  it moves, with the pin it was given or an identical one (a worktree that moved and came back). */
-  readonly rangeRelists?: number;
+  readonly rangeRelists: number;
   /** The freshness chip's tap: one manual POST, only while the tree slot is ok and no POST is in flight. */
   refreshManual(): void;
   /** `unresolved-ref`'s Fetch from origin: one manual POST, only while the slot holds that word. */
