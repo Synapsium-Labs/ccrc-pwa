@@ -267,6 +267,27 @@ describe('recording model=', () => {
 });
 
 // ── what the new keys must not disturb ──────────────────────────────────────────────────────────────────────────────────
+// REVIEW 2964 F12: `keep` never creates the record. A write that keeps the stamp has no stamp to keep when there is no file, so it answers 1
+// and writes nothing (every caller checks first; this pins the writer, which is where the promise is made).
+describe('_route_applied_put with keep creates nothing', () => {
+  beforeEach(() => { seed(); });
+  it('keep and no routeapplied: rc 1 and no file', () => {
+    expect(h.sh(`_route_applied_put ${ID} 'class=opus model=claude-opus-9-1' keep; echo rc=$?`)).toBe('rc=1');
+    expect(ra()).toBeNull();
+    expect(h.sh(`_route_applied_set ${ID} model claude-opus-9-1 keep; echo rc=$?`)).toBe('rc=1');
+    expect(ra()).toBeNull();
+    expect(fs.readdirSync(path.join(h.home, '.cc-sessions')).filter((f) => f.endsWith('.tmp'))).toEqual([]);
+    // the control: the same write without keep is `_reg_set`'s and creates the record, and with a record `keep` keeps its stamp
+    expect(h.sh(`_route_applied_put ${ID} 'class=opus'; echo rc=$?`)).toBe('rc=0');
+    expect(ra()).toBe('class=opus');
+    plantRA();
+    const before = raMtime();
+    expect(h.sh(`_route_applied_put ${ID} 'class=opus effort=xhigh model=claude-opus-9-1' keep; echo rc=$?`)).toBe('rc=0');
+    expect(ra()).toBe('class=opus effort=xhigh model=claude-opus-9-1');
+    expect(raMtime()).toBe(before);
+  });
+});
+
 describe('model=, picked= and held= in the record', () => {
   beforeEach(() => { seed(); });
 
@@ -281,6 +302,10 @@ describe('model=, picked= and held= in the record', () => {
 });
 
 // ── the readback by id ──────────────────────────────────────────────────────────────────────────────────────────────────
+// The case of a class confirmed by the TRANSCRIPT's acknowledgement (no reading named an id, so no `model=`) is pinned where its
+// fixture lives: `ccd-route-apply.test.ts`, "the project-k shape", plants a stale reading that carries a model beside the
+// acknowledgement and expects `routeapplied` to read exactly `class=opus` (review 2964 F11a: the placeholder that stood here
+// planted neither a transcript nor a sidecar, so `_route_readback` returned before the acknowledgement path).
 describe('the readback records the id it read', () => {
   beforeEach(() => { seed(); h.sh(`_reg_set ${ID} class sonnet`); setBorn(S - 50); });
 
@@ -309,13 +334,6 @@ describe('the readback records the id it read', () => {
     sidecar(nowS() - 10, 'claude-sonnet-9-1[1m]', UUID, nowS() - 5);
     expect(h.sh(`${TMUX} _route_readback ${ID}; echo $?`)).toBe('0');
     expect(ra()).toBe('effort=xhigh class=sonnet model=claude-sonnet-9-1');
-  });
-
-  it('a class confirmed by the transcript\'s acknowledgement records no model (no reading named one)', () => {
-    plantRA('class=opus effort=xhigh model=claude-opus-9-1');
-    fs.rmSync(usageFile(), { force: true });
-    h.sh(`_route_readback ${ID}; echo $?`);
-    expect(ra()).toBe('class=opus effort=xhigh model=claude-opus-9-1');   // nothing confirmed, nothing dropped
   });
 });
 

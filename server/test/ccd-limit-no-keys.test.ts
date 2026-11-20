@@ -6,7 +6,8 @@
 // file ends with: the bodies of these functions, cut out of `ccd/ccd`, contain no tmux key sender at all. A function
 // that is renamed or removed fails the "found" row, so the pin cannot go vacuous.
 import { describe, it, expect } from 'vitest';
-import { ccdSource } from './ccdWsHelpers.js';
+import fs from 'node:fs';
+import { CCD_ALIASES_LIB, ccdSource } from './ccdWsHelpers.js';
 
 /** The functions that decide or perform a limit rescue without a supervisor tick, or that move a session off a limit. */
 const GUARDED = [
@@ -39,6 +40,27 @@ describe('the limit-rescue code sends no key', () => {
     const b = body(src, '_dispatch_swap');
     expect(b).not.toBeNull();
     const code = b!.split('\n').filter((l) => !/^\s*#/.test(l)).join('\n');
+    expect(code).not.toMatch(SENDS);
+  });
+});
+
+// REVIEW 2964 F12: the model-class Anthropic arm's library observes a session on every supervise tick (`_alias_observe`) and carries a
+// held id and an effort into a launch, and it types nothing: no key reaches a pane from it. The list above is a fixed set of
+// limit-rescue functions, so a key sender added to the library would not be seen by it; this one scans EVERY function of the library
+// (the names are read from its own text, so a new function is covered at once). Comments may name the words; only code lines count.
+describe('the model-aliases library sends no key', () => {
+  const lib = fs.readFileSync(CCD_ALIASES_LIB, 'utf8');
+  const names = [...lib.matchAll(/^([A-Za-z_][A-Za-z0-9_]*)\(\) \{/gm)].map((m) => m[1]!);
+
+  it('lists its functions (so the scan below cannot be vacuous)', () => {
+    expect(names.length).toBeGreaterThan(15);
+    expect(names).toContain('_alias_observe');
+  });
+
+  it.each(names)('%s contains no key sender', (name) => {
+    const b = body(lib, name);
+    expect(b, `${name} was not found in ccd/lib/model-aliases.sh`).not.toBeNull();
+    const code = b!.split('\n').filter((l) => !/^\s*#/.test(l)).map((l) => l.replace(/\s#\s.*$/, '')).join('\n');
     expect(code).not.toMatch(SENDS);
   });
 });

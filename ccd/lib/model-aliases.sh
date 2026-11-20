@@ -319,7 +319,8 @@ _alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always 
 # rename, which is the stamp the readback judges a reading against; every write that is not a kept one is `_reg_set`'s.
 _route_applied_put() {   # id list [keep] -> writes routeapplied; with `keep` the new file takes the old file's mtime (`touch -r`) before it is renamed, so the stamp does not move, and a missing file is NOT created (rc 1); rc 0 iff it is on disk
   local id="$1" tmp __ap_keep="${3-}" f=routeapplied
-  [[ -n "$__ap_keep" && -e "$REG/$id.routeapplied" ]] || { _reg_set "$id" routeapplied "$2"; return; }   # every write but a kept one is `_reg_set`'s
+  [[ -n "$__ap_keep" ]] || { _reg_set "$id" routeapplied "$2"; return; }
+  [[ -e "$REG/$id.routeapplied" ]] || return 1   # nothing here creates `routeapplied`: no record, no stamp to keep
   _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
   tmp="$REG/.$id.$f.$BASHPID.$_REG_SET_SEQ.tmp"   # `_reg_set`'s own template (`.<id>.<field>.<pid>.<seq>.tmp`), so the id-length census covers it
   printf '%s' "$2" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
