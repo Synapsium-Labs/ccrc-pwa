@@ -16,6 +16,7 @@ import { DocsScreen } from '../src/screens/DocsScreen';
 import { MockupView, type MockupViewProps } from '../src/docs/MockupView';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsLoaders } from '../src/docs/failures';
+import type { RangeLoader } from '../src/docs/range/readRange';
 import { DOCS_FAILURE_SENTENCE, DOCS_SLOT_SENTENCE, DOCS_VIEW_TEXT, DOC_IMAGE_REFUSED_SENTENCE, EXPORT_TEXT, MOCKUP_TEXT, MOCKUP_VERDICT_SENTENCE, fillSentence } from '../src/docs/docsText';
 import { ExportBodyContext, GATE_BODY, type ExportBody, type MockupLoadEnd } from '../src/docs/exportBody';
 import { buildMockupSrcdoc, startMockupLoad } from '../src/docs/mockup/load';
@@ -249,13 +250,19 @@ describe('the HTML leaf mounts the viewer (M5.13; the stand-in is gone)', () => 
     expect(await screen.findByRole('button', { name: /^Save demo_specs_m\.html_/ }, { timeout: 5000 })).toBeInTheDocument();
   });
 
-  it('a listed size over the class cap: the too-large sentence and Download, no viewer, no file request', async () => {
+  it('a listed size over the class cap: the Download-only sentence and Download (X2 P1), no viewer, no file or range request', async () => {
     const big = DOCS_CLASS_CAP.html + 1;
     const f = byPath(treeOk({ entries: [entry('specs', 'm.html', { committed: { kind: 'file', blob: '1'.repeat(40), size: big } })] }), {});
+    const rangeCalls: string[] = [];
+    const range: RangeLoader = {
+      prepare: (target) => { rangeCalls.push(target.pin.path); return new Promise(() => undefined); },
+      frame: () => new Promise(() => undefined),
+    };
     navigate('/docs/demo/specs/m.html');
-    const { container } = render(<Routed loaders={f.loaders} />);
-    expect(await screen.findByText(/Docs shows files of this kind up to/)).toBeInTheDocument();
+    const { container } = render(<Routed loaders={{ ...f.loaders, range }} />);
+    expect(await screen.findByText('This file is 2.1 MiB; Docs offers it as a Download.')).toBeInTheDocument();
     expect(screen.getByRole('button', { name: DOCS_VIEW_TEXT.download })).toBeInTheDocument();
+    expect(rangeCalls).toEqual([]);
     expect(container.querySelector('iframe')).toBeNull();
     expect(f.file).not.toHaveBeenCalled();
     expect(constructed).toBe(0);

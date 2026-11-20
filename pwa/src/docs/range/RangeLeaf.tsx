@@ -112,7 +112,7 @@ export function RangeLeaf(p: {
     setState({ s: 'failed', why: { kind: 'aborted' } });
   };
   const download = (
-    <Button variant="ghost" className="docs-leaf-action" disabled={state.s === 'reading'}
+    <Button variant="ghost" className="docs-range-download" disabled={state.s === 'reading'}
       onClick={() => { if (state.s === 'done') saveBytes(p.name, state.bytes); else start(true); }}>
       {DOCS_VIEW_TEXT.download}
     </Button>

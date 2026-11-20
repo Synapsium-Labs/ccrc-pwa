@@ -402,10 +402,16 @@ describe('api.docs.range: the range loader beside DocsLoaders (X2 P1.3)', () => 
     await expect(aborted.api.docs.range.prepare(target(committed('a.md'), BLOB), ctl.signal)).rejects.toBe(reason);
   });
 
-  it('the loader is the readRange interface, and DocsLoaders names no range member', () => {
+  it('the loader is the readRange interface, and DocsLoaders carries it as an optional range member (P1.5)', () => {
     const loader: RangeLoader = createApi(vi.fn() as unknown as typeof fetch).docs.range;
     expect(Object.keys(loader).sort()).toEqual(['frame', 'prepare']);
-    const beside: 'range' extends keyof DocsLoaders ? never : true = true;
-    expect(beside).toBe(true);
+    // Compile-time: the member must exist, be optional, and be exactly the readRange interface, or the compiler
+    // refuses the `true`.
+    const member: 'range' extends keyof DocsLoaders
+      ? (undefined extends DocsLoaders['range']
+        ? (Exclude<DocsLoaders['range'], undefined> extends RangeLoader
+          ? (RangeLoader extends Exclude<DocsLoaders['range'], undefined> ? true : never) : never) : never)
+      : never = true;
+    expect(member).toBe(true);
   });
 });
