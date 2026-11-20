@@ -178,6 +178,62 @@ describe('splitMarkdownParts', () => {
     expect(splitMarkdownParts(t, max).parts).toEqual(parts);
   });
 
+  /** The fence lines of a text, whatever their list markers, quote marks and indentation. */
+  const fenceLines = (s: string): number => s.split('\n').filter((l) => /^[ \t>\-*+]*(```|~~~)/.test(l)).length;
+
+  it('md parts: never cuts inside a fence in a nested list item, past three columns of indentation', () => {
+    // No heading anywhere, and blank lines inside every fence: an untracked fence is cut at one of them.
+    const fence = '    - ```text\n' + '      code line\n\n'.repeat(8) + '      ```\n';
+    const t = ('- item\n  - sub item\n\n' + fence + '\nplain paragraph text\n\n').repeat(30);
+    const max = 400;
+    const { parts } = splitMarkdownParts(t, max);
+    expect(parts.length).toBeGreaterThan(5);
+    checkCover(t, parts, max);
+    for (const p of parts) {
+      expect(p.reopen).toBeNull();
+      expect(p.close).toBeNull();
+      expect(fenceLines(partText(t, p)) % 2, JSON.stringify(partText(t, p))).toBe(0);
+    }
+  });
+
+  it('md parts: never cuts inside a fence in a blockquote', () => {
+    // No blank line outside the fences either, so every cut is a line cut, and a cut inside a fence is a line cut too.
+    const fence = '> ```text\n' + '> code line\n'.repeat(20) + '> ```\n';
+    const t = (fence + 'plain paragraph text\n').repeat(30);
+    const max = 400;
+    const { parts } = splitMarkdownParts(t, max);
+    expect(parts.length).toBeGreaterThan(5);
+    checkCover(t, parts, max);
+    for (const p of parts) {
+      expect(p.reopen).toBeNull();
+      expect(p.close).toBeNull();
+      expect(fenceLines(partText(t, p)) % 2, JSON.stringify(partText(t, p))).toBe(0);
+    }
+  });
+
+  it('md parts: a fence in a blockquote or a list longer than the window is closed and reopened under the same quote, at column 0', () => {
+    const quote = '> ```json\n' + '> yyyyyyyyyyyyyyyyyyyy\n'.repeat(60) + '> ```\n';
+    const rq = splitMarkdownParts(quote, 300).parts;
+    checkCover(quote, rq, 300);
+    expect(rq.length).toBeGreaterThan(3);
+    // The text opens with the fence, so part 0 opens and closes it, and every later part reopens it under the same quote.
+    expect(rq[0]!.reopen).toBeNull();
+    expect(rq[0]!.close).toBe('> ```\n');
+    expect(rq[1]!.reopen).toBe('> ``` json\n');
+    expect(rq[1]!.close).toBe('> ```\n');
+    const list = '- item\n    - ```json\n' + '      zzzzzzzzzzzzzzzzzzzz\n'.repeat(60) + '      ```\n';
+    const rl = splitMarkdownParts(list, 300).parts;
+    checkCover(list, rl, 300);
+    expect(rl.length).toBeGreaterThan(3);
+    // The part that opens the fence closes it where it opened: the list item's indentation, no marker. A later part
+    // reopens it at column 0, with no list marker or indentation (a marker would open a new item, four columns an
+    // indented code block), and closes it there too.
+    expect(rl[1]!.reopen).toBeNull();
+    expect(rl[1]!.close).toBe('      ```\n');
+    expect(rl[2]!.reopen).toBe('``` json\n');
+    expect(rl[2]!.close).toBe('```\n');
+  });
+
   it('md parts: sizes are UTF-8 bytes, so a part of four-byte characters is cut at the gate\'s bytes', () => {
     const t = '\u{1F600}'.repeat(300000); // 1 200 000 bytes, 600 000 UTF-16 units
     const { parts } = splitMarkdownParts(t, GATE);

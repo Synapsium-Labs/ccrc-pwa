@@ -51,16 +51,31 @@ export function partHolds(ids: ReadonlySet<string> | null, fragment: string): bo
 
 const HEADING_RE = /^ {0,3}#{1,2}(?:[ \t]|$)/;
 const BLANK_RE = /^[ \t]*$/;
-const FENCE_OPEN_RE = /^ {0,3}(`{3,}|~{3,})([^\n]*)$/;
-const FENCE_CLOSE_RE = /^ {0,3}(`{3,}|~{3,})[ \t]*$/;
+// A fence is seen at any indentation, after any run of blockquote marks (`>`) and list markers (`-`, `*`, `+`, `1.`,
+// `1)`), so a fence in a nested list item or a blockquote is tracked and never cut. The prefix is group 1.
+const FENCE_PREFIX = '((?:[ \\t]*(?:>|(?:[-*+]|\\d{1,9}[.)])(?=[ \\t])))*[ \\t]*)';
+const FENCE_OPEN_RE = new RegExp('^' + FENCE_PREFIX + '(`{3,}|~{3,})([^\\n]*)$');
+const FENCE_CLOSE_RE = new RegExp('^' + FENCE_PREFIX + '(`{3,}|~{3,})[ \\t]*$');
+const LIST_MARKER_RE = /(?:[-*+]|\d{1,9}[.)])(?=[ \t])/g;
+/** The longest prefix a fence may be reopened under; a longer one (a pathological document) is tracked, not reopened. */
+const REOPEN_PREFIX_MAX = 64;
 /** The longest fence marker a part may reopen. A longer marker (a pathological document) is still tracked, so no
  *  heading inside it is a cut, but no cut is made inside it: its fence is not reopenable. */
 const REOPEN_MARKER_MAX = 64;
 /** The most bytes of the info string's first word a reopened fence carries (its language, for highlighting). */
 const REOPEN_INFO_MAX = 64;
 
-/** An open fence: its marker, and the lines a part reopens and closes it with (null when it is not reopenable). */
-interface Fence { mark: string; reopen: string | null; close: string | null }
+/** An open fence: its marker, and the lines a part reopens and closes it with (null when it is not reopenable).
+ *  The rule for a fence in a blockquote or a list item, the simplest that renders right:
+ *   - `close` ends a part that OPENED the fence: the opener's own prefix with each list marker turned into spaces of the
+ *     same width, so the closer stays inside the same list item and quote and opens no new item;
+ *   - `reopen` and `closeFlat` serve every part that starts inside the fence: the blockquote marks alone (`> ` once per
+ *     `>`), at column 0. A list marker would open a new item, and an indent of four columns would make an indented code
+ *     block, so the list nesting is dropped there; the code still renders as code, under the same quote. */
+interface Fence { mark: string; reopen: string | null; close: string | null; closeFlat: string | null }
+
+/** The closing line a part ends a fence with: `fence` is the fence the part started inside (`inside`) or opened itself. */
+const closeFor = (fence: Fence, startedInside: Fence | null): string | null => (fence === startedInside ? fence.closeFlat : fence.close);
 
 const RANK_HEADING = 4;
 const RANK_BLANK = 3;
@@ -89,16 +104,23 @@ function fenceAfter(fence: Fence | null, line: string): Fence | null {
   if (fence === null) {
     const m = FENCE_OPEN_RE.exec(line);
     if (m === null) return null;
-    const mark = m[1]!;
-    const info = m[2]!;
+    const prefix = m[1]!;
+    const mark = m[2]!;
+    const info = m[3]!;
     if (mark[0] === '`' && info.includes('`')) return null;
-    if (mark.length > REOPEN_MARKER_MAX) return { mark, reopen: null, close: null };
+    if (mark.length > REOPEN_MARKER_MAX || prefix.length > REOPEN_PREFIX_MAX) return { mark, reopen: null, close: null, closeFlat: null };
     const word = info.trim().split(/[ \t]/)[0] ?? '';
     const keep = word !== '' && utf8Bytes(word) <= REOPEN_INFO_MAX ? word : '';
-    return { mark, reopen: mark + (keep === '' ? '' : ' ' + keep) + '\n', close: mark + '\n' };
+    const flat = '> '.repeat(prefix.split('>').length - 1);
+    return {
+      mark,
+      reopen: flat + mark + (keep === '' ? '' : ' ' + keep) + '\n',
+      close: prefix.replace(LIST_MARKER_RE, (s) => ' '.repeat(s.length)) + mark + '\n',
+      closeFlat: flat + mark + '\n',
+    };
   }
   const m = FENCE_CLOSE_RE.exec(line);
-  return m !== null && m[1]![0] === fence.mark[0] && m[1]!.length >= fence.mark.length ? null : fence;
+  return m !== null && m[2]![0] === fence.mark[0] && m[2]!.length >= fence.mark.length ? null : fence;
 }
 
 /** The fence a part starting at a cut is inside, for reopening: only a reopenable one. */
@@ -152,7 +174,8 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
       if (firstLineEnd < 0) firstLineEnd = end;
       if (off > start) {
         const rank = fence === null && HEADING_RE.test(line) ? RANK_HEADING : prevRank;
-        const tail = fence !== null && fence.close !== null ? utf8Bytes(fence.close) : 0;
+        const tailText = fence === null ? null : closeFor(fence, inside);
+        const tail = tailText === null ? 0 : utf8Bytes(tailText);
         if (rank !== RANK_FENCE || fence?.reopen != null) {
           if (head + bytes + tail <= maxBytes) best[rank] = { off, bytes, fence };
         }
@@ -171,8 +194,8 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
     }
     const pick = best[RANK_HEADING] ?? best[RANK_BLANK] ?? best[RANK_LINE] ?? best[RANK_FENCE];
     if (pick !== undefined) {
-      const atFence = pick.fence !== null && pick.fence.close !== null ? pick.fence : null;
-      parts.push({ start, end: pick.off, continued, reopen, close: atFence === null ? null : atFence.close });
+      const atClose = pick.fence === null ? null : closeFor(pick.fence, inside);
+      parts.push({ start, end: pick.off, continued, reopen, close: atClose });
       continued = best[RANK_HEADING] !== pick;
       start = pick.off;
       state = pick.fence;
@@ -182,7 +205,7 @@ export function splitMarkdownParts(text: string, maxBytes: number, probe?: Probe
     // No line boundary fits: the first line is longer than what is left. Cut it at a code point boundary. Inside a
     // reopenable fence, the part closes it on a line of its own and the next part reopens it; when even that leaves no
     // room, the fence is not reopened (a pathological document), so every part still fits and the cut still moves.
-    let closeText = inside === null ? null : '\n' + inside.close!;
+    let closeText = inside === null ? null : '\n' + closeFor(inside, inside)!;
     let budget = maxBytes - head - (closeText === null ? 0 : utf8Bytes(closeText));
     if (closeText !== null && budget < 4) { closeText = null; budget = maxBytes - head; }
     const cut = codePointCut(text, start, firstLineEnd, budget);
