@@ -10,6 +10,7 @@ import {
 import type {
   DocsFileAnswer, DocsIndexAnswer, DocsLoaders, DocsRasterAnswer, DocsRefreshLoaderAnswer, DocsTreeAnswer,
 } from '../src/docs/failures';
+import type { RangeLoader } from '../src/docs/range/readRange';
 
 export const COMMIT_A = 'a'.repeat(40);
 export const COMMIT_B = 'b'.repeat(40);
@@ -125,6 +126,27 @@ export function fakeLoaders(answers: {
   const raster = vi.fn(async (): Promise<DocsRasterAnswer> => ({ s: 'unreachable' }));
   const refresh = vi.fn(async (): Promise<DocsRefreshLoaderAnswer> => answers.refresh ?? okRefresh());
   return { loaders: { projects, tree, file, raster, refresh }, projects, tree, file, raster, refresh };
+}
+
+/** A range loader that answers every prepare and frame from `src` (the bytes a read assembles), counting its prepares;
+ *  `throws` makes the prepare throw, as a loader fault does. */
+export function servingLoader(src: Uint8Array<ArrayBuffer>, opts: { throws?: boolean } = {}) {
+  let prepares = 0;
+  const hex = async (b: Uint8Array<ArrayBuffer>): Promise<string> =>
+    [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
+  const b64 = (b: Uint8Array): string => { let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); };
+  const loader: RangeLoader = {
+    async prepare() {
+      prepares += 1;
+      if (opts.throws === true) throw new TypeError('a loader fault');
+      return { s: 'ok', value: { snapshot: 's'.repeat(32), size: src.length, digest: await hex(src) } };
+    },
+    async frame(_t, snapshot, offset, length) {
+      const part = src.slice(offset, offset + length);
+      return { s: 'ok', value: { snapshot, offset, bytesB64: b64(part), digest: await hex(part), total: src.length } };
+    },
+  };
+  return { loader, prepares: () => prepares };
 }
 
 /** A `file` loader that never answers but rejects with an AbortError when its signal aborts, as `fetch` does (opt-in:

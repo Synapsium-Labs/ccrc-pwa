@@ -25,6 +25,22 @@ export interface PartToMount { readonly text: string; readonly index: number; re
 
 type Ids = readonly (ReadonlySet<string> | null)[];
 
+/** The part bar, one for every document read in parts (Markdown here, source in `SourceParts`): "Part k of n" with
+ *  Previous and Next. `index` is 0-based; `onGo` is told the part to show. Nothing for a single part. */
+export function PartBar(p: { readonly index: number; readonly count: number; readonly onGo: (to: number) => void }): ReactNode {
+  if (p.count < 2) return null;
+  const at = fillSentence(DOCS_RANGE_TEXT.partBar, { k: p.index + 1, n: p.count });
+  return (
+    <nav className="docs-parts" aria-label={at}>
+      <Button variant="ghost" className="docs-part-prev" disabled={p.index === 0}
+        onClick={() => p.onGo(p.index - 1)}>{DOCS_RANGE_TEXT.partPrevious}</Button>
+      <span className="docs-part-at">{at}</span>
+      <Button variant="ghost" className="docs-part-next" disabled={p.index === p.count - 1}
+        onClick={() => p.onGo(p.index + 1)}>{DOCS_RANGE_TEXT.partNext}</Button>
+    </nav>
+  );
+}
+
 export function MarkdownParts(p: {
   readonly text: string;
   readonly renderPart: (part: PartToMount) => ReactNode;
@@ -90,18 +106,9 @@ export function MarkdownParts(p: {
     return <p className="docs-loading">{fillSentence(DOCS_RANGE_TEXT.partPreparing, { k: done, n: parts.length })}</p>;
   }
   const part = parts[index]!;
-  const bar = parts.length < 2 ? null : (
-    <nav className="docs-parts" aria-label={fillSentence(DOCS_RANGE_TEXT.partBar, { k: index + 1, n: parts.length })}>
-      <Button variant="ghost" className="docs-part-prev" disabled={index === 0}
-        onClick={() => { setIndex(index - 1); setNote(false); }}>{DOCS_RANGE_TEXT.partPrevious}</Button>
-      <span className="docs-part-at">{fillSentence(DOCS_RANGE_TEXT.partBar, { k: index + 1, n: parts.length })}</span>
-      <Button variant="ghost" className="docs-part-next" disabled={index === parts.length - 1}
-        onClick={() => { setIndex(index + 1); setNote(false); }}>{DOCS_RANGE_TEXT.partNext}</Button>
-    </nav>
-  );
   return (
     <div className="docs-in-parts" data-part={index + 1} data-parts={parts.length}>
-      {bar}
+      <PartBar index={index} count={parts.length} onGo={(to) => { setIndex(to); setNote(false); }} />
       {note && <p className="docs-note" role="status">{DOCS_RANGE_TEXT.fragmentUnknown}</p>}
       {part.continued && index > 0 && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
       {p.renderPart({ text: partText(p.text, part), index, fragment: placed !== null && placed === fragment ? fragment : null })}

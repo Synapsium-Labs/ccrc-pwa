@@ -11,7 +11,7 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { DocsLeaf, RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { draftOf, entry, fakeLoaders, holder, okTree, pageAt, treeOk } from './docsFixtures';
+import { draftOf, entry, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, fillSentence } from '../src/docs/docsText';
 import { MarkdownParts } from '../src/docs/range/MarkdownParts';
@@ -76,26 +76,6 @@ describe('RangeLeaf', () => {
     expect(screen.getByText('Cancel')).toBeTruthy();
   });
 });
-
-/** A loader that answers every call from `src`, counting its prepares. */
-function servingLoader(src: Uint8Array<ArrayBuffer>, opts: { throws?: boolean } = {}) {
-  let prepares = 0;
-  const hex = async (b: Uint8Array<ArrayBuffer>): Promise<string> =>
-    [...new Uint8Array(await crypto.subtle.digest('SHA-256', b))].map((x) => x.toString(16).padStart(2, '0')).join('');
-  const b64 = (b: Uint8Array): string => { let s = ''; for (const x of b) s += String.fromCharCode(x); return btoa(s); };
-  const loader: RangeLoader = {
-    async prepare() {
-      prepares += 1;
-      if (opts.throws === true) throw new TypeError('a loader fault');
-      return { s: 'ok', value: { snapshot: 's'.repeat(32), size: src.length, digest: await hex(src) } };
-    },
-    async frame(_t, snapshot, offset, length) {
-      const part = src.slice(offset, offset + length);
-      return { s: 'ok', value: { snapshot, offset, bytesB64: b64(part), digest: await hex(part), total: src.length } };
-    },
-  };
-  return { loader, prepares: () => prepares };
-}
 
 const BYTES = new Uint8Array(DOCS_RANGE_FRAME_BYTES + 77).map((_, i) => 65 + (i % 26));
 

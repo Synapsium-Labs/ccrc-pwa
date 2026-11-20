@@ -298,6 +298,7 @@ export const DOCS_RANGE_TEXT = {
   partPrevious: 'Previous part',
   partNext: 'Next part',
   partContinued: 'This part continues the one before it.',
+  sourceParts: 'This file is {size}; it is shown as source in parts of at most {part}.',
   partPreparing: 'Preparing the parts of this document ({k} of {n})…',
   fragmentUnknown: 'The place this link names may be in a part Docs could not prepare, so the first part is shown.',
 } as const;

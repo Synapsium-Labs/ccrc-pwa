@@ -9,7 +9,7 @@ import { useCallback, useContext, useEffect, useMemo, useRef, useState, type Rea
 import { Button } from '@ccrc/ui';
 import type { Element as HastElement } from 'hast';
 import {
-  DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
+  DOCS_CLASS_CAP, DOCS_MAX_IMAGE_BYTES, contentClass, docsApi, entryView, type DocListPin, type DocPin, type DocsEntry, type DocsPageLocation, type DocsShowOk,
   type DocsTreeOk,
 } from '../../../shared/docs';
 import { utf8Bytes } from '../../../shared/utf8';
@@ -19,6 +19,7 @@ import { MarkdownParts } from './range/MarkdownParts';
 import { RangeImage, RangeLeaf, rangeReadKey, type RangeBytes } from './range/RangeLeaf';
 import { rangePinOf } from './range/rangePolicy';
 import type { RangeLoader } from './range/readRange';
+import { SourceParts } from './range/SourceParts';
 import { CodeBlock, PreHighlightContext } from '../lib/markdown';
 import { isRegisteredGrammar } from '../lib/highlightNames';
 import { useDocsHighlightStore } from '../lib/highlighterContext';
@@ -31,7 +32,9 @@ import { DocInLinkContext, DocLinkContext, fragmentTarget, type DocLinkContextVa
 import { DOC_NOT_UTF8_NOTE, DocMarkdown, DocPlain, docMarkdownSource } from './DocMarkdown';
 import { DocsFailureView } from './DocsFailureView';
 import type { DetachedUrls } from './docsLinks';
-import { DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, shortCommit, slotSentence } from './docsText';
+import {
+  DOCS_RANGE_TEXT, DOCS_SHOW_NO_BYTES, DOCS_SHOW_NOT_SVG, DOCS_VIEW_TEXT, failureSentence, fillSentence, kib, mib, shortCommit, slotSentence,
+} from './docsText';
 import { leafName } from './docsTree';
 import type { DocsNotOk } from './failures';
 import { downloadDocFile, showBytes } from './objectUrls';
@@ -291,6 +294,50 @@ export function openedRangePin(pin: DocListPin, digest: string): DocPin {
   return pin.kind === 'draft' && pin.fp === null ? { ...pin, fp: digest, stat: pin.stat } : pin;
 }
 
+/** The bytes a range read gave, decoded as UTF-8. `utf8: false` carries the lossy decoding, for the plain view with its
+ *  note (spec 4.4's not-UTF-8 row); a file that is not UTF-8 is never parsed, and never shown as source in parts. */
+function decodeRangeBytes(bytes: Uint8Array<ArrayBuffer>): { utf8: boolean; text: string } {
+  try {
+    return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
+  } catch {
+    return { utf8: false, text: new TextDecoder('utf-8').decode(bytes) };
+  }
+}
+
+/** The docs-show answer of bytes read by range: their text, size and digest, under the opened pin. */
+function rangeShowOf(read: RangeBytes, entry: DocsEntry, opened: DocPin, text: string): DocsShowOk {
+  const base = {
+    v: 1 as const, verb: 'docs-show' as const, ok: true as const, elapsedMs: 0, section: entry.section, path: entry.path,
+    size: read.bytes.length, sha256: read.digest, encoding: 'utf8' as const, text,
+  };
+  return opened.kind === 'draft'
+    ? { ...base, source: 'draft', branch: opened.branch, head: opened.head, fp: read.digest }
+    : { ...base, source: 'committed', commit: opened.commit, blob: entry.committed?.blob, onRef: 'unmeasured' };
+}
+
+/** One part of a text file read by range, through the leaf's own source body (`TextBody`): the part's text as a docs-show
+ *  answer of its own, so it meets the same highlight budgets a text file under the cap meets. */
+function RangeSourcePart(p: { readonly base: DocsShowOk; readonly text: string; readonly path: string }): ReactNode {
+  const show = useMemo<DocsShowOk>(() => ({ ...p.base, encoding: 'utf8', text: p.text, size: utf8Bytes(p.text) }), [p.base, p.text]);
+  return <TextBody show={show} path={p.path} />;
+}
+
+/** A text leaf read by range (spec 4.3, review F1): a file above its class cap, or a draft with no fingerprint, shown as
+ *  source in parts of at most the text class cap, each part through the same source and highlight body. Bytes that are not
+ *  UTF-8 stay a Download. */
+export function RangeSource(p: { readonly read: RangeBytes; readonly entry: DocsEntry; readonly pin: DocListPin }): ReactNode {
+  const opened = useMemo(() => openedRangePin(p.pin, p.read.digest), [p.pin, p.read.digest]);
+  const decoded = useMemo(() => decodeRangeBytes(p.read.bytes), [p.read.bytes]);
+  const base = useMemo(() => rangeShowOf(p.read, p.entry, opened, ''), [p.read, p.entry, opened]);
+  if (!decoded.utf8) return <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(p.read.bytes.length) })}</p>;
+  return (
+    <SourceParts
+      key={p.read.digest} text={decoded.text} maxBytes={DOCS_CLASS_CAP.text}
+      renderPart={(part) => <RangeSourcePart key={part.index} base={base} text={part.text} path={p.entry.path} />}
+    />
+  );
+}
+
 /** A Markdown leaf read by range (spec 4.3): its bytes as a docs-show answer of their own (text, size and digest), under
  *  the opened pin, through the same Markdown body, which shows it in parts. */
 export function RangeMarkdown(p: {
@@ -299,23 +346,9 @@ export function RangeMarkdown(p: {
   readonly pendingFragment: string | null; readonly onFragmentConsumed: () => void;
 }): ReactNode {
   const opened = useMemo(() => openedRangePin(p.pin, p.read.digest), [p.pin, p.read.digest]);
-  const decoded = useMemo<{ utf8: boolean; text: string }>(() => {
-    try {
-      return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(p.read.bytes) };
-    } catch {
-      // Bytes that are not UTF-8 are shown as the plain view with its note, never parsed (spec 4.4's not-UTF-8 row).
-      return { utf8: false, text: new TextDecoder('utf-8').decode(p.read.bytes) };
-    }
-  }, [p.read.bytes]);
-  const show = useMemo<DocsShowOk>(() => {
-    const base = {
-      v: 1 as const, verb: 'docs-show' as const, ok: true as const, elapsedMs: 0, section: p.entry.section, path: p.entry.path,
-      size: p.read.bytes.length, sha256: p.read.digest, encoding: 'utf8' as const, text: decoded.text,
-    };
-    return opened.kind === 'draft'
-      ? { ...base, source: 'draft', branch: opened.branch, head: opened.head, fp: p.read.digest }
-      : { ...base, source: 'committed', commit: opened.commit, blob: p.entry.committed?.blob, onRef: 'unmeasured' };
-  }, [p.read, p.entry, opened, decoded]);
+  // Bytes that are not UTF-8 are shown as the plain view with its note, never parsed (spec 4.4's not-UTF-8 row).
+  const decoded = useMemo(() => decodeRangeBytes(p.read.bytes), [p.read.bytes]);
+  const show = useMemo<DocsShowOk>(() => rangeShowOf(p.read, p.entry, opened, decoded.text), [p.read, p.entry, opened, decoded]);
   const bodyKey = ['range', p.page.project, p.entry.section, p.entry.path, p.read.digest].join('\u0000');
   if (!decoded.utf8) return <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />;
   return (
@@ -400,7 +433,8 @@ export function DocsLeaf(p: {
       body = <><RasterBody link={link} name={name} onLeafImage={p.onLeafImage ?? null} /><div className="docs-leaf-actions">{download}</div></>;
     } else if (file.s === 'too-large' || file.s === 'stat-pinned') {
       // X2 P1 (spec 4.3): above the class cap, or a draft with no fingerprint, the file is read by range up to the range
-      // ceiling: Markdown is shown in parts; every other class is offered as a Download read the same way.
+      // ceiling: Markdown is shown in parts, a text file as source in parts (review F1); every other class is offered as a
+      // Download read the same way.
       const range = rangePinOf(file.pin, entry);
       body = range === null
         ? <p className="docs-note">{DOCS_VIEW_TEXT.nothingToShow}</p>
@@ -417,7 +451,9 @@ export function DocsLeaf(p: {
                   pendingFragment={pendingFragment} onFragmentConsumed={fragmentConsumed}
                 />
               )
-              : undefined}
+              : cls === 'text'
+                ? (read) => <RangeSource read={read} entry={entry} pin={file.pin} />
+                : undefined}
           </RangeLeaf>
         );
     } else if (cls === 'other') {
