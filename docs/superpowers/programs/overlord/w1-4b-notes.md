@@ -67,6 +67,25 @@ follow, each under a slug below.
   workspace. The sleep path passes such a hold (`run-terminal`), and the operator can clear it by hand.
 - `base-branch-from-registry` (F3): no reader names a project's base branch, so the bind takes it from the `base` each of
   the project's registry rows records (`origin/main` names `main`).
+- `stall-import-pin-admits-acts-on-claimant` (F8): the stall watch's import pin (`stall-vocabulary.test.ts`) admits
+  `actsOnClaimant` alone from `rundefs.ts`, which is L1 and imports only L0, beside `sessionRoleOf` from `roleOf`. The
+  ruled single predicate needs it.
+
+## Fix round 1, after its fast run
+
+The fast run on the round's tip failed four guards I had not run locally, and CodeQL raised three path alerts. Each is
+fixed with no change of behaviour:
+
+- `mail-routes.test.ts`: `in-place` (`IN_PLACE_EVENT`, F9) is a `run_events.detail` word, declared beside
+  `session-rebound`.
+- `stall-vocabulary.test.ts`: the import pin above.
+- `registry-refused-census.test.ts`: the bind's registry read (F3) is a classified site, tagged `refuses` (an unlistable
+  registry refuses the bind; a refused row is no registered workspace).
+- `end-dead-coordinator.test.ts`: the abandon's commit passes `acted` as on main again. Round 1 had also passed
+  `fleet !== null` there, which F6 did not ask for.
+- CodeQL `js/path-injection` (3, high): the claimant's project field was read under the request's `by` once the body
+  check moved into `inPlaceRequest`. The request step now hands back the claimant as the store recorded it (equal to
+  `by`, which it proved), and every read and write after it names that stored id.
 
 ## Follow-ups (nothing acts on them in this PR)
 
@@ -79,6 +98,8 @@ follow, each under a slug below.
 - `sibling-worktree-unregistered` (F10, carried): the sibling worktree is registered nowhere (`workspace` stays null),
   so the orphan-tree lane, shadow until `orphan-tree-live`, does not know it. The guards that stand (dirty, in-use,
   committed work keeps its branch) make the worst case friction. Not traced end to end.
+- `abandon-commit-stale-without-act`: the abandon's commit step reads a refusal as `stale` even when no fleet act ran
+  (a stored id no verb may name, or an in-place run). This is main's behaviour, and it is kept here.
 - The landing-checks pass reads an in-place run's PR in its coordinator's workspace by the episode's explicit PR
   number. It is read-only, so this is a note only.
 

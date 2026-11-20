@@ -1046,16 +1046,20 @@ export async function bindRunInPlace(
   const listing = await deps.io.readdirMeasured(deps.cfg.registryDir);
   const request = decideInPlaceRequest(listing.ok ? listing.entries : null, coord.run(id), by);
   if (!request.ok) return request;
-  const run = request.plan;
+  // From here every read and write names the claimant the store recorded (equal to `by`, the request step proved it),
+  // never the request's own value: the registry paths below are built from a stored id.
+  const { run, claimant } = request.plan;
   const caller = decideInPlaceCaller(run, await deps.attribute(by, byUuid),
-    await fieldMeasured(deps.io, deps.cfg.registryDir, by, 'project'));
+    await fieldMeasured(deps.io, deps.cfg.registryDir, claimant, 'project'));
   if (caller !== null) return caller;
   // D-8085, D-8086: the landing intents a plain dispatch holds are held by the in-place bind too, under the same holder
   // check (the caller runs inside `coordMutex`, which serialises this check and the write in `bindInPlace`).
-  const target = decideInPlaceTarget(run, by, branch, await readRegistryMeasured(deps.io, deps.cfg), intents,
+  // [registry-refused:refuses] an unlistable registry refuses the bind; a refused row is no workspace's branch.
+  const registry = await readRegistryMeasured(deps.io, deps.cfg);
+  const target = decideInPlaceTarget(run, claimant, branch, registry, intents,
     (project, keys) => coord.heldLandingIntents(project, keys));
   if (!target.ok) return target;
-  const adv = coord.bindInPlace(id, by, target.plan.branch, target.plan.intentKeys, Date.now());
+  const adv = coord.bindInPlace(id, claimant, target.plan.branch, target.plan.intentKeys, Date.now());
   if (!adv.ok) return { ok: false, kind: 'advanceFailed', adv };
-  return { ok: true, id, sessionId: by, branch: target.plan.branch };
+  return { ok: true, id, sessionId: claimant, branch: target.plan.branch };
 }

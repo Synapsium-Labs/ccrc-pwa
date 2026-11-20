@@ -703,8 +703,11 @@ type InPlaceStep<P> = { ok: true; plan: P } | InPlaceHalt;
 /** Step 1 (`bindRunInPlace` reads the listing and the run, nothing else yet): the operator's pause and the mail kill
  *  switch, failing shut on an unlistable registry; then the run: it exists, is a `planned` work run, is claimed by the
  *  caller, and is not bound to another session (a wave N>=2 reclaim would be re-bound silently, and its worker's mail
- *  re-issued to the coordinator). */
-export function decideInPlaceRequest(names: readonly string[] | null, read: RunReadResult, by: string): InPlaceStep<RunRow> {
+ *  re-issued to the coordinator). The plan carries the claimant as the STORE recorded it, equal to `by` once the
+ *  claimant check passed, so every later read and write names the stored id, never the request's value. */
+export function decideInPlaceRequest(
+  names: readonly string[] | null, read: RunReadResult, by: string,
+): InPlaceStep<{ run: RunRow; claimant: string }> {
   const markers = admitMarkerRefusal(names);
   if (markers !== null) return markers;
   if (!read.ok) return { ok: false, kind: 'hold-invalid', detail: read.detail };
@@ -716,7 +719,7 @@ export function decideInPlaceRequest(names: readonly string[] | null, read: RunR
   if (run.sessionId !== null && run.sessionId !== by) {
     return { ok: false, kind: 'bad-request', detail: 'inPlace: this run is already bound to another session' };
   }
-  return { ok: true, plan: run };
+  return { ok: true, plan: { run, claimant: run.claimedBy } };
 }
 
 /** Step 2: the caller's attribution (its uuid is the registry's), then its project MEASURED through `fieldMeasured`

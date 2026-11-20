@@ -413,7 +413,7 @@ async function abandonRun(
       acted: act.plan.fleet !== null });
     if (after.kind !== 'go') return stopped(deps, after);
   }
-  const late = commitAbandon(deps, id, plan, causedBy, sweep, act.plan.fleet !== null, detail);
+  const late = commitAbandon(deps, id, plan, causedBy, sweep, true, detail);
   if (late !== null) return late;
   noteGone(deps, id, causedBy, fleet);
   return { ok: true, id, state: 'failed', released: act.plan.released, ...handOffChildReclaim(deps, act.plan.gate) };
