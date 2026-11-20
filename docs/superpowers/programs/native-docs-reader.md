@@ -36,6 +36,31 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)** |
 
 ## Decisions & deviations
+- **2026-11-19 (evening): the operator approved the three extension designs and answered the open choices. P1 dispatched as run 2743. X5, artifact-level HTML pages on an isolated origin, opened as run 2837 (operator rulings; coordinator run-open).**
+  - **The operator's rulings, in chat:**
+    - The appearance (X1), parity (X2) and draft-review (X3) designs are approved, as amended by X4. Implementation may dispatch.
+    - Asks 595 and 603 are confirmed: draft review is a capability link, and comments come from signed-in people only. X3's R1 is no longer waiting on them.
+    - Ask 596: a fresh start. No reading state is imported from the standalone reader. The operator agreed with the recommendation, and the coordinator confirmed it.
+    - Ask 598 / X2's C3, against the recommendation to keep the walls: HTML pages must be supported "at Claude artifacts levels", hosted in a sandbox or behind other safety measures. A new design wave, X5, designs it. X2's in-walls loader (§4.8, P6) stands until X5 decides the tiers.
+  - **Still open with the operator:**
+    - The library's new name. The operator asked about "pinax-lib". The coordinator recommends `@synapsium-labs/pinax`, with the repository `pinax`, and keeps a suffix for any later app.
+    - Who drives the library wave. The library's own programme has no open run and no coordinator in the fleet's run list.
+  - **P1 (run 2743, wave 28, block 8783 to 8785)** builds X2's range reads and large files. Its first item is the render-gate carry and D2's two minors (Binding carries). The brief names four files that other programmes' workers hold, and orders the tasks so that free files go first.
+  - **X3's R1 waits for P1.** The two waves share five files: `shared/docs.ts`, `server/src/server.ts`, the auth-gate and box-token-census tests, and the rings data. Clause 10 rules out dispatching two workers onto overlapping claims.
+  - **X5 (run 2837, wave 29, reserve 8786 to 8788)** is a docs-only design with security weight. It covers:
+    - hosting on a second registrable domain with no session;
+    - access by a capability link minted under session;
+    - page isolation and network egress;
+    - bytes served from git through the bounded reads;
+    - the tiers against X2's walls;
+    - a threat model;
+    - the mapping onto Task 17's parity rows.
+
+    An amendment to X2's §4.8 or C3 is a departure, defined from its reserve and naming this ruling.
+  - **Routing:**
+    - P1: an Opus · high main loop, Sonnet · high implementers for the ccd verb, the route and the census (Sonnet · medium elsewhere), and one Opus · high review of each task's diff.
+    - X5: as the earlier design waves. An Opus · high main loop, at xhigh for the hosting, access and egress decisions, Sonnet · medium fact checks, and one Opus · high adversarial pass.
+    - Workflow off for both.
 - **2026-11-19: X4, the library input, accepted at the review cap and landed (#3055, `da21717b8`). X2's library share set. P1 opened as run 2743 at `planned` (coordinator; in-plan rulings).**
   - X4 ran as run 2680 (wave 27). It edited X1's and X2's specs and plans in place, so that the library programme plans its one wave from corrected text. Its reserve of two numbers is unspent.
   - Review run 2694 (round 1, at `ed2d43cd3`) found six important items. Ruling on test 8's two uncovered cases:
@@ -1059,9 +1084,152 @@ Wave L plans from X1's text on `main` after #3055, not as it was at `89a9ce02a`.
   - R1 waits for the operator's confirmation of asks 595 and 603.
   - R3 waits for the M-X3.16 device item, and names `DocsHead.tsx`, `DocsIndexView.tsx`, the control census, the tap-target floors and the residue A23 to A27.
 
-## Current next wave — P1, run 2743 (planned, not dispatched)
+## Current next-wave briefs — P1 and X5, runs 2743 and 2837
 
-P1 is X2's first wave: range reads and large files (X2 plan, Wave P1). It was opened at `planned` on 2026-11-19 so that the programme keeps an open run. It is dispatched only after the operator approves the three extension designs. Its brief is written then, with its deviation block allocated in the same act. Its first item, before its code, is the render-gate carry and D2's two minors (Binding carries, above).
+Dispatched 2026-11-19 as written below (Decisions, 2026-11-19 evening). X3's R1 follows P1, because the two waves share files.
+
+### P1 — run 2743
+
+Programme `native-docs-reader`, wave 28 = P1, the first parity building wave: range reads and large files. Run 2743. Deviation block Issued: 8783, 8784 and 8785.
+
+The operator approved the X1, X2 and X3 designs on 2026-11-19. This wave builds X2's Wave P1. Read the whole section in `docs/superpowers/plans/2026-11-18-native-docs-parity.md`: its Global Constraints, Review Focus, ownership table and Tasks P1.1 to P1.5. Read the matching spec sections in `docs/superpowers/specs/2026-11-18-native-docs-parity-design.md`. Read the ledger `docs/superpowers/programs/native-docs-reader.md`, section "Binding carries from the extension designs": every item there addressed to P1 is binding.
+
+**First item, before any code (one or two commits, docs only):**
+1. The render-gate carry, exactly as the ledger states it:
+   - Markdown above the 512 KiB gate is read in parts no larger than the gate, each mounting rich and printing through the same render job;
+   - row F2 becomes a Gap closed by P1.5, and the counts and In short move;
+   - §4.3's "a part of up to 2 MiB renders as its own mount" is corrected;
+   - PL3 is reworded;
+   - P1.5's part-id pre-pass uses parts of at most gate size;
+   - P6.1's boundary and fixture tests are added.
+
+   Edit X2's spec and plan.
+2. D2's two minors (ask 600), in the completion plan's Results "D2" section:
+   - Re-measure row `W4-T10-M10` once. It records 3 failed; review run 2610 measured 2. Record your count and drop the third red name.
+   - Name D-8730's two clauses, "the next Tab follows the one bar's order" and "the one bar's layout and order are unchanged", each as pinned (by which row) or as descriptive only. Do not change D-8730's text.
+
+**Then P1.1 to P1.5, red-first, as the plan writes them**, with the carried Files additions:
+- P1.2 gains `server/test/ccdCapTokens.ts`, `server/test/ccd-archive.test.ts` and the `docs-parity` `H.VERBS` case.
+- P1.5 gains `useDocsVisit.ts`, `docsLinks.ts` and Share's `samePin`. `pinFor` must not throw for a stat-pinned draft between the listing and the prepare.
+
+**Measurements.**
+- Lab RANGE-L1 (P1.1 Step 0) sets `DOCS_RANGE_PREPARE_BUDGET_MS` from five timed 64 MiB copy-and-hash runs.
+- The render-gate stop-and-ask: if a part at the gate cannot render within budget, stop and ask. Measure it in the reader lab's desktop Chromium leg. Record the phone leg as an operator device item for me to raise. Do not claim a phone figure you did not measure.
+
+**Disk:** the box is low on disk. P1.2's cases write about 128 MiB into the fixture HOME's cache, so each case removes its snapshots. RANGE-L1's 64 MiB file lives in your session temp root and is deleted after. No repository copy, no new worktree, no `npm install` beyond your workspace's own.
+
+**Claims.** Claim your files before editing. These are held right now by other programmes' workers:
+- `ccd/ccd` and `server/src/ccdargv.ts`: claim 5684, the mid-turn-mail PR4 worker;
+- `server/src/server.ts`, `server/test/{box-token-census,auth-gate}.test.ts`, `server/test/rings/fastify-l4.data.ts` and `server/test/ccdCapTokens.ts`: claim 5697, the door-B1 worker;
+- `pwa/src/lib/api.ts`: claim 5670, the approvals PR3 worker;
+- `server/test/ccd-archive.test.ts`: claim 5673, the mid-turn-mail PR4 worker.
+
+Order your tasks so that free files go first: the first item, then P1.1 (`shared/docs.ts`), then the PWA parts of P1.4 and P1.5. For a held file, use the peers rules (`ccrc-api peers list --of <you>`) to ask its holder. If it is not free when you need it, tell me which task waits on which claim, keep working on the free tasks, and never edit a held file. The first draft-review building wave (R1) waits for this wave: it shares `shared/docs.ts`, `server/src/server.ts` and three census and ring test files with you.
+
+**Tests:**
+- Fixture HOMEs only for ccd, with the three poisons in any new ccd test.
+- Every heavy run goes through `ccrc test -- <command>`, in the foreground, with a timeout of at least 600000 ms.
+- Mutation rows (P1's M11.10 to M11.15, M11.51, M11.53, M11.55 and M11.66) are measured red, then restored from a saved copy, never by `git checkout`.
+- A new mutation row or guard ships with a test that reds when it is deleted.
+
+**Standing boundaries:**
+- Reader sandbox exactly `allow-scripts`, shell CSP `frame-src 'none'`, no parent-DOM access and no new channel.
+- Both 2026-11-06 phone blocks byte for byte. Library 1.1.0 stays pinned.
+- No live service, unit or config touched.
+- Every new door is classed under the census rules (`DOCS_DOORS`), and the range route stays session-gated.
+
+**Public repository:** neutral names (`project-a`, `the fleet box`). Private-name scan every file and every commit message before your push.
+
+**Deviations:** a departure from an approved spec or the completion design gets the next number of your block, defined in X2's plan's `## Deviations found`, quoting the sentence. A departure from an operator ruling is not yours: ask. When the block is spent, write `D-TBD-<slug>` and ask.
+
+**Asks:** a product choice goes to me as a structured ask with your recommendation. A technical choice is yours: record why.
+
+**Stop and ask:**
+- any widening of the boundaries above;
+- an edit to a file another run holds;
+- a hook or route refusal (report it, then wait for my word before any other form of the same act);
+- a measurement that fails its stated budget.
+
+**Routing (clause 13):**
+- Main loop Opus · high.
+- Implementer subagents Sonnet · high, for the ccd verb, the route and the census; Sonnet · medium elsewhere.
+- One Opus · high review subagent over each task's diff before its commit.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+
+**Delivery:** commit on `ws/<your slug>` only. One PR, with the trailers in one final paragraph. Results go in X2's plan. List mail before your push, and push once. Then:
+1. Get the exact-tip required checks and the CodeQL check green, with 0 open alerts.
+2. Send wave-done with the fingerprint JSON and the suite and failure lines.
+
+Never enqueue or arm auto-merge.
+
+### X5 — run 2837
+
+Programme `native-docs-reader`, wave 29 = X5, a DESIGN wave with security weight: HTML pages at the level of AI-chat artifacts, on an isolated origin. Run 2837. Deviation block Issued: 8786, 8787 and 8788 (a reserve; none defined yet).
+
+**The operator's ruling, 2026-11-19**, on X2's conflict C3 (ask 598): "we will need to support them, think claude artifacts levels of support, but maybe we should sandbox how they are hosted or adopt other safety measures". This replaces X2's recommendation to keep the walls.
+- An HTML page in the docs runs its own scripts, modules, workers, WebAssembly, fetches of its own sibling files, dialogs and downloads, the way a hosted artifact does.
+- The safety comes from where and how it is hosted.
+
+**Read first:**
+- X2's spec `docs/superpowers/specs/2026-11-18-native-docs-parity-design.md`: §4.8 (the walls, the in-walls loader, the measured loss by kind), "The widening, priced" and C3.
+- X2's plan, Wave P6 (the page loader).
+- `pwa/src/docs/mockup/` (`policy.ts`: `MOCKUP_SANDBOX_*`, `MOCKUP_CSP`; `load.ts`; `MockupFrame.tsx`).
+- X3's draft-review design (a capability-link store with expiry, revocation, a read door outside the auth gate, and a marker header), whose patterns you may reuse.
+- `server/src/auth/gate.ts`: its origin check (one `CCRC_ORIGIN`, whole-string equality, writes only), the `Origin: null` exemption, and EXEMPT classes.
+- Project `CLAUDE.md`: the two-box topology, `ccrc expose` with Caddy and DuckDNS, the arming triple, box-token census rules, rings, and storage and backup.
+
+**Decide and argue, each with a table of alternatives:**
+1. **Hosting.**
+   - A second registrable domain (not a subdomain of the console's) with no cookie and no session. Or the alternatives, each with its threat.
+   - How the operator sets it up: a second name, a Caddy site, a certificate, through `ccrc expose`, with no tailnet dependency.
+   - What happens on a box that has no second name: a fallback to X2's walls tier, never to the console's origin.
+2. **Access.**
+   - A capability URL minted by the console under a signed-in session: entropy, expiry, revocation, and whether X3's store is reused.
+   - The content route outside the auth gate with its own check, named once in the census.
+3. **Isolation of the page.**
+   - Sandbox flags, a frame on the second origin or a new tab, and the CSP.
+   - Network egress: none, allow-listed or open. Argue exfiltration of what the page shows.
+   - No channel to the console, and never a secret posted to it.
+4. **Bytes.** Served from git through the existing bounded reads and the whitelisted agent frames (range reads from P1), with the size budgets you keep, and caching. No live fleet read outside the agent.
+5. **Tiers.** Whether X2's in-walls srcdoc tier stays the default, with the isolated origin as an opt-in for pages the walls refuse, or one tier for all. No shared policy constant between tiers.
+6. **Threat model.** Name each and close it:
+   - phishing on the second domain;
+   - drive-by and auto-download;
+   - resource abuse;
+   - token leakage (Referer, history, previews);
+   - a malicious page in a repository;
+   - service-worker scope;
+   - cross-origin storage;
+   - the page impersonating ccrc.
+7. **Parity.** Close the standalone-only losses §4.8 measured: assets above 5 MiB in total, WebAssembly, a page above 2 MiB, dialogs and popups. Map onto Task 17's parity rows and C3.
+
+**Deliver, in one PR:**
+- A design spec `docs/superpowers/specs/2026-11-19-native-docs-html-artifacts-design.md`, from `~/.claude/templates/superpowers-spec.md`: In short, numbered sections, Mermaid figures with captions, decision tables, a promise-delta fence, and Where things stand. Keep Waiting on you to genuine product choices, each with your recommendation.
+- A leaf plan `docs/superpowers/plans/2026-11-19-native-docs-html-artifacts.md`, written with the writing-plans skill: its implementation waves, their order against X2's P1 to P6 and X3's R1 to R4, the files each owns, the interfaces, mutation rows that a deletion would red, acceptance rows, and Results.
+
+Amending X2's §4.8 or C3 text is a departure from an operator-approved design. Define it from your block, quoting each sentence exactly and naming the operator's 2026-11-19 ruling.
+
+**Measure, don't recall.** Read shipped source on `main`. You may read public documentation about how hosted artifact platforms isolate content, and cite it by public URL. Do not stand up a server, domain, certificate or service. No install, repository copy or new worktree: the box is low on disk.
+
+**Standing boundaries:**
+- The console's own origin never runs a page's code.
+- The reader frame's sandbox (`allow-scripts`) and the shell CSP `frame-src 'none'` stay as they are for docs. Any widening of the console's own policies is a stop-and-ask.
+- No live service, unit, proxy, DNS or config is touched.
+- The standalone reader is named by role only.
+
+**Public repository:** neutral names (`<console-host>`, `<artifact-host>`, `project-a`). Never a real host, domain, address or path. Private-name scan every file and every commit message before your push.
+
+**Asks:** a product choice goes to me as a structured ask, with options and your recommendation. A technical choice is yours: decide it and record why. Never re-ask a recorded ruling.
+
+**Routing (clause 13):**
+- Main loop Opus · high, xhigh at the hosting, access and egress decisions.
+- Sonnet · medium Agent subagents for fact checks against source.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+- Before your wave-done, run one Opus · high adversarial pass over the spec (boundaries, threat model, testability), and fix or record what it finds.
+
+**Stop and ask:** any source edit (this is docs only), any widening of the console's policies, a new storage owner you cannot argue under the census rules, or a refusal from any tool, hook or route (report it, then wait).
+
+**Delivery:** commit on `ws/<your slug>` only, with the trailers in one final paragraph. List mail before your push, and push once. Get the exact-tip `ci` and `CodeQL` checks green, then send wave-done with the fingerprint JSON. Never enqueue or arm auto-merge.
 
 ## Earlier brief — X4, run 2680 (landed in #3055)
 

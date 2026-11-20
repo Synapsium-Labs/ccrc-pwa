@@ -69,7 +69,7 @@ const ID_BUILDERS = {
   wsCollectCensus: 'no-id', wsCollectLooseAudit: 'no-id', wsCollectLoose: 'no-id',   // a loose entry's name travels as hex, never as an id (D-6626)
   wsHold: 'id', wsRelease: 'id', wsRename: 'id', wsTitle: 'id',
   coordPause: 'no-id', reclaimPause: 'no-id', testboxRemote: 'no-id', paneScopeStop: 'no-id', scopeSweepBusy: 'no-id', delegationAdopt: 'no-id', projectPoolSet: 'no-id', projectPoolClear: 'no-id',
-  projectAddClone: 'no-id', projectAddEmpty: 'no-id',
+  projectAddClone: 'no-id', projectAddEmpty: 'no-id', skillEnsure: 'no-id',   // a roster account id, never a registry id (D-8126)
   route: 'id', routeApply: 'id', routeSet: 'id', winSize: 'id',
   // The Overlord W1 ccd arms (plan Task 3): `keepAwake` has no caller yet; designation A's create and retire add their rows.
   keepAwake: 'id',

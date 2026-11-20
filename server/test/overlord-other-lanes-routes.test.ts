@@ -29,7 +29,7 @@ import { NotifyLog } from '../src/notifylog.js';
 import {
   bindPendingGeneration, designatePending, designationRead, failPending, goLive, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { testDeps } from './helpers.js';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
@@ -80,7 +80,7 @@ type Refusing = typeof REFUSING[number];
 const WHY = 'stopsOwed is not a JSON array of strings';
 const fakeJournal = { appendInTx: () => ({ ok: true, kind: 'appended', record: {} }) } as unknown as AuthorityAppender;
 const OPERATOR = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) })
-  .operator(actorOf('operator-a', '0123456789abcdef'));
+  .operator(gateActorOf('operator-a', '0123456789abcdef'));
 
 function seedDesignation(db: DatabaseSync, st: State): void {
   if (st === 'none') return;

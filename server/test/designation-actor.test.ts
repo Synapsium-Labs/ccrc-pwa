@@ -13,7 +13,7 @@ import {
   designatePending, designationRead, failPending, goLive, retire, setModelClass, setAccountSet, type AuthorityAppender,
 } from '../src/coord/overlordDesignationStore.js';
 import type { AuthorityAppend } from '../src/coord/overlordAuthorityJournal.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import type { RecordedActor } from '../src/auth/callerIdentity.js';
 import { ACTOR_ISSUER_MAP, ACTOR_KIND_MAP, CALLER_STRENGTH_MAP } from '../../shared/overlord-identity.js';
@@ -59,8 +59,8 @@ const journal: AuthorityAppender = { appendInTx: () => APPENDED };
 const identity = attributionIdentity({
   attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }),
 });
-const OPERATOR = identity.operator(actorOf('device-a', 'abcdef0123456789'));
-const RETIRER = identity.operator(actorOf('device-b', '0123456789abcdef'));
+const OPERATOR = identity.operator(gateActorOf('device-a', 'abcdef0123456789'));
+const RETIRER = identity.operator(gateActorOf('device-b', '0123456789abcdef'));
 
 const des = (db: DatabaseSync, actor: RecordedActor = OPERATOR): ReturnType<typeof designatePending> =>
   designatePending(db, journal, { sessionId: A, deadlineAt: NOW + 60_000, model: 'opus', accountPools: { pools: ['pool-a'], untagged: false },

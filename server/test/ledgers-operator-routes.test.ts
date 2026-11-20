@@ -846,6 +846,23 @@ describe('big calls on the waiting view, the goals read and the run record (D-81
     expect(w.callsCleared!.map((c) => c.id)).toEqual([old]);
   });
 
+  // Fix round 1 of A4 (review 2792 F3, the coordinator's ruling): a cleared row carries when it left the group, read by
+  // `callClearedAt`, its one owner: the Seen for a seen call, the ageing time for an aged one. An open row carries none.
+  it('a cleared call carries clearedAt from callClearedAt; an open call carries none', async () => {
+    const r = await rig();
+    const madeAt = Date.now() - 8 * 86_400_000;
+    const aged = record(r, {}, madeAt);
+    const open = record(r);
+    const seenOne = record(r, { chosen: 'demo-w1' });
+    expect((await seen(r, seenOne)).statusCode).toBe(200);
+    const seenAt = r.coord.callById(seenOne)!.seenAt!;
+    const w = await waitingOf(r);
+    expect(w.calls!.map((c) => [c.id, 'clearedAt' in c])).toEqual([[open, false]]);
+    const byId = new Map(w.callsCleared!.map((c) => [c.id, c.clearedAt]));
+    expect(byId.get(aged)).toBe(madeAt + 7 * 86_400_000);
+    expect(byId.get(seenOne)).toBe(seenAt);
+  });
+
   it('the goals read\'s bigCalls holds at most 20 of the programme\'s big calls, newest first', async () => {
     const r = await rig();
     const t0 = Date.now() - 10_000_000;

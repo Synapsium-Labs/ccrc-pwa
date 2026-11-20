@@ -382,9 +382,9 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
   });
 });
 
-describe('the eight coordination lanes (D-5862, PR 2)', () => {
+describe('the nine coordination lanes (D-5862, PR 2; the block-wake lane, D-8126)', () => {
   const ROWS: Array<[string, string, string]> = [
-    ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
+    ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['blockWakes', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
     ['mail', 'mono', 'none'], ['asks', 'mono', 'none'], ['approvalPrune', 'mono', 'none'], ['digestBeat', 'mono', 'none'],
   ];
 
@@ -521,9 +521,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 52 of 52 are monotonic (the Linear plan sync, D-8182; the Linear drift pass, D-8183; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 54 of 54 are monotonic (the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(52);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(54);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -648,6 +648,15 @@ describe('the case lane row (Overlord spec §10.5, Table 11.1c)', () => {
     expect(laneRow('cases')).toMatchObject({
       cadenceMs: DRIFT_SWEEP_MS, clock: 'mono', flight: 'skip',
       warnKey: 'ccrc-server: the case lane failed', derivedFrom: { name: 'DRIFT_SWEEP_MS' },
+    });
+  });
+});
+
+describe('the skill self-install lane row (D-8126, wave A7-5)', () => {
+  it('looks every 15 s, one pass at a time, abandons a pass older than five minutes, and names its warning', () => {
+    expect(laneRow('skillInstall')).toEqual({
+      name: 'skillInstall', cadenceMs: 15_000, derivedFrom: null, clock: 'mono', flight: 'skip',
+      staleAfterMs: 300_000, warnKey: 'ccrc-server: the skill self-install lane failed',
     });
   });
 });

@@ -241,9 +241,18 @@ describe('readLaneModels through the op (D-8686)', () => {
     const absent = (over: Record<string, unknown>) => rig(exited(showJson('lane-a', { registry: null, labels: null, ...over }))).read();
     expect(await absent({ anthropic: true })).toEqual({ kind: 'absent', laneKind: 'anthropic' });
     expect(await absent({ anthropic: false })).toEqual({ kind: 'absent', laneKind: 'never-made' });
-    // a `ccrc` that sends no `anthropic` key, or a value off the grammar, says nothing, and nothing is kept
-    expect(await absent({ anthropic: undefined })).toEqual({ kind: 'absent' });
-    expect(await absent({ anthropic: 'yes' })).toEqual({ kind: 'absent' });
+  });
+
+  // Follow-up transient-beside-kept-answer (item 4): an `absent` with no lane kind has ONE cause, the fleet box's roster
+  // has no such lane. Every `show` body has carried `anthropic` since the registry's first plan (`describe` and
+  // `orphanDescribe` in the models op), so a null registry with no `anthropic` key, or one that is not a boolean, is a
+  // body off the grammar: unreadable, never an absent the console words as a lane the box did not find.
+  it('the two causes stay apart: no-such-account is an absent with no lane kind, a null registry without its reason is unreadable', async () => {
+    expect(await rig(exited(refusal('no-such-account'), 1)).read()).toEqual({ kind: 'absent' });
+    const absent = (over: Record<string, unknown>) => rig(exited(showJson('lane-a', { registry: null, labels: null, ...over }))).read();
+    expect(await absent({ anthropic: undefined })).toEqual({ kind: 'unreadable' });
+    expect(await absent({ anthropic: 'yes' })).toEqual({ kind: 'unreadable' });
+    expect(await absent({ anthropic: null })).toEqual({ kind: 'unreadable' });
   });
 
   it('missing labels, a label whose model is not the pin, a bad pin or a bad efforts list is unreadable', async () => {

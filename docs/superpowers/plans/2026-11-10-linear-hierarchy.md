@@ -1837,6 +1837,10 @@ executable block runs).
   `plan map-propose` lands with its row and route in Task 7.2, and naming it here would turn both the closed-corpus
   parity and `coordinator-skill.test.ts`'s route check red.
 
+Built in part by #3040 (wave 6): `references/plan.md` and SKILL.md's §Linear pointer. The clause, its count word, the
+cap raise and the rest of this task's files are the follow-up ticket `w6-clause` (D-8739). The Overlord's autonomy
+clause (D-8126) takes number 21, so this clause lands as 22.
+
 - [ ] **Step 1: Write the failing tests** — `clause 21 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
   `the ledger template's waves table has an epic column`; the ratchet's R4/R6 hold.
 - [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
@@ -1852,12 +1856,12 @@ managed object), `server/test/skill-size-caps.json` only if lowered; Test `serve
 `server/test/skill-size-ratchet.test.ts`, `server/test/ccrc-api-closed.test.ts` (the worker's executable
 `ccrc-api plan ticket-add` block joins its pinned list).
 
-- [ ] **Step 1: Write the failing tests** — `the worker files follow-ups with plan ticket-add into its own epic`;
+- [x] **Step 1: Write the failing tests** — `the worker files follow-ups with plan ticket-add into its own epic`;
   `the Linear skill says the hierarchy is ccrc's`.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/worker-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
-- [ ] **Step 3: Write** the text, net size within each cap.
-- [ ] **Step 4: Run to pass** — same command.
-- [ ] **Step 5: Commit** — `docs(skills): the worker's follow-ups and the Linear skill's hierarchy rule (D-8185)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/worker-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
+- [x] **Step 3: Write** the text, net size within each cap.
+- [x] **Step 4: Run to pass** — same command.
+- [x] **Step 5: Commit** — `docs(skills): the worker's follow-ups and the Linear skill's hierarchy rule (D-8185)`.
 
 ---
 
@@ -2048,6 +2052,102 @@ Test `server/test/migration-putback.test.ts`.
 - [ ] **Step 3: Implement** the report and the put-back executor.
 - [ ] **Step 4: Run to pass** — same, plus `test/migration-apply.test.ts test/linear-items.test.ts`.
 - [ ] **Step 5: Commit** — `feat(linear): the migration report and put back (D-8186)`.
+
+---
+
+## Wave 8 — team and workspace mapping
+
+Spec §3.1, the operator's ruling of 2026-11-19 (item 489): coordinators suggest a team, and the Overlord may link one as
+a call made in the operator's name. It runs alongside wave 7's pilot and never blocks it. Its deviation numbers are
+issued at its run-open. Read `server/src/linking/teamLink.ts` (the decider, D-8405), `server/src/linking/visibilityLane.ts`
+(the pass), `server/src/coord/linkingStore.ts` (the one writer of the row) and `server/src/linear/route.ts` (the router)
+first. `shared/api.ts` may only shrink (D-8635): the team evidence and link source maps move to `shared/linking.ts`
+before they grow.
+
+### Task 8.1: The project row names a workspace
+
+**Files:** Modify `server/src/coord/schema.ts` (one migration at the next free slot, D-8673: `project_linking` gains the
+workspace slot id), `server/src/coord/linkingStore.ts` (the operator's write sets key and workspace together; a key
+change clears a workspace that does not have it), `server/src/linking/routes.ts` (the write body's optional workspace,
+refused `team-unknown` for a pair no connected workspace has), every resolver of a project's team key (the plan sync's,
+the inbound lane's, and the router's where the caller's project is known); Test the linking store, the linking routes,
+the router and plan sync suites, `coord-db` (the count pins).
+
+**Interfaces:** a row with a workspace resolves its key there only and never answers `team-ambiguous`; a row without one
+resolves as today.
+
+- [ ] **Step 1: Write the failing tests** — `a key two workspaces share resolves in the row's workspace`; `a row with no
+  workspace resolves as before`; `a write naming a pair no workspace has is refused`.
+- [ ] **Step 2: Run to fail.**
+- [ ] **Step 3: Write** the migration, the store, the route and the resolvers.
+- [ ] **Step 4: Run to pass.**
+- [ ] **Step 5: Commit.**
+
+### Task 8.2: The pass reads workspace and key pairs
+
+**Files:** Modify `server/src/linking/teamLink.ts` (`KnownTeam` carries its workspace; the key merge goes; a decisive key
+in two workspaces links only when the evidence names one, else each pair is a candidate), `server/src/linking/visibilityLane.ts`
+(the teams as pairs; the link writes the workspace), `shared/linking.ts` (the candidate's workspace); Test the team link
+decider and lane suites.
+
+- [ ] **Step 1: Write the failing tests** — `a decisive key in one workspace links with that workspace`; `a decisive key in
+  two workspaces with no evidence for either offers both, each with its workspace`.
+- [ ] **Steps 2-5:** run to fail, write, run to pass, commit.
+
+### Task 8.3: Attached issues as evidence
+
+**Files:** Modify `server/src/linear/ops.ts` (one new fixed read document: the issues attached to a pull request's URL),
+the lane's inputs (this repository's recent merged pull request URLs, from what the pull request sweep already reads),
+`server/src/linking/teamLink.ts` (evidence kind `pr-attachments`: distinct attached issues per team, decisive at
+`TEAM_LINK_MIN_IDS` and `TEAM_LINK_MIN_SHARE`, naming its workspace; it is weighed beside ticket ids, in public and private
+repositories alike), `shared/linking.ts` (the kind); Test the decider, the lane and the ops suites, on fixtures faked at
+`callLinear`'s FetchLike.
+
+**Interfaces:** read-only, as the ccrc actor, through `callLinear` and the one rate service. The read is not called until
+the operator's go for one live capture (an item raised when this task starts); until then the lane passes it no answer
+and the decider weighs nothing from it.
+
+- [ ] **Step 1: Write the failing tests** — `three attached issues of one team link a public repository`; `attached issues
+  name the workspace of a key two workspaces share`; `with the read off, the decision is today's`.
+- [ ] **Steps 2-5:** run to fail, write, run to pass, commit.
+
+### Task 8.4: A coordinator's suggestion
+
+**Files:** Modify `server/src/linking/routes.ts` (a box-token door, attribution-checked: the suggestion of a team, an
+optional workspace and a reason for a project with no key; one per coordinator per project, a resend replacing it;
+refused `team-set` and `team-unknown`), `server/src/coord/linkingStore.ts` (the suggestions, cleared when a key is set),
+`ccd/ccrc-api` (`linking suggest`), `shared/linking.ts` (evidence kind `suggested`, with its session and reason); Test the
+linking routes, `ccrc-api`, and the box-token census sites a new box-token door touches.
+
+**Interfaces:** a suggestion is a candidate only and never links. Its reason is shown in the console and never written to
+Linear.
+
+- [ ] **Step 1: Write the failing tests** — `a suggestion is a candidate and never links`; `a resend replaces it`;
+  `a project with a key refuses it team-set`.
+- [ ] **Steps 2-5:** run to fail, write, run to pass, commit.
+
+### Task 8.5: The Overlord links, as a call made for the operator
+
+**Files:** Modify `server/src/linking/routes.ts` (the Overlord's confirm of one candidate, only on a project the pass may
+link, `autoLinkAllowed`, and only within the Overlord's authority), `server/src/coord/linkingStore.ts` (link source
+`overlord`), the call record (D-8126) so the link shows in "calls made for you" with the candidate's evidence; Test the
+linking routes, the store, the Overlord authority suite and the calls suite.
+
+**Interfaces:** the operator's overturn is their own write, which makes the key `manual`; no other coordinator links;
+while the authority does not allow it the confirm is refused and the Overlord suggests instead.
+
+- [ ] **Step 1: Write the failing tests** — `the Overlord's confirm links and records a call`; `a manual key refuses it`;
+  `another coordinator's confirm is refused`.
+- [ ] **Steps 2-5:** run to fail, write, run to pass, commit.
+
+### Task 8.6: The console and the skills
+
+**Files:** Modify `pwa/src/screens/settings/ProjectLinkingCard.tsx` and its words (the workspace picker; candidates with
+workspace, evidence and source; an Overlord link shown as its call), `ccd/coordinator-skill/references/plan.md` (when a
+coordinator suggests a team: a project with no key that its programme files into); Test the card's suites and the skill
+pins.
+
+- [ ] **Steps 1-5:** failing tests, run to fail, write, run to pass, commit.
 
 ---
 

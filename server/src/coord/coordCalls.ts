@@ -1,5 +1,8 @@
 import { CALL_CLASSES, CALL_WAKES, type CallView, type CallWake, type CallWakeCondition, type CoordCallClass } from '../../../shared/api.js';
+import type { DiskLevel } from '../../../shared/disk.js';
+import { MAIL_DISABLED_MARKER, STALL_WATCH_DISABLED_MARKER } from '../../../shared/switches.js';
 import { redactCommand } from './redact.js';
+import { CARD_TEXT_PREFACE, UNTRUSTED_CAP_BYTES, untrustedBlock } from './untrusted.js';
 import { cutWhole } from './reviewcap.js';
 
 /**
@@ -66,6 +69,84 @@ export function blockExpiresAt(wake: CallWake, at: number): number {
 export const isLiveBlock = (row: CallRow, now: number): boolean =>
   row.class === 'block' && row.wokenAt === null && row.expiresAt !== null && row.expiresAt > now;
 
+/** What `blockWakeDue` answers: tell the coordinator, end the block quietly, or wait. */
+export const BLOCK_WAKE_VERDICTS = ['wake-mail', 'wake-quiet', 'none'] as const;
+export type BlockWakeVerdict = (typeof BLOCK_WAKE_VERDICTS)[number];
+/** The two kebab words of a measured fact that is not yet the condition (`disk` not `ok`, `memory` not `clear`). */
+export const BLOCK_WAKE_FACT_WORDS = ['not-ok', 'not-clear'] as const;
+/** Whether a quoted kebab token is one of the wake words, the wake conditions included (the source-scan pin admits them through this, never NOT_CODES). */
+export const isBlockWakeKebab = (tok: string): boolean =>
+  (BLOCK_WAKE_VERDICTS as readonly string[]).includes(tok) || (BLOCK_WAKE_FACT_WORDS as readonly string[]).includes(tok)
+  || (CALL_WAKES as readonly string[]).includes(tok);
+
+/** The facts a block's wake is judged on (the caller measures them; `unknown` is a fact that could not be read). */
+export interface BlockWakeFacts {
+  now: number;
+  disk: 'ok' | (typeof BLOCK_WAKE_FACT_WORDS)[0] | 'unknown';
+  memory: 'clear' | (typeof BLOCK_WAKE_FACT_WORDS)[1] | 'unknown';
+  /** The running server's build stamp, or null when it has none. */
+  build: string | null;
+  /** When the coordinator's newest turn STARTED (its turn marker's `turnAt`), or null when unread. Only a turn that started
+   *  after the row counts: the turn that recorded the block ends after the row, so its own stop must not release it. */
+  lastTurnAt: number | null;
+  /** The row's own condition (`disk` or `memory`) read not-ok at some sweep after the row was made. A condition that was
+   *  never seen failing has not cleared: it reads ok because it was ok all along. */
+  sawNotOk: boolean;
+}
+
+/**
+ * P7: whether a parked thread's wake is due, judged on the lane facts that already watch its condition (spec §8.2).
+ * `wake-mail` tells the coordinator; `wake-quiet` ends the block without a mail (the resumed session is the wake itself);
+ * `none` waits. A `disk` or `memory` wake is a clearing, so it needs a not-ok reading after the row (`sawNotOk`) before an ok one counts. Doubt waits for the lapse: an `unknown` fact, a null build on either side, a `capacity` wake (wave A8)
+ * and a wake word that no longer reads are all `none`. A woken row, a non-block and a condition row past its expiry
+ * (it lapsed, and the coord-ball rung may fire again) are never woken.
+ */
+export function blockWakeDue(row: CallRow, f: BlockWakeFacts): BlockWakeVerdict {
+  if (row.class !== 'block' || row.wokenAt !== null || row.wakeOn === null) return 'none';
+  if (row.wakeOn.startsWith('time:')) return f.now >= Number(row.wakeOn.slice(5)) ? 'wake-mail' : 'none';
+  if (row.expiresAt === null || row.expiresAt <= f.now) return 'none';
+  switch (row.wakeOn) {
+    case 'disk': return f.disk === 'ok' && f.sawNotOk ? 'wake-mail' : 'none';
+    case 'memory': return f.memory === 'clear' && f.sawNotOk ? 'wake-mail' : 'none';
+    case 'update': return f.build !== null && row.build !== null && f.build !== row.build ? 'wake-mail' : 'none';
+    case 'account-room': return f.lastTurnAt !== null && f.lastTurnAt > row.at ? 'wake-quiet' : 'none';
+    default: return 'none';
+  }
+}
+
+/** The two lane readings as wake facts: the disk alarm's block level reads `ok` when clear and the memory gate's level
+ *  reads `ok` when clear; `unmeasured` is doubt (`unknown`), and any other word is a condition that has not cleared. */
+export function blockWakeReadings(diskLevel: DiskLevel, memoryLevel: 'ok' | 'warn' | 'critical' | 'unmeasured'): Pick<BlockWakeFacts, 'disk' | 'memory'> {
+  return {
+    disk: diskLevel === 'unmeasured' ? 'unknown' : diskLevel === 'ok' ? 'ok' : 'not-ok',
+    memory: memoryLevel === 'unmeasured' ? 'unknown' : memoryLevel === 'ok' ? 'clear' : 'not-clear',
+  };
+}
+
+/** Whether this sweep read the row's own condition (`disk` or `memory`) not cleared: the first half of a clearing. */
+export const blockConditionNotOk = (row: CallRow, r: Pick<BlockWakeFacts, 'disk' | 'memory'>): boolean =>
+  (row.wakeOn === 'disk' && r.disk === 'not-ok') || (row.wakeOn === 'memory' && r.memory === 'not-clear');
+
+/** Whether the block-wake lane holds this pass (the coordinator's ruling on review 2817 R7): under `mail-disabled` it neither
+ *  marks a row woken nor queues mail, so the wake comes after the window (`lane-honours-mail-disabled`, D-3636), and under
+ *  `stall-watch-disabled` it holds too. Nothing else holds it: it needs no arming marker of its own, because it mails a
+ *  coordinator only its own parked words, at most once per call, and the coordination pause is a dispatch stop. */
+export const blockWakesHeld = (names: readonly string[]): boolean =>
+  names.includes(MAIL_DISABLED_MARKER) || names.includes(STALL_WATCH_DISABLED_MARKER);
+
+/** The wake mail a parked thread's coordinator gets: from the operator (the plan's A6-5 sender), naming the call, its
+ *  programme and the condition it waited on. `chosen` is the coordinator's own earlier words, returned to it fenced as
+ *  data (`untrustedBlock` under `CARD_TEXT_PREFACE`), as the timer lane returns a note (C63; review 2817 R6). */
+export function blockWakeMail(row: CallRow): { readonly subject: string; readonly body: string } {
+  const what = row.wakeOn?.startsWith('time:') === true ? 'the time you set' : `the ${row.wakeOn ?? 'condition'} you named`;
+  const where = row.program === '' ? '' : ` on programme ${row.program}`;
+  return {
+    subject: `wake: call ${row.id} (${row.wakeOn ?? ''})`,
+    body: `The thread you parked${where} (call ${row.id}) is ready to pick up. It waited on ${what}, and that has come. `
+      + `Continue it now. What you chose when you parked it:\n\n${untrustedBlock(row.chosen, UNTRUSTED_CAP_BYTES, 'on the call row', CARD_TEXT_PREFACE)}`,
+  };
+}
+
 /** A big call the operator has yet to see: not Seen, not overturned, inside the Seen window. */
 export const callIsForOperator = (row: CallRow, now: number): boolean =>
   row.class === 'big' && row.seenAt === null && row.overturnedAt === null && row.at > now - CALL_SEEN_WINDOW_MS;
@@ -89,6 +170,12 @@ export function callViewOf(row: CallRow): CallView {
     chosen: mask(row.chosen), why: mask(row.why), reversible: row.reversible, wakeOn: row.wakeOn, at: row.at,
     seenAt: row.seenAt, overturnedAt: row.overturnedAt, overturnNote: row.overturnNote === null ? null : mask(row.overturnNote),
   };
+}
+
+/** A cleared big call as the waiting view serves it (D-8126 A4): the wire shape plus `clearedAt`, read by `callClearedAt`. */
+export function clearedCallViewOf(row: CallRow, now: number): CallView {
+  const at = callClearedAt(row, now);
+  return at === null ? callViewOf(row) : { ...callViewOf(row), clearedAt: at };
 }
 
 /** The digest's predicate for the call table: only a `big` call is a line (R4). */

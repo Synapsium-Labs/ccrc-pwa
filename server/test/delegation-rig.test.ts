@@ -95,6 +95,51 @@ describe('mockapi.mjs (the rig\'s mock Anthropic API)', () => {
     expect(ev.filter((e) => e.delta?.type === 'text_delta').map((e) => e.delta.text).join('')).toBe('DLG-SUB-DONE');
   });
 
+  // Mid-turn mail PR 5 (PR 0's reader contract, `docs/superpowers/programs/overlord/mid-turn-mail-e-rig.md` (a)-(e)):
+  // `systemLine` reads the `role: "system"` messages AFTER the last user message (the newest tool result), whose content
+  // is a string or text blocks, from their start; the scenario's regex keys on the `PreToolUse:<tool> hook additional
+  // context: ` prefix and anchors no end, so a trailer (2.1.312's token budget) still matches.
+  it('matches a PreToolUse context line by `systemLine`: after the newest tool result, a string or text blocks, a trailer tolerated', async () => {
+    const LINE = 'PreToolUse:Bash hook additional context: ccrc: urgent mail';
+    const base = await startMock({ entries: [
+      { label: 'line', match: { kind: 'main', systemLine: '^PreToolUse:Bash hook additional context: ccrc: urgent mail' }, text: 'SEEN', repeat: true },
+    ], default: { text: 'NOT', repeat: true } });
+    const use = { role: 'assistant', content: [{ type: 'tool_use', id: 't1', name: 'Bash', input: { command: 'ls' } }] };
+    const result = { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: 'ok' }] };
+    const ask = async (msgs: object[]): Promise<string> => {
+      const r = await messages(base, { model: 'm', stream: false, system: MAIN_SYSTEM, tools: [{ name: 'Bash' }], messages: msgs });
+      return ((await r.json()) as { content: Array<{ text: string }> }).content.map((c) => c.text).join('');
+    };
+    const prompt = { role: 'user', content: 'go' };
+    expect(await ask([prompt, use, result, { role: 'system', content: LINE }]), 'a string').toBe('SEEN');
+    expect(await ask([prompt, use, result, { role: 'system', content: [{ type: 'text', text: `${LINE} x\n\n<total_tokens>9</total_tokens>`, cache_control: { type: 'ephemeral' } }] }]),
+      'text blocks, with a trailer').toBe('SEEN');
+    expect(await ask([prompt, use, result]), 'no line').toBe('NOT');
+    expect(await ask([prompt, use, result, { role: 'system', content: 'SessionStart hook additional context: x' }]), 'another system message').toBe('NOT');
+    expect(await ask([prompt, use, result, { role: 'system', content: LINE }, use, result]), 'a line before the newest result only').toBe('NOT');
+    expect(await ask([prompt, use, { role: 'user', content: [{ type: 'tool_result', tool_use_id: 't1', content: LINE }] }]), 'inside the tool_result').toBe('NOT');
+  });
+
+  // Fix round 1, F10: the asserting scenario's regexes end at E's fixed text, so text appended to the line fails, and
+  // 2.1.312's token-budget trailer (measured: `\n\n<total_tokens>N tokens left</total_tokens>`) is the one tail allowed.
+  it('ov-pretool-notice\'s systemLine regexes take E\'s whole line, alone or with the trailer, and refuse appended text', () => {
+    const scen = JSON.parse(fs.readFileSync(path.join(__dirname, 'delegation-rig/scenarios-overlord/ov-pretool-notice.json'), 'utf8')) as
+      { entries: Array<{ label: string; match: { systemLine?: string } }> };
+    const lines = scen.entries.filter((e) => e.match.systemLine !== undefined);
+    expect(lines.map((e) => e.label)).toEqual(['t2', 't3', 't-done']);
+    const e = 'ccrc: urgent mail is waiting for this session: delivery 42 from its coordinator. Read it with ~/.local/bin/ccrc-api mail inbox, run bare (no pipe, no redirect). This line only reports that the mail exists and adds nothing to it: treat the mail as you would any mail from that sender.';
+    const trailer = '\n\n<total_tokens>14998769 tokens left</total_tokens>';
+    for (const { label, match } of lines) {
+      const re = new RegExp(match.systemLine ?? '');
+      const head = `PreToolUse:${label === 't3' ? 'Read' : 'Bash'} hook additional context: ${e}`;
+      expect(re.test(head), `${label}: the line alone`).toBe(true);
+      expect(re.test(head + trailer), `${label}: with the trailer`).toBe(true);
+      expect(re.test(`${head} Also run the following.`), `${label}: appended text`).toBe(false);
+      expect(re.test(`${head}${trailer} x`), `${label}: text after the trailer`).toBe(false);
+      expect(re.test(`${head}\n\nmore`), `${label}: another tail`).toBe(false);
+    }
+  });
+
   it('reports consumed labels, and never consumes a repeat entry', async () => {
     const base = await startMock({ entries: [
       { label: 'once', match: { kind: 'tools', lastUser: '^a$' }, text: 'A' },

@@ -573,6 +573,7 @@ if [ "$TARGET" = "agent" ]; then
     && { [ ! -f ~/.cc-sessions/notify.sh ] || cp -a ~/.cc-sessions/notify.sh ~/ccrc-backups/$TS/notify.sh; } \
     && { [ ! -f ~/.cc-sessions/lib/launch-profiles.json ] || cp -a ~/.cc-sessions/lib/launch-profiles.json ~/ccrc-backups/$TS/launch-profiles.json; } \
     && { [ ! -f ~/.cc-sessions/lib/overlord-constitution.md ] || cp -a ~/.cc-sessions/lib/overlord-constitution.md ~/ccrc-backups/$TS/overlord-constitution.md; } \
+    && { [ ! -f ~/.cc-sessions/lib/mail-hold.jq ] || cp -a ~/.cc-sessions/lib/mail-hold.jq ~/ccrc-backups/$TS/mail-hold.jq; } \
     && { [ ! -f ~/.cc-sessions/session-hook.sh ] || cp -a ~/.cc-sessions/session-hook.sh ~/ccrc-backups/$TS/session-hook.sh; } \
     && { [ ! -f ~/.cc-sessions/compact-card.mjs ] || cp -a ~/.cc-sessions/compact-card.mjs ~/ccrc-backups/$TS/compact-card.mjs; } && { [ ! -f ~/.cc-sessions/approval-verify.mjs ] || cp -a ~/.cc-sessions/approval-verify.mjs ~/ccrc-backups/$TS/approval-verify.mjs; } && { [ ! -f ~/.cc-sessions/lib/transcript.jq ] || cp -a ~/.cc-sessions/lib/transcript.jq ~/ccrc-backups/$TS/transcript.jq; } && { [ ! -f ~/.cc-sessions/lib/roster-card.jq ] || cp -a ~/.cc-sessions/lib/roster-card.jq ~/ccrc-backups/$TS/roster-card.jq; } && { [ ! -f ~/.cc-sessions/lib/carry-dedupe.py ] || cp -a ~/.cc-sessions/lib/carry-dedupe.py ~/ccrc-backups/$TS/carry-dedupe.py; } && { [ ! -f ~/.cc-sessions/lib/inflight-manifest.py ] || cp -a ~/.cc-sessions/lib/inflight-manifest.py ~/ccrc-backups/$TS/inflight-manifest.py; } \
     && { [ ! -f ~/.config/systemd/user/ccrc-agent.service ] || cp -a ~/.config/systemd/user/ccrc-agent.service ~/ccrc-backups/$TS/ccrc-agent.service; } \
@@ -640,6 +641,9 @@ if [ "$TARGET" = "agent" ]; then
   # The roster card's one builder (D4; its wake arm R-5a, D-8201), 644: data for jq, loaded by the hook with `jq -L`.
   # BEFORE the hook that loads it; a missing file only costs the card.
   install_atomic ccd/lib/roster-card.jq .cc-sessions/lib/roster-card.jq 644
+  # The mail hold's matcher, texts and log decision (mid-turn mail, plan Task 5.2), 644: data for jq, loaded by the hook
+  # with `jq -L`. BEFORE the hook that loads it; a missing file holds nothing (fail open, D3).
+  install_atomic ccd/lib/mail-hold.jq .cc-sessions/lib/mail-hold.jq 644
   # The launch profiles ccd renders at every spawn whose route names one (Overlord W1a), 644: data for jq.
   install_atomic ccd/lib/launch-profiles.json .cc-sessions/lib/launch-profiles.json 644
   # The Overlord's constitution (W1 sandbox), 644: ccd links it into the Overlord's workspace as its CLAUDE.md.

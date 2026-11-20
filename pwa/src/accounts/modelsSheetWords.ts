@@ -174,13 +174,17 @@ export const MODELS_NOT_HELD = 'Not held: an automatic advance may move it.';
 /** What the sheet says when the lane's read answered no classes (R3b): the one sentence `laneReadWords` (`lib/models.ts`)
  *  gives each arm, and, on every arm but `absent`, that the class names are listed below. The arms that do not say it
  *  themselves add that the sheet reads again when it is opened; the transient arms (`busy`, `not-started`) already say
- *  so, and say it once (fix round 2, N2). */
+ *  so, and say it once (fix round 2, N2). `beside` is a transient word the sheet says on its own line after these words
+ *  (`laneTransientBeside`, follow-up transient-beside-kept-answer): that line already says the lane is read again, so
+ *  these words then say only that the names are listed, and "again" is said once. */
 const NAMES_LISTED = 'The four classes are listed below by name.';
 const READ_AGAIN = 'The four classes are listed below by name; the sheet reads again when it is opened.';
-export function modelsReadStateWords(read: Exclude<LaneModelsRead, { readonly kind: 'read' }>): string {
+export function modelsReadStateWords(
+  read: Exclude<LaneModelsRead, { readonly kind: 'read' }>, beside: 'busy' | 'not-started' | null = null,
+): string {
   const said = laneReadWords(read) ?? '';
   if (read.kind === 'absent') return said;
-  return `${said} ${read.kind === 'busy' || read.kind === 'not-started' ? NAMES_LISTED : READ_AGAIN}`;
+  return `${said} ${read.kind === 'busy' || read.kind === 'not-started' || beside !== null ? NAMES_LISTED : READ_AGAIN}`;
 }
 export const MODELS_READ_ABSENT = modelsReadStateWords({ kind: 'absent' });
 export const MODELS_READ_UNREADABLE = modelsReadStateWords({ kind: 'unreadable' });

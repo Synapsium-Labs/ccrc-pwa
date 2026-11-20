@@ -1,0 +1,8 @@
+{
+  "file": "ccd/ccrc-doctor-checks",
+  "maxDelta": 219,
+  "d": "D-8691",
+  "reason": "the four model-advance checks of auto-advance W3 (D-8689), their shared read and remedies; kept in the doctor file because cmd_doctor sources only this table; measured +219 net code lines against the merge-base",
+  "added": "2026-11-16",
+  "createdAt": "2026-11-16"
+}

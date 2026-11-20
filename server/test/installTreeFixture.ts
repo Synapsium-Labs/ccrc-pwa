@@ -259,6 +259,7 @@ export const TREE_FILES = [
   'ccd/lib/transcript.jq',
   // The roster card's one builder (D4, R-5a, D-8201); `_inst_files` places it beside the reader above.
   'ccd/lib/roster-card.jq',
+  'ccd/lib/mail-hold.jq',
   // `ccd carry-dedupe`'s program (#317); `_inst_files` places it beside the reader above.
   'ccd/lib/carry-dedupe.py',
   // the in-flight manifest's program (session-continuity 6b); placed beside it.

@@ -21,7 +21,7 @@ import { OverlordAuthorityJournal, overlordAuthorityFileAt, type AuthorityAppend
 import { OverlordAuthorityGuard } from '../src/coord/overlordAuthorityGuard.js';
 import type { OverlordAuthorityMove } from '../src/coord/overlordAuthority.js';
 import type { AccountGate, AccountGateAsk } from '../src/accounts/gate.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
 import { refuseRoute } from '../src/refuse.js';
 import { REFUSAL_STATUS } from '../../shared/refusal.js';
@@ -62,7 +62,7 @@ const FABLE_ROSTER = { ...ROSTER, accounts: ROSTER.accounts.map((a) => ({ ...a, 
 const BOUND = 'overlord-aaaaaaaa';
 const PENDING = 'overlord-bbbbbbbb';
 const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
-const OPERATOR = identity.operator(actorOf('device-a', 'abcdef0123456789'));
+const OPERATOR = identity.operator(gateActorOf('device-a', 'abcdef0123456789'));
 
 // ── the fakes ───────────────────────────────────────────────────────────────────────────────────────────────────────
 
@@ -73,7 +73,7 @@ function fakeGate(): FakeGate {
     g.asks.push(ask);
     g.onAsk?.();
     if (g.mode !== 'pass') { void refuseRoute(reply, g.mode); return { pass: false }; }
-    return { pass: true, actor: actorOf('device-a', 'abcdef0123456789'), sessionIdHash: 'abcdef0123456789' };
+    return { pass: true, actor: gateActorOf('device-a', 'abcdef0123456789'), sessionIdHash: 'abcdef0123456789' };
   }) as FakeGate;
   g.asks = []; g.mode = 'pass'; g.onAsk = null;
   return g;
@@ -232,7 +232,7 @@ describe('POST /api/overlord/model (C45)', () => {
     expect(r.fake.seen[0]!.entry).toMatchObject({ kind: 'authority-model-class', from: 'opus', to: 'fable' });
     expect(r.fake.seen[0]!.rowModel).toBe('opus'); // the row was not yet written when the record was asked for
     expect(view(r).model).toBe('fable');
-    expect(view(r).actor).toBe(actorOf('device-a', 'abcdef0123456789').toString());
+    expect(view(r).actor).toBe(gateActorOf('device-a', 'abcdef0123456789').toString());
     expect(r.body.log).toEqual([{ op: 'writeClass', id: BOUND, extra: 'fable' }]);
   });
 
@@ -335,8 +335,8 @@ describe('POST /api/overlord/model (C45)', () => {
     const r = await rig();
     seed(r, { state: 'live' }); quiet(r);
     const before = rowOf(r);
-    expect(r.coord.setModelClass(r.journal, { model: 'opus', actor: identity.operator(actorOf('device-b', '0123456789abcdef')), at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
-    expect(r.coord.setAccountSet(r.journal, { accountPools: SET_BA, actor: identity.operator(actorOf('device-b', '0123456789abcdef')), at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
+    expect(r.coord.setModelClass(r.journal, { model: 'opus', actor: identity.operator(gateActorOf('device-b', '0123456789abcdef')), at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
+    expect(r.coord.setAccountSet(r.journal, { accountPools: SET_BA, actor: identity.operator(gateActorOf('device-b', '0123456789abcdef')), at: 99_999, opKey: 'k' })).toEqual({ ok: true, changed: false });
     expect(r.fake.seen).toEqual([]);
     expect(rowOf(r)).toEqual(before);
   });
