@@ -180,11 +180,13 @@ which team it should be suggests one, with exactly one body:
 JSON
 ```
 
-`workspace` is needed only when the key exists in more than one connected workspace. Never put `byId` or `byUuid` in the
+`workspace` is needed only when the key exists in more than one connected workspace; without it, the one workspace that
+holds the key is recorded. Never put `byId` or `byUuid` in the
 body: the client adds the pane's own pair and refuses a body that names either. A suggestion is a candidate and never a
 link: it appears on the console's Project linking card, under the project, with the workspace and your reason, and the
 operator taps it, or the Overlord confirms it within its authority. The reason is shown in the console only, never written
 to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
-`team-set` (the project already has a key, or the operator decided it), `team-unknown` (no connected workspace has that
-team), `no-project`, `linear-text-public` and `bad-request` (a body that is not exactly these keys, or a reason over its
-length).
+`team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
+`team-unknown` (no connected workspace has that team, or the named workspace does not), `team-ambiguous` (no workspace named
+and the key is in more than one connected workspace: send it again with `workspace`), `no-project`, `linear-text-public` and
+`bad-request` (a body that is not exactly these keys, or a reason over its length).

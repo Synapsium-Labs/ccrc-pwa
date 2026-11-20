@@ -819,7 +819,8 @@ export function linearOwnerOfProject(
   project: string, rows: readonly HierarchyProjectFacts[], f: OwnerReads,
 ): ReturnType<typeof linearOwnerOf> & { project: string } {
   const row = rows.find((r) => r.project === project);
-  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f);
+  // D-8808 (final review I1): the team's owner in the project row's own workspace, so a key two workspaces share answers each its own
+  const viaTeam = row === undefined || row.teamKey === null ? null : linearOwnerOfTeam(row.teamKey, rows, f, row.workspaceId ?? null);
   return viaTeam ?? { ...linearOwnerOf(project, { named: row?.linearOwner ?? null, ownsTeamProject: null, ...f }), project };
 }
 
