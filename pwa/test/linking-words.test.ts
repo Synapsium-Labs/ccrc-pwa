@@ -17,7 +17,7 @@ describe('evidenceWords', () => {
 // D-8808 (wave 8, Task 8.6): the workspace picker's and the candidate rows' words.
 import {
   candidateAriaLabel, candidateKeyOf, candidateTap, candidateWorkspaceLine, keyWriteText, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
-  OVERLORD_LINK_WORDS, PICKER_WORDS,
+  KEY_WRITE_WORDS, OVERLORD_LINK_WORDS, PICKER_WORDS,
 } from '../src/fleet/linkingWords';
 import { ApiError } from '../src/lib/apiError';
 import { readLinearWorkspaces } from '../src/lib/api';
@@ -75,6 +75,11 @@ describe("a refused key write's words (review 2971 F4)", () => {
     expect(keyWriteText(refused('team-ambiguous'), 1)).toBe(PICKER_WORDS.ambiguousUnlisted);
     expect(keyWriteText(refused('team-ambiguous'), 0)).toBe(PICKER_WORDS.ambiguousUnlisted);
     expect(PICKER_WORDS.ambiguous).toContain(PICKER_WORDS.label);
+  });
+  it('unavailable says the Linear keys could not be read and nothing was changed, whatever the holders (review 2997 A3)', () => {
+    const down = new ApiError(503, { ok: false, error: 'unavailable' });
+    for (const n of [0, 1, 2]) expect(keyWriteText(down, n)).toBe(KEY_WRITE_WORDS.unavailable);
+    expect(KEY_WRITE_WORDS.unavailable).toMatch(/Linear keys .*could not be read, so nothing was changed/);
   });
   it('every other refusal is the write\'s own sentence', () => {
     expect(keyWriteText(refused('team-unknown'), 2)).toBe(LINKING_REFUSAL_TEXT['team-unknown']);

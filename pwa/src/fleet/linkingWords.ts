@@ -71,12 +71,22 @@ export const PICKER_WORDS = {
   ambiguousUnlisted: 'More than one connected Linear workspace has this key, and this page could not list them. Reload the page, then choose the workspace.',
 } as const;
 
+/** D-8808 (review 2997 A3): the key write's own sentence for `unavailable`. The write reads the Linear keys to decide the key's
+ *  workspace, and a store it cannot read refuses before anything is written (a 503 the card reads as a refusal, never unconfirmed).
+ *  The hierarchy writes keep their own sentence for the same word (`hierarchyWriteText`). */
+export const KEY_WRITE_WORDS = {
+  unavailable: 'The Linear keys ccrc holds could not be read, so nothing was changed. Try again in a minute.',
+} as const;
+
 /** D-8808 (review 2971 F4): what a refused key write says. The server stores a key's workspace in the same write, so a key two
  *  connected workspaces hold, sent with none, is `team-ambiguous`: the sentence points at the picker when the card lists those
- *  workspaces (`holders`, more than one), and says the list could not be read when it does not. Any other refusal is the write's
- *  own sentence (`hierarchyWriteText`). */
+ *  workspaces (`holders`, more than one), and says the list could not be read when it does not. `unavailable` is
+ *  `KEY_WRITE_WORDS`' sentence. Any other refusal is the write's own sentence (`hierarchyWriteText`). */
 export const keyWriteText = (err: unknown, holders: number): string =>
-  refusalText(err, { 'team-ambiguous': holders > 1 ? PICKER_WORDS.ambiguous : PICKER_WORDS.ambiguousUnlisted }) ?? hierarchyWriteText(err);
+  refusalText(err, {
+    'team-ambiguous': holders > 1 ? PICKER_WORDS.ambiguous : PICKER_WORDS.ambiguousUnlisted,
+    unavailable: KEY_WRITE_WORDS.unavailable,
+  }) ?? hierarchyWriteText(err);
 
 /** D-8808 (review 2971 A1): the workspaces the picker may offer: every file slot, and the legacy key's workspace while it routes
  *  like a slot (learned, with its id, not superseded, and no file slot of the same id), as the server's `routableSlots` reads
