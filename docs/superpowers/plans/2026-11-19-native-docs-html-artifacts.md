@@ -496,6 +496,14 @@ Ten confirmed findings (N1 to N10), five advisories (M1 to M5) and two residues,
 - **Who measured.** Three read-only fact checks (Sonnet), one each for the server and shared seams with X2's plan, the console's views and tests, and the expose code with Caddy's source; then the main loop read each passage it changed text against.
 - **The adversarial pass, again.** One Opus (high) read of this round's diff, after the fixes above. It closed every item but N4, whose launch sheet had no pre-scan on the too-large view, and raised 3 important and 5 minor defects, all fixed in this round: the unscanned sheet (MX5.90); the scope read's failure shape, which is the docs parser's `DocsFailureBody`, and the mint's own body check (MX5.91); the doctor table test's real file, `ccrc-doctor-core.test.ts`; then the DDNS start's bus defaults, the `CONTROLS` keys the offer reuses, the rest of each wave's Owns cell, a revoke test held on unresolved reads, and a client gone while queued (MX5.92). It found no security regression, no widening of a console policy and no private name. What it could not verify: X2 P1's names, which exist only in X2's plan, and the `Sec-Fetch-Site` Chromium sends between two loopback ports, which the browser case records.
 
+### Review round 3 (review run 2881, at `5bfe51ad9`)
+
+- **Carried at the review cap.** m3 is not applied in this pull request. A2.3, A3.3 and A5.1 own it and apply it against X2 P1's merged code. Its (a) text, verbatim (its line references are at `5bfe51ad9`):
+
+  > (1) plan:237, replace the range cell "the same range verb with `--pin fp:<sha>`" with "X2 P1's range builder with its draft arm, `{branch: pin.branch, head: pin.head}` (never `--commit`), and `--pin fp:<sha>`, as P1 merged it". In plan:238, replace "the same range verb with `--pin stat:<size>:<mtimeNs>`" with "X2 P1's range builder with its draft arm, `{branch: pin.branch, head: pin.head}`, and `--pin stat:<size>:<mtimeNs>`, as P1 merged it". (2) plan:305, replace "the `file.s === 'too-large'` arm for `cls === 'html'`, beside its sentence and Download" with "the branch that serves an HTML leaf above its class cap without mounting `MockupView` (on `main` the `file.s === 'too-large'` arm; after X2 P1 the `too-large`/`stat-pinned` range branch), beside its Download". (3) plan:193, replace "Before `pinHolds`, a draft pin whose page entry has `draft.fp` null," with "Before the pin parser and `pinHolds`, a draft pin that is stat-pinned (X2 P1's `fp: null` with `stat`, which the file route's pin excludes), or whose page entry has `draft.fp` null,".
+
+  (part 3's anchor is m2's rewritten sentence; A2.3 applies it there)
+
 ### Commands (the design wave, before round 1)
 
 - Fact checks: three read-only subagents (Sonnet, medium) over shipped source, the X2 and X3 plans and the expose code; their findings are cited in the list above.
