@@ -1,6 +1,6 @@
 import { isRegistryId, routeNamesFable, spawnVerdict, transitionsFor, parseRouteFields, routeFieldsOrNull, routeParseDetail,
-  MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
-  type CoordCaps, type CoordCapsUsage, type RouteFields, type SpawnVerdict,
+  IDLE_RUN_STATES, MAIL_BODY_MAX_BYTES, WORK_ITEM_MAX, WORK_ITEM_TITLE_MAX, WORKSPACE_SLUG_RE,
+  type CoordCaps, type CoordCapsUsage, type RouteFields, type RunState, type SpawnVerdict,
 } from '../../../shared/api.js';
 import { routeDefaultFor } from '../../../shared/route-defaults.js';
 import { parseLandingIntents, type LandingIntentHold } from '../../../shared/landingIntents.js';
@@ -11,7 +11,9 @@ import type { cutShort } from '../lifecycle.js';
 import { DISPATCH_ORPHANED_EVENT } from '../../../shared/dispatch-abandon.js';
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, holdReasonVerdict, type HoldReasonVerdict } from './rundefs.js';
 import type { TurnVerdict } from './archiveDoor.js';
-import type { RunReadResult, RunRow } from './store.js';
+import type { TurnMarkRead } from './stall.js';
+import { STOP_DONE_PARKED_IDLE_MS } from '../stopDone.js';
+import type { CapsCountedRun, RunReadResult, RunRow } from './store.js';
 import type { DispatchOutcome, SpawnPollTarget } from './dispatch.js';
 import { trackerIdsIn } from '../linking/policy.js';
 import type { LinkingMode } from '../../../shared/linking.js';
@@ -80,6 +82,189 @@ const orphaned = (res: SpawnEnding, kind: 'registry-unmeasurable' | 'ambiguous-d
 export interface CapsReading {
   caps: CoordCaps; usage: CoordCapsUsage;
   overConcurrency: { limit: number; running: number } | null;
+  /** D-8792, armed only: the raw count is at or above the limit but the runs whose worker still works are below it, so the
+   *  worker readings freed a slot. It carries the RAW numbers a refusal says. `freedSlotPending` says so as data, the
+   *  caller asks the freed-slot window, and `capRefusalOf` hands the slot out only on its yes. Absent or null: no slot was
+   *  freed. */
+  freedSlot?: { limit: number; running: number } | null;
+  /** D-8792, shadow only: the slot the readings WOULD free if the `cap-counts-working` row were armed (same rule as
+   *  `freedSlot`). Read by `capShadowLine` for the shadow record and by nothing that refuses or admits. */
+  shadowFreed?: { limit: number; running: number } | null;
+}
+
+/**
+ * D-8792 (waiting workers spec 2026-11-19 Part 3): what a run's worker is doing, for the concurrency count. `busy`:
+ * working, or between turns. `waiting`: awake, idle, nothing running, and its turn marker quiet for
+ * `STOP_DONE_PARKED_IDLE_MS`. `gone`: asleep, stopped, archived, dead, or with no registry row. `unmeasured`: a reading
+ * could not be made. The armed cap leaves out `waiting` and `gone` and counts the other two: the cap fails closed.
+ */
+export type WorkerReading = 'busy' | 'waiting' | 'gone' | 'unmeasured';
+
+/** Why a worker reads `gone` (`workerFactsFor`): no registry row, a stop, an archive, a sleep (`ccd hibernate`'s marker),
+ *  or a pane tmux proved gone. Only `asleep` matters past the count: a send-back to a sleeper is a resume (D-8792). */
+export type WorkerGone = 'absent' | 'stopped' | 'archived' | 'asleep' | 'no-pane';
+
+/** The measured facts `workerReadingOf` and `resumeSkipsCap` decide on, gathered by `workerFactsFor` (`turnverdict.ts`,
+ *  L3). `awake` is a listed, measured row that is not stopped, archived or asleep, whose pane tmux proved alive with a
+ *  readable live file; it carries the fail-closed turn verdict, whether the frame's row lists background work or subagents
+ *  (null: no row), and the turn marker read. */
+export type WorkerFacts =
+  | { readonly kind: 'gone'; readonly why: WorkerGone }
+  | { readonly kind: 'unmeasured' }
+  | { readonly kind: 'awake'; readonly turn: TurnVerdict; readonly rowBusy: boolean | null; readonly mark: TurnMarkRead };
+
+/**
+ * D-8792: the one rule for a worker's reading. Waiting is MEASURED, never declared: the turn verdict is idle, nothing runs
+ * (the row lists no background work or subagents, and the marker's `bg` and `crons` are exactly 0), and the newest of
+ * the marker's stamps (`turnAt`, `stopAt`, `restartAt`) is at least `STOP_DONE_PARKED_IDLE_MS` old, the same 30 minutes
+ * the sleep lane waits for a parked worker. This amends D-6094, which read "idle" at the instant of asking and bounded it
+ * by the run's age: the quiet time replaces both, so a worker between turns keeps its slot. A marker with no stamp, and
+ * every read that could not be made, is `unmeasured`.
+ */
+export function workerReadingOf(f: WorkerFacts, now: number): WorkerReading {
+  if (f.kind === 'gone') return 'gone';
+  if (f.kind === 'unmeasured') return 'unmeasured';
+  if (f.turn === 'busy') return 'busy';
+  if (f.turn !== 'idle' || f.rowBusy === null || !f.mark.ok) return 'unmeasured';
+  if (f.rowBusy) return 'busy';
+  const m = f.mark;
+  // `bg` -1 and `crons` -1 or null are background work nobody measured: counted, never read as nothing running.
+  if (m.bg !== 0 || m.crons !== 0) return 'busy';
+  const stamps = [m.turnAt, m.stopAt, m.restartAt].filter((t): t is number => t !== null);
+  if (stamps.length === 0) return 'unmeasured';
+  return now - Math.max(...stamps) >= STOP_DONE_PARKED_IDLE_MS ? 'waiting' : 'busy';
+}
+
+/**
+ * D-6093 and D-8792, ARMED ONLY: whether a door's start of this worker is a resume that is not charged a slot. A resume
+ * dispatch (`dispatch`) of an awake worker starts no process (D-6093). A send-back (`advance`, `advance -> working`
+ * from an idle state) of an awake worker starts none either, and a send-back of a sleeping one is a wake, which the wake
+ * budget paces and the cap does not govern (D-8793). A resume dispatch of a sleeping worker starts a process, so it is
+ * charged. So: a send-back to a live or sleeping worker, or a resume of a live one, is never refused at the cap.
+ * Everything else, an unmeasured read included, is charged as today.
+ */
+export function resumeSkipsCap(f: WorkerFacts, door: 'dispatch' | 'advance'): boolean {
+  if (f.kind === 'awake') return true;
+  return door === 'advance' && f.kind === 'gone' && f.why === 'asleep';
+}
+
+/** D-8792: the one edge a send-back is charged on, the cap gate's own (`advance.ts`, its `cap` row): an idle run sent back
+ *  to `working`. The send-back reader asks it before reading any worker; `caps-counts-working.test.ts` holds it equal to
+ *  the gate's own, state by state, so the two cannot drift. */
+export function sendBackCharged(to: RunState, from: RunState): boolean {
+  return to === 'working' && (IDLE_RUN_STATES as readonly RunState[]).includes(from);
+}
+
+/**
+ * D-8792: THE CAP READING, decided once. `rows` are the store's counted rows (`capsCountedRuns`), so `usage.running` is
+ * their number. With no `readings` it is today's count, with no `waiting`. With them, `usage.waiting` says how many rows
+ * have a worker read `waiting` or `gone` (a row with no reading, `busy` or `unmeasured` counts). Shadow (`armed` false)
+ * keeps today's refusal exactly and only says, in `shadowFreed`, what arming would free. Armed, a refusal counts only the
+ * rows that still hold a slot, and a slot the readings free is `freedSlot`, handed out by `capRefusalOf`.
+ */
+export function capsReadingOf(
+  caps: CoordCaps, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading> | null, armed: boolean,
+): CapsReading {
+  const limit = caps.maxConcurrentWorkers;
+  const running = rows.length;
+  const raw = running >= limit ? { limit, running } : null;
+  if (readings === null) return { caps, usage: { running }, overConcurrency: raw };
+  const holding = rows.filter((r) => {
+    const w = readings.get(r.runId);
+    return w === undefined || (w !== 'waiting' && w !== 'gone');
+  }).length;
+  const usage = { running, waiting: running - holding, workingOnly: armed };
+  const freed = holding < limit && running >= limit ? { limit, running } : null;
+  if (!armed) return { caps, usage, overConcurrency: raw, freedSlot: null, shadowFreed: freed };
+  return { caps, usage, overConcurrency: holding >= limit ? { limit, running: holding } : null, freedSlot: freed };
+}
+
+/** D-8792, armed only: whether this reading holds a slot the worker readings freed, which only the freed-slot window may
+ *  hand out. Data, never a write: the caller (L4) asks the window (`FleetWatcher.admitFreedSlot`, which records into it)
+ *  only on a yes here, and passes its answer to `capRefusalOf` (review 2875 F3). */
+export function freedSlotPending(c: CapsReading): boolean {
+  return c.overConcurrency === null && (c.freedSlot ?? null) !== null;
+}
+
+/**
+ * The refusal numbers of a cap reading, or null when the start may go on: ONE spelling for the dispatch and the
+ * send-back doors. An ordinary refusal is `overConcurrency`; a slot the worker readings freed (armed only,
+ * `freedSlotPending`) goes on only when the freed-slot window admitted it (`WAKE_BURST` per `WAKE_WINDOW_MS`), its answer
+ * passed in as `freedSlotAdmitted`; refused there, or with no window, it refuses with the raw numbers. Pure.
+ */
+export function capRefusalOf(c: CapsReading, freedSlotAdmitted: boolean): { limit: number; running: number } | null {
+  if (c.overConcurrency !== null) return c.overConcurrency;
+  const freed = c.freedSlot ?? null;
+  if (freed === null) return null;
+  return freedSlotAdmitted ? null : freed;
+}
+
+/** What the send-back door does about the cap (review 2875 F3): `today`, the gate's own lazy check as before; `free`, a
+ *  resume the cap never refuses; `recount`, the count over the runs whose worker still works. */
+export type SendBackCapPlan = 'today' | 'free' | 'recount';
+
+/** The facts `sendBackCapPlan` decides on, all measured by the caller. */
+export interface SendBackCapFacts {
+  /** Whether the `cap-counts-working` row is armed. The shadow record asks with `true`, for what arming would do. */
+  readonly armed: boolean;
+  /** Whether a worker port is wired: without one nothing can be read, so today's check stands. */
+  readonly port: boolean;
+  /** Whether today's count is at the cap (`capsMeasured(...).overConcurrency !== null`). */
+  readonly capFull: boolean;
+  readonly to: RunState;
+  /** The run's state, or null when the run could not be read. */
+  readonly from: RunState | null;
+  /** The run worker's facts, or null when they were not read (no session, or not asked yet). */
+  readonly worker: WorkerFacts | null;
+}
+
+/**
+ * D-8792 (the brief's F6; review 2875 F3): the send-back door's cap plan, decided once. Unarmed, with no port, with room
+ * under the cap, for an unreadable run, or on any edge but an idle run sent back to `working` (`sendBackCharged`):
+ * `today`. Otherwise a send-back to a worker `resumeSkipsCap` frees (awake or asleep) is `free`, and any other, a worker
+ * not read included, is `recount`. The caller reads the worker only when the plan without it is not `today`, and asks
+ * again with it.
+ */
+export function sendBackCapPlan(f: SendBackCapFacts): SendBackCapPlan {
+  if (!f.armed || !f.port || !f.capFull || f.from === null || !sendBackCharged(f.to, f.from)) return 'today';
+  return f.worker !== null && resumeSkipsCap(f.worker, 'advance') ? 'free' : 'recount';
+}
+
+/** D-8792, shadow: the server-journal line for a start the cap refused that the armed rule would have let through, or
+ *  null when there is nothing to record. It names the start, the numbers and each counted run the rule would leave out,
+ *  with its reading, which is the arming evidence the plan asks for (OA-F3). */
+export function capShadowLine(
+  c: CapsReading, start: string, rows: readonly CapsCountedRun[], readings: ReadonlyMap<number, WorkerReading>,
+): string | null {
+  const would = c.shadowFreed ?? null;
+  if (would === null || c.overConcurrency === null) return null;
+  const left = rows.flatMap((r) => {
+    const w = readings.get(r.runId);
+    return w === 'waiting' || w === 'gone' ? [`run ${r.runId} ${w}`] : [];
+  });
+  return `ccrc-server: cap-counts-working shadow: ${start} refused at ${would.running}/${would.limit}; `
+    + `armed, ${left.length} left out would free a slot (${left.join(', ')})`;
+}
+
+/**
+ * D-6095 (re-grounded on D-8792): how many concurrency slots are free in a cap reading, for the `admissionWake` lane's
+ * room check. The rows that hold slots are `capsMeasured`'s own: all of `usage.running` unless the reading is ARMED
+ * (`usage.workingOnly`, the `cap-counts-working` row), when the `waiting` rows it measured are left out. In shadow the
+ * waiting rows still hold their slots, so the wake fires only on a slot the armed reading frees or a slot freed the
+ * ordinary way. Never negative. It reads no freed-slot admit: a room check consumes nothing, and the dispatch the mail
+ * prompts still passes `capRefusalOf` at its own door.
+ */
+export function capsRoomOf(c: CapsReading): number {
+  const holding = c.usage.workingOnly === true ? c.usage.running - (c.usage.waiting ?? 0) : c.usage.running;
+  return Math.max(0, c.caps.maxConcurrentWorkers - holding);
+}
+
+/** D-8792, shadow (review 2875 F7): the journal line for a send-back the cap refused that arming would admit as a free
+ *  resume (`sendBackCapPlan` answers `free`), naming the worker's state. Same prefix as `capShadowLine`. */
+export function capShadowResumeLine(start: string, over: { limit: number; running: number }, f: WorkerFacts): string {
+  const state = f.kind === 'awake' ? 'awake' : f.kind === 'gone' ? f.why : 'unmeasured';
+  return `ccrc-server: cap-counts-working shadow: ${start} refused at ${over.running}/${over.limit}; `
+    + `armed, a send-back to a worker ${state} is a resume and is not charged`;
 }
 
 /** The run row a dispatch decides on, once it is known to exist. */
@@ -238,23 +423,40 @@ export interface AdmitFacts {
   step: 'admit';
   /** The registry directory's listing, or `null` when it could not be listed. */
   names: readonly string[] | null;
-  /** Called only when neither marker refused. */
+  /** D-6093 and D-8792, armed only: this dispatch resumes a worker that `resumeSkipsCap` frees from the check, read by the
+   *  caller only past the markers (`admitMarkerRefusal`, so a pause costs zero worker reads) and only when the cap would
+   *  refuse. False in shadow, and false for every fresh spawn and every read that could not be made. */
+  resumeFree: boolean;
+  /** Called only when neither marker refused, and not at all for a free resume. */
   caps: () => CapsReading;
+  /** D-8792: the freed-slot window's answer for a slot the worker readings freed, asked by the caller only when
+   *  `freedSlotPending` (review 2875 F3: no write is reached from here). Absent or false: a freed slot is refused. */
+  freedSlotAdmitted?: boolean;
+}
+
+/** Step 1 of the admit step, alone: the operator's pause and the mail-disabled marker, in that order (null: neither).
+ *  Exported so the caller can ask it BEFORE any worker read (D-6093): `decideAdmit` answers through it, so the two cannot
+ *  drift. A directory that cannot be listed is a pause that cannot be ruled out: fail-shut. */
+export function admitMarkerRefusal(names: readonly string[] | null): DispatchHalt | null {
+  if (names === null || names.includes(COORDINATOR_PAUSE_MARKER)) return { ok: false, kind: 'refused', code: 'paused' };
+  // Refusing outright (rather than skipping the `/clear`) leaves the run `planned`, so the retry after the operator
+  // lifts the marker is a genuinely fresh dispatch.
+  if (names.includes(MAIL_DISABLED_MARKER)) return { ok: false, kind: 'refused', code: 'mail-disabled' };
+  return null;
 }
 
 function decideAdmit(f: AdmitFacts): DispatchDecision<null> {
-  // 1: PAUSE / KILL-SWITCH FIRST. A directory that cannot be listed is a pause that cannot be ruled out: fail-shut.
-  if (f.names === null || f.names.includes(COORDINATOR_PAUSE_MARKER)) {
-    return refused({ ok: false, kind: 'refused', code: 'paused' });
-  }
-  // Refusing outright (rather than skipping the `/clear`) leaves the run `planned`, so the retry after the operator
-  // lifts the marker is a genuinely fresh dispatch.
-  if (f.names.includes(MAIL_DISABLED_MARKER)) return refused({ ok: false, kind: 'refused', code: 'mail-disabled' });
+  // 1: PAUSE / KILL-SWITCH FIRST.
+  const marker = admitMarkerRefusal(f.names);
+  if (marker !== null) return refused(marker);
+  // D-6093 (armed by D-8792's row): a resume of a live worker starts nothing, so it is not charged a slot. The pause and
+  // the marker above still refuse it first.
+  if (f.resumeFree) return go(null);
   // 2: the concurrency cap. The refusal carries the numbers: a cap that refuses without saying what it is reads as a
   // bug. It is the ONLY cap: the daily dispatch brake that followed it is retired (D-7068, operator
   // ruling 2026-10-26). It counted reviews and warm resumes as if they were fresh workspaces, refused a coordinator
   // with nothing that would wake it, and measured neither memory nor processes.
-  const { overConcurrency } = f.caps();
+  const overConcurrency = capRefusalOf(f.caps(), f.freedSlotAdmitted === true);
   if (overConcurrency !== null) {
     // Fields spelled, not spread: coordinator-skill.test.ts harvests this frame's names.
     return refused({ ok: false, kind: 'refused', code: 'cap-concurrency',

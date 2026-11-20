@@ -1265,6 +1265,7 @@ describe('the rulings: every egress of session-derived text goes through the mas
     '/api/docs/:project/tree': 'repository content, not session text',
     '/api/docs/:project/file': 'repository content, not session text',
     '/api/docs/:project/history': 'repository content (commit subjects and author names), not session text',
+    '/api/docs/:project/range': 'repository content (one file in frames, base64), not session text',
     // The reader lab's door (reader lab plan, RL-a; D-7967): the run read answers its opener counts by the lab's closed
     // names and classes, and the probe answers an empty 204. Neither carries session text.
     '/api/reader-lab/runs/:nonce': "a run's counts by probe name and request class, from the lab's closed vocabulary; no session text",

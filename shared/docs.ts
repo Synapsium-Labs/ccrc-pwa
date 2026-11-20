@@ -95,6 +95,23 @@ export const DOCS_STALE_MS = 600000;
 /** refreshDue: the age at which any other last attempt is due again. */
 export const DOCS_RETRY_FLOOR_MS = 60000;
 
+// The range ceilings (X2 spec section 4.3, C4: the coordinator's design default). None of them moves a class cap or
+// DOCS_MAX_FILE_BYTES: a file above 2 MiB is read in frames, never by raising a cap. From P1.2, ccd holds parity copies
+// of the two it enforces (the frame and the range ceiling; docs-parity.test.ts).
+/** ccd and the server: the most raw file bytes one `docs-show-range` frame carries (512 KiB). */
+export const DOCS_RANGE_FRAME_BYTES = 524288;
+/** The largest file read by range: Download, and the reassembled bytes behind any view (64 MiB). */
+export const DOCS_RANGE_MAX_BYTES = 67108864;
+/** The largest PDF opened in the PDF frame (wave P3); above it, Download only. Lowered, never raised, by lab PDF-L2. */
+export const DOCS_PDF_INLINE_MAX_BYTES = 4194304;
+/** The most pixels, read from the image header, of an image shown on its own page; above it, Download only. */
+export const DOCS_IMAGE_VIEW_MAX_PIXELS = 67108864;
+/** The widest or tallest side, read from the image header, of an image shown on its own page. */
+export const DOCS_IMAGE_VIEW_MAX_SIDE = 16384;
+/** The prepare's copy-and-hash budget, apart from the draft hash budget: three times lab RANGE-L1's worst 64 MiB
+ *  copy-and-hash on the fleet box (362 ms, 2026-11-19), floored at 10 s. */
+export const DOCS_RANGE_PREPARE_BUDGET_MS = 10000;
+
 // ---- (C) Value grammars (design section 2 (a)) -----------------------------------------------------------------
 //
 // Each grammar is a pattern BODY. TypeScript matches it as `new RegExp('^(?:' + body + ')$', 'u')`, built once at
@@ -120,6 +137,10 @@ export const DOCS_SHA_RE_BODY = '[0-9a-f]{40}|[0-9a-f]{64}';
 export const DOCS_FINGERPRINT_RE_BODY = '[0-9a-f]{64}';
 /** `--max-bytes N`: one to eight digits, no leading zero. ccd's bash front checks it; a bad N is a usage error. */
 export const DOCS_MAX_BYTES_RE_BODY = '[1-9][0-9]{0,7}';
+/** A listed modified time in nanoseconds (X2 P1, `DocsEntry.draft.mtimeNs` and the stat pin): a decimal string with
+ *  no sign and no leading zero, at most 19 digits, the widest a signed 64-bit `st_mtime_ns` prints. A time before 1970
+ *  is negative and matches nothing, so such a file gets no stat pin and stays withheld: it fails closed. */
+export const DOCS_MTIME_NS_RE_BODY = '0|[1-9][0-9]{0,18}';
 /** A section slug, generated from `DOC_SECTIONS`. */
 export const DOCS_SECTION_RE_BODY = DOC_SECTION_SLUGS.join('|');
 /** A section-relative path: not absolute, no trailing or doubled `/`, no `.` or `..` component, no C0 or C1
@@ -148,6 +169,7 @@ const QUALIFIED_PREFIX_RE = new RegExp('^' + DOCS_QUALIFIED_PREFIX_RE_BODY, 'u')
 const SHA_RE = fullMatcher(DOCS_SHA_RE_BODY);
 const FINGERPRINT_RE = fullMatcher(DOCS_FINGERPRINT_RE_BODY);
 const MAX_BYTES_RE = fullMatcher(DOCS_MAX_BYTES_RE_BODY);
+const MTIME_NS_RE = fullMatcher(DOCS_MTIME_NS_RE_BODY);
 const REL_PATH_RE = fullMatcher(DOCS_REL_PATH_RE_BODY);
 
 /** One code point class, built FROM the two declared lists (never a second hand-written list), plus `\p{Cs}`, a
@@ -186,6 +208,14 @@ export function isDocsCommit(s: string): boolean {
   return typeof s === 'string' && SHA_RE.test(s);
 }
 
+/** The blob a failure body names (`too-large` of a committed show: the blob of that path at that commit, which a version
+ *  page above its class cap pins its range read by), or `null`. The one reader: a value that is not a full sha (40 or 64
+ *  lowercase hex) is no blob, so the server drops it before the body leaves and the PWA never builds a pin from it. */
+export function docsFailureBlob(body: { readonly blob?: unknown }): string | null {
+  const blob = body.blob;
+  return typeof blob === 'string' && isDocsCommit(blob) ? blob : null;
+}
+
 /** The grammar, then the category check, then the whole-path bytes, the component bytes and the depth. */
 export function isDocsRelPath(s: string): boolean {
   if (typeof s !== 'string' || !REL_PATH_RE.test(s) || EXCLUDED_CODE_POINT_RE.test(s)) return false;
@@ -200,6 +230,10 @@ export function isDocsFingerprint(s: string): boolean {
 
 export function isDocsMaxBytes(s: string): boolean {
   return typeof s === 'string' && MAX_BYTES_RE.test(s);
+}
+
+export function isDocsMtimeNs(s: string): boolean {
+  return typeof s === 'string' && MTIME_NS_RE.test(s);
 }
 
 /** A ref value, classified. The two grammars are disjoint: a bare name never starts with `refs/`. */
@@ -268,6 +302,11 @@ export const DOCS_FAILURES = {
   'untrusted-worktree': 'ccd',
   'worktree-moved': 'ccd',
   'draft-changed': 'ccd',
+  // Range reads (X2 P1, `docs-show-range`): a snapshot the cache no longer holds, a request over a range bound, and a
+  // prepare the cache or its budget cannot take now.
+  'snapshot-gone': 'ccd',
+  'range-too-large': 'ccd',
+  'prepare-busy': 'ccd',
   // Fetch.
   'remote-absent': 'ccd',
   'remote-branch-absent': 'ccd',
@@ -353,6 +392,11 @@ export const DOCS_FAILURE_RETRY: Record<DocsFailure, DocsRetryClass> = {
   'untrusted-worktree': 'none',
   'worktree-moved': 'auto',
   'draft-changed': 'auto',
+  // The PWA starts again from prepare once; a bound the request itself broke never succeeds by repeating it; a busy
+  // prepare is the reader's to retry.
+  'snapshot-gone': 'auto',
+  'range-too-large': 'none',
+  'prepare-busy': 'manual',
   'remote-absent': 'none',
   'remote-branch-absent': 'none',
   'fetch-auth-failed': 'none',
@@ -439,7 +483,7 @@ type DocsTriedRef = { ref: string; result: 'resolved' | 'absent' | 'dangling' | 
  * - `root`: unknown-project (ccd's projects root).
  * - `owner`, `branch`: linked-worktree, shared-repo.
  * - `tried`, `suggest`, `hint`: unresolved-ref. `ref`, `type`: ref-not-commit.
- * - `kind`: not-a-file. `size`, `cap`: too-large. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
+ * - `kind`: not-a-file. `size`, `cap`: too-large and range-too-large. `blob`: too-large of a committed show. `count`, `bytes`: too-many-entries. `errno`: unreadable-path.
  * - `candidates`: ambiguous-worktree. `why`: untrusted-worktree, malformed-answer, foreign-request, bad-query.
  * - `head`: worktree-moved. `now`: draft-changed. `lockAgeMs`: ref-locked.
  * - `step`, `rc`, `stderrHead`: git-failed, git-timeout. `signal`: ccd-killed. `code`, `stderrHead`: ccd-fault.
@@ -458,6 +502,8 @@ export interface DocsFailureContext {
   kind?: DocsNotAFileKind;
   size?: number;
   cap?: number;
+  /** too-large of a committed show: the blob of the asked path at the asked commit, a full sha (`docsFailureBlob`). */
+  blob?: string;
   count?: number;
   bytes?: number;
   errno?: string;
@@ -509,11 +555,11 @@ export function redactDocsText(s: string): string {
 // Spec 2026-10-01 section 2 (b) "Types", with section 3.5's additive amendments (`onRef`, `github`) folded in.
 // Additive only: no FLEET_PROTO bump. Every ccd answer is one JSON line: `{v:1, verb, ok, elapsedMs, ...}`.
 
-export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log';
+export type DocsVerb = 'docs-index' | 'docs-tree' | 'docs-show' | 'docs-fetch' | 'docs-log' | 'docs-show-range';
 
 /** D-6048 (ARCH-12): the runtime list, derived from the type (`SESSION_ROLE_MAP`'s idiom). */
 const DOCS_VERB_MAP: Record<DocsVerb, true> = {
-  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true, 'docs-log': true,
+  'docs-index': true, 'docs-tree': true, 'docs-show': true, 'docs-fetch': true, 'docs-log': true, 'docs-show-range': true,
 };
 export const DOCS_VERBS: readonly DocsVerb[] = Object.keys(DOCS_VERB_MAP) as DocsVerb[];
 
@@ -563,8 +609,74 @@ export interface DocsEntry {
     fp: Sha | null;
     errno?: string;
     trust: 'status' | 'hash';
+    /** X2 P1 (additive): the leaf's modified time in nanoseconds, a decimal string (it does not fit a JSON number
+     *  exactly), from the same `fstat` its size comes from. An older ccd sends none; read it only through `statPin`. */
+    mtimeNs?: string;
   };
 }
+
+// ---- The range read's wire (X2 spec section 4.3; plan Task P1.1) ----------------------------------------------
+
+/** What a range read is pinned to: a committed blob, a draft's fingerprint, or, for a draft or folder file the
+ *  listing could not fingerprint, its size and modified time as the listing measured them. */
+export type DocsRangePin =
+  | { kind: 'blob'; sha: Sha }
+  | { kind: 'fp'; sha: Sha }
+  | { kind: 'stat'; size: number; mtimeNs: string };
+
+/** THE one reader of a listed modified time (spec 4.3, "Where the time comes from"): a draft entry and a folder entry
+ *  each call it with their own fields. An absent `mtimeNs`, one outside `DOCS_MTIME_NS_RE_BODY` (a number or an array off
+ *  the wire included, which `isDocsMtimeNs` refuses before its pattern), or a size that is not a whole byte count gives
+ *  no pin, so an older ccd's file stays withheld rather than pinned to a guess. */
+export function statPin(size: number | null, mtimeNs: string | undefined): DocsRangePin | null {
+  if (size === null || !Number.isSafeInteger(size) || size < 0) return null;
+  if (mtimeNs === undefined || !isDocsMtimeNs(mtimeNs)) return null;
+  return { kind: 'stat', size, mtimeNs };
+}
+
+/** A stat pin's size as ccd's `RANGE_STAT_SIZE_RE` reads it: zero, or one to ten digits with no leading zero. */
+const RANGE_STAT_SIZE_RE = fullMatcher('0|[1-9][0-9]{0,9}');
+/** A range snapshot's id as ccd's `RANGE_SNAPSHOT_RE` reads it: 32 lower-case hex digits. */
+const RANGE_SNAPSHOT_RE = fullMatcher('[0-9a-f]{32}');
+
+/** The wire form of a range pin, the value of `docs-show-range --pin` and of the range route's `pin` key:
+ *  `blob:<sha>`, `fp:<sha256>` or `stat:<size>:<mtimeNs>`. The one writer; `parseDocsRangePinText` is its one reader. */
+export function docsRangePinText(pin: DocsRangePin): string {
+  return pin.kind === 'stat' ? `stat:${pin.size}:${pin.mtimeNs}` : `${pin.kind}:${pin.sha}`;
+}
+
+/** THE one reader of a range pin's wire form, by the grammars ccd's `range_pin` holds (`isDocsCommit`,
+ *  `isDocsFingerprint`, a stat size of at most ten digits and `isDocsMtimeNs`). `null` has one meaning: the text is in
+ *  none of the three forms. */
+export function parseDocsRangePinText(s: string): DocsRangePin | null {
+  if (typeof s !== 'string') return null;
+  const parts = s.split(':');
+  if (parts.length === 2 && parts[0] === 'blob' && isDocsCommit(parts[1]!)) return { kind: 'blob', sha: parts[1]! };
+  if (parts.length === 2 && parts[0] === 'fp' && isDocsFingerprint(parts[1]!)) return { kind: 'fp', sha: parts[1]! };
+  if (parts.length === 3 && parts[0] === 'stat' && RANGE_STAT_SIZE_RE.test(parts[1]!) && isDocsMtimeNs(parts[2]!)) {
+    return { kind: 'stat', size: Number(parts[1]), mtimeNs: parts[2]! };
+  }
+  return null;
+}
+
+/** A byte count as ccd reads a range's `--offset` (and the digits of a stat pin's size): zero, or one to ten digits with
+ *  no leading zero. `null` has one meaning: the text is not one. */
+export function parseDocsRangeCount(s: string): number | null {
+  return typeof s === 'string' && RANGE_STAT_SIZE_RE.test(s) ? Number(s) : null;
+}
+
+/** Whether `s` names a range snapshot (ccd answers any other id `snapshot-gone`, so the server refuses it first). */
+export function isDocsRangeSnapshot(s: string): boolean {
+  return typeof s === 'string' && RANGE_SNAPSHOT_RE.test(s);
+}
+
+/** `docs-show-range --prepare`'s answer: the private snapshot's id, its size and the sha256 of its bytes. No file
+ *  bytes ride a prepare. */
+export interface DocsRangePrepared { snapshot: string; size: number; digest: Sha }
+
+/** One frame of a snapshot: at most `DOCS_RANGE_FRAME_BYTES` raw bytes from `offset`, base64, with the sha256 of
+ *  those bytes and the snapshot's whole size. */
+export interface DocsRangeFrame { snapshot: string; offset: number; bytesB64: string; digest: Sha; total: number }
 
 export type DraftsFacts =
   | {
@@ -593,6 +705,16 @@ export interface DocsShowOk {
   commit?: Sha; blob?: Sha; mode?: string; onRef?: 'contains' | 'not-contained' | 'unmeasured';
   /** Draft only; `fp === sha256`. */
   worktree?: string; branch?: string; head?: Sha; fp?: Sha;
+}
+
+/** `docs-show-range --prepare`'s ok line (X2 P1): the envelope and `DocsRangePrepared`, which carries no file bytes. */
+export interface DocsRangePreparedOk extends DocsRangePrepared {
+  v: 1; verb: 'docs-show-range'; ok: true; elapsedMs: number;
+}
+
+/** `docs-show-range --snapshot ...`'s ok line (X2 P1): the envelope and `DocsRangeFrame`, one frame of the snapshot. */
+export interface DocsRangeFrameOk extends DocsRangeFrame {
+  v: 1; verb: 'docs-show-range'; ok: true; elapsedMs: number;
 }
 
 export interface DocsFetchOk {
@@ -770,6 +892,10 @@ export type DocsRefreshFetch =
   | { state: 'skipped'; why: 'local-ref' };
 export interface DocsRefreshResponse { ok: true; fetch: DocsRefreshFetch; tree: DocsTreeResponse | DocsFailureBody }
 export interface DocsHistoryResponse { ok: true; log: DocsLogOk }
+/** The range route's two 200s (X2 P1, spec 4.3): a prepare's snapshot, and one frame of it. Each carries exactly the
+ *  fields of ccd's answer that the PWA reads, never ccd's envelope. */
+export interface DocsRangePrepareResponse { ok: true; prepared: DocsRangePrepared }
+export interface DocsRangeFrameResponse { ok: true; frame: DocsRangeFrame }
 
 // ---------------------------------------------------------------------------
 // (G) resolveDocRef (spec 4.11): where a link or an image reference inside a
@@ -951,6 +1077,10 @@ export interface EntryView {
   withheld: WithheldReason | null;
   offersCommitted: boolean;
   committedKind: 'file' | 'exec' | 'symlink' | 'submodule' | null;
+  /** X2 P1 (spec 4.3, "Where the time comes from, and where the pin lives"): what a range read of the bytes `opens`
+   *  names is pinned to: the committed blob, the draft's fingerprint, or, for a draft the listing could not fingerprint,
+   *  its stat pin; `null` iff `opens` is `'none'`. */
+  pin: DocsRangePin | null;
 }
 
 /** Whether `e`'s draft may overlay at all: exactly one trusted holder whose HEAD is the served commit
@@ -970,7 +1100,8 @@ export function admitDraft(e: DocsEntry, d: DraftsFacts): boolean {
  *   2. `typechange`: badge typechange. The draft is never read. This comes before the withheld rule, so a type
  *      change to a symlink is a typechange, not "not a file".
  *   3. a regular file with an `fp`: the draft opens. Badge `new` for added or untracked, else the state itself
- *      (modified, conflicted).
+ *      (modified, conflicted). X2 P1: so does a regular file with `fp: null` whose size is at most
+ *      `DOCS_RANGE_MAX_BYTES` and whose `mtimeNs` `statPin` reads, through its stat pin (read by range, spec 4.3).
  *   4. withheld: a file with `fp: null` is too-large, `kind: 'unreadable'` is unreadable, and every other kind is
  *      not-a-file. Listed iff it is committed or new (added, untracked).
  *  In 1, 2 and 4 the committed side opens: a committed file or exec opens committed, and a committed symlink, a
@@ -979,9 +1110,14 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
   const committedKind = e.committed === null ? null : e.committed.kind;
   const committedIsFile = committedKind === 'file' || committedKind === 'exec';
   const committedSide: EntryView['opens'] = committedIsFile ? 'committed' : 'none';
+  const committedPin: DocsRangePin | null =
+    committedIsFile && e.committed !== null ? { kind: 'blob', sha: e.committed.blob } : null;
   const view = (listed: boolean, opens: EntryView['opens'], badge: EntryBadge | null,
-    withheld: WithheldReason | null): EntryView =>
-    ({ listed, opens, badge, withheld, offersCommitted: opens === 'draft' && committedIsFile, committedKind });
+    withheld: WithheldReason | null, draftPin: DocsRangePin | null = null): EntryView =>
+    ({
+      listed, opens, badge, withheld, offersCommitted: opens === 'draft' && committedIsFile, committedKind,
+      pin: opens === 'committed' ? committedPin : opens === 'draft' ? draftPin : null,
+    });
   const draft = e.draft;
   if (mode !== 'ref' || draft === null || !admitDraft(e, d)) {
     return view(committedKind !== null, committedSide, null, null);
@@ -990,8 +1126,16 @@ export function entryView(e: DocsEntry, d: DraftsFacts, mode: EntryMode): EntryV
     return view(committedKind !== null, committedSide, draft.state, null);
   }
   const isNew = draft.state === 'added' || draft.state === 'untracked';
+  const badge: EntryBadge = isNew ? 'new' : draft.state === 'conflicted' ? 'conflicted' : 'modified';
   if (draft.kind === 'file' && draft.fp !== null) {
-    return view(true, 'draft', isNew ? 'new' : draft.state === 'conflicted' ? 'conflicted' : 'modified', null);
+    return view(true, 'draft', badge, null, { kind: 'fp', sha: draft.fp });
+  }
+  // X2 P1 (spec 4.3, "The overlay cap"): a regular file the listing could not fingerprint (above the hash ceiling, or
+  // past the listing's hash budget) opens through its snapshot, pinned by its size and modified time, up to the range
+  // ceiling. Without a readable `mtimeNs` (an older ccd) or above the ceiling it stays withheld `too-large`.
+  if (draft.kind === 'file' && draft.size !== null && draft.size <= DOCS_RANGE_MAX_BYTES) {
+    const stat = statPin(draft.size, draft.mtimeNs);
+    if (stat !== null) return view(true, 'draft', badge, null, stat);
   }
   const withheld: WithheldReason =
     draft.kind === 'file' ? 'too-large' : draft.kind === 'unreadable' ? 'unreadable' : 'not-a-file';
@@ -1342,11 +1486,40 @@ export function docsPageUrl(loc: DocsPageLocation): string {
   return pairs.length === 0 ? url : url + '?' + pairs.join('&');
 }
 
-/** What a file request names (spec 3.2, 3.4). A committed pin is the tree answer's commit and `ref.served`; a
- *  draft pin is the draft branch, the holder's HEAD and the draft's fingerprint. Neither is ever a page URL. */
+/** What a file request names (spec 3.2, 3.4): the OPENED pin. A committed pin is the tree answer's commit and
+ *  `ref.served`; a draft pin is the draft branch, the holder's HEAD and the sha256 of the bytes the page shows (`fp`),
+ *  with the listing's `stat` when the draft was read by range. Neither is ever a page URL. Every reader of `fp` as bytes
+ *  and the file route (`docsApi.file`, `DocsLoaders.file` and `.raster`) take this one, so a listing pin without bytes
+ *  cannot reach them (X2 P1, review F4). */
 export type DocPin =
   | { kind: 'committed'; commit: string; servedRef: string; section: DocSectionSlug; path: string }
-  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string };
+  | DocDraftPin;
+
+/** The pin the file route reads (`docs-show`): the opened pin itself, kept as a name for the server's ports. */
+export type DocFilePin = DocPin;
+
+/** A draft page's opened pin: its bytes are named by `fp`, the sha256 of what the page shows. */
+export type DocDraftPin =
+  { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: string;
+    stat?: { size: number; mtimeNs: string } };
+
+/** The LISTING's pin (X2 P1, spec 4.3): an opened pin, or a draft the listing could not fingerprint, which carries
+ *  `fp: null` and its `stat`. Such a draft is read by range alone; once the prepare answers, its opened pin carries the
+ *  snapshot's digest as `fp` and the same `stat`, and `samePin` holds the two equal. Used only where a listing pin
+ *  flows (`pinFor`, the visit's `stat-pinned` slot, the range target); never by the file route. */
+export type DocListPin =
+  | DocPin
+  | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: null;
+    stat: { size: number; mtimeNs: string } };
+
+/** A key for a listing pin: every field that names its bytes, a draft with no fingerprint by its place and its stat
+ *  (`stat:<size>:<mtimeNs>`, the form `docsRangePinText` writes). The ONE spelling of that key; it is a key, never a URL
+ *  (a stat-pinned draft has no file URL). */
+export function docListPinKey(pin: DocListPin): string {
+  if (pin.kind === 'committed') return ['committed', pin.commit, pin.servedRef, pin.section, pin.path].join('\u0000');
+  const bytes = pin.fp === null ? docsRangePinText({ kind: 'stat', size: pin.stat.size, mtimeNs: pin.stat.mtimeNs }) : pin.fp;
+  return ['draft', pin.branch, pin.head, pin.section, pin.path, bytes].join('\u0000');
+}
 
 /** `/api/docs/<project>`: the project segment through encodeURIComponent. */
 function apiProjectPath(project: string): string {
@@ -1359,6 +1532,14 @@ function apiQuery(pairs: readonly (readonly [string, string])[]): string {
   return '?' + pairs.map(([k, v]) => k + '=' + encodeURIComponent(v)).join('&');
 }
 
+/** A range URL's place keys, in ccd's argv order: a committed doc's commit, section, path; a draft's branch, head,
+ *  section, path. */
+function rangePlace(pin: DocListPin): (readonly [string, string])[] {
+  return pin.kind === 'committed'
+    ? [['commit', pin.commit], ['section', pin.section], ['path', pin.path]]
+    : [['branch', pin.branch], ['head', pin.head], ['section', pin.section], ['path', pin.path]];
+}
+
 /** The ONE docs API URL builder (spec 3.2). Keys are written in one fixed order whatever order the pin's fields
  *  were spelled in: committed commit, servedRef, section, path; draft branch, head, section, path, fp. It
  *  validates nothing; the server's L1 query parser does, with the same predicates. */
@@ -1366,6 +1547,7 @@ export const docsApi = {
   projects: (): string => DOCS_API_PREFIX + '/projects',
   tree: (project: string, ref: DocsRefSpec | null): string =>
     apiProjectPath(project) + '/tree' + (ref === null ? '' : apiQuery([['ref', docsRefText(ref)]])),
+  // The file route's pin is the opened one, which always names its bytes by `fp`: the file URL never carries `stat`.
   file: (project: string, pin: DocPin): string =>
     apiProjectPath(project) + '/file' + apiQuery(pin.kind === 'committed'
       ? [['commit', pin.commit], ['servedRef', pin.servedRef], ['section', pin.section], ['path', pin.path]]
@@ -1374,4 +1556,14 @@ export const docsApi = {
   /** One doc's history (rich-docs spec G4): commit, section, path, in ccd's argv order. */
   history: (project: string, ask: DocsLogAsk): string => apiProjectPath(project) + '/history'
     + apiQuery([['commit', ask.commit], ['section', ask.section], ['path', ask.path]]),
+  /** One range read's prepare (X2 P1, spec 4.3): the leaf's place as ccd takes it (a committed doc's `commit`, a draft's
+   *  `branch` and `head`; neither the file route's `servedRef` nor `fp`, which ccd never reads, the range pin being the
+   *  pin), then section, path and the range pin's wire form, then `prepare=1`. */
+  rangePrepare: (project: string, pin: DocListPin, range: DocsRangePin): string =>
+    apiProjectPath(project) + '/range' + apiQuery([...rangePlace(pin), ['pin', docsRangePinText(range)], ['prepare', '1']]),
+  /** One frame of a prepared snapshot: the same place and pin, then `snapshot`, `offset` and `length`. */
+  rangeFrame: (project: string, pin: DocListPin, range: DocsRangePin, snapshot: string, offset: number, length: number): string =>
+    apiProjectPath(project) + '/range' + apiQuery([
+      ...rangePlace(pin), ['pin', docsRangePinText(range)],
+      ['snapshot', snapshot], ['offset', String(offset)], ['length', String(length)]]),
 };

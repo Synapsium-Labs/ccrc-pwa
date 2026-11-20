@@ -225,6 +225,12 @@ const EXPECTED: Record<string, { what: string; codes: string[] }> = {
     what: 'the skill self-install verb granted without --wrapper',
     codes: ['TS2322'],
   },
+  // NATIVE DOCS READER X2 wave P1, g28's shape for the range read: read-only, enrolled on `--project`, so the narrowed
+  // grant is a compile error.
+  'g32-docs-show-range-without-project.ts': {
+    what: 'the docs range read granted without --project',
+    codes: ['TS2322'],
+  },
   // THE PANE-SCOPE STOP'S SWITCH (D-7902), g24's shape: enrolled on `--state`, so the narrowed grant is a compile error.
   'g27-pane-scope-stop-without-state.ts': {
     what: 'the pane-scope stop switch verb granted without --state',

@@ -4078,13 +4078,57 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 112: user_version 111 -> 112 ──────────────────────────────────────────
+  // The dispatch cap counts only working workers (waiting workers spec 2026-11-19, Part 3; D-8792): the seed row
+  // `cap-counts-working` = `shadow` adds the cap's switch to the Shadow lanes card. Shadow, the cap counts every active run
+  // as before and the caps view reports how many have a worker measured waiting; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, leaves those runs out of the count. The merge arms nothing, and shadow is its off switch.
+  //
+  // `OR IGNORE`: a file that already holds the row (a replay over a database rolled back one version, as
+  // decision-model-records.test.ts does) keeps the operator's choice, and the entry is a no-op there rather than a refusal.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
+  // and migrates nothing), reads the `cap-counts-working` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`: door B1 took 110 and capacity Task 2 took 111 first, so this
+  // entry moved up to 112; approvals PR 3 builds on the slots after 111 too, so whoever lands second moves up (the
+  // coordinator's standing license). RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
+  `,
+
+  // ── 113: user_version 112 -> 113 ──────────────────────────────────────────
+  // The admission wait (D-6095, fleet-capacity W1-4): a coordinator whose dispatch, or send-back of a parked run, the
+  // concurrency cap refused is mailed when the cap has room again. `admissionWaitSince` is the OLDEST refusal and only
+  // orders the queue; `lastRefusedAt` is the newest refusal and re-arms the wake; `admissionWokenAt` is when the
+  // `admissionWake` lane last mailed for it. The writers are `CoordStore`'s `stampAdmissionWait` (the first two),
+  // `markAdmissionWoken` (the third) and `clearAdmissionWait`, which `advanceInner` calls on every state move, so a
+  // dispatched, sent-back, closed or abandoned run is never mailed.
+  //
+  // THREE NULLABLE COLUMNS, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at this `user_version`
+  // takes rule 3 (it warns, reads as-is and migrates nothing), never names them, and boots. Every earlier entry is frozen.
+  // The slot is POSITIONAL: the next free one after capacity Task 3's seed (112), which this branch stacks on; door B1 took
+  // 110 and capacity Task 2 took 111 (the stack took 52, the draft 107, and this entry 111 before them); whoever lands
+  // second renumbers (the coordinator's standing license).
+  // RE-MEASURE the slot before the PR and before merge (with Task 3 landed it must print 112 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE runs ADD COLUMN admissionWaitSince INTEGER;
+  ALTER TABLE runs ADD COLUMN lastRefusedAt INTEGER;
+  ALTER TABLE runs ADD COLUMN admissionWokenAt INTEGER;
+  `,
+
+  // ── 114: user_version 113 -> 114 ──────────────────────────────────────────
   // The project row names its Linear workspace (Linear hierarchy wave 8, D-8808, plan Task 8.1): `project_linking.teamWorkspace`
   // is the slot id (a workspace id) the row's team key resolves in, so a key two connected workspaces share never answers
   // `team-ambiguous` for the project. NULL: none set, the key resolves as before. ONE COLUMN, nullable, no default, nothing
   // else: an older build opening a file at this `user_version` takes rule 3 and never names the column. Wave 8's later task
-  // (8.4) adds its columns to THIS entry. This is the next free slot by position on `main`: door B1 took 110 and the waiting
-  // workers' sleep 111 first, so this entry moved up to 112; whoever lands second renumbers (the coordinator's standing
-  // license). RE-MEASURE the slot before the PR and before merge (it must print 111, the count before this entry):
+  // (8.4) adds its columns to THIS entry. This is the next free slot by position on `main`: door B1 took 110, the waiting
+  // workers' sleep 111, the cap-counts-working seed 112 and the admission wait 113 first, so this entry moved up to 114;
+  // whoever lands second renumbers (the coordinator's standing license). RE-MEASURE the slot before the PR and before
+  // merge (it must print 113, the count before this entry):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

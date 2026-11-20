@@ -1,0 +1,255 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Session helpers: mockup (desktop polish C49)</title>
+<!--
+  A static mockup for docs/superpowers/specs/2026-11-19-session-helpers-design.md.
+  Every name, number and text in it is invented. Pick the view with ?view=desk, ?view=states, ?view=phone,
+  ?view=phone-open or ?view=archive. Colours are the Refined skin's dark tokens (ui/src/styles/tokens.css).
+-->
+<style>
+  :root {
+    --bg-page: #0B0D0C; --bg-surface: #141715; --bg-raised: #1C201D; --bg-well: #070808;
+    --edge-subtle: #262B27; --edge-strong: #39403A;
+    --ink-primary: #ECF0EC; --ink-secondary: #ADB6AE; --ink-tertiary: #8B948C;
+    --accent: #45D67E; --accent-tint: #12291B;
+    --busy: #45D67E; --busy-text: #57E08B; --idle: #7C867D; --attention: #F2B84B; --dead: #E06A55; --dead-text: #E8836F;
+    font-family: Inter, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg-page); color: var(--ink-primary); font-size: 14px; line-height: 1.4; }
+  .mono { font-family: ui-monospace, "JetBrains Mono", Menlo, monospace; }
+  .t3 { color: var(--ink-tertiary); } .t2 { color: var(--ink-secondary); }
+  .view { display: none; } body[data-view="desk"] #desk, body[data-view="phone"] #phone,
+  body[data-view="phone-open"] #phone, body[data-view="archive"] #archive, body[data-view="states"] #states { display: flex; }
+  #states { width: 1280px; height: 520px; gap: 20px; padding: 20px; background: var(--bg-page); }
+  #states .col { flex: 1; min-width: 0; } #states .cap { font-size: 12px; color: var(--ink-tertiary); margin: 0 4px 8px; }
+  #states .helpers { margin: 0; } .hhead .nk { color: var(--ink-secondary); font-size: 13px; }
+
+  /* desktop shell */
+  .shell { height: 100vh; width: 100vw; }
+  .fleet { width: 300px; flex: none; background: var(--bg-surface); border-right: 1px solid var(--edge-subtle); padding: 14px 12px; }
+  .fleet h2 { font-size: 12px; letter-spacing: .06em; text-transform: uppercase; color: var(--ink-tertiary); margin: 4px 4px 10px; }
+  .proj { font-size: 13px; color: var(--ink-secondary); margin: 12px 4px 6px; }
+  .srow { display: flex; gap: 8px; align-items: center; padding: 8px; border-radius: 8px; }
+  .srow.sel { background: var(--accent-tint); }
+  .dot { width: 8px; height: 8px; border-radius: 50%; flex: none; }
+  .dot.busy { background: var(--busy); box-shadow: 0 0 6px var(--busy); } .dot.idle { background: var(--idle); }
+  .srow .nm { flex: 1; } .srow .st { font-size: 12px; color: var(--busy-text); } .srow .st.idle { color: var(--ink-tertiary); }
+  .foot { margin-top: 18px; padding: 8px; border-top: 1px solid var(--edge-subtle); color: var(--ink-secondary); font-size: 13px; }
+
+  .pane { flex: 1; display: flex; flex-direction: column; min-width: 0; }
+  .head { padding: 12px 18px; border-bottom: 1px solid var(--edge-subtle); background: var(--bg-surface); }
+  .head .title { font-size: 16px; font-weight: 600; } .chips { display: flex; gap: 6px; margin-top: 8px; flex-wrap: wrap; }
+  .chip { background: var(--bg-raised); border: 1px solid var(--edge-subtle); border-radius: 999px; padding: 2px 10px; font-size: 12px; color: var(--ink-secondary); }
+  .chip.busy { color: var(--busy-text); }
+  .chat { flex: 1; padding: 16px 22px; overflow: hidden; display: flex; flex-direction: column; gap: 12px; }
+  .bubble { max-width: 70%; background: var(--bg-surface); border: 1px solid var(--edge-subtle); border-radius: 10px; padding: 10px 12px; color: var(--ink-secondary); }
+  .bubble.me { align-self: flex-end; background: var(--bg-raised); color: var(--ink-primary); }
+  .tool { font-size: 12px; color: var(--ink-tertiary); }
+
+  /* the Helpers section */
+  .helpers { margin: 0 16px 10px; background: var(--bg-surface); border: 1px solid var(--edge-subtle); border-radius: 10px; }
+  .hhead { display: flex; align-items: center; gap: 8px; padding: 9px 12px; border-bottom: 1px solid var(--edge-subtle); }
+  .hhead .lbl { font-weight: 600; } .hhead .cnt { color: var(--busy-text); font-size: 13px; } .hhead .fin { color: var(--ink-tertiary); font-size: 13px; }
+  .hhead .chev { margin-left: auto; color: var(--ink-tertiary); }
+  .hrow { padding: 8px 12px; border-bottom: 1px solid var(--edge-subtle); display: grid; grid-template-columns: 14px 1fr auto; column-gap: 8px; }
+  .hrow:last-child { border-bottom: 0; }
+  .hrow .ic { color: var(--busy); padding-top: 1px; } .hrow .ic.wf { color: var(--attention); } .hrow .ic.done { color: var(--ink-tertiary); }
+  .hrow .what { font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .hrow .meta { grid-column: 2 / 4; font-size: 12px; color: var(--ink-secondary); }
+  .hrow .meta b { font-weight: 500; color: var(--busy-text); } .hrow .meta .q { color: var(--ink-tertiary); }
+  .hrow .right { font-size: 12px; color: var(--ink-tertiary); text-align: right; }
+  .meter { grid-column: 2 / 4; height: 5px; border-radius: 3px; background: var(--bg-raised); margin: 6px 0 2px; overflow: hidden; }
+  .meter i { display: block; height: 100%; background: var(--busy); }
+  .fold { padding: 7px 12px; font-size: 12px; color: var(--ink-tertiary); background: var(--bg-raised); border-top: 1px solid var(--edge-subtle); border-radius: 0 0 10px 10px; }
+  .fold .tw { margin-right: 6px; }
+  .frow { padding: 7px 12px 7px 34px; font-size: 12px; color: var(--ink-secondary); border-top: 1px solid var(--edge-subtle); }
+  .frow .l1 { font-size: 13px; color: var(--ink-primary); font-weight: 500; }
+  .report .more { color: var(--ink-tertiary); display: block; margin-top: 4px; }
+  .frow .ok { color: var(--ink-tertiary); } .frow .bad { color: var(--dead-text); }
+  .report { margin: 6px 0 2px; padding: 8px 10px; background: var(--bg-well); border-radius: 6px; color: var(--ink-secondary); font-size: 12px; }
+  .composer { margin: 0 16px 16px; padding: 10px 12px; border: 1px solid var(--edge-strong); border-radius: 10px; background: var(--bg-raised); color: var(--ink-tertiary); }
+
+  /* phone */
+  #phone { width: 360px; height: 760px; flex-direction: column; background: var(--bg-page); }
+  #phone .head { padding: 10px 12px; } #phone .chat { padding: 10px 12px; } #phone .bubble { max-width: 85%; }
+  #phone .helpers { margin: 0 8px 8px; }
+  #phone .composer { margin: 0 8px 10px; }
+  #phone .hrow .meta { white-space: normal; }
+  #phone .hrow { grid-template-columns: 14px 1fr; }
+  #phone .hhead { min-height: 44px; }
+  .glance { padding: 6px 12px; font-size: 12px; color: var(--ink-secondary); display: flex; gap: 6px; border-bottom: 1px solid var(--edge-subtle); }
+  .glance:last-child { border-bottom: 0; }
+  .glance .w { flex: 1; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; } .glance b { color: var(--busy-text); font-weight: 500; }
+  body[data-view="phone"] .open-only { display: none; } body[data-view="phone-open"] .closed-only { display: none; }
+  body[data-view="phone-open"] #phone .scroll { max-height: 380px; overflow: hidden; }
+
+  /* archive */
+  #archive .main { flex: 1; padding: 22px 30px; }
+  #archive h1 { font-size: 20px; margin: 0 0 4px; } #archive .sub { color: var(--ink-tertiary); margin-bottom: 18px; }
+  .card { background: var(--bg-surface); border: 1px solid var(--edge-subtle); border-radius: 10px; margin-bottom: 16px; }
+  .card h3 { margin: 0; padding: 12px 14px; font-size: 14px; border-bottom: 1px solid var(--edge-subtle); display: flex; gap: 8px; }
+  .card h3 .n { color: var(--ink-tertiary); font-weight: 400; } .card .note { padding: 8px 14px; font-size: 12px; color: var(--ink-tertiary); border-bottom: 1px solid var(--edge-subtle); }
+  .urow { display: grid; grid-template-columns: 1fr auto; gap: 6px; padding: 10px 14px; border-bottom: 1px solid var(--edge-subtle); }
+  .urow:last-child { border-bottom: 0; }
+  .grp { padding: 8px 14px; font-size: 12px; color: var(--ink-tertiary); background: var(--bg-raised); border-bottom: 1px solid var(--edge-subtle); }
+  .urow .l3 { font-size: 12px; color: var(--ink-tertiary); }
+  .urow .l1 { font-weight: 500; } .urow .l2 { font-size: 12px; color: var(--ink-secondary); }
+  .acts { display: flex; gap: 6px; align-items: center; }
+  .btn { border: 1px solid var(--edge-strong); background: var(--bg-raised); color: var(--ink-primary); border-radius: 7px; padding: 5px 10px; font-size: 12px; }
+  .btn.primary { background: var(--accent); color: #082312; border-color: var(--accent); }
+  .arow { display: flex; justify-content: space-between; padding: 10px 14px; border-bottom: 1px solid var(--edge-subtle); color: var(--ink-secondary); font-size: 13px; }
+  .arow:last-child { border-bottom: 0; }
+  .callout { position: absolute; border: 2px dashed var(--attention); border-radius: 12px; pointer-events: none; }
+  .tag { position: absolute; background: var(--attention); color: #1c1405; font-size: 11px; font-weight: 600; padding: 2px 8px; border-radius: 6px; }
+</style>
+</head>
+<body>
+
+<!-- ===================== DESKTOP, 1280 ===================== -->
+<div id="desk" class="view shell">
+  <aside class="fleet">
+    <h2>Fleet</h2>
+    <div class="proj">project-a</div>
+    <div class="srow sel"><span class="dot busy"></span><span class="nm">lane-a-project-a</span><span class="st">working · in background</span></div>
+    <div class="srow"><span class="dot idle"></span><span class="nm">lane-b-project-a</span><span class="st idle">idle</span></div>
+    <div class="proj">project-b</div>
+    <div class="srow"><span class="dot busy"></span><span class="nm">lane-a-project-b</span><span class="st">working</span></div>
+    <div class="srow"><span class="dot idle"></span><span class="nm">lane-c-project-b</span><span class="st idle">idle</span></div>
+    <div class="foot">Archived · 12 · 3.4 GB ›</div>
+  </aside>
+  <main class="pane">
+    <div class="head">
+      <div class="title">lane-a-project-a</div>
+      <div class="chips"><span class="chip busy">working · 3 in background</span><span class="chip">run #412</span><span class="chip">PR #88</span><span class="chip">tasks 4/9</span><span class="chip">details</span></div>
+    </div>
+    <div class="chat">
+      <div class="bubble me">Measure the three sources, then draft the spec.</div>
+      <div class="tool">⏺ Agent · Measure server helper sources (background)</div>
+      <div class="tool">⏺ Agent · Measure transcript helper sources (background)</div>
+      <div class="tool">⏺ Workflow · review-panel</div>
+      <div class="bubble">Three helpers are running; I'll read their reports as they arrive.</div>
+    </div>
+
+    <section class="helpers" aria-label="Helpers">
+      <div class="hhead"><span class="lbl">Helpers</span><span class="cnt">3 running</span><span class="fin">· 2 finished</span><span class="chev">▾</span></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Measure server helper sources</span><span class="right mono">12m5s</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <b>running</b> · active 20s ago · ↓ 41k</div></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Measure transcript helper sources</span><span class="right mono">11m48s</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <b>running</b> · <span class="q">quiet 11m</span> · ↓ 63k</div></div>
+      <div class="hrow"><span class="ic wf">▣</span><span class="what">review-panel</span><span class="right mono">6m2s</span>
+        <div class="meter"><i style="width:58%"></i></div>
+        <div class="meta">workflow · <b>running</b> · phase Verify · 7/12 agents · active 4s ago · ↓ 2.5m tokens</div></div>
+      <div class="fold"><span class="tw">▾</span>Finished · last 10 min (2)</div>
+      <div class="frow"><div class="l1">Measure today's session panel</div><span class="ok">✓ done · 4m12s ·</span> header facts only; no right panel below 1600 px
+        <div class="report mono">Today's helper view is a set of header facts, not a right-hand panel.<br>Subagents: one button, then a name and an elapsed time per row.<br>Workflows: the strip under the transcript, at every width.<br>Broker records: a disclosure of rows with condition words.<span class="more">Show all (38 lines) · Copy</span></div></div>
+      <div class="frow"><div class="l1">Render the mockup</div><span class="bad">✕ failed · 1m3s ·</span> headless browser not found</div>
+    </section>
+    <div class="composer">Message lane-a-project-a…</div>
+  </main>
+</div>
+
+
+<!-- ===================== OTHER STATES, 1280 ===================== -->
+<div id="states" class="view">
+  <div class="col">
+    <div class="cap">A fresh roster</div>
+    <section class="helpers" aria-label="Helpers">
+      <div class="hhead"><span class="lbl">Helpers</span><span class="cnt">1 running</span><span class="fin">· 2 finished</span><span class="chev">▾</span></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Index the test fixtures</span><span class="right mono">4m10s</span>
+        <div class="meta">subagent · Explore · Haiku · <b>running</b> · active 6s ago · ↓ 12k</div></div>
+      <div class="hrow"><span class="ic done">◇</span><span class="what">Draft the release note</span><span class="right mono">9m02s</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · no longer listed · <span class="q">quiet 3m</span> · ↓ 30k</div></div>
+      <div class="fold"><span class="tw">▾</span>Finished · last 10 min (2)</div>
+      <div class="frow"><div class="l1">Check the migration order</div><span class="ok">■ stopped · 22s</span></div>
+      <div class="frow"><div class="l1">Summarise the failing suites</div><span class="ok">✓ finished · 6m</span></div>
+    </section>
+  </div>
+  <div class="col">
+    <div class="cap">A stale roster</div>
+    <section class="helpers" aria-label="Helpers">
+      <div class="hhead"><span class="lbl">Helpers</span><span class="nk">2 helpers · live state not known: no news from the session for 41m</span><span class="chev">▾</span></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Index the test fixtures</span><span class="right mono">46m</span>
+        <div class="meta">subagent · Explore · Haiku · <span class="q">quiet 41m</span> · ↓ 12k</div></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Draft the release note</span><span class="right mono">51m</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <span class="q">quiet 43m</span> · ↓ 30k</div></div>
+    </section>
+  </div>
+</div>
+
+<!-- ===================== PHONE, 360 ===================== -->
+<div id="phone" class="view">
+  <div class="head">
+    <div class="title">lane-a-project-a</div>
+    <div class="chips"><span class="chip busy">working · 3 in background</span><span class="chip">details</span></div>
+  </div>
+  <div class="chat">
+    <div class="bubble me">Measure the three sources, then draft the spec.</div>
+    <div class="tool">⏺ Agent · Measure server helper sources</div>
+    <div class="bubble">Three helpers are running; I'll read their reports as they arrive.</div>
+  </div>
+  <section class="helpers" aria-label="Helpers">
+    <div class="hhead"><span class="lbl">Helpers</span><span class="cnt">3 running</span><span class="fin">· 2 finished</span><span class="chev closed-only">▸</span><span class="chev open-only">▾</span></div>
+    <div class="closed-only">
+      <div class="glance"><span class="w">◆ Measure server helper sources</span><b>running</b></div>
+      <div class="glance"><span class="w">◆ Measure transcript helper sources</span><b>running</b></div>
+    </div>
+    <div class="open-only scroll">
+      <div class="hrow"><span class="ic">◆</span><span class="what">Measure server helper sources</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <b>running</b> · 12m · active 20s ago</div></div>
+      <div class="hrow"><span class="ic">◆</span><span class="what">Measure transcript helper sources</span>
+        <div class="meta">subagent · general-purpose · Sonnet · high · <b>running</b> · 11m · <span class="q">quiet 11m</span></div></div>
+      <div class="hrow"><span class="ic wf">▣</span><span class="what">review-panel</span>
+        <div class="meter"><i style="width:58%"></i></div>
+        <div class="meta">workflow · <b>running</b> · 6m · phase Verify · 7/12 agents · active 4s ago</div></div>
+      <div class="fold"><span class="tw">▸</span>Finished · last 10 min (2)</div>
+    </div>
+  </section>
+  <div class="composer">Message…</div>
+</div>
+
+<!-- ===================== ARCHIVE, 1280 ===================== -->
+<div id="archive" class="view shell">
+  <aside class="fleet">
+    <h2>Fleet</h2>
+    <div class="proj">project-a</div>
+    <div class="srow"><span class="dot busy"></span><span class="nm">lane-a-project-a</span><span class="st">working</span></div>
+    <div class="proj">project-b</div>
+    <div class="srow"><span class="dot idle"></span><span class="nm">lane-c-project-b</span><span class="st idle">idle</span></div>
+    <div class="foot" style="color:var(--ink-primary)">Archived · 12 · 3.4 GB ›</div>
+  </aside>
+  <main class="main" style="position:relative">
+    <h1>Archive</h1>
+    <div class="sub">What is sitting around, and what removing it would free.</div>
+    <div class="card">
+      <h3>Work no session owns <span class="n">3</span><span class="n">· presence on disk not measured for 1 tree</span></h3>
+      <div class="note">Delegated worktrees the broker could not give one owner, and worktrees whose two sessions are both gone.</div>
+      <div class="grp">No single owner (2)</div>
+      <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-a1b2c3d4</div><div class="l2">two owners claimed it · tried 3 days ago</div></div>
+        <div class="acts"><button class="btn">Not delegated</button></div></div>
+      <div class="urow"><div><div class="l1">project-b · agent-e5f6a7b8</div><div class="l2">no owner found · tried 9 days ago</div></div>
+        <div class="acts"></div></div>
+      <div class="grp">Both sessions gone (1)</div>
+      <div class="urow"><div><div class="l1">project-a · &lt;projects-root&gt;/project-a/.claude/worktrees/agent-c9d0e1f2</div><div class="l2">worktree kept</div></div>
+        <div class="acts"><button class="btn">Keep worktree</button><button class="btn">Not delegated</button></div></div>
+    </div>
+    <div class="card">
+      <h3>Archived workspaces <span class="n">12 · 3.4 GB measured</span></h3>
+      <div class="arow"><span>project-a · lane-b-project-a</span><span>archived 2 days ago · 410 MB</span></div>
+      <div class="arow"><span>project-b · lane-c-project-b</span><span>archived 5 days ago · 1.2 GB</span></div>
+      <div class="arow"><span class="t3">…10 more</span><span></span></div>
+    </div>
+    <div class="callout" style="left:22px;top:84px;width:calc(100% - 44px);height:334px"></div>
+    <div class="tag" style="left:34px;top:74px">New in H4</div>
+  </main>
+</div>
+
+<script>
+  const v = new URLSearchParams(location.search).get('view') || 'desk';
+  document.body.dataset.view = v;
+</script>
+</body>
+</html>
