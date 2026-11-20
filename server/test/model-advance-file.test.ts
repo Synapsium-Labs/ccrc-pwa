@@ -15,6 +15,10 @@ import { CLASSES } from '../../shared/models.js';
 import type { Registry } from '../../shared/models.js';
 import { ADVANCE_EXAMPLE, ADV_DEEP_TEXT, ADV_REGISTRY, ADV_SEEDS, reg } from './fixtures/advanceCases.js';
 import { SEEDED } from './fixtures/modelCases.js';
+// Auto-advance plan W3 Task 14: the session rule beside the family rule.
+import { BEHIND_AFTER_MS, BLOCKED_CAUSES, isoSeconds, sessionBehind } from '../../shared/model-advance.mjs';
+// D-8685 (public issue #2607): the stale catalogue's fall to the client window.
+import { clientWindowNotice } from '../../shared/model-advance.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const REPO = path.resolve(here, '..', '..');
@@ -481,5 +485,139 @@ describe('SEED_FAMILIES in deploy/models-op.mjs', () => {
     for (const call of ['parseAdvance(', 'serializeAdvance(', 'backfillAdvance(', 'recordMove(', 'recordFailure(',
       'reconcilePending(', 'heldBackOf(', 'lastMoveOf(']) expect(src).toContain(call);
     expect(src).not.toContain(' as ');
+  });
+});
+
+// ── auto-advance plan W3 Task 14: whether one session is behind a move ───────────────────────────────────────
+// `sessionBehind` is pure: the op reads the session's two files and hands their JSON here. These rows are the
+// false positives the skeleton's Review Focus line 10 names (another class, a subagent's render, seconds against
+// milliseconds, clock skew around the day), each one condition away from the positive case, and the inputs the
+// rule must refuse rather than misread (a marker or sidecar that is not an object, a null model, a clock that is
+// not a number). Neutral ids only.
+describe('sessionBehind: one session still on a model a move replaced (§2.8; plan W3 Task 14)', () => {
+  const ms = (iso: string): number => Date.parse(iso);
+  /** The lane after ADVANCE_EXAMPLE's moves: each class on the model it moved to, the reverted class empty. */
+  const PINS = reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' });
+  const NOW = ms('2026-10-23T09:00:00Z');
+  const MOVED = ms('2026-10-21T14:05:11Z');
+  const TURN = ms('2026-10-22T09:11:40Z');
+  const RENDER_S = ms('2026-10-22T09:12:03Z') / 1000;
+  const turn = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ v: 1, sessionId: 'uuid-1', turnAt: TURN, ...o });
+  const usage = (o: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ ts: RENDER_S, uuid: 'uuid-1', model: 'model-5.6-gamma', agent: null, ...o });
+  const BEHIND = { class: 'opus', from: 'model-5.6-gamma', to: 'model-6.1-gamma', movedAt: '2026-10-21T14:05:11Z',
+    turnAt: '2026-10-22T09:11:40Z', renderAt: '2026-10-22T09:12:03Z' };
+  interface Case { advance?: Advance; registry?: Registry; nowMs?: number; turn?: unknown; usage?: unknown }
+  const judge = (c: Case = {}): ReturnType<typeof sessionBehind> => sessionBehind({
+    advance: c.advance ?? ADVANCE_EXAMPLE, registry: c.registry ?? PINS, nowMs: c.nowMs ?? NOW,
+    turn: c.turn === undefined ? turn() : c.turn, usage: c.usage === undefined ? usage() : c.usage,
+  });
+
+  it('a session still rendering the replaced model, in a turn begun after a move a day old, is behind, with the evidence', () => {
+    expect(judge()).toEqual(BEHIND);
+  });
+
+  it('a move exactly a day old counts', () => {
+    expect(judge({ nowMs: MOVED + BEHIND_AFTER_MS })).toEqual(BEHIND);
+  });
+
+  it('a revert is a move: a session still on the model it replaced is behind it, to an empty class', () => {
+    // ADVANCE_EXAMPLE's fourth class advanced to model-6-delta, then was reverted to empty at 2026-10-22T08:00:00Z.
+    const t = ms('2026-10-22T09:00:00Z');
+    expect(judge({ turn: turn({ turnAt: t }), usage: usage({ model: 'model-6-delta', ts: t / 1000 + 60 }) }))
+      .toEqual({ class: 'fable', from: 'model-6-delta', to: null, movedAt: '2026-10-22T08:00:00Z',
+        turnAt: '2026-10-22T09:00:00Z', renderAt: '2026-10-22T09:01:00Z' });
+  });
+
+  it('a session two moves behind is still behind the move that replaced its model (D-5222)', () => {
+    const opus = ADVANCE_EXAMPLE.classes.opus;
+    const twice: Advance = { ...ADVANCE_EXAMPLE, classes: { ...ADVANCE_EXAMPLE.classes, opus: { ...opus, history: [
+      { at: '2026-10-20T10:00:00Z', how: 'advance', from: 'model-5.6-gamma', to: 'model-6-gamma', ok: true, canary: 'passed' },
+      { at: '2026-10-23T08:00:00Z', how: 'advance', from: 'model-6-gamma', to: 'model-6.1-gamma', ok: true, canary: 'passed' },
+    ] } } };
+    expect(judge({ advance: twice })).toEqual({ ...BEHIND, to: 'model-6-gamma', movedAt: '2026-10-20T10:00:00Z' });
+    // The model the newest move replaced, an hour before `now`, is not yet a day behind.
+    expect(judge({ advance: twice, usage: usage({ model: 'model-6-gamma' }) })).toBeNull();
+  });
+
+  it.each([
+    ['a turn begun before the move is not evidence', { turn: turn({ turnAt: ms('2026-10-21T14:00:00Z') }) }],
+    ['a move one second short of a day', { nowMs: MOVED + BEHIND_AFTER_MS - 1000 }],
+    ['a move after `now` (a clock set back) never counts', { nowMs: ms('2026-10-21T00:00:00Z') }],
+    ['a render of the new model', { usage: usage({ model: 'model-6.1-gamma' }) }],
+    ['a session on another class\'s model', { usage: usage({ model: 'model-6-beta' }) }],
+    ['a replaced model another class pins now',
+      { registry: reg({ haiku: 'model-5.6-gamma', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' }) }],
+    ['a render from another Claude Code session (a /clear between them)', { usage: usage({ uuid: 'uuid-2' }) }],
+    ['a subagent\'s render', { usage: usage({ agent: 'helper' }) }],
+    ['a render from before the turn began', { usage: usage({ ts: TURN / 1000 - 60 }) }],
+    ['a render in the turn\'s own second', { usage: usage({ ts: Math.floor(TURN / 1000) }) }],
+    ['a sidecar ts in milliseconds', { usage: usage({ ts: RENDER_S * 1000 }) }],
+    ['a sidecar ts that is not a whole number', { usage: usage({ ts: RENDER_S + 0.5 }) }],
+    ['a marker whose turn was cleared', { turn: turn({ turnAt: null }) }],
+    ['a marker turnAt in seconds reads as before every move', { turn: turn({ turnAt: TURN / 1000 }) }],
+    // The sidecar's uuid matches the bad id in each, so the marker's own sid test decides it, never `uuid !== sid`.
+    ['a marker with an empty session id', { turn: turn({ sessionId: '' }), usage: usage({ uuid: '' }) }],
+    ['a marker with no session id, beside a sidecar with no uuid', {
+      turn: turn({ sessionId: undefined }), usage: usage({ uuid: undefined }) }],
+    // A turnAt that is not a whole ms epoch passes both time comparisons, so only isEpochMs keeps it out: without it
+    // the rule would answer behind with a `turnAt` of null.
+    ['a marker turnAt that is not a whole number of ms', { turn: turn({ turnAt: TURN + 0.5 }) }],
+    ['a marker that is not an object', { turn: null }],
+    ['no sidecar at all', { usage: null }],
+    // The status line writes `model: (.model.id // null)`. With all four classes pinned no class pins null, and
+    // ADVANCE_EXAMPLE's fourth class holds a successful move FROM null (an empty class filled): only the model's
+    // own type test keeps that move from reading as "behind, on null".
+    ['a sidecar with no model, on a lane whose four classes are all pinned', {
+      registry: reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma', fable: 'model-6-delta' }),
+      usage: usage({ model: null }) }],
+    // A negative `ts` can never be later than a `turnAt` (an epoch, so never negative): a control, with no guard of
+    // its own to remove.
+    ['a render dated before 1970', { usage: usage({ ts: -1 }) }],
+    // Every time comparison is written to FAIL on NaN, so a clock that is not a number is never evidence.
+    ['a clock that is not a number', { nowMs: Number.NaN }],
+    ['a failed move away from the model is not a move', {
+      registry: reg({ opus: 'model-6.1-gamma' }), nowMs: ms('2026-10-24T12:00:00Z'),
+      turn: turn({ turnAt: ms('2026-10-22T11:00:00Z') }),
+      usage: usage({ model: 'model-6-beta', ts: ms('2026-10-22T11:01:00Z') / 1000 }) }],
+  ] as [string, Case][])('%s: not behind', (_why, c) => {
+    expect(judge(c)).toBeNull();
+  });
+
+  it('isoSeconds cuts an epoch in ms to the advance file\'s whole-second form, and refuses what a Date does not hold', () => {
+    expect(isoSeconds(0)).toBe('1970-01-01T00:00:00Z');
+    expect(isoSeconds(TURN + 999)).toBe('2026-10-22T09:11:40Z');
+    for (const bad of [-1, 1.5, 8.64e15 + 1, Number.NaN]) expect(isoSeconds(bad)).toBeNull();
+  });
+
+  it('the threshold is one day, defined once, and lock-unwritable is a blocked word', () => {
+    expect(BEHIND_AFTER_MS).toBe(24 * 60 * 60 * 1000);
+    expect(BLOCKED_CAUSES).toContain('lock-unwritable');
+  });
+});
+
+// ── D-8685 (public issue #2607): the other way a lane's window falls ────────────────────────────────────────
+describe('clientWindowNotice: a stale catalogue drops an unmeasured class model to the client window (D-8685)', () => {
+  const PINS = reg({ haiku: 'model-6-alpha', sonnet: 'model-6-beta', opus: 'model-6.1-gamma' });
+  const ROOM = { tokens: 200000, source: 'client' as const, model: 'model-6.1-gamma' };
+
+  it('names the class, the model, the client window and both remedies, and offers no advertised window as measured', () => {
+    expect(clientWindowNotice('lane-x', PINS, true, ROOM)).toBe("lane-x's opus class model model-6.1-gamma has no "
+      + "measured window, and the lane's catalogue is stale, so its advertised window is not read: every session on "
+      + "the lane now runs at the client's own default window, 200000 tokens; refresh the catalogue (ccrc models "
+      + 'refresh lane-x), or measure model-6.1-gamma, then: ccrc models lane-x set-window model-6.1-gamma <tokens>');
+  });
+
+  it.each([
+    ['a fresh catalogue', { stale: false }],
+    ['no window decision at all', { room: null }],
+    ['a window the catalogue advertised', { room: { ...ROOM, source: 'provider' as const } }],
+    ['a measured window', { room: { ...ROOM, source: 'measured' as const } }],
+    ['a model no class pins', { room: { ...ROOM, model: 'model-6-delta' } }],
+    ['no model named', { room: { ...ROOM, model: null } }],
+    ['no window in force', { room: { ...ROOM, tokens: null } }],
+  ] as [string, { stale?: boolean; room?: Parameters<typeof clientWindowNotice>[3] }][])('%s is null', (_w, o) => {
+    expect(clientWindowNotice('lane-x', PINS, o.stale ?? true, o.room === undefined ? ROOM : o.room)).toBeNull();
   });
 });
