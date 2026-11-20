@@ -11,7 +11,7 @@ A2.5 of `docs/superpowers/plans/2026-11-18-model-class-advance-anthropic-arm.md`
 - **A2.3, the writer** (`deploy/models-anthropic.mjs`, called from `deploy/models-op.mjs`): the op `aliases-refresh`,
   the Anthropic path for `hold`, `release` and `revert` (`hold.model`, `releasedAt`), `rm` removing the aliases file,
   and `show` answering `aliases`. In `shared/model-advance.mjs`: `seedAnthropicAdvance`, the three optional keys and
-  the four cause words.
+  the four cause words. Until Task A3.4, `hold` and `revert` on an Anthropic lane refuse at the arm's door (D-8820).
 - **A2.4, the refresh and the push:** `lanes` lists Anthropic rows with `ids` per class. `ccrc models refresh` runs
   `aliases-refresh` per Anthropic lane after the Codex steps and inside the same deadline, and pushes each move as one
   line built by `moveline`. `modelsPushDecision` accepts `telemetry: 'anthropic'`, and the notify route's refusal
@@ -51,29 +51,38 @@ box's own files on 2026-11-20. The scratch home held:
 Every write landed in the scratch home. Nothing was written under the live home, nothing was installed, and no
 `--fix` ran. Stand-in names are used below.
 
-- **Lanes:** 17 in all, 2 Codex and 15 Anthropic. Three Anthropic homes have a current cache, and each gets an id for
-  all four classes from it (source `cache`, not stale). One home has only an older-format cache (stale, no id). Eleven
-  have no cache.
-- **Orphaned levels:** one home keeps a saved Fable level under an id that is not the current one, and its file names
-  it as `orphaned`.
-- **Moves:** no class moved, because a first refresh is a baseline.
-- **Doctor:** all four checks PASS.
-  - The 12 homes with no id appear as `model-advance-blocked`'s note, "no source until ccd marks alias launches". The
-    box's `ccd caps` does not list `alias-launch-v1` yet, because Task A3.2 adds it.
-  - Once it does, those 12 WARN with the named cause `alias-source-absent`, which also meets the gate.
+- **Doctor:** every lane on the box, of both kinds, read PASS on all four checks.
+  - The Anthropic lanes whose homes give no id yet appear in `model-advance-blocked`'s PASS as its note, "no source
+    until ccd marks alias launches": the box's `ccd caps` does not list `alias-launch-v1` yet (Task A3.2 adds it), so
+    no launch can report an id there. Once it does, such a lane WARNs with the named cause `alias-source-absent`,
+    which also meets the gate.
   - The real lock path (`_models_lock_path`) raises no `lock-unwritable`.
-- **Sessions:** none behind and none unmeasured on the three sourced lanes.
+- **Moves:** none, because a first refresh is a baseline.
 
-## Departures (named by slug; the coordinator issues numbers)
+## Departures
 
-- **`anthropic-arm-own-module`** (ruled 2026-11-20). The Anthropic arm lives in `deploy/models-anthropic.mjs`, not in
+Defined in the plan's "Deviations found", numbers issued by the coordinator in fix round 1.
+
+- **D-8818, `anthropic-arm-own-module`.** The Anthropic arm lives in `deploy/models-anthropic.mjs`, not in
   `deploy/models-op.mjs` as the plan's file lists say. With it inside, `models-op.mjs` grew by 402 net code lines and
-  passed 3,000 lines, so the large-file row would have listed it. The line counts before and after the move, and how
-  the shared helpers are reached, are in the wave-done mail.
-- **`sheet-words-anthropic-holds`.** `pwa/src/accounts/modelsSheetWords.ts` gained sentences for the four refusals a
-  hold on an Anthropic lane can print: `alias-source-absent`, `aliases-file-unreadable`, `aliases-file-invalid` and
-  `settings-overrides-hold`. `models-verb-codes.test.ts` lists the three codes only `aliases-refresh` prints as another
-  op's. Without them, that guard is red. Task A4.3 rewrites the sheet for Anthropic lanes and may reword them.
+  passed 3,000 lines (3,484), so the large-file row would have listed it. After the move it is 2,991 lines, 23 net code
+  lines over its merge base, and the arm is 545. The arm imports only `shared/*`; the helpers both files need reach it
+  through one `io` object the op builds at load.
+- **D-8819, `sheet-words-anthropic-holds`.** `pwa/src/accounts/modelsSheetWords.ts` gained sentences for the five
+  refusals a hold on an Anthropic lane can print: `alias-hold-not-applied`, `alias-source-absent`,
+  `aliases-file-unreadable`, `aliases-file-invalid` and `settings-overrides-hold`. `models-verb-codes.test.ts` lists the
+  three codes only `aliases-refresh` prints as another op's. Without them, that guard is red. Task A4.3 rewrites the
+  sheet for Anthropic lanes and may reword them.
+- **D-8820.** `hold` and `revert` on an Anthropic lane refuse `alias-hold-not-applied`, writing nothing, until Task
+  A3.4 makes ccd apply a held id at launch; `release` stays open. The gate is one constant, `ANTHROPIC_HOLDS_APPLIED`
+  in the arm. The hold path behind it is whole, and its tests run through a copy with the gate open
+  (`server/test/modelsOpCopy.ts`'s `holdsAppliedOp`). A test of the shipped op, and one through `ccrc models`, red
+  when the gate is opened.
+- **D-8821.** An Anthropic lane's sessions are named unmeasured with the advance file's own cause,
+  `advance-file-unreadable` or `advance-file-invalid`, never one folded word.
+- **D-8822.** `shared/model-aliases.mjs` imports `shared/model-advance.mjs` as well as `shared/models.mjs`, and both
+  modules name members the plan did not list (`rowLaunchable`, `VERSION_RE`, `heldUnobserved`; `SIDECAR_TS_MAX_S`,
+  `AT_RE`, `isAt`), each the one owner of its rule.
 - **`readme-anthropic-causes`** (a follow-up). Task A2.5 Step 4, the README lines, was not done: the README is held
   under another run's freeze, and its holder refused the edit. It is owed once that freeze lifts.
 
@@ -89,6 +98,11 @@ Every write landed in the scratch home. Nothing was written under the live home,
   - `orphaned` takes the greatest bare id of the family, so key order never decides it.
 - **Writer:**
   - A refresh writes the advance file only when it records a move.
+  - Two readers of a home's `settings.json`, differing legitimately (an opposite safety direction). `settingsDrift`, in
+    the op's Codex arm (unchanged), reads it for a REPORT: an absent, unreadable or invalid file all mean "every key
+    missing", which it then lists. The arm's `readHomeSettings` reads it to ALLOW a hold, so it keeps absent apart
+    from unreadable and invalid and refuses on either of the last two, since such a file cannot be shown not to name
+    the class's key. Its refusal never carries the parser's message, which quotes the text around the bad token.
   - An advance file that cannot be read refuses the refresh, and neither file is written.
   - A `settings.json` that cannot be read refuses a hold as `settings-overrides-hold`, because it cannot be shown not
     to name the key.
@@ -100,22 +114,31 @@ Every write landed in the scratch home. Nothing was written under the live home,
   - Refused: `ok: false` with `reason`, and the run fails.
 - **Doctor population:** an Anthropic lane is in `advance-health` only when its aliases file or its advance file
   exists, readable or not, which mirrors a registry lane with no registry file. An absent aliases file is no finding.
-- **A window after a revert.** `revert` writes no aliases file, so `unobserved` is set by the next refresh. Until then
-  (up to an hour) `model-held-behind` can name a class that was just reverted. It is left as found, for the
-  coordinator to rule.
+- **The window after a revert, closed.** `revert` writes no aliases file, so the file can still call a just-reverted
+  class observed. The health reading asks `heldUnobserved` again of the hold standing at its read, the same rule the
+  resolver sets `unobserved` with, so a revert right after a recorded move names nothing until a refresh reads
+  evidence newer than the hold.
 - **Guard 4's held-id half** reads other classes' held ids from `heldRow`. A held model with no cache row is then
   caught only by the family half.
 
 ## Inert at merge
 
-`ccrc-models-advance.test.ts`'s case "inert at merge" runs `main`'s `ccd/ccrc` beside this branch's op. It asserts
-that `aliases-refresh` is never called and that no aliases file is written. It also reads `main`'s `ccd/ccd` and its
-libraries through `spliceCcd`, and asserts that none of them names the aliases file, the launch marker or the module.
-A mutation that feeds it this branch's `ccrc` reds it.
+`ccrc-models-advance.test.ts`'s case "inert at merge" has two halves.
+
+- **The older ccrc.** It runs the merge base's `ccd/ccrc` beside this branch's op. A positive control shows it reached
+  the op, asked for the lanes and answered an empty refresh; the case then asserts that `aliases-refresh` is never
+  called and that no aliases file is written. A mutation that feeds it this branch's `ccrc` reds it.
+- **The older ccd.** It reads the merge base's `ccd/ccd` and its libraries through `spliceCcd` and asserts that none of
+  them names the aliases file, the launch marker or the module. That pins a fact about the ccd this branch merges
+  over, which is what "an older ccd" means here; no change on this branch can red it.
 
 ## Measured figures
 
 - **Growth.** `ccd/ccrc-doctor-checks` grows by 23 net code lines and `ccd/ccrc` by 39, against the limit of 40 (the
-  second after the trim the coordinator ruled).
+  second after the trim the coordinator ruled). Fix round 1 changes neither file, nor `deploy/models-op.mjs` (2,991
+  lines).
 - **Box environment.** Two `ccrc-install-codex` cases fail on this box with a `browser-mcp` WARN. They fail the same
   way on a clean copy of `main`'s tree, so it is the box, not this wave.
+- **The loopback curl case.** `ccrc-containment`'s case "(h) the loopback curl front" fails on this box with
+  `--url=: expected 7 to be 2`, run alone at this branch's tip and run alone at its merge base in a scratch tree: the
+  same failure at both, in a file this branch does not touch.
