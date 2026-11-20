@@ -500,7 +500,7 @@ Modify `pwa/src/ledgers/ledgers.css`.
 | 360, 390 | One column; a row stacks status, title with its tag, facts; the strip wraps |
 | 1280, 1470, 1920 | Status, title with its tag, and facts on one row; the tag wraps under the title before the facts do |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the headline reads N of M done`, `the outstanding line names
+- [x] **Step 1: Write the failing tests** — jsdom: `the headline reads N of M done`, `the outstanding line names
   waiting on you and held apart`, `the no-plan card has no M and says what remains is not known`, `a declared empty plan
   says so and draws no runs`, `an ended plan says how it ended and shows no outstanding work`, `an ended plan words the left-open status
   WM2 sends for a ticket marked done whose evidence does not verify, and draws no outstanding line` (review 2375 F13;
@@ -511,11 +511,11 @@ Modify `pwa/src/ledgers/ledgers.css`.
   clears it`, `a carried ticket reads carried to its later phase and from its earlier one`, `Done when counts the
   proved entries`, `no url draws no Open in Linear`, `initiatives off draws its note`, `every status has a word` (over
   `WORK_STATUSES`), `a run link opens the run`, `an item link opens the item`, `a long title wraps inside the card`.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** —
   `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/work-card.test.tsx`.
-- [ ] **Step 3: Implement** the card and its words.
-- [ ] **Step 4: Run to pass**, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
-- [ ] **Step 5: Commit** — `feat(console): the Work card draws a programme's work map`.
+- [x] **Step 3: Implement** the card and its words.
+- [x] **Step 4: Run to pass**, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
+- [x] **Step 5: Commit** — `feat(console): the Work card draws a programme's work map`.
 
 **Acceptance.** The jsdom tests pass; `every status has a word` reds when a word is removed. **Rollback.** A plain
 revert: nothing mounts the card yet.
@@ -752,6 +752,30 @@ Task WM2 departs under its own number:
   `last-move-unmeasured-is-absent`, an item whose run's last move could not be read carries no `lastMoveAt`, as
   `withLastMoves` leaves it, while null means no move (review 2795 F3). The task note
   (`docs/superpowers/programs/desktop-polish/wm2.md`) gives each row and what reds it, the mutants and the test runs.
+
+Task WM3 departs under its own number:
+
+- **D-8806** — `work-map-wm3-build`: Task WM3 (desktop polish run 2859), issued on 2026-11-20. The Work card, `WorkCard.tsx`, and its
+  words, `workMapWords.ts` (L1), draw WM2's `WorkAnswer` and decide nothing; nothing mounts the card yet. The build departs from the
+  plan's text in these ways, each named by slug: `shipped-wire-wins`, WM2's shipped types differ from this plan's words in three
+  fields, and the card reads the shipped ones (a ticket's `title` is `string | null`, so a no-plan run row with no title reads
+  "Wave N", or its run number when it has no wave; `lastMoveAt` is optional, so a row whose last move was not read draws no
+  "moved" fact while null draws none either; the fallback's `waves` is nullable and the card does not read it);
+  `unreadable-carries-the-last-view`, the one `work` prop is the server's `WorkAnswer` whose `unreadable` arm may also carry
+  `last`, the last `WorkMapView` the page drew, so the note draws over it with no second prop and no state in the card (review
+  2268 F15); `phase-line-takes-targets`, `phaseLine(phase, carriedTo)` takes the target phase numbers beside the phase because
+  `WorkPhaseView` carries only the count of its carries; `carriedTargetsOf` reads them off the view's items; `status-word-leads-the-sentence`,
+  `done-unverified` is worded "marked done, but" in the status cell and its reason ("no evidence stored") is the row's first
+  fact, so the pair reads as Table 6 row 4 says; `source-line-names-no-programme`, the source line reads "From the plan" and
+  "From the work runs so far", since the card sits where the programme's own icon and colours already say whose it is (the
+  operator's tidying notes of 2026-11-19), and the card writes no "coordinator" word and draws no spot for C50's badge;
+  `layout-by-the-cards-width`, the two layout rows of the table switch at a container query on the card's own width (34rem), not
+  on the viewport's, so the page may seat the card in either column and the one-column and one-row layouts follow its width;
+  `bar-shows-left-open`, an ended plan's bar draws its left-open work too, so a closed plan's bar is never all done; and
+  `fold-chevron-drawn`, a folded summary is drawn as a flex row, which loses the browser's marker, so its chevron is drawn in
+  the stylesheet. Edits under another's claim: this plan, claim 5756 (WM6's worker), with that worker's consent by mail on
+  2026-11-20 for exactly two places, WM3's step ticks and this entry. The task note
+  (`docs/superpowers/programs/desktop-polish/wm3.md`) gives each case, the mutants, the test runs and what was seen at 360 and 1280.
 
 ## Where things stand
 
