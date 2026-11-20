@@ -2044,7 +2044,7 @@ export class FleetWatcher {
   private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map(); private readonly renewalMemo = new Set<string>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
-  private readonly mailHoldMemory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false };
+  private readonly mailHoldMemory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false, generation: 0 };
   private delegationLane(): DelegationLane {
     this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;

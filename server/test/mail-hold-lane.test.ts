@@ -59,7 +59,7 @@ function harness(s: CoordStore, o: { wallMs?: number; verbs?: string[] | null; a
   const sent: string[][] = [];
   const logs: string[] = [];
   let queries = 0;
-  const memory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false };
+  const memory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false, generation: 0 };
   const deps: MailHoldLaneDeps = {
     coord: { urgentHolds: () => { queries += 1; return s.urgentHolds(); } },
     runCcd: async (argv: CcdArgv) => { sent.push([...argv]); return o.answer?.([...argv]) ?? ok; },
@@ -174,7 +174,9 @@ describe('the mailhold pass (Task 4.3)', () => {
     expect(h.sent[0]).toEqual(expect.arrayContaining(['--actor', 'mailhold lane']));
     for (const verbs of [[ROUTE_CAP, ACTOR_FLAGS_CAP], [MAILHOLD_ROUTE_CAP], null]) {
       const n = harness(s, { verbs });
-      expect(await mailHoldPass(n.deps, [row(WORKER, null), row(OTHER, { mailhold: 'x' })], false), String(verbs)).toMatchObject({ incapable: 2 });
+      // The idle row (nothing held, no marker) is counted too: every skip is the decider's (review 2833 F4).
+      const r = await mailHoldPass(n.deps, [row(WORKER, null), row(OTHER, { mailhold: 'x' }), row('lane-a-idle', null)], false);
+      expect(r, String(verbs)).toMatchObject({ incapable: 3 });
       expect(n.sent).toEqual([]);
     }
   });
@@ -214,6 +216,26 @@ describe('the mailhold pass (Task 4.3)', () => {
     expect(r).toMatchObject({ cleared: 1, appeared: 0, mailDisabled: true });
     expect(h.sent.map(sets)).toEqual([['mailhold=']]);
     expect(h.queries()).toBe(0);
+  });
+  it('a pass a newer one overtook writes nothing more, so it never clears the marker the newer pass wrote (review 2833 F1)', async () => {
+    const s = newStore();
+    const h = harness(s);
+    // The older pass reads no hold: it clears OTHER, then would clear WORKER. Its first call wedges until the newer pass is done.
+    let release: () => void = () => {};
+    const wedged = new Promise<void>((r) => { release = r; });
+    let first = true;
+    const older = mailHoldPass({ ...h.deps, runCcd: async (argv: CcdArgv) => {
+      const out = await h.deps.runCcd(argv);
+      if (first) { first = false; await wedged; }
+      return out;
+    } }, [row(OTHER, { mailhold: `${T0 + 200}:coordinator.98` }), row(WORKER, { mailhold: `${T0 + 200}:coordinator.99` })], false);
+    // An urgent mail to WORKER arrives, and the newer pass writes its marker while the older one is wedged.
+    const d = urgentDelivered(s, WORKER, T0_MS);
+    expect(await mailHoldPass(h.deps, [row(WORKER, null)], false)).toMatchObject({ appeared: 1, superseded: false });
+    release();
+    expect(await older).toMatchObject({ superseded: true, cleared: 1 });
+    expect(h.sent.map(sets)).toEqual([['mailhold='], [`mailhold=${T0 + MAILHOLD_LEASE_S}:coordinator.${d}`]]);
+    expect(h.logs, 'the overtaken pass logs nothing').toEqual(['ccrc-server: mailhold: 1 marker(s) written']);
   });
 });
 

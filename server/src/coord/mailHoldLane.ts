@@ -18,14 +18,19 @@
 //
 // What it skips: a row whose id the registry refuses, a marker the registry could not read, a fleet whose ccd cannot take
 // the field, and a held recipient the registry does not list (nothing is written for it). A failed write is logged once
-// per episode, by session, and retried next pass. The ack's kick (plan Task 4.4) is not here: until it lands, a cleared
+// per episode, by session, and retried next pass.
+//
+// A PASS A NEWER ONE OVERTOOK WRITES NOTHING MORE. The lane row lets a pass start while one older than `staleAfterMs` still
+// walks its rows (a wedged `route` call), and the older one holds an older view: it could clear a marker the newer pass just
+// wrote, or write one the newer pass cleared. Each pass takes the next `memory.generation`, and before each write it stops
+// once a newer pass has taken one, so the projection never undoes itself. The ack's kick (plan Task 4.4) is not here: until it lands, a cleared
 // hold leaves the marker standing until the next pass, at most one `MAIL_SWEEP_MS` later.
 import { isRegistryId } from '../../../shared/api.js';
 import type { MailHoldPair } from '../../../shared/mailHold.js';
 import { CCD_ARGV, MAILHOLD_ROUTE_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
 import type { SessionRecord } from '../registry.js';
-import { ROUTE_SET_UNREACHABLE, routeSetOutcome, type RouteSetOutcome } from '../routeSetOutcome.js';
+import { routeSetOutcome, type RouteSetOutcome } from '../routeSetOutcome.js';
 import { decideMailHold, type MailHoldDecision } from './mailHoldPolicy.js';
 import type { RunCcd, WatcherCoordPort } from './ports.js';
 
@@ -45,9 +50,9 @@ export interface MailHoldRow {
 }
 
 /** The lane's memory across passes: the sessions whose last write failed and whether the last store read failed (so each
- *  failure is logged once per episode), and the last summary line (so an unchanged pass logs nothing). Never a decision's
- *  state. */
-export interface MailHoldLaneMemory { readonly failing: Set<string>; lastLine: string | null; storeUnread: boolean }
+ *  failure is logged once per episode), the last summary line (so an unchanged pass logs nothing), and the newest pass's
+ *  generation (so an overtaken pass stops writing). Never a decision's state. */
+export interface MailHoldLaneMemory { readonly failing: Set<string>; lastLine: string | null; storeUnread: boolean; generation: number }
 
 export interface MailHoldLaneDeps {
   readonly coord: MailHoldCoord;
@@ -61,6 +66,8 @@ export interface MailHoldLaneDeps {
 
 export interface MailHoldLaneResult {
   readonly mailDisabled: boolean;
+  /** A newer pass started while this one walked its rows: this one stopped before its next write, and logged nothing. */
+  readonly superseded: boolean;
   /** The hold could not be read: the pass wrote and cleared nothing, and every standing marker keeps its lease (D3). */
   readonly storeUnread: boolean;
   /** Writes that landed, by why (`decideMailHold`'s words), and clears that landed. */
@@ -72,11 +79,12 @@ export interface MailHoldLaneResult {
   readonly unlisted: number;
 }
 
-type Counts = { -readonly [K in keyof Omit<MailHoldLaneResult, 'mailDisabled' | 'storeUnread'>]: number };
+type Counts = { -readonly [K in keyof Omit<MailHoldLaneResult, 'mailDisabled' | 'superseded' | 'storeUnread'>]: number };
 
 /** One pass over the tick's listing. `mailDisabled` is `$REG/mail-disabled` as that listing read it. */
 export async function mailHoldPass(deps: MailHoldLaneDeps, rows: readonly MailHoldRow[], mailDisabled: boolean): Promise<MailHoldLaneResult> {
   const c: Counts = { appeared: 0, differed: 0, renewed: 0, cleared: 0, failed: 0, unreadable: 0, incapable: 0, unrenderable: 0, unlisted: 0 };
+  const generation = ++deps.memory.generation;
   // One store query a pass, and none under `mail-disabled`, where the decider only clears. A read that throws is not "no
   // hold": the pass writes and clears nothing, so each marker stands until its lease lapses at the hook.
   let holds: ReturnType<MailHoldCoord['urgentHolds']> = new Map();
@@ -86,7 +94,7 @@ export async function mailHoldPass(deps: MailHoldLaneDeps, rows: readonly MailHo
         deps.log(`ccrc-server: mailhold: the urgent hold could not be read, so no marker is written or cleared this pass: ${e instanceof Error ? e.message : String(e)}`);
       }
       deps.memory.storeUnread = true;
-      return { mailDisabled, storeUnread: true, ...c };
+      return { mailDisabled, superseded: false, storeUnread: true, ...c };
     }
   }
   deps.memory.storeUnread = false;
@@ -99,16 +107,16 @@ export async function mailHoldPass(deps: MailHoldLaneDeps, rows: readonly MailHo
     const measured = r.route?.fields.mailhold ?? null;
     const unreadable = r.route?.unreadable.includes('mailhold') ?? false;
     const held: MailHoldPair[] = (holds.get(r.id) ?? []).map((h) => ({ role: h.role, delivery: h.deliveryId }));
-    if (measured === null && !unreadable && held.length === 0) continue;   // nothing held, nothing standing
     const d = decideMailHold({ held, measured, unreadable, now, capable, mailDisabled });
     if (d.act === 'none') continue;
     if (d.act === 'skip') { c[d.why] += 1; continue; }
+    if (deps.memory.generation !== generation) return { mailDisabled, superseded: true, storeUnread: false, ...c };
     const value = d.act === 'write' ? d.value : '';
     const res = await deps.runCcd(CCD_ARGV.routeSet(r.id, { mailhold: value }, sweepDec(deps.fleetState, MAIL_HOLD_LANE_ACTOR)));
-    settle(deps, r.id, d, res.ran === false ? ROUTE_SET_UNREACHABLE : routeSetOutcome(res), c);
+    settle(deps, r.id, d, routeSetOutcome(res), c);
   }
   for (const id of holds.keys()) if (!listed.has(id)) c.unlisted += 1;
-  const result: MailHoldLaneResult = { mailDisabled, storeUnread: false, ...c };
+  const result: MailHoldLaneResult = { mailDisabled, superseded: false, storeUnread: false, ...c };
   logPass(deps, result);
   return result;
 }

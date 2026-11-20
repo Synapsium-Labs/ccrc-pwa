@@ -6,7 +6,7 @@
 import type { SessionRecord } from '../registry.js';
 import { isRegistryId, type FleetSession } from '../../../shared/api.js';
 import { CCD_ARGV, HIBERNATE_FRESH_CAP, capSupported, ccdCan, sweepDec } from '../ccdargv.js';
-import { ROUTE_SET_UNREACHABLE, routeSetOutcome } from '../routeSetOutcome.js';
+import { routeSetOutcome } from '../routeSetOutcome.js';
 import type { WatcherDeps } from '../deps.js';
 import type { WatcherCoordPort } from '../coord/ports.js';
 import { queueSystemMail } from '../coord/rundefsTx.js';
@@ -71,7 +71,7 @@ export function renewalActsOf(
     if (!isRegistryId(id)) return { kind: 'refused', reason: 'not a registry id' };
     if (!ccdCan(deps.fleetState, 'routeSet')) return { kind: 'capability-missing' };
     const res = await deps.runCcd(CCD_ARGV.routeSet(id, { precompact: value }, sweepDec(deps.fleetState, PRECOMPACT_ACTOR)));
-    return res.ran === false ? ROUTE_SET_UNREACHABLE : routeSetOutcome(res);
+    return routeSetOutcome(res);
   };
   return {
     canRenew: capSupported(deps.fleetState, HIBERNATE_FRESH_CAP),

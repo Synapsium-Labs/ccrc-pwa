@@ -286,7 +286,7 @@ export const LANE_SCHEDULE: readonly LaneRow[] = [
   { name: 'mail', cadenceMs: MAIL_SWEEP_MS, derivedFrom: null, clock: 'mono', flight: 'none', warnKey: null },
   // The mailhold projection (mid-turn mail spec §3.4, plan Task 4.3; `coord/mailHoldLane.ts`): one pass at a time at the mail
   // lane's cadence by reference. A pass older than 60 s is abandoned, well inside the 120 s renewal margin, so one wedged write
-  // never lets a held lease lapse. It runs under `mail-disabled` too, where it only clears; a thrown pass is caught here.
+  // never lets a held lease lapse, and the overtaken pass writes nothing more (`mailHoldPass`'s generation). It runs under `mail-disabled` too, where it only clears; a thrown pass is caught here.
   {
     name: 'mailHold', cadenceMs: MAIL_SWEEP_MS, clock: 'mono', flight: 'skip', staleAfterMs: 60_000,
     warnKey: 'ccrc-server: the mailhold lane failed',
