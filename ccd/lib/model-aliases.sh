@@ -142,3 +142,79 @@ _lane_class_efforts_to() {   # var wrapper class -> var = the class's effort lev
   fi
   return 0
 }
+
+# THE LAUNCH MARKER (plan Task A3.2, D-8744): `$REG/<id>.aliaslaunch`, one line `<born-epoch> <wrapper> <class> <model-id|->`. A fresh alias
+# launch is marked at spawn with `-` for the id and filled once by the supervise tick's own step, `_alias_observe`, with the id the
+# session first reported after its process started. A resume, a swap, a respawn, a held launch, an explicit model and class `default`
+# are never marked: only a fresh launch by the alias is evidence of what the alias resolved to. The marker is written in place with a
+# plain redirect (no temp file), and `_reg_purge` reaps it with the row like any dot-free field.
+# @ccd-lib:aliaslaunch
+_alias_launch_mark() {   # id wrapper class mode flags -> writes the marker iff this spawn is a fresh alias launch (see above); always rc 0
+  local IFS=$' \t\n' id="$1" wrapper="$2" cls="$3" mode="$4" flags="$5" ans w1 held born
+  [[ "$mode" == new && -n "$cls" && "$cls" != default ]] || return 0
+  [[ " $ROUTE_CLASSES " == *" $cls "* ]] || return 0
+  _is_anthropic_backend "$wrapper" || return 0
+  [[ " $flags " == *" --model $cls "* && "${flags#*--model }" != *"--model"* ]] || return 0   # the class's own `--model`, and no other model flag
+  _alias_facts_to ans "$wrapper" "$cls"   # a held id for THIS class stops the mark; a hold elsewhere, no aliases file or an unreadable one does not
+  read -r w1 _ _ held _ <<< "$ans"
+  [[ "$w1" == facts && "$held" != - ]] && return 0
+  born=$(_pane_born "$id")
+  [[ "$born" =~ ^[0-9]+$ ]] || return 0   # tmux cannot say when the process started: nothing to date a reading against
+  printf '%s %s %s -\n' "$born" "$wrapper" "$cls" > "$REG/$id.aliaslaunch" 2>/dev/null || :
+  return 0
+}
+
+_alias_fill_overruled() {   # id born-epoch reading-ts -> rc 0 iff the transcript holds a /model typed in [born, reading-ts] (or an undatable one): that launch's first reading is not the alias's own resolution; rc 1 none; rc 2 the transcript cannot be named, found or read (the opposite of the readback's choice: a wrong fill can record a move, so no fill, and the next tick asks again)
+  local IFS=$' \t\n' id="$1" born="$2" ts="$3" f m out kind at
+  f=$(_transcript_path "$id") || return 2
+  [[ -f "$f" && -r "$f" ]] || return 2
+  m=$(_plat_mtime "$f" 2>/dev/null)
+  [[ "$m" =~ ^[0-9]+$ ]] || return 2
+  (( 10#$m < 10#$born )) && return 1   # last written before the process started: it holds no newer row
+  out=$(_operator_choice_read "$f" "0 since" "$ROUTE_READBACK_TAIL" strict) || return 2
+  while read -r kind _ at _; do
+    [[ "$at" =~ ^[0-9]+$ ]] || continue
+    case "$kind" in
+      drift-model|ran-model) (( 10#$at == 0 || (10#$at >= 10#$born && 10#$at <= 10#$ts) )) && return 0 ;;
+    esac
+  done <<< "$out"
+  return 1
+}
+
+_alias_launch_fill() {   # id -> rc 0 decided (filled, or dropped as overruled), 1 judged and not filled, 2 undecided (the transcript could not be read: ask again). Fills an unfilled marker once, never rewrites a filled one.
+  local IFS=$' \t\n' id="$1" m born wr cls mid line rk rts rmodel ruuid cur bare
+  _reg_read_to m "$id" aliaslaunch || return 1
+  read -r born wr cls mid <<< "$m"
+  [[ "$born" =~ ^[0-9]+$ && -n "$wr" && -n "$cls" && "$mid" == - ]] || return 1
+  line=$(_usage_sidecar_read "$id")
+  read -r rk rts rmodel _ ruuid <<< "$line"
+  [[ "$rk" == reading && "$rts" =~ ^[0-9]+$ ]] || return 1
+  (( 10#$rts > 10#$born )) || return 1   # strictly later: a reading in the epoch's own second cannot be told from the previous process's
+  [[ "$rmodel" != - && "$ruuid" != - ]] || return 1
+  _reg_read_to cur "$id" uuid
+  [[ "$ruuid" == "$cur" ]] || return 1
+  _alias_fill_overruled "$id" "$born" "$rts"
+  case $? in
+    0) rm -f -- "$REG/$id.aliaslaunch"; return 0 ;;
+    1) ;;
+    *) return 2 ;;
+  esac
+  _model_id_bare_to bare "$rmodel"
+  printf '%s %s %s %s\n' "$born" "$wr" "$cls" "$bare" > "$REG/$id.aliaslaunch" 2>/dev/null || return 1
+  return 0
+}
+
+_alias_observe() {   # id -> the supervise tick's own step (never inside `_route_apply_check`, whose gate 1 returns first when nothing is pending); always rc 0. Builtins only until a marker is unfilled, its sidecar is newer than it and the sidecar's bytes changed since this supervisor last judged them.
+  local id="$1" f="$REG/$1.aliaslaunch" sc="$REG/usage/$1.json" m body='' key
+  [[ -e "$f" ]] || return 0
+  _reg_read_to m "$id" aliaslaunch || return 0
+  [[ "$m" == *" -" ]] || return 0   # filled (or not a marker): nothing to do
+  [[ -f "$sc" && "$sc" -nt "$f" ]] || return 0
+  { IFS= read -r -N 4096 body < "$sc"; } 2>/dev/null || :
+  declare -gA _ALIAS_JUDGED 2>/dev/null || :   # the memo, a supervisor-global array keyed by session id: `<marker's born epoch>:<sidecar bytes>` last judged
+  key="${m%% *}:$body"
+  [[ "${_ALIAS_JUDGED[$id]-}" == "$key" ]] && return 0
+  _alias_launch_fill "$id"
+  (( $? == 2 )) || _ALIAS_JUDGED["$id"]="$key"
+  return 0
+}

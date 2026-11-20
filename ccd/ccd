@@ -9541,6 +9541,7 @@ EOF
   echo docs-index
   echo path-users-v1; echo path-users   # `ccd path-users [--json] <path>…` (DR-7, D-6619): the read-only entry to the one holder probe; sent only behind this word
   echo lease-mark-v1; echo ws-lease-mark; echo lease-audit-v1; echo ws-lease-audit; echo lease-mark-lock-v1   # delegation broker wave 5: the lease carrier's one writer (PR1), its read-only audit (PR2), and the mark's orphan lock (PR6, D-8037), ccd/lib/delegation-lease.sh
+  echo alias-launch-v1   # the model-class Anthropic arm's launch marker (`$REG/<id>.aliaslaunch`, D-8744): a spawn marks a fresh alias launch and the tick fills it, ccd/lib/model-aliases.sh
   echo ws-add-base-v1   # delegation broker wave 5 (PR3): `ws-add --child <run> --base <commit>`, a start point only (D-7827)
   echo orphan-lease-v1   # delegation broker wave 5 PR4: the orphan ladder's lease rung (`_dl_orphan_rung`, ccd/lib/delegation-lease.sh)
   echo docs-v1; echo delegation-events-v1   # delegation broker wave 3: the spool grammar and ccd-made spool directories (`_delegation_spool_dir`); the hook's registration is the doctor's to measure, not this token's
@@ -26724,6 +26725,7 @@ _spawn_mode() {   # id -> `new` or `resume`: what a spawn of the row passes Clau
   f=$(_reg_get "$1" fresh); u=$(_reg_get "$1" uuid)
   if [[ -n "$f" && "$f" == "$u" ]]; then echo new; else echo resume; fi
 }
+# @ccd-lib:aliaslaunch — the launch marker `$REG/<id>.aliaslaunch` and the tick's step that fills it (D-8744) live in ccd/lib/model-aliases.sh
 _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN_FROMSWAP. NEVER WAITS ON THE TUI.
                    # (One bounded exception, `resume` only: SPAWN_RESUME_SETTLE_S before
                    #  the --session-id retry below. The 15-minute wait stays in _spawn_settle.)
@@ -26863,6 +26865,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   [[ -e "$REG/$id.choicekept" ]] || _operator_choice_keep "$id"   # EVERY spawn reads, here at the one choke point: a revival (Claude Code exited — a pane-scope OOM kill, /exit — and `_supervised_start`'s two unsupervised fallbacks) reads; a spawn that a stop's keep already read for (swap landing, start after stop, ws-restore after ws-archive, refusal restart) does not read again (§5.7). BEFORE the floor line below, or an older ccd's session would open its journal first and the keep read nothing
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
+  rm -f -- "$REG/$id.aliaslaunch"   # the previous process's launch marker (D-8744) goes before this process exists, on every spawn
   local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
@@ -27265,6 +27268,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
         "cd '$workdir' && $(_plat_workdirid_pane "$REG" "$id" "$workdir")true; cd '$workdir' && exec env ${genenv}COLORTERM=truecolor $resenv $SESSION_PANE_PATH '$WRAPPER_DIR/$wrapper' $launchflags --session-id '$uuid' --dangerously-skip-permissions"
     fi
   fi
+  _alias_launch_mark "$id" "$wrapper" "${rclass:-}" "$mode" "$launchflags"   # D-8744: the fresh alias launch's marker (ccd/lib/model-aliases.sh), after the session exists
   _panescope_record "$id"   # D-5237: the pane's scope, once per spawn, never per tick
   # Make this window's terminal title = the tmux session name ("cc-<id>"), so a frontmost-window-
   # aware hotkey (ccclip) can target exactly the session you're looking at, even with many open.
@@ -28973,6 +28977,7 @@ cmd_supervise() {   # systemd ExecStart: ensure then block until the session die
         [[ -e "$REG/$id.substrate" ]] && _substrate_clear "$id"
         unknown_run=0; tick=5
         _sync_uuid "$id"; _auto_stale_check "$id"; _auto_swap_check "$id"; _auto_compact_check "$id"; _route_apply_check "$id"
+        _alias_observe "$id"
         _now_s_to spent; spent=$((spent - t0)); (( spent < 0 )) && spent=0   # a backwards clock is not negative work (D-4961)
         beat=$((beat + tick + spent))
         (( beat >= 30 )) && { _now_s_to hb; _reg_set "$id" supervised "$hb"; beat=0; }   # D-4961: the clock seam
