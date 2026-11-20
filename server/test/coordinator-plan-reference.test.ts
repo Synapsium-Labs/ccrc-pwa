@@ -2,8 +2,8 @@
 // its contract. `references/plan.md` names every plan verb the closed client routes by wave 6 and every plan refusal a
 // coordinator meets from one, says the hierarchy is ccrc's and its items are the operator's to act on in the console, and
 // gives the Linear owner its one duty; the open step declares the plan first and names the run's ticket; the ledger
-// template's Waves table has an epic column; SKILL.md points at the plan reference. The contract's plan clause, which
-// lands as clause 22, and its pin wait for D-8739's follow-up (plan ticket w6-clause-22), so nothing here reads the contract.
+// template's Waves table has an epic column; SKILL.md points at the plan reference. The contract's clause 22 (D-8739's
+// follow-up) is pinned in `coordinator-skill.test.ts`, so nothing here reads the contract.
 import { describe, expect, it } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
@@ -53,10 +53,10 @@ describe('the coordinator skill points at the plan reference (D-8185)', () => {
     expect(linear).toContain('The hierarchy is ccrc\'s, kept from your plan (`references/plan.md`).');
   });
 
-  it('its Linear section states the console-only rule for hierarchy items, until clause 22 lands (D-8739, review 2580 F1)', () => {
+  it('its Linear section leaves the console-only rule to clause 22, its one home in SKILL.md (D-8739, review 2580 F1)', () => {
     const linear = flat(skill.slice(skill.indexOf('\n## Linear\n')));
-    expect(linear).toContain('The operator acts on hierarchy items in the console, and a coordinator never answers one for them '
-      + 'nor asks for those approvals in its turn text.');
+    expect(linear).not.toContain('The operator acts on hierarchy items in the console');
+    expect(flat(skill)).toContain('22. A new programme\'s plan is declared with `ccrc-api plan put`');
   });
 
   it('its Linear section keeps every name Linear returns as data, and Linear text in its workspace (review 2580 A2)', () => {
@@ -131,7 +131,7 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
-  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3)', () => {
+  it('plan triage and plan take each name unreachable (when a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4, 2885 F5, 2920 F1-F3, 2929 F1, F3)', () => {
     for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
       const text = plan();
       const at = text.indexOf(`\n${heading}\n`);
@@ -139,12 +139,14 @@ describe('the plan reference after wave 6 (D-8185)', () => {
       const section = flat(text.slice(at, next === -1 ? undefined : next));
       expect(at, heading).toBeGreaterThanOrEqual(0);
       // review 2885 F5 as review 2920 F2 rules it: the third case, a key Linear refused with a 401 (only a 401 is a verdict on the
-      // key; a 403 is an answer about one issue); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read
-      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; and when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again\)/);
-      // review 2920 F1: the two clauses main's api.md pin held, now pinned where they live
+      // key); review 2920 F3: the fourth, a workspace with no managed team, where nothing is re-read; review 2929 F3: the fifth, an
+      // answer about one issue (inboundPolicy.ts's ROW_WORDS: linear-forbidden, linear-invalid, malformed)
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first; when Linear refused the key with a 401, held as unauthorised, no retry helps until the operator replaces it; when the issue's workspace has no managed team, nothing is re-read and no retry helps until one of its teams is managed again; and when Linear answered about that one issue, refusing it as forbidden or invalid or answering outside its grammar, a retry gets the same answer until that issue changes in Linear\)/);
+      // review 2920 F1 and 2929 F1: the clauses main's api.md pin held, now pinned where they live, "only" included: a decision
+      // that binds the issue is refused, and a close, a raise or a return goes on (`inboundDoorVerdict`)
       expect(section, heading).toMatch(heading === '## plan take'
-        ? /`unreachable` \([^)]*for an Upkeep ticket's take or close, the programme's home workspace could not be resolved;/
-        : /`unreachable` \([^)]*for a decision that binds it: a hand, an Upkeep placement or a take;/);
+        ? /`unreachable` \([^)]*refused only for a decision that binds it: a take into an epic, while a close or a return goes on; or, for an Upkeep ticket's take or close, the programme's home workspace could not be resolved;/
+        : /`unreachable` \([^)]*refused only for a decision that binds it: a hand, an Upkeep placement or a take into an epic, while a close, a raise or a return goes on;/);
       expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
     }
   });

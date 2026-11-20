@@ -90,7 +90,7 @@ number from `POST /api/ledger/deviations`.
   - **The public-text check lands in wave 2** (Task 2.7), before any wave writes to Linear. The hashed private-name
     matcher moves into shared code (`shared/private-names.mjs`), and `server/test/private-names.mjs` keeps its CLI and
     re-exports the matcher. Each class's `catches` and `passes` fixtures stay in `topology-clean.test.ts`.
-  - **`references/plan.md` ships with `plan-missing`** (wave 2). Wave 6 adds clause 21 and the later verbs, and wave 7
+  - **`references/plan.md` ships with `plan-missing`** (wave 2). Wave 6 adds clause 22 and the later verbs, and wave 7
     adds `plan map-propose`.
   - **Wave 1 sends no new document live.** `directoryProjects` stays as recorded; the refresher starts the
     `projectStatuses` collection and the initiatives probe only in wave 3, after FX2 has recorded them.
@@ -298,8 +298,9 @@ number from `POST /api/ledger/deviations`.
   applies once the key is no longer shared, and the note under the select names the owner now. Both are
   additive and absence permits: an older server's answer reads as the project's own owner and today's words. Record:
   the wave 5 note (the coordinator's rulings of fix rounds 1 and 2, run 2447).
-- **D-8739 (2026-11-18)** — skills-clause-later: Task 6.1's clause 21, the count word "twenty-one" above the coordinator
-  contract, and the matching count words in README.md and CLAUDE.md move to a follow-up PR of the skills epic. They are
+- **D-8739 (2026-11-18)** — skills-clause-later: Task 6.1's clause (21 when planned, 22 when it lands), its count word
+  above the coordinator contract, and the matching count words in README.md and CLAUDE.md move to a follow-up PR of the
+  skills epic (the opening amended by review 2929 F4). They are
   held because the coordinator skill's pin file and README.md are frozen by the landing-order programme's run 1850 (#2837),
   which refused a co-edit on 2026-11-18. Wave 6's PR ships the rest of Tasks 6.1 and 6.2; the tests for
   `references/plan.md`, the open step and the ledger template's epic column live in a new file,
@@ -310,7 +311,8 @@ number from `POST /api/ledger/deviations`.
   file's measured size with the clause, measured when it lands, never a figure carried from an older tree; wave 6's PR
   shrank that file below `main`'s cap first, so the cap moves by less than the clause's bytes (amended in review round 2,
   run 2590 A2). The Overlord's clause took 21, so this clause lands as 22; run 2878's carried packet measured 24829
-  against `main`'s 24339 (6c8f52199c), and the clause waits on plan ticket `w6-clause-22` (amended by review 2920 F4).
+  against `main`'s 24339 (6c8f52199c), and the clause lands in run 2878's fix round 2 on #3119, once the operator's answer
+  to the landing-order programme's item 496 let run 1850 consent (amended by review 2920 F4, and by that fix round).
   Record: the wave 6 note and the w6-clause note, which carry the follow-up's exact content.
 - **D-8733 (2026-11-18)** — drift-reads-every-team: `changedIssues` is asked with every team key the workspace's key
   lists, not only the managed ones, so a bound issue moved out of a managed team is still read and put back (§6.2 owns the
@@ -335,8 +337,9 @@ number from `POST /api/ledger/deviations`.
   doors' by-id re-read cannot be made (no reader, no key or slot, Linear or the key refused, no managed team in the issue's
   workspace), a decision that binds the issue (a take into an epic, an Upkeep placement, a hand) is refused `unreachable`
   (503, the Linear read's existing word; a retry helps only when Linear or ccrc's Linear store could not be read: a missing
-  key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to replace it, and a
-  workspace with no managed team is not re-read at all; amended by review 2920 F4), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
+  key or slot needs the team's linking set, a key Linear refused with a 401 needs the operator to replace it, a
+  workspace with no managed team is not re-read at all, and an answer about that one issue (`linear-forbidden`,
+  `linear-invalid`, `malformed`) repeats until the issue changes in Linear; amended by review 2920 F4 and review 2929 F3), so a moved-out issue is never bound unseen; a close, a raise or a return goes on, and the lane's close re-reads
   before it writes in Linear (review run 2571 F2). The retire
   writes only the state and its cause (`linear_inbound.retiredWhy`: `completed`, `canceled`, `ccrc-own` or `moved-out`) on the
   existing row, and stores nothing new of the issue. An issue reopened, or moved back into a managed team, later returns to
@@ -1076,7 +1079,7 @@ refusal), `server/test/rings/fastify-l4.data.ts`; Test `server/test/plan-routes.
 - Produces routes (box token, then the identity pair from the query, then attribution, then the caller check):
   - `POST /api/programmes/:slug/plan` (`plan put`) → `{ ok: true, plan: PlanView }`. The slug `LINEAR_SYNC_PROGRAMME`
     is refused `reserved-programme` (409, its run status). On a slug with no `programs` row (a new programme, which
-    clause 21 declares before its first run), `home` is required and the row is inserted in the same transaction as
+    clause 22 declares before its first run), `home` is required and the row is inserted in the same transaction as
     the plan (`applyPlanChanges`'s `newRow`: `active`, `homeProject`, `planRequired` 1); the later `runs open` keeps it
     (its INSERT is `ON CONFLICT DO NOTHING`). A put after `plan close` is `plan-closed`.
   - `GET /api/programmes/:slug/plan` (`plan show`), EXEMPT-BUT-AUTHENTICATED (a session cookie or the box token, the
@@ -1127,7 +1130,7 @@ line each; `plan-missing`'s points at
 `plan met`, `plan ticket-add`, `plan ticket-move`, `plan epic-drop`, `plan close`, each with its body and refusals.
 Verbs are named as `ccrc-api plan <verb>` commands, never as raw `POST /api/...` paths, because
 `coordinator-skill.test.ts`'s route census reads only `coord/routes.ts` and `reviewRoundsRoute.ts`. Wave 6 adds
-clause 21 and the later verbs, and wave 7 adds `plan map-propose`);
+clause 22 and the later verbs, and wave 7 adds `plan map-propose`);
 Test `server/test/open-run-preconditions.test.ts` (gate-order rows, and its facts builder's default `plan` fact),
 `server/test/run-routes.test.ts`, `server/test/plan-run-attach.test.ts` (new), `server/test/coordinator-skill.test.ts`,
 `server/test/ccrc-api-closed.test.ts` (the pinned list of client commands the skill corpora run gains each `plan.*`
@@ -1165,13 +1168,14 @@ every file found. The fix:
   `OpenRunTicket = { kind: 'existing'; id: number; epicId: number; reproject: string | null } | { kind: 'new'; epicId: number; project: string; title: string }`.
   Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-closed` (the plan reads `ended`: `runs open`
   after `plan close`, which the sync would otherwise answer by closing the initiative under a live run);
-  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (a live epic exists, and: no live epic lists the
+  `plan-missing` (no live epic and `planRequired` 1); `wave-epic-mismatch` (a live epic exists, and: no live epic lists the
   wave, and the run names a ticket that is not of a live epic that lists no waves, or names none in a plan where every live
   epic lists waves; or the named ticket is available and its epic lists waves and is not the wave's, since at a wave a live
   epic lists an unavailable ticket answers `ticket-unavailable` first); `ticket-required`
   (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
-  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
-  or an Upkeep ticket). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
+  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is unknown, `done`, `dropped`, `started` by another run,
+  or an Upkeep ticket; or the plan has no live epic, does not require one, and the run names a ticket); with no live epic,
+  no `planRequired` and no named ticket, the run opens with none (`planGate`, amended by review 2929 F5). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
   run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
   project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the
   wave's epic; a named ticket in another project takes the run's project.
@@ -1827,19 +1831,19 @@ The drift item's *Hand to the coordinator* uses the existing door word (`ITEM_DO
 ### Task 6.1: The coordinator skill
 
 **Files:** Modify `ccd/coordinator-skill/references/plan.md` (Task 2.5 created it), `ccd/coordinator-skill/SKILL.md`
-(contract clause 21, the map's pointer line, §Linear trimmed to a pointer),
+(contract clause 22, the map's pointer line, §Linear trimmed to a pointer),
 `ccd/coordinator-skill/references/wave-lifecycle-1-open.md`, `ccd/coordinator-skill/references/ledger-template.md`
-(the waves table's epic column), `server/test/skill-size-caps.json` (raised by clause 21's bytes only); Test
+(the waves table's epic column), `server/test/skill-size-caps.json` (raised by clause 22's bytes only); Test
 `server/test/coordinator-skill.test.ts`, `server/test/skill-size-ratchet.test.ts`, `server/test/ccrc-api-closed.test.ts`
 (its pinned list of the commands the skill corpora run, references included, gains every `plan.*` key a new
 executable block runs).
 
 **Interfaces:**
-- Produces clause 21: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
+- Produces clause 22: "A new programme's plan is declared with `ccrc-api plan put` before its first run opens: epics
   plan-sized, each with its waves when it runs in waves, checkpoints as the gates inside them; every run opens with its ticket; a met checkpoint
   is recorded with `plan met` and its evidence; the programme ends with `plan close`; this session never files a hierarchy object or a ticket in a managed
-  team with `linear create`." The count word above the contract becomes twenty-one; §Linear shrinks so the file grows
-  by the clause line alone. (Clause 21's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
+  team with `linear create`." The count word above the contract becomes twenty-two; §Linear shrinks so the file grows
+  by the clause line alone. (Clause 22's wording was amended on 2026-11-16 by the operator's answer to desktop-polish item 359:
   an epic may list no waves, built by the work-map plan's Task WM6. Wave 6 writes the clause as amended here, and
   `references/plan.md` names `ticket-required` once WM6 has landed.)
 - `references/plan.md` gains: the run's `ticket` key, handed issues and `plan take`, and the Linear owner's duty
@@ -1849,14 +1853,15 @@ executable block runs).
 
 Built in part by #3040 (wave 6): `references/plan.md` and SKILL.md's §Linear pointer. The clause, its count word, the
 cap raise and the rest of this task's files are the follow-up ticket `w6-clause` (D-8739). The Overlord's autonomy
-clause (D-8126) takes number 21, so this clause lands as 22.
+clause (D-8126) takes number 21, so this clause lands as 22; this task's text said 21 when it was planned (amended by
+review 2929 F4).
 
-- [ ] **Step 1: Write the failing tests** — `clause 21 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
+- [x] **Step 1: Write the failing tests** — `clause 22 is pinned`; `plan.md names every plan verb registered by wave 6 and every PLAN_REFUSALS word a coordinator meets`;
   `the ledger template's waves table has an epic column`; the ratchet's R4/R6 hold.
-- [ ] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
-- [ ] **Step 3: Write** the text.
-- [ ] **Step 4: Run to pass**.
-- [ ] **Step 5: Commit** — `docs(skills): the coordinator declares and keeps its plan (D-8185)`.
+- [x] **Step 2: Run to fail** — `cd server && npx vitest run --maxWorkers=2 test/coordinator-skill.test.ts test/skill-size-ratchet.test.ts test/ccrc-api-closed.test.ts`.
+- [x] **Step 3: Write** the text.
+- [x] **Step 4: Run to pass**.
+- [x] **Step 5: Commit** — `docs(skills): the coordinator declares and keeps its plan (D-8185)`.
 
 ### Task 6.2: The worker and Linear skills
 
