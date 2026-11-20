@@ -7818,7 +7818,7 @@ cmd_ws_add() {   # [--no-rc] [--child <runId>] [--base <commit>] [--surface <wor
   # floor, the placement read, the lock, the worktree and the row. A bad
   # `--route` value is an argv a coordinator composed; this verb refuses it with
   # the box exactly as it found it (spec §5.3).
-  (( ${#lc_route[@]} )) && _route_argv_check ${lc_wrapper:+"lane=$lc_wrapper"} "${lc_route[@]}"   # the lane, when --wrapper chose one (A3.3)
+  (( ${#lc_route[@]} )) && ROUTE_ARGV_LANE=${lc_wrapper:-} _route_argv_check "${lc_route[@]}"   # the lane --wrapper chose, apart from the user's pairs (A3.3)
   (( lc_gc )) && ! _child_runid_valid "$lc_child" && die "--child needs a run id (a positive integer), got: $lc_child"
   # `--base` IS A CHILD'S ONLY, and 40 or 64 lowercase hex: the SHAPE of a full id of either object format. Which length
   # this repository's ids have, and that the value names a commit object itself, are asked of git below. The class is
@@ -10154,7 +10154,7 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
   # the log and the journal, never its bytes — the file is writable by any
   # session on the box and a multi-line value would forge log lines.
   local usage="usage: ccd route --session <id> --set <field>=<value> [--set <field>=<value>]... [--apply] [--actor <text>] [--reason <text>]"
-  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert now tries=0 lane subj
+  local id="" actor="" reason="" apply=0 kv f v cls eff old raw rc inert now tries=0 lane subj pair=0
   local -a sets=()
   while (( $# )); do
     case "$1" in
@@ -10224,11 +10224,16 @@ cmd_route() {   # ccd route --session <id> --set <field>=<value> [--set ...] [--
     f="${kv%%=*}"; v="${kv#*=}"
     [[ "$f" == class ]] && cls="$v"
     [[ "$f" == effort ]] && eff="$v"
+    [[ "$f" == class || "$f" == effort ]] && pair=1
   done
   # `auto` types nothing (spec §5.1: it is the ABSENT-equivalent), so
   # haiku+auto is not the refused pair — only haiku+a LEVEL is (controller
   # ruling S1-R5). WHICH classes take none is the lane's data first, the haiku rule where the files cannot say (A3.3).
+  # ONLY A CALL THAT SETS `class` OR `effort` JUDGES THE PAIR (review 2964 F2, D-8855): a standing pair that the lane's data
+  # now bars is filtered at spawn with a note (`_route_effort_for_to`), so an unrelated `--set` must still succeed and leave
+  # both fields alone. A call that does set one judges the RESULTING pair (its value over the stored one).
   _reg_read_to lane "$id" wrapper
+  (( pair )) || eff=""
   [[ -n "$eff" && "$eff" != auto ]] && _class_effort_barred_to subj "$lane" "$cls" && die "$subj takes no effort level — set effort=auto or pick another class"
   # THE STAMP FIRST, AND IT IS STILL BEFORE EVERY SIDE EFFECT THAT MATTERS: the
   # last `die` is above this line, so a refused call leaves the record — and the
@@ -22487,8 +22492,13 @@ _route_argv_check() {   # k=v... -> 0 all valid | dies naming the field and the 
   # the worktree, the branch, the registry row and the pane — so a coordinator
   # that composed a bad argv gets a refusal and an untouched box, never a
   # half-made workspace nobody asked for.
-  local kv f v rc cls="" eff="" seen="" lane="" subj
-  [[ "${1-}" == lane=* ]] && { lane="${1#lane=}"; shift; }   # the optional FIRST pair, a caller's chosen lane: never a route field
+  # THE LANE RIDES APART FROM THE PAIRS (review 2964 F1): `ROUTE_ARGV_LANE`, set in the environment of this one call by the
+  # two callers that know a lane (`ws-add --wrapper`; `start <wrapper> <project>`) and set empty by them otherwise. `$@` is
+  # only ever the user's pairs, so a user's own `lane=x` meets the route-field check and dies. No lane (empty, or an
+  # unregistered wrapper) = the haiku rule decides (the unknown-lane fallback); where the lane's data speaks it can only
+  # RELAX that rule on a Codex lane (D-8750). This check judges the ARGV's pair alone; a stored pair that data now bars is
+  # filtered at spawn with a note (`_route_effort_for_to`), never refused here or on an unrelated `cmd_route` write.
+  local kv f v rc cls="" eff="" seen="" lane="${ROUTE_ARGV_LANE-}" subj
   for kv in "$@"; do
     [[ "$kv" == *=* ]] || die "bad --route '$kv' (want <field>=<value>)"
     f="${kv%%=*}"; v="${kv#*=}"
@@ -27986,7 +27996,7 @@ cmd_start() {   # <id>  |  <wrapper> <project> [workdir]
                          # variable error under `set -u`, as in cmd_swap.
   # BEFORE ANY WRITE, and before the two forms diverge: a bad value must leave
   # the registry exactly as it found it whichever form was typed (spec §5.3).
-  (( ${#route[@]} )) && _route_argv_check ${args[1]+"lane=${args[0]}"} "${route[@]}"   # the wrapper of the two-positional form, when there is one (A3.3)
+  (( ${#route[@]} )) && ROUTE_ARGV_LANE=${args[1]+${args[0]}} _route_argv_check "${route[@]}"   # the two-positional form's wrapper, apart from the user's pairs (A3.3)
   local id wrapper="" project="" workdir=""
   if [[ $# -ge 2 ]]; then
     wrapper="$1"; project="$2"; workdir="${3:-}"

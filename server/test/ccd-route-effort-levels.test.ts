@@ -5,7 +5,7 @@
 // says whether the class's current model lists effort levels, a Codex lane's catalogue says it for its pinned model. A lane
 // whose files cannot say (no file, an unreadable or invalid one, a row with no effort field, a Codex empty list, no lane)
 // keeps today's rule, so data only ever relaxes it on a Codex lane. The five sites, each measured on its own below:
-// `cmd_route`, `_route_argv_check` (which also takes the lane from its two callers), `_route_seed_default`,
+// `cmd_route`, `_route_argv_check` (which also takes the lane from its two callers, apart from the user's pairs: `ROUTE_ARGV_LANE`), `_route_seed_default`,
 // `_route_effort_for_to` and `_spawn_start`. Fixture HOME only; every id is invented.
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { execFileSync } from 'node:child_process';
@@ -113,7 +113,7 @@ const SITES: Site[] = [
     return verdictOf(r);
   } },
   { name: '_route_argv_check', says: true, probe: (w, cls) => {
-    const r = shStatus(`_route_argv_check lane=${w} class=${cls} effort=high`);
+    const r = shStatus(`ROUTE_ARGV_LANE=${w} _route_argv_check class=${cls} effort=high`);
     return verdictOf(r);
   } },
   { name: '_route_seed_default', says: false, probe: (w, cls) => {
@@ -258,5 +258,76 @@ describe('the two callers of _route_argv_check pass the lane they have chosen', 
     const r = shStatus('_route_argv_check class=haiku effort=high');
     expect(r.status).toBe(1);
     expect(r.out).toContain('class haiku takes no effort level');
+  });
+});
+
+// REVIEW 2964 F2 (the coordinator's decision, D-8855 `route-effort-intent`): a stored class+effort pair that the lane's data now
+// bars is FILTERED at spawn with a floored note (`_route_effort_for_to`), never refused on an unrelated write. A call refuses
+// the barred pair only when its own sets name `class` or `effort`; the pair it judges is the resulting one. On a Codex lane
+// the data can only RELAX the haiku rule (D-8750), and where no lane is known (an unregistered wrapper, an empty one) the
+// haiku rule decides.
+describe('a barred pair refuses only a call that changes class or effort', () => {
+  const regFile = (id: string, f: string): string | null => {
+    const p = path.join(h.home, '.cc-sessions', `${id}.${f}`);
+    return fs.existsSync(p) ? fs.readFileSync(p, 'utf8') : null;
+  };
+  const standing = (id: string): (string | null)[] => ['class', 'effort', 'workflow'].map((f) => regFile(id, f));
+
+  it('an unknown lane falls back to the haiku rule', () => {
+    plantAliases(['low', 'high'], { opus: [] });   // data that would bar opus on the named lane, if the lane were known
+    const id = freshId(); seedRow(id, 'nolane');
+    const ok = shStatus(`cmd_route --session ${id} --set class=opus --set effort=high`);
+    expect(ok.status).toBe(0);
+    const bad = shStatus(`cmd_route --session ${id} --set class=haiku --set effort=high`);
+    expect(bad.status).toBe(1);
+    expect(bad.out).toContain('class haiku takes no effort level');
+    // and the argv check with no lane named reads no lane's file either
+    expect(shStatus('_route_argv_check class=opus effort=high').status).toBe(0);
+  });
+
+  it('a level accepted on a lane, then barred by changed lane data, does not refuse an unrelated write', () => {
+    plantAliases(['low', 'high']);
+    const id = freshId(); seedRow(id, ANTHROPIC);
+    expect(shStatus(`cmd_route --session ${id} --set class=opus --set effort=high`).status).toBe(0);
+    plantAliases(['low', 'high'], { opus: [] });   // the files change: the class now takes none
+    const before = standing(id);
+    expect(before.slice(0, 2)).toEqual(['opus', 'high']);
+    const r = shStatus(`cmd_route --session ${id} --set workflow=on`);
+    expect(r.status).toBe(0);
+    expect(r.out).not.toContain('takes no effort level');
+    expect(standing(id)).toEqual([before[0], before[1], 'on']);   // class and effort are left alone
+  });
+
+  it('an explicit class or effort change still refuses a barred pair without writing', () => {
+    plantAliases(['low', 'high']);
+    const id = freshId(); seedRow(id, ANTHROPIC);
+    expect(shStatus(`cmd_route --session ${id} --set class=sonnet --set effort=high`).status).toBe(0);
+    plantAliases(['low', 'high'], { opus: [] });
+    const before = standing(id);
+    const log = swapLog();
+    // a class change onto a barred class, with the stored level
+    const toClass = shStatus(`cmd_route --session ${id} --set class=opus`);
+    expect(toClass.status).toBe(1);
+    expect(toClass.out).toContain('claude-opus-9-1 takes no effort level');
+    expect(standing(id)).toEqual(before);
+    // a level on a stored class that is barred
+    h.sh(`_reg_set ${id} class opus`);   // the standing class is now the barred one (data changed under it)
+    const stored = standing(id);
+    const toEffort = shStatus(`cmd_route --session ${id} --set effort=low`);
+    expect(toEffort.status).toBe(1);
+    expect(toEffort.out).toContain('claude-opus-9-1 takes no effort level');
+    expect(standing(id)).toEqual(stored);
+    expect(swapLog()).toBe(log);   // nothing was journalled either
+    // `effort=auto` is the absent-equivalent: it is the way out
+    expect(shStatus(`cmd_route --session ${id} --set effort=auto`).status).toBe(0);
+  });
+
+  it('the spawn filter still drops a barred stored pair, with its note', () => {
+    plantAliases(['low', 'high']);
+    const id = freshId(); seedRow(id, ANTHROPIC);
+    expect(shStatus(`cmd_route --session ${id} --set class=opus --set effort=high`).status).toBe(0);
+    plantAliases(['low', 'high'], { opus: [] });
+    expect(h.sh(`_route_effort_for_to v ${id} opus; printf %s "$v"`)).toBe('');
+    expect(swapLog()).toContain(`route-refuse ${id}: model claude-opus-9-1 takes no effort level — the effort field is ignored`);
   });
 });
