@@ -549,7 +549,10 @@
 .wk-card .wk-phase,
 .wk-card .wk-nophase { display: grid; gap: var(--sp-1); min-width: 0; border-top: 1px solid var(--edge-subtle); padding-top: var(--sp-2); }
 .wk-card .wk-phase-head { display: flex; flex-wrap: wrap; gap: 2px var(--sp-2); align-items: baseline; margin: 0; font-size: var(--fs-base); font-weight: var(--weight-medium); color: var(--ink-primary); cursor: default; }
-.wk-card summary.wk-phase-head { cursor: pointer; min-height: var(--tap-min); align-items: center; }
+/* A finished phase's summary holds its heading (an h3, so a heading list reaches it): the summary is the tap target and draws
+   the chevron, the heading inside keeps the open phase's own line. */
+.wk-card summary.wk-phase-fold { display: flex; align-items: center; gap: var(--sp-1); min-height: var(--tap-min); color: var(--ink-primary); cursor: pointer; }
+.wk-card summary.wk-phase-fold > .wk-phase-head { min-width: 0; cursor: pointer; }
 .wk-card .wk-phase-title { overflow-wrap: anywhere; }
 .wk-card .wk-phase-line { font: var(--fs-xs) var(--family-mono); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .wk-card .wk-summary,

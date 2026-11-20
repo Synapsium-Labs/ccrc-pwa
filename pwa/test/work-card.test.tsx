@@ -6,9 +6,12 @@ import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
-import { WORK_GROUPS, WORK_STATUSES, type WorkAnswer, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView, type WorkStatus } from '../../shared/plan';
+import { WORK_COUNTED_GROUPS, WORK_GROUPS, WORK_STATUSES, type WorkAnswer, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView, type WorkStatus } from '../../shared/plan';
 import { WorkCard } from '../src/ledgers/WorkCard';
-import { carriedWords, doneWhenLine, epicChip, foldLabel, headline, outstandingLine, phaseLine, sourceLine, statusWord, wholeEpicLine } from '../src/ledgers/workMapWords';
+import {
+  NOTES, carriedWords, carriedTargetsOf, doneWhenLine, epicChip, foldLabel, headline, initiativeNote, outstandingLine, phaseLine, sourceLine, statusWord,
+  unreadableNote, untitledWords, wholeEpicLine,
+} from '../src/ledgers/workMapWords';
 import { effectiveValue, stripComments } from './cssRule';
 
 const NOW = 1_800_000_000_000;
@@ -35,7 +38,7 @@ const item = (key: string, status: WorkStatus, over: Partial<WorkItemView> = {})
   itemIds: [], lastFailedRunId: null, ...over,
 });
 const phase = (key: string, number: number, over: Partial<WorkPhaseView> = {}): WorkPhaseView => ({
-  key, number, title: `Phase title ${number}`, summary: '', finish: null, counts: zero(), carried: 0, wholeEpics: [], items: [], ...over,
+  key, number, title: `Phase title ${number}`, summary: '', finish: null, counts: zero(), carried: 0, carriedOut: [], wholeEpics: [], items: [], ...over,
 });
 const epic = (e: { key: string; title: string }, over: Partial<WorkEpicView> = {}): WorkEpicView => ({
   ...e, done: 0, total: 0, url: null, dropped: false, checkpointsMet: 0, checkpointsTotal: 0, checkpoints: [], items: [], ...over,
@@ -66,7 +69,7 @@ function phased(): WorkMapView {
     items: [t1, t2, t3, t4],
     phases: [
       phase('p1', 1, { finish: { at: DAY_ONE }, counts: zero({ done: 1 }), items: ['t-1'] }),
-      phase('p2', 2, { counts: zero({ 'in-progress': 1 }), carried: 1, items: ['t-2', 't-3'] }),
+      phase('p2', 2, { counts: zero({ 'in-progress': 1 }), carried: 1, carriedOut: ['t-3'], items: ['t-2', 't-3'] }),
       phase('p3', 3, { counts: zero({ 'waiting-on-you': 1, 'not-started': 1 }), wholeEpics: ['epic-b'], items: ['t-3', 't-4'] }),
     ],
     epics: [
@@ -114,8 +117,11 @@ describe('the plan states of spec 5.1', () => {
   });
 
   it('a declared empty plan says so and draws no runs', () => {
-    const { container } = draw(view({ source: 'declared-empty', epics: [epic(EPIC_A)] }));
+    const stray = item('run-1', 'done', { title: 'A stray run', epic: null });
+    const { container } = draw(view({ source: 'declared-empty', epics: [epic(EPIC_A)], runs: { items: [stray], waves: { from: 1, to: 1 } } }));
     expect(screen.getByText('The plan is declared but lists no work yet.')).toBeTruthy();
+    expect(container.querySelector('.wk-headline')).toBeNull();
+    expect(screen.queryByText('A stray run')).toBeNull();
     expect(screen.queryByText(/No plan declared/)).toBeNull();
     expect(container.querySelector('.wk-runs')).toBeNull();
     expect(screen.getByRole('button', { name: /Epic A/ })).toBeTruthy();
@@ -129,9 +135,25 @@ describe('the plan states of spec 5.1', () => {
       source: 'ended', end: { outcome: 'abandoned', why: 'scope changed', at: DAY_ONE }, counts: zero({ done: 1, 'left-open': 2 }),
       items: [done, left, stale], epics: [epic(EPIC_A, { done: 1, total: 1, items: ['t-1', 't-2', 't-3'] })],
     }));
-    expect(screen.getByText(/^Plan abandoned on 2026-11-02: scope changed/)).toBeTruthy();
+    expect(container.querySelector('.wk-headline')?.textContent).toBe('Plan abandoned on 2026-11-02: scope changed · 1 done · 2 left open');
     expect(container.querySelector('.wk-outstanding')).toBeNull();
     expect(screen.getAllByText('left open').length).toBeGreaterThan(0);
+  });
+
+  it('an ended plan draws no outstanding line even when the view still counts outstanding work (review 2873 F5)', () => {
+    const { container } = draw(view({
+      source: 'ended', end: { outcome: 'done', why: null, at: DAY_ONE }, counts: zero({ done: 1, 'in-progress': 2, 'not-started': 1 }),
+      items: [item('t-1', 'done')], epics: [epic(EPIC_A, { done: 1, total: 4, items: ['t-1'] })],
+    }));
+    expect(container.querySelector('.wk-outstanding')).toBeNull();
+  });
+
+  it('an ended plan\'s bar shows its left-open work, so it is never all done (D-8806 bar-shows-left-open)', () => {
+    const { container } = draw(view({
+      source: 'ended', end: { outcome: 'abandoned', why: null, at: DAY_ONE }, counts: zero({ done: 1, 'left-open': 3 }),
+      items: [item('t-1', 'done'), item('t-2', 'left-open')], epics: [epic(EPIC_A, { done: 1, total: 1, items: ['t-1', 't-2'] })],
+    }));
+    expect([...container.querySelectorAll('.wk-seg')].map((el) => el.getAttribute('data-group'))).toEqual(['done', 'left-open']);
   });
 
   it('an ended plan words the left-open status WM2 sends for a ticket marked done whose evidence does not verify, and draws no outstanding line', () => {
@@ -146,9 +168,13 @@ describe('the plan states of spec 5.1', () => {
     expect(container.querySelector('.wk-outstanding')).toBeNull();
   });
 
-  it('an unreadable answer says so', () => {
+  it('an unreadable answer says so, with the reason in words for each of the two failures', () => {
     draw({ unreadable: 'read-failed' });
-    expect(screen.getByRole('alert').textContent).toMatch(/^The work could not be read: /);
+    expect(screen.getByRole('alert').textContent).toBe('The work could not be read: a read failed');
+    cleanup();
+    draw({ unreadable: 'run-unreadable' });
+    expect(screen.getByRole('alert').textContent).toBe('The work could not be read: the runs could not be read');
+    expect(unreadableNote('run-unreadable')).toBe('The work could not be read: the runs could not be read');
   });
 
   it('an unreadable answer draws its note over the view the page passes in', () => {
@@ -170,6 +196,11 @@ describe('the plan states of spec 5.1', () => {
     expect(screen.getByText('Ticket t-1')).toBeTruthy();
   });
 
+  it('a plan whose tickets are all dropped draws no no-phases note (review 2873 F12)', () => {
+    draw(view({ source: 'ended', end: { outcome: 'abandoned', why: null, at: DAY_ONE }, counts: zero({ dropped: 2 }), items: [item('t-1', 'dropped'), item('t-2', 'dropped')] }));
+    expect(screen.queryByText(NOTES.noPhases)).toBeNull();
+  });
+
   it('work runs from before the plan are one folded line, in no N of M', () => {
     const { container } = draw(view({ counts: zero({ 'not-started': 1 }), beforePlan: { runs: 61 }, items: [item('t-1', 'not-started')], epics: [epic(EPIC_A, { total: 1, items: ['t-1'] })] }));
     expect(screen.getByText('Before the plan · 61 work runs')).toBeTruthy();
@@ -183,6 +214,51 @@ describe('the phases', () => {
     const first = container.querySelector('[data-phase="p1"]');
     expect(first?.querySelector('summary')?.textContent).toMatch(/Phase 1.*Phase title 1.*finished 2026-11-02/);
     expect(first?.hasAttribute('open')).toBe(false);
+  });
+
+  it('a finished phase keeps a heading inside its summary, so a heading list reaches it (review 2873 F13)', () => {
+    const { container } = draw(phased());
+    const h = container.querySelector('[data-phase="p1"] > summary h3');
+    expect(h?.textContent).toMatch(/Phase 1.*Phase title 1/);
+    expect(container.querySelectorAll('h3').length).toBeGreaterThanOrEqual(3);
+  });
+
+  it('an abandoned plan\'s phase holding only a left-open ticket says so, never "no work of its own yet" (review 2873 F1)', () => {
+    const t = item('t-1', 'left-open', { phases: [{ key: 'p1', number: 1, carriedTo: null, carriedFrom: [] }] });
+    const { container } = draw(view({
+      source: 'ended', end: { outcome: 'abandoned', why: null, at: DAY_ONE }, counts: zero({ 'left-open': 1 }), items: [t],
+      phases: [phase('p1', 1, { counts: zero({ 'left-open': 1 }), items: ['t-1'] })], epics: [epic(EPIC_A, { items: ['t-1'] })],
+    }));
+    const line = container.querySelector('[data-phase="p1"] .wk-phase-line')?.textContent;
+    expect(line).toBe('1 left open');
+    expect(container.querySelector('[data-phase="p1"]')?.tagName).toBe('SECTION');
+  });
+
+  it('an abandoned plan\'s phase holding only a closed ticket says closed, never "no work of its own yet" (review 2873 F1)', () => {
+    const t = item('t-1', 'closed', { reason: 'not needed', phases: [{ key: 'p1', number: 1, carriedTo: null, carriedFrom: [] }] });
+    const { container } = draw(view({
+      source: 'ended', end: { outcome: 'abandoned', why: null, at: DAY_ONE }, counts: zero({ closed: 1 }), items: [t],
+      phases: [phase('p1', 1, { counts: zero({ closed: 1 }), items: ['t-1'] })], epics: [epic(EPIC_A, { items: ['t-1'] })],
+    }));
+    expect(container.querySelector('[data-phase="p1"] .wk-phase-line')?.textContent).toBe('1 closed');
+  });
+
+  it('a closed ticket with a recorded carry reads closed in its phase and is never drawn carried (review 2873 F2, Table 6a)', () => {
+    const v = phased();
+    const closed = item('t-5', 'closed', {
+      reason: 'dropped from scope', phases: [{ key: 'p2', number: 2, carriedTo: { key: 'p4', number: 4 }, carriedFrom: [] }],
+    });
+    v.items.push(closed);
+    v.counts = zero({ done: 1, 'in-progress': 1, 'waiting-on-you': 1, 'not-started': 1, closed: 1 });
+    // WM2 serves p2's carry count as 1 and its carried-out keys as t-3 alone: the closed ticket is in neither.
+    v.phases[1] = { ...v.phases[1]!, items: ['t-2', 't-3', 't-5'], counts: zero({ 'in-progress': 1, closed: 1 }), carried: 1, carriedOut: ['t-3'] };
+    const { container } = draw(v);
+    const row = container.querySelector('[data-phase="p2"] [data-ticket="t-5"]') as HTMLElement;
+    expect(row.getAttribute('data-status')).toBe('closed');
+    expect(within(row).getByText('closed')).toBeTruthy();
+    expect(within(row).queryByText('carried')).toBeNull();
+    expect(row.textContent).not.toContain('carried to');
+    expect(container.querySelector('[data-phase="p2"] .wk-phase-line')?.textContent).toBe('0 of 1 done · 1 closed · 1 carried to phase 3');
   });
 
   it('a finish with no date says date unknown', () => {
@@ -237,10 +313,33 @@ describe('the phases', () => {
     expect(screen.getByText('0 of 1 done · 1 carried to phase 3')).toBeTruthy();
   });
 
+  it('a carried-out row keeps its status now beside the carry (spec Table 6a, review 2873 F11)', () => {
+    const { container } = draw(phased());
+    const facts = [...(container.querySelector('[data-phase="p2"] [data-ticket="t-3"] .wk-facts') as HTMLElement).querySelectorAll('.wk-fact')].map((el) => el.textContent);
+    expect(facts).toEqual(['carried to phase 3', 'now not started']);
+  });
+
+  it('a carried-out marked-done ticket reads the carry, its status now, then the reason that finishes it', () => {
+    const v = phased();
+    v.items[2] = { ...v.items[2]!, status: 'done-unverified', group: 'held', reason: 'no evidence stored' };
+    const { container } = draw(v);
+    const facts = [...(container.querySelector('[data-phase="p2"] [data-ticket="t-3"] .wk-facts') as HTMLElement).querySelectorAll('.wk-fact')].map((el) => el.textContent);
+    expect(facts).toEqual(['carried to phase 3', 'now marked done, but', 'no evidence stored']);
+  });
+
+  it('a marked-done ticket carried in reads its reason first, then where it came from (review 2873 F7)', () => {
+    const v = phased();
+    v.items[2] = { ...v.items[2]!, status: 'done-unverified', group: 'held', reason: 'no evidence stored' };
+    const { container } = draw(v);
+    const row = container.querySelector('[data-phase="p3"] [data-ticket="t-3"]') as HTMLElement;
+    expect(within(row).getByText('marked done, but')).toBeTruthy();
+    expect([...row.querySelectorAll('.wk-fact')].map((el) => el.textContent)).toEqual(['no evidence stored', 'from phase 2']);
+  });
+
   it('a carry from a phase dropped since reads from phase <key>, dropped', () => {
     const v = phased();
     v.items[2] = { ...v.items[2]!, phases: [{ key: 'p3', number: 3, carriedTo: null, carriedFrom: [{ key: 'p-old', number: null }] }] };
-    v.phases[1] = { ...v.phases[1]!, items: ['t-2'], carried: 0 };
+    v.phases[1] = { ...v.phases[1]!, items: ['t-2'], carried: 0, carriedOut: [] };
     draw(v);
     expect(screen.getByText('from phase p-old, dropped')).toBeTruthy();
   });
@@ -262,6 +361,7 @@ describe('the epic strip', () => {
     expect(chip.getAttribute('aria-pressed')).toBe('true');
     expect(container.querySelector('[data-ticket="t-4"]')).toBeNull();
     expect(container.querySelector('[data-ticket="t-2"]')).not.toBeNull();
+    expect(container.querySelector('[data-phase="p3"]')).toBeNull();   // a phase with nothing of the epic is hidden
     const cps = screen.getByRole('group', { name: /Checkpoints of Epic A/ });
     expect(within(cps).getByText('Guide accepted')).toBeTruthy();
     expect(within(cps).getByText(/acceptance/)).toBeTruthy();
@@ -293,8 +393,8 @@ describe('Done when, Linear and initiatives', () => {
     const { container } = draw(phased());
     const fold = container.querySelector('details.wk-donewhen') as HTMLElement;
     expect(fold.querySelector('summary')?.textContent).toBe('Done when · 1 of 3 proved');
-    expect(within(fold).getByText(/The card shows the plan/).closest('li')?.textContent).toMatch(/ proved$/);
-    expect(within(fold).getByText(/Plans are declared/).closest('li')?.textContent).toMatch(/not proved$/);
+    expect(within(fold).getByText(/The card shows the plan/).closest('li')?.querySelector('.wk-proved')?.textContent).toBe('proved');
+    expect(within(fold).getByText(/Plans are declared/).closest('li')?.querySelector('.wk-proved')?.textContent).toBe('not proved');
   });
 
   it('no url draws no Open in Linear', () => {
@@ -314,6 +414,14 @@ describe('Done when, Linear and initiatives', () => {
     expect(screen.getAllByRole('link', { name: /Open in Linear/ })).toHaveLength(3);
   });
 
+  it('an initiative not bound yet draws no line and no note', () => {
+    const v = phased();
+    v.initiatives = [{ workspaceId: 'ws-a', url: null, state: 'none' }];
+    const { container } = draw(v);
+    expect(container.querySelectorAll('.wk-initiative')).toHaveLength(0);
+    expect(initiativeNote('none')).toBeNull();
+  });
+
   it('initiatives off draws its note, one per workspace', () => {
     const v = phased();
     v.initiatives = [{ workspaceId: 'ws-a', url: null, state: 'off' }, { workspaceId: 'ws-b', url: null, state: 'off' }];
@@ -329,6 +437,22 @@ describe('a row and its facts', () => {
     const a = within(container.querySelector('[data-ticket="t-2"]') as HTMLElement).getByRole('link', { name: 'Run #12' });
     expect(a.getAttribute('href')).toBe('/runs/12');
     expect(container.querySelector('[data-ticket="t-2"]')?.textContent).toContain('moved 3m ago');
+  });
+
+  it('a run whose last move was not read draws no moved fact, and one with a move draws how long ago (review 2873 F4)', () => {
+    const base = { runId: 12 };
+    const { container } = draw(view({
+      counts: zero({ 'in-progress': 3 }), epics: [epic(EPIC_A, { total: 3, items: ['t-a', 't-b', 't-c'] })],
+      items: [item('t-a', 'working', base), item('t-b', 'working', { ...base, lastMoveAt: null }), item('t-c', 'working', { ...base, lastMoveAt: NOW - 3 * MIN })],
+    }));
+    expect(container.querySelector('[data-ticket="t-a"]')?.textContent).not.toMatch(/moved/);
+    expect(container.querySelector('[data-ticket="t-b"]')?.textContent).not.toMatch(/moved/);
+    expect(container.querySelector('[data-ticket="t-c"]')?.textContent).toContain('moved 3m ago');
+  });
+
+  it('a done ticket shows the date it was done', () => {
+    const { container } = draw(phased());
+    expect(container.querySelector('[data-ticket="t-1"]')?.textContent).toContain('done 2026-11-02');
   });
 
   it('an item link opens the item', () => {
@@ -427,6 +551,50 @@ describe('the words', () => {
     expect(headline(view({ counts: zero({ done: 11, 'in-progress': 10 }) }))).toBe('11 of 21 done');
     expect(outstandingLine(view({ counts: zero({ 'in-progress': 3, 'not-started': 6 }) }))).toBe('3 in progress · 6 not started');
     expect(sourceLine(view({ phases: [phase('p1', 1), phase('p2', 2), phase('p3', 3)], epics: [epic(EPIC_A), epic(EPIC_B), epic({ key: 'c', title: 'C' })] }), NOW - MIN, NOW)).toBe("From the plan · 3 phases · 3 epics · read 1m ago");
+  });
+
+  it('the phase line writes every group it holds, each apart, and "no work of its own yet" only for none (review 2873 F1)', () => {
+    expect(phaseLine(phase('p', 1, { counts: zero({ 'left-open': 1 }) }), [])).toBe('1 left open');
+    expect(phaseLine(phase('p', 1, { counts: zero({ closed: 1 }) }), [])).toBe('1 closed');
+    expect(phaseLine(phase('p', 1, { counts: zero({ done: 3, 'left-open': 1 }) }), [])).toBe('3 of 3 done · 1 left open');
+    expect(phaseLine(phase('p', 1, { counts: zero({ done: 3, closed: 1 }) }), [])).toBe('3 of 3 done · 1 closed');
+    expect(phaseLine(phase('p', 1, { counts: zero({ done: 2, closed: 1, 'left-open': 2, 'not-started': 1 }), carried: 1 }), [4])).toBe('2 of 3 done · 1 closed · 2 left open · 1 carried to phase 4');
+    expect(phaseLine(phase('p', 1, { carried: 2 }), [])).toBe('2 carried');
+    expect(phaseLine(phase('p', 1), [])).toBe('no work of its own yet');
+  });
+
+  it('three or more carry targets read "2, 3 and 4", and a phase names only the tickets it carried out (review 2873 F11, F2)', () => {
+    expect(phaseLine(phase('p', 1, { counts: zero({ done: 1 }), carried: 3 }), [2, 3, 4])).toBe('1 of 1 done · 3 carried to phases 2, 3 and 4');
+    expect(phaseLine(phase('p', 1, { counts: zero({ done: 1 }), carried: 2 }), [2, 3])).toBe('1 of 1 done · 2 carried to phases 2 and 3');
+    const a = item('a', 'not-started', { phases: [{ key: 'p1', number: 1, carriedTo: { key: 'p2', number: 2 }, carriedFrom: [] }] });
+    const b = item('b', 'closed', { phases: [{ key: 'p1', number: 1, carriedTo: { key: 'p3', number: 3 }, carriedFrom: [] }] });
+    expect(carriedTargetsOf({ key: 'p1', carriedOut: ['a'] }, [a, b])).toEqual([2]);
+    expect(carriedTargetsOf({ key: 'p1', carriedOut: [] }, [a, b])).toEqual([]);
+  });
+
+  it('the headline counts exactly the groups the server counts, each of the others apart (review 2873 F3)', () => {
+    for (const g of WORK_GROUPS) {
+      const m = (WORK_COUNTED_GROUPS as readonly WorkGroup[]).includes(g) ? 1 : 0;
+      expect(headline(view({ counts: zero({ [g]: 1 }) }))?.startsWith(`${g === 'done' ? 1 : 0} of ${m} done`), g).toBe(true);
+    }
+    for (const g of WORK_COUNTED_GROUPS.filter((x) => x !== 'done')) {
+      expect(outstandingLine(view({ counts: zero({ [g]: 2 }) })), g).toMatch(/^2 [a-z ]+$/);
+    }
+  });
+
+  it('the headline writes left-open and failed counts apart, and none for a declared-empty plan', () => {
+    expect(headline(view({ counts: zero({ done: 1, 'left-open': 2, failed: 3 }) }))).toBe('1 of 1 done · 2 left open · 3 failed');
+    expect(headline(view({ source: 'declared-empty' }))).toBeNull();
+    expect(headline(view({ source: 'ended', end: { outcome: 'done', why: '', at: DAY_ONE }, counts: zero({ done: 2 }) }))).toBe('Plan closed as done on 2026-11-02 · 2 done');
+    expect(headline(view({ source: 'runs', counts: zero({ done: 1 }) }))).toBe('1 work run done');
+  });
+
+  it('the source line spells one phase and one epic in the singular, and a row with no title falls back to its run', () => {
+    expect(sourceLine(view({ phases: [phase('p1', 1)], epics: [epic(EPIC_A)] }), NOW - MIN, NOW)).toBe('From the plan · 1 phase · 1 epic · read 1m ago');
+    expect(untitledWords({ wave: null, runId: 9, key: 'run-9' })).toBe('Run #9');
+    expect(untitledWords({ wave: 4, runId: 9, key: 'run-9' })).toBe('Wave 4');
+    expect(untitledWords({ wave: null, runId: null, key: 'k' })).toBe('k');
+    expect(epicChip(epic(EPIC_A, { done: 1, total: 1, dropped: true }))).toBe('1 of 1 · dropped');
   });
 
   it('a day after the read reads in days', () => {

@@ -8,7 +8,11 @@
 // the card already carries the programme's own icon and colours, and nothing writes a "coordinator" word: a coordinator is
 // shown by a badge another task adds.
 import { elapsedWords } from '@ccrc/ui';
-import type { CheckpointEvidence, CheckpointKind, WorkEpicView, WorkGroup, WorkItemView, WorkMapView, WorkPhaseView, WorkStatus, WorkUnreadable } from '../../../shared/plan';
+import {
+  WORK_COUNTED_GROUPS,
+  type CheckpointEvidence, type CheckpointKind, type WorkCountedGroup, type WorkEpicView, type WorkItemView, type WorkMapView, type WorkPhaseView,
+  type WorkStatus, type WorkUnreadable,
+} from '../../../shared/plan';
 import { releaseDate } from '../lib/format';
 
 /** A ticket's status in the operator's words, one per `WorkStatus` and spelt once (spec Table 6). `done-unverified` is the
@@ -32,17 +36,17 @@ export const STATUS_WORD: Readonly<Record<WorkStatus, string>> = {
 };
 export const statusWord = (status: WorkStatus): string => STATUS_WORD[status];
 
-/** A group's words in the outstanding line (spec §5 item 1), in the order the line writes them. */
-const OUTSTANDING_ORDER: readonly { group: WorkGroup; word: string }[] = [
-  { group: 'in-progress', word: 'in progress' },
-  { group: 'waiting-on-you', word: 'waiting on you' },
-  { group: 'held', word: 'held' },
-  { group: 'not-started', word: 'not started' },
-];
+/** An outstanding group's words in the outstanding line (spec §5 item 1). Keyed by the counted groups less `done`, so a group
+ *  the server starts counting is a compile error until it has a word; the line writes them in `WORK_COUNTED_GROUPS` order
+ *  (review 2873 F3). */
+const OUTSTANDING_WORD: Readonly<Record<Exclude<WorkCountedGroup, 'done'>, string>> = {
+  'in-progress': 'in progress', 'waiting-on-you': 'waiting on you', held: 'held', 'not-started': 'not started',
+};
+const OUTSTANDING_GROUPS = WORK_COUNTED_GROUPS.filter((g): g is Exclude<WorkCountedGroup, 'done'> => g !== 'done');
 
-/** What the headline's "N of M" counts: the work still in the plan, each ticket once. Closed, left open, dropped and failed
- *  count apart (Table 6's groups). */
-const countedIn = (c: WorkMapView['counts']): number => c.done + c['in-progress'] + c['waiting-on-you'] + c.held + c['not-started'];
+/** What the headline's "N of M" counts: the work still in the plan, each ticket once, over the groups the server counts
+ *  (`WORK_COUNTED_GROUPS`, the one list `workMapOf`'s own strip reads). Closed, left open, dropped and failed count apart. */
+const countedIn = (c: WorkMapView['counts']): number => WORK_COUNTED_GROUPS.reduce((n, g) => n + c[g], 0);
 const plural = (n: number, one: string, many: string): string => `${n} ${n === 1 ? one : many}`;
 
 /** The headline: "11 of 21 done", then closed, left-open and failed counts apart ("· 2 closed"); "38 work runs done" with no
@@ -71,7 +75,7 @@ export function headline(view: WorkMapView): string | null {
  *  `workMapOf`: an ended plan's open tickets are `left-open`, in a group of their own). */
 export function outstandingLine(view: WorkMapView): string | null {
   if (view.end !== null || view.source === 'declared-empty') return null;
-  const parts = OUTSTANDING_ORDER.filter(({ group }) => view.counts[group] > 0).map(({ group, word }) => `${view.counts[group]} ${word}`);
+  const parts = OUTSTANDING_GROUPS.filter((g) => view.counts[g] > 0).map((g) => `${view.counts[g]} ${OUTSTANDING_WORD[g]}`);
   return parts.length === 0 ? null : parts.join(' · ');
 }
 
@@ -91,22 +95,32 @@ export function sourceLine(view: WorkMapView, readAt: number, now: number): stri
 /** A phase's heading: its number, from `phaseNumbers` on the server, and its title. */
 export const phaseHeading = (p: Pick<WorkPhaseView, 'number' | 'title'>): string => `Phase ${p.number} · ${p.title}`;
 
-/** The phase numbers its carried tickets went to, ascending and once each (the wire's `WorkPhaseView.carried` is a count). */
-export function carriedTargetsOf(phaseKey: string, items: readonly WorkItemView[]): number[] {
-  const to = items.flatMap((i) => i.phases.filter((p) => p.key === phaseKey && p.carriedTo !== null).map((p) => p.carriedTo!.number));
+/** The phase numbers its carried tickets went to, ascending and once each (the wire's `WorkPhaseView.carried` is a count). The
+ *  tickets are the ones the phase serves as carried out (`carriedOut`, decided by `workMapOf` where it counts `carried`); a
+ *  closed ticket with a recorded carry is not among them (Table 6a, review 2873 F2). */
+export function carriedTargetsOf(phase: Pick<WorkPhaseView, 'key' | 'carriedOut'>, items: readonly WorkItemView[]): number[] {
+  const out = new Set(phase.carriedOut);
+  const to = items.filter((i) => out.has(i.key)).flatMap((i) => i.phases.filter((p) => p.key === phase.key && p.carriedTo !== null).map((p) => p.carriedTo!.number));
   return [...new Set(to)].sort((a, b) => a - b);
 }
 
-/** A phase's line: "5 of 8 done · 1 carried to phase 3", and once finished "finished 2026-11-02" or "finished, date unknown".
- *  An empty phase is never finished (F14) and says it holds no work yet. */
+const joinWords = (names: readonly (string | number)[]): string =>
+  names.length <= 1 ? String(names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
+
+/** A phase's line: "5 of 8 done · 1 closed · 1 left open · 1 carried to phase 3", each part left out when it is zero, and once
+ *  finished "finished 2026-11-02" or "finished, date unknown". Closed and left-open tickets count apart, as the headline writes
+ *  them, so a phase never reads as finished while a ticket of it is left open (spec §3.1, §5.1; review 2873 F1). A phase that
+ *  holds no ticket in any group says it holds no work yet. */
 export function phaseLine(p: WorkPhaseView, carriedTo: readonly number[]): string {
   if (p.finish !== null) return p.finish.at === 'unknown' ? 'finished, date unknown' : `finished ${releaseDate(p.finish.at)}`;
   const own = countedIn(p.counts);
-  const carried = p.carried === 0 ? null
-    : carriedTo.length === 0 ? `${p.carried} carried`
-      : `${p.carried} carried to ${carriedTo.length === 1 ? 'phase' : 'phases'} ${carriedTo.join(' and ')}`;
-  const done = own === 0 && carried === null ? 'no work of its own yet' : `${p.counts.done} of ${own} done`;
-  return carried === null ? done : `${done} · ${carried}`;
+  const parts = [
+    ...(own > 0 ? [`${p.counts.done} of ${own} done`] : []),
+    ...(p.counts.closed > 0 ? [`${p.counts.closed} closed`] : []),
+    ...(p.counts['left-open'] > 0 ? [`${p.counts['left-open']} left open`] : []),
+    ...(p.carried === 0 ? [] : [carriedTo.length === 0 ? `${p.carried} carried` : `${p.carried} carried to ${carriedTo.length === 1 ? 'phase' : 'phases'} ${joinWords(carriedTo)}`]),
+  ];
+  return parts.length === 0 ? 'no work of its own yet' : parts.join(' · ');
 }
 
 /** The folded done line: "5 done"; the no-plan fallback folds its failed runs the same way. */
@@ -128,11 +142,10 @@ export function epicChip(e: WorkEpicView): string {
 export const carriedWords = {
   status: 'carried',
   to: (n: number): string => `carried to phase ${n}`,
+  /** A carried-out row keeps its status now beside the carry (spec Table 6a: "carried to phase N, with its status now"). */
+  now: (status: WorkStatus): string => `now ${STATUS_WORD[status]}`,
   from: (f: { key: string; number: number | null }): string => (f.number === null ? `from phase ${f.key}, dropped` : `from phase ${f.number}`),
 } as const;
-
-const joinWords = (names: readonly string[]): string =>
-  names.length <= 1 ? (names[0] ?? '') : `${names.slice(0, -1).join(', ')} and ${names[names.length - 1]}`;
 
 /** "takes on all of Epic B (◇ 1 of 2)": a phase that references whole epics, each with its checkpoint count. Null for none. */
 export function wholeEpicLine(epics: readonly WorkEpicView[]): string | null {

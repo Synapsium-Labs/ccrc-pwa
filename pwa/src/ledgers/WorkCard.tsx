@@ -12,7 +12,7 @@
 // "coordinator" word: a coordinator is shown by the badge another task adds (the operator's tidying notes of 2026-11-19).
 import { useId, useState, type ReactNode } from 'react';
 import { Button, TextLink, useNow } from '@ccrc/ui';
-import type { WorkEpicView, WorkGroup, WorkItemView, WorkMapView, WorkPhaseView, WorkUnreadable } from '../../../shared/plan';
+import { WORK_COUNTED_GROUPS, type WorkEpicView, type WorkGroup, type WorkItemView, type WorkMapView, type WorkPhaseView, type WorkUnreadable } from '../../../shared/plan';
 import { inAppClick } from '../fleet/settingsText';
 import {
   LAST_RUN_FAILED, NOTES, NOT_IN_PHASE_WORD, NOT_PROVED_WORD, OPEN_EPIC, OPEN_IN_LINEAR, PROVED_WORD, WORK_TITLE, beforePlanLine,
@@ -21,7 +21,9 @@ import {
   unreadableNote, untitledWords, wholeEpicLine,
 } from './workMapWords';
 
-/** The card's answer: the server's `WorkAnswer`, whose unreadable arm may also carry the last view the page drew. */
+/** The card's answer: the server's `WorkAnswer` (`WorkMapView`, or `{ unreadable }`), widened so the unreadable arm may also
+ *  carry the last view the page drew. The shipped `WorkAnswer` has no `last`; this prop type is the card's own (D-8806,
+ *  `unreadable-carries-the-last-view`). */
 export type WorkCardAnswer = WorkMapView | { unreadable: WorkUnreadable; last?: WorkMapView | null };
 
 export interface WorkCardProps {
@@ -45,8 +47,11 @@ interface Ctx {
   itemHref: WorkCardProps['itemHref'];
 }
 
-/** The bar's segments: the outstanding groups, and an ended plan's left-open work, so a closed plan's bar is never all done. */
-const BAR_GROUPS: readonly WorkGroup[] = ['done', 'in-progress', 'waiting-on-you', 'held', 'not-started', 'left-open'];
+/** The bar's segments: the groups the headline counts (`WORK_COUNTED_GROUPS`), then an ended plan's left-open work, which the
+ *  headline counts apart but a closed plan's bar must still show, so it is never all done (D-8806, `bar-shows-left-open`). */
+const BAR_GROUPS: readonly WorkGroup[] = [...WORK_COUNTED_GROUPS, 'left-open'];
+/** The tickets a block carries out: none outside a phase. */
+const NO_CARRY: ReadonlySet<string> = new Set();
 
 function Link({ href, children }: { href: string; children: ReactNode }): ReactNode {
   return <TextLink href={href} onClick={inAppClick(href)}>{children}</TextLink>;
@@ -55,15 +60,17 @@ function Link({ href, children }: { href: string; children: ReactNode }): ReactN
 /** One fact of a row, in its own span so a screen reader and a test read each apart. */
 const Fact = ({ children }: { children: ReactNode }): ReactNode => <span className="wk-fact">{children}</span>;
 
-/** A row's facts: where it was carried, why it reads as it does, its run and how long ago it moved, the items that wait on
- *  the operator, and the run that last failed. */
-function RowFacts({ it, ctx, phaseKey }: { it: WorkItemView; ctx: Ctx; phaseKey: string | null }): ReactNode {
+/** A row's facts: where it was carried out to, with its status now (spec Table 6a); why it reads as it does, which finishes the
+ *  sentence the status word starts ("marked done, but" · "no evidence stored"); where it was carried from; its run and how long
+ *  ago it moved, the items that wait on the operator, and the run that last failed. */
+function RowFacts({ it, ctx, phaseKey, carriedOut }: { it: WorkItemView; ctx: Ctx; phaseKey: string | null; carriedOut: boolean }): ReactNode {
   const here = phaseKey === null ? undefined : it.phases.find((p) => p.key === phaseKey);
   return (
     <span className="wk-facts">
-      {here?.carriedTo != null && <Fact>{carriedWords.to(here.carriedTo.number)}</Fact>}
-      {here?.carriedFrom.map((f) => <Fact key={f.key}>{carriedWords.from(f)}</Fact>)}
+      {carriedOut && here?.carriedTo != null && <Fact>{carriedWords.to(here.carriedTo.number)}</Fact>}
+      {carriedOut && <Fact>{carriedWords.now(it.status)}</Fact>}
       {it.reason !== null && it.reason !== '' && <Fact>{it.reason}</Fact>}
+      {here?.carriedFrom.map((f) => <Fact key={f.key}>{carriedWords.from(f)}</Fact>)}
       {it.runId !== null && <Fact><Link href={ctx.runHref(it.runId)}>{runLinkWord(it.runId)}</Link></Fact>}
       {typeof it.lastMoveAt === 'number' && it.runId !== null && <Fact>{movedWords(it.lastMoveAt, ctx.now)}</Fact>}
       {it.itemIds.map((id) => {
@@ -86,7 +93,7 @@ function Row({ it, ctx, phaseKey, carriedOut }: { it: WorkItemView; ctx: Ctx; ph
         <span className="wk-ticket-title">{it.title ?? untitledWords(it)}</span>
         {it.epic !== null && <span className="wk-epic">{it.epic.title}</span>}
       </span>
-      <RowFacts it={it} ctx={ctx} phaseKey={phaseKey} />
+      <RowFacts it={it} ctx={ctx} phaseKey={phaseKey} carriedOut={carriedOut} />
     </li>
   );
 }
@@ -102,9 +109,10 @@ function Fold({ rows, group, ctx, phaseKey }: { rows: readonly WorkItemView[]; g
 }
 
 /** Rows in the order the card keeps: outstanding first in the view's order, carried ones next, then the done ones folded into
- *  one counted line. */
-function Rows({ items, ctx, phaseKey }: { items: readonly WorkItemView[]; ctx: Ctx; phaseKey: string | null }): ReactNode {
-  const carriedOut = (it: WorkItemView): boolean => phaseKey !== null && it.phases.some((p) => p.key === phaseKey && p.carriedTo !== null);
+ *  one counted line. A row is carried out of its phase only when the phase's `carriedOut` says so: `workMapOf` reads a closed
+ *  ticket first (Table 6a), so one with a recorded carry still reads closed, and the card re-derives none of it. */
+function Rows({ items, ctx, phaseKey, carriedKeys = NO_CARRY }: { items: readonly WorkItemView[]; ctx: Ctx; phaseKey: string | null; carriedKeys?: ReadonlySet<string> }): ReactNode {
+  const carriedOut = (it: WorkItemView): boolean => carriedKeys.has(it.key);
   const open = items.filter((it) => !carriedOut(it) && it.group !== 'done');
   const carried = items.filter(carriedOut);
   const done = items.filter((it) => !carriedOut(it) && it.group === 'done');
@@ -131,7 +139,7 @@ function itemsOf(keys: readonly string[], ctx: Ctx): WorkItemView[] {
 function PhaseBlock({ phase, ctx }: { phase: WorkPhaseView; ctx: Ctx }): ReactNode {
   const items = itemsOf(phase.items, ctx);
   if (ctx.filter !== null && items.length === 0) return null;
-  const line = phaseLine(phase, carriedTargetsOf(phase.key, ctx.view.items));
+  const line = phaseLine(phase, carriedTargetsOf(phase, ctx.view.items));
   const whole = wholeEpicLine(ctx.view.epics.filter((e) => phase.wholeEpics.includes(e.key)));
   const head = (
     <>
@@ -143,11 +151,13 @@ function PhaseBlock({ phase, ctx }: { phase: WorkPhaseView; ctx: Ctx }): ReactNo
     <>
       {phase.summary !== '' && <p className="wk-summary">{phase.summary}</p>}
       {whole !== null && <p className="wk-whole">{whole}</p>}
-      <Rows items={items} ctx={ctx} phaseKey={phase.key} />
+      <Rows items={items} ctx={ctx} phaseKey={phase.key} carriedKeys={new Set(phase.carriedOut)} />
     </>
   );
+  // A finished phase folds, and its heading stays a heading inside its summary, so a screen-reader user moving by headings
+  // reaches it as it does an open phase (review 2873 F13).
   return phase.finish !== null
-    ? <details className="wk-phase" data-phase={phase.key}><summary className="wk-phase-head">{head}</summary>{body}</details>
+    ? <details className="wk-phase" data-phase={phase.key}><summary className="wk-phase-fold"><h3 className="wk-phase-head">{head}</h3></summary>{body}</details>
     : <section className="wk-phase" data-phase={phase.key}><h3 className="wk-phase-head">{head}</h3>{body}</section>;
 }
 
@@ -254,7 +264,7 @@ function Body({ view, readAt, now, filter, onFilter, runHref, itemHref, epicHref
   const outstanding = outstandingLine(view);
   const note = view.source === 'runs' ? NOTES.noPlan
     : view.source === 'declared-empty' ? NOTES.declaredEmpty
-      : view.phases.length === 0 && view.items.length > 0 ? NOTES.noPhases : null;
+      : view.phases.length === 0 && view.items.some((i) => i.group !== 'dropped') ? NOTES.noPhases : null;
   const notIn = itemsOf(view.notInPhase, ctx);
   return (
     <>

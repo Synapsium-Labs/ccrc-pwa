@@ -263,11 +263,16 @@ export const PHASE_CASES: WorkMapCase[] = [
   } },
   { name: '6a row 2 before row 3: a closed ticket carried out reads closed, not carried', run: (m) => {
     const v = map(m, twoPhases([tref('t1', 'pb', 100)], [tref('t1')], [tk('t1')], { closed: [['t1', 'why']] }));
-    expect([phase(v, 'pa').carried, nz(phase(v, 'pa').counts)]).toEqual([0, ['closed:1']]);
+    expect([phase(v, 'pa').carried, phase(v, 'pa').carriedOut, nz(phase(v, 'pa').counts)]).toEqual([0, [], ['closed:1']]);
+  } },
+  { name: '6a row 2 before row 3: a phase with one carry and one closed-then-carried ticket serves only the carry (review 2873 F2)', run: (m) => {
+    const v = map(m, twoPhases([tref('t1', 'pb', 100), tref('t2', 'pb', 100)], [tref('t1'), tref('t2')], [tk('t1'), tk('t2')], { closed: [['t1', 'why']] }));
+    expect([phase(v, 'pa').carried, phase(v, 'pa').carriedOut, nz(phase(v, 'pa').counts)]).toEqual([1, ['t2'], ['closed:1']]);
   } },
   { name: '6a row 3: a recorded carry reads carried in the earlier phase and from it in the later one', run: (m) => {
     const v = map(m, twoPhases([tref('t1', 'pb', 100), tref('t2')], [tref('t1')], [tk('t1'), tk('t2')]));
     expect([phase(v, 'pa').carried, nz(phase(v, 'pa').counts), phase(v, 'pa').items]).toEqual([1, ['not-started:1'], ['t1', 't2']]);
+    expect([phase(v, 'pa').carriedOut, phase(v, 'pb').carriedOut]).toEqual([['t1'], []]);   // review 2873 F2: the phase serves what it carried out
     expect(nz(phase(v, 'pb').counts)).toEqual(['not-started:1']);
     expect(item(v, 't1').phases).toEqual([
       { key: 'pa', number: 1, carriedTo: { key: 'pb', number: 2 }, carriedFrom: [] },
@@ -333,12 +338,12 @@ export const PHASE_CASES: WorkMapCase[] = [
   } },
   { name: 'a carry to a dropped phase is void', run: (m) => {
     const v = map(m, { epics: [ep('e1', [tk('t1')])], phases: [ph('p1', [tref('t1', 'p2', 1)]), ph('p2', [tref('t1')], { dropped: true })] });
-    expect([phase(v, 'p1').carried, nz(phase(v, 'p1').counts), item(v, 't1').phases]).toEqual([0, ['not-started:1'], [{ key: 'p1', number: 1, carriedTo: null, carriedFrom: [] }]]);
+    expect([phase(v, 'p1').carried, phase(v, 'p1').carriedOut, nz(phase(v, 'p1').counts), item(v, 't1').phases]).toEqual([0, [], ['not-started:1'], [{ key: 'p1', number: 1, carriedTo: null, carriedFrom: [] }]]);
     expect(v.phases.map((p) => p.key)).toEqual(['p1']);
   } },
   { name: 'a phase\'s count excludes its carried tickets', run: (m) => {
     const v = map(m, twoPhases([tref('t1', 'pb', 1), tref('t2'), tref('t3')], [tref('t1')], [tk('t1'), tk('t2'), tk('t3')]));
-    expect([phase(v, 'pa').carried, nz(phase(v, 'pa').counts)]).toEqual([1, ['not-started:2']]);
+    expect([phase(v, 'pa').carried, phase(v, 'pa').carriedOut, nz(phase(v, 'pa').counts)]).toEqual([1, ['t1'], ['not-started:2']]);
   } },
   { name: 'a phase finishes at its latest own done or carry time', run: (m) => {
     const tickets = [tk('t1', { state: 'done', runId: 5 }), tk('t2', { state: 'done', runId: 6 }), tk('t3')];
