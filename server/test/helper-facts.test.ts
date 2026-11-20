@@ -213,7 +213,7 @@ describe('helperFactsOf: a notification that reaches a busy main thread (review 
   it('a prompt that is not a string, or not an envelope, yields none', () => {
     expect(helperFactsOf(attached({ prompt: { text: envelope() } }))).toEqual([]);
     expect(helperFactsOf(attached({ prompt: 'plain words' }))).toEqual([]);
-    expect(helperFactsOf(attached({ prompt: null }))).toEqual([]);
+    expect(helperFactsOf(line({ type: 'attachment', timestamp: TS, attachment: { type: 'queued_command', commandMode: 'task-notification', prompt: null } }))).toEqual([]);
   });
 
   it('a notification of a status still running, or with no task id, yields none through this shape as through the other', () => {

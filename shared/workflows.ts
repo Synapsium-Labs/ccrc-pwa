@@ -2,11 +2,13 @@
 // them. One row per dynamic workflow Claude Code is running in the session —
 // the same facts its own terminal row prints, `○ name ▰▰▰▱ 19/20 · 3h15m ·
 // ↓ 2.5m tokens` — read from the files Claude Code itself keeps
-// (`server/src/workflows/`, D-5561). L0: imports nothing.
+// (`server/src/workflows/`, D-5561). L0: imports no module but a sibling L0 file's one id rule (`AGENT_ID_RE`).
 //
 // EVERY NUMBER HAS ONE NULL, AND IT MEANS "NOT MEASURED". A count that could
 // not be read is never a zero: a journal this box failed to read has no
 // `done` and no `total`, and the row says so instead of drawing `0/0`.
+
+import { AGENT_ID_RE } from './continuity-reports.js';
 
 /** Where a row stands. `running` is decided by the read rule in
  *  `server/src/workflows/model.ts` (`decideRun`), never by a recency timeout;
@@ -164,7 +166,11 @@ export const HELPER_FINISHED_KEEP_MS = 600_000;
 export const HELPER_KEPT_MAX = 20;
 
 // THE BOUNDS OF THE AGENT ARM (review 2900 F9). The frame's Agent arm is at most
-// HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX = 84 rows, each under 1 KiB.
+// HELPER_LISTED_MAX + HELPER_NONFINAL_MAX + HELPER_KEPT_MAX = 84 rows. Each text field is capped by the unit named
+// below, so the bytes of a row depend on the text (review 2961 F5, measured on a row with every field at its cap and
+// serialised as JSON): ASCII text, 895 bytes a row (73 KiB for 84 rows); 3-byte characters, 1,677 bytes (138 KiB);
+// supplementary-plane characters, 1,287 bytes (106 KiB). No byte cap is added: no frame size limit is read anywhere
+// on the path, and the one that frames bytes is H1b's to pin where the frame is built.
 /** The hook roster's own cap: the most `running` rows. */
 export const HELPER_LISTED_MAX = 32;
 /** The most rows that are not final and not listed (launched, no longer listed, session ended, state left out) together. */
@@ -185,7 +191,6 @@ export const WORKFLOW_KEPT_AGENTS_MAX = 40;
 /** What Claude Code names a workflow's agents, in the hook roster's `name` and in their meta's `agentType`: never an Agent row. */
 export const WORKFLOW_AGENT_TYPE = 'workflow-subagent';
 
-/** An agent id, as the hook's own rule has it (`[A-Za-z0-9_-]`, 1 to 64 characters). Defined once: the fact parser and the
- *  decision both read it, and an id that fails it is never a row. */
-const HELPER_ID_RE = /^[A-Za-z0-9_-]{1,64}$/;
-export const isHelperId = (v: unknown): v is string => typeof v === 'string' && HELPER_ID_RE.test(v);
+/** Whether `v` is an agent id: the hook's own rule, `AGENT_ID_RE` (`shared/continuity-reports.ts`), the one definition (review
+ *  2961 F6). The fact parser and the decision both read it, and an id that fails it is never a row. */
+export const isHelperId = (v: unknown): v is string => typeof v === 'string' && AGENT_ID_RE.test(v);

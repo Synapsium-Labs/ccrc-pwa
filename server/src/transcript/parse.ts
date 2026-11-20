@@ -677,13 +677,13 @@ function launchFact(result: unknown, at: number | null): HelperFact | null {
   const cut = report.trim() === '' ? null : maskedCut(report, HELPER_REPORT_MAX_BYTES);
   return {
     source: 'launch', id: t.agentId, status: 'completed', at, model: typeof t.resolvedModel === 'string' ? t.resolvedModel : null,
-    durationMs: typeof t.totalDurationMs === 'number' && Number.isFinite(t.totalDurationMs) ? t.totalDurationMs : null,
+    durationMs: typeof t.totalDurationMs === 'number' && Number.isFinite(t.totalDurationMs) && t.totalDurationMs >= 0 ? t.totalDurationMs : null, // a negative one would put the start after the end
     summary: null, report: cut === null ? null : cut.text, reportCut: cut !== null && cut.cut,
   };
 }
 
-function noticeFact(message: unknown, at: number | null): HelperFact | null {
-  const content = message !== null && typeof message === 'object' ? (message as { content?: unknown }).content : undefined;
+/** The fact of one task-notification ENVELOPE (the text between and including the `<task-notification>` tags). */
+function noticeFact(content: unknown, at: number | null): HelperFact | null {
   if (typeof content !== 'string' || !content.trimStart().startsWith('<task-notification>')) return null;
   const parsed = parseTaskNotification(content);
   if (!parsed.ok) return null;
@@ -691,11 +691,23 @@ function noticeFact(message: unknown, at: number | null): HelperFact | null {
   const id = n.fields.find((f) => f.name === 'task-id')?.value ?? '';
   const status = n.status === null ? undefined : (FINAL_NOTICE_STATUS as Record<string, HelperFact['status'] | undefined>)[n.status];
   if (!isHelperId(id) || status === undefined) return null;
-  const line = (n.summary ?? '').split('\n')[0]!.trim();
+  // masked BEFORE the first line is taken (review 2961 F12), so a value spread over lines is masked as a whole
+  const line = SHAPE_MASK.maskDeep(n.summary ?? '').split('\n')[0]!.trim();
   const summary = line === '' ? null : maskedCut(line, HELPER_SUMMARY_MAX_BYTES).text;
   const result = n.fields.find((f) => f.name === 'result')?.value ?? '';
   const report = result === '' ? null : maskedCut(result, HELPER_REPORT_MAX_BYTES);
   return { source: 'notification', id, status, at, model: null, durationMs: null, summary, report: report === null ? null : report.text, reportCut: report !== null && report.cut };
+}
+
+/** The envelope a record carries, in either of the two shapes a task notification is written in (review 2961 F1): a user
+ *  record whose `message.content` is the envelope (the notification reached an idle main thread), or an `attachment`
+ *  record, a queued command of mode `task-notification` whose `prompt` is the envelope (it reached a BUSY main thread).
+ *  A notification seen in both folds to one fact (`foldHelperFacts`). */
+function envelopeOf(r: { type?: unknown; message?: unknown; attachment?: unknown }): unknown {
+  if (r.type === 'user') return r.message !== null && typeof r.message === 'object' ? (r.message as { content?: unknown }).content : undefined;
+  if (r.type !== 'attachment' || r.attachment === null || typeof r.attachment !== 'object') return undefined;
+  const a = r.attachment as { type?: unknown; commandMode?: unknown; prompt?: unknown };
+  return a.type === 'queued_command' && a.commandMode === 'task-notification' ? a.prompt : undefined;
 }
 
 /** The helper facts of ONE raw transcript line: an Agent or Task launch result, or a task notification. Defensive by
@@ -704,9 +716,9 @@ export function helperFactsOf(line: string): HelperFact[] {
   let raw: unknown;
   try { raw = JSON.parse(line); } catch { return []; }
   if (raw === null || typeof raw !== 'object') return [];
-  const r = raw as { type?: unknown; isSidechain?: unknown; timestamp?: unknown; toolUseResult?: unknown; message?: unknown };
-  if (r.isSidechain === true || r.type !== 'user') return [];
+  const r = raw as { type?: unknown; isSidechain?: unknown; timestamp?: unknown; toolUseResult?: unknown; message?: unknown; attachment?: unknown };
+  if (r.isSidechain === true) return [];
   const at = timeOf(r.timestamp);
-  const fact = launchFact(r.toolUseResult, at) ?? noticeFact(r.message, at);
+  const fact = (r.type === 'user' ? launchFact(r.toolUseResult, at) : null) ?? noticeFact(envelopeOf(r), at);
   return fact === null ? [] : [fact];
 }

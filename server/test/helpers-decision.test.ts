@@ -185,13 +185,14 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       expect(arm.known).toBe(1);
     });
 
-    it('the meta\'s finished marker yields the same way, by the helper transcript\'s last write', () => {
-      const f = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 15 * MIN }) }, roster: listedFrom(NOW - MIN) });
+    it('the meta\'s finished marker persists while a continued helper runs again (measured: 110 of 122 continued helpers\' metas still read finished), so the end fact\'s continuation overrides it too', () => {
+      const f = base({ facts: { [A]: facts(endedAt('done', NOW - 15 * MIN)) }, metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 30_000 }) }, roster: listedFrom(NOW - MIN) });
       expect(stateOf(run(f), A)).toBe('running');
-      const before = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 2 * MIN }) }, roster: listedFrom(NOW - 3 * MIN) });
-      expect(stateOf(run(before), A)).toBe('finished');
-      const noWrite = base({ metas: { [A]: meta({ finished: true, lastWriteAt: null }) }, roster: listedFrom(NOW - MIN) });
-      expect(stateOf(run(noWrite), A)).toBe('finished');
+    });
+
+    it('the marker alone, with no end fact to compare a start with, stays finished beside a listing (the recorded residual)', () => {
+      const f = base({ metas: { [A]: meta({ finished: true, lastWriteAt: NOW - 2 * MIN }) }, roster: listedFrom(NOW - MIN) });
+      expect(stateOf(run(f), A)).toBe('finished');
     });
   });
 
@@ -237,7 +238,7 @@ describe('Figure 2: the decision, strongest measured fact first', () => {
       expect(stateOf(arm, A)).toBe('unmeasured');
     });
     it('a drop seen earlier is not repeated on a reading whose roster cannot be used', () => {
-      const one = run(base({ roster: usable([A, 'a2']), metas: { [A]: meta(), a2: meta() } }));
+      const one = run(base({ roster: usable(['a2', A]), metas: { [A]: meta(), a2: meta() } }));
       const two = run({ roster: usable(['a2']), metas: { [A]: meta(), a2: meta() }, memory: one.memory });
       expect(stateOf(two, A)).toBe('unlisted');
       const three = run({ roster: { kind: 'unusable', why: { why: 'unreadable' } }, metas: { [A]: meta(), a2: meta() }, memory: two.memory });
@@ -663,7 +664,7 @@ describe('agentsUnmeasured: only while a known helper is not final, and only for
     expect(run({ metas: { a1: meta() }, roster: usable(['a1']) }).unmeasured).toBeNull();
   });
   it('the unseen count is the number of rows whose state was left out for an unseen drop', () => {
-    const one = run({ metas: { a1: meta(), a2: meta(), a3: meta() }, roster: usable(['a1', 'a2', 'a3']) });
+    const one = run({ metas: { a1: meta(), a2: meta(), a3: meta() }, roster: usable(['a3', 'a1', 'a2']) });
     const two = run({ metas: { a1: meta(), a2: meta(), a3: meta() }, roster: usable(['a3']), memory: one.memory });
     expect(stateOf(two, 'a1')).toBe('unlisted');
     expect(two.unmeasured).toBeNull();
@@ -709,7 +710,7 @@ describe('the order of the rows', () => {
 
 describe('the order of rows, continued', () => {
   it('a state left out sits above a row that is no longer listed, and launched above both', () => {
-    const one = run({ roster: usable(['a1', 'a2']), metas: { a1: meta(), a2: meta(), a3: meta(), a4: meta() } });
+    const one = run({ roster: usable(['a2', 'a1']), metas: { a1: meta(), a2: meta(), a3: meta(), a4: meta() } });
     const two = run({ roster: usable(['a2']), metas: { a1: meta(), a2: meta(), a3: meta(), a4: meta() }, memory: one.memory, facts: { a4: facts({ launch: asyncLaunch(ROSTER_AT + 1) }) } });
     expect(two.agents.map((a) => [a.id, a.state])).toEqual([['a2', 'running'], ['a4', 'launched'], ['a3', 'unmeasured'], ['a1', 'unlisted']]);
   });
