@@ -893,7 +893,7 @@ describe('the docs front probes node and the pinned redactor before any work (D-
       ].join('\n'), { mode: 0o755 });
     }
     const r = installed().run(INDEX);
-    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader and the front both hashed').toBeGreaterThanOrEqual(7);
+    expect(fs.readFileSync(count, 'utf8').split('\n').filter(Boolean).length, 'the loader (seven) and the front (one more) both hashed').toBeGreaterThanOrEqual(8);
     expect([r.code, r.stdout, r.stderr]).toEqual([0, unavailable('docs-index', 'redactor-mismatch'), '']);
   });
 

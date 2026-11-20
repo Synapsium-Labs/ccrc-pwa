@@ -76,7 +76,7 @@
 # stopped by it, and the window between hashing the body and Bash opening it
 # is not closed.
 #
-# THE BODY'S LIBRARIES (#1279). The body loads six more files beside it, `lib/disk-retention.sh`,
+# THE BODY'S LIBRARIES (#1279). The body loads seven more files beside it, `lib/disk-retention.sh`,
 # `lib/train-proof.sh`, `lib/delegation-lease.sh`, `lib/pool-set.sh`, `lib/long-lived.sh`, `lib/door.sh` and `lib/model-aliases.sh`, and pins each file's SHA-256 in its own text, which THIS digest covers: the launcher pins the
 # body, the body pins the libraries.
 # The body reads the library once, hashes what it read and evaluates what it hashed; a missing, linked or changed

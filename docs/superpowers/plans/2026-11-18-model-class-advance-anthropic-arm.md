@@ -553,15 +553,15 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
 - **Scope:** the launch marker and the tick's observe step that fills it, the effort-level rule from data, a held id
   at launch, an orphaned effort carried at launch, the routing record with the model id, the readback by id, and an id change moving a running session after
   the canary by use.
-- **Files:** `ccd/lib/model-aliases.sh` (new, pinned: the sixth library), `ccd/ccd` (the library's stamp line, the
-  loader, `cmd_caps`, the supervise tick's one new call, and call sites), and every site that names the fifth library,
+- **Files:** `ccd/lib/model-aliases.sh` (new, pinned: the seventh library; `ccd/lib/door.sh` landed as the sixth after this list was measured, so every count below is one higher at dispatch), `ccd/ccd` (the library's stamp line, the
+  loader, `cmd_caps`, the supervise tick's one new call, and call sites), and every site that names the fifth (and since then the sixth) library,
   re-measured on 2026-11-18 from #2898's diff (`git show --stat f1df4a47a`), which introduced `ccd/lib/long-lived.sh`;
   no library was added on `origin/main` since. Each site below names `long-lived.sh` or counts the libraries, and each
-  reds or misses the sixth without its edit. The brief re-measures with `git grep -n 'long-lived' origin/main` before
+  reds or misses the seventh without its edit. The brief re-measures with `git grep -n 'long-lived' origin/main` before
   dispatch.
   - The body and its installers: `ccd/ccd` (`__CCD_LIB_LONGLIVED_SHA256`'s twin, `_ccd_lib_load`'s file list and its
     all-placeholders test, the `@ccd-lib:` region comment); `ccd/ccd-entry-install.py` (a `*_LIB_PIN`,
-    `*_LIB_PIN_PLACEHOLDER`, `*_LIB_SOURCE` and `*_LIB_DEST` quartet, `render_lib_pin`, the publish after the fifth
+    `*_LIB_PIN_PLACEHOLDER`, `*_LIB_SOURCE` and `*_LIB_DEST` quartet, `render_lib_pin`, the publish after the sixth
     library, its postcondition and its say line, the backup names); `ccd/ccd-entry.py` (THE BODY'S LIBRARIES' list);
     `ccd/ccrc` (`_upd_backup_copy` and the uninstall's file list and its echo); `deploy/deploy.sh` (the backup copy);
     `README.md` (the libraries' paragraph, the restore line and the pins' list).
@@ -569,11 +569,11 @@ to A4, with D-8683. Its departures from that route are D-8744 to D-8748, D-8750 
     `ccd/contexts-edges.tsv`.
   - The server tests: `server/test/ccdWsHelpers.ts` (`CCD_LIBS` and a new `installedCcdBody` parameter);
     `server/test/ccd-lib-load.test.ts`; `server/test/ccd-entry-install.test.ts` (the library constant import, the
-    tree fixture, and a describe for the sixth library as the fifth's); `server/test/ccd-install-stamp.test.ts`;
+    tree fixture, and a describe for the seventh library as the sixth's); `server/test/ccd-install-stamp.test.ts`;
     `server/test/build-release.test.ts` (the `pair` lists and the pin expectation); `server/test/install-census.test.ts`;
     `server/test/installTreeFixture.ts`; `server/test/ccrc-uninstall.test.ts`; `server/test/consolidationCensus.ts`
     (`CCD_LIB_FILES`); `server/test/ownership.test.ts` (the library files it copies into its tree);
-    `server/test/ccd-docs-helper-redactor.test.ts` (the loader's hash count, quoted text `-le 5`, becomes 6);
+    `server/test/ccd-docs-helper-redactor.test.ts` (the loader's hash count, quoted text `-le 6` at dispatch, becomes 7, and the hash count it asserts becomes 8);
     `server/test/session-hook.test.ts` (`SCANNED`); `server/test/tmux-socket-census.test.ts` (`SOURCED_BY`, the
     library mapped to `ccd/ccd`); `server/test/ccd-id-cap.test.ts` (only if the library writes a
     `$REG/<id>.<field>` temp file, as `long-lived.sh`'s keep-awake does; the marker below is written in place, so it
@@ -645,7 +645,7 @@ tests pin both), and the note records each session id.
 
 - [ ] **Step 1: Write the failing tests** in a fixture HOME, with fixture files named by those two functions: each
   answer shape; `an unchanged file forks no jq` (a counting `jq` shim on PATH: two reads, one fork); `a changed file is
-  re-read`; `a FIFO answers unreadable without blocking`; `a Codex empty list is unknown, never none`; `seen only when
+  re-read`; `a FIFO answers unreadable without blocking`; `a Codex empty list is -, never none`; `seen only when
   the kept reading is the current id` (`cacheTarget` X2 is the id, `seenId` X1: `-`; `seenId` X2: `seen`); `a held
   class's efforts come from the held id's row`; `an unlaunchable id reads as no id` (`facts - - … -`); `the bare id
   matches the JS reader`, reading every row of `server/test/fixtures/model-id-bare.json` (Task A2.2); the library's
@@ -1243,6 +1243,20 @@ hold path stays whole behind it, its tests run through a copy with the gate open
 Task A3.4 opens or removes the gate in the release that makes ccd apply holds; ccd and the op always ship in one
 build. Cost if wrong: an operator cannot hold or revert an Anthropic class until A3.4 lands, and doctor's
 `model-held-behind` remedy, written for after A3.4, names a release of a hold that cannot be made meanwhile.
+
+Lifted as planned, in wave A3 (Task A3.4's build, run 2910). Removed together:
+- the gate constant and its refusal word `alias-hold-not-applied`;
+- the Models sheet's sentence for that word;
+- `server/test/modelsOpCopy.ts`, so the hold, release and revert tests run the shipped op.
+
+No gate replaces it. The op and the ccd that launches are one tree on one box, so a newer op over an older ccd cannot
+happen.
+
+One residual stays: a supervisor still running the previous ccd body. Such a supervisor is kept until it is restarted,
+when the update's supervisor sweep is refused by its preflight and says so in a degraded line. It respawns or swaps its
+session without the held id, while the op answers ok and the sheet shows the class held. The sweep's degraded line is
+the signal, and the remedy is restarting that supervisor, not relaunching the session. Doctor's `model-sessions-behind`
+names such a session only after a day. Wave A4 carries the user-facing note.
 
 ### D-8821 — two unmeasured-session words for an Anthropic lane's advance file
 
