@@ -52,8 +52,8 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
   Whoever lands second renumbers, under the coordinator's standing licence. The coord-db version pins and
   `run-close-switch`'s replay were counted again: one more undo line, and fifty-eight replayed migrations, Task 3's
   seed included.
-- **lane-count.** `LANE_SCHEDULE` gains the `admissionWake` row beside `main`'s new `blockWakes` row, so the
-  monotonic-clock pin goes to 55.
+- **lane-count.** `LANE_SCHEDULE` gains the `admissionWake` row beside `main`'s new `blockWakes` row. `main` then added
+  the `mailHold` row (mid-turn mail PR 4, #3087), and the absorb kept both, so the monotonic-clock pin goes to 56.
 - **capacity-blocks-in-the-wake-tx.** The draft marked the claimant's `capacity` blocks woken from the lane, outside
   the mail's write. `main` now has the block-wake lane (D-8126 A6), which leaves `capacity` to this lane, and its rule is
   that a block is never woken without its mail. `queueAdmissionWake` therefore marks those blocks in the same

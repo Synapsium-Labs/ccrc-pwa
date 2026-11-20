@@ -335,6 +335,8 @@ export const RUN_NAMES_SESSION_CALLERS: readonly NamesSessionCaller[] = [
     why: 'the minting run is ONE run with no series in hand: childBirthOf asks only whether it names the session before it places a birth' },
   { file: 'server/src/childReclaimSweep.ts', count: 2,
     why: 'a hold candidate and a minting run are single runs with no series in hand: the sweep asks only whether the run names the session' },
+  { file: 'server/src/sleepLane.ts', count: 1,
+    why: 'the run a hold names is ONE run with no series in hand: heldKindOf asks only whether that run names this session (run-own)' },
 ];
 
 const HELPER = 'runNamesSession';

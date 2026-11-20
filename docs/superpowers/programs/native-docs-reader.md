@@ -32,10 +32,55 @@ Since 2026-10-15 (operator), W5 runs as part 1, then W5h and Share in parallel, 
 | 8 | the reader frame: the shared library `docserver` mounted in a sandboxed frame with a checked bridge, the plain pipeline as fallback (proposed, rich-docs spec 2026-10-12). It inherits W5h's highlight worker and rules on the colouring divergences W5h records (2026-10-15) | #2037 (W8a plan), #2061 (W8a), #2989 (D1), #3026 (D2) | proposed; after W5b, W6, W7, library v1 and W5h-b (amended 2026-10-15; W5h). Library v1 is met: `@synapsium-labs/docserver` 1.0.0 was released on 2026-10-31. Split by the operator on 2026-10-31: **W8a**, the frame core, now, beside W5h-a and Share (plan `docs/superpowers/plans/2026-10-31-native-docs-reader-w8a-reader-frame-core.md`, approved by the operator on 2026-11-01 and merged in #2037). **W8a accepted** on 2026-11-01 at `4d62121a7`: run 1315, PR #2061, review runs 1316, 1317 and 1318 with two fix rounds, block 7691 to 7707 all defined, landing through the merge queue. Its residue goes to W8b; **W8b**, the version menu and "changes since", after W5b; W7 last. **W8a is live:** the operator's phone check on 2026-11-03 opened a spec in the reader. Its follow-ups are in Decisions, 2026-11-03 (late): the first-load compression (approved by the operator on 2026-11-03; run 1400, block 7903 to 7905 all unused; **merged** 2026-11-04, `ffa9f0ab2`, through #2247), Mermaid drawn on open (ruled; needs a library change), a compact phone header (the operator picked option 1 now and option 2 with the library release; plan approved 2026-11-04, run 1436, block 7953 to 7959), and a reader lab page (the operator: build it, as a wave of its own) W8b (completion D, Tasks 11-14) runs as two serial runs (coordinator, 2026-11-17): D1 (Tasks 11-12 and C2's carried findings) is run 2380, **merged** 2026-11-18 (`8a6f62309`, #2989; three review rounds; reserve 8716-8718 unspent); D2 (Task 13, Task 14, lab 10 and D1's carried findings) is run 2436, **merged** 2026-11-18 (`839c05e46`, #3026; three review rounds; D-8729 and D-8730 defined, 8731-8732 unspent). D is closed (Decisions, 2026-11-18) |
 | RL | the reader lab: a console page, Settings › Reader lab, that runs E17 and E18 on a phone (the walls, the busy frame, the Mermaid line), and the server door its frames report through. Two runs: RL-a, the door (server only, reviewed alone), then RL-b, the page, from `main` after RL-a merges | #2283 (RL-a), #2340 (RL-b) | **merged.** RL-a: run 1442, three review rounds, #2283 merged 2026-11-04 (`2593469be`). RL-b: run 1470, three review rounds and two fix rounds (D-8030 to D-8033), #2340 merged 2026-11-05 (`ce55b1ca9`). Approved by the operator on 2026-11-04; its own wave after W8a, independent of W5b and W8b (operator, 2026-11-03) |
 | 17 | the library 1.1 take-up: ccrc pins `docserver` 1.1.0, gates Mermaid drawn after `ready` on E17, adopts the bar-off frame with progress and commands, and the phone header's option 2 | #2346 (plan), #2806 | run 1532, dispatched 2026-11-10; library 1.1.0 publication verified and Q1-Q3 approved with every recommendation on 2026-11-06 (item 48). Two phone blocks: 217 ms fails, 192 ms holds against 200 ms; combined `E17-READING does-not-hold`, `E17-BLOCKS 2`, so approved Q1 keeps drawing on tap. E18 holds within both blocks' coverage. Tasks 1-9 committed (worker-reported). Task 10 was held at Step 2 from 2026-11-11 and resumed on 2026-11-14 with CI standing in for the local server suite (Decisions, 2026-11-14). The wave-done was verified at `d56b10667`. Review runs 2104, 2116 and 2122 found 3, 2 and 1 important findings, each sent back as a fix round; on 2026-11-15 the review cap was extended from 3 to 6. Review run 2132 (round 4) found no product defect, the wave was accepted at `b7b60ed93`, and #2806 **merged** 2026-11-15 (`f6bdbf153`), its merge-queue run green with `browser (pwa)`. Run 1532 closed done (Decisions, 2026-11-15) |
-| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries were folded in by X4, the library-input text wave (run 2680, wave 27), merged 2026-11-19 (#3055, `da21717b8`), which also set X2's library share. The library programme plans its one wave from X1 §10 and X2 §6 on `main`; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)** |
+| Required appearance | Same host-selected ccrc skin/theme and native visual language; shared renderer plus consumer adapter | — | Required before E/F final acceptance; scoped design/leaf plan and implementation after A, never silently added to A. **X1's design merged 2026-11-19 (#3048, `8781ef20a`; run 2631, D-8759 to D-8761), accepted at the review cap; its carries were folded in by X4, the library-input text wave (run 2680, wave 27), merged 2026-11-19 (#3055, `da21717b8`), which also set X2's library share. The library programme plans its one wave from X1 §10 and X2 §6 on `main`; ccrc's wave C after the release. Implementation waits for the operator's approval (Decisions, 2026-11-19)**. Approved 2026-11-19. This programme drives the library's waves: L1, the appearance contract, runs as run 2843 in the library's repository, and the library is renamed pinax-lib before the release (Decisions, 2026-11-20) |
 | Required parity/drafts | #1418 full parity and #1420 private draft-review lifecycle; outside folders, variants, large files, PDFs and configured tracker links | — | Required before E/F final acceptance and operator retirement; scoped extension plans and side-by-side evidence, not delivered by the existing A–D tasks. **X2's design (#1418 parity) merged 2026-11-19 (#3049, `6095bf43d`; run 2632, D-8762 to D-8764) and X3's (#1420 draft review) merged 2026-11-19 (#3050, `1bbb6730b`; run 2633, D-8765 to D-8767), each accepted at the review cap with binding carries (Binding carries from the extension designs, below). Implementation waits for the operator's approval; X3's R1 also waits for the operator's confirmation of asks 595 and 603 (Decisions, 2026-11-19)** |
 
 ## Decisions & deviations
+- **2026-11-20 (early): the library is named pinax-lib, and this programme drives its waves. L1 (run 2843) and X6, reader mode (run 2847), dispatched. X5's two review rounds ruled. L1's first departure, D-8816 (operator rulings; coordinator in-plan rulings).**
+  - **The operator's rulings, in chat, 2026-11-19 late:**
+    - **The library's name is pinax-lib.** The package is `@synapsium-labs/pinax-lib` ("let's go pinax-lib"). There is no separate tool: ccrc's Docs reader is built in, other consumers embed the library, and the standalone reader retires.
+      - The rename is its own landing in the library's repository, after L1 and before the release. It changes no frame asset and keeps the wire names, as #85 did, and it supersedes #85 (which says `@synapsium-labs/pinax`).
+      - At release the operator renames the GitHub repository (old URLs redirect), sets up the npm name and its trusted publisher, and pushes the signed tag.
+      - ccrc takes the new name at wave C's re-pin.
+    - **This programme drives the library's waves** ("yes drive from here"). A library wave is a run of this programme with project `docserver` and home project `ccrc-pwa`. Its departures are asked here and defined in ccrc's plans, never in the library's repository. The release and its signed tag stay the operator's.
+    - **New intent, reader mode:** "when reading a document via docserver I need a button to enter "reader mode" where the document becomes full-screen (think Kindle-like experience when used)". Design wave X6 designs it, in ccrc's native reader; the standalone reader gets nothing.
+  - **L1, run 2843 (wave 30), dispatched 2026-11-20 00:09Z.**
+    - Its scope is X1's §10 contract only, as the genesis landing of test 8's tables:
+      - the shares are `x1` 32 768 characters, and `x2` 1 166 336 in total and 72 704 for the largest frame;
+      - one `Size-Design: x1` line;
+      - no version bump.
+    - X2's additions are L2's, after it. It was briefed before the naming ruling, so it leaves #85 alone, and the rename landing follows it.
+  - **D-8816, L1's ask 660 (the gitGraph cherry-pick disc).** Mermaid 12.1.0 draws the cherry-pick commit as a disc that carries no series class, so §10's "painted `bg` … on its commit's series colour" cannot be built.
+    - Ruled option 0: the disc is `text-muted` and its mark is `bg`, which is the gate's `text-muted`-on-`bg` pair.
+    - The rule for the disc never reaches the mark, and test 5 reads both.
+    - Defined in X1's plan; §10 and test 5 are amended in place.
+  - **X6, run 2847 (wave 31, reserve 8803 to 8805), dispatched 2026-11-20 ~00:45Z.** It is a docs-only design, briefed below.
+    - **Ask 656, pages or scroll, is released to the operator** as a product tradeoff. The options are:
+      - screen pages (recommended; about 6 to 10 K characters of library code);
+      - calm scroll;
+      - true book pages (about 25 to 45 K characters, the highest risk).
+
+      The designer continues with screen pages as the default and prices all three. The host side is the same for each.
+  - **X5, run 2837: two review rounds, each sent back as a fix round.**
+    - **Round 1 (run 2850):** 13 important findings. The isolation argument held. Ruled:
+      - Caddy's logs: a stock global log filter that deletes the request path and Referer is designed into A4 now, with a test, and confirmed on a real Caddy before F. If stock Caddy cannot do it, the worker stops and asks.
+      - "Open as artifact" is offered on every HTML page, with no refusal detector. The walls tier stays the default.
+      - A1 waits for P1, R1 lands before A1, and A1 reuses R1's token grammar.
+      - The rest as the report directed.
+    - **Round 2 (run 2860):** run with the panel as written, three refuters per important finding and the majority deciding. 10 important findings were confirmed, and 23 of round 1's 26 ids are closed. Ruled:
+      - A revoke, an expiry or a sign-out ends work already admitted, with stall and whole-response deadlines.
+      - Version pages are outside the tier in this design (Later: a tree read at the pinned commit). A current page whose branch moved gets a one-action reload.
+      - The page above 2 MiB gets the offer too, because full parity is the bar.
+      - A failed artifact listen turns the tier off and never takes the console down.
+    - **Round 3 is the last.**
+  - **P1, run 2743 (working):**
+    - the worker's paused usage limit and a stall-watch restart, both recovered;
+    - a narrow hook leave (file text through the Edit and Write tools, one test command per call, no type-check tool names in titles);
+    - the first number of its block ruled for the ccd growth waiver (the range verb and the draft's mtime);
+    - a check that the test slice kills is retried once alone, else recorded unmeasured, with CI as the arbiter;
+    - co-edits with four other programmes' holders stay additive.
+  - **Fleet cap.** At 24 active runs, dispatches were refused for about 90 minutes. Bounded background retries dispatched L1, X6 and review 2860. Rule: when one of this programme's runs frees a slot, its queued waves dispatch first. Whether to raise the cap is with the operator.
+  - **Retirement note (operator's cutover, Task 18).** The old standalone reader's `/docs` forward on the operator's proxy still points at the fleet's previous host. Removing that mapping is a step of the cutover. Until then no session starts, repoints or retires it.
 - **2026-11-19 (evening): the operator approved the three extension designs and answered the open choices. P1 dispatched as run 2743. X5, artifact-level HTML pages on an isolated origin, opened as run 2837 (operator rulings; coordinator run-open).**
   - **The operator's rulings, in chat:**
     - The appearance (X1), parity (X2) and draft-review (X3) designs are approved, as amended by X4. Implementation may dispatch.
@@ -1084,7 +1129,7 @@ Wave L plans from X1's text on `main` after #3055, not as it was at `89a9ce02a`.
   - R1 waits for the operator's confirmation of asks 595 and 603.
   - R3 waits for the M-X3.16 device item, and names `DocsHead.tsx`, `DocsIndexView.tsx`, the control census, the tap-target floors and the residue A23 to A27.
 
-## Current next-wave briefs — P1 and X5, runs 2743 and 2837
+## Current next-wave briefs — P1, X5, L1 and X6, runs 2743, 2837, 2843 and 2847
 
 Dispatched 2026-11-19 as written below (Decisions, 2026-11-19 evening). X3's R1 follows P1, because the two waves share files.
 
@@ -1228,6 +1273,137 @@ Amending X2's §4.8 or C3 text is a departure from an operator-approved design. 
 - Before your wave-done, run one Opus · high adversarial pass over the spec (boundaries, threat model, testability), and fix or record what it finds.
 
 **Stop and ask:** any source edit (this is docs only), any widening of the console's policies, a new storage owner you cannot argue under the census rules, or a refusal from any tool, hook or route (report it, then wait).
+
+**Delivery:** commit on `ws/<your slug>` only, with the trailers in one final paragraph. List mail before your push, and push once. Get the exact-tip `ci` and `CodeQL` checks green, then send wave-done with the fingerprint JSON. Never enqueue or arm auto-merge.
+
+### L1 — run 2843 (the library's repository)
+
+Dispatched 2026-11-20 as written below, before the naming ruling (Decisions, 2026-11-20). The library's name is now pinax-lib, and its rename lands after L1.
+
+Programme `native-docs-reader` (home project ccrc-pwa), wave 30 = L1: the shared rendering library's appearance contract, built in the library's own repository (project `docserver`, GitHub `Synapsium-Labs/docserver`, a PUBLIC repository). Run 2843. The operator approved X1's design on 2026-11-19 and directed that this programme drive the library's build.
+
+**Your input is ccrc's design, read from the home repository:**
+- homeRepoRoot `<projects-root>/ccrc-pwa`;
+- planSha `0b96bd0dcc470ddacc6b634fc4770052571040ca`;
+- the X1 spec, §10 "The library's part", in full, with tests 1 to 10 and the size-table rules (test 8 and its genesis landing): `git -C <projects-root>/ccrc-pwa show <planSha>:docs/superpowers/specs/2026-11-18-native-docs-appearance-continuity-design.md`;
+- the X1 plan: its "Waves and order" row L, its Results "Library input (X4)" and "Review 2732" subsections, and its carries: `git -C <projects-root>/ccrc-pwa show <planSha>:docs/superpowers/plans/2026-11-18-native-docs-appearance-continuity.md`;
+- X2's spec §6, for the shares only.
+
+Read the library's `CLAUDE.md`, its programme ledger `docs/superpowers/programs/docserver.md` and its last plan `docs/superpowers/plans/2026-11-04-docserver-batch-release.md`, and follow their conventions: purity, CSP-safe browser code, one raw-HTML allowlist, the conformance corpus as the contract, and a red case for every guard.
+
+**Scope: X1's contract only. It is the genesis landing of the size tables.** It includes:
+- the appearance op on the existing port (the frame handle's `setAppearance`);
+- `parseAppearance`, with its grammars and label rules;
+- the slots, the derivations and the fonts;
+- the hosted Mermaid rules (covered kinds, the derivation, the halo, resolved cue literals, the tooltip and commit-label rules, and the svg mark that reaches the full-screen copy);
+- the non-colour cues;
+- tests 1 to 10 as §10 writes them;
+- test 8's two append-only tables. The genesis shares table records `x1` at 32 768 characters, and `x2` at 1 166 336 characters in total and 72 704 for the largest frame, as the coordinator set them.
+
+X2's additions (layouts, items, place and overlay ops, print-figures, print mode) are NOT in this wave: they are L2's, after this landing. Do not touch PR #85 (the rename), whose name is still the operator's decision, and do not change the package version. The release and its signed tag are the operator's.
+
+**Deliver, in one PR to the library's `main`:**
+1. A leaf plan, `docs/superpowers/plans/2026-11-20-docserver-appearance-contract.md`, in the library's plan shape: Status, Goal, Architecture, tasks with Files, interfaces, red-first steps, mutation rows and Results. Name ccrc's spec by its public GitHub path, never by a local path.
+2. Then implement it, task by task, red-first. Every guard gets a case that reds when it is deleted, measured.
+3. The PR description carries exactly one `Size-Design: x1` line, as test 8 requires.
+
+**Departures:** a sentence of §10 you cannot build as written is a stop-and-ask to me, quoting the sentence and your proposal. Do not write a D-number in the library's repository; ccrc's deviation numbers are recorded in ccrc.
+
+**Measure, don't recall.**
+- The library's CI runs Node 22 and 24, with real Chromium and WebKit layout tests, and takes about 36 minutes. Run the relevant files locally before you push, in the foreground, with a timeout of at least 600000 ms. Use `ccrc test -- <command>` for heavy runs.
+- The box has about 80 GB free. Use your workspace's own install, and the Playwright browsers already cached on the box. Do not download new browsers if a cached build serves, make no repository copy and open no extra worktree.
+
+**Public repository:** no private name, host, path, account or tracker in any file, commit message, PR title or body. Refer to the console as ccrc and to its design by GitHub path. Run a private-name scan over every file and commit message before your push.
+
+**Asks:** a product choice goes to me as a structured ask with your recommendation. A technical choice is yours: record why in Results.
+
+**Stop and ask:**
+- any widening of the frame's sandbox, CSP or channels beyond §10;
+- any bridge or protocol change beyond §10's appearance op;
+- a budget or size-share breach;
+- an edit outside the library repository;
+- a refusal from any tool, hook or route (report it, then wait for my word).
+
+**Routing (clause 13):**
+- Main loop Opus · high.
+- Implementer subagents Sonnet · high, for the validator, the frame application and the CSP or test-9 work, and Sonnet · medium elsewhere.
+- One Opus · high review subagent over each task's diff before its commit.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+
+**Delivery:** commit on your workspace branch only. One PR to `Synapsium-Labs/docserver` `main`, with the trailers in one final paragraph. List mail before your push, and push once. Get the PR's exact-tip CI green, then send wave-done with the fingerprint JSON and the suite and failure lines. Never merge, enqueue or arm auto-merge.
+
+### X6 — run 2847
+
+Dispatched 2026-11-20 as written below (Decisions, 2026-11-20).
+
+Programme `native-docs-reader`, wave 31 = X6, a DESIGN wave: reader mode, a full-screen, Kindle-like reading experience for a document in ccrc's native Docs reader. Run 2847. Deviation block Issued: 8803, 8804 and 8805 (a reserve; none defined yet).
+
+**The operator's request, 2026-11-19, verbatim:** "when reading a document via docserver I need a button to enter "reader mode" where the document becomes full-screen (think Kindle-like experience when used)".
+
+"docserver" here means the reader the operator reads in, which is now ccrc's native Docs reader with the shared library in its frame. The standalone reader is being retired and gets nothing.
+
+The coordinator's reading of "Kindle-like", for you to test and refine:
+- one button enters it;
+- everything but the text goes away, ccrc's chrome and the reader's bars included;
+- the document reads in pages turned by tap, swipe or the arrow keys, or else as calm continuous scroll;
+- a light tap shows a minimal overlay with progress (percent or time left), Aa and Exit;
+- the place is remembered;
+- it works on a phone and on a desktop.
+
+Pages against scroll is a product choice. Put it in Waiting on you with your recommendation, and design both far enough to price them.
+
+**Read first:**
+- the rich-docs spec `docs/superpowers/specs/2026-10-12-rich-docs-reader-and-shared-renderer-design.md` (the frame, the bridge, the host and library split, and the sandbox and CSP);
+- X1's spec §10 and the appearance contract (reader mode uses ccrc's appearance; no new palette or catalogue);
+- X2's spec, the reading layer (P5: places, the popstate dispatcher, Back, overlays, layouts) and print;
+- the native reader in `pwa/src/docs/` (`ReaderFrame.tsx`, `DocsHead.tsx`, the one bar, `reader/bridge.ts`, `reader/policy.ts`) and the reader lab (E14, E17, E18);
+- the ledger's Carried constraints.
+
+**Decide and argue, each with a table of alternatives:**
+1. **Entry and exit.**
+   - Where the button sits on desktop and in the phone head.
+   - The keyboard shortcut.
+   - Exit by Esc, Back, the overlay and the browser's own exit, with one place-and-Back model from X2's popstate dispatcher.
+2. **Full screen.**
+   - The host owns it. The sandboxed frame cannot request it, and the frame's sandbox (`allow-scripts`) and the shell CSP do not widen.
+   - The Fullscreen API on the host's container where it works.
+   - On a phone engine that refuses element full screen (measure iOS Safari, and the installed PWA in standalone mode), a chrome-less overlay that fills the viewport.
+   - The phone blocks, the tap and one-bar budgets, and safe areas.
+3. **Reading.**
+   - Pagination inside the frame (a library layout mode) against host-side paging. Figures, tables, code and Mermaid that do not fit a page.
+   - The turn gestures and tap zones, with no conflict with links and text selection.
+   - Progress reporting from the frame to the host over the existing port, as an additive op.
+   - Remembering the place per document through the reader's existing visit state.
+4. **Comfort:** typography from the appearance contract with reader-local width and size, reduced motion, an optional screen wake lock (say whether you take it, and why), orientation, and an accessible focus order.
+5. **The split and the library.** What ccrc builds and what the shared library builds:
+   - any new frame op;
+   - a paged layout;
+   - its budget share under test 8 (the library's size tables);
+   - which library wave carries it after L1 and L2.
+
+**Deliver, in one PR:**
+- A design spec, `docs/superpowers/specs/2026-11-20-native-docs-reader-mode-design.md`, from `~/.claude/templates/superpowers-spec.md`: In short, numbered sections, Mermaid figures with captions, decision tables, a promise-delta fence, and Where things stand. Include mockups, described or as Mermaid, of the button and the overlay on a phone and a desktop.
+- A leaf plan, `docs/superpowers/plans/2026-11-20-native-docs-reader-mode.md`, written with the writing-plans skill: the implementation waves and their order against X2's P5 and the library waves, the files each owns, the interfaces, mutation rows that a deletion would red, acceptance rows (a new capability: propose its row for completion Task 17), and Results.
+
+**Measure, don't recall.** Read shipped source on `main`. Measure engine full-screen support where you can: desktop Chromium in the reader lab's browser leg. Record the phone engines as an operator device item for me to raise. No install, repository copy or new worktree: the box is low on disk.
+
+**Standing boundaries:**
+- The reader sandbox stays exactly `allow-scripts`, the shell CSP stays `frame-src 'none'`, with no parent-DOM access and no new channel; frame ops are additive on the existing port.
+- Both 2026-11-06 phone blocks are byte for byte.
+- Library 1.1.0 stays pinned in this wave. A library change is designed here, not made.
+- The standalone reader gets nothing.
+
+**Public repository:** neutral names only. Private-name scan every file and every commit message before your push.
+
+**Asks:** a product choice goes to me as a structured ask with your recommendation. A technical choice is yours: decide it and record why.
+
+**Routing (clause 13):**
+- Main loop Opus · high, xhigh at the pages-or-scroll and full-screen decisions.
+- Sonnet · medium Agent subagents for fact checks against source.
+- Every Agent call names its model and effort literally, never Fable. Workflow off.
+- Before your wave-done, run one Opus · high adversarial pass over the spec (boundaries, phone behaviour, testability), and fix or record what it finds.
+
+**Stop and ask:** any source edit (this is docs only), any widening of the frame's sandbox or the shell CSP, or a refusal from any tool, hook or route (report it, then wait for my word).
 
 **Delivery:** commit on `ws/<your slug>` only, with the trailers in one final paragraph. List mail before your push, and push once. Get the exact-tip `ci` and `CodeQL` checks green, then send wave-done with the fingerprint JSON. Never enqueue or arm auto-merge.
 

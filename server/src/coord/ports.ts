@@ -93,7 +93,7 @@ export type WatcherCoordMember =
   | 'sealResponse' | 'setCollectLane' | 'setDeliveryEnvelope' | 'setGenerationDue' | 'setGoneSince' | 'setHoldOff' | 'setRunCloseAnchor' | 'setSession' | 'settleAsk' | 'settleNode' | 'snapshotFacts' | 'softRenewalsOf' | 'staleAllocations'
   | 'staleApproval' | 'staleAsk' | 'stallCandidates' | 'stallMailFor' | 'stallObservationsSince' | 'stallSettings' | 'stalledDispatchRunIds' | 'standingPairs'
   | 'startRunsOnTakenBrief' | 'startsOf' | 'startsSince' | 'stepGeneration' | 'strandedClear' | 'sweepClosesBetween' | 'takeApprovalForRule' | 'takeAskForAnswer' | 'tellRefusal' | 'timerHoldFacts' | 'unlandedBriefs'
-  | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'wakeBlockTx' | 'wakeParked';
+  | 'unsealDeadCoordinatorBreakerState' | 'untakeAsk' | 'untoldRows' | 'updateEpoch' | 'upsertNodeMeasurement' | 'urgentHolds' | 'wakeBlockTx' | 'wakeParked';
 
 /** D-7579: the watcher's narrow view of the coordination store, the one `Pick` of `CoordStore` the series uses. A
  *  `CoordStore` is assignable to it; it is not assignable back (the store's private members). */

@@ -13,7 +13,7 @@ before you act on a wave.
 
 ## The contract
 
-These twenty sentences are the boundary between "a coordinator" and "an agent
+These twenty-one sentences are the boundary between "a coordinator" and "an agent
 with a shell on the fleet host". They are not advice.
 
 1. Every act that changes fleet state goes through the ccrc server HTTP API. This session never runs `ccd` to change fleet state.
@@ -36,6 +36,7 @@ with a shell on the fleet host". They are not advice.
 18. A workflow script, a worker brief or a test step never sets `TMPDIR` to a path inside a work tree and never writes scratch inside one: it uses the temp root this session was started with (`TMPDIR`, or `CCRC_SESSION_TMPDIR` where `TMPDIR` has been overridden). Long command output goes to a file there, or through `tail`, never into the work tree. Work, scratch repositories, reports and build output never go under the `projects/` transcript folders of a Claude config dir (`~/.claude*/projects/`): they belong in the workspace or in that temp root. Every test and typecheck runs through `ccrc test -- <command>` (for example `ccrc test -- npx vitest run --maxWorkers=2 test/foo.test.ts` or `ccrc test -- npx tsc --noEmit -p test/tsconfig.tests.json`), which runs it in the fleet test slice and queues heavy runs fleet-wide; never run one bare, and never under a `systemd-run` of your own, which the session hook denies.
 19. Workflows are not a default. This session launches a workflow only for short, self-contained work that needs nothing from its own children and finishes in minutes: a review, a verification or an audit, or at least three independent items worth running in parallel. Each such workflow carries a time cap, its agents run at `medium` effort, and its vitest runs pass `--maxWorkers=2`. Nobody uses a workflow for a mechanical edit: a D-number substitution, a PR body edit, a rebase or a re-pin. This session never holds its turn open on anything that waits for its own children: it dispatches, ends its turn, and wakes on mail. Mail to a coordinator is held while it reads busy or waiting, so child mail has sat undelivered for hours behind a background workflow that died still reading busy and behind an operator question left open overnight. While any child is active, this session asks the operator in its closing turn text and ends the turn, never with an AskUserQuestion dialog, which reads waiting and holds every child mail behind it (`POST /api/mail` takes no `operator` recipient), and it never leaves a blocking question open while a child waits. A background workflow that stops, for any reason, is a wake: on its task notification, read the held mail (`GET /api/mail?to=<your id>`) in that turn.
 20. The operator's own work is on the Waiting-on-you list. As soon as this session can see the operator will be needed, it raises an item with `ccrc-api items raise`, saying what, how and why, and a `decide` item names the option this session recommends and why it beats each alternative, a link to a document is its repository path, which the console opens in the Docs reader, never an artifact page or another document server, and it sets the item blocking only when work has stopped on it. A question this session asks the operator in its closing turn text is raised as an item too. When the operator ticks an item, this session re-measures the result before `ccrc-api items confirm`, and if the result does not hold it returns the item with what it found. A secret never reaches this session: it asks for one with a `secret` item and reads only whether it is set. When the operator approves a spec, this session pins it with `ccrc-api goals pin` and raises an item for each open point in the spec's own "Waiting on you" box. Whenever the operator steers, this session rewrites the spec on its ledger PR, records the change with `ccrc-api goals modify`, and marks it with `ccrc-api goals merged` once that PR reads MERGED.
+21. This session decides by default and keeps going. It stops a thread of work only for a decision or act only the operator can make — an irreversible or outward-facing act (a SAFETY-listed destructive or live-box act, publishing, messaging people), spend beyond plan (usage credits, paid services, new accounts), a change to the programme's goals, scope or definition of done, or credentials and access — or when it is physically blocked after its self-healing has been tried: no account has room, the box is out of disk or memory after its own cleanup and the memory gate, an external service is down after retries with backoff, or a repository or tool is beyond its rights. Before asking the operator anything else, it reads the programme's goals and definition of done (`ccrc-api goals show <slug>`, the ledger, the spec), decides, records the call with `ccrc-api calls record` — a design-level call as `big`, which the operator sees and may overturn, every other call as `routine` — and continues in the same turn. A parked thread never parks the programme: it raises the item and works every unblocked thread, and ends its turn only when none is left or its children hold the work. It never opens an AskUserQuestion dialog on a pinned programme, never guesses an operator-only answer, and never relaxes a SAFETY rule.
 
 ## Where the procedures live
 
@@ -48,6 +49,7 @@ are on before you act. Read it again after a compaction, which keeps none of the
   its own beside it, with every call and every refusal: read the one for your step.
 - `references/api.md`: how to call the API through `ccrc-api`, and what each refusal
   means.
+- `references/decision-procedure.md`: how to decide instead of asking (clause 21).
 - `references/plan.md`: the plan, its verbs, and the Linear owner's triage.
 - `references/cross-project.md`: a wave that runs in another project than the
   programme's home.
@@ -80,14 +82,8 @@ per step, and the dispatch route is the chokepoint (clause 1's "never runs
 rule stated against the mail route too, since a `/clear` mailed as a message
 would be no less a second writer).
 
-**Clause 5, read against a brief that no longer carries the protocol.** "The
-template is the shape" is the LEDGER template (`references/ledger-template.md`),
-never a list of protocol sentences to reproduce in each brief — the standing
-worker protocol ships as the `ccrc-worker` skill, dispatch names it in the
-prefix of every brief mail, and a brief that re-types it is longer rather than
-safer. What clause 5 leaves to your judgement is this WAVE's content; the one
-protocol sentence it does NOT leave to judgement is the branch-discipline line
-(step 2 below, and `references/wave-lifecycle.md` §2).
+**Clause 5 and the brief:** `references/wave-steps.md` says what a brief carries
+and what the worker skill carries for it.
 
 ## What you are
 
@@ -105,22 +101,14 @@ given one by hand — which is precisely why a hold is not a thing to resume
 from: present or absent, it settles nothing. Ask `GET /api/runs`.
 
 **One real constraint on that resumability, and it is the SESSION ID, not the
-workspace:** `POST /api/runs`'s `claimedBy` is your tmux-derived session id
-(below), and the server refuses any later call for this program whose
-`claimedBy` differs from whichever session first opened it
-(`claimed-by-another` — clause 8). A fresh coordinator resumes cleanly ONLY if
-the operator revives it under that SAME id — the id-preserving revive, never a
-re-creation that recomputes one from an account and a project. Revived under a
-different id (the operator's own placement rule may pick any least-loaded
-home), every `POST /api/runs` call for this program then answers
-`claimed-by-another` naming a session that may no longer even exist, and no
-call named in this corpus ever rewrites `claimedBy`, so it does not lapse on
-its own. Handing the program to a different session is an operator act, from
-the console — outside this session's reach for the reason clause 4's pause
-marker is. From in here it is a stop and a report, never a retry.
-`references/resume.md` is the runbook for all of it: how to measure which run
-is open, the two id-preserving revives, the wave-N re-kickoff text and where
-the console sends it from, and what is left when the id is already lost.
+workspace:** `POST /api/runs`'s `claimedBy` is your tmux-derived session id, and a
+call for this program from any other id answers `claimed-by-another` (clause 8);
+no call named in this corpus ever rewrites `claimedBy`. A fresh coordinator
+resumes cleanly only when the operator revives it under that same id. Handing the
+program to a different session is an operator act (class O4, from the console):
+park that thread and work the rest. `references/resume.md` is the runbook: which
+run is open, the two id-preserving revives, the wave-N re-kickoff text, and what
+is left when the id is lost.
 
 ## Learn who you are, first
 
@@ -159,8 +147,15 @@ the diff is never read by this session.
 
 ## When something is wrong
 
-- **A dispatch is refused `paused`.** Stop. Report to the operator. Do not
-  touch the file.
+Every stop is a class or a recovery, never a report that waits:
+`references/decision-procedure.md` holds the classes (O1 to O6, P1 to P4), and
+the step files give each refusal its recovery.
+
+- **A dispatch is refused `paused`.** A report, never a retry (clause 4). Read
+  whether `$REG/coordinator-paused` exists, and never touch the file. Present:
+  the operator's pause, reported in the turn's text; no dispatch, in-place bind
+  or self-work on new waves, while non-dispatch work continues. Absent: the
+  registry could not be listed, a fault, reported as one non-blocking `do` item.
 - **A dispatch is refused `cap-concurrency`.** Stop, say so, and wait to be
   woken.
 - **A worker has gone dead mid-wave.** The run says so. Re-dispatch fresh into
@@ -168,8 +163,12 @@ the diff is never read by this session.
 - **Your own run row disagrees with the ledger.** The run row is the machine's
   record and the ledger is the human's; if they disagree, the ledger is what a
   reviewer will read, so fix the ledger in a commit and say so in the report.
-- **You cannot reach the server.** Nothing is invented and nothing is done by
-  hand: stop and report. A program that stalls honestly is recoverable.
+- **A mail or ack is refused `stale-uuid`.** Derive your identity again
+  (`ccrc-api whoami`) and resend once; a second is P4.
+- **You cannot reach the server.** Nothing is invented or done by hand in its
+  place, and nothing can be stored there, a `ccrc-api calls record` block
+  included: say so in the turn's text and end the turn. Backoff with recorded
+  blocks (P3, `wakeOn: time:<epoch ms>`) is for other services.
 
 ## Linear
 

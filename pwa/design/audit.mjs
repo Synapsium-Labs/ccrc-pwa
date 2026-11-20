@@ -963,7 +963,7 @@ export const INHERITED_GROUNDS = {
   // ── delegated work and its worktrees on a project card (delegation broker wave 4, PR2) ──────────────────────
   '.proj-pending, .proj-work': {
     under: ['var(--bg-surface)'],
-    why: "the pending spawn's row and, since delegation broker wave 4, a delegated activity's, worktree's or unowned tree's line: one rule, the same inert nested line in .proj-nest inside .proj-card-body, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
+    why: "the pending spawn's row and the delegation entry's line (the session header's entry list and its worktrees; the fleet list draws none since D-8782): one rule, the same inert line, on the card ground. Neither is ever a selected row, and the selector names no ancestor, so no route could ground it. Registered when the second selector joined the rule (`.proj-pending` alone had been a grandfathered blind spot)",
   },
   '.proj-work-parts > *:not(:first-child)::before': {
     under: ['var(--bg-surface)'],
