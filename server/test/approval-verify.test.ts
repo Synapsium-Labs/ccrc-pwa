@@ -12,7 +12,7 @@ import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
-import { approvalRulingBytes, canonicalJson, type ApprovalRulingRecord } from '../../shared/api.js';
+import { approvalRulingBytes, canonicalJson, type ApprovalRulingRecord, type ApprovalRulingRecordV1 } from '../../shared/api.js';
 import { canonical, recordBytes, verdictFor, RECORD_KEYS } from '../../ccd/approval-verify.mjs';
 
 const VERIFY = path.resolve(__dirname, '../../ccd/approval-verify.mjs');
@@ -27,7 +27,7 @@ const pair = (): { pub: string; priv: KeyObject } => {
 const ours = pair();
 const theirs = pair();
 
-const record = (over: Partial<ApprovalRulingRecord> = {}): ApprovalRulingRecord => ({
+const record = (over: Partial<ApprovalRulingRecordV1> = {}): ApprovalRulingRecordV1 => ({
   v: 1, rowId: 7, sessionId: 'project-a-quiet-basin', agentId: '', digest: DIGEST, nonce: NONCE,
   class: 'ordinary', verdict: 'allow', reason: 'a cleanup inside your worktree', expiresAt: NOW + 60_000, ...over,
 });

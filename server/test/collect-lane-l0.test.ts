@@ -66,6 +66,7 @@ const IMPORTS = [
   "import type { WorkflowView } from './workflows.js';",
   "import type { WaitingView } from './ledgers.js';",
   "import type { CHECKS_MAIL_TOKEN } from './landing.js';",
+  "import type { ApprovalParkWord, ApprovalRulingAuthority, ApprovalRulingFamily } from './approval-park.js';",
   "import type { LandingWrite } from './landingLine.js';",
   "import { hookEventIs, type HookEvent } from './hook-events.js';",
   // Overlord W1, the vocabulary piece: the two prompt constants moved into the list of what ccrc types, an import-free
