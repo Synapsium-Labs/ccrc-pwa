@@ -2485,15 +2485,16 @@ export function registerCoordRoutes(
    *  saying something the other does not. */
   const capsView = (store: NonNullable<Deps['coord']>): CoordCapsView =>
     ({ caps: store.caps(), usage: store.capsUsage(), updatedAt: store.capsUpdatedAt() });
-  /** D-8792: `capsView` with the cap reader's two additive fields, `usage.waiting` (how many of `running`'s runs have a
-   *  worker measured waiting or gone, over the same worker port the two doors use) and `usage.workingOnly` (whether the
-   *  armed `cap-counts-working` row leaves them out). The readings are taken first, so everything after them is read in
-   *  one synchronous step and the counts agree. */
-  const capsViewMeasured = async (store: NonNullable<Deps['coord']>): Promise<CoordCapsView> => {
+  /** D-8792: `view` (by default `capsView`) with the cap reader's two additive fields, `usage.waiting` (how many of
+   *  `running`'s runs have a worker measured waiting or gone, over the same worker port the two doors use) and
+   *  `usage.workingOnly` (whether the armed `cap-counts-working` row leaves them out). The readings are bounded by
+   *  `WORKER_READINGS_DEADLINE_MS` and taken OUTSIDE the coordination serialiser: a caller holding it passes the view it
+   *  read there. With no worker port, no reading was made, so neither field is sent: never a guessed 0 (review 2875 F9). */
+  const capsViewMeasured = async (store: NonNullable<Deps['coord']>, view = capsView(store)): Promise<CoordCapsView> => {
     const readings = await workerReadings(store, capPorts.workerFacts);
-    const { waiting = 0, workingOnly = false } = capsMeasured(store, readings, capCountsWorkingArmed(store)).usage;
-    const view = capsView(store);
-    return { ...view, usage: { ...view.usage, waiting, workingOnly } };
+    if (readings === null) return view;
+    const { waiting, workingOnly } = capsMeasured(store, readings, capCountsWorkingArmed(store)).usage;
+    return waiting === undefined ? view : { ...view, usage: { ...view.usage, waiting, workingOnly: workingOnly === true } };
   };
 
   /**
@@ -2585,8 +2586,10 @@ export function registerCoordRoutes(
       // D-1169: the moment is L4's to supply — read INSIDE the mutex, so the
       // timestamp belongs to the write that actually won the lock.
       coord.setCaps(merged.next, Date.now());
-      return { before: current, view: await capsViewMeasured(coord) };
+      return { before: current, view: capsView(coord) };
     });
+    // D-8792 (review 2875 F1): the worker readings are taken after the lock is released, never inside it.
+    const measured = await capsViewMeasured(coord, view);
     // A `run_events` row would be WRONG here: there is no run, and
     // `recordRunEvent` writes `fromState === toState`, which `pushNewRuns`
     // skips outright — the row would land and be seen by nobody. The durable
@@ -2602,7 +2605,7 @@ export function registerCoordRoutes(
       body: `workers ${before.maxConcurrentWorkers} → ${view.caps.maxConcurrentWorkers}`,
       runId: null,
     }, 'record-only', { degraded: 'caps written, feed archive degraded' });
-    return reply.code(200).send({ ok: true, ...view });
+    return reply.code(200).send({ ok: true, ...measured });
   });
 
   /** `GET`/`POST /api/coord/stall-watch` — the stall watch's level and quiet time become a choice the operator makes

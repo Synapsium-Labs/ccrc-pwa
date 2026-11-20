@@ -74,18 +74,29 @@ describe('workerFactsFor (D-8792, amending D-6094)', () => {
     expect(await readingOf({ quietMs: STOP_DONE_PARKED_IDLE_MS - MIN })).toBe('busy');
   });
 
-  it('a row the registry does not list, and a stopped, archived or asleep row, are gone, each with its why', async () => {
+  it('a row the registry does not list, an archived row, and a stopped or asleep row whose pane is gone, are gone, each with its why', async () => {
     expect(await factsOf({ listed: false })).toEqual({ kind: 'gone', why: 'absent' });
-    expect(await factsOf({ extra: { stopped: '1700000000 pane' } })).toEqual({ kind: 'gone', why: 'stopped' });
+    expect(await factsOf({ extra: { stopped: '1700000000 pane' }, verdict: 'gone' })).toEqual({ kind: 'gone', why: 'stopped' });
     expect(await factsOf({ extra: { archived: '1700000000' } })).toEqual({ kind: 'gone', why: 'archived' });
-    expect(await factsOf({ extra: { hibernated: '1700000000' } })).toEqual({ kind: 'gone', why: 'asleep' });
+    expect(await factsOf({ extra: { hibernated: '1700000000' }, verdict: 'gone' })).toEqual({ kind: 'gone', why: 'asleep' });
     for (const extra of [{ stopped: '1700000000 pane' }, { archived: '1700000000' }, { hibernated: '1700000000' }] as Record<string, string>[]) {
-      expect(await readingOf({ extra }), JSON.stringify(extra)).toBe('gone');
+      expect(await readingOf({ extra, verdict: 'gone' }), JSON.stringify(extra)).toBe('gone');
     }
   });
 
   it('a sleeper carries a stop stamp too, and still reads asleep (the send-back resume reads it)', async () => {
-    expect(await factsOf({ extra: { hibernated: '1700000000', stopped: '1700000000 ccd' } })).toEqual({ kind: 'gone', why: 'asleep' });
+    expect(await factsOf({ extra: { hibernated: '1700000000', stopped: '1700000000 ccd' }, verdict: 'gone' })).toEqual({ kind: 'gone', why: 'asleep' });
+  });
+
+  it('review 2875 F5: an asleep or stopped stamp over a pane tmux proves live reads like any awake worker, never gone', async () => {
+    // A failed kill (`ccd hibernate`'s roll-kill-failed exit, or a plain hibernate whose kill-session failed) leaves the
+    // pane up under the stamp: the worker is read, and only tmux's proof of a gone pane makes it `gone`.
+    for (const extra of [{ hibernated: '1700000000' }, { stopped: '1700000000 pane' }, { hibernated: '1700000000', stopped: '1700000000 ccd' }] as Record<string, string>[]) {
+      expect((await factsOf({ extra, verdict: 'live' })).kind, JSON.stringify(extra)).toBe('awake');
+      expect(await readingOf({ extra, verdict: 'live' }), JSON.stringify(extra)).toBe('waiting');
+      expect(await readingOf({ extra, verdict: 'live', status: 'busy' }), JSON.stringify(extra)).toBe('busy');
+      expect(await factsOf({ extra, verdict: 'unknown' }), JSON.stringify(extra)).toEqual({ kind: 'unmeasured' });
+    }
   });
 
   it('a pane tmux proved gone is gone; one tmux could not answer for is unmeasured', async () => {

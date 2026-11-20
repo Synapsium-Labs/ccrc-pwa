@@ -189,8 +189,10 @@ export async function conversationAfterClearFor(d: TurnReadDeps, rec: SessionRec
  * D-8792 (amending D-6094; waiting workers spec 2026-11-19 Part 3): the reads behind one run worker's reading for the
  * dispatch cap, measured, never decided: `workerReadingOf` and `resumeSkipsCap` (`coord/dispatchDecide.ts`, L1) hold the
  * rules. `gone`, with why: the registry lists no row for it, the row is archived, asleep or stopped (in that order, so a
- * sleeper's stop stamp does not hide its sleep), or tmux proved its pane gone. `unmeasured`: the row, its identity or a
- * lifecycle field could not be read, or the pane could not be. Otherwise `awake`, with the fail-closed turn verdict,
+ * sleeper's stop stamp does not hide its sleep), or tmux proved its pane gone. An asleep or stopped stamp is checked
+ * against tmux once (review 2875 F5): a failed kill can leave a live pane under it, so `gone` needs the pane proved gone,
+ * a live pane is read like any awake worker, and a pane tmux could not answer for is `unmeasured`. `unmeasured`: the
+ * row, its identity or a lifecycle field could not be read, or the pane could not be. Otherwise `awake`, with the fail-closed turn verdict,
  * whether the frame's row lists background work or subagents, and the turn marker. Every read is one this file already
  * makes for the stop-done lane and the archive door.
  */
@@ -201,10 +203,17 @@ export async function workerFactsFor(d: TurnReadDeps, sessionId: string): Promis
   const rec = read.record;
   if (measuredIdentity(rec) === null || rec.lifecycleUnmeasured.length > 0) return { kind: 'unmeasured' };
   if (rec.archivedAt !== null) return { kind: 'gone', why: 'archived' };
-  if (rec.hibernatedAt !== null) return { kind: 'gone', why: 'asleep' };
-  if (rec.stopped !== null) return { kind: 'gone', why: 'stopped' };
+  const stamped = rec.hibernatedAt !== null ? 'asleep' : rec.stopped !== null ? 'stopped' : null;
+  if (stamped !== null) {
+    const pane = (await d.tmux.sessionVerdict(rec.id)).verdict;
+    if (pane === 'gone') return { kind: 'gone', why: stamped };
+    if (pane !== 'live') return { kind: 'unmeasured' };
+  }
   const word = await liveWordFor(d, rec);
-  if (!word.ok) return word.reason === 'no-pane' ? { kind: 'gone', why: 'no-pane' } : { kind: 'unmeasured' };
+  if (!word.ok) {
+    // Under a stamp, the pane was just proved live: a read that now fails is not proof it is gone.
+    return word.reason === 'no-pane' && stamped === null ? { kind: 'gone', why: 'no-pane' } : { kind: 'unmeasured' };
+  }
   const turn = await turnVerdictFor(d, rec, rec.uuid);
   const row = await liveRowFor(d, rec, rec.uuid);
   const rowBusy = row === null ? null : (row.background?.count ?? 0) > 0 || (row.subagents?.length ?? 0) > 0;

@@ -10,11 +10,12 @@ import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import {
-  capCountsWorkingArmed, capsMeasured, dispatchRun, sendBackCapCheck, workerReadings, type DispatchOutcome, type DispatchRunDeps,
+  WORKER_READINGS_DEADLINE_MS, capCountsWorkingArmed, capsMeasured, dispatchRun, sendBackCapCheck, workerReadings,
+  type DispatchOutcome, type DispatchRunDeps,
 } from '../src/coord/dispatch.js';
 import {
-  capRefusalOf, capShadowLine, capsReadingOf, resumeSkipsCap, sendBackCharged, workerReadingOf,
-  type WorkerFacts, type WorkerReading,
+  capRefusalOf, capShadowLine, capShadowResumeLine, capsReadingOf, freedSlotPending, resumeSkipsCap, sendBackCapPlan,
+  sendBackCharged, workerReadingOf, type SendBackCapFacts, type WorkerFacts, type WorkerReading,
 } from '../src/coord/dispatchDecide.js';
 import { ADVANCE_TARGETS, advanceGate } from '../src/coord/advance.js';
 import { RUN_STATES, type RunState } from '../../shared/api.js';
@@ -63,7 +64,12 @@ function fixture(over: Over = {}) {
   copyFileSync(template, path.join(home, '.ccrc', 'coord.db'));
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   opened.push(coord);
+  /** The shadow records the doors deferred (review 2875 F1): held here, so a case sees the refusal return before any of
+   *  them runs, then runs them with `settle()`. */
+  const deferred: (() => Promise<void>)[] = [];
+  const settle = async (): Promise<void> => { for (const work of deferred.splice(0)) await work(); };
   const deps: DispatchRunDeps = {
+    deferShadowRecord: (work) => { deferred.push(work); },
     coord, io: base.io, cfg: base.cfg, runCcd: base.runCcd,
     sendClear: async () => ({ ok: true }),
     ...(over.workerFacts === undefined ? {} : { workerFacts: over.workerFacts }),
@@ -107,7 +113,7 @@ function fixture(over: Over = {}) {
     coord.db.prepare('UPDATE runs SET state = ? WHERE id = ?').run(state, o.id);
     return o.id;
   };
-  return { coord, deps, mark, seed, holder, resume, fresh, parked, home };
+  return { coord, deps, mark, seed, holder, resume, fresh, parked, home, deferred, settle };
 }
 
 const capRefused = (out: DispatchOutcome): boolean => !out.ok && out.kind === 'refused' && out.code === 'cap-concurrency';
@@ -275,7 +281,8 @@ describe('capsReadingOf: shadow reports, only armed leaves runs out (D-8792)', (
     expect(r.overConcurrency).toEqual({ limit: 2, running: 2 });
     expect(r.freedSlot).toBeNull();
     expect(r.shadowFreed).toEqual({ limit: 2, running: 2 });
-    expect(capRefusalOf(r, () => true)).toEqual({ limit: 2, running: 2 });
+    expect(freedSlotPending(r)).toBe(false);
+    expect(capRefusalOf(r, true)).toEqual({ limit: 2, running: 2 });
   });
 
   it('armed: waiting and gone are left out; busy, unmeasured and a run with no reading count', () => {
@@ -290,17 +297,35 @@ describe('capsReadingOf: shadow reports, only armed leaves runs out (D-8792)', (
     expect(capsReadingOf(caps, rows(3), readingsOf('busy', 'unmeasured'), true).overConcurrency).toEqual({ limit: 2, running: 3 });
   });
 
-  it('a freed slot is handed out only when the window admits it, and the window is asked only for one', () => {
-    let asked = 0;
-    const admit = (ok: boolean) => (): boolean => { asked++; return ok; };
+  it('a freed slot is pending as data, and goes on only on the window\'s yes (review 2875 F3: no write from L1)', () => {
     const freed = capsReadingOf(caps, rows(2), readingsOf('gone', 'busy'), true);
-    expect(capRefusalOf(freed, admit(true))).toBeNull();
-    expect(capRefusalOf(freed, admit(false))).toEqual({ limit: 2, running: 2 });
-    expect(capRefusalOf(freed, undefined)).toEqual({ limit: 2, running: 2 });
-    expect(asked).toBe(2);
-    capRefusalOf(capsReadingOf(caps, rows(1), readingsOf('gone'), true), admit(true));
-    capRefusalOf(capsReadingOf(caps, rows(2), readingsOf('busy', 'busy'), true), admit(true));
-    expect(asked).toBe(2);
+    expect(freedSlotPending(freed)).toBe(true);
+    expect(capRefusalOf(freed, true)).toBeNull();
+    expect(capRefusalOf(freed, false)).toEqual({ limit: 2, running: 2 });
+    // Room under the cap, and a full cap of working workers: nothing is pending, so the window is never asked.
+    const room = capsReadingOf(caps, rows(1), readingsOf('gone'), true);
+    expect(freedSlotPending(room)).toBe(false);
+    expect(capRefusalOf(room, false)).toBeNull();
+    const full = capsReadingOf(caps, rows(2), readingsOf('busy', 'busy'), true);
+    expect(freedSlotPending(full)).toBe(false);
+    expect(capRefusalOf(full, true)).toEqual({ limit: 2, running: 2 });
+  });
+
+  it('sendBackCapPlan (review 2875 F3): today unless armed, wired, full and on the charged edge; then free or recount', () => {
+    const base: SendBackCapFacts = { armed: true, port: true, capFull: true, to: 'working', from: 'awaiting-review', worker: null };
+    expect(sendBackCapPlan(base)).toBe('recount');
+    for (const off of [{ armed: false }, { port: false }, { capFull: false }, { from: null }, { to: 'merging' as const },
+      { from: 'dispatched' as const }]) {
+      expect(sendBackCapPlan({ ...base, ...off }), JSON.stringify(off)).toBe('today');
+    }
+    expect(sendBackCapPlan({ ...base, worker: ASLEEP })).toBe('free');
+    expect(sendBackCapPlan({ ...base, worker: LIVE_PANE })).toBe('free');
+    for (const worker of [STOPPED, { kind: 'unmeasured' } as WorkerFacts, { kind: 'gone', why: 'no-pane' } as WorkerFacts]) {
+      expect(sendBackCapPlan({ ...base, worker }), JSON.stringify(worker)).toBe('recount');
+    }
+    for (const from of RUN_STATES) {
+      expect(sendBackCapPlan({ ...base, from, worker: ASLEEP }) === 'today', from).toBe(!sendBackCharged('working', from));
+    }
   });
 
   it('the shadow line names the start, the numbers and each run left out, and only for a refusal arming would lift', () => {
@@ -349,14 +374,44 @@ describe('the dispatch door in shadow: today\'s count and refusals, and a record
 
   it('a run whose worker is gone still counts, and the refusal is recorded with each run arming would leave out', async () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
-    const f = fixture({ workerFacts: factsPort(ASLEEP), admitFreedSlot: () => true });
+    const calls: string[] = [];
+    let asked = 0;
+    const f = fixture({ workerFacts: factsPort(ASLEEP, calls), admitFreedSlot: () => { asked++; return true; } });
     f.coord.setCaps({ maxConcurrentWorkers: 1 });
     const a = f.holder('a', 'demo-a');
     const id = f.fresh();
     expect(await dispatchRun(f.deps, id, 'go', undefined))
       .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 1, running: 1 });
+    // Review 2875 F1: the refusal came back with no worker read on its path; the record follows it.
+    expect(calls).toEqual([]);
+    expect(f.deferred).toHaveLength(1);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('cap-counts-working'))).toEqual([]);
+    await f.settle();
+    expect(calls).toEqual(['demo-a']);
+    expect(asked).toBe(0);
     expect(warn.mock.calls.map((c) => c[0])).toContain(
       `ccrc-server: cap-counts-working shadow: dispatch of run ${id} refused at 1/1; armed, 1 left out would free a slot (run ${a} gone)`);
+  });
+
+  it('review 2875 F1: a worker port that never answers does not hold the shadow refusal', async () => {
+    const never = (): Promise<WorkerFacts> => new Promise<WorkerFacts>(() => undefined);
+    const f = fixture({ workerFacts: never });
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    f.holder('a', 'demo-a');
+    const t0 = Date.now();
+    expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
+    expect(Date.now() - t0).toBeLessThan(WORKER_READINGS_DEADLINE_MS);
+  });
+
+  it('with no deferral port the record runs on its own, after the refusal', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const f = fixture({ workerFacts: factsPort(ASLEEP) });
+    const { deferShadowRecord: _held, ...deps } = f.deps;
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    f.holder('a', 'demo-a');
+    expect(capRefused(await dispatchRun(deps, f.fresh(), 'go', undefined))).toBe(true);
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('cap-counts-working'))).toEqual([]);
+    await vi.waitFor(() => expect(warn.mock.calls.filter((c) => String(c[0]).includes('cap-counts-working'))).toHaveLength(1));
   });
 
   it('a resume of a live worker is charged as today', async () => {
@@ -374,6 +429,7 @@ describe('the dispatch door in shadow: today\'s count and refusals, and a record
     f.coord.setCaps({ maxConcurrentWorkers: 1 });
     f.holder('a', 'demo-a');
     expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
+    await f.settle();
     expect(warn.mock.calls.filter((c) => String(c[0]).includes('cap-counts-working'))).toEqual([]);
   });
 
@@ -428,6 +484,41 @@ describe('the dispatch door armed: a run holds a slot only while its worker work
     }
   });
 
+  it('review 2875 F1: a read past the deadline is unmeasured and keeps its slot; the reads that answered still count', async () => {
+    const f = fixture();
+    f.holder('a', 'demo-fast');
+    f.holder('b', 'demo-slow');
+    const port = async (sid: string): Promise<WorkerFacts> => (sid === 'demo-fast' ? ASLEEP : new Promise<WorkerFacts>(() => undefined));
+    const t0 = Date.now();
+    const readings = await workerReadings(f.coord, port, Date.now(), 50);
+    expect(Date.now() - t0).toBeLessThan(5_000);
+    expect([...(readings ?? new Map()).values()].sort()).toEqual(['gone', 'unmeasured']);
+    // A port that throws synchronously reads unmeasured too.
+    expect([...((await workerReadings(f.coord, () => { throw new Error('no link'); }, Date.now(), 50)) ?? new Map()).values()])
+      .toEqual(['unmeasured', 'unmeasured']);
+  });
+
+  it('review 2875 F1: armed, a worker port that never answers is cut at the deadline, and the run keeps its slot', async () => {
+    vi.useFakeTimers({ toFake: ['setTimeout', 'clearTimeout'] });
+    try {
+      const calls: string[] = [];
+      const f = atOneSlot({ workerFacts: (sid: string): Promise<WorkerFacts> => { calls.push(sid); return new Promise<WorkerFacts>(() => undefined); } });
+      f.holder('a', 'demo-a');
+      const out = dispatchRun(f.deps, f.resume(), 'go', undefined);
+      let settled = false;
+      void out.then(() => { settled = true; });
+      // The real reads before it (the registry listing) finish on real time; setImmediate is not faked.
+      for (let i = 0; i < 2000 && calls.length === 0; i++) await new Promise<void>((r) => { setImmediate(r); });
+      expect(calls).toEqual([WORKER]);
+      await vi.advanceTimersByTimeAsync(WORKER_READINGS_DEADLINE_MS - 100);
+      expect(settled).toBe(false);
+      // The resume's own read is cut, then the count's: two deadlines, and the run keeps its slot.
+      await vi.advanceTimersByTimeAsync(2 * WORKER_READINGS_DEADLINE_MS);
+      expect(calls).toEqual([WORKER, 'demo-a']);
+      expect(capRefused(await out)).toBe(true);
+    } finally { vi.useRealTimers(); }
+  });
+
   it('a run with no session keeps its slot, and is never read', async () => {
     const calls: string[] = [];
     const f = atOneSlot({ workerFacts: factsPort(ASLEEP, calls) });
@@ -439,7 +530,7 @@ describe('the dispatch door armed: a run holds a slot only while its worker work
   it('no worker port: every run keeps its slot', async () => {
     const f = atOneSlot({});
     f.holder('a', 'demo-a');
-    expect(await workerReadings(f.coord, undefined)).toEqual(new Map());
+    expect(await workerReadings(f.coord, undefined)).toBeNull();
     expect(capRefused(await dispatchRun(f.deps, f.fresh(), 'go', undefined))).toBe(true);
   });
 
@@ -555,6 +646,50 @@ describe('the send-back door: a send-back to a sleeper is a resume only when arm
     expect(asked).toBe(0);
     expect(check()).toBeNull();
     expect(asked).toBe(1);
+  });
+
+  it('review 2875 F7, shadow: a send-back arming would admit as a resume is recorded after the refusal, naming the worker', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    for (const [mine, word] of [[ASLEEP, 'asleep'], [LIVE_PANE, 'awake']] as const) {
+      warn.mockClear();
+      const calls: string[] = [];
+      const f = fixture({ workerFacts: factsPort((sid) => (sid === WORKER ? mine : quietNow(MIN)), calls) });
+      f.coord.setCaps({ maxConcurrentWorkers: 1 });
+      f.holder('busy', 'demo-busy');
+      const id = f.parked('awaiting-review');
+      const check = await sendBackCapCheck(f.coord, f.deps, id, 'working');
+      expect(calls).toEqual([]);
+      expect(check()).toEqual({ limit: 1, running: 1 });
+      expect(calls).toEqual([]);
+      await f.settle();
+      expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('cap-counts-working')), word).toEqual([
+        `ccrc-server: cap-counts-working shadow: send-back of run ${id} refused at 1/1; armed, a send-back to a worker ${word} is a resume and is not charged`]);
+    }
+    expect(capShadowResumeLine('send-back of run 3', { limit: 2, running: 4 }, { kind: 'unmeasured' }))
+      .toBe('ccrc-server: cap-counts-working shadow: send-back of run 3 refused at 4/2; armed, a send-back to a worker unmeasured is a resume and is not charged');
+    warn.mockRestore();
+  });
+
+  it('review 2875 F7, shadow: a charged send-back is recorded only when arming would free a slot; an uncharged edge, never', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const f = fixture({ workerFacts: factsPort((sid) => (sid === WORKER ? STOPPED : ASLEEP)) });
+    f.coord.setCaps({ maxConcurrentWorkers: 1 });
+    const a = f.holder('a', 'demo-a');
+    const id = f.parked('merging');
+    expect((await sendBackCapCheck(f.coord, f.deps, id, 'working'))()).toEqual({ limit: 1, running: 1 });
+    await f.settle();
+    expect(warn.mock.calls.map((c) => String(c[0])).filter((l) => l.includes('cap-counts-working'))).toEqual([
+      `ccrc-server: cap-counts-working shadow: send-back of run ${id} refused at 1/1; armed, 1 left out would free a slot (run ${a} gone)`]);
+    warn.mockClear();
+    const g = fixture({ workerFacts: factsPort((sid) => (sid === WORKER ? STOPPED : quietNow(MIN))) });
+    g.coord.setCaps({ maxConcurrentWorkers: 1 });
+    g.holder('busy', 'demo-busy');
+    expect((await sendBackCapCheck(g.coord, g.deps, g.parked('merging'), 'working'))()).toEqual({ limit: 1, running: 1 });
+    expect((await sendBackCapCheck(g.coord, g.deps, g.parked('awaiting-review'), 'merging'))()).toEqual({ limit: 1, running: 1 });
+    await g.settle();
+    expect(warn.mock.calls.filter((c) => String(c[0]).includes('cap-counts-working'))).toEqual([]);
+    expect(g.deferred).toEqual([]);
+    warn.mockRestore();
   });
 
   it('no worker is read on any other edge, at a free cap, or with no port', async () => {

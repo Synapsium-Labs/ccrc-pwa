@@ -290,8 +290,8 @@ describe('decideDispatch, the admit step', () => {
   });
   it('D-8792: a slot the readings freed is admitted only through the window, with the raw numbers otherwise', () => {
     const freed = caps({ overConcurrency: null, usage: { running: 3, waiting: 1, workingOnly: true }, freedSlot: { limit: 3, running: 3 } });
-    expect(decideDispatch({ ...admit([], freed, { n: 0 }), admitFreedSlot: () => true }).kind).toBe('go');
-    expect(outcomeOf(decideDispatch({ ...admit([], freed, { n: 0 }), admitFreedSlot: () => false })))
+    expect(decideDispatch({ ...admit([], freed, { n: 0 }), freedSlotAdmitted: true }).kind).toBe('go');
+    expect(outcomeOf(decideDispatch({ ...admit([], freed, { n: 0 }), freedSlotAdmitted: false })))
       .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3 });
     expect(outcomeOf(decideDispatch(admit([], freed, { n: 0 }))))
       .toEqual({ ok: false, kind: 'refused', code: 'cap-concurrency', limit: 3, running: 3 });
