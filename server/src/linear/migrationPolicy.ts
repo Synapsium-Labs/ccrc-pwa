@@ -380,8 +380,9 @@ export function expectOfOwned(owned: Readonly<Record<string, unknown>>): Partial
 
 /** The report's counts (§10.3): created objects and moved issues from the applied move rows; closed issues likewise; skipped
  *  and left from the report and the map. */
-export function reportCounts(moves: readonly Pick<MoveRow, 'kind' | 'before' | 'appliedAt' | 'after'>[], map: MapBody, skipped: number): MapCounts {
-  const applied = moves.filter((m) => m.appliedAt !== null);
+export function reportCounts(moves: readonly Pick<MoveRow, 'kind' | 'before' | 'appliedAt' | 'after' | 'identifier'>[], map: MapBody, skipped: number, taken: readonly string[] = []): MapCounts {
+  // An issue a live binding came to hold after its close landed is the owner's now: it is listed taken, not counted closed (review 3004 F2).
+  const applied = moves.filter((m) => m.appliedAt !== null && !(m.identifier !== null && taken.includes(m.identifier)));
   const closing = (m: (typeof applied)[number]): boolean => {
     const st = isObj(m.after.expect) ? (m.after.expect as Partial<IssueSnapshot>).state : undefined;
     return st === 'canceled' || st === 'completed';

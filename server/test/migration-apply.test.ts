@@ -1013,3 +1013,42 @@ describe('review 2998 fix round 1 (D-8186, D-8796)', () => {
     expect(whyOf(r, id)).toContain('0 skipped as changed');
   });
 });
+
+describe('review 3004 fix round 2 (D-8186, D-8796)', () => {
+  const hold = (r: MigRig, n: number, key: string): void => {
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key, kind: 'work', title: key, body: 'x', project: 'project-a', source: 'inbound' };
+    applyPlanChanges(r.db, SLUG, changes({ tickets: { insert: [t], update: [], drop: [] } }), OWNER, r.t.now, null);
+    const id = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === key)!.id;
+    adoptIssueBindingInTx(r.db, id, WS.a.id, 'AAA', U(100 + n), `AAA-${n}`, r.t.now);
+  };
+  const whyOf = (r: MigRig, id: number): string => (r.db.prepare('SELECT why FROM operator_items WHERE id = ?').get(r.plan.migrationById(id)!.reportItemId!) as { why: string }).why;
+
+  it('F1: a live binding made while a replaced level\'s comment is in flight stops the close before its relation', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), entry(2, 'epic', { programme: SLUG, epic: 'e1' })]);
+    r.override.current = (ask) => { if (ask.op === 'issueComment' && ask.input['issueId'] === U(102)) hold(r, 2, 'held2'); return undefined; };
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.opsOf('issueRelationCreate')).toEqual([]);
+    expect(updates(r, U(102)).filter((a) => a.lane === 'migration')).toEqual([]);
+    expect(r.issues.get(U(102))!.stateType).not.toBe('canceled');
+    expect(r.plan.movesOf(id).find((x) => x.identifier === 'AAA-2')!.appliedAt).toBeNull();
+    expect(r.plan.migrationById(id)!.report!.taken).toEqual(['AAA-2']);
+  });
+
+  it('F2: a take landing during the state write lists the issue as taken, and it is counted neither closed nor unrelated', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => { if (ask.op === 'issueUpdate' && ask.input['id'] === U(101) && ask.lane === 'migration') hold(r, 1, 'held1'); return undefined; };
+    const id = await r.approved([entry(1, 'epic', { programme: SLUG, epic: 'e1' })]);
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.issues.get(U(101))!.stateType).toBe('canceled');   // the write went out
+    const rep = r.plan.migrationById(id)!.report!;
+    expect(rep.taken).toEqual(['AAA-1']);
+    expect(rep.unrelated ?? []).toEqual([]);
+    expect(whyOf(r, id)).toContain('0 closed');
+    expect(r.mig.view(id)!.counts.closed).toBe(0);
+  });
+});

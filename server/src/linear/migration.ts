@@ -337,7 +337,7 @@ export class LinearMigration {
     if (m === null || m.map === null) return null;
     const map = m.map;
     const after = m.state === 'applied' || m.state === 'put-back';
-    const counts = after ? reportCounts(plan.movesOf(id), map, m.report?.skipped.length ?? 0) : countsOfMap(map);
+    const counts = after ? reportCounts(plan.movesOf(id), map, m.report?.skipped.length ?? 0, m.report?.taken ?? []) : countsOfMap(map);
     const titleOf = (slug: string): string | null => coord.programs().find((p) => p.slug === slug)?.title ?? null;
     const body = (epics: readonly PlanEpicBody[]): MigrationStructure['epics'] =>
       epics.map((e) => ({ key: e.key, title: e.title, checkpoints: e.checkpoints.map((c) => ({ key: c.key, title: c.title })) }));
@@ -567,7 +567,7 @@ export class LinearMigration {
     const nextReport = this.saveReport(m, { ...report, waiting, waitingWhy: Object.fromEntries(waitingWhy) }, lists, now);
 
     // 4. Done (D-8796 condition 4) when nothing waits, every structure object is bound, no listed issue is left unwritten, and
-    //    every move row is applied or its issue is skipped and listed; a row still waiting on its pass holds `applying`.
+    //    every move row is applied or its issue is skipped or taken and listed; a row still waiting on its pass holds `applying`.
     const all = plan.movesOf(m.id).filter((x) => !x.subject.includes(':skipped:'));
     const unwritten = map.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !taken.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
     const pending = all.some((x) => x.appliedAt === null && !(x.identifier !== null && (skipped.has(x.identifier) || taken.has(x.identifier))));
@@ -769,8 +769,9 @@ export class LinearMigration {
       const update = await this.callIn(budget, { ...base, op: 'issueUpdate', fields: ['state'], input: { id: e.issue, stateId: status.id } });
       if (update.ok) {
         plan.setMove(row.id, { appliedAt: this.deps.now() });
-        // Listed only once the state write landed (review 2955 A2).
-        if (relation?.kind === 'none') unrelated.add(e.identifier);
+        // A take that landed during the write is listed taken and counted nowhere else (review 3004 F2); otherwise the level joins
+        // `unrelated` only once the state write landed (review 2955 A2).
+        if (!heldNow() && relation?.kind === 'none') unrelated.add(e.identifier);
       }
     });
   }
@@ -797,7 +798,7 @@ export class LinearMigration {
    *  `plan-missing` mid-work with no word to it (D-8798, review 2892 F8). */
   private finishApply(m: MigrationRow, map: MapBody, report: NonNullable<MigrationRow['report']>, moves: readonly MoveRowStored[], now: number): void {
     const { plan, coord } = this.deps;
-    const counts = reportCounts(moves, map, report.skipped.length);
+    const counts = reportCounts(moves, map, report.skipped.length, report.taken ?? []);
     const named = [...new Set([...map.entries.flatMap((e) => (programmeOfEntry(e) === null || e.class === 'unclear' ? [] : [programmeOfEntry(e)!])),
       ...(map.epics ?? []).map((g) => g.programme), ...(map.backlog ?? []).map((g) => g.slug)])];
     const team = m.teamKey.toUpperCase();
@@ -841,6 +842,14 @@ export class LinearMigration {
     const movedSince = new Set(report.movedSince);
     const todo = moves.filter((x) => x.kind === 'issue' && x.revertedAt === null && x.linearId !== null).sort((a, b) => b.id - a.id).slice(0, PUT_BACK_ISSUES_PER_TICK);
     for (const row of todo) {
+      // An issue a live binding holds is the owner's: no read, no write, listed taken; its row is handled so put back goes on
+      // (review 3004 F2).
+      // A row this migration adopted holds its own binding (`after.bindingId`), which is no take: only a closer's row can be taken.
+      if (typeof row.after['bindingId'] !== 'number' && this.heldIdentifier(m, row.identifier ?? row.linearId!)) {
+        report.taken = [...new Set([...(report.taken ?? []), row.identifier ?? row.linearId!])];
+        plan.setMove(row.id, { revertedAt: this.deps.now() });
+        continue;
+      }
       const seen = await this.readIssue(m, slot, row.linearId!);
       // An issue found moved since earlier in this tick is saved before any early return (review 2892 F2): its row is already
       // marked handled, so no later tick would list it.
