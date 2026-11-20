@@ -807,7 +807,9 @@ Useful alone: coordinators declare plans and runs attach to tickets; nothing rea
   - Wire: `PlanPutBody { home?: string; title?: string; epics: PlanEpicBody[] }` (`home` is the programme's home
     project, required when the programme has no row yet and refused `plan-bad-body` when it differs from a stored
     one; `title` names a new programme, default from its slug);
-    `PlanCloseBody { outcome: 'done' | 'abandoned'; why?: string }` (`why` required for `abandoned`); `PlanEpicBody { key; title; summary; project?; waves: number[]; checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string }`;
+    `PlanCloseBody { outcome: 'done' | 'abandoned'; why?: string }` (`why` required for `abandoned`); `PlanEpicBody { key; title; summary; project?; waves?: number[]; checkpoints: PlanCheckpointBody[]; tickets?: PlanTicketBody[]; droppedWhy?: string }`
+    (`waves` optional since programme work map WM6, D-8780: an absent `waves` keeps a stored epic's range and a new epic
+    lists none, an explicit `[]` clears it; the stored row's `waves` stays `number[]`);
     `PlanCheckpointBody { key; title; kind: CheckpointKind; proves?: number[]; itemId?: number }` (`itemId` only on an
     `operator-act` checkpoint: the operator item whose `done` marks it met, §4.1);
     `PlanTicketBody { key; kind: TicketKind; title; body?: string; project?: string; checkpoint?: string }`;
@@ -1159,8 +1161,10 @@ every file found. The fix:
   `OpenRunTicket = { kind: 'existing'; id: number; epicId: number; reproject: string | null } | { kind: 'new'; epicId: number; project: string; title: string }`.
   Refusals: `reserved-programme` (slug `LINEAR_SYNC_PROGRAMME`); `plan-closed` (the plan reads `ended`: `runs open`
   after `plan close`, which the sync would otherwise answer by closing the initiative under a live run);
-  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave, or the named
-  ticket's epic is not the wave's); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
+  `plan-missing` (no epic and `planRequired` 1); `wave-epic-mismatch` (no live epic lists the wave and the run names no
+  ticket of a live epic that lists no waves, or the named ticket's epic lists waves and is not the wave's); `ticket-required`
+  (programme work map WM6, D-8780, with WM1's word: a run that names no ticket, at a wave no live epic lists, in a plan where
+  a live epic lists no waves; only live epics count, so a dropped epic of no waves leaves `wave-epic-mismatch`); `ticket-unavailable` (the ticket is `done`, `dropped`, `started` by another run,
   or an Upkeep ticket). Each has its `OPEN_RUN_GATES` row, its `RUN_REFUSAL_STATUS` and its line in `api.md`. A review
   run attaches nothing. A run with no `ticket` in a planned programme gets a new ticket (kind `work`, the run's
   project, the run's title, key `run-<runId>`, which `UNIQUE (program, key)` needs and a retry derives again) in the

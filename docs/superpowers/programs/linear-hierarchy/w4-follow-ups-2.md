@@ -8,7 +8,8 @@ issued to this run, are unused. No migration.
 
 ## In short
 
-- **Fourteen items, in the brief's order**, each fixed with a test seen red, or carried with its reason (item 14).
+- **Fourteen items, in the brief's order**, each fixed with a test seen red, or worded to the code (item 14, after #3075
+  merged, in the round after fix round 1).
 - **Correctness first:** a returned or reopened inbound note no longer outlives its `waiting` row (1); `plan take` fails
   closed on an unmeasured home (2); the drift record names a one-way set's value for what it is (3); the inbound lane's close
   re-runs the public-text check before it posts (6).
@@ -35,7 +36,7 @@ issued to this run, are unused. No migration.
 | 11 | A malformed page past `DRIFT_MAX_PAGES` re-reads the cap every second pass (round 3 F5) | Recorded as a tolerance (below), not bounded. | — |
 | 12 | `not-found` is a walk word the lane never asks about (round 3 F9) | Dropped from `ROW_WORDS` (`inboundPolicy.ts`): the by-id read retires the row `moved-out`, so the walk rule is never asked, and asked anyway it stops the walk, the safe side. | `plan-inbound-policy.test.ts` (red with the word put back: `expected false to be true`) |
 | 13 | The first note's figures and words (round 3 F7, F8; round 4 F7, F8; round 5 A1) | Corrected in place in `w4-follow-ups.md`: where D-8733..D-8736 sit (after D-8739); the round 2 reds (10 red and 6 test-only, not seventeen); the F4 and A6 mutation rows re-measured at this run's tip; WM1's cap word on its own `SERVER_CAP_MAP` entry; and the walk words. | Measured below |
-| 14 | The plan's wave-epic words for an epic with no waves (after #3075) | Carried: #3075 had not merged when the rest was green (the brief: do not wait). | — |
+| 14 | The plan's wave-epic words for an epic with no waves (after #3075) | Done after fix round 1, once #3075 merged (mail 27224): see "Item 14" below. | — (words only) |
 
 ## Tolerance recorded (item 11)
 
@@ -72,7 +73,6 @@ doc comments, `plan take`'s Upkeep lookup (8 lines, told to the holder, mail 266
 
 ## Carried, not built here
 
-- Item 14 (above): waits on #3075.
 - `plan take` reads `coord.programHome(slug)` twice (in `takeRowOf` and at the new lookup), inside one `serial`, so they
   cannot disagree; returning it from `takeRowOf` is past the consented lines.
 
@@ -95,6 +95,26 @@ test seen red first; a test of code already right says so and is proved by mutat
 second posts nothing new (the issue already carries a fallback); two different refused reasons in one close round get two
 subjects, so two mails; and if the facts loosen between passes of one close, a later pass may post the reason after the mail
 said it was withheld (no leak: the text then passes the check).
+
+## Item 14 (after #3075 merged at `208afddca`; the coordinator's mail 27224)
+
+`origin/main` merged into this branch with `git merge` (clean; the coordinator's licence). Words only, each read against the
+code (`epicForOpen` and `listedWaves`, `server/src/coord/planPolicy.ts`; `PlanEpicBody`, `shared/plan.ts`), taking the
+sentences and the two narrowings from the WM6 task note's section 6:
+
+- The plan, Task 2's refusal list for `runs open`: `wave-epic-mismatch` now holds for an epic that lists no waves (no live epic
+  lists the wave and the run names no ticket of a live waveless epic, or the named ticket's epic lists waves and is not the
+  wave's), and `ticket-required` is named for a run with no ticket, at a wave no live epic lists, in a plan where a live epic
+  lists none. Only live epics count: a dropped waveless epic leaves `wave-epic-mismatch`.
+- The plan, Task 2.1's wire contract: `PlanEpicBody` reads `waves?: number[]` (an absent field keeps a stored epic's range and
+  a new epic lists none; an explicit `[]` clears it); the stored row stays `number[]`.
+- `ccd/coordinator-skill/references/plan.md`, which this pull request already edits: its line 4 (an epic may list no waves,
+  and each of its runs names its ticket), the `runs open` ticket sentence, and the `wave-epic-mismatch` and `ticket-required`
+  lines (WM6's case beside WM1's). It is a rules file, so the review judge's rules-mixed reason stands on this pull request as
+  it did before (the coordinator's ruling, mail 26858: no split).
+
+The spec's side (§4.1 and §16 call 2) is the coordinator's, on its ledger pull request. No test pins these sentences; the
+plan reference's pins still pass.
 
 ## Suites run (fleet slice, `--maxWorkers=2`, at most 12 files a command)
 
