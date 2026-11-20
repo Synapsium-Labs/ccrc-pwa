@@ -452,7 +452,8 @@ Turns are instant in both motion settings (§5.3). The overlay appears and goes 
 
 - ccrc's window requests `navigator.wakeLock.request('screen')` on entering, where the API exists. The frame never does: it has no permission, and the host owns the screen.
 - It is released on exit, and by the browser when the page is hidden; ccrc requests it again when the page is visible and reader mode is still on.
-- **The idle release.** After 5 minutes with no reading activity (no progress change, no turn and no tap on the overlay) ccrc releases it, and requests it again on the next activity. So a forgotten phone sleeps at its normal timeout after 5 minutes.
+- **The idle release.** After 5 minutes with no reading activity ccrc releases it, and requests it again on the next activity. So a forgotten phone sleeps at its normal timeout after 5 minutes.
+- **What counts as activity.** Taps, keys and scrolls inside the frame never reach ccrc. Its only sign of reading there is the `progress` op, so every `progress` message counts, routed by the frame's mount to the reader-mode hook as it is to the progress line. A tap on ccrc's own controls counts too. A turn reaches ccrc only as a progress change, in XR2 as in XR1: the `reader` op carries no turn. A turn at the very end changes nothing, and that is correct, because nothing is being read.
 - A refusal or a missing API changes nothing you can see. There is no setting in this design; one is Later.
 
 ### 6.4 Orientation
