@@ -19,7 +19,7 @@ records what the wave built and every departure, for the coordinator to fold int
 
 The plan's "Deviations found" carries both entries in full. In short:
 
-- **Storage.** One migration (slot 112 after the absorb of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
+- **Storage.** One migration (slot 114 after the absorbs of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
   stored as `teamSource` `auto` plus `teamCallId`, because migration 64's CHECK admits only `manual` and `auto`. Exactly one
   function, `linkSourceOf`, derives the wire's `overlord` source, and a single-definition test fails on any other read
   (the coordinator's condition, mail of 2026-11-20).

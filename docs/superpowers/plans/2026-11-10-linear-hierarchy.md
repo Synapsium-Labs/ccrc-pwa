@@ -363,7 +363,7 @@ number from `POST /api/ledger/deviations`.
   coordinator role: any attributed session may suggest for any keyless project (a coordinator's programme files into
   projects not its own), and the console shows who suggested. The README's
   machine-lane count word moves to ninety-five under the packet terms of the run that holds README.md. The wave's one
-  migration took slot 112 at the absorb. One bend of the rings rule is stated
+  migration took slot 114 at the second absorb. One bend of the rings rule is stated
   here, not hidden: the choice of which inbound row a `plan triage` acts on (searching every workspace that holds the key,
   preferring the caller's) stays in `planRoutes.ts`, as the previous row lookup did, because `planPolicy.ts` was held by
   another wave; the verdict still requires the chosen row's owner to be the caller, and the follow-up `w8-triage-l1` moves
