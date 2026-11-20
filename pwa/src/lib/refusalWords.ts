@@ -415,9 +415,21 @@ export const LINKING_ROUTE_TEXT: Readonly<Record<'write-failed' | 'bad-request',
 /** A linking route's failure in words: the route words first, then every other refusal's sentence. */
 export const linkingErrorText = (err: unknown): string => refusalText(err, LINKING_ROUTE_TEXT) ?? apiErrorText(err);
 
-/** `POST /api/items/:id/linear`'s one word that has no sentence above (D-8184); its other refusals read `linkingErrorText`. */
-export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found', string>> = {
+/** The migration's own refusals (D-8186): `POST /api/projects/:project/hierarchy/migrate` answers `no-team-key`, `migration-in-flight`
+ *  and `unreachable` (no Linear key serves the team; nothing was written). `no-team-key` is said here for the migration, not as the
+ *  template sentence of `LINKING_REFUSAL_TEXT`, which names the template pull request. */
+export const MIGRATE_REFUSAL_TEXT: Readonly<Record<'no-team-key' | 'migration-in-flight' | 'unreachable', string>> = {
+  'no-team-key': "Set this project's Linear team key first, then reshape the team in Linear. Nothing was changed.",
+  'migration-in-flight': 'A migration of this team is already running, so nothing was changed. Try again when it has finished.',
+  unreachable: 'No Linear key that ccrc holds serves this team, so nothing was asked of Linear. Check the workspace in Settings, then try again.',
+};
+/** The migration's refusal in its fixed sentence, or null for a word that is not one of its own. */
+export const migrateRefusalText = (err: unknown): string | null => refusalText(err, MIGRATE_REFUSAL_TEXT);
+
+/** `POST /api/items/:id/linear`'s words that have no sentence above (D-8184, D-8186); its other refusals read `linkingErrorText`. */
+export const LINEAR_ITEM_REFUSAL_TEXT: Readonly<Record<'not-found' | 'migration-in-flight', string>> = {
   'not-found': 'The server does not know that item. Reload the page.',
+  'migration-in-flight': MIGRATE_REFUSAL_TEXT['migration-in-flight'],
 };
 /** `not-open` is the ledger doors' own sentence (`LEDGER_REFUSAL_TEXT`), said once. */
 export const linearItemErrorText = (err: unknown): string =>

@@ -6,12 +6,12 @@ import { ToastHost } from '@ccrc/ui';
 import { LINKING_REFUSALS, type ProjectLinkingWire } from '../../shared/linking';
 import type { ProjectRow } from '../../shared/api';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../shared/plan';
-import { HIERARCHY_TEXT, ownerForAllConsequence, defaultOwnerWords, namedOwnerWords, ownerInheritedNote } from '../src/fleet/hierarchyWords';
+import { HIERARCHY_TEXT, reshapeConsequence, reshapeTitle, ownerForAllConsequence, defaultOwnerWords, namedOwnerWords, ownerInheritedNote } from '../src/fleet/hierarchyWords';
 import { itemPath } from '../src/ledgers/ledgerWords';
 import { api } from '../src/lib/api';
 import { upkeepPath } from '../src/lib/routes';
 import { ApiError } from '../src/lib/apiError';
-import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT, linkingErrorText } from '../src/lib/refusalWords';
+import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT, MIGRATE_REFUSAL_TEXT, linkingErrorText } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
 import { candidateLabel, candidateWhy, evidenceWords, linkingRowsOf, teamLinkLine } from '../src/fleet/linkingWords';
@@ -279,13 +279,17 @@ describe('the hierarchy settings', () => {
     expect(await within(rowOf('project-b')).findByText('Migrated on 2026-11-12')).toBeInTheDocument();
   });
 
-  it('a project with a team key links its Upkeep page, with no inbound issues waiting; one with no key shows none', async () => {
-    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: null }))], hier([
-      hrow('project-a'), hrow('project-b', { teamKey: null }),
+  it('D-8797: the Upkeep link shows with a team key, nothing waiting or not; the inbound count only when issues wait; no key shows neither', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' })), row('project-b', wire({ teamKey: null })), row('project-c', wire({ teamKey: 'BBB' }))], hier([
+      hrow('project-a'), hrow('project-b', { teamKey: null }), hrow('project-c', { teamKey: 'BBB', inboundWaiting: 2 }),
     ]));
     const link = await within(rowOf('project-a')).findByRole('link', { name: HIERARCHY_TEXT.upkeep });
     expect(link.getAttribute('href')).toBe(upkeepPath('project-a'));
+    expect(within(rowOf('project-a')).queryByText(/inbound issues? waits? for an owner/)).toBeNull();
     expect(within(rowOf('project-b')).queryByRole('link', { name: HIERARCHY_TEXT.upkeep })).toBeNull();
+    expect(within(rowOf('project-b')).queryByText(/inbound issues? waits? for an owner/)).toBeNull();
+    expect(within(rowOf('project-c')).getByRole('link', { name: HIERARCHY_TEXT.upkeep }).getAttribute('href')).toBe(upkeepPath('project-c'));
+    expect(within(rowOf('project-c')).getByText('2 inbound issues wait for an owner')).toBeTruthy();
   });
 
   it('a 503 write-failed on a hierarchy write is unconfirmed, and its sentence never says nothing was changed (D-8186 A6)', async () => {
@@ -857,5 +861,78 @@ describe('the hierarchy settings', () => {
   it('M3: the all-projects words claim only the projects with Linear settings', () => {
     expect(ownerForAllConsequence('coord-b')).toBe('Every project with Linear settings gets coord-b as its Linear owner. Each project\'s other settings stay as they are.');
     expect(HIERARCHY_TEXT.allDone).toBe('Saved. Every project with Linear settings now names that coordinator.');
+  });
+});
+
+// Reshape in Linear (Linear hierarchy design §11.1, D-8186, Task 5.1): the button, its confirm, the re-read and the fixed sentences.
+describe('Reshape in Linear', () => {
+  const STATES = ['not-migrated', 'map-waiting', 'migrating', 'migrated', 'put-back'] as const;
+  const reshape = (n: string): HTMLElement | null => within(rowOf(n)).queryByRole('button', { name: HIERARCHY_TEXT.reshape });
+
+  it('the control shows only when not migrated or put back (each of the five states)', async () => {
+    for (const state of STATES) {
+      cleanup();
+      await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a', { state })]));
+      await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+      expect(reshape('project-a') !== null, state).toBe(state === 'not-migrated' || state === 'put-back');
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a project with no team key has no control', async () => {
+    await mount([row('project-a', wire({ teamKey: null }))], hier([hrow('project-a', { teamKey: null })]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    expect(reshape('project-a')).toBeNull();
+  });
+
+  it('the confirm names the team, and Confirm sends migrate(project), then reads the hierarchy again and says the owner was asked', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    const call = vi.spyOn(api, 'migrate').mockResolvedValue({ ok: true, migrationId: 5 });
+    fireEvent.click(reshape('project-a')!);
+    const dialog = await screen.findByRole('dialog');
+    expect(within(dialog).getByText(reshapeTitle('AAA'))).toBeInTheDocument();
+    expect(dialog.textContent).toContain(reshapeConsequence('AAA'));
+    expect(reshapeTitle('AAA')).toBe('Reshape team AAA in Linear?');
+    expect(call).not.toHaveBeenCalled();
+    answer = hier([hrow('project-a', { state: 'migrating' })]);
+    fireEvent.click(within(dialog).getByRole('button', { name: HIERARCHY_TEXT.reshapeConfirm }));
+    await waitFor(() => expect(call).toHaveBeenCalledWith('project-a'));
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.reshapeAsked)).toBeInTheDocument();
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    await waitFor(() => expect(reshape('project-a')).toBeNull());
+  });
+
+  it('each refusal is its fixed sentence, never the box\'s text', async () => {
+    const cases: [number, string, string][] = [
+      [409, 'no-team-key', MIGRATE_REFUSAL_TEXT['no-team-key']],
+      [409, 'migration-in-flight', MIGRATE_REFUSAL_TEXT['migration-in-flight']],
+      [503, 'unreachable', MIGRATE_REFUSAL_TEXT.unreachable],
+      [503, 'unavailable', linkingErrorText(new ApiError(503, { ok: false, error: 'unavailable' }))],
+    ];
+    for (const [status, error, sentence] of cases) {
+      cleanup();
+      await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+      await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+      vi.spyOn(api, 'migrate').mockRejectedValue(new ApiError(status, { ok: false, error, detail: 'box text that must not show' }));
+      fireEvent.click(reshape('project-a')!);
+      fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: HIERARCHY_TEXT.reshapeConfirm }));
+      const line = await within(rowOf('project-a')).findByText(sentence);
+      expect(line.textContent, error).toBe(sentence);
+      expect(document.body.textContent).not.toContain('box text');
+      expect(api.hierarchy).toHaveBeenCalledTimes(1);
+      vi.restoreAllMocks();
+    }
+  });
+
+  it('a 503 write-failed or a lost answer is unconfirmed and the hierarchy is read again', async () => {
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))], hier([hrow('project-a')]));
+    await within(rowOf('project-a')).findByText('Default: coord-a (live)');
+    vi.spyOn(api, 'migrate').mockRejectedValue(new ApiError(503, { ok: false, error: 'write-failed', detail: 'box text that must not show' }));
+    fireEvent.click(reshape('project-a')!);
+    fireEvent.click(within(await screen.findByRole('dialog')).getByRole('button', { name: HIERARCHY_TEXT.reshapeConfirm }));
+    expect(await within(rowOf('project-a')).findByText(HIERARCHY_TEXT.unconfirmed)).toBeInTheDocument();
+    await waitFor(() => expect(api.hierarchy).toHaveBeenCalledTimes(2));
+    expect(document.body.textContent).not.toContain('box text');
   });
 });

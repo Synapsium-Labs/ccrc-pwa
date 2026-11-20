@@ -9,7 +9,7 @@ import { api } from '../src/lib/api';
 import { ApiError } from '../src/lib/apiError';
 import { ITEM_DOOR_WORDS } from '../src/ledgers/ItemActs';
 import { LINEAR_GROUP_WORDS, LINEAR_ITEM_TEXT } from '../src/ledgers/migrationWords';
-import { LEDGER_REFUSAL_TEXT, LINEAR_ITEM_REFUSAL_TEXT, linearItemErrorText } from '../src/lib/refusalWords';
+import { LEDGER_REFUSAL_TEXT, LINEAR_ITEM_REFUSAL_TEXT, MIGRATE_REFUSAL_TEXT, linearItemErrorText } from '../src/lib/refusalWords';
 import { ItemView } from '../src/ledgers/ItemView';
 import { LinearItemControls } from '../src/ledgers/LinearItemControls';
 import { MigrationBody } from '../src/ledgers/MigrationBody';
@@ -114,6 +114,31 @@ describe('the hierarchy items\' controls', () => {
     expect(alert.textContent).toContain('does not take this action');
     expect(screen.queryByRole('status')).toBeNull();
     expect(onActed).not.toHaveBeenCalled();
+  });
+
+  it('Return is never sent with a blank note, and every refusal of the map and report acts is a fixed sentence (D-8186)', async () => {
+    const call = sent();
+    controls({ verb: 'linear-map', migrationId: 3 });
+    fireEvent.change(screen.getByRole('textbox', { name: /note/i }), { target: { value: '   ' } });
+    click('Return');
+    expect(call).not.toHaveBeenCalled();
+    cleanup();
+    const words: [string, number, string][] = [
+      ['migration-in-flight', 409, MIGRATE_REFUSAL_TEXT['migration-in-flight']],
+      ['not-open', 409, LEDGER_REFUSAL_TEXT['not-open']],
+      ['item-act-mismatch', 409, 'That item does not take this action, so nothing was changed. Reload the item and choose again.'],
+      ['not-found', 404, LINEAR_ITEM_REFUSAL_TEXT['not-found']],
+    ];
+    for (const [error, status, sentence] of words) {
+      vi.spyOn(api, 'linearItemAct').mockRejectedValue(new ApiError(status, { ok: false, error, detail: 'box text that must not show' }));
+      controls({ verb: 'linear-report', migrationId: 3 });
+      click('Done');
+      const alert = await screen.findByRole('alert');
+      expect(alert.textContent, error).toBe(sentence);
+      expect(document.body.textContent).not.toContain('box text');
+      cleanup();
+      vi.restoreAllMocks();
+    }
   });
 
   it('Name offers the live coordinators and sends {act:"name", owner} after its confirm', async () => {

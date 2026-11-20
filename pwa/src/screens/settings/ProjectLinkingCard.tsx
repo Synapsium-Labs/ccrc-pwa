@@ -22,7 +22,7 @@ import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/pl
 import { ResultLine, SETTINGS_CARDS, inAppClick, useResultLine } from '../../fleet/settingsText';
 import { itemPath } from '../../ledgers/ledgerWords';
 import {
-  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyOutcomeUnknown, hierarchyWriteText, inboundWords, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
+  HIERARCHY_TEXT, coordinatorWords, defaultHierarchyRow, defaultOwnerWords, hierarchyAbsent, hierarchyOutcomeUnknown, hierarchyWriteText, inboundWords, migrateOutcomeUnknown, migrateWriteText, reshapeConsequence, reshapeOffered, reshapeTitle, namedOwnerWords, ownerForAllConsequence, ownerInheritedNote, sharesTeamKey, stateWords,
 } from '../../fleet/hierarchyWords';
 import { api } from '../../lib/api';
 import { upkeepPath } from '../../lib/routes';
@@ -104,6 +104,22 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
       )
       .finally(() => { track(-1); setBusy(false); });
   };
+  // Reshape in Linear (D-8186): asks the team's Linear owner for the map. The hierarchy is read again, so the state line follows.
+  const [reshaping, setReshaping] = useState(false);
+  const reshape = (): void => {
+    setBusy(true);
+    track(1);
+    result.clear();
+    void api.migrate(name)
+      .then(
+        () => { result.say(HIERARCHY_TEXT.reshapeAsked); raise(reread()); },
+        (err: unknown) => {
+          if (migrateOutcomeUnknown(err)) raise(reread());
+          result.say(migrateWriteText(err), 'refusal');
+        },
+      )
+      .finally(() => { track(-1); setBusy(false); });
+  };
   const inbound = inboundWords(h.inboundWaiting);
   const named = h.linearOwner;
   const inheritedNote = ownerInheritedNote(h);
@@ -131,8 +147,13 @@ function HierarchyCell({ name, answer, reread, busy, locked, setBusy, raise, tra
           ? <TextLink href={itemPath(h.itemId)} onClick={inAppClick(itemPath(h.itemId))}>{HIERARCHY_TEXT.mapWaiting}</TextLink>
           : <p className="settings-note">{stateWords(h)}</p>}
         {inbound !== null && <p className="settings-note">{inbound}</p>}
+        {reshapeOffered(h) && (
+          <Button variant="ghost" className="linking-reshape" disabled={busy || locked} onClick={() => setReshaping(true)}>{HIERARCHY_TEXT.reshape}</Button>
+        )}
         {h.teamKey !== null && <TextLink href={upkeepPath(name)} onClick={inAppClick(upkeepPath(name))}>{HIERARCHY_TEXT.upkeep}</TextLink>}
       </div>
+      <QuickConfirm open={reshaping} onClose={() => setReshaping(false)} title={reshapeTitle(h.teamKey ?? '')}
+        consequence={reshapeConsequence(h.teamKey ?? '')} confirmLabel={HIERARCHY_TEXT.reshapeConfirm} onConfirm={reshape} />
     </div>
   );
 }

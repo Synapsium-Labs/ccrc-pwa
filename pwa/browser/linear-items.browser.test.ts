@@ -8,8 +8,9 @@
 // Three more things, measured where they matter: the act bar clears the phone bar in the REAL shell (a map item's page, scrolled),
 // the Waiting list's rows carry only the light acts (a drift row draws Hand and Keep, a map row none), and the stuck bar of the
 // 200-issue body clears a phone bar stand-in drawn with the shell's own classes (the body cannot reach the real shell yet).
-// The map and report BODY (200 issues, the width table) is mounted only where a read hands it (`ItemView`'s `migration` prop,
-// wave 7), so no route of the app draws it yet. The second describe renders the REAL `ItemView` to static markup on the node
+// The map and report BODY (200 issues, the width table, a structure section of a few programmes, D-8186) is drawn by the item's
+// route from `GET /api/migrations/:id`; the controls cases below answer that read with nothing, so those items draw as they did, and
+// the real-app describe serves it. The second describe renders the REAL `ItemView` to static markup on the node
 // side (`renderToStaticMarkup`, with `matchMedia` answering for the view's width) and loads it as a page of the SAME shared
 // build: its built stylesheets, `data-skin` and `data-theme` on `<html>` as `applySkin` and `applyTheme` set them. Layout,
 // `position: sticky` and `<details>` are CSS, so no script bundle is needed.
@@ -24,7 +25,7 @@ import { renderToStaticMarkup } from 'react-dom/server';
 import { createElement } from 'react';
 import { chromium, type Browser, type BrowserContext, type Page } from 'playwright-core';
 import { INSTRUMENT, PHOSPHOR, REFINED } from '@ccrc/ui';
-import type { MapEntry } from '../../shared/plan';
+import type { MapEntry, MigrationStructure } from '../../shared/plan';
 import { MAP_CLASSES } from '../../shared/plan';
 import { ItemView } from '../src/ledgers/ItemView';
 import { resolveChrome } from './harness';
@@ -141,6 +142,14 @@ const ENTRIES: MapEntry[] = Array.from({ length: 200 }, (_, i) => ({
   target: i % 3 === 0 ? { programme: `prog-${LONG}`, epic: `epic-${LONG}`, checkpoint: `cp-${i}` } : { programme: 'prog-a', ticketKey: `KEY-${i}` },
 }));
 const COUNTS = { created: 20, moved: 120, closed: 30, left: 10, skipped: 20 };
+/** A few programmes, with long names and one with none to show (D-8186): the map's structure section. */
+const STRUCTURE: MigrationStructure[] = [
+  { programme: 'prog-a', title: `Programme ${LONG}`, backlog: false, declared: true,
+    epics: [{ key: 'e-1', title: `Epic ${LONG}`, checkpoints: [{ key: 'c-1', title: `Checkpoint ${LONG}` }, { key: 'c-2', title: 'Second checkpoint' }] }, { key: 'e-2', title: 'Second epic', checkpoints: [] }] },
+  { programme: `prog-${LONG}`, title: null, backlog: true, declared: false, epics: [{ key: 'e-3', title: 'Third epic', checkpoints: [{ key: 'c-3', title: 'Third checkpoint' }] }] },
+  { programme: 'prog-c', title: 'Programme C', backlog: false, declared: false, epics: [] },
+];
+const REPORT = { skipped: ['KEY-5', `KEY-6-${LONG}`], waiting: ['KEY-7'], movedSince: ['KEY-8'], milestonesLeft: [`Milestone ${LONG}`] };
 
 /** The real ItemView for a map or report item with a body, drawn at `width` (the one fact `MigrationBody` asks the engine). */
 function pageOf(verb: 'linear-map' | 'linear-report', width: number): string {
@@ -151,7 +160,7 @@ function pageOf(verb: 'linear-map' | 'linear-report', width: number): string {
     const action = ACTIONS[verb] as never;
     return renderToStaticMarkup(createElement(ItemView, {
       item: item(1, action, { title: `Map ${LONG}` }) as never, onTick: async () => {}, onDismiss: async () => {},
-      programmeLive: true, now: NOW, migration: { counts: COUNTS, entries: ENTRIES },
+      programmeLive: true, now: NOW, migration: { counts: COUNTS, entries: ENTRIES, structure: STRUCTURE, report: REPORT },
     }));
   } finally { g.matchMedia = before; }
 }
@@ -224,9 +233,21 @@ describe('the map and report body, 200 issues, in the shared build\'s CSS', () =
             clipped: [...root.querySelectorAll('.wm *')].filter((e) => getComputedStyle(e).display !== 'none' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0)
               .map((e) => e.tagName.toLowerCase() + '.' + (e.getAttribute('class') ?? '')),
             countsFirst: !!(q('[data-migration-counts]').compareDocumentPosition(groups[0]!) & Node.DOCUMENT_POSITION_FOLLOWING),
+            // D-8186: the structure section (map) or the report's lists sit between the counts and the groups.
+            extraBetween: (() => {
+              const extra = document.querySelector('[data-migration-structure], [data-report-list]');
+              return extra === null ? null : !!(q('[data-migration-counts]').compareDocumentPosition(extra) & Node.DOCUMENT_POSITION_FOLLOWING) && !!(extra.compareDocumentPosition(groups[0]!) & Node.DOCUMENT_POSITION_FOLLOWING);
+            })(),
+            programmes: document.querySelectorAll('[data-structure-programme]').length, epics: document.querySelectorAll('[data-structure-epic]').length,
+            reportLists: document.querySelectorAll('[data-report-list]').length,
+            overflowing: [...document.querySelectorAll('[data-migration-structure] *, [data-report-list] *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5).length,
           };
         });
         expect(m.countsFirst, `${at}: counts come before the groups`).toBe(true);
+        expect(m.extraBetween, `${at}: the structure (or the report's lists) sit between the counts and the groups`).toBe(true);
+        if (verb === 'linear-map') { expect(m.programmes, `${at}: every programme`).toBe(3); expect(m.epics, `${at}: every epic`).toBe(3); expect(m.reportLists).toBe(0); }
+        else { expect(m.programmes).toBe(0); expect(m.reportLists, `${at}: the report's four lists`).toBe(4); }
+        expect(m.overflowing, `${at}: the structure or the lists run past the viewport`).toBe(0);
         expect(m.groups, `${at}: one group per class`).toBe(MAP_CLASSES.length);
         expect(m.issues, `${at}: every issue is listed`).toBe(200);
         expect(m.rows, `${at}: every issue is a table row`).toBe(200);
@@ -341,6 +362,61 @@ describe('the Waiting list rows carry only the light acts', () => {
         }
         const shots = process.env['CCRC_SHOTS'];
         if (shots !== undefined && shots !== '') await opened.page.screenshot({ path: path.join(shots, `rows-${width}.png`), fullPage: false });
+      } finally {
+        await opened.ctx.close();
+      }
+    }, 60_000);
+  }
+});
+
+// ---- The real app: a map item's route reads `GET /api/migrations/:id` and draws the body with its structure (D-8186).
+
+const MIGRATION = { ok: true, id: 3, team: 'AAA', state: 'proposed', counts: COUNTS, entries: ENTRIES, structure: STRUCTURE, report: null };
+const REPORT_MIGRATION = { ...MIGRATION, state: 'applied', structure: [], report: REPORT };
+const withMigration = (m: object): AppFixture => ({ ...FIXTURE, api: { ...FIXTURE.api, '/api/migrations/3': m } });
+
+describe('the item route draws the body from the migration read', () => {
+  for (const { verb, id, mig, v } of [
+    ...VIEWS.map((v) => ({ verb: 'linear-map', id: 1, mig: MIGRATION, v })),
+    ...WIDTHS.map((width) => ({ verb: 'linear-report', id: 2, mig: REPORT_MIGRATION, v: { skin: REFINED, theme: PHOSPHOR, width } })),
+  ]) {
+    it(`${verb}: structure or report lists drawn, contained, act bar in view at ${named(v)}`, async () => {
+      const opened = await openApp(browser!, v, withMigration(mig));
+      try {
+        await opened.page.goto(`${server!.origin}/waiting/${id}`);
+        await opened.page.waitForSelector('.wi [data-migration-counts]', { timeout: 20_000 });
+        await opened.page.evaluate(async () => { await document.fonts.ready; });
+        await opened.page.waitForTimeout(250);
+        const m = await opened.page.evaluate(() => {
+          const root = document.querySelector('.wi') as HTMLElement;
+          const bar = (document.querySelector('.wi-act') as HTMLElement).getBoundingClientRect();
+          const extra = document.querySelector('[data-migration-structure], [data-report-list]');
+          return {
+            viewport: window.innerWidth, height: window.innerHeight, pageScroll: document.documentElement.scrollWidth, pageClient: document.documentElement.clientWidth,
+            structure: document.querySelectorAll('[data-structure-programme]').length, lists: document.querySelectorAll('[data-report-list]').length,
+            counts: !!extra && !!(document.querySelector('[data-migration-counts]')!.compareDocumentPosition(extra) & Node.DOCUMENT_POSITION_FOLLOWING),
+            ellipsis: [...root.querySelectorAll('*')].filter((e) => getComputedStyle(e).textOverflow === 'ellipsis').length,
+            clipped: [...root.querySelectorAll('.wm *')].filter((e) => getComputedStyle(e).display !== 'none' && e.scrollWidth > e.clientWidth + 1 && e.clientWidth > 0)
+              .map((e) => e.tagName.toLowerCase() + '.' + (e.getAttribute('class') ?? '')),
+            overflowing: [...document.querySelectorAll('[data-migration-structure] *, [data-report-list] *')].filter((e) => e.getBoundingClientRect().right > window.innerWidth + 0.5).length,
+            barTop: bar.top, barBottom: bar.bottom, sticky: getComputedStyle(document.querySelector('.wi-act') as Element).position,
+            navTop: (document.querySelector('.shell-phone-nav') as HTMLElement | null)?.getBoundingClientRect().top ?? null,
+          };
+        });
+        const at = `${verb} item route at ${named(v)}`;
+        expect(m.counts, `${at}: the extra section follows the counts`).toBe(true);
+        if (verb === 'linear-map') expect(m.structure, `${at}: every programme`).toBe(3); else expect(m.lists, `${at}: the report's lists`).toBe(4);
+        expect(m.pageScroll, `${at}: the page scrolls sideways`).toBeLessThanOrEqual(m.pageClient);
+        expect(m.ellipsis, `${at}: text is cut short`).toBe(0);
+        expect(m.clipped, `${at}: text is clipped`).toEqual([]);
+        expect(m.overflowing, `${at}: a name runs past the viewport`).toBe(0);
+        if (v.width < 900) {
+          expect(m.sticky, `${at}: the act bar is sticky`).toBe('sticky');
+          expect(m.barBottom, `${at}: the act bar is below the viewport's foot`).toBeLessThanOrEqual(m.height + 0.5);
+          if (m.navTop !== null) expect(m.barBottom, `${at}: the act bar is under the phone bar`).toBeLessThanOrEqual(m.navTop + 0.5);
+        }
+        const shots = process.env['CCRC_SHOTS'];
+        if (shots !== undefined && shots !== '') await opened.page.screenshot({ path: path.join(shots, `route-${verb}-${v.skin}-${v.theme}-${v.width}.png`), fullPage: true });
       } finally {
         await opened.ctx.close();
       }

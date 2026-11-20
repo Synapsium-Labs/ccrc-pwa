@@ -41,7 +41,7 @@ import type { RenewalMode, RenewalModeView } from '../../../shared/continuity';
 import type { TestboxAdminFields, TestboxAdminSub } from '../../../shared/testbox-admin';
 import type { ProjectAddAnswer, ProjectAddBody } from '../../../shared/projectAdd';
 import type { LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking';
-import type { EpicView, HierarchyAnswer, HierarchyProjectRow, PlanView } from '../../../shared/plan';
+import type { EpicView, HierarchyAnswer, HierarchyProjectRow, MigrationView, PlanView } from '../../../shared/plan';
 import type { ReceiptIn, ResponseRetentionView, ResponseRowBrief } from '../../../shared/responses';
 import type { LinearItemAct, SecretRemoveAnswer, SecretSaveAnswer, StoredSecretsAnswer } from '../../../shared/ledgers';
 
@@ -573,6 +573,11 @@ export function createApi(fetchImpl: typeof fetch = (...args) => fetch(...args))
     linearItemAct: (id: number, body: { act: LinearItemAct; note?: string; owner?: string }) =>
       postJson<{ ok: true; queued?: boolean }>(`/api/items/${id}/linear`, body),
     ownerForAll: (linearOwner: string) => postJson<{ ok: true; projects: number }>('/api/hierarchy/owner', { linearOwner }),
+    /** The migration (D-8186): `POST /api/projects/:project/hierarchy/migrate` (no body; asks the team's Linear owner for the map) and
+     *  `GET /api/migrations/:id` (a map's or report's body). */
+    migrate: (project: string) =>
+      postJson<{ ok: true; migrationId: number }>(`/api/projects/${encodeURIComponent(project)}/hierarchy/migrate`),
+    migration: (id: number) => getJson<MigrationView>(`/api/migrations/${id}`),
     /** `POST /api/projects/:project/pr-template` (D-8147): the operator's tap that opens a pull request adding the pull
      *  request template to a private project. No body; a refusal rejects with its `ApiError`. */
     openTemplatePr: (project: string) =>

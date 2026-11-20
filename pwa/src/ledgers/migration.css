@@ -1,0 +1,6 @@
+/* The map body's structure section and the report's lists (Linear hierarchy design §11.3, D-8186; D-8737's handover): plain
+   lists that wrap at every width, each programme's epics indented under it and each epic's checkpoints under that. */
+.wm-structure, .wm-rlist { display: grid; gap: var(--sp-1); min-width: 0; margin-top: var(--sp-3); }
+.wm-plain { list-style: none; margin: 0; padding: 0; display: grid; gap: var(--sp-1); min-width: 0; }
+.wm-plain .wm-plain { padding-inline-start: var(--sp-3); }
+.wm-plain li { min-width: 0; overflow-wrap: anywhere; }

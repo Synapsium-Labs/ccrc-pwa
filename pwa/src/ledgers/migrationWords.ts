@@ -1,7 +1,7 @@
 // The words of the five hierarchy items' controls and of the map and report body (Linear hierarchy design §11.3 and §11.4,
 // D-8184, D-8737). L1: pure, no I/O. The sentences a refusal says are `refusalWords.ts`'s (`linearItemErrorText`).
 import type { LinearActionVerb } from '../../../shared/ledgers';
-import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry } from '../../../shared/plan';
+import { MAP_CLASSES, type MapClass, type MapCounts, type MapEntry, type MigrationView } from '../../../shared/plan';
 
 /** The controls' labels, once. `hand` is `ITEM_DOOR_WORDS['hand-to-coordinator']`, which `LinearItemControls` reads. */
 export const LINEAR_ITEM_TEXT = {
@@ -25,7 +25,22 @@ export const LINEAR_GROUP_WORDS: Readonly<Record<LinearActionVerb, string>> = {
 };
 
 /** The map and report body's own sentences: its two region names and its table's three headers. */
-export const MIGRATION_BODY_TEXT = { map: 'The map', report: 'The report', issue: 'Issue', class: 'Class', target: 'Target' } as const;
+export const MIGRATION_BODY_TEXT = {
+  map: 'The map', report: 'The report', issue: 'Issue', class: 'Class', target: 'Target',
+  structure: 'Programmes and epics', backlog: 'new, paused', declared: 'declared by this map', noEpics: 'No epics listed',
+  checkpoints: 'Checkpoints',
+  /** The quiet note when the migration could not be read: the item keeps its why, how and controls (D-8186). */
+  unread: 'The map could not be read just now, so its body is not shown. Reload the item to try again.',
+} as const;
+
+/** The report's lists in the order they read, each only when it holds something (design §11.4): the issues skipped because they
+ *  had changed, those still waiting, and after a put back the issues moved since and the milestones left under the canceled project. */
+export const REPORT_LISTS = [
+  { key: 'skipped', title: 'Skipped as changed' }, { key: 'waiting', title: 'Still waiting' },
+  { key: 'movedSince', title: 'Moved since' }, { key: 'milestonesLeft', title: 'Milestones left' },
+] as const;
+export const reportLists = (r: NonNullable<MigrationView['report']> | null | undefined): { key: (typeof REPORT_LISTS)[number]['key']; title: string; items: string[] }[] =>
+  r === null || r === undefined ? [] : REPORT_LISTS.map((l) => ({ key: l.key, title: l.title, items: r[l.key] })).filter((l) => l.items.length > 0);
 
 export const nameConsequence = (project: string, id: string): string => `${id} becomes the Linear owner of ${project}.`;
 
