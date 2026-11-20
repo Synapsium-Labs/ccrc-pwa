@@ -6804,8 +6804,8 @@ export type RunRefuseCode =
   | 'wave-epic-mismatch' | 'plan-missing' | 'reserved-programme' | 'ticket-unavailable' | 'plan-closed'
   // Programme work map WM1 (D-8727, spec 2026-11-16 §4.1 D10): in a plan that declares a phase, a work run with no ticket
   // into an epic with an open declared ticket no run holds must name one.
-  | 'ticket-required'
-  | 'self-dispatch';   // D-6096: a plain dispatch of a run onto the session that claims it; bind it in place instead
+  // D-6096: `self-dispatch`, a plain dispatch of a run onto the session that claims it; bind it in place instead.
+  | 'ticket-required' | 'self-dispatch';
 
 const RUN_REFUSE_CODE_MAP: Record<RunRefuseCode, true> = {
   'claimed-by-another': true, paused: true, 'mail-disabled': true, 'cap-concurrency': true,
