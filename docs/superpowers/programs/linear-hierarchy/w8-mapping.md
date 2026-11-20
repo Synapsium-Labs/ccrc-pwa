@@ -8,7 +8,7 @@ records what the wave built and every departure, for the coordinator to fold int
 | Task | Built | Tests |
 |---|---|---|
 | 8.0 (move) | The team-link vocabulary (`TeamEvidence`, `TeamLinkSource`, `TeamLinkWire`, `TeamCandidateWire` and their guards and lists) moved from `shared/api.ts` to `shared/linking.ts`, pinned first by characterization tests. `shared/api.ts` gains one type-only import. | `linking-vocab-move`, the two L0 import pins |
-| 8.1 | `project_linking.teamWorkspace`; the operator's write takes an optional `workspace`; `workspaceAfterWrite` (L1) decides what is stored; one resolver `routeProjectTeam` for the plan sync, the plan routes and the linking routes; the inbound owner rule takes the issue's workspace at all three lookups; `team-unknown` worded on the card. | `linear-route`, `linking-routes`, `linking-policy`, `linking-store`, `linking-workspace`, `plan-sync` |
+| 8.1 | `project_linking.teamWorkspace`; the operator's write takes an optional `workspace`; `workspaceAfterWrite` (L1) decides what is stored; one resolver `routeProjectTeam` for the plan sync, the plan routes and the linking routes; the inbound owner rule takes the issue's workspace at all four key lookups (the fourth by fix round 1, F1); `team-unknown` worded on the card. | `linear-route`, `linking-routes`, `linking-policy`, `linking-store`, `linking-workspace`, `plan-sync` |
 | 8.2 | The automatic pass reads teams as (workspace, key) pairs: a key in two workspaces is never merged, links only as one pair, and is otherwise offered once per workspace with its name. | `linking-team-link`, `linear-route` |
 | 8.3 | A fixed read `attachmentsForUrl` (constructed fixture), the reader `readAttachedIssues` (L4, pass `team-link`), the pure tally and completeness rule in `teamLink.ts`, and evidence `pr-attachments` weighed beside ticket ids. Off: nothing wires the reader. | `linking-attached-issues`, `linking-attached-off`, `linking-team-link`, `linear-fixtures`, `linear-ops`, `linear-hierarchy-ops`, `rings/outward-edges` |
 | 8.4 | `POST /api/linking/suggest` (box token, attribution) and `ccrc-api linking suggest`; suggestions stored in `teamSuggestions`, shown as `suggested` candidates, never linked, cleared when a key is set. | `linking-routes`, `linking-store`, `auth-gate`, `box-token-census`, `ccrc-api`, `ccrc-api-closed`, `mail-routes` |
@@ -23,8 +23,15 @@ The plan's "Deviations found" carries both entries in full. In short:
   stored as `teamSource` `auto` plus `teamCallId`, because migration 64's CHECK admits only `manual` and `auto`. Exactly one
   function, `linkSourceOf`, derives the wire's `overlord` source, and a single-definition test fails on any other read
   (the coordinator's condition, mail of 2026-11-20).
-- **The write body's workspace.** Absent keeps it (dropped when the new key is not in it), null clears it, and a named one
-  must hold the key. An unreadable Linear store answers `unavailable`, never `team-unknown`.
+- **The write body's workspace (fix round 1, F4 and F2).** A key's workspace is set in the same write (spec §3.1.1). A named
+  workspace must hold the key (`team-unknown`). With none named (absent or null), an absent one keeps the stored workspace
+  while it holds the key; otherwise the one connected workspace that holds the key is stored, a key two hold is refused
+  `team-ambiguous` (the card points at its picker), and a key none holds is stored with none. An unreadable Linear store is
+  `unavailable`, never `team-unknown` and never stored as none. A cleared key, and the stored key sent back with no workspace
+  named, read no store (`writeReadsStore`). A row stored with no workspace (before migration 114) whose key one connected
+  workspace holds already resolves there, so Save of the unchanged key, with that workspace or none, keeps the stored none: the
+  source, team name, evidence and time stay (the coordinator's ruling: no change of source). Another key or a workspace among
+  two holders is still the operator's decision.
 - **The Linear proxy is unchanged.** It knows the caller's identity, not its project.
 - **Task 8.3 is off.** Its schema is an assumption until the live capture: `attachmentsForURL(url)` returning nodes of
   `issue { id identifier team { key } }`. A partial answer, where any workspace failed, is unmeasured.
@@ -33,17 +40,27 @@ The plan's "Deviations found" carries both entries in full. In short:
   - The door writes only an existing row (`no-project` otherwise).
   - It refuses a reason that names any connected team's ticket id or carries line or bidi control characters.
   - It keeps the newest eight suggestions and answers only what the caller wrote.
-  - It checks no project ownership. A coordinator suggests for any keyless project its programme files into, and the
-    console shows who suggested.
+  - Only a coordinator suggests (fix round 1, F7, the coordinator's ruling): the caller must claim an open run, read through
+    the binding's own claimant reader (`bindingsOf(...).claimant()`, the one `claimsProgramme` asks); none is `not-a-coordinator`
+    (403, a new word: `not-coordinator` is already the digest's word, 409, with another meaning), and a run series that cannot
+    be read is `run-unreadable` (503), never a pass. It checks no project ownership beyond that; the console shows who
+    suggested. One suggestion per suggester, a resend replaces its own, and at most eight suggesters, the oldest by time
+    evicted, never the one just written.
 - **The confirm door.**
   - Its word is `overlord-v1`, so it lights later than the `continuity-v1` doors.
   - Its answer is the link and the call id only.
-  - The call names the team and the workspace by display name, never by key. A coordinator's suggested reason is shown as
-    written.
-- **Final review fixes.** The team owner is decided in the inbound issue's workspace at every plan-routes site and in
-  `linearOwnerOfProject`; the suggest door and the confirm re-check the pair against the live Linear store and refuse
+  - The call names the team and the workspace by display name, never by key. A suggestion's evidence reads "suggested by a
+    coordinator, with the reason "…"" (fix round 1, F6): a call may be mirrored, so it names no session; the session stays on
+    the card.
+- **Final review fixes.** The team owner is decided in the inbound issue's workspace at every plan-routes site, at all four
+  key lookups of the inbound lane (fix round 1, F1: the close comment's public-text re-check was the fourth; D-8808 said
+  three) and in `linearOwnerOfProject`; the suggest door and the confirm re-check the pair against the live Linear store and refuse
   `team-ambiguous` for a shared key with no workspace; a workspace-only change makes the link the operator's.
-- **The card.** Save waits for a workspace when the typed key is in two workspaces. The Overlord link's line links to the
+- **Delivery decides nothing new (fix round 1, F5).** When the write reads the Linear store (`writeReadsStore`) and the
+  confirm's stored workspace name (`confirmedWorkspaceName`) are L1 deciders in `linking/policy.ts`; the triage row choice
+  (`w8-triage-l1`) stays the one stated bend.
+- **The card.** Save waits for a workspace when the typed key is in two workspaces. A candidate row's React key names its
+  evidence kind and suggester too, so one pair offered twice is two rows (fix round 1, A2). The Overlord link's line links to the
   Waiting on you screen, because a call cannot be addressed by id.
 
 ## Carried (follow-up tickets in the `mapping` epic)
@@ -57,8 +74,10 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-triage-l1`: move the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`) into `planPolicy.ts` beside
   `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It stayed in the route because `planPolicy.ts` was held by
   another wave; stated as a bend in D-8808.
-- `w8-write-ambiguous`: the operator's write door still stores a key two workspaces hold with no workspace when the card
-  could not read the workspaces; refuse `team-ambiguous` there too.
+- `w8-legacy-picker` (fix round 1, A1): the card's picker lists only the file slots (`linear.view.workspaces`), while the server
+  also routes the unsuperseded legacy workspace. The workspaces answer's legacy row carries no workspace id
+  (`LinearLegacyRow.workspace` in `shared/linear.ts`), so the card cannot name it; the wire gains `workspace.workspaceId` there,
+  filled where `server/src/linear/routes.ts` builds the legacy row, and the card reads it beside the slots.
 
 - `w8-skill-section`: the coordinator skill's plan reference gains the section below, in a PR of its own: the review
   judge refuses a PR that changes a rules file and anything else (`rules-mixed`), so it left this one. Its text, as built
@@ -85,8 +104,9 @@ operator taps it, or the Overlord confirms it within its authority. The reason i
 to Linear, so keep it to a sentence, with no ticket ids and no private names (refused `linear-text-public`). Refusals:
 `team-set` (the project already has a key; a project whose key the operator cleared still takes suggestions),
 `team-unknown` (no connected workspace has that team, or the named workspace does not), `team-ambiguous` (no workspace named
-and the key is in more than one connected workspace: send it again with `workspace`), `no-project`, `linear-text-public` and
-`bad-request` (a body that is not exactly these keys, or a reason over its length).
+and the key is in more than one connected workspace: send it again with `workspace`), `not-a-coordinator` (the session claims
+no open run: only a programme's coordinator suggests), `run-unreadable` (the session's runs could not be read: try again),
+`no-project`, `linear-text-public` and `bad-request` (a body that is not exactly these keys, or a reason over its length).
 ````
 
 ## For the merge
