@@ -166,7 +166,7 @@ Screenshots (all viewed after the last styling change, except where §6 says oth
   was held by WM6's worker (claim 5756); I asked for a co-edit of exactly two places and they consented by mail on
   2026-11-20: WM3's step ticks, and one bullet at the end of Deviations found. Their PR had landed on `main` by then, so the
   branch conflicted in that one section (`git merge-tree` exited 1, clause 16's first trigger); I absorbed `origin/main`
-  with one `git merge`, kept both bullets (D-8780 then D-8806) and changed no line of theirs.
+  with one `git merge` (the base was `origin/main` at `208afddcab48303bc699c812c79cd3d1666732bc`, merge commit `b3989d5468`), kept both bullets (D-8780 then D-8806) and changed no line of theirs.
 - The plan's Step 2 is ticked: the red was measured with the two modules moved aside (the file cannot load). That is a weaker
   red than a case-by-case one; the case-by-case red is the mutants (§4).
 - Every commit that changes the plan, and the head, carries `Ledger-Edit: D-8806` in its last paragraph, with the
@@ -174,7 +174,9 @@ Screenshots (all viewed after the last styling change, except where §6 says oth
 - A process kill by command-line pattern was run once, in error, while stopping the harness server (`pkill -f`). It ended
   that shell, and the harness was down afterwards (measured: nothing on its port). The server was restarted, and stopped by
   its PID. I cannot tell whether a pattern match also reached another session's process with the same command line.
-  Reported to the coordinator.
+  Reported to the coordinator, who ruled: stop a process only by the PID I started or by my own process group. The exact
+  command was `pkill -f "vite --config vite.config.mts"`, run at about 01:10Z on 2026-11-20 (the next command after it
+  reads 01:11:11 on the box clock). Anyone missing a dev server started with that config file name around then may match it.
 
 ## 8. Carries
 
