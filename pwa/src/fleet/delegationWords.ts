@@ -16,13 +16,15 @@
 // nothing acts on it automatically: only the operator's own tap (wave 5's "Attach to…", below) does. `inferredChip`
 // keys on `sourceKind === 'raw'` as well as on `inferred`, so a raw row whose marker went missing still says so.
 //
-// Imports only `shared/api` and `lib/wire` (never `./fleetTree` or `./nestFleet`, which import from here: a cycle).
+// Imports only `shared/api`, `lib/wire` and the design system's elapsed ladder (never `./fleetTree` or `./nestFleet`, which
+// import from here: a cycle).
 import {
   DELEGATION_ACTIVITY_PLACEMENTS, DELEGATION_LIVENESS, DELEGATION_ROW_GROUPS, delegationLeaseDispositionOf,
   delegationLeaseExpiresAtOf, isArchivedRow, type DelegationActivityWire, type DelegationCarrierState, type LeaseDoorRefusal,
   type SessionBucket, type DelegationLeaseSourceKind, type DelegationLeaseWire, type DelegationLiveness,
   type DelegationProjectionWire, type DelegationUnownedWire,
 } from '../../../shared/api';
+import { elapsedShort } from '@ccrc/ui';
 import { isRecord } from '../lib/wire';
 
 /** The chip every raw worktree wears (D-6999). */
@@ -419,4 +421,120 @@ export const notDelegatedConfirm: ConfirmWords = {
 /** The confirm for a control (Keep asks nothing). */
 export function confirmFor(c: WorktreeControl): ConfirmWords | null {
   return c.act === 'attach' ? attachConfirm(c.parentLabel) : c.act === 'foreign' ? notDelegatedConfirm : null;
+}
+
+// THE ARCHIVE'S SECTION, "Work no session owns" (session helpers design 2026-11-19 §6 and Table 8; desktop polish H4, D-8828).
+// C48 took unowned trees and the leases of two unlisted sessions off the fleet list and gave them no home; the Archive screen
+// is that home. One pure read of the frame builds both kinds of row, so the section draws what this says and decides nothing.
+// The rows carry no liveness word and no bare `unmeasured` (§4.4): where presence on disk was not measured, `presenceWord`
+// says it once, in the section's head. An unowned tree acts only through the lease the projection hid on it, and only by
+// Not delegated (D-8095: the unowned wire names no parent and no disposition, so Attach and Keep wait for those fields).
+
+/** An unowned tree's verdict, as its row says it. */
+export const VERDICT_WORD: Readonly<Record<DelegationUnownedWire['verdict'], string>> = {
+  unresolved: 'no owner found',
+  conflicting: 'two owners claimed it',
+};
+
+/** `leaseId`'s one reader: the lease the projection hid for a conflict on an unowned row's tree, or null when it hid none,
+ *  the row came from an older server, or the member is not a non-empty string. */
+export function hiddenLeaseOf(u: DelegationUnownedWire): string | null {
+  const id: unknown = u.leaseId;
+  return typeof id === 'string' && id !== '' ? id : null;
+}
+
+/** An unowned row's controls: only through the lease the projection hid on its tree, and only Not delegated (the wire names
+ *  no parent and no disposition for that lease). Null when it hid none. */
+export function unownedControls(u: DelegationUnownedWire): { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null {
+  const leaseId = hiddenLeaseOf(u);
+  return leaseId === null ? null : { leaseId, controls: [{ act: 'foreign' }] };
+}
+
+/** The leases whose parent AND worker are both unlisted: neither is a session the fleet list carries live (`listedLive`: an
+ *  archived session is unlisted, not gone). Either side listed gives the lease a session page (`leasesStartedBy`), so it is
+ *  not drawn here. In `firstObservedAt` order. */
+export function unlistedLeases(
+  w: DelegationProjectionWire, sessions: readonly { readonly id: string; readonly bucket: SessionBucket }[],
+): readonly DelegationLeaseWire[] {
+  const listed = new Set(sessions.filter((s) => listedLive(s)).map((s) => s.id));
+  return w.leases.filter((l) => !listed.has(l.parentId) && (l.via === null || !listed.has(l.via)))
+    .sort((a, b) => a.firstObservedAt.localeCompare(b.firstObservedAt) || a.leaseId.localeCompare(b.leaseId));
+}
+
+/** The head's one sentence for trees whose presence on disk the wire did not measure; null for none. */
+export function presenceWord(n: number): string | null {
+  return n <= 0 ? null : `presence on disk not measured for ${n} tree${n === 1 ? '' : 's'}`;
+}
+
+/** An attempt's age, on the shared coarse ladder (`elapsedShort`) in whole words: `tried 3 days ago`, `tried just now`
+ *  under a minute; null for a time that cannot be read, which is left out of the row, never guessed. */
+export function triedWord(attemptedAt: string, now: number): string | null {
+  const at = Date.parse(attemptedAt);
+  if (Number.isNaN(at)) return null;
+  const short = elapsedShort(now - at);
+  if (short === null) return 'tried just now';
+  const n = Number(short.slice(0, -1));
+  const unit = { m: 'minute', h: 'hour', d: 'day' }[short.slice(-1) as 'm' | 'h' | 'd'];
+  return `tried ${n} ${unit}${n === 1 ? '' : 's'} ago`;
+}
+
+/** An unowned tree's row: where it is (its path, else its admin record), its verdict, its age, and its one act. */
+export interface UnownedTreeRow {
+  readonly key: string;
+  readonly project: string;
+  readonly where: string;
+  /** The admin record: the control's accessible name, the worktree the act is about. */
+  readonly worktree: string;
+  readonly verdict: string;
+  readonly tried: string | null;
+  readonly act: { readonly leaseId: string; readonly controls: readonly WorktreeControl[] } | null;
+}
+/** A worktree row whose two sessions are both unlisted: its path, its disposition and its controls (never Attach: it needs
+ *  a listed parent, which these rows do not have). */
+export interface UnlistedLeaseRow {
+  readonly key: string;
+  readonly lease: DelegationLeaseWire;
+  readonly project: string;
+  readonly where: string;
+  readonly worktree: string;
+  readonly state: readonly string[];
+  readonly controls: readonly WorktreeControl[] | null;
+}
+export interface UnownedWork {
+  readonly trees: readonly UnownedTreeRow[];
+  readonly leases: readonly UnlistedLeaseRow[];
+  /** Rows of both kinds, and how many of their trees' presence on disk was not measured (the head says it once). */
+  readonly total: number;
+  readonly unmeasured: number;
+}
+
+const attemptTime = (u: DelegationUnownedWire): number => {
+  const t = Date.parse(u.attemptedAt);
+  return Number.isNaN(t) ? -Infinity : t;
+};
+
+/** What the Archive's section draws, from the frame as it arrived (`readDelegation` re-files an unknown word) and the fleet's
+ *  sessions. An unavailable frame (null) holds no unowned work to draw. Unowned trees newest attempt first. */
+export function unownedWork(
+  frame: DelegationProjectionWire | null, sessions: readonly { readonly id: string; readonly bucket: SessionBucket }[], now: number,
+): UnownedWork {
+  if (frame === null) return { trees: [], leases: [], total: 0, unmeasured: 0 };
+  const w = readDelegation(frame);
+  const trees = w.unowned.slice().sort((a, b) => attemptTime(b) - attemptTime(a) || a.adminRecord.localeCompare(b.adminRecord))
+    .map((u): UnownedTreeRow => ({
+      key: `${u.project}\u0000${u.adminRecord}\u0000${u.attemptedAt}`,
+      project: u.project,
+      where: u.canonicalPath ?? u.adminRecord,
+      worktree: u.adminRecord,
+      verdict: wordOf(VERDICT_WORD, u.verdict),
+      tried: triedWord(u.attemptedAt, now),
+      act: unownedControls(u),
+    }));
+  const leases = unlistedLeases(w, sessions).map((l): UnlistedLeaseRow => ({
+    key: l.leaseId, lease: l, project: l.project, where: l.canonicalPath, worktree: l.adminRecord,
+    state: worktreeStateParts(l, now), controls: worktreeControls(l, null),
+  }));
+  const unmeasured = w.unowned.filter((u) => u.workspace === 'unmeasured').length
+    + leases.filter((r) => r.lease.workspace === 'unmeasured').length;
+  return { trees, leases, total: trees.length + leases.length, unmeasured };
 }
