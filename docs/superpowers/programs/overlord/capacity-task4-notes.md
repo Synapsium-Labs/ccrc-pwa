@@ -42,11 +42,17 @@ and holds Task 3's diff until that lands. It brings in the draft's five commits,
   in shadow behind the `cap-counts-working` row. `capsRoomOf` now leaves out waiting runs only when the reading is
   armed (`usage.workingOnly`). In shadow, the lane reads no worker facts, and only a slot freed in the ordinary way
   wakes anyone. Armed, a slot that a waiting or gone worker frees is room too. The brief makes this binding.
-- **migration-slot.** The stack took slot 52 and the draft took 107. This PR takes the next free slot on `main` when
-  it last took `main`. The slot is positional: whoever lands second renumbers it, under the coordinator's standing
-  licence. The coord-db version pins and `run-close-switch`'s replay (one more undo line, one more replayed
-  migration) were counted again.
-- **lane-count.** `LANE_SCHEDULE` gains the `admissionWake` row, so the monotonic-clock pin goes from 53 to 54.
+- **migration-slot.** The stack took slot 52 and the draft took 107. This PR takes 111: the next free slot by
+  position after capacity Task 3's seed row (110), which it stacks on, with `main` at 109 when it last took `main`.
+  Whoever lands second renumbers, under the coordinator's standing licence. The coord-db version pins and
+  `run-close-switch`'s replay were counted again: one more undo line, and fifty-eight replayed migrations, Task 3's
+  seed included.
+- **lane-count.** `LANE_SCHEDULE` gains the `admissionWake` row beside `main`'s new `blockWakes` row, so the
+  monotonic-clock pin goes to 55.
+- **capacity-blocks-in-the-wake-tx.** The draft marked the claimant's `capacity` blocks woken from the lane, outside
+  the mail's write. `main` now has the block-wake lane (D-8126 A6), which leaves `capacity` to this lane, and its rule is
+  that a block is never woken without its mail. `queueAdmissionWake` therefore marks those blocks in the same
+  transaction as the mail (`markBlockWoken`, the one writer of `wokenAt`).
 
 ## Follow-ups
 
