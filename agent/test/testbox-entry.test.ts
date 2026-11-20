@@ -2,19 +2,15 @@
 // service through it. node resolves a module's own URL through the link and leaves argv[1] as typed, so the "started as the
 // program" check compares real paths: by the paths as written the service read itself as imported, did nothing and
 // exited 0, and the unit restarted it every five seconds.
-import { describe, it, expect, afterEach } from 'vitest';
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
-import os from 'node:os';
+import { describe, it, expect } from 'vitest';
+import { mkdirSync, readFileSync, symlinkSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import { startedAsProgram } from '../src/testbox/entry.js';
-
-const made: string[] = [];
-afterEach(() => { for (const d of made.splice(0)) rmSync(d, { recursive: true, force: true }); });
+import { mkTmp } from './tmpHelpers.js';
 
 function tree(): { real: string; viaLink: string; other: string } {
-  const dir = mkdtempSync(path.join(os.tmpdir(), 'ccrc-tb-entry-'));
-  made.push(dir);
+  const dir = mkTmp('ccrc-tb-entry-');
   mkdirSync(path.join(dir, 'release', 'v1'), { recursive: true });
   const real = path.join(dir, 'release', 'v1', 'main.js');
   writeFileSync(real, '');
