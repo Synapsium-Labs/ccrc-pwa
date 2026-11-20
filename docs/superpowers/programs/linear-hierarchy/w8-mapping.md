@@ -19,7 +19,7 @@ records what the wave built and every departure, for the coordinator to fold int
 
 The plan's "Deviations found" carries both entries in full. In short:
 
-- **Storage.** One migration (slot 114 after the absorbs of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
+- **Storage.** One migration (slot 115 after the absorbs of main) holds three columns: `teamWorkspace`, `teamSuggestions` and `teamCallId`. The Overlord's link is
   stored as `teamSource` `auto` plus `teamCallId`, because migration 64's CHECK admits only `manual` and `auto`. Exactly one
   function, `linkSourceOf`, derives the wire's `overlord` source, and a single-definition test fails on any other read
   (the coordinator's condition, mail of 2026-11-20).
@@ -28,7 +28,7 @@ The plan's "Deviations found" carries both entries in full. In short:
   while it holds the key; otherwise the one connected workspace that holds the key is stored, a key two hold is refused
   `team-ambiguous` (the card points at its picker), and a key none holds is stored with none. An unreadable Linear store is
   `unavailable`, never `team-unknown` and never stored as none. A cleared key, and the stored key sent back with no workspace
-  named, read no store (`writeReadsStore`). A row stored with no workspace (before migration 114) whose key one connected
+  named, read no store (`writeReadsStore`). A row stored with no workspace (before migration 115) whose key one connected
   workspace holds already resolves there, so Save of the unchanged key, with that workspace or none, keeps the stored none: the
   source, team name, evidence and time stay (the coordinator's ruling: no change of source). Another key or a workspace among
   two holders is still the operator's decision.
@@ -70,7 +70,7 @@ The plan's "Deviations found" carries both entries in full. In short:
 
 - `w8-attached-wire`: wire `readAttachedIssues` and the merged pull request URLs into the lane after the operator's go for one
   live capture; update `linking-attached-off.test.ts` deliberately in that commit.
-- `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to "ninety-five" for the two new doors,
+- `w8-readme-count`: resolved in this PR. README.md's machine-lane count word moved to the census-derived count ("ninety-six" after the absorbs) for the two new doors,
   by the packet the README's holding run approved; the ticket can close with the PR.
 - `w8-overlord-skill`: the Overlord skill's door table gains `link_team`, and says when it suggests instead (below `full`).
 - `w8-call-anchor`: address one call by id on the Waiting on you screen, so the Overlord link's line links to its call.

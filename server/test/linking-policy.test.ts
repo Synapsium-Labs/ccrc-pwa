@@ -224,7 +224,7 @@ describe('workspaceAfterWrite', () => {
     expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'CCC' }, route: store({}) }))
       .toEqual({ ok: true, workspace: null });
   });
-  // F2 (review 2971, the coordinator's ruling: no change of source): a row stored with no workspace (before migration 114) whose
+  // F2 (review 2971, the coordinator's ruling: no change of source): a row stored with no workspace (before migration 115) whose
   // key one connected workspace holds already resolves to that workspace, so the unchanged key sent back with it changes nothing.
   it("the unchanged key sent with the one workspace that holds it keeps a stored none: the pair is the same (F2)", () => {
     expect(workspaceAfterWrite({ before: { teamKey: 'BBB', workspace: null }, written: { teamKey: 'BBB', workspace: WS_B }, route: shared }))
