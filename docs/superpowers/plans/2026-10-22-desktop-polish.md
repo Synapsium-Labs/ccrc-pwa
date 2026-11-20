@@ -4558,7 +4558,7 @@ from the broker's fixture of that shape, not from a transcript: inferred. A cont
 id) takes the later end by its time: inferred, untested against a capture.
 
 **Mutation run** (`ccd/coordinator-skill/references/mutation-run.py`, through an adapter that holds each TypeScript file as
-the module text and runs the two new test files against a copy of the tree with that one file replaced): 169 mutants run, 169 killed (the decision 106, the fact parser 36, the shared types 27); the first round left 26 alive, which added a case for each, and six mutants were removed rather than killed (the note names each).
+the module text and runs the two new test files against a copy of the tree with that one file replaced): 172 mutants run, 172 killed (the decision 106, the fact parser 36, the shared types 30); the first round left 26 alive, which added a case for each, and six mutants were removed rather than killed (the note names each).
 The table is in `docs/superpowers/programs/desktop-polish/h1a.md`.
 
 **Deviations found.** The spec's words stand where this entry is silent. Each departure is named by slug.
