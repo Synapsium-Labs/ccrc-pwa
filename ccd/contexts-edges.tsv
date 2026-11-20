@@ -2,7 +2,8 @@ _accept_first_run_prompts -> _tmux_at
 _accept_first_run_prompts -> _tmx
 _alias_launch_fill -> _reg_read_to
 _alias_launch_mark -> _is_anthropic_backend
-_alias_observe -> _reg_read_to
+_alias_launch_observe -> _reg_read_to
+_alias_model_observe -> _reg_read_to
 _am_who -> _tmx_sock
 _answer_two_option_dialog -> _tmx
 _attic_project -> _reg_get
@@ -133,7 +134,6 @@ _role_long_lived -> _fresh_pick_field_to
 _route_applied_before_write -> _route_apply_seed
 _route_applied_get_to -> _reg_get_to
 _route_applied_set -> _reg_get
-_route_applied_set -> _reg_set
 _route_apply_now -> _is_codex_backend
 _route_apply_now -> _reg_get
 _route_apply_pending -> _route_any

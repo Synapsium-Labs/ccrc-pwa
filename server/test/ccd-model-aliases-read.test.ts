@@ -34,7 +34,7 @@ const aliases = (over: Record<string, Record<string, unknown>> = {}): string => 
 const advance = (hold: Record<string, unknown> | null, cls = 'opus'): string => {
   const a = seedAnthropicAdvance() as { classes: Record<string, { hold: unknown }> };
   a.classes[cls]!.hold = hold;
-  return serializeAdvance(a);
+  return serializeAdvance(a as unknown as Parameters<typeof serializeAdvance>[0]);
 };
 const facts = (cls = 'opus', w = 'claude'): string => h.sh(`_alias_facts_to v ${w} ${cls}; printf %s "$v"`);
 const HELD = { at: '2026-11-02T00:00:00Z', by: 'hand', model: 'claude-opus-9-2' };

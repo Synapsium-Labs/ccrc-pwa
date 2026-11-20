@@ -61,7 +61,7 @@ const hold = (cls: string): void => {
   put('claude.aliases.json', aliasesText());
   const a = seedAnthropicAdvance() as { classes: Record<string, { hold: unknown }> };
   a.classes[cls]!.hold = { at: '2026-11-02T00:00:00Z', by: 'hand', model: 'claude-opus-9-2' };
-  put('claude.advance.json', serializeAdvance(a));
+  put('claude.advance.json', serializeAdvance(a as unknown as Parameters<typeof serializeAdvance>[0]));
 };
 
 /** The CONTROL of every "writes none" case: the same fixture, spawned fresh with nothing in the way, DOES write the marker
@@ -318,7 +318,7 @@ describe('the observe step fills the marker once', () => {
         set -x; _alias_observe ${ID} 2>"$HOME/err"; rc=$?; set +x
         printf '%s %s' "$me" "$rc"`);
       const [me, rc] = out.split(' ');
-      const pids = new Set((fs.readFileSync(path.join(h.home, 'xt'), 'utf8').match(/^@(\d+)@/gm) ?? []).map((m) => m.replace(/@/g, '')));
+      const pids = new Set((fs.readFileSync(path.join(h.home, 'xt'), 'utf8').match(/^@+(\d+)@/gm) ?? []).map((m) => m.replace(/@/g, '')));
       pids.delete(me!);
       return { pids, err: fs.existsSync(path.join(h.home, 'err')) ? fs.readFileSync(path.join(h.home, 'err'), 'utf8') : '', rc: rc! };
     };

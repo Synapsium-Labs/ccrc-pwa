@@ -27,6 +27,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { CCD, ghContainedEnv, makeCcdHarness, rosterWithFacts, seedAccountsSh, type CcdHarness } from './ccdWsHelpers.js';
 import { mkTmp } from './tmpHelpers.js';
+import { parseAliases, serializeAliases } from '../../shared/model-aliases.mjs';
 import { DEFAULT_TEST_ROSTER } from './helpers/roster.js';
 import {
   FIXTURES, TICK_RUN_N, plantFixture, plantShims, countTicks, loopSleeps, commandWords, unshimmedExternals,
@@ -317,6 +318,32 @@ describe(`the supervise tick's fork budget: the real loop, ${N} ticks per fixtur
     const ticks = steady(m);
     expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
     expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(LABELLED_LEAVING_BUDGET);
+  }, 120_000);
+
+  // THE ROUTING RECORD'S MODEL ID COSTS THE TICK NOTHING ONCE RECORDED (model classes A3.6): an Anthropic session whose
+  // `routeapplied` carries `model=` beside an unchanged aliases file whose class id is that model. The observe step returns on
+  // the recorded key, with builtins only, so the figure is `idle-home`'s own.
+  it('an Anthropic session with model= recorded and an unchanged aliases file costs the idle-home figure', () => {
+    const h = makeCcdHarness('ccrc-ccd-tick-budget-model-');
+    harnesses.push(h);
+    plantFixture(h.home, ID, 'idle-home');
+    const id = 'claude-opus-9-1';
+    const classes: Record<string, unknown> = {};
+    for (const c of ['fable', 'opus', 'sonnet', 'haiku']) {
+      classes[c] = { id, source: 'cache', evidenceAt: null, idSince: null, seenAt: null, cacheTarget: id, seenId: id, unobserved: false,
+        unlaunchable: null, row: { id, label: null, efforts: ['low', 'high', 'xhigh'], defaultEffort: null, minVersion: null },
+        rowFrom: 'own', heldRow: null, orphaned: null };
+    }
+    const models = path.join(h.home, '.ccrc', 'models');
+    fs.mkdirSync(models, { recursive: true });
+    fs.writeFileSync(path.join(models, 'claude-a.aliases.json'), serializeAliases(parseAliases({
+      v: 1, at: '2026-11-01T00:00:00Z', cache: { format: 'current', fetchedAt: '2026-11-01T00:00:00Z' }, stale: false, classes })));
+    fs.writeFileSync(path.join(h.home, '.cc-sessions', `${ID}.routeapplied`), `class=opus effort=xhigh model=${id}`);
+    const m = measure(h);
+    expect(m.stderr).toContain('ended; exiting for systemd restart');
+    const ticks = steady(m);
+    expect(ticks.map(fe), 'steady').toEqual(Array(ticks.length).fill(fe(ticks[0]!)));
+    expect({ forks: ticks[0]!.forks, execs: ticks[0]!.execs }).toEqual(TICK_BUDGET['idle-home']);
   }, 120_000);
 
   it('prints the table, for the PR\'s departure', () => {

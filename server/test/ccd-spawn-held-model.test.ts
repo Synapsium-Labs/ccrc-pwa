@@ -63,7 +63,7 @@ const advanceText = (holds: Holds): string => {
   for (const [cls, model] of Object.entries(holds)) {
     a.classes[cls]!.hold = model === null ? null : { at: '2026-11-02T00:00:00Z', by: 'hand', model };
   }
-  return serializeAdvance(a);
+  return serializeAdvance(a as unknown as Parameters<typeof serializeAdvance>[0]);
 };
 /** A lane's two files: an aliases file that reads, and an advance file whose classes are held on the given ids. */
 const lane = (wrapper: string, holds: Holds): void => {

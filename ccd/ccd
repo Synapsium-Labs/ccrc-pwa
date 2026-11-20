@@ -23152,10 +23152,12 @@ _route_note_clear() {   # id — the applier is no longer declining, so the MARK
 # never on the send-keys alone), the class read-back (`_route_readback`) and a
 # live UUID rotation's promotion (`_operator_choice_promote`, for exactly the
 # fields it wrote), and by nothing else.
-_route_applied_set() {   # id field value — rewrite the list with <field> replaced or appended
+# @ccd-lib:modelid — `routeapplied`'s model id (A3.6, spec §2.5.6): `_route_applied_put` (the write, with `keep`), `_route_applied_unpick_to`, `_route_model_record` and the tick's `_alias_model_observe` live in ccd/lib/model-aliases.sh
+_route_applied_set() {   # id field value [keep] — rewrite the list with <field> replaced or appended; a class that differs from the recorded one drops `model=` and `picked=`; `keep` (only model/picked writes) leaves the stamp (mtime) where it was
   local id="$1" f="$2" v="$3" cur out="" w
   local -a words=()
   cur=$(_reg_get "$id" routeapplied 2>/dev/null)
+  [[ "$f" == class && " $cur " != *" class=$v "* ]] && _route_applied_unpick_to cur "$cur"
   # `read -a`, not `for w in $cur`: the file is writable by any session on the
   # box (one UNIX user — attribution, not authentication), and an unquoted
   # expansion would GLOB a value carrying `*` against this directory.
@@ -23164,7 +23166,7 @@ _route_applied_set() {   # id field value — rewrite the list with <field> repl
     [[ "$w" == "$f="* ]] && continue
     out="${out:+$out }$w"
   done
-  _reg_set "$id" routeapplied "${out:+$out }$f=$v"
+  _route_applied_put "$id" "${out:+$out }$f=$v" "${4-}"
 }
 
 _route_applied_get_to() {   # var id field -> var = the recorded value, or empty (printing form `_route_applied_get`: the tick-diet block, D-4963). Always 0.
@@ -24569,7 +24571,7 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
   # to that note (`ROUTE_READBACK_SAID`, `<id> <word>`, read by
   # `_route_retry_ok`'s `apply-gave-up`, review finding 13): each word has its
   # own remedy, and a give-up that never names it leaves the operator guessing.
-  local id="$1" want cls rd ts=- model=- effort=- uuid=- now stamp mine why="" lts=- lmodel=- ev rest=""
+  local id="$1" want cls rd ts=- model=- effort=- uuid=- now stamp mine why="" lts=- lmodel=- ev rest="" rid=""
   ROUTE_READBACK_SAID=""
   want=$(_route_wanted "$id"); cls="${want%% *}"
   [[ -n "$cls" && "$cls" != default && "$cls" != "$(_route_applied_get "$id" class)" ]] || return 1
@@ -24583,7 +24585,7 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
     if (( now - 10#$ts <= ROUTE_READBACK_FRESH )); then   # the sidecar answers
       [[ "$(_model_family_class "$model")" == "$cls" ]] || return 1
       _route_readback_overruled "$id" "$cls" "$ts" && return 1   # …unless the transcript holds a NEWER /model it never rendered
-      why="sidecar model $model, effort $effort, $((now - 10#$ts))s old"
+      why="sidecar model $model, effort $effort, $((now - 10#$ts))s old"; rid="$model"   # the id this reading named is recorded below, by id
     else
       lts="$ts"; lmodel="$model"   # a stale reading of this process: an older acknowledgement must agree with it
     fi
@@ -24594,6 +24596,7 @@ _route_readback() {   # id -> 0 iff it recorded the pending class as already run
     why="transcript ack \"Set model to ${BASH_REMATCH[3]}\" at $(printf '%(%F %T)T' "${BASH_REMATCH[1]}"), after spawn $(printf '%(%F %T)T' "${BASH_REMATCH[2]}")"
   fi
   _route_applied_set "$id" class "$cls"
+  [[ -z "$rid" ]] || _route_model_record "$id" "$rid"   # AFTER the class write (which drops model= and moves the stamp); `keep` moves it no more
   _route_tries_clear "$id"; _route_note_clear "$id"; rm -f -- "$REG/$id.routenote"
   _route_apply_pending "$id" && rest="; $(_route_pending_word "$id") still pending, typed under its own budget"
   echo "$(date '+%F %T') route-readback $id: class=$cls already running ($why) — recorded applied without a keystroke$rest" >> "$REG/swap.log"

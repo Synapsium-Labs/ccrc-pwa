@@ -265,7 +265,7 @@ _alias_launch_fill() {   # id -> rc 0 decided (filled, or dropped as overruled),
   return 0
 }
 
-_alias_observe() {   # id -> the supervise tick's own step (never inside `_route_apply_check`, whose gate 1 returns first when nothing is pending); always rc 0. Builtins only until a marker is unfilled, its sidecar is newer than it and the sidecar's bytes changed since this supervisor last judged them.
+_alias_launch_observe() {   # id -> the marker half of `_alias_observe`; always rc 0. Builtins only until a marker is unfilled, its sidecar is newer than it and the sidecar's bytes changed since this supervisor last judged them.
   local id="$1" f="$REG/$1.aliaslaunch" sc="$REG/usage/$1.json" m body='' key
   [[ -e "$f" ]] || return 0
   _reg_read_to m "$id" aliaslaunch || return 0
@@ -277,6 +277,74 @@ _alias_observe() {   # id -> the supervise tick's own step (never inside `_route
   [[ "${_ALIAS_JUDGED[$id]-}" == "$key" ]] && return 0
   _alias_launch_fill "$id"
   (( $? == 2 )) || _ALIAS_JUDGED["$id"]="$key"
+  return 0
+}
+
+# THE ROUTING RECORD'S MODEL ID (plan Task A3.6, spec §2.5.6): `routeapplied` carries `model=<bare id>`, the id the session's own reading last
+# named, on every lane. It is RECORDED, never typed, by the tick's own step (`_alias_observe`, outside `_route_apply_check`'s gate, which
+# returns first when nothing is pending) and by `_route_readback` when it confirms a class from a fresh reading. It is written with `keep`
+# (`_route_applied_set`'s fourth argument), which leaves the stamp (`routeapplied`'s mtime) where it was, so a reading is judged against
+# the last write that MOVED the stamp. `_route_applied_set` drops it when the class changes; a spawn's settle and the seed write a whole
+# new list without it, so it is recorded again after either. Nothing here creates `routeapplied`, and nothing types a model: an id change
+# is recorded and the session moves at its next spawn (the coordinator's ruling on A3.0 Step 3's fallback). Nothing in the pending check
+# reads `model=`, `picked=` or `held=`: `_route_pending_word_to` compares `class` and `effort` by name only.
+# @ccd-lib:modelid
+_route_applied_put() {   # id list [keep] -> writes routeapplied; with `keep` the new file takes the old file's mtime (`touch -r`) before it is renamed, so the stamp does not move; rc 0 iff it is on disk
+  local id="$1" tmp keep="${3-}" f=routeapplied
+  _REG_SET_SEQ=$(( _REG_SET_SEQ + 1 ))
+  tmp="$REG/.$id.$f.$BASHPID.$_REG_SET_SEQ.tmp"   # `_reg_set`'s own template (`.<id>.<field>.<pid>.<seq>.tmp`), so the id-length census covers it
+  printf '%s' "$2" > "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }
+  if [[ -n "$keep" && -e "$REG/$id.routeapplied" ]]; then touch -r "$REG/$id.routeapplied" -- "$tmp" 2>/dev/null || { rm -f -- "$tmp"; return 1; }; fi
+  _plat_mv_notdir "$tmp" "$REG/$id.routeapplied" || { rm -f -- "$tmp"; return 1; }
+}
+
+_route_applied_unpick_to() {   # var list -> var = the word list without `model=` and `picked=` (a class change drops both); builtins only; rc 0
+  local __up_w __up_out=''
+  local -a __up_words=()
+  read -r -a __up_words <<< "$2"
+  for __up_w in ${__up_words[@]+"${__up_words[@]}"}; do
+    [[ "$__up_w" == model=* || "$__up_w" == picked=* ]] && continue
+    __up_out="${__up_out:+$__up_out }$__up_w"
+  done
+  printf -v "$1" '%s' "$__up_out"
+  return 0
+}
+
+_route_model_record() {   # id raw-model -> records `model=<bare id>` in `routeapplied`, keeping the stamp; the one spelling of that write; rc 0
+  local bare
+  _model_id_bare_to bare "$2"
+  _route_applied_set "$1" model "$bare" keep
+  return 0
+}
+
+_alias_model_observe() {   # id -> the recording half of `_alias_observe`; always rc 0. Steady state (no routeapplied, or a recorded model) is builtins only; `_usage_sidecar_read`, `_pane_born` and `_plat_mtime` fork, and run only behind builtin gates: a regular sidecar newer than `routeapplied` whose bytes (with the record and the registry uuid) changed since this supervisor last judged them. Its memo is its own, never the marker's.
+  local IFS=$' \t\n' id="$1" ra sc="$REG/usage/$1.json" body='' key line rk rts rmodel ruuid cur born stamp
+  [[ -e "$REG/$id.routeapplied" ]] || return 0   # never creates the file: a session with no routing record has no class and no model to record
+  _reg_read_to ra "$id" routeapplied || return 0
+  # PART 2's SEAM: a landed re-pick (`picked=` differs from `model=` and the reading names `picked`) will also be recorded here. Until then
+  # a recorded model ends the step.
+  [[ " $ra " == *" model="* ]] && return 0
+  [[ -f "$sc" && "$sc" -nt "$REG/$id.routeapplied" ]] || return 0
+  { IFS= read -r -N 4096 body < "$sc"; } 2>/dev/null || :
+  _reg_read_to cur "$id" uuid
+  declare -gA _ALIAS_MODEL_JUDGED 2>/dev/null || :
+  key="$ra|$cur|$body"
+  [[ "${_ALIAS_MODEL_JUDGED[$id]-}" == "$key" ]] && return 0
+  _ALIAS_MODEL_JUDGED["$id"]="$key"
+  line=$(_usage_sidecar_read "$id")
+  read -r rk rts rmodel _ ruuid <<< "$line"
+  [[ "$rk" == reading && "$rts" =~ ^[0-9]+$ && "$rmodel" != - && "$ruuid" != - && "$ruuid" == "$cur" ]] || return 0
+  born=$(_pane_born "$id")
+  stamp=$(_plat_mtime "$REG/$id.routeapplied" 2>/dev/null)
+  if ! [[ "$born" =~ ^[0-9]+$ && "$stamp" =~ ^[0-9]+$ ]]; then unset '_ALIAS_MODEL_JUDGED[$id]'; return 0; fi   # undecided (tmux or the stamp cannot say): ask again
+  (( 10#$rts > 10#$born && 10#$rts > 10#$stamp )) || return 0   # strictly later than both: a reading in the stamp's own second cannot be told from the previous process's
+  _route_model_record "$id" "$rmodel"
+  return 0
+}
+
+_alias_observe() {   # id -> the supervise tick's own step (never inside `_route_apply_check`, whose gate 1 returns first when nothing is pending): the launch marker's fill, then the routing record's model id; always rc 0
+  _alias_launch_observe "$1"
+  _alias_model_observe "$1"
   return 0
 }
 
