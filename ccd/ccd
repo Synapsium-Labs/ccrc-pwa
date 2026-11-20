@@ -22584,12 +22584,14 @@ _route_seed_default() {   # id wrapper [k=v...] — the coordinator row for an O
   # D-8142: the argv is laid OVER the row, never instead of it. A field the argv names is not seeded first, so the
   # journal never shows a value the operator did not want (`class: ∅ -> sonnet`, never `opus -> sonnet`).
   local id="$1" w="$2" named=" " kv pair f
+  # shellcheck disable=SC2034  # bsub is _class_effort_barred_to's out-variable (the refusal's subject), which this caller does not read
+  local bsub
   local -a seed=()
   shift 2
   for kv in "$@"; do named+="${kv%%=*} "; done
   # A haiku class takes no effort level (the pair `_route_argv_check` and `cmd_route` refuse), so an argv that names
   # `class=haiku` and no effort must not have the row's effort laid under it: effort stays unset, the absent-equivalent.
-  _class_effort_barred_to "" "$w" "$(_route_argv_class "$@")" && named+="effort "
+  _class_effort_barred_to bsub "$w" "$(_route_argv_class "$@")" && named+="effort "
   # shellcheck disable=SC2086
   for pair in $ROUTE_COORDINATOR_ROW; do
     f="${pair%%=*}"
@@ -26751,6 +26753,8 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # callers read the variable, and a stray line here would land in whatever
   # `ws-add`/`start` was printing.
   local id="$1" mode="$2" wrapper workdir uuid tname sidflag rcflag resenv
+  # shellcheck disable=SC2034  # bsub is _class_effort_barred_to's out-variable (the refusal's subject), which this caller does not read
+  local bsub
   # Set before anything that can fail, so no path out of this function leaves a
   # PREVIOUS spawn's answer standing. The failure direction is stated at the
   # bottom of this function and is the same one: unknown degrades to 0.
@@ -27106,7 +27110,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   # form, which Claude Code 2.1.321 saves as the ACCOUNT's default for new sessions (`modelSettings.<model>.effortLevel`
   # in the config dir's user settings); `--effort` is session-only. Haiku takes no effort level, so it gets none. Deliberately NOT a top-level `effortLevel` in
   # `--settings`: that applies to every model. A present effort file (any value, `auto` included) already decided above.
-  [[ -n "$SPAWN_EFFORT" && ! -e "$REG/$id.effort" ]] && ! _class_effort_barred_to "" "$wrapper" "${rclass:-}" && { _is_anthropic_backend "$wrapper" || _is_codex_backend "$wrapper"; } \
+  [[ -n "$SPAWN_EFFORT" && ! -e "$REG/$id.effort" ]] && ! _class_effort_barred_to bsub "$wrapper" "${rclass:-}" && { _is_anthropic_backend "$wrapper" || _is_codex_backend "$wrapper"; } \
     && routeflags="${routeflags:+$routeflags }--effort $SPAWN_EFFORT"
   # THE CHILD'S TEMP ROOT (spec §5.2), composed ONCE, here, into the one `env`
   # string BOTH spawn lines below splice — for `$rcflag`'s reason: the resume
