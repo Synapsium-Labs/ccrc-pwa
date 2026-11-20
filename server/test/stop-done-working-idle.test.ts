@@ -8,7 +8,8 @@ import path from 'node:path';
 import { copyFileSync, mkdirSync } from 'node:fs';
 import {
   STOP_DONE_GRACE_MS, STOP_DONE_PARKED_IDLE_MS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES, WORKER_ASLEEP_DETAIL_PREFIX,
-  WORKER_ASLEEP_MAILS_PER_RUN, mailOnly, stopDoneVerdict, workerAsleepNoticeDue, type StopDoneInput, type StopDoneRow,
+  WORKER_ASLEEP_MAILS_PER_RUN, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_WAITING_HOLD_OFF_MS, STOP_DONE_WAITING_MEASURES_PER_PASS,
+  STOP_DONE_PARKED_IDLE_MS as PARKED_MS, mailOnly, stopDoneVerdict, waitingCaseKey, workerAsleepNoticeDue, type StopDoneInput, type StopDoneRow,
 } from '../src/stopDone.js';
 import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { queueStallNotice, queueSystemMail } from '../src/coord/rundefsTx.js';
@@ -249,7 +250,9 @@ describe('the run-done pass on a worker whose newest placed run is `working`', (
     await stopDonePass({ ...w.deps, liveWord: measured }, m, [fleetRow(id)], [rec(WORKER)], []);
     expect(measured).not.toHaveBeenCalled();
     expect(warn.mock.calls.filter((c) => String(c[0]).startsWith('ccrc-server: stop-done shadow:'))).toHaveLength(1);
-    expect(m.retryAt.get(WORKER)).toBe(NOW + STOP_DONE_RETRY_MS);
+    // Review 2887 F3: the hour is keyed by the case (worker, run, state), never by the worker alone.
+    expect(m.waitingHeld?.get(waitingCaseKey(WORKER, id, 'working'))).toBe(NOW + STOP_DONE_RETRY_MS);
+    expect(m.retryAt.has(WORKER)).toBe(false);
     expect(w.argv).toEqual([]);
   });
 
@@ -410,6 +413,116 @@ describe('the run-done pass on a worker whose newest placed run is `working`', (
     await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], []);
     expect(w.argv).toEqual([HIB]);
     expect(mailed(s)).toEqual([]);
+  });
+});
+
+// ── Review 2887: the waiting case never costs the rest of the lane (F1), holds without mail (F2), and its hold-off
+// covers one case (F3) ─────────────────────────────────────────────────────────────────────────────────────────────
+
+/** N quiet `working` workers that sort before one `done` worker (closed two hours ago), each live read held by a
+ *  session cron; the `done` worker's marker is quiet and clear. */
+function crowd(s: CoordStore, n: number): { readonly w: World; readonly rows: FleetSession[]; readonly recs: SessionRecord[]; readonly done: string; readonly marks: string[] } {
+  const ids: string[] = [];
+  const rows: FleetSession[] = [];
+  for (let k = 1; k <= n; k++) {
+    const id = `project-a-w${String(k).padStart(2, '0')}`;
+    const run = runAt(s, 'working', k, id);
+    ids.push(id);
+    rows.push(fleetRow(run, { id } as Partial<FleetSession>));
+  }
+  const done = 'project-a-zz-finished';
+  const run = runAt(s, 'done', n + 1, done);
+  s.db.prepare('UPDATE runs SET closedAt = ? WHERE id = ?').run(NOW - 2 * HOUR, run);
+  rows.push(fleetRow(run, { id: done } as Partial<FleetSession>));
+  const w = world(s);
+  const marks: string[] = [];
+  w.deps = { ...w.deps, mark: async (r: SessionRecord) => {
+    marks.push(r.id);
+    return r.id === done ? mark(7 * HOUR) : { ...mark(7 * HOUR), crons: 1 };
+  } } as never;
+  return { w, rows, recs: [...ids, done].map(rec), done, marks };
+}
+const HIB_OF = (id: string): string[] => ['hibernate', id, '--surface', 'agent', '--actor', 'sweep:stop-done'];
+
+describe('review 2887: the waiting case and the rest of the run-done lane', () => {
+  it('the budgets: the waiting case has its own, and the rest keep the six they had', () => {
+    expect(STOP_DONE_MEASURES_PER_PASS).toBe(6);
+    expect(STOP_DONE_WAITING_MEASURES_PER_PASS).toBe(3);
+    expect(STOP_DONE_WAITING_HOLD_OFF_MS).toBe(PARKED_MS / 3);
+  });
+
+  for (const armed of [false, true]) {
+    it(`F1: ${STOP_DONE_MEASURES_PER_PASS + 1} quiet working workers held by a session cron never cost a finished worker its sleep (${armed ? 'armed' : 'shadow'})`, async () => {
+      const s = store();
+      if (armed) live(s);
+      const c = crowd(s, STOP_DONE_MEASURES_PER_PASS + 1);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      await stopDonePass(c.w.deps, mem(), c.rows, c.recs, []);
+      expect(c.w.argv).toEqual([HIB_OF(c.done)]);
+      // The waiting workers took their own budget, no more.
+      expect(c.marks.filter((id) => id !== c.done)).toHaveLength(STOP_DONE_WAITING_MEASURES_PER_PASS);
+      expect(mailed(s)).toEqual([]);
+    });
+  }
+
+  it('F1 (b): a working worker the live read held is not measured again inside the hold-off, and is once it ends', async () => {
+    const s = store();
+    const c = crowd(s, 2);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const m = mem();
+    const working = c.rows.filter((r) => r.id !== c.done);
+    const recs = c.recs.filter((r) => r.id !== c.done);
+    await stopDonePass(c.w.deps, m, working, recs, []);
+    expect(c.marks).toEqual(['project-a-w01', 'project-a-w02']);
+    await stopDonePass(c.w.deps, m, working, recs, []);
+    expect(c.marks).toHaveLength(2);
+    const later = { ...c.w.deps, now: () => NOW + STOP_DONE_WAITING_HOLD_OFF_MS } as StopDoneSweepDeps;
+    await stopDonePass(later, m, working, recs, []);
+    expect(c.marks).toHaveLength(4);
+  });
+
+  it('F2: while mail-disabled stands the waiting case holds: no sleep, no observation row, no mail; a finished worker still sleeps', async () => {
+    for (const names of [['mail-disabled'], null]) {
+      const s = store();
+      const id = runAt(s, 'working');
+      live(s);
+      const w = world(s);
+      vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+      if (names === null) {
+        // An unlistable registry is no clear switch: it holds too, read through the pass's facts.
+        expect(stopDoneVerdict({ ...input('working'), mailDisabled: 'unmeasurable' })).toEqual({ act: 'hold', reason: 'mail-disabled' });
+        continue;
+      }
+      await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], names);
+      expect(w.argv).toEqual([]);
+      expect(mailed(s)).toEqual([]);
+      expect(s.runEvents(id).filter((e) => e.detail !== null && e.detail.startsWith(WORKER_ASLEEP_DETAIL_PREFIX))).toEqual([]);
+      // CONTROL: the switch lifted, the same worker sleeps and its coordinator is told.
+      await stopDonePass(w.deps, mem(), [fleetRow(id)], [rec(WORKER)], []);
+      expect(w.argv).toEqual([HIB]);
+      expect(mailed(s)).toHaveLength(1);
+    }
+    // A finished worker's sleep never reads the switch.
+    const s = store();
+    const c = crowd(s, 0);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    await stopDonePass(c.w.deps, mem(), c.rows, c.recs, ['mail-disabled']);
+    expect(c.w.argv).toEqual([HIB_OF(c.done)]);
+  });
+
+  it('F3: a shadow-logged worker whose run moves to done sleeps after the grace, not an hour later', async () => {
+    const s = store();
+    const id = runAt(s, 'working');
+    const w = world(s);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const m = mem();
+    await stopDonePass(w.deps, m, [fleetRow(id)], [rec(WORKER)], []);
+    expect(w.argv).toEqual([]);
+    // Inside the hour, the run is done and closed past the grace.
+    s.db.prepare("UPDATE runs SET state = 'done', closedAt = ? WHERE id = ?").run(NOW - STOP_DONE_GRACE_MS - MIN, id);
+    const later = { ...w.deps, now: () => NOW + 15 * MIN } as StopDoneSweepDeps;
+    await stopDonePass(later, m, [fleetRow(id)], [rec(WORKER)], []);
+    expect(w.argv).toEqual([HIB]);
   });
 });
 

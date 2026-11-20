@@ -223,8 +223,10 @@ export const LANE_ARM_TEXT = {
         + 'or open on a screen, is left awake; the server logs it to the server journal, as lines beginning '
         + '"ccrc-server: stop-done shadow:".',
       liveNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
-        + 'or open on a screen, is put to sleep, and its coordinator is mailed once. Mail, a send-back or a re-dispatch '
-        + 'wakes it; its workspace, branch and transcript are kept.',
+        + 'or open on a screen, is put to sleep, and its coordinator is mailed once for that sleep. Its session ends; its '
+        + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
+        + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
+        + 'worker is put to sleep, because its coordinator could not be told.',
       gate: null,
     },
   },

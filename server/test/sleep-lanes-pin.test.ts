@@ -139,6 +139,8 @@ const RUN_DONE_ALSO: readonly Rung<StopDoneInput, StopDoneHold>[] = [
   { name: 'unmeasured (turn verdict)', word: 'unmeasured', touches: [], set: sdLive({ turn: 'unmeasured' }) },
   { name: 'marker (unreadable)', word: 'marker', touches: [], set: sdLive({ mark: { ok: false, reason: 'foreign' } }) },
   { name: 'marker-background (bg -1)', word: 'marker-background', touches: [], set: sdMark({ bg: -1 }) },
+  // D-8791 (review 2887 F2): the waiting case under `mail-disabled`, decided after the ladder (`stopDoneVerdict`).
+  { name: 'mail-disabled (the waiting case)', word: 'mail-disabled', touches: [], set: (i) => sdIn({ mailDisabled: 'set' })(sdLast({ state: 'working', closedAt: null })(i)) },
   { name: 'scheduled (crons absent)', word: 'scheduled', touches: [], set: sdMark({ crons: null }) },
   { name: 'recent (no stamp)', word: 'recent', touches: [], set: sdMark({ turnAt: null, stopAt: null, restartAt: null }) },
 ];

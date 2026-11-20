@@ -49,7 +49,17 @@ programme ledger. It defines no D-number: D-8790 (slug `working-idle-sleeps`) an
 | F13, holds pinned | One case each for `menu`, `roster` (subagents), `bucket`, `turn`, the row's `background`, unread mail, background work, a session cron and a claim. | The draft's one looping case is now one case per hold (`it.each`), plus `viewer`, `run-claimant`, `marker` and the unmeasurable `bg -1` and absent `crons`. The pass-level cases for unread mail, background work and a session cron stay. |
 | F2, arming order | Part 2 is armed before Part 3, whose cap reading now ships in shadow too. | Recorded here. This PR arms nothing: the `working-idle-sleep` row is seeded `shadow`. The operator arms it first; Task 3's row comes after. |
 
-## 3. Red-first evidence
+## 3. Fix round 1 (review 2887, ruled by the coordinator)
+
+| Finding | Ruling | What this PR does |
+|---|---|---|
+| F1, the measure budget | A `working` row never costs a finished or parked row its measure: (a) its own per-pass budget, skipping only the remaining working rows (`continue`); (b) a short hold-off for a working worker the live read held, keyed as in F3. | The sleep pass gains an opt-in class, `aside` on the lane row (only run-done sets it, so every other sleep lane's pass is unchanged). A row in the class (`waitingCaseKey`: its newest placed run is in `STOP_DONE_WAITING_STATES`) is measured from `STOP_DONE_WAITING_MEASURES_PER_PASS` (3), never from `STOP_DONE_MEASURES_PER_PASS` (6, unchanged), and a spent class budget skips only the class's remaining rows. A class row the live read held is not measured again for `STOP_DONE_WAITING_HOLD_OFF_MS`, a third of `STOP_DONE_PARKED_IDLE_MS` (10 minutes), so a worker that does go quiet still sleeps within 10 minutes of the bound and one parked on a cron or a Monitor is measured three times in that half hour, not thirty. The reviewer's case is pinned in shadow and armed: seven quiet `working` workers held by a session cron, and the `done` worker that sorts last still sleeps. |
+| F2, `mail-disabled` | While `mail-disabled` stands, the waiting case holds: no sleep, no observation row, no mail. Finished and parked sleeps are unchanged. | Decided in L1, in the one ladder: `decideSleep`'s run clock answers the new hold word `mail-disabled` where it recognises the waiting case, when the pass's listing reads the switch as anything but `clear` (an unlistable registry holds too), so the worker is held before any live measure is spent on it. The lane passes the reading in `StopDoneInput.mailDisabled` (`SleepInput.mailDisabled`); no other case reads it. Pinned with a control (the switch lifted, the same worker sleeps and is told) and a finished worker that still sleeps under the switch. The Live words on the arming card say so. |
+| F3, one case per hold-off | Key the hold-off memory by (worker, run, state), so a change of the run's state clears it and the unarmed decision is main's. | The waiting case's hold-offs, the live-read one and the shadow line's hour, live in `StopDoneMemory.waitingHeld`, keyed by `waitingCaseKey(worker, run, state)`. A row is skipped only while its current case is held, so a worker whose run leaves `working` meets the decision it had before this PR. `retryAt` is again only the refused act's hour, keyed by worker as on `main`. Pinned: a shadow-logged worker whose run moves to `done` sleeps 15 minutes later, not an hour later. |
+| F4, two derivations of "this sleep is the waiting case" | Carry as a note. | Carried: `v.waiting` (the verdict's, read by `answerLive`, `shadow` and `slept`) and `isWaitingState(runStateOf(store))` (read by `said` and `feedRecord`) both read `STOP_DONE_WAITING_STATES` and the act-time store, so they agree; a later change that adds a second waiting state keeps them in step. A follow-up may fold the second into the first. |
+| F5, the Live words | Say that a worker holding a live claim, or named by a second active run, keeps its process, and that its session ends while its workspace, branch and transcript are kept, with mail or a send-back restarting it. | Done in `LANE_ARM_TEXT`'s `working-idle-sleep` row, with F2's sentence. |
+
+## 4. Red-first evidence
 
 Each guard was mutated, `stop-done-working-idle.test.ts` was run through `ccrc test`, and the file was restored from
 a saved copy:
@@ -67,14 +77,17 @@ a saved copy:
 | the seed as a plain `INSERT` | killed (`decision-model-records` and `coord-db`, 2 failed each) |
 | F5: the per-run bound lifted (`workerAsleepNoticeDue` always true) | killed (1 failed) |
 | F5: the observation row's detail drops the sleep's instant, so every sleep of a worker on a run is one key | killed (3 failed) |
+| F1 (a): a spent waiting budget `break`s the pass instead of `continue` | killed (2 failed) |
+| F1 (a): no waiting class (the working rows spend the lane's six) | killed (4 failed) |
+| F1 (b): no hold-off after a held live read | killed (1 failed) |
+| F2: the `mail-disabled` hold removed from `decideSleep` | killed (2 failed) |
+| F3: the shadow line's hour keyed by the worker again (`retryAt`) | killed (2 failed) |
 
 The characterization commit (`test(sleep): pin today's run-done answer …`) is green on its base, Task 1's tip; the
 rows marked `today:` are the ones the behaviour commit flips to `now: … (was: …)`.
 
-## 4. Residuals
+## 5. Residuals
 
-- **The shadow hold-off covers the worker, not the case.** A waiting worker logged in shadow is not asked again for
-  an hour (the lane's one hold-off map). If its run moves to `awaiting-review` inside that hour, the parked sleep
-  reaches it up to an hour later than it would otherwise. Nothing is lost; the next pass after the hour decides it.
+- **Acts are still one budget.** Armed, a waiting worker's sleep takes one of the pass's three acts like any other, so a finished worker that sorts after three waiting sleeps waits one pass (a minute). Measures are separate (F1); acts are not, and nothing is acted on while the row is in shadow, so the unarmed lane is `main`'s.
 - **Arming is the operator's.** Going Live puts the fleet's quiet `working` workers to sleep within a pass or two
   (three acts a pass), and each coordinator is mailed once per sleep.

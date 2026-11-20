@@ -1,4 +1,5 @@
-import { TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
+import { TERMINAL_RUN_STATES, type FleetSession, type MarkerState } from '../../shared/api.js';
+import { MAIL_DISABLED_MARKER } from '../../shared/switches.js';
 import { turnSays, turnWordOf, type TurnPolicy } from './sessionReading.js';
 
 /**
@@ -145,6 +146,10 @@ export interface SleepInput {
   readonly now: number;
   /** The quiet threshold (and the run clock's grace): run-done's grace, idle-hours' N. */
   readonly quietMs: number;
+  /** D-8791 (review 2887 F2): `$REG/mail-disabled` as the lane's listing read it. The run clock's waiting case holds
+   *  `mail-disabled` unless it reads `clear`: that sleep is told to the run's coordinator, and while mail cannot be sent
+   *  it does not happen. Read by no other case. Absent: not read, as `clear` (a lane with no waiting case). */
+  readonly mailDisabled?: MarkerState;
 }
 
 export type SleepVerdict<W extends string> =
@@ -202,6 +207,7 @@ export function decideSleep<W extends string>(i: SleepInput, policy: SleepPolicy
     parked = policy.runClock.parkedStates.includes(s.last.state);
     // D-8790: or waiting — the run still works, its worker does not; the same clock as parked.
     waiting = !parked && policy.runClock.waitingStates.includes(s.last.state);
+    if (waiting && (i.mailDisabled ?? 'clear') !== 'clear') return hold(MAIL_DISABLED_MARKER);
     if (!parked && !waiting) {
       if (!(TERMINAL_RUN_STATES as readonly string[]).includes(s.last.state)) return hold('not-done');
       if (s.last.closedAt === null) return hold('close-unplaced');

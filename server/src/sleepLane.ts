@@ -20,10 +20,11 @@ import {
 } from './coord/hibernate.js';
 import { RECLAIM_PAUSE_MARKER, programmeHoldOf } from './coord/rundefs.js';
 import { VIEWER_OPEN_TTL_MS, TERMINAL_RUN_STATES, type FleetSession } from '../../shared/api.js';
-import { readSwitches, type MarkerSwitchName, type SwitchReading } from '../../shared/switches.js';
+import { MAIL_DISABLED_MARKER, readSwitches, type MarkerSwitchName, type SwitchReading } from '../../shared/switches.js';
 import {
   RUN_DONE_POLICY, STOP_DONE_ACTOR, STOP_DONE_DISABLED_MARKER, STOP_DONE_GRACE_MS, STOP_DONE_MEASURES_PER_PASS,
-  STOP_DONE_PARKED_STATES, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES,
+  STOP_DONE_PARKED_STATES, STOP_DONE_PER_PASS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_HOLD_OFF_MS, STOP_DONE_WAITING_MEASURES_PER_PASS,
+  STOP_DONE_WAITING_STATES, waitingCaseKey,
   mailOnly, stopDoneVerdict, workerAsleepNotice, workerAsleepNoticeDue, type StopDoneHeldKind, type StopDoneInput, type StopDoneLive, type StopDoneMark, type StopDoneRow,
   type StopDoneStoreRead, type StopDoneVerdict,
 } from './stopDone.js';
@@ -251,6 +252,19 @@ export interface SleepLane<D extends SleepDepsBase, M, Row extends { readonly su
    *  shadow — the pass writes the lane's `shadow` line and acts on nothing, and asked again at the act, nearest the
    *  argv beside the switches, it holds `switched-off`. */
   readonly answerLive?: (deps: D, v: Asleep<V>) => boolean;
+  /** D-8790 (review 2887 F1, F3): a class of rows the lane measures apart from the rest. `keyOf` names a row's case
+   *  from the pass's store read (null: not in the class). A row in the class is measured from `measures`, a per-pass
+   *  budget of its own: past it the pass skips the class's remaining rows (`continue`) and never stops for them, so the
+   *  rest of the population keeps exactly the measures of `caps.measures`. A row of the class the live read held is not
+   *  measured again for `heldMs`, and one written to the lane's `shadow` line for `shadowMs`, both keyed by its case,
+   *  so a change of case clears them. Absent: no class, and the pass is as it always was. */
+  readonly aside?: {
+    readonly keyOf: (deps: D, f: SleepPassFacts<St>, row: FleetSession) => string | null;
+    readonly measures: number;
+    readonly heldOf: (mem: M) => Map<string, number>;
+    readonly heldMs: number;
+    readonly shadowMs: number;
+  };
   /** What follows a sleep: `stay-asleep` (both sleep policies), or `wake`, the automatic roll's in-place resume
    *  (D-7452): the wake budget asked before the act, and the act is `ccd hibernate --roll` (D-7458), whose wake runs
    *  inside ccd, so the executor still runs ccd once. A `wake` lane is armed only where the box lists
@@ -366,15 +380,32 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
   const due: Array<{ readonly row: FleetSession; readonly rec: SessionRecord; readonly v: Asleep<V>; readonly port: ArmedPort<Row> }> = [];
   let acted = 0;
   let measured = 0;
+  // D-8790 (review 2887 F1, F3): the lane's aside class, its own budget and its case-keyed hold-off.
+  const aside = lane.aside ?? null;
+  const asideHeld = aside === null ? null : aside.heldOf(mem);
+  if (asideHeld !== null) {
+    const at = passNow ?? deps.now();
+    for (const [k, until] of [...asideHeld]) if (until <= at) asideHeld.delete(k);
+  }
+  let measuredAside = 0;
   for (const row of pop) {
     if (lane.caps.past === 'stop' && acted >= lane.caps.acts) break;
     const rec = byId.get(row.id)!;
     let now = passNow ?? deps.now();
+    const key = aside === null ? null : aside.keyOf(deps, f, row);
+    if (key !== null && asideHeld!.has(key)) continue;
     let v = lane.asks.first(deps, f, row, now);
     if (v.act === 'measure') {
-      if (lane.caps.measures !== null && measured >= lane.caps.measures) break;
-      measured++;
+      if (key !== null) {
+        // Its own budget: a spent one skips this row, never the rows after it.
+        if (measuredAside >= aside!.measures) continue;
+        measuredAside++;
+      } else {
+        if (lane.caps.measures !== null && measured >= lane.caps.measures) break;
+        measured++;
+      }
       ({ v, now } = await lane.asks.measured(deps, f, row, rec));
+      if (key !== null && !isAsleep(v)) asideHeld!.set(key, now + aside!.heldMs);
     }
     if (!isAsleep(v)) {
       const o = lane.outcome.judged(row.id, v);
@@ -386,6 +417,7 @@ export async function sleepPass<D extends SleepDepsBase, M, Row extends { readon
       const o = lane.outcome.judged(row.id, v);
       if (o !== null) out.push(o);
       lane.shadow?.(deps, mem, row.id, asleep, now);
+      if (key !== null) asideHeld!.set(key, now + aside!.shadowMs);
       continue;
     }
     // Past the pass's own bound the row waits for the next pass: no line, no act.
@@ -629,9 +661,11 @@ export interface StopDoneSweepDeps {
 }
 
 export interface StopDoneMemory {
-  /** After a refused stop, or a waiting worker's shadow line (D-8790): not asked again before this
-   *  instant. */
+  /** After a refused stop: not asked again before this instant. */
   readonly retryAt: Map<string, number>;
+  /** D-8790 (review 2887 F1, F3): the waiting case's hold-offs, keyed by case (`waitingCaseKey`: worker, run, state),
+   *  so a change of the run's state clears them. Created on the first pass that needs it. */
+  waitingHeld?: Map<string, number>;
   /** D-6091: the mail-only count the lane's last excluded row carried; absent until this process's first pass writes
    *  one, so a restart writes one row, zero included, and a zero reads apart from a lane that never ran. */
   mailOnly?: number;
@@ -767,7 +801,7 @@ function runDoneInput(
   return {
     row, heldKind: heldKindOf(row.held, deps.coord, ownRunAskerOf(row.id, store)), holdOkVerb: f.holdOkVerb, store, ...runDoneViewerFacts(deps, row.id, at),
     verb: f.verb, overlord: overlordOf(f.designation, row.id), optedOut: f.names.includes(`${row.id}.${NO_HIBERNATE_SUFFIX}`),
-    live, now: at, graceMs: f.quietMs,
+    live, now: at, graceMs: f.quietMs, mailDisabled: readSwitches(f.names)[MAIL_DISABLED_MARKER],
   };
 }
 
@@ -882,6 +916,16 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
   verb: 'holds-before-measure',
   holdOk: true,
   answerLive: (deps, v) => v.waiting === undefined || workingIdleSleepLive(deps.coord),
+  aside: {
+    keyOf: (_deps, f, row) => {
+      const s = f.storeOf(row.id);
+      return s.ok && s.last !== null && isWaitingState(s.last.state) ? waitingCaseKey(row.id, s.last.runId, s.last.state) : null;
+    },
+    measures: STOP_DONE_WAITING_MEASURES_PER_PASS,
+    heldOf: (m) => (m.waitingHeld ??= new Map()),
+    heldMs: STOP_DONE_WAITING_HOLD_OFF_MS,
+    shadowMs: STOP_DONE_RETRY_MS,
+  },
   then: 'stay-asleep',
   actor: STOP_DONE_ACTOR,
   clock: 'per-pass',
@@ -916,9 +960,9 @@ export const RUN_DONE_LANE: SleepLane<StopDoneSweepDeps, StopDoneMemory, StopDon
     },
   },
   // Only the waiting case reaches here (`answerLive`): the lane itself is live, so `armed` is never null in its loop.
-  shadow: (_deps, mem, id, v, now) => {
+  // Its hour's hold-off is the pass's, keyed by case (`aside.shadowMs`, review 2887 F3).
+  shadow: (_deps, _mem, id, v) => {
     if (v.waiting === undefined) return;
-    mem.retryAt.set(id, now + STOP_DONE_RETRY_MS);
     console.warn(`ccrc-server: stop-done shadow: would put ${id} to sleep (${WAITING_WORDS}, run ${v.runId}, its last turn ended ${utcOf(v.waiting.since)}); the ${WORKING_IDLE_SLEEP_LANE} row is in shadow — asked again in an hour (D-8790)`);
   },
   said: (_deps, _mem, id, r) => {

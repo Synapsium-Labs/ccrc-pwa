@@ -82,6 +82,8 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['marker-background', { live: readLive({ mark: markAt({ bg: 1 }) }) }],
     ['scheduled', { live: readLive({ mark: markAt({ crons: 1 }) }) }],
     ['recent', { live: readLive({ mark: markAt({ stopAt: NOW - 5 * 60_000, turnAt: NOW - 5 * 60_000 }) }) }],
+    // D-8791 (review 2887 F2): only the waiting case reads the switch.
+    ['mail-disabled', { store: okStore({ last: { runId: 7, state: 'working', closedAt: null } }), mailDisabled: 'set' }],
   ];
 
   for (const [hold, o] of cases) {
@@ -174,8 +176,9 @@ describe('stopDoneVerdict (D-5370)', () => {
   });
 
   it('every hold this lane shares with hibernation is spelled in hibernation\'s words (the absorption)', () => {
+    // `mail-disabled` is the waiting case's own (D-8791, review 2887 F2): hibernation has no coordinator to tell.
     const own = new Set(['not-a-child', 'child-unreadable', 'stopped', 'no-run', 'not-done', 'close-unplaced', 'grace',
-      'no-verb', 'turn']);
+      'no-verb', 'turn', 'mail-disabled']);
     const hib = new Set<string>(HIBERNATE_HOLDS);
     expect(STOP_DONE_HOLDS.filter((h) => !own.has(h) && !hib.has(h))).toEqual([]);
     expect(HIBERNATE_HOLDS.filter((h) => !(STOP_DONE_HOLDS as readonly string[]).includes(h)), 'every hibernation hold is the lane\'s too').toEqual([]);

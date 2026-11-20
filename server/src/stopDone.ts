@@ -1,4 +1,4 @@
-import { IDLE_RUN_STATES, type FleetSession, type RunState } from '../../shared/api.js';
+import { IDLE_RUN_STATES, type FleetSession, type MarkerState, type RunState } from '../../shared/api.js';
 import {
   SLEEP_HELD_RULES, SLEEP_POLICY_NAMES, SLEEP_QUIET_BOUNDARIES, SLEEP_RUN_CLOCKS, decideSleep, type SleepInput,
   type SleepPolicy,
@@ -74,6 +74,7 @@ const STOP_DONE_HOLD_MAP = {
   'not-done': 'its newest placed run is not finished: neither `done` nor `failed`, nor parked at `awaiting-review`, `merging` or `closing`, nor `working` with its worker waiting',
   'close-unplaced': 'its newest placed run reads `done` or `failed` with no close time',
   grace: 'its run closed less than the grace ago',
+  'mail-disabled': 'the waiting case only: `mail-disabled` stands, or the registry could not be listed, so its coordinator could not be told (D-8791)',
   'run-worker': 'another active run names it as worker (beside its own `working` run, a second one)',
   'run-claimant': 'it claims an open run (it coordinates)',
   claim: 'it holds a live claim',
@@ -114,6 +115,23 @@ export const STOP_DONE_PARKED_STATES: readonly string[] = IDLE_RUN_STATES.filter
 /** D-8790: the run state a worker WAITS in when its turn marker is quiet `STOP_DONE_PARKED_IDLE_MS`.
  *  `dispatched` is not one: its worker has not started, and its brief is unread mail. */
 export const STOP_DONE_WAITING_STATES = ['working'] as const satisfies readonly RunState[];
+
+/** D-8790 (review 2887 F1): a waiting worker is measured from a per-pass budget of its own, never from
+ *  `STOP_DONE_MEASURES_PER_PASS`, so however many `working` workers there are, a finished or parked worker gets exactly
+ *  the measures it had before the waiting case; a spent budget skips the remaining waiting workers, never the others. */
+export const STOP_DONE_WAITING_MEASURES_PER_PASS = 3;
+
+/** D-8790 (review 2887 F1): a waiting worker the live read held (a Monitor, a session cron, a quiet under the bound) is
+ *  not measured again for this long: a third of the 30-minute quiet bound, so a worker that does go quiet is still put
+ *  to sleep within 10 minutes of the bound, and one parked on a cron is measured three times in that half hour, not
+ *  thirty. Derived from `STOP_DONE_PARKED_IDLE_MS`, never respelled. */
+export const STOP_DONE_WAITING_HOLD_OFF_MS = STOP_DONE_PARKED_IDLE_MS / 3;
+
+/** D-8790 (review 2887 F3): a hold-off on the waiting case covers ONE case, the worker on that run in that state, so a
+ *  change of the run's state (to `done`, or parked) leaves the worker to the decision it had before the waiting case. */
+export function waitingCaseKey(workerId: string, runId: number, state: string): string {
+  return `${workerId}\t${runId}\t${state}`;
+}
 
 /** At most this many stops a pass, fleet-wide: a herd of stops is a herd of supervisors restarting on a re-dispatch,
  *  and a slower drain costs nothing (the 2026-08-14 usage-scan herd). */
@@ -215,6 +233,11 @@ export interface StopDoneInput {
   readonly live: StopDoneLive;
   readonly now: number;
   readonly graceMs: number;
+  /** D-8791 (review 2887 F2): `$REG/mail-disabled` as the pass's listing read it. Anything but `clear` holds the
+   *  waiting case (`mail-disabled`): its coordinator must be told of every waiting sleep, and while mail cannot be
+   *  sent the worker stays awake, with no observation row and no mail. Finished and parked sleeps never read it.
+   *  Absent: not read, as `clear` (the input builders a test writes by hand); the lane always reads it. */
+  readonly mailDisabled?: MarkerState;
 }
 
 export type StopDoneVerdict =
@@ -253,6 +276,7 @@ export function stopDoneSleepInput(i: StopDoneInput): SleepInput {
     heldPasses: i.holdOkVerb && (i.heldKind === 'programme' || i.heldKind === 'run-terminal' || i.heldKind === 'run-own'),
     overlord: i.overlord, optedOut: i.optedOut, store: i.store, viewer: i.viewer, sinceStartMs: i.sinceStartMs,
     viewerOpenTtlMs: i.viewerOpenTtlMs, verb: i.verb, live: i.live, now: i.now, quietMs: i.graceMs,
+    ...(i.mailDisabled === undefined ? {} : { mailDisabled: i.mailDisabled }),
   };
 }
 
