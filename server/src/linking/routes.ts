@@ -231,8 +231,10 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     const store = opts.coord;
     if (store === undefined) return refuseRoute(reply, 'unavailable');
     try {
-      if (!store.linkingAll().has(c.project)) return refuseRoute(reply, 'no-project');
-      const row = store.linkingOf(c.project);
+      // One read of the project's row, absent told apart from a row with nothing set (`linkingOf` answers a missing row as
+      // unset, so it cannot say `no-project`).
+      const row = store.linkingAll().get(c.project);
+      if (row === undefined) return refuseRoute(reply, 'no-project');
       if (!autoLinkAllowed(row.teamKey, row.teamLink?.source ?? null)) return refuseRoute(reply, 'team-set', { detail: 'the project has a key, or the operator decided it' });
       const candidates = row.teamCandidates ?? [];
       const chosen = confirmedCandidate(candidates, c.team, c.workspace);

@@ -4,9 +4,10 @@ import { describe, it, expect } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
 import {
-  DOOR_TOOLS, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS,
+  DOOR_TOOLS, DOOR_ONLY_TOOLS, ATTRIBUTION_FIELDS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, DELTA_REFRESH_MS, DELTA_LEASE_MS, TEAM_KEY_SHAPE,
 } from '../../ccd/door-process.mjs';
 import * as shared from '../../shared/continuity-door.js';
+import { LINEAR_TEAM_KEY_SHAPE } from '../../shared/linear.js';
 
 type Row = { name: string; verb: string; class: 'view' | 'operate'; fenced: boolean; reader: boolean; input: unknown };
 const ROWS = DOOR_TOOLS as unknown as Row[];
@@ -67,6 +68,11 @@ describe('DOOR_TOOLS', () => {
       expect(ROWS.map((r) => r.name), n).toContain(n);
       expect(skill, `${n} is now in the skill's table; drop it from DOOR_ONLY_TOOLS`).not.toContain(n);
     }
+  });
+
+  it('the link_team row\'s team grammar is shared/linear.ts\'s LINEAR_TEAM_KEY_SHAPE (D-8809)', () => {
+    expect(TEAM_KEY_SHAPE.source).toBe(LINEAR_TEAM_KEY_SHAPE.source);
+    expect(TEAM_KEY_SHAPE.flags).toBe(LINEAR_TEAM_KEY_SHAPE.flags);
   });
 
   it('reader is true on no row', () => {

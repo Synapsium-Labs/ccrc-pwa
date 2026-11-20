@@ -164,6 +164,9 @@ describe('POST /api/linking/confirm (D-8809)', () => {
     expect(call.chosen).toBe('Alpha Team in Workspace A');
     expect(call.options).toEqual(['Alpha Team in Workspace A', 'Beta Team in Workspace B', 'Leave project-a unlinked']);
     expect(call.why).toContain("9 of 10 ticket ids in its branches, pull requests and commits use this team's key");
+    // The words the server writes name no key. ITS LIMIT: a coordinator's suggested reason is that coordinator's own text,
+    // already refused for ticket ids and private names (`suggestionReasonVerdict`) when it was suggested, and the call shows
+    // it as written; a reason that spells a team key is not caught here.
     expect(text).not.toMatch(/\bAAA\b|\bBBB\b/);
     // Announced as the call record's route announces a big call: one record-only notice and the waiting rebuild.
     expect(r.notices).toEqual([{ title: 'Call made · linear-sync', body: `${call.question} → ${call.chosen}`, mode: 'record-only' }]);
