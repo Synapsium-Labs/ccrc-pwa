@@ -16,6 +16,7 @@ import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
 import { admissionWakeChoice, admissionWakeDetail, blockWokenWith, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
 import { queueAdmissionWake } from '../src/coord/admissionWakeTx.js';
+import { admissionWakePass, type AdmissionWakeDeps } from '../src/coord/admissionWakeLane.js';
 import { capsReadingOf, capsRoomOf } from '../src/coord/dispatchDecide.js';
 import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany, wakeRoom } from '../src/coord/wakeBudget.js';
 import { testDeps, withFakeClock } from './helpers.js';
@@ -758,6 +759,38 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${older}`]);
     expect(l.coord.callById(parked)!.wokenAt).toBeNull();
     expect(blockMail(l)).toEqual([]);
+  });
+});
+
+describe('the pass reads no worker while nothing could be woken (review 2981 F2)', () => {
+  const passWith = async (f: ReturnType<typeof fixture>, workerFacts: AdmissionWakeDeps['workerFacts']): Promise<void> =>
+    admissionWakePass({
+      coord: f.coord, names: [], serial: async (fn) => fn(), workerFacts, freedSlotRecent: () => [],
+      memory: { recent: [], served: new Map() }, push: () => undefined, warn: () => undefined,
+    });
+  const park = (f: ReturnType<typeof fixture>, wakeOn: string): number => f.coord.insertCall('prog-a', 'coord-a', {
+    class: 'block', runId: null, question: null, options: null, chosen: 'parked', why: 'w', reversible: true, wakeOn: wakeOn as never,
+  }, 'b1', Date.now() - 60_000);
+
+  it('armed, with no waiter and no capacity block (a disk block only), no worker is read and nothing is woken', async () => {
+    const f = fixture();
+    f.coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
+    f.holder('other');
+    const disk = park(f, 'disk');
+    const facts = vi.fn(async () => ({ kind: 'unmeasured' as const }));
+    await passWith(f, facts);
+    expect(facts).not.toHaveBeenCalled();
+    expect(f.coord.callById(disk)!.wokenAt).toBeNull();
+  });
+
+  it('CONTROL: armed, a capacity block no waiter would wake is a reason, so the workers are read', async () => {
+    const f = fixture();
+    f.coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
+    f.holder('other');
+    park(f, 'capacity');
+    const facts = vi.fn(async () => ({ kind: 'unmeasured' as const }));
+    await passWith(f, facts);
+    expect(facts).toHaveBeenCalled();
   });
 });
 

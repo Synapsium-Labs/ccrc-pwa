@@ -95,22 +95,27 @@ export interface LiveBlock {
   readonly wakeOn: string | null; readonly at: number;
 }
 
-/**
- * Capacity follow-ups (T4 review 2907 F3; the coordinator's ruling of round 1): the `capacity` blocks this pass wakes on
- * their own, with the block lane's own mail. A block is woken here only when no ELIGIBLE waiter of its coordinator would
- * wake it (`blockWokenWith`): one recorded after its run's wake, one whose run was never refused, and one naming no run in
- * a programme with no waiter. Those would otherwise stay live until their 24-hour lapse, and the coord-ball rung stays
- * silent for that coordinator while they do. At most `roomLeft` (the slots this pass's waiters left), oldest first, and no
- * more than the lane's own wake budget admits after the waiters took theirs. Pure.
- */
 /** A block parked on the cap (`wakeOn: 'capacity'`), the kind this lane wakes and the block lane leaves to it. */
 export const isCapacityBlock = (b: Pick<LiveBlock, 'wakeOn'>): boolean => b.wakeOn === 'capacity';
 
+/** The `capacity` blocks no ELIGIBLE waiter of their coordinator would wake (`blockWokenWith`): one recorded after its
+ *  run's wake, one whose run was never refused, and one naming no run in a programme with no waiter. The lane's pass reads
+ *  no worker while none stands and no waiter does (review 2981 F2), and `capacityBlockWakes` chooses among them. Pure. */
+export function blocksNoWaiterWakes<B extends LiveBlock>(blocks: readonly B[], waiters: readonly AdmissionWaiter[]): B[] {
+  return blocks.filter((b) => isCapacityBlock(b) && !waiters.some((w) => w.claimedBy === b.madeBy && blockWokenWith(b, w)));
+}
+
+/**
+ * Capacity follow-ups (T4 review 2907 F3; the coordinator's ruling of round 1): the `capacity` blocks this pass wakes on
+ * their own, with the block lane's own mail, chosen among `blocksNoWaiterWakes`. Those would otherwise stay live until
+ * their 24-hour lapse, and the coord-ball rung stays silent for that coordinator while they do. At most `roomLeft` (the
+ * slots this pass's waiters left), oldest first, and no more than the lane's own wake budget admits after the waiters
+ * took theirs. Pure.
+ */
 export function capacityBlockWakes<B extends LiveBlock>(
   blocks: readonly B[], waiters: readonly AdmissionWaiter[], roomLeft: number, recentWakes: readonly number[], now: number,
 ): { readonly chosen: readonly B[]; readonly recent: number[] } {
-  const own = blocks
-    .filter((b) => isCapacityBlock(b) && !waiters.some((w) => w.claimedBy === b.madeBy && blockWokenWith(b, w)))
+  const own = blocksNoWaiterWakes(blocks, waiters)
     .sort((a, b) => a.at - b.at || a.id - b.id)
     .slice(0, Math.max(0, roomLeft));
   const budget = wakeAdmitMany(recentWakes, now, own.length);

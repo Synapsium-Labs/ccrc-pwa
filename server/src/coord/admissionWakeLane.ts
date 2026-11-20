@@ -17,7 +17,7 @@
 // step, the waiters are read again, the room measured (consuming no freed-slot admit), the choice made and each chosen
 // waiter woken, so a run dispatched while the readings were taken is not mailed.
 import { COORDINATOR_PAUSE_MARKER, MAIL_DISABLED_MARKER, readSwitches } from '../../../shared/switches.js';
-import { admissionWakeChoice, capacityBlockWakes, isCapacityBlock, type AdmissionWaiter } from './admissionWake.js';
+import { admissionWakeChoice, blocksNoWaiterWakes, capacityBlockWakes, isCapacityBlock, type AdmissionWaiter } from './admissionWake.js';
 import { blockWakeMail, type CallRow } from './coordCalls.js';
 import { insertSystemMailTx } from './rundefsTx.js';
 import { queueAdmissionWake } from './admissionWakeTx.js';
@@ -61,7 +61,9 @@ export async function admissionWakePass(d: AdmissionWakeDeps): Promise<void> {
   const serial = d.serial;
   if (serial === null) return;
   try {
-    if (d.coord.admissionWaiters().length === 0 && capacityBlocksOf(d.coord, Date.now()).length === 0) return;
+    // Review 2981 F2: no worker is read while nothing could be woken: no waiter, and no block that no waiter would wake.
+    const standing = d.coord.admissionWaiters();
+    if (standing.length === 0 && blocksNoWaiterWakes(capacityBlocksOf(d.coord, Date.now()), standing).length === 0) return;
     const armed = capCountsWorkingArmed(d.coord);
     const readings = armed ? await workerReadings(d.coord, d.workerFacts) : undefined;
     await serial(async () => {

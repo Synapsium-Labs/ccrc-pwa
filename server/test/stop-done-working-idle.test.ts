@@ -9,7 +9,7 @@ import { copyFileSync, mkdirSync } from 'node:fs';
 import {
   STOP_DONE_GRACE_MS, STOP_DONE_PARKED_IDLE_MS, STOP_DONE_RETRY_MS, STOP_DONE_WAITING_STATES, WORKER_ASLEEP_DETAIL_PREFIX,
   WORKER_ASLEEP_MAILS_PER_RUN, STOP_DONE_MEASURES_PER_PASS, STOP_DONE_WAITING_HOLD_OFF_MS, STOP_DONE_WAITING_MEASURES_PER_PASS,
-  STOP_DONE_PARKED_IDLE_MS as PARKED_MS, mailOnly, stopDoneVerdict, waitingCaseKey, workerAsleepNoticeDue, type StopDoneInput, type StopDoneRow,
+  STOP_DONE_PARKED_IDLE_MS as PARKED_MS, mailOnly, stopDoneVerdict, waitingCaseKey, waitingHoldsLapse, workerAsleepNoticeDue, type StopDoneInput, type StopDoneRow,
 } from '../src/stopDone.js';
 import { stopDonePass, type StopDoneMemory, type StopDoneSweepDeps } from '../src/sleepLane.js';
 import { queueStallNotice, queueSystemMail } from '../src/coord/rundefsTx.js';
@@ -585,6 +585,30 @@ describe('capacity follow-ups: the waiting case at the act and across an arming'
     const measured = vi.fn(w.deps.liveWord);
     await stopDonePass({ ...w.deps, liveWord: measured, now: () => NOW + MIN } as StopDoneSweepDeps, m, [fleetRow(id)], [rec(WORKER)], []);
     expect(measured).not.toHaveBeenCalled();
+  });
+
+  it('F-D, no lapse otherwise (review 2981 F1): armed on both passes, a worker the live read held is not measured on the second', async () => {
+    const s = store();
+    live(s);
+    const c = crowd(s, 1);
+    vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+    const m = mem();
+    const working = c.rows.filter((r) => r.id !== c.done);
+    const recs = c.recs.filter((r) => r.id !== c.done);
+    await stopDonePass(c.w.deps, m, working, recs, []);
+    expect(c.marks).toEqual(['project-a-w01']);
+    expect(c.w.argv).toEqual([]);
+    // A minute later, the row still armed: the hold-off stands, so the worker is not measured again.
+    await stopDonePass({ ...c.w.deps, now: () => NOW + MIN } as StopDoneSweepDeps, m, working, recs, []);
+    expect(c.marks).toEqual(['project-a-w01']);
+  });
+
+  it.each([
+    [undefined, false, false], [undefined, true, false],
+    [false, false, false], [false, true, true],
+    [true, false, false], [true, true, false],
+  ] as const)('waitingHoldsLapse(last pass read %s, this pass reads %s) is %s', (was, armed, lapses) => {
+    expect(waitingHoldsLapse(was, armed)).toBe(lapses);
   });
 
   it('F-E: a shadow-logged worker re-dispatched onto a new working run is measured at once', async () => {

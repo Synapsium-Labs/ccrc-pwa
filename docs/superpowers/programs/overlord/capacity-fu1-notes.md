@@ -72,13 +72,24 @@ from the copy. All 16 mutants are killed by an assertion.
 | M15 | `wakeRoom` reads the window | killed (2 failed) |
 | M16 | the run-scoped block rule in the wake's transaction | killed (1 failed): at load 18 it first timed out at the 20 s bound, and again with a 60 s bound it failed on the block's `wokenAt` |
 
+## 3a. Fix round 1 (review 2981, ruled by the coordinator)
+
+| Finding | Ruling | What this PR does |
+|---|---|---|
+| F1, "no lapse otherwise" unpinned | One armed case and a table test; the reviewer's survivor (`waitingHoldsLapse` reduced to `armed`) must go red. | New case: with the row armed on both passes, a worker the live read held is not measured on the second. A table test runs `waitingHoldsLapse` over last-pass `undefined`, `false` and `true` against this pass shadow and armed. The survivor, built from a saved copy and restored from it, is now killed (3 failed: the armed case and two table rows). |
+| F2, worker readings with nothing to wake | Return before `workerReadings` when no waiter stands and no block no waiter would wake. | The candidate selection is its own L1 function, `blocksNoWaiterWakes`, and `capacityBlockWakes` chooses among its answer. The pass asks it before any worker read and returns when it is empty and no waiter stands. New case: armed, with no waiter and only a `disk` block, no worker is read; the control (a `capacity` block no waiter would wake) reads them. Dropping the early return reds the first case. Still true, and by design: a live candidate block with no room, armed, has the workers read each pass while it lives, because only the readings can show the room that would wake it. |
+| F3, doc block placement | Move it onto `capacityBlockWakes`. | Each of `isCapacityBlock`, `blocksNoWaiterWakes` and `capacityBlockWakes` now carries its own doc block. |
+
+The census row (`census-row-for-claimant-match`) still matches: the comparison moved, with its text unchanged, from `capacityBlockWakes` into `blocksNoWaiterWakes` in the same file.
+
 ## 4. Carried, not done here
 
 - **B-N1, in part.** The `wakeOn === 'capacity'` filter in the transaction is now L1 (`isCapacityBlock`,
   `blockWokenWith`). The rest of B-N1 (the hold rule inline in the lane, the inline cap-refusal test in `dispatchRun`,
   `sendBack: state !== 'planned'` in the store) is untouched.
 - **A-N7.** The lane still does not hold on `stall-watch-disabled`, so `capacity` blocks, now including the ones it wakes
-  on their own, are the one kind woken while that switch stands.
+  on their own, are the one kind woken while that switch stands. If that is to stay, the arming card should say so; no
+  card names it today.
 - **F6.** Nothing cancels a queued block wake mail: a run close does not (it names no run), and neither does a dispatch
   the coordinator made itself before the mail is delivered, so the mail can arrive after its thread was picked up.
 - **Two derivations (T2 F4).** The re-ask adds no third: `relisted` asks `stopDoneVerdict`, the same as `atAct`.
