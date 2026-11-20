@@ -72,6 +72,8 @@ _idle_for_keystroke -> _tmux_t
 _inflight_write -> _compact_lock_acquire
 _inflight_write -> _compact_lock_release
 _keep_awake_ours -> _fresh_pick_field_to
+_lane_class_efforts_to -> _is_anthropic_backend
+_lane_class_efforts_to -> _is_codex_backend
 _limit_dated -> _transcript_path
 _limit_read -> _transcript_limit_banner
 _operator_choice_keep -> _reg_set

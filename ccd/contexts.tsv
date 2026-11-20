@@ -988,3 +988,8 @@ _fresh_pick_to	C1
 _door_prog_ok	C10
 _door_purge	C10
 _door_spawn	C10
+_model_id_bare_to	C3
+_ma_file_to	C3
+_ma_answer_to	C3
+_alias_facts_to	C3
+_lane_class_efforts_to	C3
