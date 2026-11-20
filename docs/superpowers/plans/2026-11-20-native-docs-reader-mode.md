@@ -201,7 +201,7 @@ The library programme builds it after its L1 (X1's landing), its rename and L2 (
 
 ## Mutation rows
 
-Each row ships with the task that owns it; it is red when the guard is removed and green when restored. Run through the coordinator's mutation runner.
+Each row ships with the task that owns it; it is red when the guard is removed and green when restored. Run through the coordinator's mutation runner. Rows X6.21, X6.25, X6.35, X6.54, X6.55, X6.56, X6.66, X6.68 and X6.69 pin XR1's corner menu control, the frame's own Aa, the window-blur hide and the `reading` chrome, all of which XR2.1 removes. XR2.1 retires them: before its Step 1 it rewrites or deletes their tests in a commit of its own (an intended behaviour change, by the characterization rule), and X6.33, X6.58, X6.71 and XR2.1's other rows take their place. From XR2 on, the mutation runner runs no retired row.
 
 | Row | Task | Mutation | Red test |
 |---|---|---|---|
