@@ -73,8 +73,15 @@ describe('the advance file and its clock, each spelled once (auto-advance spec Â
     ]);
   });
 
-  it('CCRC_MODELS_NOW is read in one place, and models-op reads the wall clock on two named lines only', () => {
-    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel)).toEqual(['deploy/models-op.mjs']);
+  it('CCRC_MODELS_NOW is read once by models-op and once by the probe, and models-op reads the wall clock on two named lines only', () => {
+    // The probe stamps a catalogue's observation time (`fetchedAt`) under the same seam, so a fixture HOME drives hours
+    // of sightings through the real refresh (programme wave 3, D-8838). It is another process, in Python, so it reads
+    // the variable itself rather than importing the op's reader.
+    expect(SHIPPED.filter((f) => textOf(f).includes('CCRC_MODELS_NOW')).map(rel).sort())
+      .toEqual(['ccd/ccrc-models-probe', 'deploy/models-op.mjs']);
+    const probe = SHIPPED.find((f) => rel(f) === 'ccd/ccrc-models-probe')!;
+    expect(textOf(probe).split('\n').filter((l) => l.includes('CCRC_MODELS_NOW')).map((l) => l.trim()))
+      .toEqual(['v = os.environ.get("CCRC_MODELS_NOW", "")']);
     const lines = readFileSync(OP, 'utf8').split('\n');
     expect(lines.filter((l) => l.includes("process.env['CCRC_MODELS_NOW']"))).toHaveLength(1);
     expect(lines.filter((l) => /\bnew Date\(|\bDate\.now\(/.test(l)).map((l) => l.trim())).toEqual([
