@@ -9,7 +9,7 @@ import { ASSET_FAILED } from '../export/exportAssets';
 import { Button } from '@ccrc/ui';
 import {
   DOCS_IMAGE_VIEW_MAX_PIXELS, DOCS_IMAGE_VIEW_MAX_SIDE, DOCS_RANGE_MAX_BYTES, docsRangePinText, sniffRaster, type DocContentClass,
-  type DocListPin, type DocPin,
+  type DocPin,
 } from '../../../../shared/docs';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence, mib, slotSentence } from '../docsText';
 import { declaredRaster } from '../failures';
@@ -47,14 +47,6 @@ type ReadState =
   | { s: 'done'; bytes: Uint8Array<ArrayBuffer>; digest: string }
   | { s: 'failed'; why: RangeReadFailure; stale: RangeStale };
 
-/** What names the bytes a pin points at, for a leaf to see the pin move (a committed pin's commit; a draft's head and its
- *  fingerprint or stat). */
-function pinTextOf(pin: DocListPin): string {
-  if (pin.kind === 'committed') return 'c\u0000' + pin.commit;
-  const bytes = pin.fp === null ? 'stat:' + String(pin.stat.size) + ':' + pin.stat.mtimeNs : pin.fp;
-  return ['d', pin.branch, pin.head, bytes].join('\u0000');
-}
-
 /** The bytes a range read gave, and their digest (the snapshot's sha256, which a stat-pinned draft's page pin takes as
  *  its `fp`). */
 export interface RangeBytes { readonly bytes: Uint8Array<ArrayBuffer>; readonly digest: string }
@@ -74,22 +66,22 @@ export function RangeLeaf(p: {
   /** The view of the bytes once read; absent, the class has no view above its cap and the leaf offers Download only. */
   readonly children?: (read: RangeBytes) => ReactNode;
   /** The visit, which owns the one automatic re-list (spec 4.3 item 1) for this page: a refused read is handed to it, and
-   *  it answers whether it re-listed, has no re-list left, or the word is none of its business. Absent, none of that. */
-  readonly visit?: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'retryTree'> | null;
+   *  it answers whether it re-listed, has no re-list left, or the word is none of its business. */
+  readonly visit: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists'>;
 }): ReactNode {
   const key = rangeReadKey(p.target);
   const verdict = rangeVerdict(p.target.size, p.cls, p.target.range.kind);
   const hasView = p.children !== undefined;
   // The newest props, read by a read in flight: a re-render's new objects never restart it.
-  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit ?? null });
-  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit ?? null };
+  const latest = useRef({ target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit });
+  latest.current = { target: p.target, loader: p.loader, name: p.name, hasView, visit: p.visit };
   const [state, setState] = useState<ReadState>({ s: 'idle' });
   const ac = useRef<AbortController | null>(null);
-  // True while a re-list is pending for this leaf: the read starts again when the pin it is given changes (a committed
-  // doc after a force-push keeps its blob, so its read key does not).
+  // True while a re-list is pending for this leaf: the read starts again when the visit says a re-list that started after
+  // the failure has answered, whatever pin it gave (a worktree that moved and came back gives the same one).
   const pending = useRef(false);
-  const pinText = pinTextOf(p.target.pin);
-  const lastPin = useRef(pinText);
+  const relists = p.visit.rangeRelists ?? 0;
+  const lastRelists = useRef(relists);
 
   const start = useCallback((save: boolean) => {
     ac.current?.abort();
@@ -106,12 +98,12 @@ export function RangeLeaf(p: {
       if (!r.ok) {
         const { why } = r;
         const stale: RangeStale = why.kind === 'answer' && why.answer.s === 'failed'
-          ? latest.current.visit?.rangeFailed?.(why.answer.body.failure) ?? 'other' : 'other';
+          ? latest.current.visit.rangeFailed?.(why.answer.body.failure) ?? 'other' : 'other';
         pending.current = stale === 'relist';
         setState({ s: 'failed', why, stale });
         return;
       }
-      latest.current.visit?.rangeRead?.();
+      latest.current.visit.rangeRead?.();
       if (save) saveBytes(latest.current.name, r.bytes);
       setState(save && !latest.current.hasView ? { s: 'idle' } : { s: 'done', bytes: r.bytes, digest: r.digest });
     }, () => { if (ac.current === mine) setState({ s: 'failed', why: { kind: 'threw' }, stale: 'other' }); });
@@ -122,13 +114,13 @@ export function RangeLeaf(p: {
     if (verdict !== 'over-ceiling' && hasView) start(false);
     return () => { ac.current?.abort(); ac.current = null; };
   }, [key, verdict, hasView, start]);
-  // A pin that moved while a re-list was pending starts the read the re-list asked for (one that moved the read key too
-  // has been started by the effect above, which cleared `pending`).
+  // A re-list that served this leaf's wait starts the read it asked for, with the pin it now has (one that moved the read
+  // key too has been started by the effect above, which cleared `pending`).
   useEffect(() => {
-    if (lastPin.current === pinText) return;
-    lastPin.current = pinText;
+    if (lastRelists.current === relists) return;
+    lastRelists.current = relists;
     if (pending.current && verdict !== 'over-ceiling' && hasView) start(false);
-  }, [pinText, verdict, hasView, start]);
+  }, [relists, verdict, hasView, start]);
   const { target } = p;
   const view = p.children;
 
@@ -159,19 +151,26 @@ export function RangeLeaf(p: {
       </div>
     );
   }
+  if (state.s === 'failed' && state.stale === 'relist') {
+    // The re-list the visit just took is under way: loading, as the file route shows it, until it answers.
+    return <p className="docs-loading" role="status">{DOCS_VIEW_TEXT.loading}</p>;
+  }
   if (state.s === 'failed') {
+    const why = state.why;
     return (
       <>
         <p className="docs-note" role="alert">
-          {state.stale === 'other' ? rangeFailureSentence(state.why, target.size) : DOCS_VIEW_TEXT.changing}
+          {state.stale === 'other' ? rangeFailureSentence(why, target.size) : DOCS_VIEW_TEXT.changing}
         </p>
         <div className="docs-leaf-actions">
           {view !== undefined && <Button variant="ghost" className="docs-fail-action" onClick={() => {
-            // A stale pin is mended by a new listing, not by sending it again: re-list, and the pin that comes starts the read.
-            const { visit } = latest.current;
-            if (state.stale === 'other' || visit === null) { start(false); return; }
+            // A stale pin is mended by a new listing, not by sending it again: re-list through the visit, and the read
+            // starts when that listing answers, with the pin it gives or the same one.
+            const retry = latest.current.visit.rangeRetry;
+            if (state.stale === 'other' || retry === undefined) { start(false); return; }
             pending.current = true;
-            visit.retryTree();
+            setState({ s: 'failed', why, stale: 'relist' });
+            retry();
           }}>{DOCS_RANGE_TEXT.readAgain}</Button>}
           {download}
         </div>

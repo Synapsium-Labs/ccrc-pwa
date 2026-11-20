@@ -1777,4 +1777,15 @@ describe('X2 P1: the range ceilings, the stat pin and the range wire types', () 
   it('entryView: the default view never opens a stat-pinned draft', () => {
     expect(docsR.entryView(bigDraft(5242880, MTIME), HOLDER, 'default')).toMatchObject({ opens: 'committed', badge: null, pin: { kind: 'blob' } });
   });
+
+  it('docListPinKey: the one key of a listing pin; a stat-pinned draft is keyed by docsRangePinText\'s stat form, never as a fingerprint (X2 P1, review F2)', () => {
+    const place = { kind: 'draft', branch: 'ws/a', head: 'a'.repeat(40), section: 'specs', path: 'a.md' } as const;
+    const stat = { size: 5242880, mtimeNs: MTIME };
+    const key = docsR.docListPinKey({ ...place, fp: null, stat });
+    expect(key).toContain(docsR.docsRangePinText({ kind: 'stat', ...stat }));
+    expect(key).not.toBe(docsR.docListPinKey({ ...place, fp: 'f'.repeat(64), stat }));
+    expect(docsR.docListPinKey({ ...place, fp: 'f'.repeat(64) })).toContain('f'.repeat(64));
+    expect(docsR.docListPinKey({ kind: 'committed', commit: 'c'.repeat(40), servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'a.md' }))
+      .toContain('c'.repeat(40));
+  });
 });

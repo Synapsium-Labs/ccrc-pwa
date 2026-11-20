@@ -11,6 +11,11 @@ import type {
   DocsFileAnswer, DocsIndexAnswer, DocsLoaders, DocsRasterAnswer, DocsRefreshLoaderAnswer, DocsTreeAnswer,
 } from '../src/docs/failures';
 import type { RangeLoader } from '../src/docs/range/readRange';
+import type { DocsVisit } from '../src/docs/useDocsVisit';
+
+/** The range side of a visit for a test that reads no range, or reads one and cares nothing about a stale answer: it
+ *  re-lists nothing and moves no counter. */
+export const NO_RANGE_VISIT: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists'> = {};
 
 export const COMMIT_A = 'a'.repeat(40);
 export const COMMIT_B = 'b'.repeat(40);

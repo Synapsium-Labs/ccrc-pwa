@@ -162,11 +162,18 @@ export interface DocsVisit {
   /** A range read of the current leaf was refused with `word`. The one owner of the automatic re-list for a read that
    *  went by range, beside the file route's (`relist`: the word asked for it and the visit just took the page's one
    *  re-list, so the leaf waits for the new pin; `changing`: it asked and the re-list is spent, so the leaf says the
-   *  listing changed and offers Read it through `retryTree`; `other`: not a re-list word, or a version page). Optional
-   *  only so a hand-built visit that reads no range (a view test's) need not carry it; `useDocsVisit` always does. */
+   *  listing changed and offers Read it through `rangeRetry`; `other`: not a re-list word, or a version page). On
+   *  `relist` the read waits as a file read does: the re-list that STARTS after this call and answers moves
+   *  `rangeRelists`, whatever pin it gives. Optional only so a hand-built visit that reads no range (a view test's) need
+   *  not carry it; `useDocsVisit` always does. */
   rangeFailed?(word: DocsFailure): RangeStale;
   /** A range read of the current leaf gave its bytes: re-arms the page's one automatic re-list, as an ok file read does. */
   rangeRead?(): void;
+  /** Read it after a spent re-list: re-lists again and waits for it as `rangeFailed` does, taking no one-shot. */
+  rangeRetry?(): void;
+  /** How many re-lists of this page's listing served a range read that waited for one: a leaf that waits restarts when
+   *  it moves, with the pin it was given or an identical one (a worktree that moved and came back). */
+  readonly rangeRelists?: number;
   /** The freshness chip's tap: one manual POST, only while the tree slot is ok and no POST is in flight. */
   refreshManual(): void;
   /** `unresolved-ref`'s Fetch from origin: one manual POST, only while the slot holds that word. */
@@ -208,6 +215,10 @@ interface Store {
    *  of the answer that last set the slot: an older answer landing later is not applied. */
   seq: number;
   readonly slotSeq: Map<string, number>;
+  /** Per page (`relistPageKey`): a range read waiting for the re-list that starts after its failure, as a file entry's
+   *  `relistAfter` does; and the count of re-lists that served such a read (`DocsVisit.rangeRelists`). */
+  readonly rangeWaits: Map<string, { readonly treeKey: string; readonly relistAfter: number }>;
+  readonly rangeRelists: Map<string, number>;
 }
 
 function newStore(): Store {
@@ -215,6 +226,7 @@ function newStore(): Store {
     alive: false, targets: new Map(), trees: new Map(), treeInflight: new Set(), refreshInflight: new Set(),
     freshness: new Map(), files: new Map(), shown: new Map(), updatedTo: new Map(),
     timers: new Set(), refreshTimers: new Map(), aborts: new Map(), seq: 0, slotSeq: new Map(),
+    rangeWaits: new Map(), rangeRelists: new Map(),
   };
 }
 
@@ -362,15 +374,30 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
 
   const hasRelistWaiters = (tKey: string): boolean => {
     for (const e of st.files.values()) if (e.relistAfter !== null && e.treeKey === tKey) return true;
+    for (const w of st.rangeWaits.values()) if (w.treeKey === tKey) return true;
     return false;
   };
 
   /** Drop every file entry that waited for `tKey`'s re-list and whose word landed before the request numbered `seq`
-   *  started, so the next render reads its leaf again. A GET that started before the word is not the re-list. */
+   *  started, so the next render reads its leaf again; a range read that waited is released the same way, by moving its
+   *  page's counter (`rangeRelists`). A GET that started before the word is not the re-list. */
   const releaseRelistWaiters = (tKey: string, seq: number): void => {
     for (const [fKey, e] of st.files) {
       if (e.relistAfter !== null && e.relistAfter < seq && e.treeKey === tKey) st.files.delete(fKey);
     }
+    for (const [pk, w] of st.rangeWaits) {
+      if (w.relistAfter < seq && w.treeKey === tKey) {
+        st.rangeWaits.delete(pk);
+        st.rangeRelists.set(pk, (st.rangeRelists.get(pk) ?? 0) + 1);
+      }
+    }
+  };
+
+  /** A range read waits for a re-list that starts after now (the file route's `relistAfter`), whatever pin the new listing
+   *  gives: a same-pin answer is released too. */
+  const awaitRelist = (t: Target, pk: string): void => {
+    st.rangeWaits.set(pk, { treeKey: treeKey(t.project, t.ref), relistAfter: st.seq });
+    listTree(t);
   };
 
   const setTreeOk = (key: string, seq: number, answer: DocsTreeResponse): void => {
@@ -703,6 +730,7 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
     freshness,
     updatedTo,
     pendingFragment,
+    rangeRelists: tKey === null || page?.kind !== 'path' ? 0 : st.rangeRelists.get(relistPageKey(tKey, page.section, page.path)) ?? 0,
     retryTree: () => {
       const t = targetOf(pageRef.current);
       if (t === null) return;
@@ -728,11 +756,19 @@ export function useDocsVisit(page: DocsPageLocation | null, loaders: DocsLoaders
       const p = pageRef.current;
       const t = targetOf(p);
       if (t === null || p?.kind !== 'path' || !relistsOn(word, p.at !== null)) return 'other';
+      const pk = relistPageKey(treeKey(t.project, t.ref), p.section, p.path);
       // The same one-shot as the file route's: one automatic re-list per page, spent here too.
-      if (!takeAutoRetry('relist', relistPageKey(treeKey(t.project, t.ref), p.section, p.path), '')) return 'changing';
-      listTree(t);
+      if (!takeAutoRetry('relist', pk, '')) return 'changing';
+      awaitRelist(t, pk);
       changed();
       return 'relist';
+    },
+    rangeRetry: () => {
+      const p = pageRef.current;
+      const t = targetOf(p);
+      if (t === null || p?.kind !== 'path') return;
+      awaitRelist(t, relistPageKey(treeKey(t.project, t.ref), p.section, p.path));
+      changed();
     },
     rangeRead: () => {
       const p = pageRef.current;

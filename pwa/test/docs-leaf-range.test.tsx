@@ -4,6 +4,7 @@
 // part a link names, from the pre-pass's heading ids. Placeholders only (`demo`, `specs/...`).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type React from 'react';
+import type { ComponentProps } from 'react';
 import { act, cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DOCS_RANGE_FRAME_BYTES, DOCS_RANGE_MAX_BYTES, type DocListPin, type DocPin } from '../../shared/docs';
 import { DOCS_RENDER_GATE_BYTES } from '../src/lib/markdownLimits';
@@ -11,17 +12,22 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { DocsLeaf, RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { BLOB_2, draftOf, entry, failedAnswer, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
+import { BLOB_2, NO_RANGE_VISIT, draftOf, entry, failedAnswer, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { createFetchQueue } from '../src/docs/fetchQueue';
 import type { DocsFileAnswer, DocsRasterAnswer } from '../src/docs/failures';
 import { DOCS_RANGE_TEXT, DOCS_VIEW_TEXT, failureSentence, fillSentence } from '../src/docs/docsText';
 import { MarkdownParts } from '../src/docs/range/MarkdownParts';
-import { RangeImage, RangeLeaf, rangeReadKey } from '../src/docs/range/RangeLeaf';
+import { RangeImage, RangeLeaf as RangeLeafOf, rangeReadKey } from '../src/docs/range/RangeLeaf';
 import type { RangeLoader, RangeTarget } from '../src/docs/range/readRange';
 
 afterEach(cleanup);
+
+/** `RangeLeaf` with a visit that does nothing about a stale read, unless a test gives one. */
+function RangeLeaf(p: Omit<ComponentProps<typeof RangeLeafOf>, 'visit'> & { readonly visit?: ComponentProps<typeof RangeLeafOf>['visit'] }): React.ReactNode {
+  return <RangeLeafOf {...p} visit={p.visit ?? NO_RANGE_VISIT} />;
+}
 
 const COMMITTED: DocPin = { kind: 'committed', commit: 'a'.repeat(40), servedRef: 'refs/remotes/origin/main', section: 'specs', path: 'big.bin' };
 const target = (size: number): RangeTarget => ({ project: 'demo', pin: COMMITTED, range: { kind: 'blob', sha: 'b'.repeat(40) }, size });
@@ -133,7 +139,9 @@ describe('RangeLeaf: one read per read key', () => {
 describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
   /** The range side of the visit, which owns the one re-list rule: `stale` is what it answers to a failed read. */
   const fakeVisit = (stale: 'relist' | 'changing' | 'other') =>
-    ({ rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), retryTree: vi.fn() });
+    ({ rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0 });
+  /** The same visit after a re-list that started after the failure has answered (its counter moved). */
+  const afterRelist = (v: ReturnType<typeof fakeVisit>) => ({ ...v, rangeRelists: v.rangeRelists + 1 });
   const failing = (word: string, commits: string[]): RangeLoader => ({
     async prepare(t) {
       commits.push(t.pin.kind === 'committed' ? t.pin.commit : '');
@@ -146,33 +154,45 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
     ({ target: t, cls: 'markdown' as const, name: 'big.md', loader, visit });
 
   it.each(['draft-changed', 'unknown-commit', 'worktree-moved', 'worktree-gone'] as const)(
-    'a %s answer is handed to the visit, and once its re-list gives a new pin the leaf reads it without a tap',
+    'a %s answer is handed to the visit, the leaf loads while the re-list runs, and reads again when it answers with a new pin',
     async (word) => {
       // A committed doc re-listed after a force-push keeps its blob, so its read key does not move: the leaf starts the
-      // read itself when the pin it was given changes while a re-list is pending.
+      // read itself when the visit's counter says the re-list answered.
       const commits: string[] = [];
       const visit = fakeVisit('relist');
       const loader = failing(word, commits);
       const { rerender } = render(<RangeLeaf {...propsOf(withCommit('a'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
-      await waitFor(() => expect(screen.getByRole('alert')).toBeTruthy());
+      await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
+      expect(screen.queryByRole('alert'), 'no "listing changed" while the re-list runs').toBeNull();
       expect(visit.rangeFailed).toHaveBeenCalledTimes(1);
       expect(visit.rangeFailed).toHaveBeenCalledWith(word);
-      rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
+      rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, afterRelist(visit))}>{() => <p>view</p>}</RangeLeaf>);
       await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]));
     },
   );
 
-  it('once the visit has spent its re-list the failure says the listing changed, and Read it goes through the visit\'s retry', async () => {
+  it('a re-list that answers with the SAME pin reads again too (a worktree that moved and came back)', async () => {
+    const commits: string[] = [];
+    const visit = fakeVisit('relist');
+    const loader = failing('worktree-moved', commits);
+    const { rerender } = render(<RangeLeaf {...propsOf(withCommit('a'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
+    rerender(<RangeLeaf {...propsOf(withCommit('a'), loader, afterRelist(visit))}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'a'.repeat(40)]));
+  });
+
+  it('once the visit has spent its re-list the failure says the listing changed, and Read it re-lists through the visit and waits', async () => {
     const commits: string[] = [];
     const visit = fakeVisit('changing');
     const loader = failing('draft-changed', commits);
     const { rerender } = render(<RangeLeaf {...propsOf(withCommit('a'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
     await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(DOCS_VIEW_TEXT.changing));
     fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.readAgain));
-    expect(visit.retryTree, 'the tap re-lists; it does not resend the stale pin').toHaveBeenCalledTimes(1);
+    expect(visit.rangeRetry, 'the tap re-lists; it does not resend the stale pin').toHaveBeenCalledTimes(1);
+    expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy();
     expect(commits).toEqual(['a'.repeat(40)]);
-    rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, visit)}>{() => <p>view</p>}</RangeLeaf>);
-    await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]));
+    rerender(<RangeLeaf {...propsOf(withCommit('a'), loader, afterRelist(visit))}>{() => <p>view</p>}</RangeLeaf>);
+    await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'a'.repeat(40)]));
   });
 
   it('a failure that is no re-list word keeps its own sentence, and Read it reads again at once', async () => {
@@ -184,7 +204,7 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
     expect(screen.getByRole('alert').textContent).not.toBe(DOCS_VIEW_TEXT.changing);
     fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.readAgain));
     await waitFor(() => expect(commits).toHaveLength(2));
-    expect(visit.retryTree).not.toHaveBeenCalled();
+    expect(visit.rangeRetry).not.toHaveBeenCalled();
   });
 
   it('a read that succeeds tells the visit, which re-arms its one re-list', async () => {
@@ -226,9 +246,96 @@ describe('DocsLeaf: a changing draft re-lists once (X2 P1, review F2)', () => {
     render(<Harness />);
     await waitFor(() => expect(prepares.length).toBeGreaterThan(0));
     await act(async () => { await new Promise((r) => setTimeout(r, 300)); });
-    expect(prepares.length, 'the first read, and the one read of the re-listed pin').toBeLessThanOrEqual(2);
+    expect(prepares.length, 'the first read, and the one read of the re-listed pin').toBe(2);
     expect(listings, 'the visit\'s first listing and its one re-list').toBe(2);
     expect(screen.getByRole('alert').textContent).toBe(DOCS_VIEW_TEXT.changing);
+  });
+
+  it('a re-list that gives back the SAME pin reads again and shows the document (the worktree moved and came back)', async () => {
+    // A stat-pinned draft of 20 bytes: the pin is branch, head, section, path and stat, so a re-list gives the same one.
+    const text = '# Title\n\nbody words\n';
+    const bytes = new TextEncoder().encode(text) as Uint8Array<ArrayBuffer>;
+    const tree = treeOk({
+      drafts: holder(),
+      entries: [entry('specs', 'big.md', { draft: draftOf('modified', { fp: null, size: bytes.length, mtimeNs: '1700000000000000000' }) })],
+    });
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async () => okTree(tree));
+    const served = servingLoader(bytes);
+    let first = true;
+    const rangeLoader: RangeLoader = {
+      async prepare(t, signal) {
+        if (first) { first = false; return { s: 'failed', body: { ok: false, failure: 'worktree-moved' } }; }
+        return served.loader.prepare(t, signal);
+      },
+      frame: (...a) => served.loader.frame(...a),
+    };
+    const located = pageAt('/docs/demo/specs/big.md?ref=main');
+    if (located.kind !== 'path') throw new Error('fixture: not a leaf');
+    const page = located;
+    const parser = async (src: string) => parseMarkdown(src, 'docs');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={rangeLoader} />;
+    }
+    const { container } = render(<Harness />);
+    await waitFor(() => expect(container.textContent).toContain('body words'));
+    expect(screen.queryByRole('alert')).toBeNull();
+    expect(f.tree, 'the first listing and the one re-list').toHaveBeenCalledTimes(2);
+  });
+
+  it('a listing already in flight when the failure lands does not spend the one re-list: the next one that starts answers it', async () => {
+    const text = '# Title\n\nbody words\n';
+    const bytes = new TextEncoder().encode(text) as Uint8Array<ArrayBuffer>;
+    const tree = treeOk({
+      drafts: holder(),
+      entries: [entry('specs', 'big.md', { draft: draftOf('modified', { fp: null, size: bytes.length, mtimeNs: '1700000000000000000' }) })],
+    });
+    const f = fakeLoaders();
+    let release: (() => void) | null = null;
+    let calls = 0;
+    f.tree.mockImplementation(() => {
+      calls += 1;
+      // The second listing is held: it is the one in flight when the failure lands.
+      if (calls === 2) return new Promise((resolve) => { release = () => resolve(okTree(tree)); });
+      return Promise.resolve(okTree(tree));
+    });
+    const served = servingLoader(bytes);
+    let first = true;
+    const rangeLoader: RangeLoader = {
+      async prepare(t, signal) {
+        if (first) {
+          first = false;
+          // A listing (the stale timer, a tab return) is already in flight when the refusal lands.
+          const held = visitRef.current;
+          held?.retryTree();
+          await new Promise((r) => setTimeout(r, 0));
+          return { s: 'failed', body: { ok: false, failure: 'worktree-gone' } };
+        }
+        return served.loader.prepare(t, signal);
+      },
+      frame: (...a) => served.loader.frame(...a),
+    };
+    const visitRef: { current: ReturnType<typeof useDocsVisit> | null } = { current: null };
+    const located = pageAt('/docs/demo/specs/big.md?ref=main');
+    if (located.kind !== 'path') throw new Error('fixture: not a leaf');
+    const page = located;
+    const parser = async (src: string) => parseMarkdown(src, 'docs');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      visitRef.current = visit;
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={rangeLoader} />;
+    }
+    const { container } = render(<Harness />);
+    await waitFor(() => expect(calls).toBe(2));
+    // Let the failure land while the held listing is in flight, then answer the held listing.
+    await act(async () => { await new Promise((r) => setTimeout(r, 30)); });
+    expect(container.textContent, 'the stale listing did not serve the wait').not.toContain('body words');
+    await act(async () => { release?.(); });
+    await waitFor(() => expect(container.textContent).toContain('body words'));
+    expect(calls, 'the held listing, and the one that started after the failure').toBe(3);
   });
 });
 

@@ -21,7 +21,7 @@ import {
 } from 'react';
 import { flushSync } from 'react-dom';
 import {
-  DOCS_CLASS_CAP, contentClass, docsApi, docsPageUrl, entryView, githubBlobUrl,
+  DOCS_CLASS_CAP, contentClass, docListPinKey, docsApi, docsPageUrl, entryView, githubBlobUrl,
   type DocListPin, type DocPin, type DocsPageLocation, type DocsShowOk, type DocsTreeOk, type EntryBadge, type EntryMode, type GithubTarget,
 } from '../../../shared/docs';
 import { doorMark } from '../command/door';
@@ -657,12 +657,8 @@ function ExportAction(p: {
  *  screen no longer shows. */
 function shareKeyOf(page: TreePage, tree: DocsTreeOk, share: Exclude<ShareState, { s: 'absent' }>): string {
   const pin = share.s !== 'updating' && share.opened.kind === 'file' ? share.opened.pin : null;
-  // A draft with no fingerprint has no file URL (it is read by range): its key is its place and its stat.
-  const opened = share.s === 'updating' ? 'updating'
-    : pin === null ? 'none'
-      : pin.kind === 'draft' && pin.fp === null
-        ? ['stat', pin.branch, pin.head, pin.path, String(pin.stat.size), pin.stat.mtimeNs].join(':')
-        : docsApi.file(page.project, pin);
+  // A draft with no fingerprint has no file URL (it is read by range): the listing-pin key names every pin alike.
+  const opened = share.s === 'updating' ? 'updating' : pin === null ? 'none' : docListPinKey(pin);
   return [docsPageUrl(page), tree.ref.commit, opened].join('\u0000');
 }
 

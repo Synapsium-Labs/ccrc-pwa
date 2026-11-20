@@ -1512,6 +1512,15 @@ export type DocListPin =
   | { kind: 'draft'; branch: string; head: string; section: DocSectionSlug; path: string; fp: null;
     stat: { size: number; mtimeNs: string } };
 
+/** A key for a listing pin: every field that names its bytes, a draft with no fingerprint by its place and its stat
+ *  (`stat:<size>:<mtimeNs>`, the form `docsRangePinText` writes). The ONE spelling of that key; it is a key, never a URL
+ *  (a stat-pinned draft has no file URL). */
+export function docListPinKey(pin: DocListPin): string {
+  if (pin.kind === 'committed') return ['committed', pin.commit, pin.servedRef, pin.section, pin.path].join('\u0000');
+  const bytes = pin.fp === null ? docsRangePinText({ kind: 'stat', size: pin.stat.size, mtimeNs: pin.stat.mtimeNs }) : pin.fp;
+  return ['draft', pin.branch, pin.head, pin.section, pin.path, bytes].join('\u0000');
+}
+
 /** `/api/docs/<project>`: the project segment through encodeURIComponent. */
 function apiProjectPath(project: string): string {
   return DOCS_API_PREFIX + '/' + encodeURIComponent(project);
