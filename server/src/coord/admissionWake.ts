@@ -79,6 +79,16 @@ export function admissionWakeDetail(w: Pick<AdmissionWaiter, 'claimedBy' | 'last
   return `admission-woken:${w.claimedBy} refused=${w.lastRefusedAt}`;
 }
 
+/** Capacity follow-ups (T4 review 2907 F3): whether a live block is woken with this waiter's wake. Only a `capacity` block,
+ *  and only the woken run's: a block naming another run of the same coordinator waits for that run's own wake, so a
+ *  coordinator refused in two runs and given one slot is not told twice. A block that names no run waited for room for
+ *  any of its programme's runs, so the first wake in its programme wakes it. Pure. */
+export function blockWokenWith(b: { readonly wakeOn: string | null; readonly runId: number | null; readonly program: string },
+  w: Pick<AdmissionWaiter, 'runId' | 'program'>): boolean {
+  if (b.wakeOn !== 'capacity') return false;
+  return b.runId === null ? b.program === w.program : b.runId === w.runId;
+}
+
 /** D-6095: the numbers of a refusal by the concurrency cap, or null for any other refusal. The advance route reads it to
  *  stamp a refused send-back as a wait (through `dispatch.ts#waitOnSendBackRefusal`), so the handler decides nothing
  *  itself (ARCH-33). Pure. It lives here and not in `advance.ts` because that file was held under a freeze

@@ -14,7 +14,7 @@ import { CoordStore } from '../src/coord/store.js';
 import { dispatchRun, waitOnSendBackRefusal, type DispatchOutcome, type DispatchRunDeps } from '../src/coord/dispatch.js';
 import type { Runner } from '../src/exec.js';
 import { configDirFor } from '../src/config.js';
-import { admissionWakeChoice, admissionWakeDetail, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
+import { admissionWakeChoice, admissionWakeDetail, blockWokenWith, capWaitOf, type AdmissionWaiter } from '../src/coord/admissionWake.js';
 import { queueAdmissionWake } from '../src/coord/admissionWakeTx.js';
 import { capsReadingOf, capsRoomOf } from '../src/coord/dispatchDecide.js';
 import { WAKE_BURST, WAKE_WINDOW_MS, wakeAdmit, wakeAdmitMany } from '../src/coord/wakeBudget.js';
@@ -352,6 +352,19 @@ describe('the decider: admissionWakeChoice', () => {
   });
 });
 
+describe('blockWokenWith: which blocks a wake wakes (capacity follow-ups, T4 F3)', () => {
+  const w = { runId: 7, program: 'prog-a' };
+  it('a capacity block naming the woken run, yes; another run of the same coordinator, no; another wake word, no', () => {
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: 7, program: 'prog-a' }, w)).toBe(true);
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: 8, program: 'prog-a' }, w)).toBe(false);
+    expect(blockWokenWith({ wakeOn: 'disk', runId: 7, program: 'prog-a' }, w)).toBe(false);
+  });
+  it('a capacity block naming no run is woken by a wake in its programme, and by no other', () => {
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: null, program: 'prog-a' }, w)).toBe(true);
+    expect(blockWokenWith({ wakeOn: 'capacity', runId: null, program: 'prog-b' }, w)).toBe(false);
+  });
+});
+
 describe('the room: capsRoomOf reads the cap reading\'s own count (Part 3 ships in shadow)', () => {
   // Three counted runs under a limit of three; two of their workers read waiting or gone.
   const rows = [{ runId: 1, sessionId: 'w-1' }, { runId: 2, sessionId: 'w-2' }, { runId: 3, sessionId: 'w-3' }];
@@ -602,6 +615,26 @@ describe('the lane: refused coordinators are woken when the cap has room (D-6095
     await l.sweep(T0 + MIN);
     expect(l.wakeMail()).toHaveLength(1);
     expect(l.coord.callById(cap)!.wokenAt).toBe(T0);
+  });
+
+  it('capacity follow-ups (T4 F3): a coordinator refused in two runs has only the woken run\'s capacity block woken', async () => {
+    const l = await lane();
+    // One slot free: two holders under a cap of three.
+    l.coord.setCaps({ maxConcurrentWorkers: 3 });
+    l.busyHolder('prog-h1');
+    l.busyHolder('prog-h2');
+    const first = l.refused('prog-a', 'coord-a', T0 - 2 * MIN);
+    const second = l.refused('prog-a', 'coord-a', T0 - MIN);
+    const park = (runId: number | null): number => l.coord.insertCall('prog-a', 'coord-a', {
+      class: 'block', runId, question: null, options: null, chosen: `waiting for a slot for ${runId}`, why: 'w', reversible: true,
+      wakeOn: 'capacity' as never,
+    }, 'b1', T0 - MIN);
+    const forFirst = park(first);
+    const forSecond = park(second);
+    await l.sweep(T0);
+    expect(l.wakeMail().map((m) => m.subject)).toEqual([`capacity: room for run ${first}`]);
+    expect(l.coord.callById(forFirst)!.wokenAt).toBe(T0);
+    expect(l.coord.callById(forSecond)!.wokenAt).toBeNull();
   });
 });
 
