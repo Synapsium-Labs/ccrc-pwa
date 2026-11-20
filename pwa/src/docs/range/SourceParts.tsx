@@ -6,7 +6,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { DOCS_RANGE_TEXT, fillSentence, mib } from '../docsText';
 import { PartBar } from './MarkdownParts';
-import { splitSourceParts } from './sourceParts';
+import { splitSourceParts } from './textParts';
 
 /** One part as the leaf mounts it: its text and its index (0-based). */
 export interface SourcePartToMount { readonly text: string; readonly index: number }

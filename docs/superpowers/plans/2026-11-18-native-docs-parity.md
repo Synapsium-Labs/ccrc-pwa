@@ -708,6 +708,8 @@ The review found 8 important findings (F1 to F8), 4 minor ones (F9 to F12) and 5
 - **A code-point tail that starts with a fence marker:** `'```\n' + 'a'.repeat(1000) + '```\ncode\n```\n\nprose after the fence.\n\nmore prose.\n'` at `maxBytes` 509.
 - **A cut inside a list item, outside any fence, that starts a part with indented text**, which renders as code: `'1. first\n\n    para two of the item\n\n'.repeat(60)` at 200. This was already true before F9.
 
+**CI on the fix round's push (`50f905f78`):** one red, in `drawer-keybar` ("no two modules under pwa/src differ only in case"): F1's cutter `range/sourceParts.ts` and its component `range/SourceParts.tsx` named one file on a case-insensitive disk. The cutter is now `range/textParts.ts`; `drawer-keybar` and `docs-source-parts` pass, 170 of 170.
+
 **The range read's recorded minors** (the last review of F2, nothing important). None of them saves without a tap:
 - A leaf remounted by a re-list that changed its pin shows the plain Download-only sentence, not the `changing` note, because the new leaf cannot know that a re-list happened.
 - A leaf with a view whose Download tap a re-list interrupted shows the document again, with no hint that nothing was saved.

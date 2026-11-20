@@ -15,7 +15,7 @@ import { useDocsVisit } from '../src/docs/useDocsVisit';
 import { HighlighterContext } from '../src/lib/highlighterContext';
 import { HLJS } from '../src/lib/highlightGrammars';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { splitSourceParts } from '../src/docs/range/sourceParts';
+import { splitSourceParts } from '../src/docs/range/textParts';
 import { BLOB_1, draftOf, entry, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
 import { inThreadContext, inThreadHighlighter } from './highlightTestStore';
 
