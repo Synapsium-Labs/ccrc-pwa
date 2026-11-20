@@ -480,9 +480,10 @@ describe('liveGenerationOf reads the generation identity of the designation', ()
 
   // Gates B (plan w1-gates.md Task 6, slug overlord-note-case-moves-behind-the-gate): the bound session's note now runs the
   // gate order first. Its incarnation is checked at step 1 (this fixture's registry holds none, a measured absence), and a
-  // write needs `continuity-v1`, the act key and a witness, which no fixture can present until door process B binds its
-  // witness. So the door refuses it and writes nothing; which generation a passing note records is `liveGenerationOf`'s,
-  // pinned by its own characterization (`live-generation.test.ts`), and the passing path by the gate's suites.
+  // write needs `continuity-v1`, the act key and a witness. Door process B1 bound the witness (`continuity/witnessPorts.ts`),
+  // but this fixture presents no incarnation and no act key, so the door refuses it and writes nothing; which generation a
+  // passing note records is `liveGenerationOf`'s, pinned by its own characterization (`live-generation.test.ts`), and the
+  // passing path by the gate's suites.
   it('a restart of the Overlord: the bound session\'s note is refused by the gate and writes nothing', async () => {
     app = await open();
     const run = runOf('prog-a', ID);

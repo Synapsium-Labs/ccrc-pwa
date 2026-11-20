@@ -93,6 +93,7 @@ import { registerLinearProxyRoutes } from './linear/proxyRoutes.js';
 import { registerLinkingRoutes } from './linking/routes.js';
 import { registerContinuityRoutes } from './continuity/routes.js';
 import { registerQuizRoutes } from './continuity/quizRoutes.js';
+import { witnessPorts } from './continuity/witnessPorts.js';
 import { liveStateOf, markOperatorPrompt } from './continuity/promptHandoffs.js';
 import { promptRenewing } from './continuity/renewNow.js';
 import { CARD_REGISTRY_UNREAD } from './continuity/card.js';
@@ -2225,9 +2226,9 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const consoleActor = (req: FastifyRequest): string =>
     consoleSubject(identity.console(deps.cfg.authEnabled, deps.cfg.authEnabled ? sessionAuth(req).device : null)) ?? 'unmeasured';
   // The ladder's composed read, built once for its doors and the gate.
-  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
+  const ladderDeps = deps.coord === undefined ? undefined : { coord: deps.coord, inputs: deps.ladderInputs ?? ladderConditionInputs({ coord: deps.coord, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, sidecar: (id) => watcher?.currentUsage().get(id) }), witness: deps.ladderWitness, serverCaps: deps.ladderServerCaps ?? SERVER_CAPS, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY };
   // THE OVERLORD GATE (W1 gates B, §11.2): its one runner, each fact read through its owner's reader. The witness ports are
-  // door process B's: until it binds them, the witness reads `unmeasured` (502) and nothing is recorded, which refuses.
+  // door process B's (`continuity/witnessPorts.ts`): `unmeasured` (502) until the fleet's ccd advertises `door-witness-v1`.
   const noCoord = 'no coordination store';
   const gate = overlordGateRun({
     identity, serverWords: () => SERVER_CAPS, now: () => deps.time.clock.wall(),
@@ -2239,13 +2240,16 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     cardRead: (startId) => deps.coord?.cardReadOfStart(startId) ?? { ok: false, detail: noCoord },
     actKey: (g, key) => (deps.coord === undefined ? { kind: 'unmeasured', why: noCoord } : actKeyFact(deps.coord.db, g, key)),
     counter: (g, c) => (deps.coord === undefined ? 'unmeasured' : advanceCounterGuarded(deps.coord.db, g, c)),
-    witness: () => ({ kind: 'unmeasured', why: 'the witness report is not built' }), recordWitness: () => {},
+    ...witnessPorts({ coord: deps.coord, fleetState: () => deps.fleetState, journal: deps.overlordAuthority ?? NO_LADDER_AUTHORITY, clock: { wall: () => deps.time.clock.wall() }, entropy: { hex: (n) => deps.time.entropy.hex(n) }, push: (p) => notifyPushOnly(deps, p, 'ccrc-server: the unwitnessed-latch push was rejected') }),
     recordFenceRefusal: (row) => { if (deps.coord === undefined || !recordFenceRefusal(deps.coord.db, row).ok) console.warn(`ccrc-server: a fence refusal at ${row.door} (${row.why}) could not be recorded`); },
   });
   // The continuity routes (Overlord §3.3.11, W1a): the hook's start report, a box-token lane in a file of its own.
   registerContinuityRoutes(app, {
     coord: deps.coord, mailToken: () => deps.mailToken ?? null, wall: () => deps.time.clock.wall(), operatorModel: () => deps.operatorModel,
     entropy: { hex: (n) => deps.time.entropy.hex(n) },
+    pickUp: { sessionOf: (m) => deps.operatorModel?.messageSessionOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
+      stateOf: (m) => deps.operatorModel?.messageStateOf(m) ?? { kind: 'unmeasured', why: 'no private store' },
+      pickUp: (m, at) => deps.operatorModel?.moveMessage(m, 'pick-up', 'hook', at) ?? { ok: false, error: 'not-open', detail: 'no private store' } },
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'fromUuid'),
     attributeReader: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     // The card's registry reads (the row's child mark, or that the registry could not say; its incarnation) and declared

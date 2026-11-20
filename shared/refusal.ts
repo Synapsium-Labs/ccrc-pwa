@@ -294,6 +294,9 @@ export const OVERLORD_REFUSALS = {
   'card-unread': 409,
   // Every write door: the hook reported no matching call before it (gates B, door process B). 409.
   'unwitnessed': 409,
+  // The report door's picked-up report: the message id names no operator message on record (door process B1). 404, a row the
+  // catalogue does not hold, as `decision-row-unknown`.
+  'unknown-message': 404,
   // Peer mail, item raise, claims, the claimant's question door and coordinator intent (other-lane refusals). 403.
   'overlord-uses-its-doors': 403,
   // Run open: the designated session may never open a run (other-lane refusals). 403 (ruled, review 2102 F6), with
