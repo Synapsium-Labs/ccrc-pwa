@@ -850,19 +850,31 @@ Task WM4 departs under its own number:
   when it has no `error` word); `work-card-in-pv-card`, the page seats the card in a `.pv-card` like Goals, because the card paints its own ground and
   has no border or padding (seen in the first look at the page in Chrome: its heading sat flush with the column's edge); `pv-side-column`, the right
   column is a new `.pv-side` holding Waiting on you then Runs, beside `.pv-main` holding Goals then Work, one grid order, so a phone reads Goals, Work,
-  Waiting on you, Runs with no second layout; `card-width-steps`, the card's one container step at 34rem (D-8806 `layout-by-the-cards-width`) is two,
-  26rem with a 6.75rem status track and a 10rem facts track, and 40rem with the 7.5rem and 14rem tracks, because the left column measured in Chrome is a
-  451px card at a 1280 window and 532px at 1470, so the plan's "1280 and up: one row" held at 1920 only (the first run of the new browser file was red
-  at 1280 and 1470 at 34rem, green after); `browser-file-exists`, the plan says Create `pwa/browser/programme-page.browser.test.ts`, but that file exists
+  Waiting on you, Runs with no second layout; `card-width-steps`, the card's one container step at 34rem (D-8806 `layout-by-the-cards-width`) is two, and the
+  narrow one is not the plan's one-row layout: the left column measured in Chrome is a 451px card at a 1280 window and 532px at 1470, so the plan's "1280
+  and up: one row" held at 1920 only (the first run of the new browser file was red at 1280 and 1470 at 34rem), and the first fix, three tracks from 26rem
+  with a 10rem facts column, left a title about 146px of room at 1280 against about 280px on a phone (review 2922 F2). So from 26rem a row is two
+  columns, a 6.75rem status track beside the title with its tag, and the facts on a row of their own under the title, which leaves a title more room than a
+  phone gives it; the three-column row, status | title | facts as the plan words it, starts at 40rem, with 7.5rem and 14rem tracks. Pinned in Chrome by the
+  title track at every sampled width being at least the 360 one, by a plain-name epic tag staying on one line, and by one sampled width between 690 and 900
+  (800, where the page is one column and the card as wide as the page, so the 40rem step is measured and not only read as CSS, review 2922 A7);
+  `work-read-checks-its-words`, review 2922 F3, the page's decider checks the server's unreadable word against the words the card can word
+  (`UNREADABLE_WORDS`, the keys of the card's own table, kept in `workMapWords.ts` and not in `shared/plan.ts`, where a home for it is a carry) and checks
+  that every list the card walks is a list and `counts` an object, and an answer that is less falls to the failed-read arm ("unreadable answer");
+  `key-chosen-in-l1`, review 2922 A5, `planKey(slug, runs, waiting)` chooses which items count (the list's open and cleared ones), and the screen only
+  calls it; `browser-file-exists`, the plan says Create `pwa/browser/programme-page.browser.test.ts`, but that file exists
   (the Runs section and Resume at every width, D-8075), so its columns pin is updated to the new order and the Work card's cases are the new
   `pwa/browser/programme-work-page.browser.test.ts`; the three other browser fixtures that open the programme page (`run-tally`, `phone-bar`,
   `one-waiting-page`) answer its plan read, as a server does, so the page does not draw a failed read in them; `phase-line-writes-every-apart-group`, review
   2891 F5: the headline's and the phase line's apart counts are one function over `WORK_APART_GROUPS` less `dropped`, keyed so a group added there is a
   compile error, so the phase line now also writes "· N failed" (a count that is zero in a phase today, `failed` being the no-plan fallback's alone);
-  `kicker-left`, the page head's "Programme" kicker is left as it is: no programme icon sits beside it, the operator's note asks to drop the word
-  where it sits beside the icon, and the coordinator-badge task does not edit that file (inferred from its branch); `step-2-red-after-the-code`, Step 2 is
+  `kicker-left`, the page head's "Programme" kicker is left as it is, by the coordinator's ruling on review 2922 F1, which put the head's word to the operator
+  as a separate question (a removal is a one-line change in the head and a line of the contrast test). The operator's note of 2026-11-19 reads "We don't need
+  to write the word "Programme" when we use the programme icon and colours and also the wave timer." The head is outside it: it carries no programme icon and no
+  wave timer, and its colour border alone does not name the kind of page. The coordinator-badge task (run 2883) does not edit `ProgrammeScreen.tsx` (measured:
+  `git diff` of its branch against `main`, empty for that file, on 2026-11-20 before and after its PR merged); `step-2-red-after-the-code`, Step 2 is
   ticked, though the red was taken after the code was written, not before: the jsdom cases were written first and run only once the page was built, then
-  run against the old `ProgrammeScreen.tsx` (17 of 89 red), and the browser file's red is its first run at 34rem (1280 and 1470 red). Edits under
+  run against the old `ProgrammeScreen.tsx` (21 of 96 red at fix round 1's tip, 17 of 89 at the first push), and the browser file's red is its first run at 34rem (1280 and 1470 red). Edits under
   another's claim: `pwa/src/lib/api.ts`, claim 5826 (the Docs reader's range wave, run 2743), with that
   worker's consent by mail on 2026-11-20 for the `plan(slug)` lines only (its return type gains `work?: WorkAnswer`); the plan itself, whose
   holder at the start (WM3's worker, claim 5806) had no session left to answer (mail refused `unknown-recipient`) and whose claim lapsed from the
