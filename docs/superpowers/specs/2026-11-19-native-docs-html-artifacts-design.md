@@ -477,7 +477,18 @@ This section maps the standalone-only losses X2 measured onto how this design cl
 | Page downloads | not counted alone | `allow-downloads` (§4.2, A3) | Complete parity inventory (F11) | AR-A2 |
 | Runtime fetches beyond the walls' shim. X2 counts these 4 pages as running within the walls for the siblings its shim answers, so this is a widening, not a loss X2 records | 4 | Real same-origin `fetch` of any file in the manifest, under `connect-src S` (§4.3) | Complete parity inventory (F12) | AR-A3 |
 
-C3 and rows F11, F12 (beyond the walls) and F13 move from Conflict to Gap, designed here. A row moves from Gap to Same when its acceptance row passes on the installed release, with the artifact names set up. Two differences from the standalone reader are recorded, not waived. A page that fetches from an outside API fails, because `connect-src` takes no outside host. A page opened as an artifact runs in a new tab, not inline. An HTML page in an outside folder runs within the walls only (§3.2); running it in full is Later. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
+C3 and rows F11, F12 (beyond the walls) and F13 move from Conflict to Gap, designed here. A row moves from Gap to Same when its acceptance row passes on the installed release, with the artifact names set up, and with the differences below recorded beside it.
+
+Six differences from the standalone reader are recorded, not waived. The standalone reader serves every file raw, with CORS and at any size (X2 F12), so the last three are the manifest's own exclusions:
+
+1. A page that fetches from an outside API fails, because `connect-src` takes no outside host (§4.3).
+2. A page opened as an artifact runs in a new tab, not inline (§4.1).
+3. An HTML page in an outside folder runs within the walls only (§3.2); running it in full is Later.
+4. A reference above the page's own folder (`../shared/lib.js`) does not load, because the manifest holds the page's directory and below (§3.2). The launch sheet counts such references before Prepare.
+5. A page directly in a section's root cannot load a Markdown file of that section, because the manifest leaves Markdown out there (§3.2).
+6. A file whose size the tree read cannot give is left out of the manifest and does not load (§3.2). The launch sheet counts it as unmeasured.
+
+Differences 2 and 3 hold for every artifact row, F11 and F13 included. F12 carries 1 and 4 to 6 as well, and moves to Same only with all of them recorded beside it. Earlier versions of a page are not served by the tier (§3.2), and that is no parity loss: the standalone reader serves no versions. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
 
 ## 9. Rings, contexts and census
 
