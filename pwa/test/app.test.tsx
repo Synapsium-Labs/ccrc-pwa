@@ -20,6 +20,7 @@ import { api } from '../src/lib/api';
 import { TEST_ROSTER } from './rosterFixture';
 import { seventeenLanes } from './seventeenLanes';
 import { itemView, waitingView } from './ledgersFixture';
+import { frame, unowned } from './delegationFixture';
 
 /** A lazy screen's first load (console speed C1): the wait, and its case's own ceiling a few seconds above it, so a
  *  hang reports the wait's own failure, with the DOM, before the case's timeout (reviews 1464 F8 and 1473 A9). */
@@ -60,6 +61,18 @@ describe('App /archive route', () => {
     // mounts alongside the /archive detail pane.
     fireEvent.click(screen.getByRole('button', { name: /^workspace /i }));
     expect(location.pathname).toBe('/s/demo-quiet-basin');
+  });
+
+  it('hands the delegation frame to the Archive screen: "Work no session owns" draws from the store (desktop polish H4)', () => {
+    act(() => useFleetStore.setState({ conn: 'open', sessions: [], delegation: frame({ unowned: [unowned()] }) }));
+    try {
+      navigate('/archive');
+      render(<App />);
+      const section = screen.getByRole('region', { name: /^Work no session owns/ });
+      expect(within(section).getByText(/no owner found/)).toBeInTheDocument();
+    } finally {
+      act(() => useFleetStore.setState({ delegation: null }));
+    }
   });
 
   it('leaves / on data-view="fleet" and /s/:id routing to SessionScreen untouched', () => {

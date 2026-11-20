@@ -96,3 +96,21 @@ describe('review caps join the page (Task 24, F21)', () => {
     expect(needsYouCount(entries, 'prog-b')).toBe(1);
   });
 });
+
+describe('parked approvals join the one list (approvals PR 3, review 2889 F7)', () => {
+  const parkedRow = (id: number, runId: number | null) => ({
+    id, childId: 'project-a-quiet-basin', parentId: 'project-a-calm-mesa', runId, agentId: '', tool: 'Bash', input: 'ls',
+    class: 'escalate', denyCurrent: true, askAt: 1, horizon: null, holder: 'coordinator' as const, ruled: null,
+  });
+  it('each parked approval waits on the operator: the door counts it, and no programme chip does (drawn apart)', () => {
+    const runs = [run(7, 'working', 'project-a-quiet-basin', 'project-a-calm-mesa')];
+    const entries = needsYou([], [], runs, [parkedRow(1, 7), parkedRow(2, null)]);
+    expect(entries).toEqual([{ programme: '', runId: 7, kind: 'parked' }, { programme: '', runId: null, kind: 'parked' }]);
+    expect(needsYouCount(entries)).toBe(2);
+    expect(needsYouCount(entries, 'prog-a')).toBe(0);
+  });
+  it('the Waiting door\'s badge counts a screen that holds only parked approvals', () => {
+    expect(waitingItemsCount(waitingView({ approvals: [parkedRow(1, null)] }), [], [])).toBe(1);
+    expect(waitingItemsCount(waitingView({}), [], [])).toBe(0);
+  });
+});

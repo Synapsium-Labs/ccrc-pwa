@@ -1,13 +1,13 @@
 // L3 (coord, context C5 Coordination; D-6095, fleet-capacity W1-4, re-grounded by the waiting-workers plan Task 4): the
 // admission wake's ONE write. The observation row, the mail and the `admissionWokenAt` stamp go in ONE transaction, the
 // stall watch's pattern (`rundefsTx.ts#queueStallNotice`): the row is the once-only key, so a restart between passes never
-// re-sends, and a refused write leaves nothing behind. The claimant's `capacity` blocks are woken in it too. Not `queueSystemMail`: its dedupe asks only for an OUTSTANDING mail,
+// re-sends, and a refused write leaves nothing behind. The claimant's `capacity` blocks for the woken run are woken in it too. Not `queueSystemMail`: its dedupe asks only for an OUTSTANDING mail,
 // so a wake the coordinator already acked would be sent again. It lives beside `rundefsTx.ts` rather than in it because that
 // file is held under a freeze while this lands (capacity-task4-notes.md, slug wake-tx-own-file); its one caller is the
 // `admissionWake` lane's pass (`admissionWakeLane.ts#wakeOne`).
 import { tx } from './tx.js';
 import { insertSystemMailTx } from './rundefsTx.js';
-import { admissionWakeDetail, admissionWakeMail, type AdmissionWaiter } from './admissionWake.js';
+import { admissionWakeDetail, admissionWakeMail, blockWokenWith, type AdmissionWaiter } from './admissionWake.js';
 import type { StallObservation } from './store.js';
 import type { WatcherCoordPort } from './ports.js';
 
@@ -32,16 +32,17 @@ export function queueAdmissionWake(coord: WatcherCoordPort, w: AdmissionWaiter, 
       fromId: 'operator', toId: w.claimedBy, runId: w.runId, kind: 'status', subject: words.subject, body: words.body,
     });
     coord.markAdmissionWoken(w.runId, at);
-    wakeCapacityBlocks(coord, w.claimedBy, at);
+    wakeCapacityBlocks(coord, w, at);
     return { queued: true, mailId: q.mailId, deliveryId: q.deliveryId, eventId: seen.eventId };
   });
 }
 
-/** The claimant's live blocks parked on `capacity` are woken with the wake (amendment A8-3 of D-8126): the block-wake lane
- *  leaves `capacity` to this lane (`coordCalls.ts#blockWakeDue`), and, as there, a block is never woken without its mail:
- *  `markBlockWoken`, the one writer of `wokenAt`, runs in this same transaction. */
-function wakeCapacityBlocks(coord: WatcherCoordPort, claimedBy: string, at: number): void {
-  for (const b of coord.liveBlocksOf(claimedBy, at)) {
-    if (b.wakeOn === 'capacity') coord.markBlockWoken(b.id, at);
+/** The claimant's live blocks parked on `capacity` for the woken run are woken with the wake (amendment A8-3 of D-8126,
+ *  scoped to the run by the capacity follow-ups, `blockWokenWith`): the block-wake lane leaves `capacity` to this lane
+ *  (`coordCalls.ts#blockWakeDue`), and, as there, a block is never woken without its mail: `markBlockWoken`, the one
+ *  writer of `wokenAt`, runs in this same transaction. */
+function wakeCapacityBlocks(coord: WatcherCoordPort, w: AdmissionWaiter, at: number): void {
+  for (const b of coord.liveBlocksOf(w.claimedBy, at)) {
+    if (blockWokenWith(b, w)) coord.markBlockWoken(b.id, at);
   }
 }

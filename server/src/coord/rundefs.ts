@@ -315,6 +315,10 @@ const APPROVAL_NUDGE_SUBJECT_PREFIX = 'approval:';
 
 export const approvalNudgeSubject = (approvalId: number): string => `${APPROVAL_NUDGE_SUBJECT_PREFIX}${approvalId}`;
 
+/** The park's ruling mail to the CHILD (approvals plan 2026-11-18, §3.3.2): its parked call was ruled, and its retry of the
+ *  same command meets the ruling. Not an approval nudge (`isApprovalNudgeMail` reads the prefix above only). */
+export const approvalParkRuledSubject = (approvalId: number): string => `approval ${approvalId} ruled`;
+
 /** Is this mail row an approval nudge? Recorded and never pushed, for the ask nudge's reason (`isAskNudgeMail`): it
  *  exists to keep the prompt off the operator's phone during the window, so its own delivery must not buzz it. */
 export function isApprovalNudgeMail(m: { fromId: string; runId: number | null; subject: string }): boolean {

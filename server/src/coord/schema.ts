@@ -4139,16 +4139,53 @@ export const MIGRATIONS: readonly string[] = [
   ALTER TABLE linear_migrations ADD COLUMN putBackAskedAt INTEGER;
   ALTER TABLE linear_migrations ADD COLUMN reportDoneAt INTEGER;
   `,
-  // ── 115: user_version 114 -> 115 ─────────────────────────────────────────────
+
+  // ── 115: user_version 114 -> 115 ──────────────────────────────────────────
+  // The park (approvals plan 2026-11-18, §3.3; approvals PR 3). Four nullable columns on `approvals`, kept from mint or
+  // written once: `parkWord` (`live`, `shadow` or `capped`, decided at mint and stored, F1; NULL on a row minted before this
+  // build or released at mint), `parkKey` (the key a retry repeats: the child's registry id, the run and the sha256 of the
+  // canonical `[tool_name, cwd, tool_input]`), `fetchedAt` (the ruling read's first serve of a ruling, F8-c) and `wouldPark`
+  // (the shadow's record, 1 when a `shadow` row lapsed where a `live` one would have parked). `approval_parks`, one row per
+  // key, written only through `approvalParkStore.ts` from the questions owner: the slots its `live` rows reserve at mint
+  // (at most three), its retries, its first park and horizon (`state` `open` or `void`), a principal's ruling and its one
+  // use (`rulingUses` 0 or 1), and the coordinator's verdicts on the key (F3). The Shadow lanes card's `approval-park` row,
+  // seeded `shadow`, gated in this build until PR 3v (`lane-arm.ts`).
+  // ADDITIVE ONLY, rule 3: an older build opening a file at this version warns, reads as-is, names none of these and boots;
+  // it reads a `parked` row's state as `unknown`, which it never writes and never rules.
+  // The slot is POSITIONAL and the coordinator's: urgent mail (#3073) landed 108, Overlord gates B (#3076) 109, door
+  // process B1 (#3099) 110, the waiting workers' sleep (#3101) 111, the dispatch cap's switch (#3103) 112, capacity Task 4
+  // (#3117) 113 and the per-team Linear migration (#3109) 114 first, so this is 115. RE-MEASURE the slot before merge (it
+  // must print 114 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE approvals ADD COLUMN parkWord TEXT;
+  ALTER TABLE approvals ADD COLUMN parkKey TEXT;
+  ALTER TABLE approvals ADD COLUMN fetchedAt INTEGER;
+  ALTER TABLE approvals ADD COLUMN wouldPark INTEGER;
+  CREATE INDEX approvals_by_park_key ON approvals(parkKey) WHERE parkKey IS NOT NULL;
+  CREATE TABLE approval_parks (
+    parkKey TEXT PRIMARY KEY, childId TEXT NOT NULL, runId INTEGER NOT NULL,
+    slots INTEGER NOT NULL DEFAULT 0, retries INTEGER NOT NULL DEFAULT 0,
+    firstRowId INTEGER, parkedAt INTEGER, horizon INTEGER, state TEXT NOT NULL DEFAULT 'open',
+    rulingVerdict TEXT, rulingAuthority TEXT, rulingBy TEXT, rulingReason TEXT, rulingClass TEXT, rulingRowId INTEGER,
+    rulingAt INTEGER, rulingUses INTEGER NOT NULL DEFAULT 0,
+    coordDeclined INTEGER NOT NULL DEFAULT 0, coordDenied INTEGER NOT NULL DEFAULT 0,
+    createdAt INTEGER NOT NULL
+  );
+  CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
+  `,
+  // ── 116: user_version 115 -> 116 ─────────────────────────────────────────────
   // The in-place bind (D-6096, fleet-capacity W1-4b): a coordinator whose wave the concurrency cap refused takes that wave
   // as the run's own worker, in a sibling worktree. `inPlace` is 1 for such a run and NULL for every other; its one writer
   // is `CoordStore.bindInPlace`, and its readers decide what an in-place run does NOT do: it starts no process, so it is
   // charged to neither cap (`dispatchedAt` stays NULL), and its close and abandon compose no `ws-*` verb on the claimant,
   // whose workspace is the coordinator's own (`closeDecide.ts`).
   //
-  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 115` takes
+  // ONE NULLABLE COLUMN, NOTHING ELSE (no NOT NULL, no CHECK): an older build opening a file at `user_version 116` takes
   // rule 3 (it warns, reads as-is and migrates nothing), never names it, and boots. Every earlier entry is frozen.
-  // RE-MEASURE the slot before the PR and before merge (it must print 114 before this entry is counted):
+  // RE-MEASURE the slot before the PR and before merge (it must print 115 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

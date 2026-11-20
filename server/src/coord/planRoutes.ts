@@ -248,7 +248,10 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     try {
       const stored = plan.planOf(slug);
       const read = coord.programmeWorkRuns(slug);
-      if (!read.ok) return { unreadable: read.kind };
+      if (!read.ok) {
+        console.warn(`ccrc-server: the work map of ${slug} could not read its runs (${read.kind}: ${read.detail})`);
+        return { unreadable: read.kind };
+      }
       const runs = withLastMoves(coord, read.runs, (d) => console.warn(`ccrc-server: the work map of ${slug} could not read the runs' last moves (${d})`));
       const verdicts = verdictsReadOf(opts.runVerdicts?.all());
       const open = coord.itemsFor(slug, opts.now()).open;
@@ -267,7 +270,10 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
         let landed: DoneEvidenceFacts['landed'] = null;
         if (d.evidence !== 'malformed' && 'runId' in d.evidence) {
           const r = coord.run(d.evidence.runId);
-          if (!r.ok) return { unreadable: r.kind };
+          if (!r.ok) {
+            console.warn(`ccrc-server: the work map of ${slug} could not read evidence run ${d.evidence.runId} (${r.kind}: ${r.detail})`);
+            return { unreadable: r.kind };
+          }
           run = r.run === null ? null
             : { program: r.run.program, kind: r.run.kind, state: r.run.state, ticketKey: plan.ticketOfRun(r.run.id)?.key ?? null };
         } else if (d.evidence !== 'malformed') {

@@ -1,4 +1,3 @@
-import type { ApprovalClass } from './approvalguard.js';
 
 /**
  * THE STALE DENY DIGEST (Overlord approvals PR 0; plan 2026-11-18-overlord-approvals.md §3.2.1, Table 3c). Pure: no
@@ -13,9 +12,10 @@ import type { ApprovalClass } from './approvalguard.js';
  * Now the install spine (`ccd/install-session-hooks.sh`, the file's one writer) keeps `$REG/child-deny.digests`, one
  * `<digest> <epoch ms>` line per digest the managed file has had, newest last, at most `CHILD_DENY_DIGESTS_MAX` lines.
  * A child whose digest that history names is routed and held, its class left as the classifier gave it, and the row
- * records "deny current" as its own fact (`approvals.denyCurrent`). The rule door asks `approvalAllowRefusal`, which
- * refuses an allow on a row whose deny rules are not current, so a coordinator may deny it or hand it over, never allow
- * it (spec §6.6's guarantee, kept for allows). A digest in neither the managed file nor the history is refused
+ * records "deny current" as its own fact (`approvals.denyCurrent`). The one signing site's guard asks
+ * `approvalAllowRefusal` for every coordinator allow (approvals PR 3, `approvalPark.ts#signingRefusal`), which refuses an
+ * allow on a row whose deny rules are not current, so a coordinator may deny it or hand it over, never allow it (spec
+ * §6.6's guarantee, kept for allows). A digest in neither the managed file nor the history is refused
  * `deny-not-engaged`, as before.
  */
 
@@ -49,15 +49,17 @@ export function denyStandingOf(child: string | null, managed: string | null, his
   return 'none';
 }
 
-/** Why an allow is refused at the rule door, or null when it may be signed. `rowClass` is the class stored at mint (a
- *  string: a word a newer build wrote is not `ordinary`), `again` the classifier run once more over the input held for
- *  the window (`escalate` when none is held), and `denyCurrent` the row's own fact. Forbidden on either side is
- *  `guard-forbidden`, first. A row whose child does not run under the box's current deny rules is `deny-not-current`,
- *  whatever its class: the fact is the child's, so it answers the same before and after a server restart. Anything
- *  else short of `ordinary` on both sides is `guard-escalate`. A deny or a hand-over never asks: they stay open on
- *  every row. */
+/** Why a coordinator's allow is refused, or null when it may be signed: asked by the one signing site's guard
+ *  (`approvalPark.ts#signingRefusal`, its coordinator arm), for the claimant's in-window allow and a park's ruling met at
+ *  retry alike. `rowClass` is the class stored at mint (a string: a word a newer build wrote is not `ordinary`), `again`
+ *  the class given now (the classifier run once more over the input held for the window, `escalate` when none is held, or
+ *  a retry's own; a word this build does not know is not `ordinary`), and `denyCurrent` whether the child runs under the
+ *  box's current deny rules (the row's own fact, and the standing read at signing when there is one). Forbidden on either
+ *  side is `guard-forbidden`, first. A child not under the current rules is `deny-not-current`, whatever its class: the fact
+ *  is the child's, so it answers the same before and after a server restart. Anything else short of `ordinary` on both
+ *  sides is `guard-escalate`. A deny or a hand-over never asks: they stay open on every row. */
 export function approvalAllowRefusal(
-  rowClass: string, again: ApprovalClass, denyCurrent: boolean,
+  rowClass: string, again: string, denyCurrent: boolean,
 ): 'guard-forbidden' | 'deny-not-current' | 'guard-escalate' | null {
   if (rowClass === 'forbidden' || again === 'forbidden') return 'guard-forbidden';
   if (!denyCurrent) return 'deny-not-current';

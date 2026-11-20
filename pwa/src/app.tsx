@@ -70,7 +70,9 @@ function ShellCommands(): ReactNode {
 /** `/archive`: the one arm of the ladder that reads the fleet's rows, so it is the one that subscribes to them (C6). */
 function ArchiveRoute(): ReactNode {
   const sessions = useFleetStore((s) => s.sessions);
-  return <ArchiveScreen sessions={sessions} onOpen={(id) => navigate(sessionPath(id))} />;
+  // The delegation frame feeds the Archive's "Work no session owns" section (desktop polish H4); null reads unavailable.
+  const delegation = useFleetStore((s) => s.delegation);
+  return <ArchiveScreen sessions={sessions} delegation={delegation} onOpen={(id) => navigate(sessionPath(id))} />;
 }
 
 export function App(): ReactNode {

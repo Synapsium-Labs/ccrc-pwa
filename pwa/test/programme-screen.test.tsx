@@ -1059,7 +1059,7 @@ describe('the programme page: the Work card (WM4)', () => {
 
 // What the page does with each answer is decided once, in `workRead.ts` (L1); the screen only holds its state and draws it.
 describe('the work read: the page keeps the last view, and the time of the last good read', () => {
-  const shape = { source: 'plan', counts: {}, phases: [], notInPhase: [], epics: [], initiatives: [], doneWhen: [] };
+  const shape = { source: 'plan', counts: {}, phases: [], notInPhase: [], epics: [], initiatives: [], doneWhen: [], end: null, beforePlan: null, runs: null };
   const view = { ...shape, items: [] } as unknown as WorkMapView;
   const other = { ...shape, items: [{ key: 'x' }] } as unknown as WorkMapView;
   const T0 = 1_000;
@@ -1097,6 +1097,24 @@ describe('the work read: the page keeps the last view, and the time of the last 
     }
     const notList = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: { ...shape, items: [], epics: {} } } }, T0);
     expect(workCardOf(notList, 'prog-a')?.answer).toEqual({ readFailed: 'unreadable answer', last: null });
+  });
+
+  // Review 2956 F1: the card reads `end`, `beforePlan` and `runs` (and `runs.items`) when they are not null, so an answer where one is missing or
+  // is not an object (a partial answer from a newer or broken server) is a failed read that keeps the last view, never a render that throws.
+  it('a view whose end, beforePlan or runs is missing or is not an object is a failed read (review 2956 F1)', () => {
+    const held = workReadNext(null, 'prog-a', { answer: { ok: true, plan: {}, work: view } }, T0);
+    const failedWith = (over: Record<string, unknown>) => workCardOf(workReadNext(held, 'prog-a', { answer: { ok: true, plan: {}, work: { ...shape, items: [], ...over } } }, T0 + 1), 'prog-a')?.answer;
+    const FAILED = { readFailed: 'unreadable answer', last: view };
+    for (const field of ['end', 'beforePlan', 'runs']) {
+      expect(failedWith({ [field]: undefined }), `${field} missing`).toEqual(FAILED);
+      expect(failedWith({ [field]: 'text' }), `${field} a string`).toEqual(FAILED);
+    }
+    expect(failedWith({ runs: {} }), 'runs without items').toEqual(FAILED);
+    expect(failedWith({ runs: { items: {} } }), 'runs.items not a list').toEqual(FAILED);
+    // The same answers read, drawn, when each is null or an object the card can walk.
+    const ok = (over: Record<string, unknown>) => workCardOf(workReadNext(held, 'prog-a', { answer: { ok: true, plan: {}, work: { ...shape, items: [], ...over } } }, T0 + 1), 'prog-a')?.answer;
+    expect(ok({ end: { outcome: 'done', why: null, at: 5 }, beforePlan: { runs: 2 }, runs: { items: [], waves: null } })).toMatchObject({ source: 'plan' });
+    expect(ok({})).toMatchObject({ source: 'plan' });
   });
 
   it('nothing read yet is no card', () => {
