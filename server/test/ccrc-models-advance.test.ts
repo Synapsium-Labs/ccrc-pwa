@@ -17,7 +17,7 @@ import fs from 'node:fs';
 import path, { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { mkTmp } from './tmpHelpers.js';
-import { ghContainedEnv } from './ccdWsHelpers.js';
+import { ghContainedEnv, spliceCcd } from './ccdWsHelpers.js';
 import {
   MANAGER_STANDIN_MARK, assertManagerStandIns, ccrcFunction, codexAuthDir, eventually, freePort, killLaneProcesses,
   laneProxyAnswersAs, laneProxyGets, laneProxyMode, laneProxyParked, laneProxyProbeMode, laneProxyRelease,
@@ -2477,6 +2477,30 @@ describe.skipIf(!HAS_FLOCK)('the hourly refresh and the push carry Anthropic lan
     expect(notifyCalls()).toEqual([
       '--push\tlane-a: sonnet claude-sonnet-9-1 → claude-sonnet-9-2',
       '--push\tlane-a: opus claude-opus-9-1 → claude-opus-9-2']);
+  });
+
+  // Inert at merge (the wave contract): main's ccrc and main's ccd, as they stood before this arm, beside this branch's
+  // models op. MAIN is #2943's merge commit on main, so every full-history clone holds it; a clone without it reds.
+  it('inert at merge: an older ccrc never runs aliases-refresh, and an older ccd never reads the aliases file', () => {
+    const MAIN = 'ea0c3010a0';
+    const show = (f: string): string => {
+      const g = spawnSync('git', ['-C', REPO, 'show', `${MAIN}:${f}`], { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024 });
+      expect(g.status, `this checkout cannot read ${f} at ${MAIN}`).toBe(0);
+      return g.stdout;
+    };
+    setupAnth();
+    plantCache('.claude-lane-a', cacheJson(C1, { opus: X1 }, [X1]));
+    fs.writeFileSync(join(home, 'ccrc', 'ccd', 'ccrc'), `${show('ccd/ccrc')}\n# fixture fakes\n${FAKES}\n`);
+    const r = run('cmd_models refresh --all', { CCRC_MODELS_NOW: T0 });
+    expect(r.code, r.stdout + r.stderr).toBe(0);
+    expect(aliasCalls(), 'the older ccrc ran the new op').toEqual([]);
+    for (const id of ['lane-up', 'lane-a', 'lane-b']) expect(fs.existsSync(aliasesOf(id)), id).toBe(false);
+    expect(notifyCalls()).toEqual([]);
+    const libs = spawnSync('git', ['-C', REPO, 'ls-tree', '--name-only', `${MAIN}`, 'ccd/lib/'], { encoding: 'utf8' })
+      .stdout.split('\n').filter((f) => /^ccd\/lib\/[^/]+\.sh$/.test(f));
+    const olderCcd = spliceCcd(show('ccd/ccd'), libs.map(show));
+    expect(olderCcd.length, 'the older ccd was read').toBeGreaterThan(100_000);
+    expect(olderCcd).not.toMatch(/aliases\.json|aliaslaunch|model-aliases/);
   });
 
   it('a refresh with no move pushes nothing: a baseline, the same cache again, and a lane with no cache', () => {
