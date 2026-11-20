@@ -11,7 +11,7 @@ import { describe, it, expect } from 'vitest';
 import { readFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { parseSource } from './scan/parse.js';
+import { parseSource, ts } from './scan/parse.js';
 import { OVERLORD_DOORS, NOT_OVERLORD_DOORS, doorRow } from '../src/coord/overlordDoors.js';
 import { DOOR_GROUPS, VERB_CLASSES } from '../../shared/overlord-identity.js';
 
@@ -115,5 +115,121 @@ describe('the table itself', () => {
       'designate', 'retire', 'designation', 'model', 'account-set', 'ladder', 'rung', 'pause', 'latch-clear', 'portfolio-rank', 'goals-ratify', 'private-names-read', 'private-names-write',
       'card', 'card-record', 'notes-write', 'notes-read', 'handover', 'probe-read', 'probe-answer',
     ]);
+  });
+});
+
+// ── Overlord W1, gates B (plan w1-gates.md Task 6, Review Focus 5; spec §3.6 H2): every operator door that writes records its
+// actor through the identity port. For each `operator` row whose verb class is `admin`, the handler of its registration (in
+// the row's file) calls `identity.operator(` or `identity.console(`, as `deps.identity.<arm>(` or a local named `identity`.
+// A handler that reaches the port only through a named function of the same file (the ladder's `moveRung`, which both the
+// rung and the pause doors call) is followed ONE call deep: the helper's own body must hold the call. Read rows (`view`)
+// are exempt.
+//
+// WHAT THIS SCAN CANNOT SEE: a port reached through a function two calls deep, through a function of another file, through
+// an alias of the port (`const id = deps.identity`) or through a method call on an object; a registration made through a
+// helper or a loop; whether the actor the port returned is the one that reaches the store. It proves the port is asked in the
+// handler's reach, not that its answer is what is recorded.
+describe('every operator door that writes records its actor through the identity port', () => {
+  type FnNode = ts.Node;
+  const portCall = (n: ts.Node): boolean => {
+    if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression)) return false;
+    const arm = n.expression.name.text;
+    if (arm !== 'operator' && arm !== 'console') return false;
+    const recv = n.expression.expression;
+    return (ts.isIdentifier(recv) && recv.text === 'identity')
+      || (ts.isPropertyAccessExpression(recv) && recv.name.text === 'identity' && ts.isIdentifier(recv.expression) && recv.expression.text === 'deps');
+  };
+  const walkAll = (node: ts.Node, visit: (n: ts.Node) => void): void => { visit(node); ts.forEachChild(node, (c) => walkAll(c, visit)); };
+  const hasPort = (node: ts.Node): boolean => { let f = false; walkAll(node, (n) => { if (portCall(n)) f = true; }); return f; };
+
+  /** The handler of `METHOD path` in a source text (its last argument), or undefined. */
+  function handlerOf(text: string, file: string, method: string, route: string): FnNode | undefined {
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    let found: FnNode | undefined;
+    walkAll(sf, (n) => {
+      if (!ts.isCallExpression(n) || !ts.isPropertyAccessExpression(n.expression)) return;
+      const c = n.expression;
+      if (!ts.isIdentifier(c.expression) || c.expression.text !== 'app' || c.name.text.toUpperCase() !== method) return;
+      const first = n.arguments[0];
+      if (first === undefined || !ts.isStringLiteralLike(first) || first.text !== route) return;
+      found = n.arguments[n.arguments.length - 1];
+    });
+    return found;
+  }
+  /** The named helpers of a file: a function declaration, or a `const name = (…) => …` / function expression. */
+  function helpersOf(text: string, file: string): Map<string, ts.Node> {
+    const sf = ts.createSourceFile(file, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+    const out = new Map<string, ts.Node>();
+    walkAll(sf, (n) => {
+      if (ts.isFunctionDeclaration(n) && n.name !== undefined) out.set(n.name.text, n);
+      if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer !== undefined && (ts.isArrowFunction(n.initializer) || ts.isFunctionExpression(n.initializer))) out.set(n.name.text, n.initializer);
+    });
+    return out;
+  }
+  /** `direct` when the handler holds the port call; `via <name>` when one named helper of the file does; else null. */
+  function reach(text: string, file: string, method: string, route: string): { how: 'direct' } | { how: 'via'; helper: string } | null | 'no-handler' {
+    const h = handlerOf(text, file, method, route);
+    if (h === undefined) return 'no-handler';
+    if (hasPort(h)) return { how: 'direct' };
+    const helpers = helpersOf(text, file);
+    const called: string[] = [];
+    walkAll(h, (n) => { if (ts.isCallExpression(n) && ts.isIdentifier(n.expression) && helpers.has(n.expression.text)) called.push(n.expression.text); });
+    for (const name of called) if (hasPort(helpers.get(name)!)) return { how: 'via', helper: name };
+    return null;
+  }
+
+  const adminRows = rows.filter(([, r]) => r.group === 'operator' && r.verbClass === 'admin');
+  /** The rows whose handler reaches the port only through a helper, as `key -> helper` (pinned below). */
+  const followed: Record<string, string> = {};
+  for (const [key, r] of adminRows) {
+    const got = reach(sourceOf(r.file), r.file, r.method, r.path);
+    if (typeof got === 'object' && got !== null && got.how === 'via') followed[key] = got.helper;
+  }
+
+  it('there are admin operator rows to check (a zero would make the rest vacuous), and read rows are not among them', () => {
+    expect(adminRows.map(([k]) => k)).toEqual([
+      'designate', 'retire', 'model', 'account-set', 'rung', 'pause', 'latch-clear', 'portfolio-rank', 'goals-ratify', 'private-names-write',
+    ]);
+    for (const [k, r] of rows) if (r.group === 'operator' && r.verbClass === 'view') expect(adminRows.map(([x]) => x), k).not.toContain(k);
+  });
+  for (const [key, r] of adminRows) {
+    it(`${key} (${r.method} ${r.path}): its handler reaches identity.operator( or identity.console(`, () => {
+      const got = reach(sourceOf(r.file), r.file, r.method, r.path);
+      expect(got, `${key} in ${r.file}`).not.toBe('no-handler');
+      expect(got, `${key} does not reach the identity port`).not.toBeNull();
+    });
+  }
+  it('the rows that reach the port through a helper of their own file are pinned: the rung and pause doors, through moveRung', () => {
+    expect(followed).toEqual({ rung: 'moveRung', pause: 'moveRung' });
+  });
+  it('CONTROL: a planted admin handler with a row and no port call is red; with the port call, green', () => {
+    const none = "app.post('/api/planted', async (req, reply) => { const g = deps.gate(req, reply, {}); return { ok: true }; });\n";
+    expect(reach(none, 'x.ts', 'POST', '/api/planted')).toBeNull();
+    const direct = "app.post('/api/planted', async (req, reply) => { const a = deps.identity.operator(g.actor); return a; });\n";
+    expect(reach(direct, 'x.ts', 'POST', '/api/planted')).toEqual({ how: 'direct' });
+    const local = "app.post('/api/planted', (req, reply) => { return identity.console(true, 'device-a'); });\n";
+    expect(reach(local, 'x.ts', 'POST', '/api/planted')).toEqual({ how: 'direct' });
+  });
+  it('CONTROL: a helper that does not reach the port is not followed to green; one that does is, and is named', () => {
+    const idle = "const helper = () => 1;\napp.post('/api/planted', async () => helper());\n";
+    expect(reach(idle, 'x.ts', 'POST', '/api/planted')).toBeNull();
+    const reaching = "const helper = () => deps.identity.operator(a);\napp.post('/api/planted', async () => helper());\n";
+    expect(reach(reaching, 'x.ts', 'POST', '/api/planted')).toEqual({ how: 'via', helper: 'helper' });
+    // Two calls deep is not followed: the scan's stated width.
+    const deep = "const inner = () => deps.identity.operator(a);\nconst outer = () => inner();\napp.post('/api/planted', async () => outer());\n";
+    expect(reach(deep, 'x.ts', 'POST', '/api/planted')).toBeNull();
+    // An unrelated receiver is not the port.
+    const other = "app.post('/api/planted', async () => other.operator(a));\n";
+    expect(reach(other, 'x.ts', 'POST', '/api/planted')).toBeNull();
+  });
+  it('CONTROL: deleting the port call from a real admin handler (the model door) turns it red', () => {
+    const text = sourceOf(OVERLORD_ROUTES);
+    const at = text.indexOf("app.post('/api/overlord/model'");
+    expect(at).toBeGreaterThan(-1);
+    const call = text.indexOf('deps.identity.operator(g.actor)', at);
+    expect(call).toBeGreaterThan(at);
+    const mutated = `${text.slice(0, call)}(g.actor as never)${text.slice(call + 'deps.identity.operator(g.actor)'.length)}`;
+    expect(reach(text, OVERLORD_ROUTES, 'POST', '/api/overlord/model')).toEqual({ how: 'direct' });
+    expect(reach(mutated, OVERLORD_ROUTES, 'POST', '/api/overlord/model')).toBeNull();
   });
 });

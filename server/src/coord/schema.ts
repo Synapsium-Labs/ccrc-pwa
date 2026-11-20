@@ -3963,6 +3963,80 @@ export const MIGRATIONS: readonly string[] = [
     doneAt = (SELECT r.closedAt FROM runs r WHERE r.id = plan_tickets.runId)
     WHERE state = 'done' AND runId IS NOT NULL;
   `,
+
+  // ── 107: user_version 106 -> 107 ──────────────────────────────────────────
+  // The Linear hierarchy's wave 4 follow-ups (D-8183, D-8734 drift-cursor-and-return-tables), one entry for both tables.
+  // `linear_drift_cursors`: per workspace and changed* kind, a sweep that reached the drift pass's page cap and goes on at the next
+  // pass (review 2408 F3): `since` is the watermark the sweep reads from (it stays put until the sweep ends), `after` Linear's page
+  // cursor to go on from, `newest` the newest `updatedAt` the sweep has read so far, and `startedAt` when it began (ccrc's clock:
+  // a finished sweep never moves the watermark past its start less a margin, so a change made while it walked is read again). A
+  // row is the sweep in progress; a finished sweep deletes it. `linear_inbound_notes`: what the owner's next mail about a `waiting`
+  // inbound issue must say beyond the first mail, one row per issue, kept until the inbound lane mails it to a live owner, in the
+  // same transaction that deletes it: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
+  // Linear owner (review 2443 A3; `program` the returning programme, `note` its note, masked as the return mail carries it), and
+  // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
+  // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this
+  // build, D-8735: a word in a TEXT column, no schema change, and an older build reads such a row as a state none of its sweeps
+  // select.) `linear_inbound.retiredWhy` (review 2457 F4, D-8735): why a `retired` row left the lane (`completed`, `canceled`,
+  // `ccrc-own` or `moved-out`), null on every other row; a reopen clears it. It is a word ccrc decides, never text of the issue.
+  //
+  // ADDITIVE ONLY, rule 3: an older build opening a file at `user_version 107` warns, reads as-is, names none of these and boots
+  // (its writers name their columns, so the nullable `retiredWhy` stays null under them).
+  // Measured on main at build time (D-8673): main ended at 95; Overlord gates A (#2993) landed first and took 96, and the
+  // renewal hand-offs (#2934) took 97, the decision model B (#2990) took 98, the Overlord's ladder (#2994) took 99, the quiz
+  // record (#2991) took 100, the health changes (#3003) took 101, approvals PR 0 (#3045) took 102, door A1 (#3035)
+  // took 103, approvals PR 1 (#3043) took 104, the mail idempotency key (#3056) took 105 and the plan's done evidence
+  // (#2997) took 106, so this, the twelfth lander, takes 107. RE-MEASURE the slot before the PR and before merge (it must
+  // print 106 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  CREATE TABLE linear_drift_cursors (workspaceId TEXT NOT NULL, kind TEXT NOT NULL, since TEXT NOT NULL, after TEXT NOT NULL,
+    newest TEXT, startedAt INTEGER NOT NULL, PRIMARY KEY (workspaceId, kind));
+  CREATE TABLE linear_inbound_notes (linearId TEXT PRIMARY KEY, kind TEXT NOT NULL, program TEXT, note TEXT, at INTEGER NOT NULL);
+  ALTER TABLE linear_inbound ADD COLUMN retiredWhy TEXT;
+  `,
+
+  // ── 108: user_version 107 -> 108 ──────────────────────────────────────────
+  // Urgent mail (mid-turn mail PR 2, plan `docs/superpowers/plans/2026-11-19-mid-turn-mail.md` Task 2.2, P1).
+  // `mail.urgentAs`: the sender's role for an urgent mail, `coordinator` or `overlord`, decided by
+  // `coord/urgentMail.ts#urgentSenderVerdict` and written once by `insertMail`, its one writer, from the mail ingress only.
+  // NULL = not urgent, which is every row written before this entry and every send that does not ask. Stored as the role
+  // rather than a boolean, so a later designation or a closed run never changes what an old mail says. `mail_urgent` is
+  // a partial index over the urgent rows only, so the hold's read (`urgentHolds`) and the one-outstanding test scan them
+  // and not the whole table.
+  // ONE NULLABLE COLUMN AND ONE PARTIAL INDEX: an older build opening a file at this `user_version` takes rule 3 (it warns,
+  // reads as-is and migrates nothing); its INSERT names its columns and never this one, so a row it writes is not urgent.
+  // The slot is POSITIONAL: the mail idempotency key (#3056) landed 105, the work map's done evidence (#2997) 106 and the
+  // Linear wave 4 follow-ups (#3021) 107 first, so this is 108; whoever lands second renumbers (the coordinator's standing
+  // license). RE-MEASURE the slot before merge (it must print 107 before this entry is counted):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  ALTER TABLE mail ADD COLUMN urgentAs TEXT CHECK (urgentAs IS NULL OR urgentAs IN ('coordinator', 'overlord'));
+  CREATE INDEX mail_urgent ON mail(urgentAs) WHERE urgentAs IS NOT NULL;
+  `,
+
+  // ── 109: user_version 108 -> 109 ──────────────────────────────────────────
+  // The gate's fence refusals (Overlord W1 gates B, plan `docs/superpowers/plans/2026-11-14-overlord-w1/w1-gates.md` Task 5,
+  // slug witness-after-the-fence): a refused `stale-generation` write at an Overlord door, recorded as a counted fact for a
+  // later cause row, since a forger without the act key never reaches the witness. `why` is the fence's reason word
+  // (no-live-generation, generation-mismatch, key-unissued, key-mismatch, no-key, fork, ended); `generationId` is NULL when
+  // no live generation was read. One writer, `overlordGateStore.ts#recordFenceRefusal`, which prunes rows older than 30
+  // days in the same transaction. The act key is never a column. ONE NEW TABLE AND ITS INDEX, nothing else: an older build
+  // opening a file at this `user_version` takes rule 3 and never names the table. The slot is the next free one by
+  // position: WM1 (#2997) took 106 the Linear wave 4 follow-ups (#3021) 107 and the mid-turn mail PR 2 (#3073) 108, so this is 109; whoever lands second renumbers (the coordinator's standing license).
+  `
+  CREATE TABLE overlord_fence_refusals (
+    id           INTEGER PRIMARY KEY,
+    sessionId    TEXT    NOT NULL,
+    generationId INTEGER,
+    door         TEXT    NOT NULL,
+    why          TEXT    NOT NULL,
+    at           INTEGER NOT NULL
+  );
+  CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

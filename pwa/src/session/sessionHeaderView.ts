@@ -210,7 +210,8 @@ export function sessionHeaderView({
   const busy = st === 'busy';
 
   // D-5231: a `working` row whose last main Stop left delegated work running reads `working · N in background` (the
-  // kinds in the title), as the card does.
+  // kinds in the title). The card says `in background`, uncounted, and keeps its count in the title (D-8771); the header
+  // keeps the count, as the one allowance to the card-within-header rule.
   const bg = bucket === 'working' && session != null ? backgroundWork(session) : null;
   const bgWords = bg === null ? null : backgroundWords(bg);
   // D-5296: a `working` row whose parent holds its question reads `with coordinator · <parent>`, in the calm (idle)

@@ -1,10 +1,12 @@
 // D-8181: the plan deciders (`coord/planPolicy.ts`), pure.
 import { describe, it, expect } from 'vitest';
 import {
-  diffPlan, epicForWave, epicIsDone, linearOwnerOf, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
+  diffPlan, epicForWave, epicIsDone, linearOwnerOf, listedWaves, parsePlanClose, parsePlanPut, parsePlanTicketAdd, planCallerVerdict, programmeEnd,
   ticketIsHeld, linearOwnerOfProject, linearOwnerOfTeam, parsePlanTake, parsePlanTriage, teamOwnerProject, triageVerdict,
   type OwnerFacts, type PlanCtx,
 } from '../src/coord/planPolicy.js';
+import * as policy from '../src/coord/planPolicy.js';
+import { EPIC_FOR_OPEN_CASES } from './planEpicForOpenCases.js';
 import type { HierarchyProjectFacts, InboundRow } from '../src/coord/planStore.js';
 import { TRIAGE_DECISIONS } from '../../shared/plan.js';
 import type { StoredPlan } from '../src/coord/planStore.js';
@@ -166,6 +168,49 @@ describe('states', () => {
   });
 });
 
+describe('epics without wave ranges (programme work map WM6, D-8780)', () => {
+  const noWaves = (i: number | string, over: Partial<PlanEpicBody> = {}): PlanEpicBody => {
+    const { waves: _w, ...rest } = epic(i, over);
+    return rest as PlanEpicBody;
+  };
+  it('an epic that omits waves parses, and a new one lists none', () => {
+    expect(parsePlanPut({ epics: [noWaves(1), noWaves(2)] })).toMatchObject({ ok: true });
+    expect(diffPlan(emptyStored, put(noWaves(1), noWaves(2), epic(3, { waves: [1, 2] })), ctx())).toMatchObject({
+      ok: true, changes: { epics: { insert: [{ key: 'e-1', waves: [] }, { key: 'e-2', waves: [] }, { key: 'e-3', waves: [1, 2] }] } },
+    });
+  });
+  it('waves that are not a list are plan-bad-body, absent or not', () => {
+    expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: 'all' }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(parsePlanPut({ epics: [{ ...noWaves(1), waves: null }] })).toMatchObject({ ok: false, word: 'plan-bad-body' });
+  });
+  // Review 2791 F6, the coordinator's ruling: a put that omits `waves` KEEPS the stored range; an explicit [] clears it.
+  it('a put that omits the waves of a stored epic keeps its range', () => {
+    const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(noWaves(1)), ctx());
+    expect(r.ok && r.changes.epics.update.some((u) => 'waves' in u)).toBe(false);
+  });
+  it('an explicit empty list clears the stored range', () => {
+    const r = diffPlan(stored(storedEpic('e-1', { waves: [1] })), put(epic(1, { waves: [] })), ctx());
+    expect(r).toMatchObject({ ok: true, changes: { epics: { update: [{ id: 1, waves: [] }] } } });
+  });
+  it('an epic that keeps its range by omission still holds it: another epic cannot take a wave in it', () => {
+    const s = stored(storedEpic('e-1', { waves: [1, 2] }));
+    expect(diffPlan(s, put(noWaves(1), epic(2, { waves: [2, 3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
+  });
+  it('contiguity and overlap are read among the epics that list waves', () => {
+    expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [2, 4] })), ctx())).toMatchObject({ ok: false, word: 'waves-not-contiguous' });
+    expect(diffPlan(emptyStored, put(noWaves(1), epic(2, { waves: [3] }), epic(3, { waves: [3] })), ctx())).toMatchObject({ ok: false, word: 'wave-overlap' });
+  });
+  it('listedWaves: a list is its own range, [] included; an absent list keeps the stored range, else lists none', () => {
+    expect(listedWaves({ waves: [2, 3] }, [1])).toEqual([2, 3]);
+    expect(listedWaves({ waves: [] }, [1])).toEqual([]);
+    expect(listedWaves({}, [1])).toEqual([1]);
+    expect(listedWaves({})).toEqual([]);
+  });
+  describe('epicForOpen: EPIC_FOR_OPEN_CASES of planEpicForOpenCases.ts', () => {
+    it.each(EPIC_FOR_OPEN_CASES.map((c) => [c.name, c] as const))('%s', (_n, c) => { c.run(policy); });
+  });
+});
+
 describe('callers and owners', () => {
   it('a worker files a follow-up into its own epic only', () => {
     const run = { program: 'prog-a', epicId: 4 };
@@ -290,7 +335,7 @@ describe('parsePlanTake (D-8183)', () => {
 describe('triageVerdict (D-8183)', () => {
   const row = (state: InboundRow['state']): InboundRow => ({
     linearId: 'l1', workspaceId: 'ws-a', teamKey: 'AAA', identifier: 'AAA-12', title: 't', body: null, seenAt: 1, mailedTo: null, mailedAt: null,
-    handedTo: null, reason: null, actedAt: null, state, itemId: null,
+    handedTo: null, reason: null, actedAt: null, state, itemId: null, retiredWhy: null,
   });
   const owner = { id: 'coord-a', source: 'named' as const, live: true, gone: false };
   it('only the team owner triages', () => {

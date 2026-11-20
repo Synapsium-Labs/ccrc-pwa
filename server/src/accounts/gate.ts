@@ -7,7 +7,7 @@ import { sessionIdHash } from '../auth/sessions.js';
 import type { StepUp } from '../auth/stepup.js';
 import { capSupported } from '../ccdargv.js';
 import type { FleetState } from '../fleetstate.js';
-import { actorOf, type AccountActor } from './audit.js';
+import { gateActorOf, type AccountActor } from './audit.js';
 
 /**
  * THE ACCOUNT GATE (D-5511; spec §3.2, §13; plan Task A7): the ONE chokepoint every account route calls first,
@@ -134,6 +134,6 @@ export function createAccountGate(deps: AccountGateDeps): AccountGate {
     }
     if (ask.stepUp === true && deps.stepUp.requireRecentAssertion()(req, reply)) return { pass: false };
     const idHash = sessionIdHash(token);
-    return { pass: true, actor: actorOf(decision.device, idHash), sessionIdHash: idHash };
+    return { pass: true, actor: gateActorOf(decision.device, idHash), sessionIdHash: idHash };
   };
 }

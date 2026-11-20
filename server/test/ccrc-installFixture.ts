@@ -1843,7 +1843,10 @@ export const PROVISIONED_BOX_TOKEN =
  *  (no landing conf is opted in on a fresh box), re-measured from both box-token cases' own failing diff. D-8047 added
  *  `playwright`: SKIP at every stage (a fresh box caches no browser build), re-measured the same way. Launch profiles PR B (Overlord W1a) added `auto-memory`: PASS at every stage (a fresh box's
  *  rostered config dirs hold no memory directory), re-measured from both box-token cases' own failing diff. The Overlord
- *  W1 pool set B1 added `cap-floor`: PASS at every stage (no fact stands on a fresh box), re-measured the same way. */
+ *  W1 pool set B1 added `cap-floor`: PASS at every stage (no fact stands on a fresh box), re-measured the same way.
+ *  Model-class auto-advance W3 (D-8689) added `model-advance-held-back`, `model-held-behind`, `model-sessions-behind`
+ *  and `model-advance-blocked`: SKIP at every stage (no lane on a fresh fleet box has a model registry), re-measured
+ *  the same way; at the flip they move with `models` (the flip case names them). */
 export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "accounts": "PASS",
   "approval-digest-mismatch": "SKIP",
@@ -1891,7 +1894,13 @@ export const FLEET_BOX_CLASSES: Readonly<Record<string, string>> = {
   "land-probe": "SKIP",
   "linger": "PASS",
   "memory": "PASS",
+  // Model-class auto-advance W3 (D-8689): SKIP at every stage, re-measured from both box-token cases' own failing diff: a
+  // fresh fleet box has no model registry.
+  "model-advance-blocked": "SKIP",
+  "model-advance-held-back": "SKIP",
   "model-default": "PASS",
+  "model-held-behind": "SKIP",
+  "model-sessions-behind": "SKIP",
   "models": "SKIP",
   "name": "SKIP",
   "node": "PASS",

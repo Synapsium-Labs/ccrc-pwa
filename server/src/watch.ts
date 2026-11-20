@@ -72,6 +72,9 @@ import {
   COORDINATOR_PAUSE_MARKER, MAIL_ROLE_IDS, RECLAIM_PAUSE_MARKER, isApprovalNudgeMail, isAskNudgeMail,
   survivorOf,
 } from './coord/rundefs.js';
+import { stallCoordBallMailStep } from './coord/coordBall.js';
+import { ballOnlySubjects, coordBallInputOf, idleNudgeOpenRunOf, r7BreachNotice, type StallCoordinatorSubject } from './coord/coordBallLane.js';
+import { blockWakesPass } from './coord/blockWakeLane.js';
 import { queueLandingNotice, queueStallNotice, queueSystemMail, type LandingNoticeQueued } from './coord/rundefsTx.js';
 import {
   BRIEF_NOTICE_DETAIL, BRIEF_RETRY_DETAIL, BRIEF_WATCH_HORIZON_MS, briefNotTakenBody, briefNotTakenReason,
@@ -155,7 +158,7 @@ import {
   stallRunMail, stallSessionMail, stallNewestDelivery, stallSessionMarkerVerdict, stallSessionPushText, stallSubjects,
   stallReactivation, stallTimerFiredSince, stallTimersOf, stallVerdict, stallW2ReportMail, turnMarkStale,
   type AskRowFact, type HookAskFact, type HookRawFact, type LiveWordRead, type StallArming,
-  type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
+  type StallCoordBlockedInput, type StallCoordEpisode, type StallInput, type StallNotice, type StallNotify, type StallRunRow, type StallSessionInput, type StallSubject,
   type StallVerdict, type StallWorker, type TurnMarkRead,
 } from './coord/stall.js';
 import {
@@ -194,6 +197,7 @@ import { abandonRefusal } from './coord/close.js';
 import { childMarkOf, type ChildMarkRead } from '../../shared/runBelongs.js';
 import { coordinatorOfRun, readCoordinatorOfRun } from './coord/bindingReads.js';
 import { abandonDeadDispatches } from './coord/abandonDeadDispatch.js';
+import { skillInstallPass } from './coord/skillInstallLane.js';
 import type { PushPayload } from './push.js';
 import { noticeTitle } from './pushOutbox.js';
 import { notify, noticeSink, notifyPushOnly, questionOutboxOf, type NoticeOpts } from './notice.js';
@@ -1113,6 +1117,9 @@ export class FleetWatcher {
    *  request titles and commits. Written by `prPass` alone and read by the team link; in memory, re-read every sweep. */
   private readonly ticketTallies = new Map<string, ReadonlyMap<string, number>>();
   private readonly projectWalk = new ProjectWalkCache();
+  /** D-8126 (A7-5, review 2807 F6): the accounts whose `skill-ensure` call is still running, kept across the self-install
+   *  lane's passes so an overdue call still holds its home (`SkillInstallLaneDeps.inFlight`). */
+  private readonly skillInstallInFlight = new Set<string>();
   /** The backup-health beat (D-7858): the last read of the backup state files, judged when the block is read. */
   private readonly backupLane = new BackupLane(() => this.deps);
   /** The test box's poll (D-7411): the block `GET /api/testbox` answers, and the tools sync's one door. */
@@ -2869,6 +2876,9 @@ export class FleetWatcher {
       void this.runLane('linearPlanSync', () => this.deps.planSync?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
       // NEVER awaited, the same reasons: the LINEAR DRIFT PASS (D-8183): at most one managed workspace's pass, due once in thirty minutes.
       void this.runLane('linearDrift', () => this.deps.driftPass?.tick(this.deps.time.clock.wall()))?.catch(() => { /* one bad tick must not kill the poll */ });
+      // NEVER awaited, the same reasons: the worker skill's SELF-INSTALL (D-8126, A7-5), outside the coordination serialiser.
+      const skillCoord = this.deps.coord;
+      if (skillCoord !== undefined) void this.runLane('skillInstall', () => skillInstallPass({ coord: skillCoord, records, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, now: () => this.deps.time.clock.wall(), inFlight: this.skillInstallInFlight }))?.catch(() => { /* one bad pass must not kill the poll */ });
       // NEVER awaited, the same reasons: the RUN-CLOSE lane (D-8077), rows E1 and E1r, in shadow until its group is armed.
       void this.sweepRunClose(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, same reasoning as sweepNames immediately above: this one
@@ -2915,7 +2925,7 @@ export class FleetWatcher {
         ]);
         clearTimeout(timer);
       }
-      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names));   // read once a tick, over the tick's own listing (D-8069): published by `currentLimits`, handed to the assembly as `limitsRead`
+      const limits = await timed(this.deps.perf, 'limits', readLimits(this.deps.io, this.deps.cfg, undefined, registryRead.names, registryRead.records));   // read once a tick, over the tick's own listing (D-8069) and rows (D-8126 A7-3: the spawn demotion reads no file of its own): published by `currentLimits`, handed to the assembly as `limitsRead`
       const { sessions, panePids } = await timed(this.deps.perf, 'assemble', assembleFleetWithPanePids(this.deps.io, this.deps.cfg, this.deps.tmux, liveStateReaderOver(this.deps.io), fleetNow(), {
         pendingDialogs: pending, statuslines: this.statuslines, taskProgress: this.taskProgress, prStates: this.prStates,
         hookStates: this.hookStates, records, coord: this.deps.coord, usageReadings: this.usage,
@@ -3070,6 +3080,8 @@ export class FleetWatcher {
       // the claim pair's synchronous try-block. It gates itself on `primed`, which is set below, so the priming tick
       // never judges.
       void this.sweepStalls(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
+      // Block wakes (P7) are their own lane, never awaited: the stall watch's switch and its run read do not gate them.
+      void this.sweepBlockWakes(sessions, registryRead.names, { panePids, records, refused: registryRead.refused }).catch(() => { /* one bad sweep must not kill the poll */ });
       // NEVER awaited, the stall watch's reasons: the two SLEEP lanes (D-7045), the stop-done lane (D-5370) and
       // hibernation (D-5242), on THIS tick's rows and listing, each started without awaiting the other. Gated on
       // `primed` like the stall watch, so the priming tick puts nothing to sleep.
@@ -6956,8 +6968,12 @@ export class FleetWatcher {
       judging = true;
       const workers = stallSubjects(candidates.runs);
       const workerIds = new Set(workers.map((x) => x.primary.sessionId));
-      const coordinators = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
+      const coordinators: StallCoordinatorSubject[] = stallCoordinatorSubjects(candidates.runs).filter((c) => !workerIds.has(c.sessionId));
       const judged = new Set([...workerIds, ...coordinators.map((c) => c.sessionId)]);
+      // The coord-ball mail rung's coordinators: claimants of open runs none of which is active (an `awaiting-review`
+      // run is no candidate), so `stallCandidates` names none of them. They get that rung alone (`ballOnly`) and stay
+      // out of `judged`, so orphan D still reaches them through the registry-row loop below.
+      const ballOnly = ballOnlySubjects(store, judged, (line) => console.warn(line));
       this.pruneStallMemory(workerIds, judged, new Set([...judged, ...tick.records.map((r) => r.id)]));
       const seen = new Map<number, WorkerSeen>();
       for (const subject of workers) {
@@ -6968,7 +6984,7 @@ export class FleetWatcher {
         }
       }
       this.workerSeen.replace(seen);
-      for (const c of coordinators) {
+      for (const c of [...coordinators, ...ballOnly]) {
         try {
           await this.judgeStallCoordinator(store, c, sessions, tick, arming, paused, now);
         } catch (err) {
@@ -7152,7 +7168,7 @@ export class FleetWatcher {
    *  Reads: the live file and the marker. No session verdict takes a hookstate ask, so none is read, and
    *  `unmeasured` says so. Its mail read carries no run ids: its claimed runs' mail is its worker's subject. */
   private async judgeStallCoordinator(
-    store: WatcherCoordPort, c: { readonly sessionId: string; readonly runs: readonly StallRunRow[] },
+    store: WatcherCoordPort, c: StallCoordinatorSubject,
     sessions: readonly FleetSession[], tick: StallTick, arming: StallArming, paused: boolean, now: number,
   ): Promise<void> {
     const id = c.sessionId;
@@ -7169,7 +7185,9 @@ export class FleetWatcher {
       const ident = this.stallUuid(tick, id);
       lr = s === undefined ? null : await this.stallLiveRead(id, s.wrapper, tick);
       mark = await this.stallMarkRead(id, ident, lr);
-      this.stallMarkClock(id, ident, mark, now);
+      // A `ballOnly` coordinator keeps no marker clock: the clock belongs to the arms it does not run. Its marker is still
+      // read, so the rung takes the session holds every arm takes (review 2817 R5).
+      if (c.ballOnly !== true) this.stallMarkClock(id, ident, mark, now);
     }
     const worker = this.stallWorkerFor(store, s, lr, STALL_HOOK_ASK_UNREAD, refused);
     const read = store.stallMailFor(id, [], now - BACKLOG_HORIZON_MS);
@@ -7191,6 +7209,10 @@ export class FleetWatcher {
       longLived: role !== null && longLivedOf(role, false) === true,
     };
     const project = s?.project ?? c.runs[0]?.project ?? '';
+    if (c.ballOnly === true) {
+      this.judgeCoordBall(store, si, project, now);
+      return;
+    }
     for (const sv of [...stallRestartedVerdicts(si, now), stallOrphanEVerdict(si, now), stallFailedVerdict(si, now), ...stallMailStuckVerdicts(si, now), stallSessionMarkerVerdict(si, now), stallOrphanDVerdict(si, now)]) {
       this.applyStallSession(store, si, project, sv, now);
     }
@@ -7202,6 +7224,43 @@ export class FleetWatcher {
     const step = stallCoordBlockedStep(blocked, now);
     if (step.episode === null) this.stallCoordEpisodes.delete(id); else this.stallCoordEpisodes.set(id, step.episode);
     this.applyStallSession(store, si, project, step.verdict, now, (n) => stallCoordBlockedPushText(blocked, n, now));
+    this.countR7Breach(store, blocked, step.episode, project, now);
+  }
+
+  /** The `blockWakes` lane (design 2026-11-09 §8.2, P7; `coord/blockWakeLane.ts`): every coordinator with an unwoken block,
+   *  whether or not it claims an open run and whatever the stall watch's arming is. PUBLIC for `stall-sweep.test.ts`. */
+  async sweepBlockWakes(sessions: readonly FleetSession[], names: readonly string[], tick: StallTick): Promise<void> {
+    const coord = this.deps.coord;
+    if (!this.primed || !coord) return;
+    // The turn marker is read only for an `account-room` block; a refused id reads as unread.
+    const readMark = async (id: string): Promise<TurnMarkRead> => {
+      const s = sessions.find((x) => x.id === id);
+      if (tick.refused.has(id) || s === undefined) return STALL_MARK_UNREAD;
+      return this.stallMarkRead(id, this.stallUuid(tick, id), await this.stallLiveRead(id, s.wrapper, tick));
+    };
+    await this.runLane('blockWakes', () => blockWakesPass({
+      coord, now: Date.now(), diskLevel: () => this.diskAlarm.block()?.level ?? 'unmeasured',
+      memoryLevel: () => this.pressureLane.memoryReading().level, build: this.deps.build?.version ?? null,
+      readMark, notOkSeen: this.blockNotOkSeen, names, warn: (line) => console.warn(line),
+    }));
+  }
+
+  /** The block-wake lane's memory of a condition seen not cleared (`BlockWakeDeps.notOkSeen`). */
+  private readonly blockNotOkSeen = new Set<string>();
+
+  /** R7's count (design 2026-11-09 §10, M2): an open coord-blocked episode held by a pending dialog on a pinned programme
+   *  writes ONE `r7-breach` feed row, keyed on the episode's start through `hasNotice`'s once-only key. Record-only, never a
+   *  push: the coord-blocked push is unchanged and keeps reporting. */
+  private countR7Breach(store: WatcherCoordPort, blocked: StallCoordBlockedInput, episode: StallCoordEpisode | null, project: string, now: number): void {
+    const n = r7BreachNotice(store, blocked, episode, now);
+    if (n !== null) this.pushOne({ ...n, project, recordAlways: true, recordOnly: true }, this.activeProjects);
+  }
+
+  /** The coord-ball mail rung for one coordinator (design 2026-11-09 §8.3 item 1): `coordBallInputOf` measures,
+   *  `stallCoordBallMailStep` decides, `applyStallSession` applies. A read that fails holds the rung this sweep. */
+  private judgeCoordBall(store: WatcherCoordPort, si: StallSessionInput, project: string, now: number): void {
+    const input = coordBallInputOf(store, si, now, (line) => console.warn(line));
+    if (input !== null) this.applyStallSession(store, si, project, stallCoordBallMailStep(input, now), now);
   }
 
   /** A registry row that is no run's worker or coordinator: orphan D only (spec §5.2, "Candidates are the registry
@@ -7398,7 +7457,7 @@ export class FleetWatcher {
   private applyStall(store: WatcherCoordPort, input: StallInput, n: StallNotify, now: number): void {
     const primary = input.subject.primary;
     const worker = primary.sessionId;
-    if (stallNotifyDelivery(n.arm, n.to, input.arming) === 'shadow') {
+    if (stallNotifyDelivery(n.arm, n.to, input.arming, n.rung) === 'shadow') {
       const obs = store.recordStallObservation(primary.id, stallDetail('shadow', n.arm, n.rung, n.key), now);
       if (obs.recorded) console.warn(`ccrc-server: stall-watch shadow ${n.arm} r${n.rung} run ${primary.id} ${worker}`);
       return;
@@ -7469,7 +7528,7 @@ export class FleetWatcher {
     }
     if (v.act !== 'notify') return;
     const run = si.run;
-    if (stallNotifyDelivery(v.arm, v.to, si.arming) === 'shadow') {
+    if (stallNotifyDelivery(v.arm, v.to, si.arming, v.rung) === 'shadow') {
       if (run === null) {
         this.stallWarnOnce(id, `shadow-${v.arm}-${v.rung}-${v.key}`, `ccrc-server: stall-watch shadow ${v.arm} r${v.rung} ${id} (run-less) key ${v.key}`);
         return;
@@ -7552,7 +7611,8 @@ export class FleetWatcher {
     const live = liveRead.ok
       ? { ok: true as const, word: liveRead.state.status, since: liveRead.state.statusUpdatedAt }
       : { ok: false as const };
-    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const },
+    const openRun = idleNudgeOpenRunOf(coord, s.id);
+    const base = { ...row, now: Date.now(), live, mark: { ok: false as const }, tasks: { ok: false as const }, openRun,
       compaction: { kind: 'none' as const }, alreadyNudged: () => false };
     // Stage 1: everything but the marker, the tasks and the tail. A hold here costs no further read.
     let v = decideIdleCompactNudge(base);
@@ -7561,9 +7621,10 @@ export class FleetWatcher {
       liveRead.ok ? { startedAt: liveRead.state.startedAt } : null);
     const mark = markRead.ok ? { ok: true as const, state: markRead.state, bg: markRead.bg } : { ok: false as const };
     v = decideIdleCompactNudge({ ...base, mark });
-    if (v.act === 'hold' && v.reason !== 'tasks-unread') return;
-    const taskRead = await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
-    const tasks = taskRead.listed
+    // A session with an open run is decided on the run, not the task list: the list is not read for it.
+    if (v.act === 'hold' && v.reason !== 'tasks-unread' && !(openRun !== null && v.reason === 'no-compaction')) return;
+    const taskRead = openRun !== null ? null : await readTasks(this.deps.io, cfgDir, ident.uuid, { touchedAt: true });
+    const tasks = taskRead !== null && taskRead.listed
       ? { ok: true as const, open: taskRead.tasks.filter((t) => t.status === 'in_progress' || t.status === 'pending').length,
         touchedAt: taskRead.touchedAt ?? null }
       : { ok: false as const };

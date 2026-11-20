@@ -4,10 +4,10 @@
 // decision table are pinned without a journal file.
 import { describe, it, expect, afterEach } from 'vitest';
 import { attributionIdentity } from '../src/auth/attributionIdentity.js';
-import { actorOf } from '../src/accounts/audit.js';
+import { gateActorOf } from '../src/accounts/audit.js';
 const identity = attributionIdentity({ attribute: async () => ({ ok: true }), incarnation: async () => ({ kind: 'unmeasured', reason: 'absent' }) });
-const operator = identity.operator(actorOf('operator-a', ''));
-const lane = identity.operator(actorOf('lane-a', ''));
+const operator = identity.operator(gateActorOf('operator-a', ''));
+const lane = identity.operator(gateActorOf('lane-a', ''));
 
 import { DatabaseSync } from 'node:sqlite';
 import { tx } from '../src/coord/db.js';

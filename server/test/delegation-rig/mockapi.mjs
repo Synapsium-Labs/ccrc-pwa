@@ -18,9 +18,13 @@
 //   own, since 2.1.322's prompt opens differently); sub = offered tools and stamped `cc_is_subagent=true`,
 //   or offered tools without the main marker; side = offered NO tools.
 //   "match": "main" | "sub" | "side" | "tools" (main or sub) | "any", or an object
-//   { kind, model, system, lastUser, tool, hasToolResult } — regexes for model/system/lastUser;
+//   { kind, model, system, lastUser, tool, hasToolResult, systemLine } — regexes for model/system/lastUser/systemLine;
 //   lastUser is the last user message minus <system-reminder> blocks, a tool_result rendered as
-//   `[tool_result <content>]`. A missing "match" means "main".
+//   `[tool_result <content>]`. systemLine (mid-turn mail PR 5) matches when one `role: "system"` message AFTER the last
+//   user message (so after the newest tool result) has text, a string or its text blocks joined, that the regex
+//   matches: the PreToolUse `additionalContext` line Claude Code sends there, prefixed
+//   `PreToolUse:<tool> hook additional context: ` (the reader contract in
+//   docs/superpowers/programs/overlord/mid-turn-mail-e-rig.md). A missing "match" means "main".
 // Response (one of): { "text" } | { "tool_use": { "name" | "nameAny": [...], "input", "id"? } }
 //   | { "blocks": [ {thinking}|{text}|{tool_use} ] } | { "status": 4xx|5xx, "headers"?, "body"? }
 //   plus optional "label", "hang_ms" (N<0 never answers), "headers", "usage", "stop_reason",
@@ -83,6 +87,14 @@ function lastUser(body) {
   for (let i = ms.length - 1; i >= 0; i -= 1) if (ms[i].role === 'user') return ms[i];
   return null;
 }
+/** The text of each `role: "system"` message after the last user message (reader contract (a), (b), (e)). */
+function systemAfterLastUser(body) {
+  const ms = body.messages || [];
+  let i = ms.length - 1;
+  while (i >= 0 && ms[i].role !== 'user') i -= 1;
+  return ms.slice(i + 1).filter((m) => m.role === 'system')
+    .map((m) => (typeof m.content === 'string' ? m.content : (m.content || []).map((b) => (b && b.type === 'text' ? b.text : '')).join('')));
+}
 function resultText(c) {
   if (typeof c === 'string') return c;
   return (c || []).map((x) => x.text || `[${x.type}]`).join(' ');
@@ -129,6 +141,7 @@ function matches(entry, req) {
   if (m.system && !new RegExp(m.system).test(req.sys)) return false;
   if (m.lastUser && !new RegExp(m.lastUser).test(userPrompt(req.body))) return false;
   if (m.tool && !req.tools.includes(m.tool)) return false;
+  if (m.systemLine && !systemAfterLastUser(req.body).some((t) => new RegExp(m.systemLine).test(t))) return false;
   if (m.hasToolResult !== undefined) {
     const lu = lastUser(req.body);
     const has = !!(lu && Array.isArray(lu.content) && lu.content.some((b) => b.type === 'tool_result'));

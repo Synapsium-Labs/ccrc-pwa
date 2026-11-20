@@ -17,7 +17,8 @@
 // answer (`timeout`, `too-large`, `lost`, a stdout off the grammar) is `unreadable`: it may have run a verb whose state
 // is unknown. A `show` refusal the retired files path used to answer past (`CARRIED_CODES`), and `ccrc` dying before
 // the lane, is `unreadable` WITH the box's reason, so the sheet can name it; the argv-grammar words stay `unreadable`
-// with no code (D-8693). `absent` is a lane with no class registry, with the reason `show` gave (`laneKind`). Nothing here
+// with no code (D-8693). `absent` is a lane with no class registry, with the reason `show` gave (`laneKind`), or, with
+// no `laneKind`, a lane the fleet box's roster does not have (`no-such-account`). Nothing here
 // names a model.
 import type { ModelsAsked } from '../../shared/agent-protocol.js';
 import { ADVANCE_VERSION, AdvanceInvalid, lastMoveOf, parseAdvance } from '../../shared/model-advance.mjs';
@@ -103,11 +104,13 @@ function readShowAnswer(lane: string, code: number, stdout: string): LaneModelsR
   }
   if (raw.ok !== true || raw.op !== 'show' || raw.id !== lane) return { kind: 'unreadable' };
   // F1: `show` says why there is no registry (`anthropic`), and the answer keeps it, so a surface can tell an Anthropic
-  // lane (its classes are the client's own) from one never initialised. Any other value says nothing, and none is kept.
+  // lane (its classes are the client's own) from one never initialised. Every `show` body has carried that boolean since
+  // the registry's first plan, so one without it is off the grammar and `unreadable` (follow-up
+  // transient-beside-kept-answer): an `absent` with no lane kind then has one cause only, `no-such-account` above.
   if (raw.registry === null) {
     if (raw.anthropic === true) return { kind: 'absent', laneKind: 'anthropic' };
     if (raw.anthropic === false) return { kind: 'absent', laneKind: 'never-made' };
-    return { kind: 'absent' };
+    return { kind: 'unreadable' };
   }
   const reg = raw.registry;
   if (!isObj(reg) || !isObj(reg.classes) || !isObj(raw.labels)) return { kind: 'unreadable' };

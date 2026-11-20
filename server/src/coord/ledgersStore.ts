@@ -11,7 +11,7 @@
 import type { DatabaseSync } from 'node:sqlite';
 import { TERMINAL_RUN_STATES, type MailDeliveryState, type StuckReason } from '../../../shared/api.js';
 import {
-  CLEARED_WINDOW_MS, ITEM_KINDS, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
+  CLEARED_WINDOW_MS, ITEM_KINDS, actionAdmits, NEEDED_BY_LEVELS, OPEN_ITEM_STATES, doneWhenOf, isCloseRefusedAction, isEndRunAction, isReleaseReviewAction,
   RELEASE_REVIEW_VERB, goalRatification, modificationSource, nextItemState, operatorShownAt, parseItemAction, parseRatifiedBy, pinSource, ratifiedByText, recommendationOf,
   type GoalsView, type ItemAct, type ItemAction, type ItemActor, type ItemEventAct, type ItemKind, type ItemMoveRefusal, type ItemState,
   type GoalsVersion, type NeededBy, type Ratification, type RatifiedBy, type WrittenSource,
@@ -182,8 +182,8 @@ function moveItemInTx(
   if (row === null) return { ok: false, why: 'unknown-item' };
   const verdict = nextItemState(row.state, act, actor, ctx);
   if (!verdict.ok) return verdict;
-  // An item that carries an action ends by `act`, `decline`, `withdraw` or `settle`; a tick, confirm or return would strand it.
-  if (row.action !== null && (act === 'tick' || act === 'confirm' || act === 'return')) return { ok: false, why: 'not-open' };
+  // What an item's action admits is `actionAdmits`'s (A-1): a tick, confirm or return would strand it, and a drift item is not dismissed.
+  if (!actionAdmits(row.action, act)) return { ok: false, why: 'not-open' };
   const closes = verdict.to === 'done' || verdict.to === 'withdrawn' || verdict.to === 'dismissed';
   const answer = act === 'tick' && fields.answer !== undefined ? fields.answer : row.answer;
   const note = act === 'return' && fields.note !== undefined ? fields.note : row.note;
@@ -541,4 +541,18 @@ export function newestTickMail(db: DatabaseSync, subject: string): { state: Mail
 /** Every programme that has a spec pin, in slug order: with the programmes that hold items, the ones the waiting list carries goals for. */
 export function pinnedProgrammes(db: DatabaseSync): string[] {
   return (db.prepare('SELECT slug FROM programs WHERE specPath IS NOT NULL ORDER BY slug').all() as { slug: string }[]).map((r) => r.slug);
+}
+
+/** Whether the programme has a spec pin (the Goals pin R7 keys on). */
+export function isPinned(db: DatabaseSync, program: string): boolean {
+  return db.prepare('SELECT 1 AS x FROM programs WHERE slug = ? AND specPath IS NOT NULL LIMIT 1').get(program) !== undefined;
+}
+
+/** Whether the programme holds a `blocking` item that waits on the OPERATOR: state `open` only. A `checking` item has been
+ *  ticked, so the ball is the coordinator's (`waitingCount` reads the same way; review 2817 R1). The coord-ball rung's and
+ *  the idle nudge's `run-blocked-on-operator` hold read it. */
+export function programmeHasBlockingItem(db: DatabaseSync, program: string): boolean {
+  return db.prepare(
+    "SELECT 1 AS x FROM operator_items WHERE program = ? AND neededBy = 'blocking' AND state = 'open' LIMIT 1",
+  ).get(program) !== undefined;
 }

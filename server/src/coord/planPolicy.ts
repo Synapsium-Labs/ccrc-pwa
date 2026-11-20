@@ -4,13 +4,14 @@ import type { ProgramState } from '../../../shared/api.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
 import {
   CHECKPOINT_KINDS, PHASE_REF_KINDS, PLAN_BOUNDS, PLAN_END_OUTCOMES, TICKET_KINDS, TRIAGE_DECISIONS, isPlanKey,
-  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanPhaseBody,
+  type CheckpointEvidence, type CheckpointState, type EpicState, type PlanCloseBody, type PlanEndOutcome, type PlanEpicBody, type PlanPhaseBody,
   type PlanPhaseRefBody, type PlanPhaseRefMoveBody, type PlanPutBody, type PlanRefusal, type PlanTicketBody,
   type PlanTicketDoneBody, type TicketDoneEvidence, type TicketState, type TriageDecision,
 } from '../../../shared/plan.js';
 import { isLinearIdentifier } from '../linear/ops.js';
+import { requestIdOf } from '../linear/planSyncPolicy.js';
 import type {
-  Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
+  BindingRow, Changes, CheckpointPatch, EpicPatch, HierarchyProjectFacts, InboundRow, NewCheckpoint, NewEpic, NewPhase, NewPhaseRef, NewTicket,
   PhaseChanges, PhasePatch, PhaseRefWrite, PhaseRow, PlanChanges, StoredPlan, TicketPatch,
 } from './planStore.js';
 
@@ -85,7 +86,7 @@ export function parsePlanPut(body: unknown, opts: PlanPutOpts = {}):
     if (!textOk(e.title, PLAN_BOUNDS.titleChars, true)) return bad(`epic ${e.key}: title is not 1 to 255 characters`);
     if (typeof e.summary !== 'string' || [...e.summary].length > PLAN_BOUNDS.summaryChars) return bad(`epic ${e.key}: summary is over ${PLAN_BOUNDS.summaryChars} characters`);
     if (e.project !== undefined && !textOk(e.project, PLAN_BOUNDS.titleChars, true)) return bad(`epic ${e.key}: project is not a project name`);
-    if (!nonNegInts(e.waves, 64)) return bad(`epic ${e.key}: waves is not a list of wave numbers`);
+    if (e.waves !== undefined && !nonNegInts(e.waves, 64)) return bad(`epic ${e.key}: waves is not a list of wave numbers`);
     if (e.droppedWhy !== undefined && !textOk(e.droppedWhy, PLAN_BOUNDS.reasonChars, false)) return bad(`epic ${e.key}: droppedWhy is not 1 to ${PLAN_BOUNDS.reasonChars} characters`);
     if (!Array.isArray(e.checkpoints)) return bad(`epic ${e.key}: checkpoints is not a list`);
     if (e.checkpoints.length > PLAN_BOUNDS.checkpointsPerEpic) return tooLarge(`epic ${e.key}: more than ${PLAN_BOUNDS.checkpointsPerEpic} checkpoints`);
@@ -323,6 +324,13 @@ const contiguous = (w: readonly number[]): boolean => {
   const s = [...new Set(w)].sort((a, b) => a - b);
   return s.every((n, i) => i === 0 || n === s[i - 1]! + 1);
 };
+/** THE one reader of an epic's waves (programme work map WM6, D-8780; spec Q5, R133): `waves` is optional on the wire. An
+ *  explicit list, `[]` included, is the epic's range; an ABSENT list keeps the stored epic's range (`stored`, as an absent
+ *  ticket `body` keeps the stored body, the coordinator's ruling on review 2791 F6) and, with no stored epic, lists none.
+ *  Every caller that wants an epic's waves reads them here (after `parsePlanPut` has validated the body's field). */
+export const listedWaves = (e: { readonly waves?: readonly number[] | undefined }, stored?: readonly number[]): number[] => [...(e.waves ?? stored ?? [])];
+/** An epic is checked against waves, and takes a run by its wave, only when it lists some. */
+export const listsWaves = (e: { readonly waves?: readonly number[] | undefined }): boolean => listedWaves(e).length > 0;
 const sameList = (a: readonly number[], b: readonly number[]): boolean => a.length === b.length && a.every((n, i) => n === b[i]);
 const empty = <N, P>(): Changes<N, P> => ({ insert: [], update: [], drop: [] });
 
@@ -338,12 +346,17 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
     if (e.state !== 'dropped' && !putKeys.has(e.key)) return refuse('dropped-needs-reason', `epic ${e.key} left the plan with no droppedWhy`);
   }
   const live = put.epics.filter((e) => e.droppedWhy === undefined && byKey.get(e.key)?.state !== 'dropped');
+  // Programme work map WM6 (D-8780): both checks read only the epics that list waves; one that lists none has no range to
+  // be contiguous or to overlap, however many such epics a plan holds. An epic whose put omits `waves` keeps its stored
+  // range (review 2791 F6), so every read here is of the range the put leaves it with.
+  const rangeOf = (e: PlanEpicBody): number[] => listedWaves(e, byKey.get(e.key)?.waves);
   for (const e of put.epics) {
-    if (!contiguous(e.waves)) return refuse('waves-not-contiguous', `epic ${e.key}: waves are not one contiguous range`);
+    const range = rangeOf(e);
+    if (range.length > 0 && !contiguous(range)) return refuse('waves-not-contiguous', `epic ${e.key}: waves are not one contiguous range`);
   }
   const owner = new Map<number, string>();
   for (const e of live) {
-    for (const w of e.waves) {
+    for (const w of rangeOf(e)) {
       const o = owner.get(w);
       if (o !== undefined && o !== e.key) return refuse('wave-overlap', `wave ${w} is in epics ${o} and ${e.key}`);
       owner.set(w, e.key);
@@ -371,14 +384,15 @@ export function diffPlan(stored: StoredPlan, put: PlanPutBody, ctx: PlanCtx): { 
       continue;
     }
     if (was === undefined) {
-      changes.epics.insert.push({ key: e.key, project, waves: e.waves, ordinal, title: e.title, summary: e.summary });
+      changes.epics.insert.push({ key: e.key, project, waves: listedWaves(e), ordinal, title: e.title, summary: e.summary });
       for (const [i, c] of e.checkpoints.entries()) {
         changes.checkpoints.insert.push({ epicKey: e.key, key: c.key, ordinal: i, title: c.title, kind: c.kind, proves: c.proves ?? [], itemId: c.itemId ?? null });
       }
     } else {
       const patch: EpicPatch = {};
       if (was.project !== project) patch.project = project;
-      if (!sameList(was.waves, e.waves)) patch.waves = e.waves;
+      const range = rangeOf(e);
+      if (!sameList(was.waves, range)) patch.waves = range;
       if (was.ordinal !== ordinal) patch.ordinal = ordinal;
       if (was.title !== e.title) patch.title = e.title;
       if (was.summary !== e.summary) patch.summary = e.summary;
@@ -721,6 +735,23 @@ export function epicForWave(epics: readonly { id: number; waves: readonly number
   return epics.find((e) => epicAdmitsRun(e.state) && e.waves.includes(wave))?.id ?? null;
 }
 
+/** Programme work map WM6 (D-8780; spec Q5, R133): the epic a run opens into. A run that names a ticket of a live epic that
+ *  lists no waves takes that epic, whatever its wave (the wave is checked against an epic only when it lists waves);
+ *  otherwise the epic that lists the wave (`epicForWave`). With neither, a run that named no ticket in a plan where a live
+ *  epic lists none is refused `ticket-required`, since naming a ticket is its remedy, and anything else `wave-epic-mismatch`,
+ *  as before. `ticketEpic` is the named ticket's epic (null when the ticket is missing or none was named); `named` is whether
+ *  the open named a ticket at all. */
+export function epicForOpen(
+  epics: readonly { id: number; waves: readonly number[]; state: EpicState }[], wave: number, ticketEpic: number | null, named: boolean,
+): { epicId: number } | { refused: 'wave-epic-mismatch' | 'ticket-required' } {
+  const waveless = epics.filter((e) => epicAdmitsRun(e.state) && !listsWaves(e));
+  const own = ticketEpic === null ? undefined : waveless.find((e) => e.id === ticketEpic);
+  if (own !== undefined) return { epicId: own.id };
+  const listed = epicForWave(epics, wave);
+  if (listed !== null) return { epicId: listed };
+  return { refused: !named && waveless.length > 0 ? 'ticket-required' : 'wave-epic-mismatch' };
+}
+
 // ── Callers ────────────────────────────────────────────────────────────────────────────────────────────────────────────
 
 /** The programme verbs are the programme's coordinator's (or, before any is recorded, whoever declares first). A worker may
@@ -860,6 +891,27 @@ export function triageVerdict(
   if (owner.id === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner' };
   if (row === null || (row.state !== 'waiting' && row.state !== 'mailed')) return { ok: false, word: 'issue-not-inbound' };
   return { ok: true };
+}
+
+/** The Linear ids of a workspace that are ccrc's own (round 5 F2, round 6 P1; D-8183): every id a binding holds, and for each
+ *  `pending` TICKET binding the id its create was sent with (`requestIdOf`), since a create whose reply was lost sits in Linear
+ *  with no `linearId` on its binding yet. The ONE function that builds the set: the inbound lane's `detect` and the store's
+ *  two inbound composites both ask it, so an issue ccrc made is never read as inbound and never bound a second time. */
+export function ccrcIssueIds(bindings: ReadonlyArray<Pick<BindingRow, 'localKind' | 'localId' | 'workspaceId' | 'state' | 'linearId'>>): Set<string> {
+  const ids = new Set<string>();
+  for (const b of bindings) {
+    if (b.linearId !== null) ids.add(b.linearId);
+    if (b.localKind === 'ticket' && b.state === 'pending') ids.add(requestIdOf('ticket', b.localId, b.workspaceId));
+  }
+  return ids;
+}
+
+/** `plan take`'s choice among the rows handed to a programme under one identifier (review 2457 F2, round 4 A2): the only row, else
+ *  the one of the programme home's workspace; when the home does not decide (no home, or a workspace no row holds), none is chosen,
+ *  never a guess. */
+export function handedRowOf<R extends Pick<InboundRow, 'workspaceId'>>(rows: readonly R[], homeWorkspace: string | null): R | null {
+  if (rows.length === 1) return rows[0]!;
+  return homeWorkspace === null ? null : rows.find((x) => x.workspaceId === homeWorkspace) ?? null;
 }
 
 /** An inbound issue's reporter text, cut visibly to the plan's ticket bounds before it is stored (D-8705): the title to

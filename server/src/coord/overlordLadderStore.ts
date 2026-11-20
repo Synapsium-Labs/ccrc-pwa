@@ -28,7 +28,7 @@ import type { DatabaseSync } from 'node:sqlite';
 import type { AuthorityAppend, AuthorityAppendError } from './overlordAuthorityJournal.js';
 import type { ActorRefused, AuthorityAppender } from './overlordDesignationStore.js';
 import type { ConsoleCaller, RecordedActor } from '../auth/callerIdentity.js';
-import { isAccountGateOperator, isRecordedActor } from '../auth/attributionIdentity.js';
+import { consoleSubject, isAccountGateOperator, isRecordedActor } from '../auth/attributionIdentity.js';
 import { authorityDirection, type OverlordAuthorityMove } from './overlordAuthority.js';
 import type { CurrentRung, LadderWriterRefusal } from './overlordLadder.js';
 import {
@@ -72,12 +72,10 @@ export function ladderActor(actor: unknown, direction: 'brake' | 'widen'): { ok:
     return isAccountGateOperator(actor) ? { ok: true, subject: actor.subject } : { ok: false, reason: 'actor' };
   }
   if (isRecordedActor(actor)) return { ok: true, subject: actor.subject };
-  if (direction === 'brake' && typeof actor === 'object' && actor !== null && 'kind' in actor) {
-    if (actor.kind === 'dark') return { ok: true, subject: 'flag-off' };
-    if (actor.kind === 'device-unmeasured') return { ok: true, subject: 'unmeasured' };
-    if (actor.kind === 'signed-in' && 'actor' in actor && isRecordedActor(actor.actor)) return { ok: true, subject: actor.actor.subject };
-  }
-  return { ok: false, reason: 'actor' };
+  // A brake takes the console's answer through its one mapping (`consoleSubject`, gates B): an answer the port did not make,
+  // or a kind it does not know, refuses.
+  const subject = consoleSubject(actor);
+  return subject === null ? { ok: false, reason: 'actor' } : { ok: true, subject };
 }
 export interface StricterLadder { operatorRung: Rung; latches: readonly { cause: string; cap: Rung }[] }
 
