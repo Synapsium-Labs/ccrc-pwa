@@ -27,8 +27,13 @@ export const LAUNCH_PROFILE_LANE = 'launch-profile';
  *  anchor, which the hook prints in its first slot at every start of a session that is not a child, a fork's one refusal
  *  line, and the anchor once after an automatic compaction that brought no start. */
 export const ANCHOR_SLOT_LANE = 'anchor-slot';
+/** The dispatch cap's row (D-8792; waiting workers spec 2026-11-19, Part 3): a run holds a concurrency slot only while its
+ *  worker works. In shadow the cap counts every active run as before and the caps view reports how many have a worker
+ *  measured waiting; live, the cap leaves those out, hands the slots they free out at the wake budget's rate, and a
+ *  resume or send-back to a live or sleeping worker is not charged a slot. Shadow is its off switch. */
+export const CAP_COUNTS_WORKING_LANE = 'cap-counts-working';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, CAP_COUNTS_WORKING_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -211,6 +216,16 @@ export const LANE_ARM_TEXT = {
       liveNote: 'Each start of a session that is not a child begins with its anchor (its role, its canaries and counts, '
         + 'and to read its card) in place of the role card; a fork gets one line saying it has no card, and the first '
         + 'prompt after an automatic compaction carries the anchor once.',
+      gate: null,
+    },
+    [CAP_COUNTS_WORKING_LANE]: {
+      legend: 'Count only working workers',
+      shadowNote: 'The workers cap counts every active run, as before. The caps control also says how many of them have a '
+        + 'worker waiting (quiet 30 minutes with nothing running) or asleep, and a dispatch the cap refuses that those would '
+        + 'have let through is logged to the server journal, as lines beginning "ccrc-server: cap-counts-working shadow:".',
+      liveNote: 'A run whose worker is waiting or asleep holds no slot under the workers cap; the slots this frees are handed '
+        + 'out a few at a time, and a send-back or resume to a live or sleeping worker is never refused at the cap. A worker '
+        + 'that wakes counts again at once.',
       gate: null,
     },
   },

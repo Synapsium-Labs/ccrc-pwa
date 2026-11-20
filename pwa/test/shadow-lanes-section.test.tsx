@@ -86,6 +86,22 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
   });
 
+  it('the cap-counts-working row (the dispatch cap counts only working workers) is listed last, in its own words, ungated, with no shadow record', async () => {
+    const A = T.rows['anchor-slot'];
+    const C = T.rows['cap-counts-working'];
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }),
+      row({ lane: 'launch-profile', marker: null }), row({ lane: 'anchor-slot', marker: null }), row({ lane: 'cap-counts-working', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: C.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(C.legend)).toBeGreaterThan(groups.indexOf(A.legend));
+    const own = within(screen.getByRole('group', { name: C.legend }));
+    expect(own.getByText(C.shadowNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+    expect(laneArmGate('cap-counts-working')).toBeNull();
+    expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
+  });
+
   it('the continuity row carries no gate since the renewal act: its Live is enabled, and a lane-gated refusal from a server still says the server\'s reason (review 2003 F3)', async () => {
     expect(laneArmGate('continuity')).toBeNull();
     expect(T.rows.continuity.gate).toBeNull();

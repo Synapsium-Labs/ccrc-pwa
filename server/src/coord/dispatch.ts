@@ -28,8 +28,11 @@ import { readSkillState, skillDirFor } from '../skillstate.js';
 import { SKILL_PREFLIGHT_EVENT } from './skillInstall.js';
 import { childBindGate, type ChildBindVerdict } from './childBind.js';
 import {
-  decideDispatch, type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop,
+  admitMarkerRefusal, capRefusalOf, capShadowLine, capsReadingOf, decideDispatch, resumeSkipsCap, sendBackCharged, workerReadingOf,
+  type CapsReading, type DispatchHalt, type DispatchRun, type DispatchStop, type WorkerFacts, type WorkerReading,
 } from './dispatchDecide.js';
+import { laneArmRowViewOf } from './laneArm.js';
+import { CAP_COUNTS_WORKING_LANE } from '../../../shared/lane-arm.js';
 
 // The worker kickoff rides the brief mail itself: dispatch writes nothing to a
 // wave-1 pane (the zero-send-keys pin), and skills are invoked BY NAME (the
@@ -128,7 +131,18 @@ export interface DispatchRunDeps {
   /** The fleet-wide wake budget's one list (D-5242, `FleetWatcher.admitWake`): a resume onto a hibernated worker records
    *  an ASKED wake there beside its `ensure`, and is never refused for it. Absent (no watcher): nothing is recorded. */
   admitWake?: (kind: 'asked', id: string) => boolean;
+  /** D-8792 (amending D-6094): a run worker's measured facts (`turnverdict.ts#workerFactsFor`), which `workerReadingOf`
+   *  turns into the reading the cap leaves out or keeps, and `resumeSkipsCap` into a free resume. OPTIONAL in the safe
+   *  direction: absent, no worker is read and every dispatched run counts as today. */
+  workerFacts?: (sessionId: string) => Promise<WorkerFacts>;
+  /** D-8792 (D-6094's pacing): admits one slot the readings freed, in a window of its own
+   *  (`FleetWatcher.admitFreedSlot`). Absent: a freed slot is refused. */
+  admitFreedSlot?: () => boolean;
 }
+
+/** The two ports the cap reads beyond the store (D-8792), the same pair for the dispatch door, the send-back door and the
+ *  caps view, so the three agree on one reading. */
+export type CapPorts = Pick<DispatchRunDeps, 'workerFacts' | 'admitFreedSlot'>;
 
 /** What the dispatch route polls while a pane this dispatch's `ensure` started comes up (D-5238): the registry row
  *  and the uuid the resume arm measured, handed back so the route asks the SAME `turnVerdict` port outside
@@ -272,20 +286,80 @@ export type DispatchOutcome =
  * Two routes refuse on the concurrency cap — `dispatchRun` below and
  * `POST /api/runs/:id/advance` when a run re-enters `working` from an idle
  * state — and both take their numbers from this one read, so the refusal's
- * arithmetic is spelled here and nowhere else. It reads `coord` rather than
+ * arithmetic is spelled in one place (`capsReadingOf`, since D-8792). It reads `coord` rather than
  * taking the pair as arguments because `coord-caps-route.test.ts` pins that
  * `routes.ts` spells `.capsUsage(` exactly once (the caps VIEW); a route that
  * needs the numbers for a refusal asks here and never reads them itself.
  * `overConcurrency` carries the numbers a refusal must say (the caps doctrine:
  * a cap that refuses without saying what it is is indistinguishable from a bug).
  */
-export function capsMeasured(coord: CoordStore): CapsReading {
-  const caps = coord.caps();
-  const usage = coord.capsUsage();
-  const overConcurrency = usage.running >= caps.maxConcurrentWorkers
-    ? { limit: caps.maxConcurrentWorkers, running: usage.running }
-    : null;
-  return { caps, usage, overConcurrency };
+export function capsMeasured(coord: CoordStore, readings?: ReadonlyMap<number, WorkerReading>, armed = false): CapsReading {
+  // D-8792: the counted rows are `capsUsage`'s own (`capsCountedRuns`, its one statement), read in this one synchronous
+  // step with the caps, and the decision is `capsReadingOf`'s. With no `readings` it is today's count; with them it also
+  // says `usage.waiting`, and only `armed` (the `cap-counts-working` row, `capCountsWorkingArmed`) lets them change a
+  // refusal.
+  return capsReadingOf(coord.caps(), coord.capsCountedRuns(), readings ?? null, armed);
+}
+
+/** D-8792: whether the operator has armed the `cap-counts-working` Shadow lanes row. Only an exact `live` with its gate
+ *  open arms it (`laneArmRowViewOf`); a lost, unknown or unreadable row reads shadow, so doubt keeps today's cap. */
+export function capCountsWorkingArmed(coord: Pick<CoordStore, 'laneArmSetting'>): boolean {
+  return laneArmRowViewOf(CAP_COUNTS_WORKING_LANE, coord.laneArmSetting(CAP_COUNTS_WORKING_LANE)).live;
+}
+
+/** One worker's facts through the port, a port that throws read as `unmeasured` (it never frees a slot). */
+async function factsOf(workerFacts: NonNullable<CapPorts['workerFacts']>, sessionId: string): Promise<WorkerFacts> {
+  try { return await workerFacts(sessionId); } catch { return { kind: 'unmeasured' }; }
+}
+
+/**
+ * D-8792 (amending D-6094): one reading per counted run, for `capsMeasured`. Each worker is read once however many runs
+ * name it, the workers in parallel; a port that throws reads `unmeasured`, a row with no session gets no reading (so it
+ * counts), and an absent port reads nothing (so every run counts). It reads and consumes nothing, so a room check or the
+ * caps view never spends a freed-slot admit.
+ *
+ * D-8793: the cap governs STARTS, not wakes. A waiting worker that wakes on mail is never refused here or anywhere (an
+ * asked or a mail wake reads no cap); it counts again from the moment it reads busy, so busy workers can pass the cap for
+ * a while, and new starts are refused until the count is back under it.
+ */
+export async function workerReadings(
+  coord: CoordStore, workerFacts: CapPorts['workerFacts'], now: number = Date.now(),
+): Promise<Map<number, WorkerReading>> {
+  const out = new Map<number, WorkerReading>();
+  if (workerFacts === undefined) return out;
+  const rows = coord.capsCountedRuns();
+  const bySession = new Map<string, Promise<WorkerReading>>();
+  for (const r of rows) {
+    if (r.sessionId === null || bySession.has(r.sessionId)) continue;
+    bySession.set(r.sessionId, factsOf(workerFacts, r.sessionId).then((f) => workerReadingOf(f, now)));
+  }
+  for (const r of rows) {
+    const w = r.sessionId === null ? undefined : bySession.get(r.sessionId);
+    if (w !== undefined) out.set(r.runId, await w);
+  }
+  return out;
+}
+
+/**
+ * D-8792: the send-back door's cap check, as the thunk the advance gate asks (`advanceGate`'s `overConcurrency`). Shadow
+ * (the row not armed), a free cap, no worker port, or any edge but an idle run sent back to `working`: today's check,
+ * read lazily when the gate asks, exactly as before. Armed, on that edge with the cap full: a send-back to a worker that
+ * is awake or asleep is a resume and is never refused at the cap (`resumeSkipsCap`); any other is re-counted over the
+ * runs whose worker still works, and a freed slot is handed out only when the window admits it, and only when the gate
+ * asks. Read inside the coordination serialiser, before the gate, so the gate stays synchronous; other gates still bind.
+ */
+export async function sendBackCapCheck(
+  coord: CoordStore, ports: CapPorts, id: number, to: RunState,
+): Promise<() => { limit: number; running: number } | null> {
+  const today = (): { limit: number; running: number } | null => capsMeasured(coord).overConcurrency;
+  const workerFacts = ports.workerFacts;
+  if (workerFacts === undefined || today() === null || !capCountsWorkingArmed(coord)) return today;
+  const read = coord.run(id);
+  if (!read.ok || read.run === null || !sendBackCharged(to, read.run.state)) return today;
+  const sessionId = read.run.sessionId;
+  if (sessionId !== null && resumeSkipsCap(await factsOf(workerFacts, sessionId), 'send-back')) return () => null;
+  const reading = capsMeasured(coord, await workerReadings(coord, workerFacts), true);
+  return () => capRefusalOf(reading, ports.admitFreedSlot);
 }
 
 /** The `DispatchOutcome` member `refuseSpentChild` answers, and its inputs —
@@ -572,9 +646,24 @@ export async function dispatchRun(
     prefixes: { work: WORKER_KICKOFF_PREFIX, review: REVIEWER_KICKOFF_PREFIX } });
   if (req.kind !== 'go') return stopped(coord, id, req);
   const { run, body, itemTitles, routeFields: plannedRoute, routeDefaulted, childSlug, intentKeys, hold } = req.plan;
-  // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned.
-  const admit = decideDispatch({ step: 'admit', names: await deps.io.readdir(deps.cfg.registryDir),
-    caps: () => capsMeasured(coord) });
+  // PAUSE / KILL-SWITCH FIRST, then the caps, before anything is counted or spawned. D-8792: the workers are read only
+  // past the markers and only when today's count would refuse. Armed, a resume of a live worker is not charged (D-6093)
+  // and the count leaves out the runs whose worker waits; shadow keeps today's refusal and records what arming would do.
+  const names = await deps.io.readdir(deps.cfg.registryDir);
+  let caps = capsMeasured(coord);
+  let resumeFree = false;
+  if (admitMarkerRefusal(names) === null && caps.overConcurrency !== null && deps.workerFacts !== undefined) {
+    const armed = capCountsWorkingArmed(coord);
+    if (armed && run.sessionId !== null) resumeFree = resumeSkipsCap(await factsOf(deps.workerFacts, run.sessionId), 'dispatch');
+    if (!resumeFree) {
+      const readings = await workerReadings(coord, deps.workerFacts);
+      caps = capsMeasured(coord, readings, armed);
+      const line = capShadowLine(caps, `dispatch of run ${id}`, coord.capsCountedRuns(), readings);
+      if (line !== null) console.warn(line);
+    }
+  }
+  const admit = decideDispatch({ step: 'admit', names, resumeFree, caps: () => caps,
+    ...(deps.admitFreedSlot === undefined ? {} : { admitFreedSlot: deps.admitFreedSlot }) });
   if (admit.kind !== 'go') return stopped(coord, id, admit);
   // D-8121: an older ccd refuses a `browser` routing field by name, on the minting argv and on `ccd route` alike, so a box
   // without `browser-route-v1` gets the wave's route without it, and the omission is journalled.

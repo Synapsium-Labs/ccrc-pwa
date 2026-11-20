@@ -16,12 +16,13 @@ import type { Tmux } from './exec.js';
 import type { FleetIO } from './io.js';
 import { assembleFleet, fleetNow } from './fleet.js';
 import type { FleetWatcherView } from './coord/ports.js';
-import type { SessionRecord } from './registry.js';
+import { measuredIdentity, readSessionRecord, type SessionRecord } from './registry.js';
 import { readHookState } from './hookstate.js';
 import { liveStateReaderOver, readLiveStateMeasured } from './livestate.js';
 import { readTurnMarkMeasured } from './turnmark.js';
 import type { TurnMarkRead } from './coord/stall.js';
 import type { FleetSession } from '../../shared/api.js';
+import type { WorkerFacts } from './coord/dispatchDecide.js';
 import {
   stopVerdict, type LiveFileReading, type StopRowReading, type TurnVerdict,
 } from './coord/archiveDoor.js';
@@ -182,4 +183,30 @@ export async function conversationAfterClearFor(d: TurnReadDeps, rec: SessionRec
     if (live.state.sessionId !== '' && live.state.sessionId !== prior) return live.state.sessionId;
   }
   return null;
+}
+
+/**
+ * D-8792 (amending D-6094; waiting workers spec 2026-11-19 Part 3): the reads behind one run worker's reading for the
+ * dispatch cap, measured, never decided: `workerReadingOf` and `resumeSkipsCap` (`coord/dispatchDecide.ts`, L1) hold the
+ * rules. `gone`, with why: the registry lists no row for it, the row is archived, asleep or stopped (in that order, so a
+ * sleeper's stop stamp does not hide its sleep), or tmux proved its pane gone. `unmeasured`: the row, its identity or a
+ * lifecycle field could not be read, or the pane could not be. Otherwise `awake`, with the fail-closed turn verdict,
+ * whether the frame's row lists background work or subagents, and the turn marker. Every read is one this file already
+ * makes for the stop-done lane and the archive door.
+ */
+export async function workerFactsFor(d: TurnReadDeps, sessionId: string): Promise<WorkerFacts> {
+  const read = await readSessionRecord(d.io, d.cfg, sessionId);
+  if (read.kind === 'absent') return { kind: 'gone', why: 'absent' };
+  if (read.kind !== 'found') return { kind: 'unmeasured' };
+  const rec = read.record;
+  if (measuredIdentity(rec) === null || rec.lifecycleUnmeasured.length > 0) return { kind: 'unmeasured' };
+  if (rec.archivedAt !== null) return { kind: 'gone', why: 'archived' };
+  if (rec.hibernatedAt !== null) return { kind: 'gone', why: 'asleep' };
+  if (rec.stopped !== null) return { kind: 'gone', why: 'stopped' };
+  const word = await liveWordFor(d, rec);
+  if (!word.ok) return word.reason === 'no-pane' ? { kind: 'gone', why: 'no-pane' } : { kind: 'unmeasured' };
+  const turn = await turnVerdictFor(d, rec, rec.uuid);
+  const row = await liveRowFor(d, rec, rec.uuid);
+  const rowBusy = row === null ? null : (row.background?.count ?? 0) > 0 || (row.subagents?.length ?? 0) > 0;
+  return { kind: 'awake', turn, rowBusy, mark: await turnMarkFor(d, rec) };
 }

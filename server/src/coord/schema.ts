@@ -4037,6 +4037,23 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
   `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The dispatch cap counts only working workers (waiting workers spec 2026-11-19, Part 3; D-8792): the seed row
+  // `cap-counts-working` = `shadow` adds the cap's switch to the Shadow lanes card. Shadow, the cap counts every active run
+  // as before and the caps view reports how many have a worker measured waiting; only `live`, set by the operator at
+  // `POST /api/coord/lane-arm`, leaves those runs out of the count. The merge arms nothing, and shadow is its off switch.
+  //
+  // ONE SEED ROW, nothing else: an older build opening a file at this entry's version takes rule 3 (it warns, reads as-is
+  // and migrates nothing), reads the `cap-counts-working` lane-arm row as no lane it knows, and boots. Every earlier entry
+  // is frozen. This is the next free slot by position on `main`; capacity Task 2, approvals PR 3 and door B1 build on the
+  // slots after 109 too, so whoever lands second moves up (the coordinator's standing license). RE-MEASURE the slot before
+  // the PR and before merge (it must print the count before this entry):
+  //     git fetch origin main
+  //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
+  `
+  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('cap-counts-working', 'shadow', 0);
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a
