@@ -48,6 +48,7 @@ import type { CoordinatorPresence } from './presence';
 import { sessionLabel } from './sessionLabel';
 import { unmeasuredTitle } from './unmeasuredWords';
 import { delegatedChip, type DelegatedSummary } from './delegationWords';
+import type { SessionWorktree } from './sessionWorktrees';
 import { claudeBuildOf, type ClaudeBuildFact } from '../../../shared/claudeVersion';
 import { behindFact, buildText } from './buildWords';
 
@@ -134,6 +135,8 @@ export interface FactInput {
   readonly coordinatorTitle?: string | null;
   /** The delegation entries this session started: every one (`activitiesStartedBy`), for the header. The card takes none (D-8771). Absent or `null` = none known. */
   readonly delegated?: readonly DelegationActivityWire[] | null;
+  /** The session's worktrees, for the header's details (`worktreesOf`, D-8782: the fleet list draws none). Absent or `null` = none known. */
+  readonly worktrees?: readonly SessionWorktree[] | null;
   /** D-8276: the newest Claude Code build an awake session on the fleet runs (`fleetClaudeLatest` over the fleet store's
    *  rows). Absent or `null` = unknown, and nothing is said to be behind. */
   readonly claudeLatest?: string | null;
@@ -188,6 +191,8 @@ export interface SessionFactSet {
   /** The session's recorded delegation entries as the header's disclosure and list (`delegatedChip`): every entry it is
    *  handed, of every liveness, on a live row and a dead one alike (D-7781); `null` when handed none. */
   readonly delegated: DelegatedSummary | null;
+  /** The session's worktrees (D-8782): drawn in the header's details with their controls, never on the card. Empty when none. */
+  readonly worktrees: readonly SessionWorktree[];
   /** D-8276: the session's Claude Code build against the fleet's newest (`claudeBuildOf`). */
   readonly build: ClaudeBuildFact;
 }
@@ -263,7 +268,7 @@ function cardBackgroundWords(b: { count: number; kinds: string[] }): { text: str
 export function sessionFacts(input: FactInput): SessionFactSet {
   const {
     session, now, roster = [], projectPool = null, childRun, workingOn = null, coordinator = null,
-    coordinatorTitle = null, delegated = null, claudeLatest = null, claudeLaneLatest = null,
+    coordinatorTitle = null, delegated = null, worktrees = null, claudeLatest = null, claudeLaneLatest = null,
   } = input;
   const dead = paneGone(session);
   const asleepAt = hibernatedSince(session);
@@ -372,6 +377,7 @@ export function sessionFacts(input: FactInput): SessionFactSet {
     orphanTitle: coordinator === 'dead' || coordinator === 'hibernated' ? coordinatorTitle : null,
     // D-7781: no dead shortcut. A dead worker's entries stay in its header's disclosure (the fleet list's row has none, D-8771).
     delegated: delegatedChip(delegated ?? []),
+    worktrees: worktrees ?? [],
     build: claudeBuildOf(session, claudeLatest, claudeLaneLatest),
   };
 }

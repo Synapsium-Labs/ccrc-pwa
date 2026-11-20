@@ -5,7 +5,7 @@ import { SESSION_COOKIE, expireCookie, parseCookies } from './cookie.js';
 import type { SessionStore } from './sessions.js';
 
 /**
- * THE GATE. One `onRequest` hook stands in front of all 284 routes, the static
+ * THE GATE. One `onRequest` hook stands in front of all 285 routes, the static
  * wildcard, the SPA fallback and all three websocket upgrades.
  *
  * ONE HOOK, NOT A PER-ROUTE CHECK, and that is the whole design: a route added
@@ -74,7 +74,7 @@ import type { SessionStore } from './sessions.js';
  *
  *  2. The ninety box-token machine lanes (the coordination routes, the Linear proxy's routes, #1444, and the programme
  *     ledgers' coordinator lanes, the coordinator call record's one, the remaining-work door's one, the plan verbs', the hook's start report and its
- *     loads report, the door process's act-key claim, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
+ *     loads report, the door process's act-key claim, the hook's reports, the card door, the note door's lanes, the timer doors, the probe door's lanes and the replay quiz's record
  *     door) plus
  *     `/api/notify`, `/api/pools/epoch`
  *     and `/api/updates/intent/:nodeId` — the fleet host's ingress. These callers
@@ -602,6 +602,11 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
     "the door process's one claim: box token, attribution and a launch nonce bound to the start the generations lane minted " +
     "from; it issues the act key once — box-token gated in its own onRequest whatever the flag, no cookie accepted, the path's session the " +
     'sender, attribution checked against the registry, the key stored only as its sha256'],
+  // The report door (Overlord §3.6 H1, W1 door process B1): the session hook's reports, one kind a body.
+  ['POST /api/sessions/:id/report',
+    "the hook's reports: box token and attribution — it records what the session did and moves an operator message to picked up; " +
+    "box-token gated in its own onRequest whatever the flag, no cookie accepted, the path's session the sender, attribution " +
+    'checked against the registry, a message moved only when it is that session\'s own'],
   // The card door (Overlord §3.3.3, W1a): a session reads its own card, page by page.
   ['GET /api/sessions/:id/card',
     "a session reads its own card: box token and attribution — box-token gated in its own onRequest whatever the flag, no " +

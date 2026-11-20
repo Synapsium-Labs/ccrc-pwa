@@ -506,6 +506,13 @@ describe('inbound', () => {
     setInboundState(db, 'L1', { state: 'closed', reason: 'duplicate', actedAt: 8 });
     expect(inboundOf(db, 'L1')).toMatchObject({ state: 'closed', reason: 'duplicate', actedAt: 8, mailedTo: 'coord-a' });
   });
+  it('setInboundState called outside a transaction is one transaction of its own: a failing note delete leaves the state unchanged (review 2834 A3)', () => {
+    upsertInbound(db, inboundIn('L1'));
+    db.exec('DROP TABLE linear_inbound_notes');       // the second statement (the note's delete) now throws
+    expect(db.isTransaction).toBe(false);
+    expect(() => setInboundState(db, 'L1', { state: 'handed', handedTo: 'coord-a' })).toThrow();
+    expect(inboundOf(db, 'L1')).toMatchObject({ state: 'waiting', handedTo: null });
+  });
   it('upsertInbound truncates a long title and body visibly, on a code point (D-8705)', () => {
     const title = '😀'.repeat(300);
     const body = 'é'.repeat(40_000) + '😀';   // 80 003 bytes
@@ -811,5 +818,32 @@ describe('the one retire of an inbound row (review 2457 F4, A6; D-8735)', () => 
     const port = planStorePort(db);
     expect(typeof port.retireInbound).toBe('function');
     expect(typeof port.retireInboundInTx).toBe('function');
+  });
+});
+
+describe('a row\'s note lives only while its row is waiting (round 4 F2)', () => {
+  const note = { kind: 'returned', program: 'prog-a', note: 'not mine', at: 9 } as const;
+  const fresh = (id: string) => { upsertInbound(db, inboundIn(id)); setInboundNote(db, id, note); };
+
+  it('setInboundState to any state but waiting deletes the note', () => {
+    for (const state of ['mailed', 'handed', 'closed', 'raised', 'placed', 'taken', 'retired'] as const) {
+      fresh(`L-${state}`);
+      setInboundState(db, `L-${state}`, { state });
+      expect(inboundNoteOf(db, `L-${state}`), state).toBeNull();
+    }
+  });
+
+  it('a patch with no state, or with state waiting, keeps the note', () => {
+    fresh('L1');
+    setInboundState(db, 'L1', { actedAt: 5 });
+    setInboundState(db, 'L1', { state: 'waiting', mailedTo: null });
+    expect(inboundNoteOf(db, 'L1')).toEqual(note);
+  });
+
+  it('inside the caller\'s transaction the delete is the same transaction: a rollback keeps the note and the state', () => {
+    fresh('L1');
+    expect(() => tx(db, () => { setInboundState(db, 'L1', { state: 'placed' }); throw new Error('stop'); })).toThrow('stop');
+    expect(inboundOf(db, 'L1')!.state).toBe('waiting');
+    expect(inboundNoteOf(db, 'L1')).toEqual(note);
   });
 });

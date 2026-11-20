@@ -250,6 +250,7 @@ describe('the closed route table', () => {
     [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
     [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
     [['sessions', 'act-key', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/act-key'],
+    [['sessions', 'report', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/report'],
     [['sessions', 'card', 'lane-a-project-a'], 'GET', '/api/sessions/lane-a-project-a/card'],
     // The replay quiz's record (Overlord W1a quiz record): the operator's `ccrc quiz-record` posts its body through this row.
     [['quiz', 'record'], 'POST', '/api/continuity/quiz-runs'],
@@ -342,9 +343,10 @@ describe('the closed route table', () => {
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
     // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
     // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
-    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1).
-    // Ninety-two since `plan.map-propose` (the per-team migration, D-8186).
-    expect(keys).toHaveLength(92);
+    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1);
+    // ninety-two since `sessions.report` (Overlord W1 door process B1).
+    // Ninety-three since `plan.map-propose` (the per-team migration, D-8186).
+    expect(keys).toHaveLength(93);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -535,7 +537,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
       ['plan', 'phase-ref', 'prog-a', '--json', '-'], ['plan', 'ticket-done', 'prog-a', '--json', '-'],
       ['plan', 'take', 'prog-a', '--json', '-'], ['plan', 'triage', 'AAA', '--json', '-'], ['plan', 'map-propose', 'AAA', '--json', '-'],
-      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
+      ['sessions', 'start', 'lane-a-project-a', '--json', '-'], ['sessions', 'loads', 'lane-a-project-a', '--json', '-'], ['sessions', 'act-key', 'lane-a-project-a', '--json', '-'], ['sessions', 'report', 'lane-a-project-a', '--json', '-'], ['sessions', 'card', 'lane-a-project-a'],
       ['note', 'add', 'lane-a-project-a', '--json', '-'], ['note', 'close', 'lane-a-project-a', '--json', '-'],
       ['note', 'list', 'lane-a-project-a'], ['note', 'handover', 'lane-a-project-a', '--json', '-'],
       ['timer', 'set', '2h', 'check the checks'], ['timer', 'list'], ['timer', 'cancel', '12'],

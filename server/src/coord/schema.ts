@@ -3971,8 +3971,9 @@ export const MIGRATIONS: readonly string[] = [
   // cursor to go on from, `newest` the newest `updatedAt` the sweep has read so far, and `startedAt` when it began (ccrc's clock:
   // a finished sweep never moves the watermark past its start less a margin, so a change made while it walked is read again). A
   // row is the sweep in progress; a finished sweep deletes it. `linear_inbound_notes`: what the owner's next mail about a `waiting`
-  // inbound issue must say beyond the first mail, one row per issue, kept until the inbound lane mails it to a live owner, in the
-  // same transaction that deletes it: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
+  // inbound issue must say beyond the first mail, one row per issue, kept while its row is `waiting`: the inbound lane deletes it in
+  // the transaction that mails it to a live owner, and any other move of the row out of `waiting` (a triage, a take, a retire)
+  // deletes it in that move's own transaction: `kind` `returned` is a coordinator's `plan take` return made while the team had no live
   // Linear owner (review 2443 A3; `program` the returning programme, `note` its note, masked as the return mail carries it), and
   // `reopened` an issue Linear reopened after its row was retired (D-8735; `program` and `note` null). `at` is when, and it is
   // in that mail's subject, so no mail of an earlier round dedupes it away. (`linear_inbound.state` also takes `retired` from this
@@ -4039,6 +4040,25 @@ export const MIGRATIONS: readonly string[] = [
   `,
 
   // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The session hook's reports and the witness checks (Overlord W1 door process B1, plan
+  // `docs/superpowers/plans/2026-11-14-overlord-w1/w1-door-process.md` Task 7). `continuity_hook_reports`: what the hook says
+  // its session did (a door tool call's witness, a reader's start and stop, a quiet turn's end clearing the readers, a model
+  // switch), one row a report; `receivedAt` is the server's clock and the one every window reads, `at` the hook's own. One
+  // writer, `hookReportStore.ts#insertHookReport`, which prunes its own rows past their keep (witness 24 h, the rest 7 days) in
+  // the same transaction. `picked-up` is never a row: it moves the operator's message. Its id is AUTOINCREMENT, so a pruned
+  // witness's id is never handed to a new one, whose check would then read `used` (review 2870 F2). `continuity_witness_checks`:
+  // gates B's check of a witness (Task 9), written by `recordWitnessCheck`; its `witnessId` is UNIQUE so a witness is used once.
+  // TWO NEW TABLES AND ONE INDEX, nothing else: an older build opening a file at this `user_version` takes rule 3 and never names
+  // them. The slot is the next free one by position (after 109); whoever lands second renumbers (the standing license).
+  `
+  CREATE TABLE continuity_hook_reports (id INTEGER PRIMARY KEY AUTOINCREMENT, sessionId TEXT NOT NULL, kind TEXT NOT NULL, key TEXT,
+    agentId TEXT, detail TEXT, at INTEGER NOT NULL, receivedAt INTEGER NOT NULL);
+  CREATE INDEX continuity_hook_reports_by_key ON continuity_hook_reports (sessionId, kind, key, receivedAt);
+  CREATE TABLE continuity_witness_checks (id INTEGER PRIMARY KEY, sessionId TEXT NOT NULL, generationId INTEGER NOT NULL, witnessKey TEXT,
+    witnessId INTEGER UNIQUE, outcome TEXT NOT NULL, why TEXT, at INTEGER NOT NULL);
+  `,
+
+  // ── 111: user_version 110 -> 111 ──────────────────────────────────────────
   // The per-team migration's own facts (Linear hierarchy design 2026-11-10 §10, wave 7, D-8186), four nullable columns on
   // `linear_migrations` (migration 95's table, which no build before this one writes): `project`, the ccrc project whose team
   // this migration reshapes (its Linear owner proposes the map, and the console's row reads its state); `report`, what the report
@@ -4047,8 +4067,8 @@ export const MIGRATIONS: readonly string[] = [
   // for put back (the migration lane runs it, never the act); `reportDoneAt`, when the operator closed the report (the next team
   // may start only then, §10.2). One writer, `planStore.ts#setMigration`. FOUR NULLABLE COLUMNS AND NOTHING ELSE: an older build
   // opening a file at this `user_version` takes rule 3 and never names them. The slot is the next free one by position: the
-  // gate's fence refusals (109) are the last on main, so this is 110, renumbered at landing if another lands first (D-8673).
-  // RE-MEASURE the slot before the PR and before merge (it must print 109 before this entry is counted):
+  // session hook's reports (110) are the last on main, so this is 111, renumbered at landing if another lands first (D-8673).
+  // RE-MEASURE the slot before the PR and before merge (it must print 110 before this entry is counted):
   //     git fetch origin main
   //     git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'
   `

@@ -139,6 +139,36 @@ describe('the plan reference after wave 6 (D-8185)', () => {
     for (const b of bodies) expect(parsePlanTake(b).ok, JSON.stringify(b)).toBe(true);
   });
 
+  it('plan triage and plan take each name unreachable (a retry helps) and the client\'s capability-missing for plan-inbound-v1 (review 2571 F2, 2753 F4)', () => {
+    for (const heading of ['## The Linear owner: plan triage', '## plan take']) {
+      const text = plan();
+      const at = text.indexOf(`\n${heading}\n`);
+      const next = text.indexOf('\n## ', at + 1);
+      const section = flat(text.slice(at, next === -1 ? undefined : next));
+      expect(at, heading).toBeGreaterThanOrEqual(0);
+      expect(section, heading).toMatch(/`unreachable` \([^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first\)/);
+      expect(section, heading).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
+    }
+    // the API reference's inbound refusal list says the same (by its holder's consent)
+    const api = flat(read('references', 'api.md'));
+    // and says what plan.md says (review 2834 A5, 2874 A6): only a binding decision, take's unresolvable home, when a retry helps
+    expect(api).toMatch(/`unreachable` \([^)]*refused only for a decision that binds it[^)]*home workspace cannot be resolved[^)]*a retry helps when Linear or ccrc's Linear store could not be read, and with no key or slot for the team its linking must be set first\)/);
+    expect(api).toContain('`capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent)');
+  });
+
+  it('plan.md and api.md give runs open the same wave-epic-mismatch and ticket-required, after WM6 (review 2874 F1, F2, A8)', () => {
+    const api = flat(read('references', 'api.md'));
+    expect(api).toContain('`runs open` also answers six refusals');
+    for (const [name, text] of [['plan.md', flat(plan())], ['api.md', api]] as const) {
+      expect(text, name).toContain('`ticket-required`');
+      // a ticket of a live epic that lists no waves opens at any wave, so it is never wave-epic-mismatch
+      expect(text, name).toContain('is not in a live epic that lists no waves (such a ticket opens at any wave)');
+      // no ticket at an unlisted wave is wave-epic-mismatch only where every live epic lists waves; else ticket-required
+      expect(text, name).toContain('no live epic lists this wave, and every live epic lists waves');
+      expect(text, name).toContain('no live epic lists this wave and a live epic lists no waves');
+    }
+  });
+
   it('a ticket names its project when its work lands outside the home project (review 2580 A4)', () => {
     expect(flat(plan())).toContain('Name `project` on a ticket whose work lands outside the home project.');
   });

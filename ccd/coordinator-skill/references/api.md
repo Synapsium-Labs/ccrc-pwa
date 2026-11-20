@@ -76,13 +76,20 @@ response said. The refusals you will actually meet are
 `unknown-item`, `item-terminal`, `intent-held`. Their meanings are in
 `references/wave-lifecycle.md`.
 
-`runs open` also answers five refusals that come from the programme's plan
+`runs open` also answers six refusals that come from the programme's plan
 (`references/plan.md` has the verbs that fix each):
 
 - `plan-missing`: the programme has no plan. Declare one with `plan put` (with
   `home`), then open again. Start at `references/plan.md`.
-- `wave-epic-mismatch`: no live epic lists this wave, or the named `ticket` is in
-  another epic. Revise the plan so the wave and the ticket share an epic.
+- `wave-epic-mismatch`: the named `ticket` is not in a live epic that lists no waves
+  (such a ticket opens at any wave), and either no live epic lists this wave or the ticket
+  is in another epic than the one that lists it; or no `ticket` was named, no live epic
+  lists this wave, and every live epic lists waves. Revise the plan so the wave and the
+  ticket share an epic.
+- `ticket-required`: no `ticket` was named, and either the plan has phases and the epic
+  that lists this wave still has an open ticket no run has started, or no live epic
+  lists this wave and a live epic lists no waves. Open again naming that ticket (in the
+  second case, a ticket of the epic that lists no waves).
 - `ticket-unavailable`: the ticket is done, dropped, started by another run, or an
   Upkeep ticket. Name another, or open with none.
 - `plan-closed`: the plan was ended with `plan close`. Nothing opens under it.
@@ -105,8 +112,12 @@ JSON
 takes `{"close":{"why":"…"}}` and `{"return":{"note":"…"}}`. Refusals, all on `error`: `not-linear-owner` (only the
 team's Linear owner triages), `issue-not-inbound` (the issue is not waiting, or was not handed to you),
 `plan-bad-body` (a hand to your own programme without an `epic`, a close without a reason), `linear-text-public`,
-`not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed` and
-`reserved-programme`.
+`not-plan-owner`, `unknown-epic`, `unknown-checkpoint`, `ticket-workspace-mismatch`, `plan-closed`,
+`reserved-programme`, `unreachable` (Linear could not be read to confirm the issue is still inbound, refused only for a
+decision that binds it: a hand, an Upkeep placement or a take into an epic; `take` also answers it when the programme's
+home workspace cannot be resolved for an Upkeep ticket; a retry helps when Linear or ccrc's Linear store could not be read, and with no key
+or slot for the team its linking must be set first) and
+the client's own `capability-missing` (the server does not advertise `plan-inbound-v1`; nothing was sent).
 
 **That list is the RUN routes only** (`/runs`, `/dispatch`, `/:id/close`,
 `/:id/advance`, `/:id/items`). `POST /api/mail` and `POST /api/mail/:id/ack` draw from a
