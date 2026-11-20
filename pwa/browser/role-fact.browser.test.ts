@@ -197,6 +197,8 @@ const HEAD_FIXTURE: AppFixture = {
 interface HeadMeasure {
   /** The badge is a node of the title (`.chat-title`) that follows the name's own node (`.chat-title-text`). */
   readonly inTitleAfterName: boolean;
+  /** The badge is the last child of `.chat-title-glue`, whose text before it is the name's last character, one box that cannot break. */
+  readonly glued: boolean;
   readonly badgesInHeader: number;
   /** A badge still inside the details (`.chat-facts`). */
   readonly inFacts: boolean;
@@ -228,6 +230,10 @@ async function measureHead(page: Page): Promise<HeadMeasure> {
     const inTitleAfterName = badgeEl !== null && nameEl !== null
       && (nameEl.compareDocumentPosition(badgeEl) & Node.DOCUMENT_POSITION_FOLLOWING) !== 0;
     const inFacts = head.querySelector('.chat-facts ' + SEL) !== null;
+    const glue = badgeEl?.parentElement ?? null;
+    const glued = glue !== null && glue.classList.contains('chat-title-glue') && glue.lastElementChild === badgeEl
+      && glue.firstChild?.nodeType === Node.TEXT_NODE && Array.from(glue.firstChild.textContent ?? '').length === 1
+      && getComputedStyle(glue).whiteSpace === 'nowrap';
     const bsvg = badgeEl?.querySelector('svg')?.getBoundingClientRect();
     const br = badgeEl?.getBoundingClientRect();
     const badge = badgeEl === null || bsvg === undefined || br === undefined ? null
@@ -254,6 +260,11 @@ async function measureHead(page: Page): Promise<HeadMeasure> {
       carrierAdds = headH - head.getBoundingClientRect().height;
       carrier.style.display = saved;
     }
+    // THE C50 COMPARISON IS A FROZEN COPY (review 2963 F8): the old placement is rebuilt here from C50's own rules, written into this test,
+    // not read from `main` or from a stylesheet that still holds them (C51 removed them). It matches C50 today (a row of 16.5 px and a 5 px
+    // gap, 21.5 px at 360, equal to the real difference between `main` and the first version of this change), and it exists to give
+    // "one line shorter" a figure that does not move when the header's own rules do. If the details row's rules change, this copy is
+    // not updated by itself and the figure it gives is C50's, not the new row's.
     // The old placement, rebuilt from C50's own rules (`.chat-fact-role`: a flex line of 1lh at the row's font size, the glyph 1em of
     // --fs-meta), as the FIRST cell of the details row, measured, then taken out again.
     let oldRowAdds = 0;
@@ -261,7 +272,19 @@ async function measureHead(page: Page): Promise<HeadMeasure> {
     const block = head.querySelector<HTMLElement>('.chat-title-wrap') ?? head;
     const blockH = block.getBoundingClientRect().height;
     let oldRow: { h: number; gap: number; alone: boolean } | null = null;
-    const facts = head.querySelector<HTMLElement>('.chat-facts');
+    // The details row is not drawn for a coordinator with nothing else to show (`detailsHaveFacts`): the old placement is rebuilt as
+    // the row `SessionDetails` drew at C50, a full-width item at the end of the meta block, when there is none to put it in.
+    let facts = head.querySelector<HTMLElement>('.chat-facts');
+    let madeFacts = false;
+    if (facts === null) {
+      const meta = head.querySelector<HTMLElement>('.chat-meta');
+      if (meta !== null) {
+        facts = document.createElement('div');
+        facts.className = 'chat-facts';
+        meta.append(facts);
+        madeFacts = true;
+      }
+    }
     if (anyBadge !== null && facts !== null) {
       const row = document.createElement('span');
       row.className = 'chat-fact';
@@ -284,7 +307,8 @@ async function measureHead(page: Page): Promise<HeadMeasure> {
       oldRow = { h: rr.height, gap: Number.isFinite(above) ? above : 0, alone };
       row.remove();
     }
-    return { inTitleAfterName, badgesInHeader: head.querySelectorAll(SEL).length, inFacts, badge, name, baseline, carrierAdds, oldRowAdds, oldBlockAdds, oldRow };
+    if (madeFacts) facts?.remove();
+    return { inTitleAfterName, glued, badgesInHeader: head.querySelectorAll(SEL).length, inFacts, badge, name, baseline, carrierAdds, oldRowAdds, oldBlockAdds, oldRow };
   });
 }
 
@@ -301,11 +325,9 @@ describe('D-8834: the header\'s role badge sits on the title line, after the nam
         await page.goto(server!.origin + `/s/${PROJECT}-head-coord`);
         await page.waitForSelector('.chat-head', { timeout: 20_000 });
         await page.evaluate(async () => { await document.fonts.ready; });
-        // Details open (a phone folds them behind the door): the badge must not be in them either way.
-        const toggle = page.getByRole('button', { name: /details/i });
-        if (await toggle.count() > 0 && (await toggle.first().getAttribute('aria-expanded')) === 'false') await toggle.first().click();
-        // Attached, not visible: a coordinator with nothing else to say has an empty details row, which has no box.
-        await page.waitForSelector('.chat-facts', { state: 'attached', timeout: 10_000 });
+        // This coordinator has nothing else to say, so the header draws no details row and no Details door (a phone has none to open).
+        expect(await page.getByRole('button', { name: /details/i }).count(), 'no Details door for an empty row').toBe(0);
+        expect(await page.locator('.chat-facts').count(), 'no details row for an empty row').toBe(0);
         await page.waitForTimeout(300);
         const m = await measureHead(page);
         expect(errors, 'no page errors').toEqual([]);
@@ -326,6 +348,7 @@ describe('D-8834: the header\'s role badge sits on the title line, after the nam
       expect(m.badge, 'the title line draws the badge').not.toBeNull();
       expect(m.badgesInHeader, 'one badge in the whole header').toBe(1);
       expect(m.inTitleAfterName, 'inside the title line, after the name').toBe(true);
+      expect(m.glued, 'in one unbreakable box with the name\'s last character').toBe(true);
       expect(m.inFacts, 'not in the details row').toBe(false);
       expect(m.badge?.text, 'no visible word').toBe('');
       expect(m.badge?.cls, 'the card\'s role rule is not on the header badge').not.toContain('sess-role');
@@ -370,6 +393,101 @@ describe('D-8834: the header\'s role badge sits on the title line, after the nam
   }
 });
 
+// D-8834, review 2963 F1: the badge is glued to the name's last character, so it never wraps alone onto a line of its own. The
+// first version drew it as a plain inline box after the name, which broke before it at the lengths where the name's last line
+// nearly filled the column (Refined at 360 and 390 px was taller than the header with no badge at about one length in five). A
+// sweep, not one name: in each view the name is replaced in place by names of 1 to 130 characters, as words and as one unbroken
+// token, and at each length two things must hold. The badge's centre is inside the box of the name's last line. And the header
+// is no taller than the same header with the badge hidden (which is a worker's header of that name: the badge is the only
+// difference on the title line, and a worker draws none) WHERE THE BADGE HAS ROOM: when the name's last line leaves less than the
+// glyph's width and gap before the column's edge, the glyph needs a line the worker's name did not, and the header is taller by
+// that one line; nothing can change that short of drawing the glyph over the doors. The text is replaced in the page (the
+// head text node and the glue's own character), so the markup around it is the app's own.
+describe('D-8834: the badge never sits alone on a line (a name-length sweep)', () => {
+  for (const { skin, theme, width } of [INSTRUMENT, REFINED].flatMap((skin) =>
+    THEMES.flatMap((theme) => [360, 390, 1280].map((width) => ({ skin, theme, width }))))) {
+    it(`${skin}, ${theme}, ${width}px: names of 1 to 130 characters, words and one token`, async () => {
+      const { ctx, page, errors } = await openApp(browser!, { skin, theme, width } as AppView, HEAD_FIXTURE);
+      try {
+        await page.goto(server!.origin + `/s/${PROJECT}-head-coord`);
+        await page.waitForSelector('.chat-head', { timeout: 20_000 });
+        await page.evaluate(async () => { await document.fonts.ready; });
+        await page.waitForTimeout(300);
+        const result = await page.evaluate(() => {
+          const head = document.querySelector<HTMLElement>('.chat-head')!;
+          const title = head.querySelector<HTMLElement>('.chat-title')!;
+          const nameEl = title.querySelector<HTMLElement>('.chat-title-text')!;
+          const glue = nameEl.querySelector<HTMLElement>('.chat-title-glue');
+          const badge = title.querySelector<HTMLElement>('[role="img"][aria-label="coordinator"]');
+          type Fail = { kind: string; len: number; inLine: boolean; extra: number; room: boolean; dbg: string };
+          const none = { drawn: false, checked: 0, fails: [] as Fail[], taller: 0 };
+          if (badge === null || glue === null) return none;
+          const headNode = nameEl.firstChild as Text;
+          const lastNode = glue.firstChild as Text;
+          const WORDS = 'garden stone silver harbor morning cedars quiet river nimble copper lantern meadow willow granite amber falcon ';
+          const TOKEN = 'abcdefghijklmnopqrstuvwxyz0123456789';
+          const make = (kind: string, n: number): string => {
+            const raw = kind === 'words' ? WORDS.repeat(Math.ceil(n / WORDS.length) + 1).slice(0, n) : TOKEN.repeat(Math.ceil(n / TOKEN.length)).slice(0, n);
+            return kind === 'words' ? raw.trimEnd() || 'a' : raw;
+          };
+          const fails: Fail[] = [];
+          let checked = 0;
+          let taller = 0;
+          const textRects = (): DOMRect[] => [headNode, lastNode].flatMap((node) => {
+            const range = document.createRange();
+            range.selectNodeContents(node);
+            return [...range.getClientRects()].filter((r) => r.width > 0);
+          });
+          for (const kind of ['words', 'token']) {
+            for (let len = 1; len <= 130; len += 1) {
+              const chars = Array.from(make(kind, len));
+              lastNode.data = chars.pop() ?? '';
+              headNode.data = chars.join('');
+              const br = badge.getBoundingClientRect();
+              const rects = textRects();
+              if (rects.length === 0) continue;
+              const lastTop = Math.max(...rects.map((r) => r.top));
+              const lastLine = rects.filter((r) => r.top >= lastTop - 1);
+              const top = Math.min(...lastLine.map((r) => r.top));
+              const bottom = Math.max(...lastLine.map((r) => r.bottom));
+              const centre = (br.top + br.bottom) / 2;
+              const inLine = centre >= top - 0.5 && centre <= bottom + 0.5;
+              const h = head.getBoundingClientRect().height;
+              const tH = title.getBoundingClientRect().height;
+              badge.style.display = 'none';
+              const hNone = head.getBoundingClientRect().height;
+              const tHn = title.getBoundingClientRect().height;
+              // The worker's last line, with the badge gone: has the glyph room to its right before the column's edge?
+              const workerLast = textRects();
+              const wTop = Math.max(...workerLast.map((r) => r.top));
+              const wRight = Math.max(...workerLast.filter((r) => r.top >= wTop - 1).map((r) => r.right));
+              badge.style.display = '';
+              const need = br.width + parseFloat(getComputedStyle(badge).marginInlineStart);
+              const titleBox = title.getBoundingClientRect();
+              // Room means clearly: a glyph that fits to within a pixel is decided by sub-pixel widths, so it counts as no room.
+              const room = wRight + need + 1 <= titleBox.left + title.clientWidth;
+              const extra = h - hNone;
+              checked += 1;
+              if (extra > 0.5) taller += 1;
+              if (!inLine || (extra > 0.5 && room)) fails.push({ kind, len, inLine, extra: Math.round(extra * 100) / 100, room, dbg: `title ${tH} vs ${tHn}, worker right ${Math.round(wRight)}, limit ${Math.round(titleBox.left + title.clientWidth)}, need ${need}, head ${h} vs ${hNone}` });
+            }
+          }
+          return { drawn: true, checked, fails, taller };
+        });
+        expect(result.drawn, 'the header draws the badge, glued in its own box').toBe(true);
+        expect(result.checked, 'every length was measured').toBe(260);
+        const shown = result.fails.slice(0, 10).map((f) => `${f.kind}:${f.len}(${f.inLine ? 'in line' : 'off the last line'}, +${f.extra}px, room ${f.room}, ${f.dbg})`).join(' | ');
+        expect(result.fails.length, `${result.fails.length} of 260 names put the badge off the name's last line or make the header taller with room to spare: ${shown}`).toBe(0);
+        // The cases where the glyph truly had no room are few: the sweep reports them, and they are bounded by one line each.
+        expect(result.taller, 'names whose last line leaves no room for the glyph').toBeLessThan(40);
+        expect(errors).toEqual([]);
+      } finally {
+        await ctx.close();
+      }
+    });
+  }
+});
+
 // D-8834: the looks of the session header, for the note and the PR. When `CCRC_SHOTS` names a directory (outside the work
 // tree, or the task's `docs/design/…/c51/` folder) and `CCRC_SHOT_TAG` a word (`before` or `after`), each case below also
 // writes the coordinator's header there, with its details open, and, below the desk, closed too. Without `CCRC_SHOTS` no case
@@ -394,6 +512,17 @@ if (SHOTS !== '') describe('D-8834: the session header screenshots (opt in)', ()
           await page.waitForTimeout(300);
         }
         await page.locator('.chat-head').screenshot({ path: `${SHOTS}/${name}.png` });
+        // A long name that wraps in every view (review 2963: the first screenshots all used one 10-character name). The name's text
+        // is replaced in the page, in the app's own markup: the head's text node, and the glue's one character beside the badge.
+        await page.evaluate(() => {
+          const nameEl = document.querySelector<HTMLElement>('.chat-head .chat-title-text')!;
+          const chars = Array.from('garden stone silver harbor morning cedars quiet river nimble copper lantern meadow willow granite amber falcon');
+          const last = chars.pop() ?? '';
+          (nameEl.firstChild as Text).data = chars.join('');
+          (nameEl.querySelector('.chat-title-glue')!.firstChild as Text).data = last;
+        });
+        await page.waitForTimeout(200);
+        await page.locator('.chat-head').screenshot({ path: `${SHOTS}/${name}-longname.png` });
         expect(errors).toEqual([]);
       } finally {
         await ctx.close();

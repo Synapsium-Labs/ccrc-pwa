@@ -95,11 +95,6 @@
   font-size: var(--fs-2xs);
   min-width: 0;
 }
-/* D-8834 (C51): the badge left this row, and a coordinator with no other fact to give (no run number, hold, PR or marker) now has
-   a details row with nothing in it but `SessionMeta`'s own empty `.sess-meta`. An empty flex item of `.chat-meta` still takes the
-   meta block's row gap, so without this the header would keep a gap where the badge's line stood. The rule reads "no child but an
-   empty `.sess-meta`", which an entirely empty row meets too. */
-.chat-facts:not(:has(> :not(.sess-meta:empty))) { display: none; }
 .chat-facts .sess-meta { display: contents; }
 .chat-facts .sess-meta > *::before { content: none; }
 /* D-7785 (review 1424 F3; review 1431 F1): the header's two disclosure toggles, the subagent one and the
@@ -118,6 +113,9 @@
    paints no colour and sets no size of its own: the line's ink is the title's (the primary) and its text size is the title's.
    `vertical-align: -0.125em` is the icon rule: the glyph's bottom edge sits a little under the baseline, as the vendored icons
    are drawn, so it reads as resting on the line. The gap is the crumb separator's. */
+/* The name's last character and the badge are one unbreakable box (`HeaderTitleText`, review 2963 F1), so the badge never sits
+   alone on a line; every other break in the name stays where it was. */
+.chat-title-glue { white-space: nowrap; }
 .chat-title-role { vertical-align: -0.125em; margin-inline-start: var(--sp-1); }
 .chat-title-role svg { width: 1em; height: 1em; }
 .chat-facts .sess-subagent-list { flex-basis: 100%; }

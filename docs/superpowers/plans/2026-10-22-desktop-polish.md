@@ -4443,45 +4443,97 @@ network icon, the accessible name "coordinator", the role title on hover, and th
 cell is unchanged. On a phone there is no hover, so the ruling asked whether `@ccrc/ui` already has a primitive that shows a title
 on tap, to be used for the badge if it does.
 
-**Files.** `pwa/src/session/sessionHeaderView.ts` (the view gains `coordinatorRole`, read off the facts' own `coordinatorRole`, so the
-fact still has its one reader), `pwa/src/session/SessionHeader.tsx` (`HeaderTitleText`, the title's own node in both skins, draws the
-badge after the name; it is a node beside the name's, so a rename's typing never touches it), `pwa/src/session/SessionDetails.tsx` (the
-role detail and its two imports are gone, and so is the `className` that only it passed to `Detail`), `pwa/src/session/chat.css`
-(C50's `.chat-fact-role` rules and their `min-height` are removed; `.chat-title-role` sets `vertical-align: -0.125em`, a gap, and
-`svg { width: 1em; height: 1em }`, with no size or colour of its own; and `.chat-facts:not(:has(> :not(.sess-meta:empty)))` draws no
-box, see below). Tests: `pwa/test/coordinator-badge.test.tsx` and `pwa/browser/role-fact.browser.test.ts` (the new cases),
-`pwa/test/build-and-spend.test.ts`, `pwa/test/session-line.test.tsx` and `pwa/test/role-census.test.ts` (C50's pins, re-pointed at the
-new place, none weakened). No server, wire, ccd or `@ccrc/ui` change.
+**Fix round 1 (review 2963, the coordinator's rulings).** The first version drew the badge as a plain inline box after the name, which
+can wrap alone onto a line of its own (F1), and hid an empty details row with a stylesheet rule that read what had rendered (F3 to F6).
+The rulings: glue the badge to the name's last word and pin it with a sweep over name lengths; decide the empty details row in code,
+as a fact beside the header's others; correct every general claim to what the sweep measures.
 
-**Why the empty-details rule.** A coordinator with no other fact to give has nothing left in its details row but `SessionMeta`'s own
-empty `.sess-meta`. That row is a full-width item of the meta block, which sets every row apart by its row gap, so an empty one
-would keep a gap where the badge's line stood. The rule hides a row that holds nothing but that empty element. Measured: without it
-the header lost 16.5 px of the 21.5 px the badge's line cost in Instrument at 360 (the rule's mutant reds the four Instrument cases).
+**Files.** `pwa/src/session/SessionHeader.tsx` (`HeaderTitleText`, the title's own node in both skins: a coordinator's name is drawn as
+plain text whose last character and the badge share one `white-space: nowrap` box, `.chat-title-glue`),
+`pwa/src/session/sessionHeaderView.ts` (the view gains `coordinatorRole`, the facts' own reading; `detailRows`, `detailsHaveFacts` and
+`detailsEndWithWorktrees` decide the details row), `pwa/src/fleet/sessionFacts.ts` (`headerMetaHasCells`, the one reading of the meta
+row's cells), `pwa/src/session/SessionDetails.tsx` (the row and its phone door are drawn only when the row has something to show; the
+role detail and the `Detail` class prop are gone), `pwa/src/session/SessionWorktrees.tsx` (when the worktrees are the row's only
+facts, the focus a control hands back goes to the header's title), `pwa/src/session/chat.css` (C50's `.chat-fact-role` rules and
+their `min-height` are removed; `.chat-title-glue` and `.chat-title-role` are added; no rule reads the details row's emptiness).
+Tests: `pwa/test/coordinator-badge.test.tsx`, `pwa/test/header-details-facts.test.tsx` (new), `pwa/browser/role-fact.browser.test.ts`
+(the placement cases and the name-length sweep), `pwa/browser/delegation-rows.browser.test.ts` (the worktrees-only focus case), and C50's
+pins re-pointed at the new place, none weakened: `pwa/test/build-and-spend.test.ts`, `pwa/test/session-line.test.tsx` and
+`pwa/test/role-census.test.ts`. No server, wire, ccd or `@ccrc/ui` change.
+
+**The badge is glued to the name's last character.** A browser may break a line before an atomic inline such as the badge. **Measured**
+on a probe page in Chrome (482 widths, a name in words and a name as one token): with nothing glued, 34 widths left the badge alone on a
+line of its own; a word joiner (U+2060) before it left the same 34, a no-break space left 31, and an inline (non-flex) badge left 34.
+Only a box that spans the last piece of the name and the badge and does not break glued it: 0 of 482, for the last word and for the last
+character. The last **character** is boxed, not the last word, so a single token wider than the column keeps `overflow-wrap:
+break-word`'s emergency break inside it, as the ruling asks, and the badge follows its last fragment.
+
+**The cost, and what the sweep can and cannot say.** A coordinator's title is plain text, never a `TypedLabel`: the label's one text
+node and its `role="img"` root cannot hold a box that spans its last character and a sibling, so a rename of a coordinator's name no
+longer types in; it changes at once, as a main checkout's title does. The ruling also asked that the coordinator's header is never
+taller than a worker's with the same name at the same width. **That cannot hold at every length, and the rule and the task conflict
+there:** when the name's last line leaves less than the glyph's width and its 4 px gap before the column's edge, the glyph needs a
+line the worker's name did not, and no layout short of drawing it over the doors avoids that. **Measured** (real Chrome, both skins,
+both themes, 360, 390 and 1280 px, names of 1 to 130 characters in words and as one token, 260 names a view): at every length the
+badge's centre is inside the name's last line box; the header is taller than the same header with the badge hidden (a worker's header of
+that name, the badge being the only difference on the title line) at 4 to 36 of the 260 names a view, and at each of those the last line
+left no room for the glyph to within a pixel; with room, never. Follow-up for the coordinator: if "never taller" is wanted, it needs a
+design the ruling did not make (the glyph drawn in the gutter, or off the title).
+
+**The details row is decided in code (F3 to F6).** `detailsHaveFacts` says whether the row has anything to show: one of its own facts
+(`detailRows`: a main checkout's name, the run, a programme hold, the PR, an away lane, the question), a cell of its meta row
+(`headerMetaHasCells`), or a worktree. With none, the header draws no row and no Details door: a door that opens nothing goes.
+`header-details-facts.test.tsx` renders `SessionMeta` for each cell alone and requires `headerMetaHasCells` to agree with whether it drew
+one. When the last worktree leaves and the row goes with it, the focus a control hands back rests on the header's title (it takes
+`tabindex=-1`), not on `body`; `detailsEndWithWorktrees` tells `SessionWorktrees`, which reads it through a ref because a control
+registers its leave-time hand-off once, at mount. **This reaches every header, workers' too** (F6). **Measured** (layout heights,
+real Chrome, a session with nothing to show, `main` against the tip; the picture sizes in the screenshots are these rounded up):
+
+| Header | 360 and 390 px, closed | 360 and 390 px, open | 1280 px |
+|---|---|---|---|
+| Instrument, coordinator | 159.75 to 138.25 | 181.25 to 138.25 | 84.25 to 65 |
+| Instrument, worker | 159.75 to 138.25 | not measured | 67.75 to 65 |
+| Refined, coordinator | 109 to 87.5 | 109 to 87.5 | 85 to 85 |
+| Refined, worker | 109 to 87.5 | not measured | 85 to 85 |
+
+**One earlier pin is re-pointed, and two rulings meet there.** `goals-door-height.browser.test.ts` pins that the Goals door costs a phone
+header no height (PL11: "on a phone nothing"). In Refined that held for a coordinator with no other fact only because the Details
+door's own 44 px line (the tap floor) was the rail's tallest item and the Goals door, also 44 px, hid beside it. With no Details door the
+rail out of a programme is as tall as its chips (**measured**: 20 px) and the Goals door makes it 44, so the header is 24 px taller in
+a programme than out of one (**measured**: 85 to 109, a main-checkout coordinator, Refined, 390 px, names of 8, 13, 26 and 31
+characters). The pin now expects exactly that growth (the door's height less the rail's own) where the rail has no other 44 px item,
+and equal heights everywhere else; a door that took more would still red (**inferred**: not run under a mutant). The header "in" is not
+taller than it was before this task (109 px); the one "out" is 24 px shorter. The coordinator may want one or the other kept: for the
+coordinator to rule.
+
+A phone header with nothing to show loses the Details door's line (21.5 px); at 1280 px Instrument's loses 2.75 px for a worker and
+19.25 px for the coordinator (its badge's old line), and Refined's is unchanged. The measured heights are for these fixtures
+(a coordinator and a worker with no other fact, a 10-character name); a header with other facts keeps its row and its door.
 
 **Phone: no primitive shows a title on tap, so none is used and none is added.** `@ccrc/ui` has `Popover` (a Radix panel that a
 trigger button opens, with a 12 rem minimum width and its own focus scope; it is a menu container), `Sheet` and `Confirm`, and no
 tooltip, hint or title-on-tap primitive (a search of `ui/src` for tooltip, hint and long-press finds none). Making the badge a
 `Popover` trigger would turn a mark into a 44 px control with a panel, which is a design decision the ruling did not make. The role
-title therefore shows on hover only, as C50 left it; the badge's accessible name is unchanged. For the operator if they want a tap
-cue: a small `@ccrc/ui` primitive for it would be its own task.
+title therefore shows on hover only, as C50 left it; the badge's accessible name is unchanged, and the heading's accessible name now
+ends with "coordinator" (the badge is inside the `h1`; review 2963 found no test or source that reads the session heading by name).
 
-**Measured.** Which cases were red at `origin/main` and why, the files run, and what a real Chrome showed (before and after
-screenshots at 360 and 1280 px, both skins, both themes, details open and closed) are in
+**Measured.** Which cases were red at `origin/main` and why, the sweep, the mutants, the files run and what a real Chrome showed
+(before and after screenshots at 360 and 1280 px, both skins, both themes, and one long name that wraps) are in
 `docs/superpowers/programs/desktop-polish/c51.md`.
 
-**Acceptance.** A coordinator's header draws one badge inside its title line, after the name, and none in the details row; its glyph
-is the name's font size, shares the name's line box and rests on its baseline; the header is the height it is with the badge hidden;
-in Instrument, where the badge stood alone, the header loses that line (the text block loses it whole; at 1280 the header lost 2.25
-px less than the line when measured, which is the keycap column's height, inferred, not shown); a worker's header draws no badge;
-Refined's header is the height it was.
+**Acceptance.** A coordinator's header draws one badge inside its title line, after the name and glued to its last character, and none
+in a details row; its glyph is the name's font size, rests on the baseline, and at every name length of the sweep shares the name's
+last line; the header is as tall as the same header with the badge hidden wherever the glyph has room; a header whose details row has
+nothing to show draws no row and no door; a worker's header draws no badge.
 
 - **D-8834** — `coordinator-badge-on-the-title-line`: Task C51, issued on 2026-11-20. A coordinator's role badge sits on the session
-  header's title line, right after the name, in both skins, sized to the name's text and on its baseline, and not in the details
-  row, by the coordinator's ruling of 2026-11-20 on the operator's look at C50. It amends D-8817's placement only (the badge, its
-  name, its title and its ink are D-8817's); nothing leaves the wire or the server.
+  header's title line, right after the name and glued to its last character, in both skins, sized to the name's text and on its
+  baseline, and not in the details row, by the coordinator's ruling of 2026-11-20 on the operator's look at C50; and a header whose
+  details row has nothing to show draws no row and no Details door, for every session (review 2963). It amends D-8817's placement
+  only (the badge, its name, its title and its ink are D-8817's); nothing leaves the wire or the server.
 
 This section was added between Task C48's and Task C49's sections with the consent of the worker that holds the plan's claim for the
-helpers task (its mail of 2026-11-20), for this one insertion only.
+helpers task (its mails of 2026-11-20), for this one section only.
 
 **Rollback.** A plain revert.
 

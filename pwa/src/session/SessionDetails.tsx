@@ -26,7 +26,7 @@ import { cardFacts, contextFact, heldWords, type SessionFactSet } from '../fleet
 import { programmeWave } from '../fleet/runWords';
 import { openRunAt } from '../fleet/openers';
 import { coordinationLine, type Coordination } from '../fleet/fleetTree';
-import { coordinationClauses } from './sessionHeaderView';
+import { coordinationClauses, detailRows, detailsEndWithWorktrees, detailsHaveFacts } from './sessionHeaderView';
 
 /** A plain detail — one fact in words, its tooltip when it has one. */
 function Detail({ children, title }: { children: ReactNode; title?: string }): ReactNode {
@@ -136,18 +136,19 @@ export function SessionDetails({ facts, coordination }: {
   const s = facts.session;
   const ctx = contextFact(facts);
   const run = ctx?.key === 'programme' ? (facts.heldRun ?? facts.activeRun) : null;
-  const runId = coordination?.run?.id ?? null;
-  const asking = !facts.dead && s.hookState === 'waiting' && s.askSummary !== null && s.askSummary !== '';
+  const rows = detailRows(facts, coordination);
+  const runId = rows.runId;
+  // The row is drawn only when it has something to show (`detailsHaveFacts`, review 2963 F3 to F6): with nothing, no row and no door.
+  const shown = detailsHaveFacts(facts, coordination);
   const subagents = facts.subagents ?? [];
   const details = (
     <div className="chat-facts" id={detailsId} tabIndex={-1}>
-      {/* A main checkout's heading is its project; the name the card leads with is here. */}
-      {s.workspace === null && s.name !== null && <Detail title="this session's name">{s.name}</Detail>}
+      {rows.name !== null && <Detail title="this session's name">{rows.name}</Detail>}
       {runId !== null && <Detail title="the run this wave belongs to — the run board names it">{`run #${runId}`}</Detail>}
-      {s.held !== null && ctx?.key === 'programme' && <Detail title="the hold, verbatim">{heldWords(s.held)}</Detail>}
-      {s.pr?.number != null && <Detail>{`PR #${s.pr.number}`}</Detail>}
-      {facts.lane.away && facts.offPool === null && facts.lane.label !== undefined && <Detail>{facts.lane.label}</Detail>}
-      {asking && <Detail title="the question it is waiting on">{`asks: ${s.askSummary ?? ''}`}</Detail>}
+      {rows.held !== null && <Detail title="the hold, verbatim">{heldWords(rows.held)}</Detail>}
+      {rows.pr !== null && <Detail>{`PR #${rows.pr}`}</Detail>}
+      {rows.lane !== null && <Detail>{rows.lane}</Detail>}
+      {rows.asks !== null && <Detail title="the question it is waiting on">{`asks: ${rows.asks}`}</Detail>}
       <SessionMeta
         facts={facts}
         mode="header"
@@ -179,7 +180,7 @@ export function SessionDetails({ facts, coordination }: {
         </div>
       )}
       {/* The worktrees this session holds, each with its controls (D-8782: they moved here from the fleet list). */}
-      <SessionWorktrees worktrees={facts.worktrees} project={s.project} />
+      <SessionWorktrees worktrees={facts.worktrees} project={s.project} rowEndsWithThem={detailsEndWithWorktrees(facts, coordination)} />
     </div>
   );
 
@@ -203,14 +204,14 @@ export function SessionDetails({ facts, coordination }: {
       {lifted.map((x) => (
         <span key={x.key} className="chat-fact chat-glance" data-glance={x.key} title={x.title}>{x.text}</span>
       ))}
-      {!wide && (
+      {!wide && shown && (
         <Door className="chat-details-toggle" glyph={open ? '▾' : '▸'}
           aria-label="Session details" aria-expanded={open} aria-controls={open ? detailsId : undefined}
           onClick={() => setOpen((v) => !v)}>
           details
         </Door>
       )}
-      {(wide || open) && details}
+      {shown && (wide || open) && details}
     </>
   );
 }

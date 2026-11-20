@@ -106,8 +106,15 @@ describe('the coordinator badge (note 2)', () => {
       expect(badge, 'the title line draws the badge').not.toBeNull();
       expect(badge!.getAttribute('title')).toBe(COORDINATOR_ROLE_TITLE);
       expect(badge!.querySelector('svg')).not.toBeNull();
+      // The badge is glued to the name's last character (review 2963 F1): one `nowrap` box, the character then the badge.
       const name = title.querySelector('.chat-title-text')!;
-      expect(name.compareDocumentPosition(badge!) & Node.DOCUMENT_POSITION_FOLLOWING, 'the badge follows the name').toBeTruthy();
+      const glue = badge!.parentElement!;
+      expect(glue.classList.contains('chat-title-glue'), 'the badge is in the glue box').toBe(true);
+      expect(glue.parentElement, 'the glue box ends the name').toBe(name);
+      expect(glue.lastElementChild).toBe(badge);
+      expect(glue.firstChild?.nodeType, 'the glue box begins with the name\'s last character').toBe(Node.TEXT_NODE);
+      expect(Array.from(glue.firstChild!.textContent ?? '')).toHaveLength(1);
+      expect(name.textContent, 'the name reads whole, the badge adding no text').toBe(session.project);
       expect(head.querySelectorAll('[role="img"][aria-label="coordinator"]').length, 'one badge in the whole header').toBe(1);
       expect(head.querySelector('.chat-facts [role="img"][aria-label="coordinator"]'), 'the details row no longer carries it').toBeNull();
       expect(head.querySelector('.chat-fact-role'), 'no role detail is drawn').toBeNull();
@@ -179,6 +186,7 @@ describe('the badge stylesheet rules (note 2; the contrast gates measure the pai
 
   it('the title-line badge is the name\'s text size, 1em, on its baseline, in the line\'s own ink; the old detail\'s rules are gone (C51)', () => {
     const chat = read('session', 'chat.css');
+    expect(values(chat, '.chat-title-glue', 'white-space'), 'the last character and the badge cannot break apart').toEqual(['nowrap']);
     expect(values(chat, '.chat-title-role svg', 'width')).toEqual(['1em']);
     expect(values(chat, '.chat-title-role svg', 'height')).toEqual(['1em']);
     // No font-size and no colour of its own: the glyph follows the title's text, and the line's ink is the title's.
@@ -192,9 +200,8 @@ describe('the badge stylesheet rules (note 2; the contrast gates measure the pai
       }
     }
     expect(chat.replace(/\/\*[\s\S]*?\*\//g, '')).not.toContain('chat-fact-role');
-    // A coordinator with no other fact has a details row of nothing but an empty `.sess-meta`: it draws no box, so the header keeps
-    // no gap where the badge's line stood.
-    expect(values(chat, '.chat-facts:not(:has(> :not(.sess-meta:empty)))', 'display')).toEqual(['none']);
+    // The empty details row is decided in code (`detailsHaveFacts`), never by a stylesheet reading what rendered (review 2963 F3 to F6).
+    expect(chat.replace(/\/\*[\s\S]*?\*\//g, ''), 'no `:has` rule on the details row').not.toMatch(/\.chat-facts[^{]*:has\(/);
     // The header's glyph rule for the Goals door is untouched.
     expect(values(chat, '.chat-coord-goals svg', 'width')).toEqual(['1em']);
     const session = lead();

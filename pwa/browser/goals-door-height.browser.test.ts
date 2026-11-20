@@ -10,6 +10,11 @@
 //   - EQUAL where the line has slack: the pin's fixtures (names of 8, 13, 26 and 31 characters; a workspace with a PR, one
 //     whose cap reads "Check PR", and a main checkout coordinating its run) at 390, 1200, 1279 and 1280, in both skins. A
 //     door that always takes a line of its own reds here.
+//     DESKTOP POLISH C51 (review 2963 F5): a header with nothing to show draws no Details door, and on a phone in Refined that door
+//     was the rail's one 44 px item. Where it is absent (a main checkout coordinator with no other fact) the Goals door's own tap
+//     floor is the rail's tallest item, so "in" is taller than "out" by exactly the door's height less the rail's own (24 px here);
+//     the cases expect that figure and nothing more. PL11's "on a phone nothing" and the ruling that a door that opens nothing goes
+//     meet here, and the plan section and the wave-done say so.
 //   - THE BOUND at a desk (900 and up), any width, any content: "in" is never taller than "out" by more than the door's own
 //     row, measured from the page as the door's rendered height plus its container's computed row-gap, and no other row of
 //     the header changes height (the title, and every one of the coordination line and the chip row that does not hold the
@@ -289,7 +294,14 @@ async function checkPairs(skin: Skin, width: number, pairs: readonly Pair[], mod
       const inside = await measure(page, idOf('pi', p), p.name, true);
       const grew = inside.h - out.h;
       if (mode === 'equal') {
-        if (Math.abs(grew) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h}`);
+        // DESKTOP POLISH C51 (review 2963 F5, D-8834): a header with nothing to show draws no Details door. On a phone in Refined that
+        // door was the rail's one 44 px item (the tap floor), so the Goals door, a 44 px item as well, added no height beside it. With
+        // no Details door the rail out of a programme is only as tall as its chips, and the Goals door makes it as tall as itself:
+        // the rail grows by exactly what the door's tap floor adds to it, and no more. Everywhere else the heights are still equal.
+        const railWas = out.rows.meta?.h ?? 0;
+        const expected = width < 900 && skin === REFINED && inside.door.slot === 'coordination-line' && railWas < inside.door.height
+          ? inside.door.height - railWas : 0;
+        if (Math.abs(grew - expected) > 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h} (expected ${expected} more)`);
       } else {
         const own = inside.door.row ?? 0;
         if (grew > own + 0.5) wrong.push(`${at}: height ${out.h} -> ${inside.h} (+${grew}), above the door's own row ${own}`);
