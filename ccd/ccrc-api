@@ -21,7 +21,7 @@
 #     this process's caller does not supply. Absent, it REFUSES; it never guesses
 #     a host. (A worker guessed one on 2026-08-25 and reported success against
 #     nothing.)
-#   * The route comes from ROUTES below, ninety-one rows, and nothing else; the
+#   * The route comes from ROUTES below, ninety-two rows, and nothing else; the
 #     four claimant rows name the question door family's template, their only
 #     door since the old ones were retired (D-7324), refused here, unsent, when a
 #     current cap file says the server lacks `questions-v1` (D-7328); `runs
@@ -29,7 +29,8 @@
 #     `goals show` for `goals-read-v1` (D-8126), and `calls record` for `calls-v1`;
 #     the eleven `plan` rows are refused `no-plan-door` the same way for `plan-v1` (D-8181, D-8183), `plan phase-ref`
 #     `capability-missing` for `plan-phases-v1` (programme work map WM0), `plan ticket-done` the same for
-#     `plan-ticket-done-v1` (WM1), `plan take` and `plan triage` the same for `plan-inbound-v1` (D-8736), and the three
+#     `plan-ticket-done-v1` (WM1), and `plan take` and `plan triage` the same for `plan-inbound-v1` (D-8736), these four rows
+#     from one table gate (D-8183), and the three
 #     `timer` rows `capability-missing` for `timers-v1` (Overlord W1a, the timers piece).
 #   * The only caller-supplied text that ever reaches a URL is an id or a query
 #     value the row itself declares, each validated against `SAFE_RE` BEFORE the
@@ -80,6 +81,11 @@ set +x; set -uo pipefail   # `set +x` FIRST, a SECRETS control as in ccd-pool-sy
 unset FENCE_KEY FENCE_GENERATION FENCE_COUNTER
 FENCE_KEY="${CCRC_ACT_KEY-}" FENCE_GENERATION="${CCRC_ACT_GENERATION-}" FENCE_COUNTER="${CCRC_ACT_COUNTER-}"
 unset CCRC_ACT_KEY CCRC_ACT_GENERATION CCRC_ACT_COUNTER
+# THE WITNESS KEY LEAVES TOO (Overlord W1 door process B1): a fenced call's digest (plan question 6), handed in this child's environment by the
+# door process, is copied and unset the same way, and `send_request` puts it on curl's stdin as one header when it holds 64 lowercase hex.
+unset WITNESS_KEY
+WITNESS_KEY="${CCRC_WITNESS_KEY-}"
+unset CCRC_WITNESS_KEY
 
 # `~/.local/bin` is NOT on the `claude-session@` unit PATH (measured 2026-08-26),
 # so the corpora invoke this by explicit path. That is a caller's problem, not
@@ -102,7 +108,7 @@ SAFE_RE='^[A-Za-z0-9_-]+$'
 # (`/api/questions/<ask|approval>-{id}/<rule|release>`): from Q3j it was their
 # fifth field, sent only while the server advertised `questions-v1` (D-7325), and
 # since the old doors were retired it is their path (D-7324). Every row has four.
-# Ninety-one rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
+# Ninety-two rows, and that word is SCANNED: `server/test/ccrc-api.test.ts`
 # derives the count from the table below and reds if this line or the bullet at
 # the top of this file states a different one. The original rows were chosen on
 # 2026-08-26 by measuring the skill corpora; the standing executable-corpus
@@ -288,6 +294,8 @@ declare -A ROUTES=(
   # answered the act key once. THIS ROW'S BODY CARRIES A SECRET (`{"fromId","fromUuid","nonce"}`), which is why every body
   # rides curl's stdin (`send_request`); its answer carries the key, which only the door process reads.
   [sessions.act-key]='POST|/api/sessions/{id}/act-key|yes|-'
+  # The hook's reports (Overlord W1 door process B1, spec §3.6 H1): the session hook posts one report a call, its body on stdin.
+  [sessions.report]='POST|/api/sessions/{id}/report|yes|-'
   # The card (Overlord W1a, the card piece; spec §3.3.3 C38): a session reads its OWN card, one page per request. `{id}` is the
   # session's id; the declared query keys are the page and, after the first, the card's hash, and the pane's pair (`byId`,
   # `byUuid`) is filled from `derive_identity` after them, never typed (review 2023 F13, the `runs review-rounds` rule of
@@ -690,6 +698,8 @@ REQ_RC=0
 ACT_KEY_HEADER='x-ccrc-act-key'
 ACT_GENERATION_HEADER='x-ccrc-act-generation'
 ACT_COUNTER_HEADER='x-ccrc-act-counter'
+# The witness key's header name (shared/continuity-door.ts, `WITNESS_KEY_HEADER`; held equal by door-tools-argv.test.ts).
+WITNESS_KEY_HEADER='x-ccrc-witness-key'
 send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an answer, 3 = no response
   local method="$1" url="$2" body="$3" code
   : > "$REQ_OUT"
@@ -718,6 +728,7 @@ send_request() {   # method, url, body -> REQ_CODE / REQ_RC / $REQ_OUT; 0 = an a
     cfg+=$'\n'"header = \"$ACT_KEY_HEADER: $FENCE_KEY\""$'\n'"header = \"$ACT_GENERATION_HEADER: $FENCE_GENERATION\""
     cfg+=$'\n'"header = \"$ACT_COUNTER_HEADER: $FENCE_COUNTER\""
   fi
+  [[ "$WITNESS_KEY" =~ ^[0-9a-f]{64}$ ]] && cfg+=$'\n'"header = \"$WITNESS_KEY_HEADER: $WITNESS_KEY\""   # B1: any other value adds none
   if [[ -n "$body" ]]; then
     esc=${body//\\/\\\\}; esc=${esc//\"/\\\"}; esc=${esc//$'\n'/\\n}; esc=${esc//$'\r'/\\r}
     args+=(-H 'content-type: application/json')
@@ -1476,23 +1487,25 @@ main() {
     refuse 'no-plan-door' 'the server this box talks to does not answer the plan verbs; update it before using them'
   fi
 
-  # THE PHASES' AND THE INBOUND PATH'S GATE (programme work map WM0, D-8715; D-8736, round 4 A1), the plan door's fail
-  # direction: a CURRENT, well-formed cap file that omits the row's word (`plan-phases-v1` for `plan.phase-ref`,
-  # `plan-inbound-v1` for `plan.take` and `plan.triage`) says the server is older than that door, so `capability-missing` is
-  # answered, naming the word, and nothing is sent; an absent, stale, torn or future file sends. One call, one table.
-  local gate=''
+  # THE PHASES', THE INBOUND PATH'S AND THE TICKET-DONE GATE (programme work map WM0 and WM1, D-8715, D-8727; D-8736, round 4 A1),
+  # the plan door's fail direction: a CURRENT, well-formed cap file that omits the row's word (`plan-phases-v1` for
+  # `plan.phase-ref`, `plan-inbound-v1` for `plan.take` and `plan.triage`, `plan-ticket-done-v1` for `plan.ticket-done`) says the
+  # server is older than that door, so `capability-missing` is answered with the row's own text and nothing is sent; an absent,
+  # stale, torn or future file sends. One table (row key, word, refusal text), one check that reads it.
+  local gate='' gate_msg=''
   case "$key" in
-    plan.phase-ref) gate='plan-phases-v1' ;;
-    plan.take|plan.triage) gate='plan-inbound-v1' ;;
+    plan.phase-ref)
+      gate='plan-phases-v1'
+      gate_msg="the server this box talks to does not answer this verb yet (it does not advertise $gate); nothing was changed" ;;
+    plan.take|plan.triage)
+      gate='plan-inbound-v1'
+      gate_msg="the server this box talks to does not answer this verb yet (it does not advertise $gate); nothing was changed" ;;
+    plan.ticket-done)
+      gate='plan-ticket-done-v1'
+      gate_msg="the server this box talks to does not record done evidence yet (it does not advertise $gate); no ticket was changed" ;;
   esac
   if [[ "$key" == plan.* && -n "$gate" ]] && ! _api_server_cap "$gate" && _api_server_cap ''; then
-    refuse 'capability-missing' "the server this box talks to does not answer this verb yet (it does not advertise $gate); nothing was changed"
-  fi
-
-  # THE TICKET-DONE GATE (programme work map WM1, D-8727), the same fail direction: a CURRENT, well-formed cap file that omits
-  # `plan-ticket-done-v1` says the server keeps no done evidence yet, so `capability-missing` is answered and nothing is sent.
-  if [[ "$key" == 'plan.ticket-done' ]] && ! _api_server_cap plan-ticket-done-v1 && _api_server_cap ''; then
-    refuse 'capability-missing' 'the server this box talks to does not record done evidence yet (it does not advertise plan-ticket-done-v1); no ticket was changed'
+    refuse 'capability-missing' "$gate_msg"
   fi
 
   # THE TIMERS' GATE (Overlord W1a, the timers piece, plan Task 11), the plan door's fail direction: a CURRENT, well-formed cap file

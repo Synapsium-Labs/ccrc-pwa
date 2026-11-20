@@ -500,7 +500,7 @@ Modify `pwa/src/ledgers/ledgers.css`.
 | 360, 390 | One column; a row stacks status, title with its tag, facts; the strip wraps |
 | 1280, 1470, 1920 | Status, title with its tag, and facts on one row; the tag wraps under the title before the facts do |
 
-- [ ] **Step 1: Write the failing tests** — jsdom: `the headline reads N of M done`, `the outstanding line names
+- [x] **Step 1: Write the failing tests** — jsdom: `the headline reads N of M done`, `the outstanding line names
   waiting on you and held apart`, `the no-plan card has no M and says what remains is not known`, `a declared empty plan
   says so and draws no runs`, `an ended plan says how it ended and shows no outstanding work`, `an ended plan words the left-open status
   WM2 sends for a ticket marked done whose evidence does not verify, and draws no outstanding line` (review 2375 F13;
@@ -513,9 +513,12 @@ Modify `pwa/src/ledgers/ledgers.css`.
   `WORK_STATUSES`), `a run link opens the run`, `an item link opens the item`, `a long title wraps inside the card`.
 - [ ] **Step 2: Run to fail** —
   `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/work-card.test.tsx`.
-- [ ] **Step 3: Implement** the card and its words.
-- [ ] **Step 4: Run to pass**, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
-- [ ] **Step 5: Commit** — `feat(console): the Work card draws a programme's work map`.
+  Not run before Step 3 (D-8806 `tests-beside-the-code`): the cases and the card were written in one sitting. Measured after the
+  fact, with the card's two new modules moved aside: the suite cannot load, so every case is red. Each case's own red is
+  measured by its mutant instead (the task note, §4).
+- [x] **Step 3: Implement** the card and its words.
+- [x] **Step 4: Run to pass**, then `cd pwa && ~/.local/bin/ccrc test -- ./node_modules/.bin/tsc --noEmit`.
+- [x] **Step 5: Commit** — `feat(console): the Work card draws a programme's work map`.
 
 **Acceptance.** The jsdom tests pass; `every status has a word` reds when a word is removed. **Rollback.** A plain
 revert: nothing mounts the card yet.
@@ -609,15 +612,15 @@ its plan's clause 21), on the operator's yes.
   epic lists waves. A run with no ticket whose wave no epic lists, in a plan where any epic lists no waves, is refused
   `ticket-required` (its remedy is to name a ticket), not `wave-epic-mismatch`.
 
-- [ ] **Step 1: Write the failing tests** — `an epic with no waves is accepted`, `two epics with no waves run side by
+- [x] **Step 1: Write the failing tests** — `an epic with no waves is accepted`, `two epics with no waves run side by
   side`, `a run naming a ticket of an epic with no waves opens`, `an epic that lists waves keeps waves-not-contiguous,
   wave-overlap and wave-epic-mismatch`, `a run with no ticket into a plan with an epic of no waves is refused
   ticket-required`.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-epic-waves.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, then every test named under Files.
-- [ ] **Step 5: Commit** — `feat(plan): an epic may run without a wave range`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, then every test named under Files.
+- [x] **Step 5: Commit** — `feat(plan): an epic may run without a wave range`.
 
 **Acceptance.** Every stored plan opens runs exactly as before. **Rollback.** A plain revert, once no stored epic lacks
 waves.
@@ -752,6 +755,85 @@ Task WM2 departs under its own number:
   `last-move-unmeasured-is-absent`, an item whose run's last move could not be read carries no `lastMoveAt`, as
   `withLastMoves` leaves it, while null means no move (review 2795 F3). The task note
   (`docs/superpowers/programs/desktop-polish/wm2.md`) gives each row and what reds it, the mutants and the test runs.
+
+Task WM6 departs under its own number:
+
+- **D-8780** — `work-map-wm6-build`: Task WM6 (desktop polish run 2780), issued on 2026-11-19. An epic may list no wave
+  range (spec Q5, the operator's yes, R133). The build departs from the plan's text in these ways, each named by slug:
+  `wm6-one-reader-and-one-chooser`, `PlanEpicBody.waves` is optional on the wire and every body-level read takes it through
+  `listedWaves` (`planPolicy.ts`; `parsePlanPut` validates the raw field before that), and the epic a run opens into is
+  chosen by one decider, `epicForOpen` (named so the plan store's `epicOfRun`, the epic of an existing run's ticket, keeps
+  its one meaning), which `planGate` calls and which replaces its call of `epicForWave` (kept, as `epicForOpen`'s own
+  step); `wm6-ticket-read-before-the-epic`, `planGate` reads a named ticket through `p.ticket` before it chooses the epic,
+  where it read it after, so the ticket's epic can take the run, and a ticket that does not exist still names no epic, so
+  such a run is refused as before (`wave-epic-mismatch` at an unlisted wave, `ticket-unavailable` at a listed one);
+  `wm6-live-epics-only`, the plan's "any epic lists no waves" counts the live epics (not `dropped`; a settled `done` one
+  counts, as the gate and the store's attach re-check already read it), since a dropped epic cannot take a run and naming
+  a ticket is therefore no remedy for it; `wm6-absent-waves-keeps`, a put that omits `waves` on a stored epic keeps its
+  stored range and an explicit `[]` clears it (the coordinator's ruling on review 2791 F6, as an absent ticket `body`
+  keeps the stored body: a coordinator that re-puts a plan without the field must not silently change how runs open), a
+  new epic that omits it lists none, and `wave-overlap` is read against the kept range; and
+  `wm6-contiguity-needs-no-condition`, an empty list is trivially contiguous and overlaps nothing, so
+  `waves-not-contiguous` and `wave-overlap` read only epics that list waves by skipping the others, and no mutant of that
+  condition can go red; the guard that can is the reader (`listedWaves`), which its mutant breaks. The acceptance, that a
+  plan opens runs exactly as before, is shown for plans whose live epics all list a non-empty range; a stored live epic
+  with `[]` changes as this task rules (a run with no ticket at an unlisted wave is refused `ticket-required`, and its
+  tickets open at any wave), and how many such epics are stored is unmeasured. WM2's worker consented, by mail, to the edit
+  of `shared/plan.ts`'s `PlanEpicBody` line and to this section and its ticks (their claim held both). Fix round 1 (review
+  2791, on the coordinator's rulings): `epicForOpen` joins `MUTANT_SETS` and `mutation-floors.json` with its floor measured
+  (F1), its cases are written once in `server/test/planEpicForOpenCases.ts`, the collision of a waveless ticket's epic with
+  the epic that lists the wave (F2) and a ticket of a dropped waveless epic (F5) are pinned at the decider, the gate and the
+  route, and an epic with an explicit `waves: []` is pinned end to end (F12). The task note
+  (`docs/superpowers/programs/desktop-polish/wm6.md`) gives each case, the mutants and the sentences of the Linear
+  hierarchy's documents that now read false, which this task does not edit.
+
+Task WM3 departs under its own number:
+
+- **D-8806** — `work-map-wm3-build`: Task WM3 (desktop polish run 2859), issued on 2026-11-20. The Work card, `WorkCard.tsx`, and its
+  words, `workMapWords.ts` (L1), draw WM2's `WorkAnswer` and decide nothing; nothing mounts the card yet. The build departs from the
+  plan's text in these ways, each named by slug: `shipped-wire-wins`, WM2's shipped types differ from this plan's words in five
+  places, and the card reads the shipped ones (a ticket's `title` is `string | null`, so a no-plan run row with no title reads
+  "Wave N", or its run number when it has no wave; `lastMoveAt` is optional, so a row whose last move was not read draws no
+  "moved" fact while null draws none either; the fallback's `waves` is nullable and the card does not read it; a checkpoint's
+  `kind` and `state` are typed where the plan has strings, and the card words `kind` from a table keyed by the type;
+  `unreadable` is the typed `WorkUnreadable`, not a string); `unreadable-words-its-own`, the plan gives no words for the two
+  failures, so the card writes "the runs could not be read" and "a read failed" after "The work could not be read: ";
+  `unreadable-carries-the-last-view`, the shipped `WorkAnswer` is `WorkMapView | { unreadable: WorkUnreadable }` and has no
+  `last`, so the card's one `work` prop is its own wider `WorkCardAnswer`, whose `unreadable` arm may also carry `last`, the last
+  `WorkMapView` the page drew, so the note draws over it with no second prop and no state in the card (review 2268 F15);
+  `phase-line-takes-targets`, `phaseLine(phase, carriedTo)` takes the target phase numbers beside the phase because
+  `WorkPhaseView` carries only the count of its carries, and `carriedTargetsOf` reads them off the view's items for the tickets
+  the phase serves as `carriedOut`; `phase-serves-carried-out`, review 2873 F2: WM2's `WorkPhaseView` gains one additive field,
+  `carriedOut`, the keys of the tickets a phase carried out, decided in `workMapOf` where `carried` is counted, so the card
+  draws a closed ticket closed and re-derives no carry (Table 6a reads closed before carried); no `FLEET_PROTO` bump, and the
+  work-map cases and mutants pin it; `counted-groups-spelt-once`, review 2873 F3: `WORK_COUNTED_GROUPS` in `shared/plan.ts`,
+  derived from `WORK_GROUPS`, is the one list of the groups "N of M" counts, read by `workMapOf`'s strip and by the card's
+  headline, outstanding line and bar; `phase-line-writes-apart-counts`, review 2873 F1: beside "N of M done" and the carry, a
+  phase's line writes its closed and left-open tickets apart ("· 1 closed", "· 2 left open", as the headline does), spec §3.1 and
+  §5.1, which the plan's three examples do not show, and says "no work of its own yet" only for a phase that holds none;
+  `carried-row-keeps-its-status`, review 2873 F11: a ticket carried out of a phase reads "carried" in the status column and,
+  among its facts, "carried to phase N" and "now <its status>", where the plan asks only for "carried" and spec Table 6a says
+  "with its status now"; `status-word-leads-the-sentence`, `done-unverified` is worded "marked done, but" in the status cell and
+  its reason ("no evidence stored") is the row's first fact (ahead of "from phase N"; on a carried-out row it follows the carry
+  and its status now), so the pair reads as Table 6 row 4 says; `fold-label-takes-a-group`, `foldLabel(n, group)` takes a second
+  parameter, so the no-plan fallback folds its failed runs as "N failed"; `finished-phase-keeps-its-heading`, review 2873 F13: a
+  finished phase's `<details>` holds its `h3` inside the summary, so a heading list reaches it; `clock-is-not-state`, the card
+  calls the design system's shared clock, `useNow(30_000)`, beside its one piece of local state (the epic filter), and keeps no
+  other state; `source-line-names-no-programme`, the source line reads "From the plan" and "From the work runs so far", since the
+  card sits where the programme's own icon and colours already say whose it is (the operator's tidying notes of 2026-11-19), and
+  the card writes no "coordinator" word and draws no spot for C50's badge; `layout-by-the-cards-width`, the two layout rows of
+  the table switch at a container query on the card's own width (34rem), not on the viewport's, so the page may seat the card in
+  either column and the one-column and one-row layouts follow its width; `bar-shows-left-open`, an ended plan's bar draws its
+  left-open work too, so a closed plan's bar is never all done; `fold-chevron-drawn`, a folded summary is drawn as a flex row,
+  which loses the browser's marker, so its chevron is drawn in the stylesheet; and `tests-beside-the-code`, Step 2 is not ticked:
+  the cases and the card were written in one sitting, and the red was taken afterwards with the two modules moved aside (the
+  suite cannot load), each case's own red being measured by mutants (the task note, §4), as D-8779 `tests-beside-the-decider` did.
+  Edits under another's claim: this plan, claim 5756 (WM6's worker), with that worker's consent by mail on 2026-11-20 for exactly
+  two places, WM3's step ticks and this entry, and its fix round under this task's own claim, plus `shared/plan.ts` under claim 5778 (the linear hierarchy's wave 7 worker),
+  with that worker's consent by mail on 2026-11-20 for exactly two additive hunks, the counted-groups list beside `WORK_GROUPS` and
+  `carriedOut` in `WorkPhaseView`.
+  The task note (`docs/superpowers/programs/desktop-polish/wm3.md`) gives each case, the mutants, the test runs and what was seen
+  at 360 and 1280.
 
 ## Where things stand
 

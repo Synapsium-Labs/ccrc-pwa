@@ -388,8 +388,13 @@ Each row is measured once, alone, from a saved copy, with `timeout -k 10 600` (9
   - The handle also carries `setAppearance(a: Appearance): void`. Before `ready` it queues, latest wins. After `ready` it posts the `appearance` op (D-8759), and it seeds every later remount.
   - Why: changes while open need a host-side call beside `setPrefs`, which carries only the reader's enum preferences.
   - Task 7 amends the line.
+- **D-8816 (2026-11-20)**: gitgraph-cherry-pick-disc. Issued to run 2843 (L1, the library's appearance contract, built in the library's repository) and defined here, because a library wave's departures are asked and defined in ccrc. It departs from X1 spec §10's sentence "gitGraph's cherry-pick mark, `#ffffff` (`.commit-cherry-pick`, fill and stroke), painted `bg`, which meets 4.5:1 on its commit's series colour". It also departs from §10's measured "and the cherry-pick mark in `bg`), each at 4.57:1 or better on its commit's series colour", and from test 5's closed colours "`bg` on the cherry-pick mark".
+  - Measured by L1 on Mermaid 12.1.0 (the cherry-pick branch of the gitGraph renderer's commit bullet): the disc carries `commit <id> commit-cherry-pick` and no `commit<n>` class. No theme key or series colour reaches it, and it draws black in library 1.1.0 too. Only its two dots and two stems carry the inline `#fff`. A rule on `.commit-cherry-pick` paints the disc and the mark alike, which would leave the mark at 1:1.
+  - While hosted, the disc is `text-muted`, fill and stroke, and the mark is `bg`. Each rule carries `!important` and is scoped to the hosted mark, and the disc's rule never reaches the mark. The mark on the disc is the gate's `text-muted`-on-`bg` pair, 4.5:1 or better in every palette, and the disc meets 3:1 on `surface` and `surface2` as a line does. Test 5's drawn-pairs and closed-colours rows read both. A library mutation that drops the disc's rule, or lets it reach the mark, reds a row.
+  - Why: the sentence cannot be built as written. `text-muted` is already a closed colour of the drawing and a measured line colour. The branch's own colour would need the library to infer a commit's branch from the layout, and a black disc fails the closed colours and the dark palettes (L1's ask 660, answered by the coordinator 2026-11-20, option 0).
+  - Amended in place in §10 and test 5, each marked "(amended 2026-11-20; D-8816)".
 
-All of run 2631's block is defined: 8759, 8760, 8761.
+All of run 2631's block is defined: 8759, 8760, 8761. Run 2843's one number is defined: 8816.
 
 ## Results
 

@@ -332,3 +332,27 @@ describe('the box\'s two answers, read', () => {
     expect(parseDepsShedAnswer('', 's').kind).toBe('unreadable');
   });
 });
+
+// D-8789 (capacity Task 1): run-done passes a hold naming the worker's OWN open run, so a parked worker may sleep.
+// Removing a sleeping worker's dependencies is a different act, and it keeps reading that hold as an open run's: the
+// pass classifies the hold with no session named, so this arm's reach is never widened by the sleep change.
+describe('a hold naming the worker\'s own open run keeps the deps-shed held (D-8789)', () => {
+  const own = (f: Fake, state: string) => {
+    (f.deps.coord as { run: unknown }).run = (id: number) => ({ ok: true as const, run: { id, state, sessionId: W, reviews: null } as never });
+  };
+  it('control: the same row with no hold is shed (dry run, in shadow)', async () => {
+    const f = fake();
+    own(f, 'awaiting-review');
+    await run(f, mem(), [worker(f)]);
+    expect(f.argv).toEqual([DRY(W)]);
+  });
+  it('held: the hold names its own open run, armed or not', async () => {
+    for (const names of [[], [DEPS_SHED_LIVE_MARKER]]) {
+      const f = fake();
+      own(f, 'awaiting-review');
+      const r = { ...worker(f), held: 'program:p wave:1 run:7' } as FleetSession;
+      await run(f, mem(), [r], names);
+      expect(f.argv, names.join(',') || 'shadow').toEqual([]);
+    }
+  });
+});

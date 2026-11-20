@@ -86,11 +86,28 @@ describe('Settings › Automation › Shadow lanes (D-8274)', () => {
     expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
   });
 
-  it('the cap-counts-working row (the dispatch cap counts only working workers) is listed last, in its own words, ungated, with no shadow record', async () => {
+  it('the working-idle-sleep row (waiting workers sleep) is listed after the anchor, in its own words, ungated, with no shadow record', async () => {
     const A = T.rows['anchor-slot'];
+    const W = T.rows['working-idle-sleep'];
+    vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }),
+      row({ lane: 'launch-profile', marker: null }), row({ lane: 'anchor-slot', marker: null }), row({ lane: 'working-idle-sleep', marker: null })] });
+    mount();
+    await waitFor(() => expect(screen.getByRole('group', { name: W.legend })).toBeInTheDocument());
+    const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);
+    expect(groups.indexOf(W.legend)).toBeGreaterThan(groups.indexOf(A.legend));
+    const own = within(screen.getByRole('group', { name: W.legend }));
+    expect(own.getByText(W.shadowNote)).toBeInTheDocument();
+    expect(own.queryByText(/Shadow record:/)).toBeNull();
+    expect(laneArmGate('working-idle-sleep')).toBeNull();
+    expect((own.getByRole('radio', { name: T.live }) as HTMLInputElement).disabled).toBe(false);
+  });
+
+  it('the cap-counts-working row (the dispatch cap counts only working workers) is listed last, in its own words, ungated, with no shadow record', async () => {
+    const A = T.rows['working-idle-sleep'];
     const C = T.rows['cap-counts-working'];
     vi.spyOn(api, 'laneArm').mockResolvedValue({ lanes: [row(), row({ lane: 'continuity', marker: null }),
-      row({ lane: 'launch-profile', marker: null }), row({ lane: 'anchor-slot', marker: null }), row({ lane: 'cap-counts-working', marker: null })] });
+      row({ lane: 'launch-profile', marker: null }), row({ lane: 'anchor-slot', marker: null }), row({ lane: 'working-idle-sleep', marker: null }),
+      row({ lane: 'cap-counts-working', marker: null })] });
     mount();
     await waitFor(() => expect(screen.getByRole('group', { name: C.legend })).toBeInTheDocument());
     const groups = screen.getAllByRole('group').map((g) => g.getAttribute('aria-label') ?? g.querySelector('legend')?.textContent);

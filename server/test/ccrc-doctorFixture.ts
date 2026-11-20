@@ -1503,9 +1503,10 @@ export const CODEX_TOOLS = ['bash', 'readlink', 'cat', 'cmp', 'ps', 'awk', 'od',
  *  `plantAuthHelper`'s reason: node resolves a module's imports from its REAL
  *  path. A file missing here is not a degraded fixture: every Codex PASS case
  *  reds on the check's "printed no answer" FAIL. */
-export const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/litellm-config.template.yaml',
+export const MODELS_OP_CLOSURE = ['deploy/models-op.mjs', 'deploy/models-anthropic.mjs',
+  'deploy/litellm-config.template.yaml',
   'shared/roster-json.mjs', 'shared/base-url.mjs', 'shared/models.mjs', 'shared/modelenv.mjs', 'shared/litellm.mjs',
-  'shared/model-advance.mjs', 'shared/model-suggest.mjs'];
+  'shared/model-advance.mjs', 'shared/model-aliases.mjs', 'shared/model-suggest.mjs'];
 
 export function installModelsOp(home: string): void {
   for (const rel of MODELS_OP_CLOSURE) {

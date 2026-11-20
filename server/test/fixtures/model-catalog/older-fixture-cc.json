@@ -1,0 +1,18 @@
+{
+  "version": 1,
+  "fetchedAt": 1794000000000,
+  "staleAt": 1794000600000,
+  "resolution": "token_org",
+  "organizationUuid": "00000000-0000-4000-8000-000000000000",
+  "catalog": {
+    "config": {
+      "models": [
+        {
+          "id": "claude-opus-9-1", "name": "Opus 9.1", "min_claude_code_version": null,
+          "runtime": { "family": "opus", "effort_levels": ["low", "medium", "high", "max"], "default_effort": "high" },
+          "thinking": { "type": "effort" }
+        }
+      ]
+    }
+  }
+}

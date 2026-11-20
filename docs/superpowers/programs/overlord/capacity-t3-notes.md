@@ -10,7 +10,7 @@ to run 2838 and defined in the plan's "Deviations found".
 ## What changed against the draft
 
 - **shadow-switch.** The draft changed the cap at merge. Here a new Shadow lanes row, `cap-counts-working`
-  (`shared/lane-arm.ts`, seeded `shadow` by migration 110), is the only switch (`dispatch.ts#capCountsWorkingArmed`).
+  (`shared/lane-arm.ts`, seeded `shadow` by migration 112), is the only switch (`dispatch.ts#capCountsWorkingArmed`).
   In shadow the count, every refusal, the resume check and the send-back check are exactly today's. Only while the row
   is armed does the cap leave waiting runs out, hand out freed slots, skip the check for a live resume (D-6093), and
   admit a send-back to a sleeper. The row gets the same census and single-definition coverage as the other rows: the
@@ -59,8 +59,10 @@ to run 2838 and defined in the plan's "Deviations found".
   can say the right thing in each mode: armed, "3 / 4 working, 2 waiting"; shadow, "5 / 4, 2 of them waiting", the
   count the cap still uses. With an older server it says today's "5 / 4". The draft's single wording would have shown a
   count in shadow that the cap does not use.
-- **migration-slot.** The seed takes slot 110, the next free one on `main` today. Capacity Task 2, approvals PR 3 and
-  door B1 build on the same slot, so whoever lands second moves up. The entry says how to re-measure.
+- **migration-slot.** The seed takes slot 112, the next free one on `main`. It took 110 first; door B1 (#3099) landed
+  110 and capacity Task 2 (#3101) landed 111 before this pull request, so it moved up once, at the one absorb of `main`
+  for fix round 2, with the coord-db pins re-counted. Approvals PR 3 builds on the slots after 111 too, so whoever lands
+  second moves up. The entry says how to re-measure.
 - **seed-or-ignore.** The seed is `INSERT OR IGNORE`. The first full run on the PR found that
   `decision-model-records.test.ts` rolls a database back one version by dropping later tables. It cannot drop a row
   from an older table, so a plain insert met the row on replay and refused. A file that already holds the row now

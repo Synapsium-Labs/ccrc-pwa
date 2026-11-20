@@ -6,6 +6,7 @@ export declare const BLOCKED_CAUSES: readonly [
   'advance-file-unreadable', 'advance-file-invalid', 'registry-unreadable', 'registry-invalid',
   'catalogue-unreadable', 'catalogue-invalid', 'windows-unreadable', 'pin-grammar', 'shared-family',
   'lane-not-codex-kind', 'lock-unwritable',
+  'alias-source-absent', 'alias-cache-stale', 'aliases-file-unreadable', 'aliases-file-invalid',
 ];
 export type BlockedCause = (typeof BLOCKED_CAUSES)[number];
 export declare const REASON_MAX: 200;
@@ -42,12 +43,16 @@ export type How = (typeof HOWS)[number];
 export type CanaryResult = (typeof CANARY_RESULTS)[number];
 export type HoldBy = (typeof HOLD_BY)[number];
 
+/** A stored time's one form, `YYYY-MM-DDTHH:MM:SSZ`, and its test (`shared/model-aliases.mjs` imports both). */
+export declare const AT_RE: RegExp;
+export declare function isAt(v: unknown): v is string;
 export declare class AdvanceInvalid extends Error {
   readonly field: string;
   constructor(field: string, message: string);
 }
 
-export interface Hold { at: string; by: HoldBy }
+/** `model` is the id an Anthropic lane's hold holds (Task A2.3); absent on a Codex lane's. */
+export interface Hold { at: string; by: HoldBy; model?: string }
 export interface Previous { model: string | null; effort: string | null }
 export interface HistoryEntry {
   at: string;
@@ -61,6 +66,8 @@ export interface HistoryEntry {
   tries?: number;
   lastAt?: string;
   recovered?: boolean;
+  /** The time of the evidence an Anthropic lane's move rests on (Task A2.3), kept as data. */
+  evidenceAt?: string;
   /** Why an advance moved (D-8384): absent on an entry written before the field, which `causeOf` reads as unknown. */
   cause?: CandidateReason;
   [key: string]: unknown;
@@ -70,6 +77,8 @@ export interface ClassAdvance {
   hold: Hold | null;
   previous: Previous | null;
   history: HistoryEntry[];
+  /** When an Anthropic lane's hold on the class was last released (Task A2.3); no history entry is made for it. */
+  releasedAt?: string;
   [key: string]: unknown;
 }
 /** An automatic advance's intent (W2's `advance-commit`): it carries no `how`. */
@@ -107,6 +116,8 @@ export declare function serializeAdvance(adv: Advance): string;
 export declare function backfillAdvance(
   a: { registry: Registry; seedFamilies: Readonly<Record<ModelClass, string | null>> | null },
 ): Advance;
+/** An Anthropic lane's advance file: every class's family its own class word, nothing else set. */
+export declare function seedAnthropicAdvance(): Advance;
 export declare function recordMove(adv: Advance, cls: ModelClass, e: HistoryEntry): Advance;
 export declare function recordFailure(
   adv: Advance, cls: ModelClass, f: { at: string; from: string | null; to: string; reason: string },
@@ -136,6 +147,8 @@ export declare function unmeasuredMoveNotice(lane: string, m: UnmeasuredMove, to
 export declare function clientWindowNotice(lane: string, registry: Registry, stale: boolean, room: { tokens: number | null; source: 'measured' | 'provider' | 'client' | null; model: string | null } | null): string | null;
 // ── sessions behind a move (plan W3 Task 14) ──
 export declare const BEHIND_AFTER_MS: 86400000;
+/** The largest usage-sidecar `ts`, in whole seconds, that is still a time in seconds (a larger one is milliseconds). */
+export declare const SIDECAR_TS_MAX_S: 99999999999;
 export declare function isoSeconds(ms: number): string | null;
 /** One session still on a model a move replaced: the class whose history holds the move, the model it replaced and
  *  what replaced it (null: the class was emptied), the move's time, and the evidence (the turn and the render). */

@@ -1152,6 +1152,10 @@ const W4_PWA_FILES = [
   'pwa/src/stores/fleet.ts', 'pwa/src/fleet/nestFleet.ts', 'pwa/src/fleet/fleetTree.ts', 'pwa/src/fleet/rollup.ts',
   'pwa/src/fleet/ProjectCard.tsx', 'pwa/src/fleet/FleetCards.tsx', 'pwa/src/fleet/sessionFacts.ts',
   'pwa/src/fleet/SessionMeta.tsx', 'pwa/src/fleet/SessionLine.tsx', 'pwa/src/screens/SessionScreen.tsx',
+  // Desktop polish C48 (D-8782): the worktrees of a session moved from the fleet list into its own details; these three files
+  // draw and label them, and name the wire types and the words module like the files above. No quote mark in a comment here:
+  // the health test mirrors this block by reading every quoted string in it.
+  'pwa/src/fleet/WorktreeControls.tsx', 'pwa/src/fleet/sessionWorktrees.ts', 'pwa/src/session/SessionWorktrees.tsx',
 ] as const;
 /** Wave 5 PR8c's PWA files (D-8114): the Settings card over the adoption switch. It reads the switch's door and the lane's counts
  *  and list (`GET /api/coord/delegation-adopt`), so its files name the door and the wire's types; no string they make public says

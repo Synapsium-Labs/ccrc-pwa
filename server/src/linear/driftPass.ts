@@ -44,7 +44,7 @@ import type { LinearRateService } from './rate.js';
 import type { FleetSession } from '../../../shared/api.js';
 import {
   DRIFT_PASS_MS, DRIFT_PERSIST, driftReadHeld, driftScoped, keepIssueNode, milestonesJudged, syncWroteSince, LINEAR_TEXT_PREFACE, commentDue, driftValueText, driftVerdict, driftedFields, eventVerdict, graceRereads,
-  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, type NameFacts,
+  graceVerdict, isNewUnrestorable, isPersistent, missingLinksVerdict, restorableFields, restoreCommentOf, restoreSides, restoredLine, driftEventValue, driftEventText, type NameFacts,
   shouldRaiseDriftItem, type DriftKind, type DriftRaiseWhy, type OwnedFields,
   DRIFT_KEEP_NOTE, bindingByLinearIdOf, closedByKeep, driftCursorAfterFailure, handRoute, restoreFallbackCommentOf, sweepStep,
 } from './driftPolicy.js';
@@ -446,12 +446,13 @@ export class DriftPass {
     plan.setDriftItem(fresh.id, coord.raiseItem(input, now, 'ccrc'));
   }
 
-  /** The record of what changed, as an operator or a coordinator reads it: Linear's values, fenced as untrusted text. */
+  /** The record of what changed, as an operator or a coordinator reads it: Linear's values, fenced as untrusted text; a one-way set's
+   *  line names the planned members Linear lacks (`driftEventText`). */
   private recordBlock(bindingId: number, now: number): string {
     const lines = this.deps.plan.driftEventsOf(bindingId, now - DRIFT_PERSIST.windowMs).map((e) => {
       const day = new Date(e.at).toISOString().slice(0, 10);
       const value = e.value.replace(/\s+/gu, ' ');
-      return `${day} ${e.field} = ${value === '' ? '(empty)' : value} (${e.restored ? 'put back' : 'not put back'}; who: not read by ccrc)`;
+      return `${day} ${driftEventText(e.field, value)} (${e.restored ? 'put back' : 'not put back'}; who: not read by ccrc)`;
     });
     return untrustedBlock(lines.join('\n'), UNTRUSTED_CAP_BYTES, 'on the drift record', LINEAR_TEXT_PREFACE);
   }

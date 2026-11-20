@@ -10,12 +10,12 @@ import { render, type RenderResult } from '@testing-library/react';
 import type { ReactElement } from 'react';
 import { vi } from 'vitest';
 import { ToastHost } from '@ccrc/ui';
-import type { DelegationLeaseWire, DelegationProjectionWire, DelegationUnownedWire, FleetSession } from '../../shared/api';
-import { ProjectCard } from '../src/fleet/ProjectCard';
-import { fleetTree } from '../src/fleet/fleetTree';
+import type { DelegationLeaseWire, DelegationProjectionWire, FleetSession } from '../../shared/api';
+import { SessionWorktrees } from '../src/session/SessionWorktrees';
+import { readDelegation } from '../src/fleet/delegationWords';
+import { worktreeSidesKey, worktreesOf } from '../src/fleet/sessionWorktrees';
 import { fleetSession } from './fleetFixture';
-import { withRunBinding } from './runBindingFixture';
-import { frame, lease, unowned } from './delegationFixture';
+import { frame, lease } from './delegationFixture';
 
 /** A worktree id the doors accept: a lease id is a UUID. */
 export const LEASE_ID = '0b0c3f8e-5d55-4c1e-9a77-2f1d8c3e4a10';
@@ -26,15 +26,11 @@ export const COORD_A: FleetSession = fleetSession({
   id: 'coord-a', project: 'project-a', workspace: null, workdir: '/work/project-a', name: 'coord-a',
 });
 
-export interface CardWorld { readonly frame: DelegationProjectionWire; readonly sessions: readonly FleetSession[] }
+export interface CardWorld { readonly frame: DelegationProjectionWire; readonly sessions: readonly FleetSession[]; readonly self?: string }
 
 /** One worktree row under `coord-a`, as a newer server sends it. */
 export function worldWithLease(over: Partial<DelegationLeaseWire> = {}, sessions: readonly FleetSession[] = [COORD_A]): CardWorld {
-  return { frame: frame({ leases: [lease({ leaseId: LEASE_ID, disposition: 'ephemeral', expiresAt: null, ...over })] }), sessions };
-}
-/** One unowned row on `project-a`, with `over` applied. */
-export function worldWithUnowned(over: Partial<DelegationUnownedWire> = {}): CardWorld {
-  return { frame: frame({ unowned: [unowned(over)] }), sessions: [COORD_A] };
+  return { frame: frame({ leases: [lease({ leaseId: LEASE_ID, disposition: 'ephemeral', expiresAt: null, ...over })] }), sessions, self: over.parentId ?? 'coord-a' };
 }
 
 /** A 200 whose body is `body`, as JSON. */
@@ -43,11 +39,13 @@ export const okJson = (body: unknown, status = 200): Response =>
 
 export type CardFetch = (url: string, init?: RequestInit) => Response | Promise<Response>;
 
-/** The card over `world`, both delegation groups open, with the app's toast host beside it. */
+/** `coord-a`'s details' worktree section over `world` (D-8782: the worktrees moved from the fleet list's rows to the session's
+ *  details), with the app's toast host beside it. */
 export function cardElement(world: CardWorld): ReactElement {
-  const group = fleetTree(withRunBinding([...world.sessions], []), [], [], {}, world.frame).find((g) => g.project === 'project-a');
-  if (group === undefined) throw new Error('no project-a card');
-  return <><ProjectCard group={group} onOpen={() => {}} onActions={() => {}} offlineOpen unownedOpen nowMs={CARD_NOW} /><ToastHost /></>;
+  const w = readDelegation(world.frame);
+  const self = world.self ?? 'coord-a';
+  const key = worktreeSidesKey(self, w, world.sessions);
+  return <><div className="chat-facts" tabIndex={-1}><SessionWorktrees worktrees={worktreesOf(w.leases, key)} project="project-a" nowMs={CARD_NOW} /></div><ToastHost /></>;
 }
 
 /** The card over `world`, with `fetch` answering through `opts.fetch` (by default a 500, so a test that did not expect a

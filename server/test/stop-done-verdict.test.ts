@@ -29,7 +29,7 @@ const base = (o: Partial<StopDoneInput> = {}): StopDoneInput => ({
   row: row(), heldKind: 'none', holdOkVerb: true,
   store: {
     ok: true, last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS - 1 },
-    openWorker: false, parkedWorker: false, openClaimant: false, claim: false, mail: false,
+    openWorker: false, parkedWorker: false, otherOpenWorker: false, openClaimant: false, claim: false, mail: false,
   },
   viewer: false, sinceStartMs: VIEWER_TTL_MS + 1, viewerOpenTtlMs: VIEWER_TTL_MS, verb: true, overlord: false, optedOut: false,
   live: { kind: 'read', word: { ok: true, word: 'idle' }, turn: 'idle', mark: MARK_DONE },
@@ -60,7 +60,7 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['substrate', { row: row({ substrate: { at: NOW, text: 't' } }) }],
     ['runs-unreadable', { store: { ok: false, detail: 'locked' } }],
     ['no-run', { store: okStore({ last: null }) }],
-    ['not-done', { store: okStore({ last: { runId: 7, state: 'working', closedAt: null } }) }],
+    ['not-done', { store: okStore({ last: { runId: 7, state: 'dispatched', closedAt: null } }) }],
     ['close-unplaced', { store: okStore({ last: { runId: 7, state: 'done', closedAt: null } }) }],
     ['grace', { store: okStore({ last: { runId: 7, state: 'done', closedAt: NOW - STOP_DONE_GRACE_MS + 1 } }) }],
     ['run-worker', { store: okStore({ openWorker: true }) }],
@@ -82,6 +82,8 @@ describe('stopDoneVerdict (D-5370)', () => {
     ['marker-background', { live: readLive({ mark: markAt({ bg: 1 }) }) }],
     ['scheduled', { live: readLive({ mark: markAt({ crons: 1 }) }) }],
     ['recent', { live: readLive({ mark: markAt({ stopAt: NOW - 5 * 60_000, turnAt: NOW - 5 * 60_000 }) }) }],
+    // D-8791 (review 2887 F2): only the waiting case reads the switch.
+    ['mail-disabled', { store: okStore({ last: { runId: 7, state: 'working', closedAt: null } }), mailDisabled: 'set' }],
   ];
 
   for (const [hold, o] of cases) {
@@ -130,10 +132,13 @@ describe('stopDoneVerdict (D-5370)', () => {
 
   it('an empty roster does not hold; a run outside done, failed and the parked states is not a finished one (D-6092)', () => {
     expect(stopDoneVerdict(base({ row: row({ subagents: [] }) }))).toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * HOUR });
-    for (const state of ['abandoned', 'dispatched', 'working', 'unknown', 'planned', 'some-future-state']) {
+    for (const state of ['abandoned', 'dispatched', 'unknown', 'planned', 'some-future-state']) {
       expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state, closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) })))
         .toEqual({ act: 'hold', reason: 'not-done' });
     }
+    // D-8790: `working` is the waiting case, which sleeps (stop-done-working-idle.test.ts).
+    expect(stopDoneVerdict(base({ store: okStore({ last: { runId: 7, state: 'working', closedAt: NOW - STOP_DONE_GRACE_MS - 1 } }) })).act)
+      .toBe('hibernate');
   });
 
   it('the grace is measured from the run\'s close: exactly the grace past it stops', () => {
@@ -171,8 +176,9 @@ describe('stopDoneVerdict (D-5370)', () => {
   });
 
   it('every hold this lane shares with hibernation is spelled in hibernation\'s words (the absorption)', () => {
+    // `mail-disabled` is the waiting case's own (D-8791, review 2887 F2): hibernation has no coordinator to tell.
     const own = new Set(['not-a-child', 'child-unreadable', 'stopped', 'no-run', 'not-done', 'close-unplaced', 'grace',
-      'no-verb', 'turn']);
+      'no-verb', 'turn', 'mail-disabled']);
     const hib = new Set<string>(HIBERNATE_HOLDS);
     expect(STOP_DONE_HOLDS.filter((h) => !own.has(h) && !hib.has(h))).toEqual([]);
     expect(HIBERNATE_HOLDS.filter((h) => !(STOP_DONE_HOLDS as readonly string[]).includes(h)), 'every hibernation hold is the lane\'s too').toEqual([]);
@@ -348,12 +354,17 @@ describe('stopDoneVerdict: "finished" per F5 (b), before and after (D-6092)', ()
     expect(stopDoneVerdict(base({ store: runAt('awaiting-review', null), live: quiet(29 * MIN) })).act).toBe('hold');
   });
 
-  for (const state of ['working', 'dispatched', 'unknown']) {
+  for (const state of ['dispatched', 'unknown']) {
     it(`kept: an ${state === 'unknown' ? 'unknown' : 'active'} run (${state}) holds not-done, however quiet`, () => {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * 60 * MIN) })))
         .toEqual({ act: 'hold', reason: 'not-done' });
     });
   }
+
+  it('now: a `working` run, its marker quiet 7 hours, sleeps as the waiting case (was: not-done; D-8790)', () => {
+    expect(stopDoneVerdict(base({ store: runAt('working', null), live: quiet(7 * 60 * MIN) })))
+      .toEqual({ act: 'hibernate', runId: 7, idleMs: 7 * 60 * MIN, waiting: { since: NOW - 7 * 60 * MIN } });
+  });
 });
 
 // D-6092 (fleet capacity W1-1b; F5 (b), 2026-10-20), the new rows: a run is finished for the run-done policy when it is
@@ -389,6 +400,80 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
     });
   }
 
+  // D-8789 (capacity Task 1): the hold every dispatch writes on its own worker names the worker's own run (`run-own`).
+  // It guards the workspace, so a parked producer carrying it sleeps at 30 minutes, the hold handed to `--hold-ok`.
+  const OWN = 'program:programme-a wave:2 run:7';
+  it('a producer parked at awaiting-review, its hold naming its own run, sleeps after 30 minutes quiet carrying the hold (D-8789)', () => {
+    expect(stopDoneVerdict(base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS),
+    }))).toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS, holdOk: OWN });
+  });
+
+  it('an own-run hold still waits the parked clock: 29 minutes quiet holds recent (D-8789)', () => {
+    expect(stopDoneVerdict(base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS - 1),
+    }))).toEqual({ act: 'hold', reason: 'recent' });
+  });
+
+  it('an own-run hold on a box without hibernate-hold-ok holds, as a programme hold does (D-8789)', () => {
+    for (const heldKind of ['run-own', 'programme'] as const) {
+      expect(stopDoneVerdict(base({
+        row: row({ held: OWN }), heldKind, holdOkVerb: false, store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS),
+      })), heldKind).toEqual({ act: 'hold', reason: 'held' });
+    }
+  });
+
+  it('a hold naming another session\'s open run, or an unreadable run, holds even parked and quiet (D-8789)', () => {
+    for (const heldKind of ['run-live', 'unreadable'] as const) {
+      expect(stopDoneVerdict(base({
+        row: row({ held: OWN }), heldKind, store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS),
+      })), heldKind).toEqual({ act: 'hold', reason: 'held' });
+    }
+  });
+
+  // D-8790: `working` is the waiting case now, so the pin stands on a `dispatched` run (its brief unread).
+  it('an own-run hold on a dispatched run is still held by the run, never put to sleep by the hold passing (D-8789)', () => {
+    expect(stopDoneVerdict(base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('dispatched', null), live: quiet(7 * HOUR),
+    }))).toEqual({ act: 'hold', reason: 'not-done' });
+  });
+
+  // D-8789, the coordinator's ruling for a change live at merge: the own-run hold passing never puts a worker to sleep
+  // while it is doing or owed anything. Each row stacks one activity on the passing own-run case (the control).
+  describe('an own-run hold passes, and every activity still holds (D-8789)', () => {
+    const ownParked = (o: Partial<StopDoneInput> = {}): StopDoneInput => base({
+      row: row({ held: OWN }), heldKind: 'run-own', store: runAt('awaiting-review', null), live: quiet(STOP_DONE_PARKED_IDLE_MS), ...o,
+    });
+    const parkedStore = (o: Record<string, unknown>) => okStore({ last: { runId: 7, state: 'awaiting-review', closedAt: null }, ...o });
+    const quietMark = (o: Record<string, unknown>) => markAt({ turnAt: NOW - STOP_DONE_PARKED_IDLE_MS, stopAt: NOW - STOP_DONE_PARKED_IDLE_MS, ...o });
+
+    it('control: nothing running, nothing owed, it sleeps', () => {
+      expect(stopDoneVerdict(ownParked())).toEqual({ act: 'hibernate', runId: 7, idleMs: STOP_DONE_PARKED_IDLE_MS, holdOk: OWN });
+    });
+
+    const activities: [StopDoneHold, Partial<StopDoneInput>][] = [
+      ['mail', { store: parkedStore({ mail: true }) }],
+      ['claim', { store: parkedStore({ claim: true }) }],
+      ['background', { row: row({ held: OWN, background: { count: 1, kinds: ['shell'] } }) }],
+      ['roster', { row: row({ held: OWN, subagents: [{ name: 'a0000000000000001', startedAt: NOW }] }) }],
+      ['marker-background', { live: readLive({ mark: quietMark({ bg: 1 }) }) }],
+      ['scheduled', { live: readLive({ mark: quietMark({ crons: 1 }) }) }],
+      ['menu', { row: row({ held: OWN, dialogPending: true }) }],
+      ['turn', { live: readLive({ turn: 'busy', mark: quietMark({}) }) }],
+      ['marker', { live: readLive({ mark: quietMark({ state: 'working' }) }) }],
+      ['live-word', { live: readLive({ word: { ok: true, word: 'shell' }, mark: quietMark({}) }) }],
+      ['viewer', { viewer: true }],
+      // The design review (2848): the amendment is for the worker's own newest placed run alone; an older ACTIVE run
+      // of its own still holds it through `openPlacedWorkers`.
+      ['run-worker', { store: parkedStore({ openWorker: true }) }],
+    ];
+    for (const [hold, o] of activities) {
+      it(`holds ${hold}`, () => {
+        expect(stopDoneVerdict(ownParked(o))).toEqual({ act: 'hold', reason: hold });
+      });
+    }
+  });
+
   it('a parked producer quiet 29 minutes holds', () => {
     for (const state of ['awaiting-review', 'merging', 'closing']) {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(29 * MIN) })), state).toEqual({ act: 'hold', reason: 'recent' });
@@ -408,8 +493,8 @@ describe('stopDoneVerdict: finished per F5 (b) (D-6092)', () => {
       .toEqual({ act: 'hold', reason: 'recent' });
   });
 
-  it('an active run holds', () => {
-    for (const state of ['dispatched', 'working', 'unknown']) {
+  it('an active run holds, but `working`, the waiting case (D-8790)', () => {
+    for (const state of ['dispatched', 'unknown']) {
       expect(stopDoneVerdict(base({ store: runAt(state, null), live: quiet(7 * HOUR) })), state).toEqual({ act: 'hold', reason: 'not-done' });
     }
   });

@@ -188,6 +188,7 @@ import { runForecastLane, spendReadingOf } from './coord/forecastLane.js';
 import { runDecisionAnchorLane } from './coord/decisionModelLane.js';
 import { TIMER_MAIL_SENDER } from '../../shared/continuity-timers.js';
 import { LAUNCH_PROFILE_LANE_ROW, profilePass, steerMarkerOf, type ProfileLaneMemory } from './continuity/profileLane.js';
+import { MAIL_HOLD_LANE_ROW, mailHoldPass, type MailHoldLaneMemory } from './coord/mailHoldLane.js';
 import { declaredIntentOf } from './continuity/profileFor.js';
 import { intentOfCheckpoint } from './continuity/declaredIntent.js';
 import { compactionsPaths, readCompactionsMeasured } from './continuity/compactions.js';
@@ -2048,6 +2049,7 @@ export class FleetWatcher {
   private readonly generationsRetried = new Set<number>(); private readonly generationsEmptyTries: EmptyTries = new Map(); private readonly renewalMemo = new Set<string>();
   /** The launch-profile lane's last logged line (`ProfileLaneMemory`): a log throttle, never a decision's memory. */
   private readonly launchProfileMemory: ProfileLaneMemory = { lastLine: null };
+  private readonly mailHoldMemory: MailHoldLaneMemory = { failing: new Set(), lastLine: null, storeUnread: false, generation: 0 };
   private delegationLane(): DelegationLane {
     this.delegationLaneMemo ??= new DelegationLane(this.deps, () => this.delegationCensus, this.lanes, () => this.listedIds);
     return this.delegationLaneMemo;
@@ -2434,6 +2436,8 @@ export class FleetWatcher {
         listing: async () => {
           try { const r = await this.deps.io.readdirMeasured(this.deps.cfg.registryDir); return r.ok ? r.entries : null; } catch { return null; }
         },
+        // D-8791: the waiting case's one mail to the run's coordinator.
+        stallNotice: (run, n) => queueStallNotice(coord, run, n),
         startedAt: this.sleepStartedAt, now: Date.now,
       }, this.stopDoneMemory, sessions, records, names);
     } catch (err) {
@@ -2901,6 +2905,8 @@ export class FleetWatcher {
       // (`inject/send.ts:30-40,115,126`). Awaiting it would put the dialog
       // detector and the busy->idle push behind a mail delivery.
       void this.sweepMail(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
+      // NEVER awaited, the same reasons: the MAILHOLD projection (mid-turn mail §3.4), run under `mail-disabled` too, where it only clears.
+      void this.sweepMailHold(registryRead).catch(() => { /* one bad sweep must not kill the poll */ });
       // The question sweep (W3 Q3c, D-7027): its two halves, each NEVER awaited, same reasoning as `sweepMail`
       // immediately above — the release CAS and its own registry listing must not sit in front of the dialog detector.
       this.sweepQuestions(registryRead);
@@ -6288,6 +6294,17 @@ export class FleetWatcher {
         },
       }, records.map((r) => ({ id: r.id, child: r.child, route: r.route })));
     });
+  }
+
+  /** The mailhold projection (mid-turn mail §3.4, `coord/mailHoldLane.ts`) on this tick's listing: it runs whether or not
+   *  `mail-disabled` stands (read off the same listing), and then only clears. PUBLIC so a test can await it. */
+  async sweepMailHold(read: FleetReadModel): Promise<void> {
+    const coord = this.deps.coord;
+    if (!coord || !read.listed) return;
+    await this.runLane(MAIL_HOLD_LANE_ROW, () => mailHoldPass({
+      coord, runCcd: this.deps.runCcd, fleetState: this.deps.fleetState, wallMs: () => this.deps.time.clock.wall(),
+      log: (line) => console.warn(line), memory: this.mailHoldMemory,
+    }, read.records.map((r) => ({ id: r.id, route: r.route })), read.switches[MAIL_DISABLED_MARKER] === 'set'));
   }
 
   /** The timers lane (Overlord §3.3.12, W1a; `continuity/timerLane.ts`), on this tick's own listing, passed rather than read

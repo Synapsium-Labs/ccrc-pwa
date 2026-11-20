@@ -1174,6 +1174,13 @@ export const ROUTE_DEFAULT_CAP = 'route-default-v1';
  *  `ccdCapTokens.ts` are the other spellings. */
 export const BROWSER_ROUTE_CAP = 'browser-route-v1';
 
+/** The `ccd caps` token that says `mailhold` is a routing field this box takes (mid-turn mail spec §3.3, plan PR 3): the
+ *  lane-only marker the mailhold projection writes through `route --set mailhold=…`. An older ccd refuses the field by name
+ *  ("unknown routing field"), so the projection (`coord/mailHoldLane.ts`) sends nothing to a box that does not advertise
+ *  it, and every session there holds nothing. Read with `capSupported` (null refuses). ccd's `echo route-mailhold-v1` and
+ *  `ccdCapTokens.ts` are the other spellings. */
+export const MAILHOLD_ROUTE_CAP = 'route-mailhold-v1';
+
 /** The `ccd caps` token that says this box parses `--child <runId>` on
  *  `ws-add`, stamps `$REG/<id>.child` before the first spawn, and exports a
  *  child's own TMPDIR on every spawn path (child-workspace reclamation, spec
@@ -1441,6 +1448,12 @@ export const HIBERNATE_ROLL_CAP = 'hibernate-roll';
  *  `SessionHost`): with no token `renew` answers `capability-missing` and sends nothing (`capSupported`, false on no
  *  evidence). ccd's `echo hibernate-fresh` and `server/test/ccdCapTokens.ts` are the other two spellings. */
 export const HIBERNATE_FRESH_CAP = 'hibernate-fresh';
+
+/** The `ccd caps` token that says this box's session hook sends the witness (Overlord W1 door process B1): the call digest of
+ *  each door call, reported before the call runs. The Overlord's witness port answers `unmeasured` until it is advertised, so a
+ *  server updated first refuses the Overlord's writes 502 and fires no latch (`capSupported`, false on no evidence). ccd's
+ *  `echo door-witness-v1` and `server/test/ccdCapTokens.ts` are the other two spellings. */
+export const DOOR_WITNESS_CAP = 'door-witness-v1';
 
 /**
  * Whether the DEPLOYED ccd advertised a CAPABILITY token — a verb-shaped string

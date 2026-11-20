@@ -12325,6 +12325,7 @@ _check_overlord-mods() {
 # and no jq regular-expression function is used (a jq without Oniguruma has none; `_check_jq_regex`).
 
 DR_MA_JSON=''
+DR_MA_ANTHROPIC='|'
 DR_MA_LANES=0
 # jq's one shared definition: control characters out of a finding, so a detail can never split its row or its line.
 DR_MA_JQ_DEFS='def clean: explode | map(if . < 32 or . == 127 then 32 else . end) | implode; '
@@ -12375,7 +12376,7 @@ _models_node "$@"' _dr_ma_read advance-health --file "$(_models_roster_path)" --
   fi
   DR_MA_LANES="$(printf '%s' "$out" | jq -r '.lanes | length' 2>/dev/null)"
   if [ "$DR_MA_LANES" = 0 ]; then
-    _dr_skip "$name" "no lane on this box has a model registry, so no class can advance"
+    _dr_skip "$name" "no lane on this box has a model registry or an aliases file, so no class can advance"
     return 3
   fi
   DR_MA_JSON="$out"
@@ -12416,6 +12417,12 @@ _dr_ma_held_back_fix() {   # <lane> <class>…
 
 _dr_ma_held_behind_fix() {   # <lane> <class>…
   local id="$1"; shift
+  # An Anthropic lane (`DR_MA_ANTHROPIC`, `|`-delimited lane ids from the answer's `anthropic`) has no canary and no
+  # advance: its class follows its alias once the hold goes (model-class Anthropic arm A2.5).
+  case "${DR_MA_ANTHROPIC:-}" in *"|$id|"*)
+    printf '%s' "release the hold from the lane's Models sheet (or with 'ccrc models $id release <class>': $(_dr_ma_list "$@")), and the class follows its alias: its sessions launch on the alias's current id from their next launch. Leaving the hold in place keeps the held id, and this warning"
+    return ;;
+  esac
   if [ "$#" -eq 1 ]; then
     printf '%s' "'ccrc models $id release $1' lets the next hourly refresh advance it, canary first"
   else
@@ -12461,6 +12468,12 @@ _dr_ma_blocked_fix() {   # <lane> <cause>…
         part="shared family — 'ccrc models $id set-class <class> <modelId>' on one of the classes named, or 'ccrc models $id hold <class>'" ;;
       lane-not-codex-kind)
         part="lane kind — make its roster row exec.kind \"codex\" (README, \"A ChatGPT/Codex lane\"), or leave it, and it never advances" ;;
+      alias-source-absent)
+        part="alias source — start one session on this lane through ccd, or sign it in so Claude Code writes a catalogue" ;;
+      alias-cache-stale)
+        part="alias cache — the next session Claude Code starts on this lane refreshes it" ;;
+      aliases-file-unreadable|aliases-file-invalid)
+        part="aliases file — the refresh will not write over it: read it, then move it aside, and the next hourly refresh starts it again" ;;
       lock-unwritable)
         part="lock — at the path the finding names: remove a symlink, a FIFO, or whatever stands where the lock file or its directory belongs; make a lock file this account cannot write writable, or remove it; give a lock directory another account owns back to this account; a lock directory this account owns is made 0700 by the next writer ('chmod 700' clears this now)" ;;
       *)
@@ -12490,7 +12503,7 @@ _check_model-advance-held-back() {
     return 3
   fi
   _dr_ma_report model-advance-held-back "$rows" _dr_ma_held_back_fix \
-    "$DR_MA_LANES lane(s) with a model registry: no class is held back by a failed canary or move"
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no class is held back by a failed canary or move"
 }
 
 _check_model-held-behind() {
@@ -12508,8 +12521,9 @@ _check_model-held-behind() {
     _dr_skip model-held-behind "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
     return 3
   fi
+  DR_MA_ANTHROPIC="|$(printf '%s' "$DR_MA_JSON" | jq -r '[.lanes[] | select(.anthropic == true) | .id] | join("|")' 2>/dev/null)|"
   _dr_ma_report model-held-behind "$rows" _dr_ma_held_behind_fix \
-    "$DR_MA_LANES lane(s) with a model registry: no held class has a newer model in its family"
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no held class has a newer model in its family"
 }
 
 _check_model-sessions-behind() {
@@ -12562,12 +12576,12 @@ _check_model-sessions-behind() {
   [ "$ma_unasked" -eq 0 ] || tail+="; $ma_unasked listed session(s) whose state the service manager did not report"
   [ -z "$unmeasured" ] || tail+="; $unmeasured"
   _dr_ma_report model-sessions-behind "$live" _dr_ma_sessions_fix \
-    "$DR_MA_LANES lane(s) with a model registry: no running session is still on a model a move replaced 24 h or more ago" \
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: no running session is still on a model a move replaced 24 h or more ago" \
     "$tail"
 }
 
 _check_model-advance-blocked() {
-  local rc rows
+  local rc rows caps id key text ma_kept="" ma_note=""
   _dr_ma_read model-advance-blocked; rc=$?
   [ "$rc" -eq 0 ] || return "$rc"
   if ! rows="$(printf '%s' "$DR_MA_JSON" | jq -r "$DR_MA_JQ_DEFS"'
@@ -12578,6 +12592,19 @@ _check_model-advance-blocked() {
     _dr_skip model-advance-blocked "deploy/models-op.mjs advance-health answered in a shape this check does not read, so no lane's advance state was read"
     return 3
   fi
+  # `alias-source-absent` WARNs only once this box's ccd marks alias launches (`ccd caps` lists `alias-launch-v1`, the
+  # Anthropic arm's A3.2); before that a lane with no catalogue cache has no source by design, so it is a note.
+  caps="$(_plat_timeout "$CCRC_DOCTOR_GH_TIMEOUT" "$HOME/.local/bin/ccd" caps </dev/null 2>/dev/null)" || caps=""
+  case $'\n'"$caps"$'\n' in
+    *$'\n'alias-launch-v1$'\n'*) ;;
+    *)
+      while IFS=$'\x1f' read -r id key text; do
+        [ -n "$id" ] || continue
+        if [ "$key" = alias-source-absent ]; then ma_note+="${ma_note:+, }$id"; else ma_kept+="$id"$'\x1f'"$key"$'\x1f'"$text"$'\n'; fi
+      done <<< "$rows"
+      rows="$ma_kept"
+      [ -z "$ma_note" ] || ma_note="; no source until ccd marks alias launches ($ma_note)" ;;
+  esac
   _dr_ma_report model-advance-blocked "$rows" _dr_ma_blocked_fix \
-    "$DR_MA_LANES lane(s) with a model registry: nothing blocks an advance"
+    "$DR_MA_LANES lane(s) with a model registry or an aliases file: nothing blocks an advance" "$ma_note"
 }
