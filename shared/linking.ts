@@ -6,19 +6,65 @@
  * `LINEAR_TEAM_KEY_SHAPE` in `./linear.ts`; there is no second one.
  *
  * The facts a project row carries (`ProjectLinkingWire` and the four words under it) are declared in `./api.ts`, beside
- * `ProjectRepoWire`: `ProjectRow.linking` names them, and `shared/api.ts` takes no sibling import for it (the import
- * pins in `peers-claims-l0.test.ts` and `collect-lane-l0.test.ts` hold at sixteen). They are re-exported from here, so
- * every reader of the linking vocabulary names one module.
+ * `ProjectRepoWire`: `ProjectRow.linking` names them. They are re-exported from here, so every reader of the linking
+ * vocabulary names one module. The team-link vocabulary (the evidence kinds, the link sources, the candidate shape and
+ * their guards) is declared here (D-8635, wave 8); `./api.ts` takes only a type-only import of it, for the row's fields.
  */
 import type { LinkingOverride, ProjectLinkingWire } from './api.js';
 export type {
   RepoVisibility, LinkingOverride, LinkingMode, TemplateState, ProjectLinkingWire,
-  TeamEvidence, TeamEvidenceKind, TeamLinkSource, TeamLinkWire, TeamCandidateWire,
 } from './api.js';
-export {
-  REPO_VISIBILITIES, LINKING_OVERRIDES, LINKING_MODES, TEMPLATE_STATES, TEAM_EVIDENCE_KINDS, TEAM_LINK_SOURCES,
-  isTeamEvidence, isTeamCandidate,
-} from './api.js';
+export { REPO_VISIBILITIES, LINKING_OVERRIDES, LINKING_MODES, TEMPLATE_STATES } from './api.js';
+
+/** D-8405: what the automatic team link read, strongest first. `ticket-ids`: `ids` distinct ticket ids of the team's key
+ *  among `of` distinct ids of every known team key, in the project's branches, pull request titles and commits (a
+ *  private repository only). `name-match`: the project's name or its repository's name equals the team's name or key,
+ *  ignoring case. */
+export type TeamEvidence =
+  | { kind: 'ticket-ids'; ids: number; of: number }
+  | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' };
+export type TeamEvidenceKind = TeamEvidence['kind'];
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true };
+export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
+
+/** D-8405: who set a project's team key. */
+export type TeamLinkSource = 'manual' | 'auto';
+/** D-6048 (ARCH-12): the runtime list, derived from the type. */
+const TEAM_LINK_SOURCE_MAP: Record<TeamLinkSource, true> = { manual: true, auto: true };
+export const TEAM_LINK_SOURCES: readonly TeamLinkSource[] = Object.keys(TEAM_LINK_SOURCE_MAP) as TeamLinkSource[];
+
+/** D-8405: a project's team key and who set it. `at` is when (null for a key stored before anyone recorded it). */
+export type TeamLinkWire =
+  | { source: 'manual'; at: number | null }
+  | { source: 'auto'; teamName: string; evidence: TeamEvidence; at: number };
+
+/** D-8405: one team the automatic pass offers for a project, with the evidence that names it. */
+export interface TeamCandidateWire { key: string; name: string; evidence: TeamEvidence }
+
+const isCount = (v: unknown): v is number => typeof v === 'number' && Number.isInteger(v) && v >= 0;
+
+/** D-8405: the one guard of `TeamEvidence`, for a value read back from storage: exactly one of the two shapes. */
+export function isTeamEvidence(v: unknown): v is TeamEvidence {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  if (o['kind'] === 'ticket-ids') {
+    return Object.keys(o).length === 3 && isCount(o['ids']) && isCount(o['of']) && (o['ids'] as number) <= (o['of'] as number);
+  }
+  if (o['kind'] === 'name-match') {
+    return Object.keys(o).length === 3 && (o['matched'] === 'project' || o['matched'] === 'repo')
+      && (o['on'] === 'name' || o['on'] === 'key');
+  }
+  return false;
+}
+
+/** D-8405: the one guard of `TeamCandidateWire`; `isKey` is the team key's grammar (`isLinearTeamKey`, `./linear.ts`),
+ *  passed in because this file imports no runtime module. */
+export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v is TeamCandidateWire {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return Object.keys(o).length === 3 && isKey(o['key']) && typeof o['name'] === 'string' && isTeamEvidence(o['evidence']);
+}
 
 /** `GET /api/linking`: a session's read of its own project. */
 export interface LinkingShowAnswer extends ProjectLinkingWire { ok: true; project: string }
