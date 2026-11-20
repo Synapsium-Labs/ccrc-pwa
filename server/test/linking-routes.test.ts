@@ -13,7 +13,8 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
-import { putLinearSlot } from '../src/linear/store.js';
+import { putLinearSlot, readLinearStore } from '../src/linear/store.js';
+import { VisibilityLane } from '../src/linking/visibilityLane.js';
 import { keyTailOf } from '../src/linear/connection.js';
 import { valueDigestHex } from '../src/token/files.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -358,5 +359,177 @@ describe('POST /api/projects/:project/linking: the workspace', () => {
     await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_A });
     const res = await post(app, 'project-a', { teamKey: 'AAA', override: 'private' });
     expect(res.json().linking).toMatchObject({ override: 'private', teamWorkspace: WS_A });
+  });
+});
+
+// Linear hierarchy wave 8, D-8808 (Task 8.4): a coordinator's suggestion of a team for a project with no key.
+describe('POST /api/linking/suggest', () => {
+  const WS_A = '00000000-0000-4000-8000-0000000000a1';
+  const WS_B = '00000000-0000-4000-8000-0000000000b2';
+  const ME = { byId: 'project-a-calm-mesa', byUuid: 'u-project-a-calm-mesa' };
+  const OTHER = { byId: 'project-a-quiet-fern', byUuid: 'u-project-a-quiet-fern' };
+  const seedWorkspaces = async (): Promise<void> => {
+    for (const [id, urlKey, keys, fill] of [[WS_A, 'ws-a', ['AAA'], 'a'], [WS_B, 'ws-b', ['AAA', 'BBB'], 'b']] as const) {
+      const key = `lin_api_${fill.repeat(40)}`;
+      await putLinearSlot(path.join(home, '.ccrc'), key, {
+        workspaceId: id, name: `Workspace ${urlKey}`, urlKey, user: 'User A',
+        teams: keys.map((k, i) => ({ id: `00000000-0000-4000-8000-${String(fill.charCodeAt(0) * 10 + i).padStart(12, '0')}`, key: k, name: `Team ${k}` })),
+        teamsAt: 1, keyTail: keyTailOf(key), keyDigest: valueDigestHex(key), checkedAt: 1, outcome: 'ok',
+      }, { replace: true });
+    }
+  };
+  const suggest = (a: FastifyInstance, body: Record<string, unknown>, token: string | null = ID_GATE_TOKEN) =>
+    a.inject({ method: 'POST', url: '/api/linking/suggest', payload: body as never, headers: token === null ? {} : { 'x-ccrc-mail-token': token } });
+  const ok = (over: Record<string, unknown> = {}): Record<string, unknown> =>
+    ({ ...ME, project: 'project-a', team: 'BBB', workspace: WS_B, why: 'the branches name this team', ...over });
+  const boot = async (): Promise<FastifyInstance> => {
+    seedRow(home, ME.byId, { project: 'project-a' });
+    seedRow(home, OTHER.byId, { project: 'project-a' });
+    await seedWorkspaces();
+    // Every listed project has a row from the visibility lane's reading; the door writes to an existing row only.
+    coord!.recordLinkingReading('project-a', { state: 'measured', visibility: 'private', slug: 'owner/repo', template: 'present', at: 1 });
+    return open({ coord, mailToken: ID_GATE_TOKEN });
+  };
+
+  it('a suggestion is a candidate and never links', async () => {
+    app = await boot();
+    const res = await suggest(app, ok());
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().ok).toBe(true);
+    const row = coord!.linkingOf('project-a');
+    expect(row.teamKey).toBeNull();
+    expect(row.teamLink).toBeNull();
+    expect(row.teamCandidates).toEqual([{
+      key: 'BBB', name: 'Team BBB', evidence: { kind: 'suggested', by: ME.byId, why: 'the branches name this team' },
+      workspaceId: WS_B, workspaceName: 'Workspace ws-b',
+    }]);
+    expect(res.json().linking).toEqual(row);
+    // The real team-link pass over this project, with no decisive evidence, leaves the key null and the suggestion in place.
+    const store = await readLinearStore(path.join(home, '.ccrc'));
+    const lane = new VisibilityLane(() => ({ coord: coord!, runCcd: async () => { throw new Error('no ccd'); }, fleetState: undefined, cfg: { ccrcDir: path.join(home, '.ccrc') } }), async () => store);
+    await lane.linkTeams(['project-a'], 1000, { tally: () => new Map(), slug: () => null });
+    const after = coord!.linkingOf('project-a');
+    expect(after.teamKey).toBeNull();
+    expect(after.teamLink).toBeNull();
+    expect(after.teamCandidates!.map((c) => c.evidence.kind)).toContain('suggested');
+  });
+
+  it('a resend replaces it, and two sessions\' suggestions both show', async () => {
+    app = await boot();
+    await suggest(app, ok());
+    await suggest(app, ok({ why: 'second thoughts', team: 'AAA', workspace: WS_A }));
+    await suggest(app, ok({ ...OTHER, why: 'another view' }));
+    const c = coord!.linkingOf('project-a').teamCandidates;
+    expect(c!.map((x) => [x.key, x.evidence])).toEqual([
+      ['AAA', { kind: 'suggested', by: ME.byId, why: 'second thoughts' }],
+      ['BBB', { kind: 'suggested', by: OTHER.byId, why: 'another view' }],
+    ]);
+  });
+
+  it('without a workspace the key must be held by some workspace, and none is recorded', async () => {
+    app = await boot();
+    const res = await suggest(app, (() => { const b = ok({ team: 'bbb' }); delete b['workspace']; return b; })());
+    expect(res.statusCode, res.body).toBe(200);
+    const c = coord!.linkingOf('project-a').teamCandidates;
+    expect(c).toEqual([{ key: 'BBB', name: 'Team BBB', evidence: { kind: 'suggested', by: ME.byId, why: 'the branches name this team' } }]);
+  });
+
+  it('a project with a key refuses it team-set and writes nothing', async () => {
+    app = await boot();
+    coord!.setLinking('project-a', { teamKey: 'AAA', override: null }, 'd', 1);
+    const res = await suggest(app, ok());
+    expect([res.statusCode, res.json().error]).toEqual([409, 'team-set']);
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('a pair no workspace has is team-unknown and writes nothing', async () => {
+    app = await boot();
+    for (const b of [ok({ team: 'BBB', workspace: WS_A }), ok({ team: 'ZZZ', workspace: WS_B })]) {
+      const res = await suggest(app, b);
+      expect([res.statusCode, res.json().error]).toEqual([404, 'team-unknown']);
+    }
+    const none = ok({ team: 'ZZZ' }); delete none['workspace'];
+    expect((await suggest(app, none)).json().error).toBe('team-unknown');
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('an unreadable Linear store is unavailable (503), never team-unknown', async () => {
+    seedRow(home, ME.byId, { project: 'project-a' });
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    const store = path.join(home, '.ccrc', 'linear');
+    rmSync(store, { recursive: true, force: true });
+    writeFileSync(store, 'not a directory');
+    const res = await suggest(app, ok());
+    expect([res.statusCode, res.json().error]).toEqual([503, 'unavailable']);
+    const none = ok(); delete none['workspace'];
+    expect((await suggest(app, none)).json().error).toBe('unavailable');
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('a reason with a tracker id of the team or a private-name class is refused linear-text-public, and the text is never echoed', async () => {
+    app = await boot();
+    const ticket = await suggest(app, ok({ why: 'see BBB-12 for the history' }));
+    expect([ticket.statusCode, ticket.json().error]).toEqual([409, 'linear-text-public']);
+    expect(ticket.body).not.toContain('BBB-12');
+    const host = await suggest(app, ok({ why: `the box is reachable at ${['100', '64', '1', '2'].join('.')}` }));
+    expect([host.statusCode, host.json().error]).toEqual([409, 'linear-text-public']);
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('a reason naming another connected team\'s ticket id is refused and writes nothing', async () => {
+    app = await boot();
+    const res = await suggest(app, ok({ why: 'see AAA-12 for the history' }));
+    expect([res.statusCode, res.json().error]).toEqual([409, 'linear-text-public']);
+    expect(res.body).not.toContain('AAA-12');
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('an unknown project writes no row and answers no-project', async () => {
+    seedRow(home, ME.byId, { project: 'project-typo' });
+    await seedWorkspaces();
+    app = await open({ coord, mailToken: ID_GATE_TOKEN });
+    const res = await suggest(app, ok({ project: 'project-typo' }));
+    expect([res.statusCode, res.json().error]).toEqual([404, 'no-project']);
+    expect(coord!.linkingAll().size).toBe(0);
+  });
+
+  it('refuses a missing or wrong token, a bad pair, and a bad body naming the field', async () => {
+    app = await boot();
+    for (const t of [null, 'e'.repeat(64)]) {
+      const res = await suggest(app, ok(), t);
+      expect([res.statusCode, res.json().error]).toEqual([401, 'unauthenticated']);
+    }
+    const stale = await suggest(app, ok({ byUuid: 'u-other' }));
+    expect([stale.statusCode, stale.json().error]).toEqual([403, 'stale-uuid']);
+    const unknown = await suggest(app, ok({ byId: 'project-a-no-such' }));
+    expect([unknown.statusCode, unknown.json().error]).toEqual([403, 'unknown-sender']);
+    const cases: Array<[Record<string, unknown>, string]> = [
+      [ok({ project: 'bad/name' }), 'project'], [ok({ team: 'not a key' }), 'team'], [ok({ workspace: 'ws-a' }), 'workspace'],
+      [ok({ why: '' }), 'why'], [ok({ why: 'a\u2028b' }), 'why'], [ok({ why: 'a\u2029b' }), 'why'], [ok({ why: 'a\u202eb' }), 'why'], [ok({ why: 'a\u2066b' }), 'why'], [ok({ why: 'x'.repeat(281) }), 'why'], [ok({ why: 'two\nlines' }), 'why'],
+      [ok({ byId: 7 }), 'byId'], [ok({ extra: 1 }), 'body'],
+    ];
+    for (const [b, field] of cases) {
+      const res = await suggest(app, b);
+      expect([res.statusCode, res.json().error, res.json().detail], field).toEqual([400, 'bad-request', field]);
+    }
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+  });
+
+  it('a server with no coordination store answers unavailable', async () => {
+    seedRow(home, ME.byId, { project: 'project-a' });
+    app = await open({ mailToken: ID_GATE_TOKEN });
+    expect((await suggest(app, ok())).statusCode).toBe(503);
+  });
+
+  it('an operator\'s key and an automatic link clear the suggestions', async () => {
+    app = await boot();
+    await suggest(app, ok());
+    coord!.linkTeamAuto('project-a', { key: 'AAA', name: 'Team AAA', evidence: { kind: 'name-match', matched: 'project', on: 'name' } }, 2);
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
+    coord!.setLinking('project-a', { teamKey: null, override: null }, 'd', 3);
+    await suggest(app, ok());
+    expect(coord!.linkingOf('project-a').teamCandidates).toHaveLength(1);
+    coord!.setLinking('project-a', { teamKey: 'AAA', override: null }, 'd', 4);
+    expect(coord!.linkingOf('project-a').teamCandidates).toEqual([]);
   });
 });

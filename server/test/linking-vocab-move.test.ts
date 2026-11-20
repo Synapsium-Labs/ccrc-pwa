@@ -8,7 +8,7 @@ import { isLinearTeamKey } from '../../shared/linear.js';
 
 describe('the team-link vocabulary (pinned across its move)', () => {
   it('lists the evidence kinds and link sources', () => {
-    expect([...TEAM_EVIDENCE_KINDS]).toEqual(['ticket-ids', 'name-match']);
+    expect([...TEAM_EVIDENCE_KINDS]).toEqual(['ticket-ids', 'name-match', 'pr-attachments', 'suggested']);
     expect([...TEAM_LINK_SOURCES]).toEqual(['manual', 'auto']);
   });
 
@@ -17,6 +17,15 @@ describe('the team-link vocabulary (pinned across its move)', () => {
     expect(isTeamEvidence({ kind: 'ticket-ids', ids: 3, of: 3 })).toBe(true);
     expect(isTeamEvidence({ kind: 'name-match', matched: 'repo', on: 'key' })).toBe(true);
     expect(isTeamEvidence({ kind: 'name-match', matched: 'project', on: 'name' })).toBe(true);
+  });
+
+  it('isTeamEvidence accepts the suggested shape: a session and a reason of at most 280', () => {
+    expect(isTeamEvidence({ kind: 'suggested', by: 'lane-a', why: 'a reason' })).toBe(true);
+    expect(isTeamEvidence({ kind: 'suggested', by: 'lane-a', why: 'x'.repeat(280) })).toBe(true);
+    for (const v of [{ kind: 'suggested', by: 'lane-a', why: 'x'.repeat(281) }, { kind: 'suggested', by: '', why: 'a' }, { kind: 'suggested', by: 'a', why: '' },
+      { kind: 'suggested', by: 'a' }, { kind: 'suggested', by: 'a', why: 'b', extra: 1 }, { kind: 'suggested', by: 1, why: 'b' }]) {
+      expect(isTeamEvidence(v), JSON.stringify(v)).toBe(false);
+    }
   });
 
   it('isTeamEvidence refuses everything else', () => {

@@ -13,8 +13,8 @@ import type { CcdArgv } from '../ccdargv.js';
 import type { CcdResult } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
-import { parseLinkingWrite, workspaceAfterWrite } from './policy.js';
-import { routableSlots, routeProjectTeam } from '../linear/route.js';
+import { parseLinkingWrite, parseTeamSuggestion, suggestionReasonVerdict, workspaceAfterWrite } from './policy.js';
+import { routableSlots, routableTeams, routeProjectTeam } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
 
 export interface LinkingRouteOpts {
@@ -35,6 +35,8 @@ export interface LinkingRouteOpts {
   /** The Linear slot store (D-8808): which workspace holds a team key. Absent: read as unreadable, so a write naming a workspace
    *  answers `unavailable`. */
   readLinearStore?: () => Promise<LinearStoreRead>;
+  /** The installer's private tracker keys (`CCRC_PRIVATE_TRACKER_KEYS`), which a suggestion's reason may not name. */
+  privateTrackerKeys?: readonly string[];
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -124,6 +126,55 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
     const row = coord.linkingOf(project);
     const answer: LinkingShowAnswer = { ok: true, project, ...row };
     return answer;
+  });
+
+  /**
+   * `POST /api/linking/suggest` (D-8808): a session suggests a Linear team (and optionally its workspace) for a project with no
+   * key, with a reason. A candidate only: it never links, and the reason is shown in the console and never written to Linear.
+   * A box-token machine lane (an `auth/gate.ts` EXEMPT entry): the token first (never the cookie), then the body's shape, then the
+   * registry's attribution, then the store, then the row (`team-set` when it has a key), then the pair (a Linear store that
+   * cannot be read is `unavailable`, never `team-unknown`), then the reason as PUBLIC text (the console may be mirrored), then
+   * the write, which itself refuses a row that got a key in the meantime. The 200 is the project's row read back.
+   */
+  app.post('/api/linking/suggest', {
+    config: { rateLimit: { max: 1200, timeWindow: '1 minute' } },
+    onRequest: async (req: FastifyRequest, reply: FastifyReply) => {
+      const verdict = checkMailToken(opts.mailToken?.() ?? null, req.headers[MAIL_TOKEN_HEADER], 'POST /api/linking/suggest');
+      if (verdict !== 'ok') return refuseRoute(reply, 'unauthenticated', { detail: TOKEN_DETAIL[verdict] });
+      return undefined;
+    },
+  }, async (req, reply) => {
+    const parsed = parseTeamSuggestion(req.body);
+    if (!parsed.ok) return refuseRoute(reply, 'bad-request', { detail: parsed.field });
+    const s = parsed.value;
+    const coord = opts.coord;
+    if (coord === undefined || opts.attribute === undefined) return refuseRoute(reply, 'unavailable');
+    const attributed = await opts.attribute(s.byId, s.byUuid);
+    if (!attributed.ok) return refuseRoute(reply, attributed.error, { detail: attributed.detail });
+    if (coord.linkingOf(s.project).teamKey !== null) return refuseRoute(reply, 'team-set');
+    let store: LinearStoreRead | null = null;
+    if (opts.readLinearStore !== undefined) {
+      try { store = await opts.readLinearStore(); } catch { store = null; }
+    }
+    if (store === null || store.kind !== 'listed') return refuseRoute(reply, 'unavailable');
+    const matches = routableTeams(store).filter((t) => t.key === s.team && (s.workspace === undefined || t.workspaceId === s.workspace));
+    // The team's name comes from the first workspace holding the key: a key two workspaces share names the same team in
+    // each, and a suggestion that names no workspace records none, so the first is as good as any and never a guess at a link.
+    const first = matches[0];
+    if (first === undefined) return refuseRoute(reply, 'team-unknown');
+    const text = suggestionReasonVerdict(s.why, routableTeams(store).map((t) => t.key), opts.privateTrackerKeys ?? []);
+    if (!text.ok) return refuseRoute(reply, text.word, { detail: text.class });
+    try {
+      const wrote = coord.recordTeamSuggestion(s.project, {
+        by: s.byId, key: s.team, workspaceId: s.workspace === undefined ? null : first.workspaceId,
+        workspaceName: s.workspace === undefined ? null : first.workspaceName, teamName: first.name, why: s.why, at: now(),
+      });
+      if (wrote === 'no-project') return refuseRoute(reply, 'no-project');
+      if (wrote === 'team-set') return refuseRoute(reply, 'team-set');
+      return { ok: true, linking: coord.linkingOf(s.project) };
+    } catch (err) {
+      return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });
+    }
   });
 
   /**

@@ -2,7 +2,9 @@
 // else. A private repository carries the ticket id; a public or unmeasured one never does.
 import { LINEAR_TEAM_KEY_SHAPE, isLinearUuid } from '../../../shared/linear.js';
 import { WS_SLUG_MAX, fitSlug, slugifyWords } from '../../../shared/slug.js';
-import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
+import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamSuggestionBody } from '../../../shared/linking.js';
+import { TEAM_SUGGESTION_WHY_MAX } from '../../../shared/linking.js';
+import { isWsProject } from '../../../shared/slug.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
 
 /** A visibility reading is kept this long before the sweep takes another. */
@@ -72,6 +74,34 @@ export function parseLinkingWrite(body: unknown):
   return { ok: true, write: hasWorkspace ? { teamKey, override: o.override, workspace: o.workspace as string | null } : { teamKey, override: o.override } };
 }
 
+/** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
+const IDENTITY_RE = /^[A-Za-z0-9_-]{1,128}$/;
+const SUGGEST_KEYS: readonly string[] = ['byId', 'byUuid', 'project', 'team', 'workspace', 'why'];
+
+/** D-8808: a session's suggestion body, closed: `byId`, `byUuid`, `project` (a registry project name, `isWsProject`), `team` (the
+ *  Linear key shape, uppercased), optionally `workspace` (a slot id, `isLinearUuid`) and `why` (1 to `TEAM_SUGGESTION_WHY_MAX`
+ *  characters, one line, no control character). A refusal names the field (`body` for the shape as a whole). */
+export function parseTeamSuggestion(body: unknown): { ok: true; value: TeamSuggestionBody } | { ok: false; field: string } {
+  if (typeof body !== 'object' || body === null || Array.isArray(body)) return { ok: false, field: 'body' };
+  const o = body as Record<string, unknown>;
+  if (Object.keys(o).some((k) => !SUGGEST_KEYS.includes(k))) return { ok: false, field: 'body' };
+  const byId = o['byId'];
+  if (typeof byId !== 'string' || !IDENTITY_RE.test(byId)) return { ok: false, field: 'byId' };
+  const byUuid = o['byUuid'];
+  if (typeof byUuid !== 'string' || !IDENTITY_RE.test(byUuid)) return { ok: false, field: 'byUuid' };
+  const project = o['project'];
+  if (typeof project !== 'string' || !isWsProject(project)) return { ok: false, field: 'project' };
+  const team = o['team'];
+  if (typeof team !== 'string' || !LINEAR_TEAM_KEY_SHAPE.test(team.toUpperCase())) return { ok: false, field: 'team' };
+  if ('workspace' in o && !isLinearUuid(o['workspace'])) return { ok: false, field: 'workspace' };
+  const why = o['why'];
+  // eslint-disable-next-line no-control-regex
+  if (typeof why !== 'string' || why.length < 1 || why.length > TEAM_SUGGESTION_WHY_MAX || /[\u0000-\u001f\u007f\u2028\u2029\u202a-\u202e\u2066-\u2069]/.test(why)) return { ok: false, field: 'why' };
+  const value: TeamSuggestionBody = { byId, byUuid, project, team: team.toUpperCase(), why };
+  if ('workspace' in o) value.workspace = o['workspace'] as string;
+  return { ok: true, value };
+}
+
 /** D-8808: the workspace a write stores beside the key. `holds` answers whether a workspace has a team key (`unmeasured`: the
  *  Linear store could not be read). A named workspace must hold the key (`team-unknown`), and an unreadable store is
  *  `unavailable`, never read as "no such team". `workspace: null` or no key stores none. An omitted workspace keeps the stored
@@ -114,6 +144,18 @@ export function visibilityDue(rows: readonly { project: string; at: number | nul
 
 /** The path a text is read as by the hashed class: its exemptions key on a file, and plan text is nobody's file. */
 const TEXT_FILE = 'plan-text';
+
+/** D-8808: may a suggestion's reason be stored? It is shown in a console a public mirror may show, so it is read as PUBLIC text:
+ *  it may name no ticket id of ANY connected team (`teamKeys`: every distinct key the Linear store reaches), then every other
+ *  class is checked once. A hit names its class, never the text. */
+export function suggestionReasonVerdict(why: string, teamKeys: readonly string[], privateKeys: readonly string[] = []):
+  { ok: true } | { ok: false; word: 'linear-text-public'; class: string; ids?: string[] } {
+  for (const key of new Set(teamKeys.map((k) => k.toUpperCase()))) {
+    const ids = trackerIdsIn(why, key);
+    if (ids.length > 0) return { ok: false, word: 'linear-text-public', class: 'tracker id', ids };
+  }
+  return publicTextVerdict(why, null, 'public', privateKeys);
+}
 
 /** D-8181 (design §4.3, §6.1): may this text reach a tracker? A `private` project's text passes; a `public` or `unknown`
  *  one (unmeasured is treated as public, as `linkingMode` does everywhere) is refused if it names one of the team's

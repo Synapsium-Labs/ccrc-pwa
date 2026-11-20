@@ -4048,6 +4048,9 @@ export const MIGRATIONS: readonly string[] = [
   // 111, so whoever lands second renumbers (the coordinator's standing license).
   `
   ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
+  -- Task 8.4: the coordinators' suggestions, a JSON array, one element per suggesting session; NULL: none. A candidate
+  -- only: nothing in the pass or the decider reads it, and every writer that sets a key clears it.
+  ALTER TABLE project_linking ADD COLUMN teamSuggestions TEXT;
   `,
 ];
 

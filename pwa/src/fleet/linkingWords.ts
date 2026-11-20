@@ -18,8 +18,13 @@ export function linkingRowsOf(rows: readonly ProjectRow[]): Array<{ name: string
 
 /** What the evidence was, as a clause: "9 of 10 ticket ids in its branches, pull requests and commits use AAA". */
 export function evidenceWords(e: TeamEvidence, key: string): string {
-  if (e.kind === 'ticket-ids') return `${e.ids} of ${e.of} ticket ids in its branches, pull requests and commits use ${key}`;
-  return `the ${e.matched === 'project' ? 'project' : 'repository'} name matches the team ${e.on === 'name' ? 'name' : 'key'}`;
+  switch (e.kind) {
+    case 'ticket-ids': return `${e.ids} of ${e.of} ticket ids in its branches, pull requests and commits use ${key}`;
+    case 'name-match': return `the ${e.matched === 'project' ? 'project' : 'repository'} name matches the team ${e.on === 'name' ? 'name' : 'key'}`;
+    case 'pr-attachments': return `${e.ids} of ${e.of} issues attached to this repository's merged pull requests are ${key} issues`;
+    case 'suggested': return `suggested by ${e.by}: ${e.why}`;
+    default: { const never: never = e; return never; }
+  }
 }
 
 /** The line under the key field about who set it, or null when there is nothing to say (no key and nothing decided, a

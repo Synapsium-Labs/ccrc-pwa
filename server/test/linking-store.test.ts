@@ -3,7 +3,7 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { rmSync } from 'node:fs';
 import path from 'node:path';
 import { openCoordDb } from '../src/coord/db.js';
-import { linkTeamAuto, linkingAll, linkingOf, recordReading, setLinking } from '../src/coord/linkingStore.js';
+import { linkTeamAuto, linkingAll, linkingOf, recordReading, recordTeamSuggestion, setLinking } from '../src/coord/linkingStore.js';
 import { mkTmp } from './tmpHelpers.js';
 
 let dir: string;
@@ -104,5 +104,59 @@ describe('project_linking.teamWorkspace', () => {
     expect(linkingOf(db, 'project-a')).toMatchObject({ teamKey: 'AAA', teamWorkspace: WS });
     expect(linkTeamAuto(db, 'project-b', { key: 'BBB', name: 'Beta', evidence: EV, workspace: null }, 100)).toBe(true);
     expect(linkingOf(db, 'project-b').teamWorkspace).toBeNull();
+  });
+});
+
+// Linear hierarchy wave 8, D-8808 (Task 8.4): a coordinator's suggestions.
+describe('project_linking.teamSuggestions', () => {
+  const S = { by: 'lane-a', key: 'AAA', workspaceId: null, workspaceName: null, teamName: 'Alpha', why: 'because', at: 5 };
+  const row = (p: string): void => recordReading(db, p, MEASURED);
+  const cell = (p: string) => db.prepare('SELECT teamSuggestions FROM project_linking WHERE project = ?').get(p);
+  it('writes only where the key is null, in the same statement', () => {
+    row('project-a'); row('project-b');
+    expect(recordTeamSuggestion(db, 'project-a', S)).toBe('written');
+    setLinking(db, 'project-b', { teamKey: 'BBB', override: null }, 'd', 1);
+    expect(recordTeamSuggestion(db, 'project-b', S)).toBe('team-set');
+    expect(linkingOf(db, 'project-b').teamCandidates).toEqual([]);
+    // The key lands after the first suggestion: the statement's own guard refuses.
+    db.prepare('UPDATE project_linking SET teamKey = ? WHERE project = ?').run('AAA', 'project-a');
+    expect(recordTeamSuggestion(db, 'project-a', { ...S, by: 'lane-b' })).toBe('team-set');
+  });
+  it('a project with no row is no-project and mints no row', () => {
+    expect(recordTeamSuggestion(db, 'project-typo', S)).toBe('no-project');
+    expect(linkingAll(db).size).toBe(0);
+  });
+  it('one per session: a resend replaces, another session adds', () => {
+    row('project-a');
+    recordTeamSuggestion(db, 'project-a', S);
+    recordTeamSuggestion(db, 'project-a', { ...S, why: 'again', at: 6 });
+    recordTeamSuggestion(db, 'project-a', { ...S, by: 'lane-b', key: 'BBB', teamName: 'Beta' });
+    expect(linkingOf(db, 'project-a').teamCandidates!.map((c) => [c.key, c.evidence])).toEqual([
+      ['AAA', { kind: 'suggested', by: 'lane-a', why: 'again' }],
+      ['BBB', { kind: 'suggested', by: 'lane-b', why: 'because' }],
+    ]);
+  });
+  it('keeps the newest eight by time, in one transaction with the write', () => {
+    row('project-a');
+    for (let i = 1; i <= 10; i++) recordTeamSuggestion(db, 'project-a', { ...S, by: `lane-${i}`, at: i });
+    const by = linkingOf(db, 'project-a').teamCandidates!.map((c) => (c.evidence as { by: string }).by);
+    expect(by).toEqual(['3', '4', '5', '6', '7', '8', '9', '10'].map((n) => `lane-${n}`));
+  });
+  it('a cell that does not parse reads as none, and a key write clears the cell', () => {
+    row('project-a');
+    db.prepare("UPDATE project_linking SET teamSuggestions = 'not json' WHERE project = 'project-a'").run();
+    expect(linkingOf(db, 'project-a').teamCandidates).toEqual([]);
+    recordTeamSuggestion(db, 'project-a', S);
+    expect(linkingOf(db, 'project-a').teamCandidates).toHaveLength(1);
+    setLinking(db, 'project-a', { teamKey: null, override: null }, 'd', 7);
+    expect(linkingOf(db, 'project-a').teamCandidates).toHaveLength(1);
+    setLinking(db, 'project-a', { teamKey: 'AAA', override: null }, 'd', 8);
+    expect(cell('project-a')).toEqual({ teamSuggestions: null });
+  });
+  it('linkTeamAuto clears it', () => {
+    row('project-a');
+    recordTeamSuggestion(db, 'project-a', S);
+    expect(linkTeamAuto(db, 'project-a', { key: 'AAA', name: 'Alpha', evidence: { kind: 'name-match', matched: 'project', on: 'name' } }, 9)).toBe(true);
+    expect(cell('project-a')).toEqual({ teamSuggestions: null });
   });
 });

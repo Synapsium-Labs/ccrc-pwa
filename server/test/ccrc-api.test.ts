@@ -246,6 +246,8 @@ describe('the closed route table', () => {
     // The linking standard's read (D-8147): the pane's own project's team key, override and measured visibility. The identity
     // rides the query, as the Linear rows' does, so it runs in a pane.
     [['linking', 'show'], 'GET', '/api/linking'],
+    // A coordinator's suggestion of a team (D-8808): a POST whose body the caller writes and whose identity this client fills, so it runs in a pane.
+    [['linking', 'suggest', '--json', '-'], 'POST', '/api/linking/suggest'],
     // The start report (Overlord W1a): the session hook's report of its own SessionStart.
     [['sessions', 'start', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start'],
     [['sessions', 'loads', 'lane-a-project-a'], 'POST', '/api/sessions/lane-a-project-a/start/loads'],
@@ -341,8 +343,9 @@ describe('the closed route table', () => {
     // Eighty-five since `programme.remaining` (Overlord W2 remaining work A).
     // Eighty-six since `plan.phase-ref` (programme work map WM0); eighty-eight since `plan.take` and `plan.triage` (D-8183).
     // Eighty-nine since `quiz.record` (Overlord W1a quiz record; coordinator ruling, slug quiz-record-posts-through-the-client).
-    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1).
-    expect(keys).toHaveLength(91);
+    // Ninety since `sessions.act-key` (Overlord W1 door process A1); ninety-one since `plan.ticket-done` (programme work map WM1);
+    // ninety-two since `linking.suggest` (D-8808).
+    expect(keys).toHaveLength(92);
   });
 
   it('states the row count in prose as the number the table actually holds', () => {
@@ -357,7 +360,7 @@ describe('the closed route table', () => {
       43: 'forty-three', 44: 'forty-four', 45: 'forty-five', 46: 'forty-six', 47: 'forty-seven', 48: 'forty-eight',
       49: 'forty-nine', 50: 'fifty', 51: 'fifty-one', 52: 'fifty-two', 53: 'fifty-three', 54: 'fifty-four', 55: 'fifty-five',
       56: 'fifty-six', 57: 'fifty-seven', 58: 'fifty-eight', 59: 'fifty-nine', 60: 'sixty', 61: 'sixty-one', 62: 'sixty-two', 63: 'sixty-three', 64: 'sixty-four', 65: 'sixty-five', 66: 'sixty-six', 67: 'sixty-seven', 68: 'sixty-eight', 69: 'sixty-nine', 70: 'seventy', 71: 'seventy-one', 72: 'seventy-two', 73: 'seventy-three', 74: 'seventy-four', 75: 'seventy-five', 76: 'seventy-six', 77: 'seventy-seven', 78: 'seventy-eight',
-      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one',
+      79: 'seventy-nine', 80: 'eighty', 81: 'eighty-one', 82: 'eighty-two', 83: 'eighty-three', 84: 'eighty-four', 85: 'eighty-five', 86: 'eighty-six', 87: 'eighty-seven', 88: 'eighty-eight', 89: 'eighty-nine', 90: 'ninety', 91: 'ninety-one', 92: 'ninety-two',
     };
     const want = WORDS[n];
     expect(want, `the ROUTES table outgrew this test's word list at ${n}`).toBeDefined();
@@ -527,7 +530,7 @@ describe('the four claimant rows send the question door family, and refuse local
       ['linear', 'search', '--json', '-'], ['linear', 'comments', 'AAA-12', '--limit', '5'], ['linear', 'statuses', '--team', 'AAA'],
       ['linear', 'projects'], ['linear', 'labels'], ['linear', 'users'], ['linear', 'create', '--json', '-'],
       ['linear', 'update', 'AAA-12', '--json', '-'], ['linear', 'comment', 'AAA-12', '--json', '-'],
-      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'],
+      ['linear', 'link', 'AAA-12', '--json', '-'], ['linking', 'show'], ['linking', 'suggest', '--json', '-'],
       ['plan', 'put', 'prog-a', '--json', '-'], ['plan', 'show', 'prog-a'], ['plan', 'met', 'prog-a', '--json', '-'],
       ['plan', 'ticket-add', 'prog-a', '--json', '-'], ['plan', 'ticket-move', 'prog-a', '--json', '-'],
       ['plan', 'epic-drop', 'prog-a', '--json', '-'], ['plan', 'close', 'prog-a', '--json', '-'],
@@ -2058,5 +2061,36 @@ describe('the plan rows: identity in the query, the body as the caller gave it, 
     writeCaps(SERVER_CAPS.filter((w) => w !== 'plan-v1'), nowS() - 181);
     await run(['plan', 'show', 'prog-a']);
     expect(seen.map((s) => s.url)).toEqual(['/api/programmes/prog-a/plan', '/api/programmes/prog-a/plan']);
+  });
+});
+
+describe('linking suggest fills identity from the pane and refuses a caller-named identity (D-8808)', () => {
+  const pane = { TMUX_PANE: '%7' };
+  const BODY = '{"project":"project-a","team":"AAA","why":"the branches name it"}';
+  const suggest = (body?: string): Promise<Run> => run(['linking', 'suggest', ...(body === undefined ? [] : ['--json', '-'])], body, pane);
+  const errorOf = (r: Run): string => (JSON.parse(r.stdout) as { error: string }).error;
+
+  it('the row is a POST that takes no id and no query key', () => {
+    const row = clientRoutes().find((r) => r.key === 'linking.suggest');
+    expect([row!.method, row!.path, row!.needsId, row!.query]).toEqual(['POST', '/api/linking/suggest', false, []]);
+  });
+
+  it('sends the body with the pane\'s pair added and the box token, and nothing in the query', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    const r = await suggest(BODY);
+    expect(r.status, r.stdout + r.stderr).toBe(0);
+    expect([seen[0]!.method, seen[0]!.url, seen[0]!.auth]).toEqual(['POST', '/api/linking/suggest', TOKEN]);
+    expect(JSON.parse(seen[0]!.body)).toEqual({ byId: 'demo-ws', byUuid: 'uuid-7', ...JSON.parse(BODY) });
+  });
+
+  it('refuses a body naming byId or byUuid, no body, and a non-object, each unsent', async () => {
+    plantPane('demo-ws', 'uuid-7');
+    for (const b of ['{"byId":"someone-else","team":"AAA"}', '{"team":"AAA","byUuid" : "x"}']) {
+      const r = await suggest(b);
+      expect([r.status, errorOf(r)], b).toEqual([2, 'bad-body']);
+    }
+    expect(errorOf(await suggest())).toBe('no-body');
+    expect(errorOf(await suggest('[]'))).toBe('bad-body');
+    expect(seen).toEqual([]);
   });
 });

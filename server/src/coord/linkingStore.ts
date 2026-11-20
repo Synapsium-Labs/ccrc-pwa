@@ -22,11 +22,11 @@ interface Row {
   failReason: string | null; measuredAt: number | null;
   initiatives: string; linearOwner: string | null; ownsTeam: number;
   setAt: number | null; teamSource: string | null; teamName: string | null; teamEvidence: string | null;
-  teamAt: number | null; teamCandidates: string | null; teamWorkspace: string | null;
+  teamAt: number | null; teamCandidates: string | null; teamWorkspace: string | null; teamSuggestions: string | null;
 }
 
 const COLUMNS = 'project, teamKey, override, visibility, slug, template, failReason, measuredAt, initiatives, linearOwner, ownsTeam, '
-  + 'setAt, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace';
+  + 'setAt, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace, teamSuggestions';
 
 /** A project with no row: no key, no override, nothing measured. */
 export const UNSET_LINKING: ProjectLinkingWire = Object.freeze({
@@ -63,6 +63,35 @@ function candidatesOf(row: Row | undefined): TeamCandidateWire[] {
   return Array.isArray(v) ? v.filter((c): c is TeamCandidateWire => isTeamCandidate(c, isLinearTeamKey)) : [];
 }
 
+/** One stored suggestion (D-8808): a coordinator session's candidate team with its reason. */
+export interface TeamSuggestion {
+  by: string; key: string; workspaceId: string | null; workspaceName: string | null; teamName: string; why: string; at: number;
+}
+
+const isSuggestion = (v: unknown): v is TeamSuggestion => {
+  if (typeof v !== 'object' || v === null || Array.isArray(v)) return false;
+  const o = v as Record<string, unknown>;
+  return typeof o['by'] === 'string' && typeof o['teamName'] === 'string' && typeof o['why'] === 'string'
+    && typeof o['at'] === 'number' && isLinearTeamKey(o['key'])
+    && (o['workspaceId'] === null || typeof o['workspaceId'] === 'string')
+    && (o['workspaceName'] === null || typeof o['workspaceName'] === 'string');
+};
+
+/** The stored suggestions; a cell that does not parse reads as none. */
+function suggestionsOf(text: string | null): TeamSuggestion[] {
+  const v = jsonOf(text);
+  return Array.isArray(v) ? v.filter(isSuggestion) : [];
+}
+
+/** D-8808: each suggestion as a candidate, after the pass's, each through `isTeamCandidate`. */
+function suggestedCandidates(row: Row | undefined): TeamCandidateWire[] {
+  return suggestionsOf(row?.teamSuggestions ?? null).flatMap((s) => {
+    const c: TeamCandidateWire = { key: s.key, name: s.teamName, evidence: { kind: 'suggested', by: s.by, why: s.why } };
+    if (s.workspaceId !== null) { c.workspaceId = s.workspaceId; c.workspaceName = s.workspaceName; }
+    return isTeamCandidate(c, isLinearTeamKey) ? [c] : [];
+  });
+}
+
 function wireOf(row: Row | undefined): ProjectLinkingWire {
   const teamKey = row?.teamKey ?? null;
   const override = row?.override ?? null;
@@ -83,7 +112,7 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
   return {
     teamKey, override, measured, mode: linkingMode(override, ruled),
     initiatives: row?.initiatives === 'off' ? 'off' : 'on', linearOwner: row?.linearOwner ?? null, ownsTeam: row?.ownsTeam === 1,
-    teamLink: teamLinkOf(row), teamCandidates: candidatesOf(row), teamWorkspace: row?.teamWorkspace ?? null,
+    teamLink: teamLinkOf(row), teamCandidates: [...candidatesOf(row), ...suggestedCandidates(row)], teamWorkspace: row?.teamWorkspace ?? null,
   };
 }
 
@@ -104,6 +133,7 @@ export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBod
       + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, override = excluded.override, '
       + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource'
       + (w.workspace !== undefined ? ', teamWorkspace = excluded.teamWorkspace' : '')
+      + (w.teamKey !== null ? ', teamSuggestions = NULL' : '')
       + (keyChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt' : ''),
     ).run(project, w.teamKey, w.override, by, at, teamSourceAfterWrite(prior, w.teamKey), keyChanged ? at : null, w.workspace ?? null);
   });
@@ -119,7 +149,7 @@ export function linkTeamAuto(
     'INSERT INTO project_linking (project, teamKey, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace) '
     + "VALUES (?, ?, 'auto', ?, ?, ?, NULL, ?) "
     + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, teamSource = excluded.teamSource, '
-    + 'teamName = excluded.teamName, teamEvidence = excluded.teamEvidence, teamAt = excluded.teamAt, teamCandidates = NULL, teamWorkspace = excluded.teamWorkspace '
+    + 'teamName = excluded.teamName, teamEvidence = excluded.teamEvidence, teamAt = excluded.teamAt, teamCandidates = NULL, teamWorkspace = excluded.teamWorkspace, teamSuggestions = NULL '
     + "WHERE project_linking.teamKey IS NULL AND project_linking.teamSource IS NOT 'manual'",
   ).run(project, link.key, link.name, JSON.stringify(link.evidence), at, link.workspace ?? null);
   return Number(res.changes) > 0;
@@ -137,6 +167,30 @@ export function recordTeamCandidates(db: DatabaseSync, project: string, candidat
     + 'ON CONFLICT(project) DO UPDATE SET teamCandidates = excluded.teamCandidates '
     + 'WHERE project_linking.teamCandidates IS NOT excluded.teamCandidates',
   ).run(project, JSON.stringify(candidates));
+}
+
+/** The most suggestions a project keeps: the newest by `at`. */
+export const TEAM_SUGGESTIONS_MAX = 8;
+
+/** D-8808: a coordinator session's suggestion of a team for a project: one per session (a resend replaces its element), at
+ *  most `TEAM_SUGGESTIONS_MAX` (the oldest by `at` goes). A candidate only. UPDATE-only: a project with no row is `no-project`
+ *  (a typo mints no phantom project; every listed project has a row from the visibility lane's reading). Written only where no
+ *  key is stored, in the same statement (`team-set` otherwise, an operator's key landing first wins). Nothing in the pass or the
+ *  decider reads the cell. */
+export function recordTeamSuggestion(db: DatabaseSync, project: string, s: TeamSuggestion): 'written' | 'team-set' | 'no-project' {
+  return tx(db, () => {
+    const row = db.prepare('SELECT teamKey, teamSuggestions FROM project_linking WHERE project = ?').get(project) as
+      { teamKey: string | null; teamSuggestions: string | null } | undefined;
+    if (row === undefined) return 'no-project';
+    const next = [...suggestionsOf(row.teamSuggestions).filter((e) => e.by !== s.by), s];
+    while (next.length > TEAM_SUGGESTIONS_MAX) {
+      let oldest = 0;
+      next.forEach((e, i) => { if (e.at < next[oldest]!.at) oldest = i; });
+      next.splice(oldest, 1);
+    }
+    const res = db.prepare('UPDATE project_linking SET teamSuggestions = ? WHERE project = ? AND teamKey IS NULL').run(JSON.stringify(next), project);
+    return Number(res.changes) > 0 ? 'written' : 'team-set';
+  });
 }
 
 /** The sweep's reading: a measurement writes the visibility, slug and template and clears any failure; a failure writes

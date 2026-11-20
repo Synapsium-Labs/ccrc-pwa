@@ -403,6 +403,7 @@ export const LINKING_REFUSAL_TEXT: Readonly<Record<LinkingRefusal, string>> = {
   'template-failed': 'The template pull request could not be opened. Nothing was changed. Try again.',
   'override-private-public': 'GitHub reads this repository as public, so it cannot be set to Private: a private rule would write ticket ids into a public repository. Choose Automatic or Public.',
   'team-unknown': 'That team and workspace pair is not in any connected Linear workspace. Choose a workspace that holds the key, or check the workspace key.',
+  'team-set': 'This project already has a Linear team, so a suggestion is not needed.',
 };
 
 /** The words the linking POST routes answer beside the fixed table (D-8147): not in `LINKING_REFUSAL_TEXT`, because

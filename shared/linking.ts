@@ -21,14 +21,19 @@ export { REPO_VISIBILITIES, LINKING_OVERRIDES, LINKING_MODES, TEMPLATE_STATES } 
  *  private repository only). `name-match`: the project's name or its repository's name equals the team's name or key,
  *  ignoring case. D-8808 `pr-attachments`: `ids` distinct issues of the team attached to this repository's merged pull
  *  requests among `of` distinct attached issues of every team (public and private repositories alike); the pair's
- *  workspace rides the candidate or the link, not the evidence. */
+ *  workspace rides the candidate or the link, not the evidence. D-8808 `suggested`: a coordinator session's suggestion (`by`
+ *  is the session, `why` its reason, shown in the console and never written to Linear); a candidate only, never a link. */
 export type TeamEvidence =
   | { kind: 'ticket-ids'; ids: number; of: number }
   | { kind: 'name-match'; matched: 'project' | 'repo'; on: 'name' | 'key' }
-  | { kind: 'pr-attachments'; ids: number; of: number };
+  | { kind: 'pr-attachments'; ids: number; of: number }
+  | { kind: 'suggested'; by: string; why: string };
 export type TeamEvidenceKind = TeamEvidence['kind'];
 /** D-6048 (ARCH-12): the runtime list, derived from the type. */
-const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true, 'pr-attachments': true };
+const TEAM_EVIDENCE_KIND_MAP: Record<TeamEvidenceKind, true> = { 'ticket-ids': true, 'name-match': true, 'pr-attachments': true, suggested: true };
+
+/** D-8808: the longest reason a suggestion carries. */
+export const TEAM_SUGGESTION_WHY_MAX = 280;
 export const TEAM_EVIDENCE_KINDS: readonly TeamEvidenceKind[] = Object.keys(TEAM_EVIDENCE_KIND_MAP) as TeamEvidenceKind[];
 
 /** D-8405: who set a project's team key. */
@@ -57,6 +62,10 @@ export function isTeamEvidence(v: unknown): v is TeamEvidence {
   if (o['kind'] === 'ticket-ids' || o['kind'] === 'pr-attachments') {
     return Object.keys(o).length === 3 && isCount(o['ids']) && isCount(o['of']) && (o['ids'] as number) <= (o['of'] as number);
   }
+  if (o['kind'] === 'suggested') {
+    return Object.keys(o).length === 3 && typeof o['by'] === 'string' && o['by'] !== ''
+      && typeof o['why'] === 'string' && o['why'] !== '' && o['why'].length <= TEAM_SUGGESTION_WHY_MAX;
+  }
   if (o['kind'] === 'name-match') {
     return Object.keys(o).length === 3 && (o['matched'] === 'project' || o['matched'] === 'repo')
       && (o['on'] === 'name' || o['on'] === 'key');
@@ -79,6 +88,10 @@ export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v i
 /** `GET /api/linking`: a session's read of its own project. */
 export interface LinkingShowAnswer extends ProjectLinkingWire { ok: true; project: string }
 
+/** `POST /api/linking/suggest` (D-8808): a session's suggestion of a team for its project. Closed: exactly these keys
+ *  (`workspace` optional). Never a link; the reason is shown in the console only. */
+export interface TeamSuggestionBody { byId: string; byUuid: string; project: string; team: string; workspace?: string; why: string }
+
 /** `POST /api/projects/:project/linking`: the operator's write. */
 export interface LinkingWriteBody {
   teamKey: string | null; override: LinkingOverride | null;
@@ -88,7 +101,8 @@ export interface LinkingWriteBody {
 
 /** Every refusal word the linking routes answer; each reaches the PWA through `refusalText`. */
 export const LINKING_REFUSALS = ['bad-team-key', 'bad-override', 'no-project', 'repo-public', 'repo-unmeasured',
-  'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public', 'template-failed', 'override-private-public', 'team-unknown'] as const;
+  'template-exists', 'no-team-key', 'tracker-id-public', 'ticket-slug-public', 'template-failed', 'override-private-public', 'team-unknown',
+  'team-set'] as const;
 export type LinkingRefusal = (typeof LINKING_REFUSALS)[number];
 
 /** Where a repository's pull request template lives. */

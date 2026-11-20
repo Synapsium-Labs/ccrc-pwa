@@ -448,7 +448,8 @@ describe('the client stays closed', () => {
     // quiz-record-posts-through-the-client) to eighty-nine.
     // `sessions.act-key` (Overlord W1 door process A1; the door process's own body, carrying the nonce, no splice and no fill)
     // to ninety. `plan.ticket-done` (programme work map WM1) to ninety-one, the way `plan.phase-ref` does it.
-    expect(routeKeys().size).toBe(91);
+    // `linking.suggest` (D-8808) to ninety-two: it takes the `calls.record` fill's rule, pinned below.
+    expect(routeKeys().size).toBe(92);
     // The call record's fill is the one that REFUSES a caller's identity (D-8126): it tests the stripped copy for both keys and
     // refuses, then derives the pair from the pane, and fills nowhere else.
     const callFill = code.slice(code.indexOf("if [[ \"$key\" == 'calls.record' ]]; then"));
