@@ -428,6 +428,7 @@ flowchart TD
 | Outside hosts | One unticked checkbox per origin the pre-scan found (the census `origins.ts` already makes), each saying "loads from this host can carry what the page shows to it, and may see this link". At most 8. An origin on the console's, artifact or content host is never offered |
 | Above the folder | "N references point above this page's folder and will not load", from the pre-scan |
 | Unmeasured files | "N files beside it could not be measured and will not load", when the scope read's `unsized` is above 0 |
+| Not scanned | On a page the console never loaded (its too-large view), the pre-scan has not run, so the two rows above are replaced by "This page was not scanned, so outside hosts cannot be offered and references above its folder are not counted. It runs with outside loads closed." Prepare then mints with no outside host |
 | Others open | "Another artifact is open. Pages run as artifacts can share data with each other while open", when the box has another live capability |
 | Windows | Unticked: "Let it open windows. A window it opens can send what the page shows anywhere." |
 | Buttons | Prepare (mints with the boxes as ticked; a tick changed after Prepare revokes that capability and needs Prepare again), then Open (the real link), and Cancel |
