@@ -9,7 +9,7 @@
 import type { RunSummary } from '../../../shared/api';
 import type { ItemView } from '../../../shared/ledgers';
 import type { WorkMapView, WorkUnreadable } from '../../../shared/plan';
-import type { WorkCardAnswer } from './WorkCard';
+import type { WorkCardAnswer } from './workMapWords';
 
 /** What the last read came to, beside the programme it was for and the view the page last drew. */
 export interface WorkRead {
