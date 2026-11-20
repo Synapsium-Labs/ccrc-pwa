@@ -770,6 +770,49 @@ describe('a save answers only its own tap (X2 P1, review F2)', () => {
     }
   });
 
+  it('a late Download answer for a page left behind is dropped: coming back saves nothing, a direct tap saves once', async () => {
+    const VERSION = '9'.repeat(40);
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'a.bin'), entry('specs', 'b.bin')] })) });
+    let land: (() => void) | null = null;
+    const tooLargeAnswer = failedAnswer('too-large', { size: src.length, cap: 2097152, blob: BLOB_2 });
+    f.file.mockImplementationOnce(() => new Promise((resolve) => { land = () => resolve(tooLargeAnswer); }));
+    f.file.mockResolvedValue(tooLargeAnswer);
+    const served = servingLoader(src);
+    const assets: DocsAssetContextValue = { loaders: { file: f.file, raster: f.raster }, queue: createFetchQueue(), onDraftAsset: () => undefined };
+    function Harness(p: { page: ReturnType<typeof leafOf> }): React.ReactNode {
+      const visit = useDocsVisit(p.page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return (
+        <DocsAssetContext value={assets}>
+          <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={p.page} parser={parser} rangeLoader={served.loader} />
+        </DocsAssetContext>
+      );
+    }
+    const A = leafOf(`/docs/demo/specs/a.bin?at=${VERSION}`);
+    const B = leafOf(`/docs/demo/specs/b.bin?at=${VERSION}`);
+    const { clicks, restore } = clickSpy();
+    try {
+      const { rerender } = render(<Harness page={A} />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(land).not.toBeNull());
+      rerender(<Harness page={B} />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      await act(async () => { land?.(); await new Promise((r) => setTimeout(r, 20)); });
+      rerender(<Harness page={A} />);
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(clicks, 'a late answer for a page left behind saves nothing').toHaveLength(0);
+      expect(screen.getByText('Download')).toBeTruthy();
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(clicks, 'a direct tap saves exactly once').toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
   /** A stat-pinned draft of `bytes` whose stat moves on every listing: `n` listings so far. */
   const movingDraft = (path: string, size: number) => {
     let listings = 0;

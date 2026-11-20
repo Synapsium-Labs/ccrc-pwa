@@ -434,10 +434,16 @@ export function DocsLeaf(p: {
   // page they were told for, so another page never inherits them.
   const versionKey = JSON.stringify([page.project, page.ref, page.at, page.section, page.path]);
   const [toldOver, setToldOver] = useState<{ key: string; blob: string; size: number } | null>(null);
+  const openKey = useRef(versionKey);
+  openKey.current = versionKey;
   const onTold = useCallback(
-    (over: { blob: string; size: number }) => setToldOver({ key: versionKey, ...over }), [versionKey]);
-  // A told answer belongs to the tap that made it: leaving the page drops it, so coming back to the page asks again
-  // instead of mounting a leaf that saves a file nobody asked for.
+    (over: { blob: string; size: number }) => {
+      // A late answer for a page already left behind is dropped: it would be matched on a later visit to that page.
+      if (openKey.current !== versionKey) return;
+      setToldOver({ key: versionKey, ...over });
+    }, [versionKey]);
+  // A told answer belongs to the tap that made it: leaving the page drops it (and a late answer for a left page is
+  // dropped above), so coming back to the page asks again instead of mounting a leaf that saves a file nobody asked for.
   useEffect(() => {
     setToldOver((t) => (t !== null && t.key !== versionKey ? null : t));
   }, [versionKey]);
