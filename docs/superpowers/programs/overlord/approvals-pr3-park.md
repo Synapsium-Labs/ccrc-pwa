@@ -45,7 +45,7 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
   own run by the listing, both doors, the retry and the mint. `questionPolicy.ts#decideApprovalLapse` gains `park` and `shadow-park` beside `lapse` and `stale`, in the
   same function, reading the row's stored `parkWord` and `fetchedAt`, the grace, and the park's horizon and void;
   `decideDeferredApprovalPush` drops an entry covering a `parked` row.
-- **L3, `server/src/coord/approvalParkStore.ts`, and the store.** `approval_parks` (migration 111: see "Migration"), written only through `CoordStore` from the questions owner. The mint's park step
+- **L3, `server/src/coord/approvalParkStore.ts`, and the store.** `approval_parks` (migration 112: see "Migration"), written only through `CoordStore` from the questions owner. The mint's park step
   runs inside the mint's transaction (`insertApprovalAt`, the cap race). `parkApprovalRow` is the one statement that writes
   `parked`; a ruling inside the window releases its slot and records a coordinator's deny on the key in the same transaction,
   as the decline does; `meetApprovalParkRuling` is the spend (re-read, sign, use 0 to 1, the retry row's ruling) in one
@@ -118,7 +118,7 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
   signs whatever record it is handed, so it compiles unchanged at `main`'s text. The approval signing path therefore stays
   outside a diff that touches the questions owner, as `consolidation-path-guard.test.ts`'s W3 arm requires. That arm is
   not loosened.
-- `lane-seed-or-ignore`: migration 111 seeds the park's Shadow lanes row with `INSERT OR IGNORE`. A migration replayed
+- `lane-seed-or-ignore`: migration 112 seeds the park's Shadow lanes row with `INSERT OR IGNORE`. A migration replayed
   over a database that already carries the row (a replay test does exactly this) then answers as on a fresh database,
   instead of failing `UNIQUE`.
 - `park-on-the-binding-run` (review 2889 F2): the park key and the park's run are the child's LIVE BINDING run, the run its
@@ -159,8 +159,9 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
 ## Migration
 
 `approval_parks` and four nullable `approvals` columns (`parkWord`, `parkKey`, `fetchedAt`, `wouldPark`), one index each, and
-the lane's seed row, at slot 111, the coordinator's: urgent mail (#3073) took 108, Overlord gates B (#3076) 109 and door
-process B1 (#3099) 110, each absorbed from main (the last in fix round 1).
+the lane's seed row, at slot 112, the coordinator's: urgent mail (#3073) took 108, Overlord gates B (#3076) 109, door
+process B1 (#3099) 110 and the waiting workers' sleep (#3101) 111, each absorbed from main (the last two in the review fix
+round, whose Shadow lanes card now lists the park's row before the sleep lane's, as their worker and I agreed).
 
 ## Mutation measurements
 
@@ -248,7 +249,7 @@ then green, and each guard has its mutant above.
 
 The holders of the files touched agreed first: linear-hierarchy wave 8 (shared/api.ts, store.ts), the docs reader's P1 (the
 console's client), capacity Task 4 (the single-definition file) and door process B1 (the floors file). Door B1's #3099 took
-migration slot 110, so the park moved to 111 (an additive conflict, absorbed).
+migration slot 110 and the waiting workers' sleep (#3101) 111, so the park moved to 112 (additive conflicts, absorbed).
 
 ## For the ledger
 

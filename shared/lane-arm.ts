@@ -31,8 +31,12 @@ export const ANCHOR_SLOT_LANE = 'anchor-slot';
  *  (the hook prints a deny that says so, and the row reaches Waiting on you) instead of left to its pane's menu. In shadow
  *  the request route stores `shadow` at mint and a lapse records `wouldPark`; live, it stores `live` while sign-in is armed. */
 export const APPROVAL_PARK_LANE = 'approval-park';
+/** The waiting workers' row (D-8790; waiting workers spec 2026-11-19, Part 2): the run-done sleep's
+ *  case for a dispatched worker on a `working` run whose turn marker has been quiet 30 minutes. In shadow the sleep lane
+ *  logs the worker it would put to sleep; live, it puts it to sleep and mails the run's coordinator once. */
+export const WORKING_IDLE_SLEEP_LANE = 'working-idle-sleep';
 /** The lanes the Shadow lanes card has a row for, in the card's order. */
-export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE] as const;
+export const LANE_ARM_LANES = [ROSTER_CARD_LANE, CONTINUITY_LANE, LAUNCH_PROFILE_LANE, ANCHOR_SLOT_LANE, APPROVAL_PARK_LANE, WORKING_IDLE_SLEEP_LANE] as const;
 export type LaneArmLane = (typeof LANE_ARM_LANES)[number];
 export function isLaneArmLane(v: unknown): v is LaneArmLane {
   return typeof v === 'string' && (LANE_ARM_LANES as readonly string[]).includes(v);
@@ -227,6 +231,18 @@ export const LANE_ARM_TEXT = {
       // INERT UNTIL PR 3v (the coordinator's rulings of 2026-11-19): the route hunks are in this build (item 486's
       // packet), but the fleet box's verifier does not yet read the operator's signed ruling, so Live is refused here.
       gate: 'This lane goes live once the fleet box\'s verifier reads a ruling signed for you; until then nothing parks.',
+    },
+    [WORKING_IDLE_SLEEP_LANE]: {
+      legend: 'Sleep waiting workers',
+      shadowNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
+        + 'or open on a screen, is left awake; the server logs it to the server journal, as lines beginning '
+        + '"ccrc-server: stop-done shadow:".',
+      liveNote: 'A worker on a working run whose last turn ended 30 minutes ago, with nothing running, scheduled, unread '
+        + 'or open on a screen, is put to sleep, and its coordinator is mailed once for that sleep. Its session ends; its '
+        + 'workspace, branch and transcript are kept, and mail or a send-back starts it again. A worker holding a live '
+        + 'claim, or named by a second active run, keeps running. While mail is switched off (mail-disabled), no waiting '
+        + 'worker is put to sleep, because its coordinator could not be told.',
+      gate: null,
     },
   },
   shadowLog: (path: string): string => `Shadow record: ${path} on the fleet box. Read it before going live.`,
