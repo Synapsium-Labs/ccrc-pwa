@@ -60,7 +60,10 @@ The plan's "Deviations found" carries both entries in full. In short:
   confirm's stored workspace name (`confirmedWorkspaceName`) are L1 deciders in `linking/policy.ts`; the triage row choice
   (`w8-triage-l1`) stays the one stated bend.
 - **The card.** Save waits for a workspace when the typed key is in two workspaces. A candidate row's React key names its
-  evidence kind and suggester too, so one pair offered twice is two rows (fix round 1, A2). The Overlord link's line links to the
+  evidence kind and suggester too, so one pair offered twice is two rows (fix round 1, A2).
+  The picker offers the legacy key's workspace too while it routes like a slot (learned, not superseded): the workspaces
+  answer's legacy row carries `workspace.workspaceId`, additive (an older server omits it and the picker leaves it out), read
+  once in `wireReaders.ts` and merged by `pickerWorkspacesOf` (fix round 1, A1). The Overlord link's line links to the
   Waiting on you screen, because a call cannot be addressed by id.
 
 ## Carried (follow-up tickets in the `mapping` epic)
@@ -74,11 +77,6 @@ The plan's "Deviations found" carries both entries in full. In short:
 - `w8-triage-l1`: move the triage row choice (`triageOf`, `teamHolders` in `planRoutes.ts`) into `planPolicy.ts` beside
   `triageVerdict`, reusing `teamOwnerProject`'s holder predicate. It stayed in the route because `planPolicy.ts` was held by
   another wave; stated as a bend in D-8808.
-- `w8-legacy-picker` (fix round 1, A1): the card's picker lists only the file slots (`linear.view.workspaces`), while the server
-  also routes the unsuperseded legacy workspace. The workspaces answer's legacy row carries no workspace id
-  (`LinearLegacyRow.workspace` in `shared/linear.ts`), so the card cannot name it; the wire gains `workspace.workspaceId` there,
-  filled where `server/src/linear/routes.ts` builds the legacy row, and the card reads it beside the slots.
-
 - `w8-skill-section`: the coordinator skill's plan reference gains the section below, in a PR of its own: the review
   judge refuses a PR that changes a rules file and anything else (`rules-mixed`), so it left this one. Its text, as built
   and reviewed in Task 8.6 and the final fixes, to append after `## plan take` in `ccd/coordinator-skill/references/plan.md`

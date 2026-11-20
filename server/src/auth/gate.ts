@@ -585,8 +585,9 @@ export const EXEMPT: ReadonlyMap<string, string> = new Map([
   // D-8808: a session suggests a Linear team for a project that has no key (a candidate shown in the console; never a link).
   ['POST /api/linking/suggest',
     'a session suggests a Linear team, with a reason, for a project with no key — box-token gated in its own onRequest whatever ' +
-    'the flag, no cookie accepted, attribution checked against the registry, the reason held to the public-text rules before it ' +
-    'is stored; it records a candidate only and never links'],
+    'the flag, no cookie accepted, attribution checked against the registry, then the caller\'s standing as a coordinator (a ' +
+    'session that claims an open run; any other is refused not-a-coordinator, and runs that cannot be read refuse, never pass), ' +
+    'the reason held to the public-text rules before it is stored; it records a candidate only and never links'],
   // D-8809: the Overlord confirms one team candidate for a project with no key, as a call made in the operator's name.
   ['POST /api/linking/confirm',
     'the Overlord confirms one current team candidate for a project with no key — box-token gated in its own onRequest whatever ' +

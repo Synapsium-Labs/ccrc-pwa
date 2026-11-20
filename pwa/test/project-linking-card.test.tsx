@@ -13,11 +13,11 @@ import { upkeepPath } from '../src/lib/routes';
 import { ApiError } from '../src/lib/apiError';
 import { LINKING_REFUSAL_TEXT, LINKING_ROUTE_TEXT } from '../src/lib/refusalWords';
 import { SETTINGS_CARDS } from '../src/fleet/settingsText';
-import type { LinearWorkspaceView } from '../../shared/linear';
+import type { LinearLegacyRow, LinearWorkspaceView } from '../../shared/linear';
 import { LINKING_TEXT, ProjectLinkingCard } from '../src/screens/settings/ProjectLinkingCard';
 import { candidateLabel, candidateWhy, evidenceWords, linkingRowsOf, teamLinkLine } from '../src/fleet/linkingWords';
 
-afterEach(() => { cleanup(); vi.restoreAllMocks(); supplied = null; });
+afterEach(() => { cleanup(); vi.restoreAllMocks(); supplied = null; suppliedLegacy = null; });
 
 const NOW = Date.UTC(2026, 10, 9, 12, 0, 0);
 const measured = (over: Partial<Extract<ProjectLinkingWire['measured'], { state: 'measured' }>> = {}): ProjectLinkingWire['measured'] =>
@@ -30,6 +30,7 @@ const serve = (projects: ProjectRow[]) => vi.spyOn(api, 'projects').mockResolved
 let answer: HierarchyAnswer | null = null;
 // The frame's one workspace list, handed to the card as a prop (`serveWorkspaces` sets it).
 let supplied: LinearWorkspaceView[] | null = null;
+let suppliedLegacy: LinearLegacyRow | null = null;
 // `null`: an older server (the route is absent, 404); an Error: a read that failed; an answer: the route's answer.
 const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | null = null): Promise<HTMLElement> => {
   serve(projects);
@@ -39,7 +40,7 @@ const mount = async (projects: ProjectRow[], hier: HierarchyAnswer | Error | nul
   else if (hier instanceof Error) read.mockRejectedValue(hier);
   else read.mockImplementation(async () => answer!);
   vi.spyOn(Date, 'now').mockReturnValue(NOW);
-  await act(async () => { render(<><ToastHost /><ProjectLinkingCard workspaces={supplied} /></>); });
+  await act(async () => { render(<><ToastHost /><ProjectLinkingCard workspaces={supplied} legacy={suppliedLegacy} /></>); });
   return screen.findByRole('region', { name: SETTINGS_CARDS.security.linking.title });
 };
 const rowOf = (name: string): HTMLElement => document.querySelector<HTMLElement>(`[data-linking-row="${name}"]`)!;
@@ -878,6 +879,19 @@ describe('the team key\'s workspace picker (D-8808)', () => {
     fireEvent.click(within(rowOf('project-b')).getByRole('button', { name: LINKING_TEXT.save }));
     await waitFor(() => expect(save).toHaveBeenLastCalledWith('project-b', { teamKey: 'ZZZ', override: null }));
     expect(picker('project-b')).toBeNull();
+  });
+
+  it('offers a key held by a file slot and the legacy workspace as two choices, and writes the legacy one (review 2971 A1)', async () => {
+    const ID_L = '00000000-0000-4000-8000-0000000000c3';
+    serveWorkspaces([wsView('id-a', 'ws-a', ['AAA'])]);
+    suppliedLegacy = { view: { state: 'not-connected' }, superseded: false, workspace: { workspaceId: ID_L, name: 'ws-l', urlKey: 'ws-l', teams: [{ key: 'AAA', name: 'AAA' }] } };
+    await mount([row('project-a', wire({ teamKey: 'AAA' }))]);
+    await waitFor(() => expect(picker('project-a')).not.toBeNull());
+    expect(within(picker('project-a')!).getAllByRole('option').map((o) => o.textContent)).toEqual([PICKER_WORDS.choose, 'ws-a', 'ws-l']);
+    const save = vi.spyOn(api, 'saveLinking').mockResolvedValue({ ok: true, linking: wire({ teamKey: 'AAA', teamWorkspace: ID_L }) });
+    fireEvent.change(picker('project-a')!, { target: { value: ID_L } });
+    fireEvent.click(within(rowOf('project-a')).getByRole('button', { name: LINKING_TEXT.save }));
+    await waitFor(() => expect(save).toHaveBeenCalledWith('project-a', { teamKey: 'AAA', override: null, workspace: ID_L }));
   });
 
   it('reads no workspace list of its own: the frame hands it the one read', async () => {

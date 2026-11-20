@@ -1,7 +1,7 @@
 // The Project linking card's pure readers (D-8405): which rows it draws and what the automatic team link says. L1: no
 // store, no `lib/api.ts`, no component; `ProjectLinkingCard.tsx` renders what these answer.
 import type { ProjectRow } from '../../../shared/api';
-import type { LinearWorkspaceShown } from '../../../shared/linear';
+import type { LinearLegacyRow, LinearWorkspaceShown } from '../../../shared/linear';
 import type { ProjectLinkingWire, TeamCandidateWire, TeamEvidence } from '../../../shared/linking';
 import { refusalText } from '../lib/refusalWords';
 import { hierarchyWriteText } from './hierarchyWords';
@@ -77,6 +77,19 @@ export const PICKER_WORDS = {
  *  own sentence (`hierarchyWriteText`). */
 export const keyWriteText = (err: unknown, holders: number): string =>
   refusalText(err, { 'team-ambiguous': holders > 1 ? PICKER_WORDS.ambiguous : PICKER_WORDS.ambiguousUnlisted }) ?? hierarchyWriteText(err);
+
+/** D-8808 (review 2971 A1): the workspaces the picker may offer: every file slot, and the legacy key's workspace while it routes
+ *  like a slot (learned, with its id, not superseded, and no file slot of the same id), as the server's `routableSlots` reads
+ *  them. An unread list (`null`) stays no list. */
+export function pickerWorkspacesOf(
+  workspaces: readonly LinearWorkspaceShown[] | null, legacy: LinearLegacyRow | null,
+): readonly LinearWorkspaceShown[] | null {
+  const w = legacy?.workspace ?? null;
+  if (workspaces === null || legacy === null || legacy.superseded || w === null || w.workspaceId === undefined) return workspaces;
+  const id = w.workspaceId;
+  if (workspaces.some((s) => s.id === id)) return workspaces;
+  return [...workspaces, { id, name: w.name, urlKey: w.urlKey, user: null, teams: w.teams, keyTail: null, checkedAt: null }];
+}
 
 /** The connected workspaces that hold a team key (compared uppercased), each by the name the picker shows. An unreadable
  *  read (`null`) is no list: the picker is left out, never guessed. */

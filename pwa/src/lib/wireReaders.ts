@@ -184,7 +184,10 @@ function readLegacyRow(raw: unknown): LinearLegacyRow | null {
   if (w === null) return { view, workspace: null, superseded: raw.superseded };
   const teams = isRecord(w) ? readTeamsShown(w.teams) : null;
   if (!isRecord(w) || teams === null || !isLinearStoredName(w.name) || !isLinearUrlKey(w.urlKey)) return null;
-  return { view, workspace: { name: w.name, urlKey: w.urlKey, teams }, superseded: raw.superseded };
+  // D-8808 (review 2971 A1): the workspace's id, additive: absent (an older server) reads as no id; present, it must be an id.
+  if (w.workspaceId !== undefined && !isLinearUuid(w.workspaceId)) return null;
+  const id = w.workspaceId === undefined ? {} : { workspaceId: w.workspaceId };
+  return { view, workspace: { ...id, name: w.name, urlKey: w.urlKey, teams }, superseded: raw.superseded };
 }
 
 /**

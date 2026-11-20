@@ -20,6 +20,9 @@ import {
   OVERLORD_LINK_WORDS, PICKER_WORDS,
 } from '../src/fleet/linkingWords';
 import { ApiError } from '../src/lib/apiError';
+import { readLinearWorkspaces } from '../src/lib/api';
+import { pickerWorkspacesOf } from '../src/fleet/linkingWords';
+import type { LinearLegacyRow } from '../../shared/linear';
 import { LINKING_REFUSAL_TEXT } from '../src/lib/refusalWords';
 import type { LinearWorkspaceShown } from '../../shared/linear';
 import type { ProjectLinkingWire } from '../../shared/linking';
@@ -105,5 +108,36 @@ describe('a candidate\'s tap', () => {
     expect(candidateTap({ ...bare, key: 'BBB' }, read)).toEqual({ kind: 'write', workspace: 'id-a' });
     expect(candidateTap(bare, null)).toEqual({ kind: 'write' });
     expect(candidateTap({ ...bare, key: 'ZZZ' }, read)).toEqual({ kind: 'write' });
+  });
+});
+
+// Review 2971 A1: the legacy key's workspace routes like a slot, so the picker offers it, read off the wire additively.
+describe("the legacy workspace on the wire and in the picker (review 2971 A1)", () => {
+  const ID_L = '00000000-0000-4000-8000-0000000000c3';
+  const CONNECTED = { state: 'connected', org: 'Workspace L', user: 'user-a', keyTail: '4f2c', checkedAt: 1, outcome: 'ok' };
+  const learned = (extra: Record<string, unknown>) =>
+    ({ store: 'ok', workspaces: [], legacy: { view: CONNECTED, superseded: false, workspace: { name: 'Workspace L', urlKey: 'ws-l', teams: [{ key: 'AAA', name: 'Team A' }], ...extra } } });
+  it("reads the legacy workspace's id when the server sends it", () => {
+    expect(readLinearWorkspaces(learned({ workspaceId: ID_L }))!.legacy!.workspace).toEqual({ workspaceId: ID_L, name: 'Workspace L', urlKey: 'ws-l', teams: [{ key: 'AAA', name: 'Team A' }] });
+  });
+  it('an older server without the field still reads, with no id; a malformed id is no list', () => {
+    const read = readLinearWorkspaces(learned({}));
+    expect(read).not.toBeNull();
+    expect(read!.legacy!.workspace).toEqual({ name: 'Workspace L', urlKey: 'ws-l', teams: [{ key: 'AAA', name: 'Team A' }] });
+    expect(readLinearWorkspaces(learned({ workspaceId: 'ws-l' }))).toBeNull();
+  });
+  it('the picker offers the file slots and the legacy workspace while it routes like a slot', () => {
+    const slot = ws('id-a', 'ws-a', ['AAA']);
+    const row = (over: Partial<LinearLegacyRow> = {}, id: string | null = ID_L): LinearLegacyRow =>
+      ({ view: CONNECTED as LinearLegacyRow['view'], superseded: false, workspace: { ...(id === null ? {} : { workspaceId: id }), name: 'Workspace L', urlKey: 'ws-l', teams: [{ key: 'AAA', name: 'AAA' }] }, ...over });
+    const both = pickerWorkspacesOf([slot], row());
+    expect(workspacesHoldingKey(both, 'AAA')).toEqual([{ id: 'id-a', name: 'ws-a' }, { id: ID_L, name: 'Workspace L' }]);
+    // Left out: superseded, not learned, an older server's row with no id, a slot of the same id, and no list at all.
+    expect(pickerWorkspacesOf([slot], row({ superseded: true }))).toEqual([slot]);
+    expect(pickerWorkspacesOf([slot], row({ workspace: null }))).toEqual([slot]);
+    expect(pickerWorkspacesOf([slot], row({}, null))).toEqual([slot]);
+    expect(pickerWorkspacesOf([ws(ID_L, 'ws-l', ['AAA'])], row())).toHaveLength(1);
+    expect(pickerWorkspacesOf([slot], null)).toEqual([slot]);
+    expect(pickerWorkspacesOf(null, row())).toBeNull();
   });
 });

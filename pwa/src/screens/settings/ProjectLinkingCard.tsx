@@ -12,11 +12,11 @@
 // act shows the pull request's URL as a link. A refusal is its word's fixed sentence (`LINKING_REFUSAL_TEXT`); the box's
 // own text never reaches the screen. A project whose cell is absent (an older server) draws nothing.
 // Layout is `settings.css`'s `.linking-*` (a container query on the card, so the pane's width decides, not the window's).
-import { useCallback, useEffect, useId, useRef, useState } from 'react';
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from 'react';
 import type { ReactNode } from 'react';
 import { Button, OptionRow, QuickConfirm, Section, Select, TextInput, TextLink, elapsedWords, useNow } from '@ccrc/ui';
 import type { LinkingOverride, LinkingWriteBody, ProjectLinkingWire, TeamCandidateWire } from '../../../../shared/linking';
-import type { LinearWorkspaceShown } from '../../../../shared/linear';
+import type { LinearLegacyRow, LinearWorkspaceShown } from '../../../../shared/linear';
 import { LINKING_TEMPLATE_PATH } from '../../../../shared/linking';
 import type { ProjectRow } from '../../../../shared/api';
 import type { HierarchyAnswer, HierarchyProjectRow } from '../../../../shared/plan';
@@ -31,7 +31,7 @@ import { writeOutcomeUnknown } from '../../lib/apiError';
 import { loadProjects } from '../../fleet/useProjectRows';
 import {
   OVERLORD_LINK_WORDS, PICKER_WORDS, candidateAriaLabel, candidateKeyOf, candidateLabel, candidateTap, candidateWhy, candidateWorkspaceLine, candidatesShown, keyWriteText,
-  linkingRowsOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
+  linkingRowsOf, pickerWorkspacesOf, teamLinkLine, workspaceToWrite, workspacesHoldingKey,
 } from '../../fleet/linkingWords';
 import { linkingErrorText } from '../../lib/refusalWords';
 
@@ -335,9 +335,13 @@ function OwnerForAll({ answer, reread, setFloor, track }: { answer: HierarchyAns
 /** One read of the project list, and the rows the cards draw from it. */
 type Read = { kind: 'loading' } | { kind: 'failed' } | { kind: 'read'; rows: ProjectRow[] };
 
-/** `workspaces` is the Settings frame's one read of `GET /api/linear/workspaces` (the Linear card's poll), never a read of the
- *  card's own: `null` while it is unread or unreadable, so no picker (D-8808). */
-export function ProjectLinkingCard({ workspaces }: { workspaces: readonly LinearWorkspaceShown[] | null }): ReactNode {
+/** `workspaces` and `legacy` are the Settings frame's one read of `GET /api/linear/workspaces` (the Linear card's poll), never a
+ *  read of the card's own: `workspaces` is `null` while it is unread or unreadable, so no picker (D-8808). The picker offers the
+ *  file slots and the legacy key's workspace while it routes (`pickerWorkspacesOf`, review 2971 A1). */
+export function ProjectLinkingCard({ workspaces: slots, legacy = null }: {
+  workspaces: readonly LinearWorkspaceShown[] | null; legacy?: LinearLegacyRow | null;
+}): ReactNode {
+  const workspaces = useMemo(() => pickerWorkspacesOf(slots, legacy), [slots, legacy]);
   const card = SETTINGS_CARDS.security.linking;
   const now = useNow(30_000);
   const [read, setRead] = useState<Read>({ kind: 'loading' });

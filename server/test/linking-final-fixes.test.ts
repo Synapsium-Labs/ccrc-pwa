@@ -18,7 +18,8 @@ import { PlanSync } from '../src/linear/planSync.js';
 import type { CcrcOpAsk, CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { NOT_DESIGNATED_READS } from './otherLanesFixture.js';
-import { seedSlot, WS } from './linearProxyRig.js';
+import { seedLegacy, seedSlot, WS } from './linearProxyRig.js';
+import { WORKSPACES, bodyOf, settingsRig } from './linearSettingsRig.js';
 import { mkTmp } from './tmpHelpers.js';
 
 const T = 1_800_000_000_000;
@@ -169,5 +170,21 @@ describe("the inbound lane's re-check before a close comment takes the row's wor
     expect(String(comment!.input['body'])).not.toContain('AAA-5');
     expect(String(comment!.input['body'])).toContain('did not pass the public-text check');
     expect(asks.map((a) => a.op)).toContain('issueUpdate');
+  });
+});
+
+// Review 2971 A1: the workspaces answer names the legacy key's workspace id, the one the server routes the legacy slot by, so the
+// project card's picker can offer it (additive: an older server omits it).
+describe("the workspaces answer names the legacy workspace's id (review 2971 A1)", () => {
+  it('a learned legacy row carries workspaceId; an unlearned one has no workspace', async () => {
+    const r = await settingsRig({ clock: () => T, timeoutMs: 50 });
+    try {
+      await seedLegacy(r.ccrcDir, 'a', { learned: false });
+      expect(bodyOf(await r.req('GET', WORKSPACES))['legacy']).toMatchObject({ workspace: null });
+      await seedLegacy(r.ccrcDir, 'a', { learned: true });
+      expect((bodyOf(await r.req('GET', WORKSPACES))['legacy'] as { workspace: unknown }).workspace).toEqual({
+        workspaceId: WS.a.id, name: WS.a.name, urlKey: WS.a.urlKey, teams: [{ key: 'AAA', name: 'Team A' }],
+      });
+    } finally { await r.fx.refresher.idle(); await r.close(); }
   });
 });

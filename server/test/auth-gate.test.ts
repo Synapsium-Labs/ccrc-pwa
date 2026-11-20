@@ -1314,6 +1314,15 @@ describe('the coordinator intent door: exempt from the session gate, and not for
 
 // ── the attributed landing writes (landing order wave 5f) ─────────────────────────────────────────────────────────────
 
+describe('the linking suggest door\'s EXEMPT reason names its coordinator check (D-8808, review 2971 F7)', () => {
+  it('says the caller must claim an open run, and the word a session that does not is refused with', () => {
+    const reason = EXEMPT.get('POST /api/linking/suggest')!;
+    expect(reason).toContain('box-token gated');
+    expect(reason).toContain('claims an open run');
+    expect(reason).toContain('not-a-coordinator');
+  });
+});
+
 describe('the landing write doors: exempt from the session gate, and the route still requires the box token', () => {
   const KEYS = ['POST /api/landing/entries', 'POST /api/landing/order'] as const;
   let app: FastifyInstance | undefined;
