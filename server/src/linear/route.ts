@@ -93,6 +93,19 @@ export function routableTeams(store: Listed): Array<{ key: string; name: string 
 /** Whether a slot holds a team: both sides uppercased, whoever built the slot. */
 const holds = (s: LinearRouteSlot, team: string): boolean => s.teamKeys.some((k) => k.toUpperCase() === team.toUpperCase());
 
+/**
+ * D-8808: where a project row's team key resolves. A row that names no workspace resolves exactly as `routeLinear` does for a
+ * team (a key two workspaces share is `team-ambiguous`). A row that names one resolves in the slots of that workspace only: the
+ * slot if it holds the key, else `team-unknown` (the workspace is gone, or no longer has the team); never `team-ambiguous`, and
+ * `not-configured` only when there are no slots at all. The ONE resolver every project-team caller asks.
+ */
+export function routeProjectTeam(slots: readonly LinearRouteSlot[], row: { teamKey: string; workspaceId: string | null }): LinearRoute {
+  if (row.workspaceId === null) return routeLinear(slots, { kind: 'team', team: row.teamKey, workspace: null });
+  if (slots.length === 0) return { kind: 'refused', word: 'not-configured' };
+  const own = slots.find((s) => s.workspaceId === row.workspaceId && holds(s, row.teamKey));
+  return own === undefined ? { kind: 'refused', word: 'team-unknown' } : { kind: 'slot', slot: own };
+}
+
 /** §4.2's table. Total: every ask answers one slot or one refusal word. */
 export function routeLinear(slots: readonly LinearRouteSlot[], ask: LinearRouteAsk): LinearRoute {
   if (slots.length === 0) return { kind: 'refused', word: 'not-configured' };

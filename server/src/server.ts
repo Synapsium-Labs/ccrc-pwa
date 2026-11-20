@@ -2213,7 +2213,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
     mailToken: () => deps.mailToken ?? null,
     attribute: (id, uuid) => attributionVerdict(deps.io, deps.cfg, id, uuid, 'byUuid'),
     readRecord: (id) => readSessionRecord(deps.io, deps.cfg, id),
-    runCcd: deps.runCcd, fleetState: () => deps.fleetState,
+    runCcd: deps.runCcd, fleetState: () => deps.fleetState, readLinearStore: () => readLinearStore(deps.cfg.ccrcDir),
   });
   // The caller identity port (Overlord W1 gates A, §3.6 H2): its one adapter, over the readers the continuity routes take.
   const identity = attributionIdentity({

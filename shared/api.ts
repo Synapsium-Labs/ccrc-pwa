@@ -2397,6 +2397,8 @@ export interface ProjectLinkingWire {
   /** D-8405: the automatic pass's one-tap choices for a project with no key, best first; empty when it found none. The
    *  pass never links on them. Absent: an older server. */
   teamCandidates?: readonly TeamCandidateWire[];
+  /** D-8808: the workspace id the team key resolves in; null: none set (the key resolves as before); absent: an older server. */
+  teamWorkspace?: string | null;
 }
 
 /**

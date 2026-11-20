@@ -1,6 +1,6 @@
 // The linking standard's deciders (D-8147). L1: pure; every rule about the convention is decided here and nowhere
 // else. A private repository carries the ticket id; a public or unmeasured one never does.
-import { LINEAR_TEAM_KEY_SHAPE } from '../../../shared/linear.js';
+import { LINEAR_TEAM_KEY_SHAPE, isLinearUuid } from '../../../shared/linear.js';
 import { WS_SLUG_MAX, fitSlug, slugifyWords } from '../../../shared/slug.js';
 import type { LinkingMode, LinkingOverride, LinkingWriteBody, ProjectLinkingWire } from '../../../shared/linking.js';
 import { publicTextClassesFor } from './publicTextClasses.js';
@@ -53,20 +53,47 @@ export function withoutTrackerIds(text: string, teamKey: string | null): string 
   }).join('\n');
 }
 
-/** The operator's write body: exactly `teamKey` and `override`; a key in the Linear shape (uppercased) or null. */
+/** The operator's write body: `teamKey` and `override`, and optionally `workspace` (D-8808: a slot id, `isLinearUuid`, or
+ *  null); a key in the Linear shape (uppercased) or null. */
 export function parseLinkingWrite(body: unknown):
   { ok: true; write: LinkingWriteBody } | { ok: false; error: 'bad-team-key' | 'bad-override' | 'bad-request' } {
   if (typeof body !== 'object' || body === null || Array.isArray(body)) return { ok: false, error: 'bad-request' };
   const o = body as Record<string, unknown>;
   const keys = Object.keys(o);
-  if (keys.length !== 2 || !('teamKey' in o) || !('override' in o)) return { ok: false, error: 'bad-request' };
+  const hasWorkspace = 'workspace' in o;
+  if (keys.length !== (hasWorkspace ? 3 : 2) || !('teamKey' in o) || !('override' in o)) return { ok: false, error: 'bad-request' };
+  if (hasWorkspace && o.workspace !== null && !isLinearUuid(o.workspace)) return { ok: false, error: 'bad-request' };
   let teamKey: string | null = null;
   if (o.teamKey !== null) {
     if (typeof o.teamKey !== 'string' || !LINEAR_TEAM_KEY_SHAPE.test(o.teamKey.toUpperCase())) return { ok: false, error: 'bad-team-key' };
     teamKey = o.teamKey.toUpperCase();
   }
   if (o.override !== null && o.override !== 'private' && o.override !== 'public') return { ok: false, error: 'bad-override' };
-  return { ok: true, write: { teamKey, override: o.override } };
+  return { ok: true, write: hasWorkspace ? { teamKey, override: o.override, workspace: o.workspace as string | null } : { teamKey, override: o.override } };
+}
+
+/** D-8808: the workspace a write stores beside the key. `holds` answers whether a workspace has a team key (`unmeasured`: the
+ *  Linear store could not be read). A named workspace must hold the key (`team-unknown`), and an unreadable store is
+ *  `unavailable`, never read as "no such team". `workspace: null` or no key stores none. An omitted workspace keeps the stored
+ *  one while the key is unchanged, or while it holds the new key; an unmeasured holding drops it (the pass or the operator
+ *  names it again). The ONE writer of which workspace a row stores. */
+export function workspaceAfterWrite(a: {
+  before: { teamKey: string | null; workspace: string | null };
+  written: { teamKey: string | null; workspace?: string | null };
+  holds: (workspace: string, teamKey: string) => boolean | 'unmeasured';
+}): { ok: true; workspace: string | null } | { ok: false; error: 'team-unknown' | 'unavailable' } {
+  const { before, written } = a;
+  if (written.workspace === undefined && before.workspace !== null && written.teamKey !== null) {
+    if (written.teamKey === before.teamKey) return { ok: true, workspace: before.workspace };
+    return { ok: true, workspace: a.holds(before.workspace, written.teamKey) === true ? before.workspace : null };
+  }
+  if (written.workspace === undefined || written.workspace === null || written.teamKey === null) {
+    if (typeof written.workspace === 'string') return { ok: false, error: 'team-unknown' };
+    return { ok: true, workspace: null };
+  }
+  const held = a.holds(written.workspace, written.teamKey);
+  if (held === 'unmeasured') return { ok: false, error: 'unavailable' };
+  return held ? { ok: true, workspace: written.workspace } : { ok: false, error: 'team-unknown' };
 }
 
 /** A failed reading is taken again after this long, not after a day: a failure says nothing about the repository. */

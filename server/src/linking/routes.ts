@@ -13,7 +13,9 @@ import type { CcdArgv } from '../ccdargv.js';
 import type { CcdResult } from '../lifecycle.js';
 import type { FleetState } from '../fleetstate.js';
 import { withoutCcdRefusal } from '../../../shared/ccd-refusal.js';
-import { parseLinkingWrite } from './policy.js';
+import { parseLinkingWrite, workspaceAfterWrite } from './policy.js';
+import { routableSlots, routeProjectTeam } from '../linear/route.js';
+import type { LinearStoreRead } from '../linear/store.js';
 
 export interface LinkingRouteOpts {
   /** The coordination store, or undefined on a server without one (a test, a script): the write answers `unavailable`. */
@@ -30,6 +32,9 @@ export interface LinkingRouteOpts {
   /** The ccd runner, and the fleet's verb list it is asked against: the template pull request's act. Absent: `unavailable`. */
   runCcd?: (argv: CcdArgv) => Promise<CcdResult>;
   fleetState?: () => Pick<FleetState, 'ccdVerbs'> | undefined;
+  /** The Linear slot store (D-8808): which workspace holds a team key. Absent: read as unreadable, so a write naming a workspace
+   *  answers `unavailable`. */
+  readLinearStore?: () => Promise<LinearStoreRead>;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -64,7 +69,21 @@ export function registerLinkingRoutes(app: FastifyInstance, opts: LinkingRouteOp
       if (parsed.write.override === 'private' && before.override !== 'private' && m.state === 'measured' && m.visibility === 'public') {
         return refuseRoute(reply, 'override-private-public');
       }
-      coord.setLinking(project, parsed.write, opts.by(req), now());
+      // D-8808: the workspace stored beside the key, decided once (`workspaceAfterWrite`). The store is read only when the answer
+      // can need it: a named workspace, or a stored one that a changed key must be checked against.
+      const w = parsed.write;
+      const needsStore = typeof w.workspace === 'string' || (w.workspace === undefined && before.teamWorkspace != null && w.teamKey !== before.teamKey);
+      let store: LinearStoreRead | null = null;
+      if (needsStore && opts.readLinearStore !== undefined) {
+        try { store = await opts.readLinearStore(); } catch { store = null; }
+      }
+      const slots = store !== null && store.kind === 'listed' ? routableSlots(store) : null;
+      const decided = workspaceAfterWrite({
+        before: { teamKey: before.teamKey, workspace: before.teamWorkspace ?? null }, written: w,
+        holds: (workspace, teamKey) => (slots === null ? 'unmeasured' : routeProjectTeam(slots, { teamKey, workspaceId: workspace }).kind === 'slot'),
+      });
+      if (!decided.ok) return refuseRoute(reply, decided.error);
+      coord.setLinking(project, { ...w, workspace: decided.workspace }, opts.by(req), now());
       return { ok: true, linking: coord.linkingOf(project) };
     } catch (err) {
       return refuseRoute(reply, 'write-failed', { detail: err instanceof Error ? err.message : String(err) });

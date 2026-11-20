@@ -3,7 +3,7 @@
 import { describe, it, expect } from 'vitest';
 import {
   withoutTrackerIds, slugForTicket,
-  VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue,
+  VISIBILITY_MAX_AGE_MS, VISIBILITY_RETRY_MS, linkingMode, ticketRefOfBranch, trackerIdsIn, parseLinkingWrite, visibilityDue, workspaceAfterWrite,
 } from '../src/linking/policy.js';
 import { WS_SLUG_MAX } from '../../shared/slug.js';
 import type { ProjectLinkingWire } from '../../shared/linking.js';
@@ -134,5 +134,63 @@ describe('slugForTicket (D-8182)', () => {
     expect(s.endsWith('-')).toBe(false);
     expect(WS_SLUG_MAX).toBe(31);
     expect(slugForTicket('KEY-123', 'x'.repeat(80), 't').length).toBe(WS_SLUG_MAX);
+  });
+});
+
+// Linear hierarchy wave 8, D-8808: the workspace a write stores beside the key.
+describe('parseLinkingWrite: the optional workspace', () => {
+  const WS = '00000000-0000-4000-8000-0000000000a1';
+  it('takes a workspace id or null as a third key', () => {
+    expect(parseLinkingWrite({ teamKey: 'key', override: null, workspace: WS }))
+      .toEqual({ ok: true, write: { teamKey: 'KEY', override: null, workspace: WS } });
+    expect(parseLinkingWrite({ teamKey: 'key', override: null, workspace: null }))
+      .toEqual({ ok: true, write: { teamKey: 'KEY', override: null, workspace: null } });
+  });
+  it('refuses a workspace that is not a slot id, and any other third key', () => {
+    expect(parseLinkingWrite({ teamKey: 'KEY', override: null, workspace: 'ws-a' })).toEqual({ ok: false, error: 'bad-request' });
+    expect(parseLinkingWrite({ teamKey: 'KEY', override: null, workspace: 7 })).toEqual({ ok: false, error: 'bad-request' });
+    expect(parseLinkingWrite({ teamKey: 'KEY', override: null, other: WS })).toEqual({ ok: false, error: 'bad-request' });
+  });
+});
+
+describe('workspaceAfterWrite', () => {
+  const WS_A = '00000000-0000-4000-8000-0000000000a1';
+  const WS_B = '00000000-0000-4000-8000-0000000000b2';
+  const holdsOnly = (ws: string, key: string) => (w: string, k: string): boolean => w === ws && k === key;
+  const none = () => { throw new Error('holds must not be asked'); };
+
+  it('a named workspace that holds the key is stored', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, holds: holdsOnly(WS_A, 'AAA') }))
+      .toEqual({ ok: true, workspace: WS_A });
+  });
+  it('a named workspace that does not hold the key, or a named one with no key, is team-unknown', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_B }, holds: holdsOnly(WS_A, 'AAA') }))
+      .toEqual({ ok: false, error: 'team-unknown' });
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: null, workspace: WS_A }, holds: none }))
+      .toEqual({ ok: false, error: 'team-unknown' });
+  });
+  it('a named workspace read from an unreadable store is unavailable, never team-unknown', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: null, workspace: null }, written: { teamKey: 'AAA', workspace: WS_A }, holds: () => 'unmeasured' }))
+      .toEqual({ ok: false, error: 'unavailable' });
+  });
+  it('workspace null, or no key, stores no workspace', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'AAA', workspace: null }, holds: none }))
+      .toEqual({ ok: true, workspace: null });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: null }, holds: none }))
+      .toEqual({ ok: true, workspace: null });
+  });
+  it('an omitted workspace with the key unchanged keeps the stored one, asking nothing', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'AAA' }, holds: none }))
+      .toEqual({ ok: true, workspace: WS_A });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: null }, written: { teamKey: 'BBB' }, holds: none }))
+      .toEqual({ ok: true, workspace: null });
+  });
+  it('an omitted workspace with the key changed keeps the stored one only if it holds the new key', () => {
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: holdsOnly(WS_A, 'BBB') }))
+      .toEqual({ ok: true, workspace: WS_A });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: holdsOnly(WS_A, 'AAA') }))
+      .toEqual({ ok: true, workspace: null });
+    expect(workspaceAfterWrite({ before: { teamKey: 'AAA', workspace: WS_A }, written: { teamKey: 'BBB' }, holds: () => 'unmeasured' }))
+      .toEqual({ ok: true, workspace: null });
   });
 });

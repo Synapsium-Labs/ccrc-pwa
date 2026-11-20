@@ -4037,6 +4037,18 @@ export const MIGRATIONS: readonly string[] = [
   );
   CREATE INDEX overlord_fence_refusals_by_session ON overlord_fence_refusals (sessionId, at);
   `,
+
+  // ── 110: user_version 109 -> 110 ──────────────────────────────────────────
+  // The project row names its Linear workspace (Linear hierarchy wave 8, D-8808, plan Task 8.1): `project_linking.teamWorkspace`
+  // is the slot id (a workspace id) the row's team key resolves in, so a key two connected workspaces share never answers
+  // `team-ambiguous` for the project. NULL: none set, the key resolves as before. ONE COLUMN, nullable, no default, nothing
+  // else: an older build opening a file at this `user_version` takes rule 3 and never names the column. Wave 8's later task
+  // (8.4) adds its columns to THIS entry. Re-measure the slot with
+  // `git show origin/main:server/src/coord/schema.ts | grep -c '^  // ── [0-9]*: user_version'`; other branches hold 110 and
+  // 111, so whoever lands second renumbers (the coordinator's standing license).
+  `
+  ALTER TABLE project_linking ADD COLUMN teamWorkspace TEXT;
+  `,
 ];
 
 /** The version this build writes. `MIGRATIONS.length` and nothing else: a

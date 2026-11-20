@@ -22,16 +22,16 @@ interface Row {
   failReason: string | null; measuredAt: number | null;
   initiatives: string; linearOwner: string | null; ownsTeam: number;
   setAt: number | null; teamSource: string | null; teamName: string | null; teamEvidence: string | null;
-  teamAt: number | null; teamCandidates: string | null;
+  teamAt: number | null; teamCandidates: string | null; teamWorkspace: string | null;
 }
 
 const COLUMNS = 'project, teamKey, override, visibility, slug, template, failReason, measuredAt, initiatives, linearOwner, ownsTeam, '
-  + 'setAt, teamSource, teamName, teamEvidence, teamAt, teamCandidates';
+  + 'setAt, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace';
 
 /** A project with no row: no key, no override, nothing measured. */
 export const UNSET_LINKING: ProjectLinkingWire = Object.freeze({
   teamKey: null, override: null, measured: Object.freeze({ state: 'unmeasured' as const }), mode: 'unknown' as const,
-  initiatives: 'on' as const, linearOwner: null, ownsTeam: false, teamLink: null, teamCandidates: Object.freeze([]),
+  initiatives: 'on' as const, linearOwner: null, ownsTeam: false, teamLink: null, teamCandidates: Object.freeze([]), teamWorkspace: null,
 });
 
 /** A stored JSON cell, or undefined when it does not parse. */
@@ -83,13 +83,14 @@ function wireOf(row: Row | undefined): ProjectLinkingWire {
   return {
     teamKey, override, measured, mode: linkingMode(override, ruled),
     initiatives: row?.initiatives === 'off' ? 'off' : 'on', linearOwner: row?.linearOwner ?? null, ownsTeam: row?.ownsTeam === 1,
-    teamLink: teamLinkOf(row), teamCandidates: candidatesOf(row),
+    teamLink: teamLinkOf(row), teamCandidates: candidatesOf(row), teamWorkspace: row?.teamWorkspace ?? null,
   };
 }
 
 /** The operator's write: the key and the override, who and when; the reading is left as it is. D-8405: a write that
  *  changes the key makes it the operator's (`teamSourceAfterWrite`), and the pass's team and evidence go with the old key;
- *  one that sends the stored key back keeps whoever set it. Read and written in one transaction. */
+ *  one that sends the stored key back keeps whoever set it. D-8808: `w.workspace` is the DECIDED workspace
+ *  (`workspaceAfterWrite`), written with the key in the same statement; absent writes none. Read and written in one transaction. */
 export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBody, by: string, at: number): void {
   tx(db, () => {
     const before = db.prepare('SELECT teamKey, teamSource FROM project_linking WHERE project = ?').get(project) as
@@ -97,11 +98,11 @@ export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBod
     const prior = { teamKey: before?.teamKey ?? null, source: sourceOf(before?.teamSource ?? null) };
     const keyChanged = w.teamKey !== prior.teamKey;
     db.prepare(
-      'INSERT INTO project_linking (project, teamKey, override, setBy, setAt, teamSource, teamAt) VALUES (?, ?, ?, ?, ?, ?, ?) '
+      'INSERT INTO project_linking (project, teamKey, override, setBy, setAt, teamSource, teamAt, teamWorkspace) VALUES (?, ?, ?, ?, ?, ?, ?, ?) '
       + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, override = excluded.override, '
-      + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource'
+      + 'setBy = excluded.setBy, setAt = excluded.setAt, teamSource = excluded.teamSource, teamWorkspace = excluded.teamWorkspace'
       + (keyChanged ? ', teamName = NULL, teamEvidence = NULL, teamAt = excluded.teamAt' : ''),
-    ).run(project, w.teamKey, w.override, by, at, teamSourceAfterWrite(prior, w.teamKey), keyChanged ? at : null);
+    ).run(project, w.teamKey, w.override, by, at, teamSourceAfterWrite(prior, w.teamKey), keyChanged ? at : null, w.workspace ?? null);
   });
 }
 
@@ -109,15 +110,15 @@ export function setLinking(db: DatabaseSync, project: string, w: LinkingWriteBod
  *  key is stored and the operator has not decided (`teamSource` is not `manual`), in the same statement, so an operator's
  *  write that lands first always wins. True when the row was written. */
 export function linkTeamAuto(
-  db: DatabaseSync, project: string, link: { key: string; name: string; evidence: TeamEvidence }, at: number,
+  db: DatabaseSync, project: string, link: { key: string; name: string; evidence: TeamEvidence; workspace?: string | null }, at: number,
 ): boolean {
   const res = db.prepare(
-    'INSERT INTO project_linking (project, teamKey, teamSource, teamName, teamEvidence, teamAt, teamCandidates) '
-    + "VALUES (?, ?, 'auto', ?, ?, ?, NULL) "
+    'INSERT INTO project_linking (project, teamKey, teamSource, teamName, teamEvidence, teamAt, teamCandidates, teamWorkspace) '
+    + "VALUES (?, ?, 'auto', ?, ?, ?, NULL, ?) "
     + 'ON CONFLICT(project) DO UPDATE SET teamKey = excluded.teamKey, teamSource = excluded.teamSource, '
-    + 'teamName = excluded.teamName, teamEvidence = excluded.teamEvidence, teamAt = excluded.teamAt, teamCandidates = NULL '
+    + 'teamName = excluded.teamName, teamEvidence = excluded.teamEvidence, teamAt = excluded.teamAt, teamCandidates = NULL, teamWorkspace = excluded.teamWorkspace '
     + "WHERE project_linking.teamKey IS NULL AND project_linking.teamSource IS NOT 'manual'",
-  ).run(project, link.key, link.name, JSON.stringify(link.evidence), at);
+  ).run(project, link.key, link.name, JSON.stringify(link.evidence), at, link.workspace ?? null);
   return Number(res.changes) > 0;
 }
 

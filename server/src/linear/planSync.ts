@@ -46,7 +46,7 @@ import type { LinearJournal } from './journal.js';
 import type { CcrcPass, LinearWritePolicy } from './policy.js';
 import type { LinearRateService } from './rate.js';
 import type { LinearRefresher } from './refresher.js';
-import { currentDetails, routableSlots, routeLinear } from './route.js';
+import { currentDetails, routableSlots, routeProjectTeam } from './route.js';
 import { markLinearSlotRejected, type LinearSlotRef, type LinearStoreRead } from './store.js';
 import { restoreCommentChoice, restoreHoldVerdict, restoreTargetVerdict, restoredDescription } from './driftPolicy.js';
 import {
@@ -451,10 +451,10 @@ export class PlanSync {
     return this.workspaceOfProject(t.project, store.kind === 'listed' ? routableSlots(store) : []);
   }
 
-  /** The workspace a project's linked team routes to (`routeLinear`), null when it has no team or no slot serves it. */
+  /** The workspace a project's linked team routes to (`routeProjectTeam`), null when it has no team or no slot serves it. */
   private workspaceOfProject(project: string, listed: ReturnType<typeof routableSlots>): string | null {
     const l = this.deps.coord.linkingOf(project);
-    const route = l.teamKey === null ? null : routeLinear(listed, { kind: 'team', team: l.teamKey, workspace: null });
+    const route = l.teamKey === null ? null : routeProjectTeam(listed, { teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null });
     return route !== null && route.kind === 'slot' ? route.slot.workspaceId : null;
   }
 

@@ -16,7 +16,7 @@ import { handedMail, inboundDoorVerdict, raisedItemInput, returnedMail, type Inb
 import { insertSystemMailTx } from './rundefsTx.js';
 import { isLinearTeamKey } from '../../../shared/linear.js';
 import type { CoordinatorPresence } from '../../../shared/ledgers.js';
-import { routableSlots, routeLinear } from '../linear/route.js';
+import { routableSlots, routeProjectTeam } from '../linear/route.js';
 import type { LinearStoreRead } from '../linear/store.js';
 import { refuseOtherLane, refuseRoute, refuseRun } from '../refuse.js';
 import type { OtherLane, OtherLaneReads } from './otherLanes.js';
@@ -207,9 +207,9 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     let store: LinearStoreRead | null = null;
     try { store = await opts.readLinearStore(); } catch { store = null; }
     for (const p of projects) {
-      const team = opts.coord.linkingOf(p).teamKey;
-      if (team === null || store === null || store.kind !== 'listed') { out.set(p, null); continue; }
-      const r = routeLinear(routableSlots(store), { kind: 'team', team, workspace: null });
+      const l = opts.coord.linkingOf(p);
+      if (l.teamKey === null || store === null || store.kind !== 'listed') { out.set(p, null); continue; }
+      const r = routeProjectTeam(routableSlots(store), { teamKey: l.teamKey, workspaceId: l.teamWorkspace ?? null });
       out.set(p, r.kind === 'slot' ? r.slot.workspaceId : null);
     }
     return out;

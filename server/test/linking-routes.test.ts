@@ -13,6 +13,9 @@ import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { hashLine } from '../src/auth/secret.js';
 import { DEFAULT_TEST_ROSTER, seedRoster } from './helpers.js';
+import { putLinearSlot } from '../src/linear/store.js';
+import { keyTailOf } from '../src/linear/connection.js';
+import { valueDigestHex } from '../src/token/files.js';
 import { mkTmp } from './tmpHelpers.js';
 import { ID_GATE_TOKEN, seedRow } from './idGateFixture.js';
 
@@ -62,7 +65,7 @@ describe('POST /api/projects/:project/linking', () => {
       ok: true, linking: {
         teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false,
         // D-8405: a key the operator typed is theirs, stamped when.
-        teamLink: { source: 'manual', at: expect.any(Number) }, teamCandidates: [],
+        teamLink: { source: 'manual', at: expect.any(Number) }, teamCandidates: [], teamWorkspace: null,
       },
     });
     expect(coord!.linkingOf('project-a').teamKey).toBe('KEY');
@@ -137,11 +140,11 @@ describe('GET /api/projects carries a linking cell', () => {
     const byName = Object.fromEntries((res.json().projects as { name: string; linking?: unknown }[]).map((p) => [p.name, p.linking]));
     expect(byName['project-a']).toEqual({
       teamKey: 'KEY', override: 'public', measured: { state: 'unmeasured' }, mode: 'public', initiatives: 'on', linearOwner: null, ownsTeam: false,
-      teamLink: { source: 'manual', at: 1 }, teamCandidates: [],
+      teamLink: { source: 'manual', at: 1 }, teamCandidates: [], teamWorkspace: null,
     });
     expect(byName['project-b']).toEqual({
       teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false,
-      teamLink: null, teamCandidates: [],
+      teamLink: null, teamCandidates: [], teamWorkspace: null,
     });
   });
 
@@ -166,7 +169,7 @@ describe('GET /api/linking: a session reads its own project\'s row', () => {
     expect(res.statusCode, res.body).toBe(200);
     expect(res.json()).toEqual({
       ok: true, project: 'project-a', teamKey: 'KEY', override: 'private', measured: { state: 'unmeasured' }, mode: 'private', initiatives: 'on', linearOwner: null, ownsTeam: false,
-      teamLink: { source: 'manual', at: 1 }, teamCandidates: [],
+      teamLink: { source: 'manual', at: 1 }, teamCandidates: [], teamWorkspace: null,
     });
   });
 
@@ -196,7 +199,7 @@ describe('GET /api/linking: a session reads its own project\'s row', () => {
     const res = await get(app, me);
     expect(res.json()).toEqual({
       ok: true, project: 'project-a', teamKey: null, override: null, measured: { state: 'unmeasured' }, mode: 'unknown', initiatives: 'on', linearOwner: null, ownsTeam: false,
-      teamLink: null, teamCandidates: [],
+      teamLink: null, teamCandidates: [], teamWorkspace: null,
     });
     await app.close();
     seedRow(home, 'bare-session', { project: '' });
@@ -291,5 +294,69 @@ describe('POST /api/projects/:project/pr-template', () => {
     app = await open({ coord, runCcd }, true);
     expect((await tmpl(app)).statusCode).toBe(401);
     expect(calls).toEqual([]);
+  });
+});
+
+// Linear hierarchy wave 8, D-8808: the write may name the workspace the key lives in.
+describe('POST /api/projects/:project/linking: the workspace', () => {
+  const WS_A = '00000000-0000-4000-8000-0000000000a1';
+  const WS_B = '00000000-0000-4000-8000-0000000000b2';
+  /** Two connected workspaces: both have team AAA, only ws-b has BBB. Keys are built at run time (fixtures, not keys). */
+  const seedWorkspaces = async (): Promise<void> => {
+    for (const [id, urlKey, keys, fill] of [[WS_A, 'ws-a', ['AAA'], 'a'], [WS_B, 'ws-b', ['AAA', 'BBB'], 'b']] as const) {
+      const key = `lin_api_${fill.repeat(40)}`;
+      await putLinearSlot(path.join(home, '.ccrc'), key, {
+        workspaceId: id, name: `Workspace ${urlKey}`, urlKey, user: 'User A',
+        teams: keys.map((k, i) => ({ id: `00000000-0000-4000-8000-${String(fill.charCodeAt(0) * 10 + i).padStart(12, '0')}`, key: k, name: `Team ${k}` })),
+        teamsAt: 1, keyTail: keyTailOf(key), keyDigest: valueDigestHex(key), checkedAt: 1, outcome: 'ok',
+      }, { replace: true });
+    }
+  };
+
+  it('a held pair is stored together and answered', async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    const res = await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_B });
+    expect(res.statusCode, res.body).toBe(200);
+    expect(res.json().linking).toMatchObject({ teamKey: 'AAA', teamWorkspace: WS_B });
+  });
+
+  it('a write naming a pair no workspace has is refused team-unknown and writes nothing', async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    const res = await post(app, 'project-a', { teamKey: 'BBB', override: null, workspace: WS_A });
+    expect(res.statusCode).toBe(404);
+    expect(res.json()).toMatchObject({ error: 'team-unknown' });
+    expect(coord!.linkingOf('project-a')).toMatchObject({ teamKey: null, teamWorkspace: null });
+  });
+
+  it('a named workspace with an unreadable Linear store is unavailable (503), not team-unknown', async () => {
+    app = await open({ coord }, false);
+    const store = path.join(home, '.ccrc', 'linear');
+    rmSync(store, { recursive: true, force: true });
+    writeFileSync(store, 'not a directory');
+    const res = await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_A });
+    expect(res.statusCode).toBe(503);
+    expect(res.json()).toMatchObject({ error: 'unavailable' });
+    expect(coord!.linkingOf('project-a').teamKey).toBeNull();
+  });
+
+  it('a key change clears a workspace that does not hold the new key, and keeps one that does', async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_B });
+    const kept = await post(app, 'project-a', { teamKey: 'BBB', override: null });
+    expect(kept.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: WS_B });
+    await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_A });
+    const cleared = await post(app, 'project-a', { teamKey: 'BBB', override: null });
+    expect(cleared.json().linking).toMatchObject({ teamKey: 'BBB', teamWorkspace: null });
+  });
+
+  it('a write with no workspace and the key unchanged keeps the stored workspace', async () => {
+    await seedWorkspaces();
+    app = await open({ coord });
+    await post(app, 'project-a', { teamKey: 'AAA', override: null, workspace: WS_A });
+    const res = await post(app, 'project-a', { teamKey: 'AAA', override: 'private' });
+    expect(res.json().linking).toMatchObject({ override: 'private', teamWorkspace: WS_A });
   });
 });

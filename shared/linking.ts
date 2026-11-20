@@ -70,7 +70,11 @@ export function isTeamCandidate(v: unknown, isKey: (k: unknown) => boolean): v i
 export interface LinkingShowAnswer extends ProjectLinkingWire { ok: true; project: string }
 
 /** `POST /api/projects/:project/linking`: the operator's write. */
-export interface LinkingWriteBody { teamKey: string | null; override: LinkingOverride | null }
+export interface LinkingWriteBody {
+  teamKey: string | null; override: LinkingOverride | null;
+  /** D-8808: the workspace id the key lives in; null: none; omitted: keep the stored one while it holds the key (`workspaceAfterWrite`). */
+  workspace?: string | null;
+}
 
 /** Every refusal word the linking routes answer; each reaches the PWA through `refusalText`. */
 export const LINKING_REFUSALS = ['bad-team-key', 'bad-override', 'no-project', 'repo-public', 'repo-unmeasured',
