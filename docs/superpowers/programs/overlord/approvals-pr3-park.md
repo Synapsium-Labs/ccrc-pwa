@@ -101,6 +101,13 @@ take a packet (mail 27068); the holder said yes to it (mail 27138), so PR 3b's h
   answer lifecycle, never through it: the lifecycle owns pressing a painted dialog (`rings/pwa-one-owner.test.ts`'s one
   answer path), and a park ruling presses nothing. It posts to the same operator door, whose `approval-<n>` arm H3 adds.
 - `parked-group-above-the-list`: the console draws the group above the programme list, so it shows when nothing else waits.
+- `record-name-is-the-union`: `ApprovalRulingRecord` names either record, and v1 is `ApprovalRulingRecordV1`. The signer
+  signs whatever record it is handed, so it compiles unchanged at `main`'s text. The approval signing path therefore stays
+  outside a diff that touches the questions owner, as `consolidation-path-guard.test.ts`'s W3 arm requires. That arm is
+  not loosened.
+- `lane-seed-or-ignore`: migration 110 seeds the park's Shadow lanes row with `INSERT OR IGNORE`. A migration replayed
+  over a database that already carries the row (a replay test does exactly this) then answers as on a fresh database,
+  instead of failing `UNIQUE`.
 
 ## Residuals
 
@@ -143,6 +150,25 @@ Every guard was measured red by a mutant, each file restored from a copy saved b
     `WHERE fetchedAt IS NULL`, so each guard covers the other, and the mutant with both dropped is the one above.
 - The plan's mutant "call a press function from the new arm" has no site: the arm's core takes no press function at all
   (`OperatorApprovalRule` has none), which `approvalParkDoor.ts`'s ladder and the core's signature hold.
+
+## Fix round 1 (CI's first run)
+
+The first fast run was red on nine suites that I had not run before the push (`suite: red`, `failure: shallow`). Each one is
+fixed in this PR:
+
+- **Real defects (2):**
+  - the lane seed's replay (`lane-seed-or-ignore`);
+  - the signer in the diff beside the questions owner (`record-name-is-the-union`).
+- **A compaction I had made to stay inside `store.ts`'s growth cap:** it folded comments onto code lines and so spelled a
+  node-file name on a code line. It is reverted to `main`'s import block.
+- **A raw `bash` spawn in the hook test,** now through `spawnSyncGroup`.
+- **Pins and censuses that read an intended change:**
+  - the question census's closed store-method list, with the park's eight methods (43);
+  - the operator door's ladder: an `approval-<n>` id reaches its arm's gate;
+  - the Shadow lanes order and seed rows, with the park's row;
+  - `shared/api.ts`'s import list in two pins, with the park's type import (twenty-one).
+
+The holders of the files touched agreed first: linear-hierarchy waves 7 and 8, and capacity Task 2.
 
 ## For the ledger
 
