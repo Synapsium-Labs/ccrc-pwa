@@ -125,9 +125,12 @@ describe('the coordinator badge (note 2)', () => {
 
 describe('the badge colour (note 2, the contrast gates)', () => {
   const read = (f: string): string => readFileSync(path.join(__dirname, '../src/fleet', f), 'utf8');
+  /** The `color` a rule of exactly this selector declares, read by its text, so no selector is turned into a pattern. */
   const decl = (css: string, selector: string): string | null => {
-    const esc = selector.replace(/[.[\]'()]/g, '\\$&');
-    return new RegExp(`(?:^|\\})\\s*${esc}\\s*\\{\\s*color:\\s*([^;}]+);\\s*\\}`, 'm').exec(css)?.[1] ?? null;
+    const at = css.indexOf(`${selector} {`);
+    if (at < 0) return null;
+    const body = css.slice(at + selector.length + 2, css.indexOf('}', at));
+    return /color:\s*([^;]+);/.exec(body)?.[1] ?? null;
   };
 
   it('is the quiet secondary ink outside a programme box, a gated token the row gate measures', () => {
