@@ -8,6 +8,7 @@ import type { RaiseItemInput } from '../coord/ledgersStore.js';
 import { parsePlanPut } from '../coord/planPolicy.js';
 import type { StoredPlan } from '../coord/planStore.js';
 import type { CcrcOpName } from './hierarchyOps.js';
+import { normalText } from './driftPolicy.js';
 
 export type IssueSnapshotRow = IssueSnapshot & { linearId: string; identifier: string };
 export interface IssueAfter {
@@ -37,9 +38,16 @@ type Checked = { ok: true; counts: MapCounts } | { ok: false; word: MapWord; det
 const FIELDS = ['state', 'team', 'project', 'parent', 'milestone', 'title', 'description'] as const satisfies readonly (keyof IssueSnapshot)[];
 /** A field holds a value a re-read can measure: a string, or null for an absent project, parent or milestone. */
 const measured = (v: unknown): boolean => typeof v === 'string' || v === null;
+/** The texts compare as the drift pass compares them (`normalText`): Linear may re-flow the markdown whitespace it stores, so a
+ *  description the sync wrote reads back equal, never as a person's edit (the wave's review). */
+const TEXT_FIELDS: ReadonlySet<keyof IssueSnapshot> = new Set(['title', 'description']);
+const fieldEq = (f: keyof IssueSnapshot, x: unknown, y: unknown): boolean =>
+  TEXT_FIELDS.has(f) && typeof x === 'string' && typeof y === 'string' ? normalText(x) === normalText(y) : x === y;
 /** Equal on every listed field, by key and type (D-8795): a field either side cannot measure is never a match. */
 const sameOn = (a: Partial<IssueSnapshot>, b: Partial<IssueSnapshot>, fields: readonly (keyof IssueSnapshot)[] = FIELDS): boolean =>
-  fields.every((f) => measured(a[f]) && measured(b[f]) && a[f] === b[f]);
+  fields.every((f) => measured(a[f]) && measured(b[f]) && fieldEq(f, a[f], b[f]));
+/** Whether a fresh read of an issue still matches the snapshot its map was drafted from (every field; texts as above). */
+export const snapshotHolds = (was: IssueSnapshot, now: IssueSnapshot): boolean => sameOn(now, was);
 const isObj = (v: unknown): v is Record<string, unknown> => typeof v === 'object' && v !== null && !Array.isArray(v);
 
 export const ticketKeyOf = (e: MapEntry): string => e.target?.ticketKey ?? e.identifier.toLowerCase();
@@ -393,7 +401,8 @@ export function reportItemInput(migrationId: number, team: string, c: MapCounts)
 /** The mail asking the team's Linear owner for the map (Task 7.2), deduped by its subject. */
 export function proposeMail(migrationId: number, team: string, project: string, followUp: readonly string[] = []): { subject: string; body: string } {
   return {
-    subject: `linear migration ${migrationId}: propose the map for team ${team}`,
+    subject: followUp.length === 0 ? `linear migration ${migrationId}: propose the map for team ${team}`
+      : `linear migration ${migrationId}: propose a follow-up map for team ${team} (${followUp.length} skipped)`,
     body: [
       `You are the Linear owner of project ${project}, whose team ${team} is to be reshaped into ccrc's hierarchy (migration ${migrationId}).`,
       followUp.length === 0

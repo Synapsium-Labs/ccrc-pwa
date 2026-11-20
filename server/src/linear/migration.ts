@@ -43,7 +43,7 @@ import {
   applySteps, checkMap, countsOfMap, declareMail, expectOfOwned, hierarchyStateOf, mapItemInput, migrationSettled, parseMapProposal,
   programmeOfEntry, proposeMail, putBackSteps, putBackVerdict, reconcileMove, replacementComment, reportCounts,
   reportItemInput, returnMail, startVerdict, ticketKeyOf, ticketKindOf,
-  type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
+  snapshotHolds, type IssueAfter, type IssueSnapshotRow, type MapContext, type MoveRow, type PlanFacts,
 } from './migrationPolicy.js';
 
 /** How long one apply tick lets a key's pass run when it waits for it (the sync's own budget is its own). */
@@ -53,6 +53,8 @@ export const MIGRATION_PASS_BUDGET_MS = 20_000;
  *  three calls, so two a tick stays near the lane's share and the sync's own lane is never spent. The pilot's ~220 issues take
  *  about two hours. */
 export const MIGRATION_WRITES_PER_TICK = 2;
+/** The moved issues put back a tick: each costs a read and a write on lane `migration` (spec §10.6). */
+export const PUT_BACK_ISSUES_PER_TICK = 2;
 /** The page cap of the team's open-issue read: a team past it is read again on the next tick (the pilot holds about 220). */
 export const MIGRATION_OPEN_PAGES = 20;
 
@@ -104,8 +106,14 @@ function mergeFollowUp(was: MapBody, next: MapBody): MapBody {
   };
 }
 
+/** The `planBy` of the plan rows a map declares (a programme with no plan of its own): told apart from a coordinator's own
+ *  declaration when the apply judges the map's rule again. */
+export const MIGRATION_PLAN_BY = 'ccrc-migration';
+
 export class LinearMigration {
   private running = false;
+  /** Until when the migration lane rests after Linear's rate refusal (in this process; a restart costs one refused call). */
+  private restUntil = 0;
   constructor(private readonly deps: LinearMigrationDeps) {}
 
   // ── Reads shared by the doors and the tick ──
@@ -175,6 +183,16 @@ export class LinearMigration {
 
   // ── Propose (Task 7.2) ──
 
+  /** The migration of a team that waits for a map: `proposing`, or `applied` with skipped issues, its report open and no put back
+   *  asked (a follow-up). Null: none. */
+  private waitingRow(team: string, workspaceId: string | null): MigrationRow | null {
+    return this.deps.plan.migrationsOf().find((m) => m.teamKey.toUpperCase() === team.toUpperCase() && (workspaceId === null || m.workspaceId === workspaceId)
+      && (m.state === 'proposing' || (m.state === 'applied' && m.reportDoneAt === null && m.putBackAskedAt === null && (m.report?.skipped.length ?? 0) > 0))) ?? null;
+  }
+  /** Whether a team has a migration waiting for a map: `plan map-propose` asks before its Linear read, so a call with nothing to
+   *  propose spends no read (the wave's review). */
+  awaitsMap(team: string): boolean { return this.waitingRow(team, null) !== null; }
+
   /** Outside the mutex: the team's open issues, for `storeProposal`. */
   async readOpen(team: string): Promise<OpenRead> {
     const at = await this.slotOfTeam(team);
@@ -187,16 +205,18 @@ export class LinearMigration {
   storeProposal(team: string, caller: string, body: unknown, open: Extract<OpenRead, { ok: true }>): { ok: true; migrationId: number; counts: ReturnType<typeof reportCounts> } | Refusal {
     const { plan, coord } = this.deps;
     const now = this.deps.now();
-    const row = plan.migrationsOf().find((m) => m.teamKey === team && m.workspaceId === open.workspaceId && !migrationSettled(m));
+    const row = this.waitingRow(team, open.workspaceId);
     const followUp = row?.state === 'applied' ? row.report?.skipped ?? [] : null;
-    if (row === undefined || (row.state !== 'proposing' && (followUp === null || followUp.length === 0))) {
-      return { ok: false, word: 'plan-bad-body', detail: `no migration of team ${team} is waiting for a map` };
-    }
+    if (row === null) return { ok: false, word: 'plan-bad-body', detail: `no migration of team ${team} is waiting for a map` };
     const owner = this.ownerOf(team);
     if (owner === null || owner.id !== caller) return { ok: false, word: 'not-linear-owner', detail: `only the Linear owner of team ${team} proposes its map` };
     const parsed = parseMapProposal(body, team);
     if (!parsed.ok) return parsed;
-    const rows = followUp === null ? open.rows : open.rows.filter((r) => followUp.includes(r.identifier));
+    // An issue ccrc's sync already holds (a programme born in the new shape, §10.5) is no part of a map: one writer per Linear object.
+    const held = new Set(plan.boundLinearIdsOf(open.workspaceId));
+    // A follow-up's issues are the ones the apply skipped: an adopted one keeps its binding (its ticket dropped "put back"), so the
+    // binding must not hide it from the follow-up map.
+    const rows = followUp === null ? open.rows.filter((r) => !held.has(r.linearId)) : open.rows.filter((r) => followUp.includes(r.identifier));
     const runs = this.runFacts();
     if (runs === null) return { ok: false, word: 'unreachable', detail: 'the runs could not be read' };
     const project = row.project ?? owner.project;
@@ -365,7 +385,7 @@ export class LinearMigration {
   private async applyTick(m: MigrationRow): Promise<void> {
     const { plan } = this.deps;
     const now = this.deps.now();
-    if (m.map === null) return;
+    if (m.map === null || now < this.restUntil) return;
     if (m.state === 'approved' && !plan.setMigration(m.id, ['approved'], { state: 'applying' }, now)) return;
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
     const slot = slotsOf(store).get(m.workspaceId);
@@ -375,89 +395,131 @@ export class LinearMigration {
     if (entries === null || runs === null) return;
     const map = m.map;
     const report = m.report ?? EMPTY_MIGRATION_REPORT();
+    const skipped = new Set(report.skipped);
+    const initiativesOff = entries.initiatives === 'off' || plan.hierarchySettingsOf(m.project ?? '').initiatives === 'off';
 
-    // 1. The structure the map declares: plan rows and their move rows, then the sync's pass creates and binds the objects.
+    // 1. The structure the map declares: plan rows and their move rows, then the sync's pass creates and binds the objects. The
+    //    map's rule is judged again here (the wave's review): a programme that has since been declared by its coordinator, or
+    //    has a run, takes no structure from the map, and its issues are skipped and listed, never left waiting forever.
     let structureBound = true;
     for (const g of [...(map.backlog ?? []).map((b) => ({ slug: b.slug, epics: b.epics, backlog: b })), ...(map.epics ?? []).map((e) => ({ slug: e.programme, epics: e.epics, backlog: null }))]) {
       if (runs.active.has(g.slug)) { structureBound = false; continue; }
       const stored = plan.planOf(g.slug);
-      if (!g.epics.every((e) => stored.epics.some((s) => s.key === e.key))) {
-        const diff = diffPlan(stored, { epics: g.epics }, { home: m.project ?? '', doneWhenCount: 0, workspaceOfProject: () => m.workspaceId });
-        if (!diff.ok) continue;
-        plan.declareMapStructure(m.id, g.slug, diff.changes, 'ccrc-migration', now, g.backlog === null ? null : { home: m.project ?? '', title: g.backlog.title, state: 'paused' });
+      if (!g.epics.every((e) => stored.epics.some((x) => x.key === e.key))) {
+        const facts = this.planFacts(runs.live)(g.slug);
+        const ours = stored.planBy === null || stored.planBy === MIGRATION_PLAN_BY;
+        const diff = facts.live || !ours ? null : diffPlan(stored, { epics: g.epics }, { home: m.project ?? '', doneWhenCount: 0, workspaceOfProject: () => m.workspaceId });
+        if (diff === null || !diff.ok) {
+          for (const e of map.entries) if (programmeOfEntry(e) === g.slug) skipped.add(e.identifier);
+          continue;
+        }
+        plan.declareMapStructure(m.id, g.slug, diff.changes, MIGRATION_PLAN_BY, now, g.backlog === null ? null : { home: m.project ?? '', title: g.backlog.title, state: 'paused' });
       }
-      if (!this.fillCreated(m, g.slug)) {
+      if (!this.fillCreated(m, g.slug, initiativesOff)) {
         await this.deps.planSync.passFor(g.slug, now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred');
-        if (!this.fillCreated(m, g.slug)) structureBound = false;
+        if (!this.fillCreated(m, g.slug, initiativesOff)) structureBound = false;
       }
     }
 
-    // 2. The issues: one read of the team's open issues, then each listed issue in Task 7.1's order.
-    const open = await this.readOpenIn(m.workspaceId, slot, m.teamKey);
-    if (!open.ok) return;
-    const reread = new Map<string, IssueSnapshot | 'closed'>(map.entries.map((e) => [e.issue, 'closed' as const]));
-    for (const r of open.rows) if (reread.has(r.linearId)) reread.set(r.linearId, snapshotOf(r));
-    const moves = new Map(plan.movesOf(m.id).map((x) => [x.subject, x]));
-    const skipped = new Set(report.skipped);
-    const fresh: MapBody = { ...map, entries: map.entries.filter((e) => !moves.has(`issue:${e.issue}`) && !skipped.has(e.identifier)) };
-
+    // 2. A row written before a crash, or one whose pass has not landed yet: reconciled against a fresh read by id (D-8795's
+    //    `reconcileMove`). Every read and write of a tick counts against its budget (spec §10.6), and a rate refusal ends the tick.
+    const moves = plan.movesOf(m.id).filter((x) => !x.subject.includes(':skipped:'));
+    const moveOf = new Map(moves.map((x) => [x.subject, x]));
     let budget = MIGRATION_WRITES_PER_TICK;
-    // A row written before a crash: reconciled against the fresh read (D-8795's reconcileMove).
     for (const e of map.entries) {
-      const row = moves.get(`issue:${e.issue}`);
-      if (row === undefined || row.appliedAt !== null) continue;
-      const seen = reread.get(e.issue) ?? 'closed';
-      const v = reconcileMove(asMoveRow(row), seen);
+      const row = moveOf.get(`issue:${e.issue}`);
+      if (row === undefined || row.appliedAt !== null || skipped.has(e.identifier) || budget <= 0) continue;
+      budget -= 1;
+      const seen = await this.readIssue(m, slot, e.issue);
+      if (seen === 'unread') { this.saveReport(m, report, skipped, now); return; }
+      const v = reconcileMove(asMoveRow(row), seen === 'gone' ? 'closed' : seen);
       if (v === 'applied') plan.setMove(row.id, { appliedAt: now });
-      else if (v === 'skip') skipped.add(e.identifier);
-      else if (budget > 0) {
-        budget -= 1;
-        if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries);
-        else await this.deps.planSync.passFor(String(row.after['key'] ?? ''), now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred');
-      }
+      else if (v === 'skip') this.skipAdopted(row, e, skipped, now);
+      else if (CLOSERS.has(e.class)) await this.closeIssue(m, e, row, slot, entries);
+      else await this.deps.planSync.passFor(String(row.after['key'] ?? ''), now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred');
     }
 
+    // 3. New writes, in Task 7.1's order: each issue is read by id inside its key's flight just before its write (D-8796), and one
+    //    that changed since the map was drafted is skipped, listed and never adopted.
+    const fresh: MapBody = { ...map, entries: map.entries.filter((e) => !moveOf.has(`issue:${e.issue}`) && !skipped.has(e.identifier)) };
     const live = structureBound ? runs.active : new Set([...runs.active, ...(map.epics ?? []).map((g) => g.programme), ...(map.backlog ?? []).map((g) => g.slug)]);
-    const steps = applySteps(fresh, live, reread, (e) => (CLOSERS.has(e.class) || e.class === 'leaf' || e.class === 'upkeep' ? { expect: {} } : null));
+    const asDrafted = new Map<string, IssueSnapshot | 'closed'>(fresh.entries.flatMap((e) => (map.snapshot[e.issue] === undefined ? [] : [[e.issue, map.snapshot[e.issue]!] as const])));
+    const steps = applySteps(fresh, live, asDrafted, (e) => (CLOSERS.has(e.class) || e.class === 'leaf' || e.class === 'upkeep' ? { expect: {} } : null));
     for (const id of steps.skipped) skipped.add(map.entries.find((e) => e.issue === id)?.identifier ?? id);
     for (const step of steps.now) {
       if (budget <= 0) break;
       budget -= 1;
       const e = map.entries.find((x) => x.issue === step.linearId)!;
-      const before = step.before!;
+      const was = map.snapshot[e.issue]!;
       if (CLOSERS.has(e.class)) {
-        const row = plan.insertMove({ migrationId: m.id, subject: `issue:${e.issue}`, kind: 'issue', linearId: e.issue, identifier: e.identifier, before, after: this.closeAfter(e) });
-        await this.closeIssue(m, e, row, slot, entries);
+        const out = await this.deps.planSync.withFlight(`migration:${e.issue}`, async () => {
+          const seen = await this.readIssue(m, slot, e.issue);
+          if (seen === 'unread') return 'unread' as const;
+          if (seen === 'gone' || !snapshotHolds(was, seen)) return 'changed' as const;
+          return plan.insertMove({ migrationId: m.id, subject: `issue:${e.issue}`, kind: 'issue', linearId: e.issue, identifier: e.identifier, before: seen, after: this.closeAfter(e) });
+        });
+        if (out === 'unread') { this.saveReport(m, report, skipped, now); return; }
+        if (out === 'changed') { skipped.add(e.identifier); continue; }
+        await this.closeIssue(m, e, out, slot, entries);
       } else {
         // An Upkeep issue is placed in the project's Upkeep epic, whose Linear project the sync must have created first: a ticket
         // is placeable only under a bound epic (`plannedOwnedNow` answers null before it).
         if (e.class === 'upkeep' && !(await this.upkeepBound(m, now))) continue;
-        const key = await this.adopt(m, e, before, store);
-        if (key === null) continue;
-        await this.deps.planSync.passFor(key, now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred');
+        const out = await this.adopt(m, e, was, store, slot);
+        if (out === 'unread') { this.saveReport(m, report, skipped, now); return; }
+        if (out === 'changed') { skipped.add(e.identifier); continue; }
+        if (out === null) continue;
+        await this.deps.planSync.passFor(out, now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred');
       }
     }
     const waiting = [...steps.waiting].map((id) => map.entries.find((e) => e.issue === id)?.identifier ?? id);
-    const nextReport = { ...report, skipped: [...skipped], waiting };
-    plan.setMigration(m.id, ['applying'], { report: nextReport }, now);
+    const nextReport = this.saveReport(m, { ...report, waiting }, skipped, now);
 
-    // 3. Done (D-8796 condition 4) when nothing waits, every structure object is bound, no listed issue is left unwritten, and
+    // 4. Done (D-8796 condition 4) when nothing waits, every structure object is bound, no listed issue is left unwritten, and
     //    every move row is applied or its issue is skipped and listed; a row still waiting on its pass holds `applying`.
-    const all = plan.movesOf(m.id);
-    const unwritten = fresh.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
+    const all = plan.movesOf(m.id).filter((x) => !x.subject.includes(':skipped:'));
+    const unwritten = map.entries.some((e) => e.class !== 'unclear' && !skipped.has(e.identifier) && !all.some((x) => x.subject === `issue:${e.issue}`));
     const pending = all.some((x) => x.appliedAt === null && !(x.identifier !== null && skipped.has(x.identifier)));
     if (waiting.length > 0 || !structureBound || unwritten || pending) return;
     this.finishApply(m, map, nextReport, all, now);
   }
 
+  /** The report's skipped list written back (the row stays `applying`); answers the report it wrote. */
+  private saveReport(m: MigrationRow, report: NonNullable<MigrationRow['report']>, skipped: ReadonlySet<string>, now: number): NonNullable<MigrationRow['report']> {
+    const next = { ...report, skipped: [...skipped] };
+    this.deps.plan.setMigration(m.id, ['applying'], { report: next }, now);
+    return next;
+  }
+
+  /** An adopted issue that changed between its adoption and its write (`reconcileMove` answers skip): its ticket is put aside
+   *  (dropped "put back", so the sync never writes over the person's change, §10.3), its row set aside so a follow-up map can
+   *  move it, and it is listed as skipped. */
+  private skipAdopted(row: MoveRowStored, e: MapEntry, skipped: Set<string>, now: number): void {
+    const ticketId = row.after['ticketId'];
+    if (typeof ticketId === 'number') this.deps.plan.dropPutBack({ epics: [], checkpoints: [], tickets: [ticketId] }, now);
+    this.deps.plan.setMove(row.id, { retire: true });
+    skipped.add(e.identifier);
+  }
+
+  /** One issue read by id on lane `migration`: its snapshot, `gone` (not found), or `unread` (refused; a rate refusal rests the lane
+   *  until Linear's retry time). */
+  private async readIssue(m: MigrationRow, slot: SlotInfo, linearId: string): Promise<IssueSnapshot | 'gone' | 'unread'> {
+    const out = await this.deps.call({ op: 'issueOwned', pass: 'migration', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, target: null, fields: [], input: { id: linearId } });
+    if (!out.ok) {
+      if (out.word === 'rate-limited' && 'retryAfterS' in out) this.restUntil = this.deps.now() + out.retryAfterS * 1000;
+      return out.word === 'not-found' ? 'gone' : 'unread';
+    }
+    const r = rowOf(out.value['issue']);
+    return r === null ? 'unread' : snapshotOf(r);
+  }
+
   /** The move rows of a programme's created objects take their Linear ids from the bindings the pass made (D-8796). True when
-   *  every one of them is filled. */
-  private fillCreated(m: MigrationRow, slug: string): boolean {
+   *  every one of them is filled. With initiatives off (the workspace's, or the home project's setting), the sync makes no
+   *  initiative, so a programme's row is settled with no Linear id rather than waited on forever (the wave's review). */
+  private fillCreated(m: MigrationRow, slug: string, initiativesOff: boolean): boolean {
     const { plan } = this.deps;
-    // A key `upkeep:<project>` is the project's Upkeep epic (no programme row); any other key is a programme's slug.
-    const upkeep = slug.startsWith(UPKEEP_DUE_PREFIX);
-    const rowid = upkeep ? null : plan.programmeRowId(slug);
-    const stored = upkeep ? plan.upkeepPlanOf(slug.slice(UPKEEP_DUE_PREFIX.length)) : plan.planOf(slug);
+    const rowid = plan.programmeRowId(slug);
+    const stored = plan.planOf(slug);
     const ids = new Set<string>([...(rowid === null ? [] : [`programme:${rowid}`]), ...stored.epics.flatMap((e) => [`epic:${e.id}`, ...e.checkpoints.map((c) => `checkpoint:${c.id}`)])]);
     const bindings = plan.bindingsOf(slug);
     let all = true;
@@ -465,51 +527,51 @@ export class LinearMigration {
       if (row.before !== null || !ids.has(row.subject) || row.appliedAt !== null) continue;
       const [kind, localId] = row.subject.split(':');
       const b = bindings.find((x) => x.localKind === kind && x.localId === Number(localId) && x.workspaceId === m.workspaceId && x.state === 'bound' && x.linearId !== null);
+      if (b === undefined && kind === 'programme' && initiativesOff) { plan.setMove(row.id, { appliedAt: this.deps.now() }); continue; }
       if (b === undefined) { all = false; continue; }
       plan.setMove(row.id, { linearId: b.linearId!, appliedAt: this.deps.now() });
     }
     return all;
   }
 
-  /** The project's Upkeep epic, created (with its move row, `before` null) in one transaction when it is missing, and its Linear
-   *  objects created by the sync's pass for `upkeep:<project>` (outside any flight of ours: `passFor` joins the key's flight). True
-   *  when the epic is bound; its move row then holds its Linear id. A false answer waits for the next tick. */
+  /** The project's Upkeep epic, created when it is missing and made bound by the sync's pass for `upkeep:<project>` (outside any
+   *  flight of ours: `passFor` joins the key's flight). The Upkeep epic is shared with the inbound path, so it is no object of the
+   *  migration's: it has no move row and put back leaves it (the wave's review). A false answer waits for the next tick. */
   private async upkeepBound(m: MigrationRow, now: number): Promise<boolean> {
     const { plan, coord, planSync } = this.deps;
     const project = m.project ?? '';
     const key = `${UPKEEP_DUE_PREFIX}${project}`;
-    tx(coord.db, () => {
-      const had = plan.upkeepEpicOf(project);
-      const epicId = plan.ensureUpkeepEpicInTx(project, now);
-      if (had === null) plan.insertMove({ migrationId: m.id, subject: `epic:${epicId}`, kind: 'epic', linearId: null, identifier: null, before: null, after: { created: true } });
-    });
-    const epicId = plan.upkeepEpicOf(project)!.id;
+    const epicId = tx(coord.db, () => plan.ensureUpkeepEpicInTx(project, now));
     const bound = (): boolean => plan.bindingsOf(key).some((b) => b.localKind === 'epic' && b.localId === epicId && b.workspaceId === m.workspaceId && b.state === 'bound' && b.linearId !== null);
     if (!bound()) {
       plan.markSyncDue(key, now);
       await planSync.passFor(key, now + MIGRATION_PASS_BUDGET_MS).catch(() => 'deferred');
     }
-    this.fillCreated(m, key);
     return bound();
   }
 
-  /** A leaf or upkeep issue adopted with its move row in ONE transaction (D-8796): the move's `after.expect` is the sync's planned
-   *  owned fields for the new binding. The key whose pass sends the update, or null when it is not placeable now (rolled back). */
-  private async adopt(m: MigrationRow, e: MapEntry, before: IssueSnapshot, store: LinearStoreRead): Promise<string | null> {
+  /** A leaf or upkeep issue adopted with its move row in ONE transaction (D-8796), inside its key's flight and right after a read
+   *  of the issue by id: one that changed since the map was drafted is `changed`, never adopted. The move's `after.expect` is the
+   *  sync's planned owned fields for the new binding. The key whose pass sends the update, `unread`, `changed`, or null when it
+   *  is not placeable now (rolled back). */
+  private async adopt(m: MigrationRow, e: MapEntry, was: IssueSnapshot, store: LinearStoreRead, slot: SlotInfo): Promise<string | 'unread' | 'changed' | null> {
     const { plan, planSync, coord } = this.deps;
     const programme = e.class === 'leaf' ? programmeOfEntry(e) : null;
     const project = m.project ?? '';
     const key = programme ?? `${UPKEEP_DUE_PREFIX}${project}`;
     return planSync.withFlight(key, async () => {
+      const seen = await this.readIssue(m, slot, e.issue);
+      if (seen === 'unread') return 'unread';
+      if (seen === 'gone' || !snapshotHolds(was, seen)) return 'changed';
       try {
         return tx(coord.db, () => {
           const now = this.deps.now();
           let epicId: number;
           let checkpointId: number | null = null;
           if (programme === null) {
-            const had = plan.upkeepEpicOf(project);
-            epicId = plan.ensureUpkeepEpicInTx(project, now);
-            if (had === null) plan.insertMove({ migrationId: m.id, subject: `epic:${epicId}`, kind: 'epic', linearId: null, identifier: null, before: null, after: { created: true } });
+            const upkeep = plan.upkeepEpicOf(project);
+            if (upkeep === null) throw new Error('not-placeable');
+            epicId = upkeep.id;
           } else {
             const epic = plan.planOf(programme).epics.find((x) => x.key === e.target!.epic && x.state !== 'dropped' && x.putBackAt === null);
             if (epic === undefined) throw new Error('not-placeable');
@@ -517,14 +579,14 @@ export class LinearMigration {
             if (e.target?.checkpoint !== undefined) checkpointId = epic.checkpoints.find((c) => c.key === e.target!.checkpoint)?.id ?? null;
           }
           const ticketId = plan.adoptIssueAsTicketInTx({
-            issue: { ...before, linearId: e.issue, identifier: e.identifier }, programme, epicId, checkpointId, key: ticketKeyOf(e), kind: ticketKindOf(e),
+            issue: { ...seen, linearId: e.issue, identifier: e.identifier }, programme, epicId, checkpointId, key: ticketKeyOf(e), kind: ticketKindOf(e),
             source: e.class === 'leaf' ? 'plan' : 'inbound', mask: this.deps.mask ?? linearEgressText,
-          }, { workspaceId: m.workspaceId, teamKey: before.team }, now);
+          }, { workspaceId: m.workspaceId, teamKey: seen.team }, now);
           const binding = plan.bindingOf('ticket', ticketId, m.workspaceId);
           const owned = binding === null ? null : planSync.plannedOwnedNow(key, store, binding.id);
           if (binding === null || owned === null) throw new Error('not-placeable');
           const after: IssueAfter = { expect: expectOfOwned(owned.owned), ticketId, bindingId: binding.id, key };
-          plan.insertMove({ migrationId: m.id, subject: `issue:${e.issue}`, kind: 'issue', linearId: e.issue, identifier: e.identifier, before, after });
+          plan.insertMove({ migrationId: m.id, subject: `issue:${e.issue}`, kind: 'issue', linearId: e.issue, identifier: e.identifier, before: seen, after });
           return key;
         });
       } catch (err) {
@@ -598,57 +660,77 @@ export class LinearMigration {
   }
 
   /** Put back (Task 7.4): from the move record alone, last move first, inside each key's flight. The ccrc half first (the records
-   *  dropped "put back", `putBackAt` set, so the sync emits nothing for them), then Linear's: each moved issue restored, each
-   *  created initiative and project canceled; a created milestone stays under its canceled project (D-8795); an issue moved since
-   *  is listed and untouched. */
+   *  dropped "put back", `putBackAt` set, so the sync emits nothing for them); then the moved issues, a few a tick (spec §10.6:
+   *  each costs a read and a write on lane `migration`), each restored or, when it moved since, listed and untouched; then the
+   *  created objects: a project canceled, an initiative canceled with its programme's plan end recorded `abandoned` "put back"
+   *  (the plan was the map's), a milestone left under its canceled project and listed (D-8795). */
   private async putBackTick(m: MigrationRow): Promise<void> {
     const { plan } = this.deps;
     const now = this.deps.now();
+    if (now < this.restUntil) return;
     const store = await this.deps.readLinearStore().catch((): LinearStoreRead => ({ kind: 'unreadable', code: 'unreadable' }));
     const slot = slotsOf(store).get(m.workspaceId);
     if (slot === undefined || this.deps.planSync.keyBlockedUntil(m.workspaceId) > now) return;
     const entries = this.deps.directory.get(slot.ref, slot.digest);
     if (entries === null) return;
-    const moves = plan.movesOf(m.id);
-    // The ccrc half: what the migration made in the plan, dropped in one transaction.
+    const moves = plan.movesOf(m.id).filter((x) => x.appliedAt !== null);
     const local = (kind: string) => moves.filter((x) => x.before === null && x.subject.startsWith(`${kind}:`)).map((x) => Number(x.subject.split(':')[1]));
     plan.dropPutBack({ epics: local('epic'), checkpoints: local('checkpoint'), tickets: moves.flatMap((x) => (typeof x.after['ticketId'] === 'number' ? [x.after['ticketId']] : [])) }, now);
-    // The current state of every moved issue, by id.
-    const current = new Map<string, IssueSnapshot>();
-    for (const x of moves) {
-      if (x.kind !== 'issue' || x.linearId === null || x.revertedAt !== null) continue;
-      const out = await this.deps.call({ op: 'issueOwned', pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, target: null, fields: [], input: { id: x.linearId } });
-      if (!out.ok) { if (out.word === 'not-found') continue; return; }
-      const r = rowOf(out.value['issue']);
-      if (r !== null) current.set(r.linearId, snapshotOf(r));
+    const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()) };
+    const movedSince = new Set(report.movedSince);
+    const todo = moves.filter((x) => x.kind === 'issue' && x.revertedAt === null && x.linearId !== null).sort((a, b) => b.id - a.id).slice(0, PUT_BACK_ISSUES_PER_TICK);
+    for (const row of todo) {
+      const seen = await this.readIssue(m, slot, row.linearId!);
+      if (seen === 'unread') return;
+      const { steps, moved } = putBackSteps([asMoveRow(row)], seen === 'gone' ? new Map() : new Map([[row.linearId!, seen]]));
+      // An issue moved since (or gone) is listed and never touched; its row is marked handled so the next tick goes on.
+      if (moved.length > 0 || steps.length === 0) { movedSince.add(row.identifier ?? row.linearId!); plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
+      if (!(await this.putBackStep(m, steps[0]!, row, slot, entries))) { this.saveMovedSince(m, report, movedSince, now); return; }
+      plan.setMove(row.id, { revertedAt: this.deps.now() });
     }
-    const { steps, moved, left } = putBackSteps(moves.filter((x) => x.revertedAt === null).map(asMoveRow), current);
-    let done = true;
-    for (const step of steps) {
-      const row = moves.find((x) => x.linearId === step.linearId && (step.before === null) === (x.before === null))!;
-      const ok = await this.putBackStep(m, step, row, slot, entries);
-      if (ok) plan.setMove(row.id, { revertedAt: this.deps.now() });
-      else done = false;
+    // The created objects only once every moved issue is handled: a project is canceled after its issues left it.
+    if (plan.movesOf(m.id).some((x) => x.appliedAt !== null && x.kind === 'issue' && x.revertedAt === null && x.linearId !== null)) {
+      this.saveMovedSince(m, report, movedSince, now);
+      return;
     }
-    if (!done) return;
-    const ident = (id: string) => moves.find((x) => x.linearId === id)?.identifier ?? id;
-    const report = { ...(m.report ?? EMPTY_MIGRATION_REPORT()), movedSince: moved.map(ident), milestonesLeft: left };
-    plan.setMigration(m.id, ['applied'], { state: 'put-back', putBackAt: now, report }, now);
+    const milestones: string[] = [];
+    for (const row of plan.movesOf(m.id).filter((x) => x.appliedAt !== null && x.before === null && x.revertedAt === null).sort((a, b) => b.id - a.id)) {
+      const slug = typeof row.after['key'] === 'string' ? row.after['key'] : null;
+      if (row.kind === 'checkpoint') { milestones.push(row.subject); plan.setMove(row.id, { revertedAt: this.deps.now() }); continue; }
+      if (row.kind === 'programme') {
+        // The programme's plan was the map's: its end is recorded `abandoned` "put back", so nothing reopens it, and its initiative
+        // is canceled here, in the key's flight. With every epic put back, the sync's snapshot has no fact for the initiative and
+        // sends it nothing, so it never writes over this cancel.
+        if (slug !== null && plan.planEndOf(slug) === null) plan.closePlan(slug, 'abandoned', 'put back', this.deps.now());
+        if (row.linearId !== null) {
+          const out = await this.deps.planSync.withFlight(slug ?? `migration:${row.linearId}`, () => this.deps.call({
+            pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, op: 'initiativeUpdate', target: row.linearId,
+            fields: ['status'], input: { id: row.linearId, status: 'Canceled' },
+          }));
+          if (!out.ok) { this.saveMovedSince(m, report, movedSince, now); return; }
+        }
+        plan.setMove(row.id, { revertedAt: this.deps.now() });
+        continue;
+      }
+      const st = statusOfType(entries, 'project', 'canceled', null);
+      if (st === null || row.linearId === null) { this.saveMovedSince(m, report, movedSince, now); return; }
+      const ok = await this.deps.planSync.withFlight(slug ?? `migration:${row.linearId}`, async () => (await this.deps.call({
+        pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey, op: 'projectUpdate', target: row.linearId,
+        fields: ['status'], input: { id: row.linearId, statusId: st.id },
+      })).ok);
+      if (!ok) { this.saveMovedSince(m, report, movedSince, now); return; }
+      plan.setMove(row.id, { revertedAt: this.deps.now() });
+    }
+    plan.setMigration(m.id, ['applied'], { state: 'put-back', putBackAt: now, report: { ...report, movedSince: [...movedSince], milestonesLeft: [...report.milestonesLeft, ...milestones] } }, now);
+  }
+  private saveMovedSince(m: MigrationRow, report: NonNullable<MigrationRow['report']>, movedSince: ReadonlySet<string>, now: number): void {
+    this.deps.plan.setMigration(m.id, ['applied'], { report: { ...report, movedSince: [...movedSince] } }, now);
   }
 
+  /** One moved issue restored from its `before` (state, project, milestone, parent, team, title and description), in its key's
+   *  flight, on lane `migration` with pass `put-back`. */
   private async putBackStep(m: MigrationRow, step: ReturnType<typeof putBackSteps>['steps'][number], row: MoveRowStored, slot: SlotInfo, entries: NonNullable<ReturnType<LinearDirectoryRead['get']>>): Promise<boolean> {
     if (step.linearId === null) return true;
-    const base = { pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey } as const;
-    if (step.op === 'initiativeUpdate') {
-      const out = await this.deps.call({ ...base, op: 'initiativeUpdate', target: step.linearId, fields: ['status'], input: { id: step.linearId, status: 'Canceled' } });
-      return out.ok;
-    }
-    if (step.op === 'projectUpdate') {
-      const st = statusOfType(entries, 'project', 'canceled', null);
-      if (st === null) return false;
-      const out = await this.deps.call({ ...base, op: 'projectUpdate', target: step.linearId, fields: ['status'], input: { id: step.linearId, statusId: st.id } });
-      return out.ok;
-    }
     const was = row.before!;
     const team = slot.teams.find((t) => t.key.toUpperCase() === was.team.toUpperCase());
     const state = statusOfType(entries, 'issue', was.state, was.team);
@@ -656,9 +738,11 @@ export class LinearMigration {
     const key = typeof row.after['key'] === 'string' ? row.after['key'] : `migration:${step.linearId}`;
     return this.deps.planSync.withFlight(key, async () => {
       const out = await this.deps.call({
-        ...base, op: 'issueUpdate', target: row.identifier, destinationTeamKey: was.team, fields: ['title', 'description', 'state', 'project', 'milestone', 'team', 'parent'],
+        pass: 'put-back', lane: 'migration', slot: slot.ref, workspaceId: m.workspaceId, teamKey: m.teamKey,
+        op: 'issueUpdate', target: row.identifier, destinationTeamKey: was.team, fields: ['title', 'description', 'state', 'project', 'milestone', 'team', 'parent'],
         input: { id: step.linearId, teamId: team.id, stateId: state.id, projectId: was.project, projectMilestoneId: was.milestone, parentId: was.parent, title: was.title, description: was.description },
       });
+      if (!out.ok && out.word === 'rate-limited' && 'retryAfterS' in out) this.restUntil = this.deps.now() + out.retryAfterS * 1000;
       return out.ok;
     });
   }

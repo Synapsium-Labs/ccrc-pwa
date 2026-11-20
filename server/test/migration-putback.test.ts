@@ -4,6 +4,8 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, fail, leaf, migRig, OWNER, SLUG, T, U, type MigRig } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
+import { tx } from '../src/coord/tx.js';
+import { PUT_BACK_ISSUES_PER_TICK } from '../src/linear/migration.js';
 
 afterEach(() => { vi.restoreAllMocks(); cleanMigRigs(); });
 
@@ -106,12 +108,71 @@ describe('the migration report and put back (D-8186)', () => {
     const epic = moves.find((m) => m.kind === 'epic')!;
     r.asks.length = 0;
     await putBack(r, id);
-    const ini = putBackAsks(r).filter((a) => a.op === 'initiativeUpdate');
     const proj = putBackAsks(r).filter((a) => a.op === 'projectUpdate');
-    expect(ini).toHaveLength(1);
-    expect(ini[0]).toMatchObject({ target: prog.linearId, lane: 'migration', input: { id: prog.linearId, status: 'Canceled' } });
     expect(proj).toHaveLength(1);
     expect(proj[0]).toMatchObject({ target: epic.linearId, lane: 'migration', input: { id: epic.linearId, statusId: U(34) } });
+    // the initiative is canceled by put back itself, with the plan's end recorded (see the next test)
+    expect(putBackAsks(r).filter((a) => a.op === 'initiativeUpdate')).toEqual([
+      expect.objectContaining({ target: prog.linearId, lane: 'migration', input: { id: prog.linearId, status: 'Canceled' } }),
+    ]);
+    expect(prog.linearId).not.toBeNull();
+  });
+
+  it("put back records the programme's plan end and cancels its initiative, and the sync never writes it again", async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    r.addIssue(1);
+    const id = await r.applied([B_LEAF(1, 'k1')], STRUCTURE);
+    expect(r.plan.planEndOf('prog-b')).toBeNull();
+    r.asks.length = 0;
+    await putBack(r, id);
+    expect(r.plan.planEndOf('prog-b')).toMatchObject({ outcome: 'abandoned', why: 'put back' });
+    expect(r.asks.filter((a) => a.op === 'initiativeUpdate' && a.pass === 'put-back')).toHaveLength(1);
+    r.asks.length = 0;
+    await r.sync.passFor('prog-b', r.t.now + 60_000);
+    await r.sync.passFor('prog-b', r.t.now + 60_000);
+    expect(r.asks.filter((a) => a.op === 'initiativeUpdate')).toEqual([]);
+  });
+
+  it("put back leaves the project's Upkeep epic in place, and inbound keeps placing into it", async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const id = await r.applied([entry(1, 'upkeep')]);
+    const epic = r.plan.upkeepEpicOf('project-a')!;
+    expect(epic).not.toBeNull();
+    await putBack(r, id);
+    const after = r.plan.upkeepEpicOf('project-a')!;
+    expect(after).toMatchObject({ id: epic.id, state: epic.state });
+    expect(after.state).not.toBe('dropped');
+    expect(after.putBackAt).toBeNull();
+    expect(r.plan.movesOf(id).filter((m) => m.subject.startsWith('epic:'))).toEqual([]);
+    expect(r.asks.filter((a) => a.op === 'projectUpdate')).toEqual([]);                 // its Linear project is not canceled
+    expect(tx(r.coord.db, () => r.plan.ensureUpkeepEpicInTx('project-a', r.t.now))).toBe(epic.id);   // inbound reuses it
+  });
+
+  it('put back runs a few issues a tick and finishes', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    for (let n = 1; n <= 5; n += 1) r.addIssue(n);
+    const id = await r.applied([1, 2, 3, 4, 5].map((n) => B_LEAF(n, `k${n}`)), STRUCTURE);
+    expect(r.mig.act(reportItem(r, id), id, 'put-back', null)).toEqual({ ok: true });
+    r.asks.length = 0;
+    const per: number[] = [];
+    let projectBeforeIssuesDone = false;
+    for (let i = 0; i < 12 && r.stateOf(id) !== 'put-back'; i += 1) {
+      const from = r.asks.length;
+      await r.tick();
+      const slice = r.asks.slice(from);
+      per.push(slice.filter((a) => a.pass === 'put-back' && a.op === 'issueUpdate').length);
+      const restored = [...r.issues.values()].filter((x) => x.projectId === null).length;
+      if (restored < 5 && slice.some((a) => a.op === 'projectUpdate')) projectBeforeIssuesDone = true;
+    }
+    expect(r.stateOf(id)).toBe('put-back');
+    expect(Math.max(...per)).toBeLessThanOrEqual(PUT_BACK_ISSUES_PER_TICK);
+    expect(per.reduce((a, b) => a + b, 0)).toBe(5);
+    expect(per.length).toBeGreaterThanOrEqual(3);
+    expect(projectBeforeIssuesDone).toBe(false);             // a project is canceled only after every issue left it
+    expect(r.asks.filter((a) => a.op === 'projectUpdate')).toHaveLength(1);
   });
 
   it('a created milestone is written nothing and listed', async () => {
@@ -125,7 +186,7 @@ describe('the migration report and put back (D-8186)', () => {
     expect(putBackAsks(r).filter((a) => a.op.startsWith('projectMilestone'))).toEqual([]);
     expect(r.asks.filter((a) => a.input['id'] === cp.linearId)).toEqual([]);
     expect(r.plan.migrationById(id)!.report!.milestonesLeft).toEqual([cp.subject]);
-    expect(r.plan.movesOf(id).find((m) => m.id === cp.id)!.revertedAt).toBeNull();
+    expect(r.plan.movesOf(id).find((m) => m.id === cp.id)!.revertedAt).not.toBeNull();   // handled: listed once, never again
   });
 
   it("put back restores an adopted issue's title and description", async () => {

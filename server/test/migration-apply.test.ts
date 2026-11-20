@@ -5,6 +5,7 @@ import { MIGRATION_WRITES_PER_TICK } from '../src/linear/migration.js';
 import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket, type PlanChanges } from '../src/coord/planStore.js';
 import { cleanMigRigs, entry, leaf, migRig, ok, fail, SLUG, T, U, OWNER, type MigRig } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
+import type { CcrcOpOutcome } from '../src/linear/ccrcCall.js';
 
 afterEach(() => { vi.restoreAllMocks(); cleanMigRigs(); });
 
@@ -169,11 +170,9 @@ describe('the migration apply (D-8186, D-8796)', () => {
     const epic = r.plan.upkeepEpicOf('project-a');
     expect(epic).not.toBeNull();
     expect((r.db.prepare("SELECT COUNT(*) AS n FROM plan_epics WHERE title LIKE '%pkeep%'").get() as { n: number }).n).toBe(1);
-    const created = moveRows(r, id).filter((m) => m.subject.startsWith('epic:'));
-    expect(created).toHaveLength(1);
-    expect(created[0]!.before).toBeNull();
-    expect(created[0]!.linearId).not.toBeNull();             // the sync created its project, the row names it
-    expect(created[0]!.appliedAt).not.toBeNull();
+    // The Upkeep epic is shared with the inbound path: it is no object of the migration's, so it has no move row.
+    expect(moveRows(r, id).filter((m) => m.subject.startsWith('epic:'))).toEqual([]);
+    expect(r.plan.bindingsOf('upkeep:project-a').some((b) => b.localKind === 'epic' && b.state === 'bound' && b.linearId !== null)).toBe(true);
     expect(ticketBindings(r).map((x) => x.linearId).sort()).toEqual([U(101), U(102)]);
     expect(r.plan.upkeepPlanOf('project-a').epics[0]!.tickets.map((t) => t.source)).toEqual(['inbound', 'inbound']);
   });
@@ -331,5 +330,153 @@ describe('the migration apply (D-8186, D-8796)', () => {
     expect(r.stateOf(id)).toBe('applied');
     expect(moveRows(r, id)[0]!.appliedAt).not.toBeNull();
     expect(ok()).toBeTruthy();
+  });
+});
+
+const expectedFields = (r: MigRig, id: number, identifier: string): Record<string, unknown> =>
+  (r.plan.movesOf(id).find((m) => m.identifier === identifier)!.after['expect'] as Record<string, unknown>);
+
+describe('the migration apply reads each issue by id (D-8796, review round)', () => {
+  it('an issue a person edits after the tick began is read inside the flight and skipped, never adopted', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    const id = await r.approved([leaf(1, 'k1')]);
+    r.asks.length = 0;                                       // the propose's page read is not the apply's
+    const flight = r.sync.withFlight.bind(r.sync);
+    vi.spyOn(r.sync, 'withFlight').mockImplementation((key, fn) => {
+      if (key === SLUG) r.issues.get(U(101))!.title = 'Edited while the tick ran';   // after the tick's snapshot, before the key's flight
+      return flight(key, fn);
+    });
+    await r.until(() => r.stateOf(id) === 'applied');
+    expect(r.stateOf(id)).toBe('applied');
+    expect(tickets(r)).toBe(0);
+    expect(moveRows(r, id)).toHaveLength(0);
+    expect(updates(r, U(101))).toHaveLength(0);
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+    expect(r.asks.some((a) => a.op === 'issueOwned' && a.input['id'] === U(101) && a.pass === 'migration' && a.lane === 'migration')).toBe(true);
+    expect(r.asks.some((a) => a.op === 'teamOpenIssues')).toBe(false);              // no page read in the apply
+    expect(r.issues.get(U(101))!.title).toBe('Edited while the tick ran');
+  });
+
+  it('a description Linear re-flows (trailing whitespace) still reconciles as applied', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => (ask.op === 'issueUpdate' ? fail('unreachable') : undefined);
+    const id = await r.approved([leaf(1, 'k1')]);
+    await r.tick();
+    expect(moveRows(r, id)[0]!.appliedAt).toBeNull();        // adopted, its write refused
+    r.override.current = null;
+    // the write lands with Linear's whitespace re-flow: trailing spaces, CRLF and a run of blank lines
+    const exp = expectedFields(r, id, 'AAA-1');
+    const i = r.issues.get(U(101))!;
+    if (typeof exp['description'] === 'string') i.description = `${exp['description'].replace(/\n/gu, '  \r\n')}  \r\n\r\n\r\n\r\n`;
+    if (typeof exp['title'] === 'string') i.title = exp['title'];
+    if ('state' in exp) i.stateType = String(exp['state']);
+    if ('project' in exp) i.projectId = (exp['project'] as string | null) ?? null;
+    if ('milestone' in exp) i.milestoneId = (exp['milestone'] as string | null) ?? null;
+    if ('parent' in exp) i.parentId = (exp['parent'] as string | null) ?? null;
+    const before = updates(r, U(101)).length;
+    await r.until(() => r.stateOf(id) === 'applied', 10);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(moveRows(r, id)[0]!.appliedAt).not.toBeNull();
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
+    expect(updates(r, U(101))).toHaveLength(before);         // nothing redone
+  });
+
+  it('an adopted issue changed before its write is put aside: its ticket dropped "put back", the sync writes nothing to it, and a follow-up map can move it again', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    r.override.current = (ask) => (ask.op === 'issueUpdate' ? fail('unreachable') : undefined);
+    const id = await r.approved([leaf(1, 'k1')]);
+    await r.tick();
+    const row = moveRows(r, id)[0]!;
+    const ticketId = row.after['ticketId'] as number;
+    expect(row.appliedAt).toBeNull();
+    r.override.current = null;
+    r.issues.get(U(101))!.title = 'A person renamed it between the adoption and the write';
+    const refused = updates(r, U(101)).length;
+    await r.until(() => r.stateOf(id) === 'applied', 10);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+    expect(r.plan.ticketById(ticketId)).toMatchObject({ state: 'dropped' });
+    expect(r.plan.ticketById(ticketId)!.putBackAt).not.toBeNull();
+    expect(moveRows(r, id)[0]!.subject).toMatch(/^issue:.+:skipped:\d+$/u);
+    // the sync writes nothing to the person's issue
+    r.plan.markSyncDue(SLUG, r.t.now);
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    r.t.now += 60_000;
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    expect(updates(r, U(101))).toHaveLength(refused);
+    expect(r.issues.get(U(101))!.title).toBe('A person renamed it between the adoption and the write');
+    // a follow-up map can move it again
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1b')] }, open)).toMatchObject({ ok: true, migrationId: id });
+    const m = r.plan.migrationById(id)!;
+    expect(r.mig.act(m.itemId!, id, 'approve', null)).toEqual({ ok: true });
+    await r.until(() => r.stateOf(id) === 'applied' && moveRows(r, id).some((x) => x.subject === `issue:${U(101)}` && x.appliedAt !== null), 20);
+    expect(moveRows(r, id).filter((x) => x.subject === `issue:${U(101)}`)).toHaveLength(1);
+    expect(moveRows(r, id).find((x) => x.subject === `issue:${U(101)}`)!.appliedAt).not.toBeNull();
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual([]);
+  });
+
+  it('a map-declared programme declared by its coordinator before the apply skips its issues and the migration finishes', async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1', { programme: 'prog-b', epic: 'eb', checkpoint: 'cb' }), leaf(2, 'k2')], {
+      epics: [{ programme: 'prog-b', epics: [{ key: 'eb', title: 'Epic B', summary: 'S', project: 'project-a', waves: [], checkpoints: [{ key: 'cb', title: 'CB', kind: 'acceptance' }] }] }],
+    });
+    // the coordinator declares prog-b's plan itself, after the map was approved
+    applyPlanChanges(r.db, 'prog-b', changes({
+      epics: { insert: [{ key: 'ez', project: 'project-a', waves: [1], ordinal: 0, title: 'Their own epic', summary: 'S' }], update: [], drop: [] },
+    }), OWNER, T, null);
+    expect(r.plan.planOf('prog-b').planBy).toBe(OWNER);
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-1']);
+    expect(r.plan.planOf('prog-b').epics.map((e) => e.key)).toEqual(['ez']);        // the map's structure was not created
+    expect(moveRows(r, id).filter((m) => m.before === null)).toEqual([]);
+    expect(moveRows(r, id).map((m) => m.identifier)).toEqual(['AAA-2']);            // the other issue still moved
+    expect(r.opsOf('initiativeCreate')).toHaveLength(0);
+  });
+
+  it("with initiatives off the map's declared programme does not hold the apply", async () => {
+    const r = await migRig();
+    r.addProgramme('prog-b', 'done');
+    r.addIssue(1);
+    const id = await r.approved([leaf(1, 'k1', { programme: 'prog-b', epic: 'eb', checkpoint: 'cb' })], {
+      epics: [{ programme: 'prog-b', epics: [{ key: 'eb', title: 'Epic B', summary: 'S', project: 'project-a', waves: [], checkpoints: [{ key: 'cb', title: 'CB', kind: 'acceptance' }] }] }],
+    });
+    r.db.prepare("UPDATE project_linking SET initiatives = 'off' WHERE project = 'project-a'").run();
+    await r.until(() => r.stateOf(id) === 'applied', 20);
+    expect(r.stateOf(id)).toBe('applied');
+    const rowid = r.plan.programmeRowId('prog-b')!;
+    const prog = moveRows(r, id).find((m) => m.subject === `programme:${rowid}`)!;
+    expect(prog.appliedAt).not.toBeNull();
+    expect(prog.linearId).toBeNull();                        // settled with no Linear id: no initiative exists
+    expect(r.opsOf('initiativeCreate')).toHaveLength(0);
+  });
+
+  it('a rate refusal rests the lane until its retry time', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    let refused = 0;
+    r.override.current = (ask) => {
+      if (ask.op === 'issueOwned' && refused === 0) { refused += 1; return { ok: false, word: 'rate-limited', retryAfterS: 600 } as CcrcOpOutcome; }
+      return undefined;
+    };
+    const id = await r.approved([leaf(1, 'k1')]);
+    await r.tick();
+    expect(refused).toBe(1);
+    const n = r.asks.length;
+    await r.tick();                                          // 31 s later: still resting
+    await r.tick();
+    expect(r.asks).toHaveLength(n);
+    expect(r.stateOf(id)).toBe('applying');
+    await r.tick(600_000);                                   // past the retry time
+    expect(r.asks.length).toBeGreaterThan(n);
+    await r.until(() => r.stateOf(id) === 'applied', 10);
+    expect(r.stateOf(id)).toBe('applied');
   });
 });

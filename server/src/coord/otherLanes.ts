@@ -77,7 +77,7 @@ export const OVERLORD_PROFILE: FleetRole = 'overlord';
 /** The kebab words this file spells that are no wire refusal: the `via` column, the verdict's and the profile read's
  *  own kinds. The mail-routes kebab census admits them through `isOtherLaneKebab`; the refusal words are
  *  `OVERLORD_REFUSALS`' and admitted there. */
-export const OTHER_LANE_KEBABS = ['landing-write', 'linear-proxy', 'plan-door', 'open-run-gate', 'reclaim-heir',
+export const OTHER_LANE_KEBABS = ['landing-write', 'linear-proxy', 'plan-door', 'plan-map', 'open-run-gate', 'reclaim-heir',
   'pass-unmeasured', 'not-read'] as const;
 export const isOtherLaneKebab = (w: string): boolean => (OTHER_LANE_KEBABS as readonly string[]).includes(w);
 

@@ -81,7 +81,7 @@ export interface PlanRouteOpts {
    *  bound. Absent (a test, a script): every row reads `unmeasured`, and the doors refuse `unreachable`. */
   inboundRecheck?: (row: InboundRow) => Promise<InboundRecheck>;
   /** The per-team migration's propose (D-8186, Task 7.2); absent (a test, a script): `plan map-propose` answers `unavailable`. */
-  migration?: Pick<LinearMigration, 'readOpen' | 'storeProposal'>;
+  migration?: Pick<LinearMigration, 'awaitsMap' | 'readOpen' | 'storeProposal'>;
 }
 
 /** The identity pair's grammar: the client's SAFE_RE, bounded as the Linear proxy bounds it. */
@@ -808,6 +808,7 @@ export function registerPlanRoutes(app: FastifyInstance, opts: PlanRouteOpts): v
     if (migration === undefined) return refuseRoute(reply, 'unavailable');
     const owner = linearOwnerOfTeam(team, who.plan.hierarchyProjectsOf(), ownerFacts(who.plan));
     if (owner === null || owner.id !== who.id) return refuse(reply, 'not-linear-owner', `only the Linear owner of team ${team} proposes its map`);
+    if (!migration.awaitsMap(team)) return refuse(reply, 'plan-bad-body', `no migration of team ${team} is waiting for a map`);
     const open = await migration.readOpen(team);
     if (!open.ok) return refuseRoute(reply, open.word as RouteRefusal, { detail: open.detail });
     try {

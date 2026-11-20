@@ -1,6 +1,7 @@
 // D-8186 (Linear hierarchy plan, Task 7.2): the migration's start, the owner's proposal and the operator's Approve and Return.
 import { afterEach, describe, expect, it } from 'vitest';
-import { cleanMigRigs, entry, leaf, migRig, OWNER, U } from './migrationRig.js';
+import { applyPlanChanges, NO_PLAN_CHANGES, type NewTicket } from '../src/coord/planStore.js';
+import { cleanMigRigs, entry, leaf, migRig, OWNER, SLUG, U } from './migrationRig.js';
 import { WS } from './linearProxyRig.js';
 
 afterEach(cleanMigRigs);
@@ -140,5 +141,74 @@ describe('the migration proposal (D-8186)', () => {
     expect(r.mig.act(m.itemId!, id, 'return', 'not yet')).toEqual({ ok: true });
     expect(r.plan.migrationById(id)!.state).toBe('applied');
     expect(r.plan.migrationById(id)!.report!.skipped).toEqual(['AAA-2']);
+  });
+
+  it('an issue the sync already binds is no part of a map', async () => {
+    const r = await migRig();
+    r.addIssue(1);
+    // a ticket ccrc's own sync created: its issue is open in the team and bound
+    const t: NewTicket = { program: SLUG, epicKey: 'e1', checkpointKey: 'c1', key: 'own', kind: 'work', title: 'Our own ticket', body: 'Do it', project: 'project-a', source: 'plan' };
+    applyPlanChanges(r.db, SLUG, { ...NO_PLAN_CHANGES(), tickets: { insert: [t], update: [], drop: [] } }, OWNER, r.t.now, null);
+    await r.sync.passFor(SLUG, r.t.now + 60_000);
+    const tid = r.plan.planOf(SLUG).epics[0]!.tickets[0]!.id;
+    const bound = r.plan.bindingOf('ticket', tid, WS.a.id)!;
+    r.issues.set(bound.linearId!, { id: bound.linearId!, identifier: 'AAA-50', title: 'Our own ticket', description: 'x', teamKey: 'AAA', stateType: 'unstarted', projectId: null, milestoneId: null, parentId: null });
+    expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(open.rows.map((x) => x.identifier).sort()).toEqual(['AAA-1', 'AAA-50']);
+    // the map covers AAA-1 alone: the bound issue is not "missing"
+    const named = r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1'), { issue: bound.linearId!, identifier: 'AAA-50', class: 'stale' }] }, open);
+    expect(named).toMatchObject({ ok: false, word: 'map-incomplete', detail: 'not-open:AAA-50' });
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1')] }, open)).toMatchObject({ ok: true });
+  });
+
+  it('awaitsMap answers only while a migration waits', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    expect(r.mig.awaitsMap('AAA')).toBe(false);              // none
+    const { migrationId, itemId } = await (async () => {
+      expect(r.mig.start('project-a', WS.a.id).ok).toBe(true);
+      expect(r.mig.awaitsMap('AAA')).toBe(true);             // proposing
+      const open = await r.mig.readOpen('AAA');
+      if (!open.ok) throw new Error('read');
+      expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(1, 'k1'), leaf(2, 'k2')] }, open)).toMatchObject({ ok: true });
+      const m = r.plan.migrationsOf()[0]!;
+      return { migrationId: m.id, itemId: m.itemId! };
+    })();
+    expect(r.mig.awaitsMap('AAA')).toBe(false);              // proposed
+    expect(r.mig.act(itemId, migrationId, 'approve', null)).toEqual({ ok: true });
+    expect(r.mig.awaitsMap('AAA')).toBe(false);              // approved
+    r.issues.get(U(102))!.title = 'Edited by a person after the map';
+    await r.until(() => r.stateOf(migrationId) === 'applied');
+    expect(r.mig.awaitsMap('AAA')).toBe(true);               // applied with one skipped: a follow-up
+    expect(r.mig.awaitsMap('ZZZ')).toBe(false);
+  });
+
+  it('a follow-up map is refused while put back is asked', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2')]);
+    r.issues.get(U(102))!.title = 'Edited by a person after the map';
+    await r.until(() => r.stateOf(id) === 'applied');
+    const m = r.plan.migrationById(id)!;
+    expect(r.mig.awaitsMap('AAA')).toBe(true);
+    expect(r.mig.act(m.reportItemId!, id, 'put-back', null)).toEqual({ ok: true });
+    expect(r.mig.awaitsMap('AAA')).toBe(false);
+    const open = await r.mig.readOpen('AAA');
+    if (!open.ok) throw new Error('read');
+    expect(r.mig.storeProposal('AAA', OWNER, { entries: [leaf(2, 'k2')] }, open)).toMatchObject({ ok: false, word: 'plan-bad-body' });
+    expect(r.plan.migrationById(id)!.state).toBe('applied');
+  });
+
+  it('a follow-up propose mail has its own subject and names the skipped count', async () => {
+    const r = await migRig();
+    r.addIssue(1); r.addIssue(2);
+    const id = await r.approved([leaf(1, 'k1'), leaf(2, 'k2')]);
+    r.issues.get(U(102))!.title = 'Edited by a person after the map';
+    await r.until(() => r.stateOf(id) === 'applied');
+    await r.tick(); await r.tick();
+    const subjects = mailsTo(r, OWNER).map((x) => x.subject);
+    expect(subjects.filter((s) => s.includes('propose a follow-up map for team AAA (1 skipped)'))).toHaveLength(1);
   });
 });

@@ -1209,8 +1209,10 @@ export function movesOf(db: DatabaseSync, migrationId: number): MoveRowStored[] 
   return (db.prepare('SELECT * FROM linear_migration_moves WHERE migrationId = ? ORDER BY id').all(migrationId) as Raw[]).map(moveOf);
 }
 /** A move's later facts: its Linear id (a created object's, from its binding), its after (a re-measured one), when it was applied,
- *  when it was put back. A field not named stays. */
-export function setMove(db: DatabaseSync, id: number, p: Partial<{ linearId: string; after: Record<string, unknown>; appliedAt: number; revertedAt: number }>): void {
+ *  when it was put back. A field not named stays. `retire` sets a skipped issue's row aside (its subject gains `:skipped:<id>`), so
+ *  a follow-up map can write a fresh row for the issue under the unique index. */
+export function setMove(db: DatabaseSync, id: number, p: Partial<{ linearId: string; after: Record<string, unknown>; appliedAt: number; revertedAt: number; retire: true }>): void {
+  if (p.retire === true) db.prepare("UPDATE linear_migration_moves SET subject = subject || ':skipped:' || id WHERE id = ? AND appliedAt IS NULL AND subject NOT LIKE '%:skipped:%'").run(id);
   if (p.linearId !== undefined) db.prepare('UPDATE linear_migration_moves SET linearId = ? WHERE id = ?').run(p.linearId, id);
   if (p.after !== undefined) db.prepare('UPDATE linear_migration_moves SET after = ? WHERE id = ?').run(JSON.stringify(p.after), id);
   if (p.appliedAt !== undefined) db.prepare('UPDATE linear_migration_moves SET appliedAt = ? WHERE id = ? AND appliedAt IS NULL').run(p.appliedAt, id);
@@ -1265,7 +1267,7 @@ export function declareMapStructure(
       const id = epicId === null ? null : checkpointIdByKey(db, epicId, c.key);
       if (id !== null) subjects.push({ subject: `checkpoint:${id}`, kind: 'checkpoint' });
     }
-    return subjects.map((x) => insertMove(db, { migrationId, ...x, linearId: null, identifier: null, before: null, after: { created: true } }));
+    return subjects.map((x) => insertMove(db, { migrationId, ...x, linearId: null, identifier: null, before: null, after: { created: true, key: program } }));
   });
 }
 /** D-8796 (condition 1): the objects an `approved` or `applying` migration still writes through the sync, as
