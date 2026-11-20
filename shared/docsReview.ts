@@ -40,6 +40,9 @@ export const REVIEW_OPEN_STREAMS = 16;
 export const REVIEW_SEND_IDLE_MS = 30000;
 /** The largest body an opening request may carry. */
 export const REVIEW_OPEN_BODY_BYTES = 256;
+/** The fixed header required before a capability can be looked up. */
+export const REVIEW_MARKER_HEADER = 'x-ccrc-review';
+export const REVIEW_MARKER_VALUE = '1';
 
 // ---- The token ---------------------------------------------------------------------------------------------------
 

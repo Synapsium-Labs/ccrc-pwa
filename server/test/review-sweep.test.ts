@@ -1,4 +1,5 @@
 import path from 'node:path';
+import { existsSync, mkdirSync, utimesSync, writeFileSync } from 'node:fs';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { REVIEW_RETENTION_MS, REVIEW_SWEEP_MS, REVIEW_PENDING_RETRY_MS, type ReviewSource } from '../../shared/docsReview.js';
 import type { DocsTreeOk } from '../../shared/docs.js';
@@ -63,6 +64,38 @@ function tree(project: string, count = 3): DocsTreeOk {
 afterEach(() => { vi.useRealTimers(); vi.restoreAllMocks(); });
 
 describe('review sweep', () => {
+  it('cleans young boot temp files on a later pending tick', async () => {
+    vi.useFakeTimers();
+    const now = Date.now();
+    const dir = path.join(mkTmp('review-young-'), 'store');
+    mkdirSync(dir);
+    const snapshot = path.join(dir, `${'f'.repeat(64)}.v1.html.${'1'.repeat(12)}.tmp`);
+    const index = path.join(dir, `index.${'2'.repeat(12)}.tmp`);
+    writeFileSync(snapshot, 'copy');
+    writeFileSync(index, 'index');
+    for (const name of [snapshot, index]) utimesSync(name, now / 1000, now / 1000);
+    const opened = await openReviewStore(dir);
+    if (!opened.ok) throw new Error(opened.why);
+    const store = opened.store;
+    const read = vi.fn(async () => ({ ok: false as const }));
+    const sweep = startReviewSweep(store, { tree: read }, () => Date.now());
+    try {
+      await sweep.started;
+      expect(store.bytesUsed()).toBe(4);
+      await vi.advanceTimersByTimeAsync(REVIEW_PENDING_RETRY_MS);
+      expect(existsSync(snapshot)).toBe(true);
+      expect(existsSync(index)).toBe(true);
+      expect(store.bytesUsed()).toBe(4);
+      await vi.advanceTimersByTimeAsync(70_000);
+      await vi.waitFor(() => {
+        expect(existsSync(snapshot)).toBe(false);
+        expect(existsSync(index)).toBe(false);
+        expect(store.bytesUsed()).toBe(0);
+      });
+      expect(store.bytesUsed()).toBe(0);
+      expect(read).not.toHaveBeenCalled();
+    } finally { await sweep.stop(); }
+  });
   it('groups by project and recorded served ref and removes changed blobs', async () => {
     const store = await fixture();
     await put(store, 0); await put(store, 1); await put(store, 2); await put(store, 0, T, 'project-b');

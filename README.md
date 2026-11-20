@@ -1530,7 +1530,9 @@ login and passkey-assertion doors themselves,
 `GET /api/auth/status` (with a minimized anonymous body), the reader lab's probe
 `/api/reader-lab/probe/:nonce/:name` (a sandboxed frame's request: its answer never depends on whether
 a run exists, and it only counts arrivals for a lab run someone opened, a signed-in session on an armed box and
-anyone who reaches the port on a dark one), and `GET /*`, the
+anyone who reaches the port on a dark one), the draft review's read door `POST /api/review/open` (gate reason 9:
+the token in its body is the credential, so it reads no session and no box token, and every token it cannot serve gets
+the same 404), and `GET /*`, the
 static bundle a browser has to
 download before it can show a login screen. Enrolling a passkey is **not**
 exempt — it requires already being signed in, which is what makes

@@ -1095,6 +1095,57 @@ describe('boot', () => {
     expect(existsSync(young)).toBe(true);
   });
 
+  it('retries an already-aged boot temp on the first pending pass even if the wall clock moved back', async () => {
+    const dir = freshDir();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const temp = path.join(dir, `${'f'.repeat(64)}.v1.html.0123456789ab.tmp`);
+    writeFileSync(temp, 'copy');
+    const modified = T0 / 1000 - 61;
+    utimesSync(temp, modified, modified);
+    const io = new FaultFs(dir);
+    let tempUnlinked = false;
+    io.fail = (call) => {
+      if (call === 'unlink H.v1.html.tmp') tempUnlinked = true;
+      return tempUnlinked && call === 'fsync DIR';
+    };
+    const bootClock = vi.spyOn(Date, 'now').mockReturnValue(T0);
+    let store: ReviewStore;
+    try { store = await openStore(dir, io); }
+    finally { bootClock.mockRestore(); }
+    expect(existsSync(temp)).toBe(false);
+    expect(store.bytesUsed()).toBe(4);
+    expect(store.hasPending()).toBe(true);
+
+    io.fail = () => false;
+    // Boot already observed the grace period elapse. A backward wall step must not defer a failed sync.
+    expect(await store.retryPending(T0 - 2_000)).toEqual({ remaining: 0 });
+    expect(store.bytesUsed()).toBe(0);
+    expect(store.hasPending()).toBe(false);
+  });
+
+  it.each(['unlink', 'directory sync'] as const)('retries a young boot temp after a due %s failure despite a backward clock', async failure => {
+    const dir = freshDir();
+    mkdirSync(dir, { recursive: true, mode: 0o700 });
+    const temp = path.join(dir, `${'f'.repeat(64)}.v1.html.0123456789ab.tmp`);
+    writeFileSync(temp, 'copy');
+    utimesSync(temp, T0 / 1000, T0 / 1000);
+    const io = new FaultFs(dir);
+    const clock = vi.spyOn(Date, 'now').mockReturnValue(T0);
+    let store: ReviewStore;
+    try { store = await openStore(dir, io); } finally { clock.mockRestore(); }
+    expect(existsSync(temp)).toBe(true);
+    expect(store.bytesUsed()).toBe(4);
+    io.fail = call => call === (failure === 'unlink' ? 'unlink H.v1.html.tmp' : 'fsync DIR');
+    expect(await store.retryPending(T0 + 60_001)).toEqual({ remaining: 1 });
+    expect(existsSync(temp)).toBe(failure === 'unlink');
+    expect(store.bytesUsed()).toBe(4);
+    io.fail = () => false;
+    expect(await store.retryPending(T0 - 2_000)).toEqual({ remaining: 0 });
+    expect(existsSync(temp)).toBe(false);
+    expect(store.bytesUsed()).toBe(0);
+    expect(store.hasPending()).toBe(false);
+  });
+
   it('removes with lost an index entry whose bytes file is missing, and its link finds nothing', async () => {
     const dir = freshDir();
     const store = await openStore(dir);

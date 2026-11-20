@@ -79,6 +79,7 @@ import { createQuestions, type OperatorDoorDeps, type Questions } from './coord/
 import { heldFor } from './coord/heldFor.js';
 import { registerUpdateRoutes } from './update/routes.js';
 import { composeDocs, readTree, registerDocsReadRoutes, registerDocsRefreshRoute } from './docs/routes.js';
+import { registerReviewOpenRoute } from './review/routes.js';
 import { installDocsRequestPolicy, installDocsResponsePolicy } from './docs/hooks.js';
 import { openReviewStore } from './review/store.js';
 import { startReviewSweep } from './review/sweep.js';
@@ -4553,6 +4554,7 @@ export async function buildServer(deps: Deps, bus = new Bus(), watcher?: FleetWa
   const review = deps.review?.store === undefined
     ? await openReviewStore(deps.cfg.reviewStoreDir, deps.review?.fs)
     : { ok: true as const, store: deps.review.store };
+  registerReviewOpenRoute(app, review.ok ? review.store : null, () => deps.time.clock.wall());
   const reviewAbort = new AbortController();
   const node = docs.readers.primary;
   const reviewSweep = review.ok ? startReviewSweep(review.store, {

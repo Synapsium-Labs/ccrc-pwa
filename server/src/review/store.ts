@@ -217,6 +217,8 @@ class FsReviewStore implements ReviewStore {
   private readonly snapshotSizes = new Map<string, number>();
   /** Unreferenced snapshot files whose unlink has not landed, retried by `retryPending`. */
   private readonly strays = new Set<string>();
+  /** Boot leftovers retain their grace period and are retried by the existing writer. */
+  private readonly deferredTemps = new Map<string, number>();
   /** Bytes possibly named by an index whose directory sync failed; only removal may unlink them. */
   private readonly uncertain = new Set<string>();
   private tail: Promise<unknown> = Promise.resolve();
@@ -271,7 +273,7 @@ class FsReviewStore implements ReviewStore {
     return n;
   }
 
-  hasPending(): boolean { return this.pending.size > 0 || this.strays.size > 0; }
+  hasPending(): boolean { return this.pending.size > 0 || this.strays.size > 0 || this.deferredTemps.size > 0; }
 
   async readBytes(tokenHash: string, version: number): Promise<Uint8Array | null> {
     if (!HASH_RE.test(tokenHash)) return null;
@@ -607,14 +609,20 @@ class FsReviewStore implements ReviewStore {
     });
   }
 
-  retryPending(_now: number): Promise<{ remaining: number }> {
+  retryPending(now: number): Promise<{ remaining: number }> {
     return this.enqueue(async () => {
       for (const p of [...this.pending.values()]) await this.runRemoval(p);
       for (const name of [...this.strays]) {
         // A name that is a live entry's current copy is no stray: drop it from the set, never unlink it.
         if (this.isLiveBytes(name) || (await this.unlinkDurable(name))) this.strays.delete(name);
       }
-      return { remaining: this.pending.size + this.strays.size };
+      for (const [name, deadline] of this.deferredTemps) {
+        if (now > deadline) {
+          if (await this.unlinkDurable(name)) this.deferredTemps.delete(name);
+          else this.deferredTemps.set(name, Number.NEGATIVE_INFINITY);
+        }
+      }
+      return { remaining: this.pending.size + this.strays.size + this.deferredTemps.size };
     });
   }
 
@@ -666,11 +674,9 @@ class FsReviewStore implements ReviewStore {
           const snapshot = BYTES_RE.test(name.split('.').slice(0, -2).join('.'));
           if (snapshot) this.snapshotSizes.set(name, size);
           if (now - mtimeMs > TMP_MAX_AGE_MS) {
-            if (snapshot) {
-              if (!(await this.unlinkDurable(name))) this.strays.add(name);
-            } else {
-              await this.io.unlink(this.p(name)).catch(() => undefined);
-            }
+            if (!(await this.unlinkDurable(name))) this.deferredTemps.set(name, Number.NEGATIVE_INFINITY);
+          } else {
+            this.deferredTemps.set(name, mtimeMs + TMP_MAX_AGE_MS);
           }
           continue;
         }
