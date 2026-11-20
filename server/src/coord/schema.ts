@@ -4071,7 +4071,7 @@ export const MIGRATIONS: readonly string[] = [
     createdAt INTEGER NOT NULL
   );
   CREATE INDEX approval_parks_by_horizon ON approval_parks(horizon);
-  INSERT INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
+  INSERT OR IGNORE INTO lane_arm_settings (lane, choice, updatedAt) VALUES ('approval-park', 'shadow', 0);
   `,
 ];
 

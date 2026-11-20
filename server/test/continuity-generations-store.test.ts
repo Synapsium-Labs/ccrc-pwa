@@ -50,10 +50,10 @@ describe('continuity_generations: the migration and its seed', () => {
   });
 
   it('the Shadow lanes card lists the new lane, after the roster card, with its words', () => {
-    expect(LANE_ARM_LANES).toEqual(['roster-card', 'continuity', 'launch-profile', 'anchor-slot']);   // launch profiles PR B, then the anchor, append a row each
+    expect(LANE_ARM_LANES).toEqual(['roster-card', 'continuity', 'launch-profile', 'anchor-slot', 'approval-park']);   // launch profiles PR B, the anchor, then approvals PR 3's park, append a row each
     const s = store();
     const v = laneArmViewOf((lane) => s.laneArmSetting(lane));
-    expect(v.lanes.map((l) => [l.lane, l.stored, l.live])).toEqual([['roster-card', 'shadow', false], ['continuity', 'shadow', false], ['launch-profile', 'shadow', false], ['anchor-slot', 'shadow', false]]);
+    expect(v.lanes.map((l) => [l.lane, l.stored, l.live])).toEqual([['roster-card', 'shadow', false], ['continuity', 'shadow', false], ['launch-profile', 'shadow', false], ['anchor-slot', 'shadow', false], ['approval-park', 'shadow', false]]);
     expect(LANE_ARM_TEXT.rows[CONTINUITY_LANE].legend).toBe('Renew long-lived sessions');
   });
 });

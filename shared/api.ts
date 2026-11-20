@@ -13432,7 +13432,7 @@ export function approvalDigestBytes(hookInput: Readonly<Record<string, unknown>>
 /** A signed ruling's record (spec §6.3 server half, step 5). `sessionId` is the child's REGISTRY id (the request
  *  body's `sessionId`), not Claude Code's `session_id`; `rowId` is the row the `201` named, and the verifier checks
  *  both (D-5488). `expiresAt` is epoch milliseconds, the request window's end (D-5441). */
-export interface ApprovalRulingRecord {
+export interface ApprovalRulingRecordV1 {
   readonly v: 1;
   readonly rowId: number;
   readonly sessionId: string;
@@ -13448,19 +13448,21 @@ export interface ApprovalRulingRecord {
 
 /** Record v2 (approvals plan 2026-11-18, §3.6, PR 3): v1's ten fields and three more, `authority`, `denyCurrent` (the
  *  child's deny rules were the box's current ones when the server signed) and `family`. Signed over all thirteen. */
-export interface ApprovalRulingRecordV2 extends Omit<ApprovalRulingRecord, 'v'> {
+export interface ApprovalRulingRecordV2 extends Omit<ApprovalRulingRecordV1, 'v'> {
   readonly v: 2;
   readonly authority: ApprovalRulingAuthority;
   readonly denyCurrent: boolean;
   readonly family: ApprovalRulingFamily;
 }
-/** Either record: what the one signing site signs and the ruling read serves. `ApprovalRulingRecord` stays v1's name. */
-export type ApprovalRulingRecordAny = ApprovalRulingRecord | ApprovalRulingRecordV2;
+/** Either record: what the one signing site signs and the ruling read serves. The name is the union (approvals PR 3), so
+ *  the signer (`approvalsign.ts`), which signs whatever record it is handed, is unchanged: the signing path stays outside
+ *  this diff (`consolidation-path-guard.test.ts`'s W3 arm). */
+export type ApprovalRulingRecord = ApprovalRulingRecordV1 | ApprovalRulingRecordV2;
 
 /** The bytes the server signs and the verifier checks: a v1 record's ten fields, or a v2 record's thirteen, and only
  *  those, in canonical form. `null` for a record with no canonical form. `ccd/approval-verify.mjs` carries the documented
  *  second copy, held equal by `approval-verify.test.ts`. */
-export function approvalRulingBytes(r: ApprovalRulingRecordAny): string | null {
+export function approvalRulingBytes(r: ApprovalRulingRecord): string | null {
   const v1 = { v: r.v, rowId: r.rowId, sessionId: r.sessionId, agentId: r.agentId, digest: r.digest,
     nonce: r.nonce, class: r.class, verdict: r.verdict, reason: r.reason, expiresAt: r.expiresAt };
   if (r.v !== 2) return canonicalJson(v1);
@@ -13495,7 +13497,7 @@ export interface ApprovalRequestAccepted { readonly id: number; readonly waitS: 
  *  the base64 Ed25519 signature over `approvalRulingBytes(record)`. */
 export interface ApprovalRulingAnswer {
   readonly state: string;
-  readonly ruling?: { readonly record: ApprovalRulingRecordAny; readonly sig: string };
+  readonly ruling?: { readonly record: ApprovalRulingRecord; readonly sig: string };
 }
 
 /** `GET /api/approvals/key`'s answer: the server's public key, PEM SPKI, which the install spine pins once into the

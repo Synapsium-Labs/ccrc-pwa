@@ -9,11 +9,11 @@
  * of the printed verdict line, not the verifier's checks. The `ccrc-api` client is a stub as in the wait suite.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
-import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { mkTmp } from './tmpHelpers.js';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { approvalParkDenyText } from '../../shared/approval-park.js';
 
 const HOOK = path.resolve(__dirname, '../../ccd/session-hook.sh');
@@ -104,7 +104,7 @@ const payloadFor = (): Payload => ({ ...MAIN, transcript_path: transcript });
 interface Run { stdout: string; ms: number; rulings: number }
 const fire = (env: NodeJS.ProcessEnv = ENV()): Run => {
   const t0 = Date.now();
-  const r = spawnSync('bash', [HOOK], { input: JSON.stringify(payloadFor()), encoding: 'utf8', env, timeout: 30_000 });
+  const r = spawnSyncGroup('bash', [HOOK], { input: JSON.stringify(payloadFor()), encoding: 'utf8', env, timeout: 30_000 });
   const ms = Date.now() - t0;
   expect(r.status, 'the hook contract: exit 0 on every path').toBe(0);
   expect(r.stderr, 'the hook contract: silent on stderr').toBe('');
