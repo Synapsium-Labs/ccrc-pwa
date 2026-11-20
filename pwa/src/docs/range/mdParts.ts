@@ -27,9 +27,10 @@
 // first: a non-blank line with fewer `>` marks, or one indented less than the zone's content column. The content column
 // is 0 when only `>` marks come before the opener, the opener's own column when it carries a list marker, else the
 // larger of 2 and its column less 3. A line the detector cannot place stays in the zone.
-// THE SEVEN RESIDUAL CLASSES: this cutter is a line heuristic, not a parser, and a cut can still fall inside a fence or leave
+// THE NINE RESIDUAL CLASSES: this cutter is a line heuristic, not a parser, and a cut can still fall inside a fence or leave
 // a part that starts oddly. Each class below has its input pinned in `pwa/test/docs-md-parts.test.ts` (1, 6 and 7) or
-// recorded in the plan's Results (all). P6.1 Step 0b2's parser-backed cutter replaces them all.
+// recorded in the plan's Results (all nine; classes 8 and 9, the list tracker's over-reads, are recorded there only).
+// P6.1 Step 0b2's parser-backed cutter replaces them all.
 //   1. A fence that its list item ended, followed by a later fence at column 0: the zone takes that opener for its closer,
 //      so a cut falls inside the real fence, with no close and no reopen.
 //   2. A zone longer than a whole part (a container fence, a fence with a marker over 64 characters): it is cut inside at
