@@ -1,4 +1,4 @@
-// The flow's diagram (flows design 2026-11-19 §9; mockup `docs/superpowers/specs/2026-11-19-flows-design/`). Ring L4: a
+// The flow's diagram (flows design 2026-11-19 §9; mockup `docs/design/2026-11-19-flows-design/`). Ring L4: a
 // component. Wave 1 draws it read-only: blocks at their stored places, every outcome an arrow drawn from the blocks' own
 // geometry, a fix round (an arrow back to an earlier part of the wave) dashed in the attention hue. It takes no input:
 // the outline selects a step, and the diagram marks it. Selecting and dragging on the canvas are the canvas wave's (§10, wave 5).
