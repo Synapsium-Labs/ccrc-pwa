@@ -51,6 +51,7 @@ import type { LinearWritePolicy } from './linear/policy.js';
 import type { LinearRateService } from './linear/rate.js';
 import type { LinearRefresher } from './linear/refresher.js';
 import type { PerfRecorder } from './perf/recorder.js';
+import type { ReviewFs, ReviewStore } from './review/store.js';
 import type { ResponseStamp } from '../../shared/responses.js';
 
 /** The collector switch's composition (path-identity spec 2026-10-12 §5.2, §5.6), built once in `index.ts`: the ONE
@@ -61,6 +62,8 @@ export interface CollectLaneDeps { readonly journal: CollectLaneJournal; readonl
 
 export interface Deps {
   cfg: CcrcConfig;
+  /** Draft review's fixture seam: hand in the open store or the filesystem with which to open it. */
+  review?: { store?: ReviewStore; fs?: ReviewFs };
   /** The timing recorder (console speed S1): absent in tests; `index.ts` builds one. It changes no behaviour. */
   perf?: PerfRecorder;
   /** The deploy's build stamp (buildinfo.ts, read once at boot from
