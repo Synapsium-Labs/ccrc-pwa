@@ -11,8 +11,8 @@ and `<previous opus id>` and `<current opus id>` are the two opus ids its alias 
 
 One print-mode prompt ran on lane-a's wrapper, from a scratch directory outside every work tree. The environment
 carried `ANTHROPIC_DEFAULT_OPUS_MODEL=<previous opus id>`, the command passed `--model opus`, and the prompt asked for
-one subagent with `model: opus`. A `--resume` of the same session then asked for a second subagent. Session
-`56799fe0-5024-4ac3-86bd-0bc3e474351b`.
+one subagent with `model: opus`. A `--resume` of the same session then asked for a second subagent. The session is
+named here by the stand-in `session-1` (its id is in the run's mail, not in tracked text).
 
 | Run | Main session's id | Subagent's id |
 |---|---|---|
@@ -28,7 +28,7 @@ or not. That is the variable's own meaning; this wave changes nothing about it.
 
 ### Step 2: the re-pick: UNMEASURED
 
-A throwaway workspace on lane-a was spawned with `class=default` (`mca-a30-repick`, kept for the owner to reap), and
+A throwaway workspace on lane-a was spawned with `class=default` (the stand-in `probe-ws`, kept for the owner to reap), and
 the owner was asked to type `/model <previous opus id>` there through the console. That typing had not happened when
 A3.1 to A3.5 were green: the session's usage sidecar was still the one written at its spawn, reporting
 `<current opus id>`. The coordinator ruled the plan's Step 3 fallback, D-8833 (slug `repick-unmeasured-fallback`).
@@ -67,27 +67,38 @@ Every task's tests were run red first, and every mutation row named by the plan 
 ## Brief rulings carried out
 
 - **The seventh pinned library.** `ccd/lib/model-aliases.sh` is the seventh library (the door library is the sixth).
-  Every site the plan lists counts seven, and so does the redactor test's loader count (`-le 7`).
-- **D-8820's hold gate is lifted.**
-  - `ANTHROPIC_HOLDS_APPLIED` and its refusal are gone from `deploy/models-anthropic.mjs`, with the Models sheet's
-    `alias-hold-not-applied` sentence and the codes guard's entry.
+  Every site the plan lists counts seven:
+  - the redactor test's loader count (`-le 7`, and the hash count it asserts is 8);
+  - the entry reader's comment;
+  - the plan's wave contract;
+  - README's libraries paragraph, its restore line and its pins' list, under the README holder's yes to the exact
+    three-hunk packet (review 2964 F5).
+- **D-8820's hold gate is lifted, as that entry planned** (the plan's D-8820 now records the lift).
+  - Removed: `ANTHROPIC_HOLDS_APPLIED`, its refusal `alias-hold-not-applied` and the Models sheet's sentence for it.
   - `server/test/modelsOpCopy.ts` is removed, so the hold, release and revert tests run the shipped op.
+  - The codes guard derives its words from the files, so it needed no edit.
   - A held id now reaches every launch on the lane through Task A3.4, in this same branch.
-  - This wave removes the gate D-8820 put in; the lift takes no number of its own.
-- **F4 (review 2886): a held class records no alias move.**
-  - Measured first on the Codex arm, in a new case in the models op's tests: an advance of a held class is abandoned
-    (`held`), with no history entry, `previous` untouched and no push.
-  - The Anthropic arm's aliases refresh now does the same. A held class's alias move writes no history and leaves
-    `previous`, so a second revert holds where the first did.
-  - The aliases file still records where the alias went, which is how doctor names the class held behind.
-  - The asymmetry this leaves, on both arms alike: a move made while the class was held is never recorded or pushed
-    after the release. The class follows the alias's current id from its next fresh launch.
-- **R1 (review 2886).** `_dr_ma_blocked_fix`'s advance-file arm has an Anthropic branch:
-  - Repair the file. Until then no hold reaches a launch.
-  - Removing the file loses the holds and the move history, and nothing refills them.
+  - The lift takes no number of its own, and no gate replaces it: the op and the ccd that launches are one tree on one
+    box.
+  - One residual is named in the plan's D-8820: a supervisor still running the previous ccd body after the update's
+    supervisor sweep was refused by its preflight respawns or swaps without the held id. The remedy is restarting that
+    supervisor, not relaunching the session. Wave A4 carries the user-facing note.
+- **F4 (review 2886, then review 2964 F4): a hold's alias move.** Measured first on the Codex arm, in a new case in the
+  models op's tests: an advance of a held class is abandoned (`held`), with no history entry, `previous` untouched and no
+  push, and it is recorded after the release.
+  - While held, the Anthropic arm records no alias move either.
+  - At the first trustworthy refresh after the release, it records the move made under the hold once: from the held-at
+    id to the alias's id, with `previous` the held-at id, through the existing push (D-8857).
+  - The first version of this note said the two arms behaved alike after a release. They did not: the Anthropic arm
+    then never recorded that move. D-8857 corrects it.
+- **R1 (review 2886, then review 2964 F7).** `_dr_ma_blocked_fix`'s advance-file arm has an Anthropic branch. It says:
+  - repair the file;
+  - until then, hold, release and revert on the lane are refused;
+  - a hold ccd can no longer read does not reach a launch, and one it can still read keeps applying;
+  - removing the file loses the holds and the move history, and nothing refills them.
 
-  Wave 3 consented to the lines; it does not touch this arm. `DR_MA_ANTHROPIC` is now computed in `_dr_ma_read`, so
-  every model-advance check sees it, not only the held-behind check.
+  Wave 3 consented to the lines; it does not touch this arm. `DR_MA_ANTHROPIC` is computed in `_dr_ma_read`, so every
+  model-advance check sees it.
 - **F12(c) (review 2886).** The "Anthropic row beside a Codex row does not SKIP" doctor case plants a launch marker
   between its refreshes and asserts the class's `use` evidence.
 - **The census guard's library list.** `server/test/consolidationCensus.ts`'s `CCD_LIB_FILES` gains
@@ -95,46 +106,64 @@ Every task's tests were run red first, and every mutation row named by the plan 
   run's freeze covers the file. That run's coordinator accepted this one-line packet as sent (sha256 `30e48bf3…`), so
   it lands here.
 
-## Departures (numbered where the coordinator issued one, by slug otherwise)
+## Departures
 
-- D-8832: the growth waiver for the new library (Growth, below).
+Each is defined in the plan's "Deviations found", with its reason and its cost.
 
-- D-8833, `repick-unmeasured-fallback`: A3.0 Step 2 is unmeasured and Task A3.6 is built as the plan's Step 3 fallback; the
-  typed arm is the follow-up `typed-repick` (above). Of A3.6's test list, the recording, readback and "never typed"
-  cases are built (22 cases in `server/test/ccd-route-model-id.test.ts`, plus one `ccd-tick-budget` case at the
-  `idle-home` figure); the pending, re-pick and hand-pick cases, and the two tick-budget cases that plant `picked=`, go
-  with `typed-repick`.
-- `readme-seventh-library`: README's libraries paragraph, its restore line and its count of pins still say six. The
-  holder of README's lines has not consented, and no test needs them; a follow-up updates them.
-- `contexts-edges-a3`: the plan names no context-map edges, and the map's guard needed each new cross-context call
-  as an edge: `_spawn_start -> _alias_launch_mark`, `cmd_supervise -> _alias_observe`, the readers' registry edges,
-  `_route_applied_put -> _reg_set`, and the rest the guard listed.
-- `observe-memo-read`: the observe step's steady-state read of the sidecar's bytes is `read -r -N 4096`, a bounded
-  builtin, where the plan says `read -r -d ''`.
-- `effort-barred-helper`: A3.3 adds one function the plan does not name, `_class_effort_barred_to`. It wraps
-  `_class_takes_no_effort`, applies the haiku rule on its rc 2 and names the refusal's subject, so each of the five
-  sites is one line. The refusal now names the model (`model <id> takes no effort level …`) when the lane's data
-  decided, and still says `class haiku` when the standing rule did; three pins moved with the wording.
-- `reader-no-file-no-fork`: the reader's first cut forked one jq per process to answer `absent`, which raised every
-  `TICK_BUDGET` through `_route_effort_for_to`. A file that is not a regular readable file now answers without jq,
-  with the same words the jq program gives, and no `TICK_BUDGET` figure moved.
-- `held-unread-wider`: the `held-unread` line, floored per session, is written for any answer other than `facts` or
-  `absent`. That covers an unreadable or invalid aliases file and a refused `hold.model` as well as an unreadable
-  advance file, because a hold ccd cannot read should never be silent.
-- `held-word-one-pair-list`: `routeapplied` carries one word, `held=<class>:<id>[,<class>:<id>…]`, listing every held
-  class in `ROUTE_CLASSES` order, since every held class rides the launch environment. It is written only for a session
-  with a routing record.
-- `orphan-level-listed-only`: A3.5 carries an orphaned level only when the current row lists it, or the row has no
-  effort field. A level Claude Code would refuse never stops a launch, and a model that takes none takes no carried
-  level.
-- `readback-records-id`: the class readback records `model=<bare id>` (with `keep`) after its class write. Four
-  expectations in the route-apply tests now read `class=… model=…` after a sidecar readback.
-- Test-side repairs found on the way:
-  - The tick-diet static guard's `E1c` was red after A3.1, because its five out-variable forms were missing from the
-    runner's planned and landed lists. They are added, with the later tasks' forms.
-  - `_route_pair_note` is vendored into the tick-diet legacy fixture with its pin.
-  - A3.2's no-fork trace now matches subshell levels; it matched none before.
-  - Three test files' advance casts now typecheck.
+| Number | Slug | In short |
+|---|---|---|
+| D-8832 | (growth waiver) | the library's growth, Growth below |
+| D-8833 | `repick-unmeasured-fallback` | A3.6 on Step 3's fallback; the typed arm is `typed-repick` |
+| D-8846 | `contexts-edges-a3` | the context-map edges the wave's calls need |
+| D-8847 | `observe-memo-read` | the sidecar's bytes read with a bounded `read -r -N 4096` |
+| D-8848 | `effort-barred-helper` | one helper for the five sites; the refusal names the model, the held id under a hold |
+| D-8849 | `reader-no-file-no-fork` | the steady reader answers without jq with no aliases file; a launch reads the advance file alone |
+| D-8850 | `held-unread-wider` | `held-unread` for every answer ccd cannot use |
+| D-8851 | `held-word-one-pair-list` | one `held=` word listing every held class |
+| D-8852 | `orphan-level-listed-only` | an orphaned level only when the current row lists it |
+| D-8853 | `readback-records-id` | the class readback records the id it confirmed |
+| D-8854 | `model-files-guards-admit-reader` | two exact-holder guards name the library as a read-only reader |
+| D-8855 | `route-effort-intent` | the trusted lane rides apart from the user's pairs; a pair is judged only on a class or effort change |
+| D-8856 | `hold-survives-alias-absence` | a stored hold reaches a launch with no aliases file |
+| D-8857 | `held-release-reconcile` | a hold's alias move recorded once at the first trustworthy refresh after release |
+| D-8858 | `observe-transcript-retry` | an undecided fill retries cheaply until the transcript appears |
+| D-8859 | `orphan-only-usable-alias` | no orphaned level for a held class or an unusable id |
+
+**A3.6's tests.** The recording, readback and "never typed" cases are built: 22 cases in
+`server/test/ccd-route-model-id.test.ts`, the vacuous acknowledgement case deleted (`ccd-route-apply`'s "project-k shape"
+case pins that path), plus the tick-budget cases. The pending, re-pick and hand-pick cases go with `typed-repick`, and
+so do the two tick-budget cases that plant `picked=`.
+
+**Unknown-lane fallback.** `_route_argv_check` with no known lane (`ccd start <id>`, `ws-add` without `--wrapper`)
+applies the haiku rule. So it can accept a pair that `ccd route`, which knows the session's lane, would bar. Such a pair
+is filtered at spawn with its floored note (review 2964 F13d).
+
+**Codex lanes at merge.** A Codex lane that already has its registry and catalogue now takes a level for a haiku class
+whose pin lists levels (D-8750's relaxation). That is the one place data changes today's behaviour at merge, and only
+toward allowing a level (review 2964 F13e).
+
+**What the reader does not check.**
+- ccd's effort-token rule is stricter than the shared parser's (`isStr`): an effort string with a space or `+` makes ccd
+  answer `invalid …row` for that class, while doctor passes. Real levels are words, so this is unreached.
+- The reader reads the aliases and catalogue files whole with no size cap, as the shared `_file_read_to` does. The op
+  writes them `0600` at a few KB, and a same-user writer is already inside the trust boundary.
+
+Review 2964 F13b and F13h name both, and neither is redesigned here.
+
+**The narrow `keep` writer.** `_route_applied_put` is a writer beside `_reg_set`, and is legitimately different: only it
+can carry the old file's mtime across the rename. That mtime is the stamp the readback judges a reading against. Every
+write that is not kept is `_reg_set`'s, and `keep` never creates a missing record.
+
+**Test-side repairs found on the way:**
+- The tick-diet static guard's `E1c` was red after A3.1, because its five out-variable forms were missing from the
+  runner's planned and landed lists. They are added, with the later tasks' forms.
+- `_route_pair_note` is vendored into the tick-diet legacy fixture with its pin.
+- A3.2's no-fork trace now matches subshell levels, and has a positive control.
+- Three test files' advance casts now typecheck.
+- `ccd-limit-no-keys` now scans every function of the library too.
+
+**The lease gap.** This run's claims on most of the branch's paths reached their hard cap at 15:57Z on 2026-11-20 and
+were taken again at 16:35Z. No commit on main touched any of those paths in that window.
 
 ## The six notes asked by the brief
 
@@ -147,9 +176,14 @@ the typed arm and carry to `typed-repick` by number. Notes 1, 3 and 6 are answer
    - The `model=` recording uses its own `_ALIAS_MODEL_JUDGED`, keyed `<record>|<uuid>|<bytes>`. It drops its entry
      when tmux or the stamp cannot say, so the next tick asks again.
 
-   Neither suppresses the other. The test `a marker judged on the same bytes does not stop the recording` pins that,
-   and the mutation "share A3.2's memo" reds it. When `typed-repick` builds the undecided re-ask, it takes a third
-   value of its own, never either of these.
+   Neither suppresses the other. Two mutation rows were run (review 2964 F11f):
+   - Renaming the recording's memo to the marker's array reds the read-count pin, `an unchanged sidecar is read once
+     for the recording, a changed one again`.
+   - Sharing the array and the marker's key reds that pin, and `a marker judged on the same bytes does not stop the
+     recording, nor the recording the marker`, too.
+
+   The marker's undecided fill (D-8858) is memoed in the marker's own array, with the transcript's path kept beside it
+   in `_ALIAS_TWAIT`. When `typed-repick` builds the hand-pick re-ask, it takes a value of its own, never one of these.
 2. **A fresh reading of ccd's own picked id is exempt from the positive hand pick:** no hand-pick read is built here.
    Carried to `typed-repick`.
 3. **The builtin match on the bare picked id:** nothing in this branch writes `picked=` or matches a `picked` id.
@@ -181,21 +215,28 @@ the typed arm and carry to `typed-repick` by number. Notes 1, 3 and 6 are answer
    - Gating the recording on the hand-pick read would instead leave `model=` absent for every undecided session, and
      an absent `model=` is never pending. That turns "unreadable transcript" into "never moved", and it puts a
      transcript read on the recording's path, which the steady tick must not pay.
+   - The caveat `typed-repick` must carry (review 2964 F13i): "after the stamp" holds only until another write moves
+     the stamp. An effort change, a compaction or subagent write and a promotion all rewrite `routeapplied` without
+     `keep`. So the follow-up must not rely on the stamp alone to place a pre-rollout `/model`; it needs the journal, or
+     a stamp of its own.
 
 ## Growth
 
-Measured armed, against the merge-base with `origin/main` fetched:
+Measured armed, against the merge-base with `origin/main` fetched, at the end of fix round 1:
 
 | File | Net code lines |
 |---|---|
-| `ccd/ccd` | +11 |
+| `ccd/ccd` | +14 (+11 at the first close; +2 for the shellcheck reason lines, +1 for review 2964 F1/F2) |
 | `ccd/ccrc-doctor-checks` | +3 |
 | `ccd/ccrc` | +1 (the seventh library's backup line; the uninstall list and its echo edited in place) |
-| `ccd/lib/model-aliases.sh` | +302 (new) |
-| `ccd (program)` | +313 |
+| `ccd/lib/model-aliases.sh` | +321 (new; +302 at the first close) |
+| `ccd (program)` | +335 |
+| `deploy/models-anthropic.mjs` (not a listed file) | +46 for D-8857 |
 
-The library carries the whole wave so that `ccd/ccd` grows only by its call sites. Its waiver, D-8832 (`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`, maxDelta 302), raises
-the program row's limit by the same figure.
+The library carries the whole wave so that `ccd/ccd` grows only by its call sites. Its waiver, D-8832
+(`server/test/growth-waivers/D-8832-ccd-lib-model-aliases.json`), raises the program row's limit by the same figure. Its
+maxDelta was 302 at the first close. The coordinator raised it to 321 in fix round 1 for the F3, F8, F9, F12 and F13a
+fixes: the program row's limit is 40 + 321 = 361.
 
 ## The live gate (read-only)
 
