@@ -320,7 +320,7 @@
 
 /* The programme view (desktop-polish PL5b, D-7713; the prototype's view 2): the programme's head, Goals on one side and its
    share of the list on the other. GROUNDS, as above: the head and each card state their own ground and ink, so the audit
-   measures every pair through the stylesheet. The programme's hue paints its non-text rule on the head, and its NAME ("Programme")
+   measures every pair through the stylesheet. The programme's hue paints its non-text rule on the head, and its ICON
    in the hue on the card surface, the pair the lane hues are gated on. A pending change says "spec update pending" in
    words on the attention tint; nothing is read out of colour. */
 .pv { --pg: var(--edge-strong); }
@@ -337,7 +337,11 @@
 .pv-head[data-hue='violet'] { --pg: var(--prog-violet); --pg-ink: var(--prog-violet); }
 .pv-head[data-hue='magenta'] { --pg: var(--prog-magenta); --pg-ink: var(--prog-magenta); }
 .pv-head[data-hue='blue'] { --pg: var(--prog-blue); --pg-ink: var(--prog-blue); }
-.pv-head .pv-kicker { font-size: var(--fs-xs); letter-spacing: 0.06em; text-transform: uppercase; font-weight: var(--weight-medium); color: var(--pg-ink); }
+/* The programme icon before the title (WM4 fix round 1 amendment, D-8823 `head-icon-not-word`): sized to the title's text, in the programme's
+   hue on the head's surface (the pair the lane hues are gated on), in one box with the title so it adds no line to the head. */
+.pv-head .pv-name { display: flex; align-items: center; gap: var(--sp-1); min-width: 0; }
+.pv-head .pv-ico { font-size: var(--fs-base); color: var(--pg-ink); }
+.pv-head .pv-ico svg { width: 1em; height: 1em; }
 .pv-head .pv-title { margin: 0; font: var(--weight-medium) var(--fs-base) / var(--lh-tight) var(--family-mono); color: var(--ink-primary); overflow-wrap: anywhere; }
 .pv-head .pv-sub { font-family: var(--family-mono); font-size: var(--fs-xs); color: var(--ink-secondary); overflow-wrap: anywhere; }
 .pv-two { display: grid; grid-template-columns: minmax(0, 1.05fr) minmax(0, 1fr); gap: var(--sp-3); align-items: start; min-width: 0; }

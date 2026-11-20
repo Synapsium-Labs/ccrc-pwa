@@ -130,6 +130,30 @@ describe('the programme route', () => {
 });
 
 describe('the programme view: the head', () => {
+  // The operator's ruling of 2026-11-20 (fix round 1 amendment, D-8823 `head-icon-not-word`): the head keeps two of the note's three cues, the
+  // programme's colour and its wave line, so the word goes too, and the programme icon the box draws (`RoleBadge`) stands before the title.
+  it('draws no visible "Programme" word, and no kicker', () => {
+    const store = heard({ runs: [runRow({ id: 1, program: 'prog-a', state: 'working', wave: 2, waveOf: 5, programTitle: 'Billing', homeProject: 'project-a' } as never)] });
+    const view = render(<ProgrammeScreen slug="prog-a" store={store} />);
+    const head = view.container.querySelector('.pv-head')!;
+    expect(head.querySelector('.pv-kicker')).toBeNull();
+    expect(head.textContent).not.toMatch(/programme/i);
+    expect(head.textContent).toContain('Billing');
+  });
+
+  it('its programme icon is an image named Programme, with the same title, standing before the title on its line', () => {
+    const view = render(<ProgrammeScreen slug="prog-a" store={heard()} />);
+    const head = view.container.querySelector('.pv-head') as HTMLElement;
+    const icon = within(head).getByRole('img', { name: 'Programme' });
+    expect(icon.getAttribute('aria-label')).toBe('Programme');
+    expect(icon.getAttribute('title')).toBe('Programme');
+    expect(icon.querySelector('svg')).not.toBeNull();
+    const heading = within(head).getByRole('heading', { level: 1, name: 'Programme A' });
+    expect(icon.nextElementSibling).toBe(heading);
+    expect(icon.parentElement).toBe(heading.parentElement);
+    expect(icon.parentElement!.classList.contains('pv-name')).toBe(true);
+  });
+
   it('names the programme, its wave and a way back to the fleet', () => {
     render(<ProgrammeScreen slug="prog-a" store={heard()} />);
     expect(screen.getByRole('heading', { level: 1, name: 'Programme A' })).toBeTruthy();

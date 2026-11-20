@@ -34,7 +34,7 @@
 // not read says so; it is never drawn as a programme with no secrets.
 import { useCallback, useEffect, useState } from 'react';
 import type { ReactNode } from 'react';
-import { cn, useNow } from '@ccrc/ui';
+import { RoleBadge, cn, useNow } from '@ccrc/ui';
 import type { FleetSession, RunSummary } from '../../../shared/api';
 import {
   WAITS_ON_WORDS, programmeWaitsOn, type GoalsVersion, type GoalsView, type ItemView, type StoredSecret, type StoredSecretsAnswer, type WaitingView,
@@ -295,8 +295,13 @@ export function ProgrammeScreen({ slug, store = useFleetStore, secrets, readers 
     <div className="wl pv" data-program={slug} data-hue={hue}>
       <header className="pv-head" data-hue={hue}>
         <Back to={FLEET_PATH} label="Back to Fleet" />
-        <span className="pv-kicker">Programme</span>
-        <h1 className="pv-title">{title}</h1>
+        {/* The programme icon, as the box draws it (`RoleBadge`), stands where the word "Programme" did: the head's colour and its wave line
+            say what kind of page this is, so the word is not drawn, and the icon keeps its name and a hover title (D-8823 `head-icon-not-word`;
+            the operator's note of 2026-11-19 and his ruling of 2026-11-20). One box with the title, so the two share a line. */}
+        <div className="pv-name">
+          <RoleBadge icon="workflow" label="Programme" title="Programme" className="pv-ico" />
+          <h1 className="pv-title">{title}</h1>
+        </div>
         {subWave !== null && <span className="pv-sub">{subWave}</span>}
         <SpecLink href={specHref(pinned?.specPath ?? null, home)} programme={title} className="pv-spec" />
         <ProgrammeHeadFacts view={runsView} sessions={fleetSessions} fleetFrameSeen={fleetFrameSeen} runsHeard={runs !== null}

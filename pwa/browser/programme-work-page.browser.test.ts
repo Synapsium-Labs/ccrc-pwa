@@ -129,6 +129,8 @@ interface Measured {
   rem: number;
   /** The width of the plain ticket's `.wk-what` (its title with its tag): the room a title has (review 2922 F2). */
   titleTrack: number;
+  /** The head's programme icon and its title (the amendment of fix round 1): the icon stands on the title's line, as tall as its text. */
+  head: { ico: Box; title: Box; lineHeight: number; fontSize: number; kicker: boolean };
   /** Each epic tag's height in lines: more than one means it broke. */
   tagLines: number[];
   headings: { phases: number; finishedInsideSummary: boolean };
@@ -162,6 +164,10 @@ const measure = (root: Element): Measured => {
     tracks: getComputedStyle(row).gridTemplateColumns.split(' ').map(parseFloat),
     rem: parseFloat(getComputedStyle(document.documentElement).fontSize),
     titleTrack: box(one('.wk-row[data-ticket="t-4"] .wk-what')).width,
+    head: {
+      ico: box(one('.pv-head .pv-ico')), title: box(one('.pv-head .pv-title')), lineHeight: parseFloat(getComputedStyle(one('.pv-head .pv-title')).lineHeight),
+      fontSize: parseFloat(getComputedStyle(one('.pv-head .pv-title')).fontSize), kicker: root.querySelector('.pv-kicker') !== null,
+    },
     tagLines: [...card.querySelectorAll('.wk-epic')].map((e) => Math.round(e.getBoundingClientRect().height / parseFloat(getComputedStyle(e).lineHeight))),
     headings: { phases: card.querySelectorAll('h3.wk-phase-head').length, finishedInsideSummary: card.querySelector('details.wk-phase > summary > h3.wk-phase-head') !== null },
     ellipsis: [...root.querySelectorAll('*')].filter((e) => getComputedStyle(e).textOverflow === 'ellipsis').map((e) => e.tagName.toLowerCase()),
@@ -249,6 +255,13 @@ describe('the programme page with its Work card, per width, skin and theme (WM4)
               expect(m.runs.top, `${at}: Runs is not below Waiting on you`).toBeGreaterThanOrEqual(m.waiting.bottom - 0.5);
             }
             assertRowLayout(m, at, width);
+            // The head: the programme icon before the title on the title's own line, sized to its text, and no kicker word.
+            expect(m.head.kicker, `${at}: the head still draws its kicker`).toBe(false);
+            expect(m.head.ico.right, `${at}: the icon is not before the title`).toBeLessThanOrEqual(m.head.title.left + 0.5);
+            expect(Math.abs((m.head.ico.top + m.head.ico.bottom) / 2 - (m.head.title.top + m.head.title.bottom) / 2), `${at}: the icon is not on the title's line`)
+              .toBeLessThanOrEqual(m.head.lineHeight / 2 + 1);
+            expect(m.head.ico.bottom - m.head.ico.top, `${at}: the icon is not sized to the title's text`).toBeLessThanOrEqual(m.head.fontSize * 1.2);
+            expect(m.head.ico.bottom - m.head.ico.top, `${at}: the icon is not sized to the title's text`).toBeGreaterThanOrEqual(m.head.fontSize * 0.8);
             // F2 of review 2922: a title has at least the room on a desk that it has on a phone.
             const ref = await phoneTitleTrack();
             expect(m.titleTrack, `${at}: a ticket's title has less room (${Math.round(m.titleTrack)}px) than on a phone (${Math.round(ref)}px)`).toBeGreaterThanOrEqual(ref - 1);

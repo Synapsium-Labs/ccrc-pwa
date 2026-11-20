@@ -73,8 +73,11 @@ describe('the programme box header (note 1)', () => {
     const img = kicker.querySelector('.pg-ico[role="img"]');
     expect(img?.getAttribute('aria-label')).toBe('Programme');
     expect(img?.getAttribute('title'), 'a mouse user still gets the word on hover').toBe('Programme');
-    // The programme page's kicker has no icon beside it, so it stays the page's one cue.
-    expect(readFileSync(path.join(__dirname, '../src/ledgers/ProgrammeScreen.tsx'), 'utf8')).toContain('<span className="pv-kicker">Programme</span>');
+    // The programme page's head took the same icon and lost its word on 2026-11-20 (the operator's ruling after this note; WM4 fix round 1 amendment,
+    // D-8823 `head-icon-not-word`): the head's colour and wave line, and the same icon, are its cues.
+    const head = readFileSync(path.join(__dirname, '../src/ledgers/ProgrammeScreen.tsx'), 'utf8');
+    expect(head).toContain('<RoleBadge icon="workflow" label="Programme" title="Programme" className="pv-ico" />');
+    expect(head).not.toContain('pv-kicker');
   });
 });
 

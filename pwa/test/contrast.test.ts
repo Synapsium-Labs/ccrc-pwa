@@ -2464,9 +2464,11 @@ describe('the Waiting on you pills and the item band (desktop-polish PL5a)', () 
     }
   });
 
-  it('measures the programme\'s name on the surface in each hue, in every palette', () => {
+  // WM4's fix round 1 amendment (D-8823 `head-icon-not-word`): the head's word is gone and its programme icon stands in the programme's hue on the
+  // same surface, so the row is the icon's, one per hue, as the box's badge is pinned.
+  it('measures the programme\'s icon on the surface in each hue, in every palette', () => {
     for (const h of HUES) {
-      const key = `.pv-head .pv-kicker [in .pv-head] [as .pv-head[data-hue='${h}']]`;
+      const key = `.pv-head .pv-ico [in .pv-head] [as .pv-head[data-hue='${h}']]`;
       const rows = rowsFor(key);
       expect(rows, key).toHaveLength(THEME_COUNT);
       for (const row of rows) {
