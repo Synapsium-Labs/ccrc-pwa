@@ -426,7 +426,7 @@ The builder may rename fields; the shape is the spec's.
   throws, it answers `work: { unreadable: <word> }` and still serves `plan`. When the plan read itself throws, it
   refuses as any read does, with no `plan` and no `work`; the page (WM4) keeps its last view (F15).
 
-- [ ] **Step 1: Write the failing tests** — `work-map.test.ts`: one case per row of the spec's Tables 6 and 6a, plus
+- [x] **Step 1: Write the failing tests** — `work-map.test.ts`: one case per row of the spec's Tables 6 and 6a, plus
   `an open item on the run beats a stuck verdict`, `stuck beats working`, `verdicts not read skips stuck and blocked
   and says so`, `a run in state unknown reads state-unknown`, `evidence that no longer holds reads done-unverified with
   its reason`, `a dropped ticket is in no total`, `a failed run's ticket reads not-started with lastFailedRunId`, `a
@@ -451,10 +451,14 @@ The builder may rename fields; the shape is the spec's.
   plan`, `a failing read answers work unreadable and still serves plan`. `plan.test.ts`: both lists spelled once.
 - [ ] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/work-map.test.ts`.
-- [ ] **Step 3: Implement** the vocabulary, `workMapOf`, the store read, the wiring and the route's field.
-- [ ] **Step 4: Run to pass**, then
+  Not run before Step 3 (D-8779 `tests-beside-the-decider`): the cases and the decider were written in one sitting.
+  Measured after the fact by review 2795's tests lens, at `main` with the task's tests: the work-map suite cannot import
+  a `workMap.ts` that does not exist, and the five new `plan-routes.test.ts` cases red while its 34 older cases stay
+  green. Each row's red is measured by its mutant instead (the task note, §4).
+- [x] **Step 3: Implement** the vocabulary, `workMapOf`, the store read, the wiring and the route's field.
+- [x] **Step 4: Run to pass**, then
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-routes.test.ts test/single-definition/plan.test.ts test/sim/mutation-floors.test.ts`.
-- [ ] **Step 5: Commit** — `feat(plan): the programme's work map, decided once and served on the plan read`.
+- [x] **Step 5: Commit** — `feat(plan): the programme's work map, decided once and served on the plan read`.
 
 **Acceptance.** Every row of Tables 6 and 6a has a case that reds when the row is deleted (measured with
 `mutation-run.py`). `typecheck-tests`, `single-definition` and `rings` pass. **Rollback.** A plain revert: nothing reads
@@ -605,15 +609,15 @@ its plan's clause 21), on the operator's yes.
   epic lists waves. A run with no ticket whose wave no epic lists, in a plan where any epic lists no waves, is refused
   `ticket-required` (its remedy is to name a ticket), not `wave-epic-mismatch`.
 
-- [ ] **Step 1: Write the failing tests** — `an epic with no waves is accepted`, `two epics with no waves run side by
+- [x] **Step 1: Write the failing tests** — `an epic with no waves is accepted`, `two epics with no waves run side by
   side`, `a run naming a ticket of an epic with no waves opens`, `an epic that lists waves keeps waves-not-contiguous,
   wave-overlap and wave-epic-mismatch`, `a run with no ticket into a plan with an epic of no waves is refused
   ticket-required`.
-- [ ] **Step 2: Run to fail** —
+- [x] **Step 2: Run to fail** —
   `cd server && ~/.local/bin/ccrc test -- ./node_modules/.bin/vitest run --maxWorkers=2 test/plan-epic-waves.test.ts`.
-- [ ] **Step 3: Implement.**
-- [ ] **Step 4: Run to pass**, then every test named under Files.
-- [ ] **Step 5: Commit** — `feat(plan): an epic may run without a wave range`.
+- [x] **Step 3: Implement.**
+- [x] **Step 4: Run to pass**, then every test named under Files.
+- [x] **Step 5: Commit** — `feat(plan): an epic may run without a wave range`.
 
 **Acceptance.** Every stored plan opens runs exactly as before. **Rollback.** A plain revert, once no stored epic lacks
 waves.
@@ -710,6 +714,75 @@ Task WM1 departs under its own number:
   `ticket-required` to `references/plan.md` is done already, by #3001. The task
   note (`docs/superpowers/programs/desktop-polish/wm1.md`) gives the migration slot, each row and what reds it, and the
   mutants.
+
+Task WM2 departs under its own number:
+
+- **D-8779** — `work-map-wm2-build`: Task WM2 (desktop polish run 2779), issued on 2026-11-19. The work map is decided once,
+  by `workMapOf` in `server/src/coord/workMap.ts` (L1), and served as `work` beside `plan` on the plan read; it needs no
+  migration. The build departs from the plan's text in these ways, each named by slug: `closed-reads-nothing-yet`, the
+  hierarchy's close with a reason (its Task 4.3) stores a close only as the drop of an Upkeep ticket, so the decider takes
+  the close as an input map that Table 6 row 2 reads and its cases pin, and the route passes it empty until that task
+  stores a programme ticket's close; `evidence-and-verdicts-decided-in-l1`, the route only gathers, so the read side of
+  WM1's evidence rule is a second pure decider, `doneEvidenceVerdict`, and "the reader is empty" is a third,
+  `verdictsReadOf`, both in `workMap.ts`; `last-move-from-the-run`, `lastMoveAt` comes from the run, stamped by
+  `withLastMoves`, not from the verdicts map, so a reader not read yet keeps every row's last move;
+  `dropped-tickets-are-items`, the top-level `items` list every ticket once, a dropped one with status `dropped` counted in
+  `counts.dropped`, while no phase, epic, `notInPhase` or "N of M" holds it; `declared-reads-planBy`, "declared" reads
+  `planBy`, which the plan store writes in one statement with `planAt`; `run-row-title-nullable`, a run row's title is
+  null when its run title is missing or repeats the programme's, and the fallback's `waves` is null with no work run;
+  `held-by-an-unread-run`, a ticket held by a run the run read did not return reads `state-unknown`; `unreadable-words`,
+  `work.unreadable` is `run-unreadable` (the store's word) or `read-failed` (a read that throws), while a landing line that
+  cannot be read makes only that ticket's evidence fail; `dropped-epic-while-it-holds-a-ticket`, a dropped epic stays on
+  the strip while it holds a ticket not dropped, so the strip adds up to the headline (F3); `not-in-phase-only-when-phased`,
+  `notInPhase` is empty for a plan with no phase; `three-floor-keys`, three `MUTANT_SETS` keys and floors, one per decider
+  in `workMap.ts`; and `tests-beside-the-decider`, the cases and the decider were written together, so each row's red is
+  measured by its mutant rather than by a run before the decider existed (Step 2 is left unticked for it). Four edits under
+  other claims, each with the holder's consent by mail before the edit: one read in `server/src/coord/store.ts`
+  (`programmeWorkRuns`, claim 5529, consent 2026-11-19); the import, the spread line and the three floor rows in
+  `server/test/sim/mutation-floors.test.ts` and `.json` (claim 5529, the same consent); the `runVerdicts` wiring property in
+  `server/src/server.ts` (claim 5558, consent 2026-11-19); and, after CI's first fast run, the plan doors' inline snapshot in
+  `server/test/overlord-other-lanes-pin.test.ts` (claim 5572, consent 2026-11-19), which records the whole plan read. That
+  run also asked `isPlanKebab` to admit the map's words (`map-words-are-plan-words`: the map's sources and verdict
+  reads are lists in `shared/plan.ts` too, with `read-failed`, never the store's `run-unreadable`) and the WM0 characterization to set `work` aside
+  (`characterization-reads-plan-only`). Review 2795's fix round adds three: `fold-by-the-held-ticket`, a `{ runId }` folds
+  in the auto ticket its run holds (`runs.ticketId`, as `ticketDoneVerdict` compares it), so an auto ticket the orphan arm
+  handed to a wave's next run under its first key folds too (review 2795 F1); `pr-evidence-folds-its-carrier`, a declared
+  ticket done by `{ pr }` evidence folds in the auto ticket of each run the landing line ties to that pull request, read
+  through `evidenceLinksOf` (planRunFacts.ts) and handed in by the route, so the work counts once (review 2795 F2); and
+  `last-move-unmeasured-is-absent`, an item whose run's last move could not be read carries no `lastMoveAt`, as
+  `withLastMoves` leaves it, while null means no move (review 2795 F3). The task note
+  (`docs/superpowers/programs/desktop-polish/wm2.md`) gives each row and what reds it, the mutants and the test runs.
+
+Task WM6 departs under its own number:
+
+- **D-8780** — `work-map-wm6-build`: Task WM6 (desktop polish run 2780), issued on 2026-11-19. An epic may list no wave
+  range (spec Q5, the operator's yes, R133). The build departs from the plan's text in these ways, each named by slug:
+  `wm6-one-reader-and-one-chooser`, `PlanEpicBody.waves` is optional on the wire and every body-level read takes it through
+  `listedWaves` (`planPolicy.ts`; `parsePlanPut` validates the raw field before that), and the epic a run opens into is
+  chosen by one decider, `epicForOpen` (named so the plan store's `epicOfRun`, the epic of an existing run's ticket, keeps
+  its one meaning), which `planGate` calls and which replaces its call of `epicForWave` (kept, as `epicForOpen`'s own
+  step); `wm6-ticket-read-before-the-epic`, `planGate` reads a named ticket through `p.ticket` before it chooses the epic,
+  where it read it after, so the ticket's epic can take the run, and a ticket that does not exist still names no epic, so
+  such a run is refused as before (`wave-epic-mismatch` at an unlisted wave, `ticket-unavailable` at a listed one);
+  `wm6-live-epics-only`, the plan's "any epic lists no waves" counts the live epics (not `dropped`; a settled `done` one
+  counts, as the gate and the store's attach re-check already read it), since a dropped epic cannot take a run and naming
+  a ticket is therefore no remedy for it; `wm6-absent-waves-keeps`, a put that omits `waves` on a stored epic keeps its
+  stored range and an explicit `[]` clears it (the coordinator's ruling on review 2791 F6, as an absent ticket `body`
+  keeps the stored body: a coordinator that re-puts a plan without the field must not silently change how runs open), a
+  new epic that omits it lists none, and `wave-overlap` is read against the kept range; and
+  `wm6-contiguity-needs-no-condition`, an empty list is trivially contiguous and overlaps nothing, so
+  `waves-not-contiguous` and `wave-overlap` read only epics that list waves by skipping the others, and no mutant of that
+  condition can go red; the guard that can is the reader (`listedWaves`), which its mutant breaks. The acceptance, that a
+  plan opens runs exactly as before, is shown for plans whose live epics all list a non-empty range; a stored live epic
+  with `[]` changes as this task rules (a run with no ticket at an unlisted wave is refused `ticket-required`, and its
+  tickets open at any wave), and how many such epics are stored is unmeasured. WM2's worker consented, by mail, to the edit
+  of `shared/plan.ts`'s `PlanEpicBody` line and to this section and its ticks (their claim held both). Fix round 1 (review
+  2791, on the coordinator's rulings): `epicForOpen` joins `MUTANT_SETS` and `mutation-floors.json` with its floor measured
+  (F1), its cases are written once in `server/test/planEpicForOpenCases.ts`, the collision of a waveless ticket's epic with
+  the epic that lists the wave (F2) and a ticket of a dropped waveless epic (F5) are pinned at the decider, the gate and the
+  route, and an epic with an explicit `waves: []` is pinned end to end (F12). The task note
+  (`docs/superpowers/programs/desktop-polish/wm6.md`) gives each case, the mutants and the sentences of the Linear
+  hierarchy's documents that now read false, which this task does not edit.
 
 ## Where things stand
 

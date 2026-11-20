@@ -32,6 +32,7 @@ import { isDeadDispatchKebab } from '../src/coord/deadDispatch.js';
 import { isAutoRollKebab } from '../src/coord/rollTarget.js';
 import { isWakeGateKebab } from '../src/coord/wakeBudget.js';
 import { isRunCloseKebab } from '../src/coord/runClose.js';
+import { isBlockWakeKebab } from '../src/coord/coordCalls.js';
 import { isHibernateKebab } from '../src/coord/hibernate.js';
 import { isArchivedExpiryKebab } from '../src/archivedExpiry.js';
 import { isStallSettingsKebab } from '../src/coord/stallsettings.js';
@@ -1284,8 +1285,12 @@ describe('the rejection table is total, in both directions', () => {
         // The door registry's own keys identify routes only there; another quoting file needs its own guard.
         || isOverlordDoorWordHere(tok, outsideDoors)
         // Actor issuer literals in coordination are stored in the schema, not mail or run refusal codes.
-        || isActorIssuerWordHere(tok, outsideIssuers),
-        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason or Overlord gate word`).toBe(true);
+        || isActorIssuerWordHere(tok, outsideIssuers)
+        // THE BLOCK WAKE (D-8126): `coord/coordCalls.ts` names `blockWakeDue`'s three answers and the two words of a fact that has
+        // not reached its condition as literals. They decide a parked thread's wake on the block-wake lane, never a `refused`
+        // or `reject.code`. Admitted through the exported guard, derived from `BLOCK_WAKE_VERDICTS`, `BLOCK_WAKE_FACT_WORDS` and `CALL_WAKES`.
+        || isBlockWakeKebab(tok),
+        `${tok} is not a declared MailRejectCode, RunRefuseCode, LifecycleGapReason, ClaimRefuseCode, SessionLifecycle, ReclaimRefuseCode, AskRefuseCode, RunRouteRefuseCode, SetAccountPoolsRefuseCode, UpdateStoreRefuseCode, child-reclaim word, stall-watch word, expiry word, stall-watch settings word, dead-coordinator word, temp-root collector word, delegation word, collector switch word, collector-switch route refusal, hibernation word, drift kind, notice mode, archive gate, stale-archive outcome, drift lane tag, stale-sibling claimant state, coord-blocked gate reason, question-sweep word, dead-dispatch word, automatic-roll word, item-move refusal, run stuck word, review-rounds refusal, run-close word, shadow-lane word, wake-gate word, claims-move word, answer-mark word, overlaps word, receipt drop word, decision-model word, remaining-work refusal, edge predicate, edge state, health word, edge kind, spend state, service class, Overlord door word, actor issuer, Overlord refusal, designation word, unforecastable reason, approval census word, untrusted-build reason, Overlord gate word or block-wake word`).toBe(true);
     }
   });
 });

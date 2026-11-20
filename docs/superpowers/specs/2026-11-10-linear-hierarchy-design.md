@@ -127,6 +127,55 @@ that carry the same team key are one product, because they file into one team. *
 - A programme whose epics sit in two workspaces gets one initiative in each, with the same name and description, each
   linking the epics of its own workspace.
 
+### 3.1 How a project gets its team and workspace (ruled 2026-11-19)
+
+A project files into nothing until it carries a team key (§13). Today the key is the operator's, or the automatic team
+link's (D-8405, `server/src/linking/teamLink.ts`): a server pass over every project with no key, which links one on
+decisive evidence (ticket ids in a private repository's branches, pull request titles and commits, or an exact name
+match) and otherwise offers up to three candidates for one tap in the console. Three gaps, measured on `origin/main`
+`0b96bd0dc`:
+- **No workspace.** The project row holds a team key and no workspace. The pass collapses a key that two connected
+  workspaces both use into one team, and the router then refuses a write for it `team-ambiguous`, with nowhere to
+  record which workspace the project means.
+- **Little evidence for a public repository.** A public repository never carries ticket ids (§6.1), so the pass has
+  only the name match, and most public projects end at candidates.
+- **No coordinator voice.** Only the operator writes a key, and the pass reads no coordinator's knowledge.
+
+The operator ruled on 2026-11-19 (item 489): coordinators suggest a team, and the Overlord may link one as a call made
+in the operator's name. The design:
+
+1. **The project row names a workspace.** `project_linking` gains the workspace slot id beside the team key; the pair is
+   the mapping. A project whose workspace is set resolves its key in that workspace only, so the router and the plan
+   sync never answer `team-ambiguous` for it. A row with no workspace resolves as today. The operator sets both on the
+   project card (§11.1); setting a key sets its workspace in the same write.
+2. **The pass reads teams as workspace and key pairs.** It no longer merges a key across workspaces. It links on its own
+   only when the decisive team is one pair: its key is in one connected workspace, or the evidence names the workspace
+   (step 3). A key in two workspaces with no evidence for either ends as candidates, each showing its workspace's name.
+3. **Evidence from Linear's GitHub integration.** Linear attaches an issue to the pull requests that name it. A new
+   fixed read asks each connected workspace which issues are attached to this repository's recent merged pull requests
+   (their URLs, which the pull request sweep already reads), and counts the distinct issues per team. It is decisive at
+   the ticket-id bar (`TEAM_LINK_MIN_IDS` issues and `TEAM_LINK_MIN_SHARE` of every attached issue) and names its
+   workspace. It works for a public repository, because nothing is read from or written to the repository. It goes
+   through `callLinear` and the one rate service, as the ccrc actor, read-only; it is built on fixtures and is not
+   called until the operator gives the go for one live capture of its answer.
+4. **A coordinator suggests.** `ccrc-api linking suggest --project <p> --team <key> [--workspace <slot>] --why <text>`,
+   box-token gated and attribution-checked, records a candidate on a project with no key: a coordinator's suggestion,
+   with its session and its reason. It never links. One per coordinator per project (a resend replaces it), refused
+   `team-set` on a project that has a key and `team-unknown` for a pair no connected workspace has. The reason is shown
+   in the console only and never written to Linear.
+5. **The Overlord may link.** On a project with no key that the operator has not decided (the pass's own rule,
+   `autoLinkAllowed`), the Overlord may confirm one candidate, whatever its source. The link is recorded as a call made
+   in the operator's name (D-8126's record), with the candidate's evidence, so it shows in "calls made for you", where
+   the operator marks it seen or overturns it. Overturning is the operator's own write, which makes the key `manual`.
+   It acts within the Overlord's authority like its other calls; while that authority does not allow it, the Overlord
+   suggests instead. No other coordinator links.
+6. **Unchanged:** a key the operator wrote is never overwritten by the pass, a suggestion or the Overlord. Linking a team
+   starts the plan sync creating that project's objects in the team (§5.2), but the team is not managed, and gets no
+   drift pass and no inbound routing, until the operator approves its migration (§7.1, §10.3).
+
+A product of several repositories (§3) is not changed by this section: each project still carries its own key, and the
+first project to set a shared key owns the team (§7.5).
+
 ## 4. ccrc's new model
 
 ### 4.1 The levels, and how they relate to what exists
@@ -149,9 +198,11 @@ that carry the same team key are one product, because they file into one team. *
   (`wave-epic-mismatch`). Waves keep their programme-wide numbering, so ledgers, branch names and the runs screen are
   unchanged.
   **Amended 2026-11-16 (the operator's answer to desktop-polish item 359):** an epic may list no waves. A run into
-  such an epic names one of its tickets, and its wave is not checked against the epic. A run that names no ticket,
-  into a plan where any epic lists no waves, is refused `ticket-required`. Epics that list waves keep every rule
-  above. The work-map plan's Task WM6 builds this (`docs/superpowers/plans/2026-11-16-programme-work-map.md`).
+  such an epic names one of its tickets, and its wave is not checked against the epic. A run that names no ticket, at
+  a wave no live epic lists, in a plan where a live epic lists no waves, is refused `ticket-required`. A run at a wave
+  some live epic lists opens as before, and a dropped epic that lists no waves counts for nothing (a run at a wave no
+  live epic lists is then `wave-epic-mismatch`). Epics that list waves keep every rule above. The work-map plan's
+  Task WM6 built this (`docs/superpowers/plans/2026-11-16-programme-work-map.md`, #3075).
 - **Run.** A work run attaches to exactly one ticket of a programme, never to a ticket in a team's Upkeep epic (§7.6).
   A review run is never filed: it attaches to the run it reviews, as today. A wave of three parallel work runs is three
   tickets. **Design call.**
@@ -668,6 +719,11 @@ Settings > Security > Project linking (`pwa/src/screens/settings/ProjectLinkingC
 The add-project sheet gains the Linear owner picker (left empty, the default rule) and the initiatives toggle beside
 the team key. Nothing else is configured anywhere else.
 
+The card's team key gains its **workspace** (§3.1): a picker of the connected workspaces that have the key, set in
+the same write. Under a project with no key, the candidates show each team's workspace, its evidence (ticket ids,
+attached issues, a name match, or a coordinator's suggestion with its reason) and the one tap that links it. A key the
+Overlord linked shows as its call, with a link to that call in "calls made for you".
+
 ### 11.2 Programme and epic pages
 
 - **Programme page** (`/programmes/<slug>`, `pwa/src/ledgers/ProgrammeScreen.tsx`) gains a **Plan** section: each epic
@@ -706,8 +762,8 @@ Both skins use the same components; nothing in this design is skin-specific.
 ## 12. The skills
 
 - **Coordinator** (`ccd/coordinator-skill/SKILL.md` §Linear and its wave-lifecycle references): a new programme's plan
-  is declared with `plan put` before its first run opens, epics plan-sized with their waves listed and checkpoints as
-  the gates inside them; every run opens with its ticket, and a ticket names its project when the work lands outside
+  is declared with `plan put` before its first run opens, epics plan-sized, each with its waves when it runs in waves
+  (an epic may list none, §4.1), and checkpoints as the gates inside them; every run opens with its ticket, and a ticket names its project when the work lands outside
   the home project; a checkpoint is recorded with `plan met` and its evidence when it is met; a handed issue or an
   Upkeep ticket it wants is taken with `plan take`; `linear create` is not used in a managed team. As a project's
   Linear owner, it routes inbound mail with `plan triage` and drafts the team's map with `plan map propose`, and it
@@ -739,7 +795,9 @@ Both skins use the same components; nothing in this design is skin-specific.
 2. **Plan sync and drift pass**, with the `plan-missing` refusal for programmes created from that day.
 3. **Console:** the settings (the Linear owner among them), the programme and epic pages, the items.
 4. **Skills.**
-5. **Migration:** the pilot team, its report read by the operator; then the remaining teams in its workspace; then
+5. **Team and workspace mapping (§3.1):** alongside the pilot, never blocking it; the attached-issues read stays off
+   until the operator's go for its live capture.
+6. **Migration:** the pilot team, its report read by the operator; then the remaining teams in its workspace; then
    the remaining teams in each other workspace.
 
 ## 15. Left to the builder
@@ -760,10 +818,12 @@ Each is a detail this design does not settle, named so it is not missed:
 10. How "live" is read for a Linear owner, from the session standing the console already shows (§7.5).
 11. A pointer in the central-key spec's §2 to this design's reversal of its initiatives non-goal.
 12. The D-numbers, defined in the plan, not here.
+13. The attached-issues read (§3.1): the exact document, how many recent merged pull requests it asks about, and how
+    often, measured against the rate service; captured once under the operator's go.
 
 ## 16. Design calls
 
-**Ruled since the first draft,** and so not in this list: each project's **Linear owner** (§7.5), with its default,
+**Ruled since the first draft,** and so not in this list: the team and workspace mapping (§3.1, 2026-11-19); each project's **Linear owner** (§7.5), with its default,
 its two duties (the team's migration map, routing inbound issues), its authority over the team verbs (§4.3), and the
 item that asks the operator to name one when none is live.
 
@@ -771,7 +831,8 @@ Every call the author made without a ruling, for the operator to check:
 1. A ticket files into the team of the project its work lands in (a per-ticket `project`, default the home project);
    an epic belongs to one workspace; a programme spanning two workspaces gets one initiative in each, same name (§3).
 2. The plan declares each epic's waves; a run in a wave no epic lists is refused `wave-epic-mismatch`; waves keep
-   programme-wide numbering (§4.1). *Amended 2026-11-16:* an epic may list no waves, and a run into one names its ticket (§4.1).
+   programme-wide numbering (§4.1). *Amended 2026-11-16:* an epic may list no waves, and a run into one names its ticket; only live epics count, and a
+   run with no ticket at a wave no live epic lists, in a plan with such an epic, is refused `ticket-required` (§4.1).
 3. One ticket per work run, never an Upkeep ticket; review runs are never filed (§4.1).
 4. An operator-act checkpoint tied to an item is marked met when the item is done (§4.1).
 5. One binding table for every Linear id (§4.2).
@@ -804,3 +865,6 @@ Every call the author made without a ruling, for the operator to check:
 27. A live programme's wave boundary is read from run states (§10.5).
 28. Done programmes get an initiative only when they still own open issues (§10.5).
 29. A worker files follow-ups into its own run's epic only (§12).
+30. The project row names a workspace, and a key in two workspaces links on its own only when evidence names one (§3.1).
+31. Issues attached to the repository's pull requests are team evidence, at the ticket-id bar (§3.1).
+32. A coordinator's suggestion is a candidate only, one per coordinator per project, shown in the console only (§3.1).
