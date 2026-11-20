@@ -2368,6 +2368,18 @@ function readAliases(id) {
   }
 }
 
+/** The `lanes` op's `ids` for an Anthropic row: each class's `{id, cacheTarget, seenId}` from the lane's aliases file (the
+ *  id ccrc keeps, the cache's own target and the id a fresh launch reported, so a reader sees both when they disagree),
+ *  or `null` when that file is absent, unreadable or invalid. */
+function aliasIdsOf(id) {
+  const r = readAliases(id);
+  if (r.err !== undefined || r.aliases === null) return null;
+  return Object.fromEntries(CLASSES.map((c) => {
+    const row = r.aliases.classes[c];
+    return [c, { id: row.id, cacheTarget: row.cacheTarget, seenId: row.seenId }];
+  }));
+}
+
 /** The lane's aliases file as `show` reports it: the parsed file itself, or `{state: 'absent'|'unreadable'|'invalid'}`
  *  (with the reason, for the last two). */
 function aliasesReport(id) {
@@ -2733,7 +2745,21 @@ function main(argv) {
   if (opName === 'lanes') {
     const lanes = [];
     for (const acc of (json.accounts ?? [])) {
-      if (!isObj(acc) || !canCarryRegistry(acc)) continue;
+      if (!isObj(acc)) continue;
+      // D-8751: an Anthropic lane is listed too, so the hourly refresh reaches it through this one op. `anthropic` is
+      // the one fact of the lane's kind (`isAnthropicLane`, from the roster): no second kind field. Such a row has no
+      // registry and no catalogue by design, so nothing of either is read; `ids` is its aliases file's two readings
+      // of each class, `null` when that file is absent, unreadable or invalid (`show`'s `aliases` names which).
+      if (isAnthropicLane(acc)) {
+        if (typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id) || typeof acc.configDirSuffix !== 'string') continue;
+        lanes.push({
+          id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: isAnthropicLane(acc),
+          hasRegistry: false, registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null,
+          windowNotices: [], ids: aliasIdsOf(acc.id),
+        });
+        continue;
+      }
+      if (!canCarryRegistry(acc)) continue;
       // `readRegistry` runs REGARDLESS of whether the catalogue read
       // succeeded (round-2 ruling on Task 9's Fix round 1, Finding 2): the
       // old code's `cat.err !== undefined ? { registry: null } : …` treated
@@ -2758,7 +2784,7 @@ function main(argv) {
       const registry = reg.registry ?? null;
       const registryInvalid = reg.err !== undefined ? reg.err[1] : (reg.invalid !== undefined ? reg.invalid.message : null);
       lanes.push({
-        id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: false,
+        id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: isAnthropicLane(acc),
         hasRegistry: registry !== null || registryInvalid !== null,
         registryInvalid,
         catalogueInvalid: cat.err !== undefined ? cat.err[1] : null,

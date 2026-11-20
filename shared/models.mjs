@@ -189,7 +189,8 @@ export function modelsPushOf(message) {
  *  Task 12, D-5211): pure, no I/O, no Fastify, no push call. The box token
  *  proves only "a process on the fleet box" (`deploy/notify.sh`'s own header),
  *  so the route sends a message to the phone only when `modelsPushOf` reads it
- *  AND its lane is a row of `roster` whose `exec.kind` is `codex`. The roster
+ *  AND its lane is a row of `roster` whose `exec.kind` is `codex` or whose `telemetry` is `anthropic` (D-8751: an
+ *  Anthropic lane's class moves are pushed in the same line shape). The roster
  *  arrives as a PARAMETER, anything with a `get(laneId)` that answers the
  *  lane's row or `undefined` (the server's `roster.byId`, a `ReadonlyMap`, is
  *  one), so this file reads no file and imports nothing.
@@ -200,7 +201,8 @@ export function modelsPushOf(message) {
  *    `not-a-model-line`  no shape of `modelsPushOf` matched (or not a string)
  *    `over-cap`          longer than MODELS_PUSH_MAX, so `modelsPushOf` refused it
  *    `unknown-lane`      a model line of a lane the roster has no row for
- *    `not-a-codex-lane`  a model line of a row whose exec kind is not codex.
+ *    `not-a-codex-lane`  a model line of a row that is neither codex-kind nor an Anthropic lane (the word is kept
+ *                        so an older reader's vocabulary holds).
  *  The last two also carry the `lane` (grammar-checked, so safe to print), for
  *  the operator's remedy. The roster is asked only about a line that matched,
  *  once. The tag is per lane AND class (D-5212): a phone REPLACES a
@@ -220,7 +222,7 @@ export function modelsPushDecision(message, roster) {
   if (line === null) return { verdict: 'refused', reason: overCap(message) ? 'over-cap' : 'not-a-model-line' };
   const row = roster.get(line.lane);
   if (row === undefined) return { verdict: 'refused', reason: 'unknown-lane', lane: line.lane };
-  if (row.exec.kind !== 'codex') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
+  if (row.exec.kind !== 'codex' && row.telemetry !== 'anthropic') return { verdict: 'refused', reason: 'not-a-codex-lane', lane: line.lane };
   return { verdict: 'pushable', lane: line.lane, cls: line.cls, kind: line.kind, tag: `models-advance:${line.lane}:${line.cls}` };
 }
 

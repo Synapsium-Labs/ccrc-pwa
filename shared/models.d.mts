@@ -47,7 +47,7 @@ export declare function modelsPushOf(
 /** What the policy asks of a roster: a lane id to its row, or `undefined`. The server's `roster.byId` (a
  *  `ReadonlyMap<string, AccountDef>`) is one. */
 export interface ModelsPushRoster {
-  get(lane: string): { readonly exec: { readonly kind: string } } | undefined;
+  get(lane: string): { readonly exec: { readonly kind: string }; readonly telemetry?: string } | undefined;
 }
 export type ModelsPushDecision =
   | { verdict: 'pushable'; lane: string; cls: ModelClass; kind: ModelsPushKind; tag: string }

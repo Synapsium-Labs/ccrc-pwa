@@ -315,10 +315,14 @@ describe('the roster read', () => {
 });
 
 describe('lanes', () => {
-  it('lists every account that can carry a registry, and flags the anthropic ones', () => {
+  it('lists every account that can carry a registry, and every Anthropic lane, flagged (D-8751)', () => {
     const r = op('lanes', '--file', rosterPath());
     expect(r.code).toBe(0);
     expect(r.body['lanes']).toEqual([
+      { id: 'claude', configDirSuffix: '.claude', anthropic: true, hasRegistry: false,
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [], ids: null },
+      { id: 'claude-a', configDirSuffix: '.claude-a', anthropic: true, hasRegistry: false,
+        registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [], ids: null },
       { id: 'gpt', configDirSuffix: '.claude-gpt', anthropic: false, hasRegistry: false,
         registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [] },
       { id: 'router', configDirSuffix: '.claude-router', anthropic: false, hasRegistry: false,
@@ -338,9 +342,10 @@ describe('lanes', () => {
     });
   });
 
-  it('an upstream account is never a lane a registry can sit on', () => {
-    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as { id: string }[];
-    expect(lanes.map((l) => l.id)).not.toContain('claude');
+  it('the upstream account is listed as an Anthropic row, never as a lane a registry can sit on (D-8751)', () => {
+    const lanes = op('lanes', '--file', rosterPath()).body['lanes'] as { id: string; anthropic: boolean; hasRegistry: boolean }[];
+    expect(lanes.find((l) => l.id === 'claude')).toMatchObject({ anthropic: true, hasRegistry: false });
+    expect(lanes.filter((l) => l.hasRegistry)).toEqual([]);
   });
 
   // Fix round 1, Finding 2 (ruling): the old code passed `{ registry: null }`
@@ -6162,6 +6167,45 @@ describe('an anthropic lane: the aliases file, holds and the writer (model-class
     expect(refresh(T0).code).toBe(0);
     expect(hold().code).toBe(0);
     expect(snap()).toEqual(before);
+  });
+
+  it('lanes lists an Anthropic lane: anthropic true, no registry, no other kind field, and ids null with no aliases file (D-8751)', () => {
+    const rows = op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[];
+    const row = rows.find((l) => l['id'] === LANE)!;
+    expect(row).toEqual({
+      id: LANE, configDirSuffix: SUFFIX, anthropic: true, hasRegistry: false, registryInvalid: null,
+      catalogueInvalid: null, probe: null, baseUrl: null, windowNotices: [], ids: null,
+    });
+    expect(rows.find((l) => l['id'] === OTHER)).toMatchObject({ anthropic: true, hasRegistry: false });
+    // A registry row is unchanged: it carries no `ids` and is not Anthropic.
+    const reg = rows.find((l) => l['id'] === 'gpt')!;
+    expect(reg).toMatchObject({ anthropic: false });
+    expect(reg).not.toHaveProperty('ids');
+    // An aliases file that cannot be read or is not one this build reads is `ids: null` too, and the lane stays listed.
+    fs.mkdirSync(path.dirname(aliasesFile()), { recursive: true });
+    fs.writeFileSync(aliasesFile(), '{"v": 2}\n');
+    expect((op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === LANE)).toMatchObject({ anthropic: true, ids: null });
+    fs.rmSync(aliasesFile());
+    fs.mkdirSync(aliasesFile());
+    expect((op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === LANE)).toMatchObject({ anthropic: true, ids: null });
+  });
+
+  it('lanes carries both ids: the id kept, the cache target and the id a fresh launch reported, when they disagree (D-8751)', () => {
+    plantCache(SUFFIX, 'cache-fixture', cacheJson(C1, { opus: X1, sonnet: S1 }, [{ id: X1 }, { id: X2 }, { id: S1 }]));
+    plantLaunch('s1', C2, LANE, 'opus', X2);
+    expect(refresh(T0).code).toBe(0);
+    const row = (op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === LANE)!;
+    const ids = row['ids'] as Record<string, unknown>;
+    expect(Object.keys(ids)).toEqual(['haiku', 'sonnet', 'opus', 'fable']);
+    expect(ids['opus']).toEqual({ id: X2, cacheTarget: X1, seenId: X2 });
+    expect(ids['sonnet']).toEqual({ id: S1, cacheTarget: S1, seenId: null });
+    expect(ids['haiku']).toEqual({ id: null, cacheTarget: null, seenId: null });
+    // The other lane has no aliases file: its ids are null, not an empty object.
+    expect((op('lanes', '--file', rosterPath()).body['lanes'] as Record<string, unknown>[])
+      .find((l) => l['id'] === OTHER)).toMatchObject({ ids: null });
   });
 
   it('show answers aliases beside advance: the parsed file, or its state', () => {
