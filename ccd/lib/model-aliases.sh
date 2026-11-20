@@ -183,6 +183,27 @@ _class_effort_barred_to() {   # var wrapper class -> rc 0 the class takes no eff
   return 0
 }
 
+# EFFORT CARRIED TO THE ALIAS'S CURRENT ID (plan Task A3.5, D23, D-8746, spec §2.5.5): Claude Code saves a plain `/effort` per model id in the
+# home's settings, so a level saved under an older id of a class's family is ORPHANED when the alias moves on, and the aliases file records it.
+# ccd carries it to the current id at launch, session-only (`--effort`), and only for a record whose effort is `auto` ("the lane decides": the
+# saved level is the lane's decision); the caller (`_spawn_start`) asks only then. ccrc writes no model or effort choice into the home. A level
+# the current row lists none of is never carried: a launch is never stopped by a level Claude Code would refuse, and a model that takes none
+# takes no carried level.
+_orphaned_effort_to() {   # var wrapper class -> rc 0 and var = the orphaned level to put on `--effort`; rc 1 and var empty when the lane is no Anthropic backend, there is no class, no readable file, no orphan, or the current row does not list the level
+  local IFS=$' \t\n' __oe_ans __oe_a __oe_id __oe_e __oe_h __oe_o
+  printf -v "$1" ''
+  [[ -n "${3-}" ]] && _is_anthropic_backend "$2" || return 1
+  _alias_facts_to __oe_ans "$2" "$3"
+  read -r __oe_a __oe_id __oe_e __oe_h __oe_o _ <<< "$__oe_ans"
+  [[ "$__oe_a" == facts && "$__oe_o" != - ]] || return 1
+  case ",$__oe_e," in
+    *",$__oe_o,"*|,-,) ;;   # listed, or a row with no effort field (which cannot rule it out)
+    *) return 1 ;;          # a list without it, or `none`
+  esac
+  printf -v "$1" '%s' "$__oe_o"
+  return 0
+}
+
 # THE LAUNCH MARKER (plan Task A3.2, D-8744): `$REG/<id>.aliaslaunch`, one line `<born-epoch> <wrapper> <class> <model-id|->`. A fresh alias
 # launch is marked at spawn with `-` for the id and filled once by the supervise tick's own step, `_alias_observe`, with the id the
 # session first reported after its process started. A resume, a swap, a respawn, a held launch, an explicit model and class `default`

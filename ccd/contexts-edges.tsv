@@ -89,6 +89,7 @@ _operator_choice_promote -> _route_peek
 _operator_choice_promote -> _route_word_in
 _operator_choice_promote -> cmd_route
 _operator_choice_unmark -> _session_probe
+_orphaned_effort_to -> _is_anthropic_backend
 _pane_born -> _tmux_t
 _pane_born -> _tmx
 _pane_carried_in -> _limit_dated
@@ -210,6 +211,7 @@ _spawn_start -> _is_anthropic_backend
 _spawn_start -> _is_codex_backend
 _spawn_start -> _lc_done
 _spawn_start -> _operator_choice_keep
+_spawn_start -> _orphaned_effort_to
 _spawn_start -> _reg_generation_read
 _spawn_start -> _reg_get
 _spawn_start -> _reg_get_to

@@ -995,6 +995,7 @@ _alias_facts_to	C3
 _lane_class_efforts_to	C3
 _class_takes_no_effort	C3
 _class_effort_barred_to	C3
+_orphaned_effort_to	C3
 _alias_launch_mark	C3
 _alias_fill_overruled	C3
 _alias_launch_fill	C3

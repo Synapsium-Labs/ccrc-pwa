@@ -72,6 +72,7 @@ export const PLANNED_FORMS: Readonly<Record<string, string>> = {
   _lane_class_efforts_to: 'model-class Anthropic arm A3.1',
   _class_effort_barred_to: 'model-class Anthropic arm A3.3 (D-8750)',
   _held_model_env_to: 'model-class Anthropic arm A3.4 (D24)',
+  _orphaned_effort_to: 'model-class Anthropic arm A3.5 (D23, D-8746)',
 };
 /** What has NOT landed in `ccd/ccd` yet: the planned forms, plus `_now_s`, the one printing form whose name is new.
  *  The task that lands a name deletes it here in the same commit (the header's "RED FIRST"). D-4961 (Task 4) landed
@@ -95,7 +96,7 @@ const LANDED: ReadonlySet<string> = new Set([
   '_roster_fp_to', '_dl_fingerprint_to', '_pane_limit_capture_to', '_limit_rescue_knob_to', '_watchdog_sign_to',
   '_wd_operator_hold_to', '_compact_text_to', '_fresh_pick_field_to', '_fresh_pick_to', '_fresh_pick_least_to',
   '_model_id_bare_to', '_ma_file_to', '_ma_answer_to', '_alias_facts_to', '_lane_class_efforts_to', '_class_effort_barred_to',
-  '_held_model_env_to',
+  '_held_model_env_to', '_orphaned_effort_to',
 ]);
 export const PENDING: ReadonlySet<string> = new Set(
   [...Object.keys(PLANNED_FORMS), '_now_s'].filter((n) => !LANDED.has(n)),

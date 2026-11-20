@@ -22738,7 +22738,7 @@ _route_peek_to() {   # var id field -> var = the VALIDATED value, or empty (prin
   _route_valid "$f" "$v" && printf -v "$__rp_out" '%s' "$v"
   return 0
 }
-# @ccd-lib:efforts — the effort-level rule's one decision, `_class_takes_no_effort` and `_class_effort_barred_to` (A3.3, D-8750), lives in ccd/lib/model-aliases.sh; the five haiku sites call it
+# @ccd-lib:efforts — the effort-level rule's one decision, `_class_takes_no_effort` and `_class_effort_barred_to` (A3.3, D-8750), lives in ccd/lib/model-aliases.sh; the five haiku sites call it; the orphaned-level carry, `_orphaned_effort_to` (A3.5, D23), is in the same region, called by `_spawn_start`
 _route_effort_for_to() {   # var id class [quiet] -> var = the effort to apply (printing form `_route_effort_for`: the tick-diet block, D-4963). Haiku 4.5 takes no effort
   # level (the served catalogue gives it `thinking.type: none`), so the PAIR is
   # refused here with its own note and nothing is typed. `auto` is spec
@@ -26870,7 +26870,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
   _typed_note "$id" since   # the operator-choice journal opens at this ccd's first spawn of the row: no older command is read as the operator's (session-continuity §5.7)
   rm -f "$REG/$id.choicekept"   # every spawn ends the marker: it means "a keep ran since the last spawn" (§5.7)
   rm -f -- "$REG/$id.aliaslaunch"   # the previous process's launch marker (D-8744) goes before this process exists, on every spawn
-  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied heldenv
+  local routeflags="" routeenv="" rclass rsub rwf reff inert="" rapplied heldenv oeff
   _held_model_env_to heldenv "$wrapper" "$id"   # D24: the env words of a held class, and HELD_MODEL_PAIRS for the routeapplied word below (ccd/lib/model-aliases.sh)
   if _route_any "$id"; then
     rclass=$(_route_get "$id" class)
@@ -27005,6 +27005,7 @@ _spawn_start() {   # id mode(new|resume) -> creates the tmux session, sets SPAWN
         off) routeflags="${routeflags:+$routeflags }--settings '{\"enableWorkflows\":false}'" ;;
       esac
       [[ -n "$reff" && "$reff" != auto ]] && routeflags="${routeflags:+$routeflags }--effort $reff"
+      [[ "$reff" == auto ]] && _orphaned_effort_to oeff "$wrapper" "$rclass" && routeflags="${routeflags:+$routeflags }--effort $oeff"   # D23: under `auto` a home's orphaned saved level rides the argv; `rapplied` below keeps the record's word, `auto`
     else
       # WHAT IS STAMPED INERT HERE IS `$reff` — the effort AFTER
       # `_route_effort_for`'s haiku filtering, which is the decision and not an
