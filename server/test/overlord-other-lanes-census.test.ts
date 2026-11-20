@@ -256,7 +256,7 @@ describe('6. the claimant lanes', () => {
 // ── 7. every write door is classified (the plan's question 8, Table 2) ────────────────────────────────────────────
 
 type DoorClass = 'run-ownership' | 'programme-ownership' | 'lease-ownership' | 'launch-profile' | 'stays-open'
-  | 'operator-sign-in';
+  | 'operator-sign-in' | 'overlord-door';
 
 /** The write doors outside Table 1 that a session's identity can reach (every one is in `gate.ts`' EXEMPT), by what
  *  stops the Overlord's body there. Hand-kept: a new such door is red until it has a row. */
@@ -286,6 +286,8 @@ const NOT_REFUSED: Readonly<Record<string, readonly [DoorClass, string]>> = {
   'POST /api/continuity/quiz-runs': ['launch-profile', 'box token only, from the operator\'s `ccrc quiz-record` through `ccrc-api`; a session holding the token could post a pending run, but only the operator\'s session-gated Confirm makes it count'],
   'POST /api/mail/:id/ack': ['stays-open', 'the Overlord acks its own deliveries: its timer mail reaches it as mail (question 5)'],
   'POST /api/linear/proxy/search': ['stays-open', 'a read sent as a POST (question 7)'],
+  'POST /api/linking/suggest': ['stays-open', 'a box-token write lane, attribution-checked, that the Overlord uses too: below the full rung it suggests a team instead of linking (D-8808, spec §3.1 step 5); it stores the caller\'s own suggestion only'],
+  'POST /api/linking/confirm': ['overlord-door', 'an Overlord door (`link-team` in `OVERLORD_DOORS`, class `other`, others refused): it runs the Overlord gate, which refuses every caller that is not the designated Overlord and allows the act at `full` only (D-8809)'],
   'POST /api/auth/login': ['operator-sign-in', 'the operator\'s sign-in door; no session identity rides it'],
   'POST /api/auth/passkey/assert/start': ['operator-sign-in', 'the operator\'s passkey door'],
   'POST /api/auth/passkey/assert/finish': ['operator-sign-in', 'the operator\'s passkey door'],
