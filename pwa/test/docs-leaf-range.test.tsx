@@ -12,7 +12,9 @@ import type { ReaderRenderOutcome } from '../src/lib/readerRenderJob';
 import { DocsLeaf, RangeMarkdown, openedRangePin } from '../src/docs/DocsLeaf';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import { parseMarkdown } from '../src/lib/markdownParse';
-import { BLOB_2, NO_RANGE_VISIT, draftOf, entry, failedAnswer, fakeLoaders, holder, okTree, pageAt, servingLoader, treeOk } from './docsFixtures';
+import {
+  BLOB_2, NO_RANGE_VISIT, draftOf, entry, failedAnswer, fakeLoaders, holder, okTree, pageAt, recordingRejections, servingLoader, treeOk,
+} from './docsFixtures';
 import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
 import { DocsAssetContext, type DocsAssetContextValue } from '../src/docs/DocImage';
 import { createFetchQueue } from '../src/docs/fetchQueue';
@@ -139,7 +141,10 @@ describe('RangeLeaf: one read per read key', () => {
 describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
   /** The range side of the visit, which owns the one re-list rule: `stale` is what it answers to a failed read. */
   const fakeVisit = (stale: 'relist' | 'changing' | 'other') =>
-    ({ rangeFailed: vi.fn((_word: string) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0, rangeWaiting: false });
+    ({
+      rangeFailed: vi.fn((_word: string, _save: boolean) => stale), rangeRead: vi.fn(), rangeRetry: vi.fn(), rangeRelists: 0,
+      rangeWaiting: false, rangeTakeSave: vi.fn(() => false),
+    });
   /** The same visit after a re-list that started after the failure has answered (its counter moved). */
   const afterRelist = (v: ReturnType<typeof fakeVisit>) => ({ ...v, rangeRelists: v.rangeRelists + 1 });
   const failing = (word: string, commits: string[]): RangeLoader => ({
@@ -165,7 +170,7 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
       await waitFor(() => expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy());
       expect(screen.queryByRole('alert'), 'no "listing changed" while the re-list runs').toBeNull();
       expect(visit.rangeFailed).toHaveBeenCalledTimes(1);
-      expect(visit.rangeFailed).toHaveBeenCalledWith(word);
+      expect(visit.rangeFailed).toHaveBeenCalledWith(word, false);
       rerender(<RangeLeaf {...propsOf(withCommit('e'), loader, afterRelist(visit))}>{() => <p>view</p>}</RangeLeaf>);
       await waitFor(() => expect(commits).toEqual(['a'.repeat(40), 'e'.repeat(40)]));
     },
@@ -282,7 +287,27 @@ describe('RangeLeaf: a stale read re-lists once (X2 P1, review F2)', () => {
       await waitFor(() => expect(clicks).toHaveLength(1));
       await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
       expect(clicks, 'saved once').toHaveLength(1);
-      expect(calls.length, 'the aborted first mount read nothing more than the second').toBeLessThanOrEqual(2);
+      // StrictMode's first mount began a read that its cleanup aborted, and the second mount's read is the one that saved.
+      expect(calls, 'two reads begun, one saved').toHaveLength(2);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a Download tap while the page waits for a re-list waits as the mount does, then reads and saves', async () => {
+    const { clicks, restore } = saves();
+    try {
+      const visit = { ...fakeVisit('other'), rangeWaiting: true };
+      const { loader, calls } = refusesThenServes([]);
+      const props = (v: typeof visit) => ({ target: target(BYTES.length), cls: 'other' as const, name: 'b.bin', loader, visit: v });
+      const { rerender } = render(<RangeLeaf {...props(visit)} />);
+      fireEvent.click(screen.getByText('Download'));
+      await act(async () => { await new Promise((r) => setTimeout(r, 20)); });
+      expect(calls, 'the stale pin is not read').toHaveLength(0);
+      expect(screen.getByText(DOCS_VIEW_TEXT.loading)).toBeTruthy();
+      rerender(<RangeLeaf {...props({ ...visit, rangeWaiting: false, rangeRelists: 1 })} />);
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      expect(calls).toHaveLength(1);
     } finally {
       restore();
     }
@@ -673,5 +698,135 @@ describe('a version page above its class cap reads by range (X2 P1, review Q4)',
     expect(container.textContent).not.toContain(DOCS_VIEW_TEXT.changing);
     expect(f.tree, 'one listing').toHaveBeenCalledTimes(1);
     expect(targets).toHaveLength(1);
+  });
+});
+
+describe('a save is one-shot and survives its remount (X2 P1, review F2)', () => {
+  const clickSpy = (): { clicks: HTMLAnchorElement[]; restore: () => void } => {
+    const clicks: HTMLAnchorElement[] = [];
+    const spy = vi.spyOn(HTMLAnchorElement.prototype, 'click').mockImplementation(function (this: HTMLAnchorElement) { clicks.push(this); });
+    return { clicks, restore: () => spy.mockRestore() };
+  };
+  const parser = async (text: string) => parseMarkdown(text, 'docs');
+  const leafOf = (url: string) => {
+    const located = pageAt(url);
+    if (located.kind !== 'path') throw new Error('fixture: not a leaf');
+    return located;
+  };
+
+  it('a version page told by a Download tap saves once: going to another page and back does not save again', async () => {
+    const VERSION = '9'.repeat(40);
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const f = fakeLoaders({ tree: okTree(treeOk({ entries: [entry('specs', 'a.bin'), entry('specs', 'b.bin')] })) });
+    f.file.mockResolvedValue(failedAnswer('too-large', { size: src.length, cap: 2097152, blob: BLOB_2 }));
+    const served = servingLoader(src);
+    const targets: RangeTarget[] = [];
+    const rangeLoader: RangeLoader = {
+      async prepare(t, signal) { targets.push(t); return served.loader.prepare(t, signal); },
+      frame: (t, snapshot, offset, length, signal) => served.loader.frame(t, snapshot, offset, length, signal),
+    };
+    const assets: DocsAssetContextValue = { loaders: { file: f.file, raster: f.raster }, queue: createFetchQueue(), onDraftAsset: () => undefined };
+    function Harness(p: { page: ReturnType<typeof leafOf> }): React.ReactNode {
+      const visit = useDocsVisit(p.page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return (
+        <DocsAssetContext value={assets}>
+          <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={p.page} parser={parser} rangeLoader={rangeLoader} />
+        </DocsAssetContext>
+      );
+    }
+    const A = leafOf(`/docs/demo/specs/a.bin?at=${VERSION}`);
+    const B = leafOf(`/docs/demo/specs/b.bin?at=${VERSION}`);
+    const { clicks, restore } = clickSpy();
+    try {
+      const { rerender } = render(<Harness page={A} />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      rerender(<Harness page={B} />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      rerender(<Harness page={A} />);
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(clicks, 'one tap, one save').toHaveLength(1);
+      expect(targets).toHaveLength(1);
+    } finally {
+      restore();
+    }
+  });
+
+  /** A stat-pinned draft of `bytes` whose stat moves on every listing: `n` listings so far. */
+  const movingDraft = (path: string, size: number) => {
+    let listings = 0;
+    const treeAt = () => treeOk({
+      drafts: holder(),
+      entries: [entry('specs', path, { draft: draftOf('modified', { fp: null, size, mtimeNs: String(1700000000000000000n + BigInt(listings)) }) })],
+    });
+    const f = fakeLoaders();
+    f.tree.mockImplementation(async () => { listings += 1; return okTree(treeAt()); });
+    return { f, listingCount: () => listings };
+  };
+
+  it('a Download whose re-list changes the read key (a new stat pin) still saves once, after the leaf remounts', async () => {
+    const src = new Uint8Array([1, 2, 3, 4]) as Uint8Array<ArrayBuffer>;
+    const { f } = movingDraft('big.bin', src.length);
+    const served = servingLoader(src);
+    let first = true;
+    const prepares: string[] = [];
+    const rangeLoader: RangeLoader = {
+      async prepare(t, signal) {
+        prepares.push(rangeReadKey(t));
+        if (first) { first = false; return failedAnswer('draft-changed'); }
+        return served.loader.prepare(t, signal);
+      },
+      frame: (t, snapshot, offset, length, signal) => served.loader.frame(t, snapshot, offset, length, signal),
+    };
+    const page = leafOf('/docs/demo/specs/big.bin?ref=main');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={rangeLoader} />;
+    }
+    const { clicks, restore } = clickSpy();
+    try {
+      render(<Harness />);
+      await waitFor(() => expect(screen.getByText('Download')).toBeTruthy());
+      fireEvent.click(screen.getByText('Download'));
+      await waitFor(() => expect(clicks).toHaveLength(1));
+      await act(async () => { await new Promise((r) => setTimeout(r, 50)); });
+      expect(clicks, 'saved once').toHaveLength(1);
+      expect(prepares, 'the refused read, and the one of the new pin').toHaveLength(2);
+      expect(prepares[1]).not.toBe(prepares[0]);
+    } finally {
+      restore();
+    }
+  });
+
+  it('a tree listing that rejects releases the waiting read as a failure: "changing" with Read it, never Loading for good', async () => {
+    const text = '# T\n\nbody\n';
+    const bytes = new TextEncoder().encode(text) as Uint8Array<ArrayBuffer>;
+    const tree = treeOk({
+      drafts: holder(),
+      entries: [entry('specs', 'big.md', { draft: draftOf('modified', { fp: null, size: bytes.length, mtimeNs: '1700000000000000000' }) })],
+    });
+    const f = fakeLoaders();
+    let calls = 0;
+    f.tree.mockImplementation(async () => { calls += 1; if (calls === 2) throw new Error('listing failed'); return okTree(tree); });
+    const rangeLoader: RangeLoader = {
+      async prepare() { return failedAnswer('worktree-moved'); },
+      async frame() { throw new Error('no frame'); },
+    };
+    const page = leafOf('/docs/demo/specs/big.md?ref=main');
+    function Harness(): React.ReactNode {
+      const visit = useDocsVisit(page, f.loaders);
+      if (visit.tree?.s !== 'ok') return null;
+      return <DocsLeaf visit={visit} tree={visit.tree.answer.tree} page={page} parser={parser} rangeLoader={rangeLoader} />;
+    }
+    const seen = await recordingRejections(async () => {
+      render(<Harness />);
+      await waitFor(() => expect(screen.getByRole('alert').textContent).toBe(DOCS_VIEW_TEXT.changing), { timeout: 3000 });
+    });
+    expect(seen).toHaveLength(1);
+    expect(screen.getByText(DOCS_RANGE_TEXT.readAgain)).toBeTruthy();
+    expect(screen.queryByText(DOCS_VIEW_TEXT.loading)).toBeNull();
   });
 });

@@ -15,8 +15,9 @@ import type { DocsVisit } from '../src/docs/useDocsVisit';
 
 /** The range side of a hand-built visit, for a test that reads no range or cares nothing about a stale one: a failed read
  *  is none of the visit's business, nothing is re-listed, and the counter never moves. Spread it into a `DocsVisit`. */
-export const NO_RANGE_VISIT: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting'> = {
+export const NO_RANGE_VISIT: Pick<DocsVisit, 'rangeFailed' | 'rangeRead' | 'rangeRetry' | 'rangeRelists' | 'rangeWaiting' | 'rangeTakeSave'> = {
   rangeFailed: () => 'other', rangeRead: () => {}, rangeRetry: () => {}, rangeRelists: 0, rangeWaiting: false,
+  rangeTakeSave: () => false,
 };
 
 export const COMMIT_A = 'a'.repeat(40);

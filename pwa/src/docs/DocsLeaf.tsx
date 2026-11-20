@@ -436,6 +436,11 @@ export function DocsLeaf(p: {
   const [toldOver, setToldOver] = useState<{ key: string; blob: string; size: number } | null>(null);
   const onTold = useCallback(
     (over: { blob: string; size: number }) => setToldOver({ key: versionKey, ...over }), [versionKey]);
+  // A told answer belongs to the tap that made it: leaving the page drops it, so coming back to the page asks again
+  // instead of mounting a leaf that saves a file nobody asked for.
+  useEffect(() => {
+    setToldOver((t) => (t !== null && t.key !== versionKey ? null : t));
+  }, [versionKey]);
   const entry = tree.entries.find((e) => e.section === page.section && e.path === page.path);
   if (entry === undefined) return null;
   const view = entryView(entry, tree.drafts, page.ref === null ? 'default' : 'ref');
@@ -494,7 +499,7 @@ export function DocsLeaf(p: {
         : file.s === 'failed' ? rangeOfTooLarge(file.body) : null;
     if (over !== null) {
       // A class with no view (`other`) was told by `DownloadButton`'s tap, so its first tap saves.
-      body = rangeBody(pin, { kind: 'blob', sha: over.blob }, over.size, entry, over.blob, cls === 'other' && told !== null);
+      body = rangeBody(pin, { kind: 'blob', sha: over.blob }, over.size, entry, over.blob, cls === 'other');
     } else if (cls === 'raster' && rasterByRange) {
       // X2 P1 (spec 4.3): an image above its class cap, or a draft image with no fingerprint, is shown on its own page
       // from bytes read by range, after its header's dimensions pass the image-view ceilings.
