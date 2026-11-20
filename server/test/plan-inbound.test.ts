@@ -18,14 +18,14 @@ import { runCcrcOp, type CcrcOpAsk, type CcrcOpOutcome } from '../src/linear/ccr
 import type { FetchLike } from '../src/linear/client.js';
 import { DriftPass } from '../src/linear/driftPass.js';
 import { DRIFT_PASS_MS, LINEAR_TEXT_PREFACE } from '../src/linear/driftPolicy.js';
-import { givenUpWord, INBOUND_RECHECK_MS } from '../src/linear/inboundPolicy.js';
+import { closeCommentSeedOf, givenUpWord, INBOUND_RECHECK_MS } from '../src/linear/inboundPolicy.js';
 import { LINEAR_VIA_FLEET_MAX_ITEMS } from '../src/linear/journal.js';
 import type { LinearDirectoryEntries } from '../src/linear/ops.js';
 import { PLAN_SYNC_DEBOUNCE_MS, PlanSync } from '../src/linear/planSync.js';
 import { readLinearStore } from '../src/linear/store.js';
 import { coordinatorPresenceIn, type CoordinatorPresence } from '../../shared/ledgers.js';
 import { LINEAR_SYNC_PROGRAMME } from '../../shared/plan.js';
-import { requestIdOf } from '../src/linear/planSyncPolicy.js';
+import { requestIdOf, uuidOf } from '../src/linear/planSyncPolicy.js';
 import { linearServicesFake, memCoordDb } from './linearServicesFake.js';
 import { seedSlot, WS } from './linearProxyRig.js';
 import { mkTmp } from './tmpHelpers.js';
@@ -59,7 +59,9 @@ interface Rig {
     /** A by-id read of one stored row's issue refused with this word (review 2524 F2): an answer about that one row. */
     byIdWord: Record<string, string>;
     /** What the drift pass's and the doors' read of the Linear store answers (review 2524 A2): the store, a rejection or an unreadable one. */
-    store: 'ok' | 'reject' | 'unreadable' };
+    store: 'ok' | 'reject' | 'unreadable';
+    /** The comments Linear accepted (review 2834 A2): a repeated requestId answers `conflict`, as Linear does, and posts nothing. */
+    comments: { requestId: string; body: string }[] };
   sync: PlanSync; drift: DriftPass; app: FastifyInstance;
   /** When the plan sync's one owner of slot rejection was asked (`markSlotRejected`, review 2394 A-3). */
   rejected: number[];
@@ -109,7 +111,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'AAA', 'applied', T - 1000);
   const r = {
     db, coord, plan, ccrcDir, t: { now: T }, asks: [] as CcrcOpAsk[], presence: {} as Record<string, CoordinatorPresence>, viaCalls: [] as string[][],
-    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'], byIdWord: {} as Rig['lin']['byIdWord'], store: 'ok' as Rig['lin']['store'] }, rejected: [] as number[],
+    fleet: { ids: new Set<string>() }, lin: { issues: [] as Record<string, unknown>[], directory: DIRECTORY as LinearDirectoryEntries | null, fail: new Set<string>(), failWord: 'linear-forbidden' as Rig['lin']['failWord'], retryAfterS: 0, byId: {} as Rig['lin']['byId'], byIdWord: {} as Rig['lin']['byIdWord'], store: 'ok' as Rig['lin']['store'], comments: [] as Rig['lin']['comments'] }, rejected: [] as number[],
   } as Rig;
   r.presenceFn = { current: (id) => r.presence[id] ?? 'alive' };
   const presenceOf = (id: string): CoordinatorPresence => r.presenceFn.current(id);
@@ -128,7 +130,12 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
       return ok({ issue: o ?? { id, identifier: r.plan.inboundOf(id)!.identifier, teamKey: 'AAA', stateType: 'unstarted' } });
     }
     if (ask.op.endsWith('Create')) { const id = U(counter++); return ok(ask.op === 'issueCreate' ? { id, identifier: `AAA-${counter}` } : { id }, id); }
-    if (ask.op === 'issueComment') return ok({ id: U(counter++) }, U(counter++));
+    if (ask.op === 'issueComment') {
+      const requestId = String(ask.input['requestId']);
+      if (r.lin.comments.some((c) => c.requestId === requestId)) return { ok: false, word: 'linear-invalid', detail: 'conflict', maybeSent: false } as CcrcOpOutcome;
+      r.lin.comments.push({ requestId, body: String(ask.input['body']) });
+      return ok({ id: U(counter++) }, U(counter++));
+    }
     if (ask.op.endsWith('Update')) return ok({ id: ask.target });
     return { ok: false, word: 'not-found', maybeSent: false };
   };
@@ -152,7 +159,7 @@ async function rig(o: { named?: string | null; progs?: boolean; mode?: 'public' 
   apps.push(r.app);
   registerPlanRoutes(r.app, {
     coord, plan, serial, mailToken: () => TOKEN, attribute: async () => ({ ok: true }), otherLaneReads: NOT_DESIGNATED_READS, sessionAuth: () => ({ allow: false, verdict: 'no-session', reason: 'refused', device: null }),
-    authEnabled: false, readLinearStore: () => readLinearStore(ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf, privateTrackerKeys: [],
+    authEnabled: false, readLinearStore: () => r.lin.store === 'reject' ? Promise.reject(new Error('store')) : r.lin.store === 'unreadable' ? Promise.resolve({ kind: 'unreadable' as const, code: 'EIO' }) : readLinearStore(ccrcDir), runOfSession: () => null, now: () => r.t.now, presenceOf, privateTrackerKeys: [],
     ...(o.noRecheck === true ? {} : { inboundRecheck: (row: InboundRow) => r.drift.recheckInbound(row) }),
   });
   registerHierarchyRoutes(r.app, { plan, serial, presenceOf, by: () => 'device-a', itemOf: (id) => coord.itemById(id), now: () => r.t.now });
@@ -1257,6 +1264,47 @@ describe('the malformed count is per issue (round 4 F2)', () => {
     expect(rowOf(r, 13)).toMatchObject({ state: 'closed', actedAt: null });   // held, not given up
     expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
   });
+
+  it('a retired issue that reopens and is closed again starts its malformed count afresh (final review minor 5, D-8183)', async () => {
+    const r = await rig();
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'malformed';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    for (const wait of [30_000, 120_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(3);          // three malformed answers stand
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);                        // it reopens
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise again' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1_800_000);
+    await passAt(r, r.t.now + 1_800_000);
+    // a count kept through the retire (3) would reach the give-up at the second answer
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(2);
+    expect(givenUpWord(rowOf(r, 12)!.reason)).toBeNull();
+  });
+
+  it('a count left by one issue of a workspace never counts against another issue of it (round 3 F3, D-8183)', async () => {
+    const r = await rig();
+    await detect(r, [node(12), node(13)]);
+    await triage(r, { issue: 'AAA-12', decision: 'close', reason: 'noise' });
+    r.lin.failWord = 'malformed';
+    r.lin.fail.add('issueComment');
+    await passAt(r, r.t.now + 1);
+    for (const wait of [30_000, 120_000]) await passAt(r, r.t.now + wait);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(3);          // the first issue stands at three malformed answers
+    r.plan.setInboundState(U(12), { actedAt: r.t.now });                             // it leaves the lane with its count unspent (never given up)
+    await triage(r, { issue: 'AAA-13', decision: 'close', reason: 'noise' });
+    r.asks.length = 0;
+    // the second issue has its own count: a count shared by the workspace (3) would reach the give-up at its second answer
+    await passAt(r, r.t.now + 1_800_000);
+    await passAt(r, r.t.now + 1_800_000);
+    expect(r.asks.filter((a) => a.op === 'issueComment')).toHaveLength(2);
+    expect(givenUpWord(rowOf(r, 13)!.reason)).toBeNull();
+    expect(rowOf(r, 13)).toMatchObject({ state: 'closed', actedAt: null });
+  });
 });
 
 describe('the close path of a take with no project judges the text as a public project (round 5 A5)', () => {
@@ -1275,6 +1323,20 @@ describe('the close path of a take with no project judges the text as a public p
     expect(errorOf(pub)).toBe('linear-text-public');
     // text with nothing private passes on the no-project path
     expect((await take(r, 'prog-b', { issue: 'CCC-40', close: { why: 'noise' } }, OTHER)).statusCode).toBe(200);
+  });
+});
+
+describe('a team no project claims is judged as unknown, public, at the door as in the lane (review 2834 F1)', () => {
+  it('a coordinator\'s close of a handed row on an unowned team under a PRIVATE home is refused as public text', async () => {
+    const r = await rig({ mode: 'private', progs: true });
+    // a MANAGED team no project claims: a migration row, the row in it, and a by-id node in that team, so the re-read answers managed
+    r.db.prepare('INSERT INTO linear_migrations (workspaceId, teamKey, state, createdAt, updatedAt, appliedAt) VALUES (?, ?, ?, 1, 1, ?)').run(WS.a.id, 'CCC', 'applied', T - 1000);
+    r.plan.upsertInbound({ linearId: U(40), workspaceId: WS.a.id, teamKey: 'CCC', identifier: 'CCC-40', title: 't', body: null, seenAt: T });
+    r.plan.setInboundState(U(40), { state: 'handed', handedTo: 'prog-b' });
+    r.lin.byId[U(40)] = node(40, { teamKey: 'CCC', identifier: 'CCC-40' });
+    const res = await take(r, 'prog-b', { issue: 'CCC-40', close: { why: 'dup of CCC-77' } }, OTHER);
+    expect([res.statusCode, errorOf(res)]).toEqual([409, 'linear-text-public']);
+    expect(rowOf(r, 40)!.state).toBe('handed');
   });
 });
 
@@ -1832,6 +1894,59 @@ describe('plan take never reaches another workspace\'s Upkeep ticket (review 252
   });
 });
 
+describe('plan take with no handed row and an unmeasured home fails closed (review 2571 F10)', () => {
+  const otherTicket = (r: Rig): number => {
+    r.plan.upsertInbound({ linearId: U(60), workspaceId: WS.b.id, teamKey: 'BBB', identifier: 'AAA-12', title: 'Other ticket', body: null, seenAt: T - 4000 });
+    const done = r.plan.placeInboundInUpkeep({ linearId: U(60), project: 'project-b', now: T - 3500 });
+    if (!done.ok) throw new Error('fixture: the Upkeep ticket was not placed');
+    return done.ticketId;
+  };
+  const untouched = (r: Rig, id: number): void => {
+    const t = r.plan.upkeepEpicOf('project-b')!.tickets.find((x) => x.id === id)!;
+    expect([t.program, t.state]).toEqual([null, 'open']);
+  };
+  const epicOf = (slug: string, home: string | null) => (r: Rig): void => {
+    applyPlanChanges(r.db, slug, changes({
+      epics: { insert: [{ key: 'e-z', project: 'project-a', waves: [1], ordinal: 0, title: 'Epic z', summary: 'Summary' }], update: [], drop: [] },
+      checkpoints: { insert: [], update: [], drop: [] },
+    }), OTHER, T - 500, home === null ? null : { home, title: slug });
+  };
+  const cases: Array<[string, string, string | null, 'ok' | 'unreadable', number, string]> = [
+    ['no programme home', 'prog-nh', null, 'ok', 409, 'issue-not-inbound'],
+    ['a home with no team key', 'prog-nk', 'project-x', 'ok', 409, 'issue-not-inbound'],
+    ['a home whose workspace cannot be resolved', 'prog-c', 'project-b', 'unreadable', 503, 'unreachable'],
+  ];
+  it.each(cases)('%s: a take into an epic and a close refuse and the ticket is unchanged', async (_n, slug, home, store, status, word) => {
+    const r = await rig({ twoWs: true });
+    if (slug !== 'prog-c') epicOf(slug, home)(r);
+    const id = otherTicket(r);
+    r.lin.store = store;
+    const epic = slug === 'prog-c' ? 'e-c' : 'e-z';
+    for (const body of [{ issue: 'AAA-12', epic }, { issue: 'AAA-12', close: { why: 'noise' } }]) {
+      const res = await take(r, slug, body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([status, word]);
+    }
+    untouched(r, id);
+  });
+});
+
+describe('a foreign-workspace Upkeep ticket under an unresolvable home (review 2834 A8)', () => {
+  it('zero handed rows, the ticket bound in ANOTHER workspace than the home\'s, the home\'s workspace unresolvable: refused, the ticket unchanged', async () => {
+    const r = await rig({ twoWs: true });
+    // prog-c's home is project-b (ws-b); the ticket is project-a's, in ws-a
+    r.plan.upsertInbound({ linearId: U(61), workspaceId: WS.a.id, teamKey: 'AAA', identifier: 'AAA-15', title: 'Foreign ticket', body: null, seenAt: T - 4000 });
+    const done = r.plan.placeInboundInUpkeep({ linearId: U(61), project: 'project-a', now: T - 3500 });
+    if (!done.ok) throw new Error('fixture: the Upkeep ticket was not placed');
+    r.lin.store = 'unreadable';
+    for (const body of [{ issue: 'AAA-15', epic: 'e-c' }, { issue: 'AAA-15', close: { why: 'noise' } }]) {
+      const res = await take(r, 'prog-c', body, OTHER);
+      expect([res.statusCode, errorOf(res)], JSON.stringify(body)).toEqual([503, 'unreachable']);
+    }
+    const t = r.plan.upkeepEpicOf('project-a')!.tickets.find((x) => x.id === done.ticketId)!;
+    expect([t.program, t.state]).toEqual([null, 'open']);
+  });
+});
+
 describe('every cause is walked at pass level: canceled, and an unreadable store (review 2524 A2)', () => {
   const canceled = (r: Rig): void => { r.lin.byId[U(12)] = node(12, { stateType: 'canceled' }); };
   it('canceled by id: a take and a triage retire the row with cause canceled', async () => {
@@ -1922,5 +2037,190 @@ describe('the reopen mail names the row\'s own retire cause (review 2524 A4)', (
     r.db.prepare("UPDATE linear_inbound SET state = 'retired', retiredWhy = NULL WHERE linearId = ?").run(U(12));
     await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
     expect(reopenBody(r)).toContain(`The issue AAA-12 was retired earlier and is open again in Linear, ${SO}`);
+  });
+});
+
+// ── Wave 4 follow-ups, second set (round 4 F2, D-8183): a note never outlives its waiting row ──
+
+describe('a returned or reopened note never outlives its waiting row (round 4 F2)', () => {
+  const returnedWhileGone = async (r: Rig): Promise<void> => {
+    await detect(r, [node(12)]);
+    await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-b' });
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: 'coord-gone', ownsTeam: false }, 'test', T);
+    r.presence['coord-gone'] = 'dead';
+    expect((await take(r, 'prog-b', { issue: 'AAA-12', return: { note: 'not ours' } }, OTHER)).statusCode).toBe(200);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'waiting' });
+    expect(r.plan.inboundNoteOf(U(12))).toMatchObject({ kind: 'returned' });
+    r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: OWNER, ownsTeam: false }, 'test', T);   // the owner is back, before the lane's next beat
+  };
+  const reopenedNote = async (r: Rig): Promise<void> => {
+    await detect(r, [node(12)]);
+    r.plan.setInboundNote(U(12), { kind: 'reopened', at: T, was: 'completed' });
+  };
+  const triages: Array<[string, Record<string, unknown>, string]> = [
+    ['upkeep', { decision: 'upkeep' }, 'placed'],
+    ['close', { decision: 'close', reason: 'noise' }, 'closed'],
+    ['raise', { decision: 'raise', note: 'This changes scope' }, 'raised'],
+    ['hand', { decision: 'hand', programme: 'prog-b' }, 'handed'],
+  ];
+  for (const [name, body, state] of triages) {
+    for (const [noteName, make] of [['returned', returnedWhileGone], ['reopened', reopenedNote]] as const) {
+      it(`a ${noteName} note is deleted when the owner triages the row ${name}, and a later beat mails nothing about it`, async () => {
+        const r = await rig();
+        await make(r);
+        const res = await triage(r, { issue: 'AAA-12', ...body });
+        expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+        expect(rowOf(r, 12)).toMatchObject({ state });
+        expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+        r.plan.setHierarchySettings('project-a', { initiatives: 'on', linearOwner: OWNER, ownsTeam: false }, 'test', T);
+        await passAt(r, r.t.now + 1);
+        expect(mails(r, 'Linear inbound: AAA-12 returned%')).toEqual([]);
+        expect(mails(r, 'Linear inbound: AAA-12 reopened%')).toEqual([]);
+      });
+    }
+  }
+
+  it('a hand to the owner\'s own programme takes the row at once and deletes its note', async () => {
+    const r = await rig();
+    await reopenedNote(r);
+    const res = await triage(r, { issue: 'AAA-12', decision: 'hand', programme: 'prog-a', epic: 'e1', checkpoint: 'c1' });
+    expect([res.statusCode, errorOf(res)]).toEqual([200, '']);
+    expect(rowOf(r, 12)).toMatchObject({ state: 'taken' });
+    expect(r.plan.inboundNoteOf(U(12))).toBeNull();
+    expect(r.db.prepare('SELECT COUNT(*) AS n FROM linear_inbound_notes').get()).toEqual({ n: 0 });
+  });
+});
+
+describe('a close re-runs the public-text check before it posts (D-8183, round 4 F6)', () => {
+  it('a reason the check refuses now is not posted: a fallback comment, the cancel, one mail to the owner', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-99 for the dupe' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    const w = writes(r);
+    expect(w.map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(String(w[0]!.input['body'])).not.toContain('AAA-99');
+    expect(String(w[0]!.input['body'])).toContain('did not pass the public-text check');
+    expect(rowOf(r, 12)!.actedAt).toBe(r.t.now);
+    const m = mails(r, 'Linear inbound: AAA-12 closed without its reason%');
+    expect(m.map((x) => x.toId)).toEqual([OWNER]);
+    expect(m[0]!.body).not.toContain('AAA-99');
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, 'Linear inbound: AAA-12 closed without%')).toHaveLength(1);
+  });
+
+  it('a clean reason still posts Closed: <reason>', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    expect(String(writes(r)[0]!.input['body'])).toContain('Closed: a duplicate of other work');
+    expect(mails(r, 'Linear inbound: AAA-12 closed without%')).toEqual([]);
+  });
+});
+
+describe('the refused-text close has its own identity (review 2834 A1, A2, A6)', () => {
+  const MAIL = 'Linear inbound: AAA-12 closed without its reason%';
+  const REFUSED = 'see AAA-99 for the dupe';
+  const comments = (r: Rig) => r.asks.filter((a) => a.op === 'issueComment');
+  /** A real retire (the issue completes) and reopen (it is open again, the lane mails the row anew, so `mailedAt` moves on). */
+  const retireAndReopen = async (r: Rig): Promise<void> => {
+    await detect(r, [node(12, { stateType: 'completed' })], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('retired');
+    await detect(r, [node(12)], r.t.now + DRIFT_PASS_MS + 1);
+    expect(rowOf(r, 12)!.state).toBe('mailed');
+  };
+  const closeRefused = async (r: Rig, reason: string): Promise<void> => {
+    r.plan.setInboundState(U(12), { state: 'closed', reason });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);                                  // the comment lands, the cancel is refused retryably: the row stays unacted
+    r.lin.fail.clear();
+  };
+
+  it('a re-close with another reason posts its own comment after a real retire and reopen', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a duplicate of other work' });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);                                  // the reason comment lands, the cancel fails retryably
+    expect(r.lin.comments).toHaveLength(1);
+    r.lin.fail.clear();
+    await retireAndReopen(r);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'a second, different reason' });
+    await passAt(r, r.t.now + 1);
+    expect(r.lin.comments.map((c) => c.body).some((b) => b.includes('a second, different reason'))).toBe(true);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+  });
+
+  it('the fallback key does not depend on the reason; the reason key does', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    await closeRefused(r, REFUSED);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: 'see AAA-98 for another dupe' });   // same close round, another refused reason
+    await passAt(r, r.t.now + 3600_000);
+    const ids = comments(r).map((a) => String(a.input['requestId']));
+    expect(ids).toHaveLength(2);
+    expect(ids[1]).toBe(ids[0]);
+    // two REASON attempts of one close round, for two clean reasons, are keyed apart (review 2874 A2): the reason kind's key
+    // carries the reason's digest, so the second reason is posted, not answered conflict
+    const r2 = await rig({ mode: 'public' });
+    await detect(r2, [node(12)]);
+    await closeRefused(r2, 'a duplicate of other work');           // the reason comment lands, the cancel fails retryably
+    r2.plan.setInboundState(U(12), { state: 'closed', reason: 'a second, different reason' });
+    await passAt(r2, r2.t.now + 3600_000);
+    const reasonIds = comments(r2).map((a) => String(a.input['requestId']));
+    expect(reasonIds).toHaveLength(2);
+    expect(reasonIds[1]).not.toBe(reasonIds[0]);
+    expect(r2.lin.comments.map((c) => c.body).some((b) => b.includes('a second, different reason'))).toBe(true);
+    expect(reasonIds).not.toContain(ids[0]);
+  });
+
+  it('two refused closes of one issue (a real retire and reopen between) are mailed twice, even with the SAME reason', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    await closeRefused(r, REFUSED);
+    expect(mails(r, MAIL)).toHaveLength(1);
+    await passAt(r, r.t.now + 3600_000);                           // the retry of the same close: the comment conflicts, no second mail
+    expect(mails(r, MAIL)).toHaveLength(1);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
+    const r2 = await rig({ mode: 'public' });
+    await detect(r2, [node(12)]);
+    await closeRefused(r2, REFUSED);
+    await retireAndReopen(r2);
+    await closeRefused(r2, REFUSED);                                // the SAME reason: only mailedAt tells the closes apart
+    const m = mails(r2, MAIL);
+    expect(m).toHaveLength(2);
+    expect(m[0]!.subject).not.toBe(m[1]!.subject);
+    expect(r2.lin.comments).toHaveLength(2);                        // each close posted its own fallback
+    for (const x of m) { expect(x.body).not.toContain('AAA-99'); expect(x.body).toContain('a comment without the reason is on the issue'); }
+  });
+
+  it('a refused-text close in a team with no Linear owner: the fallback and the cancel go on, actedAt is set, no mail (review 2874 F3)', async () => {
+    const r = await rig({ mode: 'public', named: null, progs: false });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: REFUSED });
+    r.asks.length = 0;
+    await passAt(r, r.t.now + 1);
+    const w = writes(r);
+    expect(w.map((a) => a.op)).toEqual(['issueComment', 'issueUpdate']);
+    expect(String(w[0]!.input['body'])).not.toContain('AAA-99');
+    expect(rowOf(r, 12)!.actedAt).toBe(r.t.now);
+    expect(mails(r)).toEqual([]);
+  });
+
+  it('a fallback answered conflict (an earlier attempt landed it) still mails once; a later pass of the same close mails nothing more', async () => {
+    const r = await rig({ mode: 'public' });
+    await detect(r, [node(12)]);
+    r.plan.setInboundState(U(12), { state: 'closed', reason: REFUSED });
+    r.lin.comments.push({ requestId: uuidOf(closeCommentSeedOf(U(12), 'fallback', rowOf(r, 12)!)), body: 'an earlier attempt' });
+    r.lin.fail.add('issueUpdate'); r.lin.failWord = 'unreachable';
+    await passAt(r, r.t.now + 1);
+    expect(mails(r, MAIL)).toHaveLength(1);
+    r.lin.fail.clear();
+    await passAt(r, r.t.now + 3600_000);
+    expect(mails(r, MAIL)).toHaveLength(1);
+    expect(rowOf(r, 12)!.actedAt).not.toBeNull();
   });
 });

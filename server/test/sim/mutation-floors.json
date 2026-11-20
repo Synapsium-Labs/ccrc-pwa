@@ -76,6 +76,7 @@
   "server/src/continuity/renewalFeed.ts#renewalFeed": 1,
   "server/src/continuity/renewalFeed.ts#renewAnswerEvent": 1,
   "server/src/continuity/renewalFeed.ts#FIRST_PROMPT_OF_ROLE": 1,
+  "server/src/continuity/renewalFeed.ts#RENEWAL_MAIL_OF_ROLE": 1,
   "server/src/continuity/renewalFeed.ts#renewalHoldsMail": 1,
   "server/src/continuity/renewalOrder.ts#overlordFirst": 1,
   "server/src/continuity/renewalDrain.ts#drainVerdict": 1,
@@ -263,8 +264,15 @@
   "server/src/coord/workMap.ts#doneEvidenceVerdict": 1,
   "server/src/coord/workMap.ts#verdictsReadOf": 1,
   "server/src/continuity/actKey.ts#actKeyClaimVerdict": 1,
+  "server/src/continuity/hookReports.ts#hookReportOf": 1,
+  "server/src/continuity/hookReports.ts#offModelOf": 1,
+  "server/src/continuity/hookReports.ts#modelDriftOf": 1,
+  "server/src/continuity/hookReports.ts#readersRunning": 1,
+  "server/src/coord/overlordLadder.ts#offModelReading": 1,
   "server/src/coord/overlordGate.ts#callerStandingOf": 1,
   "server/src/coord/overlordGate.ts#fenceVerdict": 1,
   "server/src/coord/overlordGate.ts#counterVerdict": 1,
-  "server/src/coord/overlordGate.ts#overlordGate": 1
+  "server/src/coord/overlordGate.ts#overlordGate": 1,
+  "server/src/continuity/hookReports.ts#witnessVerdict": 1,
+  "server/src/continuity/hookReports.ts#unwitnessedLatchDue": 1
 }

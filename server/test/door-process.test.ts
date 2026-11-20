@@ -5,8 +5,9 @@ import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawn, spawnSync, type ChildProcess } from 'node:child_process';
 import fs from 'node:fs';
 import path from 'node:path';
+import { createHash } from 'node:crypto';
 import {
-  DOOR_TOOLS, DELTA_LEASE_MS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, MAX_LINE_BYTES, PROTOCOL_VERSIONS, createDoor,
+  DOOR_TOOLS, readToolOver, DELTA_LEASE_MS, CLAIM_RETRY_MIN_MS, CLAIM_RETRY_MAX_MS, MAX_LINE_BYTES, PROTOCOL_VERSIONS, createDoor,
 } from '../../ccd/door-process.mjs';
 import { mkTmp, removeTmpFixtures } from './tmpHelpers.js';
 
@@ -18,7 +19,7 @@ const KEY = 'fedcba9876543210'.repeat(4);
 const HASH = 'abcdef0123456789'.repeat(4);
 
 type Entry = { argv: string[]; stdin: string; verb: string; nonce: string | null; key: string | null; gen: string | null;
-  counter: string | null; s: number; e: number };
+  counter: string | null; wit: string | null; s: number; e: number };
 
 /** The stub client. Verb names: `whoami`, `sessions-act-key`, `delta` (card --anchor), else argv[0]. Files in its dir:
  *  ans.<verb> (stdout), rc.<verb> (exit code), delay.<verb> (seconds to sleep). One JSON line a call goes to `log`, at the end. */
@@ -38,8 +39,8 @@ function writeStub(dir: string): string {
     'v() { if [ -n "${!1+x}" ]; then jq -Rn --arg v "${!1}" \'$v\'; else echo null; fi; }',
     'argv=$(printf \'%s\\n\' "$@" | jq -Rn \'[inputs]\')',
     'jq -cn --argjson argv "$argv" --arg stdin "$in" --arg verb "$verb" --argjson nonce "$(v CCRC_DOOR_NONCE)" \\',
-    '  --argjson key "$(v CCRC_ACT_KEY)" --argjson gen "$(v CCRC_ACT_GENERATION)" --argjson counter "$(v CCRC_ACT_COUNTER)" \\',
-    '  --argjson s "$s" --argjson e "$e" \'{argv:$argv,stdin:$stdin,verb:$verb,nonce:$nonce,key:$key,gen:$gen,counter:$counter,s:$s,e:$e}\' >> "$D/log"',
+    '  --argjson key "$(v CCRC_ACT_KEY)" --argjson gen "$(v CCRC_ACT_GENERATION)" --argjson counter "$(v CCRC_ACT_COUNTER)" --argjson wit "$(v CCRC_WITNESS_KEY)" \\',
+    '  --argjson s "$s" --argjson e "$e" \'{argv:$argv,stdin:$stdin,verb:$verb,nonce:$nonce,key:$key,gen:$gen,counter:$counter,wit:$wit,s:$s,e:$e}\' >> "$D/log"',
     'rc=0; [ -f "$D/rc.$verb" ] && rc=$(cat "$D/rc.$verb")',
     'if [ -f "$D/ans.$verb" ]; then cat "$D/ans.$verb"; else',
     `  case "$verb" in whoami) echo '{"id":"${ID}","uuid":"${UUID}"}';; *) echo '{"ok":true}';; esac`,
@@ -83,7 +84,7 @@ class Proc {
     const env: Record<string, string> = {
       PATH: process.env['PATH'] ?? '', HOME: dir, CCRC_SESSION_ID: ID, CCRC_API: stub, CCRC_DOOR_NONCE: NONCE,
       // Stale fence variables in the process's own environment: no child may inherit them.
-      CCRC_ACT_KEY: 'ab'.repeat(32), CCRC_ACT_GENERATION: '77', CCRC_ACT_COUNTER: '99',
+      CCRC_ACT_KEY: 'ab'.repeat(32), CCRC_ACT_GENERATION: '77', CCRC_ACT_COUNTER: '99', CCRC_WITNESS_KEY: 'cd'.repeat(32),
     };
     if (opts.doorDir !== undefined) env['CCRC_DOOR_DIR'] = opts.doorDir;
     this.child = spawn('node', [opts.program ?? PROGRAM], { env, stdio: ['pipe', 'pipe', 'pipe'] });
@@ -245,6 +246,83 @@ describe('the door process: the claim and the fence', () => {
     for (const e of l.filter((x) => ['probe', 'whoami', 'sessions-act-key'].includes(x.verb) || x.argv[1] === 'list')) {
       expect([e.key, e.gen, e.counter], `${e.verb} ${e.argv.join(' ')} carries the fence`).toEqual([null, null, null]);
     }
+  });
+
+  /** The witness key, computed independently of the program: sha256 of `mcp__door__<name>`, one newline and `jq -cS` of the input. */
+  const expectedWitness = (name: string, input: unknown): string => {
+    const r = spawnSync('jq', ['-cS', '.'], { input: JSON.stringify(input ?? {}), encoding: 'utf8' });
+    expect(r.status, r.stderr).toBe(0);
+    return createHash('sha256').update(`mcp__door__${name}\n${r.stdout.replace(/\n$/, '')}`).digest('hex');
+  };
+  const HARD = { z: 1, a: { y: [1.5, 1e21, 12345678901234567890], b: 'caf\u00e9 \u0001 \ud83d\ude00' }, m: null };
+
+  it('a fenced call\'s child carries CCRC_WITNESS_KEY, the digest the hook computes (question 6); an unfenced one, the claim and the whoami carry none', async () => {
+    const p = new Proc();
+    await p.call('note_add', HARD);
+    await p.call('timer_cancel', { id: 2 });
+    await p.call('probe', {});
+    await p.call('note_list', {});
+    await p.call('read', { door: 'card' });
+    const l = log();
+    expect(l.filter((e) => e.wit !== null).map((e) => [e.verb, e.wit])).toEqual([
+      ['note', expectedWitness('note_add', HARD)], ['timer', expectedWitness('timer_cancel', { id: 2 })],
+    ]);
+    for (const e of l.filter((x) => ['probe', 'whoami', 'sessions-act-key', 'delta'].includes(x.verb) || x.argv[1] === 'list')) {
+      expect(e.wit, `${e.verb} ${e.argv.join(' ')} carries a witness key`).toBeNull();
+    }
+    expect(expectedWitness('note_add', HARD)).toMatch(/^[0-9a-f]{64}$/);
+  });
+
+  it('every card page carries its own witness key (gates B\'s F9: the page that completes the read is a write)', async () => {
+    const p = new Proc();
+    await p.call('card', {});
+    await p.call('card', { page: 2, hash: HASH });
+    expect(of('card').map((e) => e.wit)).toEqual([expectedWitness('card', {}), expectedWitness('card', { page: 2, hash: HASH })]);
+  });
+
+  it('an absent input hashes as {}, the same as an empty one; a call that gets no claim still carries its key', async () => {
+    const p = new Proc();
+    answer('sessions-act-key', { ok: false, error: 'unmeasured' });
+    await p.call('note_handover');
+    const h = of('note').find((e) => e.argv[1] === 'handover')!;
+    expect(h.key, 'no claim, so no act key').toBeNull();
+    expect(h.wit).toBe(expectedWitness('note_handover', {}));
+  });
+
+  it('no child inherits a witness key the process itself held: the stale one in its own environment reaches nobody', async () => {
+    const p = new Proc();
+    await p.call('probe', {});
+    await p.call('note_add', {});
+    for (const e of log()) expect(e.wit === 'cd'.repeat(32), `${e.verb} inherited the stale key`).toBe(false);
+  });
+
+  it('read refuses every door while none is marked a reader, answers that none is readable, and runs nothing', async () => {
+    const p = new Proc();
+    const before = log().length;
+    for (const input of [{ door: 'card' }, { door: 'messages', args: {} }, { door: 'note_list' }, {}]) {
+      const r = await p.call('read', input);
+      expect(r.isError, JSON.stringify(input)).toBe(true);
+      expect(r.text).toMatch(/no door is readable yet|door is the name of a readable door/);
+    }
+    expect(log().filter((e) => e.verb !== 'whoami' && e.verb !== 'delta').length - before).toBe(0);
+  });
+
+  it('read serves a row marked reader as that row\'s own argv and body, and never an unmarked, fenced or non-view one (a table with readers, in-process)', () => {
+    const mk = (name: string, over: object = {}): any => ({ name, class: 'view', fenced: false, reader: true, input: { type: 'object' },
+      argv: (i: any, self: string) => [name, self, ...(i.page ? ['--page', String(i.page)] : [])], body: (i: any) => ({ echoed: i }), ...over });
+    const rows = [mk('board'), mk('history'), mk('messages', { reader: false }), mk('card', { fenced: true, reader: true }), mk('weird', { class: 'operate' })];
+    const read = readToolOver(rows) as any;
+    expect(read.input.properties.door).toEqual({ type: 'string', enum: ['board', 'history', 'card', 'weird'] });
+    expect(read.argv({ door: 'board', args: { page: 2 } }, ID)).toEqual(['board', ID, '--page', '2']);
+    expect(read.argv({ door: 'history' }, ID)).toEqual(['history', ID]);
+    expect(read.body({ door: 'board', args: { page: 2 } })).toEqual({ echoed: { page: 2 } });
+    for (const input of [{ door: 'messages' }, { door: 'card' }, { door: 'weird' }, { door: 'nothing' }, { door: 'board', args: [] }, { door: 'board', args: null }]) {
+      expect(() => read.argv(input, ID), JSON.stringify(input)).toThrow();
+    }
+    expect(() => read.argv({ door: 'messages' }, ID)).toThrow(/not a readable door/);
+    const none = readToolOver([mk('x', { reader: false })]) as any;
+    expect(none.input.properties.door.enum).toBeUndefined();
+    expect(() => none.argv({ door: 'x' }, ID)).toThrow(/no door is readable yet/);
   });
 
   it.each([1, 2, 3])('the card tool presents key, generation and a rising counter on page %i of 3', async (page) => {

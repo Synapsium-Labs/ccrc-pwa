@@ -1106,8 +1106,10 @@ describe('the Overlord gate words have one home (W1 gates B, Task 6)', () => {
       'server/src/retire.ts',
     ]);
   });
-  it("'unwitnessed' is held by the gate alone (door process B's hookReports.ts joins when it lands)", async () => {
-    expect(await holders('unwitnessed')).toEqual([GATE]);
+  it("'unwitnessed' is held by the gate and by door process B's two files that name its verdict arm and its recorded outcome (hookReports.ts answers the gate's WitnessVerdict; witnessPorts.ts acts on it; hookReportStore.ts imports the gate's outcome type, review 2870 F10; none refuses a route)", async () => {
+    expect(await holders('unwitnessed')).toEqual([
+      'server/src/continuity/hookReports.ts', 'server/src/continuity/witnessPorts.ts', GATE,
+    ]);
   });
   it('CONTROL: a planted refuseRoute(reply, gate word) in another file is red, in each word', async () => {
     for (const w of ['not-the-overlord', 'stale-designation', 'card-unread']) {

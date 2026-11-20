@@ -18,7 +18,7 @@ import { tx } from '../coord/tx.js';
 import {
   MESSAGE_STATES, READ_OUTCOME_MAX_CHARS, READ_SCOPE_MAX_CHARS, isGenerationRead, isMessageState, isReadCaller, isReadDoor,
   isReadTurnState, isSettledBy,
-  type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadLine,
+  type MessageActor, type MessageEvent, type MessageState, type OperatorMessageRow, type ReadCaller, type ReadLine,
 } from '../../../shared/operatorMessages.js';
 import { capMessageText, messageMove, nextMessageId } from './messages.js';
 import { isNameListMode, type NameListMode } from '../../../shared/privateNames.js';
@@ -211,6 +211,16 @@ export class OperatorModelStore {
     } catch (err) {
       return { ok: false, error: 'write-failed', detail: message(err) };
     }
+  }
+
+  /** How many ledger lines of these callers fall at or after `from` and at or before `to` (closed-book's `ReadLedgerCount`
+   *  port). The ledger names a caller by role, never a session, so `['overlord', 'reader']` is the designated session's and its
+   *  readers' reads, whoever held the designation then; an empty list or an unknown word is unmeasured, never zero. */
+  readsBetween(callers: readonly ReadCaller[], from: number, to: number): StoreRead<number> {
+    if (callers.length === 0 || !callers.every(isReadCaller)) return { kind: 'unmeasured', why: 'callers: a non-empty list of ledger caller words' };
+    if (!isCount(from) || !isCount(to)) return { kind: 'unmeasured', why: 'from and to: non-negative safe integers' };
+    return this.read(() => (this.db.prepare(`SELECT count(*) AS c FROM read_ledger WHERE caller IN (${callers.map(() => '?').join(', ')}) AND at >= ? AND at <= ?`)
+      .get(...callers, from, to) as { c: number }).c);
   }
 
   /** The one writer of the uploaded name list (Overlord W2, private names B): deletes every entry, inserts `entries` in their

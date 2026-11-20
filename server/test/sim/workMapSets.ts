@@ -78,7 +78,10 @@ export const WORK_MAP_SET = set([
   { id: 'T6a-2', old: "      if (item.status === 'closed') { pc.closed += 1; continue; }", new: '' },
   // Review 2795 F4 item 3: a closed ticket counted into the phase's own work keeps it from finishing.
   { id: 'T6a-2b', old: "      if (item.status === 'closed') { pc.closed += 1; continue; }", new: "      if (item.status === 'closed') { pc.closed += 1; own += 1; continue; }" },
-  { id: 'T6a-3', old: '      if (out !== null) { carried += 1; times.push(out.at); continue; }', new: '' },
+  { id: 'T6a-3', old: '      if (out !== null) { carried += 1; carriedOut.push(k); times.push(out.at); continue; }   // carried out', new: '' },
+  // Review 2873 F2: the phase serves which tickets it carried out; the card draws that and re-derives nothing.
+  { id: 'T6a-3c', old: 'carried += 1; carriedOut.push(k);', new: 'carried += 1;' },
+  { id: 'T6a-3d', old: "      if (item.status === 'closed') { pc.closed += 1; continue; }", new: "      if (item.status === 'closed') { pc.closed += 1; if (carryOut(p, k) !== null) carriedOut.push(k); continue; }" },
   { id: 'T6a-3b', old: '    if (r === undefined || r.carriedTo === null || !numbers.has(r.carriedTo)) return null;', new: '    if (r === undefined || r.carriedTo === null) return null;' },
   { id: 'T6a-4', old: "      if (item.group === 'done') { ownDone += 1; times.push(item.doneAt); }", new: '' },
   { id: 'T6a-5', old: '      own += 1;', new: "      if (item.group !== 'left-open') own += 1;" },
@@ -104,7 +107,7 @@ export const WORK_MAP_SET = set([
   { id: 'S-2', old: '    if (dropped && keys.length === 0) return [];', new: '' },
   { id: 'S-3', old: '      total: keys.filter((k) => COUNTED.has(byKey.get(k)!.group)).length,', new: '      total: keys.length,' },
   // Review 2795 F4 item 4: the strip counts as the headline does, so a left-open ticket is in no total.
-  { id: 'S-3b', old: "new Set(['done', 'in-progress', 'waiting-on-you', 'held', 'not-started'])", new: "new Set(['done', 'in-progress', 'waiting-on-you', 'held', 'not-started', 'left-open'])" },
+  { id: 'S-3b', old: 'new Set(WORK_COUNTED_GROUPS)', new: "new Set([...WORK_COUNTED_GROUPS, 'left-open'])" },
   { id: 'S-4', old: "    const cps = e.checkpoints.filter((c) => c.state !== 'dropped');", new: '    const cps = e.checkpoints;' },
   { id: 'S-5', old: "  const source: WorkMapView['source'] = ended ? 'ended' : anyTicket ? 'plan'", new: "  const source: WorkMapView['source'] = anyTicket ? 'plan'" },
   { id: 'S-6', old: ": anyTicket ? 'plan' : plan.declared ? 'declared-empty' : 'runs';", new: ": anyTicket ? 'plan' : 'runs';" },

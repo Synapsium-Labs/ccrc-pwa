@@ -85,6 +85,7 @@ import {
   parseAdvance, reconcilePending, recordFailure, recordMove, resolveEffort, sessionBehind, unmeasuredMoveNotice,
   unmeasuredMoves,
 } from '../shared/model-advance.mjs';
+import { ANTHROPIC_OPS, anthropicArm } from './models-anthropic.mjs';
 import { LitellmTemplateInvalid, renderLitellmConfig } from '../shared/litellm.mjs';
 
 const SELF = 'models-op';
@@ -1227,6 +1228,7 @@ function describe(account, registry, catalogue, reading) {
     windows: windowsReport(reading),
     contextWindow: registry === null ? null : contextWindowFor(registry, catalogue, windows),
     advance: advanceReport(account.id),
+    ...(anthropic ? { aliases: aliasesReport(account.id) } : {}),
     labels: registry === null ? null : laneClassModels(registry, catalogue),
     windowNotices: windowNotices(account.id, registry, catalogue, windows),
   };
@@ -1357,6 +1359,10 @@ const OPS = {
   // Auto-advance plan W2 Task 9: one class's move, or one failed canary's
   // record. It writes, and ONLY under the lane-files lock its bash caller holds.
   'advance-commit': { keys: ['file', 'id', 'class', 'from', 'to', 'canary', 'reason'], required: ['file', 'id', 'class', 'from', 'to', 'canary'], writes: true },
+  // Model-class Anthropic arm, Task A2.3: an Anthropic lane's aliases file (the id each class's alias resolves to, from
+  // the lane's cache and its marked launches), and the moves it finds, recorded in the advance file. It writes, and ONLY
+  // under the lane-files lock its bash caller holds. `--reg` is the session registry (the launch markers).
+  'aliases-refresh': { keys: ['file', 'id', 'reg'], required: ['file', 'id', 'reg'], writes: true },
   // Auto-advance plan W3 Task 14: doctor's one read of every lane's advance state. Box-wide and READ-ONLY; its two
   // paths come from ccd/ccrc ($_SVC_REG and `_models_lock_path '{id}'`) so neither is spelled twice.
   'advance-health': { keys: ['file', 'reg', 'lock-template'], required: ['file', 'reg', 'lock-template'], writes: false },
@@ -2201,7 +2207,7 @@ function laneHealth(acc, ctx) {
   const cat = readCatalogue(id);
   const reg = readRegistry(id, cat.err !== undefined ? null : cat.catalogue);
   if (reg.err === undefined && reg.invalid === undefined && reg.registry === null) return null;
-  const lane = { id, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
+  const lane = { id, anthropic: false, heldBack: [], heldBehind: [], blocked: [], sessionsBehind: [], sessionsUnmeasured: [] };
   const block = (cls, cause, detail) => { lane.blocked.push({ class: cls, cause, detail }); };
   const lockWhy = lockUnwritable(ctx.lockTemplate.replace('{id}', id));
   if (lockWhy !== null) block(null, 'lock-unwritable', lockWhy);
@@ -2268,8 +2274,9 @@ function laneHealth(acc, ctx) {
 }
 
 /** `advance-health` (auto-advance spec §2.8; plan W3 Task 14): box-wide and READ-ONLY. Every roster row a registry
- *  can sit on (`canCarryRegistry`) whose registry FILE exists, readable or not, in roster order; a row with none is
- *  not in the population. `--reg` is the session registry and `--lock-template` the lane-files lock path with `{id}`
+ *  can sit on (`canCarryRegistry`) whose registry FILE exists, readable or not, and every Anthropic row
+ *  (`isAnthropicLane`) with an aliases file or an advance file, in roster order; a row with none is not in the
+ *  population. Every lane row carries `anthropic`, the one fact of the lane's kind. `--reg` is the session registry and `--lock-template` the lane-files lock path with `{id}`
  *  in place of the lane, both from `ccd/ccrc` (`$_SVC_REG`, `_models_lock_path '{id}'`), so this file spells neither
  *  (D-5219). Each is checked after the roster read (`main` reads the roster before it
  *  dispatches any op, so with no roster the answer is the roster's own word) and before any lane file or session
@@ -2290,13 +2297,21 @@ function advanceHealthOp(a, json) {
   const ctx = { nowMs, reg: a.reg, sessions, lockTemplate: tpl };
   const lanes = [];
   for (const acc of (json.accounts ?? [])) {
-    if (!isObj(acc) || !canCarryRegistry(acc) || typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id)) continue;
-    const lane = laneHealth(acc, ctx);
+    if (!isObj(acc) || typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id)) continue;
+    const lane = isAnthropicLane(acc) ? anthropicLaneHealth(acc, ctx) : canCarryRegistry(acc) ? laneHealth(acc, ctx) : null;
     if (lane !== null) lanes.push(lane);
   }
   out({ ok: true, op: 'advance-health', now: at, sessions: sessions.state, sessionsUnmeasured: sessions.unlaned, lanes });
   return 0;
 }
+
+// The Anthropic arm (`deploy/models-anthropic.mjs`, model-class Anthropic arm A2), bound once to the helpers it shares with
+// this file. It never imports this file, so each helper reaches it here and nowhere else.
+const { anthropicOp, anthropicLaneHealth, aliasIdsOf, aliasesReport, aliasesPath } = anthropicArm({
+  HOME, now, out, refuse, isObj, isAnthropicLane, modelsDir, readAdvance, writeAdvance, refuseAdvance, writeJsonFile,
+  sayWhatChanged, readSessionFile, readSessionJson, SESSION_FILE_MAX_BYTES, SESSION_ID_RE, lockUnwritable, describe,
+  readWindowsFile,
+});
 
 /** `--key value` pairs, refused rather than ignored, with a strict `i += 2`
  *  walk: a value that itself starts with `--` is refused, because accepting it
@@ -2359,7 +2374,21 @@ function main(argv) {
   if (opName === 'lanes') {
     const lanes = [];
     for (const acc of (json.accounts ?? [])) {
-      if (!isObj(acc) || !canCarryRegistry(acc)) continue;
+      if (!isObj(acc)) continue;
+      // D-8751: an Anthropic lane is listed too, so the hourly refresh reaches it through this one op. `anthropic` is
+      // the one fact of the lane's kind (`isAnthropicLane`, from the roster): no second kind field. Such a row has no
+      // registry and no catalogue by design, so nothing of either is read; `ids` is its aliases file's two readings
+      // of each class, `null` when that file is absent, unreadable or invalid (`show`'s `aliases` names which).
+      if (isAnthropicLane(acc)) {
+        if (typeof acc.id !== 'string' || !ACCOUNT_ID_RE.test(acc.id) || typeof acc.configDirSuffix !== 'string') continue;
+        lanes.push({
+          id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: isAnthropicLane(acc),
+          hasRegistry: false, registryInvalid: null, catalogueInvalid: null, probe: null, baseUrl: null,
+          windowNotices: [], ids: aliasIdsOf(acc.id),
+        });
+        continue;
+      }
+      if (!canCarryRegistry(acc)) continue;
       // `readRegistry` runs REGARDLESS of whether the catalogue read
       // succeeded (round-2 ruling on Task 9's Fix round 1, Finding 2): the
       // old code's `cat.err !== undefined ? { registry: null } : …` treated
@@ -2384,7 +2413,7 @@ function main(argv) {
       const registry = reg.registry ?? null;
       const registryInvalid = reg.err !== undefined ? reg.err[1] : (reg.invalid !== undefined ? reg.invalid.message : null);
       lanes.push({
-        id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: false,
+        id: acc.id, configDirSuffix: acc.configDirSuffix, anthropic: isAnthropicLane(acc),
         hasRegistry: registry !== null || registryInvalid !== null,
         registryInvalid,
         catalogueInvalid: cat.err !== undefined ? cat.err[1] : null,
@@ -2406,8 +2435,8 @@ function main(argv) {
   const account = findAccount(json, a.id);
 
   if (opName === 'rm') {
-    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the six
-    // model-registry files this design owns and clears exactly `LANE_ENV_KEYS`
+    // REAP, not a mutation (spec §4.1 Lifecycle, §10, §11): deletes the seven
+    // model-registry files this design owns (the seventh is an Anthropic lane's aliases file, Task A2.3) and clears exactly `LANE_ENV_KEYS`
     // from the lane's settings: every key a lane block can carry (the eight model
     // keys and, on a Codex lane, `ENABLE_CODE_SECURITY_REVIEW`) — nothing else in
     // that file. Because it runs before the anthropic-lane gate, this is the one
@@ -2424,7 +2453,7 @@ function main(argv) {
     // error: there is no configDirSuffix to find a settings.json through, so
     // the settings step is skipped, and the answer says so.
     const removed = [];
-    for (const p of [registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id),
+    for (const p of [aliasesPath(a.id), registryPath(a.id), cataloguePath(a.id), classesTsvPath(a.id), effortPath(a.id),
       windowsPath(a.id), advancePath(a.id)]) {
       try {
         unlinkSync(p);
@@ -2470,15 +2499,21 @@ function main(argv) {
       + `${(json.accounts ?? []).map((x) => x.id).join(', ')}.`);
   }
   if (isAnthropicLane(account)) {
-    // Every op but `show` is refused on such a lane. `show` answers, because
-    // "this lane has all four classes and they are the client's own" is a
-    // useful answer and the one every surface renders (§4.1, decision 4).
+    // Every op but `show` is refused on such a lane, bar the four its OWN PATH admits (model-class Anthropic arm, Task
+    // A2.3, D-8747): `hold`, `release`, `revert` and `aliases-refresh`, which need no registry and run before the
+    // `no-registry` gate below. `show` answers, because "this lane has all four classes and they are the client's own"
+    // is a useful answer and the one every surface renders (§4.1, decision 4).
+    if (ANTHROPIC_OPS.includes(opName)) return anthropicOp(opName, a, account, json);
     if (opName !== 'show') {
       return refuse(1, 'anthropic-lane',
         `account "${a.id}" is an Anthropic lane (telemetry: anthropic): its four classes are Claude `
         + 'Code\'s own defaults, shown read-only, and it carries no class registry. Nothing was '
         + 'written.');
     }
+  } else if (opName === 'aliases-refresh') {
+    return refuse(1, 'not-an-anthropic-lane',
+      `account "${a.id}" is not an Anthropic lane (telemetry: anthropic), and an aliases file is an Anthropic lane's `
+      + 'own. Nothing was written.');
   }
 
   const cat = readCatalogue(a.id);

@@ -766,9 +766,10 @@ describe('coord.db: migration 4 — runs.dispatchStartedAt', () => {
     // follow-ups, D-8734, D-8735),
     // and MIGRATIONS[107] (mail.urgentAs and mail_urgent, urgent mail, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, the gate's fence refusals, Overlord W1 gates B),
-    // and MIGRATIONS[109] (approval_parks, four approvals columns and the approval-park lane row, approvals PR 3).
-    expect(COORD_SCHEMA_VERSION).toBe(110);
-    expect(MIGRATIONS.length).toBe(110);
+    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, the hook's reports, Overlord W1 door process B1).
+    // and MIGRATIONS[110] (approval_parks, four approvals columns and the approval-park lane row, approvals PR 3).
+    expect(COORD_SCHEMA_VERSION).toBe(111);
+    expect(MIGRATIONS.length).toBe(111);
   });
 
   it('is ADDITIVE: every column migration 1 wrote is still on the table, unchanged', () => {
@@ -904,8 +905,9 @@ describe('coord.db: migration 11 — runs.kind and runs.reviews (design 2026-09-
     // follow-ups),
     // and MIGRATIONS[107] (mail.urgentAs, mid-turn mail PR 2),
     // and MIGRATIONS[108] (overlord_fence_refusals, Overlord W1 gates B),
-    // and MIGRATIONS[109] (approval_parks, approvals PR 3); the migration above is still entry 11.
-    expect(COORD_SCHEMA_VERSION).toBe(110);
+    // and MIGRATIONS[109] (continuity_hook_reports and continuity_witness_checks, Overlord W1 door process B1),
+    // and MIGRATIONS[110] (approval_parks, approvals PR 3); the migration above is still entry 11.
+    expect(COORD_SCHEMA_VERSION).toBe(111);
     const row = db.prepare('SELECT kind, reviews FROM runs').get() as { kind: string; reviews: number | null };
     expect(row).toEqual({ kind: 'work', reviews: null });
     db.close();
