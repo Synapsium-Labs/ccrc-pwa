@@ -11,6 +11,7 @@ import { buildServer } from '../src/server.js';
 import { openCoordDb } from '../src/coord/db.js';
 import { CoordStore } from '../src/coord/store.js';
 import { CAP_COUNTS_WORKING_LANE } from '../../shared/lane-arm.js';
+import type { Runner } from '../src/exec.js';
 import { testDeps } from './helpers.js';
 import { mkTmp } from './tmpHelpers.js';
 
@@ -27,7 +28,12 @@ async function rig(armed: boolean) {
   mkdirSync(reg, { recursive: true });
   const coord = new CoordStore(openCoordDb(path.join(home, '.ccrc', 'coord.db')));
   if (armed) coord.setLaneArm(CAP_COUNTS_WORKING_LANE, 'live', 1);
-  const app = await buildServer({ ...testDeps(home), mailToken: TOKEN, coord });
+  // tmux proves the sleeper's pane gone, as it is for a hibernated session (review 2875 F5: a stamp alone is not proof);
+  // every other ask is unanswered, so nothing else reads gone.
+  const runner: Runner = async (cmd, args) => (cmd === 'tmux' && args[0] === 'has-session' && args.some((a) => a.includes(SLEEPER))
+    ? { ran: true, code: 1, stdout: '', stderr: `can't find session: ${SLEEPER}` }
+    : { ran: true, code: 1, stdout: '', stderr: '' });
+  const app = await buildServer({ ...testDeps(home, runner), mailToken: TOKEN, coord });
   apps.push(app);
   /** A registry row for `id`, asleep (`ccd hibernate`'s marker) when `asleep`. */
   const seed = (id: string, asleep: boolean): void => {
@@ -77,6 +83,15 @@ describe('GET /api/coord/caps reports the waiting runs through the cap reader (D
     r.run('a', null, 'dispatched');
     r.run('b', 'demo-unread', 'dispatched');
     expect((await r.caps()).usage).toEqual({ running: 2, waiting: 0, workingOnly: true });
+  });
+
+  it('review 2875 F1: the POST answers the measured view too, its readings taken after the lock', async () => {
+    const r = await rig(false);
+    r.seed(SLEEPER, true);
+    r.run('a', SLEEPER, 'dispatched');
+    const res = await r.app.inject({ method: 'POST', url: '/api/coord/caps', payload: { maxConcurrentWorkers: 3 } });
+    expect(res.statusCode).toBe(200);
+    expect(res.json()).toMatchObject({ ok: true, caps: { maxConcurrentWorkers: 3 }, usage: { running: 1, waiting: 1, workingOnly: false } });
   });
 });
 

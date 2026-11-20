@@ -560,12 +560,34 @@ describe('the caps answer shape is defined ONCE, and both halves send it', () =>
     const reg = sourceOfSymbol(path.join(srcRoot, 'coord', 'routes.ts'), 'registerCoordRoutes');
     const at = reg.indexOf('const capsViewMeasured');
     expect(at, 'the measured view is gone under this name').toBeGreaterThan(-1);
-    expect(reg.slice(at, reg.indexOf('\n  };', at)),
-      'the measured view rebuilds the answer instead of extending the shared one').toMatch(/\bcapsView\(store\)/);
+    // Review 2875 F10: an end that is not found would slice to the end of the function and weaken this pin silently.
+    const end = reg.indexOf('\n  };', at);
+    expect(end, 'the measured view\'s end is not found, so the slice below would run past it').toBeGreaterThan(at);
+    const measured = reg.slice(at, end);
+    expect(measured, 'the measured view rebuilds the answer instead of extending the shared one').toMatch(/\bcapsView\(store\)/);
+    // Review 2875 F9: with no worker port the view sends no `waiting`, never a defaulted 0.
+    expect(measured, 'the measured view guesses a waiting count').not.toMatch(/waiting\s*=\s*0/);
     for (const decl of ["app.get('/api/coord/caps'", "app.post('/api/coord/caps'"]) {
       expect(handlerBody(r, b, decl), `${decl} builds its own answer instead of the shared one`)
         .toContain('capsViewMeasured(');
     }
+  });
+
+  it('review 2875 F1: the POST takes the worker readings after the coordination lock, never inside it', () => {
+    // Keyed on scan/symbols.ts (sourceOfSymbol), never a literal read of routes.ts: ARCH-06's ratchet holds that file's
+    // literal pins at their ceiling.
+    const reg = sourceOfSymbol(path.join(srcRoot, 'coord', 'routes.ts'), 'registerCoordRoutes');
+    const post = reg.indexOf("app.post('/api/coord/caps'");
+    expect(post, 'the caps POST is gone under this registration').toBeGreaterThan(-1);
+    const lock = reg.indexOf('coordMutex.run(', post);
+    expect(lock, 'the POST no longer takes the lock: this scan is over nothing').toBeGreaterThan(post);
+    const close = reg.indexOf('\n    });', lock);
+    expect(close, 'the lock body\'s end is not found').toBeGreaterThan(lock);
+    const next = reg.indexOf('app.', close);
+    expect(next, 'the next registration is not found').toBeGreaterThan(close);
+    expect(reg.slice(lock, close), 'the worker readings are taken inside the lock').not.toContain('capsViewMeasured(');
+    expect(reg.slice(lock, close)).toContain('capsView(coord)');
+    expect(reg.slice(close, next), 'the measured view is not built after the lock').toContain('capsViewMeasured(coord, view)');
   });
 
   it('…and the usage half is read in exactly one place, so a rebuild cannot be faithful', () => {
