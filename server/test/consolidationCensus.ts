@@ -263,6 +263,8 @@ export const RAN_NARROW_WINDOW = 12;
 /** The readers a `runCcd(` result may be handed to whole, each of which reads `ran` FIRST (D-6034, D-6840). */
 export const RAN_CARRY_READERS: readonly string[] = [
   'cutShort', 'sweepFailureReason', 'failureDetail', 'classifyAddFailure', 'classifyTitleFailure', 'archiveOutcome',
+  // The `ccd route --set` answer's reader (`server/src/routeSetOutcome.ts`, mid-turn mail PR 4): `ran === false` is `unreachable` first.
+  'routeSetOutcome',
   // The project add's reader (`server/src/projectAdd.ts`), `classifyAddFailure`'s shape: `ran === false` is `other` first.
   'classifyProjectAddFailure',
 ];

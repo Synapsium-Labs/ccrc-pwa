@@ -14,6 +14,8 @@ import { callsIn, symbolOf } from './scan/symbols.js';
 import { CATALOGUE_POLL_INTERVAL_MS, SERVER_CAPS_WRITE_MS, CHILD_RECLAIM_SWEEP_MS } from '../src/laneSchedule.js';
 import { HIBERNATE_SWEEP_MS, STOP_DONE_SWEEP_MS, DRIFT_SWEEP_MS, USAGE_SWEEP_MS, DECISION_ANCHOR_PERIOD_MS, QUIZ_LANE_PERIOD_MS } from '../src/laneSchedule.js';
 import { LAUNCH_PROFILE_LANE_ROW } from '../src/continuity/profileLane.js';
+import { MAIL_HOLD_LANE_ROW } from '../src/coord/mailHoldLane.js';
+import { MAILHOLD_RENEW_UNDER_S } from '../../shared/mailHold.js';
 import { parsedFile, sourceOfSymbol } from './scan/symbols.js';
 
 const SRC = path.join(import.meta.dirname, '..', 'src');
@@ -382,9 +384,9 @@ describe('the nine sweep lanes outside coordination (D-5862, PR 1b)', () => {
   });
 });
 
-describe('the eight coordination lanes (D-5862, PR 2)', () => {
+describe('the nine coordination lanes (D-5862, PR 2; the block-wake lane, D-8126)', () => {
   const ROWS: Array<[string, string, string]> = [
-    ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
+    ['claimRenew', 'mono', 'none'], ['claimLapse', 'mono', 'none'], ['stalls', 'mono', 'skip'], ['blockWakes', 'mono', 'skip'], ['idleNudge', 'mono', 'skip'],
     ['mail', 'mono', 'none'], ['asks', 'mono', 'none'], ['approvalPrune', 'mono', 'none'], ['digestBeat', 'mono', 'none'],
   ];
 
@@ -521,9 +523,9 @@ describe('the four reclaim lanes (D-5862, PR 3)', () => {
 });
 
 describe('every throttle is on the monotonic clock (OA-C4, ruled (a) on #803)', () => {
-  it('no row of LANE_SCHEDULE is on the wall clock: 53 of 53 are monotonic (the Linear plan sync, D-8182; the Linear drift pass, D-8183; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126)', () => {
+  it('no row of LANE_SCHEDULE is on the wall clock: 55 of 55 are monotonic (the block-wake lane, D-8126; the Linear plan sync, D-8182; the Linear drift pass, D-8183; the disk alarm, the tmp census and the stale-archive arm are rows, D-7895; the stuck verdict pass, D-8071; the run-close lane, D-8077; the case lane, Overlord §10.5; the generations lane, Overlord §3.3.11; the launch-profile lane, Overlord §3.6; the timers lane, Overlord §3.3.12; the quiz lane, Overlord §3.3.9; the push outbox lane, Overlord §6.7; the response lane, Overlord §4.3; the overlaps arm, Overlord §5.5; the forecast lane, Overlord §5.6; the decision anchors lane, Overlord W2; the skill self-install lane, D-8126; the mailhold projection, mid-turn mail PR 4)', () => {
     expect(LANE_SCHEDULE.filter((r) => r.clock === 'wall').map((r) => r.name), 'a throttle on Date.now()').toEqual([]);
-    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(53);
+    expect(LANE_SCHEDULE.filter((r) => r.clock === 'mono')).toHaveLength(55);
   });
 
   it('the runner throttles a monotonic row on the monotonic reading: a wall step back runs it at its cadence, a step forward never early', () => {
@@ -600,6 +602,22 @@ describe('the launch-profile lane row (Overlord spec §3.6 H1, W1a launch profil
       cadenceMs: USAGE_SWEEP_MS, clock: 'mono', flight: 'skip',
       warnKey: 'ccrc-server: the launch-profile lane failed', derivedFrom: { name: 'USAGE_SWEEP_MS' },
     });
+  });
+});
+
+describe('the mailhold projection row (mid-turn mail plan Task 4.3)', () => {
+  it('beats at the mail lane\'s cadence by reference, skips an overlap, abandons a pass older than 60 s and names its warning', () => {
+    expect(MAIL_HOLD_LANE_ROW).toBe('mailHold');
+    expect(laneRow(MAIL_HOLD_LANE_ROW)).toEqual({
+      name: 'mailHold', cadenceMs: 10_000, clock: 'mono', flight: 'skip', staleAfterMs: 60_000,
+      warnKey: 'ccrc-server: the mailhold lane failed', derivedFrom: { name: 'MAIL_SWEEP_MS', reason: expect.any(String) },
+    });
+    // A stuck pass is abandoned well inside the renewal margin, so one wedged write never lets a held lease lapse.
+    expect(laneRow(MAIL_HOLD_LANE_ROW).staleAfterMs!).toBeLessThan(MAILHOLD_RENEW_UNDER_S * 1000);
+  });
+  it('sits right after the mail row', () => {
+    const names = LANE_SCHEDULE.map((r) => r.name);
+    expect(names.indexOf('mailHold')).toBe(names.indexOf('mail') + 1);
   });
 });
 

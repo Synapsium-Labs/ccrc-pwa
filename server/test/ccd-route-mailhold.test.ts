@@ -6,7 +6,7 @@
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import fs from 'node:fs';
 import path from 'node:path';
-import { execFileSync } from 'node:child_process';
+import { spawnSyncGroup } from './spawnGroup.js';
 import { makeCcdHarness, ghContainedEnv, CCD, type CcdHarness } from './ccdWsHelpers.js';
 import { eventsOf } from './lifecycleHelpers.js';
 import { MAILHOLD_LEASE_S, MAILHOLD_REACH_S } from '../../shared/mailHold.js';
@@ -26,14 +26,10 @@ const nowS = (): number => Math.floor(Date.now() / 1000);
 
 /** `cmd_route`, observed through its exit status (it refuses through `die`): `ccd-route-fields.test.ts`'s shape. */
 const route = (args: string, env: NodeJS.ProcessEnv = {}): { status: number; out: string } => {
-  try {
-    const out = execFileSync('bash', ['-c', `source "${CCD}"; exec 2>&1; cmd_route ${args}`],
-      { encoding: 'utf8', cwd: h.home, env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
-    return { status: 0, out };
-  } catch (e) {
-    const err = e as { status?: number | null; stdout?: string; stderr?: string };
-    return { status: err.status ?? -1, out: `${err.stdout ?? ''}${err.stderr ?? ''}` };
-  }
+  const r = spawnSyncGroup('bash', ['-c', `source "${CCD}"; exec 2>&1; cmd_route ${args}`],
+    { encoding: 'utf8', cwd: h.home, timeout: 60_000, killSignal: 'SIGKILL',
+      env: ghContainedEnv(h.home, { ...process.env, HOME: h.home, ...env }, { systemd: true, tmux: true }) });
+  return { status: r.status ?? -1, out: `${r.stdout ?? ''}${r.stderr ?? ''}` };
 };
 
 describe('ccd route --set mailhold=… (Task 3.2)', () => {
@@ -148,5 +144,54 @@ describe('ccd route --set mailhold=… (Task 3.2)', () => {
 
   it('ccd caps prints route-mailhold-v1', () => {
     expect(h.sh('cmd_caps').split('\n')).toContain('route-mailhold-v1');
+  });
+});
+
+describe('a renewal leaves no record (PR 3 review F2, the coordinator\'s binding ruling)', () => {
+  // The projection renews a matching marker every few minutes per held session: only a write that changes the held
+  // set, and a clear, may leave a journal row and a swap.log line.
+  it('ten renewals of one unchanged hold leave no new journal row or swap.log line, and each moves the lease', () => {
+    seed();
+    const base = nowS();
+    expect(route(`--session ${ID} --set mailhold=${base + 100}:coordinator.7,overlord.9`).status).toBe(0);
+    const rows = eventsOf(h.home, 'route').length;
+    const log = swapLog();
+    for (let i = 1; i <= 10; i += 1) {
+      const v = `${base + 100 + i}:coordinator.7,overlord.9`;
+      const r = route(`--session ${ID} --set mailhold=${v}`);
+      expect(r.status, r.out).toBe(0);
+      expect(r.out).toContain(`set ${ID} mailhold=${v}`);
+      expect(h.reg(ID, 'mailhold')).toBe(v);
+    }
+    expect(eventsOf(h.home, 'route')).toHaveLength(rows);
+    expect(swapLog()).toBe(log);
+  });
+
+  it('a write that changes the held set is recorded, and so is a clear', () => {
+    seed();
+    const base = nowS();
+    expect(route(`--session ${ID} --set mailhold=${base + 100}:coordinator.7`).status).toBe(0);
+    expect(route(`--session ${ID} --set mailhold=${base + 100}:coordinator.7,overlord.9`).status).toBe(0);
+    expect(route(`--session ${ID} --set mailhold=${base + 100}:overlord.9`).status).toBe(0);
+    expect(route(`--session ${ID} --set mailhold=${base + 100}:coordinator.9`).status).toBe(0);
+    expect(route(`--session ${ID} --set mailhold=`).status).toBe(0);
+    expect(eventsOf(h.home, 'route')).toHaveLength(5);
+    expect(swapLog().trim().split('\n')).toHaveLength(5);
+  });
+
+  it('only mailhold skips its record: a same-value rewrite of another field is still recorded each time', () => {
+    seed();
+    expect(route(`--session ${ID} --set compact=50`).status).toBe(0);
+    expect(route(`--session ${ID} --set compact=50`).status).toBe(0);
+    expect(eventsOf(h.home, 'route')).toHaveLength(2);
+    expect(swapLog().trim().split('\n')).toHaveLength(2);
+  });
+
+  it('a write over a malformed standing value is recorded, never read as a renewal', () => {
+    seed();
+    h.sh(`_reg_set ${ID} mailhold junk:coordinator.7`);
+    expect(route(`--session ${ID} --set mailhold=${nowS() + 100}:coordinator.7`).status).toBe(0);
+    expect(eventsOf(h.home, 'route')).toHaveLength(1);
+    expect(swapLog()).toContain('bytes, unrecognised>');
   });
 });

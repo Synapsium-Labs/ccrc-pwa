@@ -6,7 +6,7 @@
 // `verb-gate.test.ts` and `routes.test.ts`'s knownId census. A new call, or a new builder key, must classify itself
 // here, or this suite goes red.
 //
-// THE CLAIM: 54 id-taking calls across 19 files.
+// THE CLAIM: 55 id-taking calls across 20 files.
 //
 // Origins:
 //   `request`   a route's own parameter or body;
@@ -315,6 +315,8 @@ const GATES = {
   'registry-refused': { file: 'registry.ts', scope: 'readRegistryMeasured', re: /\bisRegistryId\(/ },
   /** The launch-profile lane refuses a row whose id is not a registry id before it composes any argv (Overlord W1a). */
   'profile-lane-id': { file: 'continuity/profileLane.ts', scope: 'profilePass', re: /if \(!isRegistryId\(r\.id\)\) \{ routeUnread \+= 1; continue; \}/ },
+  /** The mailhold projection refuses a row whose id is not a registry id before it composes any argv (mid-turn mail PR 4). */
+  'mailhold-lane-id': { file: 'coord/mailHoldLane.ts', scope: 'mailHoldPass', re: /if \(!isRegistryId\(r\.id\)\) \{ c\.unlisted \+= 1; continue; \}/ },
   /** The renewal act's ccd adapter refuses an id that is not a registry id before it composes any argv (Overlord W1a). */
   'renew-id': { file: 'continuity/ccdSessionHost.ts', scope: 'renew', re: /if \(!isRegistryId\(sessionId\)\) return \{ kind: 'refused'/ },
   /** The renewal acts' PreCompact field write refuses an id that is not a registry id before it composes any argv (Overlord W1a,
@@ -517,6 +519,9 @@ const CENSUS: readonly CensusRow[] = [
   // continuity/profileLane.ts (Overlord W1a launch profiles PR B): the lane's rows are the watcher's listing, and the pass
   // refuses a non-registry id itself before `routeSet` composes an argv.
   { file: 'continuity/profileLane.ts', scope: 'profilePass', builder: 'routeSet', id: 'r.id', origin: ['registry'], gate: ['profile-lane-id'] },
+  // coord/mailHoldLane.ts (mid-turn mail PR 4): the projection's rows are the watcher's listing, and the pass refuses a
+  // non-registry id itself before `routeSet` composes an argv.
+  { file: 'coord/mailHoldLane.ts', scope: 'mailHoldPass', builder: 'routeSet', id: 'r.id', origin: ['registry'], gate: ['mailhold-lane-id'] },
   // continuity/ccdSessionHost.ts (Overlord W1a, the renewal act): the id is a stored generation row's, and `renew` refuses a
   // non-registry id itself before `hibernate` composes an argv.
   { file: 'continuity/ccdSessionHost.ts', scope: 'renew', builder: 'hibernate', id: 'sessionId', origin: ['stored'], gate: ['renew-id'] },
@@ -544,6 +549,8 @@ const GATE_FILES = [
   'continuity/profileLane.ts',
   // continuity/ccdSessionHost.ts (Overlord W1a, the renewal act): `renew` vets its id with the predicate before `hibernate`.
   'continuity/ccdSessionHost.ts',
+  // coord/mailHoldLane.ts (mid-turn mail PR 4): each row's id is vetted by the predicate before `routeSet`.
+  'coord/mailHoldLane.ts',
   // continuity/renewalWiring.ts (Overlord W1a, the renewal hand-offs): the PreCompact field write vets its id before `routeSet`.
   'continuity/renewalWiring.ts',
   // ccdargv.ts (delegation broker wave 5): `CCD_ARGV.leaseMark` vets the parent and a promoted session with the predicate
