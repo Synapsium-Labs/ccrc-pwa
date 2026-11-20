@@ -7,7 +7,7 @@
 import { createContext, useContext, useEffect, useMemo, useRef, useState, type ComponentProps, type ReactNode } from 'react';
 import type { Element as HastElement } from 'hast';
 import {
-  DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, contentClass, docsApi, docsPageUrl, entryView, resolveDocRef,
+  DOCS_CLASS_CAP, DOCS_MAX_IMAGES_PER_PAGE, contentClass, docsApi, docsPageUrl, resolveDocRef,
   type DocPin, type DocsEntry, type DocsPageLocation, type RasterMime,
 } from '../../../shared/docs';
 import { onAuthRegained } from '../lib/auth';
@@ -122,10 +122,11 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   const e = entryAt(ctx.tree.entries, r.section, r.path);
   const ip = imagePinFor(e, ctx.tree, page);
   if (!ip.ok) {
-    // A draft with no fingerprint is withheld here (the raster route needs one), but its own page reads it by range
-    // through its stat pin (spec 4.3), so the chip opens that page.
-    if (ip.why === 'draft-withheld' && e !== undefined && entryView(e, ctx.tree.drafts, 'ref').pin?.kind === 'stat') {
-      return refused('draft-unhashed', { kind: 'viewer', href: leafHref });
+    // A draft with no fingerprint is not loaded here (the raster route needs one), but its own page reads a raster by
+    // range through its stat pin (spec 4.3), so the chip opens that page. An SVG's page offers Download alone: it keeps
+    // the withheld refusal, with no action.
+    if (ip.why === 'draft-unhashed') {
+      return cls === 'raster' ? refused('draft-unhashed', { kind: 'viewer', href: leafHref }) : refused('draft-withheld');
     }
     return refused(ip.why);
   }
@@ -134,8 +135,10 @@ export function planImageRef(ctx: DocLinkContextValue, src: string, index: numbe
   const basis = ctx.pageAt !== null ? null : mockupSizeBasis(e, ctx.tree, ip.pin, cls);
   const cap = DOCS_CLASS_CAP[cls];
   if (basis !== null && basis.kind === 'listed' && basis.bytes > cap) {
-    // Spec 4.3: the chip keeps its sentence and opens the image's own page, which reads it by range.
-    return refused('too-large', { kind: 'viewer', href: leafHref }, { size: kib(basis.bytes), cap: kib(cap) });
+    // Spec 4.3: a raster's chip keeps its sentence and opens the image's own page, which reads it by range; an SVG's page
+    // offers Download alone, so its chip has no action.
+    return refused('too-large', cls === 'raster' ? { kind: 'viewer', href: leafHref } : null,
+      { size: kib(basis.bytes), cap: kib(cap) });
   }
   return {
     kind: 'pinned', pin: ip.pin, cls, draft: ip.draft, uncommittedNotShown: ip.uncommittedNotShown, leafHref,

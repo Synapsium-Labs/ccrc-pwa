@@ -43,7 +43,7 @@ export type MockupRefVerdict =
   | { readonly v: 'kept'; readonly why: 'fragment' | 'self-contained' }
   | { readonly v: 'external'; readonly origin: string; readonly via: 'src' | 'script-text' }
   | { readonly v: 'refused'; readonly why: MockupRefusedWhy }
-  | { readonly v: 'missing'; readonly why: 'absent-at-commit' | 'deleted-in-worktree' | 'draft-withheld' }
+  | { readonly v: 'missing'; readonly why: 'absent-at-commit' | 'deleted-in-worktree' | 'draft-withheld' | 'draft-unhashed' }
   | { readonly v: 'unsupported'; readonly why: 'kind' | 'element' | 'css-depth' }
   | { readonly v: 'skipped'; readonly why: 'too-large' | 'over-budget' }
   | { readonly v: 'failed'; readonly failure: string };
