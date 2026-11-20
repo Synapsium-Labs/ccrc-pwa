@@ -35,10 +35,15 @@ const WORD_UNREADABLE_ANSWER = 'unreadable answer';
 const wordOf = (answer: unknown): string =>
   isRecord(answer) && typeof answer.error === 'string' && answer.error !== '' ? answer.error : WORD_UNREADABLE_ANSWER;
 
-/** A view the card can draw: every list it walks is a list, and `counts` is an object. An answer that is anything less (a partial object from a
- *  newer or broken server) is a failed read, never a render that throws (review 2922 F3). */
+/** A view the card can draw, as far as the card dereferences it: `counts` is an object, every list the card walks is a list, and `end`,
+ *  `beforePlan` and `runs` are each null or an object (`runs` with its `items` a list), the three it reads a member of when they are not
+ *  null. It does not look inside a row, a phase or an epic: those are the server's typed records. An answer that fails this (a partial
+ *  object from a newer or broken server) is a failed read, never a render that throws (review 2922 F3; review 2956 F1). */
 const VIEW_LISTS = ['items', 'phases', 'notInPhase', 'epics', 'initiatives', 'doneWhen'] as const;
-const isViewShape = (v: unknown): v is WorkMapView => isRecord(v) && isRecord(v.counts) && VIEW_LISTS.every((k) => Array.isArray(v[k]));
+const isNullOrRecord = (v: unknown): boolean => v === null || isRecord(v);
+const isViewShape = (v: unknown): v is WorkMapView =>
+  isRecord(v) && isRecord(v.counts) && VIEW_LISTS.every((k) => Array.isArray(v[k]))
+  && isNullOrRecord(v.end) && isNullOrRecord(v.beforePlan) && (v.runs === null || (isRecord(v.runs) && Array.isArray(v.runs.items)));
 
 /** The state after an event. A state held for another programme is not carried into this one's read. */
 export function workReadNext(prev: WorkRead | null, slug: string, event: WorkReadEvent, now: number): WorkRead {
