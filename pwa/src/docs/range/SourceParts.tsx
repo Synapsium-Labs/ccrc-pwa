@@ -13,17 +13,20 @@ export interface SourcePartToMount { readonly text: string; readonly index: numb
 
 export function SourceParts(p: {
   readonly text: string;
+  /** The file's size in bytes as it was read (the bytes of the read, not of the decoded text, whose BOM is stripped), for
+   *  the sentence naming the parts: the same figure the Download sentence gives. */
+  readonly size: number;
   readonly maxBytes: number;
   readonly renderPart: (part: SourcePartToMount) => ReactNode;
 }): ReactNode {
-  const { parts, bytes } = useMemo(() => splitSourceParts(p.text, p.maxBytes), [p.text, p.maxBytes]);
+  const { parts } = useMemo(() => splitSourceParts(p.text, p.maxBytes), [p.text, p.maxBytes]);
   const [index, setIndex] = useState(0);
   const part = parts[Math.min(index, parts.length - 1)]!;
   const at = Math.min(index, parts.length - 1);
   return (
     <div className="docs-in-parts docs-source-parts" data-part={at + 1} data-parts={parts.length}>
       <PartBar index={at} count={parts.length} onGo={setIndex} />
-      {parts.length > 1 && <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.sourceParts, { size: mib(bytes), part: mib(p.maxBytes) })}</p>}
+      {parts.length > 1 && <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.sourceParts, { size: mib(p.size), part: mib(p.maxBytes) })}</p>}
       {part.continued && <p className="docs-note">{DOCS_RANGE_TEXT.partContinued}</p>}
       {p.renderPart({ text: p.text.slice(part.start, part.end), index: at })}
     </div>

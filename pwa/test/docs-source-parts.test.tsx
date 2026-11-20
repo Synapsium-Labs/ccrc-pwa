@@ -4,9 +4,13 @@
 // by range and decodes it as UTF-8, and bytes that are not UTF-8 keep the Download. Placeholders only (`demo`, `specs/...`).
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import type React from 'react';
+import { readFileSync } from 'node:fs';
+import path from 'node:path';
 import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { DOCS_MAX_DOC_BYTES, type DocsTreeOk } from '../../shared/docs';
-import { DocsLeaf } from '../src/docs/DocsLeaf';
+import { DocsLeaf, RangeSource } from '../src/docs/DocsLeaf';
+import { DOC_NOT_UTF8_NOTE } from '../src/docs/DocMarkdown';
+import type { RangeBytes } from '../src/docs/range/RangeLeaf';
 import { DOCS_RANGE_TEXT, fillSentence, mib } from '../src/docs/docsText';
 import { useDocsVisit } from '../src/docs/useDocsVisit';
 import { HighlighterContext } from '../src/lib/highlighterContext';
@@ -111,6 +115,28 @@ describe('splitSourceParts: the cutter', () => {
       spy.mockRestore();
     }
   });
+
+  it('source parts: linear on a line many parts long, and on a short line before one, each character read at most twice', () => {
+    const max = 1000;
+    const spy = vi.spyOn(String.prototype, 'codePointAt');
+    const indexOf = vi.spyOn(String.prototype, 'indexOf');
+    try {
+      for (const text of ['a'.repeat(max * 60), 'ab\n' + 'a'.repeat(max * 60), ('a'.repeat(300) + '\n').repeat(500)]) {
+        spy.mockClear();
+        indexOf.mockClear();
+        const { parts } = splitSourceParts(text, max);
+        expect(parts.map((p) => text.slice(p.start, p.end)).join('')).toBe(text);
+        expect(spy.mock.calls.length, 'code points read').toBeLessThanOrEqual(2 * text.length);
+        // A line end is searched for once: a miss (no line end left) is remembered, so a line sixty parts long costs one
+        // search, not one a part, and the searches are one a line end and one for the end of the text at most.
+        expect(indexOf.mock.calls.length, 'searches for a line end').toBeLessThanOrEqual(text.split('\n').length);
+      }
+    } finally {
+      spy.mockRestore();
+      indexOf.mockRestore();
+    }
+  });
+
 });
 
 /** Lines of ten bytes, `n` of them: a text file a little over 3 MiB at 314 573 lines. */
@@ -193,19 +219,67 @@ describe('DocsLeaf: a text file above its cap is shown as source in parts', () =
     expect(screen.getByText(fillSentence(DOCS_RANGE_TEXT.sourceParts, { size: mib(src.length), part: mib(DOCS_MAX_DOC_BYTES) }))).toBeTruthy();
   }, 60000);
 
-  it('source parts: a file that is not UTF-8 stays Download-only', async () => {
+  const statDraft = (path: string, size: number): DocsTreeOk => treeOk({
+    drafts: holder(),
+    entries: [entry('specs', path, { draft: draftOf('modified', { fp: null, size, mtimeNs: '1700000000000000000' }) })],
+  });
+
+  it('source parts: a file under the cap that is not UTF-8 shows the plain view with its note, as a text file under the cap does', async () => {
     const src = new Uint8Array([0x61, 0xff, 0xfe, 0x62, 0x0a]);
-    const tree = treeOk({
-      drafts: holder(),
-      entries: [entry('specs', 'a.log', { draft: draftOf('modified', { fp: null, size: src.length, mtimeNs: '1700000000000000000' }) })],
-    });
-    const { container, s } = openLeaf('/docs/demo/specs/a.log?ref=main', tree, src);
-    // The leaf shows the Download sentence for a first render too, before it has read anything: wait for the read to end.
+    const { container, s } = openLeaf('/docs/demo/specs/a.log?ref=main', statDraft('a.log', src.length), src);
     await waitFor(() => expect(s.prepares()).toBe(1));
+    await waitFor(() => expect(screen.getByText(DOC_NOT_UTF8_NOTE)).toBeTruthy());
+    expect(container.querySelector('pre.doc-plain')?.textContent, 'each bad sequence is U+FFFD').toBe('a��b\n');
+    expect(screen.queryByText(/offers it as a Download/)).toBeNull();
+    expect(screen.queryByText(/Part \d of \d/)).toBeNull();
+    expect(screen.getByText('Download')).toBeTruthy();
+  });
+
+  it('source parts: a file above the cap that is not UTF-8 stays Download-only, never one plain view of megabytes', async () => {
+    const src = new Uint8Array(DOCS_MAX_DOC_BYTES + 1).fill(0x61);
+    src[10] = 0xff;
+    const { container, s } = openLeaf('/docs/demo/specs/a.log?ref=main', statDraft('a.log', src.length), src);
+    await waitFor(() => expect(s.prepares()).toBe(1));
+    // The leaf shows the Download sentence for a first render too, before it has read anything: wait for the read to end.
     await waitFor(() => expect(screen.queryByText(DOCS_RANGE_TEXT.cancel)).toBeNull());
     expect(screen.getByText(/offers it as a Download/)).toBeTruthy();
     expect(container.querySelector('pre')).toBeNull();
-    expect(screen.queryByText(/Part \d of \d/)).toBeNull();
+    expect(screen.queryByText(DOC_NOT_UTF8_NOTE)).toBeNull();
     expect(screen.getByText('Download')).toBeTruthy();
+  }, 60000);
+
+  it('source parts: the sentence naming the parts gives the size of the read, not of the decoded text (a BOM is not counted)', async () => {
+    // 3 MiB read, a BOM first: the decoded text is 3 MiB less 3 bytes, which the sentence would round up to 3.1 MiB.
+    const size = 3 * 1048576;
+    const src = new Uint8Array(size).fill(0x7a);
+    src.set([0xef, 0xbb, 0xbf]);
+    openLeaf('/docs/demo/specs/one.log?ref=main', statDraft('one.log', size), src);
+    await waitFor(() => expect(screen.getByText('Part 1 of 2')).toBeTruthy(), { timeout: 20000 });
+    expect(screen.getByText(fillSentence(DOCS_RANGE_TEXT.sourceParts, { size: '3 MiB', part: '2 MiB' }))).toBeTruthy();
+  }, 60000);
+});
+
+describe('RangeSource: one document at a time', () => {
+  const read = (fill: number, digest: string): RangeBytes => ({
+    bytes: new Uint8Array(DOCS_MAX_DOC_BYTES + 10).fill(fill) as Uint8Array<ArrayBuffer>, digest,
+  });
+
+  it('source parts: after moving to part 2, another document (another digest) starts at part 1', () => {
+    const { rerender } = render(<RangeSource read={read(0x61, 'a'.repeat(64))} path="specs/a.log" />);
+    expect(screen.getByText('Part 1 of 2')).toBeTruthy();
+    fireEvent.click(screen.getByText(DOCS_RANGE_TEXT.partNext));
+    expect(screen.getByText('Part 2 of 2')).toBeTruthy();
+    rerender(<RangeSource read={read(0x62, 'b'.repeat(64))} path="specs/b.log" />);
+    expect(screen.getByText('Part 1 of 2')).toBeTruthy();
+    expect(document.querySelector('pre.doc-plain')?.textContent?.startsWith('bbbb')).toBe(true);
+  }, 60000);
+
+  it('source parts: a part is shown from its text alone, never from an answer that carries the whole file\'s digest', () => {
+    const src = readFileSync(path.join(import.meta.dirname, '..', 'src', 'docs', 'DocsLeaf.tsx'), 'utf8');
+    const from = src.indexOf('export function RangeSource');
+    const body = src.slice(from, src.indexOf('\n}\n', from));
+    expect(from).toBeGreaterThan(0);
+    expect(body).not.toMatch(/rangeShowOf|sha256|DocsShowOk/);
+    expect(body).toMatch(/TextSource/);
   });
 });

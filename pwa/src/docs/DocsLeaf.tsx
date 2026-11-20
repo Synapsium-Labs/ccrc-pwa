@@ -163,24 +163,30 @@ function SourceText(p: { readonly show: DocsShowOk }): ReactNode {
  *  that block when it is created, published for the leaf's actions and released on unmount; else plain. */
 function TextBody(p: { readonly show: DocsShowOk; readonly path: string }): ReactNode {
   const src = useMemo(() => docMarkdownSource(p.show), [p.show]);
+  if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
+  if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
+  return <TextSource text={src.text} path={p.path} />;
+}
+
+/** The text of a `text` leaf, decoded, as source: one highlighted `CodeBlock` when a grammar knows the extension, else plain.
+ *  It takes the text alone, so a part of a file read by range (`RangeSource`) is shown through it without an answer that
+ *  would carry the whole file's digest beside the part's text. */
+function TextSource(p: { readonly text: string; readonly path: string }): ReactNode {
   const name = leafName(p.path);
   // contentClass said `text`, so the extension is ASCII `a-z0-9` once lowered: `toLowerCase` lowers it the same way.
   const ext = name.slice(name.lastIndexOf('.') + 1).toLowerCase();
-  const text = src.kind === 'markdown' && isRegisteredGrammar(ext) ? src.text : null;
+  const text = isRegisteredGrammar(ext) ? p.text : null;
   const store = useDocsHighlightStore(useMemo(
     () => (text === null ? null : [{ lang: ext, raw: text.replace(/\n$/, '') }]),
     [ext, text],
   ));
-  // What this body shows, for Export: its text, and the grammar that colours it, if any. Bytes that are not UTF-8 are
-  // `DocPlain`'s, which publishes itself.
-  usePublishExportBody(useMemo<ExportBody | null>(
-    () => (src.kind === 'markdown' ? { kind: 'text', text: src.text, lang: text === null ? null : ext } : null), [src, text, ext]));
-  if (src.kind === 'no-bytes') return <DocsFailureView answer={malformed(DOCS_SHOW_NO_BYTES)} />;
-  if (src.kind === 'not-utf8') return <DocPlain text={src.text} note={DOC_NOT_UTF8_NOTE} />;
-  if (store === null) return <pre className="doc-plain">{src.text}</pre>;
+  // What this body shows, for Export: its text, and the grammar that colours it, if any.
+  usePublishExportBody(useMemo<ExportBody>(
+    () => ({ kind: 'text', text: p.text, lang: text === null ? null : ext }), [p.text, text, ext]));
+  if (store === null) return <pre className="doc-plain">{p.text}</pre>;
   return (
     <PreHighlightContext value={store}>
-      <CodeBlock><code className={'language-' + ext}>{src.text}</code></CodeBlock>
+      <CodeBlock><code className={'language-' + ext}>{p.text}</code></CodeBlock>
     </PreHighlightContext>
   );
 }
@@ -343,7 +349,7 @@ export function openedRangePin(pin: DocListPin, digest: string): DocPin {
 }
 
 /** The bytes a range read gave, decoded as UTF-8. `utf8: false` carries the lossy decoding, for the plain view with its
- *  note (spec 4.4's not-UTF-8 row); a file that is not UTF-8 is never parsed, and never shown as source in parts. */
+ *  note (spec 4.4's not-UTF-8 row); a file that is not UTF-8 is never parsed. */
 function decodeRangeBytes(bytes: Uint8Array<ArrayBuffer>): { utf8: boolean; text: string } {
   try {
     return { utf8: true, text: new TextDecoder('utf-8', { fatal: true }).decode(bytes) };
@@ -363,25 +369,24 @@ function rangeShowOf(read: RangeBytes, entry: DocsEntry, opened: DocPin, text: s
     : { ...base, source: 'committed', commit: opened.commit, blob: entry.committed?.blob, onRef: 'unmeasured' };
 }
 
-/** One part of a text file read by range, through the leaf's own source body (`TextBody`): the part's text as a docs-show
- *  answer of its own, so it meets the same highlight budgets a text file under the cap meets. */
-function RangeSourcePart(p: { readonly base: DocsShowOk; readonly text: string; readonly path: string }): ReactNode {
-  const show = useMemo<DocsShowOk>(() => ({ ...p.base, encoding: 'utf8', text: p.text, size: utf8Bytes(p.text) }), [p.base, p.text]);
-  return <TextBody show={show} path={p.path} />;
-}
-
 /** A text leaf read by range (spec 4.3, review F1): a file above its class cap, or a draft with no fingerprint, shown as
- *  source in parts of at most the text class cap, each part through the same source and highlight body. Bytes that are not
- *  UTF-8 stay a Download. */
-export function RangeSource(p: { readonly read: RangeBytes; readonly entry: DocsEntry; readonly pin: DocListPin }): ReactNode {
-  const opened = useMemo(() => openedRangePin(p.pin, p.read.digest), [p.pin, p.read.digest]);
+ *  source in parts of at most the text class cap, each part through the same source and highlight body a text file under
+ *  the cap gets (`TextSource`, which takes the part's text alone: no answer carries the whole file's digest beside a part).
+ *  Bytes that are not UTF-8 show the plain view with its note, as the siblings do, up to the class cap; above it they stay a
+ *  Download, because the plain view is one `<pre>` of the whole text and the point of the parts is that none is larger
+ *  than the cap. The parts are keyed by the read's digest, so another document starts at its part 1. */
+export function RangeSource(p: { readonly read: RangeBytes; readonly path: string }): ReactNode {
   const decoded = useMemo(() => decodeRangeBytes(p.read.bytes), [p.read.bytes]);
-  const base = useMemo(() => rangeShowOf(p.read, p.entry, opened, ''), [p.read, p.entry, opened]);
-  if (!decoded.utf8) return <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(p.read.bytes.length) })}</p>;
+  const size = p.read.bytes.length;
+  if (!decoded.utf8) {
+    return size <= DOCS_CLASS_CAP.text
+      ? <DocPlain text={decoded.text} note={DOC_NOT_UTF8_NOTE} />
+      : <p className="docs-note">{fillSentence(DOCS_RANGE_TEXT.downloadOnly, { size: mib(size) })}</p>;
+  }
   return (
     <SourceParts
-      key={p.read.digest} text={decoded.text} maxBytes={DOCS_CLASS_CAP.text}
-      renderPart={(part) => <RangeSourcePart key={part.index} base={base} text={part.text} path={p.entry.path} />}
+      key={p.read.digest} text={decoded.text} size={size} maxBytes={DOCS_CLASS_CAP.text}
+      renderPart={(part) => <TextSource key={part.index} text={part.text} path={p.path} />}
     />
   );
 }
@@ -484,7 +489,7 @@ export function DocsLeaf(p: {
               />
             )
             : cls === 'text'
-              ? (read) => <RangeSource read={read} entry={rentry} pin={rpin} />
+              ? (read) => <RangeSource read={read} path={rentry.path} />
               : undefined}
       </RangeLeaf>
     );
