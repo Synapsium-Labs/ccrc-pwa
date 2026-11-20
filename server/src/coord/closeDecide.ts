@@ -249,13 +249,21 @@ export interface CloseActFacts {
   gate: () => Promise<ChildGate>;
 }
 
+/** D-6096: the session a close or an abandon would act on is the run's own CLAIMANT, so its workspace is the coordinator's.
+ *  True for an in-place run, and for any run bound to its own claimant with `inPlace` unset: after a coord.db rebuild
+ *  (`inPlace` is not recoverable, the reconstruction drill's UNRECOVERABLE list) an in-place run reads as such a run, and a
+ *  plain dispatch can no longer make one (`self-dispatch`). Either way no `ws-*` verb and no child gate names the claimant. */
+export function actsOnClaimant(run: Pick<RunRow, 'inPlace' | 'sessionId' | 'claimedBy'>): boolean {
+  return run.inPlace === true || (run.sessionId !== null && run.sessionId === run.claimedBy);
+}
+
 async function decideCloseAct(f: CloseActFacts): Promise<CloseDecision<ActPlan>> {
   // D-6096: an in-place run's workspace is its coordinator's. No release, no hold for wave N+1 (the next wave's run names no
   // session, never the claimant), no archive and no child gate: the sibling list and the gate are not even read.
-  if (f.run.inPlace === true) {
+  if (actsOnClaimant(f.run)) {
     if (f.state === 'failed' && f.archive) {
       return refused({ ok: false, kind: 'hold-invalid',
-        detail: 'archive: this run was taken in place, so its workspace is its coordinator\'s and is never archived' });
+        detail: 'archive: this run is bound to its own coordinator, so its workspace is the coordinator\'s and is never archived' });
     }
     return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
   }
@@ -289,7 +297,7 @@ export interface AbandonFacts {
 
 async function decideAbandon(f: AbandonFacts): Promise<CloseDecision<ActPlan>> {
   // D-6096: as the close above, an in-place run's abandon composes no `ws-*` verb on its claimant.
-  if (f.run.inPlace === true) return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
+  if (actsOnClaimant(f.run)) return go({ gate: NO_CHILD_GATE, fleet: null, released: false });
   if (!f.siblings.ok) return refused({ ok: false, kind: 'hold-invalid', detail: f.siblings.detail });
   const siblings = f.siblings.siblings;
   // An abandon is FINISHED (spec §5.7), so an eligible child is exactly the no-survivor case: already released.

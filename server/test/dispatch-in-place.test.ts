@@ -139,32 +139,45 @@ describe('a self-claimed run: what the characterization pinned, and what D-6096 
     expect(await dispatchRun(b.deps, id, 'go', undefined)).toMatchObject({ ok: true, resumed: true, sessionId: 'demo-worker' });
   });
 
-  it('today: a final close of a self-claimed run releases the COORDINATOR’s workspace', async () => {
+  // D-6096 (reconstructed-in-place-reads-ordinary): the four rows above were "today" on the base. A run bound to its own
+  // claimant with `inPlace` unset is what an in-place run reads as after a coord.db rebuild, so its close and abandon now
+  // compose no `ws-*` verb on the coordinator, exactly as an in-place run's do.
+  it('a final close of a self-claimed run composes no ws-* verb on the coordinator (was: ws-release)', async () => {
     const final = build();
     const f = final.open({ session: BOSS, state: 'dispatched' });
-    expect(await closeRun(final.deps, f, { ...FAILED_CLOSE, final: true }, 'coordinator')).toMatchObject({ ok: true, released: true });
-    expect(final.acts()).toEqual([['ws-release', BOSS]]);
+    expect(await closeRun(final.deps, f, { ...FAILED_CLOSE, final: true }, 'coordinator')).toMatchObject({ ok: true, released: false });
+    expect(final.acts()).toEqual([]);
   });
 
-  it('today: a non-final close of a self-claimed run holds the COORDINATOR’s workspace for the next wave', async () => {
+  it('a non-final close of a self-claimed run leaves no hold on the coordinator (was: ws-hold)', async () => {
     const next = build();
     const n = next.open({ session: BOSS, state: 'dispatched' });
     expect(await closeRun(next.deps, n, FAILED_CLOSE, 'coordinator')).toMatchObject({ ok: true, released: false });
-    expect(next.acts()).toEqual([['ws-hold', BOSS]]);
+    expect(next.acts()).toEqual([]);
   });
 
-  it('today: a failed close with archive of a self-claimed run archives the COORDINATOR’s workspace', async () => {
+  it('a failed close with archive of a self-claimed run is refused and never archives the coordinator (was: ws-archive)', async () => {
     const arch = build();
     const a = arch.open({ session: BOSS, state: 'dispatched' });
-    expect(await closeRun(arch.deps, a, { ...FAILED_CLOSE, archive: true }, 'coordinator')).toMatchObject({ ok: true });
-    expect(arch.acts()).toEqual([['ws-archive', BOSS]]);
+    expect(await closeRun(arch.deps, a, { ...FAILED_CLOSE, archive: true }, 'coordinator')).toMatchObject({ ok: false, kind: 'hold-invalid' });
+    expect(arch.acts()).toEqual([]);
+    expect(okRun(arch.coord.run(a))).toMatchObject({ state: 'dispatched' });
   });
 
-  it('today: abandoning a self-claimed run releases the coordinator’s workspace', async () => {
+  it('abandoning a self-claimed run composes no ws-* verb on the coordinator (was: ws-release)', async () => {
     const b = build();
     const id = b.open({ session: BOSS, state: 'dispatched' });
-    expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'operator')).toMatchObject({ ok: true, state: 'failed' });
-    expect(b.acts()).toEqual([['ws-release', BOSS]]);
+    expect(await closeRun(b.deps, id, { intent: 'abandon' }, 'operator')).toMatchObject({ ok: true, state: 'failed', released: false });
+    expect(b.acts()).toEqual([]);
+  });
+
+  it('a self-claimed run with inPlace unset, as after a rebuild, composes no ws-* verb', async () => {
+    const b = build();
+    const id = b.open({ session: BOSS, state: 'dispatched' });
+    b.coord.db.prepare('UPDATE runs SET inPlace = NULL WHERE id = ?').run(id);
+    expect(okRun(b.coord.run(id))!.inPlace).toBeUndefined();
+    expect(await closeRun(b.deps, id, { ...FAILED_CLOSE, final: true }, 'coordinator')).toMatchObject({ ok: true, released: false });
+    expect(b.acts()).toEqual([]);
   });
 
   it('today: the done branch is the registry’s branch for the session, never the run row’s', async () => {
