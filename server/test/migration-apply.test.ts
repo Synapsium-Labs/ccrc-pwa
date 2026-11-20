@@ -746,21 +746,22 @@ describe('review 2955 (D-8186)', () => {
     const id = r.plan.planOf(SLUG).epics[0]!.tickets.find((x) => x.key === key)!.id;
     adoptIssueBindingInTx(r.db, id, WS.a.id, 'AAA', U(100 + n), `AAA-${n}`, r.t.now);
   };
-  it('F1: a no-relation close\'s `unrelated` entry, learned in a tick that then ends early on a refused read, is kept', async () => {
+  it('F1: a no-relation level settled in step 2 stays listed when step 3\'s closer read is then refused', async () => {
     const r = await migRig();
     r.addIssue(1); r.addIssue(2);
     const id = await r.approved([entry(1, 'epic', { programme: SLUG, epic: 'e1' }), entry(2, 'checkpoint', { programme: SLUG, epic: 'e1', checkpoint: 'c1' })]);
-    // tick 1: both rows are written and every comment refused, and a person closes the epic's issue meanwhile
+    // tick 1: the epic's close is commented, its state write lands but the answer is lost (3 calls), so the checkpoint is not reached
     r.override.current = (ask) => {
-      if (ask.op !== 'issueComment') return undefined;
-      if (ask.input['issueId'] === U(101)) r.issues.get(U(101))!.stateType = 'canceled';
+      if (ask.op !== 'issueUpdate' || ask.input['id'] !== U(101)) return undefined;
+      r.issues.get(U(101))!.stateType = 'canceled';
       return fail('unreachable');
     };
     await r.tick();
-    expect(r.plan.movesOf(id).map((x) => [x.identifier, x.appliedAt])).toEqual([['AAA-1', null], ['AAA-2', null]]);
-    // tick 2: step 2 settles the epic's row as applied (a level with no ticket under it), then the next closer's read is refused
+    expect(r.plan.movesOf(id).map((x) => [x.identifier, x.appliedAt])).toEqual([['AAA-1', null]]);
+    // tick 2: step 2 settles the epic's row as applied (1 call); step 3's checkpoint close then has its read refused inside its flight
     r.override.current = (ask) => (ask.op === 'issueOwned' && ask.input['id'] === U(102) ? fail('unreachable') : undefined);
     await r.tick();
+    expect(r.plan.movesOf(id).map((x) => x.identifier)).toEqual(['AAA-1']);   // the checkpoint's row was never inserted
     expect(r.plan.migrationById(id)!.report!.unrelated).toEqual(['AAA-1']);
     r.override.current = null;
     await r.until(() => r.stateOf(id) === 'applied', 20);
