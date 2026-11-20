@@ -201,7 +201,7 @@ This section decides how a page is reached on the artifact hosts. The question i
 
 **The scope read, before the mint.** The launch sheet first asks a read door, `GET /api/docs/artifacts/scope`, for the same pin. It answers the manifest's file count, its uncommitted count and its bytes, and mints nothing. So the operator sees what the page could read while the boxes are still unticked. The mint repeats the tree read and answers its own counts. If the drafts changed in between, the sheet shows the new counts before Open.
 
-**Earlier versions of a page are not in this tier.** A version page (the console's `at` view of a page at an older commit) pins that commit, but the tree read takes a ref name and answers that ref's current version (`server/src/ccdargv.ts#docsTree`), so the mint could never read the manifest at the pinned commit; `pinHolds` would refuse it as `pin-moved`, a refusal no reload cures. So the console makes no offer on a version page: its sentence reads "Only the current version of a page runs as an artifact. Go back to the latest to open it." beside the existing "Back to the latest". Reading the tree at a pinned commit, a new tree-read capability, is the way to add them (Later). The standalone reader serves no versions, so this is not a parity loss (§8).
+**Earlier versions of a page are not in this tier.** A version page (the console's `at` view of a page at an older commit) pins that commit, but the tree read takes a ref name and answers that ref's current version (`server/src/ccdargv.ts#docsTree`), so the mint could never read the manifest at the pinned commit; `pinHolds` would refuse it as `pin-moved`, a refusal no reload cures. So the console makes no offer on a version page: its sentence reads "Only the current version of a page runs as an artifact. Go back to the latest to open it." beside the existing "Back to the latest". Reading the tree at a pinned commit, a new tree-read capability, is the way to add them (Later). The standalone reader does open a page at a tag or a commit (X2 I7) and keeps per-doc history with Back to the latest (X2 I15, I16), so this is a parity difference, recorded in §8.
 
 **Outside folders are not in this tier.** X2 rules that an outside folder is "never [read] without a signed-in session" (X2 §4.1), and the content door holds a capability, not a session. So a page in an outside folder opens within the walls only. Bringing folders in would be a departure from X2 §4.1 with its own argument (Later).
 
@@ -481,7 +481,7 @@ This section maps the standalone-only losses X2 measured onto how this design cl
 
 C3 and rows F11, F12 (beyond the walls) and F13 move from Conflict to Gap, designed here. A row moves from Gap to Same when its acceptance row passes on the installed release, with the artifact names set up, and with the differences below recorded beside it.
 
-Six differences from the standalone reader are recorded, not waived. The standalone reader serves every file raw, with CORS and at any size (X2 F12), so the last three are the manifest's own exclusions:
+Nine differences from the standalone reader are recorded, not waived. The standalone reader serves every file raw, with CORS and at any size (X2 F12), so differences 4 to 6 and 8 are the manifest's own exclusions:
 
 1. A page that fetches from an outside API fails, because `connect-src` takes no outside host (§4.3).
 2. A page opened as an artifact runs in a new tab, not inline (§4.1).
@@ -489,8 +489,11 @@ Six differences from the standalone reader are recorded, not waived. The standal
 4. A reference above the page's own folder (`../shared/lib.js`) does not load, because the manifest holds the page's directory and below (§3.2). The launch sheet counts such references before Prepare.
 5. A page directly in a section's root cannot load a Markdown file of that section, because the manifest leaves Markdown out there (§3.2).
 6. A file whose size the tree read cannot give is left out of the manifest and does not load (§3.2). The launch sheet counts it as unmeasured.
+7. A page opened at an earlier version (a version page, or a tag or a commit, which X2 §5.3 opens as `at=`) runs within the walls only, because the tree read answers only a branch's current version (§3.2). The standalone reader runs it at that tag or commit (X2 I7). Running it in full is Later.
+8. A file above `DOCS_RANGE_MAX_BYTES` (64 MiB, C4's ceiling) beside the page is left out of the manifest and does not load (§5). The scope read counts it with the unmeasured files.
+9. A page with more than six files above 1 MiB loads the seventh and later only on a reload, not on its first open (§5, Prepare busy).
 
-Differences 2 and 3 hold for every artifact row, F11 and F13 included. F12 carries 1 and 4 to 6 as well, and moves to Same only with all of them recorded beside it. Earlier versions of a page are not served by the tier (§3.2), and that is no parity loss: the standalone reader serves no versions. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
+Differences 2, 3 and 7 hold for every artifact row, F11 and F13 included. F12 carries 1, 4 to 6, 8 and 9 as well, and moves to Same only with all of them recorded beside it. On a box with no artifact names, the rows stay as X2's walls tier leaves them, and F records that box as a box without the tier.
 
 ## 9. Rings, contexts and census
 
